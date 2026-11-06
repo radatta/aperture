@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { canTransitionTask, needsEstimate, STANDALONE_PART_TITLE } from '@aperture/shared';
+import { canTransitionTask, isTimed, needsEstimate, STANDALONE_PART_TITLE } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -9,7 +9,7 @@ import { useSplitTask } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 import { liveElapsedMin } from '../../home/rightNow';
 import { usePomodoro } from '../../pomodoro/pomodoro-context';
-import { SPLIT_TITLE_SUFFIX, splitDefaults } from '../taskMath';
+import { SPLIT_TITLE_SUFFIX, splitDefaults, typedBadMinutes } from '../taskMath';
 import { useEditSlot } from './editState';
 import type { EditSlots } from './editState';
 
@@ -17,7 +17,6 @@ type Finish = 'done' | 'keep';
 
 const minutes = (v: string): number | null => (v.trim() === '' ? null : Number(v));
 const valid = (v: string) => v.trim() === '' || Number(v) >= 0; // empty, or real non-negative minutes
-const blankOrOne = (v: string) => v.trim() === '' || Number(v) >= 1; // what a done part's minutes take
 const str = (n: number | null) => n?.toString() ?? '';
 
 // Split always yields parent + parts (split.ts). This part is either done (an actual is required, and an
@@ -53,7 +52,10 @@ export function SplitForm({
     const tracked = Math.round(liveElapsedMin(task, timers));
     return tracked > 0 ? String(tracked) : '';
   });
-  const [estimate, setEstimate] = useState(str(splitDefaults(task, 'keep').thisPart));
+  // An unscoped task's starts empty: an estimate of 0 with time logged would prefill the actual, as hindsight.
+  const [estimate, setEstimate] = useState(
+    needsEstimate(task) ? '' : str(splitDefaults(task, 'keep').thisPart),
+  );
   const [restTitle, setRestTitle] = useState(
     standalone ? 'Part 2' : `${task.title}${SPLIT_TITLE_SUFFIX}`,
   );
@@ -93,16 +95,18 @@ export function SplitForm({
   const askEstimate = done && needsEstimate(task);
   // Where the rest lands — the server rule, stated generally: plan rows are loaded per day here, and a
   // planned task can have rows ahead of today (the night "Tomorrow"), so naming a day could be wrong.
-  const landing =
-    task.status === 'planned' || task.status === 'in_progress'
+  const landing = isTimed(task)
+    ? 'Lands on its day, by its time'
+    : task.status === 'planned' || task.status === 'in_progress'
       ? 'Lands on this one’s latest plan day, else the backlog'
       : 'Lands in the backlog';
   // The two parts' total vs the original working estimate — the size of the rescope, at a glance.
   const thisPart = done ? minutes(actual) : minutes(estimate);
   const rest = minutes(restEstimate);
+  // Only what shows counts: a done part's estimate field is there only when it's asked for.
   const numbersOk =
-    (done ? blankOrOne(actual) : valid(actual)) &&
-    (askEstimate ? blankOrOne(estimate) : valid(estimate)) &&
+    (done ? !typedBadMinutes(actual) : valid(actual)) &&
+    (done ? !askEstimate || !typedBadMinutes(estimate) : valid(estimate)) &&
     valid(restEstimate);
   const total = numbersOk && thisPart != null && rest != null ? thisPart + rest : null;
   const canSubmit =
@@ -274,7 +278,7 @@ export function SplitForm({
       {!numbersOk && (
         <Text size="xs" tone="danger">
           {done
-            ? "Minutes can't be negative, and this part's need to be at least 1."
+            ? "Minutes can't be negative, and this part's are whole minutes, at least 1."
             : "Minutes can't be negative."}
         </Text>
       )}

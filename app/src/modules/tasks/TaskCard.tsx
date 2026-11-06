@@ -72,6 +72,7 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
   const openTask = useOpenTask()!;
   const titleRef = useRef<HTMLButtonElement>(null);
   const [asking, setAsking] = useState(false); // Start on an unscoped task: EstimateChips is open
+  const startRef = useRef<HTMLButtonElement>(null);
   const { data: tasks = [] } = useAllTasks();
   const parts = partsOf(tasks, task.id);
   const summary = parts.length ? partsSummary(parts) : null;
@@ -109,11 +110,12 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
           {actions}
           {canScope && (
             <Button
+              ref={startRef}
               size="sm"
               aria-expanded={needsEstimate(task) ? asking : undefined}
               onClick={() =>
                 needsEstimate(task)
-                  ? setAsking((a) => !a)
+                  ? setAsking(true)
                   : transition.mutate({ id: task.id, to: 'in_progress' })
               }
             >
@@ -137,7 +139,12 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
         </div>
       </div>
       {asking && canScope && (
-        <EstimateChips task={task} onClose={() => setAsking(false)} className="mt-2" />
+        <EstimateChips
+          task={task}
+          startRef={startRef}
+          onClose={() => setAsking(false)}
+          className="mt-2"
+        />
       )}
       {summary && showParts && <PartsList parts={parts} />}
     </Card>

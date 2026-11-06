@@ -335,6 +335,7 @@ function FocusRow({
   const t = row.task;
   const u = useUrgency(t);
   const [asking, setAsking] = useState(false); // Start on an unscoped task: EstimateChips is open
+  const startRef = useRef<HTMLButtonElement>(null);
   const open = t.status === 'backlog' || t.status === 'planned';
   return (
     <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
@@ -392,7 +393,9 @@ function FocusRow({
           )}
         </div>
       </div>
-      {asking && open && <EstimateChips task={t} onClose={() => setAsking(false)} />}
+      {asking && open && (
+        <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
+      )}
     </div>
   );
 }

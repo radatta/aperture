@@ -676,7 +676,7 @@ describe('TaskEditor', () => {
     const go = screen.getByRole<HTMLButtonElement>('button', { name: 'Split' });
     expect(go.disabled).toBe(true);
     await user.type(screen.getByLabelText("This part's estimate (min)"), '0');
-    expect(screen.getByText(/this part's need to be at least 1/)).toBeTruthy();
+    expect(screen.getByText(/this part's are whole minutes, at least 1/)).toBeTruthy();
     expect(go.disabled).toBe(true);
     await user.clear(screen.getByLabelText("This part's estimate (min)"));
     await user.type(screen.getByLabelText("This part's estimate (min)"), '15');
@@ -704,6 +704,39 @@ describe('TaskEditor', () => {
     expect(screen.queryByLabelText("This part's estimate (min)")).toBeNull();
     await user.type(screen.getByLabelText("This part's actual (min)"), '0');
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(true);
+  });
+
+  it('switching a done split to Keep going and back keeps what was typed', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Unscoped' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.type(screen.getByLabelText("This part's actual (min)"), '20');
+    await user.type(screen.getByLabelText("This part's estimate (min)"), '15');
+    await user.click(screen.getByRole('button', { name: 'Keep going' }));
+    expect(screen.getByLabelText<HTMLInputElement>("This part's estimate (min)").value).toBe('15');
+    expect(screen.queryByLabelText("This part's actual (min)")).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Done with this part' }));
+    expect(screen.getByLabelText<HTMLInputElement>("This part's actual (min)").value).toBe('20');
+    expect(screen.getByLabelText<HTMLInputElement>("This part's estimate (min)").value).toBe('15');
+  });
+
+  it('a negative typed in Keep going, on a scoped task, does not block a done split it no longer shows', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Scoped', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.click(screen.getByRole('button', { name: 'Keep going' }));
+    const est = screen.getByLabelText("This part's estimate (min)");
+    await user.clear(est);
+    await user.type(est, '-5');
+    await user.click(screen.getByRole('button', { name: 'Done with this part' }));
+    await user.type(screen.getByLabelText("This part's actual (min)"), '20');
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(false);
   });
 
   it('rejects negative minutes inline, and Cancel returns focus to Split…', async () => {

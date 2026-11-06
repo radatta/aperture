@@ -79,7 +79,7 @@ export function CalibrationSection() {
               {agg.count < 5 ? ' · still sparse, read it lightly' : ''}
             </Text>
             {agg.retroCount > 0 && (
-              <Text size="xs" tone="subtle">
+              <Text size="xs" tone="muted">
                 {agg.retroCount} of {agg.count} estimated after the fact
               </Text>
             )}
@@ -106,7 +106,7 @@ export function CalibrationSection() {
                       actualMin={p.actualAccruedMin}
                     />
                     {drift && (
-                      <Text size="xs" tone="subtle" tabular className="mt-1">
+                      <Text size="xs" tone="muted" tabular className="mt-1">
                         {drift}
                       </Text>
                     )}

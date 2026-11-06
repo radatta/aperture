@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Ref } from 'react';
-import { needsEstimate, TASK_REFLECTION_MAX } from '@aperture/shared';
+import { isCalibrated, needsEstimate, TASK_REFLECTION_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -14,6 +14,7 @@ import type { EditSlots } from './editor/editState';
 import { NotesField } from './notes/NotesField';
 import { REFLECTION_FIELD } from './notes/reflectionField';
 import { notesValue } from './notes/parseNotes';
+import { typedBadMinutes, WHOLE_MINUTES_ERROR, wholeMinutes } from './taskMath';
 
 // "Done" captures the actual — prefilled from tracked pomodoro time, but editable (works with no
 // timer). This is what the estimate is measured against. `initialActualMin` lets a caller prefill the
@@ -33,9 +34,6 @@ import { notesValue } from './notes/parseNotes';
 // never silently cut). In the task modal (`edits`), a changed reflection makes leaving ask first.
 // Either onDone uses the finished task and Cancel is its own (the task modal, which asks about unsaved
 // edits), or onDone is the caller's plain close and Cancel just closes too.
-const atLeastOne = (v: string) => v.trim() !== '' && Number(v) >= 1;
-const typedTooLow = (v: string) => v.trim() !== '' && !(Number(v) >= 1);
-
 type DoneProps =
   | { onDone: (task: Task) => void; onCancel: () => void }
   | { onDone: () => void; onCancel?: undefined };
@@ -43,6 +41,7 @@ type DoneProps =
 export function DoneForm({
   task,
   initialActualMin,
+  initialEstimateMin,
   actualRef,
   edits,
   onDone,
@@ -50,6 +49,7 @@ export function DoneForm({
 }: {
   task: Task;
   initialActualMin?: number;
+  initialEstimateMin?: number; // prefills a missing estimate (Flux's rep: Mark done stays one tap)
   actualRef?: Ref<HTMLInputElement>;
   edits?: EditSlots;
 } & DoneProps) {
@@ -61,10 +61,13 @@ export function DoneForm({
     const tracked = Math.round(initialActualMin ?? liveElapsedMin(task, timers));
     return tracked > 0 ? String(tracked) : '';
   });
-  const [estimate, setEstimate_] = useState('');
+  const [estimate, setEstimate_] = useState(initialEstimateMin?.toString() ?? '');
   const askEstimate = needsEstimate(task);
-  const estimateBad = askEstimate && !atLeastOne(estimate);
-  const actualBad = !atLeastOne(actual);
+  const estimateBad = askEstimate && !wholeMinutes(estimate);
+  // An errand is checked off, not measured: its actual takes what it always did.
+  const calibrated = isCalibrated(task);
+  const actualBad = calibrated ? !wholeMinutes(actual) : actual.trim() === '';
+  const lock = task.estimateLockedMin ?? 0;
   const [seed] = useState(() => task.reflection ?? '');
   const [reflection, setReflection] = useState(seed);
   const reflectionTrimmed = notesValue(reflection);
@@ -112,7 +115,7 @@ export function DoneForm({
           ref={actualRef}
           label="Actual (min)"
           type="number"
-          min={1}
+          min={calibrated ? 1 : 0}
           inputMode="numeric"
           placeholder="minutes"
           value={actual}
@@ -121,21 +124,29 @@ export function DoneForm({
         />
         {askEstimate && (
           <Field
-            label="Estimate (min)"
+            label="Estimate in hindsight"
             type="number"
             min={1}
             inputMode="numeric"
-            placeholder="in hindsight"
+            placeholder="minutes"
             value={estimate}
             onChange={(e) => setEstimate_(e.target.value)}
             className="w-32"
           />
         )}
-        {task.estimateLockedMin != null && (
+        {lock >= 1 ? (
           <Text size="sm" tone="muted" tabular>
-            vs {fmtDuration(task.estimateLockedMin)} estimated
-            {task.estimateMin !== task.estimateLockedMin && ' at start'}
+            vs {fmtDuration(lock)} estimated
+            {task.estimateMin !== lock && ' at start'}
           </Text>
+        ) : (
+          // Estimated since the start, so the finish marks it retro: never a silent change on the page.
+          calibrated &&
+          !askEstimate && (
+            <Text size="sm" tone="muted" tabular>
+              vs {fmtDuration(task.estimateMin!)}, counted as estimated after the fact
+            </Text>
+          )
         )}
       </div>
       {askEstimate && (
@@ -143,9 +154,9 @@ export function DoneForm({
           No estimate yet — what would you have said? It counts as estimated after the fact.
         </Text>
       )}
-      {(typedTooLow(actual) || (askEstimate && typedTooLow(estimate))) && (
+      {((calibrated && typedBadMinutes(actual)) || (askEstimate && typedBadMinutes(estimate))) && (
         <Text size="xs" tone="danger">
-          Minutes need to be at least 1.
+          {WHOLE_MINUTES_ERROR}
         </Text>
       )}
       <NotesField

@@ -1986,6 +1986,24 @@ export function runApiContract(
       await expect(api.setTaskEstimate(gone.id, 90, null)).rejects.toThrow(/history/);
     });
 
+    it('calibration integrity: a parent whose parts went takes one backfill, as a legacy row does', async () => {
+      const p = await api.createTask({ title: 'was a parent' });
+      const part = await api.createTask({ title: 'its part', parentId: p.id });
+      await api.transitionTask(part.id, 'in_progress');
+      await api.setTaskEstimate(part.id, 5, null);
+      await api.setTaskActual(part.id, 7);
+      await api.transitionTask(part.id, 'done');
+      const done = await api.transitionTask(p.id, 'done');
+      expect(done).toMatchObject({ estimateLockedMin: null, actualAccruedMin: 7 });
+      await expect(api.setTaskEstimate(p.id, 30, null)).rejects.toThrow(); // still a parent
+      await api.deleteTask(part.id);
+      expect(await api.setTaskEstimate(p.id, 30, null)).toMatchObject({
+        estimateLockedMin: 30,
+        estimateSource: 'retro',
+      });
+      await expect(api.setTaskEstimate(p.id, 40, null)).rejects.toThrow(/history/);
+    });
+
     it('calibration integrity: a done split of an unscoped task needs its estimate; the follow-up is unaffected', async () => {
       const t = await api.createTask({ title: 'unscoped split' });
       await api.transitionTask(t.id, 'in_progress');

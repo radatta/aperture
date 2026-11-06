@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
+import { useAllTasks } from '../../data/hooks/useTasks';
 import { DoneForm } from './DoneForm';
 
 function api(now?: () => number): ApiClient {
@@ -226,7 +227,7 @@ describe('DoneForm', () => {
     it('a scoped task is not asked for an estimate', async () => {
       const client = api();
       renderDone(client, await started(client));
-      expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
+      expect(screen.queryByLabelText('Estimate in hindsight')).toBeNull();
     });
 
     it('an unscoped task needs the estimate, which lands first and marks it retro', async () => {
@@ -234,7 +235,7 @@ describe('DoneForm', () => {
       const task = await unscoped(client);
       const { onDone, user } = renderDone(client, task);
       expect(markDone().disabled).toBe(true);
-      await user.type(screen.getByLabelText('Estimate (min)'), '25');
+      await user.type(screen.getByLabelText('Estimate in hindsight'), '25');
       expect(markDone().disabled).toBe(false);
       const estimate = vi.spyOn(client, 'setTaskEstimate');
       const actual = vi.spyOn(client, 'setTaskActual');
@@ -255,15 +256,75 @@ describe('DoneForm', () => {
     it('a typed 0 blocks Mark done and says why, on either number', async () => {
       const client = api();
       const { user } = renderDone(client, await unscoped(client));
-      await user.type(screen.getByLabelText('Estimate (min)'), '0');
-      expect(screen.getByText('Minutes need to be at least 1.')).toBeTruthy();
+      await user.type(screen.getByLabelText('Estimate in hindsight'), '0');
+      expect(screen.getByText('Whole minutes, at least 1.')).toBeTruthy();
       expect(markDone().disabled).toBe(true);
-      await user.clear(screen.getByLabelText('Estimate (min)'));
-      await user.type(screen.getByLabelText('Estimate (min)'), '20');
+      await user.clear(screen.getByLabelText('Estimate in hindsight'));
+      await user.type(screen.getByLabelText('Estimate in hindsight'), '20');
       await user.clear(screen.getByLabelText('Actual (min)'));
       await user.type(screen.getByLabelText('Actual (min)'), '0');
-      expect(screen.getByText('Minutes need to be at least 1.')).toBeTruthy();
+      expect(screen.getByText('Whole minutes, at least 1.')).toBeTruthy();
       expect(markDone().disabled).toBe(true);
+    });
+
+    it('the estimate landed, the actual failed: the retry finishes it, retro, sending no estimate twice', async () => {
+      const client = api();
+      const task = await unscoped(client);
+      const onDone = vi.fn();
+      // As the modal does: the form's task is the list's, so a landed estimate reaches it.
+      function Live() {
+        const { data = [] } = useAllTasks();
+        const live = data.find((t) => t.id === task.id);
+        return live ? <DoneForm task={live} initialActualMin={40} onDone={onDone} /> : null;
+      }
+      renderWithProviders(<Live />, { api: client });
+      const user = userEvent.setup();
+      const actual = vi.spyOn(client, 'setTaskActual').mockRejectedValueOnce(new Error('nope'));
+      const estimate = vi.spyOn(client, 'setTaskEstimate');
+      await user.type(await screen.findByLabelText('Estimate in hindsight'), '25');
+      await user.click(markDone());
+      expect(await screen.findByRole('alert')).toBeTruthy();
+      expect(onDone).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByLabelText('Estimate in hindsight')).toBeNull());
+      await user.click(markDone());
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect(actual).toHaveBeenCalledTimes(2);
+      expect(estimate).toHaveBeenCalledTimes(1);
+      expect(await client.getTask(task.id)).toMatchObject({
+        status: 'done',
+        estimateLockedMin: 25,
+        estimateSource: 'retro',
+      });
+    });
+
+    it('estimated since an unscoped start: no field, and it says the finish counts as after the fact', async () => {
+      const client = api();
+      const task = await unscoped(client);
+      renderDone(client, await client.setTaskEstimate(task.id, 50, null));
+      expect(screen.queryByLabelText('Estimate in hindsight')).toBeNull();
+      expect(screen.getByText(/counted as estimated after the fact/)).toBeTruthy();
+    });
+
+    it('a fractional estimate is refused', async () => {
+      const client = api();
+      const { user } = renderDone(client, await unscoped(client));
+      await user.type(screen.getByLabelText('Estimate in hindsight'), '1.5');
+      expect(screen.getByText('Whole minutes, at least 1.')).toBeTruthy();
+      expect(markDone().disabled).toBe(true);
+    });
+
+    it('a typed 0 on an errand is allowed: it is checked off, not measured', async () => {
+      const client = api();
+      await client.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+      const t = await client.createTask({ title: 'stamps', place: 'corner' });
+      const task = await client.transitionTask(t.id, 'in_progress');
+      const { onDone, user } = renderDone(client, task);
+      expect(screen.queryByLabelText('Estimate in hindsight')).toBeNull();
+      await user.clear(screen.getByLabelText('Actual (min)'));
+      await user.type(screen.getByLabelText('Actual (min)'), '0');
+      expect(screen.queryByText('Whole minutes, at least 1.')).toBeNull();
+      await user.click(markDone());
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
     });
 
     it('an estimate write that fails keeps the form and says so', async () => {
@@ -271,7 +332,7 @@ describe('DoneForm', () => {
       const task = await unscoped(client);
       const { onDone, user } = renderDone(client, task);
       vi.spyOn(client, 'setTaskEstimate').mockRejectedValueOnce(new Error('nope'));
-      await user.type(screen.getByLabelText('Estimate (min)'), '25');
+      await user.type(screen.getByLabelText('Estimate in hindsight'), '25');
       await user.click(markDone());
       expect(await screen.findByRole('alert')).toBeTruthy();
       expect(onDone).not.toHaveBeenCalled();

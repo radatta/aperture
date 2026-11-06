@@ -81,6 +81,7 @@ describe('createMcpClient', () => {
       'createTask',
       'deleteAttachment',
       'deleteTask',
+      'splitTask',
       'stopSeries',
       'stopSeriesUnknown',
       'updateCategory',

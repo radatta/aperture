@@ -175,6 +175,25 @@ export function createMcpClient({
         ...(estimateMin === undefined ? {} : { estimateMin }),
       });
     },
+    // Split one of this run's tasks; what it creates is recorded from the response, so cleanup can remove it.
+    async splitTask(
+      id: string,
+      input: {
+        finish: 'done' | 'keep';
+        followUpTitle: string;
+        actualMin?: number;
+        estimateMin?: number;
+      },
+    ): Promise<{ parent: DevTask; original: DevTask; followUp: DevTask }> {
+      assertLedgerTask(id);
+      const out = await data<{ parent: DevTask; original: DevTask; followUp: DevTask }>(
+        'split_task',
+        { id, ...input },
+      );
+      for (const t of [out.parent, out.followUp])
+        ledger.append({ run, op: 'created', id: t.id, via: MCP_CREATE_VIA, title: t.title });
+      return out;
+    },
     // Deleting a parent deletes its parts, so a recorded parent with a part the ledger doesn't know is
     // refused, as the pipeline's cleanup does. A task already gone answers Not found — returned, not thrown.
     async deleteTask(

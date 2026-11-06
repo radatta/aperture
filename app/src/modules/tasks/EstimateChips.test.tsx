@@ -1,3 +1,4 @@
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -13,7 +14,14 @@ async function setup() {
   const client = api();
   const task = await client.createTask({ title: 'Unscoped' });
   const onClose = vi.fn();
-  renderWithProviders(<EstimateChips task={task} onClose={onClose} />, { api: client });
+  const startRef = createRef<HTMLButtonElement>();
+  renderWithProviders(
+    <>
+      <button ref={startRef}>Start</button>
+      <EstimateChips task={task} startRef={startRef} onClose={onClose} />
+    </>,
+    { api: client },
+  );
   return { client, task, onClose, user: userEvent.setup() };
 }
 
@@ -50,6 +58,7 @@ describe('EstimateChips', () => {
     const { client, task, onClose, user } = await setup();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Start' }));
     expect(await client.getTask(task.id)).toMatchObject({ status: 'backlog', estimateMin: null });
   });
 
@@ -57,14 +66,34 @@ describe('EstimateChips', () => {
     const { client, task, onClose, user } = await setup();
     await user.click(screen.getByRole('button', { name: 'Custom' }));
     await user.type(screen.getByLabelText('Estimate (min)'), '0');
-    expect(screen.getByText('Minutes need to be at least 1.')).toBeTruthy();
+    expect(screen.getByText('Whole minutes, at least 1.')).toBeTruthy();
     const go = screen.getByRole('button', { name: 'Start with this' });
     expect((go as HTMLButtonElement).disabled).toBe(true);
     await user.clear(screen.getByLabelText('Estimate (min)'));
-    await user.type(screen.getByLabelText('Estimate (min)'), '25');
-    await user.click(go);
+    await user.type(screen.getByLabelText('Estimate (min)'), '1.5');
+    expect((go as HTMLButtonElement).disabled).toBe(true);
+    await user.clear(screen.getByLabelText('Estimate (min)'));
+    await user.type(screen.getByLabelText('Estimate (min)'), '25{Enter}'); // the return key starts it
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect((await client.getTask(task.id))?.estimateLockedMin).toBe(25);
+  });
+
+  it('Cancel holds while a start is on its way', async () => {
+    const { client, onClose, user } = await setup();
+    let land = () => {};
+    const estimate = client.setTaskEstimate.bind(client);
+    vi.spyOn(client, 'setTaskEstimate').mockImplementationOnce(
+      (...a) =>
+        new Promise((r) => {
+          land = () => r(estimate(...a));
+        }),
+    );
+    await user.click(screen.getByRole('button', { name: '30' }));
+    expect(screen.getByRole('button', { name: 'Cancel' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    land();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it('a failed start stays open and says so; the retry starts it', async () => {

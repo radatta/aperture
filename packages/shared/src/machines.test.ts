@@ -109,6 +109,14 @@ describe('taskTransition — estimate freeze', () => {
     expect(isCalibrated(errand)).toBe(false);
   });
 
+  it('a done row locked at 0 can be repaired once, like one with no lock', () => {
+    const zero = baseTask({ status: 'done', estimateLockedMin: 0, actualAccruedMin: 9 });
+    expect(withEstimate(zero, 12, null, 1)).toMatchObject({
+      estimateLockedMin: 12,
+      estimateSource: 'retro',
+    });
+  });
+
   it('a lock of 0 is no baseline: the finish takes the estimate as retro', () => {
     const t = baseTask({
       status: 'in_progress',

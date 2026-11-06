@@ -51,6 +51,11 @@ export function remainingMin(task: Task): number {
 // (never below the time already logged).
 // The rest is floored so a part that ran over still gets a real number.
 export const SPLIT_TITLE_SUFFIX = ' (cont.)';
+// What a calibrated finish takes (the done gate), typed: whole minutes, at least 1.
+export const WHOLE_MINUTES_ERROR = 'Whole minutes, at least 1.';
+export const wholeMinutes = (v: string): boolean =>
+  v.trim() !== '' && Number.isInteger(Number(v)) && Number(v) >= 1;
+export const typedBadMinutes = (v: string): boolean => v.trim() !== '' && !wholeMinutes(v);
 export const SPLIT_MIN_REMAINDER = 5;
 
 export function splitDefaults(

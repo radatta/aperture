@@ -31,13 +31,16 @@ export const DONE_NEEDS_NUMBERS_ERROR =
 // Done gate (docs/areas/calibration/integrity.md): every calibrated done task is a point. Started unscoped,
 // its lock comes now, in hindsight, and the source says so; a lock of 0 was never a baseline. Stored, not
 // derived: complete_task's chain through in_progress would otherwise make a retro number look honest.
+const hasBaseline = (task: Task): boolean => (task.estimateLockedMin ?? 0) >= 1;
 function finishCalibrated(task: Task, next: Task): void {
   if (needsEstimate(task) || !(task.actualAccruedMin >= 1))
     throw new Error(DONE_NEEDS_NUMBERS_ERROR);
-  const lock = task.estimateLockedMin;
-  const hadLock = lock !== null && lock >= 1;
-  next.estimateLockedMin = hadLock ? lock : task.estimateMin;
-  next.estimateSource = !hadLock ? 'retro' : lock === task.estimateMin ? 'planned' : 'revised';
+  if (!hasBaseline(task)) {
+    next.estimateLockedMin = task.estimateMin;
+    next.estimateSource = 'retro';
+    return;
+  }
+  next.estimateSource = task.estimateLockedMin === task.estimateMin ? 'planned' : 'revised';
 }
 
 // The heart of calibration: the estimate FREEZES on first exit from planning. After that the
@@ -125,10 +128,11 @@ export function canEditEstimate(task: Task): boolean {
   return task.status !== 'done' && task.status !== 'cancelled';
 }
 
-// The one way into a finished estimate: a done task from before the gate, with no lock, takes one retro
+// The one way into a finished estimate: a done task with no baseline (from before the gate, or a parent
+// whose parts all went) takes one retro
 // estimate. Once it has that lock it's history like any other. Not offered in the UI (canEditEstimate).
 export const canBackfillEstimate = (task: Task): boolean =>
-  task.status === 'done' && isCalibrated(task) && task.estimateLockedMin === null;
+  task.status === 'done' && isCalibrated(task) && !hasBaseline(task);
 
 export function withEstimate(
   task: Task,

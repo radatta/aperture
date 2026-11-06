@@ -3,7 +3,7 @@
 // says so before writing anything; the Calibration page footnotes retro and labels a rescoped row. An errand's
 // exemption is the `places` scenario's check-off. Titles use `devcheck-cal <nonce>` — the parts scenarios sweep
 // `devcheck <nonce>` — and no task's word sits inside another's, since the search matches substrings.
-import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck-cal ${ctx.nonce} ${what}`;
 const GATE = 'Needs an estimate and an actual';
@@ -76,7 +76,7 @@ export const calibrationIntegrity: Scenario = {
       id: 'chips-custom',
       entry: 'ui',
       kind: 'edge',
-      what: 'Custom estimate: 0 is refused with a message, 25 starts with a lock of 25',
+      what: 'Custom estimate: 0 and 1.5 are refused with a message, 25 starts with a lock of 25',
     },
     {
       id: 'chips-cancel',
@@ -89,17 +89,24 @@ export const calibrationIntegrity: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Start on a Home “Right now” row opens the same chips',
-      offDev: {
-        file: 'app/src/pages/Home/RightNow.test.tsx',
-        test: 'Start on an unscoped row asks for an estimate, and a chip starts it',
-        why: 'same path as chips-start (proven on dev): the same EstimateChips and BFF calls; which row opens them runs in the named test, and Home’s mode depends on the clock',
-      },
+    },
+    {
+      id: 'chips-write-fails',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A chip whose write fails stays open and says so; tapping again starts it',
     },
     {
       id: 'without-one',
       entry: 'ui',
       kind: 'edge',
       what: '“Start without one” leaves no lock; Done asks for the estimate and stays blocked until it is typed; the point is retro',
+    },
+    {
+      id: 'done-retry',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Done: the estimate lands and the actual fails → the form stays and says so; the retry finishes it, retro',
     },
     {
       id: 'actual-zero',
@@ -111,7 +118,7 @@ export const calibrationIntegrity: Scenario = {
       id: 'split-unscoped',
       entry: 'ui',
       kind: 'edge',
-      what: 'A done split of an unscoped task asks for its estimate; the point is retro, the next part stays unscoped and unlocked',
+      what: 'A done split of an unscoped task asks for its estimate; the point is retro, the next part stays unscoped and unlocked; switching to Keep going and back keeps what was typed',
     },
     {
       id: 'footnote',
@@ -130,6 +137,17 @@ export const calibrationIntegrity: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'A parent’s Mark done still takes one tap, with no estimate of its own, its actual the sum of its parts',
+    },
+    {
+      id: 'flux-rep-unscoped',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Flux: a rep that lost its estimate takes its Roll’s at Done, so Mark done stays one tap, marked retro',
+      offDev: {
+        file: 'app/src/pages/Flux/ExerciseView.test.tsx',
+        test: 'a rep with no estimate takes its Roll’s at Stop: Mark done stays one tap, marked retro',
+        why: 'Flux’s stage needs a camera to save a set, which dev’s browser has none of; the prefill is client-only, on the setTaskEstimate path chips-start proves',
+      },
     },
     {
       id: 'mcp-scoped',
@@ -162,6 +180,12 @@ export const calibrationIntegrity: Scenario = {
       what: 'update_task {status: done} on an unscoped started task: the gate’s message, still in progress',
     },
     {
+      id: 'mcp-split-done',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'split_task {finish: done} on an unscoped task: refused with the gate’s message, nothing created; with estimateMin, retro',
+    },
+    {
       id: 'api-actual-zero-done',
       entry: 'api',
       kind: 'edge',
@@ -171,12 +195,7 @@ export const calibrationIntegrity: Scenario = {
       id: 'mcp-backfill-once',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A done task with no lock takes one retro estimate; a second is refused',
-      offDev: {
-        file: 'lambdas/src/mcp/tools.test.ts',
-        test: 'update_task backfills a done task with no lock once; a second is refused',
-        why: 'dev can no longer produce a done task with no lock: only a row from before the gate has that shape, and the test writes it directly',
-      },
+      what: 'A done task with no lock (a parent whose only part was deleted, unscoped when it started) takes one retro estimate; a second is refused',
     },
     {
       id: 'prod-backfill',
@@ -193,7 +212,16 @@ export const calibrationIntegrity: Scenario = {
       entry: 'api',
       title: 'Tasks for each case: unscoped and scoped, a parent with two parts (API, MCP)',
       async run(ctx) {
-        for (const what of ['chips', 'custom', 'nudged', 'without', 'splitme'])
+        for (const what of [
+          'chips',
+          'custom',
+          'nudged',
+          'failing',
+          'without',
+          'retried',
+          'splitme',
+          'homerow',
+        ])
           await ctx.api.writes.createTask({ title: name(ctx, what) });
         for (const what of ['zeroed', 'drifted'])
           await ctx.api.writes.createTask({ title: name(ctx, what), estimateMin: 30 });
@@ -201,6 +229,7 @@ export const calibrationIntegrity: Scenario = {
         await ctx.mcp.writes.createTask({ title: name(ctx, 'mnone') });
         await ctx.mcp.writes.createTask({ title: name(ctx, 'mrevise'), estimateMin: 20 });
         await ctx.mcp.writes.createTask({ title: name(ctx, 'mstatus') });
+        await ctx.mcp.writes.createTask({ title: name(ctx, 'msplit') });
         const parent = await ctx.api.writes.createTask({ title: name(ctx, 'rollup') });
         for (const what of ['pone', 'ptwo'])
           await ctx.api.writes.createTask({
@@ -208,6 +237,8 @@ export const calibrationIntegrity: Scenario = {
             parentId: parent.id,
             estimateMin: 5,
           });
+        const ex = await ctx.api.writes.createTask({ title: name(ctx, 'exparent') });
+        await ctx.api.writes.createTask({ title: name(ctx, 'expart'), parentId: ex.id });
       },
     },
     {
@@ -225,7 +256,7 @@ export const calibrationIntegrity: Scenario = {
         if (t?.estimateLockedMin !== 30) throw new Error(`locked ${JSON.stringify(t)}`);
         const dialog = await openDoneForm(ctx, 'chips');
         await dialog.getByLabel('Actual (min)').fill('40');
-        if (await dialog.getByLabel('Estimate (min)').count())
+        if (await dialog.getByLabel('Estimate in hindsight').count())
           throw new Error('a scoped task’s Done form asked for an estimate');
         await markDone(dialog);
         const p = await pointOf(ctx, id);
@@ -251,10 +282,13 @@ export const calibrationIntegrity: Scenario = {
         await chips.getByRole('button', { name: 'Custom', exact: true }).click();
         const field = chips.getByLabel('Estimate (min)');
         await field.fill('0');
-        await ctx.ui.expectText('Minutes need to be at least 1.');
+        await ctx.ui.expectText('Whole minutes, at least 1.');
         if (!(await chips.getByRole('button', { name: 'Start with this' }).isDisabled()))
           throw new Error('0 left “Start with this” enabled');
         await ctx.shot('custom-zero');
+        await field.fill('1.5');
+        if (!(await chips.getByRole('button', { name: 'Start with this' }).isDisabled()))
+          throw new Error('1.5 left “Start with this” enabled');
         await field.fill('25');
         await chips.getByRole('button', { name: 'Start with this' }).click();
         const { id } = await mine(ctx, 'custom');
@@ -278,6 +312,58 @@ export const calibrationIntegrity: Scenario = {
       },
     },
     {
+      id: 'chips-home',
+      entry: 'ui',
+      proves: ['chips-home'],
+      title: 'Home › Daytime: Start on the planned unscoped row opens the chips; 45 starts it',
+      async run(ctx) {
+        const { id } = await mine(ctx, 'homerow');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
+        // First in the plan, so it's a Big 3 row with a Start whatever else is on today.
+        await ctx.api.writes.upsertPlan({ taskId: id, day: today, plannedMinutes: 30, order: -1 });
+        await ctx.ui.goto('/');
+        await ctx.page.getByRole('button', { name: 'Daytime' }).click();
+        const title = name(ctx, 'homerow');
+        await ctx.ui.expectText(title, 15_000);
+        await ctx.page
+          .getByText(title, { exact: true })
+          .locator('xpath=ancestor::div[.//button[normalize-space()="Start"]][1]')
+          .getByRole('button', { name: 'Start', exact: true })
+          .click();
+        const chips = ctx.page.getByRole('group', { name: `Estimate for ${title}` });
+        await chips.waitFor({ timeout: 10_000 });
+        await ctx.shot('chips-home');
+        await chips.getByRole('button', { name: '45', exact: true }).click();
+        await untilInProgress(ctx, id);
+        if ((await ctx.api.reads.getTask(id))?.estimateLockedMin !== 45)
+          throw new Error('the Home chip locked something else');
+      },
+    },
+    {
+      id: 'chips-write-fails',
+      entry: 'ui',
+      proves: ['chips-write-fails'],
+      title: 'A failed start keeps the chips and says so; again starts it',
+      async run(ctx) {
+        const chips = await openChips(ctx, 'failing');
+        const chip = chips.getByRole('button', { name: '60', exact: true });
+        const i = await ctx.intercept('transitionTask');
+        try {
+          await chip.click();
+          await ctx.ui.expectText('Couldn’t start it — try again.', 15_000);
+          await ctx.shot('chips-failed');
+        } finally {
+          await i.release();
+        }
+        await chip.click();
+        const { id } = await mine(ctx, 'failing');
+        await untilInProgress(ctx, id);
+        if ((await ctx.api.reads.getTask(id))?.estimateLockedMin !== 60)
+          throw new Error('the retry locked something else');
+      },
+    },
+    {
       id: 'without-one',
       entry: 'ui',
       proves: ['without-one'],
@@ -290,7 +376,7 @@ export const calibrationIntegrity: Scenario = {
         const started = await ctx.api.reads.getTask(id);
         if (started?.estimateLockedMin != null) throw new Error('a lock with no estimate');
         const dialog = await openDoneForm(ctx, 'without');
-        const estimate = dialog.getByLabel('Estimate (min)');
+        const estimate = dialog.getByLabel('Estimate in hindsight');
         await estimate.scrollIntoViewIfNeeded();
         await ctx.shot('done-asks-estimate');
         await dialog.getByLabel('Actual (min)').fill('50');
@@ -300,6 +386,34 @@ export const calibrationIntegrity: Scenario = {
         await markDone(dialog);
         const p = await pointOf(ctx, id);
         if (p.estimateLockedMin !== 45 || p.estimateSource !== 'retro')
+          throw new Error(`point ${JSON.stringify(p)}`);
+      },
+    },
+    {
+      id: 'done-retry',
+      entry: 'ui',
+      proves: ['done-retry'],
+      title:
+        'Estimate lands, actual refused by the network → the form stays; the retry finishes it, retro',
+      async run(ctx) {
+        const chips = await openChips(ctx, 'retried');
+        await chips.getByRole('button', { name: 'Start without one' }).click();
+        const { id } = await mine(ctx, 'retried');
+        await untilInProgress(ctx, id);
+        const dialog = await openDoneForm(ctx, 'retried');
+        await dialog.getByLabel('Estimate in hindsight').fill('35');
+        await dialog.getByLabel('Actual (min)').fill('30');
+        const i = await ctx.intercept('setTaskActual');
+        try {
+          await dialog.getByRole('button', { name: 'Mark done' }).click();
+          await dialog.getByText('Couldn’t mark it done — try again.').waitFor({ timeout: 15_000 });
+          await ctx.shot('done-retry-failed');
+        } finally {
+          await i.release();
+        }
+        await markDone(dialog);
+        const p = await pointOf(ctx, id);
+        if (p.estimateLockedMin !== 35 || p.actualAccruedMin !== 30 || p.estimateSource !== 'retro')
           throw new Error(`point ${JSON.stringify(p)}`);
       },
     },
@@ -316,7 +430,7 @@ export const calibrationIntegrity: Scenario = {
         await untilInProgress(ctx, (await mine(ctx, 'zeroed')).id);
         const dialog = await openDoneForm(ctx, 'zeroed');
         await dialog.getByLabel('Actual (min)').fill('0');
-        await dialog.getByText('Minutes need to be at least 1.').waitFor({ timeout: 5_000 });
+        await dialog.getByText('Whole minutes, at least 1.').waitFor({ timeout: 5_000 });
         if (!(await dialog.getByRole('button', { name: 'Mark done' }).isDisabled()))
           throw new Error('Mark done is enabled at 0');
         await ctx.shot('actual-zero');
@@ -342,6 +456,10 @@ export const calibrationIntegrity: Scenario = {
         if (!(await split.isDisabled())) throw new Error('Split is enabled with no estimate');
         await dialog.getByLabel("This part's estimate (min)").fill('15');
         await ctx.shot('split-asks-estimate');
+        await dialog.getByRole('button', { name: 'Keep going' }).click();
+        await dialog.getByRole('button', { name: 'Done with this part' }).click();
+        if ((await actual.inputValue()) !== '20')
+          throw new Error('Keep going and back lost the typed actual');
         await split.click();
         await dialog.waitFor({ state: 'hidden', timeout: 15_000 });
         const p = await pointOf(ctx, id);
@@ -419,6 +537,8 @@ export const calibrationIntegrity: Scenario = {
         'mcp-unscoped-retro',
         'mcp-revision',
         'mcp-status-done',
+        'mcp-split-done',
+        'mcp-backfill-once',
       ],
       title: 'complete_task and update_task, scoped and unscoped',
       async run(ctx) {
@@ -451,6 +571,31 @@ export const calibrationIntegrity: Scenario = {
         if (!said?.includes(GATE)) throw new Error(`update_task said: ${said}`);
         if ((await ctx.api.reads.getTask(status.id))?.status !== 'in_progress')
           throw new Error('the gate’s refusal moved the task');
+
+        const splitting = await mine(ctx, 'msplit');
+        await ctx.mcp.writes.updateTask(splitting.id, { status: 'in_progress' });
+        const input = { finish: 'done', followUpTitle: name(ctx, 'mrest'), actualMin: 9 } as const;
+        const refused = await refusal(ctx.mcp.writes.splitTask(splitting.id, input));
+        if (!refused?.includes(GATE)) throw new Error(`split_task said: ${refused}`);
+        if ((await ctx.api.reads.listTasks()).some((x) => x.title === name(ctx, 'mrest')))
+          throw new Error('the refused split created its follow-up');
+        await ctx.mcp.writes.splitTask(splitting.id, { ...input, estimateMin: 6 });
+        const d = await pointOf(ctx, splitting.id);
+        if (d.estimateLockedMin !== 6 || d.estimateSource !== 'retro')
+          throw new Error(`split: ${JSON.stringify(d)}`);
+
+        // The one shape left on dev with no lock: unscoped part, parent marked done, part deleted.
+        const ex = await mine(ctx, 'exparent');
+        const part = await mine(ctx, 'expart');
+        await ctx.mcp.writes.completeTask(part.id, 7, undefined, 7);
+        await ctx.mcp.writes.completeTask(ex.id);
+        await ctx.mcp.writes.deleteTask(part.id);
+        await ctx.mcp.writes.updateTask(ex.id, { estimateMin: 30 });
+        const e = await pointOf(ctx, ex.id);
+        if (e.estimateLockedMin !== 30 || e.estimateSource !== 'retro')
+          throw new Error(`backfill: ${JSON.stringify(e)}`);
+        const twice = await refusal(ctx.mcp.writes.updateTask(ex.id, { estimateMin: 40 }));
+        if (!twice?.includes('history')) throw new Error(`second backfill said: ${twice}`);
       },
     },
     {
@@ -471,11 +616,18 @@ export const calibrationIntegrity: Scenario = {
       entry: 'api',
       title: 'Delete what this scenario left open, so later scenarios’ lists stay short',
       async run(ctx) {
-        const tasks = await ctx.api.reads.listTasks();
-        const parentId = tasks.find((t) => t.title === name(ctx, 'splitme'))?.parentId;
-        for (const what of ['custom', 'nudged', 'zeroed', 'mstatus'])
+        // A split gives its parent the title: this also takes Part 1 and the next part.
+        for (const what of [
+          'custom',
+          'nudged',
+          'failing',
+          'zeroed',
+          'mstatus',
+          'homerow',
+          'splitme',
+          'msplit',
+        ])
           await ctx.api.writes.deleteTask((await mine(ctx, what)).id);
-        if (parentId) await ctx.api.writes.deleteTask(parentId);
       },
     },
     {
