@@ -286,7 +286,7 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
 
 ## Tests
 
-- **`tools/mailroom/run-fixtures.sh`** runs every `testdata/jobs.jsonl` case against the real runner and a fresh temp `.hostjobs`. `curl` and `security` are stubbed as **exported shell functions**, not stub files. A process command line holding a path that ends in the curl name, next to `/tmp/`, trips COI's Sigma rule (COI-INCIDENTS → Incident H). Each case asserts:
+- **`tools/mailroom/run-fixtures.sh`** runs every `testdata/jobs.jsonl` case against the real runner and a fresh temp `.hostjobs`, in shards (`MAILROOM_FIXTURE_JOBS`, default the machine's cores up to 4, `1` runs them in order), so output comes grouped by shard. The pass count must equal the case count, so a lost shard fails the run. `curl` and `security` are stubbed as **exported shell functions**, not stub files. A process command line holding a path that ends in the curl name, next to `/tmp/`, trips COI's Sigma rule (COI-INCIDENTS → Incident H). Each case asserts:
   - the result fields;
   - the exact list of `METHOD path` calls;
   - that the token arrives only through the header file, never on argv;

@@ -37,7 +37,7 @@ describe('mailroom runner', () => {
         cause: err,
       });
     }
-    expect(out).toMatch(/# \d+ passed, 0 failed/);
+    expect(out).toMatch(/# (\d+) passed, 0 failed, of \1 cases/); // a shard lost shows as a shortfall
   });
 
   it('jobs.jsonl is exactly what gen-jobs.py generates', () => {

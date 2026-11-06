@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { validateSimParams, type IosOp } from '../../mailroom/sim.ts';
 import { MATRIX_EXEMPT, matrixProblems } from '../matrix';
 import { SCENARIOS, globMatch, selectScenarios, slowScenarios } from './index';
-import type { Scenario } from '../scenario';
+import { NeedsYou, type Ctx, type Scenario } from '../scenario';
 
 // The gate's half of MATRIX_GAP: a scenario whose rows don't hold fails CI before any devcheck runs.
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -74,6 +75,34 @@ describe('the slow tier', () => {
     expect(hit('app/src/auth/userStore.ts')).toBe(true);
     expect(hit('tools/mailroom/jobs/sim.sh')).toBe(true);
     expect(hit('app/src/pages/Home/index.tsx')).toBe(false);
+  });
+
+  describe('ios-standalone plans', () => {
+    const steps = () => SCENARIOS.find((s) => s.id === 'ios-standalone')!.steps;
+    const step = (id: string) => steps().find((s) => s.id === id)!;
+    const sent: Record<string, IosOp[]> = {};
+    const ctx = {
+      nonce: 'x1full',
+      ios: { run: async (name: string, ops: IosOp[]) => void (sent[name] = ops) },
+      api: { reads: { getTask: async () => ({ status: 'in_progress' }) } },
+    } as unknown as Ctx;
+
+    it('verify proves nothing, so says needs you, until the Done form step has completed', async () => {
+      await expect(step('verify').run(ctx)).rejects.toBeInstanceOf(NeedsYou);
+      await step('done-form').run(ctx);
+      await expect(step('verify').run(ctx)).resolves.toBeUndefined();
+    });
+
+    it('every plan is valid, erases past a dropped tap, and the last shuts the sim down', async () => {
+      for (const id of ['launch', 'capture', 'done-form', 'relaunch']) await step(id).run(ctx);
+      for (const [name, plan] of Object.entries(sent)) {
+        const params = { sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan };
+        expect(validateSimParams(params), name).toBeNull();
+      }
+      for (const name of ['capture', 'done-form'])
+        expect(sent[name]!.find((o) => o.op === 'erase')).toEqual({ op: 'erase', n: 6 });
+      expect(sent.relaunch!.at(-1)).toEqual({ op: 'shutdown' });
+    });
   });
 
   it('every ios-standalone slow path exists: a rename would silently stop the sim running', () => {

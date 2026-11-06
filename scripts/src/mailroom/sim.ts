@@ -54,6 +54,7 @@ export const TAP_DENY = [
   'return',
   'add to today',
   'add place',
+  'focus',
 ];
 // sim.sh's device profile screen, in points: coordinates past it are refused (runner-fixtures.test.ts pins both).
 export const SIM_W = 440;
@@ -275,7 +276,11 @@ function opOk(o: unknown): boolean {
 }
 
 const normLabel = (s: string) => s.toLowerCase().replace(/^ +/, '').replace(/ +$/, '');
-const denied = (o: Obj) => o.op === 'tap' && TAP_DENY.includes(normLabel(o.label as string));
+const denied = (o: Obj) => {
+  if (o.op !== 'tap') return false;
+  const l = normLabel(o.label as string);
+  return TAP_DENY.some((d) => l === d || l.startsWith(`${d} `));
+};
 
 function crossOk(steps: Obj[]): boolean {
   if (steps.filter((s) => s.op === 'shot').length > MAX_SHOTS) return false;
@@ -396,7 +401,7 @@ export async function runSimJob(d: SimDeps, job: SimJob): Promise<SimResult> {
             : `last result ${Math.round((d.clock.now() - seen.lastResultMs) / 60_000)} min ago`;
         throw new IosUnavailable(
           'MAC_UNREACHABLE',
-          `no pickup in ${PICKUP_MS / 1000} s — Mac asleep or mailroom not running (${age})`,
+          `no pickup in ${PICKUP_MS / 1000} s — Mac asleep, mailroom not running, or busy with another job (${age})`,
         );
       }
       break; // taken just now

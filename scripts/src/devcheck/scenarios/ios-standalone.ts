@@ -6,7 +6,7 @@
 // draft by key taps and erases it. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
 // re-measure (keyboard up, the capture bar sits at y 462); a MISS after an app change means a plan needs new ones —
 // read the step's screenshot.
-import type { Ctx, Scenario } from '../scenario';
+import { needsYou, type Ctx, type Scenario } from '../scenario';
 import type { IosOp } from '../../mailroom/sim';
 
 // One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters.
@@ -18,6 +18,10 @@ const marker = (ctx: Ctx) =>
     .slice(0, 12);
 const title = (ctx: Ctx) => `devcheck-ios ${marker(ctx)}`;
 let taskId = '';
+let drove = false; // the sim got through the Done form, so "untouched" means something
+// Four typed keys, two spare deletes: a delete tap can drop silently (job …043145Z…-capture-d571 left a Z), and one on an
+// empty field does nothing. The rows still prove the placeholder returns; this does hide how often taps drop.
+const ERASE = 6;
 
 const LAUNCH: IosOp[] = [
   { op: 'launch' },
@@ -64,7 +68,7 @@ const CAPTURE: IosOp[] = [
     as: 'send',
   },
   { op: 'expect', as: 'send', enabled: true },
-  { op: 'erase', n: 4 },
+  { op: 'erase', n: ERASE },
   { op: 'expect', as: 'bar', valueIs: 'What happened?' },
   { op: 'expect', as: 'send', enabled: false },
   { op: 'blur' },
@@ -103,7 +107,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'find', label: 'Reflection', scan: { x: 200, from: 120, to: 690 }, as: 'again' },
   { op: 'expect', as: 'again', aboveKeyboard: true },
   { op: 'keys', text: 'zzqx' },
-  { op: 'erase', n: 4 },
+  { op: 'erase', n: ERASE },
   { op: 'blur' },
   { op: 'tap', label: 'Cancel', scan: { x: 190, from: 150, to: 720 }, role: 'AXButton' },
   { op: 'shot', name: 'done-form-closed' },
@@ -122,6 +126,7 @@ const RELAUNCH: IosOp[] = [
   { op: 'readBuild' },
   { op: 'expectBuild' },
   { op: 'shot', name: 'relaunch' },
+  { op: 'shutdown' }, // the run's last sim job: nothing else needs it, and it's the heaviest thing on the Mac
 ];
 
 // What these rows can see: the keyboard's lift and the fields it covers, zoom, the shell and its insets, staying signed
@@ -135,9 +140,13 @@ const APP = [
   'app/src/index.css',
   'app/src/auth/**',
   'app/src/lib/useKeyboardInset.ts',
+  'app/src/components/AppNav.tsx',
   'app/src/components/AppShell.tsx',
   'app/src/components/Modal/**',
   'app/src/modules/capture/CaptureBar.tsx',
+  'app/src/modules/capture/mode.ts',
+  'app/src/modules/capture/useAutoGrow.ts',
+  'app/src/modules/tasks/QueryControls.tsx',
   'app/src/modules/tasks/DoneForm.tsx',
   'app/src/modules/tasks/TaskModal.tsx',
   'app/src/modules/tasks/editor/TaskEditor.tsx',
@@ -289,6 +298,7 @@ export const iosStandalone: Scenario = {
       async run(ctx) {
         const t = await ctx.mcp.writes.createTask({ title: title(ctx), estimateMin: 15 });
         taskId = t.id;
+        drove = false;
         await ctx.mcp.writes.updateTask(t.id, { status: 'in_progress' });
       },
     },
@@ -332,6 +342,7 @@ export const iosStandalone: Scenario = {
       ],
       async run(ctx) {
         await ctx.ios.run('done-form', doneForm(ctx));
+        drove = true;
       },
     },
     {
@@ -351,6 +362,9 @@ export const iosStandalone: Scenario = {
       cost: 'slow',
       proves: ['ios-never-writes', 'done-form-draft-cleared'],
       async run(ctx) {
+        // Reached with the sim steps skipped (a missing keyboard is that step's needs-you), this would prove nothing.
+        if (!drove)
+          needsYou('the Done form step never completed, so an untouched task proves nothing');
         const t = await ctx.api.reads.getTask(taskId);
         if (!t) throw new Error('the task is gone');
         if (t.status !== 'in_progress') throw new Error(`status ${t.status}, want in_progress`);

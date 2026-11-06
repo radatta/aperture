@@ -12,6 +12,7 @@ import {
   runSimJob,
   validateSimParams,
 } from '../mailroom/sim.ts';
+import { INSTALL_LINE } from '../mailroom/open-pr.ts';
 import type { IosOp, SimResult } from '../mailroom/sim.ts';
 import type { Fs } from '../mailroom/submit.ts';
 import { needsYou } from './scenario';
@@ -43,6 +44,7 @@ export interface IosDeps {
   outDir: string; // the run's artifact dir
   copy: (from: string, to: string) => void;
   log: (s: string) => void;
+  repoVersion?: () => string; // the runner this checkout would install; an older one on the Mac gets a line once
 }
 
 export interface Ios {
@@ -59,6 +61,16 @@ const runWide = (reason: string) => !reason.endsWith('/KEYBOARD_SETUP');
 export function createIos(d: IosDeps): Ios {
   let out: string | null = null;
   let ran = false;
+  let lastBooted: string | undefined;
+  let warned = false;
+  const warnStaleRunner = (r: SimResult) => {
+    const want = d.repoVersion?.();
+    if (warned || !want || !r.runnerVersion || r.runnerVersion === want) return;
+    warned = true;
+    d.log(
+      `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall: ${INSTALL_LINE}`,
+    );
+  };
   const jobs: IosJobSummary[] = [];
   const shots: string[] = [];
 
@@ -135,6 +147,8 @@ export function createIos(d: IosDeps): Ios {
         }
         keepShots(scenarioId, name, r);
         jobs.push(summarize(name, r));
+        lastBooted = r.booted;
+        warnStaleRunner(r);
         // Credited to the build the app actually ran; a pass on another build is no pass for this one.
         const want = d.expectedSha.slice(0, 7);
         const seen = r.buildsSeen?.at(-1);
@@ -146,6 +160,7 @@ export function createIos(d: IosDeps): Ios {
     async finish() {
       // No shutdown job to a Mac that isn't answering; any other unavailability (NOT_LAUNCHED…) left it booted.
       if (!ran || (out && /^MAC_(UNREACHABLE|STALLED)/.test(out))) return;
+      if (lastBooted === 'off') return; // the plan's own last op shut it down
       const job = makeSimJob(
         'shutdown',
         { sha: d.expectedSha, timeoutSec: 60, shutdown: false, steps: [{ op: 'shutdown' }] },

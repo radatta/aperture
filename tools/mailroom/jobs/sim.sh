@@ -40,7 +40,7 @@ SIM_MAX_PROBES=400
 if [ "$(uname)" = Darwin ]; then SIM_MV_NOFOLLOW=-fh; else SIM_MV_NOFOLLOW=-fT; fi # mv onto a link: replace it
 SIM_TABS='["Home","Log","Tasks","Recruiting","Habits","Rolls","Flux","Finances","Inbox","Settings"]'
 # The app's write buttons, refused for `tap` (lowercased, exact). A belt: the boundary is the test user's partition.
-SIM_DENY='["save","save log","save task","save idea","mark done","start","stop","delete","complete","export json","generate token","rotate","connect google calendar","sign out","save password","not now","return","add to today","add place"]'
+SIM_DENY='["save","save log","save task","save idea","mark done","start","stop","delete","complete","export json","generate token","rotate","connect google calendar","sign out","save password","not now","return","add to today","add place","focus"]'
 
 # Prints a reason code, or nothing when the plan is good. Same order as sim.ts → validateSimParams.
 SIM_JQ='
@@ -83,7 +83,7 @@ SIM_JQ='
     elif .op == "shot" then keysok(["op","name"]; []) and (.name | whole("^[a-z0-9-]{1,32}$"))
     elif .op == "wait" then keysok(["op","s"]; []) and (.s | int(1; 30))
     else false end;
-  def denied: .op == "tap" and ((.label | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | index($l)) != null;
+  def denied: .op == "tap" and ((.label | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | any(. as $d | $l == $d or ($l | startswith($d + " "))));
   def crossok:
     . as $s | length as $n
     | ([$s[] | select(.op == "shot")] | length) <= 20
@@ -592,7 +592,16 @@ sim_sign_in() {
   # HID typing flipped the keyboard prefs back: re-arm, reboot, relaunch.
   sim_arm || return 1
   sim_op_launch || return 1
-  [ "$SIM_SIGNED" = already ] || { sim_err SIGNIN_FAILED AUTH_REJECTED "signed out again after the reboot"; return 1; }
+  # The session should survive a restart, so this is the row's failure, not the environment's; the card can show for a
+  # moment before the tokens are restored (inference), so give it a few reads first.
+  i=0
+  while [ "$SIM_SIGNED" != already ] && [ "$i" -lt 5 ]; do
+    sleep 2
+    s="$(sim_landmark)" || return 1
+    [ "$s" != already ] || SIM_SIGNED=already
+    i=$((i + 1))
+  done
+  [ "$SIM_SIGNED" = already ] || { sim_fail LANDMARK "signed out again after the reboot"; return 1; }
   SIM_SIGNED=fresh
   SIM_NOTE="signed in fresh; rebooted to re-arm the keyboard"
 }
@@ -666,7 +675,7 @@ sim_op_absent() {
 
 sim_op_tap() {
   sim_find "$1" || return 1
-  if jq -e --argjson deny "$SIM_DENY" '((.label // "") | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | index($l) != null' <<<"$SIM_HIT" >/dev/null; then
+  if jq -e --argjson deny "$SIM_DENY" '((.label // "") | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | any(. as $d | $l == $d or ($l | startswith($d + " ")))' <<<"$SIM_HIT" >/dev/null; then
     sim_fail DENIED "the match is a write button; not tapped"
     return 1
   fi
@@ -697,7 +706,7 @@ sim_accessory_top() {
 }
 
 sim_op_expect() {
-  local a e r f top bottom w1 w2
+  local a e r f top bottom w1 w2 seen
   if [ "$(jq -r '.signedIn // false' <<<"$1")" = true ]; then
     case "$SIM_SIGNED" in already | fresh) SIM_NOTE="signed in ($SIM_SIGNED)"; return 0 ;; esac
     sim_fail LANDMARK "not signed in ($SIM_SIGNED)"
@@ -734,7 +743,9 @@ sim_op_expect() {
     SIM_NOTE="$a $f as expected"
     return 0
   fi
-  sim_fail VALUE "$a $f differs"
+  # What it saw, filtered like a MISS note. No sign-in value can get here: expect runs between ops, and a sensitive read has none.
+  seen="$(jq -r --arg f "$f" 'if $f == "value" then .value else .label end | . // "" | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40]' <<<"$e")"
+  sim_fail VALUE "$a $f is \"$seen\", want \"$(jq -r '.valueIs // .labelIs' <<<"$1")\""
 }
 
 # The soft keyboard's keys (part of the device profile).
@@ -833,6 +844,14 @@ sim_op_expectBuild() {
   sim_fail STALE_BUILD "ran build $got, expected $want — rerun"
 }
 
+# What the screen showed when a row failed; a plan's own shots already reached their cap, or a sign-in, gets none. Its own
+# failure changes nothing about the row's.
+sim_fail_shot() {
+  local st="$SIM_ST" rs="$SIM_RS" dt="$SIM_DT" note="$SIM_NOTE"
+  if [ "$1" != signIn ] && [ "$SIM_SENSITIVE" = false ] && [ "$SIM_SHOTS" -lt 20 ]; then sim_op_shot '{"name":"fail"}' || true; fi
+  SIM_ST="$st" SIM_RS="$rs" SIM_DT="$dt" SIM_NOTE="$note"
+}
+
 sim_op_shot() {
   local name
   name="$(jq -r .name <<<"$1")"
@@ -895,6 +914,7 @@ run_sim() {
         [ ! -e "$SIM_P.over" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT=PROBES SIM_NOTE="over $SIM_MAX_PROBES point reads"; }
         [ ! -e "$SIM_P.late" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT="" SIM_NOTE="over the ${budget} s budget"; }
         status="${SIM_ST:-error}"
+        if [ "$status" = fail ]; then sim_fail_shot "$op"; fi
       fi
     fi
     jq -cn --argjson i "$i" --arg op "$op" --arg st "$status" --argjson ms "$(($(sim_ms) - t0))" --arg note "$SIM_NOTE" \

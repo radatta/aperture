@@ -112,8 +112,21 @@ simbase="$(head -1 "$CASES" | jq -c .simBase)"
 defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 deftape="$(sed -n 2p "$CASES" | jq -c .defaultTape)"
 
-while IFS= read -r c; do
-  name="$(jq -r .name <<<"$c")"
+run_shard() { # $1: this shard's index; a case runs here when its index mod MAILROOM_FIXTURE_JOBS is $1
+  local ci=0
+  while IFS= read -r c; do
+  ci=$((ci + 1))
+  [ $((ci % MAILROOM_FIXTURE_JOBS)) = "$1" ] || continue
+  # Every scalar the harness reads from the case, in one jq: one value per line (the JSON ones are compact, so
+  # single-line), read back in order.
+  {
+    IFS= read -r name; read -r kind; read -r setup; read -r raw; read -r no_token; read -r no_simpw; read -r no_simpw_read
+    read -r want_rc; read -r want_left; read -r no_result; read -r calls_type; read -r has_post; read -r has_md; read -r want_pw
+    read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j
+  } <<<"$(jq -r '[.name, (.kind // "open-pr"), (.setup // ""), (if has("raw") then "1" else "" end),
+    (.noToken // false), (.noSimPassword // false), (.noSimPasswordRead // false), (.exit // 0), (.inboxLeft // 0),
+    (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
+    (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson)] | .[]' <<<"$c")"
   T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state"
@@ -121,20 +134,20 @@ while IFS= read -r c; do
   : >"$T/calls"
   : >"$T/simcalls"
   now="$(date +%s)"
-  kind="$(jq -r '.kind // "open-pr"' <<<"$c")"
   cbase="$base"
   [ "$kind" != sim ] || cbase="$simbase"
 
   # The job: base ⊕ patch, minus unset paths, submittedAt relative to now, bodySha256 computed when "auto".
-  job="$(jq -c --argjson base "$cbase" --argjson now "$now" '. as $c | ($base * ($c.patch // {}))
+  { IFS= read -r job; read -r id; read -r file; read -r sha_auto; } <<<"$(jq -r --argjson base "$cbase" --argjson now "$now" '. as $c | ($base * ($c.patch // {}))
     | reduce ($c.unset // [])[] as $p (.; delpaths([$p]))
     | if $c.bodyRepeat then .params.body = ($c.bodyRepeat.s * $c.bodyRepeat.n) else . end
-    | if .submittedAt == "now" then .submittedAt = (($now - 60 * ($c.submittedAgoMin // 0)) | todate) else . end' <<<"$c")"
-  if [ "$(jq -r '.params.bodySha256? // ""' <<<"$job")" = auto ]; then
+    | if .submittedAt == "now" then .submittedAt = (($now - 60 * ($c.submittedAgoMin // 0)) | todate) else . end
+    | . as $j | ($j | tojson),
+      ((if ($j.id | type) == "string" then $j.id else "20261101T204512Z-mac-mailroom-3kx9" end) as $id | $id, ($c.file // "\($id).json")),
+      ($j.params.bodySha256? // "")' <<<"$c")"
+  if [ "$sha_auto" = auto ]; then
     job="$(jq -c --arg s "$(jq -j .params.body <<<"$job" | sha256)" '.params.bodySha256 = $s' <<<"$job")"
   fi
-  id="$(jq -r 'if (.id | type) == "string" then .id else "20261101T204512Z-mac-mailroom-3kx9" end' <<<"$job")"
-  file="$(jq -r --arg d "$id.json" '.file // $d' <<<"$c")"
   rid="${file%.json}" # results land under the file's stem
 
   # The API: default routes ⊕ the case's (a null route removes it); an optional near expiry on GET /user.
@@ -147,8 +160,6 @@ while IFS= read -r c; do
   jq -r --argjson d "$deftape" '((.tape // []) + $d)[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring),
     (.out // "" | if type == "string" then . else tojson end)] | join("\t")' <<<"$c" >"$T/tape"
 
-  setup="$(jq -r '.setup // ""' <<<"$c")"
-  raw="$(jq -r 'if has("raw") then "1" else "" end' <<<"$c")"
   if [ -n "$raw" ]; then jq -j .raw <<<"$c" >"$hj/staging/x"; else printf '%s' "$job" >"$hj/staging/x"; fi
   case "$setup" in
     symlink) printf 'secret\n' >"$T/outside.txt"; ln -s "$T/outside.txt" "$hj/inbox/$file" ;;
@@ -180,22 +191,21 @@ while IFS= read -r c; do
   esac
 
   (
-    [ "$(jq -r '.noToken // false' <<<"$c")" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
-    [ "$(jq -r '.noSimPassword // false' <<<"$c")" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
-    [ "$(jq -r '.noSimPasswordRead // false' <<<"$c")" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
+    [ "$no_token" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
+    [ "$no_simpw" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
+    [ "$no_simpw_read" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
     MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
       MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st"
   ) >"$T/out" 2>&1
   rc=$?
 
   why=""
-  want_rc="$(jq -r '.exit // 0' <<<"$c")"
   [ "$rc" = "$want_rc" ] || why="runner exited $rc, want $want_rc"
   left="$(find "$hj/inbox/" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
-  [ -n "$why" ] || [ "$left" = "$(jq -r '.inboxLeft // 0' <<<"$c")" ] || why="$left entries left in the inbox"
+  [ -n "$why" ] || [ "$left" = "$want_left" ] || why="$left entries left in the inbox"
 
   if [ -z "$why" ]; then
-    if [ "$(jq -r '.noResult // false' <<<"$c")" = true ]; then
+    if [ "$no_result" = true ]; then
       found="$(find "$hj/results/" "$T/elsewhere" -name result.json 2>/dev/null | wc -l | tr -d ' ')"
       [ "$found" = 0 ] || why="wrote $found result(s), want none"
     elif [ "$setup" = many ]; then
@@ -203,30 +213,35 @@ while IFS= read -r c; do
       [ "$found" = 5 ] || why="wrote $found results, want 5"
     elif [ ! -f "$hj/results/$rid/result.json" ]; then
       why="no results/$rid/result.json"
-    elif ! jq -e --argjson e "$(jq -c .expect <<<"$c")" '. as $r | $e | to_entries | all(.value == $r[.key])' \
+    elif ! jq -e --argjson e "$expect_j" '. as $r | $e | to_entries | all(.value == $r[.key])' \
       "$hj/results/$rid/result.json" >/dev/null; then
-      why="result $(cat "$hj/results/$rid/result.json") does not match $(jq -c .expect <<<"$c")"
+      why="result $(cat "$hj/results/$rid/result.json") does not match $expect_j"
     fi
   fi
 
   # Every call: exactly the expected METHOD path list, the token only in the header file, never on argv.
-  if [ -z "$why" ] && [ "$(jq -r '.calls // [] | type' <<<"$c")" = array ]; then
-    got="$(cut -d' ' -f1,2 "$T/calls" | jq -R . | jq -sc .)"
-    want="$(jq -c '.calls // []' <<<"$c")"
+  if [ -z "$why" ] && [ "$calls_type" = array ]; then
+    got="$(cut -d' ' -f1,2 "$T/calls" | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    want="$want_calls"
     [ "$got" = "$want" ] || why="calls $got, want $want"
     if grep -qv ' auth=ok leak=0$' "$T/calls"; then why="a call without the header-file token, or with it on argv"; fi
   fi
   # The exact request body of a call: "post" for POST …/pulls, "md" for POST /markdown.
   for k in post md; do
-    [ -z "$why" ] && [ "$(jq -r --arg k "$k" 'has($k)' <<<"$c")" = true ] || continue
-    case "$k" in post) route='^POST /repos/radatta/aperture/pulls ' ;; md) route='^POST /markdown ' ;; esac
+    case "$k" in post) has="$has_post"; body_j="$post_j"; route='^POST /repos/radatta/aperture/pulls ' ;; md) has="$has_md"; body_j="$md_j"; route='^POST /markdown ' ;; esac
+    [ -z "$why" ] && [ "$has" = true ] || continue
     idx="$(grep -n "$route" "$T/calls" | head -1 | cut -d: -f1)"
     sent="$( [ -z "$idx" ] || cat "$T/calls.$((idx - 1)).data" 2>/dev/null || true)"
-    jq -e --argjson p "$(jq -c --arg k "$k" '.[$k]' <<<"$c")" '. == $p' <<<"$sent" >/dev/null 2>&1 || why="$k body ${sent:-not sent}"
+    jq -e --argjson p "$body_j" '. == $p' <<<"$sent" >/dev/null 2>&1 || why="$k body ${sent:-not sent}"
   done
   if [ -z "$why" ] && [ "$setup" = hardlink ] && [ ! -f "$hj/staging/mine" ]; then why="the hard-linked original went missing"; fi
   if [ -z "$why" ] && grep -rq -e "$MAILROOM_FIXTURE_TOKEN" -e BODYMARK -e "$MAILROOM_FIXTURE_PW" "$T/out" "$hj/results/" 2>/dev/null; then
     why="the token, the test user's password or body text reached the log or a result"
+  fi
+  # A step's note, by step index: what the job says to whoever reads its result.
+  if [ -z "$why" ] && [ "$notes_j" != "{}" ]; then
+    jq -e --argjson n "$notes_j" '.steps as $s | $n | to_entries | all(.value as $v | ($s[.key | tonumber].note // "") | contains($v))' \
+      "$hj/results/$rid/result.json" >/dev/null 2>&1 || why="a step note isn't $notes_j"
   fi
   # sim cases: tool calls in order (substrings), calls that must not happen, password reads/typings, artifacts.
   if [ -z "$why" ] && [ "$kind" = sim ]; then
@@ -248,7 +263,6 @@ while IFS= read -r c; do
     typed="$(grep -c -F -- "<<<$MAILROOM_FIXTURE_PW" "$T/simcalls" || true)"
     reads=0
     [ ! -f "$T/simcalls.pw" ] || reads="$(wc -l <"$T/simcalls.pw" | tr -d ' ')"
-    want_pw="$(jq -r '.pwTyped // 0' <<<"$c")"
     [ -n "$why" ] || [ "$typed" = "$want_pw" ] || why="the password was typed $typed times, want $want_pw"
     [ -n "$why" ] || [ "${reads:-0}" = "$want_pw" ] || why="the password was read ${reads:-0} times, want $want_pw"
     if [ -z "$why" ] && [ "$(grep -v -F -- "<<<$MAILROOM_FIXTURE_PW" "$T/simcalls" | grep -c -F -- "$MAILROOM_FIXTURE_PW")" != 0 ]; then
@@ -264,7 +278,25 @@ while IFS= read -r c; do
   fi
   if [ -z "$why" ]; then ok "$name"; else bad "$name" "$why" "$T/out"; fi
   rm -r -f -- "$T"
-done < <(tail -n +3 "$CASES")
+  done < <(tail -n +3 "$CASES")
+}
+# Up to 4 shards, never more than the machine has cores: no gain past that, and CI's other tests share its two.
+if [ -z "${MAILROOM_FIXTURE_JOBS:-}" ]; then
+  MAILROOM_FIXTURE_JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  [ "$MAILROOM_FIXTURE_JOBS" -le 4 ] 2>/dev/null || MAILROOM_FIXTURE_JOBS=4
+fi
+OUTD="$(mktemp -d)"
+trap 'rm -r -f -- "$OUTD"' EXIT
+s=0
+while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do
+  run_shard "$s" >"$OUTD/$s" 2>&1 &
+  s=$((s + 1))
+done
+wait
+s=0
+while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do cat "$OUTD/$s"; s=$((s + 1)); done
+pass="$(cat "$OUTD"/* | grep -c '^ok - ' || true)"
+failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 
 # sim_cap kills a command that outlives its cap (the sim job's only guard against a hung axe/simctl/security).
 (

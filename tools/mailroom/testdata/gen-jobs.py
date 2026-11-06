@@ -286,6 +286,8 @@ srej('sim: a reused name is BAD_OP', 'BAD_OP', [L, F('Home', 38, 168, 'h'), F('T
 srej('sim: a kill not followed by launch is BAD_OP', 'BAD_OP', [L, {'op': 'kill', 'method': 'terminate'}, {'op': 'nav', 'tab': 'Home'}])
 srej('sim: shutdown before the last op is BAD_OP', 'BAD_OP', [L, {'op': 'shutdown'}, {'op': 'wait', 's': 1}])
 srej('sim: 21 screenshots is BAD_OP', 'BAD_OP', [L] + [{'op': 'shot', 'name': f's{i}'} for i in range(21)])
+srej('sim: tapping Start timer (an entry and a space) is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Start timer', 'near': {'x': 200, 'y': 600}}])
+srej('sim: tapping Focus is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Focus', 'near': {'x': 200, 'y': 600}}])
 srej('sim: tapping Mark done is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Mark done', 'near': {'x': 200, 'y': 600}}])
 srej('sim: tapping Save log is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Save log', 'near': {'x': 360, 'y': 810}}])
 srej('sim: tapping " Save " (padded) is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': ' Save ', 'near': {'x': 200, 'y': 600}}])
@@ -405,7 +407,17 @@ sfail('sim: another app in front is NOT_IN_APP', 'NOT_IN_APP', [F('Capture log',
 sfail('sim: a field under the keyboard is BELOW_KEYBOARD', 'BELOW_KEYBOARD', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}])
 spass('sim: a field above the keyboard passes', [L, F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}],
       tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36))])
-sfail('sim: another value is VALUE', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}])
+sfail('sim: another value is VALUE, and the note says what it saw', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
+      notes={'2': 'bar value is "What happened?", want "zzqx"'}, simIncludes=['screenshot --output'])
+sfail('sim: a failed step takes one screenshot, recorded with the job', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}], simCount={'screenshot --output': 1})
+sfail('sim: a value is filtered in the note (no tags, no newlines)', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXTextArea', 'Capture log', '<b>Z</b>' + 'y' * 60, 25, 877, 346, 36))], notes={'2': 'bar value is "bZ/b' + 'y' * 36 + '", want'})
+sc('sim: signed out after the reboot is LANDMARK, a row failure, with no screenshot of the sign-in', [L, {'op': 'signIn'}],
+      tape=[pt(220, 895, {}, n=1), pt(220, 895, CAPTURE, n=1), pt(220, 895, {}), pt(220, 530, SIGNIN, n=2), pt(220, 530, {}, n=1), pt(220, 530, SIGNIN)] + FORM + [pt(220, 588, {})],
+      expect={'status': 'fail', 'reason': 'ASSERT', 'detail': 'LANDMARK', 'signedIn': 'false', 'booted': 'rebooted'}, pwTyped=1, simExcludes=['screenshot'])
+spass('sim: the Sign in card showing a moment after the reboot still signs in', [L, {'op': 'signIn'}],
+      tape=[pt(220, 895, {}, n=1), pt(220, 530, SIGNIN, n=2), pt(220, 530, {}, n=1)] + [pt(220, 895, CAPTURE, n=1), pt(220, 895, {}, n=2), pt(220, 530, SIGNIN, n=1), pt(220, 895, CAPTURE)] + FORM + [pt(220, 588, {})],
+      expect={'signedIn': 'fresh'}, pwTyped=1)
 sfail('sim: an enabled control expected disabled is ENABLED', 'ENABLED', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'enabled': False}])
 sfail('sim: a zoomed field is WIDTH', 'WIDTH', [L, F('Capture log', 220, 895, 'bar0'), F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'sameWidthAs': 'bar0'}],
       tape=[pt(200, 417, el('AXTextArea', 'Capture log', '', 18, 399, 366, 40))])
@@ -415,6 +427,10 @@ spass('sim: the two-launch refresh (old build, then the new one) passes', [L, {'
       tape=[pt(57, 935, el('AXStaticText', '', 'Build bbbbbbb', 20, 852, 71, 17), n=1)], expect={'buildsSeen': ['bbbbbbb', 'aaaaaaa']})
 sfail('sim: no landmark after launch is LANDMARK', 'LANDMARK', [L], tape=[pt(220, 895, {}), pt(220, 530, {})],
       simIncludes=['swipe --start-x 220 --start-y 450 --end-x 220 --end-y 250'])
+sfail('sim: a prefix landing on Delete task (an entry and a space) is DENIED, not tapped', 'DENIED', [L, {'op': 'tap', 'label': 'Del', 'near': {'x': 200, 'y': 600}, 'radius': 10}],
+      tape=[pt(200, 600, el('AXButton', 'Delete task', '', 150, 590, 100, 30))], simExcludes=['tap -x 200 -y 605'])
+spass('sim: a label that only starts like an entry is tapped', [L, {'op': 'tap', 'label': 'Saved', 'near': {'x': 200, 'y': 600}, 'radius': 10}],
+      tape=[pt(200, 600, el('AXButton', 'Saved', '', 150, 590, 100, 30))], simIncludes=['tap -x 200 -y 605'])
 sfail('sim: a prefix that lands on a write button is DENIED, not tapped', 'DENIED', [L, {'op': 'tap', 'label': 'Sav', 'near': {'x': 200, 'y': 300}, 'radius': 10}],
       tape=[pt(200, 300, el('AXButton', 'Save', '', 180, 280, 80, 40))], simExcludes=['tap -x 220 -y 300'], ts=None)
 sfail('sim: a key not where the layout puts it is MISS', 'MISS', [L, {'op': 'keys', 'text': 'z'}], tape=[pt(91, 800, el('AXButton', 'x', '', 76, 780, 30, 40))],
@@ -438,6 +454,7 @@ spass('sim: keys are tapped on the soft keyboard, never typed', [L, {'op': 'keys
 spass('sim: a nav tab off the row is found after a swipe', [L, {'op': 'nav', 'tab': 'Settings'}], tape=[pt(395, 168, {}, n=1)],
       simIncludes=['swipe --start-x 398 --start-y 168 --end-x 40 --end-y 168', 'tap -x 395 -y 168'])
 spass('sim: shutdown: true shuts the sim down after a pass', patch={'params': {'shutdown': True}}, expect={'booted': 'off'}, simIncludes=['simctl shutdown'])
+spass('sim: a bare shutdown of a sim already off does nothing more', [{'op': 'shutdown'}], expect={'booted': 'off'}, tape=[{'m': 'list devices -j', 'out': dev('Shutdown')}], ts=None)
 spass('sim: a bare shutdown resolves the device first', [{'op': 'shutdown'}], expect={'booted': 'off'},
       simIncludes=['simctl list devices -j', 'simctl shutdown ' + U], simExcludes=['describe-ui', 'bootstatus'])
 sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)

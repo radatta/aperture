@@ -312,7 +312,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     );
     // A thin layer over needs-you: the rows the sim couldn't prove, and why, for the status line and the PR.
     const iosOut = r.coverage.filter(
-      (x) => x.status === 'needs-you' && x.note?.startsWith(`${IOS_NOTE}: `),
+      (x) => x.entry === 'ios' && x.status === 'needs-you' && x.note?.startsWith(`${IOS_NOTE}: `),
     );
     if (d.ios || iosOut.length)
       r.ios = {

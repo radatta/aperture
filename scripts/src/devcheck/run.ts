@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { run as sh } from '../bot/sh.ts';
-import { hostjobsDir, nodeFs } from '../mailroom/submit.ts';
+import { hostjobsDir, nodeFs, repoRunnerVersion } from '../mailroom/submit.ts';
 import { createApiClient } from './api';
 import { launch, loadPlaywright } from './browser';
 import {
@@ -237,6 +237,7 @@ async function main(): Promise<number> {
         outDir: shotsDir,
         copy: copyFileSync,
         log,
+        repoVersion: () => repoRunnerVersion(sh('git', ['rev-parse', '--show-toplevel'])),
       }),
       waitForDeploy: args.deployWait
         ? () =>

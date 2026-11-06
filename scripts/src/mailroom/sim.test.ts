@@ -178,6 +178,12 @@ describe('validateSimParams', () => {
         steps: [{ op: 'tap', label: 'Mark done', near: { x: 1, y: 1 } }],
       }),
     ).toBe('DENIED_TAP');
+    const tap = (label: string) =>
+      validateSimParams({ ...params, steps: [{ op: 'tap', label, near: { x: 1, y: 1 } }] });
+    expect(tap('Start timer')).toBe('DENIED_TAP'); // an entry and a space
+    expect(tap('Focus')).toBe('DENIED_TAP');
+    expect(tap('Saved')).toBeNull();
+    expect(tap('Done')).toBeNull();
     // the first bad op decides: a malformed op before a denied tap is BAD_OP
     expect(
       validateSimParams({

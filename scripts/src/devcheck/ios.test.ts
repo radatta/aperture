@@ -11,6 +11,7 @@ const SHA = 'a'.repeat(40);
 // The Mac: answers each job dropped in the inbox with `answer(job)` (null = never picks it up).
 function mac(
   answer: (job: { id: string; params: { steps: { op: string }[] } }) => Partial<SimResult> | null,
+  repoVersion?: () => string,
 ) {
   const fs = memFs([`${HJ}/inbox`]);
   const submitted: string[] = [];
@@ -42,6 +43,7 @@ function mac(
     );
   };
   const copy = vi.fn();
+  const logs: string[] = [];
   const ios = createIos({
     fs,
     clock: fakeClock(),
@@ -49,9 +51,10 @@ function mac(
     expectedSha: SHA,
     outDir: '/run/shots',
     copy,
-    log: () => undefined,
+    log: (s) => void logs.push(s),
+    ...(repoVersion ? { repoVersion } : {}),
   });
-  return { ios, copy, submitted, client: ios.forScenario('ios-standalone') };
+  return { ios, copy, submitted, logs, client: ios.forScenario('ios-standalone') };
 }
 const caught = (p: Promise<unknown>) =>
   p.then(
@@ -136,6 +139,34 @@ describe('ctx.ios', () => {
       ),
     ).toMatch(/invalid: DENIED_TAP/);
     expect(submitted).toEqual([]);
+  });
+
+  it('finish sends nothing when the last job already shut the sim down', async () => {
+    const { ios, client, submitted } = mac(() => ({ booted: 'off' }));
+    await client.run('w', [{ op: 'launch' }, { op: 'shutdown' }]);
+    await ios.finish();
+    expect(submitted).toEqual(['launch,shutdown']);
+  });
+
+  it('an older runner on the Mac logs the reinstall line once', async () => {
+    const { client, logs } = mac(
+      () => ({ runnerVersion: 'old' }),
+      () => 'new',
+    );
+    await client.run('a', [{ op: 'launch' }]);
+    await client.run('b', [{ op: 'launch' }]);
+    const lines = logs.filter((l) => l.includes('reinstall'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('install.sh?ref=main');
+  });
+
+  it('the runner the repo has logs nothing', async () => {
+    const { client, logs } = mac(
+      () => ({ runnerVersion: 'same' }),
+      () => 'same',
+    );
+    await client.run('a', [{ op: 'launch' }]);
+    expect(logs.filter((l) => l.includes('reinstall'))).toEqual([]);
   });
 
   it('finish shuts the sim down only after a job ran and the Mac was reachable', async () => {
