@@ -123,16 +123,6 @@ describe('suggestCategory', () => {
     expect(ask({ title: 'file the quarterly report' })).toBeNull();
   });
 
-  it('never a category none of whose tasks hold a word', () => {
-    // Three titles the tokeniser reads as nothing: the category has no words, so nothing is its evidence.
-    const h = [...history(), ...rows(['?', '!!', '…'], 'cat-empty', 'e')];
-    const c = cats([{ id: 'cat-empty' }]);
-    expect(ask({ title: 'mulch the tomato beds' }, h, c)?.categoryId).toBe(GARDEN);
-    expect(ask({ title: 'water prune spread sow stake weed' }, h, c)?.categoryId).not.toBe(
-      'cat-empty',
-    );
-  });
-
   it('says nothing when no word has been seen before', () => {
     expect(ask({ title: 'quarterly filing' })).toBeNull();
   });
@@ -170,6 +160,14 @@ describe('suggestCategory', () => {
     it('a line split evenly between them says nothing', () => {
       const line = [...gardenWords.slice(0, 6), ...ledgerWords.slice(0, 6)].join(' ');
       expect(ask({ title: line }, h, c)).toBeNull();
+    });
+
+    it('never names a category whose tasks hold no words at all', () => {
+      // Titles the tokeniser reads as nothing leave it the smallest denominator of all.
+      const empty = [...h, ...rows(['?', '!!', '…'], 'cat-empty', 'e')];
+      const roster = [...c, { id: 'cat-empty', active: true }];
+      const line = gardenWords.slice(0, 10).join(' ');
+      expect(ask({ title: line }, empty, roster)?.categoryId).not.toBe('cat-empty');
     });
 
     it('never names a small category that hasn’t seen the line, when the big one’s words repeat', () => {
