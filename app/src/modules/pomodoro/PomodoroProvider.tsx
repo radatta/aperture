@@ -10,7 +10,7 @@ import { isNotFound } from '../../data/retry';
 import { qk } from '../../data/queryKeys';
 import { PomodoroContext } from './pomodoro-context';
 import type { RunningTimer, StartFocusInput } from './pomodoro-context';
-import { activeSec, isStale, remainingSec, targetSecFor } from './pomodoro';
+import { isStale, remainingSec, stopCapMin, targetSecFor, workedSec } from './pomodoro';
 import { chime, unlockAudio } from './chime';
 
 // The timer engine (PRODUCT §4b, TECH §2.3.3). Owns ALL concurrently-running timers — you run
@@ -41,7 +41,6 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
 
   const [sessions, setSessions] = useState<PomodoroSession[]>([]);
   const [pausedIds, setPausedIds] = useState<Set<string>>(() => new Set());
-  const [blocks, setBlocks] = useState<Record<string, number>>({}); // target multiplier per timer (extend)
   const [chimedIds, setChimedIds] = useState<Set<string>>(() => new Set());
   const [stale, setStale] = useState<PomodoroSession[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -50,7 +49,10 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   const [adoptFailed, setAdoptFailed] = useState(false);
   const [adoptTry, setAdoptTry] = useState(0);
   const [startError, setStartError] = useState<string | null>(null);
-  const fail = useCallback((id: string, msg: string) => setErrors((e) => ({ ...e, [id]: msg })), []);
+  const fail = useCallback(
+    (id: string, msg: string) => setErrors((e) => ({ ...e, [id]: msg })),
+    [],
+  );
   const clear = useCallback((id: string) => setErrors((e) => without(e, id)), []);
 
   // A heartbeat or resume answered after its timer was stopped must not bring the row back.
@@ -68,14 +70,13 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     setSessions((cur) => cur.filter((x) => x.id !== id));
     setPausedIds((p) => withDeleted(p, id));
     setChimedIds((c) => withDeleted(c, id));
-    setBlocks((b) => without(b, id));
     setErrors((e) => without(e, id));
     setMissed((m) => without(m, id));
   }, []);
 
   const targetFor = useCallback(
-    (s: PomodoroSession) => targetSecFor(s.kind, settings) * (blocks[s.id] ?? 1),
-    [settings, blocks],
+    (s: PomodoroSession) => targetSecFor(s.kind, settings) * (s.blocks ?? 1),
+    [settings],
   );
 
   // Derived per-timer display state.
@@ -83,18 +84,22 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     () =>
       sessions.map((session) => {
         const paused = pausedIds.has(session.id);
-        const remaining = remainingSec(session, targetFor(session), paused, now);
+        // Until the settings load the target is only the default: never Done on it (a longer real block
+        // would stop beating, and its stop would be capped short), and the count isn't held at it.
+        const known = settings !== undefined;
+        const target = targetFor(session);
+        const remaining = remainingSec(session, target, paused, now);
         return {
           session,
           paused,
           remaining,
-          done: remaining <= 0,
-          activeSec: activeSec(session, paused, now),
+          done: known && remaining <= 0,
+          activeSec: workedSec(session, known ? target : Infinity, paused, now),
           error: errors[session.id] ?? null,
           syncFailed: (missed[session.id] ?? 0) >= MISSED_BEATS_WARN,
         };
       }),
-    [sessions, pausedIds, now, targetFor, errors, missed],
+    [sessions, pausedIds, now, targetFor, settings, errors, missed],
   );
 
   // Adopt sessions left running: fresh ones run live, long-silent ones go to the stale prompt.
@@ -147,17 +152,17 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Keep a live snapshot for the heartbeat loop so the interval itself stays stable (no reset per beat).
-  const beatRef = useRef({ sessions, pausedIds, targetFor });
-  beatRef.current = { sessions, pausedIds, targetFor };
+  const beatRef = useRef({ sessions, pausedIds, targetFor, timers, settings });
+  beatRef.current = { sessions, pausedIds, targetFor, timers, settings };
 
   // One heartbeat loop beats every timer that's genuinely running (not paused, not done).
   useEffect(() => {
     const id = setInterval(() => {
-      const { sessions: live, pausedIds: paused, targetFor: tf } = beatRef.current;
+      const { sessions: live, pausedIds: paused, targetFor: tf, settings: known } = beatRef.current;
       const t = Date.now();
       for (const s of live) {
         if (paused.has(s.id)) continue;
-        if (remainingSec(s, tf(s), false, t) <= 0) continue; // done → frozen
+        if (known && remainingSec(s, tf(s), false, t) <= 0) continue; // done → frozen
         api.heartbeatSession(s.id).then(
           (next) => {
             upsert(next);
@@ -260,43 +265,55 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     [api, upsert, clear, fail],
   );
 
-  // Give a done timer one more block: bump the target, clear the chime latch, and reset the clock so
-  // the time spent sitting on "done" isn't credited to the new block.
+  // Give a done timer one more block: the server credits the block's last stretch up to its target (the
+  // same cap as a stop, so the wait isn't credited and a locked phone's stretch isn't lost), raises the
+  // target on the row and restarts the clock; here, the chime latch clears.
+  const extending = useRef(new Set<string>()); // a second tap before the answer must not add a second block
   const extend = useCallback(
     (id: string) => {
+      if (extending.current.has(id)) return;
+      extending.current.add(id);
       clear(id);
-      api.resumeSession(id).then(
-        (s) => {
-          setMissed((m) => without(m, id));
-          upsert(s);
-          setChimedIds((c) => withDeleted(c, id));
-          setPausedIds((p) => withDeleted(p, id));
-          setBlocks((b) => ({ ...b, [id]: (b[id] ?? 1) + 1 }));
-        },
-        () => fail(id, 'Couldn’t extend — try again.'),
-      );
+      const { timers: live, targetFor: tf } = beatRef.current;
+      const timer = live.find((t) => t.session.id === id);
+      const capMin = timer ? stopCapMin(timer, tf(timer.session)) : undefined;
+      api
+        .extendSession(id, capMin === undefined ? undefined : { capMin })
+        .then(
+          (s) => {
+            setMissed((m) => without(m, id));
+            upsert(s);
+            setChimedIds((c) => withDeleted(c, id));
+            setPausedIds((p) => withDeleted(p, id));
+          },
+          () => fail(id, 'Couldn’t extend — try again.'),
+        )
+        .finally(() => extending.current.delete(id));
     },
     [api, upsert, clear, fail],
   );
 
-  // The server credits everything since the last beat on a stop. A paused timer hasn't beaten since its
-  // pause captured the worked time, so its clock is reset first (resumeSession credits nothing) — the pause
-  // never counts. A timer sitting on "done" is NOT reset: if the block ended behind a locked phone, its last
-  // stretch was never beaten either, and a reset would drop it. It over-credits the wait on "done" instead,
-  // as before; capping that needs a capped heartbeat on the server (follow-up).
+  // The server credits everything since the last beat on a stop, capped at what may still be real work
+  // (stopCapMin): a paused timer 0 — its pause beat captured the worked time, so the pause never counts; a
+  // timer on "done" what was left to its target — the wait before Stop isn't work, while a block that ended
+  // behind a locked phone (iOS freezes a hidden page's timers, so it never beat after the lock) keeps its
+  // last stretch, which a client-side reset would have dropped (PR 83). A running timer stops uncapped.
   // Not found means the server has no running row by that id: the stop already landed (its response was
   // lost, or another device stopped it), so it's settled here too — Mark done waits on this, and a row stuck
   // on "Couldn't stop" would hold it until a reload re-adopted. The task's accrual is re-read either way.
   const stop = useCallback(
     (id: string, status: 'completed' | 'discarded' = 'completed') => {
       clear(id);
-      const reset = status === 'completed' && beatRef.current.pausedIds.has(id);
+      const { timers: live, targetFor: tf } = beatRef.current;
+      const timer = live.find((t) => t.session.id === id);
+      const capMin =
+        status === 'completed' && timer ? stopCapMin(timer, tf(timer.session)) : undefined;
       const settled = () => {
         invalidateTaskData(qc);
         remove(id);
       };
-      return (reset ? api.resumeSession(id).then(() => undefined) : Promise.resolve())
-        .then(() => api.stopSession(id, status))
+      return api
+        .stopSession(id, status, capMin === undefined ? undefined : { capMin })
         .then(settled, (e: unknown) => {
           if (isNotFound(e)) return settled();
           // The timer stays: a stop that didn't land never looks like it did.
@@ -338,7 +355,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     () => ({
       timers,
       stale,
-      staleErrors: Object.fromEntries(stale.flatMap((x) => (errors[x.id] ? [[x.id, errors[x.id]!]] : []))),
+      staleErrors: Object.fromEntries(
+        stale.flatMap((x) => (errors[x.id] ? [[x.id, errors[x.id]!]] : [])),
+      ),
       adoptFailed,
       retryAdopt,
       startError,

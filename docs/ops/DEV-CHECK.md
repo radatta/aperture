@@ -299,6 +299,7 @@ request, not their method, and are listed under _Injected by the harness_, never
 starts and stops one ad-hoc focus timer through the dock, which leaves a seconds-long completed session in the test
 user's history each run. Sessions have no delete method, so they're not ledgered; a timer an aborted run left running
 is stopped or discarded through the dock before the timer steps, judged by the server's list.
+`timer-credit`'s `done-stop` step shortens the test user's work block to 1 minute. The settings row isn't ledgered: the step restores it in its `finally`, and because a killed run skips that, each run also puts `DEV_WORK_MIN` back right after the sweep.
 
 ### Rows
 
@@ -343,7 +344,7 @@ lists. **For the all-clear a deferred row counts like off dev** — the branch t
 can't have changed what the row proves. A row with any proving step that ran is judged on those steps, with
 one exception: when every step through the row's own entry point was deferred, the row reads `deferred`, so a
 `ui` row never passes on its `api` step alone (a step that failed still fails it). Slow today: `ios-standalone`
-(every step; the app files its rows can see and its harness). Its paths are narrower than everything that could affect those rows (IOS-CHECK.md → the trade), so for it "can't have changed" is a judgement, not a proof.
+(every step; the app files its rows can see and its harness). Its paths are narrower than everything that could affect those rows (IOS-CHECK.md → the trade), so for it "can't have changed" is a judgement, not a proof. Also `timer-credit`'s `done-stop` (a 1-minute block on the clock).
 
 Walk the plan's matrix through **the edge-case checklist**: empty / max / invalid input; cancel; repeat
 (idempotent); survives a reload; the neighbouring item unaffected; ownership (another user's id). `smoke` alone

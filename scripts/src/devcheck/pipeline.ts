@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { financeRowOf, ledgerKind, type ApiClient } from './api';
+import { DEV_WORK_MIN, financeRowOf, ledgerKind, type ApiClient } from './api';
 import { DEV_ORIGIN } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -186,6 +186,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         r.swept.push(id);
       }
     }
+    // A killed run skips a step's `finally`, and the settings row isn't ledgered: a leftover 1-minute block
+    // would have every later timer hit Done at 60 s.
+    if ((await api.reads.getSettings()).pomodoroWorkMin !== DEV_WORK_MIN)
+      await api.writes.updateSettings({ pomodoroWorkMin: DEV_WORK_MIN });
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
     placeBaseline = new Set((await api.reads.listPlaces()).map((p) => p.id));
     categoryBaseline = new Set((await api.reads.listCategories()).map((c) => c.id));

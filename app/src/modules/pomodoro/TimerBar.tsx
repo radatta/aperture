@@ -7,6 +7,7 @@ import { Text } from '../../components/Text';
 import { TimerIcon } from '../../components/icons';
 import { cx } from '../../lib/cx';
 import { fmtClock } from '../../lib/format';
+import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { usePomodoro } from './pomodoro-context';
 import type { RunningTimer } from './pomodoro-context';
@@ -155,6 +156,8 @@ function TimerRow({
   onStop: () => void;
 }) {
   const { session, paused, remaining, done, error, syncFailed } = timer;
+  // Until the settings load the target is only the default: a clock on it would read wrong, then freeze at 0:00.
+  const { data: settings } = useSettings();
   const running = !paused && !done;
   return (
     <Row done={done} error={error}>
@@ -175,7 +178,7 @@ function TimerRow({
         </span>
       )}
       <Text size="sm" tabular tone={done ? 'gold' : undefined} className="shrink-0">
-        {done ? 'Done' : fmtClock(remaining)}
+        {done ? 'Done' : settings ? fmtClock(remaining) : '–:––'}
       </Text>
       {done ? (
         <Button variant="ghost" size="sm" onClick={onExtend} title="One more block">

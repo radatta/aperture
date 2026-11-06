@@ -637,6 +637,31 @@ describe('backend read-then-write under lagging reads', () => {
     return { backend, snapshot, stored, doc };
   };
 
+  it('a stop right after a pause’s beat sees that beat: the work before the pause is kept, the pause is not', async () => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => clock,
+    });
+    const t = await backend.createTask({ title: 'paused' });
+    await backend.transitionTask(t.id, 'in_progress');
+    const s = await backend.startSession({
+      taskId: t.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    const before = await doc.get('u#local', sk.sessionRunning(s.id));
+    clock += 2 * 60_000;
+    await backend.heartbeatSession(s.id); // the pause's beat: 2 min worked
+    doc.staleNextGets('u#local', sk.sessionRunning(s.id), before, 20); // plain gets still show 0 worked
+    clock += 10 * 60_000; // paused
+    const stopped = await backend.stopSession(s.id, 'completed', { capMin: 0 });
+    expect(stopped.activeMinutes).toBe(2);
+    expect((await backend.getTask(t.id))?.actualAccruedMin).toBe(2);
+  });
+
   it('a due set straight after a rename keeps the new title', async () => {
     const { backend, snapshot } = setup();
     const t = await backend.createTask({ title: 'old' });
@@ -1053,6 +1078,20 @@ describe('stopSession over RPC onto a finished task', () => {
     clock += 3 * 60_000;
     await rpc('stopSession', [s2.id, 'completed']);
     expect((await rpc('getTask', [dropped.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
+  });
+
+  it('a negative capMin is refused over RPC and the session keeps running', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const rpc = (method: 'startSession' | 'stopSession' | 'listRunningSessions', args: unknown[]) =>
+      handleRpc(doc, { userId: 'local', method, args, now }, { presigner: fakePresigner() });
+    const s = (await rpc('startSession', [
+      { taskId: null, categoryId: null, kind: 'work', day: '2026-08-04' },
+    ])) as PomodoroSession;
+    await expect(rpc('stopSession', [s.id, 'completed', { capMin: -1 }])).rejects.toThrow(/capMin/);
+    expect(((await rpc('listRunningSessions', [])) as PomodoroSession[]).map((x) => x.id)).toEqual([
+      s.id,
+    ]);
   });
 
   it('keeping a stale timer onto a finished task completes it with its minutes but adds none', async () => {
