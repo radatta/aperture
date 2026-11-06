@@ -5,10 +5,11 @@
 // never `devcheck <nonce>` — the parts scenarios sweep that prefix. The /tasks search text persists
 // across lenses, so every open searches for its own task and the last step clears it.
 // The Review preview's chip (docs/areas/tasks/quick-add.md) has no grammar path: Review always asks the
-// model. Three rows go end to end through the real parse (the `real-*` steps, a fraction of a cent a run):
+// model. Four rows go end to end through the real parse (the `real-*` steps and the Simulator's, a fraction of a cent a run):
 // they assert what holds whatever the model says (a preview, no error, the slot agrees with what lands) and
 // nothing of its wording. Rows that need an exact reply (the scorer's cases need a parse with no category,
 // which the model won't reliably give) get a canned one from ctx.intercept; each row's text says why.
+import type { IosOp } from '../../mailroom/sim.ts';
 import type { PwLocator } from '../pw-types';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -222,10 +223,48 @@ async function barWithHistory(ctx: Ctx) {
   await ctx.page.getByRole('button', { name: chipName('Garden') }).waitFor({ timeout: 15_000 });
 }
 
+// The sim types through its own keyboard, so the line is the fixed words of R_REAL_CHIP, no nonce. Nothing is
+// saved. The field and the chip are found by scanning: the preview lifts the bar by its own height.
+const REVIEW_KEYBOARD: IosOp[] = [
+  { op: 'nav', tab: 'Home' },
+  { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
+  { op: 'wait', s: 2 },
+  { op: 'tap', label: 'Task', near: { x: 110, y: 437 }, radius: 40, role: 'AXCheckBox' },
+  { op: 'keys', text: R_REAL_CHIP },
+  { op: 'tap', label: 'Review before saving', near: { x: 355, y: 480 }, radius: 60 },
+  { op: 'wait', s: 6 },
+  { op: 'shot', name: 'review-chip' },
+  {
+    op: 'tap',
+    label: 'Use suggested category',
+    scan: { x: 195, from: 300, to: 600 },
+    role: 'AXButton',
+  },
+  { op: 'wait', s: 1 },
+  {
+    op: 'find',
+    label: 'Capture task',
+    scan: { x: 200, from: 300, to: 560 },
+    role: 'AXTextArea',
+    as: 'bar',
+  },
+  { op: 'expect', as: 'bar', aboveKeyboard: true },
+  { op: 'absent', label: 'Use suggested category', scan: { x: 195, from: 300, to: 600 } },
+  { op: 'shot', name: 'review-chip-taken' },
+  { op: 'erase', n: 22 },
+  { op: 'tap', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox' },
+  { op: 'blur' },
+];
+
 export const categorySuggest: Scenario = {
   id: 'category-suggest',
   title: 'Editor and Review preview: tap-only category suggestion',
   tiers: ['full'],
+  slowPaths: [
+    'app/src/modules/capture/CaptureBar.tsx',
+    'app/src/modules/capture/PreviewCategory.tsx',
+    'scripts/src/devcheck/scenarios/category-suggest.ts',
+  ],
   rows: [
     {
       id: 'accept',
@@ -413,8 +452,7 @@ export const categorySuggest: Scenario = {
       id: 'review-keyboard',
       entry: 'ios',
       kind: 'nominal',
-      what: 'iPhone PWA: Review a line, tap the chip: the keyboard stays up and the field doesn’t move',
-      needsYou: 'only the iOS keyboard can show whether the tap keeps the field focused',
+      what: 'iPhone PWA, real parse: Review a line, tap the chip: the keyboard stays up, the field stays above it, the chip goes',
     },
     {
       id: 'week',
@@ -559,6 +597,16 @@ export const categorySuggest: Scenario = {
           const t = await ctx.api.reads.getTask((await mine(ctx, what)).id);
           if (t?.categoryId !== id(label)) throw new Error(`${what} moved to ${t?.categoryId}`);
         }
+      },
+    },
+    {
+      id: 'review-keyboard',
+      entry: 'ios',
+      cost: 'slow',
+      proves: ['review-keyboard'],
+      title: 'On the Simulator: Review, tap the chip; the keyboard stays up over a real parse',
+      async run(ctx) {
+        await ctx.ios.run('review-chip', REVIEW_KEYBOARD);
       },
     },
     {
