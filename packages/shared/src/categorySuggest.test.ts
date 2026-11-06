@@ -127,6 +127,37 @@ describe('suggestCategory', () => {
     expect(ask({ title: 'quarterly filing' })).toBeNull();
   });
 
+  describe('a big category against a small one, on a long line', () => {
+    // Garden 17 tasks of three once-used words each, Ledger 4: every word here is rare, the case where
+    // a word's cost must not depend on how few tasks a category has.
+    const words = (stem: string, n: number) => Array.from({ length: n }, (_, i) => `${stem}${i}`);
+    const titles = (w: string[], per: number) =>
+      Array.from({ length: Math.floor(w.length / per) }, (_, i) =>
+        w.slice(i * per, i * per + per).join(' '),
+      );
+    const gardenWords = words('plot', 51);
+    const ledgerWords = words('sum', 12);
+    const LEDGER = 'cat-ledger';
+    const h = [
+      ...rows(titles(gardenWords, 3), GARDEN, 'g'),
+      ...rows(titles(ledgerWords, 3), LEDGER, 'l'),
+    ];
+    const c = [
+      { id: GARDEN, active: true },
+      { id: LEDGER, active: true },
+    ];
+
+    it('31 of the big category’s words name it, not the small one', () => {
+      const s = ask({ title: gardenWords.slice(0, 31).join(' ') }, h, c);
+      expect(s?.categoryId).toBe(GARDEN);
+      expect(s!.margin).toBeGreaterThanOrEqual(2);
+    });
+
+    it('a clear line of the small category’s own words still names it', () => {
+      expect(ask({ title: ledgerWords.slice(0, 8).join(' ') }, h, c)?.categoryId).toBe(LEDGER);
+    });
+  });
+
   it('reads notes — the first 200 chars only', () => {
     expect(ask({ title: 'thing', notes: 'mulch the tomato beds' })?.categoryId).toBe(GARDEN);
     expect(ask({ title: 'thing', notes: `${'z'.repeat(200)} mulch the tomato beds` })).toBeNull();

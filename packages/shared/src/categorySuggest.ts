@@ -1,9 +1,10 @@
 // A confident-only category suggestion for an uncategorised task, scored from the user's own
-// categorised tasks: naive Bayes over the words of title + notes, with a log prior and add-0.5
-// smoothing. It is not a classifier — measured on prod 2026-11-05 (187 tasks, 142 categorised),
-// top-1 ungated was 63%, no better than always naming the biggest category; gated to a 2-nat margin
-// it spoke on 46% of tasks at 92% precision. So below the gates it says nothing, and the chip that
-// shows it is tap-only: a wrong accept costs what a wrong manual pick does, never an auto-assign.
+// categorised tasks: multinomial naive Bayes over the words of title + notes, with a log prior and
+// add-0.5 smoothing. It is not a classifier — leave-one-out on prod 2026-11-05 (171 categorised, 71%
+// in one category), top-1 ungated was 81%; gated to a 2-nat margin it spoke on 78% of tasks at 95%
+// precision, and at 80% when it named anything but the biggest category. So below the gates it says
+// nothing, and the chip that shows it is tap-only: a wrong accept costs what a wrong manual pick
+// does, never an auto-assign.
 // docs/areas/tasks/task-editor.md → Category suggestion.
 import type { Category, Task } from './types';
 
@@ -30,6 +31,7 @@ export function suggestionTokens(title: string, notes?: string | null): Set<stri
 interface Stats {
   docs: number;
   df: Map<string, number>; // tasks in this category carrying the word
+  tokens: number; // the sum of df: this category's share of all the words seen
 }
 
 export function suggestCategory(
@@ -47,10 +49,11 @@ export function suggestCategory(
   const stats = new Map<string, Stats>();
   const vocab = new Set<string>();
   for (const t of docs) {
-    const s = stats.get(t.categoryId!) ?? { docs: 0, df: new Map() };
+    const s = stats.get(t.categoryId!) ?? { docs: 0, df: new Map(), tokens: 0 };
     s.docs += 1;
     for (const w of suggestionTokens(t.title, t.notes)) {
       s.df.set(w, (s.df.get(w) ?? 0) + 1);
+      s.tokens += 1;
       vocab.add(w);
     }
     stats.set(t.categoryId!, s);
@@ -63,7 +66,10 @@ export function suggestCategory(
 
   const scored = [...stats].map(([categoryId, s]) => {
     let score = Math.log(s.docs / docs.length);
-    for (const w of terms) score += Math.log(((s.df.get(w) ?? 0) + 0.5) / (s.docs + 1));
+    // Over the category's words, not its task count: per task, a word absent from a 4-task category
+    // outscored a word present in a 17-task one, so long lines drifted to the smallest category.
+    const denom = s.tokens + 0.5 * vocab.size;
+    for (const w of terms) score += Math.log(((s.df.get(w) ?? 0) + 0.5) / denom);
     return { categoryId, score, docs: s.docs };
   });
   scored.sort((a, b) => b.score - a.score);
