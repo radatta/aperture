@@ -114,6 +114,13 @@ export const timerCredit: Scenario = {
   id: 'timer-credit',
   title: 'A task finished under a running timer keeps the actual that was typed',
   tiers: ['full'],
+  // done-stop's minute on the clock: what can change a block's credit on Done.
+  slowPaths: [
+    'app/src/modules/pomodoro/**',
+    'packages/shared/src/machines.ts',
+    'lambdas/src/backend.ts',
+    'scripts/src/devcheck/scenarios/timer-credit.ts',
+  ],
   rows: [
     {
       id: 'done-stops-timer',
@@ -414,6 +421,7 @@ export const timerCredit: Scenario = {
     {
       id: 'done-stop',
       entry: 'ui',
+      cost: 'slow',
       proves: ['done-stop', 'neighbour-full-credit', 'extend-on-done', 'extend-reload'],
       title:
         'Two 1-minute blocks → Done → a third timer starts → 15 s → Again on one, Stop the other (credit ≤ 1.05), then the rest',
@@ -476,7 +484,8 @@ export const timerCredit: Scenario = {
     {
       id: 'open-tasks-gone',
       entry: 'api',
-      title: 'Delete the tasks this run left open, so they don’t fill the Backlog group later scenarios read',
+      title:
+        'Delete the tasks this run left open, so they don’t fill the Backlog group later scenarios read',
       async run(ctx) {
         for (const what of ['nb', 'cap', 'ext', 'other'])
           await ctx.api.writes.deleteTask((await mine(ctx, what)).id);
