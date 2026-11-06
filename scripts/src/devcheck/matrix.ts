@@ -27,6 +27,10 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
     if (!sc.rows.length && !MATRIX_EXEMPT.includes(sc.id)) p('declares no rows');
     for (const id of dupes(sc.rows.map((r) => r.id))) p(`row ${id} is declared twice`);
     for (const id of dupes(sc.steps.map((s) => s.id))) p(`step ${id} is declared twice`);
+    const slow = sc.steps.filter((s) => s.cost === 'slow');
+    if (slow.length && !sc.slowPaths?.some((g) => g.trim()))
+      p(`step ${slow.map((s) => s.id).join(', ')} is slow but the scenario declares no slowPaths`);
+    if (!slow.length && sc.slowPaths) p('declares slowPaths but no slow step');
     for (const s of sc.steps) {
       if (!STEP_ENTRIES.includes(s.entry))
         p(`step ${s.id} claims entry ${s.entry}, which no step can drive yet`);
@@ -76,7 +80,9 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
 // Each row's result: off dev and needs you as declared; a step-proven row passes only when every step
 // naming it passed, fails when any failed, reads needs-you when a step said so at run time (scenario.ts
 // needsYou — the rest passed or were left unrun by it), and is skipped otherwise (a step that never ran
-// proves nothing). `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven
+// proves nothing). A slow step the run deferred drops out of that; a row whose proving steps were ALL
+// deferred — or every one through the row's own entry point (a ui row never rests on its api step alone) — is
+// `deferred` (DEV-CHECK.md → Slow tier). `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven
 // another build.
 export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = false): RowResult[] {
   return sc.rows.map((row) => {
@@ -93,10 +99,23 @@ export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = fal
         note: row.needsYou,
       };
     const by = sc.steps.filter((s) => s.proves?.includes(row.id));
-    const results = by.map(
+    const all = by.map(
       (s): Pick<StepResult, 'status' | 'note'> =>
         steps.find((r) => r.scenario === sc.id && r.step === s.id) ?? { status: 'skipped' },
     );
+    const ran = by.map((s, i) => ({ s, r: all[i]! })).filter((x) => x.r.status !== 'deferred');
+    const ownDeferred =
+      ran.length < all.length &&
+      !ran.some((x) => x.s.entry === row.entry) &&
+      !ran.some((x) => x.r.status === 'fail'); // a failure still shows on its row
+    if (all.length && (all.every((x) => x.status === 'deferred') || ownDeferred))
+      return {
+        ...base,
+        status: 'deferred',
+        provenBy: `steps ${by.map((s) => `${s.id} (${s.entry})`).join(', ')}`,
+        note: all.find((x) => x.status === 'deferred')?.note ?? 'slow tier',
+      };
+    const results = ran.map((x) => x.r);
     const statuses = results.map((r) => r.status);
     const status = statuses.includes('fail')
       ? 'fail'
@@ -105,7 +124,7 @@ export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = fal
         : statuses.includes('needs-you') && statuses.every((x) => x === 'pass' || x === 'needs-you')
           ? 'needs-you'
           : 'skipped';
-    const failed = by.filter((_, i) => statuses[i] === 'fail').map((s) => s.id);
+    const failed = ran.filter((x) => x.r.status === 'fail').map((x) => x.s.id);
     const reason = results.find((r) => r.status === 'needs-you')?.note;
     return {
       ...base,

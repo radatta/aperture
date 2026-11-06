@@ -8,11 +8,14 @@ import type { Clock } from '../bot/dispatch.ts';
 import { run } from '../bot/sh.ts';
 import { EXIT, openPr, probe } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
+import { simCommand } from './sim.ts';
 import { hostjobsDir, nodeFs, repoRunnerVersion } from './submit.ts';
 
 const USAGE = `pnpm mailroom <command>
   open-pr --title "<title>" [--wait <seconds>]   open this pushed branch's PR as the user, from their Mac
-  probe [--wait <seconds>]                       the whole path with a zero sha — stops before any write`;
+  probe [--wait <seconds>]                       the whole path with a zero sha — stops before any write
+  sim-probe [--sign-in]                          boot the Mac's iOS sim, launch the web app, screenshot (≤ 5 min)
+  sim-shutdown                                   shut the Mac's iOS sim down`;
 
 const clock: Clock = {
   now: () => Date.now(),
@@ -46,6 +49,13 @@ export async function main(argv: string[]): Promise<number> {
       return openPr(deps(), flags.title, waitMs);
     case 'probe':
       return probe(deps(), waitMs);
+    case 'sim-probe':
+    case 'sim-shutdown':
+      return simCommand(
+        { fs: nodeFs, clock, dir: hostjobsDir(run), log: (s) => console.log(s) },
+        cmd === 'sim-probe' ? 'probe' : 'shutdown',
+        flags['sign-in'] === 'true',
+      );
     case 'help':
     case undefined:
       console.log(USAGE);

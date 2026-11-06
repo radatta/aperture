@@ -8,14 +8,15 @@ import type { ApiClient } from './api';
 import type { McpClient } from './mcp';
 import { DEV_ORIGIN, assertDevOrigin } from './config';
 import { SHELL } from './login';
+import type { IosClient } from './ios';
 import type { PwPage } from './pw-types';
 
 export type Tier = 'smoke' | 'full';
 
-// Where a user or client enters the feature. A step drives one of STEP_ENTRIES; the rest name surfaces
-// headless Chromium can't reach, so their rows are needsYou.
+// Where a user or client enters the feature. A step drives one of STEP_ENTRIES ('ios': the Mac's iOS
+// Simulator, docs/ops/IOS-CHECK.md); the rest name surfaces no step can reach, so their rows are needsYou.
 export type EntryPoint = 'ui' | 'api' | 'mcp' | 'ios' | 'raycast' | 'extension';
-export const STEP_ENTRIES: readonly EntryPoint[] = ['ui', 'api', 'mcp'];
+export const STEP_ENTRIES: readonly EntryPoint[] = ['ui', 'api', 'mcp', 'ios'];
 export type RowKind = 'nominal' | 'edge';
 
 // Dev can't make this failure happen, so a unit or handler test is the proof. `file` is repo-relative,
@@ -40,6 +41,9 @@ export interface Step {
   title: string;
   entry: EntryPoint; // how this step drives the app — 'api' for setup and verify-only steps
   proves?: string[]; // row ids; a row needs at least one proving step through its own entry
+  // 'slow': a full run defers it unless --feature names the scenario or the branch touches its slowPaths;
+  // --tier all always runs it (DEV-CHECK.md → Slow tier). Never a prerequisite of a cheap step.
+  cost?: 'slow';
   run(ctx: Ctx): Promise<void>;
 }
 
@@ -49,6 +53,7 @@ export interface Scenario {
   tiers: Tier[];
   rows: Row[]; // [] only for smoke, which proves the harness, not a feature
   steps: Step[];
+  slowPaths?: string[]; // repo-relative globs (`**` crosses folders) a branch must touch for its slow steps to run
 }
 
 export interface Dates {
@@ -72,6 +77,7 @@ export interface Ctx {
   // (DEV-CHECK.md → Injected failures). Release it to pass through again; the pipeline releases any a step
   // left behind when its scenario ends.
   intercept(method: string, opts?: InterceptOpts): Promise<Interception>;
+  ios: IosClient; // the Mac's iOS Simulator through the mailroom (ios.ts); unavailable → needsYou
   log(msg: string): void;
 }
 
@@ -100,17 +106,20 @@ export interface Ui {
 // the rows its scenario's steps prove read "needs you: <reason>" in the report (matrix.ts), the scenario's
 // later steps are left unrun (they build on it — its noConsoleErrors too, so a needs-you scenario checks no
 // console), and the run stays green. Never for a bug — a real throw still fails the step — and never
-// recorded under the run's own failures (those are the harness's).
+// recorded under the run's own failures (those are the harness's). `stepOnly`: the cause is this step's alone
+// (the sim's soft keyboard) and the later steps don't build on it, so they still run.
 export class NeedsYou extends Error {
   readonly reason: string;
-  constructor(reason: string) {
+  readonly stepOnly: boolean;
+  constructor(reason: string, stepOnly = false) {
     super(`needs you: ${reason}`);
     this.name = 'NeedsYou';
     this.reason = reason;
+    this.stepOnly = stepOnly;
   }
 }
-export function needsYou(reason: string): never {
-  throw new NeedsYou(reason);
+export function needsYou(reason: string, opts: { stepOnly?: boolean } = {}): never {
+  throw new NeedsYou(reason, opts.stepOnly);
 }
 export const needsYouReason = (err: unknown): string | null =>
   err instanceof NeedsYou ? err.reason : null;

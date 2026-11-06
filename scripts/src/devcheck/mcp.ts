@@ -141,10 +141,11 @@ export function createMcpClient({
       return task;
     },
     // Patch fields on a task this run created (update_task: place moves it between errand lists; the
-    // reflection scenario sets one up for complete_task to keep).
+    // reflection scenario sets one up for complete_task to keep; the iOS scenario starts one, since the sim
+    // never taps Start).
     async updateTask(
       id: string,
-      patch: { place?: string | null; reflection?: string | null },
+      patch: { place?: string | null; reflection?: string | null; status?: 'in_progress' },
     ): Promise<DevTask> {
       assertLedgerTask(id);
       return data<DevTask>('update_task', { id, ...patch });

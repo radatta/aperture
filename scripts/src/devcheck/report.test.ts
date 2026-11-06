@@ -227,7 +227,7 @@ describe('report', () => {
       const md = renderReport({ ...feat, coverage: rows });
       expect(md.indexOf('## Feature coverage')).toBeLessThan(md.indexOf('## Steps'));
       expect(md).toContain(
-        'Proven on dev **1** · off dev **1** · needs you **1** · not proven **0**',
+        'Proven on dev **1** · off dev **1** · needs you **1** · deferred **0** · not proven **0**',
       );
       expect(md).toContain('| ad | Delete \\| Cancel | nominal | ui | steps del (ui) | pass |');
       expect(md).toContain(
@@ -307,7 +307,7 @@ describe('report', () => {
       const md = renderReport({ ...feat, coverage: [...rows, ...pv] });
       expect(md).toContain('### Other scenarios (regression)');
       expect(md).toContain(
-        '- pv: proven on dev **1** · off dev **0** · needs you **1** · not proven **1**',
+        '- pv: proven on dev **1** · off dev **0** · needs you **1** · deferred **0** · not proven **1**',
       );
       expect(md).toContain('#### Not proven on dev\n\n- pv: PV esc — step x failed');
       const mine = md.slice(md.indexOf('### This feature'), md.indexOf('### Other'));
@@ -329,6 +329,116 @@ describe('report', () => {
       );
       expect(renderReport({ ...base, scenarioSha: `${'a'.repeat(40)}-dirty` })).toContain(
         'scenarios from `aaaaaaa-dirty`',
+      );
+    });
+  });
+
+  describe('slow tier and the iOS sim', () => {
+    const rowOf = (
+      scenario: string,
+      row: string,
+      status: RowResult['status'],
+      note?: string,
+    ): RowResult => ({
+      scenario,
+      row,
+      entry: 'ios',
+      kind: 'nominal',
+      what: `${row} what`,
+      status,
+      provenBy: 'steps w (ios)',
+      ...(note ? { note } : {}),
+    });
+
+    it('deferred rows get their own list, count, and never land in the paste lists or Not proven', () => {
+      const md = renderReport({
+        ...base,
+        feature: ['feat'],
+        coverage: [
+          rowOf('feat', 'a', 'pass'),
+          rowOf('feat', 'b', 'deferred', 'slow tier'),
+          rowOf('other', 'c', 'deferred', 'slow tier'),
+        ],
+      });
+      expect(md).toContain(
+        'Proven on dev **1** · off dev **0** · needs you **0** · deferred **1** · not proven **0**',
+      );
+      expect(md).toContain(
+        '#### Deferred (slow tier)\n\n_Not run: the branch touches none of these scenarios’ slow paths and no `--feature` names them. `--tier all` runs them._\n\n- feat: b what',
+      );
+      expect(md).toContain('- other: c what');
+      const paste = md.slice(md.indexOf("#### You don't need to test"));
+      expect(paste).not.toContain('b what');
+      expect(md).not.toContain('Not proven on dev');
+    });
+
+    it('a PASS with iOS rows the sim couldn’t prove says so in the status line and an iOS section', () => {
+      const r: RunResult = {
+        ...base,
+        ios: {
+          jobs: [
+            {
+              id: 'j1',
+              step: 'launch',
+              status: 'pass',
+              reason: null,
+              booted: 'warm',
+              signedIn: 'already',
+              buildsSeen: ['aaaaaaa'],
+              device: {
+                name: 'aperture-devcheck',
+                udid: 'U',
+                runtime: 'iOS 27.0',
+                axe: '1.8.0',
+                xcode: 'Xcode 27.2',
+              },
+              runnerVersion: 'abcdef1234567890',
+            },
+            {
+              id: 'j2',
+              step: 'capture',
+              status: 'unavailable',
+              reason: 'SIM_UNAVAILABLE/KEYBOARD_SETUP',
+              buildsSeen: [],
+            },
+          ],
+          unavailable: { reason: 'SIM_UNAVAILABLE/KEYBOARD_SETUP', rows: 1 },
+        },
+      };
+      expect(statusLine(r)).toBe(
+        'PASS — iOS NOT RUN (SIM_UNAVAILABLE/KEYBOARD_SETUP): 1 iPhone row untested',
+      );
+      const md = renderReport(r);
+      expect(md.split('\n')[0]).toBe(
+        '# Dev check — PASS — iOS NOT RUN (SIM_UNAVAILABLE/KEYBOARD_SETUP): 1 iPhone row untested',
+      );
+      expect(md).toContain('## iOS Simulator');
+      expect(md).toContain(
+        'aperture-devcheck · iOS 27.0 · axe 1.8.0 · Xcode 27.2 · runner `abcdef123456`',
+      );
+      expect(md).toContain('| launch | pass | warm | already | aaaaaaa |');
+      expect(md).toContain(
+        '| capture | unavailable (SIM_UNAVAILABLE/KEYBOARD_SETUP) | — | — | — |',
+      );
+    });
+
+    it('a FAIL keeps its exact status line; the iOS line stands under the header', () => {
+      const r: RunResult = {
+        ...base,
+        status: 'FAIL',
+        codes: ['STEP_FAILED'],
+        ios: { jobs: [], unavailable: { reason: 'MAC_UNREACHABLE', rows: 14 } },
+      };
+      expect(statusLine(r)).toBe('FAIL: STEP_FAILED');
+      expect(renderReport(r)).toContain(
+        '**iOS NOT RUN (MAC_UNREACHABLE): 14 iPhone rows untested**',
+      );
+    });
+
+    it('no iOS section when the run had no sim at all', () => {
+      expect(renderReport(base)).not.toContain('## iOS Simulator');
+      expect(renderReport({ ...base, ios: { jobs: [], unavailable: null } })).not.toContain(
+        '## iOS Simulator',
       );
     });
   });

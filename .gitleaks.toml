@@ -6,4 +6,6 @@ useDefault = true
 description = "Known false positives"
 # plaid-client-id matches "…Plaid…'," followed by any 24-char alphanumeric; the RPC method name
 # exchangePlaidPublicToken is exactly 24 chars (packages/shared/src/rpc.ts). Not a credential.
-regexes = ['''^exchangePlaidPublicToken$''']
+# generic-api-key reads "PASSWORD_MISSING', tape=SIGNED_OUT" as a key and its value; it's a fixture line in
+# tools/mailroom/testdata/gen-jobs.py, the tape constant, not a credential.
+regexes = ['''^exchangePlaidPublicToken$''', '''^tape=SIGNED_OUT$''']

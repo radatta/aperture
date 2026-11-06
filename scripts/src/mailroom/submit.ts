@@ -6,7 +6,6 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSy
 import { dirname, join } from 'node:path';
 import type { Clock } from '../bot/dispatch.ts';
 import type { Run } from '../bot/sh.ts';
-import type { Job } from './job.ts';
 
 export interface Fs {
   writeNew: (path: string, data: string) => void; // fails if the path exists
@@ -79,7 +78,7 @@ export const hostjobsDir = (run: Run) =>
 
 export class NotInstalled extends Error {}
 
-export function submit(fs: Fs, dir: string, job: Job): void {
+export function submit(fs: Fs, dir: string, job: { id: string }): void {
   if (!fs.isDir(join(dir, 'inbox')))
     throw new NotInstalled(`${join(dir, 'inbox')} is missing — the Mac mailroom isn't installed`);
   fs.mkdirp(join(dir, 'staging'));

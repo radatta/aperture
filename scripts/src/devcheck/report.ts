@@ -2,11 +2,13 @@
 // what it created and what's left. report.md is for reading (Claude reads it, then the screenshots);
 // report.json is the same result for tooling.
 import type { ReasonCode } from './errors';
+import type { IosJobSummary } from './ios';
 import type { EntryPoint, RowKind } from './scenario';
 
 // needs-you: the step said so itself (scenario.ts needsYou) — nothing broke, the user has to do something
 // first; the scenario's later steps carry it too, since they never ran because of it.
-export type StepStatus = 'pass' | 'fail' | 'skipped' | 'needs-you';
+// deferred: a slow step this run didn't take (DEV-CHECK.md → Slow tier) — never silent, never a failure.
+export type StepStatus = 'pass' | 'fail' | 'skipped' | 'needs-you' | 'deferred';
 
 export interface StepResult {
   scenario: string;
@@ -15,11 +17,11 @@ export interface StepResult {
   status: StepStatus;
   ms: number;
   error?: string;
-  note?: string; // needs-you: the reason
+  note?: string; // needs-you: the reason; deferred: how to run it
   shot?: string;
 }
 
-export type RowStatus = 'pass' | 'fail' | 'skipped' | 'off-dev' | 'needs-you';
+export type RowStatus = 'pass' | 'fail' | 'skipped' | 'off-dev' | 'needs-you' | 'deferred';
 
 export interface RowResult {
   scenario: string;
@@ -74,18 +76,27 @@ export interface RunResult {
   shots: string[];
   durationMs: number;
   crash?: string;
+  // The iOS Simulator's jobs this run, and — when any iOS row came back "needs you" from the sim — why and how
+  // many (the status line and the PR's first line say so: IOS-CHECK.md → Results).
+  ios?: { jobs: IosJobSummary[]; unavailable: { reason: string; rows: number } | null };
 }
 
 const STATUS_DETAIL_MAX = 200;
 // `FAIL: <codes>` exactly for a step-only failure (a step's text is in its row; readers match the bare line), then the harness
 // failures' detail on one line — their one-liners name their cause, so the code isn't repeated here.
 export function statusLine(r: RunResult): string {
+  // A PASS that skipped the iPhone checks is never a bare PASS. A FAIL keeps its exact line (readers match
+  // it); the report's header carries the iOS line under it.
+  if (r.status === 'PASS' && r.ios?.unavailable) return `PASS — ${iosNotRun(r.ios.unavailable)}`;
   if (r.status !== 'FAIL') return r.status;
   const line = `FAIL: ${[...new Set(r.codes)].join(', ')}`;
   if (!r.failures.length) return line;
   const detail = r.failures.map((f) => f.message.replace(/\s*\n\s*/g, ' ').trim()).join(' · ');
   return `${line} — ${detail.length > STATUS_DETAIL_MAX ? `${detail.slice(0, STATUS_DETAIL_MAX - 1)}…` : detail}`;
 }
+
+export const iosNotRun = (u: { reason: string; rows: number }) =>
+  `iOS NOT RUN (${u.reason}): ${u.rows} iPhone row${u.rows === 1 ? '' : 's'} untested`;
 
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
@@ -95,13 +106,14 @@ const ROW_LABEL: Record<RowStatus, string> = {
   skipped: 'skipped',
   'off-dev': 'off dev',
   'needs-you': 'needs you',
+  deferred: 'deferred',
 };
 
 const item = (x: RowResult) => `- ${x.scenario}: ${x.what}`;
 const isUnproven = (x: RowResult) => x.status === 'fail' || x.status === 'skipped';
 const counts = (rs: RowResult[], lead = 'Proven on dev') => {
   const n = (...st: RowStatus[]) => rs.filter((x) => st.includes(x.status)).length;
-  return `${lead} **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · not proven **${rs.filter(isUnproven).length}**`;
+  return `${lead} **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · deferred **${n('deferred')}** · not proven **${rs.filter(isUnproven).length}**`;
 };
 const table = (rs: RowResult[]) => [
   '| Scenario | Row | Kind | Entry | Proven by | Result |',
@@ -124,6 +136,20 @@ function notProven(rs: RowResult[], h: string): string[] {
     ),
   ];
 }
+// Slow rows this run didn't take: their own list, so a deferral is never mistaken for a pass.
+function deferredList(rs: RowResult[], h: string): string[] {
+  const d = rs.filter((x) => x.status === 'deferred');
+  if (!d.length) return [];
+  return [
+    '',
+    `${h} Deferred (slow tier)`,
+    '',
+    '_Not run: the branch touches none of these scenarios’ slow paths and no `--feature` names them. `--tier all` runs them._',
+    '',
+    ...d.map(item),
+  ];
+}
+
 // The two lists report-<branch>.md and the CC done notes paste. They stand on a FAIL too, but never without the
 // run's verdict beside them.
 function pasteLists(rs: RowResult[], h: string, status: RunResult['status']): string[] {
@@ -166,6 +192,7 @@ function renderCoverage(
       '',
       ...table(rows),
       ...notProven(rows, '###'),
+      ...deferredList(rows, '###'),
     ];
   // selectFeature guarantees each feature scenario ran and declares rows; never paste an empty section anyway.
   const mine = rows.filter((x) => feature.includes(x.scenario));
@@ -182,6 +209,7 @@ function renderCoverage(
     '',
     ...table(mine),
     ...notProven(mine, '####'),
+    ...deferredList(mine, '####'),
     ...pasteLists(mine, '####', status),
   );
   if (others.length)
@@ -199,8 +227,35 @@ function renderCoverage(
           )}`,
       ),
       ...notProven(others, '####'),
+      ...deferredList(others, '####'),
     );
   return lines;
+}
+
+// What the Mac's sim did this run: one line per job, plus the device it ran on.
+function renderIos(ios: RunResult['ios']): string[] {
+  if (!ios || (!ios.jobs.length && !ios.unavailable)) return [];
+  const dev = ios.jobs.find((j) => j.device)?.device;
+  return [
+    '',
+    '## iOS Simulator',
+    '',
+    ...(ios.unavailable
+      ? [`**${iosNotRun(ios.unavailable)}** — IOS-CHECK.md → Failures.`, '']
+      : []),
+    ...(dev
+      ? [
+          `${dev.name} · ${dev.runtime ?? '?'} · axe ${dev.axe} · ${dev.xcode ?? 'Xcode ?'} · runner \`${ios.jobs.find((j) => j.runnerVersion)?.runnerVersion?.slice(0, 12) ?? '?'}\``,
+          '',
+        ]
+      : []),
+    '| Step | Result | Booted | Signed in | Builds seen |',
+    '| --- | --- | --- | --- | --- |',
+    ...ios.jobs.map(
+      (j) =>
+        `| ${j.step} | ${j.status}${j.reason ? ` (${cell(j.reason)})` : ''} | ${j.booted ?? '—'} | ${j.signedIn ?? '—'} | ${j.buildsSeen.join(', ') || '—'} |`,
+    ),
+  ];
 }
 
 export function renderReport(r: RunResult): string {
@@ -215,6 +270,9 @@ export function renderReport(r: RunResult): string {
   if (r.failures.length)
     lines.push('', ...r.failures.map((f) => `**Failed:** ${f.code} — ${f.message}`));
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);
+  // On a FAIL the status line stays exact, so the iPhone line stands under it instead.
+  if (r.status !== 'PASS' && r.ios?.unavailable)
+    lines.push('', `**${iosNotRun(r.ios.unavailable)}**`);
   lines.push(...renderCoverage(r.coverage, r.status, r.feature));
   lines.push(
     '',
@@ -227,6 +285,7 @@ export function renderReport(r: RunResult): string {
     lines.push(
       `| ${s.scenario} | ${cell(s.title)} | ${s.status === 'needs-you' ? 'needs you' : s.status} | ${sec(s.ms)} | ${cell(s.error ?? s.note ?? '')}${s.shot ? ` ![](shots/${s.shot})` : ''} |`,
     );
+  lines.push(...renderIos(r.ios));
   lines.push('', '## Data', '');
   if (!r.created.length) lines.push('Created nothing.');
   for (const c of r.created)

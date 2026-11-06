@@ -45,7 +45,7 @@ describe('parseArgs', () => {
     });
   });
   it('refuses bad input', () => {
-    expect(() => parseArgs(['--tier', 'all'])).toThrow(/smoke\|delta\|full/);
+    expect(() => parseArgs(['--tier', 'every'])).toThrow(/smoke\|delta\|full\|all/);
     expect(() => parseArgs(['--sha', 'abc1234'])).toThrow(/40-hex/);
     expect(() => parseArgs(['--prod'])).toThrow(/unknown argument/);
     expect(() => parseArgs(['--tier'])).toThrow(/needs a value/);

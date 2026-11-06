@@ -120,6 +120,22 @@ describe('createMcpClient', () => {
     expect(args).toEqual([{ id: 'T1', place: 'shop' }, { id: 'T1' }, { id: 'T1', actualMin: 5 }]);
   });
 
+  it('update_task can start a recorded task (the iOS scenario: the sim never taps Start)', async () => {
+    const fetch = server({ update_task: json({ id: 'T1', title: 'a', status: 'in_progress' }) });
+    const c = client(fetch);
+    await expect(c.writes.updateTask('theirs', { status: 'in_progress' })).rejects.toThrow(
+      /LEDGER_GUARD/,
+    );
+    expect((await c.writes.updateTask('T1', { status: 'in_progress' })).status).toBe('in_progress');
+    const [, init] = fetch.mock.calls[0] ?? [];
+    expect(
+      (JSON.parse(init?.body as string) as { params: { arguments: unknown } }).params.arguments,
+    ).toEqual({
+      id: 'T1',
+      status: 'in_progress',
+    });
+  });
+
   it('refuses delete_task on a place id the ledger recorded', async () => {
     const fetch = server({});
     const c = client(

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
@@ -14,7 +14,15 @@ import {
 } from './api';
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
-import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
+import { IOS_NOTE, type Ios } from './ios';
+import {
+  DEFER_NOTE,
+  exitCode,
+  runPipeline,
+  type BrowserSession,
+  type PipelineDeps,
+} from './pipeline';
+import { statusLine } from './report';
 import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
 import { hidingSecret, needsYou, type Ctx, type Scenario } from './scenario';
@@ -532,11 +540,46 @@ describe('runPipeline', () => {
 
   it('a page session that is no longer the test user stops cleanup with WRONG_USER', async () => {
     const w = world();
-    w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
-    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    let ran = false;
+    w.browser.readSession = async () =>
+      ran ? Promise.reject(new DevcheckError('WRONG_USER', 'x')) : null;
+    const sc = scenario(async (x) => {
+      await x.uiCreate('a');
+      ran = true;
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
     expect(r.codes).toContain('WRONG_USER');
     expect(r.failures).toEqual([{ code: 'WRONG_USER', message: 'x' }]);
     expect(w.deleted).toEqual([]);
+  });
+
+  it('each step runs on the token the page holds now, renewed mid-run', async () => {
+    const w = world();
+    const seen: string[] = [];
+    let token: () => string = () => '';
+    w.browser.readSession = async () =>
+      seen.length ? { accessToken: 'renewed', expiresAt: 0, email: 'x', sub: 's' } : null;
+    const base = scenario(async () => void seen.push(token()))(w);
+    const sc = { ...base, steps: [base.steps[0]!, { ...base.steps[0]!, id: 'second' }] };
+    const r = await runPipeline({
+      ...deps(w, [sc]),
+      makeApi: (t) => {
+        token = t;
+        return w.api;
+      },
+    });
+    expect(r.steps.map((x) => x.status)).toEqual(['pass', 'pass']);
+    expect(seen).toEqual(['tok', 'renewed']);
+  });
+
+  it('a page session that stopped being the test user mid-run fails the step before it runs', async () => {
+    const w = world();
+    let ran = false;
+    w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
+    const r = await runPipeline(deps(w, [scenario(async () => void (ran = true))(w)]));
+    expect(ran).toBe(false);
+    expect(r.codes).toContain('WRONG_USER');
+    expect(r.steps[0]?.status).toBe('fail');
   });
 
   it('a swept id that survives its delete is a leftover', async () => {
@@ -1085,6 +1128,156 @@ describe('runPipeline', () => {
       ['a', 'needs-you', 'link the fixture bank'],
       ['b', 'needs-you', 'link the fixture bank'],
     ]);
+  });
+
+  it('a step-only needs-you (the sim’s keyboard) leaves the rest of its scenario running', async () => {
+    const w = world();
+    let ran = 0;
+    const sc: Scenario = {
+      id: 'kb',
+      title: 'kb',
+      tiers: ['full'],
+      rows: [
+        { id: 'a', entry: 'api', kind: 'nominal', what: 'a' },
+        { id: 'b', entry: 'api', kind: 'nominal', what: 'b' },
+      ],
+      steps: [
+        {
+          id: 'typing',
+          title: 'typing',
+          entry: 'api',
+          proves: ['a'],
+          run: async () => needsYou('no soft keyboard', { stepOnly: true }),
+        },
+        { id: 'next', title: 'next', entry: 'api', proves: ['b'], run: async () => void ran++ },
+      ],
+    };
+    const r = await runPipeline(deps(w, [sc]));
+    expect(ran).toBe(1);
+    expect(r.status).toBe('PASS');
+    expect(r.steps.map((s) => [s.step, s.status])).toEqual([
+      ['typing', 'needs-you'],
+      ['next', 'pass'],
+    ]);
+    expect(r.coverage.map((x) => [x.row, x.status])).toEqual([
+      ['a', 'needs-you'],
+      ['b', 'pass'],
+    ]);
+  });
+
+  describe('slow tier and the iOS sim', () => {
+    const slowSc = (run: () => Promise<void>): Scenario => ({
+      id: 'slw',
+      title: 'slw',
+      tiers: ['full'],
+      slowPaths: ['app/**'],
+      rows: [
+        { id: 'slow', entry: 'ios', kind: 'nominal', what: 'slow' },
+        { id: 'cheap', entry: 'api', kind: 'nominal', what: 'cheap' },
+        { id: 'both', entry: 'api', kind: 'edge', what: 'both' },
+      ],
+      steps: [
+        { id: 'wait', title: 'wait', entry: 'ios', cost: 'slow', proves: ['slow', 'both'], run },
+        {
+          id: 'quick',
+          title: 'quick',
+          entry: 'api',
+          proves: ['cheap', 'both'],
+          run: async () => undefined,
+        },
+      ],
+    });
+
+    it('a slow step outside the slow set is deferred, the scenario goes on, and the run stays green', async () => {
+      let slowRan = 0;
+      const r = await runPipeline(
+        deps(world(), [slowSc(async () => void slowRan++)], memLedger(), { slow: [] }),
+      );
+      expect(slowRan).toBe(0);
+      expect(r.status).toBe('PASS');
+      expect(r.steps.map((s) => [s.step, s.status])).toEqual([
+        ['wait', 'deferred'],
+        ['quick', 'pass'],
+      ]);
+      expect(r.steps[0]!.note).toBe(DEFER_NOTE);
+      expect(r.coverage.map((x) => [x.row, x.status])).toEqual([
+        ['slow', 'deferred'],
+        ['cheap', 'pass'],
+        ['both', 'pass'], // a row a run step proves is judged on that step
+      ]);
+    });
+
+    it('in the slow set, or with no slow set at all, a slow step runs', async () => {
+      for (const slow of [['slw'], undefined]) {
+        let slowRan = 0;
+        const r = await runPipeline(
+          deps(world(), [slowSc(async () => void slowRan++)], memLedger(), { slow }),
+        );
+        expect(slowRan).toBe(1);
+        expect(r.steps[0]!.status).toBe('pass');
+      }
+    });
+
+    it('an iOS step whose sim is out reads needs you, and the run says iOS NOT RUN with the row count', async () => {
+      const finish = vi.fn(async () => undefined);
+      const ios: Ios = {
+        forScenario: () => ({ run: () => needsYou(`${IOS_NOTE}: MAC_UNREACHABLE`) }),
+        finish,
+        jobs: [
+          {
+            id: 'j1',
+            step: 'wait',
+            status: 'unavailable',
+            reason: 'MAC_UNREACHABLE',
+            buildsSeen: [],
+          },
+        ],
+        shots: ['ios-slw-wait-01-home.png'],
+        unavailable: () => 'MAC_UNREACHABLE',
+      };
+      const r = await runPipeline(
+        deps(world(), [slowSc(async () => undefined)], memLedger(), {
+          ios,
+          scenarios: [
+            {
+              ...slowSc(async () => undefined),
+              steps: [
+                {
+                  id: 'wait',
+                  title: 'wait',
+                  entry: 'ios',
+                  cost: 'slow',
+                  proves: ['slow', 'both'],
+                  run: (ctx) => ctx.ios.run('wait', [{ op: 'launch' }]).then(() => undefined),
+                },
+                {
+                  id: 'quick',
+                  title: 'quick',
+                  entry: 'api',
+                  proves: ['cheap'],
+                  run: async () => undefined,
+                },
+              ],
+            },
+          ],
+        }),
+      );
+      expect(r.status).toBe('PASS');
+      // the later step inherits the needs-you (the scenario stops there), so its row is untested too
+      expect(r.ios?.unavailable).toEqual({ reason: 'MAC_UNREACHABLE', rows: 3 });
+      expect(statusLine(r)).toBe('PASS — iOS NOT RUN (MAC_UNREACHABLE): 3 iPhone rows untested');
+      expect(finish).toHaveBeenCalledOnce();
+      expect(r.shots).toContain('ios-slw-wait-01-home.png');
+    });
+
+    it('without an iOS client a step that asks for the sim reads needs you, never crashes', async () => {
+      const sc = slowSc(async () => undefined);
+      sc.steps[0]!.run = (ctx) => ctx.ios.run('wait', [{ op: 'launch' }]).then(() => undefined);
+      const r = await runPipeline(deps(world(), [sc]));
+      expect(r.status).toBe('PASS');
+      expect(r.steps[0]!.status).toBe('needs-you');
+      expect(r.ios?.unavailable?.reason).toBe('no mailroom in this run');
+    });
   });
 
   it('a bucket, a link and a rule in the ledger are cleared their own way, and an earlier run’s swept', async () => {

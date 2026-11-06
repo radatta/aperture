@@ -1,6 +1,7 @@
 // Every scenario the dev check knows. A feature adds scenarios/<feature>.ts and lists it here; `--tier
-// delta --scenario <id>` runs just that one, `--tier full` runs them all. `--feature <id>` marks whose rows
-// are the feature's in the report.
+// delta --scenario <id>` runs just that one, `--tier full` runs them all — their slow steps only where the
+// branch touches the scenario's slowPaths or `--feature` names it — and `--tier all` runs every step.
+// `--feature <id>` marks whose rows are the feature's in the report.
 import type { Scenario, Tier } from '../scenario';
 import { attachmentDelete } from './attachment-delete';
 import { captureDock } from './capture-dock';
@@ -11,6 +12,7 @@ import { finance } from './finance';
 import { fluxHistory } from './flux-history';
 import { fluxPerf } from './flux-perf';
 import { inflightCap } from './inflight-cap';
+import { iosStandalone } from './ios-standalone';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
 import { partsV2bReads } from './parts-v2b-reads';
@@ -23,6 +25,7 @@ import { timerCredit } from './timer-credit';
 
 export const SCENARIOS: Scenario[] = [
   smoke,
+  iosStandalone, // early: an asleep Mac is known (and short-circuits) before the long browser scenarios
   captureTask,
   captureDock,
   partsV2,
@@ -42,7 +45,7 @@ export const SCENARIOS: Scenario[] = [
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];
 
-export type RunTier = Tier | 'delta';
+export type RunTier = Tier | 'delta' | 'all';
 
 function assertKnown(ids: string[], all: Scenario[]): void {
   const unknown = ids.filter((id) => !all.some((s) => s.id === id));
@@ -59,7 +62,7 @@ export function selectScenarios(tier: RunTier, ids: string[], all = SCENARIOS): 
     // smoke always leads: a delta run still proves sign-in and the shell before the feature's steps.
     return all.filter((s) => s.id === 'smoke' || ids.includes(s.id));
   }
-  const inTier = all.filter((s) => s.tiers.includes(tier));
+  const inTier = all.filter((s) => s.tiers.includes(tier === 'all' ? 'full' : tier));
   const picked = ids.length ? inTier.filter((s) => ids.includes(s.id)) : inTier;
   if (!picked.length) throw new Error(`no scenario in tier ${tier} matches ${ids.join(', ')}`);
   return picked;
@@ -81,4 +84,37 @@ export function selectFeature(ids: string[], selected: Scenario[], all = SCENARI
       `--feature ${absent.join(', ')} is not in this run (${selected.map((s) => s.id).join(', ')}) — add --scenario, or a tier it runs in`,
     );
   return ids;
+}
+
+// A repo-relative glob: `**` crosses folders, `*` stays inside one.
+export function globMatch(glob: string, path: string): boolean {
+  const re = glob
+    .split('**')
+    .map((part) =>
+      part
+        .split('*')
+        .map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+        .join('[^/]*'),
+    )
+    .join('.*');
+  return new RegExp(`^${re}$`).test(path);
+}
+
+// The scenarios whose slow steps run this time (DEV-CHECK.md → Slow tier). `changed` is the branch's diff
+// against origin/main; null when it couldn't be read — then nothing is deferred, never silently skipped.
+export function slowScenarios(
+  tier: RunTier,
+  feature: string[],
+  selected: Scenario[],
+  changed: string[] | null,
+): string[] {
+  const slow = selected.filter((s) => s.steps.some((x) => x.cost === 'slow'));
+  if (tier === 'all' || tier === 'delta' || changed === null) return slow.map((s) => s.id);
+  return slow
+    .filter(
+      (s) =>
+        feature.includes(s.id) ||
+        changed.some((f) => (s.slowPaths ?? []).some((g) => globMatch(g, f))),
+    )
+    .map((s) => s.id);
 }

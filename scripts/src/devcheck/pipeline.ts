@@ -7,6 +7,7 @@ import { DEV_ORIGIN } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, detailOf, type ReasonCode } from './errors';
+import { IOS_NOTE, type Ios, type IosClient } from './ios';
 import { orphanIntents, pendingIds, type Ledger } from './ledger';
 import { coverageOf } from './matrix';
 import type { McpClient } from './mcp';
@@ -18,6 +19,8 @@ import {
   createUi,
   datesFor,
   makeShot,
+  NeedsYou,
+  needsYou,
   needsYouReason,
   shotWithheld,
   type Ctx,
@@ -53,7 +56,16 @@ export interface PipelineDeps {
   now: () => number;
   log: (msg: string) => void;
   responseWaitMs?: number; // how long cleanup waits for a create still in flight (default 30 s)
+  // Scenarios whose slow steps run this time (run.ts decides: --tier all, --feature, or a touched slowPath);
+  // absent: every slow step runs. The rest are deferred — reported, never failed (DEV-CHECK.md → Slow tier).
+  slow?: string[];
+  ios?: Ios; // the Mac's iOS Simulator (ios.ts); absent, an iOS step says needs you
 }
+
+export const DEFER_NOTE = 'slow tier: the branch touches none of its paths — run --tier all';
+const NO_IOS: IosClient = {
+  run: () => needsYou(`${IOS_NOTE}: no mailroom in this run`),
+};
 
 // Chromium's console line for a failed load names no URL, so while an intercept is live these are the
 // harness's own doing (window-scoped, not per method — DEV-CHECK.md → Injected failures).
@@ -89,6 +101,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   };
   // A message keeps the failure's detail in the report (status line + a Failed line); a step's failure has
   // its row, so STEP_FAILED passes none and the status line stays `FAIL: STEP_FAILED`.
+  // The token may have renewed in the page since sign-in, and must still be the test user's (throws WRONG_USER);
+  // a dead page keeps the token we have.
+  const renewSession = async () => {
+    try {
+      const fresh = await browser?.readSession();
+      if (fresh) session = fresh;
+    } catch (err) {
+      if (codeOf(err) === 'WRONG_USER') throw err;
+    }
+  };
   const fail = (code: ReasonCode, message?: string) => {
     if (r.status !== 'CRASH') r.status = 'FAIL';
     r.codes.push(code);
@@ -198,9 +220,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       createdIds: () => [...runIds],
       consoleErrors: () => [...r.consoleErrors],
       intercept: (method, opts) => intercept(page, method, opts),
+      ios: NO_IOS,
       log: d.log,
     };
     for (const sc of d.scenarios) {
+      ctx.ios = d.ios?.forScenario(sc.id) ?? NO_IOS;
       let failed = false;
       let needs: string | null = null; // a step said needs you: the rest of the scenario reads so too
       for (const step of sc.steps) {
@@ -219,8 +243,14 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           res.note = needs;
           continue;
         }
+        if (step.cost === 'slow' && d.slow && !d.slow.includes(sc.id)) {
+          res.status = 'deferred'; // the scenario goes on: a slow step is never a cheap one's prerequisite
+          res.note = DEFER_NOTE;
+          continue;
+        }
         const s0 = d.now();
         try {
+          await renewSession(); // a cached token can lapse mid-run, and a run with sim steps is minutes long
           await step.run(ctx);
           await Promise.all(pendingRecords); // a create's id is in the ledger before the next step reads it
           res.status = 'pass';
@@ -228,7 +258,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           const reason = needsYouReason(err);
           if (reason !== null) {
             // Not a failure: the run stays green, the rows read needs-you with the reason (matrix.ts).
-            needs = reason;
+            if (!(err instanceof NeedsYou && err.stepOnly)) needs = reason;
             res.status = 'needs-you';
             res.note = reason;
             res.ms = d.now() - s0;
@@ -261,6 +291,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
   } finally {
     await Promise.allSettled(pendingRecords);
+    if (d.ios) {
+      await d.ios.finish().catch(() => undefined);
+      r.shots.push(...d.ios.shots);
+    }
     await cleanup().catch((err: unknown) => {
       r.status = 'CRASH';
       r.crash = `${r.crash ? `${r.crash}\n` : ''}cleanup: ${err instanceof Error ? err.message : String(err)}`;
@@ -270,6 +304,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     r.coverage = d.scenarios.flatMap((sc) =>
       coverageOf(sc, r.steps, r.codes.includes('DEV_CHANGED_MID_RUN')),
     );
+    // A thin layer over needs-you: the rows the sim couldn't prove, and why, for the status line and the PR.
+    const iosOut = r.coverage.filter(
+      (x) => x.status === 'needs-you' && x.note?.startsWith(`${IOS_NOTE}: `),
+    );
+    if (d.ios || iosOut.length)
+      r.ios = {
+        jobs: d.ios?.jobs ?? [],
+        unavailable: iosOut.length
+          ? { reason: iosOut[0]!.note!.slice(IOS_NOTE.length + 2), rows: iosOut.length }
+          : null,
+      };
     await browser?.close().catch(() => undefined);
     r.durationMs = d.now() - t0;
     d.ledger.append({ run: d.runId, op: 'run-end', status: r.status });
@@ -459,16 +504,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         );
       return;
     }
-    // The token may have renewed in the page since sign-in — and must still be the test user's.
     try {
-      const fresh = await browser?.readSession();
-      if (fresh) session = fresh;
+      await renewSession();
     } catch (err) {
-      if (codeOf(err) === 'WRONG_USER') {
-        fail('WRONG_USER', detailOf(err));
-        return;
-      }
-      // a dead page: keep the sign-in token
+      fail('WRONG_USER', detailOf(err));
+      return;
     }
 
     const pending = new Set(pendingIds(entries));

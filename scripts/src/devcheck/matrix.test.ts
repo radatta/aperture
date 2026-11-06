@@ -78,11 +78,12 @@ describe('matrixProblems', () => {
     ]);
   });
 
-  it('a step drives mcp; none can drive ios, raycast or the extension', () => {
+  it('steps drive mcp and ios (the Mac sim); none can drive raycast or the extension', () => {
     expect(problems(sc([row('m', { entry: 'mcp' })], [step('m', 'mcp', ['m'])]))).toEqual([]);
+    expect(problems(sc([row('i', { entry: 'ios' })], [step('i', 'ios', ['i'])]))).toEqual([]);
     expect(
-      problems(sc([row('i', { entry: 'ios', needsYou: 'iOS Safari' })], [step('i', 'ios')])),
-    ).toEqual(['feat: step i claims entry ios, which no step can drive yet']);
+      problems(sc([row('r', { entry: 'raycast', needsYou: 'the Mac' })], [step('r', 'raycast')])),
+    ).toEqual(['feat: step r claims entry raycast, which no step can drive yet']);
   });
 
   it('a row is off dev or needs you, never both, and needs you gives a reason', () => {
@@ -185,6 +186,73 @@ describe('matrixProblems', () => {
     expect(problems(sc([row('a'), row('a')], [step('s', 'ui', ['a']), step('s', 'ui')]))).toEqual([
       'feat: row a is declared twice',
       'feat: step s is declared twice',
+    ]);
+  });
+});
+
+describe('matrixProblems: the slow tier', () => {
+  const slow = (id: string, proves?: string[]): Step => ({
+    ...step(id, 'api', proves),
+    cost: 'slow',
+  });
+  it('a slow step needs the scenario’s slowPaths, and slowPaths need a slow step', () => {
+    expect(problems(sc([row('a', { entry: 'api' })], [slow('w', ['a'])]))).toEqual([
+      'feat: step w is slow but the scenario declares no slowPaths',
+    ]);
+    expect(
+      problems({ ...sc([row('a', { entry: 'api' })], [slow('w', ['a'])]), slowPaths: [' '] }),
+    ).toEqual(['feat: step w is slow but the scenario declares no slowPaths']);
+    expect(
+      problems({ ...sc([row('a', { entry: 'api' })], [slow('w', ['a'])]), slowPaths: ['app/**'] }),
+    ).toEqual([]);
+    expect(
+      problems({
+        ...sc([row('a', { entry: 'api' })], [step('w', 'api', ['a'])]),
+        slowPaths: ['app/**'],
+      }),
+    ).toEqual(['feat: declares slowPaths but no slow step']);
+  });
+});
+
+describe('coverageOf: deferred slow steps', () => {
+  const s = sc(
+    [row('slow', { entry: 'api' }), row('mixed', { entry: 'api' }), row('broke', { entry: 'api' })],
+    [
+      step('w', 'api', ['slow', 'mixed', 'broke']),
+      step('q', 'api', ['mixed']),
+      step('f', 'api', ['broke']),
+    ],
+  );
+  const res = (step: string, status: StepResult['status']): StepResult => ({
+    scenario: 'feat',
+    step,
+    title: step,
+    status,
+    ms: 0,
+    note: status === 'deferred' ? 'slow tier' : undefined,
+  });
+  it('all proving steps deferred → deferred; a run step decides otherwise, and failedSteps name the right one', () => {
+    const c = coverageOf(s, [res('w', 'deferred'), res('q', 'pass'), res('f', 'fail')]);
+    expect(c.map((x) => [x.row, x.status, x.failedSteps, x.note])).toEqual([
+      ['slow', 'deferred', undefined, 'slow tier'],
+      ['mixed', 'pass', undefined, undefined],
+      ['broke', 'fail', ['f'], undefined],
+    ]);
+  });
+  it('a row whose own-entry steps were all deferred is deferred, never proven by another entry’s step alone', () => {
+    const m = sc(
+      [row('form', { entry: 'ios' }), row('saved', { entry: 'api' })],
+      [step('sim', 'ios', ['form', 'saved']), step('read', 'api', ['form', 'saved'])],
+    );
+    const c = coverageOf(m, [res('sim', 'deferred'), res('read', 'pass')]);
+    expect(c.map((x) => [x.row, x.status])).toEqual([
+      ['form', 'deferred'],
+      ['saved', 'pass'],
+    ]);
+    const broke = coverageOf(m, [res('sim', 'deferred'), res('read', 'fail')]);
+    expect(broke.map((x) => [x.row, x.status])).toEqual([
+      ['form', 'fail'], // a failure still shows on its row
+      ['saved', 'fail'],
     ]);
   });
 });

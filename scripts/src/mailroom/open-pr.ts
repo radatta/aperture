@@ -92,6 +92,32 @@ async function deliver(d: Deps, job: Job, waitMs: number, title: string): Promis
 }
 
 const MIN_WAIT_MS = 10_000;
+
+// The PR's first line when the head commit's newest devcheck ran without the iPhone checks (Mac asleep, Device Hub
+// down, …): never a quiet "needs you". Plain ⚠ — the emoji form carries U+FE0F, which BAD_TEXT refuses.
+const IOS_BANNER_MARK = 'iPhone checks did not run';
+export function iosBanner(fs: Fs, root: string, sha: string): string | null {
+  const dir = join(root, 'localNotes', 'devcheck');
+  for (const run of fs.list(dir).sort().reverse()) {
+    let r: {
+      expectedSha?: string;
+      ios?: { unavailable?: { reason: string; rows: number } | null };
+    };
+    try {
+      r = JSON.parse(fs.read(join(dir, run, 'report.json')) ?? '') as typeof r;
+    } catch {
+      continue;
+    }
+    const at = r.expectedSha ?? '';
+    if (at.length < 7 || !(sha.startsWith(at) || at.startsWith(sha))) continue;
+    const u = r.ios?.unavailable;
+    if (!u) return null;
+    const reason = /^[A-Z_/()0-9.]{1,40}$/.test(u.reason) ? u.reason : 'SIM_UNAVAILABLE';
+    const asleep = /^MAC_(UNREACHABLE|STALLED)/.test(reason);
+    return `> ⚠ **${IOS_BANNER_MARK}** (${reason}${asleep ? ', Mac asleep?' : ''}): ${u.rows} iOS row${u.rows === 1 ? '' : 's'} untested. Rerun the devcheck ${asleep ? 'with the Mac awake' : 'once the sim is fixed (IOS-CHECK.md → Failures)'} before merging a UI change.`;
+  }
+  return null;
+}
 const budget = (d: Deps, startMs: number, waitMs: number) => waitMs - (d.clock.now() - startMs);
 
 // Warnings every result can carry: an expiring token, an installed runner older than the repo's.
@@ -119,8 +145,11 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   const branch = featureBranch(d.run);
   const sha = requirePushed(d.run, branch);
   const bodyPath = join(d.root, 'localNotes', `pr-${branch}.md`);
-  const body = d.fs.read(bodyPath);
-  if (body === null) throw new Error(`${bodyPath} is missing — write the PR body first`);
+  const written = d.fs.read(bodyPath);
+  if (written === null) throw new Error(`${bodyPath} is missing — write the PR body first`);
+  const banner = written.includes(IOS_BANNER_MARK) ? null : iosBanner(d.fs, d.root, sha);
+  if (banner) d.log(banner.slice(2));
+  const body = banner ? `${banner}\n\n${written}` : written;
   const job = makeOpenPrJob({ branch, sha, title, body }, d.clock.now());
   const bad = validateJob(job, job.id, d.clock.now());
   if (bad) return refuse(d, job, bad);
