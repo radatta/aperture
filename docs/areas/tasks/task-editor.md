@@ -117,6 +117,26 @@ The card keeps only the actions you press without thinking. No overflow menu.
   one: the same field with its own label and cap, in the same Save and dirty guard. The finish intent's Done
   form takes it with the actual.
 
+- **Category suggestion (2026-11-05)** — an uncategorised task's editor shows a dashed ghost chip
+  `Garden?` above the Category select (beside it from `sm`) when the task's own history is confident, scored on the client
+  (`packages/shared/src/categorySuggest.ts`, `useSuggestCategory`): multinomial naive Bayes over the words of title
+  + the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing over each
+  category's words. Per-task probabilities drifted long lines to the smallest category (a word absent from
+  a 4-task category outscored one present once in a 17-task category), so the denominator is the category's
+  word count plus half the vocabulary. A rare word still scores higher in a small category, so the winner
+  must also hold more than half the line's known words. Leave-one-out on prod 2026-11-05 (171 categorised
+  tasks, active categories only, 71% in one): ungated top-1 81%; gated it spoke on 78% of them at 95.5%
+  precision, and at 79% (11 of 14) when it named anything but the biggest category; on the 46 uncategorised
+  tasks, the ones it's for, it spoke on 25. On a skewed roster a lone common word can name the biggest
+  category. So the gates carry it — margin ≥ 2 nats, ≥ 20 categorised tasks, ≥ 3 behind the winner, most of the line seen by the winner,
+  active categories only, the task's own row excluded — and below them nothing is said. **Tap-only, never
+  pre-selected:** the chip fills the select, the form goes dirty, Save writes it like a manual pick (a
+  wrong tag snapshots `wasWork` into sessions, so no auto-assign; PRODUCT §2 — it lives in the enrichment
+  pass). Follows the title and notes as typed; gone once the field has a value; never on a part (its
+  category is its parent's). The Review preview's chip in capture is PR 2. If a week of scoping shows it
+  missing, the next step is ~20 recent categorised titles as examples in the parse prompt, not embeddings
+  (dependency rules) and not a new endpoint. Plan: task `01M455ZMVX1H8DH5KANJ00YVS3`.
+
 ## Non-goals / deferred
 
 - **Rename sync** — renaming a task does *not* rename its recurring series template. Its linked Google

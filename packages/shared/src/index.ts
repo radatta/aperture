@@ -19,6 +19,7 @@ export * from './calendarSync';
 export * from './calendarPull';
 export * from './api';
 export * from './bulkTasks';
+export * from './categorySuggest';
 export * from './quickParse';
 export * from './rpc';
 export * from './finance';

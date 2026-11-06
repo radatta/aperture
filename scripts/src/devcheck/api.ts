@@ -18,6 +18,7 @@ export interface DevTask {
   title: string;
   estimateMin?: number | null;
   status?: string;
+  categoryId?: string | null; // the category-suggest scenario
   parentId?: string | null;
   place?: string | null; // a place slug — an errand (the places scenario)
   estimateLockedMin?: number | null;
@@ -59,7 +60,7 @@ export interface CreateTaskInput {
   notes?: string | null;
   parentId?: string | null; // a part of that task (the parts scenario)
   place?: string | null; // a place slug (the places scenario)
-  categoryId?: string | null; // one of this run's categories (the areas scenario)
+  categoryId?: string | null; // one of this run's categories (the areas and category-suggest scenarios)
 }
 
 // The slices of a category, a plan row and the day row the check reads (the parts-v2b-reads scenario:

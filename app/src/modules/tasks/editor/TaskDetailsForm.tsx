@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Ref } from 'react';
 import {
   canEditEstimate,
@@ -18,6 +18,7 @@ import { Text } from '../../../components/Text';
 import { Textarea } from '../../../components/Textarea';
 import { useCategoryOptions } from '../../../data/hooks/useCategories';
 import { usePlaceOptions } from '../../../data/hooks/usePlaces';
+import { useSuggestCategory } from '../../../data/hooks/useSuggestCategory';
 import {
   useSetCategory,
   useSetDue,
@@ -76,6 +77,7 @@ export function TaskDetailsForm({
   const placeName = (slug: string) =>
     placeOptions.places.find((p) => p.slug === slug)?.name ?? slug;
   const setReflection = useSetTaskReflection();
+  const suggest = useSuggestCategory();
 
   const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
@@ -96,6 +98,22 @@ export function TaskDetailsForm({
   // and so does any other with one — except one in progress, whose Done form already holds it.
   const [reflection, setReflection_] = useState<string>(task.reflection ?? '');
   const [editingReflection, setEditingReflection] = useState(false);
+  // A confident guess at the category while the field is empty, from the title and notes as typed. A
+  // part takes its parent's category, so it never gets one. Tap-only: it fills the select, the form goes
+  // dirty, Save writes it like a manual pick — never pre-selected (PRODUCT §2: the enrichment pass).
+  const suggestion = useMemo(
+    () => (categoryId === '' && !isPart ? suggest({ id: task.id, title, notes }) : null),
+    [suggest, categoryId, isPart, task.id, title, notes],
+  );
+  const suggestedLabel = suggestion
+    ? categoryOptions.options.find((o) => o.value === suggestion.categoryId)?.label
+    : undefined;
+  // Once a chip has shown, its slot stays for the rest of this open: the tap (or a title edit) empties
+  // it without the row above the selects collapsing, so nothing under the finger moves. Set during
+  // render, like the reseed below, so the chip never arrives a frame late.
+  const [chipSlot, setChipSlot] = useState(false);
+  if (suggestion && !chipSlot) setChipSlot(true);
+  const categorySelect = useRef<HTMLSelectElement>(null);
   const showReflection =
     task.status === 'done' || (!!task.reflection && task.status !== 'in_progress');
   // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
@@ -324,15 +342,45 @@ export function TaskDetailsForm({
             )}
           </div>
         )}
-        <Select
-          label="Category"
-          placeholder="Uncategorized"
-          value={categoryId}
-          onChange={(e) => setCategoryId(e.target.value)}
-          options={categoryOptions.options}
-          disabled={categoryOptions.failed}
-          className="w-40"
-        />
+        {/* On a phone the chip sits above the label, not beside the select: beside it the group
+            outgrows the row and Place wraps, then jumps back when the tap removes the chip. Above (and
+            beside from sm, where the row has room), the selects stay aligned and only the chip itself
+            comes and goes. The select comes first in the DOM so Tab follows the row from sm, and the
+            chip's width is capped so a long label can't wrap that row either. */}
+        <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-end sm:gap-2">
+          <Select
+            ref={categorySelect}
+            label="Category"
+            placeholder="Uncategorized"
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+            options={categoryOptions.options}
+            disabled={categoryOptions.failed}
+            className="w-40"
+          />
+          {chipSlot && (
+            <div className="flex min-h-8.5 items-center max-sm:order-first">
+              {suggestion && suggestedLabel && (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  onClick={(e) => {
+                    setCategoryId(suggestion.categoryId);
+                    // The chip unmounts: Enter or Space keeps focus on the field it filled, not <body>.
+                    // Only then (detail 0): focusing on a tap would open the iOS picker.
+                    if (e.detail === 0) categorySelect.current?.focus();
+                  }}
+                  aria-label={`Use suggested category ${suggestedLabel}`}
+                  aria-description="From your other tasks — tap to use"
+                  title="From your other tasks — tap to use"
+                  className="max-w-36 border border-dashed border-line"
+                >
+                  <span className="min-w-0 truncate">{suggestedLabel}?</span>
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
         {categoryOptions.failed && (
           <LoadError size="xs" onRetry={categoryOptions.retry}>
             Couldn’t load categories.
