@@ -47,7 +47,7 @@ export function StillOpenSection({ today, dayStartHour }: { today: string; daySt
   const { unplan } = useAddToDay();
   const setDue = useSetDue();
   const { data: tasks = [] } = useAllTasks();
-  const { timers, stop } = usePomodoro();
+  const { timers, stop, startFocus } = usePomodoro();
   const [left, setLeft] = useState(() => readLeft(today));
   // Once something's been answered, the section closes on a line instead of vanishing — focus needs
   // somewhere to land when the last row goes.
@@ -75,11 +75,23 @@ export function StillOpenSection({ today, dayStartHour }: { today: string; daySt
     ) : null;
 
   // Backlog on a started task: stop its running focus first, so the session's minutes land now
-  // instead of accruing onto a task that's no longer in play.
+  // instead of accruing onto a task that's no longer in play. If the unplan then fails, its minutes
+  // are already on the task; a fresh focus block (from zero — the day's sessions sum the same) puts
+  // the row back as it was, and the row says the save failed. A stop that fails stops here: the timer
+  // stays, its own row says so, and the task stays on the plan.
   async function toBacklog(r: TodayRow) {
+    let stopped = false;
     for (const t of timers)
-      if (t.session.kind === 'work' && t.session.taskId === r.task.id) await stop(t.session.id);
-    if (r.plan) await unplan(r.plan, r.task, { fromInProgress: true });
+      if (t.session.kind === 'work' && t.session.taskId === r.task.id) {
+        await stop(t.session.id);
+        stopped = true;
+      }
+    try {
+      if (r.plan) await unplan(r.plan, r.task, { fromInProgress: true });
+    } catch (err) {
+      if (stopped) await startFocus({ taskId: r.task.id });
+      throw err;
+    }
   }
   // Same clock, the next day — unless that ends a part after its parent's deadline.
   const nextDue = ({ task }: TodayRow) => ({

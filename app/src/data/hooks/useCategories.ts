@@ -75,7 +75,7 @@ export function useDeleteCategory() {
       api.deleteCategory(v.id, v.reassignToId),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: qk.categories() });
-      invalidateTaskData(qc);
+      void invalidateTaskData(qc);
     },
   });
 }

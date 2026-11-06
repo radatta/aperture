@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
-import { invalidateTaskData } from './invalidate';
 import { useSettings } from './useSettings';
 
 // getDay lazily materializes due recurring occurrences and sweeps stale planned tasks back to backlog
@@ -27,12 +26,13 @@ export function useDay(day: string) {
   });
 }
 
+// The three day setters return the day row: it goes into the cache as is, like any other write-through.
 export function useSetCapacity(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (capacityHours: number | null) => api.setDayCapacity(day, capacityHours),
-    onSettled: () => invalidateTaskData(qc),
+    onSuccess: (next) => qc.setQueryData(qk.day(day), next),
   });
 }
 

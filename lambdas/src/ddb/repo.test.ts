@@ -99,6 +99,43 @@ describe('Repo persistence', () => {
     expect(plans[0]!.order).toBe(5);
   });
 
+  it('putPlan writes the new key before dropping the old, and dates the new copy past the old', async () => {
+    const { doc, repo: r } = repo();
+    const row = { id: 'p1', userId: U, createdAt: 0, updatedAt: 7, deletedAt: null, taskId: 't1' };
+    const before = { ...row, day: '2026-08-04', plannedMinutes: 30, order: 1 };
+    await r.putPlan(before);
+    const calls: string[] = [];
+    const [put, del] = [doc.put.bind(doc), doc.delete.bind(doc)];
+    doc.put = (item) => (calls.push('put'), put(item));
+    doc.delete = (pk, key) => (calls.push('delete'), del(pk, key));
+    const moved = await r.putPlan({ ...before, order: 5 }, before);
+    expect(calls).toEqual(['put', 'delete']);
+    expect(moved.updatedAt).toBe(8);
+    expect((await r.listPlans('2026-08-04')).map((p) => p.updatedAt)).toEqual([8]);
+  });
+
+  it('a plan read collapses two copies of one id to the newest, a tombstone included', async () => {
+    const { repo: r } = repo();
+    const row = {
+      id: 'p1',
+      userId: U,
+      createdAt: 0,
+      deletedAt: null,
+      taskId: 't1',
+      day: '2026-08-04',
+      plannedMinutes: 30,
+    };
+    await r.putPlan({ ...row, order: 1, updatedAt: 1 });
+    await r.putPlan({ ...row, order: 5, updatedAt: 2 });
+    expect((await r.listPlans('2026-08-04')).map((p) => p.order)).toEqual([5]);
+    expect((await r.listAllPlans()).map((p) => p.order)).toEqual([5]);
+    expect((await r.listPlansFrom('2026-08-04')).map((p) => p.order)).toEqual([5]);
+    expect((await r.findPlan('p1'))?.order).toBe(5);
+    await r.putPlan({ ...row, order: 5, updatedAt: 3, deletedAt: 3 });
+    expect(await r.listPlans('2026-08-04')).toEqual([]);
+    expect(await r.findPlan('p1')).toMatchObject({ deletedAt: 3 });
+  });
+
   it('listPlansFrom reads rows dated the day or later, alive only, in one bounded query', async () => {
     const { doc, repo: r } = repo();
     const row = (id: string, day: string, deletedAt: number | null = null) => ({

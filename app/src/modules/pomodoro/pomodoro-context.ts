@@ -24,7 +24,9 @@ export interface PomodoroContextValue {
   adoptFailed: boolean; // the on-load read of running sessions failed — never shown as "none running"
   retryAdopt: () => void;
   startError: string | null; // the last start failed
-  startFocus: (input?: StartFocusInput) => void; // add a concurrent work block (dedups per task)
+  // Add a concurrent work block (dedups per task). Resolves true once it runs, false when the server
+  // refused (startError set) — never rejects, so a caller may ignore it or wait on it.
+  startFocus: (input?: StartFocusInput) => Promise<boolean>;
   startBreak: () => void;
   pause: (id: string) => void;
   resume: (id: string) => void;

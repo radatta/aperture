@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ApiClient, PomodoroSession } from '@aperture/shared';
@@ -298,6 +299,42 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     renderApp({ api, path: '/settings' });
     await user.click(await screen.findByTitle('Start a 25-minute focus block'));
     await screen.findByText('Couldn’t start the timer — try again.');
+  });
+
+  // A caller that waits on startFocus (the night row's restart after a failed unplan) gets an answer.
+  function Probe() {
+    const { startFocus, startError } = usePomodoro();
+    const [answer, setAnswer] = useState('');
+    return (
+      <>
+        <button
+          onClick={() => void startFocus().then((ok) => setAnswer(ok ? 'started' : 'refused'))}
+        >
+          go
+        </button>
+        <output>{answer}</output>
+        {startError && <p>{startError}</p>}
+      </>
+    );
+  }
+
+  it('startFocus resolves true once the server started the timer', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    renderWithProviders(<Probe />, { api });
+    await user.click(screen.getByRole('button', { name: 'go' }));
+    await screen.findByText('started');
+    expect(await api.listRunningSessions()).toHaveLength(1);
+  });
+
+  it('startFocus resolves false and sets startError when the server refuses', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    api.startSession = boom('startSession');
+    renderWithProviders(<Probe />, { api });
+    await user.click(screen.getByRole('button', { name: 'go' }));
+    await screen.findByText('refused');
+    expect(screen.getByText('Couldn’t start the timer — try again.')).toBeTruthy();
   });
 
   // The calls a stop makes, with the cap it sent: 'stop' uncapped, 'stop:0' for a paused timer, and so on.

@@ -67,7 +67,7 @@ export function useInsertCalendarEvent() {
   return useMutation({
     mutationFn: (input: InsertCalendarEventInput) => api.insertCalendarEvent(input),
     onSuccess: (t: Task) => putTasks(qc, [t]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -78,7 +78,7 @@ export function useSyncCalendarEvent() {
   return useMutation({
     mutationFn: (taskId: string) => api.syncCalendarEvent(taskId),
     onSuccess: (t: Task) => putTasks(qc, [t]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -88,7 +88,7 @@ export function useDeleteCalendarEvent() {
   return useMutation({
     mutationFn: (taskId: string) => api.deleteCalendarEvent(taskId),
     onSuccess: (t: Task) => putTasks(qc, [t]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -111,7 +111,11 @@ export function useCalendarPull(): void {
       api
         .pullCalendar()
         .then((res) => {
-          if (res.changedTaskIds.length > 0) invalidateTaskData(qc);
+          // The day too: a pulled edit can give a planned task a time, which getDay's sweep settles.
+          if (res.changedTaskIds.length > 0) {
+            void invalidateTaskData(qc);
+            void qc.invalidateQueries({ queryKey: ['day'] });
+          }
           if (res.pulled) qc.invalidateQueries({ queryKey: qk.googleStatus() });
         })
         .catch(() => {

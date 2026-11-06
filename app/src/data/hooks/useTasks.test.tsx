@@ -2,18 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { todayKey } from '@aperture/shared';
 import type { ApiClient, Task } from '@aperture/shared';
 import { ApiContext } from '../api-context';
 import { qk } from '../queryKeys';
 import { createStubClient } from '../stubClient';
 import { LOCAL_WRITE_TTL_MS } from '../taskCache';
 import { useBacklog } from './useBacklog';
+import { useDay } from './useDay';
 import {
   useAllTasks,
   useCheckOffErrand,
   useCreateTask,
   useCreateTasks,
   useDeleteTask,
+  useSetDue,
   useSetTaskPlace,
   useSetTaskTitle,
   useSplitTask,
@@ -23,13 +26,14 @@ import {
 beforeEach(() => globalThis.localStorage?.clear());
 afterEach(() => vi.useRealTimers());
 
-// A stepping server clock: every write gets a later updatedAt, as on the real server.
-function setup(before?: (api: ApiClient) => Promise<void> | void) {
+// A stepping server clock: every write gets a later updatedAt, as on the real server. A case that reads
+// the day passes a live clock instead: getDay refuses a day after the clock's today.
+function setup(before?: (api: ApiClient) => Promise<void> | void, now?: () => number) {
   let clock = 1_000_000;
   const api = createStubClient({
     seed: false,
     storageKey: `use-tasks-${Math.random()}`,
-    now: () => (clock += 1000),
+    now: now ?? (() => (clock += 1000)),
   });
   void before?.(api);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -50,6 +54,9 @@ function setup(before?: (api: ApiClient) => Promise<void> | void) {
       del: useDeleteTask(),
       checkOff: useCheckOffErrand(),
       setPlace: useSetTaskPlace(),
+      setDue: useSetDue(),
+      settled: useTransitionTask({ settled: true }),
+      day: useDay(todayKey(4)),
     }),
     { wrapper },
   );
@@ -307,5 +314,59 @@ describe('errands', () => {
     holdList(api);
     await run(() => hook.result.current.setPlace.mutateAsync({ id: t.id, place: 'market' }));
     expect(byId(hook, t.id)!.place).toBe('market');
+  });
+});
+
+describe('what a task write refetches', () => {
+  it('setting a due date refetches the day — the sweep settles a planned task that gained a time; a title does not', async () => {
+    // Live, stepping: today is today, and the sweep's stamp is newer than the write's (a tie keeps ours).
+    let live = Date.now();
+    const { api, hook } = setup(undefined, () => (live += 1000));
+    const t = await api.createTask({ title: 'OA' });
+    await api.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 30, order: 0 });
+    await api.transitionTask(t.id, 'planned');
+    await reload(hook);
+    await waitFor(() => expect(hook.result.current.day.isSuccess).toBe(true));
+    const getDay = vi.spyOn(api, 'getDay');
+
+    await run(() => hook.result.current.title.mutateAsync({ id: t.id, title: 'OA 2' }));
+    await waitFor(() => expect(byId(hook, t.id)!.title).toBe('OA 2'));
+    expect(getDay).not.toHaveBeenCalled();
+
+    await run(() =>
+      hook.result.current.setDue.mutateAsync({
+        id: t.id,
+        due: { dueDay: todayKey(4), dueTime: '23:58' },
+      }),
+    );
+    await waitFor(() => expect(getDay).toHaveBeenCalledTimes(1));
+    // The sweep moved it: a timed task is on its day by its time, not planned (lenses.md D13).
+    await waitFor(() => expect(byId(hook, t.id)!.status).toBe('backlog'));
+  });
+
+  it('a transition resolves on the write by default; with `settled` only once the list refetched', async () => {
+    const { api, hook } = setup();
+    const t = await api.createTask({ title: 'pset' });
+    await reload(hook);
+    let release!: (tasks: Task[]) => void;
+    const real = api.listTasks.bind(api);
+    vi.spyOn(api, 'listTasks').mockImplementation(() => new Promise<Task[]>((r) => (release = r)));
+
+    // Default: the write answers, the mutation is done — the held list read is still out.
+    await run(() => hook.result.current.transition.mutateAsync({ id: t.id, to: 'planned' }));
+    expect(byId(hook, t.id)!.status).toBe('planned');
+
+    // settled: pending until that read lands.
+    let done = false;
+    const p = hook.result.current.settled
+      .mutateAsync({ id: t.id, to: 'in_progress' })
+      .then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(done).toBe(false);
+    await act(async () => {
+      release(await real());
+      await p;
+    });
+    expect(done).toBe(true);
   });
 });

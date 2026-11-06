@@ -14,9 +14,12 @@ export function useUpsertSeries() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: UpsertSeriesInput) => api.upsertSeries(input),
+    // The day too: a new series' occurrence due today materializes on the next getDay (lazy recurrence).
+    // Not awaited — the form clears on the write's own answer, like every task write (useTasks.ts).
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: qk.series() });
-      invalidateTaskData(qc);
+      void qc.invalidateQueries({ queryKey: qk.series() });
+      void qc.invalidateQueries({ queryKey: ['day'] });
+      void invalidateTaskData(qc);
     },
   });
 }

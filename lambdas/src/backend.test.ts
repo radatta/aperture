@@ -749,6 +749,58 @@ describe('backend read-then-write under lagging reads', () => {
     expect(live).toEqual([]);
   });
 
+  // A plan's order and day live in its key, so a move is two writes. Every read between them, or after one fails.
+  const movingPlan = async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const plan = await backend.upsertPlan({ taskId: t.id, day: DAY, plannedMinutes: 30, order: 0 });
+    return { backend, doc, plan };
+  };
+
+  it('a day’s plan list straight after a reorder shows the new order, not a lagging copy', async () => {
+    const { backend, doc, plan } = await movingPlan();
+    const first = await doc.get('u#local', sk.plan(DAY, 0, plan.id));
+    await backend.upsertPlan({ ...plan, order: 1 });
+    lagKey(doc, sk.plan(DAY, 0, plan.id), first);
+    lagKey(doc, sk.plan(DAY, 1, plan.id), null);
+    expect((await backend.listPlansForDay(DAY)).map((p) => p.order)).toEqual([1]);
+  });
+
+  it('a reader during a plan move sees the row once, at every step', async () => {
+    const { backend, doc, plan } = await movingPlan();
+    const seen: number[] = [];
+    const look = async () => {
+      seen.push((await backend.listPlansForDay(DAY)).filter((p) => p.id === plan.id).length);
+    };
+    const [put, del] = [doc.put.bind(doc), doc.delete.bind(doc)];
+    doc.put = async (item) => (await put(item), look());
+    doc.delete = async (pk, key) => (await del(pk, key), look());
+    await backend.upsertPlan({ ...plan, order: 1 });
+    expect(seen).toEqual([1, 1]);
+  });
+
+  it('a plan move whose put fails keeps the row where it was', async () => {
+    const { backend, doc, plan } = await movingPlan();
+    const put = doc.put.bind(doc);
+    doc.put = () => Promise.reject(new Error('throttled'));
+    await expect(backend.upsertPlan({ ...plan, order: 1 })).rejects.toThrow('throttled');
+    doc.put = put;
+    expect((await backend.listPlansForDay(DAY)).map((p) => p.order)).toEqual([0]);
+  });
+
+  it('a plan move whose delete fails leaves one row: the new spot wins every read and the next write', async () => {
+    const { backend, doc, plan } = await movingPlan();
+    const del = doc.delete.bind(doc);
+    doc.delete = () => Promise.reject(new Error('throttled'));
+    await expect(backend.upsertPlan({ ...plan, order: 1 })).rejects.toThrow('throttled');
+    doc.delete = del;
+    expect((await backend.listPlansForDay(DAY)).map((p) => p.order)).toEqual([1]);
+    await backend.upsertPlan({ ...plan, order: 2 });
+    expect((await backend.listPlansForDay(DAY)).map((p) => p.order)).toEqual([2]);
+    await backend.removePlan(plan.id);
+    expect(await backend.listPlansForDay(DAY)).toEqual([]);
+  });
+
   it('an intent typed straight after a capacity keeps both', async () => {
     const { backend, doc } = setup();
     await backend.getDay(DAY);

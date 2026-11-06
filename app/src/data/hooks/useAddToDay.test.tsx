@@ -7,6 +7,9 @@ import type { ApiClient } from '@aperture/shared';
 import { ApiContext } from '../api-context';
 import { createStubClient } from '../stubClient';
 import { useAddToDay } from './useAddToDay';
+import { useDay } from './useDay';
+import { usePlansForDay } from './usePlans';
+import { useAllTasks } from './useTasks';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -113,6 +116,145 @@ describe('useAddToDay', () => {
     expect(await plansFor(api, day)).toHaveLength(0);
   });
 
+  it('a failed unplan puts the status back: the task is where it was, still on the plan', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const day = todayKey(4);
+    const t = await api.createTask({ title: 'b' });
+    const row = await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+    const started = await api.transitionTask(t.id, 'in_progress');
+    api.removePlan = () => Promise.reject(new Error('offline'));
+
+    await act(async () => {
+      await expect(
+        hook.result.current.unplan(row, started, { fromInProgress: true }),
+      ).rejects.toThrow('offline');
+    });
+
+    expect((await api.getTask(t.id))?.status).toBe('in_progress');
+    expect(await plansFor(api, day)).toHaveLength(1);
+  });
+
+  it('a failed sweep read after the removal is no failed unplan: the row is gone, the day marked stale', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const day = todayKey(4);
+    const t = await api.createTask({ title: 'c' });
+    const row = await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+    const planned = await api.transitionTask(t.id, 'planned');
+    api.getDay = () => Promise.reject(new Error('blip'));
+
+    await act(async () => void (await hook.result.current.unplan(row, planned)));
+
+    expect(await plansFor(api, day)).toHaveLength(0);
+    expect((await api.getTask(t.id))?.status).toBe('planned'); // the next getDay sweeps it
+  });
+
+  it('an add sends its status write without waiting on the plan refetch', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-to-day-${Math.random()}` });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ApiContext value={api}>{children}</ApiContext>
+      </QueryClientProvider>
+    );
+    // A mounted day list, as every page has: the row's write refetches it.
+    const hook = renderHook(
+      () => {
+        usePlansForDay(todayKey(4));
+        return useAddToDay();
+      },
+      { wrapper },
+    );
+    await ready(hook);
+    const t = await api.createTask({ title: 'quick' });
+    const list = api.listPlansForDay.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let rowWritten = false;
+    const write = api.upsertPlan.bind(api);
+    api.upsertPlan = (input) => write(input).finally(() => (rowWritten = true));
+    api.listPlansForDay = async (day) => {
+      if (rowWritten) await held; // every read after the row hangs
+      return list(day);
+    };
+    let done: Promise<unknown> = Promise.resolve();
+    act(() => void (done = hook.result.current.addToDay(t)));
+    await waitFor(async () => expect((await api.getTask(t.id))?.status).toBe('planned'));
+    release();
+    await act(async () => void (await done));
+  });
+
+  it('a second add whose pre-read joined a refetch the first add cancels still lands', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-to-day-${Math.random()}` });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ApiContext value={api}>{children}</ApiContext>
+      </QueryClientProvider>
+    );
+    const hook = renderHook(
+      () => {
+        usePlansForDay(todayKey(4));
+        return useAddToDay();
+      },
+      { wrapper },
+    );
+    await ready(hook);
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    const [a, b] = [await api.createTask({ title: 'a' }), await api.createTask({ title: 'b' })];
+    const list = api.listPlansForDay.bind(api);
+    const getTask = api.getTask.bind(api);
+    let letRead = () => {};
+    const readHeld = new Promise<void>((r) => (letRead = r));
+    let letStatus = () => {};
+    const statusHeld = new Promise<void>((r) => (letStatus = r));
+    let rowWritten = false;
+    const write = api.upsertPlan.bind(api);
+    api.upsertPlan = (input) => write(input).finally(() => (rowWritten = true));
+    let heldReads = 0;
+    api.listPlansForDay = async (day) => {
+      if (rowWritten && ++heldReads === 1) await readHeld; // A's refetch hangs, B's pre-read joins it
+      return list(day);
+    };
+    let held = true;
+    api.getTask = async (id) => {
+      if (held && id === a.id) await statusHeld; // A's status write waits until B has joined
+      return getTask(id);
+    };
+    let first: Promise<unknown> = Promise.resolve();
+    let second: Promise<unknown> = Promise.resolve();
+    act(() => void (first = hook.result.current.addToDay(a)));
+    await waitFor(() => expect(heldReads).toBe(1));
+    act(() => void (second = hook.result.current.addToDay(b)));
+    await new Promise((r) => setTimeout(r, 20));
+    held = false;
+    letStatus(); // A's status write invalidates the plans and cancels the refetch B joined
+    await act(async () => {
+      await first;
+      letRead();
+      await second;
+    });
+    expect((await api.getTask(b.id))?.status).toBe('planned');
+    expect((await list(todayKey(4))).map((p) => p.taskId).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it('an add finishes after its component leaves (an in-app navigation)', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const t = await api.createTask({ title: 'left' });
+    const list = api.listPlansForDay.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    api.listPlansForDay = async (day) => (await held, list(day));
+    const done = hook.result.current.addToDay(t);
+    hook.unmount();
+    release();
+    await done;
+    expect(await plansFor(api, todayKey(4))).toHaveLength(1);
+    expect((await api.getTask(t.id))?.status).toBe('planned');
+  });
+
   it('a retry repairs a half-done add: row written, transition lost', async () => {
     const { api, hook } = setup();
     await ready(hook);
@@ -213,5 +355,93 @@ describe('useAddToDay', () => {
     expect(out).toMatchObject({ planned: false, timed: true });
     expect(await api.getTask(out!.task.id)).toBeTruthy();
     expect(await plansFor(api, todayKey(4))).toEqual([]);
+  });
+});
+
+// How many reads one plan write costs, with the Tasks page's three queries mounted (tasks, today's plan,
+// the day). Each stub read is counted; the page-load reads settle and are cleared before the write.
+type Counts = Record<string, number>;
+function counting(day = todayKey(4)) {
+  const counts: Counts = {};
+  const raw = createStubClient({ seed: false, storageKey: `add-counts-${Math.random()}` });
+  const api = new Proxy(raw, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver) as unknown;
+      if (typeof v !== 'function') return v;
+      return (...args: unknown[]) => {
+        counts[String(prop)] = (counts[String(prop)] ?? 0) + 1;
+        return (v as (...a: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={qc}>
+      <ApiContext value={api}>{children}</ApiContext>
+    </QueryClientProvider>
+  );
+  const hook = renderHook(
+    () => ({
+      add: useAddToDay(),
+      tasks: useAllTasks(),
+      plans: usePlansForDay(day),
+      day: useDay(day),
+    }),
+    { wrapper },
+  );
+  const settled = () => waitFor(() => expect(qc.isFetching()).toBe(0));
+  const reset = () => void Object.keys(counts).forEach((k) => delete counts[k]);
+  const reads = () => ({
+    listTasks: counts.listTasks ?? 0,
+    listPlansForDay: counts.listPlansForDay ?? 0,
+    getDay: counts.getDay ?? 0,
+    getTask: counts.getTask ?? 0,
+  });
+  return { api: raw, qc, hook, settled, reset, reads };
+}
+
+describe('useAddToDay: one write, one refetch', () => {
+  // Measured before this change (at PR 108's head): listTasks 5, listPlansForDay 6, getDay 2 — each
+  // mutation's invalidation refetched the day too, whose own cascade refetched tasks and plans again,
+  // then settled() once more. After: the pre-read, the row write's own plans refetch, and the status
+  // write's tasks + plans refetch.
+  it('one add refetches tasks once and the day never', async () => {
+    const { api, hook, settled, reset, reads } = counting();
+    await waitFor(() => expect(hook.result.current.day.data).toBeTruthy());
+    await settled();
+    const t = await api.createTask({ title: 'pset', estimateMin: 40 });
+    reset();
+
+    await act(async () => void (await hook.result.current.add.addToDay(t)));
+    await settled();
+
+    expect(reads()).toEqual({ listTasks: 1, listPlansForDay: 3, getDay: 0, getTask: 1 });
+    expect(hook.result.current.plans.data).toMatchObject([{ taskId: t.id }]);
+    expect(hook.result.current.tasks.data?.find((x) => x.id === t.id)?.status).toBe('planned');
+  });
+
+  // Measured before: listTasks 3, listPlansForDay 3, getDay 1. After: the row removal's plans refetch,
+  // the explicit getDay (its own queryFn — no useDay cascade), then one tasks + plans refetch for what
+  // the sweep moved.
+  it('one unplan reads the day once, tasks once', async () => {
+    const { api, hook, settled, reset, reads } = counting();
+    await waitFor(() => expect(hook.result.current.day.data).toBeTruthy());
+    const t = await api.createTask({ title: 'pset' });
+    const row = await api.upsertPlan({
+      taskId: t.id,
+      day: todayKey(4),
+      plannedMinutes: 30,
+      order: 0,
+    });
+    const planned = await api.transitionTask(t.id, 'planned');
+    await settled();
+    reset();
+
+    await act(async () => void (await hook.result.current.add.unplan(row, planned)));
+    await settled();
+
+    expect(reads()).toEqual({ listTasks: 1, listPlansForDay: 2, getDay: 1, getTask: 1 });
+    expect(hook.result.current.plans.data).toEqual([]);
+    expect(hook.result.current.tasks.data?.find((x) => x.id === t.id)?.status).toBe('backlog');
   });
 });

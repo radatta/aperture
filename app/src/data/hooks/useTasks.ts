@@ -30,10 +30,13 @@ export function useAllTasks() {
 }
 
 // Every task write: its answer goes into the list now (taskCache.ts); the invalidate still runs for what
-// the answer doesn't carry (a parent's lock, a dropped parent's parts, plan rows, the day's sweep).
-const written = (qc: QueryClient) => ({
+// the answer doesn't carry (a parent's lock, a dropped parent's parts, plan rows). Not awaited: a surface
+// acting on the write's own answer (the modal's close, PR 77) never waits on the list. With `settled`
+// the mutation resolves only once the refetch lands — for a caller moving focus off a row that just left
+// its list (useAddToDay).
+const written = (qc: QueryClient, settled = false) => ({
   onSuccess: (t: Task) => putTasks(qc, [t]),
-  onSettled: () => invalidateTaskData(qc),
+  onSettled: () => (settled ? invalidateTaskData(qc) : void invalidateTaskData(qc)),
 });
 
 // Capture creates backlog tasks and never asks for structure: a bare string is title-only, and a Task
@@ -63,7 +66,7 @@ export function useCreateTasks() {
   return useMutation({
     mutationFn: (inputs: CreateTaskInput[]) => api.createTasks(inputs),
     onSuccess: (ts: Task[]) => putTasks(qc, ts),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -118,13 +121,19 @@ export function useCheckOffErrand() {
 }
 
 // Due date — day-granular deadline metadata. No freeze constraint: settable at any status.
-// Deadline day + optional time, one write (and one calendar sync — see setTaskDue).
+// Deadline day + optional time, one write (and one calendar sync — see setTaskDue). The one task write
+// that also refetches the day: a planned task gaining a time is on its day by that time now (lenses.md
+// D13), and getDay's sweep is what moves it off the plan's status.
 export function useSetDue() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; due: SetTaskDueInput }) => api.setTaskDue(v.id, v.due),
-    ...written(qc),
+    onSuccess: (t: Task) => putTasks(qc, [t]),
+    onSettled: () => {
+      void invalidateTaskData(qc);
+      void qc.invalidateQueries({ queryKey: ['day'] });
+    },
   });
 }
 
@@ -160,13 +169,13 @@ export function useSetTaskNotes() {
 }
 
 // The lifecycle move. Crossing out of planning (→ in_progress|done) freezes estimateLockedMin inside
-// the shared machine — this hook doesn't need to know, it just calls it.
-export function useTransitionTask() {
+// the shared machine — this hook doesn't need to know, it just calls it. `settled`: see `written`.
+export function useTransitionTask(opts: { settled?: boolean } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; to: TaskStatus }) => api.transitionTask(v.id, v.to),
-    ...written(qc),
+    ...written(qc, opts.settled),
   });
 }
 
@@ -190,7 +199,7 @@ export function useSplitTask() {
   return useMutation({
     mutationFn: (v: { id: string; input: SplitTaskInput }) => api.splitTask(v.id, v.input),
     onSuccess: (r) => putTasks(qc, [r.parent, r.original, r.followUp]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -203,8 +212,8 @@ export function useDeleteTask() {
     mutationFn: (id: string) => api.deleteTask(id),
     onSuccess: (_v: void, id: string) => removeTask(qc, id),
     onSettled: () => {
-      invalidateTaskData(qc);
-      qc.invalidateQueries({ queryKey: qk.attachments() });
+      void invalidateTaskData(qc);
+      void qc.invalidateQueries({ queryKey: qk.attachments() });
     },
   });
 }

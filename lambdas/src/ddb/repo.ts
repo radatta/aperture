@@ -25,7 +25,7 @@ import type {
   TaskSeries,
 } from '@aperture/shared';
 import { ConditionFailedError, SK_END } from './DocClient';
-import type { DocClient, Item } from './DocClient';
+import type { DocClient, Item, QueryOpts } from './DocClient';
 import type { Writes } from './writes';
 import { pointerOf } from './placeTokens';
 import type { PlaceTokenPointer } from './placeTokens';
@@ -176,41 +176,47 @@ export class Repo {
   }
 
   // --- Plans ---
+  // A plan's order and day live in its key, so a move is two writes and a read can catch both copies, or
+  // one a failed delete left behind. Every plan read goes through here: one row per id, the newest, chosen
+  // before the alive filter so a tombstone beats an older copy.
+  private async planRows(prefix: string, opts?: QueryOpts): Promise<TaskPlan[]> {
+    const newest = new Map<string, TaskPlan>();
+    for (const item of await this.doc.query(this.p(), prefix, opts)) {
+      const row = toEntity<TaskPlan>(item);
+      const seen = newest.get(row.id);
+      if (!seen || row.updatedAt > seen.updatedAt) newest.set(row.id, row);
+    }
+    return [...newest.values()];
+  }
   // `consistent` for upsertPlan's dedupe: "+ Today" twice in one second must see the first row.
   async listPlans(day: string, opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.planPrefix(day), opts)).map((i) => toEntity<TaskPlan>(i)),
-    );
+    return alive(await this.planRows(sk.planPrefix(day), opts));
   }
   async listAllPlans(opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.planAllPrefix(), opts)).map((i) => toEntity<TaskPlan>(i)),
-    );
+    return alive(await this.planRows(sk.planAllPrefix(), opts));
   }
   // Alive rows dated `day` or later, one range read (the SK sorts by day): the stale sweep's input —
   // rows before `day` never decide a move, and plan history only grows.
   async listPlansFrom(day: string, opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
-    const rows = await this.doc.query(this.p(), sk.planAllPrefix(), {
-      ...opts,
-      from: sk.planPrefix(day),
-    });
-    return alive(rows.map((i) => toEntity<TaskPlan>(i)));
+    return alive(await this.planRows(sk.planAllPrefix(), { ...opts, from: sk.planPrefix(day) }));
   }
   // `consistent` for a read whose copy is written back (upsertPlan, removePlan) — a second reorder must
   // not resurrect the row the first one just moved.
   async findPlan(id: string, opts?: { consistent?: boolean }): Promise<TaskPlan | null> {
-    const it = await this.scanById(sk.planAllPrefix(), id, opts);
-    return it ? toEntity<TaskPlan>(it) : null;
+    return (await this.planRows(sk.planAllPrefix(), opts)).find((r) => r.id === id) ?? null;
   }
+  // A moved plan lands at a new key. The new key goes first, so no read misses the row and a failed write
+  // never loses it. An update's `updatedAt` is always past the copy it replaces (on the same clock tick too),
+  // so the reads above tell any two copies apart.
   async putPlan(p: TaskPlan, previous?: TaskPlan): Promise<TaskPlan> {
-    // Order/day live in the SK, so a moved plan lands at a new key — drop the old row first.
-    const nextSk = sk.plan(p.day, p.order, p.id);
+    const row = previous ? { ...p, updatedAt: Math.max(p.updatedAt, previous.updatedAt + 1) } : p;
+    const nextSk = sk.plan(row.day, row.order, row.id);
+    await this.writes.put(entityItem(this.userId, nextSk, row));
     if (previous) {
       const prevSk = sk.plan(previous.day, previous.order, previous.id);
       if (prevSk !== nextSk) await this.writes.delete(this.p(), prevSk);
     }
-    await this.writes.put(entityItem(this.userId, nextSk, p));
-    return p;
+    return row;
   }
 
   // --- Series ---

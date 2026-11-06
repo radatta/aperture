@@ -75,6 +75,70 @@ describe('night: still open — when?', () => {
     expect(rows.map((p) => p.taskId)).not.toContain(lab.id);
   });
 
+  it('Backlog on a started task with a running timer stops it, then unplans; a failed unplan restarts the timer and says so', async () => {
+    // The stub's clock: ten minutes pass between the start and the stop, so the stop credits them.
+    let clock = Date.now();
+    const api = createStubClient({
+      seed: false,
+      storageKey: `night-timer-${Math.random()}`,
+      now: () => clock,
+    });
+    await onToday(api, 'essay draft', 'planned', 0);
+    const lab = await onToday(api, 'lab report', 'in_progress', 1);
+    const first = await api.startSession({
+      taskId: lab.id,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: today(),
+    });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    await screen.findByText('Still open — when?');
+    await screen.findByRole('button', { name: 'Pause' }); // the dock adopted the running timer
+    clock += 10 * 60_000;
+    const removePlan = api.removePlan.bind(api);
+    let fail!: (err: Error) => void;
+    api.removePlan = () => new Promise((_resolve, reject) => (fail = reject));
+
+    await user.click(row('lab report').getByRole('button', { name: 'Backlog' }));
+    // Busy while the unplan is out: the row's buttons are disabled, the timer already stopped.
+    await waitFor(() => expect(fail).toBeTruthy());
+    expect(
+      row('lab report').getByRole<HTMLButtonElement>('button', { name: 'Backlog' }).disabled,
+    ).toBe(true);
+    expect(await api.listRunningSessions()).toEqual([]);
+    fail(new Error('offline'));
+    await screen.findByText("Couldn't save that — try again.");
+
+    // The stop landed — its minutes are on the task — and the row is back as it was: the task in
+    // progress, on today's plan, with a fresh timer running.
+    expect((await api.listSessionsForDay(today())).find((s) => s.id === first.id)).toMatchObject({
+      status: 'completed',
+      activeMinutes: 10,
+    });
+    expect(await api.getTask(lab.id)).toMatchObject({
+      status: 'in_progress',
+      actualAccruedMin: 10,
+    });
+    const running = await api.listRunningSessions();
+    expect(running.map((s) => s.taskId)).toEqual([lab.id]);
+    expect(running[0]!.id).not.toBe(first.id);
+    expect(
+      row('lab report').getByRole<HTMLButtonElement>('button', { name: 'Backlog' }).disabled,
+    ).toBe(false);
+
+    // The retry: stop again, unplan — gone from the night, in the backlog, no timer.
+    api.removePlan = removePlan;
+    await user.click(row('lab report').getByRole('button', { name: 'Backlog' }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'lab report' })).toBeNull());
+    expect((await api.getTask(lab.id))?.status).toBe('backlog');
+    expect(await api.listRunningSessions()).toEqual([]);
+    expect((await api.listPlansForDay(today())).map((p) => p.taskId)).not.toContain(lab.id);
+    expect(screen.queryByText("Couldn't save that — try again.")).toBeNull();
+  });
+
   it('Leave hides it for the session without writing anything', async () => {
     const { api, user, essay } = await night();
 

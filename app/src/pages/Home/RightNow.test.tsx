@@ -29,6 +29,93 @@ async function plan(
 }
 
 describe('Right now card', () => {
+  // Two fast taps, and the first tap's writes answering out of order: the run's [0,1,2,2].
+  it('a second “Focus this” waits for the first; the server’s orders stay distinct', async () => {
+    const api = stub();
+    // Planned out of id order, as a real day gets: on a tie between C and D, C reads last and offers the button.
+    const a = await plan(api, 'A', { est: 15, order: 0 });
+    const b = await plan(api, 'B', { est: 15, order: 1 });
+    const d = await plan(api, 'D', { est: 15, order: 3 });
+    const c = await plan(api, 'C', { est: 15, order: 2 });
+    const write = api.upsertPlan.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    api.upsertPlan = async (input) => {
+      if (input.taskId === d.id && input.order === 2) await held; // D's move answers last
+      return write(input);
+    };
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(await screen.findByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Focus this' }));
+    const orders = async () => {
+      const rows = await api.listPlansForDay(TODAY);
+      return [a, b, c, d].map((t) => rows.find((r) => r.taskId === t.id)?.order);
+    };
+    await waitFor(async () => expect((await orders())[2]).toBe(3)); // C has moved, D hasn't
+    await new Promise((r) => setTimeout(r, 50)); // the half-done order reaches the screen, if it can
+    // The fast second tap: on every row still offering it, while the first tap's D is in flight.
+    for (const again of screen.queryAllByRole('button', { name: 'Focus this' }))
+      if (!(again as HTMLButtonElement).disabled) await user.click(again);
+    release();
+    await waitFor(async () => expect((await orders())[3]).not.toBe(3));
+    await waitFor(() => {
+      for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
+        expect((b as HTMLButtonElement).disabled).toBe(false);
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(new Set(await orders()).size).toBe(4);
+    expect(screen.getAllByText(/^[ABCD]$/)).toHaveLength(4);
+  });
+
+  it('a failed “Focus this” says so and re-enables the buttons', async () => {
+    const api = stub();
+    for (let i = 0; i < 4; i++) await plan(api, `Task ${i}`, { est: 30, order: i });
+    const write = api.upsertPlan.bind(api);
+    api.upsertPlan = () => Promise.reject(new Error('upsertPlan failed (503)'));
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(await screen.findByRole('button', { name: 'Daytime' }));
+    const focus = await screen.findByRole('button', { name: 'Focus this' });
+    await user.click(focus);
+    await screen.findByText("Couldn't save that — try again.");
+    await waitFor(() => expect((focus as HTMLButtonElement).disabled).toBe(false));
+    api.upsertPlan = write;
+    await user.click(focus);
+    await waitFor(() => expect(screen.queryByText("Couldn't save that — try again.")).toBeNull());
+  });
+
+  it('a “Focus this” with one failed write holds the buttons until its other writes are back', async () => {
+    const api = stub();
+    const tasks = [];
+    for (let i = 0; i < 5; i++) tasks.push(await plan(api, `Task ${i}`, { est: 30, order: i }));
+    const write = api.upsertPlan.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    api.upsertPlan = async (input) => {
+      if (++calls === 1) throw new Error('upsertPlan failed (503)');
+      await held;
+      return write(input);
+    };
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(await screen.findByRole('button', { name: 'Daytime' }));
+    const buttons = await screen.findAllByRole('button', { name: 'Focus this' });
+    await user.click(buttons.at(-1)!);
+    await waitFor(() => expect(calls).toBe(3));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("Couldn't save that — try again.")).toBeNull();
+    for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    release();
+    await screen.findByText("Couldn't save that — try again.");
+    await waitFor(() => {
+      for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
+        expect((b as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
   it('splits today’s plan into the Big 3 and Also today', async () => {
     const api = stub();
     for (let i = 0; i < 5; i++) await plan(api, `Task ${i}`, { est: 30, order: i });

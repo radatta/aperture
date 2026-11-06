@@ -48,6 +48,56 @@ export const partsV2bReads: Scenario = {
       what: '“Focus this” on two rows straight after each other → each task once after a reload, one live plan row each',
     },
     {
+      id: 'aborted-write',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'One write of a “Focus this” never reaches the server (a real dropped request), then a reload → each row once, two share an order; the next tap heals it',
+    },
+    {
+      id: 'reload-mid-write',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A read landing inside a plan move sees the row once, never none',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a reader during a plan move sees the row once, at every step',
+        why: 'only a read between the move’s two writes shows it; the in-memory doc reads at each write',
+      },
+    },
+    {
+      id: 'move-put-fails',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A plan move whose put fails → the row stays where it was',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a plan move whose put fails keeps the row where it was',
+        why: 'dev’s table has no way to fail one write of a move',
+      },
+    },
+    {
+      id: 'move-delete-fails',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A plan move whose delete fails → one row, at the new spot, in reads and the next write',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a plan move whose delete fails leaves one row: the new spot wins every read and the next write',
+        why: 'dev’s table has no way to fail one write of a move',
+      },
+    },
+    {
+      id: 'second-tap',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A second “Focus this” while the first’s writes are out → it waits; orders stay distinct',
+      offDev: {
+        file: 'app/src/pages/Home/RightNow.test.tsx',
+        test: 'a second “Focus this” waits for the first; the server’s orders stay distinct',
+        why: 'the tie needs one response held back and plan ids out of order; only the stub holds a write open',
+      },
+    },
+    {
       id: 'day-row',
       entry: 'ui',
       kind: 'edge',
@@ -190,9 +240,18 @@ export const partsV2bReads: Scenario = {
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
         await ctx.ui.expectText(name(ctx, 'pD'), 15_000);
         await rowOf(ctx, name(ctx, 'pD')).getByRole('button', { name: 'Focus this' }).click();
-        // pC takes pD's "Also today" spot once the plan refetches; its button appears then.
+        // pC takes pD's "Also today" spot once the plan refetches; its button appears then, enabled once
+        // the first tap's writes are done (the click waits for that).
         await rowOf(ctx, name(ctx, 'pC')).getByRole('button', { name: 'Focus this' }).click();
-        await ctx.ui.settle();
+        // pD's button back and enabled: the second tap's writes are answered, so the reload and the server
+        // read below judge the final order. A read inside a move is reload-mid-write's row.
+        const pD = rowOf(ctx, name(ctx, 'pD')).getByRole('button', { name: 'Focus this' });
+        await pD.waitFor({ state: 'visible', timeout: 15_000 });
+        for (let i = 0; await pD.isDisabled(); i++) {
+          if (i > 150)
+            throw new Error('“Focus this” stayed disabled for 15 s after the second tap');
+          await new Promise((r) => setTimeout(r, 100));
+        }
         await ctx.page.reload();
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
         await ctx.ui.expectText(name(ctx, 'pD'), 15_000);
@@ -220,6 +279,61 @@ export const partsV2bReads: Scenario = {
         const orders = new Set(rows.map((r) => r.order));
         if (rows.length !== 4 || tasks.size !== 4 || orders.size !== 4)
           throw new Error(`plan rows: ${JSON.stringify(rows.map((r) => [r.taskId, r.order]))}`);
+      },
+    },
+    {
+      id: 'aborted-write',
+      entry: 'ui',
+      proves: ['aborted-write'],
+      title:
+        'A dropped write of a “Focus this”, then a reload: each row once, a tie on the server; the next tap heals it',
+      async run(ctx) {
+        const today = await appToday(ctx);
+        const mine = new Set(
+          (await ctx.api.reads.listTasks())
+            .filter((t) => PLANNED.some((w) => t.title === name(ctx, w)))
+            .map((t) => t.id),
+        );
+        const orders = async () =>
+          (await ctx.api.reads.listPlansForDay(today))
+            .filter((p) => mine.has(p.taskId))
+            .map((p) => p.order);
+        const until = async (what: string, ok: (o: number[]) => boolean) => {
+          let last: number[] = [];
+          for (let i = 0; i < 75; i++) {
+            last = await orders();
+            if (ok(last)) return;
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          throw new Error(`${what}: orders ${JSON.stringify(last)}`);
+        };
+        const distinct = (o: number[]) => new Set(o).size;
+        const dropped = await ctx.intercept('upsertPlan', { abort: true, times: 1 });
+        try {
+          await rowOf(ctx, name(ctx, 'pD')).getByRole('button', { name: 'Focus this' }).click();
+          await ctx.ui.expectText("Couldn't save that — try again.", 15_000);
+          if (dropped.hits() !== 1 || dropped.passed() !== 1)
+            throw new Error(`upsertPlan: ${dropped.hits()} dropped, ${dropped.passed()} sent`);
+        } finally {
+          await dropped.release();
+        }
+        await until('the sent write to leave a tie', (o) => o.length === 4 && distinct(o) === 3);
+        await ctx.page.reload();
+        await ctx.page.getByRole('button', { name: 'Daytime' }).click();
+        await ctx.ui.expectText(name(ctx, 'pD'), 15_000);
+        for (const what of PLANNED) {
+          const n = await ctx.page.getByText(name(ctx, what), { exact: true }).count();
+          if (n !== 1) throw new Error(`${what} shows ${n} times with a tie`);
+        }
+        await ctx.shot('tie');
+        const offers = [];
+        for (const what of PLANNED) {
+          const b = rowOf(ctx, name(ctx, what)).getByRole('button', { name: 'Focus this' });
+          if (await b.count()) offers.push(b);
+        }
+        if (offers.length !== 1) throw new Error(`${offers.length} rows offer “Focus this”`);
+        await offers[0]!.click();
+        await until('the next tap to heal the tie', (o) => o.length === 4 && distinct(o) === 4);
       },
     },
     {

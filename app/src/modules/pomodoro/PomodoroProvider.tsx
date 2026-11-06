@@ -189,9 +189,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   }, [doneKey, chimedIds]);
 
   const startFocus = useCallback(
-    (input?: StartFocusInput) => {
+    (input?: StartFocusInput): Promise<boolean> => {
       setStartError(null);
-      api
+      return api
         .startSession({
           taskId: input?.taskId ?? null,
           categoryId: null,
@@ -202,11 +202,15 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
         .then(
           (s) => {
             setStartError(null);
-            invalidateTaskData(qc);
+            void invalidateTaskData(qc);
             upsert(s);
             setPausedIds((p) => withDeleted(p, s.id)); // re-focusing a dedup'd task clears any stale pause
+            return true;
           },
-          () => setStartError('Couldn’t start the timer — try again.'),
+          () => {
+            setStartError('Couldn’t start the timer — try again.');
+            return false;
+          },
         );
     },
     [api, qc, upsert, settings],
@@ -309,7 +313,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       const capMin =
         status === 'completed' && timer ? stopCapMin(timer, tf(timer.session)) : undefined;
       const settled = () => {
-        invalidateTaskData(qc);
+        void invalidateTaskData(qc);
         remove(id);
       };
       return api
@@ -329,7 +333,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       clear(id);
       api.resolveStaleSession(id, 'keep').then(
         () => {
-          invalidateTaskData(qc);
+          void invalidateTaskData(qc);
           setStale((cur) => cur.filter((s) => s.id !== id));
         },
         () => fail(id, 'Couldn’t save — try again.'),
