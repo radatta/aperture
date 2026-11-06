@@ -325,7 +325,10 @@ export const areas: Scenario = {
         'Settings › New category "…C", Area: Recruiting, Add → its row reads it; the ledger has its id',
       async run(ctx) {
         await ctx.page.getByLabel('New category', { exact: true }).fill(catLabel(ctx, 'C'));
-        await ctx.page.getByLabel('Area', { exact: true }).selectOption({ label: 'Recruiting' });
+        // A <select> inside its <label>: the label's text includes the options, so an exact getByLabel never matches.
+        await ctx.page
+          .getByRole('combobox', { name: /^Area\b/ })
+          .selectOption({ label: 'Recruiting' });
         await ctx.page.getByRole('button', { name: 'Add', exact: true }).click();
         const row = ctx.page.getByRole('group', {
           name: `Category ${catLabel(ctx, 'C')}`,
