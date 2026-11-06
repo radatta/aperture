@@ -282,9 +282,9 @@ export const planWriteRefetch: Scenario = {
         if ((await statusOf(ctx, made.A!)) !== 'planned') throw new Error('A is not planned');
         const a = await rowsOf(ctx, today, made.A!);
         if (a.length !== 1) throw new Error(`A rows: ${JSON.stringify(a)}`);
-        // Compared with itself just before the unplan: "Focus this" renumbered the day earlier in this run.
-        const n = JSON.stringify(await rowsOf(ctx, today, made.N!));
-        if (n !== neighbour) throw new Error(`N moved: ${neighbour} → ${n}`);
+        const n = await rowsOf(ctx, today, made.N!);
+        if (n.length !== 1 || n[0]!.order !== 0 || n[0]!.plannedMinutes !== 15)
+          throw new Error(`N moved: ${JSON.stringify(n)}`);
         if ((await statusOf(ctx, made.N!)) !== 'planned') throw new Error('N changed status');
       },
     },
