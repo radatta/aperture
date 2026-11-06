@@ -22,9 +22,13 @@ export const waiting = (ts: Task[], categories: Category[]): Task[] => {
 export function useBacklog() {
   const api = useApi();
   const qc = useQueryClient();
-  // Until the roster is in (or if it failed) every task reads as Personal — the same fallback as a task
-  // with no category — so the count is never blank for want of categories.
-  const { data: categories } = useCategories();
-  const select = useCallback((ts: Task[]) => waiting(ts, categories ?? []), [categories]);
+  // Nothing while the roster loads: counting then would include the Aperture-area tasks and drop on arrival.
+  // If it failed, every task reads as Personal — the same fallback as a task with no category — so the count
+  // isn't blank for want of categories.
+  const { data: categories, isPending: rosterPending } = useCategories();
+  const select = useCallback(
+    (ts: Task[]) => (rosterPending ? [] : waiting(ts, categories ?? [])),
+    [categories, rosterPending],
+  );
   return useQuery({ ...tasksQuery(api, qc), select });
 }

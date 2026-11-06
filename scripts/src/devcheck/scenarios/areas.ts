@@ -54,8 +54,8 @@ async function waitingCount(ctx: Ctx): Promise<number | null> {
   await ctx.page
     .getByText('Plan today', { exact: true })
     .waitFor({ state: 'visible', timeout: 15_000 });
-  // Waits, not a count after settle: the line needs the day and the backlog read, and a count taken before
-  // they land would read as "capacity set".
+  // Waits, not a count after settle: the line needs the day, the backlog and the roster (useBacklog holds it
+  // back until then), and a count taken before they land would read as "capacity set".
   const line = ctx.page.getByText(/\d+ waiting in the backlog/);
   try {
     await line.first().waitFor({ state: 'visible', timeout: 8_000 });
@@ -569,7 +569,10 @@ export const areas: Scenario = {
         'Home’s waiting count rises by two once A moves to School (its two untimed backlog tasks)',
       async run(ctx) {
         await ctx.api.writes.setCategoryArea(catA.id, 'school');
-        const after = await waitingCount(ctx);
+        // Fresh loads: the roster's list read isn't consistent, so the first one may predate the write.
+        let after = await waitingCount(ctx);
+        for (let i = 0; i < 3 && waitingBefore !== null && after === waitingBefore; i++)
+          after = await waitingCount(ctx);
         if (waitingBefore === null || after === null)
           needsYou(
             'Home showed no waiting count within 8 s: the test user likely has capacity set today (Home draws the bar instead); clear it, then rerun',

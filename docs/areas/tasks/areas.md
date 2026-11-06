@@ -59,8 +59,8 @@ Category ──── area: 'school' | 'aperture' | 'recruiting' | 'personal' | 
 - **Home "+ Add".** `useBacklog` (the "N waiting in the backlog" count) and the picker's unsearched list
   apply the same life predicate (`lifeFrom`, `areas.ts`) — the hook adds "backlog, untimed, no parent", the
   picker "open, not on today"; typing in the picker still finds anything, and a task added while typing
-  stays listed. Until the categories roster is in, every task reads as Personal, so the count is never
-  blank for want of categories.
+  stays listed. The count waits for the categories roster, so it never starts high and drops; if the roster
+  read fails, every task reads as Personal, so the count isn't blank for want of categories.
 - **MCP.** `create_category` and `update_category` take `area` (the enum; `null` clears on update),
   `list_categories` returns it. The tool text says the Backlog folds Aperture away, so "park this" has a
   recipe.
@@ -74,7 +74,8 @@ Category ──── area: 'school' | 'aperture' | 'recruiting' | 'personal' | 
 2. The chip is a toggle with `aria-pressed`, drawn only when N > 0, counting cards in the lens by area
    (`areaCardCounts`) whatever the query shows — so the number is "how much Aperture work is waiting", not
    "how much this filter hid".
-3. `useBacklog` joins categories; a missing roster reads as Personal (the same fallback as no category).
+3. `useBacklog` joins categories and holds its list back while the roster loads; a failed roster reads as
+   Personal (the same fallback as no category).
 4. "Legacy undefined → null" is proven per impl (a raw row in the Lambda test, a persisted store in the
    stub test) — the contract suite can't write a row without the field. Ownership is a two-user Lambda test.
 5. The stub seed gives Deep Work the Aperture area and Learning School, so the Backlog has something to fold.

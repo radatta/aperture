@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
@@ -68,4 +68,44 @@ describe('routing', () => {
     expect(screen.getByLabelText('Capture log')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Today' })).toBeTruthy();
   });
+});
+
+describe('Plan today › the waiting count', () => {
+  async function apertureBacklog() {
+    const api = createStubClient({ seed: false, storageKey: `home-${Math.random()}` });
+    const cat = await api.upsertCategory({ label: 'A', isWork: true, area: 'aperture' });
+    await api.createTask({ title: 'a1', categoryId: cat.id });
+    await api.createTask({ title: 'a2', categoryId: cat.id });
+    await api.createTask({ title: 'life' });
+    return api;
+  }
+  const line = () => document.body.textContent?.match(/\d+ waiting in the backlog/)?.[0] ?? null;
+
+  it('shows no count until the roster is in, so it never starts high and drops', async () => {
+    const api = await apertureBacklog();
+    const real = api.listCategories.bind(api);
+    let open = () => {};
+    const gate = new Promise<void>((r) => (open = r));
+    vi.spyOn(api, 'listCategories').mockImplementation(async () => {
+      await gate;
+      return real();
+    });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/' });
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    await screen.findByText(/Nothing planned yet/);
+    await new Promise((r) => setTimeout(r, 100)); // the tasks read has landed
+    expect(line()).toBeNull();
+    open();
+    await waitFor(() => expect(line()).toBe('1 waiting in the backlog'));
+  });
+
+  it('a failed roster still counts, every task as Personal', async () => {
+    const api = await apertureBacklog();
+    vi.spyOn(api, 'listCategories').mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    renderApp({ api, path: '/' });
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    await waitFor(() => expect(line()).toBe('3 waiting in the backlog'), { timeout: 15_000 });
+  }, 20_000);
 });
