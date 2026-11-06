@@ -65,10 +65,19 @@ describe('the slow tier', () => {
     );
   });
 
-  it('ios-standalone is slow everywhere and covers app/** plus its own harness', () => {
+  it('ios-standalone is slow everywhere and covers what iOS can see plus its own harness', () => {
     const sc = SCENARIOS.find((s) => s.id === 'ios-standalone')!;
+    const paths = sc.slowPaths!;
+    const hit = (f: string) => paths.some((g) => globMatch(g, f));
     expect(sc.steps.every((s) => s.cost === 'slow')).toBe(true);
-    expect(sc.slowPaths).toContain('app/**');
-    expect(sc.slowPaths).toContain('tools/mailroom/jobs/sim.sh');
+    expect(hit('app/src/lib/useKeyboardInset.ts')).toBe(true);
+    expect(hit('app/src/auth/userStore.ts')).toBe(true);
+    expect(hit('tools/mailroom/jobs/sim.sh')).toBe(true);
+    expect(hit('app/src/pages/Home/index.tsx')).toBe(false);
+  });
+
+  it('every ios-standalone slow path exists: a rename would silently stop the sim running', () => {
+    const paths = SCENARIOS.find((s) => s.id === 'ios-standalone')!.slowPaths!;
+    for (const g of paths) expect(existsSync(ROOT + g.replace(/\/\*\*$/, ''))).toBe(true);
   });
 });

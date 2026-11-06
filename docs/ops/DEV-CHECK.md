@@ -130,7 +130,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   test user's own day row (capacity, intent) through the UI and puts the prior values back in the step's `finally` —
   a singleton, nothing to ledger (an intent that was never set comes back as `''`; the API has no null intent).
 - **A habit is one more kind** (`scenarios/day-guards.ts`): recorded from the create's id (`via: api:upsertHabit`). The API
-  has no habit delete, so cleanup *archives* it (`upsertHabit({ …, active: false })`) and "exists" means listed and active —
+  has no habit delete, so cleanup _archives_ it (`upsertHabit({ …, active: false })`) and "exists" means listed and active —
   the run ends at 0 leftovers, and one archived `devcheck <nonce> habit` per run stays on the dev test user, by design, until a
   tombstoning `deleteHabit` lands (day-guards' follow-up). Its checks are tombstones the archive leaves behind.
 - **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
@@ -341,7 +341,7 @@ lists. **For the all-clear a deferred row counts like off dev** — the branch t
 can't have changed what the row proves. A row with any proving step that ran is judged on those steps, with
 one exception: when every step through the row's own entry point was deferred, the row reads `deferred`, so a
 `ui` row never passes on its `api` step alone (a step that failed still fails it). Slow today: `ios-standalone`
-(every step; `app/**` and its harness).
+(every step; the app files its rows can see and its harness). Its paths are narrower than everything that could affect those rows (IOS-CHECK.md → the trade), so for it "can't have changed" is a judgement, not a proof.
 
 Walk the plan's matrix through **the edge-case checklist**: empty / max / invalid input; cancel; repeat
 (idempotent); survives a reload; the neighbouring item unaffected; ownership (another user's id). `smoke` alone

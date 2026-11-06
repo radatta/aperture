@@ -1,7 +1,7 @@
 // The Home Screen web app on the Mac's iOS Simulator (docs/ops/IOS-CHECK.md): it launches signed in, survives
 // three kinds of kill, picks up a deploy by its second launch, and keeps the capture bar and the Done form's
 // Reflection box above the soft keyboard without zooming. Every step is slow (a sim run is minutes), so a full
-// run defers them unless the branch touches app/ or names this scenario (DEV-CHECK.md → Slow tier).
+// run defers them unless the branch touches what they can see (APP, below) or names this scenario (DEV-CHECK.md → Slow tier).
 // The sim never submits: the one task it opens is set up here through MCP, and the sim only focuses, types a
 // draft by key taps and erases it. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
 // re-measure (keyboard up, the capture bar sits at y 462); a MISS after an app change means a plan needs new ones —
@@ -124,7 +124,25 @@ const RELAUNCH: IosOp[] = [
   { op: 'shot', name: 'relaunch' },
 ];
 
-const APP = ['app/**'];
+// What these rows can see: the keyboard's lift and the fields it covers, zoom, the shell and its insets, staying signed
+// in, the service worker's second launch. `app/**` would rerun the sim on every app change, ~6 min a run for most of them
+// nothing iOS can see (Rahul, 2026-11-05). Elsewhere an iOS-only bug waits for --tier all or naming the scenario.
+const APP = [
+  'app/index.html',
+  'app/vite.config.ts',
+  'app/pwa/**',
+  'app/src/main.tsx',
+  'app/src/index.css',
+  'app/src/auth/**',
+  'app/src/lib/useKeyboardInset.ts',
+  'app/src/components/AppShell.tsx',
+  'app/src/components/Modal/**',
+  'app/src/modules/capture/CaptureBar.tsx',
+  'app/src/modules/tasks/DoneForm.tsx',
+  'app/src/modules/tasks/TaskModal.tsx',
+  'app/src/modules/tasks/editor/TaskEditor.tsx',
+  'app/src/modules/tasks/notes/NotesField.tsx',
+];
 const HARNESS = [
   'tools/mailroom/jobs/sim.sh',
   'scripts/src/mailroom/sim.ts',
