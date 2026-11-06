@@ -67,7 +67,7 @@ export class PushRegistry {
   }
 
   async getPoller(): Promise<PushPollerRow | null> {
-    const it = await this.doc.get(PUSH_PK, pushSk.health());
+    const it = await this.doc.get(PUSH_PK, pushSk.health(), { consistent: true });
     return it ? toEntity<PushPollerRow>(it) : null;
   }
   // The poller is its only writer (one tick at a time: timeout < rate, prod reserves one), so a plain put.

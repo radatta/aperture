@@ -39,8 +39,10 @@ Notifications:
   - **Reopening:** done and cancelled are terminal (`machines.ts`), so no BFF path reopens a task, and a
     finished task's plans can't fire again. If a reopen path is ever added, the task re-arms on its own write,
     and that path must re-arm the task's plans too (`backend.push.test.ts` pins the terminal states).
-  - **Series:** a series' task and plan for a day are created on that day's first `getDay`, so a first open
-    after 09:00 means that plan was made after its fire time — no planned ping that day.
+  - **Series:** a series' task and plan for a day are created on that day's first `getDay`
+    ([recurring.md](recurring.md) §2), so a first open after 09:00 means that plan was made after its fire
+    time — no planned ping that day. An occurrence due later (`dueOffsetDays`) still pings at 09:00 on its
+    due day: that deadline was set before it fires.
 - There is no user-facing cap and no quiet hours (both rejected).
 - **Same-tick batching:** several reminders in one minute become one notification ("3 reminders", titles joined).
 - **Tap-through:** `/tasks?lens=today&task=<id>&n=<tag>` opens the task's modal on Today. A batch opens Today.

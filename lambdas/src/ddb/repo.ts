@@ -892,7 +892,7 @@ export class Repo {
   }
 
   async getPushUserHealth(): Promise<PushUserHealth | null> {
-    const it = await this.doc.get(this.p(), sk.pushHealth());
+    const it = await this.doc.get(this.p(), sk.pushHealth(), { consistent: true });
     return it ? toEntity<PushUserHealth>(it) : null;
   }
   async putPushUserHealth(h: PushUserHealth): Promise<void> {
