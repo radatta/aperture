@@ -397,7 +397,7 @@ sim_find_icon() {
         e="$(sim_icon_in "$t")" || true
         [ -n "$e" ] || break
         if [ "$(sim_icon_count "$t")" != 1 ]; then
-          sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "more than one Aperture icon on Home Screen page 2; remove the extra one by hand (each icon has its own session)"
+          sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "more than one Aperture icon on Home Screen page 2; remove the extra one by hand"
           return 1
         fi
         if [ "$e" = "$prev" ]; then SIM_ICON="$e"; return 0; fi # two reads agree
@@ -478,6 +478,7 @@ sim_focus_field() {
 # Prove the focus is in Password before any secret moves: the tree marks no focus between fields (profile.md, P12) and a
 # dropped tap would type the password into Email, in clear. One harmless key first: it must reach Password as a single
 # bullet with Email unchanged, and delete must empty the field again. These reads carry no secret: only the x was typed.
+# --duration matters: a bare `axe key` exits 0 and did nothing here (profile.md, P13 and P14).
 sim_pw_focused() {
   local pf="$1" ef="$2" px py ex ey p m i
   read -r px py < <(jq -r '.at | "\(.x) \(.y)"' <<<"$pf")
@@ -485,19 +486,19 @@ sim_pw_focused() {
   for i in 1 2; do
     sim_tap_el "$pf" || return 1
     sleep 1
-    ax key 27 >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
+    ax key 27 --duration 0.2 >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
     sleep 1
     p="$(SIM_SENSITIVE=false && sim_point "$px" "$py")" || return 1
     m="$(SIM_SENSITIVE=false && sim_point "$ex" "$ey")" || return 1
     if jq -e '.value == "•"' <<<"$p" >/dev/null 2>&1 && jq -e --arg v "$SIM_EMAIL" '.value == $v' <<<"$m" >/dev/null 2>&1; then
-      ax key 42 >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
+      ax key 42 --duration 0.2 >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
       sleep 1
       p="$(SIM_SENSITIVE=false && sim_point "$px" "$py")" || return 1
       jq -e '.value == "Password"' <<<"$p" >/dev/null 2>&1 && return 0
       sim_err SIGNIN_FAILED FORM_CHANGED "the Password field didn't empty"
       return 1
     fi
-    if ! jq -e --arg v "$SIM_EMAIL" '.value == $v' <<<"$m" >/dev/null 2>&1; then ax key 42 >/dev/null 2>&1 || true; fi
+    if ! jq -e --arg v "$SIM_EMAIL" '.value == $v' <<<"$m" >/dev/null 2>&1; then ax key 42 --duration 0.2 >/dev/null 2>&1 || true; fi
     sleep 1
   done
   sim_err SIGNIN_FAILED FORM_CHANGED "the Password field never took focus"

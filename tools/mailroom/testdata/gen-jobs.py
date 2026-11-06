@@ -363,13 +363,13 @@ serr('sim: Home Screen with a third page is WEBCLIP_MISSING, no tap', 'WEBCLIP_M
 spass('sim: a sim still shutting down boots rather than failing the profile', [L], tape=[{'m': 'list devices -j', 'n': 2, 'out': dev('Shutting Down')}], simIncludes=['bootstatus'])
 serr('sim: the test key landing in Email is deleted and the password never typed', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
      tape=SIGNED_OUT + [COGNITO, EMAIL[0], {**EMAIL[1], 'n': 2}, pt(220, 276, el('AXTextField', 'Email', ADDR + 'x', 36, 278, 366, 40))] + pwfield(366, 345, *['Password'] * 9),
-     pwTyped=0, simIncludes=['key 27', 'key 42'])
+     pwTyped=0, simIncludes=['key 27 --duration 0.2', 'key 42 --duration 0.2'])
 serr('sim: a test key that lands nowhere means no password', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, *['Password'] * 9), pwTyped=0, simIncludes=['key 27'], simExcludes=['key 42'])
+     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, *['Password'] * 9), pwTyped=0, simIncludes=['key 27 --duration 0.2'], simExcludes=['key 42'])
 serr('sim: an unmasked Password field (the x readable) means no password', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
      tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, 'Password', *['x'] * 9), pwTyped=0)
 serr('sim: a Password field that won’t empty after the test key means no password', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, 'Password', *['•'] * 9), pwTyped=0, simIncludes=['key 42'])
+     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, 'Password', *['•'] * 9), pwTyped=0, simIncludes=['key 42 --duration 0.2'])
 serr('sim: an Email field that never takes focus (no zoom after a retap) is FORM_CHANGED, nothing typed', 'FORM_CHANGED', [L, {'op': 'signIn'}],
      reason='SIGNIN_FAILED', tape=SIGNED_OUT + [COGNITO, pt(220, 276, el('AXTextField', 'Email', PW, 60, 258, 320, 35))], simExcludes=['axe type'])
 serr('sim: a missing Email field is FORM_CHANGED', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED', tape=SIGNED_OUT + [COGNITO], simExcludes=['axe type'])

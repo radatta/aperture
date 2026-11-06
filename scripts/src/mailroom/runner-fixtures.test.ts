@@ -115,7 +115,8 @@ describe('mailroom runner', () => {
     expect(checks[1]).toBeLessThan(password);
     // The focus is proven with a harmless key before the password, and the host checked after that.
     const focused = sim.indexOf('sim_pw_focused "$pf" "$ef" ||');
-    expect(sim).toContain('ax key 27');
+    expect(sim).toContain('ax key 27 --duration 0.2');
+    expect(sim).not.toMatch(/\bax key \d+ >/); // a bare key press exits 0 and does nothing
     expect(focused).toBeGreaterThan(email);
     expect(focused).toBeLessThan(checks[1] ?? -1);
     expect(sim.match(/\bax type\b[^\n]*/g)?.map((l) => l.slice(0, 30))).toEqual([
