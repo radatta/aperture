@@ -4,6 +4,7 @@
 
 import type { AttachmentStatus } from './attachments';
 import type { Area } from './areas';
+import type { ExerciseId } from './flux/definitions';
 import type { CompetencyTag } from './stories';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 
@@ -271,6 +272,9 @@ export interface Settings extends BaseEntity {
   // disclaimer was accepted. Synced, so it's accepted once, not once per device. null → unset.
   fluxRollId: string | null; // default null
   fluxDisclaimerAckAt: number | null; // default null
+  // The sets stepper's opening count per exercise — learned, written on Start when it differs from the
+  // stored one (D61). Absent → the stepper's default. Whole numbers 1–5 (fluxSetsError).
+  fluxSets: Partial<Record<ExerciseId, number>>; // default {}
 }
 
 // --- Calibration (derived, read-only) -------------------------------------

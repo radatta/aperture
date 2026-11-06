@@ -98,6 +98,21 @@ export function fluxSetError(input: RecordFluxSetInput): string | null {
   return null;
 }
 
+// The sets stepper's range (D42), and the one refusal for a `fluxSets` settings patch (D61): a plain
+// object of catalogue ids to whole numbers in that range; null = valid. Stub and Lambda both throw it.
+export const FLUX_MIN_SETS = 1;
+export const FLUX_MAX_SETS = 5;
+export function fluxSetsError(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return 'Flux sets must be a map of exercise to count.';
+  for (const [id, n] of Object.entries(value)) {
+    if (!isExerciseId(id)) return `Unknown Flux exercise "${id}".`;
+    if (!Number.isInteger(n) || (n as number) < FLUX_MIN_SETS || (n as number) > FLUX_MAX_SETS)
+      return `Sets for ${getExercise(id).name} must be a whole number from ${FLUX_MIN_SETS} to ${FLUX_MAX_SETS}.`;
+  }
+  return null;
+}
+
 // The count a set goes for under its prescription (D56): both sides for a bilateral drill, none for a
 // timed one. One home for the live readout's "/ 10", the draft's `planned` and so History's "2 of 10".
 export function plannedCount(def: ExerciseDefinition): number | null {

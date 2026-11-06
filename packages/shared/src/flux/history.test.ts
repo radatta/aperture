@@ -6,6 +6,7 @@ import { EXERCISES, getExercise } from './definitions';
 import {
   fluxFilterError,
   fluxSetError,
+  fluxSetsError,
   groupByDay,
   hasSide,
   inRange,
@@ -192,5 +193,19 @@ describe('grouping and summaries', () => {
 
   it('every exercise has a short name', () => {
     expect(Object.keys(SHORT_NAMES).sort()).toEqual(EXERCISES.map((d) => d.id).sort());
+  });
+});
+
+describe('fluxSetsError (D61)', () => {
+  it('accepts a map of catalogue ids to whole numbers 1–5, and nothing else', () => {
+    expect(fluxSetsError({})).toBeNull();
+    expect(fluxSetsError({ 'chin-tuck': 1, 'cervical-rotation': 5 })).toBeNull();
+    expect(fluxSetsError({ 'chin-tuck': 0 })).toContain('1 to 5');
+    expect(fluxSetsError({ 'chin-tuck': 6 })).toContain('1 to 5');
+    expect(fluxSetsError({ 'chin-tuck': 2.5 })).toContain('whole number');
+    expect(fluxSetsError({ 'chin-tuck': '3' })).toContain('whole number');
+    expect(fluxSetsError({ nope: 2 })).toContain('Unknown Flux exercise');
+    expect(fluxSetsError(null)).toContain('map');
+    expect(fluxSetsError([1])).toContain('map');
   });
 });

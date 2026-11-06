@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { addDays, fmtDayHeading, fmtMonthShortDay, todayKey, type FluxSet } from '@aperture/shared';
 import {
+  FLUX_EXERCISE_IDS,
   getExercise,
   groupByDay,
   isExerciseId,
@@ -38,7 +39,10 @@ export function FluxHistoryTab() {
   });
   const loading = q.isPending || q.isPlaceholderData;
   const sets = q.data ?? [];
-  const ids = [...new Set(sets.map((s) => s.exerciseId))].filter(isExerciseId);
+  // Chips in the catalogue's order, not the sets': a list ordered by newest set would move a chip
+  // whenever its latest set is deleted (or a newer set of another exercise lands).
+  const present = new Set(sets.map((s) => s.exerciseId));
+  const ids = FLUX_EXERCISE_IDS.filter((id) => present.has(id));
   // A chip whose last set was just deleted is gone — so is its filter.
   const exerciseId = picked && ids.includes(picked as (typeof ids)[number]) ? picked : null;
   // …and stays gone once a loaded window lacks it (a delete, or a window it has no sets in): a set of it

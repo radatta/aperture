@@ -9,6 +9,7 @@ import {
   type ExerciseId,
 } from '@aperture/shared/flux';
 import { dayKey, ulid } from '@aperture/shared';
+import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
@@ -61,7 +62,12 @@ function Stage({ id }: { id: ExerciseId }) {
   const sided = hasSide(def);
   const [side, setSide] = useState<Side>('a');
   const shown = mirrorForSide(def, side);
-  const [sets, setSets] = useState(DEFAULT_SETS);
+  // The stepper opens at this exercise's last started count (D61); a tap here wins until Start.
+  const { data: settings } = useSettings();
+  const updateSettings = useUpdateSettings();
+  const [pickedSets, setSets] = useState<number | null>(null);
+  const storedSets = settings?.fluxSets[id] ?? DEFAULT_SETS;
+  const sets = pickedSets ?? storedSets;
   const lastSide = useRef<Side>('a'); // the side the last finished set was done on
 
   const voice = useVoice();
@@ -96,6 +102,9 @@ function Stage({ id }: { id: ExerciseId }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const start = () => {
+    // Remember the count for next time — only a change, so an untouched stepper never writes.
+    if (settings && sets !== storedSets)
+      updateSettings.mutate({ fluxSets: { ...settings.fluxSets, [id]: sets } });
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (video && canvas) void engine.start({ video, canvas });

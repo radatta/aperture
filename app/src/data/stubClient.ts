@@ -183,7 +183,7 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
-import { fluxFilterError, fluxSetError, inRange } from '@aperture/shared/flux';
+import { fluxFilterError, fluxSetError, fluxSetsError, inRange } from '@aperture/shared/flux';
 import { heuristicParse, takeStubParseFailure } from './stubParse';
 import { forgetStubBlob } from './attachmentTransport';
 import { seedStore } from './seed';
@@ -193,7 +193,7 @@ const FINANCE_SETTINGS_DEFAULTS = {
   financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
   financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
-const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null };
+const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null, fluxSets: {} };
 const STORAGE_KEY = 'aperture.stub.v1';
 // Done or dropped: a finished task's place is history (places.ts PLACE_FINISHED_ERROR).
 const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
@@ -1533,6 +1533,10 @@ class StubClient implements ApiClient {
     return this.ensureSettings();
   }
   async updateSettings(patch: SettingsPatch): Promise<Settings> {
+    if (patch.fluxSets !== undefined) {
+      const err = fluxSetsError(patch.fluxSets);
+      if (err) throw new Error(err);
+    }
     const current = this.ensureSettings();
     const next: Settings = { ...current, ...patch, updatedAt: this.now() };
     this.store.settings = next;

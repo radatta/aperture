@@ -201,6 +201,44 @@ describe('Flux History tab', () => {
     expect((await api.exportData()).fluxSets.map((s) => s.id)).toEqual([keep.id]);
   });
 
+  it('chip order is stable across a delete', async () => {
+    // Chips follow the catalogue, not the sets' recency: deleting the newest set of an exercise must
+    // not move its chip (it moved to the end before, as the list is newest first).
+    const t = Date.now();
+    const tuckOld = set({
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      count: 6,
+      avgPeakDeg: null,
+      completedAt: t - 3000,
+    });
+    const rotation = set({ completedAt: t - 2000 });
+    const tuckNew = set({ ...tuckOld, id: ulid(), completedAt: t - 1000 });
+    const { user } = await history([tuckOld, rotation, tuckNew]);
+    const chipLabels = () =>
+      within(screen.getByRole('group', { name: 'Exercise' }))
+        .getAllByRole('button')
+        .map((b) => b.textContent);
+    await screen.findByText('Neck Rotation');
+    const before = chipLabels();
+    expect(before).toEqual(['All', 'rotation', 'chin tuck']);
+    const deletes = screen.getAllByRole('button', {
+      name: /^Delete Chin Tuck \(Cervical Retraction\) set from /,
+    });
+    await user.click(deletes[0] as HTMLElement); // the newest chin tuck, listed first
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('button', {
+          name: /^Delete Chin Tuck \(Cervical Retraction\) set from /,
+        }),
+      ).toHaveLength(1),
+    );
+    expect(chipLabels()).toEqual(before);
+  });
+
   it('Cancel and Escape on the delete confirm hand focus back to the row’s Delete', async () => {
     const { user } = await history([set()]);
     const trigger = () => screen.getByRole('button', { name: /^Delete Neck Rotation set from / });

@@ -45,7 +45,7 @@ function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & { entries: 
 // A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a request
 // whose response arrives when `respond` says (immediately by default).
 function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[] } = {}) {
-  let settings = { dayStartHour: 4, pomodoroWorkMin: 25 };
+  let settings = { dayStartHour: 4, pomodoroWorkMin: 25, fluxSets: {} };
   const tasks = new Map<string, DevTask>(
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
   );

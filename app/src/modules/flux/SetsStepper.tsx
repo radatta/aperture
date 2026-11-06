@@ -1,9 +1,11 @@
+import { FLUX_MAX_SETS, FLUX_MIN_SETS } from '@aperture/shared/flux';
 import { Button } from '../../components/Button';
 
 // How many sets this session (D42), chosen before Start so nothing needs a tap once it runs: a good day
-// can be 3, a rough day 1. Per-exercise prescriptions come with Flux history (the next PR).
-export const MIN_SETS = 1;
-export const MAX_SETS = 5;
+// can be 3, a rough day 1. It opens at the count this exercise was last started with (Settings
+// `fluxSets`, written on Start — D61), else 2.
+export const MIN_SETS = FLUX_MIN_SETS;
+export const MAX_SETS = FLUX_MAX_SETS;
 
 export function SetsStepper({
   value,
