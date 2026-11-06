@@ -63,16 +63,19 @@ describe('liveWrites stamps by stage', () => {
   it('prod writes the item unchanged, as does a Lambda with no stage', async () => {
     const before = process.env.STAGE;
     delete process.env.STAGE;
-    for (const stage of ['prod', undefined]) {
-      const doc = new InMemoryDoc();
-      const writes = liveWrites(doc, stage);
-      await writes.put(dead);
-      await writes.putIf(row('task#2', T), null);
-      await writes.batchPut([row('task#3', T)]);
-      for (const SK of ['task#1', 'task#2', 'task#3'])
-        expect(await raw(doc, SK), `${stage} ${SK}`).not.toHaveProperty('expiresAt');
+    try {
+      for (const stage of ['prod', undefined]) {
+        const doc = new InMemoryDoc();
+        const writes = liveWrites(doc, stage);
+        await writes.put(dead);
+        await writes.putIf(row('task#2', T), null);
+        await writes.batchPut([row('task#3', T)]);
+        for (const SK of ['task#1', 'task#2', 'task#3'])
+          expect(await raw(doc, SK), `${stage} ${SK}`).not.toHaveProperty('expiresAt');
+      }
+    } finally {
+      if (before !== undefined) process.env.STAGE = before;
     }
-    if (before !== undefined) process.env.STAGE = before;
   });
   it('reads the stage from the Lambda’s STAGE', async () => {
     const before = process.env.STAGE;
@@ -220,8 +223,10 @@ describe('deleteTask reads each list once', () => {
     });
     doc.reads = [];
     await backend.deleteTask(parent.id);
-    expect(whole(doc, sk.taskPrefix())).toHaveLength(1);
-    expect(whole(doc, sk.planAllPrefix())).toHaveLength(1);
+    expect(whole(doc, sk.taskPrefix())).toEqual([{ prefix: sk.taskPrefix(), consistent: true }]);
+    expect(whole(doc, sk.planAllPrefix())).toEqual([
+      { prefix: sk.planAllPrefix(), consistent: true },
+    ]);
     for (const t of [parent, ...parts]) expect(await backend.getTask(t.id)).toBeNull();
     expect((await doc.get('u#local', sk.plan(plan.day, plan.order, plan.id)))?.deletedAt).toBe(T);
   });

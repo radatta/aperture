@@ -156,6 +156,8 @@ export const deadRows: Scenario = {
         await eventually('the part’s plan is still listed', async () =>
           (await ctx.api.reads.listPlansForDay(today)).every((p) => p.taskId !== one.id),
         );
+        if (!(await ctx.api.reads.listTasks()).some((t) => t.id === neighbour.id))
+          throw new Error('the cascade took the neighbour too');
         // The Backlog's "No category" group collapses past 8, and later scenarios click into it.
         await ctx.api.writes.deleteTask(neighbour.id);
       },
@@ -190,8 +192,8 @@ export const deadRows: Scenario = {
         };
         await ctx.api.writes.recordFluxSet(input);
         await ctx.api.writes.deleteFluxSet(input.id);
-        // The retry's dedupe read is eventually consistent too, and writes nothing when it finds the row, so
-        // repeating it is safe. The harness's type leaves deletedAt out: reads never carry a live one.
+        // The retry's dedupe read is eventually consistent too. It writes nothing when it finds the row, and a
+        // stale miss loses a put-if-absent to the tombstone, so repeating it is safe. The harness's type leaves deletedAt out: reads never carry a live one.
         let retried = await ctx.api.writes.recordFluxSet(input);
         await eventually('the retry brought the set back to life', async () => {
           retried = await ctx.api.writes.recordFluxSet(input);
