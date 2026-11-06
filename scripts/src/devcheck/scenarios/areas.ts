@@ -54,9 +54,14 @@ async function waitingCount(ctx: Ctx): Promise<number | null> {
   await ctx.page
     .getByText('Plan today', { exact: true })
     .waitFor({ state: 'visible', timeout: 15_000 });
-  await ctx.ui.settle();
+  // Waits, not a count after settle: the line needs the day and the backlog read, and a count taken before
+  // they land would read as "capacity set".
   const line = ctx.page.getByText(/\d+ waiting in the backlog/);
-  if ((await line.count()) === 0) return null;
+  try {
+    await line.first().waitFor({ state: 'visible', timeout: 8_000 });
+  } catch {
+    return null;
+  }
   return Number((await line.first().textContent())?.match(/(\d+) waiting in the backlog/)?.[1]);
 }
 
@@ -567,7 +572,7 @@ export const areas: Scenario = {
         const after = await waitingCount(ctx);
         if (waitingBefore === null || after === null)
           needsYou(
-            'the test user has capacity set today, so Home draws the bar instead of the waiting count; clear it, then rerun',
+            'Home showed no waiting count within 8 s: the test user likely has capacity set today (Home draws the bar instead); clear it, then rerun',
           );
         if (after !== waitingBefore + 2)
           throw new Error(`waiting read ${waitingBefore} with A as Aperture, ${after} as School`);
