@@ -7,6 +7,7 @@ import { areas } from './areas';
 import { attachmentDelete } from './attachment-delete';
 import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
+import { deadRows } from './dead-rows';
 import { dayGuards } from './day-guards';
 import { failedReads } from './failed-reads';
 import { finance } from './finance';
@@ -33,6 +34,7 @@ export const SCENARIOS: Scenario[] = [
   partsV2b,
   partsV2bReads,
   dayGuards,
+  deadRows,
   fluxHistory,
   fluxPerf,
   attachmentDelete,

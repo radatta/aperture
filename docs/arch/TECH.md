@@ -48,7 +48,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items and their sync states, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
-- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. No live violation since `day-guards` (2026-11) — the last, `uncheckHabit`, is kept as a record under **[Tech debt](#tech-debt)**.
+- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones (dev's table alone expires them: §2.3, rule 4). No live violation since `day-guards` (2026-11) — the last, `uncheckHabit`, is kept as a record under **[Tech debt](#tech-debt)**.
 - **`exportData` excludes tombstones.** The "you own your data" snapshot returns live rows only, on both impls, asserted by the export contract test. So a soft-deleted row is **unrecoverable from an export** — deliberate while the export is a one-way download with no import path. If restore/merge ever lands it will need tombstones plus a versioned envelope; revisit then. The bundle's shape is the shared `ExportBundle` type, and every collection is required — omitting one is a compile error, not a silent gap (which is how `leetcodeAttempts` once shipped missing).
 
 ### 2.2 Entities
@@ -126,7 +126,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
-4. Never hard-delete — `deletedAt` tombstones everywhere.
+4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; at once, flux after a week, finance never), and `toEntity` strips it. Prod writes nothing new and has no TTL.
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
@@ -243,7 +243,7 @@ checkout pulls it — the executing copy is always `${CLAUDE_PROJECT_DIR}`'s (th
 
 Kept as a record. **Fix:** `uncheckHabit` writes a tombstone at the same key (`putCheck` with `deletedAt`) and `repo.deleteCheck` is gone; a re-check writes a fresh row (new id) over it, as the stub does. The proof lives in `lambdas/` as the record below said it must: `backend.test.ts` "uncheck keeps the row as a tombstone…" reads the raw item after the uncheck. `listChecks` also became one date-bounded range read. The text below is as written when the violation was live.
 
-**The rule: nothing is ever hard-deleted.** Every entity carries `deletedAt`, deleting sets it, reads
+**The rule: nothing is ever hard-deleted** (prod; dev's disposable table expires its tombstones, §2.3 rule 4). Every entity carries `deletedAt`, deleting sets it, reads
 filter tombstones. This isn't fastidiousness. `updatedAt` is **last-write-wins across devices**, so a row
 that simply vanishes is indistinguishable from a row that never synced — the tombstone is the only way
 one device can tell another that something was deliberately removed rather than lost. Destroy the row and

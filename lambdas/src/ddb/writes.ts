@@ -11,12 +11,28 @@ export interface Writes {
   batchPut(items: Item[]): Promise<void>;
 }
 
-export function liveWrites(doc: DocClient): Writes {
+// Dev's table expires tombstones (TECH §2.3; prod's has no TTL and is never stamped): every dev check leaves ~130
+// dead rows, and reads that list them run dev into its read cap. Epoch seconds, as DynamoDB TTL wants. A flux
+// tombstone stays a week, because an outbox retry of a deleted set must still find it. Finance tombstones never
+// expire: a returning account revives from its row, and a posted row inherits from a removed pending one.
+const FLUX_KEEP_S = 7 * 24 * 3600;
+export function expiresAtOf(item: Item): number | null {
+  const { deletedAt, SK } = item;
+  if (typeof deletedAt !== 'number' || SK.startsWith('fin#')) return null;
+  return Math.floor(deletedAt / 1000) + (SK.startsWith('flux#') ? FLUX_KEEP_S : 0);
+}
+const stamped = (item: Item): Item => {
+  const expiresAt = expiresAtOf(item);
+  return expiresAt === null ? item : { ...item, expiresAt };
+};
+
+export function liveWrites(doc: DocClient, stage = process.env.STAGE): Writes {
+  const out = stage === 'dev' ? stamped : (item: Item) => item;
   return {
-    put: (item) => doc.put(item),
-    putIf: (item, expected) => doc.putIf(item, expected),
+    put: (item) => doc.put(out(item)),
+    putIf: (item, expected) => doc.putIf(out(item), expected),
     delete: (pk, sk) => doc.delete(pk, sk),
-    batchPut: (items) => doc.batchPut(items),
+    batchPut: (items) => doc.batchPut(items.map(out)),
   };
 }
 

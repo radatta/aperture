@@ -2,14 +2,15 @@ import type { FinanceSyncState, FinanceTransaction, Task } from '@aperture/share
 import type { Item } from './DocClient';
 import { gsi1, pk, sk } from './keys';
 
-// DDB item ↔ domain entity. Items carry the key attributes (PK/SK, and GSI1 for done tasks); the
-// domain entities never see them. `toEntity` is the read side; the `*Item` builders are the write side.
+// DDB item ↔ domain entity. Items carry the key attributes (PK/SK, and GSI1 for done tasks) and, on dev, a
+// tombstone's `expiresAt` (writes.ts); the domain entities never see them. `toEntity` is the read side; the
+// `*Item` builders are the write side.
 
-const KEY_ATTRS = ['PK', 'SK', 'GSI1PK', 'GSI1SK'];
+const ITEM_ATTRS = ['PK', 'SK', 'GSI1PK', 'GSI1SK', 'expiresAt'];
 
 export function toEntity<T>(item: Item): T {
   const rest: Record<string, unknown> = { ...item };
-  for (const k of KEY_ATTRS) delete rest[k];
+  for (const k of ITEM_ATTRS) delete rest[k];
   return rest as T;
 }
 

@@ -1111,27 +1111,34 @@ export class BackendClient implements ApiClient {
     // throws with the task, its parts, plans and calendar event untouched — only the files already
     // removed are gone, and a retry finishes. Consistent reads, so a file attached a moment ago goes too.
     if (!(await this.repo.getTask(id, { consistent: true }))) return;
-    const parts = partsOf(await this.repo.listTasks({ consistent: true }), id);
+    // One read of each list for the whole cascade, parts included: every list is a read of the task or plan history.
+    const tasks = await this.repo.listTasks({ consistent: true });
+    const parts = partsOf(tasks, id);
     for (const taskId of [id, ...parts.map((p) => p.id)])
       for (const a of await this.repo.listAttachmentsForTask(taskId, { consistent: true }))
         await this.removeAttachment(a, this.now());
-    return this.deleteOne(id, true);
+    return this.deleteOne(id, true, tasks, await this.repo.listAllPlans({ consistent: true }));
   }
   // `release`: a part's parent is left plain if this was its last part — not when the parent is going
   // too (its marker is deleted with it, not first patched back into a block: no wasted Google call).
-  private async deleteOne(id: string, release: boolean): Promise<void> {
-    // Consistent reads: the tombstone is built from this copy, and a part made a moment ago must go too.
+  private async deleteOne(
+    id: string,
+    release: boolean,
+    tasks: Task[],
+    plans: TaskPlan[],
+  ): Promise<void> {
+    // Consistent: the tombstone is built from this copy. `tasks` and `plans` are deleteTask's consistent lists,
+    // so a part or a plan made a moment ago goes too.
     const task = await this.repo.getTask(id, { consistent: true });
     if (!task) return; // idempotent — already tombstoned or never existed
     // A parent goes with every part — each through this same path (event, plans, attachments), first.
-    for (const part of partsOf(await this.repo.listTasks({ consistent: true }), id))
-      await this.deleteOne(part.id, false);
+    for (const part of partsOf(tasks, id)) await this.deleteOne(part.id, false, tasks, plans);
     // Calendar event FIRST (deleteCalendarEvent uses mustTask, so it must run before the tombstone).
     // Build the tombstone from the RETURNED task: it has the gcal pointers nulled, so we don't re-put
     // stale pointers onto the tombstone.
     const cleared = task.gcalEventId ? await this.deleteCalendarEvent(id) : task;
     const now = this.now();
-    for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === id))
+    for (const p of plans.filter((p) => p.taskId === id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
     // Every status, so a never-confirmed pending upload's bytes go too. deleteTask already removed them
     // up front; this catches one that landed since. Consistent, so a just-tombstoned row isn't re-deleted.
