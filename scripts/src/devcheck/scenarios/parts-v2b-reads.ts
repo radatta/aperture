@@ -304,7 +304,14 @@ export const partsV2bReads: Scenario = {
           .getByRole('button', { name: new RegExp(`^More actions for ${label}`) })
           .click();
         await ctx.page.getByRole('menuitem', { name: 'Make work…' }).click();
+        // Armed before the tap and awaited before the reload below, which otherwise can drop the write: on
+        // 2026-11-05 the flip never reached a Lambda when the rename's refetch had already renamed the field.
+        const flipped = ctx.page.waitForResponse((r) => r.url().endsWith('/api/setCategoryWork'), {
+          timeout: 15_000,
+        });
         await ctx.page.getByRole('button', { name: 'Just going forward', exact: true }).click();
+        const res = await flipped;
+        if (res.status() !== 200) throw new Error(`setCategoryWork answered ${res.status()}`);
         await ctx.page
           .getByRole('textbox', { name: `Rename ${renamed}`, exact: true })
           .waitFor({ state: 'visible', timeout: 15_000 });

@@ -246,6 +246,15 @@ export const areas: Scenario = {
                 throw new Error(
                   `Move ${which} ${dir} is off screen at 390: x ${box.x}, w ${box.width}`,
                 );
+              // On the rename box's line, not centred on the box and its caption (phone-nits' same check only
+              // runs when the test user happens to have a category).
+              const input = await ctx.page
+                .getByRole('textbox', { name: `Rename ${catLabel(ctx, which)}`, exact: true })
+                .boundingBox();
+              if (!input) throw new Error(`Rename ${which}: no box`);
+              const off = Math.abs(input.y + input.height / 2 - (box.y + box.height / 2));
+              if (off > 4)
+                throw new Error(`Move ${which} ${dir} is ${off}px off the rename box's line`);
             }
           }
           // The Area panel at the floor: its four chips share one line (round 2 found Personal wrapping alone

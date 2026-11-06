@@ -223,10 +223,11 @@ function CategoryRow({
 
   return (
     <Card role="group" aria-label={`Category ${cat.label}`} className="px-3.5 py-2.5">
-      <div ref={rowRef} className="flex items-center justify-between gap-3">
+      <div ref={rowRef} className="flex items-start justify-between gap-3">
         {/* No wrap: at 390 the rename input gives way (min-w-0, ~128px) so the arrows stay on the row. The
             type · area line sits under the rename box, not beside it: beside, "Non-work · Recruiting" pushed
-            the arrows and menu under the box at 440 (and the menu off the left edge). */}
+            the arrows and menu under the box at 440 (and the menu off the left edge). items-start: the arrows
+            line up with the box, not with the box and its caption together. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
               form to fill in, but hover-only would leave the field unmarked on touch — and this is
