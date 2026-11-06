@@ -409,7 +409,15 @@ spass('sim: a field above the keyboard passes', [L, F('Capture log', 200, 417, '
       tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36))])
 sfail('sim: another value is VALUE, and the note says what it saw', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
       notes={'2': 'bar value is "What happened?", want "zzqx"'}, simIncludes=['screenshot --output'])
-sfail('sim: a failed step takes one screenshot, recorded with the job', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}], simCount={'screenshot --output': 1})
+sfail('sim: a failed step takes one screenshot, recorded with the job', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}], simCount={'screenshot --output': 1}, files=['shots/01-fail.png'])
+sfail('sim: a failure screenshot that fails leaves the row at VALUE', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
+      tape=[{'m': 'axe screenshot', 'rc': 1}], notes={'2': 'bar value is'})
+sfail('sim: a plan already at 20 shots takes no 21st on failure', 'VALUE', [L, F('Capture log', 220, 895, 'bar')] + [{'op': 'shot', 'name': f's{i}'} for i in range(20)] + [{'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
+      simCount={'screenshot --output': 20})
+serr('sim: hung reads while launching are AX_TIMEOUT, not a landmark failure', 'AX_TIMEOUT', tape=[{'m': '--point 220,895', 'rc': 124}, {'m': '--point 220,530', 'rc': 124}])
+sc('sim: a hung read after the reboot is AX_TIMEOUT, not signed out', [L, {'op': 'signIn'}],
+   tape=[pt(220, 895, {}, n=1), pt(220, 895, CAPTURE, n=1), pt(220, 895, {}, n=1), pt(220, 530, SIGNIN, n=2), pt(220, 530, {}, n=1), pt(220, 530, SIGNIN, n=1), pt(220, 530, {}), {'m': '--point 220,895', 'rc': 124}] + FORM + [pt(220, 588, {})],
+   expect={'status': 'error', 'reason': 'SIM_UNAVAILABLE', 'detail': 'AX_TIMEOUT'}, pwTyped=1)
 sfail('sim: a value is filtered in the note (no tags, no newlines)', 'VALUE', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
       tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXTextArea', 'Capture log', '<b>Z</b>' + 'y' * 60, 25, 877, 346, 36))], notes={'2': 'bar value is "bZ/b' + 'y' * 36 + '", want'})
 sc('sim: signed out after the reboot is LANDMARK, a row failure, with no screenshot of the sign-in', [L, {'op': 'signIn'}],

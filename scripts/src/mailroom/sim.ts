@@ -32,7 +32,7 @@ export const ROLES = [
   'AXStaticText',
   'AXCheckBox',
 ] as const;
-// The app's write buttons, refused for `tap` at validation (lowercased, trimmed, exact) — and again at run time
+// The app's write buttons, refused for `tap` at validation (lowercased, trimmed: an entry, or an entry and a space) — and again at run time
 // on the element actually matched. A belt: the boundary is the dev test user's own partition.
 export const TAP_DENY = [
   'save',

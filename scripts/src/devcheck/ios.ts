@@ -63,12 +63,19 @@ export function createIos(d: IosDeps): Ios {
   let ran = false;
   let lastBooted: string | undefined;
   let warned = false;
+  // A line only: nothing here may fail a row.
   const warnStaleRunner = (r: SimResult) => {
-    const want = d.repoVersion?.();
-    if (warned || !want || !r.runnerVersion || r.runnerVersion === want) return;
+    if (warned || !d.repoVersion || !r.runnerVersion) return;
+    let want: string;
+    try {
+      want = d.repoVersion();
+    } catch {
+      return;
+    }
+    if (r.runnerVersion === want) return;
     warned = true;
     d.log(
-      `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall: ${INSTALL_LINE}`,
+      `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall (from merged main; a branch that changes the runner: with --ref <its sha>, MAILROOM.md → Install): ${INSTALL_LINE}`,
     );
   };
   const jobs: IosJobSummary[] = [];
@@ -123,6 +130,7 @@ export function createIos(d: IosDeps): Ios {
           );
         ran = true;
         d.log(`  ios ${name}: ${steps.length} ops`);
+        lastBooted = undefined; // this job may boot it, whatever the last one left
         let r: SimResult;
         try {
           r = await runSimJob({ fs: d.fs, clock: d.clock, dir: d.dir, log: d.log }, job);
@@ -130,6 +138,8 @@ export function createIos(d: IosDeps): Ios {
           if (err instanceof IosAssert) {
             keepShots(scenarioId, name, err.result);
             jobs.push(summarize(name, err.result));
+            lastBooted = err.result.booted;
+            warnStaleRunner(err.result);
             throw new Error(`iOS: ${err.message}`, { cause: err });
           }
           if (err instanceof IosUnavailable) {

@@ -81,14 +81,19 @@ describe('the slow tier', () => {
     const steps = () => SCENARIOS.find((s) => s.id === 'ios-standalone')!.steps;
     const step = (id: string) => steps().find((s) => s.id === id)!;
     const sent: Record<string, IosOp[]> = {};
+    let task: Record<string, unknown> = { status: 'in_progress' };
     const ctx = {
       nonce: 'x1full',
       ios: { run: async (name: string, ops: IosOp[]) => void (sent[name] = ops) },
-      api: { reads: { getTask: async () => ({ status: 'in_progress' }) } },
+      api: { reads: { getTask: async () => task } },
     } as unknown as Ctx;
 
     it('verify proves nothing, so says needs you, until the Done form step has completed', async () => {
       await expect(step('verify').run(ctx)).rejects.toBeInstanceOf(NeedsYou);
+      // a real change fails, however far the sim got
+      task = { status: 'in_progress', reflection: 'x' };
+      await expect(step('verify').run(ctx)).rejects.toThrow('a reflection was saved');
+      task = { status: 'in_progress' };
       await step('done-form').run(ctx);
       await expect(step('verify').run(ctx)).resolves.toBeUndefined();
     });

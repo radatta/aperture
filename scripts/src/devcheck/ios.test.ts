@@ -160,6 +160,44 @@ describe('ctx.ios', () => {
     expect(lines[0]).toContain('install.sh?ref=main');
   });
 
+  it('a failing job still says the runner is old', async () => {
+    const { client, logs } = mac(
+      () => ({
+        status: 'fail',
+        reason: 'ASSERT',
+        detail: 'VALUE',
+        runnerVersion: 'old',
+        steps: [],
+      }),
+      () => 'new',
+    );
+    await caught(client.run('a', [{ op: 'launch' }]));
+    expect(logs.filter((l) => l.includes('reinstall'))).toHaveLength(1);
+  });
+
+  it('a repo version that throws fails nothing', async () => {
+    const { client } = mac(
+      () => ({ runnerVersion: 'old' }),
+      () => {
+        throw new Error('no git');
+      },
+    );
+    await expect(client.run('a', [{ op: 'launch' }])).resolves.toBeDefined();
+  });
+
+  it('finish still shuts down when a later job failed after an earlier one left it off', async () => {
+    let n = 0;
+    const { ios, client, submitted } = mac(() =>
+      n++ === 0
+        ? { booted: 'off' }
+        : { status: 'fail', reason: 'ASSERT', detail: 'MISS', booted: 'warm', steps: [] },
+    );
+    await client.run('a', [{ op: 'launch' }, { op: 'shutdown' }]);
+    await caught(client.run('b', [{ op: 'launch' }]));
+    await ios.finish();
+    expect(submitted.at(-1)).toBe('shutdown');
+  });
+
   it('the runner the repo has logs nothing', async () => {
     const { client, logs } = mac(
       () => ({ runnerVersion: 'same' }),

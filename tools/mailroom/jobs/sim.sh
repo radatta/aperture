@@ -39,7 +39,7 @@ SIM_SCROLL_X=220                               # where page swipes run
 SIM_MAX_PROBES=400
 if [ "$(uname)" = Darwin ]; then SIM_MV_NOFOLLOW=-fh; else SIM_MV_NOFOLLOW=-fT; fi # mv onto a link: replace it
 SIM_TABS='["Home","Log","Tasks","Recruiting","Habits","Rolls","Flux","Finances","Inbox","Settings"]'
-# The app's write buttons, refused for `tap` (lowercased, exact). A belt: the boundary is the test user's partition.
+# The app's write buttons, refused for `tap` (lowercased: an entry, or an entry and a space). A belt: the boundary is the test user's partition.
 SIM_DENY='["save","save log","save task","save idea","mark done","start","stop","delete","complete","export json","generate token","rotate","connect google calendar","sign out","save password","not now","return","add to today","add place","focus"]'
 
 # Prints a reason code, or nothing when the plan is good. Same order as sim.ts → validateSimParams.
@@ -427,6 +427,7 @@ sim_op_launch() {
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
   sim_tap_el "$SIM_ICON" || return 1
+  rm -f "$SIM_P.unread"
   i=0
   while :; do
     s="$(sim_landmark)" || return 1
@@ -436,7 +437,14 @@ sim_op_launch() {
       return 0
     fi
     i=$((i + 1))
-    [ "$i" -lt 20 ] || { sim_fail LANDMARK "neither Home nor the sign-in card after launch"; return 1; }
+    if [ "$i" -ge 20 ]; then
+      if [ -e "$SIM_P.unread" ]; then # reads that hung saw nothing, which isn't the page being wrong
+        sim_err SIM_UNAVAILABLE AX_TIMEOUT "point reads timed out looking for Home or the sign-in card"
+        return 1
+      fi
+      sim_fail LANDMARK "neither Home nor the sign-in card after launch"
+      return 1
+    fi
     if [ "$i" = 10 ]; then # the page can draw offset from its accessibility frames after a kill: nudge it
       ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
       ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
@@ -594,6 +602,7 @@ sim_sign_in() {
   sim_op_launch || return 1
   # The session should survive a restart, so this is the row's failure, not the environment's; the card can show for a
   # moment before the tokens are restored (inference), so give it a few reads first.
+  rm -f "$SIM_P.unread"
   i=0
   while [ "$SIM_SIGNED" != already ] && [ "$i" -lt 5 ]; do
     sleep 2
@@ -601,6 +610,10 @@ sim_sign_in() {
     [ "$s" != already ] || SIM_SIGNED=already
     i=$((i + 1))
   done
+  if [ "$SIM_SIGNED" != already ] && [ -e "$SIM_P.unread" ]; then # a hung read isn't "signed out"
+    sim_err SIM_UNAVAILABLE AX_TIMEOUT "a point read timed out looking for Home after the reboot"
+    return 1
+  fi
   [ "$SIM_SIGNED" = already ] || { sim_fail LANDMARK "signed out again after the reboot"; return 1; }
   SIM_SIGNED=fresh
   SIM_NOTE="signed in fresh; rebooted to re-arm the keyboard"

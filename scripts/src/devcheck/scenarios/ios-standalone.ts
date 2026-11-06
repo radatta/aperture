@@ -362,14 +362,15 @@ export const iosStandalone: Scenario = {
       cost: 'slow',
       proves: ['ios-never-writes', 'done-form-draft-cleared'],
       async run(ctx) {
-        // Reached with the sim steps skipped (a missing keyboard is that step's needs-you), this would prove nothing.
-        if (!drove)
-          needsYou('the Done form step never completed, so an untouched task proves nothing');
         const t = await ctx.api.reads.getTask(taskId);
         if (!t) throw new Error('the task is gone');
         if (t.status !== 'in_progress') throw new Error(`status ${t.status}, want in_progress`);
         if (t.reflection) throw new Error('a reflection was saved');
         if (t.actualAccruedMin) throw new Error(`${t.actualAccruedMin} min logged`);
+        // A change is a failure however far the sim got. No change only proves something if it drove the form:
+        // a missing keyboard is that step's needs-you, and then "untouched" means nothing.
+        if (!drove)
+          needsYou('the Done form step never completed, so an untouched task proves nothing');
       },
     },
   ],

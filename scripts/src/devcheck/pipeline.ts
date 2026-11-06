@@ -319,7 +319,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         jobs: d.ios?.jobs ?? [],
         unavailable: iosOut.length
           ? { reason: iosOut[0]!.note!.slice(IOS_NOTE.length + 2), rows: iosOut.length }
-          : null,
+          : // an outage reaches the banner even if no ios row inherited it
+            d.ios?.unavailable()
+            ? { reason: d.ios.unavailable()!, rows: 0 }
+            : null,
       };
     await browser?.close().catch(() => undefined);
     r.durationMs = d.now() - t0;
