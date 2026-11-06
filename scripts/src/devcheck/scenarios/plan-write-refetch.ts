@@ -309,6 +309,8 @@ export const planWriteRefetch: Scenario = {
           order: 9,
         });
         await add.click();
+        // The row leaves the Backlog once the add is done; navigating sooner would abort its status write.
+        await add.waitFor({ state: 'hidden', timeout: 15_000 });
         await onceOnToday(ctx, made.U!, 'after the add');
         await until('U to be planned', async () => (await statusOf(ctx, made.U!)) === 'planned');
         const rows = await rowsOf(ctx, today, made.U!);
