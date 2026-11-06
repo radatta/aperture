@@ -362,6 +362,8 @@ export const areas: Scenario = {
       title: 'Backlog: the B task shows, the A task waits behind "Aperture · N", a search finds it',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=backlog');
+        // The search is session state: a scenario that failed before its own clear leaves its text in the box.
+        await clearSearch(ctx);
         await taskButton(ctx, 'hw').waitFor({ state: 'visible', timeout: 15_000 });
         const chip = apertureChip(ctx);
         await chip.waitFor({ state: 'visible', timeout: 10_000 });
