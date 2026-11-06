@@ -126,7 +126,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
-4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; at once, flux after a week, finance never), and `toEntity` strips it. Prod writes nothing new and has no TTL.
+4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance never; AWS deletes some time after a row is due), and `toEntity` strips it. Prod writes nothing new and has no TTL.
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
@@ -136,6 +136,7 @@ PK = u#<userId>            (one partition per user — fine at single-user volum
 SK (type-prefixed range keys):
   log#<day>#<ulid>              day's log entries          (begins_with log#<day>)
   task#<ulid>                   task by id
+  (any tombstone, dev only)     expiresAt: DynamoDB TTL attribute, epoch seconds (§2.3 rule 4)
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)

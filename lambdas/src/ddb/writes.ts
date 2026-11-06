@@ -11,10 +11,11 @@ export interface Writes {
   batchPut(items: Item[]): Promise<void>;
 }
 
-// Dev's table expires tombstones (TECH §2.3; prod's has no TTL and is never stamped): every dev check leaves ~130
-// dead rows, and reads that list them run dev into its read cap. Epoch seconds, as DynamoDB TTL wants. A flux
-// tombstone stays a week, because an outbox retry of a deleted set must still find it. Finance tombstones never
-// expire: a returning account revives from its row, and a posted row inherits from a removed pending one.
+// Dev's table expires tombstones (TECH §2.3; prod's has no TTL and is never stamped): dev checks leave dead rows, and
+// reads that list them run dev into its read cap (CI-BOT.md → Compute). Epoch seconds, as DynamoDB TTL wants: due at
+// deletion, and AWS deletes some time after. A flux tombstone is due a week on, because an outbox retry of a deleted
+// set must still find it. Finance tombstones are never due: a returning account revives from its row, and a posted
+// row inherits from a removed pending one.
 const FLUX_KEEP_S = 7 * 24 * 3600;
 export function expiresAtOf(item: Item): number | null {
   const { deletedAt, SK } = item;

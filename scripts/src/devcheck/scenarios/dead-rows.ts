@@ -17,6 +17,15 @@ const offDev = (id: string, what: string, test: string, why = WHY_RAW): Row => (
 
 const made: Record<string, DevTask> = {};
 const hasExpiry = (row: object) => 'expiresAt' in row;
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// A list read is eventually consistent, so a healthy build can answer with the row a moment after its delete.
+async function eventually(what: string, ok: () => Promise<boolean>) {
+  for (let i = 0; i < 20; i++) {
+    if (await ok()) return;
+    await wait(250);
+  }
+  throw new Error(what);
+}
 
 export const deadRows: Scenario = {
   id: 'dead-rows',
@@ -49,9 +58,24 @@ export const deadRows: Scenario = {
       needsYou: 'raw rows are behind AWS: the query in the report and PR body',
     },
     offDev(
-      'stamp-kinds',
-      'Tombstones expire at once, flux after a week, finance never',
+      'stamp-tombstones',
+      'A tombstone is due at deletion, in epoch seconds',
       'a tombstone expires at once, in epoch seconds',
+    ),
+    offDev(
+      'stamp-flux',
+      'A flux tombstone is due a week later',
+      'a flux tombstone stays a week, for an outbox retry',
+    ),
+    offDev(
+      'stamp-finance',
+      'A finance tombstone is never due',
+      'a finance tombstone never expires',
+    ),
+    offDev(
+      'stamp-revived',
+      'A live row written over a tombstone carries no expiresAt, so TTL can’t delete it',
+      'a re-check over a stamped tombstone is not due',
     ),
     offDev(
       'stamp-prod',
@@ -67,7 +91,7 @@ export const deadRows: Scenario = {
     ),
     offDev(
       'reads-once',
-      'A delete reads the task and plan lists once each, consistently',
+      'The delete cascade reads the task and plan lists once each, consistently',
       'a parent with parts: still one of each, and every part and plan goes',
       'the wire shows one RPC, never the table reads behind it',
     ),
@@ -101,13 +125,16 @@ export const deadRows: Scenario = {
         const { leaf, neighbour } = made;
         if (!leaf || !neighbour) throw new Error('setup made no tasks');
         await ctx.api.writes.deleteTask(leaf.id);
-        const live = (await ctx.api.reads.listTasks()).map((t) => t.id);
-        if (live.includes(leaf.id)) throw new Error('the deleted task is still listed');
-        if (!live.includes(neighbour.id)) throw new Error('the neighbour went too');
+        await eventually('the deleted task is still listed', async () =>
+          (await ctx.api.reads.listTasks()).every((t) => t.id !== leaf.id),
+        );
+        if (!(await ctx.api.reads.listTasks()).some((t) => t.id === neighbour.id))
+          throw new Error('the neighbour went too');
         const { dayStartHour } = await ctx.api.reads.getSettings();
         const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
-        const plans = await ctx.api.reads.listPlansForDay(today);
-        if (plans.some((p) => p.taskId === leaf.id)) throw new Error('its plan is still listed');
+        await eventually('its plan is still listed', async () =>
+          (await ctx.api.reads.listPlansForDay(today)).every((p) => p.taskId !== leaf.id),
+        );
         await ctx.api.writes.deleteTask(leaf.id); // idempotent: throws on a non-2xx
       },
     },
@@ -117,17 +144,20 @@ export const deadRows: Scenario = {
       entry: 'api',
       proves: ['delete-parent'],
       async run(ctx) {
-        const { parent, one, two } = made;
-        if (!parent || !one || !two) throw new Error('setup made no parent');
+        const { parent, one, two, neighbour } = made;
+        if (!parent || !one || !two || !neighbour) throw new Error('setup made no parent');
         await ctx.api.writes.deleteTask(parent.id);
-        const live = new Set((await ctx.api.reads.listTasks()).map((t) => t.id));
-        for (const t of [parent, one, two])
-          if (live.has(t.id)) throw new Error(`${t.title} is still listed`);
+        const gone = new Set([parent.id, one.id, two.id]);
+        await eventually('the parent or a part is still listed', async () =>
+          (await ctx.api.reads.listTasks()).every((t) => !gone.has(t.id)),
+        );
         const { dayStartHour } = await ctx.api.reads.getSettings();
         const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
-        const plans = await ctx.api.reads.listPlansForDay(today);
-        if (plans.some((p) => p.taskId === one.id))
-          throw new Error('the part’s plan is still listed');
+        await eventually('the part’s plan is still listed', async () =>
+          (await ctx.api.reads.listPlansForDay(today)).every((p) => p.taskId !== one.id),
+        );
+        // The Backlog's "No category" group collapses past 8, and later scenarios click into it.
+        await ctx.api.writes.deleteTask(neighbour.id);
       },
     },
     {
@@ -160,13 +190,17 @@ export const deadRows: Scenario = {
         };
         await ctx.api.writes.recordFluxSet(input);
         await ctx.api.writes.deleteFluxSet(input.id);
-        const retried = await ctx.api.writes.recordFluxSet(input);
-        // The harness's type leaves deletedAt out: reads never carry a live one.
-        if ((retried as { deletedAt?: number | null }).deletedAt == null)
-          throw new Error('the retry brought the set back to life');
+        // The retry's dedupe read is eventually consistent too, and writes nothing when it finds the row, so
+        // repeating it is safe. The harness's type leaves deletedAt out: reads never carry a live one.
+        let retried = await ctx.api.writes.recordFluxSet(input);
+        await eventually('the retry brought the set back to life', async () => {
+          retried = await ctx.api.writes.recordFluxSet(input);
+          return (retried as { deletedAt?: number | null }).deletedAt != null;
+        });
         if (hasExpiry(retried)) throw new Error('expiresAt reached the answer');
-        if ((await ctx.api.reads.listFluxSets()).some((f) => f.id === input.id))
-          throw new Error('the deleted set is listed after the retry');
+        await eventually('the deleted set is listed after the retry', async () =>
+          (await ctx.api.reads.listFluxSets()).every((f) => f.id !== input.id),
+        );
       },
     },
     noConsoleErrors,

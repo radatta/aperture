@@ -1111,7 +1111,8 @@ export class BackendClient implements ApiClient {
     // throws with the task, its parts, plans and calendar event untouched — only the files already
     // removed are gone, and a retry finishes. Consistent reads, so a file attached a moment ago goes too.
     if (!(await this.repo.getTask(id, { consistent: true }))) return;
-    // One read of each list for the whole cascade, parts included: every list is a read of the task or plan history.
+    // One read of each list for the whole cascade (the parent's release re-reads after it): each is a read of the
+    // whole task or plan history. A part made during the S3 deletes below is missed, as one made after the list always was.
     const tasks = await this.repo.listTasks({ consistent: true });
     const parts = partsOf(tasks, id);
     for (const taskId of [id, ...parts.map((p) => p.id)])
@@ -1127,8 +1128,8 @@ export class BackendClient implements ApiClient {
     tasks: Task[],
     plans: TaskPlan[],
   ): Promise<void> {
-    // Consistent: the tombstone is built from this copy. `tasks` and `plans` are deleteTask's consistent lists,
-    // so a part or a plan made a moment ago goes too.
+    // Consistent: the tombstone is built from this copy. `tasks` and `plans` are deleteTask's consistent lists, so a
+    // part or a plan made just before the delete goes too.
     const task = await this.repo.getTask(id, { consistent: true });
     if (!task) return; // idempotent — already tombstoned or never existed
     // A parent goes with every part — each through this same path (event, plans, attachments), first.

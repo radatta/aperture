@@ -180,6 +180,8 @@ inside an injected-failure window is dropped from the console and shows only und
 section too). The same scenario counts Home's `/api` requests on the wire and fails past 8. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here.
 
+The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
+
 ## Ledgers
 
 | File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                   |

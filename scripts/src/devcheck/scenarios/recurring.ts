@@ -144,7 +144,7 @@ export const recurring: Scenario = {
       offDev: {
         file: 'lambdas/src/backend.test.ts',
         test: 'deleteSeries tombstones the template and later series writes answer Not found',
-        why: 'the teardown step runs deleteSeries on dev for every series this scenario made; the tombstone itself (kept in the table, gone from every read) is only visible under the facade',
+        why: 'the teardown step runs deleteSeries on dev for every series this scenario made; the tombstone itself (gone from every read, and on dev expired by TTL) is only visible under the facade',
       },
     },
     {

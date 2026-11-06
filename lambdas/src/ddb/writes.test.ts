@@ -61,6 +61,8 @@ describe('liveWrites stamps by stage', () => {
     expect(await raw(doc, 'task#4')).not.toHaveProperty('expiresAt');
   });
   it('prod writes the item unchanged, as does a Lambda with no stage', async () => {
+    const before = process.env.STAGE;
+    delete process.env.STAGE;
     for (const stage of ['prod', undefined]) {
       const doc = new InMemoryDoc();
       const writes = liveWrites(doc, stage);
@@ -70,6 +72,7 @@ describe('liveWrites stamps by stage', () => {
       for (const SK of ['task#1', 'task#2', 'task#3'])
         expect(await raw(doc, SK), `${stage} ${SK}`).not.toHaveProperty('expiresAt');
     }
+    if (before !== undefined) process.env.STAGE = before;
   });
   it('reads the stage from the Lambda’s STAGE', async () => {
     const before = process.env.STAGE;
@@ -112,6 +115,17 @@ describe('dev tombstones through the backend', () => {
       1_700_000_000,
     );
     expect(await doc.get('u#local', sk.task(other.id))).not.toHaveProperty('expiresAt');
+  });
+
+  it('a re-check over a stamped tombstone is not due', async () => {
+    const { doc, backend } = setup();
+    const DAY = '2026-08-04';
+    const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
+    await backend.checkHabit(h.id, DAY);
+    await backend.uncheckHabit(h.id, DAY);
+    expect((await doc.get('u#local', sk.hcheck(DAY, h.id)))?.expiresAt).toBe(1_700_000_000);
+    await backend.checkHabit(h.id, DAY);
+    expect(await doc.get('u#local', sk.hcheck(DAY, h.id))).not.toHaveProperty('expiresAt');
   });
 
   it('a reorder of a plan whose tombstone has expired answers Not found', async () => {
