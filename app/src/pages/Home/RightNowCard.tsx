@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   deadlineOf,
@@ -16,6 +16,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { fmtDuration, fmtTime } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
+import { useRowAction } from '../../lib/useRowAction';
 import { useSettings } from '../../data/hooks/useSettings';
 import { urgencyClass, urgencyLabel } from '../../modules/tasks/dueStyle';
 import { useUpsertPlan } from '../../data/hooks/usePlans';
@@ -129,6 +130,8 @@ function DueTime({ task }: { task: Task }) {
   );
 }
 
+const PROMOTE = 'promote'; // one key: any "Focus this" holds them all
+
 // The daytime hero: what's happening right now (the in-progress task, count-up vs estimate) over the
 // Big 3, then the rest of today. Replaces the old FocusCard + TodayTasksCard.
 export function RightNowCard() {
@@ -137,6 +140,11 @@ export function RightNowCard() {
   const { timers, startFocus, startBreak, stop } = usePomodoro();
   const transition = useTransitionTask();
   const upsertPlan = useUpsertPlan();
+  // One "Focus this" at a time: a second tap computed from a half-applied renumbering leaves two rows on
+  // one order. Resolves once the plan is refetched. A partial failure heals on the next tap (`promote`
+  // renumbers whatever is off).
+  const alsoRef = useRef<HTMLDivElement>(null);
+  const focusAction = useRowAction(alsoRef);
   const [doneInitial, setDoneInitial] = useState<number | null>(null);
   // Done opens the form with Actual focused, as the task modal's finish intent does — you tapped Done to
   // enter the number. Stable, so it focuses once on mount, not on every render.
@@ -269,7 +277,11 @@ export function RightNowCard() {
         )}
 
         {alsoRest.length > 0 && (
-          <div className="flex flex-col gap-1.5 border-t border-line pt-3">
+          <div
+            ref={alsoRef}
+            tabIndex={-1}
+            className="flex flex-col gap-1.5 border-t border-line pt-3 outline-none"
+          >
             <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
               Also today
             </Text>
@@ -277,9 +289,21 @@ export function RightNowCard() {
               <AlsoRow
                 key={r.task.id}
                 row={r}
-                onFocus={(id) => promote(rows, id).forEach((u) => upsertPlan.mutate(u))}
+                busy={focusAction.isBusy(PROMOTE)}
+                onFocus={(id) =>
+                  focusAction.run(PROMOTE, () =>
+                    Promise.all(promote(rows, id).map((u) => upsertPlan.mutateAsync(u))),
+                  )
+                }
               />
             ))}
+            <div role="status">
+              {focusAction.failed && (
+                <Text size="sm" tone="danger">
+                  Couldn&apos;t save that — try again.
+                </Text>
+              )}
+            </div>
           </div>
         )}
 
@@ -360,7 +384,15 @@ function FocusRow({
 
 // A lighter "also today" row — the plan's tail + any off-plan in-progress task. "Focus this" is the
 // only way to actually CHOOSE the Big 3 (there is no reorder UI); it renumbers the day's plan.
-function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => void }) {
+function AlsoRow({
+  row,
+  busy,
+  onFocus,
+}: {
+  row: RightNowRow;
+  busy: boolean;
+  onFocus: (id: string) => void;
+}) {
   const t = row.task;
   const canFocus = row.plan != null && (t.status === 'backlog' || t.status === 'planned');
   const u = useUrgency(t);
@@ -395,7 +427,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
           </Text>
         )}
         {canFocus && (
-          <Button variant="quiet" size="sm" onClick={() => onFocus(t.id)}>
+          <Button variant="quiet" size="sm" disabled={busy} onClick={() => onFocus(t.id)}>
             Focus this
           </Button>
         )}

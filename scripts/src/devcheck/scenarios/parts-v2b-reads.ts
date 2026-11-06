@@ -48,6 +48,50 @@ export const partsV2bReads: Scenario = {
       what: '“Focus this” on two rows straight after each other → each task once after a reload, one live plan row each',
     },
     {
+      id: 'reload-mid-write',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A read landing inside a plan move sees the row once, never none',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a reader during a plan move sees the row once, at every step',
+        why: 'only a read between the move’s two writes shows it; the in-memory doc reads at each write',
+      },
+    },
+    {
+      id: 'move-put-fails',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A plan move whose put fails → the row stays where it was',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a plan move whose put fails keeps the row where it was',
+        why: 'dev’s table has no way to fail one write of a move',
+      },
+    },
+    {
+      id: 'move-delete-fails',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A plan move whose delete fails → one row, at the new spot, in reads and the next write',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a plan move whose delete fails leaves one row: the new spot wins every read and the next write',
+        why: 'dev’s table has no way to fail one write of a move',
+      },
+    },
+    {
+      id: 'second-tap',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A second “Focus this” while the first’s writes are out → it waits; orders stay distinct',
+      offDev: {
+        file: 'app/src/pages/Home/RightNow.test.tsx',
+        test: 'a second “Focus this” waits for the first; the server’s orders stay distinct',
+        why: 'the tie needs one response held back and plan ids out of order; only the stub holds a write open',
+      },
+    },
+    {
       id: 'day-row',
       entry: 'ui',
       kind: 'edge',
@@ -190,9 +234,18 @@ export const partsV2bReads: Scenario = {
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
         await ctx.ui.expectText(name(ctx, 'pD'), 15_000);
         await rowOf(ctx, name(ctx, 'pD')).getByRole('button', { name: 'Focus this' }).click();
-        // pC takes pD's "Also today" spot once the plan refetches; its button appears then.
+        // pC takes pD's "Also today" spot once the plan refetches; its button appears then, enabled once
+        // the first tap's writes are done (the click waits for that).
         await rowOf(ctx, name(ctx, 'pC')).getByRole('button', { name: 'Focus this' }).click();
-        await ctx.ui.settle();
+        // pD's button back and enabled: the second tap's writes are answered, so the reload and the server
+        // read below judge the final order. A read inside a move is reload-mid-write's row.
+        const pD = rowOf(ctx, name(ctx, 'pD')).getByRole('button', { name: 'Focus this' });
+        await pD.waitFor({ state: 'visible', timeout: 15_000 });
+        for (let i = 0; await pD.isDisabled(); i++) {
+          if (i > 150)
+            throw new Error('“Focus this” stayed disabled for 15 s after the second tap');
+          await new Promise((r) => setTimeout(r, 100));
+        }
         await ctx.page.reload();
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
         await ctx.ui.expectText(name(ctx, 'pD'), 15_000);
