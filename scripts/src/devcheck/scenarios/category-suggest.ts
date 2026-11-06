@@ -1,12 +1,14 @@
 // The editor's category suggestion (docs/areas/tasks/task-editor.md → Category suggestion): seed two
-// run categories and 24 categorised tasks with their own vocabulary (synthetic — never a real title), then
+// run categories and 27 categorised tasks with their own vocabulary (synthetic — never a real title), then
 // open uncategorised tasks whose titles do and don't match. Categories go in first: cleanup runs
 // newest-first, so the tasks go before the categories they sit on. Titles use `devcheck-cat <nonce> …`,
 // never `devcheck <nonce>` — the parts scenarios sweep that prefix. The /tasks search text persists
 // across lenses, so every open searches for its own task and the last step clears it.
 // The Review preview's chip (docs/areas/tasks/quick-add.md) has no grammar path: Review always asks the
-// model. The chip is under test, not the parse, so each Review's parseTask is answered with a canned reply
-// (ctx.intercept): no Haiku spend, no model output to flake a row. The chip, the scorer and the create are real.
+// model. Three rows go end to end through the real parse (the `real-*` steps, a fraction of a cent a run):
+// they assert what holds whatever the model says (a preview, no error, the slot agrees with what lands) and
+// nothing of its wording. Rows that need an exact reply (the scorer's cases need a parse with no category,
+// which the model won't reliably give) get a canned one from ctx.intercept; each row's text says why.
 import type { PwLocator } from '../pw-types';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -23,6 +25,12 @@ const GARDEN = [
   'plant tulip bulbs',
   'net the berry bushes',
   'rake the fallen leaves',
+  // Words that say nothing of gardens: the real parse has no reason to file a line of them under Garden,
+  // so its Review reaches the chip, and only this history can place it. Review titles use them because
+  // three examples clear the margin on two words; "tomato beds", on one example each, doesn't (2 nats).
+  'oil the flux gasket',
+  'check the flux gasket',
+  'swap the flux gasket',
 ];
 const KITCHEN = [
   'descale the kettle',
@@ -41,18 +49,24 @@ const KITCHEN = [
 const MATCH = 'mulch the tomato beds';
 const CANCEL = 'prune the tomato hedge';
 const STRANGER = 'quarterly filing';
-const R_ACCEPT = 'hoe the tomato beds';
-const R_DECLINE = 'feed the tomato beds';
-const R_EDIT = 'dig the tomato beds';
-const R_NAMED = 'edge the tomato beds';
+const R_ACCEPT = 'hoe the flux gasket';
+const R_DECLINE = 'feed the flux gasket';
+const R_EDIT = 'dig the flux gasket';
+const R_NAMED = 'edge the flux gasket';
 const R_STRANGER = 'annual filing';
-const R_PROBE = 'till the tomato beds';
-const R_AUTO = 'rake the tomato beds';
-const R_GRAMMAR = 'lime the tomato beds';
-const R_FAILED = 'net the tomato beds';
-const R_RETRY = 'tie the tomato beds';
+const R_PROBE = 'till the flux gasket';
+const R_AUTO = 'rake the flux gasket';
+const R_GRAMMAR = 'lime the flux gasket';
+const R_FAILED = 'net the flux gasket';
+const R_RETRY = 'tie the flux gasket';
+const R_ROLLOVER = 'hill the flux gasket';
+const R_TODAY = 'thin the flux gasket';
+const R_MODE = 'seed the flux gasket';
+const R_REAL_CHIP = 'torque the flux gasket';
+const R_REAL_NAMED = 'kitchen, polish the flux gasket';
+const R_REAL_AUTO = 'grease the flux gasket';
 const R_LONG =
-  'hoe the tomato beds and then walk the long way back past the shed to fetch the other tool';
+  'hoe the flux gasket and then walk the long way back past the shed to fetch the other tool';
 
 // The slice of @aperture/shared's ParseTaskResult the canned replies carry (scripts doesn't depend on shared).
 type ParseReply =
@@ -66,6 +80,10 @@ type ParseReply =
       today: string;
     }
   | { ok: false; reason: 'unavailable' };
+
+// Why a row's parse is canned, in the row's own words on the report.
+const NO_CATEGORY =
+  'Canned parse: needs a reply with no category, which the model won’t reliably give.';
 
 const name = (ctx: Ctx, what: string) => `devcheck-cat ${ctx.nonce} ${what}`;
 const chipName = (label: string) => `Use suggested category ${label}`;
@@ -100,9 +118,9 @@ async function waitForCategory(ctx: Ctx, id: string, categoryId: string | null) 
 }
 
 // The app's day (todayKey(dayStartHour)): the bar drops a preview parsed against any other day.
-async function appToday(ctx: Ctx) {
+async function appToday(ctx: Ctx, daysAgo = 0) {
   const { dayStartHour } = await ctx.api.reads.getSettings();
-  return laDay(new Date(Date.now() - dayStartHour * 3_600_000));
+  return laDay(new Date(Date.now() - dayStartHour * 3_600_000 - daysAgo * 86_400_000));
 }
 
 const captureField = (ctx: Ctx) => ctx.page.locator('textarea[aria-label="Capture task"]');
@@ -139,6 +157,59 @@ async function review(ctx: Ctx, title: string, category?: { id: string; label: s
   await ctx.page.getByRole('button', { name: 'Save reviewed task' }).waitFor({ timeout: 10_000 });
   await parse.release();
   if (parse.hits() !== 1) throw new Error(`parseTask answered ${parse.hits()} times, not once`);
+}
+
+// A Review through the real model. A failed parse gets one press of its own Retry: an outage isn't this
+// feature's bug, though a second failure is the row's.
+async function realReview(ctx: Ctx, line: string) {
+  const save = ctx.page.getByRole('button', { name: 'Save reviewed task' });
+  const retry = ctx.page.getByRole('button', { name: 'Retry parse' });
+  await captureField(ctx).fill(line);
+  await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
+  await save.or(retry).first().waitFor({ timeout: 15_000 });
+  if (await retry.isVisible()) {
+    ctx.log('the real parse failed once; pressing Retry parse');
+    await retry.click();
+    await save.waitFor({ timeout: 15_000 });
+  }
+}
+
+// The newest create in the ledger after `before`: the model may reword a title, so never found by title.
+async function newestTask(ctx: Ctx, before: string | undefined) {
+  for (let i = 0; i < 40; i++) {
+    const id = ctx.createdIds().at(-1);
+    if (id && id !== before) {
+      const t = await ctx.api.reads.getTask(id);
+      if (t) return t;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error('the create response never reached the ledger');
+}
+
+// What holds whatever the model said: the preview's slot (chip, a category, or "no category") agrees with what
+// lands, and the title the preview showed is the title saved. Returns which slot it was, for the log.
+async function saveRealReview(ctx: Ctx) {
+  const shown = await ctx.page.locator('div[aria-live="polite"]:not([role])').first().textContent();
+  const cats = await ctx.api.reads.listCategories();
+  const chip = anyChip(ctx);
+  const suggested = (await chip.count())
+    ? (await chip.first().getAttribute('aria-label'))?.replace('Use suggested category ', '')
+    : undefined;
+  const none = (await ctx.page.getByText('no category', { exact: true }).count()) !== 0;
+  if (suggested) await chip.first().click();
+  const before = ctx.createdIds().at(-1);
+  await captureField(ctx).press('Enter');
+  await ctx.ui.expectText(/Task added/, 15_000);
+  const t = await newestTask(ctx, before);
+  if (!t.title || !shown?.includes(t.title))
+    throw new Error(`the preview showed “${shown}”, the server saved “${t.title}”`);
+  if (suggested) {
+    if (t.categoryId !== cats.find((c) => c.label === suggested)?.id)
+      throw new Error(`took ${suggested}, saved under ${t.categoryId}`);
+  } else if (none ? t.categoryId != null : t.categoryId == null)
+    throw new Error(`preview said ${none ? 'no category' : 'a category'}, saved ${t.categoryId}`);
+  return suggested ? `chip ${suggested}` : none ? 'no category' : 'the model’s category';
 }
 
 const anyChip = (ctx: Ctx) => ctx.page.getByRole('button', { name: /^Use suggested category/ });
@@ -240,55 +311,55 @@ export const categorySuggest: Scenario = {
       id: 'review-accept',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Review of a line the parse left uncategorised shows "Garden?" for "no category"; the tap writes nothing; the next press saves it under Garden',
+      what: `Review of a line the parse left uncategorised shows "Garden?" for "no category"; the tap writes nothing; the next press saves it under Garden. ${NO_CATEGORY}`,
     },
     {
       id: 'review-steady',
       entry: 'ui',
       kind: 'edge',
-      what: 'At phone width the tap moves nothing: the capture field stays where it was',
+      what: `At phone width the tap moves nothing: the capture field stays where it was. ${NO_CATEGORY}`,
     },
     {
       id: 'review-decline',
       entry: 'ui',
       kind: 'edge',
-      what: 'Saving a Review without the tap stays uncategorised (never pre-selected)',
+      what: `Saving a Review without the tap stays uncategorised (never pre-selected). ${NO_CATEGORY}`,
     },
     {
       id: 'review-edit',
       entry: 'ui',
       kind: 'edge',
-      what: 'Tap, then edit the text: the preview and the taken category go, nothing is written; the next Review offers the chip again',
+      what: `Tap, then edit the text: the preview and the taken category go, nothing is written; the next Review offers the chip again. ${NO_CATEGORY}`,
     },
     {
       id: 'review-stranger',
       entry: 'ui',
       kind: 'edge',
-      what: 'A title matching nothing keeps "no category" and shows no chip',
+      what: `A title matching nothing keeps "no category" and shows no chip. ${NO_CATEGORY}`,
     },
     {
       id: 'review-named',
       entry: 'ui',
       kind: 'edge',
-      what: 'A parse that found a category shows it and no chip, even when the history says otherwise',
+      what: 'A parse that found a category shows it and no chip, even when the history says otherwise. Canned parse: needs Kitchen on a Garden-worded title, a disagreement the model won’t stage on request.',
     },
     {
       id: 'review-long',
       entry: 'ui',
       kind: 'edge',
-      what: 'With a title that wraps at phone width, the tap still moves nothing',
+      what: `With a title that wraps at phone width, the tap still moves nothing. ${NO_CATEGORY}`,
     },
     {
       id: 'review-retry',
       entry: 'ui',
       kind: 'edge',
-      what: 'Tap, then the create fails: the text comes back with the taken category, and the retry saves under it',
+      what: `Tap, then the create fails: the text comes back with the taken category, and the retry saves under it. ${NO_CATEGORY}`,
     },
     {
       id: 'review-auto',
       entry: 'ui',
       kind: 'edge',
-      what: 'Enter with no Review saves uncategorised: it never takes a suggestion',
+      what: `Enter with no Review saves uncategorised: it never takes a suggestion. ${NO_CATEGORY}`,
     },
     {
       id: 'review-grammar',
@@ -300,18 +371,43 @@ export const categorySuggest: Scenario = {
       id: 'review-failed',
       entry: 'ui',
       kind: 'edge',
-      what: 'A failed parse shows no chip',
+      what: 'A failed parse shows no chip. Canned parse: a failure the model won’t produce on demand.',
+    },
+    {
+      id: 'real-review',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Real parse into Review, words only the history can place: a preview, no error; the slot (chip, a category, or "no category") agrees with what lands',
+    },
+    {
+      id: 'real-named',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Real parse into Review of a line naming a category: the same agreement, and a chip only if the model left the category empty',
+    },
+    {
+      id: 'real-auto',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Real parse behind Enter with no Review: the task lands with a title, and no chip ever shows',
     },
     {
       id: 'review-rollover',
       entry: 'ui',
       kind: 'edge',
-      what: 'After the 4am rollover a hidden preview is never saved, taken category included: the next press parses again',
-      offDev: {
-        file: 'app/src/modules/capture/CaptureBar.test.tsx',
-        test: 'a rolled-over preview never saves, taken category included: the next press parses again',
-        why: 'dev can’t move the day under an open bar without a test-only switch',
-      },
+      what: 'A parse from before the 4am rollover is never saved: no preview shows, and the next press parses again. Canned parse: needs yesterday’s day in the reply.',
+    },
+    {
+      id: 'review-today',
+      entry: 'ui',
+      kind: 'edge',
+      what: `Tap, then "→ today": planned today under the taken category. ${NO_CATEGORY}`,
+    },
+    {
+      id: 'review-mode',
+      entry: 'ui',
+      kind: 'edge',
+      what: `Tap, then switch to Log and back: the taken category is gone. ${NO_CATEGORY}`,
     },
     {
       id: 'review-keyboard',
@@ -332,7 +428,7 @@ export const categorySuggest: Scenario = {
     {
       id: 'seed',
       entry: 'api',
-      title: 'Two run categories, a place, 24 categorised tasks, three uncategorised ones (API)',
+      title: 'Two run categories, a place, 27 categorised tasks, three uncategorised ones (API)',
       async run(ctx) {
         const garden = await ctx.api.writes.upsertCategory({ label: 'Garden', isWork: false });
         const kitchen = await ctx.api.writes.upsertCategory({ label: 'Kitchen', isWork: false });
@@ -669,6 +765,118 @@ export const categorySuggest: Scenario = {
         await parse.release();
         if ((await anyChip(ctx).count()) !== 0) throw new Error('a chip shows on a failed parse');
         await captureField(ctx).fill('');
+      },
+    },
+    {
+      id: 'review-rollover',
+      entry: 'ui',
+      proves: ['review-rollover'],
+      title: 'A reply from yesterday: no preview; Enter parses again and saves that reply',
+      async run(ctx) {
+        const title = name(ctx, R_ROLLOVER);
+        await openTaskBar(ctx);
+        const reply = await parsed(ctx, title);
+        const stale = await ctx.intercept('parseTask', {
+          status: 200,
+          times: 1,
+          body: { ...reply, input: { title: `${title} stale` }, today: await appToday(ctx, 1) },
+        });
+        await captureField(ctx).fill(title);
+        await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
+        for (let i = 0; stale.hits() === 0; i++) {
+          if (i >= 40) throw new Error('the Review never asked for its parse');
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        await stale.release();
+        await new Promise((r) => setTimeout(r, 500)); // the reply reaches the bar
+        if ((await ctx.page.getByRole('button', { name: 'Save reviewed task' }).count()) !== 0)
+          throw new Error('yesterday’s parse shows as a preview');
+        const fresh = await ctx.intercept('parseTask', { status: 200, times: 1, body: reply });
+        await captureField(ctx).press('Enter');
+        await ctx.ui.expectText(/Task added/, 15_000);
+        await fresh.release();
+        if (fresh.hits() !== 1) throw new Error('Enter saved without parsing again');
+        await mine(ctx, R_ROLLOVER); // the fresh reply's title, not the stale one's
+      },
+    },
+    {
+      id: 'review-today',
+      entry: 'ui',
+      proves: ['review-today'],
+      title: 'Tap, "→ today", save: on today’s plan under Garden',
+      async run(ctx) {
+        const title = name(ctx, R_TODAY);
+        await openTaskBar(ctx);
+        await review(ctx, title);
+        await ctx.page.getByRole('button', { name: chipName('Garden') }).click({ timeout: 15_000 });
+        await ctx.page.getByRole('button', { name: /today/i }).first().click();
+        await captureField(ctx).press('Enter');
+        await ctx.ui.expectText(/Task added/, 15_000);
+        const garden = (await ctx.api.reads.listCategories()).find((c) => c.label === 'Garden');
+        const { id } = await mine(ctx, R_TODAY);
+        await waitForCategory(ctx, id, garden!.id);
+        const plans = await ctx.api.reads.listPlansForDay(await appToday(ctx));
+        if (!plans.some((p) => p.taskId === id)) throw new Error('the task is not on today’s plan');
+      },
+    },
+    {
+      id: 'review-mode',
+      entry: 'ui',
+      proves: ['review-mode'],
+      title: 'Tap, Log, back to Task: no #Garden, and the bar asks for a new Review',
+      async run(ctx) {
+        const title = name(ctx, R_MODE);
+        await openTaskBar(ctx);
+        await review(ctx, title);
+        await ctx.page.getByRole('button', { name: chipName('Garden') }).click({ timeout: 15_000 });
+        const label = ctx.page.getByText('#Garden', { exact: true });
+        await label.waitFor({ timeout: 5_000 });
+        await ctx.page.getByRole('button', { name: 'Log', exact: true }).click();
+        await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
+        await ctx.page
+          .getByRole('button', { name: 'Review before saving' })
+          .waitFor({ timeout: 5_000 });
+        if ((await label.count()) !== 0) throw new Error('the taken category survived the switch');
+        await captureField(ctx).fill('');
+      },
+    },
+    {
+      id: 'real-review',
+      entry: 'ui',
+      proves: ['real-review'],
+      title: 'The real parse into Review; what the slot says is what lands',
+      async run(ctx) {
+        await barWithHistory(ctx);
+        await realReview(ctx, name(ctx, R_REAL_CHIP));
+        await ctx.shot('real-review');
+        ctx.log(`real Review: ${await saveRealReview(ctx)}`);
+      },
+    },
+    {
+      id: 'real-named',
+      entry: 'ui',
+      proves: ['real-named'],
+      title: 'The real parse into Review of a line naming a category; same agreement',
+      async run(ctx) {
+        await barWithHistory(ctx);
+        await realReview(ctx, `${R_REAL_NAMED} ${ctx.nonce}`);
+        ctx.log(`real Review, named: ${await saveRealReview(ctx)}`);
+      },
+    },
+    {
+      id: 'real-auto',
+      entry: 'ui',
+      proves: ['real-auto'],
+      title: 'The real parse behind Enter: a task lands, no chip',
+      async run(ctx) {
+        await openTaskBar(ctx);
+        const before = ctx.createdIds().at(-1);
+        await captureField(ctx).fill(name(ctx, R_REAL_AUTO));
+        await captureField(ctx).press('Enter');
+        await ctx.ui.expectText(/Task added/, 20_000);
+        const t = await newestTask(ctx, before);
+        if (!t.title) throw new Error('the task landed with no title');
+        if ((await anyChip(ctx).count()) !== 0) throw new Error('a chip shows after an Auto save');
       },
     },
     noConsoleErrors,

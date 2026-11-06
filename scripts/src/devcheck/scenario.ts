@@ -72,8 +72,8 @@ export interface Ctx {
   createdIds(): string[]; // ids the ledger got from this run's UI creates, oldest first
   consoleErrors(): string[]; // console errors + uncaught page errors so far
   // Fails dev's /api/<method> from the harness side (Playwright route), never a switch in shipped code: the
-  // next `times` calls (default: every call) get `status`, or a dropped connection with `abort`. While any is
-  // active, the console's resource-load lines are this run's own doing and are left out of consoleErrors
+  // next `times` calls (default: every call) get `status` and `body`, or a dropped connection with `abort`. While
+  // a failing one (dropped, or status ≥ 400) is active, the console's resource-load lines are this run's own doing and are left out of consoleErrors
   // (DEV-CHECK.md → Injected failures). Release it to pass through again; the pipeline releases any a step
   // left behind when its scenario ends.
   intercept(method: string, opts?: InterceptOpts): Promise<Interception>;

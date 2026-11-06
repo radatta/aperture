@@ -1170,6 +1170,17 @@ describe('runPipeline', () => {
     expect(r.consoleErrors).toEqual(['TypeError: x is undefined', line]);
   });
 
+  it('a canned 200 opens no console window: a failed load during it still counts', async () => {
+    const w = world();
+    const line = 'Failed to load resource: the server responded with a status of 500 ()';
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('parseTask', { status: 200, body: { ok: true } });
+      x.consoleError(line);
+      await i.release();
+    })(w);
+    expect((await runPipeline(deps(w, [sc]))).consoleErrors).toEqual([line]);
+  });
+
   it('a scenario’s intercepts are released before the next scenario', async () => {
     const w = world();
     let next: number | string = 0;

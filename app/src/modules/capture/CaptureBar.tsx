@@ -135,6 +135,7 @@ export function CaptureBar({
   const changeMode = (m: CaptureMode | ((m: CaptureMode) => CaptureMode)) => {
     setMode(m);
     setHeldAck(null);
+    clearPreview(); // a preview belongs to the mode it was made in
   };
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previewId = useId();
@@ -303,9 +304,6 @@ export function CaptureBar({
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
-
-  // A preview belongs to the mode it was made in; switching away drops it.
-  useEffect(() => clearPreview(), [mode, clearPreview]);
 
   // "/" focuses capture from anywhere, unless you're already typing or a page claimed it first (the
   // Finances All tab's search, in the capture phase).

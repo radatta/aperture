@@ -67,7 +67,7 @@ const NO_IOS: IosClient = {
   run: () => needsYou(`${IOS_NOTE}: no mailroom in this run`),
 };
 
-// Chromium's console line for a failed load names no URL, so while an intercept is live these are the
+// Chromium's console line for a failed load names no URL, so while a failing intercept is live these are the
 // harness's own doing (window-scoped, not per method — DEV-CHECK.md → Injected failures).
 const INJECTED_CONSOLE =
   /^Failed to load resource: (the server responded with a status of \d+|net::ERR_FAILED)/;
@@ -145,7 +145,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if (injectedRequests.has(res.request())) return; // ours: in r.injected
       const url = new URL(res.url());
       const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
-      // While an intercept is live the console's failed-load lines are dropped (they name no URL), so a real
+      // While a failing intercept is live the console's failed-load lines are dropped (they name no URL), so a real
       // failed load in that window — /api or anything else — is recorded from its response instead.
       if (failing() && res.status() >= 400 && res.status() !== 429)
         r.consoleErrors.push(

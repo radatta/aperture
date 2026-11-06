@@ -1239,8 +1239,10 @@ describe('CaptureBar — Review category suggestion', () => {
     await user.click(screen.getByRole('button', { name: 'Log' }));
     expect(screen.queryByText('#Garden')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Task' }));
+    expect(screen.queryByText('#Garden')).toBeNull();
+    await user.click(box());
     await user.keyboard('{Enter}');
-    await waitFor(async () => expect(await saved(api, LINE)).toBeTruthy());
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
   });
 
   it('"→ today" with a taken chip plans it under that category', async () => {
@@ -1252,6 +1254,24 @@ describe('CaptureBar — Review category suggestion', () => {
     await user.click(screen.getByRole('button', { name: /today/i }));
     await user.keyboard('{Enter}');
     await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBe(garden.id));
+    const { id } = (await saved(api, LINE))!;
+    await waitFor(async () =>
+      expect((await api.listPlansForDay(todayKey(4))).map((p) => p.taskId)).toContain(id),
+    );
+  });
+
+  it('switching modes while the save is pending still gets the tap back when it fails', async () => {
+    const { api, user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await review(user);
+    await user.click(await screen.findByRole('button', { name: 'Use suggested category Garden' }));
+    let fail!: (e: Error) => void;
+    vi.spyOn(api, 'createTask').mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    await user.keyboard('{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Log' }));
+    await act(async () => fail(new Error('offline')));
+    expect(box().value).toBe(LINE);
+    expect(await screen.findByText('#Garden')).toBeTruthy();
   });
 
   it('a rolled-over preview never saves, taken category included: the next press parses again', async () => {
