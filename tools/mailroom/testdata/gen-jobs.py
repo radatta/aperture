@@ -357,6 +357,8 @@ serr('sim: absent with a timed-out read is AX_TIMEOUT, never a pass', 'AX_TIMEOU
 serr('sim: a Home Screen tree with no page pill is HOME_TREE_STALE, no scroll, no tap', 'HOME_TREE_STALE',
      tape=[{'m': 'describe-ui --udid', 'out': [{'role': 'AXApplication', 'AXLabel': 'Safari', 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': []}]}], simExcludes=['gesture scroll-left', 'tap -x'])
 spass('sim: page 2 in the tree does not scroll', [L], simExcludes=['gesture scroll-left'])
+serr('sim: two Aperture icons on page 2 is WEBCLIP_MISSING, no tap', 'WEBCLIP_MISSING',
+     tape=[{'m': 'describe-ui --udid', 'out': [{'role': 'AXApplication', 'AXLabel': 'SpringBoard', 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': [{'AXValue': 'Page 2 of 2'}, ICON, {**ICON, 'frame': {**ICON['frame'], 'x': 33}}]}]}], simExcludes=['tap -x 371', 'tap -x 69'])
 serr('sim: Home Screen with a third page is WEBCLIP_MISSING, no tap', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(page=3)}], simExcludes=['gesture scroll-left', 'tap -x 371'])
 spass('sim: a sim still shutting down boots rather than failing the profile', [L], tape=[{'m': 'list devices -j', 'n': 2, 'out': dev('Shutting Down')}], simIncludes=['bootstatus'])
 serr('sim: the test key landing in Email is deleted and the password never typed', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',

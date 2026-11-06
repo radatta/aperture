@@ -382,6 +382,10 @@ sim_icon_in() {
     | select(.w > 0 and .h > 0 and .x >= 0 and .x + .w <= $w and .y >= 0 and .y + .h <= $h)][0] // empty
     | {role: "AXButton", label: "Aperture", frame: .}' <<<"$1" 2>/dev/null
 }
+sim_icon_count() {
+  jq --argjson w "$SIM_W" --argjson h "$SIM_H" '[.. | objects | select(.AXLabel? == "Aperture" and .role? == "AXButton")
+    | select((.frame.width // 0) > 0 and (.frame.height // 0) > 0 and (.frame.x // -1) >= 0 and (.frame.x + .frame.width) <= $w and (.frame.y // -1) >= 0 and (.frame.y + .frame.height) <= $h)] | length' <<<"$1" 2>/dev/null
+}
 sim_find_icon() {
   local t page i e prev="" scrolled=""
   SIM_ICON=""
@@ -392,6 +396,10 @@ sim_find_icon() {
       "Page 2 of 2")
         e="$(sim_icon_in "$t")" || true
         [ -n "$e" ] || break
+        if [ "$(sim_icon_count "$t")" != 1 ]; then
+          sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "more than one Aperture icon on Home Screen page 2; remove the extra one by hand (each icon has its own session)"
+          return 1
+        fi
         if [ "$e" = "$prev" ]; then SIM_ICON="$e"; return 0; fi # two reads agree
         prev="$e"
         sleep 1
