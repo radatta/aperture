@@ -24,6 +24,14 @@ Aperture · due Fri 4pm · 30m` — until you start the next capture). On the ph
   preview ✨ parses again ("Retry parse") and Enter saves the line as typed. Editing the text,
   switching modes, or the 4am rollover (the parse resolved "tmw" against yesterday) drops the preview.
   ✨ keeps focus in the field, so the phone keyboard stays up.
+- **The preview's category chip.** When the parse found no category and the user's own history is
+  confident, a dashed `Garden?` stands in for `no category` ([same scorer and gates as the
+  editor's](task-editor.md)). The tap fills the preview and writes nothing; the next press saves it. It is
+  never pre-selected: saving untapped stays uncategorised, Enter with no Review never sees it, and a
+  grammar line never shows it. The task list loads only once a preview needs the chip. A preview belongs
+  to its exact text, so an edit hides a taken chip and undoing the edit shows it again, still visible. A
+  failed create puts the text back with the tap; a capture parked below (the field had moved on) keeps only
+  its text, so Review it again.
 - **A grammar line — space, pipe, space, as in `memo | ~30 #Admin`** — never reaches the model: it is the
   [bulk-add](bulk-add.md) grammar, as before, and shows no ✨ (⌘Enter saves it like Enter). `a|b` is
   not one; it goes to the model.

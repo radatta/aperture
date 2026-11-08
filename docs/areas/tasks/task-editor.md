@@ -133,7 +133,7 @@ The card keeps only the actions you press without thinking. No overflow menu.
   pre-selected:** the chip fills the select, the form goes dirty, Save writes it like a manual pick (a
   wrong tag snapshots `wasWork` into sessions, so no auto-assign; PRODUCT §2 — it lives in the enrichment
   pass). Follows the title and notes as typed; gone once the field has a value; never on a part (its
-  category is its parent's). The Review preview's chip in capture is PR 2. If a week of scoping shows it
+  category is its parent's). Capture's Review preview shows the same chip ([quick-add](quick-add.md)); bulk add, voice and MCP don't. If a week of scoping shows it
   missing, the next step is ~20 recent categorised titles as examples in the parse prompt, not embeddings
   (dependency rules) and not a new endpoint. Plan: task `01M455ZMVX1H8DH5KANJ00YVS3`.
 

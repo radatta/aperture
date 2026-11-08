@@ -156,6 +156,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   };
   // The app calling /api/<method>: the first matching route decides; a fulfilled 429 also reaches the
   // response listeners, as a real one would.
+  const injectedBodies: (string | undefined)[] = [];
   const call = async (method: string): Promise<number | 'real' | 'dropped'> => {
     const url = `https://dev.aperture.rahuldatta.dev/api/${method}`;
     const hit = [...routes].reverse().find((x) => x.match(new URL(url))); // Playwright: last registered wins
@@ -172,8 +173,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       continue: async () => void (out = 'real'),
       fallback: async () => void (out = 'real'),
       abort: async () => void (out = 'dropped'),
-      fulfill: async ({ status }) => {
+      fulfill: async ({ status, body }) => {
         out = status;
+        injectedBodies.push(body);
         respond(`/api/${method}`, status, request);
       },
     });
@@ -379,6 +381,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     respond,
     consoleError,
     call,
+    injectedBodies,
     routes,
     gotos,
     api,
@@ -1075,6 +1078,27 @@ describe('runPipeline', () => {
     expect(r.codes).toContain('LEFTOVERS');
   });
 
+  it('an intercept answers with `body` as JSON, `{}` without one', async () => {
+    const w = world();
+    const sc = scenario(async (x, ctx) => {
+      const canned = await ctx.intercept('parseTask', {
+        status: 200,
+        times: 1,
+        body: { ok: true },
+      });
+      expect(await x.call('parseTask')).toBe(200);
+      await canned.release();
+      const bare = await ctx.intercept('parseTask', { times: 1 });
+      expect(await x.call('parseTask')).toBe(429);
+      await bare.release();
+      expect(x.injectedBodies).toEqual(['{"ok":true}', '{}']);
+    })(w);
+    expect((await runPipeline(deps(w, [sc]))).injected).toEqual([
+      '/api/parseTask → 200',
+      '/api/parseTask → 429',
+    ]);
+  });
+
   it('an intercept fails `times` calls, then passes through, and counts both', async () => {
     const w = world();
     const seen: (number | string)[] = [];
@@ -1144,6 +1168,17 @@ describe('runPipeline', () => {
     })(w);
     const r = await runPipeline(deps(w, [sc]));
     expect(r.consoleErrors).toEqual(['TypeError: x is undefined', line]);
+  });
+
+  it('a canned 200 opens no console window: a failed load during it still counts', async () => {
+    const w = world();
+    const line = 'Failed to load resource: the server responded with a status of 500 ()';
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('parseTask', { status: 200, body: { ok: true } });
+      x.consoleError(line);
+      await i.release();
+    })(w);
+    expect((await runPipeline(deps(w, [sc]))).consoleErrors).toEqual([line]);
   });
 
   it('a scenario’s intercepts are released before the next scenario', async () => {

@@ -285,13 +285,15 @@ step, proving no row, so a console error fails the run without unproving the row
 
 A failure dev won't produce on demand (a read that 429s, a dropped connection, a stop that doesn't land) is
 injected **by the harness**, never by a switch in shipped code: `ctx.intercept(method, { status?, times?,
-abort? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
-every call) get `status` (default 429) or a dropped connection, and the rest pass through. The returned handle
+abort?, body? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
+every call) get `status` (default 429) with `body` as JSON (default `{}`), or a dropped connection, and the rest
+pass through. A row needing an exact model reply can get a canned one this way (status 200): `category-suggest`
+does, beside three rows that go through the real parse and assert only what holds whatever the model says. The returned handle
 counts `hits()` and `passed()`; `release()` unroutes it, because a live page route turns off the page's HTTP
 cache. The pipeline releases any a step left live when its scenario ends, so a step that threw mid-intercept
 can't fail the next scenario's reads.
 
-While any intercept is live, the console's `Failed to load resource: … status of N` and `net::ERR_FAILED` lines are
+While a failing intercept (dropped, or status ≥ 400) is live, the console's `Failed to load resource: … status of N` and `net::ERR_FAILED` lines are
 the harness's own doing and are left out of _Console errors_. Chromium's line names no URL, so the drop covers
 the whole window (a few seconds per step), not one method. To keep a real failure in that
 window from hiding, every non-injected response ≥ 400 other than a 429 — `/api` or not — is recorded from the

@@ -14,16 +14,26 @@ import { CaptureBar } from './CaptureBar';
 beforeEach(() => globalThis.localStorage?.clear());
 
 // A fresh stub with one category, in Task mode — the setup every token test starts from.
-async function taskBar(opts: { hangCategories?: boolean; categories?: string[] } = {}) {
+async function taskBar(
+  opts: {
+    hangCategories?: boolean;
+    categories?: string[];
+    history?: Record<string, string[]>; // category label → titles, created before the bar mounts
+  } = {},
+) {
   const api = createStubClient({ seed: false, storageKey: `cap-tok-${Math.random()}` });
-  for (const label of opts.categories ?? ['Admin'])
-    await api.upsertCategory({ label, isWork: true });
+  for (const label of opts.categories ?? ['Admin']) {
+    const { id } = await api.upsertCategory({ label, isWork: true });
+    for (const title of opts.history?.[label] ?? [])
+      await api.createTask({ title, categoryId: id });
+  }
   if (opts.hangCategories) vi.spyOn(api, 'listCategories').mockReturnValue(new Promise(() => {}));
+  const list = vi.spyOn(api, 'listTasks'); // before the render: it counts the bar's own reads
   const user = userEvent.setup();
   renderWithProviders(<CaptureBar />, { api });
   await user.click(screen.getByRole('button', { name: 'Task' }));
   const box = () => screen.getByLabelText('Capture task') as HTMLTextAreaElement;
-  return { api, user, box };
+  return { api, user, box, list };
 }
 
 function field() {
@@ -1033,6 +1043,258 @@ describe('CaptureBar', () => {
       );
       expect(titles.sort()).toEqual(['book flight', 'pay rent']);
     });
+  });
+});
+
+describe('CaptureBar — Review category suggestion', () => {
+  // Synthetic history: two categories, twelve tasks each, with their own vocabulary.
+  const history = {
+    Garden: [
+      'water the tomato beds',
+      'prune the rose hedge',
+      'spread mulch on the border',
+      'sow carrot seeds',
+      'stake the bean poles',
+      'weed the herb patch',
+      'repot the fern',
+      'trim the lawn edge',
+      'turn the compost heap',
+      'plant tulip bulbs',
+      'net the berry bushes',
+      'rake the fallen leaves',
+    ],
+    Kitchen: [
+      'descale the kettle',
+      'sharpen the chef knife',
+      'clean the oven racks',
+      'restock the pantry shelf',
+      'season the cast skillet',
+      'defrost the freezer drawer',
+      'wipe the range hood',
+      'sort the spice rack',
+      'replace the sink filter',
+      'scrub the cutting board',
+      'organise the baking tins',
+      'degrease the stove top',
+    ],
+  };
+  const LINE = 'mulch the tomato beds';
+  const seededBar = () => taskBar({ categories: ['Garden', 'Kitchen'], history });
+  const review = (user: Awaited<ReturnType<typeof taskBar>>['user']) =>
+    user.click(screen.getByRole('button', { name: 'Review before saving' }));
+  const chip = () => screen.queryByRole('button', { name: /^Use suggested category/ });
+  const saved = async (api: Awaited<ReturnType<typeof taskBar>>['api'], title: string) =>
+    (await api.listTasks()).find((t) => t.title === title);
+  // "No chip" means nothing until the list it scores has landed: "no category" shows before that.
+  const listLanded = async (list: Awaited<ReturnType<typeof taskBar>>['list']) => {
+    await waitFor(() => expect(list).toHaveResolved());
+    await act(async () => {});
+  };
+
+  it('a confident parse with no category shows the chip; the tap writes nothing, the next press saves it', async () => {
+    const { api, user, box } = await seededBar();
+    const parse = vi.spyOn(api, 'parseTask');
+    const garden = (await api.listCategories()).find((c) => c.label === 'Garden')!;
+    const before = (await api.listTasks()).length;
+    await user.type(box(), LINE);
+    await review(user);
+    const suggested = await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    expect(suggested.textContent).toBe('Garden?');
+    expect(screen.queryByText('no category')).toBeNull();
+    await user.click(suggested);
+    expect(chip()).toBeNull();
+    expect(screen.getByText('#Garden')).toBeTruthy();
+    expect(box().value).toBe(LINE); // the text stays until you save
+    expect(document.activeElement).toBe(box()); // the phone keyboard stays up
+    expect(await api.listTasks()).toHaveLength(before);
+    await user.click(screen.getByRole('button', { name: 'Save reviewed task' }));
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBe(garden.id));
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(`${LINE} · Garden`)).toBeTruthy();
+  });
+
+  it('is never pre-selected: saving a Review without the tap stays uncategorised', async () => {
+    const { api, user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await review(user);
+    await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
+    expect(await screen.findByText(`${LINE} · no category`)).toBeTruthy();
+  });
+
+  it('Auto (Enter, no Review) never takes a suggestion', async () => {
+    const { api, user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
+    expect(chip()).toBeNull();
+  });
+
+  it('keeps saying "no category" for a title the history can’t place', async () => {
+    const { user, box, list } = await seededBar();
+    await user.type(box(), 'quarterly filing');
+    await review(user);
+    expect(await screen.findByText('no category')).toBeTruthy();
+    await listLanded(list);
+    expect(screen.getByText('no category')).toBeTruthy();
+    expect(chip()).toBeNull();
+  });
+
+  it('keeps saying "no category" under the history floor', async () => {
+    const { user, box, list } = await taskBar({
+      categories: ['Garden', 'Kitchen'],
+      history: { Garden: history.Garden.slice(0, 5), Kitchen: history.Kitchen.slice(0, 5) },
+    });
+    await user.type(box(), LINE);
+    await review(user);
+    expect(await screen.findByText('no category')).toBeTruthy();
+    await listLanded(list);
+    expect(screen.getByText('no category')).toBeTruthy();
+    expect(chip()).toBeNull();
+  });
+
+  it('shows no chip when the parse found a category, even one the history disagrees with', async () => {
+    const { user, box, list } = await seededBar();
+    await user.type(box(), `kitchen, ${LINE}`);
+    await review(user);
+    expect(await screen.findByText('#Kitchen')).toBeTruthy();
+    expect(chip()).toBeNull();
+    expect(list).not.toHaveBeenCalled(); // the slot never mounted
+  });
+
+  it('shows no chip on a grammar line', async () => {
+    const { user, box, list } = await seededBar();
+    await user.type(box(), `${LINE} | ~30`);
+    expect((await screen.findAllByText('30m')).length).toBeGreaterThan(0);
+    expect(chip()).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('shows no chip on a failed parse', async () => {
+    const { user, box, list } = await seededBar();
+    globalThis.localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+    await user.type(box(), LINE);
+    await review(user);
+    expect(await screen.findByText(/Couldn’t parse/)).toBeTruthy();
+    expect(chip()).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('editing the text drops a taken chip: the next Review offers it again, untaken', async () => {
+    const { api, user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await review(user);
+    await user.click(await screen.findByRole('button', { name: 'Use suggested category Garden' }));
+    await user.type(box(), ' again');
+    expect(screen.queryByText('#Garden')).toBeNull();
+    await review(user);
+    await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, `${LINE} again`))?.categoryId).toBeNull());
+  });
+
+  it('by keyboard, the chip hands focus back to the field as it goes', async () => {
+    const { user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await review(user);
+    (await screen.findByRole('button', { name: 'Use suggested category Garden' })).focus();
+    await user.keyboard('{Enter}');
+    expect(chip()).toBeNull();
+    expect(document.activeElement).toBe(box());
+  });
+
+  it('a capture nobody reviews never reads the task list', async () => {
+    const { user, box, list } = await taskBar();
+    await user.type(box(), 'memo | ~30');
+    await user.keyboard('{Enter}');
+    await screen.findByText(/Task added/);
+    await user.type(box(), 'file taxes');
+    await user.keyboard('{Enter}');
+    await screen.findByText('file taxes · no category');
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('a failed create puts the text back with the tap; the retry saves under it, without parsing again', async () => {
+    const { api, user, box } = await seededBar();
+    const parse = vi.spyOn(api, 'parseTask');
+    const garden = (await api.listCategories()).find((c) => c.label === 'Garden')!;
+    await user.type(box(), LINE);
+    await review(user);
+    await user.click(await screen.findByRole('button', { name: 'Use suggested category Garden' }));
+    vi.spyOn(api, 'createTask').mockRejectedValueOnce(new Error('offline'));
+    await user.click(screen.getByRole('button', { name: 'Save reviewed task' }));
+    await waitFor(() => expect(box().value).toBe(LINE));
+    expect(await screen.findByText('#Garden')).toBeTruthy();
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBe(garden.id));
+    expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it('switching modes drops a taken chip', async () => {
+    const { api, user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await review(user);
+    await user.click(await screen.findByRole('button', { name: 'Use suggested category Garden' }));
+    await user.click(screen.getByRole('button', { name: 'Log' }));
+    expect(screen.queryByText('#Garden')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    expect(screen.queryByText('#Garden')).toBeNull();
+    await user.click(box());
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
+  });
+
+  it('"→ today" with a taken chip plans it under that category', async () => {
+    const { api, user, box } = await seededBar();
+    const garden = (await api.listCategories()).find((c) => c.label === 'Garden')!;
+    await user.type(box(), LINE);
+    await review(user);
+    await user.click(await screen.findByRole('button', { name: 'Use suggested category Garden' }));
+    await user.click(screen.getByRole('button', { name: /today/i }));
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBe(garden.id));
+    const { id } = (await saved(api, LINE))!;
+    await waitFor(async () =>
+      expect((await api.listPlansForDay(todayKey(4))).map((p) => p.taskId)).toContain(id),
+    );
+  });
+
+  it('switching modes while the save is pending still gets the tap back when it fails', async () => {
+    const { api, user, box } = await seededBar();
+    await user.type(box(), LINE);
+    await review(user);
+    await user.click(await screen.findByRole('button', { name: 'Use suggested category Garden' }));
+    let fail!: (e: Error) => void;
+    vi.spyOn(api, 'createTask').mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+    await user.keyboard('{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Log' }));
+    await act(async () => fail(new Error('offline')));
+    expect(box().value).toBe(LINE);
+    expect(await screen.findByText('#Garden')).toBeTruthy();
+  });
+
+  it('a rolled-over preview never saves, taken category included: the next press parses again', async () => {
+    const { api, user, box } = await seededBar();
+    const garden = (await api.listCategories()).find((c) => c.label === 'Garden')!;
+    const parse = vi.spyOn(api, 'parseTask').mockResolvedValueOnce({
+      ok: true,
+      source: 'haiku',
+      input: { title: 'yesterday parse', categoryId: garden.id },
+      categoryLabel: 'Garden',
+      placeName: null,
+      dropped: [],
+      today: addDays(todayKey(4), -1),
+    });
+    await user.type(box(), LINE);
+    await review(user);
+    await waitFor(() => expect(parse).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(screen.queryByText('yesterday parse')).toBeNull(); // hidden: its day has gone
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect(await saved(api, LINE)).toBeTruthy());
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(await saved(api, 'yesterday parse')).toBeUndefined();
   });
 });
 
