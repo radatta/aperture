@@ -845,7 +845,7 @@ export function createApiClient({
     // with no create would read as a leak. Answers the refusal's message. Should it land after all, its id
     // is recorded (cleanup removes it) and the call throws.
     async subscribePushExpectingRefusal(input: DevSubscribePushInput): Promise<string> {
-      const url = `${DEV_ORIGIN}/api/subscribePush`;
+      const url = `${targetOrigin()}/api/subscribePush`;
       assertDevOrigin(url);
       const { status, text } = await backoff(() =>
         fetch(url, {
