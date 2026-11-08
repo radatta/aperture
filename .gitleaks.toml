@@ -8,4 +8,7 @@ description = "Known false positives"
 # exchangePlaidPublicToken is exactly 24 chars (packages/shared/src/rpc.ts). Not a credential.
 # generic-api-key reads "PASSWORD_MISSING', tape=SIGNED_OUT" as a key and its value; it's a fixture line in
 # tools/mailroom/testdata/gen-jobs.py, the tape constant, not a credential.
-regexes = ['''^exchangePlaidPublicToken$''', '''^tape=SIGNED_OUT$''']
+# generic-api-key reads "authSecret: 'BTBZ…'" / "AUTH = 'BTBZ…'" as a key; it's the auth_secret test vector published
+# in RFC 8291 Appendix A, used by the Web Push tests (lambdas/src/push/*.test.ts, backend.push.test.ts). Public,
+# not a credential.
+regexes = ['''^exchangePlaidPublicToken$''', '''^tape=SIGNED_OUT$''', '''^BTBZMqHH6r4Tts7J_aSIgg$''']

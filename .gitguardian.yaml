@@ -1,0 +1,9 @@
+# GitGuardian config. Read by ggshield (CLI, pre-commit, CI action); the GitGuardian GitHub App's checks are
+# governed from its dashboard (an incident marked ignored there stays ignored). Mirrors .gitleaks.toml's allowlist.
+version: 2
+secret:
+  ignored_matches:
+    # The auth_secret test vector published in RFC 8291 Appendix A, used by the Web Push tests
+    # (lambdas/src/push/*.test.ts, backend.push.test.ts). Public, not a credential.
+    - name: RFC 8291 Appendix A auth_secret test vector
+      match: BTBZMqHH6r4Tts7J_aSIgg
