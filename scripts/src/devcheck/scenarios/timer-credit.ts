@@ -132,7 +132,7 @@ export const timerCredit: Scenario = {
   slowPaths: [
     'app/src/modules/pomodoro/**',
     'packages/shared/src/machines.ts',
-    'lambdas/src/backend.ts',
+    'lambdas/src/sessions.ts',
     'scripts/src/devcheck/scenarios/timer-credit.ts',
   ],
   rows: [
