@@ -71,7 +71,7 @@ export interface RunResult {
   blockedDeletes: string[]; // ledger ids NOT deleted because the server showed parts the ledger doesn't know
   failedDeletes: string[]; // `<id>: <error>` — a removal (still pending, the sweep retries) or read-back that threw; the loop went on
   consoleErrors: string[];
-  failedLoads: string[]; // every failed load the page saw, in order: `<status|net error> <METHOD> <host/path>` (no query)
+  failedLoads?: string[]; // every failed load the page saw, in order: `<status|net error> <METHOD> <host/path>` (no query)
   throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
   injected: string[]; // responses the harness itself served (ctx.intercept): `/api/<method> → <status>|dropped`
   shots: string[];
@@ -328,7 +328,7 @@ export function renderReport(r: RunResult): string {
     '',
     '## Failed loads',
     '',
-    ...(r.failedLoads.length ? r.failedLoads.map((f) => `- \`${cell(f)}\``) : ['None.']),
+    ...(r.failedLoads?.length ? r.failedLoads.map((f) => `- \`${cell(f)}\``) : ['None.']),
   );
   // A 429 is Lambda refusing to start the function, so the call never ran (docs/ops/DEV-CHECK.md → Throttles (429)). Chromium's
   // console line for it carries no URL; this names each one.
