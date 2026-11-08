@@ -80,6 +80,17 @@ describe('parseQueue', () => {
     ]);
   });
 
+  it('cleans what it quotes from a bad file', () => {
+    const q = parseQueue('{"v":1,\x1b[31m\n}');
+    expect(q.problems[0]).toMatch(/^not JSON/);
+    expect([...q.problems[0]!].some((ch) => ch.charCodeAt(0) < 0x20)).toBe(false);
+    expect(
+      parseQueue(
+        '{"v":1,"updatedAt":"2026-11-08T06:00:00Z","devQueue":[{"branch":"a","state":"🚀"}]}',
+      ).problems,
+    ).toEqual(['devQueue[0]: state "?"']);
+  });
+
   it('is missing when there is no file', () => {
     expect(parseQueue(null)).toEqual({ status: 'missing', data: null, problems: [] });
   });

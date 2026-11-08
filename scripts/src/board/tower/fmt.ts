@@ -47,8 +47,8 @@ export function parseTime(s: unknown): number | null {
 // removed, and double-width glyphs (CJK, emoji) as "?" so every row stays exactly the terminal's width.
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/g;
-const ZERO = /[\p{M}\u200b-\u200f]/gu; // combining marks, variation selectors, zero-width spaces and joiners
+const ZERO = /[\p{M}\p{Cf}]/gu; // combining marks, variation selectors, zero-width and bidi format characters
 const WIDE =
-  /[\u1100-\u115f\u2600-\u27bf\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f000}-\u{1faff}\u{20000}-\u{3fffd}]/gu;
+  /[\p{Extended_Pictographic}\u1100-\u115f\u2600-\u27bf\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f000}-\u{1faff}\u{20000}-\u{3fffd}]/gu;
 export const clean = (s: string) =>
   s.replace(/\t/g, ' ').replace(CONTROL, '').replace(ZERO, '').replace(WIDE, '?');

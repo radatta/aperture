@@ -7,7 +7,6 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
-  statSync,
   readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -154,22 +153,38 @@ describe('sampler.sh', () => {
     expect(s.mix).toEqual(expect.objectContaining({ working: expect.any(Number) }));
   });
 
+  // The path is asked for, never proven by running a tick: a regression would write the live file.
   it('keeps a fake cgroup’s prev tick beside it, never in the live sampler’s file', () => {
-    const live = '/tmp/aperture-sampler.prev';
-    const before = existsSync(live) ? statSync(live).mtimeMs : null;
-    spawnSync('bash', [join(boardDir, 'sampler.sh'), '--once'], { env, encoding: 'utf8' });
-    expect(readFileSync(join(tmp, 'cg/sampler.prev'), 'utf8')).toMatch(/^T\t\d+\t1000$/m);
-    expect(existsSync(live) ? statSync(live).mtimeMs : null).toBe(before);
+    const where = (e: NodeJS.ProcessEnv) =>
+      spawnSync('bash', [join(boardDir, 'sampler.sh'), '--prev-path'], {
+        env: e,
+        encoding: 'utf8',
+      }).stdout.trim();
+    expect(where(env)).toBe(join(tmp, 'cg/sampler.prev'));
+    expect(where({ ...env, APERTURE_SAMPLER_PREV: join(tmp, 'x.prev') })).toBe(join(tmp, 'x.prev'));
+    const live = { ...env };
+    delete live.APERTURE_CGROUP_DIR;
+    expect(where(live)).toBe('/tmp/aperture-sampler.prev');
+    const prev = join(tmp, 'own.prev');
+    spawnSync('bash', [join(boardDir, 'sampler.sh'), '--once'], {
+      env: { ...env, APERTURE_SAMPLER_PREV: prev },
+      encoding: 'utf8',
+    });
+    expect(readFileSync(prev, 'utf8')).toMatch(/^T\t\d+\t1000\t\d+\.\d+$/m); // epoch, usage, µs clock
   });
 
   // The real bad pair from 2026-11-08T05:38:53Z: the live counter (~6.28e10 µs) against a test's
   // usage_usec 1000 left in the shared prev file 1 s earlier read as 62763.68 cores on a 9-CPU box.
   it('writes null cores, not thousands, when the prev tick is not this cgroup’s', () => {
     const prev = join(tmp, 'pair.prev');
-    const tick = (prevUsage: number, usage: number, ago: number) => {
+    const tick = (prevUsage: number, usage: number, ago: number, realtime = false) => {
       writeFileSync(join(tmp, 'cg/cpu.stat'), `usage_usec ${usage}\n`);
-      writeFileSync(prev, `T\t${Math.floor(Date.now() / 1000) - ago}\t${prevUsage}\n`);
-      const r = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], { env: { ...env, APERTURE_SAMPLER_PREV: prev }, encoding: 'utf8' });
+      const rt = realtime ? `\t${(Date.now() / 1000 - ago).toFixed(6)}` : ''; // the 4th field, µs clock
+      writeFileSync(prev, `T\t${Math.floor(Date.now() / 1000 - ago)}\t${prevUsage}${rt}\n`);
+      const r = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], {
+        env: { ...env, APERTURE_SAMPLER_PREV: prev },
+        encoding: 'utf8',
+      });
       return JSON.parse(r.stdout).cg.cpuCores as number | null;
     };
     expect(tick(1000, 62_763_681_000, 1)).toBeNull();
@@ -177,6 +192,13 @@ describe('sampler.sh', () => {
     const ok = tick(62_700_000_000, 62_700_000_000 + 2.5 * 30e6, 30); // a real 30 s tick (±1 s epoch rounding)
     expect(ok).toBeGreaterThan(2.3);
     expect(ok).toBeLessThan(2.6);
+    // half a second after a tick (a `board.sh status`): whole seconds would read 0 or 2×. The µs clock reads
+    // 7 cores' worth of usage over 0.5 s plus however long the spawn took, measured around it.
+    const t0 = Date.now();
+    const quick = tick(62_700_000_000, 62_700_000_000 + 7 * 0.5e6, 0.5, true)!;
+    const spent = (Date.now() - t0) / 1000;
+    expect(quick).toBeGreaterThanOrEqual((7 * 0.5) / (0.5 + spent) - 0.05);
+    expect(quick).toBeLessThanOrEqual(7.05);
   });
 });
 

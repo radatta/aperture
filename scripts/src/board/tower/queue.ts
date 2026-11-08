@@ -44,7 +44,13 @@ const str = (x: unknown) => (typeof x === 'string' && x.length > 0 ? clean(x) : 
 const int = (x: unknown) => (Number.isInteger(x) ? (x as number) : null);
 const arr = (x: unknown) => (Array.isArray(x) ? (x as unknown[]) : []);
 
+// Problems quote the file (a JSON.parse message carries its raw bytes): cleaned like the rest.
 export function parseQueue(text: string | null, prev: QueueData | null = null): Queue {
+  const q = parse(text, prev);
+  return { ...q, problems: q.problems.map(clean) };
+}
+
+function parse(text: string | null, prev: QueueData | null): Queue {
   if (text === null) return { status: 'missing', data: null, problems: [] };
   const problems: string[] = [];
   let raw: Record<string, unknown>;

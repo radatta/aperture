@@ -2,9 +2,9 @@
 # Inputs, in ARGV order (named F1–F4 via -v; no gawk ARGIND): 1 tmux panes  "window\tpane_pid"
 #                                      2 sessions    "pid\tsid\tname\tbranch\tstate"   (hook-registered)
 #                                      3 heavy slots "pid\tlabel"
-#                                      4 prev tick   "T\tepoch\tusage_usec" | "S\tpid\tcpuTicks"
+#                                      4 prev tick   "T\tepoch\tusage_usec\tepochRealtime" | "S\tpid\tcpuTicks"
 #                                      5 procs (-)   "pid\tppid\tcomm\tthreads\trssPages\tcpuTicks\targs"
-# -v: t ep interval anon file current high pids pidsMax usage cpus psiMemSome psiMemFull psiCpuSome oomKill
+# -v: t ep epr interval anon file current high pids pidsMax usage cpus psiMemSome psiMemFull psiCpuSome oomKill
 #     highEvents dev page hz prevOut statusOut
 BEGIN { FS = "\t"; MiB = 1048576 }
 FILENAME == F1 { win[$2] = $1; next }
@@ -12,7 +12,7 @@ FILENAME == F1 { win[$2] = $1; next }
 FILENAME == F2 { reg[$1] = 1; sid[$1] = $2; rname[$1] = $3; branch[$1] = $4; hstate[$1] = $5; next }
 FILENAME == F3 { if (!($1 in heavy)) heavy[$1] = $2; else heavy[$1] = heavy[$1] "+" $2; nslots++; next }
 FILENAME == F4 {
-  if ($1 == "T") { prevEp = $2; prevUsage = $3 } else if ($1 == "S") prevCpu[$2] = $3
+  if ($1 == "T") { prevEp = $2; prevUsage = $3; prevEpr = $4 } else if ($1 == "S") prevCpu[$2] = $3
   next
 }
 {
@@ -56,14 +56,16 @@ END {
     else if (c ~ /^(vitest|vite|chromium|tsc|eslint)$/) unattr += thr[p]
   }
 
-  # null when the counters can't be from this cgroup's last tick: a delta below zero or above the CPUs
-  # it has (with room for the 1 s epoch rounding) means the prev file came from elsewhere
-  cores = (prevEp != "" && prevUsage != "" && ep > prevEp) ? (usage - prevUsage) / ((ep - prevEp) * 1e6) : 0
+  # Over the real elapsed time (µs clock): whole epoch seconds could halve it for a `--print` just after a
+  # tick; a prev file from before the 4th field falls back to the seconds. null when the counters can't be
+  # this cgroup's last tick's: a delta below zero, or above the CPUs it has (with room for rounding).
+  dt = (prevEpr != "" && epr != "") ? epr - prevEpr : ep - prevEp
+  cores = (prevEp != "" && prevUsage != "" && dt > 0) ? (usage - prevUsage) / (dt * 1e6) : 0
   coresOut = (cores < 0 || (cpus > 0 && cores > cpus * 1.5)) ? "null" : sprintf("%.2f", cores)
   el = (prevEp != "" && ep > prevEp) ? ep - prevEp : interval
   gap = (prevEp != "" && ep - prevEp > interval + 60) ? ep - prevEp - interval : ""
 
-  printf "T\t%s\t%s\n", ep, usage > prevOut
+  printf "T\t%s\t%s\t%s\n", ep, usage, epr > prevOut
   sess = ""; working = 0; idle = 0
   for (r in roots) {
     printf "S\t%s\t%s\n", r, sc[r] > prevOut

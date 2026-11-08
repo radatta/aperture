@@ -54,7 +54,9 @@ for size in 210x55 100x50; do
   # the terminal type before the session exists, so the tower's pane gets it; argv quoted for the pane's shell
   tm start-server \; set -g default-terminal tmux-256color \; set -g exit-empty off >/dev/null
   tm new-session -d -s proof -x "$w" -y "$h" "$(printf '%q ' bash "$here/tower.sh" "${args[@]}")"
-  for _ in $(seq 50); do tm capture-pane -p -t proof | grep -q TOWER && break; sleep 0.2; done # the first frame
+  drawn=
+  for _ in $(seq 50); do tm capture-pane -p -t proof | grep -q TOWER && { drawn=1; break; }; sleep 0.2; done
+  [ -n "$drawn" ] || { echo "tower-capture: no frame at $size after 10 s" >&2; tm capture-pane -p -t proof >&2; exit 1; }
   sleep 0.3
   shot "$size-1h"
   tm send-keys -t proof 6; sleep 0.5; shot "$size-6h"

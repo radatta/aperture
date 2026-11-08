@@ -30,6 +30,7 @@ describe('clean', () => {
     expect(clean('e\u0301 a\u200bb')).toBe('e ab');
     expect(clean('│ ⣿ — ok')).toBe('│ ⣿ — ok'); // box drawing and braille are narrow
     expect(clean('☀ ✔')).toBe('? ?'); // the dingbat block can render as emoji: replaced in outside text
+    expect(clean('⭐⌚ a\u2060b\ufeffc\u00add\u202ee')).toBe('?? abcde'); // wide emoji; zero-width and bidi format
   });
 });
 

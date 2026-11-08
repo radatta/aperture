@@ -5,6 +5,7 @@
 #   sampler.sh          run forever
 #   sampler.sh --once   one tick, no lock (tests, probe)
 #   sampler.sh --print  compute a tick to stdout; writes nothing (board.sh status/json)
+#   sampler.sh --prev-path  where the previous tick's counters live (tests check a fake cgroup's is its own)
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -32,7 +33,7 @@ tick() {  # $1 = print → stdout only, nothing written
   [ "${#live[@]}" -eq 0 ] ||
     jq -r '[.pid, .label // .class] | @tsv' "${live[@]}" >"$slots" 2>/dev/null
   line=$(sb_procs args | awk -f "$SB_SCRIPTS/sample.awk" \
-    -v t="$(sb_now)" -v ep="$(sb_epoch)" -v interval="$interval" -v page="$page" -v hz="$hz" \
+    -v t="$(sb_now)" -v ep="$(sb_epoch)" -v epr="${EPOCHREALTIME/,/.}" -v interval="$interval" -v page="$page" -v hz="$hz" \
     -v anon="$(cg_anon)" -v file="$(cg_file)" -v current="$(cg_current)" -v high="$(cg_high)" \
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" -v cpus="$(cg_cpus)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \
@@ -46,6 +47,7 @@ tick() {  # $1 = print → stdout only, nothing written
   [ -n "$line" ] && sb_append samples "$line"
 }
 
+if [ "${1:-}" = --prev-path ]; then printf '%s\n' "$prev"; exit 0; fi
 if [ "${1:-}" = --once ]; then tick; exit 0; fi
 if [ "${1:-}" = --print ]; then tick print; exit 0; fi
 

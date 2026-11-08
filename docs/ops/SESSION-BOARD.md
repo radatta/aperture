@@ -89,10 +89,11 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
   unreliable, because a session waiting on the model uses almost no CPU. `board.sh status` marks those `*`.
 - `unattributed` counts heavy-category threads with no session (drift detector for the attribution).
 - `gapSec` is set when a tick is > 60 s late — the container was frozen or the VM slept.
-- `cpuCores` is the cgroup's CPU time since the last tick over the seconds between, from the previous tick's
-  counters in `/tmp/aperture-sampler.prev` (a fake cgroup, `APERTURE_CGROUP_DIR`, keeps its own beside it).
-  It is `null` when that delta is negative or above 1.5 × the container's CPUs (`cpu.max`, else `nproc`): the
-  counters weren't this cgroup's. Until 2026-11-07 a board test's `--once` against a fake cgroup overwrote the
+- `cpuCores` is the cgroup's CPU time since the last tick over the real time between (`$EPOCHREALTIME`, so a
+  `status` read just after a tick isn't off by a rounded second), from the previous tick's counters in
+  `/tmp/aperture-sampler.prev` (a fake cgroup, `APERTURE_CGROUP_DIR`, keeps its own beside it;
+  `sampler.sh --prev-path` says which). It is `null` when that delta is negative or above 1.5 × the
+  container's CPUs (`cpu.max`, else the online CPUs): the counters weren't this cgroup's. Until 2026-11-07 a board test's `--once` against a fake cgroup overwrote the
   live prev file, so the tick after every scripts suite read thousands of cores (127 such ticks on 2026-11-05);
   `cli.ts report` skips values over 64 in that older history, and the control tower anything over 2 × its cores.
 - It also rewrites `board/status.line` every tick and, every 5th tick, `board/overlap.json`.
@@ -400,7 +401,7 @@ tell.
 
 **Proof frames.** `scripts/board/tower-capture.sh <dir>` runs the tower on the fixtures
 (`scripts/src/board/tower/fixtures/`, a fixed clock) in a private tmux server at 210 × 55 and 100 × 50,
-presses `6`, `←`×12 and `2`, and writes each frame as ANSI text (`cat` it in a truecolor terminal), SVG and
+presses `6`, `←`×12 and `2` (failing if no frame draws within 10 s), and writes each frame as ANSI text (`cat` it in a truecolor terminal), SVG and
 PNG (headless Chromium from `~/pw`, else ImageMagick, whose SVG renderer drops braille); `--live` captures
 the real board instead. `tower.sh --once <cols>x<rows>` prints one frame without a terminal; `--no-gh` skips
 `gh pr list` (live, the minute's `devlock.sh` peek still runs; `--fixtures` skips both).

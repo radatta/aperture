@@ -1,6 +1,6 @@
 // The tower's IO: reads the board's own files (never `board.sh status`, which scans /proc and peeks at
 // GitHub on every call), keeps incremental tails, and assembles a TowerState. No terminal here.
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { parseBench, type Bench } from './bench.ts';
@@ -30,22 +30,42 @@ const readOr = (p: string): string | null => {
   }
 };
 
-// Re-reads a whole file only when its mtime/size/inode changed.
+// The last `n` bytes of a file (a log rewritten every few seconds needs only its end), or null.
+function tailText(p: string, n = 4096): string | null {
+  let fd: number;
+  try {
+    fd = openSync(p, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const buf = Buffer.alloc(Math.min(n, size));
+    readSync(fd, buf, 0, buf.length, size - buf.length);
+    return buf.toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Re-reads a file only when its mtime/size/inode changed.
 class Watched<T> {
   private key: string | null | undefined = undefined;
   value: T;
   private path: string;
   private parse: (text: string | null, prev: T) => T;
-  constructor(path: string, init: T, parse: (text: string | null, prev: T) => T) {
+  private read: (p: string) => string | null;
+  constructor(path: string, init: T, parse: (text: string | null, prev: T) => T, read = readOr) {
     this.path = path;
     this.value = init;
     this.parse = parse;
+    this.read = read;
   }
   get(): T {
     const k = stamp(this.path);
     if (k !== this.key) {
       this.key = k;
-      this.value = this.parse(k === null ? null : readOr(this.path), this.value);
+      this.value = this.parse(k === null ? null : this.read(this.path), this.value);
     }
     return this.value;
   }
@@ -125,11 +145,7 @@ export class Source {
       (t, prev) => parseQueue(t, prev.data as QueueData | null),
     );
     this.benchTsv = new Watched(join(paths.bench, 'results.tsv'), null, (t) => t);
-    this.benchLog = new Watched(
-      join(paths.bench, 'bench.log'),
-      null,
-      (t) => t?.slice(-4096) ?? null,
-    );
+    this.benchLog = new Watched(join(paths.bench, 'bench.log'), null, (t) => t, tailText); // only its last line shows
   }
 
   refresh(now: number): TowerState {
@@ -153,6 +169,8 @@ export class Source {
     this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
     foldRuns(this.runs, parseLines(readNew(this.ledgerTail)));
+    for (const [id, r] of this.runs)
+      if ((r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);
 
     const sessions = this.sessionsNow();
     const lock = this.lockNow(sessions, now);
