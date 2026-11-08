@@ -40,11 +40,11 @@ Measured (2026-11-07): smoke 25 s, full 190 s (startup 1–5 s), ~2.8 GiB peak f
 Every scenario and step except what `scripts/src/devcheck/local/skips.ts` leaves to dev — reported `deferred` with
 `local: … runs on dev`, never failed: every `ios` step (the Mac's Simulator), `ios-standalone`, `flux-perf`
 (service-worker precache, brotli wasm at the edge), `attachment-delete` (presigned S3), `finance` (the Plaid
-Sandbox bank), `category-suggest`'s three real-parse steps (real Haiku) and `flux-history` (builds dev-origin URLs until it reads `targetOrigin()`). `skips.test.ts` fails the
+Sandbox bank), and `category-suggest`'s three real-parse steps (real Haiku). `skips.test.ts` fails the
 gate if a named scenario or step disappears.
 
 Never caught locally — dev's alone: DynamoDB eventual reads and timing races (the in-memory table is instant and
-consistent), Lambda concurrency and 429s, real Haiku output (parse is off: raw save), Google, Plaid, S3, the
+consistent), Lambda concurrency and 429s, real Haiku output (parse is off: raw save; Flux's week note is its deterministic line), Google, Plaid, S3, the
 deployed shell and service worker, the Simulator.
 
 Beyond dev's checks, the end of a local run fails `LEFTOVERS` on any **running timer** — the table is fresh, so one

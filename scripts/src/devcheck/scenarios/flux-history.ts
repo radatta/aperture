@@ -5,7 +5,7 @@
 // so the sweep's delete of it is a no-op. The Library
 // tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
-import { DEV_ORIGIN, assertDevOrigin } from '../config';
+import { assertDevOrigin, targetOrigin } from '../config';
 import type { PwResponse } from '../pw-types';
 import { laDay, needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -30,7 +30,7 @@ export function devUlid(now = Date.now()): string {
 const EXERCISE = 'Chin Tuck (Cervical Retraction)';
 // The stage hides the capture bar, which ui.goto waits for; here the stepper is the page being up.
 const openStage = async (ctx: Ctx, id: string) => {
-  const url = `${DEV_ORIGIN}/flux/${id}`;
+  const url = `${targetOrigin()}/flux/${id}`;
   assertDevOrigin(url);
   await ctx.page.goto(url, { waitUntil: 'domcontentloaded' });
 };

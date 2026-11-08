@@ -15,10 +15,6 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason: 'local: the real Haiku parse is dev’s (parsing is off locally) — runs on dev',
   },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
-  'flux-history': {
-    reason:
-      'local: its stage URLs are built from the dev origin until it reads targetOrigin() — runs on dev',
-  },
 };
 
 export const IOS_LOCAL = 'local: the iOS Simulator is the Mac’s — runs on dev';
