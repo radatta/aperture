@@ -359,7 +359,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // outer catch does; anything else is a crash.
     await cleanup().catch((err: unknown) => {
       const code = codeOf(err);
-      if (code) return fail(code, `cleanup: ${detailOf(err)}`);
+      if (code) {
+        fail(code, `cleanup: ${detailOf(err)}`);
+        return fail(
+          'LEFTOVERS',
+          'cleanup stopped before the leak check: dev may hold more of this run',
+        );
+      }
       r.status = 'CRASH';
       r.crash = `${r.crash ? `${r.crash}\n` : ''}cleanup: ${err instanceof Error ? err.message : String(err)}`;
     });

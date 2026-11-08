@@ -842,9 +842,14 @@ describe('runPipeline', () => {
       const r = await run();
       expect(r.steps[0]?.status).toBe('pass');
       expect(seen).toEqual(['tok']);
-      // Cleanup's delete was refused, never sent, and the end sweep's read fails naming why, not a crash.
+      // Cleanup's delete stops at its first read, never sent, and the end sweep's read fails naming why,
+      // not a crash.
       expect(r.status).toBe('FAIL');
       expect(r.codes).toEqual(expect.arrayContaining(['LEFTOVERS', 'AUTH_REJECTED']));
+      expect(r.failures.some((f) => f.message.startsWith('cleanup: '))).toBe(true);
+      expect(
+        r.failures.some((f) => f.message.startsWith('cleanup stopped before the leak check')),
+      ).toBe(true);
       expect(w.deleted).toEqual([]);
     });
 
