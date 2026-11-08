@@ -22,6 +22,7 @@ const base: RunResult = {
   consoleErrors: [],
   injected: [],
   throttled: [],
+  failedLoads: [],
   shots: ['smoke-home-home-light.png'],
   durationMs: 61_000,
 };
@@ -119,6 +120,17 @@ describe('report', () => {
     expect(md).toContain('## Throttled (429)\n\n- `/api/listTasks`\n- `/api/getDay`\n');
   });
 
+  it('lists each failed load beside the console errors', () => {
+    const md = renderReport({
+      ...base,
+      consoleErrors: ['Failed to load resource: the server responded with a status of 400 ()'],
+      failedLoads: ['400 POST dev.aperture.rahuldatta.dev/api/listTasks'],
+    });
+    expect(md).toContain(
+      '## Console errors\n\n- Failed to load resource: the server responded with a status of 400 ()\n\n## Failed loads\n\n- `400 POST dev.aperture.rahuldatta.dev/api/listTasks`\n\n## Throttled (429)',
+    );
+  });
+
   it('renders a pass', () => {
     expect(renderReport(base)).toMatchInlineSnapshot(`
       "# Dev check — PASS
@@ -142,6 +154,10 @@ describe('report', () => {
       - \`t1\` via ui:createTask → **deleted**
 
       ## Console errors
+
+      None.
+
+      ## Failed loads
 
       None.
 

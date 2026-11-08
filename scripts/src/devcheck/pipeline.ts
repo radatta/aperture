@@ -76,6 +76,15 @@ const NO_IOS: IosClient = {
 const INJECTED_CONSOLE =
   /^Failed to load resource: (the server responded with a status of \d+|net::ERR_FAILED)/;
 
+// A failed load's URL for the report: host and path, never the query (a sign-in callback's code rides there).
+const loadUrl = (u: string) => {
+  try {
+    const url = new URL(u);
+    return url.host + url.pathname;
+  } catch {
+    return u.split(/[?#]/)[0]; // never throw inside a page listener
+  }
+};
 const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous shell first (pwa-two-launch-refresh)
 
 export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
@@ -99,6 +108,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     failedDeletes: [],
     consoleErrors: [],
     throttled: [],
+    failedLoads: [],
     injected: [],
     shots: [],
     durationMs: 0,
@@ -175,6 +185,18 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         isCreateRequest(method, req.postData())
       )
         pendingRecords.push(awaitCreate(req, method));
+    });
+    // Chromium's console line for a failed load names no URL ("status of 400 ()"): record each one's method, status
+    // and URL, in order, so the report can name it. Informational only — the console line is what fails a row.
+    page.on('response', (res) => {
+      if (res.status() >= 400 && !injectedRequests.has(res.request()))
+        r.failedLoads.push(`${res.status()} ${res.request().method()} ${loadUrl(res.url())}`);
+    });
+    page.on('requestfailed', (req) => {
+      const why = req.failure?.()?.errorText ?? 'failed';
+      // A navigation or unmount cancelling its own request is no failed load (and prints no console line).
+      if (why !== 'net::ERR_ABORTED' && !injectedRequests.has(req))
+        r.failedLoads.push(`${why} ${req.method()} ${loadUrl(req.url())}`);
     });
     const ui = createUi(page);
     const shot = makeShot(page, ui, d.shotsDir, () => prefix, r.shots);

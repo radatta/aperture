@@ -183,7 +183,7 @@ have recovered the call, but the method isn't proven by this run. Chromium logs 
 or not, so one fails the run like any other console error, and the report's _Throttled (429)_ section names each
 (`/api/<method>`), which Chromium's line doesn't. Treat one as a bug — a burst wider than the cap, a refetch storm, the
 harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run's console saw (one
-inside an injected-failure window is dropped from the console and shows only under _Throttled (429)_ — read that
+inside an injected-failure window is dropped from the console and shows under _Throttled (429)_ (and _Failed loads_) — read that
 section too). The same scenario counts Home's `/api` requests on the wire and fails past 8. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here.
 
@@ -284,7 +284,10 @@ ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user),
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
 extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console check is its own
-step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove.
+step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove. Chromium's
+`Failed to load resource` line names no URL, so the report's _Failed loads_ lists, in order, every non-injected
+response ≥ 400 and every request that got none or whose body failed (not a `net::ERR_ABORTED`, the page cancelling its own), as
+`<status or net error> <METHOD> <host/path>` with the query dropped: trace a console error by it. It fails nothing itself.
 
 ### Injected failures
 
@@ -303,7 +306,7 @@ the harness's own doing and are left out of _Console errors_. Chromium's line na
 the whole window (a few seconds per step), not one method. To keep a real failure in that
 window from hiding, every non-injected response ≥ 400 other than a 429 — `/api` or not — is recorded from the
 response itself, as `HTTP <status> on /api/<method>` (or the host and path) `(during an injected failure)`, and a
-real 429 still lands in _Throttled (429)_. Only a dropped real connection inside the window goes unrecorded. Injected responses are known by their
+real 429 still lands in _Throttled (429)_. A real `net::ERR_FAILED` inside the window fails nothing but is listed under _Failed loads_; any other net error's console line still fails the run. Injected responses are known by their
 request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last in `SCENARIOS` for this reason. It
 starts and stops one ad-hoc focus timer through the dock, which leaves a seconds-long completed session in the test
 user's history each run. Sessions have no delete method, so they're not ledgered; a timer an aborted run left running
