@@ -713,7 +713,7 @@ sim_front() {
 # Double home opens the switcher, a swipe up on the card kills the app, a tap on the background leaves (a home press
 # doesn't). Each step is read back, since AXe reports presses and swipes iOS never got (job …192707Z…-relaunch-bd33):
 # swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
-# is gone, so neither can land in a live app. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
+# is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
 sim_kill_switcher() {
   local try sx sy ex ey bx by why=""
   read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
@@ -731,6 +731,12 @@ sim_kill_switcher() {
     sleep 1
     ! sim_web_alive || sleep 1
     if ! sim_web_alive; then
+      # The last card gone can close the switcher by itself: on the Home Screen the background spot is a dock icon.
+      sim_front || return 1
+      if [ -n "$SIM_FRONT_PAGE" ] || [ "$SIM_FRONT_APP" = Web ]; then
+        SIM_NOTE="$why; no switcher left to leave (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+        return 0
+      fi
       ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
       SIM_NOTE="$why"
       return 0
