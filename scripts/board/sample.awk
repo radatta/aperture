@@ -4,7 +4,7 @@
 #                                      3 heavy slots "pid\tlabel"
 #                                      4 prev tick   "T\tepoch\tusage_usec" | "S\tpid\tcpuTicks"
 #                                      5 procs (-)   "pid\tppid\tcomm\tthreads\trssPages\tcpuTicks\targs"
-# -v: t ep interval anon file current high pids pidsMax usage psiMemSome psiMemFull psiCpuSome oomKill
+# -v: t ep interval anon file current high pids pidsMax usage cpus psiMemSome psiMemFull psiCpuSome oomKill
 #     highEvents dev page hz prevOut statusOut
 BEGIN { FS = "\t"; MiB = 1048576 }
 FILENAME == F1 { win[$2] = $1; next }
@@ -56,8 +56,10 @@ END {
     else if (c ~ /^(vitest|vite|chromium|tsc|eslint)$/) unattr += thr[p]
   }
 
-  cores = (prevEp != "" && ep > prevEp) ? (usage - prevUsage) / ((ep - prevEp) * 1e6) : 0
-  if (cores < 0) cores = 0
+  # null when the counters can't be from this cgroup's last tick: a delta below zero or above the CPUs
+  # it has (with room for the 1 s epoch rounding) means the prev file came from elsewhere
+  cores = (prevEp != "" && prevUsage != "" && ep > prevEp) ? (usage - prevUsage) / ((ep - prevEp) * 1e6) : 0
+  coresOut = (cores < 0 || (cpus > 0 && cores > cpus * 1.5)) ? "null" : sprintf("%.2f", cores)
   el = (prevEp != "" && ep > prevEp) ? ep - prevEp : interval
   gap = (prevEp != "" && ep - prevEp > interval + 60) ? ep - prevEp - interval : ""
 
@@ -85,9 +87,9 @@ END {
   }
   cats = cats sprintf(",\"unattributed\":{\"thr\":%d}", unattr)
 
-  printf "{\"t\":\"%s\",\"v\":1,\"cg\":{\"anonMiB\":%d,\"fileMiB\":%d,\"currentMiB\":%d,\"highMiB\":%s,\"pids\":%d,\"pidsMax\":%s,\"cpuCores\":%.2f,\"psiMemSome10\":%s,\"psiMemFull10\":%s,\"psiCpuSome10\":%s,\"oomKill\":%d,\"highEvents\":%d},\"cats\":{%s},\"sessions\":[%s],\"mix\":{\"working\":%d,\"idle\":%d,\"heavy\":%d},\"gapSec\":%s}\n", \
+  printf "{\"t\":\"%s\",\"v\":1,\"cg\":{\"anonMiB\":%d,\"fileMiB\":%d,\"currentMiB\":%d,\"highMiB\":%s,\"pids\":%d,\"pidsMax\":%s,\"cpuCores\":%s,\"psiMemSome10\":%s,\"psiMemFull10\":%s,\"psiCpuSome10\":%s,\"oomKill\":%d,\"highEvents\":%d},\"cats\":{%s},\"sessions\":[%s],\"mix\":{\"working\":%d,\"idle\":%d,\"heavy\":%d},\"gapSec\":%s}\n", \
     t, anon / MiB, file / MiB, current / MiB, high == "" ? "null" : int(high / MiB), pids, pidsMax == "" ? "null" : pidsMax, \
-    cores, num(psiMemSome), num(psiMemFull), num(psiCpuSome), oomKill, highEvents, cats, sess, working, idle, nslots, \
+    coresOut, num(psiMemSome), num(psiMemFull), num(psiCpuSome), oomKill, highEvents, cats, sess, working, idle, nslots, \
     gap == "" ? "null" : gap
 
   printf "board: %d working · %d idle · heavy %d · anon %.1f/%sG · pids %d/%s%s\n", working, idle, nslots, \

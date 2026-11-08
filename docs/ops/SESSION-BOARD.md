@@ -89,6 +89,12 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
   unreliable, because a session waiting on the model uses almost no CPU. `board.sh status` marks those `*`.
 - `unattributed` counts heavy-category threads with no session (drift detector for the attribution).
 - `gapSec` is set when a tick is > 60 s late — the container was frozen or the VM slept.
+- `cpuCores` is the cgroup's CPU time since the last tick over the seconds between, from the previous tick's
+  counters in `/tmp/aperture-sampler.prev` (a fake cgroup, `APERTURE_CGROUP_DIR`, keeps its own beside it).
+  It is `null` when that delta is negative or above 1.5 × the container's CPUs (`cpu.max`, else `nproc`): the
+  counters weren't this cgroup's. Until 2026-11-07 a board test's `--once` against a fake cgroup overwrote the
+  live prev file, so the tick after every scripts suite read thousands of cores (127 such ticks on 2026-11-05);
+  `cli.ts report` skips values over 64 in that older history, and the control tower anything over 2 × its cores.
 - It also rewrites `board/status.line` every tick and, every 5th tick, `board/overlap.json`.
 
 `heavy.sh` adds one **job event** per run to `history/events-<date>.jsonl` (`kind: "job"`, below); lease

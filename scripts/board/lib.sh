@@ -43,6 +43,8 @@ cg_high() { sb_one "$CG/memory.high"; }
 cg_pids() { sb_one "$CG/pids.current"; }
 cg_pids_max() { sb_one "$CG/pids.max"; }
 cg_usage_usec() { sb_kv "$CG/cpu.stat" usage_usec; }
+# CPUs the container may use: cpu.max's quota/period, else every online CPU.
+cg_cpus() { local q= p=; read -r q p 2>/dev/null <"$CG/cpu.max"; if [ -n "$q" ] && [ "$q" != max ] && [ -n "$p" ]; then awk -v q="$q" -v p="$p" 'BEGIN{printf "%.2f", q / p}'; else nproc; fi; }
 cg_oom_kill() { sb_kv "$CG/memory.events" oom_kill; }
 cg_high_events() { sb_kv "$CG/memory.events" high; }
 # PSI `avg10` of line $2 (some|full) in pressure file $1 (memory|cpu).

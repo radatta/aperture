@@ -135,7 +135,7 @@ cmd_status() {
     .sample as $s | .thresholds as $t | .registered as $r |
     "board @ \($s.t | hm)  anon \($s.cg.anonMiB | gib)/\($s.cg.highMiB | gib) GiB (soft \(($t.ANON_SOFT | tonumber) / 1048576 | gib) · hard \(($t.ANON_HARD | tonumber) / 1048576 | gib))" +
       " · pids \($s.cg.pids)/\($s.cg.pidsMax) (soft \($t.PIDS_SOFT) · hard \($t.PIDS_HARD))" +
-      " · cpu \($s.cg.cpuCores) cores · psi full \($s.cg.psiMemFull10)" +
+      " · cpu \($s.cg.cpuCores // "?") cores · psi full \($s.cg.psiMemFull10)" +
       (if $t.ENFORCE == "true" then " · enforcing" else " · nudge-only" end),
     "sessions (\($s.mix.working) working, \($s.mix.idle) idle):",
     ($s.sessions | sort_by(.state != "working", .name)[] |
