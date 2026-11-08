@@ -15,6 +15,14 @@ import {
 import type { PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
+import type { Verifier } from './auth/verify';
+import type { DocClient } from './ddb/DocClient';
+import type { GoogleGateway } from './google/gateway';
+import type { Presigner } from './s3/presigner';
+import type { ObjectStore } from './s3/objects';
+import type { PlaidGateway } from './plaid/gateway';
+import type { FinanceSyncInvoker } from './finance/invoker';
+import type { AnthropicGateway } from './anthropic/gateway';
 import { handleRpc } from './handler';
 import { BackendClient } from './backend';
 import { Repo } from './ddb/repo';
@@ -70,6 +78,29 @@ const financeInvoker = process.env.FINANCE_SYNC_FN
 // testMode swaps in noopAnthropic. No key on the stage → every parse says so and the line saves raw.
 const anthropic = createLiveAnthropic({ stage: STAGE });
 
+// Everything the edge calls out to. The deployed handler is built from the live ones above; the local
+// devcheck server (local/serve.ts) builds one over InMemoryDoc and inert gateways (docs/ops/LOCAL-CHECK.md).
+export interface BffDeps {
+  doc: DocClient;
+  verifier: Verifier | null;
+  google: GoogleGateway;
+  presigner: Presigner;
+  objects: ObjectStore;
+  plaid: PlaidGateway;
+  financeInvoker: FinanceSyncInvoker;
+  anthropic: AnthropicGateway;
+}
+const live: BffDeps = {
+  doc,
+  verifier,
+  google,
+  presigner,
+  objects,
+  plaid,
+  financeInvoker,
+  anthropic,
+};
+
 interface HttpEvent {
   rawPath?: string;
   requestContext?: { http?: { path?: string; method?: string } };
@@ -98,7 +129,13 @@ const SMOKE_USER = 'smoke-test';
 // The one method the browser extension calls, authenticated by a device token instead of a Cognito JWT.
 const INGEST_METHOD = 'recordLeetcodeAttempt';
 
-export async function handler(event: HttpEvent): Promise<HttpResult> {
+export const createBffHandler =
+  (d: BffDeps) =>
+  (event: HttpEvent): Promise<HttpResult> =>
+    handle(event, d);
+export const handler = createBffHandler(live);
+
+async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   const path = event.rawPath ?? event.requestContext?.http?.path ?? '';
   const isHttp = event.requestContext?.http !== undefined; // false for direct (CI-cred'd) invokes
   if (event.requestContext?.http?.method === 'OPTIONS')
@@ -149,9 +186,9 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid state' }) };
     }
     try {
-      const backend = new BackendClient(new Repo(doc, liveWrites(doc), userId), {
+      const backend = new BackendClient(new Repo(d.doc, liveWrites(d.doc), userId), {
         userId,
-        google,
+        google: d.google,
         stateSecret: process.env.ORIGIN_SECRET,
       });
       await backend.completeGoogleConnect(q.code);
@@ -164,7 +201,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   // RPC dispatch, and the only thing a place token opens. Behind the origin gate above, ahead of the
   // JWT path: every /api/places/* path ends here, so it never reaches handleRpc and never falls through
   // to JWT. The body (and testMode) is ignored.
-  if (path.startsWith('/api/places/')) return placeRead(event, path);
+  if (path.startsWith('/api/places/')) return placeRead(event, path, d.doc);
 
   const body = event.body
     ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
@@ -180,18 +217,24 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       ? SMOKE_USER
       : method === INGEST_METHOD
         ? resolveDeviceUserId(authHeader, process.env.DEVICE_TOKEN, process.env.DEVICE_USER_ID)
-        : await resolveUserId(authHeader, verifier); // JWT `sub`, or dev user locally
+        : await resolveUserId(authHeader, d.verifier); // JWT `sub`, or dev user locally
     const result = await handleRpc(
-      doc,
+      d.doc,
       {
         userId,
         method,
         args: body.args ?? [],
         testMode: body.testMode,
-        google,
+        google: d.google,
         stateSecret: process.env.ORIGIN_SECRET,
       },
-      { presigner, objects, plaid, financeInvoker, anthropic },
+      {
+        presigner: d.presigner,
+        objects: d.objects,
+        plaid: d.plaid,
+        financeInvoker: d.financeInvoker,
+        anthropic: d.anthropic,
+      },
     );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {
@@ -225,7 +268,7 @@ const UNAUTHORIZED_REASON = (message: string): string =>
 // no failure is silent on the phone. Only a 200 writes (the count + the place's heartbeat —
 // BackendClient.readPlaceForShortcut). The log line carries the outcome only — never the header, token,
 // hash or an error message.
-async function placeRead(event: HttpEvent, path: string): Promise<HttpResult> {
+async function placeRead(event: HttpEvent, path: string, doc: DocClient): Promise<HttpResult> {
   const reply = (
     statusCode: number,
     reason: string,

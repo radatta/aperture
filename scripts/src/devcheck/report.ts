@@ -112,6 +112,9 @@ const ROW_LABEL: Record<RowStatus, string> = {
 };
 
 const item = (x: RowResult) => `- ${x.scenario}: ${x.what}`;
+// A local run's deferral says why (local/skips.ts): the row is dev's to prove.
+const deferredItem = (x: RowResult) =>
+  x.note?.startsWith('local: ') ? `${item(x)} — ${x.note}` : item(x);
 const isUnproven = (x: RowResult) => x.status === 'fail' || x.status === 'skipped';
 const counts = (rs: RowResult[], lead = 'Proven on dev') => {
   const n = (...st: RowStatus[]) => rs.filter((x) => st.includes(x.status)).length;
@@ -148,7 +151,7 @@ function deferredList(rs: RowResult[], h: string): string[] {
     '',
     '_Not run: the branch touches none of these scenarios’ slow paths and no `--feature` names them. `--tier all` runs them._',
     '',
-    ...d.map(item),
+    ...d.map(deferredItem),
   ];
 }
 

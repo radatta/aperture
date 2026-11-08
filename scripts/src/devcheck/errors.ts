@@ -17,6 +17,7 @@ export const REASON_CODES = [
   'LEDGER_GUARD', // a delete was attempted on an id the ledger never recorded
   'LEFTOVERS', // something may be left on dev: a surviving or undeletable ledger id, an unanswered create, an unrecorded new task
   'DEV_CHANGED_MID_RUN', // dev's build changed between start and end — main won; rebase and rerun
+  'LOCAL_SERVER_FAILED', // the local check's server or Vite didn't start (docs/ops/LOCAL-CHECK.md) — its log is in the run dir
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 

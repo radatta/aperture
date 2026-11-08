@@ -8,6 +8,9 @@ It replaces the Claude-in-Chrome runbooks: a green full run with zero leftovers 
 covered off dev or listed for the user, plus Claude reading the screenshots, is what "tested on dev" means
 (CLAUDE.md → _Feature workflow_, phases 8–9). Code: `scripts/src/devcheck/`.
 
+Before the dev lock, the same scenarios run locally in seconds: `pnpm devcheck:local` (`docs/ops/LOCAL-CHECK.md`) — a
+pre-flight for step bugs, never a substitute for this check.
+
 ```
 pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=SHA> ─► sign in (Hosted UI, cached)
    ─► sweep earlier leftovers ─► MCP sign-in (claude client, PKCE) ─► in-page build check ─► scenarios

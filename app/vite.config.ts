@@ -25,9 +25,24 @@ const assetFileNames = (info: { names: string[] }) =>
     ? 'assets/[name]-[hash].br.wasm'
     : 'assets/[name]-[hash][extname]';
 
+// The local check (docs/ops/LOCAL-CHECK.md) serves the app against its own local server: the paths CloudFront
+// sends to a Lambda are proxied to the CloudFront stand-in (lambdas/src/local/edge.ts). Unset everywhere else.
+const LOCAL_EDGE = process.env.APERTURE_LOCAL_EDGE;
+const localProxy = LOCAL_EDGE
+  ? Object.fromEntries(
+      [
+        '/api/',
+        '/mcp',
+        '/.well-known/oauth-protected-resource',
+        '/.well-known/oauth-authorization-server',
+        '/.well-known/openid-configuration',
+      ].map((p) => [p, LOCAL_EDGE]),
+    )
+  : undefined;
+
 // https://vite.dev/config/
 export default defineConfig({
-  server: { port: DEV_PORT },
+  server: { port: DEV_PORT, ...(localProxy ? { proxy: localProxy } : {}) },
   preview: { port: DEV_PORT },
   // Flux's tracking worker is a module worker: MediaPipe's module glue sets ModuleFactory via ESM, and
   // Vite's default IIFE worker would make it silently no-op ("ModuleFactory not set").

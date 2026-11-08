@@ -6,7 +6,7 @@
 import { join } from 'node:path';
 import type { ApiClient } from './api';
 import type { McpClient } from './mcp';
-import { DEV_ORIGIN, assertDevOrigin } from './config';
+import { assertDevOrigin, targetOrigin } from './config';
 import { SHELL } from './login';
 import type { IosClient } from './ios';
 import type { PwPage } from './pw-types';
@@ -174,7 +174,7 @@ export function datesFor(now: Date): Dates {
 export function createUi(page: PwPage): Ui {
   const ui: Ui = {
     async goto(path) {
-      const url = `${DEV_ORIGIN}${path}`;
+      const url = `${targetOrigin()}${path}`;
       assertDevOrigin(url);
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator(SHELL).waitFor({ timeout: 30_000 });

@@ -3,7 +3,7 @@
 // every write is declared in the one `writes` object below and nowhere else, and the only reads are the
 // `reads` object. Every request asserts the dev origin; a delete must name a ledger id. The one exception to
 // the origin is a presigned URL the dev BFF minted for an attachment, under assertPresignedDevUrl.
-import { AUTH_HEADER, DEV_ORIGIN, assertDevOrigin, assertPresignedDevUrl } from './config';
+import { AUTH_HEADER, assertDevOrigin, assertPresignedDevUrl, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import { pendingIds, type Ledger, type LedgerEntry } from './ledger';
 
@@ -334,7 +334,7 @@ export function createApiClient({
   }
 
   async function call<T>(method: string, args: unknown[]): Promise<T> {
-    const url = `${DEV_ORIGIN}/api/${method}`;
+    const url = `${targetOrigin()}/api/${method}`;
     assertDevOrigin(url);
     const { status, text } = await backoff(() =>
       fetch(url, {
@@ -423,7 +423,7 @@ export function createApiClient({
       placeToken: string | null,
       method: 'GET' | 'POST' = 'GET',
     ): Promise<{ status: number; body: unknown }> {
-      const url = `${DEV_ORIGIN}/api/places/${encodeURIComponent(slug)}/tasks`;
+      const url = `${targetOrigin()}/api/places/${encodeURIComponent(slug)}/tasks`;
       assertDevOrigin(url);
       const headers: Record<string, string> = placeToken
         ? { [AUTH_HEADER]: `Bearer ${placeToken}` }
