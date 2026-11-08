@@ -68,6 +68,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
   const consoleListeners: ((m: { type(): string; text(): string }) => void)[] = [];
+  const failedListeners: ((r: PwRequest) => void)[] = [];
   type Match = (u: URL) => boolean;
   type Handler = (r: PwRoute) => Promise<void> | void;
   const routes: { match: Match; handler: Handler }[] = [];
@@ -80,7 +81,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         ? listeners.push(fn as (r: PwRequest) => void)
         : ev === 'response'
           ? responseListeners.push(fn as (r: PwResponse) => void)
-          : ev === 'console' && consoleListeners.push(fn as never)),
+          : ev === 'requestfailed'
+            ? failedListeners.push(fn as (r: PwRequest) => void)
+            : ev === 'console' && consoleListeners.push(fn as never)),
     route: async (match: Match, handler: Handler) => void routes.push({ match, handler }),
     unroute: async (match: Match, handler: Handler) => {
       const i = routes.findIndex((x) => x.match === match && x.handler === handler);
@@ -149,6 +152,18 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       json: async () => ({}),
     };
     for (const l of responseListeners) l(res);
+  };
+  // A request that never got a response (`errorText` as Chromium names it).
+  const requestFailed = (path: string, errorText: string, method = 'GET') => {
+    const url = path.startsWith('https://') ? path : `https://dev.aperture.rahuldatta.dev${path}`;
+    const req = {
+      url: () => url,
+      method: () => method,
+      postData: () => null,
+      response: async () => null,
+      failure: () => ({ errorText }),
+    };
+    for (const l of failedListeners) l(req);
   };
   // The page's console printing an error line.
   const consoleError = (text: string) => {
@@ -379,6 +394,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     uiCreate,
     uiPlace,
     respond,
+    requestFailed,
     consoleError,
     call,
     injectedBodies,
@@ -1179,6 +1195,38 @@ describe('runPipeline', () => {
       await i.release();
     })(w);
     expect((await runPipeline(deps(w, [sc]))).consoleErrors).toEqual([line]);
+  });
+
+  it('names every failed load by status, method and URL, without its query; a pass stays a pass', async () => {
+    const w = world();
+    const sc = scenario(async (x) => {
+      x.respond('/api/getDay', 200);
+      x.respond('/api/listTasks?x=1', 400); // the console line for this one names no URL
+      x.respond('/api/listCategories', 429); // a throttle is a failed load too
+      x.respond('https://cdn.example.com/f.woff2?v=2', 404, { method: () => 'GET' });
+      x.requestFailed('/api/getSettings', 'net::ERR_FAILED', 'POST');
+      x.requestFailed('/assets/old.js', 'net::ERR_ABORTED'); // cancelled by the page itself: not a failure
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.failedLoads).toEqual([
+      '400 POST dev.aperture.rahuldatta.dev/api/listTasks',
+      '429 POST dev.aperture.rahuldatta.dev/api/listCategories',
+      '404 GET cdn.example.com/f.woff2',
+      'net::ERR_FAILED POST dev.aperture.rahuldatta.dev/api/getSettings',
+    ]);
+    expect(r.status).toBe('PASS'); // informational: only the console line fails a row
+  });
+
+  it('a load the harness itself failed is not a failed load', async () => {
+    const w = world();
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('listCategories', { times: 1 });
+      await x.call('listCategories');
+      await i.release();
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.injected).toEqual(['/api/listCategories → 429']);
+    expect(r.failedLoads).toEqual([]);
   });
 
   it('a scenario’s intercepts are released before the next scenario', async () => {

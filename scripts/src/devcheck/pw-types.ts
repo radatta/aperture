@@ -13,6 +13,7 @@ export interface PwRequest {
   method(): string;
   postData(): string | null;
   response(): Promise<PwResponse | null>;
+  failure?(): { errorText: string } | null; // set once the request failed (`requestfailed`)
 }
 
 export interface PwLocator {
