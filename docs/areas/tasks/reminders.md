@@ -51,7 +51,7 @@ Notifications:
 ```
 Settings › Enable ──subscribePush──▶ BFF ── u#<uid> pushsub#<id> + push/user#<uid>
                                                      │
-EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
+EventBridge Scheduler cron, each :00 ──▶ aperture-push-dispatch-<stage>
    for each registered user: GSI1 u#<uid>#remind, fireAt ∈ [now−30 min, now]
    → re-read task · toggle · dedup psent# · guard pcount# · encrypt · POST to the push service
                                                      │
@@ -64,8 +64,10 @@ EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
   `{"web_push":8030,"notification":{title, body, navigate, tag, …}}` and the system shows it as-is. The
   Workbox-generated service worker has no `push` handler, so the declarative fallback always displays. The app
   subscribes via `window.pushManager` (Safari), falling back to the service worker registration's.
-- **The poller** is a `rate(1 minute)` Scheduler Lambda (`cdk/src/lib/push-dispatch.ts`, cloned from
-  finance-sync). Task data is the truth; there are no per-reminder schedules to drift. A tick does the following:
+- **The poller** is a Scheduler Lambda on `cron(* * * * ? *)` (`cdk/src/lib/push-dispatch.ts`, cloned from
+  finance-sync): a tick at the top of each minute, so a reminder goes out seconds after its minute starts. It
+  was `rate(1 minute)` until 2026-11-08; a rate ticks at the second its schedule was created, so pings landed up
+  to a minute late. Task data is the truth; there are no per-reminder schedules to drift. A tick does the following:
   1. Lists the user registry (`PK=push`, `SK=user#<uid>`, written on first subscribe).
   2. Queries GSI1's third key space for each user: `GSI1PK=u#<uid>#remind`, `GSI1SK=fireAt`, set on task and
      plan items atomically with their write.

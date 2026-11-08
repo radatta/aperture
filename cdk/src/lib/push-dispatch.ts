@@ -107,7 +107,9 @@ export class PushDispatch extends Construct {
     new scheduler.CfnSchedule(this, 'Schedule', {
       name: `aperture-push-dispatch-${stage}`,
       groupName: group.ref,
-      scheduleExpression: 'rate(1 minute)',
+      // cron, not rate: a rate ticks at the second its schedule was created, so a 12:56 reminder went out as
+      // late as 12:56:59; a cron tick fires at the top of each minute (reminders.md → §3).
+      scheduleExpression: 'cron(* * * * ? *)',
       flexibleTimeWindow: { mode: 'OFF' },
       target: {
         arn: this.fn.functionArn,

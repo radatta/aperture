@@ -834,7 +834,7 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
   it('schedules a tick every minute with no user in its input, never retried, in its own group', () => {
     dev.hasResourceProperties('AWS::Scheduler::Schedule', {
       Name: 'aperture-push-dispatch-dev',
-      ScheduleExpression: 'rate(1 minute)',
+      ScheduleExpression: 'cron(* * * * ? *)',
       FlexibleTimeWindow: { Mode: 'OFF' },
       Target: Match.objectLike({
         Arn: { 'Fn::GetAtt': [poller.id, 'Arn'] },
