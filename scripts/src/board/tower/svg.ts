@@ -18,7 +18,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 export function parseCapture(text: string): Cell[][] {
   const rows: Cell[][] = [];
   let fg: string = NORD.fg;
-  let bg: string = NORD.bg;
+  let bg: string = NORD.term;
   let bold = false;
   for (const line of text.replace(/\n$/, '').split('\n')) {
     const row: Cell[] = [];
@@ -29,11 +29,11 @@ export function parseCapture(text: string): Cell[][] {
         const p = part.slice(2, -1).split(/[;:]/).map(Number);
         for (let i = 0; i < p.length; i++) {
           const k = p[i] || 0;
-          if (k === 0) [fg, bg, bold] = [NORD.fg, NORD.bg, false];
+          if (k === 0) [fg, bg, bold] = [NORD.fg, NORD.term, false];
           else if (k === 1) bold = true;
           else if (k === 22) bold = false;
           else if (k === 39) fg = NORD.fg;
-          else if (k === 49) bg = NORD.bg;
+          else if (k === 49) bg = NORD.term;
           else if ((k === 38 || k === 48) && p[i + 1] === 2) {
             const col = hex(p[i + 2] ?? 0, p[i + 3] ?? 0, p[i + 4] ?? 0);
             if (k === 38) fg = col;
@@ -55,7 +55,7 @@ export function ansiToSvg(text: string): string {
   const cols = Math.max(1, ...rows.map((r) => r.length));
   const out = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(cols * CW)}" height="${rows.length * CH}" font-family="DejaVu Sans Mono, Menlo, monospace" font-size="14">`,
-    `<rect width="100%" height="100%" fill="${NORD.bg}"/>`,
+    `<rect width="100%" height="100%" fill="${NORD.term}"/>`,
   ];
   rows.forEach((row, y) => {
     for (let x = 0; x < row.length;) {
@@ -72,7 +72,7 @@ export function ansiToSvg(text: string): string {
         .slice(x, e)
         .map((c) => c.ch)
         .join('');
-      if (a.bg !== NORD.bg)
+      if (a.bg !== NORD.term)
         out.push(
           `<rect x="${(x * CW).toFixed(1)}" y="${y * CH}" width="${((e - x) * CW).toFixed(1)}" height="${CH}" fill="${a.bg}"/>`,
         );

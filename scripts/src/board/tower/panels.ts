@@ -24,7 +24,7 @@ const DAY = 86400000;
 // A bordered panel: title on the top edge, body padded one column each side, cut or filled to fit.
 export function box(r: Rect, title: string, body: string[], right = ''): string[] {
   const iw = r.w - 4;
-  const edge = (s: string) => c(NORD.dim, s);
+  const edge = (s: string) => c(NORD.edge, s);
   const t = ` ${c(NORD.accent, title, true)} `;
   const rt = right ? ` ${right} ` : '';
   const fill = Math.max(0, r.w - 3 - width(t) - width(rt));
@@ -59,7 +59,7 @@ function gauge(
     if (on) out += c(col, '━');
     else if (i === h) out += c(NORD.red, '┊');
     else if (i === s) out += c(NORD.amber, '┊');
-    else out += c(NORD.dim, '─');
+    else out += c(NORD.edge, '─');
   }
   return out;
 }

@@ -29,6 +29,6 @@ describe('braille', () => {
     const rows = raster([1, 1, 9, 9], 2, 1, 10, '#000001', [{ at: 8, color: '#BF616A' }], 1);
     expect(strip(rows[0]!)).toHaveLength(2);
     expect(rows[0]).toContain('\x1b[38;2;191;97;106m'); // red for the cell at 9
-    expect(rows[0]).toContain('\x1b[48;2;67;76;94m'); // the cursor's background
+    expect(rows[0]).toContain('\x1b[48;2;59;74;102m'); // the cursor's background
   });
 });

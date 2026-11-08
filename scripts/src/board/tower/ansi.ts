@@ -1,13 +1,18 @@
 // Nord truecolor, matching tools/coi/tmux.conf. Every row starts on BASE and no style ever emits a full
-// reset, so every gap keeps the Nord background. BASE also ends bold, so a style cut by fit() never leaks.
+// reset. BASE also ends bold, so a style cut by fit() never leaks.
 import type { Tone } from './model.ts';
 
+// The tower draws on the terminal's own background (iTerm's navy, like Claude Code and the tmux bar):
+// painting Nord's #2E3440 over it read as haze, with dim text at ~1.6:1 contrast. `dim` is lifted to stay
+// legible on a dark navy; `edge` keeps the darker grey for borders and empty gauge track only.
 export const NORD = {
-  bg: '#2E3440',
+  bg: '#2E3440', // text on an accent badge
+  term: '#0D2140', // the terminal background the proof frames assume (iTerm's, sampled)
   panel: '#3B4252',
-  sel: '#434C5E',
-  dim: '#4C566A',
-  fg: '#D8DEE9',
+  sel: '#3B4A66',
+  edge: '#4C566A',
+  dim: '#7B88A1',
+  fg: '#E5E9F0',
   bright: '#ECEFF4',
   accent: '#88C0D0',
   blue: '#5E81AC',
@@ -25,7 +30,8 @@ const rgb = (hex: string) => {
 };
 export const fgc = (hex: string) => `\x1b[38;2;${rgb(hex)}m`;
 export const bgc = (hex: string) => `\x1b[48;2;${rgb(hex)}m`;
-export const BASE = '\x1b[22m' + bgc(NORD.bg) + fgc(NORD.fg);
+export const BG_DEFAULT = '\x1b[49m'; // the terminal's own background
+export const BASE = '\x1b[22m' + BG_DEFAULT + fgc(NORD.fg);
 
 export type Style = { fg?: string; bg?: string; bold?: boolean };
 
@@ -33,7 +39,7 @@ export type Style = { fg?: string; bg?: string; bold?: boolean };
 export function paint(text: string, s: Style): string {
   if (!text) return '';
   const on = (s.fg ? fgc(s.fg) : '') + (s.bg ? bgc(s.bg) : '') + (s.bold ? '\x1b[1m' : '');
-  const off = (s.bold ? '\x1b[22m' : '') + (s.bg ? bgc(NORD.bg) : '') + (s.fg ? fgc(NORD.fg) : '');
+  const off = (s.bold ? '\x1b[22m' : '') + (s.bg ? BG_DEFAULT : '') + (s.fg ? fgc(NORD.fg) : '');
   return on + text + off;
 }
 

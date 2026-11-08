@@ -8,7 +8,7 @@ describe('svg', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]!.map((c) => c.ch).join('')).toBe('ab c');
     expect(rows[0]![0]).toEqual({ ch: 'a', fg: '#BF616A', bg: '#434C5E', bold: false });
-    expect(rows[0]![2]!.bg).toBe('#2E3440');
+    expect(rows[0]![2]!.bg).toBe('#0D2140'); // a reset is the terminal's own background
     expect(rows[1]![0]!.bold).toBe(true);
   });
 

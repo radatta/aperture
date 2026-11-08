@@ -1,6 +1,6 @@
 // Braille area charts: each cell holds 2×4 dots, so a chart of `cols` cells takes 2·cols values and draws
 // rows·4 levels. Dot bits (U+2800 + mask): left column top→bottom 0,1,2,6 · right column 3,4,5,7.
-import { NORD, bgc, fgc } from './ansi.ts';
+import { BG_DEFAULT, NORD, bgc, fgc } from './ansi.ts';
 
 const LEFT = [0x01, 0x02, 0x04, 0x40];
 const RIGHT = [0x08, 0x10, 0x20, 0x80];
@@ -65,11 +65,11 @@ export function raster(
       const sel = x === cursor;
       const key = col + (sel ? 's' : '');
       if (key !== cur) {
-        out += fgc(col) + bgc(sel ? NORD.sel : NORD.bg);
+        out += fgc(col) + (sel ? bgc(NORD.sel) : BG_DEFAULT);
         cur = key;
       }
       out += ch;
     });
-    return out + bgc(NORD.bg) + fgc(NORD.fg);
+    return out + BG_DEFAULT + fgc(NORD.fg);
   });
 }

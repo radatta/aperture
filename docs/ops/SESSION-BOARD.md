@@ -320,7 +320,7 @@ What it means:
 `scripts/board/tower.sh` — a full-screen board for its own tmux window (it replaces a
 `watch board.sh status` window): `tmux new-window -n tower /workspace/scripts/board/tower.sh`. Keys: `q` quit ·
 `1` / `6` / `2` history over 1 h / 6 h / 24 h · `←` `→` (or `h` `l`) move the readout column back / forward ·
-`Esc` back to live · `r` refresh now. Node, no dependencies: `scripts/src/board/tower/`.
+`Esc` back to live · `r` refresh now. Node, no dependencies: `scripts/src/board/tower/`. It draws in Nord colours on the terminal's own background, like the tmux bar (painting Nord's grey over iTerm's navy read as haze).
 
 **Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`; gauges for anon
 memory and pids (soft / hard marks from `limits.json`) and CPU against the cores. _Dev queue_, _Waiting on
