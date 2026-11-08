@@ -462,6 +462,17 @@ serr('sim: a hung read in the nav row is AX_TIMEOUT, not a missing tab', 'AX_TIM
 serr('sim: a hung read of a key is AX_TIMEOUT, not a moved layout', 'AX_TIMEOUT', [L, {'op': 'keys', 'text': 'z'}], tape=[HANG('--point 91,800')], simExcludes=['tap -x 91 -y 800'])
 serr('sim: a hung re-read in expect is AX_TIMEOUT, not VALUE', 'AX_TIMEOUT', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'What happened?'}],
      tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')])
+spass('sim: a build stamp unread on the first visit gets a second visit (the stand-in for a dropped Settings tap)', [L, {'op': 'readBuild'}],
+      tape=[{'m': '--point 57,', 'out': {}, 'n': 21}], notes={'1': 'running aaaaaaa; went to Settings again'}, simCount={'tap -x 395 -y 168': 2},
+      expect={'buildsSeen': ['aaaaaaa']})
+sfail('sim: no build stamp after two visits is MISS', 'MISS', [L, {'op': 'readBuild'}], tape=[{'m': '--point 57,', 'out': {}}],
+      notes={'1': 'after two Settings visits'}, simCount={'tap -x 395 -y 168': 2})
+serr('sim: a hung stamp read on the second visit is AX_TIMEOUT, not MISS', 'AX_TIMEOUT', [L, {'op': 'readBuild'}],
+     tape=[{'m': '--point 57,', 'out': {}, 'n': 21}, HANG('--point 57,')], simCount={'tap -x 395 -y 168': 2})
+spass('sim: the relaunch\'s second visit stays in expectBuild\'s note', [L, {'op': 'readBuild'}, {'op': 'expectBuild'}],
+      tape=[pt(57, 935, el('AXStaticText', '', 'Build bbbbbbb', 20, 852, 71, 17), n=1), {'m': '--point 57,', 'out': {}, 'n': 21}],
+      notes={'2': 'second aaaaaaa; went to Settings again'}, expect={'buildsSeen': ['bbbbbbb', 'aaaaaaa']})
+spass('sim: a build stamp found on the first visit is read once', [L, {'op': 'readBuild'}], notes={'1': 'running aaaaaaa'}, simCount={'tap -x 395 -y 168': 1})
 serr('sim: hung reads of the build stamp are AX_TIMEOUT, not a missing stamp', 'AX_TIMEOUT', [L, {'op': 'readBuild'}], tape=[HANG('--point 57,')])
 serr('sim: a hung read of the space bar is AX_TIMEOUT, not KEYBOARD_SETUP', 'AX_TIMEOUT', [L, {'op': 'keys', 'text': 'ab'}], tape=[HANG('--point 221,856')], simExcludes=['tap -x 48'])
 serr('sim: hung reads of the accessory bar in blur are AX_TIMEOUT, never "no keyboard"', 'AX_TIMEOUT', [L, {'op': 'blur'}], tape=[HANG('--point 395,')])
