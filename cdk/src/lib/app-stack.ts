@@ -432,9 +432,10 @@ export class ApertureAppStack extends Stack {
       preventUserExistenceErrors: true,
       // 30 days, Cognito's default (7 until 2026-11): the refresh token sits in browser localStorage, so a
       // leaked one stays useful for up to a month — traded for a monthly sign-in on the phone and the sim,
-      // not a weekly one. Recovery is AdminUserGlobalSignOut, with revocation pinned on so the access/ID
-      // tokens die with it. Access/ID stay at the 1-hour default (they cross the network on every request
-      // and are cheap to renew). Why: TECH §3.
+      // not a weekly one. Recovery is AdminUserGlobalSignOut: no new tokens from then on, though the last
+      // access token still passes the BFF's local JWT check until its hour is up. Revocation is pinned on
+      // rather than left to Cognito's default. Access/ID stay at the 1-hour default (they cross the network
+      // on every request and are cheap to renew). Why: TECH §3.
       refreshTokenValidity: Duration.days(30),
       enableTokenRevocation: true,
       oAuth: {

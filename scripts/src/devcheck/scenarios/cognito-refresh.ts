@@ -1,6 +1,6 @@
 // The app client's refresh token goes 7 → 30 days, revocation pinned on (TECH §3). A refresh token is
-// opaque, so dev can't read its expiry: what dev proves is that a session renews against the updated
-// client. The value itself is the template's (stacks.test.ts) and the live client's (a one-line read).
+// opaque, so dev can't read its expiry: what dev proves is that a refresh-token grant against the updated
+// client works. The value itself is the template's (stacks.test.ts) and the live client's (a one-line read).
 import type { Scenario } from '../scenario';
 
 const STACKS = 'cdk/src/stacks.test.ts';
@@ -15,7 +15,7 @@ export const cognitoRefresh: Scenario = {
       id: 'renews-after-update',
       entry: 'ui',
       kind: 'nominal',
-      what: 'After the client update the app opens signed in: the launch renews with the refresh token the harness cached before it',
+      what: 'After the client update, a refresh-token grant against it succeeds and the app stays signed in',
     },
     {
       id: 'template-30d',
@@ -37,17 +37,6 @@ export const cognitoRefresh: Scenario = {
         file: STACKS,
         test: 'provisions the claude.ai MCP OAuth client (30-day refresh, code flow, connector callbacks)',
         why: 'a template neighbour: its resource is untouched, and the test pins it by name',
-      },
-    },
-    {
-      id: 'expired-token-signin',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A lapsed refresh token lands on the sign-in card with no red error',
-      offDev: {
-        file: 'app/src/auth/renewal.test.tsx',
-        test: 'does not surface an error when the session expires normally',
-        why: 'dev can’t age a token on demand; the invalid_grant path is the same whatever the window',
       },
     },
     {
@@ -76,9 +65,9 @@ export const cognitoRefresh: Scenario = {
       id: 'stolen-token-recovery',
       entry: 'ui',
       kind: 'edge',
-      what: 'admin-user-global-sign-out ends every session of the user, its live access tokens included',
+      what: 'admin-user-global-sign-out stops a stolen refresh token at once; its last access token still works at the API for up to an hour',
       needsYou:
-        'only an AWS admin call can run it, and running it on the test user would sign out every dev check',
+        'only an AWS admin call can run it; on the test user it would also cost the next dev check a fresh sign-in',
     },
   ],
   steps: [
@@ -86,9 +75,35 @@ export const cognitoRefresh: Scenario = {
       id: 'renews',
       entry: 'ui',
       proves: ['renews-after-update'],
-      title: 'The app opens signed in after the client update',
+      title: 'A refresh-token grant against the updated client succeeds; the app stays signed in',
       async run(ctx) {
+        // A page load alone renews nothing while the access token is fresh. Marking it expired makes the
+        // next load renew it from the stored refresh token, at the token endpoint (OidcBridge, on load).
         await ctx.ui.goto('/tasks');
+        const marked = await ctx.page.evaluate<number>(`(() => {
+          let n = 0;
+          for (const k of Object.keys(localStorage)) {
+            if (!k.startsWith('oidc.user:')) continue;
+            const u = JSON.parse(localStorage.getItem(k));
+            if (!u || !u.refresh_token) continue;
+            u.expires_at = Math.floor(Date.now() / 1000) - 60;
+            localStorage.setItem(k, JSON.stringify(u));
+            n++;
+          }
+          return n;
+        })()`);
+        if (marked !== 1)
+          throw new Error(`expected one stored session with a refresh token, found ${marked}`);
+        const grant = ctx.page.waitForResponse(
+          (r) => r.url().includes('.amazoncognito.com/oauth2/token'),
+          { timeout: 20_000 },
+        );
+        await ctx.ui.goto('/tasks');
+        const res = await grant;
+        if (!res.request().postData?.()?.includes('grant_type=refresh_token'))
+          throw new Error('the token request was not a refresh-token grant');
+        if (res.status() !== 200)
+          throw new Error(`the refresh-token grant answered ${res.status()}`);
         await ctx.ui.expectText('Backlog');
         await ctx.shot('signed-in');
       },
