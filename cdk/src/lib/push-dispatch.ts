@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { Duration, RemovalPolicy, Stack, Validations } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -44,8 +44,17 @@ export class PushDispatch extends Construct {
       retention: stage === 'prod' ? logs.RetentionDays.ONE_MONTH : logs.RetentionDays.TWO_WEEKS,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    // Its own role, without AWSLambdaBasicExecutionRole: that policy's logs:CreateLogGroup let a tick still
+    // running as a deploy deleted the function and its group re-create the group outside the stack, and the
+    // orphan then failed every later deploy by name (dev, 2026-11-08). The stack owns the group; the function
+    // only writes to it.
+    const fnRole = new iam.Role(this, 'FnRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
+    logGroup.grantWrite(fnRole);
     this.fn = new NodejsFunction(this, 'Fn', {
       functionName: `aperture-push-dispatch-${stage}`,
+      role: fnRole,
       entry: DISPATCH_ENTRY,
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -75,12 +84,6 @@ export class PushDispatch extends Construct {
     this.fn.addToRolePolicy(
       new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [vapidPrivateKeyArn] }),
     );
-    // cdk-nag matches acks by id across the app, so this duplicates the BFF's; kept so the function states
-    // its own. No IAM5: every resource above is exact.
-    this.fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
-      'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
-        'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
-    });
 
     // Every minute, never retried. L1 with its own role so the invoke grant is the exact function ARN, in
     // its own one-schedule group: Scheduler checks the trust policy's SourceArn against the group's ARN,

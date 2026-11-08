@@ -812,12 +812,26 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
       'dynamodb:PutItem',
       'dynamodb:Query',
     ]);
-    expect(actions.filter((a) => !String(a).startsWith('dynamodb:'))).toEqual(['ssm:GetParameter']);
+    expect(actions.filter((a) => !String(a).startsWith('dynamodb:')).sort()).toEqual([
+      'logs:CreateLogStream',
+      'logs:PutLogEvents',
+      'ssm:GetParameter',
+    ]);
     const ssm = stmts.filter((st) => actionsOf([st]).includes('ssm:GetParameter'));
     expect(JSON.stringify(ssm.map((st) => st.Resource)).match(/parameter\/aperture\/[^"]*/g)).toEqual([
       'parameter/aperture/dev/push/vapid_private_key',
     ]);
     expect(JSON.stringify(stmts)).not.toMatch(/\*"|index\/\*|s3:|lambda:/);
+  });
+
+  it('its role is its own: no managed policy, so it can never re-create its log group outside the stack', () => {
+    const roleId = (poller.props.Role as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
+    const role = dev.findResources('AWS::IAM::Role')[roleId]!;
+    expect(role.Properties.ManagedPolicyArns).toBeUndefined();
+    expect(actionsOf(statementsOf(dev, poller.props.Role))).not.toContain('logs:CreateLogGroup');
+    const logs = statementsOf(dev, poller.props.Role).filter((st) => actionsOf([st]).includes('logs:PutLogEvents'));
+    const groupId = Object.keys(dev.findResources('AWS::Logs::LogGroup', { Properties: { LogGroupName: '/aws/lambda/aperture-push-dispatch-dev' } }))[0]!;
+    expect(logs.map((st) => st.Resource)).toEqual([{ 'Fn::GetAtt': [groupId, 'Arn'] }]); // that one group, nothing wider
   });
 
   it('the BFF may read the public key and never the private one; the MCP function neither', () => {
