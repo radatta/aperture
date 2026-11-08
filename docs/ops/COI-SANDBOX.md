@@ -872,6 +872,29 @@ enabled = false
 
 Configs **merge**: user → repo → `--profile` layered on top as deltas; scalars are last-wins.
 
+## tmux — status bar and window restore
+
+Container-side, in `tools/coi/`. The session keeps COI's name (`coi attach` is `tmux attach -t <session>`,
+_Ending a session_) — the bar only labels itself `aperture`. Window names matter too: the board names
+sessions by them, and restore matches on them.
+
+- **Bar** (`tmux.conf`: Nord palette, the dev-lock holder from the board, the time, an amber dot on a bell).
+  `~/.tmux.conf` is a symlink into `/workspace`, so a merged change is live once `/workspace` is on the new
+  `main` and tmux reloads:
+  ```bash
+  ln -sf /workspace/tools/coi/tmux.conf ~/.tmux.conf   # once, and again after a container rebuild
+  tmux source ~/.tmux.conf
+  ```
+- **Window restore** (`tmux-restore.sh`): `save` snapshots each window running Claude — name, session id, cwd,
+  and `--dangerously-skip-permissions` if it had it — to `localNotes/tmux-sessions.tsv` (gitignored: it holds
+  session ids). Restore reopens each missing window by name with `claude --resume <id> -n <name>`, 3 s apart,
+  and skips windows that already exist. Run it inside the COI session (`coi attach`), which it fills; outside
+  tmux it builds a separate `aperture` session (plus a `_boot` window) that `coi attach` won't find.
+  ```bash
+  bash /workspace/tools/coi/tmux-restore.sh save   # before a stop or rebuild
+  bash /workspace/tools/coi/tmux-restore.sh        # after it
+  ```
+
 ## GitHub access inside the container
 
 The container has **no SSH key and no SSH agent** (COI reports "SSH agent: Not available"), and the
