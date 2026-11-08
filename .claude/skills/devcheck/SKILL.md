@@ -9,6 +9,8 @@ The reference is `docs/ops/DEV-CHECK.md`. This is the procedure.
 
 ## Before
 
+- The local check passed first: `pnpm devcheck:local --tier full --feature <feature-scenario>` (`docs/ops/LOCAL-CHECK.md`)
+  — the same scenarios in the container in seconds, no lock. It catches step bugs; it proves nothing about dev.
 - The branch's commit is on dev through `pnpm bot deploy-dev` (a `deploy-dev <sha> <key>` run). `git rev-parse HEAD` is what
   the check expects unless you pass `--sha` — which is also how a scenario-only fix proves the build already on
   dev (`scripts/` isn't deployed, so no redeploy).

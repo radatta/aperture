@@ -10,6 +10,17 @@ export const TEST_USER_EMAIL = 'rahul3datta+devcheck@gmail.com';
 // packages/shared/src/rpc.ts AUTH_HEADER — the BFF reads the JWT here (CloudFront owns Authorization).
 export const AUTH_HEADER = 'x-aperture-authorization';
 
+// The origin this run talks to: dev, unless the local check (local/run-local.ts) bound its own loopback
+// server and switched to it. Only a loopback http origin is accepted, so no config can aim a run at prod.
+let target = DEV_ORIGIN;
+export const targetOrigin = (): string => target;
+export function useLocalOrigin(origin: string): void {
+  const u = new URL(origin);
+  if (u.protocol !== 'http:' || u.hostname !== '127.0.0.1' || !u.port || u.origin !== origin)
+    throw new Error(`refusing ${origin} — the local check only talks to its own 127.0.0.1 server`);
+  target = origin;
+}
+
 export function assertDevOrigin(url: string): void {
   let origin: string;
   try {
@@ -17,8 +28,8 @@ export function assertDevOrigin(url: string): void {
   } catch {
     throw new Error(`refusing a non-URL target: ${url}`);
   }
-  if (origin !== DEV_ORIGIN)
-    throw new Error(`refusing ${origin} — the dev check only talks to ${DEV_ORIGIN}`);
+  if (origin !== target)
+    throw new Error(`refusing ${origin} — the dev check only talks to ${target}`);
 }
 
 // The one other origin the harness may touch: a presigned URL the dev BFF minted for the test user's own

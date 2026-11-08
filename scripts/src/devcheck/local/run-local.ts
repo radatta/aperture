@@ -1,0 +1,209 @@
+// The local check — docs/ops/LOCAL-CHECK.md. The dev check's scenarios and pipeline against a local stack:
+//   pnpm devcheck:local --tier smoke|delta|full|all [--scenario a,b] [--feature a,b]
+// The real BFF + MCP edges in a child process behind a CloudFront stand-in, over a per-run in-memory table,
+// with locally signed tokens; the app from `vite dev`. No dev lock, no deploy, no network past 127.0.0.1.
+// A pre-flight before `pnpm bot deploy-dev`: a red run blocks the lock, a green one proves nothing about dev.
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { createApiClient } from '../api';
+import { launch, loadPlaywright } from '../browser';
+import { useLocalOrigin, worktreeRoot } from '../config';
+import { openLedger } from '../ledger';
+import { SHELL, readCheckedSession } from '../login';
+import { matrixProblems } from '../matrix';
+import { createMcpClient } from '../mcp';
+import { assertMcpTestUser } from '../mcp-login';
+import { exitCode, runPipeline, type BrowserSession } from '../pipeline';
+import { renderReport, statusLine, type RunResult } from '../report';
+import { parseArgs, shasFor } from '../run';
+import { SCENARIOS, selectFeature, selectScenarios, slowScenarios } from '../scenarios/index';
+import { DevcheckError } from '../errors';
+import { freePort, startLocalServer, startVite, type Proc } from './server';
+import { localSkip } from './skips';
+import {
+  LOCAL_CLAUDE_CLIENT,
+  LOCAL_APP_CLIENT,
+  LOCAL_POOL_ID,
+  localMcpSession,
+  makeLocalAuth,
+  seededState,
+} from './target';
+import { cognitoAuthority } from '../token';
+
+const exec = promisify(execFile);
+
+// The dev report's wording, retitled: every "on dev" a local report would claim is "locally" here.
+export function toLocalReport(md: string): string {
+  return md
+    .replace(/^# Dev check — (.*)$/m, '# Local check — $1 (pre-flight; dev remains the proof)')
+    .replaceAll('Not proven on dev', 'Not proven locally')
+    .replaceAll('Proven on dev', 'Proven locally')
+    .replaceAll('proven on dev', 'proven locally')
+    .replaceAll('Deferred (slow tier)', 'Deferred (slow tier, or runs on dev)');
+}
+
+export const localRunDir = (worktree: string, runId: string): string =>
+  resolve(worktree, 'localNotes', 'devcheck-local', runId);
+
+async function main(): Promise<number> {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.sha) throw new Error('--sha is a dev flag: the local check always serves the worktree');
+  const worktree = worktreeRoot();
+  const git = async (a: string[]) => (await exec('git', a, { cwd: worktree })).stdout.trim();
+  const head = await git(['rev-parse', 'HEAD']);
+  const { scenarioSha } = shasFor(
+    head,
+    !!(await git(['--no-optional-locks', 'status', '--porcelain', '--', ':/scripts/src/devcheck'])),
+  );
+  const dirty = !!(await git(['--no-optional-locks', 'status', '--porcelain']));
+  const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
+  const feature = selectFeature(args.feature, scenarios);
+  const changed = await Promise.all([
+    git(['diff', '--name-only', 'origin/main...HEAD']),
+    git(['diff', '--name-only', 'HEAD']),
+  ]).then(
+    (outs) => [...new Set(outs.flatMap((o) => o.split('\n').filter(Boolean)))],
+    () => null,
+  );
+  const slow = slowScenarios(args.tier, feature, scenarios, changed);
+  const gaps = matrixProblems(SCENARIOS, worktree, {
+    exists: existsSync,
+    read: (p) => readFileSync(p, 'utf8'),
+  });
+  if (gaps.length) throw new DevcheckError('MATRIX_GAP', gaps.join('\n  '));
+  const pw = loadPlaywright();
+
+  const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}-${args.tier}`;
+  const out = localRunDir(worktree, runId);
+  const shotsDir = join(out, 'shots');
+  mkdirSync(shotsDir, { recursive: true });
+  const log = (msg: string) => console.log(`[devcheck:local] ${msg}`);
+  const procs: Proc[] = [];
+  const stopAll = () => Promise.allSettled(procs.reverse().map((p) => p.stop()));
+  for (const [sig, code] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)
+    process.once(sig, () => void stopAll().then(() => process.exit(code)));
+
+  try {
+    const auth = makeLocalAuth();
+    const vitePort = await freePort();
+    const origin = `http://127.0.0.1:${vitePort}`;
+    const t0 = Date.now();
+    const server = await startLocalServer({
+      worktree,
+      logPath: join(out, 'server.log'),
+      env: {
+        ORIGIN_SECRET: auth.originSecret,
+        APP_URL: origin,
+        LOCAL_POOL_ID,
+        LOCAL_CLAUDE_CLIENT_ID: LOCAL_CLAUDE_CLIENT,
+        LOCAL_JWKS: JSON.stringify(auth.jwks),
+      },
+    });
+    procs.push(server.proc);
+    procs.push(
+      await startVite({
+        worktree,
+        port: vitePort,
+        edgePort: server.port,
+        logPath: join(out, 'vite.log'),
+        env: {
+          VITE_API_MODE: 'http',
+          VITE_API_BASE: '',
+          VITE_COGNITO_AUTHORITY: cognitoAuthority(LOCAL_POOL_ID),
+          VITE_COGNITO_CLIENT_ID: LOCAL_APP_CLIENT,
+          VITE_BUILD_SHA: head,
+        },
+      }),
+    );
+    useLocalOrigin(origin);
+    log(
+      `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} — server :${server.port} (pid ${server.proc.pid}), app ${origin}, up in ${Date.now() - t0} ms → ${out}`,
+    );
+    const statePath = join(out, 'state.json');
+    writeFileSync(statePath, JSON.stringify(seededState(auth, origin)));
+    const ledger = openLedger(join(out, 'ledger.jsonl'));
+    const fetchShell = async () =>
+      (await fetch(`${origin}/`, { signal: AbortSignal.timeout(15_000) })).text();
+
+    const result: RunResult = await runPipeline({
+      runId,
+      tier: args.tier,
+      feature,
+      expectedSha: head,
+      scenarioSha,
+      scenarios,
+      ledger,
+      shotsDir,
+      slow,
+      skip: localSkip,
+      checkSessions: true,
+      fetchShell,
+      async openBrowser(): Promise<BrowserSession> {
+        const { browser, context } = await launch(pw, statePath);
+        const page = await context.newPage();
+        // Nothing leaves the machine: a request off the run's origin (a scenario still built on the dev
+        // origin, a third-party asset) is refused before it is sent.
+        await page.route(
+          (u) => u.origin !== origin,
+          (route) => route.abort('blockedbyclient'),
+        );
+        return {
+          page,
+          async signIn() {
+            // Vite optimises dependencies on the first load and may reload once; the shell settles after.
+            for (let i = 0; i < 2; i++) {
+              await page.goto(`${origin}/tasks`, { waitUntil: 'domcontentloaded' });
+              await page.locator(SHELL).waitFor({ timeout: 60_000 });
+            }
+            const s = await readCheckedSession(page, auth.env);
+            if (!s)
+              throw new DevcheckError(
+                'WRONG_USER',
+                'signed-in shell but no seeded session in localStorage',
+              );
+            return s;
+          },
+          readSession: () => readCheckedSession(page, auth.env),
+          async signInMcp() {
+            const s = localMcpSession(auth);
+            assertMcpTestUser(s, auth.env);
+            return s;
+          },
+          close: () => browser.close(),
+        };
+      },
+      makeApi: (token) => createApiClient({ fetch, token, ledger, run: runId }),
+      makeMcp: (token) => createMcpClient({ fetch, token, ledger, run: runId }),
+      now: Date.now,
+      log,
+    });
+    const md = toLocalReport(renderReport(result)).replace(
+      /^(Run `.*)$/m,
+      `$1\nTarget: local (HEAD \`${head.slice(0, 7)}\` served by vite dev${dirty ? ', working tree dirty' : ''}) — dev remains the proof`,
+    );
+    writeFileSync(join(out, 'report.md'), md);
+    writeFileSync(
+      join(out, 'report.json'),
+      JSON.stringify({ ...result, target: 'local' }, null, 2) + '\n',
+    );
+    console.log(`\nLOCAL ${statusLine(result)}\nreport: ${join(out, 'report.md')}`);
+    return exitCode(result);
+  } finally {
+    await stopAll();
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main().then(
+    (code) => process.exit(code),
+    (err: unknown) => {
+      console.error(err instanceof Error ? err.message : err);
+      process.exit(2);
+    },
+  );

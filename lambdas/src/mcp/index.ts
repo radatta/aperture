@@ -8,6 +8,11 @@ import type { ApiMethod } from '@aperture/shared';
 import { createLiveDoc } from '../ddb/LiveDoc';
 import { createCognitoVerifier, resolveAgentUserId, resolveUserId } from '../auth/verify';
 import type { Verifier } from '../auth/verify';
+import type { DocClient } from '../ddb/DocClient';
+import type { GoogleGateway } from '../google/gateway';
+import type { Presigner } from '../s3/presigner';
+import type { ObjectStore } from '../s3/objects';
+import type { AnthropicGateway } from '../anthropic/gateway';
 import { handleRpc } from '../handler';
 import { createLiveGoogle } from '../google/liveGoogle';
 import { createS3Presigner } from '../s3/presigner';
@@ -60,7 +65,8 @@ function requireMcpVerifier(): Verifier {
   const clientId = process.env.MCP_CLIENT_ID;
   // No 'local' fallback (unlike resolveAgentUserId): a public OAuth endpoint must never treat
   // "unconfigured" as "anyone is the local user". Unconfigured → the bearer is simply rejected.
-  if (!poolId || !clientId) throw new Error('Unauthorized: bearer auth not configured on this stage');
+  if (!poolId || !clientId)
+    throw new Error('Unauthorized: bearer auth not configured on this stage');
   if (!cachedMcpVerifier) cachedMcpVerifier = createCognitoVerifier(poolId, clientId);
   return cachedMcpVerifier;
 }
@@ -72,7 +78,9 @@ function requireMcpVerifier(): Verifier {
 function wwwAuthenticate(): Record<string, string> {
   const appUrl = process.env.APP_URL;
   if (!appUrl) return {};
-  return { 'www-authenticate': `Bearer resource_metadata="${appUrl}/.well-known/oauth-protected-resource/mcp"` };
+  return {
+    'www-authenticate': `Bearer resource_metadata="${appUrl}/.well-known/oauth-protected-resource/mcp"`,
+  };
 }
 
 // PUT bytes to a presigned URL — the only place the MCP server itself moves bytes (attach_file's small
@@ -86,7 +94,35 @@ async function uploadToPresigned(url: string, bytes: Buffer, contentType: string
   if (!res.ok) throw new Error(`Attachment upload failed: ${res.status}`);
 }
 
-export async function handler(event: HttpEvent): Promise<HttpResult> {
+// Everything the edge calls out to — the BFF's BffDeps, for this function. `mcpVerifier` stays a thunk so
+// an unconfigured stage still 401s a bearer per call (requireMcpVerifier). The local devcheck server
+// (local/serve.ts) builds one over InMemoryDoc and inert gateways.
+export interface McpDeps {
+  doc: DocClient;
+  google: GoogleGateway;
+  presigner: Presigner;
+  objects: ObjectStore;
+  anthropic: AnthropicGateway;
+  mcpVerifier: () => Verifier;
+  upload: ToolContext['upload'];
+}
+const live: McpDeps = {
+  doc,
+  google,
+  presigner,
+  objects,
+  anthropic,
+  mcpVerifier: requireMcpVerifier,
+  upload: uploadToPresigned,
+};
+
+export const createMcpHandler =
+  (d: McpDeps) =>
+  (event: HttpEvent): Promise<HttpResult> =>
+    handle(event, d);
+export const handler = createMcpHandler(live);
+
+async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
   const httpMethod = event.requestContext?.http?.method;
   const path = event.requestContext?.http?.path ?? '';
   const isHttp = event.requestContext?.http !== undefined; // false for direct (CI-cred'd) invokes
@@ -107,13 +143,21 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   const wk = matchWellKnown(path);
   if (wk) {
     if (httpMethod && httpMethod !== 'GET' && httpMethod !== 'HEAD') {
-      return { statusCode: 405, headers: { ...HEADERS, allow: 'GET' }, body: JSON.stringify({ error: 'Method Not Allowed' }) };
+      return {
+        statusCode: 405,
+        headers: { ...HEADERS, allow: 'GET' },
+        body: JSON.stringify({ error: 'Method Not Allowed' }),
+      };
     }
     const appUrl = process.env.APP_URL;
     const cognitoDomain = process.env.COGNITO_DOMAIN;
     const userPoolId = process.env.USER_POOL_ID;
     if (!appUrl || !cognitoDomain || !userPoolId) {
-      return { statusCode: 404, headers: HEADERS, body: JSON.stringify({ error: 'OAuth metadata not configured on this stage' }) };
+      return {
+        statusCode: 404,
+        headers: HEADERS,
+        body: JSON.stringify({ error: 'OAuth metadata not configured on this stage' }),
+      };
     }
     const wkEnv = { appUrl, cognitoDomain, userPoolId };
     const metadata = wk === 'prm' ? protectedResource(wkEnv) : authorizationServer(wkEnv);
@@ -121,21 +165,26 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   }
 
   if (httpMethod && httpMethod !== 'POST') {
-    return { statusCode: 405, headers: { ...HEADERS, allow: 'POST' }, body: JSON.stringify({ error: 'Method Not Allowed' }) };
+    return {
+      statusCode: 405,
+      headers: { ...HEADERS, allow: 'POST' },
+      body: JSON.stringify({ error: 'Method Not Allowed' }),
+    };
   }
 
   // Credential fork — disambiguate by CREDENTIAL, not method. The agent token (Claude Code, a raw custom
   // header, unscoped) is checked first and never falls through. A Cognito bearer (claude.ai, phase 2) is
   // verified against the client-bound MCP verifier. Neither present → 401 with the discovery pointer.
   const agentHeader = event.headers?.[AGENT_TOKEN_HEADER];
-  const bearer = event.headers?.authorization ?? event.headers?.Authorization ?? event.headers?.[AUTH_HEADER];
+  const bearer =
+    event.headers?.authorization ?? event.headers?.Authorization ?? event.headers?.[AUTH_HEADER];
   const credential = agentHeader !== undefined ? 'agent' : bearer ? 'bearer' : 'none';
   let userId: string;
   try {
     if (credential === 'agent') {
       userId = resolveAgentUserId(agentHeader, process.env.AGENT_TOKEN, process.env.DEVICE_USER_ID);
     } else if (credential === 'bearer') {
-      userId = await resolveUserId(bearer, requireMcpVerifier());
+      userId = await resolveUserId(bearer, d.mcpVerifier());
     } else {
       throw new Error('Unauthorized: /mcp requires a credential');
     }
@@ -144,15 +193,30 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
     console.log(JSON.stringify({ event: 'mcp_auth', credential, ok: true }));
   } catch (err) {
     console.log(JSON.stringify({ event: 'mcp_auth', credential, ok: false }));
-    return { statusCode: 401, headers: { ...HEADERS, ...wwwAuthenticate() }, body: JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }) };
+    return {
+      statusCode: 401,
+      headers: { ...HEADERS, ...wwwAuthenticate() },
+      body: JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }),
+    };
   }
 
   let message: unknown;
   try {
-    const raw = event.isBase64Encoded && event.body ? Buffer.from(event.body, 'base64').toString('utf8') : event.body;
+    const raw =
+      event.isBase64Encoded && event.body
+        ? Buffer.from(event.body, 'base64').toString('utf8')
+        : event.body;
     message = raw ? JSON.parse(raw) : null;
   } catch {
-    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }) };
+    return {
+      statusCode: 200,
+      headers: HEADERS,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32700, message: 'Parse error' },
+      }),
+    };
   }
 
   const ctx: ToolContext = {
@@ -160,11 +224,17 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       // Plaid + the sync invoker are pinned inert: the MCP role has no Plaid IAM (cdk stacks.test "the
       // MCP function gets nothing Plaid"), and its finance tools read only what's in the table.
       handleRpc(
-        doc,
-        { userId, method, args, google, stateSecret: process.env.ORIGIN_SECRET },
-        { presigner, objects, plaid: noopPlaid(), financeInvoker: noopInvoker(), anthropic },
+        d.doc,
+        { userId, method, args, google: d.google, stateSecret: process.env.ORIGIN_SECRET },
+        {
+          presigner: d.presigner,
+          objects: d.objects,
+          plaid: noopPlaid(),
+          financeInvoker: noopInvoker(),
+          anthropic: d.anthropic,
+        },
       ),
-    upload: uploadToPresigned,
+    upload: d.upload,
   };
 
   const response = await handleMcpMessage(message, ctx);

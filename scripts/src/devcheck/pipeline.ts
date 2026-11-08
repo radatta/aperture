@@ -3,7 +3,7 @@
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
 import { DEV_WORK_MIN, financeRowOf, ledgerKind, type ApiClient } from './api';
-import { DEV_ORIGIN } from './config';
+import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, detailOf, type ReasonCode } from './errors';
@@ -60,6 +60,10 @@ export interface PipelineDeps {
   // absent: every slow step runs. The rest are deferred — reported, never failed (DEV-CHECK.md → Slow tier).
   slow?: string[];
   ios?: Ios; // the Mac's iOS Simulator (ios.ts); absent, an iOS step says needs you
+  // The local check only (local/run-local.ts): a step this returns a reason for is deferred with it — a row
+  // that only dev can prove ('local: … runs on dev') — and the end of the run asserts no timer was left running.
+  skip?: (scenario: string, step: { id: string; entry: string }) => string | null;
+  checkSessions?: boolean;
 }
 
 export const DEFER_NOTE = 'slow tier: the branch touches none of its paths — run --tier all';
@@ -144,7 +148,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     page.on('response', (res) => {
       if (injectedRequests.has(res.request())) return; // ours: in r.injected
       const url = new URL(res.url());
-      const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
+      const method = url.origin === targetOrigin() ? methodOf(res.url()) : undefined;
       // While a failing intercept is live the console's failed-load lines are dropped (they name no URL), so a real
       // failed load in that window — /api or anything else — is recorded from its response instead.
       if (failing() && res.status() >= 400 && res.status() !== 429)
@@ -156,7 +160,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       r.throttled.push(
         method
           ? `/api/${method}`
-          : url.origin === DEV_ORIGIN
+          : url.origin === targetOrigin()
             ? url.pathname
             : url.host + url.pathname,
       );
@@ -250,6 +254,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           res.note = needs;
           continue;
         }
+        const skipped = d.skip?.(sc.id, step) ?? null;
+        if (skipped !== null) {
+          res.status = 'deferred';
+          res.note = skipped;
+          continue;
+        }
         if (step.cost === 'slow' && d.slow && !d.slow.includes(sc.id)) {
           res.status = 'deferred'; // the scenario goes on: a slow step is never a cheap one's prerequisite
           res.note = DEFER_NOTE;
@@ -340,7 +350,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     let left = opts.times ?? Infinity;
     let hits = 0;
     let passed = 0;
-    const match = (u: URL) => u.origin === DEV_ORIGIN && u.pathname === `/api/${method}`;
+    const match = (u: URL) => u.origin === targetOrigin() && u.pathname === `/api/${method}`;
     const handler = async (route: PwRoute) => {
       if (left <= 0) {
         passed++;
@@ -571,6 +581,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     if (categoryBaseline) r.appeared.push(...cats.filter((id) => !categoryBaseline!.has(id)));
     if (r.appeared.length)
       fail('LEFTOVERS', `appeared during the run, not in the ledger: ${r.appeared.join(', ')}`);
+    // Sessions aren't ledgered: a timer a run leaves running breaks every later timer scenario (and, on dev,
+    // the next run's). Locally the table is fresh, so any running one is this run's leak.
+    if (d.checkSessions) {
+      const running = await api.reads.listRunningSessions();
+      if (running.length)
+        fail('LEFTOVERS', `a timer was left running: ${running.map((s) => s.id).join(', ')}`);
+    }
 
     if (r.startSha) {
       r.endSha = parseMarker(await d.fetchShell());

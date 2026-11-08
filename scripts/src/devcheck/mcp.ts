@@ -17,12 +17,12 @@ import {
   type FetchLike,
   type LedgerKind,
 } from './api';
-import { DEV_ORIGIN, assertDevOrigin } from './config';
+import { assertDevOrigin, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import type { Ledger } from './ledger';
 
 export const MCP_CREATE_VIA = 'mcp:create_task';
-const MCP_URL = `${DEV_ORIGIN}/mcp`;
+const mcpUrl = () => `${targetOrigin()}/mcp`;
 const THROTTLE_BACKOFF_MS = [500, 1000, 2000, 4000, 8000]; // as api.ts: a 429 never ran the call
 
 export interface McpDeps {
@@ -60,9 +60,9 @@ export function createMcpClient({
   let nextId = 1;
 
   async function rpc<T>(method: string, params: unknown): Promise<T> {
-    assertDevOrigin(MCP_URL);
+    assertDevOrigin(mcpUrl());
     const send = () =>
-      fetch(MCP_URL, {
+      fetch(mcpUrl(), {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` },
         body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),

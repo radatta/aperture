@@ -8,7 +8,7 @@
 // never in a log, an error, a screenshot or the ledger. The rows are the plan's dev-test matrix
 // (localNotes/plan.md §4 D) plus review rounds 1 and 2 (localNotes/decisions.md) — round 2 the broken-down errand.
 import { randomBytes } from 'node:crypto';
-import { DEV_ORIGIN } from '../config';
+import { targetOrigin } from '../config';
 import type { DevPlace, DevPlaceTokenStatus, DevTask } from '../api';
 import { hidingSecret, laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -602,7 +602,7 @@ export const places: Scenario = {
           count: 1,
           titles: [errand(ctx, 'shampoo')],
           text: `${place.name} · 1 — ${errand(ctx, 'shampoo')}`,
-          url: `${DEV_ORIGIN}${lensPath(place.slug)}`,
+          url: `${targetOrigin()}${lensPath(place.slug)}`,
         });
         if ((await tokenStatus(ctx)).lastUsedAt === null)
           throw new Error('after one read the token’s lastUsedAt is unset');
@@ -623,7 +623,7 @@ export const places: Scenario = {
           count: 1,
           titles: [errand(ctx, 'shampoo')],
           text: `${place.name} · 1 — ${errand(ctx, 'shampoo')}`,
-          url: `${DEV_ORIGIN}${lensPath(place.slug)}`,
+          url: `${targetOrigin()}${lensPath(place.slug)}`,
         });
       },
     },
@@ -654,7 +654,7 @@ export const places: Scenario = {
       async run(ctx) {
         await ctx.ui.goto('/settings');
         await ctx.page.getByRole('button', { name: 'Set up the iPhone Shortcut' }).click();
-        const want = `${DEV_ORIGIN}/api/places/[Shortcut Input]/tasks`;
+        const want = `${targetOrigin()}/api/places/[Shortcut Input]/tasks`;
         await ctx.ui.expectText(want);
         // No `text` and no `count` (a CloudFront 5xx, a throttle) is a non-answer, never a quiet empty list.
         await ctx.ui.expectText(/Aperture didn[’']t answer/);
@@ -1097,7 +1097,7 @@ export const places: Scenario = {
           count: 2,
           titles: partTitles,
           text: `${partsPlace.name} · 2 — ${partTitles.join(', ')}`,
-          url: `${DEV_ORIGIN}${lensPath(partsPlace.slug)}`,
+          url: `${targetOrigin()}${lensPath(partsPlace.slug)}`,
         });
         const parts = (await ctx.api.reads.listTasks()).filter((t) => t.parentId === partyId);
         partIds = partTitles.map((title) => parts.find((t) => t.title === title)!.id);
@@ -1147,7 +1147,7 @@ export const places: Scenario = {
           count: 1,
           titles: [partTitles[1]],
           text: `${partsPlace.name} · 1 — ${partTitles[1]}`,
-          url: `${DEV_ORIGIN}${lensPath(partsPlace.slug)}`,
+          url: `${targetOrigin()}${lensPath(partsPlace.slug)}`,
         });
       },
     },

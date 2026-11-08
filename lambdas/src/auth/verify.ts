@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
+export type Jwks = Parameters<ReturnType<typeof CognitoJwtVerifier.create>['cacheJwks']>[0];
+
 // A narrow verifier surface so the request path is testable with a fake — the real one wraps
 // aws-jwt-verify (JWKS signature + issuer + expiry, keys cached in-process).
 export interface Verifier {
@@ -23,13 +25,15 @@ export function assertClientAllowed(clientId: unknown, rejectClientIds?: string[
 // token_use=access are still enforced), and it avoids a Cognito↔CloudFront↔Lambda deploy cycle — the
 // Lambda would otherwise depend on the client, which depends on CloudFront, which depends on the Lambda.
 // The MCP bearer path DOES bind (passes the claude client id) — that client has no CloudFront edge, so
-// no cycle. `rejectClientIds` is the inverse: deny listed clients (D14, used by the BFF).
+// no cycle. `rejectClientIds` is the inverse: deny listed clients (D14, used by the BFF). `jwks` pre-loads the
+// pool's keys instead of fetching them from Cognito — only the local devcheck server passes it (a per-run
+// key it signed its tokens with); the deployed edges never do, so they always fetch the pool's real JWKS.
 export function createCognitoVerifier(
   userPoolId: string,
   clientId: string | null = null,
-  opts: { rejectClientIds?: string[] } = {},
+  opts: { rejectClientIds?: string[]; jwks?: Jwks } = {},
 ): Verifier {
-  const { rejectClientIds } = opts;
+  const { rejectClientIds, jwks } = opts;
   const verifier = CognitoJwtVerifier.create({
     userPoolId,
     tokenUse: 'access',
@@ -38,6 +42,7 @@ export function createCognitoVerifier(
       ? { customJwtCheck: ({ payload }) => assertClientAllowed(payload.client_id, rejectClientIds) }
       : {}),
   });
+  if (jwks) verifier.cacheJwks(jwks);
   return {
     async verify(token: string) {
       const payload = await verifier.verify(token);

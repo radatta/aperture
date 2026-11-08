@@ -1465,3 +1465,49 @@ describe('runPipeline', () => {
     expect(r.status).toBe('PASS');
   });
 });
+
+// The local check (local/run-local.ts): its skip hook and the running-timer check — dev runs pass neither.
+describe('runPipeline — the local check’s hooks', () => {
+  it('a skipped step is deferred with its reason and never runs; the rest of the scenario does', async () => {
+    const w = world();
+    const ran: string[] = [];
+    const sc = scenario(
+      async () => void ran.push('s0'),
+      async () => void ran.push('s1'),
+    )(w);
+    const r = await runPipeline(
+      deps(w, [sc], memLedger(), {
+        skip: (_sc, step) => (step.id === 's0' ? 'local: x — runs on dev' : null),
+      }),
+    );
+    expect(r.status).toBe('PASS');
+    expect(ran).toEqual(['s1']);
+    expect(r.steps.map((s) => [s.step, s.status, s.note])).toEqual([
+      ['s0', 'deferred', 'local: x — runs on dev'],
+      ['s1', 'pass', undefined],
+    ]);
+  });
+
+  it('a timer left running fails the run LEFTOVERS — only when checkSessions is on', async () => {
+    const w = world();
+    w.api.reads.listRunningSessions = async () => [
+      {
+        id: 'sess1',
+        taskId: null,
+        status: 'running',
+        startedAt: 0,
+        endedAt: null,
+        activeMinutes: 0,
+      },
+    ];
+    const sc = scenario(async () => undefined)(w);
+    const on = await runPipeline(deps(w, [sc], memLedger(), { checkSessions: true }));
+    expect(on.status).toBe('FAIL');
+    expect(on.failures).toContainEqual({
+      code: 'LEFTOVERS',
+      message: 'a timer was left running: sess1',
+    });
+    const off = await runPipeline(deps(w, [sc], memLedger()));
+    expect(off.status).toBe('PASS');
+  });
+});
