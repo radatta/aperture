@@ -352,6 +352,9 @@ export type FetchLike = (
 export interface ApiDeps {
   fetch: FetchLike;
   token: () => string; // read per call — the browser session may have renewed it
+  // Awaited before every request: every request goes through `backoff`, which runs this first, so a session
+  // near expiry is renewed before `token()` is read.
+  fresh?: () => Promise<void>;
   ledger: Ledger;
   run: string;
   sleep?: (ms: number) => Promise<void>;
@@ -378,6 +381,7 @@ function bffError(text: string): boolean {
 export function createApiClient({
   fetch,
   token,
+  fresh,
   ledger,
   run,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -387,6 +391,7 @@ export function createApiClient({
     send: () => ReturnType<FetchLike>,
     retry: (status: number, text: string) => boolean = (status) => status === 429,
   ): Promise<{ status: number; text: string }> {
+    await fresh?.(); // once a request: the retries total well under the margin
     let res = await send();
     let text = await res.text();
     for (const wait of THROTTLE_BACKOFF_MS) {

@@ -6,10 +6,12 @@ import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from '
 import { DEV_ORIGIN, type DevcheckEnv } from './config';
 import { DevcheckError } from './errors';
 import type { PwContext, PwPage } from './pw-types';
+import type { FetchLike } from './api';
 import {
   assertTestUser,
   cognitoAuthority,
   sessionFromStorage,
+  tokenGrant,
   userStoreKey,
   type Session,
 } from './token';
@@ -36,6 +38,34 @@ export async function readSession(page: PwPage, env: DevcheckEnv): Promise<Sessi
     storage,
     userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID),
   );
+}
+
+// The page hasn't renewed its session (pipeline.ts `fresh`): renew from here with the refresh token it keeps,
+// at the dev pool's token endpoint, and check the identity again. The page is left alone: its own renew runs
+// on its timer, and Cognito's refresh token isn't rotated (if it ever is, write the new one back). Nothing is
+// written to storage or logged. Null when the page keeps no refresh token.
+export async function refreshSession(
+  page: PwPage,
+  env: DevcheckEnv,
+  fetch: FetchLike,
+  now: () => number,
+): Promise<Session | null> {
+  const storage = await page.evaluate<Record<string, string>>(
+    'Object.assign({}, window.localStorage)',
+  );
+  const raw = storage[userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID)];
+  const refresh = raw ? (JSON.parse(raw) as { refresh_token?: unknown }).refresh_token : undefined;
+  if (typeof refresh !== 'string' || !refresh) return null;
+  const { accessToken, expiresAt, email, sub } = await tokenGrant(
+    fetch,
+    env.DEVCHECK_COGNITO_HOST,
+    { grant_type: 'refresh_token', client_id: env.DEVCHECK_CLIENT_ID, refresh_token: refresh },
+    now,
+    (m) => new DevcheckError('AUTH_REJECTED', `session refresh: ${m}`),
+  );
+  const session = { accessToken, expiresAt, email, sub };
+  assertTestUser(session, env.DEVCHECK_SUB);
+  return session;
 }
 
 // The cached session must be the test user's BEFORE any page loads: loading the app already writes (getDay

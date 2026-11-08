@@ -16,7 +16,7 @@ import {
 import { DevcheckError } from './errors';
 import { saveState, submitHostedUiForm } from './login';
 import type { PwContext, PwPage, PwRequest } from './pw-types';
-import { assertTestUser, decodeJwtPayload, type Session } from './token';
+import { assertTestUser, decodeJwtPayload, nearExpiry, tokenGrant, type Session } from './token';
 
 export interface Pkce {
   verifier: string;
@@ -68,58 +68,27 @@ export function parseCallback(url: string, expectedState: string): string {
   return code;
 }
 
-// Exchange the code at the dev pool's token endpoint. An error names Cognito's `error` field only — the
-// body of a success holds the tokens, and nothing here ever prints a body.
-export async function swapCode(
+// Exchange the code at the dev pool's token endpoint (token.ts tokenGrant).
+export const swapCode = (
   fetch: FetchLike,
   env: DevcheckEnv,
   code: string,
   verifier: string,
   now: () => number,
-): Promise<McpSession> {
-  const url = `https://${env.DEVCHECK_COGNITO_HOST}/oauth2/token`;
-  assertDevCognitoUrl(url, env.DEVCHECK_COGNITO_HOST, '/oauth2/token');
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
+): Promise<McpSession> =>
+  tokenGrant(
+    fetch,
+    env.DEVCHECK_COGNITO_HOST,
+    {
       grant_type: 'authorization_code',
       client_id: env.DEVCHECK_CLAUDE_CLIENT_ID,
       code,
       redirect_uri: CLAUDE_CALLBACK,
       code_verifier: verifier,
-    }).toString(),
-    redirect: 'error',
-  }).catch(() => {
-    throw fail('the token endpoint request failed'); // a refused redirect or the network; never its URL
-  });
-  const text = await res.text();
-  let body: Record<string, unknown> = {};
-  try {
-    body = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    // not JSON — reported by status alone
-  }
-  if (res.status !== 200)
-    throw fail(
-      `the token endpoint answered HTTP ${res.status}${typeof body.error === 'string' ? ` ${body.error}` : ''}`,
-    );
-  const { access_token, id_token, expires_in } = body;
-  if (typeof access_token !== 'string' || typeof id_token !== 'string')
-    throw fail('the token endpoint returned no access or id token');
-  const id = decodeJwtPayload(id_token);
-  const access = decodeJwtPayload(access_token);
-  return {
-    accessToken: access_token,
-    expiresAt:
-      typeof access.exp === 'number'
-        ? access.exp
-        : Math.floor(now() / 1000) + (typeof expires_in === 'number' ? expires_in : 0),
-    email: typeof id.email === 'string' ? id.email : '',
-    sub: typeof id.sub === 'string' ? id.sub : '',
-    clientId: typeof access.client_id === 'string' ? access.client_id : '',
-  };
-}
+    },
+    now,
+    fail,
+  );
 
 // The same identity guard as the app's session (WRONG_USER), plus: an access token minted for the claude
 // client, the only one /mcp accepts.
@@ -130,9 +99,10 @@ export function assertMcpTestUser(s: McpSession, env: DevcheckEnv): void {
     throw fail('the token was not minted as the claude client’s access token');
 }
 
-// Read per call; a token with under 30 s left fails the step rather than a request mid-flight.
+// Read per call; a token within the shared margin (token.ts) fails the step rather than a request mid-flight:
+// the MCP session keeps no refresh token to renew with.
 export function mcpToken(s: McpSession, now: () => number): string {
-  if (s.expiresAt * 1000 - now() < 30_000) throw fail('the MCP token has expired — rerun');
+  if (nearExpiry(s, now())) throw fail('the MCP token has expired — rerun');
   return s.accessToken;
 }
 

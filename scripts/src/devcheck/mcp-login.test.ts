@@ -177,9 +177,11 @@ describe('the MCP session', () => {
     ).toThrow(/MCP_AUTH_FAILED/);
   });
 
-  it('the token getter refuses a token with under 30 s left', () => {
+  it('the token getter refuses a token within the shared margin (60 s)', () => {
     const s = session();
     expect(mcpToken(s, () => NOW)).toBe(s.accessToken);
+    expect(mcpToken(s, () => NOW + 3600_000 - 61_000)).toBe(s.accessToken);
+    expect(() => mcpToken(s, () => NOW + 3600_000 - 59_000)).toThrow(/MCP_AUTH_FAILED.*expired/);
     expect(() => mcpToken(s, () => NOW + 3600_000 - 29_000)).toThrow(/MCP_AUTH_FAILED.*expired/);
   });
 });

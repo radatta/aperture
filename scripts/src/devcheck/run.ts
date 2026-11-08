@@ -35,7 +35,7 @@ import { openLedger } from './ledger';
 import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
-import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
+import { ensureSignedIn, readCheckedSession, refreshSession, validateCachedState } from './login';
 import { createIos } from './ios';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
@@ -259,6 +259,7 @@ async function main(): Promise<number> {
           signIn: (shot) =>
             ensureSignedIn(page, context, env, { statePath: statePath(main), shot }),
           readSession: () => readCheckedSession(page, env),
+          refreshSession: () => refreshSession(page, env, fetch, Date.now),
           signInMcp: (shotOf) =>
             ensureMcpSignedIn(context, env, {
               fetch,
@@ -270,7 +271,7 @@ async function main(): Promise<number> {
           close: () => browser.close(),
         };
       },
-      makeApi: (token) => createApiClient({ fetch, token, ledger, run: runId }),
+      makeApi: (token, fresh) => createApiClient({ fetch, token, fresh, ledger, run: runId }),
       makeMcp: (token) => createMcpClient({ fetch, token, ledger, run: runId }),
       now: Date.now,
       log,
