@@ -407,10 +407,10 @@ container, forcing a `--resume` next time, which **forks the session** (§1). Le
 reattach.
 
 **Stepping away without ending? DETACH, don't exit.** If you run your own tmux around the session,
-`Ctrl+B` then `D` detaches it — Claude Code, `coi shell`, every pane and the container stay alive;
-reattach later with `tmux attach` (or `coi attach`). Nothing exits, nothing forks. This is the
-routine nightly move: the `exit` in step 2 *closes* the pane you'd detach from. The tradeoff: a
-detach does **not** end `coi shell`, so **no fresh export snapshot is written** — you're relying on
+`Ctrl+B` then `D` detaches it (the container's own tmux: `Ctrl+A`, _tmux_ below) — Claude Code, `coi shell`,
+every pane and the container stay alive; reattach later with `tmux attach` (or `coi attach`). Nothing exits,
+nothing forks. This is the routine nightly move: the `exit` in step 2 *closes* the pane you'd detach from.
+The tradeoff: a detach does **not** end `coi shell`, so **no fresh export snapshot is written** — you're relying on
 the container surviving. Before anything risky (a VM change, a Mac reboot), run the step-1/2 exit
 first to force a snapshot, then come back with `coi attach` (the container is still running — `coi
 shell --resume` against a running one isn't re-checked on v0.15 and may start a second container).
@@ -885,11 +885,17 @@ sessions by them, and restore matches on them.
   ln -sf /workspace/tools/coi/tmux.conf ~/.tmux.conf   # once, and again after a container rebuild
   tmux source ~/.tmux.conf
   ```
+- **Keys** (`tmux.conf`). The prefix is `Ctrl-a` (screen's; `Ctrl-a a` sends a real `Ctrl-a` to the shell);
+  `Ctrl-b` is unbound and `d` still detaches.
+  - `Ctrl-a t` — the control tower (`scripts/board/tower.sh`) in a pop-up over any window; `q` closes it.
+  - `Ctrl-a g` — the hub's window, `dispatch`, by name: numbers shift as windows close (`renumber-windows`).
+  - `Ctrl-a j` — fuzzy-jump to any window by name with `fzf` (`au3` finds `auto-3`; Esc cancels).
 - **Window restore** (`tmux-restore.sh`): `save` snapshots each window running Claude — name, session id, cwd,
   and `--dangerously-skip-permissions` if it had it — to `localNotes/tmux-sessions.tsv` (gitignored: it holds
   session ids); with no Claude windows it keeps the last snapshot and exits 1. Restore reopens each missing
-  window by name with `claude --resume <id> -n <name>`, 3 s apart, and skips windows that already exist. Run it inside the COI session (`coi attach`), which it fills; outside
-  tmux it builds a separate `aperture` session (plus a `_boot` window) that `coi attach` won't find.
+  window by name with `claude --resume <id> -n <name>`, 3 s apart, and skips windows that already exist. Run it
+  inside the COI session (`coi attach`), which it fills; outside tmux it builds a separate `aperture` session
+  (plus a `_boot` window) that `coi attach` won't find.
   ```bash
   bash /workspace/tools/coi/tmux-restore.sh save   # before a stop or rebuild
   bash /workspace/tools/coi/tmux-restore.sh        # after it
