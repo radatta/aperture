@@ -35,6 +35,7 @@ const localProxy = LOCAL_EDGE
         '/mcp',
         '/.well-known/oauth-protected-resource',
         '/.well-known/oauth-authorization-server',
+        '/.well-known/openid-configuration',
       ].map((p) => [p, LOCAL_EDGE]),
     )
   : undefined;

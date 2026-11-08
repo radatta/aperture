@@ -8,7 +8,8 @@ import {
   sessionFromStorage,
   userStoreKey,
 } from '../token';
-import { toLocalReport } from './run-local';
+import { renderReport, type RowResult, type RunResult } from '../report';
+import { LOCAL_NOT_PASTE, toLocalReport } from './run-local';
 import {
   LOCAL_APP_CLIENT,
   LOCAL_CLAUDE_CLIENT,
@@ -115,5 +116,59 @@ describe('toLocalReport', () => {
         '### Deferred (slow tier, or runs on dev)',
       ].join('\n'),
     );
+  });
+});
+
+describe('toLocalReport over a real render', () => {
+  const row = (scenario: string, status: RowResult['status'], note?: string): RowResult => ({
+    scenario,
+    row: `${scenario}-r`,
+    entry: 'ui',
+    kind: 'nominal',
+    what: `${scenario} row`,
+    status,
+    provenBy: 'steps a (ui)',
+    ...(note ? { note } : {}),
+  });
+  const result: RunResult = {
+    runId: 'r1',
+    tier: 'full',
+    feature: ['feat'],
+    expectedSha: 'a'.repeat(40),
+    status: 'PASS',
+    codes: [],
+    failures: [],
+    coverage: [
+      row('feat', 'pass'),
+      row('feat', 'needs-you', 'a phone'),
+      row('other', 'pass'),
+      row('fin', 'deferred', 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev'),
+    ],
+    steps: [],
+    created: [],
+    swept: [],
+    unrecorded: [],
+    orphanIntents: [],
+    blockedDeletes: [],
+    failedDeletes: [],
+    consoleErrors: [],
+    throttled: [],
+    injected: [],
+    shots: [],
+    durationMs: 1000,
+  };
+  const md = toLocalReport(renderReport(result));
+  it('never carries a paste list or an "on dev" proof', () => {
+    expect(md).not.toMatch(/^#+ You don't need to test$/m);
+    expect(md).not.toMatch(/^#+ Needs you$/m);
+    expect(md).not.toMatch(/[Pp]roven on dev/);
+    expect(md).toContain(LOCAL_NOT_PASTE);
+    expect(md.split('\n')[0]).toBe('# Local check — PASS (pre-flight; dev remains the proof)');
+  });
+  it('a local deferral says why, and never that --tier all runs it', () => {
+    expect(md).toContain(
+      'fin: fin row — local: the Plaid Sandbox fixture bank is dev’s — runs on dev',
+    );
+    expect(md).not.toContain('`--tier all` runs them._');
   });
 });

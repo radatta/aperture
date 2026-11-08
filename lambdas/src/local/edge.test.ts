@@ -1,4 +1,5 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -6,7 +7,15 @@ import { AGENT_TOKEN_HEADER, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture
 import { createBffHandler } from '../index';
 import { createMcpHandler } from '../mcp/index';
 import { localDeps } from './deps';
-import { createEdge, routeOf, toEvent } from './edge';
+import {
+  API_HEADERS,
+  API_QUERY,
+  MCP_HEADERS,
+  WELL_KNOWN,
+  createEdge,
+  routeOf,
+  toEvent,
+} from './edge';
 import type { EdgeEvent, EdgeResult } from './edge';
 
 describe('routeOf', () => {
@@ -15,6 +24,8 @@ describe('routeOf', () => {
     expect(routeOf('/mcp')).toBe('mcp');
     expect(routeOf('/.well-known/oauth-protected-resource/mcp')).toBe('well-known');
     expect(routeOf('/.well-known/oauth-authorization-server')).toBe('well-known');
+    expect(routeOf('/.well-known/openid-configuration')).toBe('well-known');
+    expect(routeOf('/.well-known/openid-configuration/x')).toBeNull();
     expect(routeOf('/.well-known/other')).toBeNull();
     expect(routeOf('/mcp/x')).toBeNull();
     expect(routeOf('/tasks')).toBeNull();
@@ -144,5 +155,43 @@ describe('the local server', () => {
   });
   it('a path CloudFront serves from S3 is not the edge’s', async () => {
     expect((await fetch(`${base}/tasks`)).status).toBe(404);
+  });
+  it('a Lambda 404 comes back as the app shell with a 200, as CloudFront’s errorResponses do', async () => {
+    const res = await rpc('noSuchMethod', token('app'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/html');
+  });
+});
+
+// The stand-in's allowlists are copies of the distribution's; this fails when either side moves.
+describe('edge.ts ↔ app-stack.ts', () => {
+  const stack = readFileSync(new URL('../../../cdk/src/lib/app-stack.ts', import.meta.url), 'utf8');
+  const consts: Record<string, string> = { AUTH_HEADER, AGENT_TOKEN_HEADER };
+  const block = (name: string) => {
+    const i = stack.indexOf(`'${name}'`);
+    expect(i, name).toBeGreaterThan(-1);
+    return stack.slice(i, stack.indexOf('});', i));
+  };
+  const lists = (src: string) =>
+    [...src.matchAll(/allowList\(([^)]*)\)/g)].map((m) =>
+      m[1]!
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => consts[x] ?? x.replace(/^'|'$/g, '')),
+    );
+  it('/api/*: the origin request policy’s headers and query keys', () => {
+    expect(lists(block('ApiOriginPolicy'))).toEqual([API_HEADERS, API_QUERY]);
+  });
+  it('/mcp: the origin request policy’s headers plus the cache policy’s', () => {
+    const [orp] = lists(block('McpOriginPolicy'));
+    const [cache] = lists(block('McpCachePolicy'));
+    expect([...orp!, ...cache!].sort()).toEqual([...MCP_HEADERS].sort());
+  });
+  it('the well-known behaviors', () => {
+    const paths = [...stack.matchAll(/'(\/\.well-known\/[^']*)': wellKnownBehavior/g)].map((m) =>
+      m[1]!.replace(/\*$/, ''),
+    );
+    expect(paths).toEqual(WELL_KNOWN);
   });
 });

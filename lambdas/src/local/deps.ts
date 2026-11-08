@@ -1,6 +1,7 @@
 // The local devcheck server's collaborators (docs/ops/LOCAL-CHECK.md): the real edges over one InMemoryDoc,
-// the real Cognito verifier fed the run's JWKS, and inert gateways — nothing here can construct a live
-// AWS, Google, Plaid or Claude client, so a local run makes no call off the machine.
+// the real Cognito verifier fed the run's JWKS (it never fetches one), and inert gateways. Importing the edges
+// still builds their live clients at module scope, but no request reaches them: every handler path goes
+// through these deps, and serve.ts runs with no table, pool or bucket configured.
 import { createCognitoVerifier } from '../auth/verify';
 import type { Jwks } from '../auth/verify';
 import { InMemoryDoc } from '../ddb/DocClient';

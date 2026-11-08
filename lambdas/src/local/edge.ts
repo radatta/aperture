@@ -1,7 +1,8 @@
 // A CloudFront stand-in for the local devcheck server: it turns a Node request into the Function URL event
 // the edges read, forwarding only what the deployed distribution forwards (cdk/src/lib/app-stack.ts →
 // ApiOriginPolicy, McpOriginPolicy, McpCachePolicy) and stamping the origin secret. A header the app starts
-// relying on that CloudFront would strip fails here too. Keep the lists in step with app-stack.ts.
+// relying on that CloudFront would strip fails here too. edge.test.ts reads app-stack.ts and fails on drift.
+// Like the distribution's errorResponses, a Lambda's 403/404 reaches the browser as index.html with a 200.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AGENT_TOKEN_HEADER, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
 
@@ -13,6 +14,12 @@ export const MCP_HEADERS = [
   'accept',
   'mcp-protocol-version',
   'authorization',
+];
+// The façade behaviors (app-stack.ts wellKnownBehavior): the first two are `*` patterns, the last exact.
+export const WELL_KNOWN = [
+  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-authorization-server',
+  '/.well-known/openid-configuration',
 ];
 
 export interface EdgeEvent {
@@ -34,9 +41,9 @@ export type Route = 'api' | 'mcp' | 'well-known';
 export function routeOf(path: string): Route | null {
   if (path.startsWith('/api/')) return 'api';
   if (path === '/mcp') return 'mcp';
-  // Only the two façade behaviors — never all of /.well-known (app-stack.ts wellKnownBehavior).
-  if (path.startsWith('/.well-known/oauth-protected-resource')) return 'well-known';
-  if (path.startsWith('/.well-known/oauth-authorization-server')) return 'well-known';
+  // Only the façade behaviors — never all of /.well-known.
+  if (path === WELL_KNOWN[2]) return 'well-known';
+  if (WELL_KNOWN.slice(0, 2).some((p) => path.startsWith(p))) return 'well-known';
   return null;
 }
 
@@ -72,7 +79,11 @@ export function toEvent(
   };
 }
 
-export function createEdge(fns: { bff: Fn; mcp: Fn }, originSecret: string) {
+export function createEdge(
+  fns: { bff: Fn; mcp: Fn },
+  originSecret: string,
+  errorPage: () => Promise<string> = async () => '<!doctype html>',
+) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://local');
     const route = routeOf(url.pathname);
@@ -94,7 +105,9 @@ export function createEdge(fns: { bff: Fn; mcp: Fn }, originSecret: string) {
     );
     try {
       const out = await (route === 'api' ? fns.bff : fns.mcp)(event);
-      res.writeHead(out.statusCode, out.headers).end(out.body);
+      if (out.statusCode === 403 || out.statusCode === 404)
+        res.writeHead(200, { 'content-type': 'text/html' }).end(await errorPage());
+      else res.writeHead(out.statusCode, out.headers).end(out.body);
     } catch (err) {
       // A Lambda that throws is a 502 at CloudFront — never the app's index.html.
       console.error(err);

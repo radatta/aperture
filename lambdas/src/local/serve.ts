@@ -26,7 +26,9 @@ const deps = localDeps({
 });
 const bff = createBffHandler(deps.bff) as (e: EdgeEvent) => Promise<EdgeResult>;
 const mcp = createMcpHandler(deps.mcp) as (e: EdgeEvent) => Promise<EdgeResult>;
-const server = createServer(createEdge({ bff, mcp }, need('ORIGIN_SECRET')));
+// CloudFront's errorResponses page: the app's own shell, from Vite (APP_URL is the run's loopback origin).
+const errorPage = async () => (await fetch(`${need('APP_URL')}/index.html`)).text();
+const server = createServer(createEdge({ bff, mcp }, need('ORIGIN_SECRET'), errorPage));
 server.listen(0, '127.0.0.1', () => {
   const { port } = server.address() as AddressInfo;
   console.log(JSON.stringify({ ready: true, port }));

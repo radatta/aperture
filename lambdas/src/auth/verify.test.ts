@@ -129,6 +129,12 @@ describe('createCognitoVerifier with a jwks option', () => {
     const v = createCognitoVerifier(POOL, null, { jwks: jwks as Jwks });
     await expect(v.verify(sign(claims(), other))).rejects.toThrow();
   });
+  it('never fetches: a token signed under a key not in the set is rejected, not looked up', async () => {
+    const v = createCognitoVerifier(POOL, null, { jwks: jwks as Jwks });
+    const data = `${b64({ alg: 'RS256', kid: 'unknown', typ: 'JWT' })}.${b64(claims())}`;
+    const token = `${data}.${cryptoSign('sha256', Buffer.from(data), privateKey).toString('base64url')}`;
+    await expect(v.verify(token)).rejects.toThrow(/no JWKS fetch/);
+  });
   it('keeps D14: a denied client is rejected', async () => {
     const v = createCognitoVerifier(POOL, null, {
       jwks: jwks as Jwks,

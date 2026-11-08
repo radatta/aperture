@@ -51,6 +51,7 @@ function asProc(child: ChildProcess, name: string): Proc {
 // in from the shell). Resolves with the port from its one ready line.
 export async function startLocalServer(o: {
   worktree: string;
+  track: (p: Proc) => void;
   env: Record<string, string>;
   logPath: string;
 }): Promise<{ port: number; proc: Proc }> {
@@ -68,19 +69,22 @@ export async function startLocalServer(o: {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const log = createWriteStream(o.logPath);
+  child.stdout!.pipe(log);
   child.stderr!.pipe(log);
   const proc = asProc(child, 'the local server');
+  o.track(proc);
   const port = await new Promise<number>((res, rej) => {
     const t = setTimeout(() => rej(fail('the local server sent no ready line in 30 s')), 30_000);
     let buf = '';
-    child.stdout!.on('data', (b: Buffer) => {
+    const onData = (b: Buffer) => {
       buf += String(b);
       const m = /"ready":true,"port":(\d+)/.exec(buf);
-      if (m) {
-        clearTimeout(t);
-        res(Number(m[1]));
-      }
-    });
+      if (!m) return;
+      clearTimeout(t);
+      child.stdout!.off('data', onData);
+      res(Number(m[1]));
+    };
+    child.stdout!.on('data', onData);
     child.once('exit', (code) => {
       clearTimeout(t);
       rej(fail(`the local server exited (${code}) before it was ready — see ${o.logPath}`));
@@ -89,7 +93,6 @@ export async function startLocalServer(o: {
     await proc.stop();
     throw err;
   });
-  child.stdout!.pipe(log);
   return { port, proc };
 }
 
@@ -97,6 +100,7 @@ export async function startLocalServer(o: {
 // to the local server (app/vite.config.ts → APERTURE_LOCAL_EDGE). Ready once it serves the shell.
 export async function startVite(o: {
   worktree: string;
+  track: (p: Proc) => void;
   port: number;
   edgePort: number;
   env: Record<string, string>;
@@ -126,10 +130,12 @@ export async function startVite(o: {
   child.stdout!.pipe(log);
   child.stderr!.pipe(log);
   const proc = asProc(child, 'vite');
+  o.track(proc);
   const origin = `http://127.0.0.1:${o.port}`;
   const t0 = Date.now();
   for (;;) {
-    if (child.exitCode !== null) throw fail(`vite exited (${child.exitCode}) — see ${o.logPath}`);
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw fail(`vite exited (${child.exitCode ?? child.signalCode}) — see ${o.logPath}`);
     try {
       const res = await fetch(`${origin}/`, { signal: AbortSignal.timeout(5_000) });
       if (res.ok) return proc;

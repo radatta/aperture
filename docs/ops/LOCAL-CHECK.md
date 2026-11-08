@@ -54,10 +54,14 @@ left running is this run's leak (the class that broke phone-nits and timer-credi
 
 - **Never off the machine.** The origin can only be switched to `http://127.0.0.1:<port>` (`config.ts`
   `useLocalOrigin`); the page aborts any request off that origin; the server refuses a live `TABLE_NAME`,
-  `USER_POOL_ID` or `FILES_BUCKET` and builds no live client (`lambdas/src/local/deps.ts`).
+  `USER_POOL_ID` or `FILES_BUCKET`, routes every handler call through inert deps (`lambdas/src/local/deps.ts` —
+  the edges' live clients exist at import but are never called), and its verifier never fetches a JWKS.
 - **The deployed code paths, not a bypass.** The edges are the deployed `handler`s' own factories; auth is the real
   `aws-jwt-verify` with a JWKS passed in (`createCognitoVerifier`'s `jwks` option, which the deployed edges never
-  pass). Origin secret, D14 and per-user partitions behave as on dev (`lambdas/src/local/edge.test.ts`).
+  pass). Origin secret, D14 and per-user partitions behave as on dev, the agent and device tokens are set (no
+  'local' fallback), and a Lambda 403/404 comes back as the app shell with a 200, as CloudFront's errorResponses
+  do (`lambdas/src/local/edge.test.ts`, which also fails if the allowlists drift from `app-stack.ts`). The OAuth
+  well-known metadata answers "not configured" locally — the façade is dev's.
 - **Lambda's clock.** The server runs with `TZ=UTC`, as Lambda does — the container is Los Angeles time, and a UTC
   day-key bug only shows on a UTC server.
 - **Separate from dev's state.** Its own ledger and report under `localNotes/devcheck-local/<run>/`, no `run.lock`;

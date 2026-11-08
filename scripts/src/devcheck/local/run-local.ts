@@ -4,6 +4,7 @@
 // with locally signed tokens; the app from `vite dev`. No dev lock, no deploy, no network past 127.0.0.1.
 // A pre-flight before `pnpm bot deploy-dev`: a red run blocks the lock, a green one proves nothing about dev.
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -35,14 +36,22 @@ import { cognitoAuthority } from '../token';
 
 const exec = promisify(execFile);
 
-// The dev report's wording, retitled: every "on dev" a local report would claim is "locally" here.
+// The dev report's wording, retitled: every "on dev" a local report would claim is "locally" here, and the two
+// lists report-<branch>.md and the CC done notes paste are renamed so a local run can never fill them.
+export const LOCAL_NOT_PASTE = '— not a paste list: dev’s report is';
 export function toLocalReport(md: string): string {
   return md
     .replace(/^# Dev check — (.*)$/m, '# Local check — $1 (pre-flight; dev remains the proof)')
     .replaceAll('Not proven on dev', 'Not proven locally')
     .replaceAll('Proven on dev', 'Proven locally')
     .replaceAll('proven on dev', 'proven locally')
-    .replaceAll('Deferred (slow tier)', 'Deferred (slow tier, or runs on dev)');
+    .replace(/^(#+) You don't need to test$/gm, `$1 Passed locally ${LOCAL_NOT_PASTE}`)
+    .replace(/^(#+) Needs you$/gm, `$1 Needs you (local run) ${LOCAL_NOT_PASTE}`)
+    .replaceAll('Deferred (slow tier)', 'Deferred (slow tier, or runs on dev)')
+    .replaceAll(
+      '_Not run: the branch touches none of these scenarios’ slow paths and no `--feature` names them. `--tier all` runs them._',
+      '_Not run here: rows marked `local: …` only dev can prove — they run in the dev check; the rest are slow steps outside this branch’s paths (`--tier all` runs them)._',
+    );
 }
 
 export const localRunDir = (worktree: string, runId: string): string =>
@@ -81,8 +90,12 @@ async function main(): Promise<number> {
   const shotsDir = join(out, 'shots');
   mkdirSync(shotsDir, { recursive: true });
   const log = (msg: string) => console.log(`[devcheck:local] ${msg}`);
+  // Tracked from spawn, not from ready: a kill during startup must still stop a child that is booting.
   const procs: Proc[] = [];
-  const stopAll = () => Promise.allSettled(procs.reverse().map((p) => p.stop()));
+  const track = (p: Proc) => void procs.push(p);
+  const stopAll = async () => {
+    for (const p of [...procs].reverse()) await p.stop().catch(() => undefined); // vite, then the server
+  };
   for (const [sig, code] of [
     ['SIGINT', 130],
     ['SIGTERM', 143],
@@ -96,6 +109,7 @@ async function main(): Promise<number> {
     const t0 = Date.now();
     const server = await startLocalServer({
       worktree,
+      track,
       logPath: join(out, 'server.log'),
       env: {
         ORIGIN_SECRET: auth.originSecret,
@@ -103,24 +117,25 @@ async function main(): Promise<number> {
         LOCAL_POOL_ID,
         LOCAL_CLAUDE_CLIENT_ID: LOCAL_CLAUDE_CLIENT,
         LOCAL_JWKS: JSON.stringify(auth.jwks),
+        // Set, so the agent-token and device-token paths reject as on dev rather than fall back to 'local'.
+        AGENT_TOKEN: randomBytes(32).toString('hex'),
+        DEVICE_TOKEN: randomBytes(32).toString('hex'),
       },
     });
-    procs.push(server.proc);
-    procs.push(
-      await startVite({
-        worktree,
-        port: vitePort,
-        edgePort: server.port,
-        logPath: join(out, 'vite.log'),
-        env: {
-          VITE_API_MODE: 'http',
-          VITE_API_BASE: '',
-          VITE_COGNITO_AUTHORITY: cognitoAuthority(LOCAL_POOL_ID),
-          VITE_COGNITO_CLIENT_ID: LOCAL_APP_CLIENT,
-          VITE_BUILD_SHA: head,
-        },
-      }),
-    );
+    await startVite({
+      worktree,
+      track,
+      port: vitePort,
+      edgePort: server.port,
+      logPath: join(out, 'vite.log'),
+      env: {
+        VITE_API_MODE: 'http',
+        VITE_API_BASE: '',
+        VITE_COGNITO_AUTHORITY: cognitoAuthority(LOCAL_POOL_ID),
+        VITE_COGNITO_CLIENT_ID: LOCAL_APP_CLIENT,
+        VITE_BUILD_SHA: head,
+      },
+    });
     useLocalOrigin(origin);
     log(
       `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} — server :${server.port} (pid ${server.proc.pid}), app ${origin}, up in ${Date.now() - t0} ms → ${out}`,
