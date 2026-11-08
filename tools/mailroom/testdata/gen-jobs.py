@@ -213,6 +213,14 @@ L = {'op': 'launch'}
 def ST(*steps): return {'params': {'steps': list(steps)}}
 def F(label, x, y, as_, **k): return {'op': 'find', 'label': label, 'near': {'x': x, 'y': y}, 'radius': 10, 'as': as_, **k}
 NOSIM = ['axe ', 'xcrun ']
+# Trees for the read-backs (home presses, the switcher, the icon tap).
+def dtree(out, n=0): return {'m': 'describe-ui --udid', 'out': out, 'n': n}
+FULL = {'x': 0, 'y': 0, 'width': 440, 'height': 956}
+APPFRONT = [{'role': 'AXApplication', 'AXLabel': 'Web', 'frame': FULL, 'children': []}]  # the incident: the app, no pill
+SWITCHER = [{'role': 'AXApplication', 'AXLabel': 'SpringBoard', 'frame': FULL, 'children': [{**ICON, 'frame': {'x': 120, 'y': 200, 'width': 200, 'height': 430}}]}]
+KS = [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}]
+DOUBLE, SWIPE, LEAVE, PRESS = 'button home --step sleep 0.15', 'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40', 'tap -x 400 -y 880', 'home --step sleep 1 --udid'
+WEB = 'pgrep -f RuntimeRoot/Applications/Web.app/Web'
 def sc(name, steps=None, **k):
     if steps is not None: k['patch'] = {**k.get('patch', {}), **ST(*steps)}
     c(name, kind='sim', **k)
@@ -519,9 +527,16 @@ serr('sim: a hung keyboard read after a field tap is AX_TIMEOUT', 'AX_TIMEOUT', 
 spass('sim: blur checks the keyboard went down once', [L, {'op': 'blur'}], tape=[pt(221, 856, {})], notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1})
 sfail('sim: a keyboard that stays up after two Done taps is BLUR', 'BLUR', [L, {'op': 'blur'}], simCount={'tap -x 395 -y 575': 2})
 spass('sim: blur with no keyboard up does nothing', [L, {'op': 'blur'}], tape=[pt(395, 575, {})], notes={'1': 'no keyboard to dismiss'}, simExcludes=['tap -x 395'])
-spass('sim: a dropped icon tap (still on the Home Screen) is tapped again, not swiped', [L],
-      tape=[pt(220, 895, {}, n=10), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
-      simExcludes=['swipe --start-x 220 --start-y 450'])
+spass('sim: a dropped icon tap (still on the Home Screen) is tapped again at the third poll, not swiped', [L],
+      tape=[pt(220, 895, {}, n=3), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
+      notes={'0': 'icon tapped 2 times'}, simExcludes=['swipe --start-x 220 --start-y 450'])
+spass('sim: icon taps that keep dropping are tapped again at polls 3, 6 and 10', [L],
+      tape=[pt(220, 895, {}, n=11), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4},
+      notes={'0': 'icon tapped 4 times'})
+sfail('sim: still the Home Screen after four icon taps is ICON_TAP_DROPPED, not LANDMARK', 'ICON_TAP_DROPPED', [L],
+      tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4}, files=['shots/01-fail.png'])
+sfail('sim: the app in front without its landmark stays LANDMARK, its icon never tapped again', 'LANDMARK', [L],
+      tape=[pt(220, 895, {}), dtree(tree(), 3), dtree(APPFRONT)], simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1})
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
 serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
      tape=SIGNED_OUT + FORMP[:-1] + [{**FORMP[-1], 'n': 1}, HANG('--point 220,454')], pwTyped=1, simCount={'tap -x 201 -y 453': 1})
@@ -550,13 +565,6 @@ spass('sim: a stale first landmark read is read again', [L], tape=[pt(220, 895, 
       expect={'signedIn': 'already'})
 # The switcher and home presses are read back (job …192707Z…-relaunch-bd33: AXe reported presses iOS never got). One launch
 # reads the tree three times (ready, then two icon reads that agree), so a kill's own read is the fourth.
-def dtree(out, n=0): return {'m': 'describe-ui --udid', 'out': out, 'n': n}
-FULL = {'x': 0, 'y': 0, 'width': 440, 'height': 956}
-APPFRONT = [{'role': 'AXApplication', 'AXLabel': 'Web', 'frame': FULL, 'children': []}]  # the incident: the app, no pill
-SWITCHER = [{'role': 'AXApplication', 'AXLabel': 'SpringBoard', 'frame': FULL, 'children': [{**ICON, 'frame': {'x': 120, 'y': 200, 'width': 200, 'height': 430}}]}]
-KS = [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}]
-DOUBLE, SWIPE, LEAVE, PRESS = 'button home --step sleep 0.15', 'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40', 'tap -x 400 -y 880', 'home --step sleep 1 --udid'
-WEB = 'pgrep -f RuntimeRoot/Applications/Web.app/Web'
 spass('sim: kill by app switcher', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 2)], notes={'1': 'killed by switcher; web: gone'},
       simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', SWIPE, 'tap -x 400 -y 880 --tap-style physical', WEB],
       simCount={DOUBLE: 1, SWIPE: 1, LEAVE: 1})

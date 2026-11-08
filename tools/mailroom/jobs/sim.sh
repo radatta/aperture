@@ -454,7 +454,7 @@ sim_find_icon() {
 
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
-  local i s t clean=""
+  local i s t clean="" taps=1
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
@@ -468,6 +468,7 @@ sim_op_launch() {
       SIM_SIGNED="$s"
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
       [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
+      [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
       return 0
     fi
     i=$((i + 1))
@@ -476,23 +477,37 @@ sim_op_launch() {
         sim_err SIM_UNAVAILABLE AX_TIMEOUT "point reads timed out looking for Home or the sign-in card"
         return 1
       fi
+      # Still the Home Screen after every tap is AXe's taps dropped (job …223625Z…-relaunch-07aa), not the app.
+      if t="$(sim_tree)" && sim_tree_home "$t"; then
+        sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+        return 1
+      fi
       sim_fail LANDMARK "neither Home nor the sign-in card after launch"
       return 1
     fi
-    if [ "$i" = 10 ]; then
-      # Still on the Home Screen: the icon tap dropped, so tap it again (a swipe there opens Search). In the app, the
-      # page can draw offset from its accessibility frames after a kill: nudge it.
-      # An unreadable tree does neither.
-      t="$(sim_tree)" || t=""
-      if [ -n "$t" ] && ! jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
-        sim_tap_el "$SIM_ICON" || return 1
-      elif [ -n "$t" ]; then
-        ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
-        ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
-      fi
-    fi
+    case "$i" in
+      3 | 6 | 10)
+        # Read back the icon tap: still the Home Screen means it dropped, so tap again (a swipe there opens Search), up
+        # to four taps. In the app, the page can draw offset from its accessibility frames after a kill: at 10, nudge it.
+        # An unreadable tree does neither.
+        t="$(sim_tree)" || t=""
+        if [ -n "$t" ] && sim_tree_home "$t"; then
+          sim_tap_el "$SIM_ICON" || return 1
+          taps=$((taps + 1))
+        elif [ "$i" = 10 ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
+          ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
+          ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
+        fi
+        ;;
+    esac
     sleep 2
   done
+}
+
+# Is tree $1 the Home Screen: not the web app, with the page pill?
+sim_tree_home() {
+  jq -e '([.. | objects | select(.role? == "AXApplication")][0].AXLabel // "") != "Web"
+    and any(.. | objects | .AXValue?; type == "string" and test("^Page [0-9]+ of [0-9]+$"))' <<<"$1" >/dev/null 2>&1
 }
 
 # Is the front sheet dev's Cognito? Read from the sheet's own address bar: native chrome (role, id "URL"), owned
