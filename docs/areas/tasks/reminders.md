@@ -69,9 +69,11 @@ EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
   1. Lists the user registry (`PK=push`, `SK=user#<uid>`, written on first subscribe).
   2. Queries GSI1's third key space for each user: `GSI1PK=u#<uid>#remind`, `GSI1SK=fireAt`, set on task and
      plan items atomically with their write.
-  3. Re-reads each task (or plan) consistently. A plan moved to another day writes its new key before deleting
-     the old one (`putPlan`), so a tick landing between those two writes still sees the old copy: a move off
-     today during 09:00–09:30 can send that one "Planned for today". Accepted: the gap is one write wide.
+  3. Re-reads each task (or plan) consistently. A plan pings only from its newest copy: a move writes the new
+     key before deleting the old one (`putPlan`), so the old copy outlives it by a write, or for good when that
+     delete failed. One consistent range read from the window's earliest plan day finds each plan's newest
+     copy, as the app's reads do. A removal's tombstone, or a newest copy dated before that day, reads as
+     absent, so the row stays quiet.
   4. Applies the toggles and the arm rule (below).
   5. Writes the dedup row `psent#<fireAt>#<taskId>` with `putIf` **before** sending.
   6. Bumps the daily guard `pcount#<day>`.

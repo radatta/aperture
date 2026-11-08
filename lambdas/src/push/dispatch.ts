@@ -109,15 +109,32 @@ export const taskSource: CandidateSource = async ({ repo, rows, settings, notBef
 };
 
 // A plan pings only while its task is open and untimed (a timed task is never planned — the check is
-// defensive).
+// defensive), and only from its newest copy: a move writes the new key before deleting the old, so the old
+// one outlives it by a write, or for good when that delete failed. The app's reads keep the newest per id;
+// one consistent range read from the window's earliest plan day does the same here. A newest copy dated
+// before that day (or a removal's tombstone) reads as absent, so the row stays quiet.
 export const planSource: CandidateSource = async ({ repo, rows, settings, notBefore }) => {
   if (!reminderEnabled('planned', settings)) return [];
+  const reads = [];
+  for (const row of rows)
+    if (row.kind === 'plan') reads.push({ row, read: await repo.getPlanForRemind(row.sk) });
+  const days = reads.flatMap(({ read }) => (read ? [read.plan.day] : [])).sort();
+  if (!days.length) return [];
+  const newest = new Map(
+    (await repo.listPlansFrom(days[0]!, { consistent: true })).map((p) => [p.id, p]),
+  );
   const out: FoundCandidate[] = [];
-  for (const row of rows) {
-    if (row.kind !== 'plan') continue;
-    const read = await repo.getPlanForRemind(row.sk);
+  for (const { row, read } of reads) {
     if (!read || safeFireAt(() => planFireAt(read.plan, userDueEpoch)) !== row.fireAt) continue;
     const { plan, armedAt } = read;
+    const head = newest.get(plan.id);
+    if (
+      !head ||
+      head.day !== plan.day ||
+      head.order !== plan.order ||
+      head.updatedAt !== plan.updatedAt
+    )
+      continue; // a stale copy
     if (armedAt > row.fireAt || notBefore('planned') > row.fireAt) continue; // planned after 9:00
     const task = await repo.getTask(plan.taskId, { consistent: true });
     if (!task || task.status === 'done' || task.status === 'cancelled' || task.dueTime) continue;

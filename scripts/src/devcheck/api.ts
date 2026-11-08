@@ -553,7 +553,6 @@ export function createApiClient({
         );
       await call<null>('deleteFluxSet', [id]);
     },
-    // The reflection scenario's direct BFF call (its over-cap refusal), on a task this harness created.
     // A run's own task re-dated (timed-reminders moves its reminder on a minute when a tick ran late).
     async setTaskDue(
       id: string,
@@ -562,6 +561,7 @@ export function createApiClient({
       assertLedgerTask(id);
       return call<DevTask>('setTaskDue', [id, due]);
     },
+    // The reflection scenario's direct BFF call (its over-cap refusal), on a task this harness created.
     async setTaskActual(
       id: string,
       actualMin: number,

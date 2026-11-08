@@ -747,6 +747,35 @@ describe('push dispatch — armed before it fires', () => {
     expect(w2.push.sends).toHaveLength(0);
   });
 
+  it('a copy a failed delete left behind stays quiet: only the newest copy of a plan pings', async () => {
+    const doc = new InMemoryDoc();
+    const w = world(doc);
+    await w.device();
+    await w.repo().putTask(task({ id: 'A', title: 'Moved off' }));
+    await w.repo().putTask(task({ id: 'B', title: 'Reordered, then removed' }));
+    await w.repo().putTask(task({ id: 'C', title: 'Still planned' }));
+    const p = plan({ id: 'P1', taskId: 'A', updatedAt: 0 });
+    const q = plan({ id: 'P2', taskId: 'B', order: 1, updatedAt: 0 });
+    await w.repo().putPlan(p);
+    await w.repo().putPlan(q);
+    await w.repo().putPlan(plan({ id: 'P3', taskId: 'C', order: 2, updatedAt: 0 }));
+    // Each move's delete fails: the old row (remind keys and all) is put back as it was.
+    const moved = async (from: TaskPlan, to: TaskPlan) => {
+      const old = await doc.get(pk(U), sk.plan(from.day, from.order, from.id), {
+        consistent: true,
+      });
+      const next = await w.repo().putPlan(to, from);
+      await doc.put(old!);
+      return next;
+    };
+    await moved(p, { ...p, day: '2026-11-05', updatedAt: NINE_AM - 60 * MIN }); // off to tomorrow
+    const q2 = await moved(q, { ...q, order: 4, updatedAt: NINE_AM - 60 * MIN }); // reordered
+    await w.repo().putPlan({ ...q2, deletedAt: NINE_AM - 30 * MIN, updatedAt: NINE_AM - 30 * MIN });
+    w.set(NINE_AM + MIN);
+    await w.tick();
+    expect(w.notes()).toEqual([expect.objectContaining({ title: 'Still planned' })]);
+  });
+
   it('nothing due before the user had reminders on pings (the registry row is when they went live)', async () => {
     const w = world();
     await w.repo().putPushSub(sub('S1'));
