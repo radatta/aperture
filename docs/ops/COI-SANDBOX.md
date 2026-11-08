@@ -887,8 +887,8 @@ sessions by them, and restore matches on them.
   ```
 - **Window restore** (`tmux-restore.sh`): `save` snapshots each window running Claude — name, session id, cwd,
   and `--dangerously-skip-permissions` if it had it — to `localNotes/tmux-sessions.tsv` (gitignored: it holds
-  session ids). Restore reopens each missing window by name with `claude --resume <id> -n <name>`, 3 s apart,
-  and skips windows that already exist. Run it inside the COI session (`coi attach`), which it fills; outside
+  session ids); with no Claude windows it keeps the last snapshot and exits 1. Restore reopens each missing
+  window by name with `claude --resume <id> -n <name>`, 3 s apart, and skips windows that already exist. Run it inside the COI session (`coi attach`), which it fills; outside
   tmux it builds a separate `aperture` session (plus a `_boot` window) that `coi attach` won't find.
   ```bash
   bash /workspace/tools/coi/tmux-restore.sh save   # before a stop or rebuild

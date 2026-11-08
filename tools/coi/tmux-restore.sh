@@ -9,8 +9,9 @@ tsv=/workspace/localNotes/tmux-sessions.tsv
 save() {
   mkdir -p "${tsv%/*}"
   : > "$tsv.tmp"
-  tmux list-panes -a -F '#{window_index} #{window_name} #{pane_pid} #{pane_current_path}' | sort -n | while read -r idx name ppid cwd; do
-    cpid=$(ps -o pid=,comm= --ppid "$ppid" | awk '$2=="claude"{print $1; exit}')
+  # name last: read hands it the rest of the line, so it may hold spaces, tabs or nothing
+  tmux list-panes -a -F $'#{window_index}\t#{pane_pid}\t#{window_name}' | sort -n | while IFS=$'\t' read -r _ ppid name; do
+    cpid=$(ps -o pid=,comm= --ppid "$ppid" | awk '$2=="claude"{print $1; exit}' || true) # a childless pane fails ps
     [ -n "$cpid" ] || continue
     meta="$HOME/.claude/sessions/$cpid.json"
     [ -f "$meta" ] || continue
@@ -18,6 +19,8 @@ save() {
     flags=$(ps -o args= -p "$cpid" | grep -o -- '--dangerously-skip-permissions' || true)
     printf '%s\t%s\t%s\t%s\n' "$name" "$sid" "$scwd" "$flags" >> "$tsv.tmp"
   done
+  # no Claude windows (e.g. right after a rebuild) keeps the last snapshot rather than emptying it
+  [ -s "$tsv.tmp" ] || { rm -f "$tsv.tmp"; echo "no Claude windows; kept $tsv" >&2; exit 1; }
   mv "$tsv.tmp" "$tsv"
   echo "saved $(wc -l < "$tsv") windows -> $tsv"
 }
@@ -26,11 +29,11 @@ restore() {
   [ -f "$tsv" ] || { echo "no $tsv"; exit 1; }
   if [ -n "${TMUX:-}" ]; then sess=$(tmux display -p '#S'); else sess=aperture; tmux has-session -t "$sess" 2>/dev/null || tmux new-session -d -s "$sess" -n _boot -c /workspace; fi
   while IFS=$'\t' read -r name sid cwd flags; do
-    if tmux list-windows -t "$sess" -F '#{window_name}' | grep -qx "$name"; then echo "skip $name (window exists)"; continue; fi
-    tmux new-window -d -t "$sess:" -n "$name" -c "$cwd"
-    tmux send-keys -t "$sess:$name" "claude --resume $sid -n $name $flags" Enter
+    if grep -qxF -- "$name" <<<"$(tmux list-windows -t "$sess" -F '#{window_name}')"; then echo "skip $name (window exists)"; continue; fi
+    win=$(tmux new-window -d -P -F '#{window_id}' -t "$sess:" -n "$name" -c "$cwd")
+    tmux send-keys -t "$win" "$(printf 'claude --resume %q -n %q' "$sid" "$name") $flags" Enter
     echo "restored $name"
-    sleep 3 # stagger the 12 startups
+    sleep 3 # stagger the startups
   done < "$tsv"
   [ -n "${TMUX:-}" ] || exec tmux attach -t "$sess"
 }
