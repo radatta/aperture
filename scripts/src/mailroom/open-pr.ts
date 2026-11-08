@@ -114,7 +114,7 @@ export function iosBanner(fs: Fs, root: string, sha: string): string | null {
     if (!u) return null;
     const reason = /^[A-Z_/()0-9.]{1,40}$/.test(u.reason) ? u.reason : 'SIM_UNAVAILABLE';
     const asleep = /^MAC_(UNREACHABLE|STALLED)/.test(reason);
-    return `> ⚠ **${IOS_BANNER_MARK}** (${reason}${asleep ? ', Mac asleep?' : ''}): ${u.rows} iOS row${u.rows === 1 ? '' : 's'} untested. Rerun the devcheck ${asleep ? 'with the Mac awake' : 'once the sim is fixed (IOS-CHECK.md → Failures)'} before merging a UI change.`;
+    return `> ⚠ **${IOS_BANNER_MARK}** (${reason}${asleep ? ', Mac asleep?' : ''}): ${u.rows ? `${u.rows} iOS row${u.rows === 1 ? '' : 's'} untested` : 'its iOS steps didn’t finish'}. Rerun the devcheck ${asleep ? 'with the Mac awake' : 'once the sim is fixed (IOS-CHECK.md → Failures)'} before merging a UI change.`;
   }
   return null;
 }

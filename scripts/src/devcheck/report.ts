@@ -96,7 +96,9 @@ export function statusLine(r: RunResult): string {
 }
 
 export const iosNotRun = (u: { reason: string; rows: number }) =>
-  `iOS NOT RUN (${u.reason}): ${u.rows} iPhone row${u.rows === 1 ? '' : 's'} untested`;
+  u.rows
+    ? `iOS NOT RUN (${u.reason}): ${u.rows} iPhone row${u.rows === 1 ? '' : 's'} untested`
+    : `iOS NOT RUN (${u.reason})`;
 
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;

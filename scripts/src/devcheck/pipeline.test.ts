@@ -1345,11 +1345,26 @@ describe('runPipeline', () => {
         }),
       );
       expect(r.status).toBe('PASS');
-      // the later step inherits the needs-you (the scenario stops there), so its row is untested too
-      expect(r.ios?.unavailable).toEqual({ reason: 'MAC_UNREACHABLE', rows: 3 });
-      expect(statusLine(r)).toBe('PASS — iOS NOT RUN (MAC_UNREACHABLE): 3 iPhone rows untested');
+      // the later step inherits the needs-you too, but only an ios row counts as an iPhone row
+      expect(r.ios?.unavailable).toEqual({ reason: 'MAC_UNREACHABLE', rows: 1 });
+      expect(statusLine(r)).toBe('PASS — iOS NOT RUN (MAC_UNREACHABLE): 1 iPhone row untested');
       expect(finish).toHaveBeenCalledOnce();
       expect(r.shots).toContain('ios-slw-wait-01-home.png');
+    });
+
+    it('an outage with no ios row left to count still reaches the status line', async () => {
+      const ios = {
+        forScenario: () => ({ run: async () => ({}) }),
+        finish: async () => undefined,
+        jobs: [],
+        shots: [],
+        unavailable: () => 'MAC_UNREACHABLE',
+      } as unknown as Ios;
+      const r = await runPipeline(
+        deps(world(), [scenario(async () => undefined)(world())], memLedger(), { ios }),
+      );
+      expect(r.ios?.unavailable).toEqual({ reason: 'MAC_UNREACHABLE', rows: 0 });
+      expect(statusLine(r)).toBe('PASS — iOS NOT RUN (MAC_UNREACHABLE)');
     });
 
     it('without an iOS client a step that asks for the sim reads needs you, never crashes', async () => {

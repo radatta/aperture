@@ -7,11 +7,13 @@ import { basename, join } from 'node:path';
 import type { Clock } from '../bot/dispatch.ts';
 import {
   IosAssert,
+  IosRejected,
   IosUnavailable,
   makeSimJob,
   runSimJob,
   validateSimParams,
 } from '../mailroom/sim.ts';
+import { INSTALL_LINE } from '../mailroom/open-pr.ts';
 import type { IosOp, SimResult } from '../mailroom/sim.ts';
 import type { Fs } from '../mailroom/submit.ts';
 import { needsYou } from './scenario';
@@ -43,6 +45,7 @@ export interface IosDeps {
   outDir: string; // the run's artifact dir
   copy: (from: string, to: string) => void;
   log: (s: string) => void;
+  repoVersion?: () => string; // the runner this checkout would install; an older one on the Mac gets a line once
 }
 
 export interface Ios {
@@ -59,6 +62,27 @@ const runWide = (reason: string) => !reason.endsWith('/KEYBOARD_SETUP');
 export function createIos(d: IosDeps): Ios {
   let out: string | null = null;
   let ran = false;
+  let lastBooted: string | undefined;
+  let warned = false;
+  // This checkout's runner when the Mac's is another version, else null (unknown counts as the same).
+  const staleAgainst = (r: { runnerVersion?: string | undefined }): string | null => {
+    if (!d.repoVersion || !r.runnerVersion) return null;
+    try {
+      const want = d.repoVersion();
+      return r.runnerVersion === want ? null : want;
+    } catch {
+      return null;
+    }
+  };
+  // A line only: nothing here may fail a row.
+  const warnStaleRunner = (r: { runnerVersion?: string | undefined }) => {
+    const want = staleAgainst(r);
+    if (warned || !want || !r.runnerVersion) return;
+    warned = true;
+    d.log(
+      `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall (from merged main; a branch that changes the runner: its sha in ?ref= and --ref, MAILROOM.md → Install): ${INSTALL_LINE}`,
+    );
+  };
   const jobs: IosJobSummary[] = [];
   const shots: string[] = [];
 
@@ -111,16 +135,36 @@ export function createIos(d: IosDeps): Ios {
           );
         ran = true;
         d.log(`  ios ${name}: ${steps.length} ops`);
+        lastBooted = undefined; // this job may boot it, whatever the last one left
         let r: SimResult;
         try {
           r = await runSimJob({ fs: d.fs, clock: d.clock, dir: d.dir, log: d.log }, job);
         } catch (err) {
+          if (err instanceof IosRejected || err instanceof IosUnavailable) warnStaleRunner(err);
           if (err instanceof IosAssert) {
             keepShots(scenarioId, name, err.result);
             jobs.push(summarize(name, err.result));
+            lastBooted = err.result.booted;
+            warnStaleRunner(err.result);
             throw new Error(`iOS: ${err.message}`, { cause: err });
           }
+          // A plan this checkout writes that an older runner can't read: the Mac needs a reinstall, not a fix here.
+          if (err instanceof IosRejected && staleAgainst(err)) {
+            out = 'RUNNER_STALE';
+            jobs.push({
+              id: job.id,
+              step: name,
+              status: 'rejected',
+              reason: out,
+              buildsSeen: [],
+              runnerVersion: err.runnerVersion,
+            });
+            needsYou(
+              `${IOS_NOTE}: RUNNER_STALE — the Mac's runner refused a plan from a newer one; reinstall it`,
+            );
+          }
           if (err instanceof IosUnavailable) {
+            if (err.result) keepShots(scenarioId, name, err.result);
             if (runWide(err.reason)) out = err.reason;
             jobs.push({
               id: job.id,
@@ -135,6 +179,8 @@ export function createIos(d: IosDeps): Ios {
         }
         keepShots(scenarioId, name, r);
         jobs.push(summarize(name, r));
+        lastBooted = r.booted;
+        warnStaleRunner(r);
         // Credited to the build the app actually ran; a pass on another build is no pass for this one.
         const want = d.expectedSha.slice(0, 7);
         const seen = r.buildsSeen?.at(-1);
@@ -146,6 +192,7 @@ export function createIos(d: IosDeps): Ios {
     async finish() {
       // No shutdown job to a Mac that isn't answering; any other unavailability (NOT_LAUNCHED…) left it booted.
       if (!ran || (out && /^MAC_(UNREACHABLE|STALLED)/.test(out))) return;
+      if (lastBooted === 'off') return; // the plan's own last op shut it down
       const job = makeSimJob(
         'shutdown',
         { sha: d.expectedSha, timeoutSec: 60, shutdown: false, steps: [{ op: 'shutdown' }] },

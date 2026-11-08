@@ -32,7 +32,7 @@ export const ROLES = [
   'AXStaticText',
   'AXCheckBox',
 ] as const;
-// The app's write buttons, refused for `tap` at validation (lowercased, trimmed, exact) — and again at run time
+// The app's write buttons, refused for `tap` at validation (lowercased, trimmed: an entry, or an entry and a space) — and again at run time
 // on the element actually matched. A belt: the boundary is the dev test user's own partition.
 export const TAP_DENY = [
   'save',
@@ -54,6 +54,8 @@ export const TAP_DENY = [
   'return',
   'add to today',
   'add place',
+  'focus',
+  'send', // the capture bar's return key (enterKeyHint) saves the log
 ];
 // sim.sh's device profile screen, in points: coordinates past it are refused (runner-fixtures.test.ts pins both).
 export const SIM_W = 440;
@@ -80,7 +82,7 @@ export type IosOp =
   | { op: 'expect'; as: string; enabled: boolean }
   | { op: 'expect'; as: string; aboveKeyboard: true }
   | { op: 'expect'; as: string; sameWidthAs: string }
-  | { op: 'keys'; text: string }
+  | { op: 'keys'; text: string; in?: string } // in: read the field back where that find/tap found it
   | { op: 'erase'; n: number }
   | { op: 'scroll'; dir: 'up' | 'down'; pt: number }
   | { op: 'expectBuild'; relaunches?: 0 | 1 }
@@ -254,7 +256,11 @@ function opOk(o: unknown): boolean {
       if ('sameWidthAs' in o) return asName(o.sameWidthAs);
       return false;
     case 'keys':
-      return keysOk(o, ['op', 'text'], []) && whole(o.text, /^[a-z ]{1,24}$/);
+      return (
+        keysOk(o, ['op', 'text'], ['in']) &&
+        whole(o.text, /^[a-z ]{1,24}$/) &&
+        (!('in' in o) || asName(o.in))
+      );
     case 'erase':
       return keysOk(o, ['op', 'n'], []) && int(o.n, 1, 24);
     case 'scroll':
@@ -275,7 +281,11 @@ function opOk(o: unknown): boolean {
 }
 
 const normLabel = (s: string) => s.toLowerCase().replace(/^ +/, '').replace(/ +$/, '');
-const denied = (o: Obj) => o.op === 'tap' && TAP_DENY.includes(normLabel(o.label as string));
+const denied = (o: Obj) => {
+  if (o.op !== 'tap') return false;
+  const l = normLabel(o.label as string);
+  return TAP_DENY.some((d) => l === d || l.startsWith(`${d} `));
+};
 
 function crossOk(steps: Obj[]): boolean {
   if (steps.filter((s) => s.op === 'shot').length > MAX_SHOTS) return false;
@@ -290,6 +300,7 @@ function crossOk(steps: Obj[]): boolean {
       if (!defs.includes(s.as as string)) return false;
       if ('sameWidthAs' in s && !defs.includes(s.sameWidthAs as string)) return false;
     }
+    if (s.op === 'keys' && 'in' in s && !defs.includes(s.in as string)) return false;
     if ((s.op === 'find' || s.op === 'tap') && 'as' in s) {
       if (defs.includes(s.as as string)) return false;
       defs.push(s.as as string);
@@ -319,7 +330,7 @@ export const SIM_REASON_HINT: Record<SimReason, string> = {
   BAD_PARAM: 'sim params: sha (40 hex), timeoutSec 60–600, shutdown (boolean), steps (1–80 ops)',
   TOO_MANY_OPS: `a sim plan holds at most ${MAX_OPS} ops`,
   BAD_OP:
-    'an op off the allowlist, a bad argument, an unknown `as`, a kill not followed by launch, a signIn before any launch, or shutdown not last (docs/ops/IOS-CHECK.md → Ops)',
+    'an op off the allowlist, a bad argument, an unknown `as` (or `in`), a kill not followed by launch, a signIn before any launch, or shutdown not last (docs/ops/IOS-CHECK.md → Ops)',
   DENIED_TAP: 'that label is one of the app’s write buttons — the sim never saves',
 };
 
@@ -333,9 +344,21 @@ const GRACE_MS = 60_000;
 // The sim couldn't run (Mac asleep, Device Hub down, no password, …): the rows are "needs you", never a failure.
 export class IosUnavailable extends Error {
   readonly reason: string;
-  constructor(reason: string, message: string) {
+  readonly runnerVersion?: string; // the Mac answered: which runner did
+  readonly result?: SimResult; // the Mac ran part of the plan: its steps and screenshots
+  constructor(reason: string, message: string, runnerVersion?: string, result?: SimResult) {
     super(`${reason}: ${message}`);
     this.reason = reason;
+    if (runnerVersion) this.runnerVersion = runnerVersion;
+    if (result) this.result = result;
+  }
+}
+// The Mac refused the plan. A harness bug, or a runner older than the plan (ios.ts says which).
+export class IosRejected extends Error {
+  readonly runnerVersion?: string;
+  constructor(message: string, runnerVersion?: string) {
+    super(message);
+    if (runnerVersion) this.runnerVersion = runnerVersion;
   }
 }
 // The sim ran and an assertion didn't hold: the row fails.
@@ -363,8 +386,9 @@ function settle(r: SimResult): SimResult {
   if (r.status === 'pass') return r;
   if (r.status === 'fail') throw new IosAssert(failingNote(r), r);
   if (r.status === 'rejected')
-    throw new Error(
+    throw new IosRejected(
       `the Mac refused the sim plan: ${r.reason} — a harness bug (IOS-CHECK.md → Ops)`,
+      r.runnerVersion,
     );
   // runner.sh's fallback when run_sim itself died: a bug in the runner, not an unavailable Mac.
   if (r.status === 'error' && r.reason === 'API_FAILED')
@@ -372,7 +396,12 @@ function settle(r: SimResult): SimResult {
       'the Mac runner crashed in the sim job — a harness bug (the Mac’s agent.log, MAILROOM.md)',
     );
   const code = r.status === 'expired' ? 'MAC_UNREACHABLE' : (r.reason ?? 'SIM_UNAVAILABLE');
-  throw new IosUnavailable(r.detail ? `${code}/${r.detail}` : code, failingNote(r));
+  throw new IosUnavailable(
+    r.detail ? `${code}/${r.detail}` : code,
+    failingNote(r),
+    r.runnerVersion,
+    r.status === 'error' ? r : undefined,
+  );
 }
 
 // Submit, wait for the Mac to take it (its result dir appears), then for the result while the heartbeat moves.
@@ -396,7 +425,7 @@ export async function runSimJob(d: SimDeps, job: SimJob): Promise<SimResult> {
             : `last result ${Math.round((d.clock.now() - seen.lastResultMs) / 60_000)} min ago`;
         throw new IosUnavailable(
           'MAC_UNREACHABLE',
-          `no pickup in ${PICKUP_MS / 1000} s — Mac asleep or mailroom not running (${age})`,
+          `no pickup in ${PICKUP_MS / 1000} s — Mac asleep, mailroom not running, or busy with another job (${age})`,
         );
       }
       break; // taken just now

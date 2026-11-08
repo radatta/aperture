@@ -88,7 +88,7 @@ The whole script is one `main` function, called on its last line, so a truncated
 
 Other uses:
 
-- **Before a merge.** Only the mailroom's own feature branch needs this, for its trial. Use `?ref=<sha>` in the URL plus `--ref <sha>`. That commit is bot-pushed and nobody has approved it, and its `install.sh` runs directly on the Mac. So **first read `tools/mailroom/` at that commit on github.com**. The script then prints `NOT main's head` and asks `[y/N]` before swapping anything in. Re-run from `main` once it merges.
+- **Before a merge.** Only a branch that changes `tools/mailroom/` needs this, for its trial or dev test. Use `?ref=<sha>` in the URL plus `--ref <sha>`. That commit is bot-pushed and nobody has approved it, and its `install.sh` runs directly on the Mac. So **first read `tools/mailroom/` at that commit on github.com**. The script then prints `NOT main's head` and asks `[y/N]` before swapping anything in. Re-run from `main` once it merges.
 - **`--mode poll`** swaps the folder watch for a 15 s timer. Use it if QueueDirectories never fires on the shared folder (_Trial_).
 - **`--uninstall`** removes the agent and the installed copy. It keeps `.hostjobs/` and the Keychain item. Remove those with `security delete-generic-password -s aperture-mailroom-gh`, and revoke the token on GitHub.
 - **The log** is `~/Library/Logs/aperture-mailroom/agent.log`. It holds codes, ids, durations and HTTP statuses, never the token or the body.
@@ -286,7 +286,7 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
 
 ## Tests
 
-- **`tools/mailroom/run-fixtures.sh`** runs every `testdata/jobs.jsonl` case against the real runner and a fresh temp `.hostjobs`. `curl` and `security` are stubbed as **exported shell functions**, not stub files. A process command line holding a path that ends in the curl name, next to `/tmp/`, trips COI's Sigma rule (COI-INCIDENTS → Incident H). Each case asserts:
+- **`tools/mailroom/run-fixtures.sh`** runs every `testdata/jobs.jsonl` case against the real runner and a fresh temp `.hostjobs`, in shards (`MAILROOM_FIXTURE_JOBS`, default the machine's cores up to 4, `1` runs them in order), so output comes grouped by shard. The pass count must equal the case count, so a lost shard fails the run. `curl` and `security` are stubbed as **exported shell functions**, not stub files. A process command line holding a path that ends in the curl name, next to `/tmp/`, trips COI's Sigma rule (COI-INCIDENTS → Incident H). Each case asserts:
   - the result fields;
   - the exact list of `METHOD path` calls;
   - that the token arrives only through the header file, never on argv;

@@ -6,18 +6,24 @@
 // draft by key taps and erases it. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
 // re-measure (keyboard up, the capture bar sits at y 462); a MISS after an app change means a plan needs new ones —
 // read the step's screenshot.
-import type { Ctx, Scenario } from '../scenario';
+import { needsYou, type Ctx, type Scenario } from '../scenario';
 import type { IosOp } from '../../mailroom/sim';
 
-// One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters.
+// One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters. Six: the run's time of day
+// (the nonce's tail is the tier), and each typed key is a tap that can drop.
 const marker = (ctx: Ctx) =>
   ctx.nonce
     .toLowerCase()
     .replace(/[0-9]/g, (d) => 'abcdefghij'[Number(d)] ?? 'a')
     .replace(/[^a-z]/g, '')
-    .slice(0, 12);
+    .slice(0, 6);
 const title = (ctx: Ctx) => `devcheck-ios ${marker(ctx)}`;
 let taskId = '';
+let drove = false; // the sim got through the Done form, so "untouched" means something
+// Four typed keys, two spare deletes: a delete tap can drop silently (job …043145Z…-capture-d571 left a Z), and one on an
+// empty field does nothing. The rows still prove the placeholder returns; this does hide how often deletes drop. Typed
+// keys are read back (`keys … in`) and retyped, with a note saying so (job …083234Z…-capture-5c12 lost one).
+const ERASE = 6;
 
 const LAUNCH: IosOp[] = [
   { op: 'launch' },
@@ -53,7 +59,7 @@ const CAPTURE: IosOp[] = [
   { op: 'find', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox', as: 'mode' },
   { op: 'expect', as: 'mode', aboveKeyboard: true },
   { op: 'shot', name: 'capture-keyboard' },
-  { op: 'keys', text: 'zzqx' },
+  { op: 'keys', text: 'zzqx', in: 'bar' },
   { op: 'find', label: 'zzqx', near: { x: 60, y: 480 }, radius: 40, as: 'typed' },
   {
     op: 'find',
@@ -64,7 +70,7 @@ const CAPTURE: IosOp[] = [
     as: 'send',
   },
   { op: 'expect', as: 'send', enabled: true },
-  { op: 'erase', n: 4 },
+  { op: 'erase', n: ERASE },
   { op: 'expect', as: 'bar', valueIs: 'What happened?' },
   { op: 'expect', as: 'send', enabled: false },
   { op: 'blur' },
@@ -85,7 +91,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'expect', as: 'search', aboveKeyboard: true },
   // …and the capture dock didn't lift over the page: lifted, its bar would sit just above the keyboard
   { op: 'absent', label: 'Capture log', near: { x: 200, y: 480 }, radius: 40, role: 'AXTextArea' },
-  { op: 'keys', text: marker(ctx) },
+  { op: 'keys', text: marker(ctx), in: 'search' },
   { op: 'blur' },
   // The row's Done opens the modal with the Done form on top, as on the phone. Opening only: the form's own button submits.
   { op: 'tap', label: 'Done', scan: { x: 395, from: 390, to: 840 }, role: 'AXButton' },
@@ -102,8 +108,8 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'wait', s: 2 },
   { op: 'find', label: 'Reflection', scan: { x: 200, from: 120, to: 690 }, as: 'again' },
   { op: 'expect', as: 'again', aboveKeyboard: true },
-  { op: 'keys', text: 'zzqx' },
-  { op: 'erase', n: 4 },
+  { op: 'keys', text: 'zzqx', in: 'again' },
+  { op: 'erase', n: ERASE },
   { op: 'blur' },
   { op: 'tap', label: 'Cancel', scan: { x: 190, from: 150, to: 720 }, role: 'AXButton' },
   { op: 'shot', name: 'done-form-closed' },
@@ -122,6 +128,7 @@ const RELAUNCH: IosOp[] = [
   { op: 'readBuild' },
   { op: 'expectBuild' },
   { op: 'shot', name: 'relaunch' },
+  { op: 'shutdown' }, // the run's last sim job: nothing else needs it, and it's the heaviest thing on the Mac
 ];
 
 // What these rows can see: the keyboard's lift and the fields it covers, zoom, the shell and its insets, staying signed
@@ -135,9 +142,13 @@ const APP = [
   'app/src/index.css',
   'app/src/auth/**',
   'app/src/lib/useKeyboardInset.ts',
+  'app/src/components/AppNav.tsx',
   'app/src/components/AppShell.tsx',
   'app/src/components/Modal/**',
   'app/src/modules/capture/CaptureBar.tsx',
+  'app/src/modules/capture/mode.ts',
+  'app/src/modules/capture/useAutoGrow.ts',
+  'app/src/modules/tasks/QueryControls.tsx',
   'app/src/modules/tasks/DoneForm.tsx',
   'app/src/modules/tasks/TaskModal.tsx',
   'app/src/modules/tasks/editor/TaskEditor.tsx',
@@ -289,6 +300,7 @@ export const iosStandalone: Scenario = {
       async run(ctx) {
         const t = await ctx.mcp.writes.createTask({ title: title(ctx), estimateMin: 15 });
         taskId = t.id;
+        drove = false;
         await ctx.mcp.writes.updateTask(t.id, { status: 'in_progress' });
       },
     },
@@ -332,6 +344,7 @@ export const iosStandalone: Scenario = {
       ],
       async run(ctx) {
         await ctx.ios.run('done-form', doneForm(ctx));
+        drove = true;
       },
     },
     {
@@ -356,6 +369,10 @@ export const iosStandalone: Scenario = {
         if (t.status !== 'in_progress') throw new Error(`status ${t.status}, want in_progress`);
         if (t.reflection) throw new Error('a reflection was saved');
         if (t.actualAccruedMin) throw new Error(`${t.actualAccruedMin} min logged`);
+        // A change is a failure however far the sim got. No change only proves something if it drove the form:
+        // a missing keyboard is that step's needs-you, and then "untouched" means nothing.
+        if (!drove)
+          needsYou('the Done form step never completed, so an untouched task proves nothing');
       },
     },
   ],

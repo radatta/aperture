@@ -11,6 +11,7 @@ const SHA = 'a'.repeat(40);
 // The Mac: answers each job dropped in the inbox with `answer(job)` (null = never picks it up).
 function mac(
   answer: (job: { id: string; params: { steps: { op: string }[] } }) => Partial<SimResult> | null,
+  repoVersion?: () => string,
 ) {
   const fs = memFs([`${HJ}/inbox`]);
   const submitted: string[] = [];
@@ -42,6 +43,7 @@ function mac(
     );
   };
   const copy = vi.fn();
+  const logs: string[] = [];
   const ios = createIos({
     fs,
     clock: fakeClock(),
@@ -49,9 +51,10 @@ function mac(
     expectedSha: SHA,
     outDir: '/run/shots',
     copy,
-    log: () => undefined,
+    log: (s) => void logs.push(s),
+    ...(repoVersion ? { repoVersion } : {}),
   });
-  return { ios, copy, submitted, client: ios.forScenario('ios-standalone') };
+  return { ios, copy, submitted, logs, client: ios.forScenario('ios-standalone') };
 }
 const caught = (p: Promise<unknown>) =>
   p.then(
@@ -136,6 +139,115 @@ describe('ctx.ios', () => {
       ),
     ).toMatch(/invalid: DENIED_TAP/);
     expect(submitted).toEqual([]);
+  });
+
+  it('finish sends nothing when the last job already shut the sim down', async () => {
+    const { ios, client, submitted } = mac(() => ({ booted: 'off' }));
+    await client.run('w', [{ op: 'launch' }, { op: 'shutdown' }]);
+    await ios.finish();
+    expect(submitted).toEqual(['launch,shutdown']);
+  });
+
+  it('an older runner on the Mac logs the reinstall line once', async () => {
+    const { client, logs } = mac(
+      () => ({ runnerVersion: 'old' }),
+      () => 'new',
+    );
+    await client.run('a', [{ op: 'launch' }]);
+    await client.run('b', [{ op: 'launch' }]);
+    const lines = logs.filter((l) => l.includes('reinstall'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('install.sh?ref=main');
+  });
+
+  it('a failing job still says the runner is old', async () => {
+    const { client, logs } = mac(
+      () => ({
+        status: 'fail',
+        reason: 'ASSERT',
+        detail: 'VALUE',
+        runnerVersion: 'old',
+        steps: [],
+      }),
+      () => 'new',
+    );
+    await caught(client.run('a', [{ op: 'launch' }]));
+    expect(logs.filter((l) => l.includes('reinstall'))).toHaveLength(1);
+  });
+
+  it('a plan the old runner refuses says so', async () => {
+    const { client, logs } = mac(
+      () => ({ status: 'rejected', reason: 'BAD_OP', runnerVersion: 'old' }),
+      () => 'new',
+    );
+    const err = await caught(client.run('a', [{ op: 'launch' }]));
+    expect(needsYouReason(err)).toMatch(new RegExp(`^${IOS_NOTE}: RUNNER_STALE`));
+    expect((err as NeedsYou).stepOnly).toBe(false);
+    expect(logs.filter((l) => l.includes('reinstall'))).toHaveLength(1);
+    // the run's later iOS steps don't send a plan the Mac can't read
+    expect(needsYouReason(await caught(client.run('b', [{ op: 'launch' }])))).toBe(
+      `${IOS_NOTE}: RUNNER_STALE`,
+    );
+  });
+
+  it('a plan the current runner refuses is a harness bug, not needs-you', async () => {
+    const { client } = mac(
+      () => ({ status: 'rejected', reason: 'BAD_OP', runnerVersion: 'same' }),
+      () => 'same',
+    );
+    const err = await caught(client.run('a', [{ op: 'launch' }]));
+    expect(needsYouReason(err)).toBeNull();
+    expect(String(err)).toMatch(/harness bug/);
+  });
+
+  it('a sim that stopped mid-plan keeps its screenshots', async () => {
+    const { client, copy, ios } = mac(() => ({
+      status: 'error',
+      reason: 'SIM_UNAVAILABLE',
+      detail: 'AX_TIMEOUT',
+      shots: ['shots/01-fail.png'],
+      steps: [],
+    }));
+    expect(needsYouReason(await caught(client.run('k', [{ op: 'launch' }])))).toBe(
+      `${IOS_NOTE}: SIM_UNAVAILABLE/AX_TIMEOUT`,
+    );
+    expect(copy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/shots\/01-fail\.png$/),
+      '/run/shots/ios-ios-standalone-k-01-fail.png',
+    );
+    expect(ios.shots).toEqual(['ios-ios-standalone-k-01-fail.png']);
+  });
+
+  it('a repo version that throws fails nothing', async () => {
+    const { client } = mac(
+      () => ({ runnerVersion: 'old' }),
+      () => {
+        throw new Error('no git');
+      },
+    );
+    await expect(client.run('a', [{ op: 'launch' }])).resolves.toBeDefined();
+  });
+
+  it('finish still shuts down when a later job failed after an earlier one left it off', async () => {
+    let n = 0;
+    const { ios, client, submitted } = mac(() =>
+      n++ === 0
+        ? { booted: 'off' }
+        : { status: 'fail', reason: 'ASSERT', detail: 'MISS', booted: 'warm', steps: [] },
+    );
+    await client.run('a', [{ op: 'launch' }, { op: 'shutdown' }]);
+    await caught(client.run('b', [{ op: 'launch' }]));
+    await ios.finish();
+    expect(submitted.at(-1)).toBe('shutdown');
+  });
+
+  it('the runner the repo has logs nothing', async () => {
+    const { client, logs } = mac(
+      () => ({ runnerVersion: 'same' }),
+      () => 'same',
+    );
+    await client.run('a', [{ op: 'launch' }]);
+    expect(logs.filter((l) => l.includes('reinstall'))).toEqual([]);
   });
 
   it('finish shuts the sim down only after a job ran and the Mac was reachable', async () => {

@@ -312,14 +312,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     );
     // A thin layer over needs-you: the rows the sim couldn't prove, and why, for the status line and the PR.
     const iosOut = r.coverage.filter(
-      (x) => x.status === 'needs-you' && x.note?.startsWith(`${IOS_NOTE}: `),
+      (x) => x.entry === 'ios' && x.status === 'needs-you' && x.note?.startsWith(`${IOS_NOTE}: `),
     );
     if (d.ios || iosOut.length)
       r.ios = {
         jobs: d.ios?.jobs ?? [],
         unavailable: iosOut.length
           ? { reason: iosOut[0]!.note!.slice(IOS_NOTE.length + 2), rows: iosOut.length }
-          : null,
+          : // an outage reaches the banner even if no ios row inherited it
+            d.ios?.unavailable()
+            ? { reason: d.ios.unavailable()!, rows: 0 }
+            : null,
       };
     await browser?.close().catch(() => undefined);
     r.durationMs = d.now() - t0;
