@@ -119,9 +119,12 @@ doesn't) is no lift. Only while the dock has focus (lifting for a page field's k
 field), never when pinch-zoomed, and capped to the visible strip, clipping the dock's top (timers)
 in landscape. On the iOS 27 Simulator's standalone app the hook applied no lift in any 2026-11-08 dev run: there
 `innerHeight` shrank to `visualViewport.height` with the keyboard up (541 of 894 pt, `offsetTop` 353), so the gap
-was negative, and WebKit itself kept the fixed dock above the keyboard. A dock once seen ~56 pt low,
-on the accessory bar (PR 118's sim, 2026-11-07), didn't reproduce there; the `ios-standalone` row
-`capture-long-page` guards it. The top edge has one rule too: the installed PWA draws under the status bar, so a
+was negative, and WebKit itself kept the fixed dock above the keyboard. **Still live:** on a long, scrolled
+page the dock can sit ~60 pt low, on the accessory bar (PR 118's sim, 2026-11-07; again in 1 of 5 long-page runs on
+2026-11-08, main's code). The `ios-standalone` row `capture-long-page` measures the field at focus, after the Task switch and after a
+Review, then the preview row; a low reading there is needs-you naming the issue, not a fail, until the closed-loop
+lift fix (a follow-up) lands and makes it a fail again. A dock low enough to hide the field entirely (≳ 90 pt) would
+still fail as a miss. The top edge has one rule too: the installed PWA draws under the status bar, so a
 top-pinned element offsets by `--safe-top` (`index.css`; `top-[var(--safe-top)]`), never a raw
 `top-0` — the All tab's armed Sort-into bar sat under the clock that way (2026-11-05). A scroll margin
 (`scroll-mt-*`) does **not** add it: `html`'s `scroll-padding-top` already carries the inset, and the

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fakeClock } from '../bot/fakes.ts';
 import { memFs } from '../mailroom/fakes.ts';
-import type { SimResult } from '../mailroom/sim.ts';
+import { IosAssert, type SimResult } from '../mailroom/sim.ts';
 import { IOS_NOTE, createIos } from './ios';
 import { NeedsYou, needsYouReason } from './scenario';
 
@@ -129,6 +129,10 @@ describe('ctx.ios', () => {
       'iOS: ASSERT/BELOW_KEYBOARD at op 0 expect: box bottom 900 vs keyboard top 600',
     );
     expect(copy).toHaveBeenCalledOnce();
+    // the sim's result rides along as the cause: a scenario classifies a known state by it (ios-standalone's low dock)
+    const cause = (err as Error).cause;
+    expect(cause).toBeInstanceOf(IosAssert);
+    expect((cause as IosAssert).result.detail).toBe('BELOW_KEYBOARD');
   });
 
   it('an invalid plan is a harness bug, refused before anything reaches the Mac', async () => {

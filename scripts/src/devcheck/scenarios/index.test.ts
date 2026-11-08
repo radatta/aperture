@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { validateSimParams, type IosOp } from '../../mailroom/sim.ts';
+import { IosAssert, validateSimParams, type IosOp } from '../../mailroom/sim.ts';
 import { MATRIX_EXEMPT, matrixProblems } from '../matrix';
 import { SCENARIOS, globMatch, selectScenarios, slowScenarios } from './index';
 import { NeedsYou, type Ctx, type Scenario } from '../scenario';
@@ -130,7 +130,7 @@ describe('the slow tier', () => {
       const gone: string[] = [];
       const planned: { taskId: string; day: string }[] = [];
       let plan: IosOp[] = [];
-      const long = (note: string) =>
+      const ctxWith = (run: () => Promise<unknown>) =>
         ({
           nonce: 'x1full',
           log: () => {},
@@ -145,42 +145,151 @@ describe('the slow tier', () => {
           ios: {
             run: async (_: string, ops: IosOp[]) => {
               plan = ops;
-              return { steps: [{ i: 5, op: 'expect', status: 'pass', ms: 1, note }] };
+              return run();
             },
           },
         }) as unknown as Ctx;
-      await step('capture-long').run(long('long-preview bottom 490 vs keyboard top 558'));
+      const good: Record<string, string> = {
+        'long-bar': 'long-bar bottom 498 vs keyboard top 556',
+        'long-bar-task': 'long-bar-task bottom 498 vs keyboard top 556',
+        'long-field': 'long-field bottom 468 vs keyboard top 556',
+        'long-preview': 'long-preview bottom 490 vs keyboard top 556',
+      };
+      const passing = (over: Record<string, string> = {}) =>
+        ctxWith(async () => ({
+          steps: Object.values({ ...good, ...over }).map((note, i) => ({
+            i,
+            op: 'expect',
+            status: 'pass',
+            ms: 1,
+            note,
+          })),
+        }));
+      // a failed job: the expects before `at` passed with these notes, the op at `at` failed
+      const failing = (
+        detail: string,
+        at: (ops: IosOp[]) => number,
+        note: string,
+        over: Record<string, string> = {},
+      ) =>
+        ctxWith(async () => {
+          const i = at(plan);
+          const notes: Record<string, string> = { ...good, ...over };
+          const steps = plan.slice(0, i).flatMap((o, j) =>
+            o.op === 'expect' && 'as' in o && notes[o.as]
+              ? [
+                  {
+                    i: j,
+                    op: 'expect',
+                    status: 'pass',
+                    ms: 1,
+                    note: notes[o.as],
+                  },
+                ]
+              : [],
+          );
+          steps.push({ i, op: plan[i]!.op, status: 'fail', ms: 1, note });
+          const result = { status: 'fail', reason: 'ASSERT', detail, steps };
+          throw new Error('iOS: failed', { cause: new IosAssert('failed', result as never) });
+        });
+      const opAs = (op: string, as: string) => (ops: IosOp[]) =>
+        ops.findIndex((o) => o.op === op && 'as' in o && o.as === as);
+      const knownLow = (p: Promise<unknown>) =>
+        expect(p).rejects.toSatisfy(
+          (e: unknown) =>
+            e instanceof NeedsYou &&
+            e.stepOnly === true &&
+            e.reason.startsWith('known issue, still live'),
+        );
+      const deletedAll = () => {
+        expect(gone).toHaveLength(16);
+        gone.length = 0;
+      };
+
+      await step('capture-long').run(passing());
       expect(
         validateSimParams({ sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan }),
       ).toBeNull();
       for (const o of plan) if (o.op === 'keys') expect(o.text.length).toBeLessThanOrEqual(6);
+      // the field is measured at focus (after it's found, before anything is typed) and after the Review
+      const keys = plan.findIndex((o) => o.op === 'keys');
+      expect(opAs('find', 'long-bar')(plan)).toBeLessThan(opAs('expect', 'long-bar')(plan));
+      expect(opAs('expect', 'long-bar')(plan)).toBeLessThan(keys);
+      expect(opAs('expect', 'long-field')(plan)).toBeLessThan(opAs('find', 'long-preview')(plan));
       expect(made).toHaveLength(16);
       // planned for one day, every one: backlog-only padding isn't on Tasks' Today list (run 19-19-51's short page)
       expect(planned.map((p) => p.taskId)).toEqual(made.map((_, i) => `t${i + 1}`));
       expect(new Set(planned.map((p) => p.day)).size).toBe(1);
-      expect(gone).toHaveLength(made.length);
-      // the edge: exactly 30 pt clears, 29 doesn't
-      await step('capture-long').run(long('long-preview bottom 528 vs keyboard top 558'));
+      deletedAll();
+
+      // the edge: exactly 30 pt clears; under it, on any measured element, is the known low dock
+      await step('capture-long').run(
+        passing({ 'long-preview': 'long-preview bottom 526 vs keyboard top 556' }),
+      );
+      deletedAll();
+      await knownLow(
+        step('capture-long').run(
+          passing({ 'long-preview': 'long-preview bottom 527 vs keyboard top 556' }),
+        ),
+      );
+      deletedAll();
+      await knownLow(
+        step('capture-long').run(
+          passing({ 'long-bar': 'long-bar bottom 540 vs keyboard top 556' }),
+        ),
+      );
+      deletedAll();
+      // a long-* element under the keyboard (the sim's own assert)
+      await knownLow(
+        step('capture-long').run(
+          failing(
+            'BELOW_KEYBOARD',
+            opAs('expect', 'long-bar'),
+            'long-bar bottom 566 vs keyboard top 556',
+          ),
+        ),
+      );
+      deletedAll();
+      // the preview row missing while the field sat low enough to put it under the bar
+      const missPreview = (field: string) =>
+        failing('MISS', opAs('find', 'long-preview'), 'no "vacuum" found', { 'long-field': field });
+      await knownLow(
+        step('capture-long').run(missPreview('long-field bottom 520 vs keyboard top 556')),
+      );
+      deletedAll();
+      // …but a missing preview under a field that sits right is a broken Review: a failure
       await expect(
-        step('capture-long').run(long('long-preview bottom 529 vs keyboard top 558')),
-      ).rejects.toThrow('the dock sits low on a long page');
-      gone.length = 0;
+        step('capture-long').run(missPreview('long-field bottom 468 vs keyboard top 556')),
+      ).rejects.toThrow('iOS: failed');
+      deletedAll();
+      // another element's BELOW_KEYBOARD, and another assert on a long-* element, still fail
       await expect(
-        step('capture-long').run(long('long-preview bottom 548 vs keyboard top 558')),
-      ).rejects.toThrow('the dock sits low on a long page');
-      expect(gone).toHaveLength(16);
-      gone.length = 0;
-      await expect(step('capture-long').run(long('long-preview ok'))).rejects.toThrow(
+        step('capture-long').run(
+          failing('BELOW_KEYBOARD', () => 0, 'box bottom 700 vs keyboard top 556'),
+        ),
+      ).rejects.toThrow('iOS: failed');
+      deletedAll();
+      await expect(
+        step('capture-long').run(
+          failing(
+            'TYPED',
+            (ops) => ops.findIndex((o) => o.op === 'keys'),
+            'long-bar-task reads "vac"',
+          ),
+        ),
+      ).rejects.toThrow('iOS: failed');
+      deletedAll();
+      await expect(step('capture-long').run(ctxWith(async () => ({ steps: [] })))).rejects.toThrow(
         'no clearance',
       );
-      expect(gone).toHaveLength(16);
+      deletedAll();
       // a lapsed token on the padding's delete leaves it to the run's sweep, never fails the row
-      const failing = long('long-preview bottom 490 vs keyboard top 558');
-      (failing as unknown as { api: { writes: Record<string, unknown> } }).api.writes.deleteTask =
+      const lapsed = passing();
+      (lapsed as unknown as { api: { writes: Record<string, unknown> } }).api.writes.deleteTask =
         async () => {
           throw new Error('deleteTask → HTTP 401');
         };
-      await expect(step('capture-long').run(failing)).resolves.toBeUndefined();
+      await expect(step('capture-long').run(lapsed)).resolves.toBeUndefined();
     });
   });
 

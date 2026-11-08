@@ -26,7 +26,8 @@ import type { RefObject } from 'react';
 //   re-pan on every keystroke.
 // - On the iOS 27 Simulator's standalone app it didn't lift in any of four 2026-11-08 dev runs: innerHeight shrank to
 //   vv.height with the keyboard up (offsetTop 353), so the gap was negative and WebKit kept the fixed dock above the
-//   keyboard itself (docs/product/CONVENTIONS.md; the ios-standalone row capture-long-page guards it).
+//   keyboard itself. It doesn't always: on a long page the dock sometimes sat ~60 pt low, under the accessory bar
+//   (1 of 5 runs) — still live, see docs/product/CONVENTIONS.md and the ios-standalone row capture-long-page.
 // Classic scrollbars are 15px (macOS) to 17px (Windows) tall.
 const SCROLLBAR_MAX = 24;
 
