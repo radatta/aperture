@@ -129,6 +129,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   non-ledger writes, both Settings fields on the test user's own row: a test user who never opened Flux has the
   disclaimer accepted (logged), and row `sets-remembered` empties `fluxSets` first and puts the prior map back in
   the step's `finally`.
+  One more a run leaves behind: `getFluxWeekNote` stores the week's note row (`fluxnote#<weekStart>`) in the
+  test user's partition — derived from the sets, overwritten when they change, never listed as a leftover.
 - **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
   deleted with `deleteCategory(id, null)`. Cleanup runs newest-first and the category is made after the run's tasks, so it goes
   before them — a run task on a run category would make the delete refuse, so no scenario puts one there. The same scenario sets the

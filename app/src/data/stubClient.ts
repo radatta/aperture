@@ -182,8 +182,22 @@ import type {
   UpsertPlanInput,
   UpsertRollInput,
   UpsertSeriesInput,
+  FluxWeekNote,
+  FluxWeekNoteRow,
 } from '@aperture/shared';
-import { fluxFilterError, fluxSetError, fluxSetsError, inRange } from '@aperture/shared/flux';
+import {
+  FLUX_NOTE_MIN_SETS,
+  fluxFilterError,
+  fluxNoteFingerprint,
+  fluxNoteOf,
+  fluxSetError,
+  fluxSetsError,
+  fluxWeekLine,
+  fluxWeekSets,
+  fluxWeekStart,
+  fluxWeekSummary,
+  inRange,
+} from '@aperture/shared/flux';
 import { heuristicParse, takeStubParseFailure } from './stubParse';
 import { forgetStubBlob } from './attachmentTransport';
 import { seedStore } from './seed';
@@ -229,6 +243,7 @@ export interface Store {
   stories: Story[];
   attachments: Attachment[];
   fluxSets: FluxSet[];
+  fluxNotes: FluxWeekNoteRow[]; // the weekly note cache (D62) — the stub's note is the deterministic line
   financeItems: FinanceItem[];
   financeSyncStates: FinanceSyncState[];
   financeAccounts: FinanceAccount[];
@@ -257,6 +272,7 @@ export function emptyStore(): Store {
     stories: [],
     attachments: [],
     fluxSets: [],
+    fluxNotes: [],
     financeItems: [],
     financeSyncStates: [],
     financeAccounts: [],
@@ -693,6 +709,29 @@ class StubClient implements ApiClient {
     // Like the backend: deleting a deleted set changes nothing (its deletedAt stays the first one).
     if (this.store.fluxSets.some((f) => f.id === id && f.deletedAt === null))
       this.writes.softDelete(this.store.fluxSets, id);
+  }
+
+  // The weekly note (D62): the deterministic line, cached by fingerprint like the Lambda's — the stub has
+  // no model, so the line is the note. Null under two sets this week.
+  async getFluxWeekNote(): Promise<FluxWeekNote | null> {
+    const today = todayKey(this.dayStartHour(), this.now());
+    const weekStart = fluxWeekStart(today);
+    const sets = inRange(this.store.fluxSets);
+    const summary = fluxWeekSummary(sets, weekStart);
+    if (summary.totalSets < FLUX_NOTE_MIN_SETS) return null;
+    const week = fluxWeekSets(sets, weekStart);
+    const fingerprint = fluxNoteFingerprint(week);
+    const stored = this.store.fluxNotes.find((x) => x.weekStart === weekStart);
+    if (stored && stored.fingerprint === fingerprint) return fluxNoteOf(stored);
+    const row: FluxWeekNoteRow = {
+      weekStart,
+      text: fluxWeekLine(summary),
+      generatedAt: this.now(),
+      fingerprint,
+    };
+    this.store.fluxNotes = [...this.store.fluxNotes.filter((x) => x.weekStart !== weekStart), row];
+    this.persist();
+    return fluxNoteOf(row);
   }
 
   // --- Story bank ----------------------------------------------------------
@@ -2154,7 +2193,8 @@ class StubClient implements ApiClient {
     // automatically, which made the contract's key-set assertion go red until the backend caught up.
     // Enumerating lost that signal, so assert coverage explicitly: add a collection to Store and this
     // stops compiling, which forces it into ExportBundle, which in turn breaks the backend's literal.
-    // The one Store key left out on purpose: the place token is a credential.
-    return bundle satisfies Record<Exclude<keyof Store, 'placeToken'>, unknown>;
+    // Left out on purpose: the place token is a credential, and the week-note cache is derived from the
+    // sets (rebuilt on the next read).
+    return bundle satisfies Record<Exclude<keyof Store, 'placeToken' | 'fluxNotes'>, unknown>;
   }
 }

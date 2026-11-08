@@ -193,6 +193,51 @@ describe('createLiveAnthropic', () => {
     });
   });
 
+  it('the weekly note goes through the same call: Haiku, 256 tokens, the {note} schema, its own log event', async () => {
+    const { gw, calls, logs } = setup(() =>
+      message(JSON.stringify({ note: 'Rotation twice, 44° to 53°.' })),
+    );
+    const summary = {
+      weekStart: '2026-11-02',
+      weekEnd: '2026-11-08',
+      totalSets: 2,
+      lastWeekSets: 0,
+      exercises: [],
+    };
+    const line = 'This week: 2 sets rotation 44° → 53° · first week';
+    expect(await gw.fluxWeekNote({ line, summary, timeoutMs: 6_000 })).toEqual({
+      ok: true,
+      fields: { note: 'Rotation twice, 44° to 53°.' },
+    });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body).toMatchObject({
+      model: 'claude-haiku-5-5',
+      max_tokens: 256,
+      thinking: { type: 'disabled' },
+      output_config: {
+        effort: 'low',
+        format: {
+          type: 'json_schema',
+          schema: { type: 'object', required: ['note'], properties: { note: { type: 'string' } } },
+        },
+      },
+    });
+    expect(body.system).toContain('one short note about a week of neck-rehab exercises');
+    expect(body.messages).toEqual([
+      { role: 'user', content: expect.stringContaining(`Draft line: ${line}`) },
+    ]);
+    expect(JSON.parse(logs[0]!)).toMatchObject({
+      event: 'flux_week_note',
+      ok: true,
+      status: 200,
+      sets: 2,
+      input_tokens: 420,
+      output_tokens: 37,
+    });
+    expect(logs[0]).not.toContain('rotation');
+    expect(logs[0]).not.toContain(KEY);
+  });
+
   it('logs one line per call with usage — never the key or the text', async () => {
     const { gw, logs } = setup(() => message(JSON.stringify(FIELDS)));
     await gw.parseTask(req);

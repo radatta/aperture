@@ -119,6 +119,7 @@ import type {
   IdeaStatus,
   LeetcodeAttempt,
   FluxSet,
+  FluxWeekNote,
   FluxSetFilter,
   RecordFluxSetInput,
   LogEntry,
@@ -150,7 +151,20 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
-import { fluxFilterError, fluxSetError, fluxSetsError, inRange } from '@aperture/shared/flux';
+import {
+  FLUX_NOTE_MIN_SETS,
+  fluxFilterError,
+  fluxNoteFingerprint,
+  fluxNoteOf,
+  fluxNoteText,
+  fluxSetError,
+  fluxSetsError,
+  fluxWeekLine,
+  fluxWeekSets,
+  fluxWeekStart,
+  fluxWeekSummary,
+  inRange,
+} from '@aperture/shared/flux';
 import type { Repo } from './ddb/repo';
 import type { PlaceTokenPointer, PlaceTokenStore } from './ddb/placeTokens';
 import { ConditionFailedError } from './ddb/DocClient';
@@ -258,6 +272,9 @@ function partPlace(given: string | null, parent: Task | undefined): string | nul
 // Every hash a new pointer must retire: the live one it replaces, plus any a cut-short delete left.
 const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
   prev ? [...new Set([...(prev.hash ? [prev.hash] : []), ...prev.retiring])] : [];
+
+// The note's model budget: well inside the Lambda's 15 s with the reads in front of it (D62).
+const FLUX_NOTE_TIMEOUT_MS = 6_000;
 
 export class BackendClient implements ApiClient {
   private readonly userId: string;
@@ -655,6 +672,39 @@ export class BackendClient implements ApiClient {
     const existing = await this.repo.findFluxSet(id, { consistent: true });
     if (existing && existing.deletedAt === null)
       await this.repo.putFluxSet({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
+  }
+
+  // The weekly note (D62): this week's cached line, rebuilt — one model call — only when the week's
+  // alive sets change (fluxNoteFingerprint). The model's answer is validated (fluxNoteText) and any
+  // failure keeps the deterministic line, stored too, so a bad hour costs one call per saved set, never
+  // one per request. Under two sets this week there is nothing to say: null, nothing stored.
+  async getFluxWeekNote(): Promise<FluxWeekNote | null> {
+    const settings = await this.ensureSettings();
+    const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
+    const weekStart = fluxWeekStart(today);
+    // Consistent: a set saved a moment ago must be in the fingerprint, or the note is stored stale.
+    const sets = inRange(await this.repo.listAllFluxSets({ consistent: true }));
+    const summary = fluxWeekSummary(sets, weekStart);
+    if (summary.totalSets < FLUX_NOTE_MIN_SETS) return null;
+    const week = fluxWeekSets(sets, weekStart);
+    const fingerprint = fluxNoteFingerprint(week);
+    const stored = await this.repo.getFluxWeekNote(weekStart);
+    if (stored && stored.fingerprint === fingerprint) return fluxNoteOf(stored);
+    const line = fluxWeekLine(summary);
+    const out = await this.anthropic.fluxWeekNote({
+      line,
+      summary,
+      timeoutMs: FLUX_NOTE_TIMEOUT_MS,
+    });
+    const text =
+      (out.ok && fluxNoteText((out.fields as { note?: unknown })?.note, line, summary)) || line;
+    const row = await this.repo.putFluxWeekNote({
+      weekStart,
+      text,
+      generatedAt: this.now(),
+      fingerprint,
+    });
+    return fluxNoteOf(row);
   }
 
   // --- Story bank ---

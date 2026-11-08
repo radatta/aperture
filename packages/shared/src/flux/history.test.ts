@@ -4,9 +4,16 @@ import type { RecordFluxSetInput } from '../api';
 import { ulid } from '../ulid';
 import { EXERCISES, getExercise } from './definitions';
 import {
+  fluxExerciseSummary,
   fluxFilterError,
+  fluxNoteFingerprint,
+  fluxNoteData,
+  fluxNoteText,
   fluxSetError,
   fluxSetsError,
+  fluxWeekLine,
+  fluxWeekStart,
+  fluxWeekSummary,
   groupByDay,
   hasSide,
   inRange,
@@ -207,5 +214,280 @@ describe('fluxSetsError (D61)', () => {
     expect(fluxSetsError({ nope: 2 })).toContain('Unknown Flux exercise');
     expect(fluxSetsError(null)).toContain('map');
     expect(fluxSetsError([1])).toContain('map');
+  });
+});
+
+// --- The weekly note (D62) ---
+describe('fluxWeekStart', () => {
+  it('is the Monday of the week the day is in', () => {
+    expect(fluxWeekStart('2026-11-02')).toBe('2026-11-02'); // a Monday
+    expect(fluxWeekStart('2026-11-05')).toBe('2026-11-02'); // Thursday
+    expect(fluxWeekStart('2026-11-08')).toBe('2026-11-02'); // Sunday
+    expect(fluxWeekStart('2026-11-09')).toBe('2026-11-09'); // the next Monday
+  });
+});
+
+const weekSet = (over: Partial<FluxSet> = {}): FluxSet => ({
+  id: ulid(),
+  userId: 'u',
+  createdAt: 0,
+  updatedAt: 0,
+  deletedAt: null,
+  day: '2026-11-03',
+  exerciseId: 'cervical-rotation',
+  kind: 'romReps',
+  side: null,
+  condition: null,
+  count: 10,
+  avgPeakDeg: 44,
+  avgErrorDeg: null,
+  rom: { pitch: 4, yaw: 100, roll: 5 },
+  calibrated: true,
+  delegate: 'GPU',
+  durationSec: 150,
+  completedAt: 1_000,
+  repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
+  ...over,
+});
+
+describe('fluxWeekSummary + fluxWeekLine', () => {
+  const sets = [
+    weekSet({ completedAt: 1_000, avgPeakDeg: 44 }),
+    weekSet({ completedAt: 2_000, avgPeakDeg: 53, day: '2026-11-05' }),
+    weekSet({
+      completedAt: 3_000,
+      exerciseId: 'upper-trap-stretch',
+      kind: 'holdAtTarget',
+      side: 'a',
+      avgPeakDeg: null,
+      count: 3,
+      planned: 3,
+    }),
+    weekSet({ completedAt: 500, day: '2026-10-29', avgPeakDeg: 40 }), // last week
+    weekSet({ completedAt: 100, day: '2026-10-20', avgPeakDeg: 30 }), // two weeks ago: ignored
+  ];
+
+  it('counts this week against last, per exercise, most sets first, with sides for a sided stretch', () => {
+    const s = fluxWeekSummary(sets, '2026-11-02');
+    expect(s).toMatchObject({
+      weekStart: '2026-11-02',
+      weekEnd: '2026-11-08',
+      totalSets: 3,
+      lastWeekSets: 1,
+    });
+    expect(s.exercises.map((e) => e.exerciseId)).toEqual([
+      'cervical-rotation',
+      'upper-trap-stretch',
+    ]);
+    expect(s.exercises[0]).toMatchObject({
+      sets: 2,
+      first: 44,
+      latest: 53,
+      unit: '°',
+      sides: null,
+      lastWeek: { sets: 1, latest: 40 },
+    });
+    expect(s.exercises[1]).toMatchObject({ sets: 1, sides: { right: 1, left: 0 }, lastWeek: null });
+  });
+
+  it('writes the line: counts, the angle first → latest from two sets up, last week beside it', () => {
+    expect(fluxWeekLine(fluxWeekSummary(sets, '2026-11-02'))).toBe(
+      'This week: 2 sets rotation 44° → 53°, 1 upper trap · last week 1',
+    );
+    expect(fluxWeekLine(fluxWeekSummary(sets.slice(0, 3), '2026-11-02'))).toBe(
+      'This week: 2 sets rotation 44° → 53°, 1 upper trap · first week',
+    );
+    expect(fluxWeekLine(fluxWeekSummary(sets, '2026-11-02')).length).toBeLessThanOrEqual(140);
+  });
+
+  it('stays within the cap with every exercise in the week', () => {
+    const all = EXERCISES.map((def, i) =>
+      weekSet({ exerciseId: def.id, kind: def.kind, side: null, avgPeakDeg: null, completedAt: i }),
+    );
+    const line = fluxWeekLine(fluxWeekSummary(all, '2026-11-02'));
+    expect(line.length).toBeLessThanOrEqual(140);
+    expect(line.endsWith('…')).toBe(true);
+  });
+
+  it('the exercise summary is the MCP shape: a stopped set keeps its angle, loses its count', () => {
+    const [e] = fluxExerciseSummary([
+      weekSet({ completedAt: 1, avgPeakDeg: 44 }),
+      weekSet({ completedAt: 2, avgPeakDeg: 50, stoppedEarly: true, count: 3 }),
+    ]);
+    expect(e).toEqual({
+      exerciseId: 'cervical-rotation',
+      exercise: 'Neck Rotation',
+      sets: 2,
+      stoppedEarly: 1,
+      metric: 'avg peak',
+      unit: '°',
+      first: 44,
+      latest: 50,
+      betterWhen: 'higher',
+      target:
+        getExercise('cervical-rotation').kind === 'romReps'
+          ? (getExercise('cervical-rotation') as { targetDeg: number }).targetDeg
+          : undefined,
+    });
+  });
+});
+
+describe('fluxNoteFingerprint', () => {
+  it('is the identity of the week’s sets: order-free, and a swap of one set for another changes it', () => {
+    const a = weekSet({ id: 'A', completedAt: 1 });
+    const b = weekSet({ id: 'B', completedAt: 2 });
+    const c = weekSet({ id: 'C', completedAt: 0 }); // an offline set landing later, with an earlier time
+    expect(fluxNoteFingerprint([a, b])).toBe(fluxNoteFingerprint([b, a]));
+    expect(fluxNoteFingerprint([a, b])).not.toBe(fluxNoteFingerprint([c, b]));
+    expect(fluxNoteFingerprint([a, b])).not.toBe(fluxNoteFingerprint([a]));
+    expect(fluxNoteFingerprint([a, b])).toMatch(/^2:[0-9a-f]+$/);
+    expect(fluxNoteFingerprint([])).toMatch(/^0:/);
+  });
+});
+
+describe('fluxNoteText', () => {
+  const s = fluxWeekSummary(
+    [weekSet({ avgPeakDeg: 44 }), weekSet({ avgPeakDeg: 53, completedAt: 2 })],
+    '2026-11-02',
+  );
+  const line = fluxWeekLine(s);
+  it('accepts a trimmed line within the cap whose numbers are all in the input', () => {
+    expect(fluxNoteText('  Rotation twice,  44° to 53°. ', line, s)).toBe(
+      'Rotation twice, 44° to 53°.',
+    );
+  });
+  it('accepts a difference of two given numbers, and a dashed or plural form of a name', () => {
+    expect(fluxNoteText('Rotation up 9 degrees over two sets.', line, s)).toBe(
+      'Rotation up 9 degrees over two sets.',
+    );
+    const tucks = fluxWeekSummary(
+      [
+        weekSet({ exerciseId: 'chin-tuck', kind: 'holdAtTarget', avgPeakDeg: null }),
+        weekSet({
+          exerciseId: 'chin-tuck',
+          kind: 'holdAtTarget',
+          avgPeakDeg: null,
+          completedAt: 2,
+        }),
+      ],
+      '2026-11-02',
+    );
+    expect(fluxNoteText('Two chin-tuck sets.', fluxWeekLine(tucks), tucks)).toBe(
+      'Two chin-tuck sets.',
+    );
+  });
+  it('refuses a non-string, an empty, an over-long, a number the input lacks, or a note naming no exercise', () => {
+    expect(fluxNoteText(null, line, s)).toBeNull();
+    expect(fluxNoteText('   ', line, s)).toBeNull();
+    expect(fluxNoteText('x'.repeat(141), line, s)).toBeNull();
+    expect(fluxNoteText('Rotation up 12 degrees.', line, s)).toBeNull();
+    expect(fluxNoteText('Two sets, 44° to 53°.', line, s)).toBeNull();
+  });
+
+  // The dev week (2026-11-06): three rotations rising, a finished chin tuck and one stopped at 2 holds.
+  const tuck = {
+    exerciseId: 'chin-tuck',
+    kind: 'holdAtTarget',
+    avgPeakDeg: null,
+    planned: 6,
+  } as const;
+  const devWeek = fluxWeekSummary(
+    [
+      weekSet({ ...tuck, count: 6, completedAt: 1 }),
+      weekSet({ ...tuck, count: 2, stoppedEarly: true, completedAt: 2 }),
+      weekSet({ avgPeakDeg: 44, completedAt: 3 }),
+      weekSet({ avgPeakDeg: 48, completedAt: 4 }),
+      weekSet({ avgPeakDeg: 53, completedAt: 5 }),
+    ],
+    '2026-11-02',
+  );
+  const devLine = fluxWeekLine(devWeek);
+  it('refuses any count claim in a week with a set stopped early, and keeps counts of stopped sets and angles', () => {
+    for (const note of [
+      'This week you did 3 rotation sets, angle rising from 44° to 53°, and 2 chin tuck sets with 6 holds each, with no prior week to compare.',
+      'Both chin tuck sets reached 6 holds.',
+      '2 chin tuck sets of 6 holds, 3 rotation sets.',
+      '2 chin tuck sets, 6 holds.',
+      'Chin tuck: six holds each.',
+      'Chin tuck 6 holds per-set.',
+      '2 chin tuck sets of 6.',
+      'Chin tuck 6 × 2.',
+    ])
+      expect(fluxNoteText(note, devLine, devWeek), note).toBeNull();
+    for (const note of [
+      '2 chin tuck sets with 1 stopped early, and 3 rotation sets at 44° to 53°.',
+      'Both exercises this week: 3 rotation sets rising from 44° to 53° and 2 chin tuck sets, 1 stopped early.',
+      'All 3 rotation sets rose, 44° to 53°; 2 chin tuck sets, one of them stopped early.',
+    ])
+      expect(fluxNoteText(note, devLine, devWeek), note).toBe(note);
+  });
+  it('accepts "6 holds each" over a week with no stopped set — the gate is the stopped set, not the word', () => {
+    const finished = fluxWeekSummary(
+      [
+        weekSet({ ...tuck, count: 6, completedAt: 1 }),
+        weekSet({ ...tuck, count: 6, completedAt: 2 }),
+      ],
+      '2026-11-02',
+    );
+    expect(
+      fluxNoteText('Two chin-tuck sets with 6 holds each.', fluxWeekLine(finished), finished),
+    ).toBe('Two chin-tuck sets with 6 holds each.');
+  });
+});
+
+describe('fluxNoteData', () => {
+  it('names a count’s first → latest as finished sets only and an angle as every set, with finishedSets beside stoppedEarly', () => {
+    const tuck = {
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      avgPeakDeg: null,
+      planned: 6,
+    } as const;
+    const data = fluxNoteData(
+      fluxWeekSummary(
+        [
+          weekSet({ ...tuck, count: 6, completedAt: 1 }),
+          weekSet({ ...tuck, count: 2, stoppedEarly: true, completedAt: 2 }),
+          weekSet({ avgPeakDeg: 44, completedAt: 3 }),
+          weekSet({ avgPeakDeg: 50, stoppedEarly: true, count: 3, completedAt: 4 }),
+        ],
+        '2026-11-02',
+      ),
+    );
+    const byName = Object.fromEntries(data.exercises.map((e) => [e.name, e]));
+    expect(byName['chin tuck']).toEqual({
+      name: 'chin tuck',
+      sets: 2,
+      finishedSets: 1,
+      stoppedEarly: 1,
+      finishedCount: { first: 6, latest: 6, unit: 'holds' },
+      sides: null,
+      lastWeek: null,
+    });
+    expect(byName['rotation']).toEqual({
+      name: 'rotation',
+      sets: 2,
+      finishedSets: 1,
+      stoppedEarly: 1,
+      angle: { first: 44, latest: 50 },
+      sides: null,
+      lastWeek: null,
+    });
+  });
+  it('scopes last week’s number by the exercise’s kind: an angle stays an angle when this week’s sets carry none', () => {
+    const [rotation] = fluxNoteData(
+      fluxWeekSummary(
+        [
+          weekSet({ day: '2026-10-28', avgPeakDeg: 40, completedAt: 1 }),
+          weekSet({ avgPeakDeg: null, completedAt: 2 }),
+          weekSet({ avgPeakDeg: null, completedAt: 3 }),
+        ],
+        '2026-11-02',
+      ),
+    ).exercises;
+    expect(rotation?.lastWeek).toEqual({ sets: 1, angle: { latest: 40 } });
+    expect(rotation).not.toHaveProperty('finishedCount');
   });
 });

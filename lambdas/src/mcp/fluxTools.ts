@@ -8,6 +8,7 @@ import {
   setMetric,
   sideLabel,
   summarizeSets,
+  fluxExerciseSummary,
   type ExerciseDefinition,
 } from '@aperture/shared/flux';
 import { RpcParamError } from './types';
@@ -44,45 +45,9 @@ function setRow(s: FluxSet) {
   };
 }
 
-// Per exercise: how many sets, and its number first → latest in the window (oldest first). A stopped
-// set's angle counts, as in History's trend; its count doesn't — one hold of six would read as a
-// collapse (D55). How many were stopped early is counted beside it.
-function summary(sets: readonly FluxSet[]) {
-  const byId = new Map<string, FluxSet[]>();
-  for (const s of [...sets].sort((a, b) => a.completedAt - b.completedAt)) {
-    const list = byId.get(s.exerciseId) ?? [];
-    list.push(s);
-    byId.set(s.exerciseId, list);
-  }
-  return [...byId].map(([id, list]) => {
-    const def = isExerciseId(id) ? getExercise(id) : null;
-    const stopped = list.filter((s) => s.stoppedEarly).length;
-    const metrics = def
-      ? list.flatMap((s) => {
-          const m = setMetric(def, s);
-          return m && (!s.stoppedEarly || m.unit === '°') ? [m] : [];
-        })
-      : [];
-    const first = metrics[0];
-    const latest = metrics.at(-1);
-    return {
-      exerciseId: id,
-      exercise: def?.name ?? id,
-      sets: list.length,
-      stoppedEarly: stopped,
-      ...(first && latest
-        ? {
-            metric: latest.label,
-            unit: latest.unit,
-            first: first.value,
-            latest: latest.value,
-            betterWhen: latest.betterWhen,
-            ...(latest.target !== undefined ? { target: latest.target } : {}),
-          }
-        : {}),
-    };
-  });
-}
+// Per exercise: how many sets, and its number first → latest in the window — the shared summary the
+// weekly note builds on too (D62).
+const summary = fluxExerciseSummary;
 
 function exercise(def: ExerciseDefinition) {
   const prescription =

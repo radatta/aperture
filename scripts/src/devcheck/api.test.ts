@@ -62,6 +62,7 @@ describe('createApiClient', () => {
       'getDay',
       'getFinanceTransaction',
       'getFluxSet',
+      'getFluxWeekNote',
       'getPlaceTokenStatus',
       'getSettings',
       'getTask',

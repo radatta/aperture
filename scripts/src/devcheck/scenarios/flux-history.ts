@@ -5,8 +5,17 @@
 // so the sweep's delete of it is a no-op. The Library
 // tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
-import { DEV_ORIGIN, assertDevOrigin } from '../config';
-import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { assertDevOrigin, targetOrigin } from '../config';
+import type { PwResponse } from '../pw-types';
+import { laDay, needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+
+// Day maths for the note's week (scripts has no @aperture/shared): Monday of the LA day given.
+const addLaDays = (day: string, n: number): string => {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const laWeekday = (day: string): number => new Date(`${day}T12:00:00Z`).getUTCDay(); // 0 = Sunday
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -21,7 +30,7 @@ export function devUlid(now = Date.now()): string {
 const EXERCISE = 'Chin Tuck (Cervical Retraction)';
 // The stage hides the capture bar, which ui.goto waits for; here the stepper is the page being up.
 const openStage = async (ctx: Ctx, id: string) => {
-  const url = `${DEV_ORIGIN}/flux/${id}`;
+  const url = `${targetOrigin()}/flux/${id}`;
   assertDevOrigin(url);
   await ctx.page.goto(url, { waitUntil: 'domcontentloaded' });
 };
@@ -89,6 +98,76 @@ export const fluxHistory: Scenario = {
         'a session run to its end needs a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel, until the next Start"',
     },
     {
+      id: 'note-null',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Before the scenario’s sets (under two this week), getFluxWeekNote is null',
+    },
+    {
+      id: 'week-note',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'After the scenario’s sets, getFluxWeekNote is a line of at most 140 characters naming one of the week’s exercises; a second call keeps generatedAt',
+    },
+    {
+      id: 'night-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The night home shows the week’s note under "Flux · …", in the same link',
+    },
+    {
+      id: 'history-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'History shows the week’s note above the exercise chips',
+    },
+    {
+      id: 'note-last-week',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Last week’s sets count only as last week: one set this week beside them is still no note',
+      offDev: {
+        file: 'lambdas/src/backend.fluxNote.test.ts',
+        test: 'is null under two sets this week, and last week’s sets only count as last week',
+        why: 'which of the scenario’s backdated sets fall in last week depends on the weekday the run happens on; the test drives the real backend over fixed days',
+      },
+    },
+    {
+      id: 'note-fallback',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A model failure, a bad answer or an invented number keeps the deterministic line',
+      offDev: {
+        file: 'lambdas/src/backend.fluxNote.test.ts',
+        test: 'keeps the deterministic line on a model failure, a bad answer, or an invented number — and stores that too',
+        why: 'dev can’t drop the API key or make Haiku misbehave on demand; the test runs the real backend over the Fake gateway',
+      },
+    },
+    {
+      id: 'note-rebuilt',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Deleting a set rebuilds the week’s note: History shows the new note (a fresh generatedAt), never the one from before',
+    },
+    {
+      id: 'note-honest-count',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With a set stopped early, a note that reads one count across sets ("6 holds each") is refused and the deterministic line is kept',
+      offDev: {
+        file: 'lambdas/src/backend.fluxNote.test.ts',
+        test: 'refuses a note claiming every set reached a count when one was stopped early — the stored and served text is the deterministic line',
+        why: 'dev can’t force Haiku’s wording (that sentence passed on dev, 2026-11-07); the test drives the real backend over the Fake gateway with it',
+      },
+    },
+    {
+      id: 'note-earns-its-line',
+      entry: 'ios',
+      kind: 'nominal',
+      what: 'A real week’s note on the phone: does it earn its line, or read as a score? Cut it if so',
+      needsYou: 'a week of your own sets and your read of the line — a product call, not a check',
+    },
+    {
       id: 'sets-remembered',
       entry: 'ui',
       kind: 'nominal',
@@ -119,6 +198,27 @@ export const fluxHistory: Scenario = {
     },
   ],
   steps: [
+    {
+      id: 'note-empty',
+      entry: 'api',
+      proves: ['note-null'],
+      title: 'getFluxWeekNote is null while the test user has under two sets this week',
+      async run(ctx) {
+        // The sweep cleared earlier runs' sets; sets left this week are ones no ledger knows (the Mac's
+        // run, or a set done by hand as the test user) — not this build's doing, and not the harness's
+        // to delete: the step says so instead of failing (DEV-CHECK → Rows, needsYou).
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const today = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
+        const monday = addLaDays(today, -((laWeekday(today) + 6) % 7));
+        const sets = (await ctx.api.reads.listFluxSets()).filter((s) => s.day >= monday);
+        if (sets.length >= 2)
+          needsYou(
+            `the test user already has ${sets.length} sets this week (${sets.map((s) => s.id).join(', ')}) — delete them to prove the null case`,
+          );
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (note) throw new Error(`a note with under two sets: ${note.text}`);
+      },
+    },
     {
       id: 'record',
       entry: 'api',
@@ -175,9 +275,41 @@ export const fluxHistory: Scenario = {
       },
     },
     {
+      id: 'week-note',
+      entry: 'api',
+      proves: ['week-note'],
+      title:
+        'getFluxWeekNote: at most 140 characters, names one of the week’s exercises, stable across a second call',
+      async run(ctx) {
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (!note)
+          throw new Error('no note after the scenario’s sets (expected at least two this week)');
+        if (note.text.length > 140)
+          throw new Error(`note is ${note.text.length} chars: ${note.text}`);
+        // The server refuses a note naming none of the week's exercises (fluxNoteText, dashes folded),
+        // so one of this run's two — chin tuck, rotation — is always named, whichever the model leads with.
+        if (!/chin[ -]?tucks?|rotation/i.test(note.text))
+          throw new Error(`note names neither chin tuck nor rotation: ${note.text}`);
+        // The scenario's week has a tuck stopped at 2 of 6, so the served note makes no count claim at all
+        // (fluxNoteText's CLAIMS_A_COUNT, D62) — "6 holds each" passed here once.
+        if (
+          /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(reps?|holds?)\b/i.test(
+            note.text,
+          )
+        )
+          throw new Error(
+            `the note claims a count in a week with a set stopped early: ${note.text}`,
+          );
+        const again = await ctx.api.reads.getFluxWeekNote();
+        if (again?.generatedAt !== note.generatedAt || again.text !== note.text)
+          throw new Error('a second read rebuilt the note');
+        ctx.log(`note: ${note.text}`);
+      },
+    },
+    {
       id: 'history',
       entry: 'ui',
-      proves: ['history', 'sparkline', 'chip-order'],
+      proves: ['history', 'sparkline', 'history-note', 'chip-order', 'note-rebuilt'],
       title:
         'History lists both, the stopped one marked; deleting it holds the chips’ order; the rotation trend’s sparkline spans its tile',
       async run(ctx) {
@@ -196,18 +328,69 @@ export const fluxHistory: Scenario = {
         await ctx.ui.expectText(EXERCISE, 15_000);
         await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
         await ctx.ui.expectText(/2 of 6 holds · stopped early/, 15_000);
+        // The week's note sits above the chips — the same text the API handed back.
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (!note) throw new Error('no week note for History to show');
+        const chips = ctx.page.getByRole('group', { name: 'Exercise' });
+        const line = ctx.page.getByText(note.text, { exact: true });
+        await line.waitFor({ state: 'visible', timeout: 15_000 });
+        const lineBox = await line.boundingBox();
+        const chipsBox = await chips.boundingBox();
+        if (!lineBox || !chipsBox || lineBox.y >= chipsBox.y)
+          throw new Error('the week note is not above the exercise chips');
         await ctx.shot('history');
         // The stopped tuck is this run's own newest set: delete it from the screen, the chips hold still.
-        const chips = () => ctx.page.getByRole('group', { name: 'Exercise' }).textContent();
-        const before = await chips();
+        const before = await chips.textContent();
         const stopped = ctx.page.getByText(/2 of 6 holds · stopped early/);
+        // Collected from before the delete: once it settles the app refetches the note (it sits under the
+        // fluxSets key), and that refetch is the rebuild — one Haiku call, ~1.6 s, the old line on screen
+        // meanwhile. Every note response is kept, so a stale one (a focus refetch that beat the delete) and a
+        // fast rebuild can land in any order. The API read below waits for the rebuild, so it's a cache hit on
+        // the row the app holds; read first, it would race the app into two rebuilds and the screen onto a
+        // third text.
+        type Shown = { text: string; generatedAt: number } | null;
+        const oldAt = note.generatedAt;
+        const rebuilt: Promise<Shown> = new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            ctx.page.off('response', onResponse);
+            reject(new Error('the app never fetched a rebuilt note after the delete (20 s)'));
+          }, 20_000);
+          function onResponse(r: PwResponse) {
+            if (!r.url().endsWith('/api/getFluxWeekNote')) return;
+            if (r.status() !== 200) {
+              clearTimeout(timer);
+              ctx.page.off('response', onResponse);
+              reject(new Error(`getFluxWeekNote answered ${r.status()} after the delete`));
+              return;
+            }
+            void r.json().then((body) => {
+              const shown = body as Shown;
+              if (shown?.generatedAt === oldAt) return; // the old row: keep waiting
+              clearTimeout(timer);
+              ctx.page.off('response', onResponse);
+              resolve(shown);
+            }, reject);
+          }
+          ctx.page.on('response', onResponse);
+        });
         await stopped
           .locator('xpath=ancestor::*[.//button[starts-with(@aria-label, "Delete ")]][1]')
           .getByRole('button', { name: /^Delete / })
           .click();
         await ctx.page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
         await stopped.waitFor({ state: 'hidden', timeout: 15_000 });
-        const after = await chips();
+        const shown = await rebuilt;
+        const fresh = await ctx.api.reads.getFluxWeekNote();
+        if (!fresh || !shown) throw new Error('no week note after the delete');
+        if (fresh.generatedAt === note.generatedAt)
+          throw new Error(`the delete did not rebuild the note: ${fresh.text}`);
+        if (fresh.generatedAt !== shown.generatedAt)
+          throw new Error('the app and the API hold different notes after the delete');
+        await ctx.page
+          .getByText(fresh.text, { exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
+        ctx.log(`rebuilt note: ${fresh.text}`);
+        const after = await chips.textContent();
         if (!before?.includes('rotation') || before !== after)
           throw new Error(`the chips moved: ${before} → ${after}`);
         await ctx.shot('history-after-delete');
@@ -306,12 +489,18 @@ export const fluxHistory: Scenario = {
     {
       id: 'night-line',
       entry: 'ui',
-      proves: ['night-line'],
-      title: 'Night home says "Flux · … chin tuck"',
+      proves: ['night-line', 'night-note'],
+      title: 'Night home says "Flux · … chin tuck", with the week’s note under it in the same link',
       async run(ctx) {
         await ctx.ui.goto('/');
         await ctx.page.getByRole('button', { name: 'Night', exact: true }).click();
         await ctx.ui.expectText(/^Flux · .*chin tuck/, 15_000);
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (!note) throw new Error('no week note for the night home to show');
+        const link = ctx.page.getByRole('link', { name: /^Flux · .*chin tuck/ });
+        await link
+          .getByText(note.text, { exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
         await ctx.shot('night');
       },
     },

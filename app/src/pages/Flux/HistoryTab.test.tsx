@@ -201,6 +201,26 @@ describe('Flux History tab', () => {
     expect((await api.exportData()).fluxSets.map((s) => s.id)).toEqual([keep.id]);
   });
 
+  it('shows the week’s note above the exercise chips, and none under two sets this week', async () => {
+    const t = Date.now();
+    const { api, user } = await history([
+      set({ completedAt: t - 2000, avgPeakDeg: 44 }),
+      set({ completedAt: t - 1000, avgPeakDeg: 53 }),
+    ]);
+    const note = await screen.findByText(/^This week: 2 sets rotation 44° → 53°/);
+    const chips = screen.getByRole('group', { name: 'Exercise' });
+    expect(note.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect((await api.getFluxWeekNote())?.text).toBe(note.textContent);
+    // Deleting down to one set this week takes the note with it.
+    await user.click(
+      screen.getAllByRole('button', { name: /^Delete Neck Rotation set from / })[0] as HTMLElement,
+    );
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
+    );
+    await waitFor(() => expect(screen.queryByText(/^This week: /)).toBeNull());
+  });
+
   it('chip order is stable across a delete', async () => {
     // Chips follow the catalogue, not the sets' recency: deleting the newest set of an exercise must
     // not move its chip (it moved to the end before, as the list is newest first).

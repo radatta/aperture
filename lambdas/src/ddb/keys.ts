@@ -28,6 +28,8 @@ export const sk = {
   // Flux sets (D47), day-bucketed like lc. A few rows a day: reads and the by-id lookup scan `flux#`.
   flux: (day: string, id: string) => `flux#${day}#${id}`,
   fluxAllPrefix: () => `flux#`,
+  // The weekly note (D62): one row per ISO week, rebuilt when the week's sets change.
+  fluxNote: (weekStart: string) => `fluxnote#${weekStart}`,
 
   task: (id: string) => `task#${id}`,
   taskPrefix: () => `task#`,
