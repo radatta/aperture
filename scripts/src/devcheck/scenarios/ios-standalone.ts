@@ -85,7 +85,10 @@ const CAPTURE: IosOp[] = [
 // (real Haiku on dev) and saves nothing; the field is erased and the mode put back to Log.
 const LONG_PAD = 16;
 const CLEARANCE = 30;
-const LONG_LINE = 'shim the flux gasket';
+// The page is what must be long, not the line: six keys at most, like every other typed draft here — each key is a
+// tap that can drop, and a retype's deletes each cost a point read (job …211837Z…-0239 timed out retyping 20). One
+// word, so the parse's preview title starts with it (the probe matches that prefix).
+const LONG_LINE = 'vacuum';
 const CAPTURE_LONG: IosOp[] = [
   { op: 'nav', tab: 'Tasks' },
   { op: 'scroll', dir: 'down', pt: 400 },

@@ -153,6 +153,7 @@ describe('the slow tier', () => {
       expect(
         validateSimParams({ sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan }),
       ).toBeNull();
+      for (const o of plan) if (o.op === 'keys') expect(o.text.length).toBeLessThanOrEqual(6);
       expect(made).toHaveLength(16);
       // planned for one day, every one: backlog-only padding isn't on Tasks' Today list (run 19-19-51's short page)
       expect(planned.map((p) => p.taskId)).toEqual(made.map((_, i) => `t${i + 1}`));
