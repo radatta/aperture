@@ -199,8 +199,8 @@ aperture/
       lib/             # cx, format, useDisclosure, useRowAction (ulid/dates live in packages/shared)
       auth/            # Cognito/OIDC glue (userManager, OidcBridge, AuthProvider)
       styles/          # Tailwind tokens (CSS-var theme)
-  lambdas/src/         # BFF — index.ts, handler.ts, backend.ts; auth/ (verify), ddb/ (keys, repo, writes,
-                       #   mapping, DocClient), google/, mcp/, s3/
+  lambdas/src/         # BFF — index.ts, handler.ts, backend.ts, sessions.ts (pomodoro sessions); auth/ (verify),
+                       #   ddb/ (keys, repo, writes, mapping, DocClient), google/, mcp/, s3/
   cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
   extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a
                        #   pnpm workspace member, and excluded from eslint + prettier

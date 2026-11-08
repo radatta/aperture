@@ -8,29 +8,22 @@ import {
   calendarSyncPlan,
   seenAfter,
   syncedFieldsChanged,
-  accruesTime,
-  completeSession,
   countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
-  discardSession,
   eventWindow,
-  extendSession,
   syncWindow,
   gcalSyncMessage,
   isPendingRemoval,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   findOpenRollTask,
-  heartbeatSession,
   normalizeContentType,
   normalizeDue,
   normalizeNotes,
   normalizeReflection,
   normalizeVerdict,
-  resolveStaleSession,
-  resumeSession,
   ROLL_PLAN_FALLBACK_MIN,
   rollRepFields,
   sanitizeFilename,
@@ -169,6 +162,7 @@ import {
   type PlaceReadAuth,
 } from './auth/placeToken';
 import { FinanceService } from './finance/service';
+import { SessionService } from './sessions';
 import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
@@ -274,6 +268,7 @@ export class BackendClient implements ApiClient {
   private readonly presigner: Presigner;
   private readonly objects: ObjectStore;
   private readonly finance: FinanceService;
+  private readonly sessions: SessionService;
   private readonly anthropic: AnthropicGateway;
   private readonly placeTokens: PlaceTokenStore;
 
@@ -299,6 +294,7 @@ export class BackendClient implements ApiClient {
       invoker: opts.financeInvoker ?? noopInvoker(),
       settings: () => this.ensureSettings(),
     });
+    this.sessions = new SessionService({ repo, now: this.now, base: () => this.base() });
   }
 
   private baseAt(t: number): BaseEntity {
@@ -1225,95 +1221,37 @@ export class BackendClient implements ApiClient {
     await this.repo.putSeries({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }
 
-  // --- Sessions ---
+  // --- Sessions (sessions.ts) ---
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
-    const t = this.now();
-    if (input.taskId && input.kind === 'work') {
-      const existing = (await this.repo.listRunningSessions()).find(
-        (s) => s.kind === 'work' && s.taskId === input.taskId,
-      );
-      if (existing) return existing;
-    }
-    const categoryId =
-      input.categoryId ??
-      (input.taskId ? ((await this.repo.getTask(input.taskId))?.categoryId ?? null) : null);
-    const wasWork = categoryId
-      ? ((await this.repo.getCategory(categoryId))?.isWork ?? false)
-      : false;
-    return this.repo.putSession({
-      ...this.base(),
-      taskId: input.taskId,
-      categoryId,
-      label: input.label ?? null,
-      wasWork,
-      kind: input.kind,
-      startedAt: t,
-      endedAt: null,
-      day: input.day,
-      activeMinutes: 0,
-      status: 'running',
-      lastHeartbeatAt: t,
-    });
-  }
-  // Heartbeat/resume/stop/resolveStale only ever act on RUNNING sessions → a direct running-key read.
-  // Every caller writes the row back, so the read is consistent: a stop right after a pause's beat must
-  // see that beat, or it completes the pre-pause copy and counts the pause as work.
-  private async mustSession(id: string): Promise<PomodoroSession> {
-    const s = await this.repo.getRunningSession(id, { consistent: true });
-    if (!s) throw new Error(`Not found: ${id}`);
-    return s;
+    return this.sessions.startSession(input);
   }
   async heartbeatSession(id: string): Promise<PomodoroSession> {
-    return this.repo.putSession(heartbeatSession(await this.mustSession(id), this.now()));
+    return this.sessions.heartbeatSession(id);
   }
   async resumeSession(id: string): Promise<PomodoroSession> {
-    return this.repo.putSession(resumeSession(await this.mustSession(id), this.now()));
+    return this.sessions.resumeSession(id);
   }
   async stopSession(
     id: string,
     status: 'completed' | 'discarded',
     opts?: { capMin?: number },
   ): Promise<PomodoroSession> {
-    const session = await this.mustSession(id);
-    const next =
-      status === 'completed'
-        ? completeSession(session, this.now(), opts?.capMin)
-        : discardSession(session, this.now());
-    await this.repo.putSession(next);
-    if (status === 'completed') await this.accrueToTask(next);
-    return next;
+    return this.sessions.stopSession(id, status, opts);
   }
   async extendSession(id: string, opts?: { capMin?: number }): Promise<PomodoroSession> {
-    const session = await this.mustSession(id);
-    return this.repo.putSession(extendSession(session, this.now(), opts?.capMin));
+    return this.sessions.extendSession(id, opts);
   }
   async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
-    return (await this.repo.listAllSessions()).filter((s) => s.day === day);
+    return this.sessions.listSessionsForDay(day);
   }
   async findRunningSession(): Promise<PomodoroSession | null> {
-    return (await this.runningSessions())[0] ?? null;
+    return this.sessions.findRunningSession();
   }
   async listRunningSessions(): Promise<PomodoroSession[]> {
-    return this.runningSessions();
-  }
-  private async runningSessions(): Promise<PomodoroSession[]> {
-    return (await this.repo.listRunningSessions()).sort((a, b) => a.createdAt - b.createdAt);
+    return this.sessions.listRunningSessions();
   }
   async resolveStaleSession(id: string, decision: 'keep' | 'discard'): Promise<PomodoroSession> {
-    const next = resolveStaleSession(await this.mustSession(id), decision, this.now());
-    await this.repo.putSession(next);
-    if (decision === 'keep') await this.accrueToTask(next);
-    return next;
-  }
-  private async accrueToTask(session: PomodoroSession): Promise<void> {
-    if (session.kind !== 'work' || !session.taskId) return;
-    const task = await this.repo.getTask(session.taskId, { consistent: true }); // written back below
-    if (!task || !accruesTime(task)) return; // finished meanwhile: the session keeps its minutes, the task doesn't
-    await this.repo.putTask({
-      ...task,
-      actualAccruedMin: task.actualAccruedMin + session.activeMinutes,
-      updatedAt: this.now(),
-    });
+    return this.sessions.resolveStaleSession(id, decision);
   }
 
   // --- Habits ---
