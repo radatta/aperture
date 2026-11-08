@@ -128,6 +128,7 @@ describe('the slow tier', () => {
     it('capture-long pads Tasks, asks for clearance above the accessory bar, and deletes the padding either way', async () => {
       const made: string[] = [];
       const gone: string[] = [];
+      const planned: { taskId: string; day: string }[] = [];
       let plan: IosOp[] = [];
       const long = (note: string) =>
         ({
@@ -136,7 +137,7 @@ describe('the slow tier', () => {
           api: {
             reads: { getSettings: async () => ({ dayStartHour: 4 }) },
             writes: {
-              upsertPlan: async () => ({}),
+              upsertPlan: async (p: { taskId: string; day: string }) => void planned.push(p),
               createTask: async () => ({ id: `t${made.push('x')}` }),
               deleteTask: async (id: string) => void gone.push(id),
             },
@@ -152,8 +153,16 @@ describe('the slow tier', () => {
       expect(
         validateSimParams({ sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan }),
       ).toBeNull();
-      expect(made.length).toBeGreaterThanOrEqual(12);
+      expect(made).toHaveLength(16);
+      // planned for one day, every one: backlog-only padding isn't on Tasks' Today list (run 19-19-51's short page)
+      expect(planned.map((p) => p.taskId)).toEqual(made.map((_, i) => `t${i + 1}`));
+      expect(new Set(planned.map((p) => p.day)).size).toBe(1);
       expect(gone).toHaveLength(made.length);
+      // the edge: exactly 30 pt clears, 29 doesn't
+      await step('capture-long').run(long('long-preview bottom 528 vs keyboard top 558'));
+      await expect(
+        step('capture-long').run(long('long-preview bottom 529 vs keyboard top 558')),
+      ).rejects.toThrow('the dock sits low on a long page');
       gone.length = 0;
       await expect(
         step('capture-long').run(long('long-preview bottom 548 vs keyboard top 558')),
@@ -164,6 +173,13 @@ describe('the slow tier', () => {
         'no clearance',
       );
       expect(gone).toHaveLength(16);
+      // a lapsed token on the padding's delete leaves it to the run's sweep, never fails the row
+      const failing = long('long-preview bottom 490 vs keyboard top 558');
+      (failing as unknown as { api: { writes: Record<string, unknown> } }).api.writes.deleteTask =
+        async () => {
+          throw new Error('deleteTask → HTTP 401');
+        };
+      await expect(step('capture-long').run(failing)).resolves.toBeUndefined();
     });
   });
 

@@ -3,7 +3,8 @@
 // Reflection box above the soft keyboard without zooming. Every step is slow (a sim run is minutes), so a full
 // run defers them unless the branch touches what they can see (APP, below) or names this scenario (DEV-CHECK.md → Slow tier).
 // The sim never submits: the one task it opens is set up here through MCP, and the sim only focuses, types a
-// draft by key taps and erases it. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
+// draft by key taps and erases it — capture-long also seeds 16 API tasks (ledgered) and taps Review, a real parse
+// that saves nothing. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
 // re-measure (keyboard up, the capture bar sits at y 462); a MISS after an app change means a plan needs new ones —
 // read the step's screenshot.
 import { datesFor, needsYou, type Ctx, type Scenario } from '../scenario';
@@ -78,7 +79,7 @@ const CAPTURE: IosOp[] = [
 
 // A long page, scrolled, then the capture bar in Task mode and a Review: on PR 118's run the dock lifted ~56 pt short
 // there, its preview row on the keyboard's accessory bar, while a short page lifted right — and `aboveKeyboard` still
-// passed. A long page alone lifts right (run 2026-11-08T19-29-11: 120 pt clear); the Review's preview row growing the
+// passed. A long page alone sits right (run 2026-11-08T19-29-11: 120 pt clear); the Review's preview row growing the
 // lifted dock is the other half of PR 118's case. So the step asks for clearance (CLEARANCE) under the preview row,
 // read from the expect's note. Tasks' Today list, not Home: Home's length depends on the hour. The Review parses
 // (real Haiku on dev) and saves nothing; the field is erased and the mode put back to Log.
@@ -107,7 +108,13 @@ const CAPTURE_LONG: IosOp[] = [
   },
   { op: 'wait', s: 6 },
   // Scanned up from the keyboard: the preview's copy of the line sits below the field's.
-  { op: 'find', label: LONG_LINE, scan: { x: 40, from: 650, to: 300 }, as: 'long-preview' },
+  {
+    op: 'find',
+    label: LONG_LINE,
+    scan: { x: 40, from: 650, to: 300 },
+    role: 'AXStaticText',
+    as: 'long-preview',
+  },
   { op: 'expect', as: 'long-preview', aboveKeyboard: true },
   { op: 'shot', name: 'capture-long' },
   { op: 'erase', n: LONG_LINE.length + 2 },
@@ -116,7 +123,7 @@ const CAPTURE_LONG: IosOp[] = [
 ];
 
 // "long-preview bottom B vs keyboard top T" — sim.sh's aboveKeyboard note.
-export function clearanceOf(note: string | undefined): { bottom: number; top: number } | null {
+function clearanceOf(note: string | undefined): { bottom: number; top: number } | null {
   const m = /bottom (\d+(?:\.\d+)?) vs keyboard top (\d+(?:\.\d+)?)/.exec(note ?? '');
   return m ? { bottom: Number(m[1]), top: Number(m[2]) } : null;
 }
@@ -435,13 +442,22 @@ export const iosStandalone: Scenario = {
           )?.note;
           const c = clearanceOf(note);
           if (!c) throw new Error(`no clearance in the expect's note: ${note ?? 'none'}`);
-          ctx.log(`  capture bar on a long page: bottom ${c.bottom}, accessory bar top ${c.top}`);
+          ctx.log(`  preview row on a long page: bottom ${c.bottom}, accessory bar top ${c.top}`);
           if (c.top - c.bottom < CLEARANCE)
             throw new Error(
-              `the dock sits low on a long page: the capture bar's bottom ${c.bottom} is ${c.top - c.bottom} pt above the accessory bar (${c.top}), want ≥ ${CLEARANCE}`,
+              `the dock sits low on a long page: the preview row's bottom ${c.bottom} is ${c.top - c.bottom} pt above the accessory bar (${c.top}), want ≥ ${CLEARANCE}`,
             );
         } finally {
-          for (const id of pad) await ctx.api.writes.deleteTask(id);
+          // Best effort: the API token can lapse inside a long sim job (a 401 on run 2026-11-08T19-48-02), and the
+          // run's end sweep deletes ledgered tasks by id anyway (0 leftovers there). No later step reads Tasks.
+          for (const id of pad)
+            await ctx.api.writes
+              .deleteTask(id)
+              .catch((err: unknown) =>
+                ctx.log(
+                  `  padding ${id} left for the sweep: ${err instanceof Error ? err.message : String(err)}`,
+                ),
+              );
         }
       },
     },
