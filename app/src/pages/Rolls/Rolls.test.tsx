@@ -74,6 +74,7 @@ describe('Rolls page', () => {
     const roll = await api.upsertRoll({ name: 'Study', categoryId: null, estimateMin: 45 });
     const { task } = await api.pickRollToday(roll.id, TODAY);
     await api.transitionTask(task.id, 'in_progress');
+    await api.setTaskActual(task.id, 45);
     await api.transitionTask(task.id, 'done'); // one rep, today
     const user = userEvent.setup();
     renderApp({ api, path: '/rolls' });

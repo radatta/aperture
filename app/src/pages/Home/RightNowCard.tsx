@@ -5,6 +5,7 @@ import {
   dueUrgency,
   fmtClock12,
   fmtWeekdayShort,
+  needsEstimate,
   parentOf,
   placedByTime,
   todayKey,
@@ -26,6 +27,7 @@ import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
 import { CategoryTag } from '../../modules/tasks/CategoryTag';
 import { RollTag } from '../../modules/rolls/RollTag';
 import { DoneForm } from '../../modules/tasks/DoneForm';
+import { EstimateChips } from '../../modules/tasks/EstimateChips';
 import { liveElapsedMin, promote, rightNow } from '../../modules/home/rightNow';
 import type { RightNowRow } from '../../modules/home/rightNow';
 import { AddToTodayButton } from '../../modules/tasks/AddToTodayDialog';
@@ -145,7 +147,9 @@ export function RightNowCard() {
   // renumbers whatever is off).
   const alsoRef = useRef<HTMLDivElement>(null);
   const focusAction = useRowAction(alsoRef);
-  const [doneInitial, setDoneInitial] = useState<number | null>(null);
+  // The hero the Done form is open for: if another task takes the hero, the form goes with its own, so typed
+  // minutes never land on the wrong task.
+  const [doneOpen, setDoneOpen] = useState<{ taskId: string; initialMin: number } | null>(null);
   // Done opens the form with Actual focused, as the task modal's finish intent does — you tapped Done to
   // enter the number. Stable, so it focuses once on mount, not on every render.
   const focusActual = useCallback((el: HTMLInputElement | null) => el?.focus(), []);
@@ -237,18 +241,18 @@ export function RightNowCard() {
                     ))
                   )
                     return;
-                  setDoneInitial(elapsed);
+                  setDoneOpen({ taskId: hero.id, initialMin: elapsed });
                 }}
               >
                 Done
               </Button>
             </div>
-            {doneInitial !== null && (
+            {doneOpen?.taskId === hero.id && (
               <DoneForm
                 task={hero}
-                initialActualMin={doneInitial}
+                initialActualMin={doneOpen.initialMin}
                 actualRef={focusActual}
-                onDone={() => setDoneInitial(null)}
+                onDone={() => setDoneOpen(null)}
               />
             )}
           </Hero>
@@ -332,55 +336,69 @@ function FocusRow({
 }) {
   const t = row.task;
   const u = useUrgency(t);
+  const [asking, setAsking] = useState(false); // Start on an unscoped task: EstimateChips is open
+  const startRef = useRef<HTMLButtonElement>(null);
+  const open = t.status === 'backlog' || t.status === 'planned';
   return (
-    <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <RowText
-        task={t}
-        title={
-          <Text
-            size="sm"
-            className={cx(
-              'min-w-0 max-w-full truncate',
-              t.status === 'done' && 'text-ink-subtle line-through',
-            )}
-          >
-            {t.title}
-          </Text>
-        }
-      >
-        <PartCategory task={t} />
-        <PartOf task={t} />
-        <RollTag rollId={t.rollId} />
-        {/* A part's deadline (and colour) is its parent's; in "By time" its own end is why it's here. */}
-        {byTime && t.parentId && t.dueTime && (
-          <Text size="xs" tone="subtle" className="shrink-0">
-            ends {fmtClock12(t.dueTime)}
-          </Text>
-        )}
-        <DueTime task={t} />
-      </RowText>
-      <div className="flex shrink-0 items-center gap-2">
-        {t.status === 'done' ? (
-          <Text size="xs" tone="subtle">
-            done
-          </Text>
-        ) : t.status === 'in_progress' ? (
-          <Text size="xs" tone="muted" tabular>
-            {fmtDuration(t.actualAccruedMin)} in
-          </Text>
-        ) : (
-          <>
-            {estimateOf(t) != null && (
-              <Text size="xs" tone="subtle" tabular>
-                {fmtDuration(estimateOf(t)!)}
-              </Text>
-            )}
-            <Button variant="quiet" size="sm" onClick={() => onStart(t.id)}>
-              Start
-            </Button>
-          </>
-        )}
+    <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
+      <div className="flex items-center justify-between gap-3">
+        <RowText
+          task={t}
+          title={
+            <Text
+              size="sm"
+              className={cx(
+                'min-w-0 max-w-full truncate',
+                t.status === 'done' && 'text-ink-subtle line-through',
+              )}
+            >
+              {t.title}
+            </Text>
+          }
+        >
+          <PartCategory task={t} />
+          <PartOf task={t} />
+          <RollTag rollId={t.rollId} />
+          {/* A part's deadline (and colour) is its parent's; in "By time" its own end is why it's here. */}
+          {byTime && t.parentId && t.dueTime && (
+            <Text size="xs" tone="subtle" className="shrink-0">
+              ends {fmtClock12(t.dueTime)}
+            </Text>
+          )}
+          <DueTime task={t} />
+        </RowText>
+        <div className="flex shrink-0 items-center gap-2">
+          {t.status === 'done' ? (
+            <Text size="xs" tone="subtle">
+              done
+            </Text>
+          ) : t.status === 'in_progress' ? (
+            <Text size="xs" tone="muted" tabular>
+              {fmtDuration(t.actualAccruedMin)} in
+            </Text>
+          ) : (
+            <>
+              {estimateOf(t) != null && (
+                <Text size="xs" tone="subtle" tabular>
+                  {fmtDuration(estimateOf(t)!)}
+                </Text>
+              )}
+              <Button
+                variant="quiet"
+                size="sm"
+                ref={startRef}
+                aria-expanded={needsEstimate(t) ? asking : undefined}
+                onClick={() => (needsEstimate(t) ? setAsking(true) : onStart(t.id))}
+              >
+                Start
+              </Button>
+            </>
+          )}
+        </div>
       </div>
+      {asking && open && (
+        <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
+      )}
     </div>
   );
 }

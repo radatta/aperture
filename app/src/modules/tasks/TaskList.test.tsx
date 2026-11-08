@@ -211,6 +211,7 @@ describe('/tasks lenses', () => {
     const fin = await api.createTask({ title: 'finished one', estimateMin: 45 });
     await api.upsertPlan({ taskId: fin.id, day: today(), plannedMinutes: 45, order: 1 });
     await api.transitionTask(fin.id, 'in_progress');
+    await api.setTaskActual(fin.id, 45);
     await api.transitionTask(fin.id, 'done');
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
@@ -236,9 +237,10 @@ describe('/tasks lenses', () => {
 
   it('Today: once everything planned is done, it says so instead of "Nothing planned yet."', async () => {
     const { api } = await seeded();
-    const t = await api.createTask({ title: 'only one' });
+    const t = await api.createTask({ title: 'only one', estimateMin: 30 });
     await api.upsertPlan({ taskId: t.id, day: today(), plannedMinutes: 30, order: 0 });
     await api.transitionTask(t.id, 'in_progress');
+    await api.setTaskActual(t.id, 30);
     await api.transitionTask(t.id, 'done');
     renderApp({ api, path: '/tasks' });
 
@@ -249,8 +251,9 @@ describe('/tasks lenses', () => {
 
   it('Today: a task finished off the plan lands in Done today; a dropped one shows nowhere', async () => {
     const { api } = await seeded();
-    const off = await api.createTask({ title: 'started off plan' });
+    const off = await api.createTask({ title: 'started off plan', estimateMin: 30 });
     await api.transitionTask(off.id, 'in_progress');
+    await api.setTaskActual(off.id, 30);
     await api.transitionTask(off.id, 'done');
     const dropped = await api.createTask({ title: 'dropped one' });
     await api.upsertPlan({ taskId: dropped.id, day: today(), plannedMinutes: 30, order: 0 });
@@ -269,9 +272,10 @@ describe('/tasks lenses', () => {
 
   it('Done: a finished task with a row today offers no Unplan', async () => {
     const { api } = await seeded();
-    const t = await api.createTask({ title: 'done on plan' });
+    const t = await api.createTask({ title: 'done on plan', estimateMin: 30 });
     await api.upsertPlan({ taskId: t.id, day: today(), plannedMinutes: 30, order: 0 });
     await api.transitionTask(t.id, 'in_progress');
+    await api.setTaskActual(t.id, 30);
     await api.transitionTask(t.id, 'done');
     renderApp({ api, path: '/tasks?lens=done' });
 

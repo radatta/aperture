@@ -81,6 +81,7 @@ describe('createMcpClient', () => {
       'createTask',
       'deleteAttachment',
       'deleteTask',
+      'splitTask',
       'stopSeries',
       'stopSeriesUnknown',
       'updateCategory',
@@ -193,6 +194,7 @@ describe('createMcpClient', () => {
     await c.writes.updateTask('T1', { reflection: 'kept' });
     await c.writes.completeTask('T1', 10, 'went fine');
     await c.writes.completeTask('T1', 10);
+    await c.writes.completeTask('T1', 10, undefined, 25);
     const args = fetch.mock.calls.map(
       ([, init]) =>
         (JSON.parse(init.body as string) as { params: { arguments: unknown } }).params.arguments,
@@ -201,6 +203,7 @@ describe('createMcpClient', () => {
       { id: 'T1', reflection: 'kept' },
       { id: 'T1', actualMin: 10, reflection: 'went fine' },
       { id: 'T1', actualMin: 10 },
+      { id: 'T1', actualMin: 10, estimateMin: 25 },
     ]);
   });
 

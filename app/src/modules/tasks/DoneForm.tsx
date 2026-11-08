@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { Ref } from 'react';
-import { TASK_REFLECTION_MAX } from '@aperture/shared';
+import { isCalibrated, needsEstimate, TASK_REFLECTION_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
-import { useSetActual, useTransitionTask } from '../../data/hooks/useTasks';
+import { useSetActual, useSetEstimate, useTransitionTask } from '../../data/hooks/useTasks';
 import { liveElapsedMin } from '../home/rightNow';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { useEditSlot } from './editor/editState';
@@ -14,6 +14,7 @@ import type { EditSlots } from './editor/editState';
 import { NotesField } from './notes/NotesField';
 import { REFLECTION_FIELD } from './notes/reflectionField';
 import { notesValue } from './notes/parseNotes';
+import { typedBadMinutes, WHOLE_MINUTES_ERROR, wholeMinutes } from './taskMath';
 
 // "Done" captures the actual — prefilled from tracked pomodoro time, but editable (works with no
 // timer). This is what the estimate is measured against. `initialActualMin` lets a caller prefill the
@@ -23,8 +24,10 @@ import { notesValue } from './notes/parseNotes';
 // the task takes no more session time (accruesTime), so a timer anywhere else can't double-count it.
 // A stop that doesn't land keeps the form and the timer, and the error below says so.
 // `actualRef` lets the task editor's finish-intent focus the Actual field when the dialog opens.
-// Nothing tracked starts EMPTY, not "0" (you'd type over it), and an empty field can't be submitted —
-// a quiet 0 would land in calibration as a real actual.
+// Nothing tracked starts EMPTY, not "0" (you'd type over it), and neither empty nor 0 can be submitted —
+// a quiet 0 would land in calibration as a real actual (the done gate refuses it: machines.ts).
+// A task with no estimate asks for one here, in hindsight: every finished task is a calibration point, and
+// with no lock from the start the server marks this one retro. It lands before the actual and the finish.
 // The optional reflection (what went well, what to do differently) rides the same write as the actual;
 // focus stays on Actual. Left as it was seeded, it's not sent at all, so one saved meanwhile (MCP, another
 // device) is kept; cleared, it sends null. Over the cap, Mark done disables (no maxLength, so a paste is
@@ -38,6 +41,7 @@ type DoneProps =
 export function DoneForm({
   task,
   initialActualMin,
+  initialEstimateMin,
   actualRef,
   edits,
   onDone,
@@ -45,16 +49,25 @@ export function DoneForm({
 }: {
   task: Task;
   initialActualMin?: number;
+  initialEstimateMin?: number; // prefills a missing estimate (Flux's rep: nothing new to type)
   actualRef?: Ref<HTMLInputElement>;
   edits?: EditSlots;
 } & DoneProps) {
   const setActual = useSetActual();
+  const setEstimate = useSetEstimate();
   const transition = useTransitionTask();
   const { timers, stop } = usePomodoro();
   const [actual, setActual_] = useState<string>(() => {
     const tracked = Math.round(initialActualMin ?? liveElapsedMin(task, timers));
     return tracked > 0 ? String(tracked) : '';
   });
+  const [estimate, setEstimate_] = useState(initialEstimateMin?.toString() ?? '');
+  const askEstimate = needsEstimate(task);
+  const estimateBad = askEstimate && !wholeMinutes(estimate);
+  // An errand is checked off, not measured: its actual takes what it always did.
+  const calibrated = isCalibrated(task);
+  const actualBad = calibrated ? !wholeMinutes(actual) : actual.trim() === '';
+  const lock = task.estimateLockedMin ?? 0;
   const [seed] = useState(() => task.reflection ?? '');
   const [reflection, setReflection] = useState(seed);
   const reflectionTrimmed = notesValue(reflection);
@@ -77,6 +90,12 @@ export function DoneForm({
             setStopFailed(true);
             throw e;
           });
+      if (askEstimate)
+        await setEstimate.mutateAsync({
+          id: task.id,
+          estimateMin: Number(estimate),
+          bufferMin: task.bufferMin,
+        });
       await setActual.mutateAsync({
         id: task.id,
         actualMin: Number(actual),
@@ -96,20 +115,50 @@ export function DoneForm({
           ref={actualRef}
           label="Actual (min)"
           type="number"
-          min={0}
+          min={calibrated ? 1 : 0}
           inputMode="numeric"
           placeholder="minutes"
           value={actual}
           onChange={(e) => setActual_(e.target.value)}
           className="w-32"
         />
-        {task.estimateLockedMin != null && (
+        {askEstimate && (
+          <Field
+            label="Estimate in hindsight"
+            type="number"
+            min={1}
+            inputMode="numeric"
+            placeholder="minutes"
+            value={estimate}
+            onChange={(e) => setEstimate_(e.target.value)}
+            className="w-32"
+          />
+        )}
+        {lock >= 1 ? (
           <Text size="sm" tone="muted" tabular>
-            vs {fmtDuration(task.estimateLockedMin)} estimated
-            {task.estimateMin !== task.estimateLockedMin && ' at start'}
+            vs {fmtDuration(lock)} estimated
+            {task.estimateMin !== lock && ' at start'}
           </Text>
+        ) : (
+          // Estimated since the start, so the finish marks it retro: never a silent change on the page.
+          calibrated &&
+          !askEstimate && (
+            <Text size="sm" tone="muted" tabular>
+              vs {fmtDuration(task.estimateMin!)}, counted as estimated after the fact
+            </Text>
+          )
         )}
       </div>
+      {askEstimate && lock < 1 && (
+        <Text size="xs" tone="muted">
+          No estimate yet — what would you have said? It counts as estimated after the fact.
+        </Text>
+      )}
+      {((calibrated && typedBadMinutes(actual)) || (askEstimate && typedBadMinutes(estimate))) && (
+        <Text size="xs" tone="danger">
+          {WHOLE_MINUTES_ERROR}
+        </Text>
+      )}
       <NotesField
         {...REFLECTION_FIELD}
         placeholder="How did it go? Optional."
@@ -125,7 +174,7 @@ export function DoneForm({
           size="sm"
           onClick={submit}
           aria-disabled={busy}
-          disabled={actual.trim() === '' || reflectionOver}
+          disabled={actualBad || estimateBad || reflectionOver}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >
           Mark done
@@ -134,7 +183,7 @@ export function DoneForm({
           Cancel
         </Button>
       </div>
-      {(stopFailed || setActual.isError || transition.isError) && (
+      {(stopFailed || setEstimate.isError || setActual.isError || transition.isError) && (
         <div role="alert">
           <Text size="sm" tone="danger">
             Couldn’t mark it done — try again.

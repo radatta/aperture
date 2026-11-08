@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router';
+import { ROLL_PLAN_FALLBACK_MIN } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { CheckCircleIcon } from '../../components/icons';
 import { Text } from '../../components/Text';
@@ -102,7 +103,14 @@ export function RepTieStrip({ handle, activeMs }: { handle: RepTieHandle; active
           <Text size="sm" weight="medium">
             Log today&apos;s {roll.name} rep
           </Text>
-          <DoneForm task={tie.task} initialActualMin={doneMin} onDone={closeDone} />
+          {/* Hands-free once loaded (flux docs): the gate must not add a typed field here. A rep that lost its
+              estimate takes its Roll's, visible and editable; with no lock from the start it's marked retro. */}
+          <DoneForm
+            task={tie.task}
+            initialActualMin={doneMin}
+            initialEstimateMin={Math.max(1, Math.round(roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN))}
+            onDone={closeDone}
+          />
         </div>
       )}
       {message && (

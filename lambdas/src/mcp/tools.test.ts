@@ -243,9 +243,88 @@ describe('mcp tools — tasks', () => {
     expect(((await call('list_tasks')) as Task[]).some((t) => t.id === x.id)).toBe(false);
   });
 
+  it('complete_task: scoped → lock = estimate, planned; a revision keeps the lock', async () => {
+    const { call } = makeEnv();
+    const a = (await call('create_task', { title: 'scoped', estimateMin: 10 })) as Task;
+    const one = (await call('complete_task', { id: a.id, actualMin: 12 })) as { task: Task };
+    expect(one.task).toMatchObject({ estimateLockedMin: 10, estimateSource: 'planned' });
+    const b = (await call('create_task', { title: 'rescoped', estimateMin: 20 })) as Task;
+    const two = (await call('complete_task', { id: b.id, actualMin: 25, estimateMin: 40 })) as {
+      task: Task;
+    };
+    expect(two.task).toMatchObject({
+      estimateMin: 40,
+      estimateLockedMin: 20,
+      estimateSource: 'revised',
+    });
+  });
+
+  it('complete_task: unscoped needs estimateMin, refused before any write; with it, retro', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'unscoped' })) as Task;
+    await expect(call('complete_task', { id: t.id, actualMin: 12 })).rejects.toThrow(/estimateMin/);
+    const still = (await call('list_tasks', {})) as Task[];
+    expect(still.find((x) => x.id === t.id)).toMatchObject({
+      status: 'backlog',
+      actualAccruedMin: 0,
+    });
+    const { task } = (await call('complete_task', { id: t.id, actualMin: 12, estimateMin: 8 })) as {
+      task: Task;
+    };
+    expect(task).toMatchObject({ estimateLockedMin: 8, estimateSource: 'retro' });
+  });
+
+  it('complete_task: estimateMin under 1 is a param error; a parent takes none', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'low', estimateMin: 5 })) as Task;
+    await expect(
+      call('complete_task', { id: t.id, actualMin: 5, estimateMin: 0 }),
+    ).rejects.toThrow();
+    const parent = (await call('create_task', { title: 'parent' })) as Task;
+    const part = (await call('create_task', { title: 'part', estimateMin: 5 })) as Task;
+    await call('update_task', { id: part.id, parentId: parent.id });
+    await expect(call('complete_task', { id: parent.id, estimateMin: 5 })).rejects.toThrow(
+      /Omit estimateMin/,
+    );
+  });
+
+  it('update_task status done meets the gate; a done task with a lock takes no estimate', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'gated' })) as Task;
+    await call('update_task', { id: t.id, status: 'in_progress' });
+    await expect(call('update_task', { id: t.id, status: 'done' })).rejects.toThrow(
+      /estimate and an actual/,
+    );
+    await call('complete_task', { id: t.id, actualMin: 5, estimateMin: 5 });
+    await expect(call('update_task', { id: t.id, estimateMin: 9 })).rejects.toThrow(/history/);
+  });
+
+  it('update_task backfills a done task with no lock once; a second is refused', async () => {
+    const { call, doc } = makeEnv();
+    const t = (await call('create_task', { title: 'legacy' })) as Task;
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    await repo.putTask({
+      ...(await repo.getTask(t.id))!,
+      status: 'done',
+      completedAt: 1_700_000_000_000,
+      actualAccruedMin: 90,
+    });
+    expect(await call('update_task', { id: t.id, estimateMin: 60 })).toMatchObject({
+      estimateMin: 60,
+      estimateLockedMin: 60,
+      estimateSource: 'retro',
+    });
+    await expect(call('update_task', { id: t.id, estimateMin: 70 })).rejects.toThrow(/history/);
+    expect((await repo.getTask(t.id))?.estimateLockedMin).toBe(60);
+  });
+
   it('notes: create sets them, lists return them, update replaces and clears at any status', async () => {
     const { call } = makeEnv();
-    const t = (await call('create_task', { title: 'noted', notes: '  ch. 4\n- q6  ' })) as Task;
+    const t = (await call('create_task', {
+      title: 'noted',
+      estimateMin: 20,
+      notes: '  ch. 4\n- q6  ',
+    })) as Task;
     expect(t.notes).toBe('ch. 4\n- q6');
     expect(((await call('list_tasks')) as Task[])[0]!.notes).toBe('ch. 4\n- q6');
     expect(((await call('list_backlog')) as Task[])[0]!.notes).toBe('ch. 4\n- q6');

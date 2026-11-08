@@ -395,8 +395,14 @@ describe('calendar auto-sync (timed tasks)', () => {
 
   it('done leaves the event; cancel removes it (pre-existing delete-on-cancel)', async () => {
     const { g, b } = await connected();
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     await b.transitionTask(t.id, 'done');
     expect(g.events.size).toBe(1);
     const t2 = await b.createTask({ title: 'y', dueDay: '2026-10-09', dueTime: '16:00' });
@@ -464,8 +470,14 @@ describe('calendar auto-sync (timed tasks)', () => {
 
   it('a done split moves the event to the follow-up — renamed, never duplicated', async () => {
     const { g, b } = await connected();
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     const { original, followUp } = await b.splitTask(t.id, {
       finish: 'done',
       followUp: { title: 'x, part 2', estimateMin: null },
@@ -478,8 +490,14 @@ describe('calendar auto-sync (timed tasks)', () => {
 
   it('a done split clears the original’s two-way state and gives the follow-up the event’s', async () => {
     const { b } = await connected();
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     const { original, followUp } = await b.splitTask(t.id, {
       finish: 'done',
       followUp: { title: 'x, part 2', estimateMin: null },
@@ -497,7 +515,12 @@ describe('calendar auto-sync (timed tasks)', () => {
   it('a done split moves a picked block on a timed task to the follow-up, re-timed to the deadline', async () => {
     const { g, b } = await connected();
     await b.updateSettings({ autoCalendar: false }); // the picker is offered with sync off
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     const manual = await b.insertCalendarEvent({
       taskId: t.id,
       accountSub: 'A',
@@ -508,6 +531,7 @@ describe('calendar auto-sync (timed tasks)', () => {
     });
     await b.updateSettings({ autoCalendar: true });
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     const { original, followUp } = await b.splitTask(t.id, {
       finish: 'done',
       followUp: { title: 'x, part 2', estimateMin: null },
@@ -614,7 +638,7 @@ describe('calendar auto-sync (timed tasks)', () => {
   it('split keeps a manual event on an untimed original, done or kept going', async () => {
     for (const finish of ['done', 'keep'] as const) {
       const { g, b } = await connected();
-      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09' });
+      const t = await b.createTask({ title: 'x', estimateMin: 30, dueDay: '2026-10-09' });
       await b.insertCalendarEvent({
         taskId: t.id,
         accountSub: 'A',
@@ -624,6 +648,7 @@ describe('calendar auto-sync (timed tasks)', () => {
         endMs: at('2026-10-08', '15:00'),
       });
       await b.transitionTask(t.id, 'in_progress');
+      await b.setTaskActual(t.id, 20);
       const { original, followUp } = await b.splitTask(t.id, {
         finish,
         title: 'x', // keeps its title, so the manual block isn't renamed
@@ -684,6 +709,7 @@ describe('calendar auto-sync (timed tasks)', () => {
       const created = await b.syncCalendarEvent(p.id);
       expect(g.events.get(created.gcalEventId!)).toMatchObject({ marker: true, title: 'P2' });
       await b.transitionTask(part.id, 'in_progress');
+      await b.setTaskActual(part.id, 30);
       await b.transitionTask(part.id, 'done');
       const done = await b.transitionTask(p.id, 'done');
       expect(g.events.has(done.gcalEventId!)).toBe(true);
@@ -714,10 +740,11 @@ describe('calendar auto-sync (timed tasks)', () => {
       const [a, c, d] = await b.createTasks([
         { title: 'Part 1', parentId: p.id, ...t },
         { title: 'Part 2', parentId: p.id, ...t },
-        { title: 'Part 3', parentId: p.id, ...t },
+        { title: 'Part 3', parentId: p.id, estimateMin: 30, ...t },
       ]);
       expect(g.events.get(a!.gcalEventId!)!.title).toBe('P2 · Part 1');
       await b.transitionTask(d!.id, 'in_progress');
+      await b.setTaskActual(d!.id, 20);
       await b.transitionTask(d!.id, 'done');
       g.patches.length = 0;
       g.events.delete(c!.gcalEventId!); // Part 2's block is gone in Google — its patch unlinks it
@@ -754,8 +781,14 @@ describe('calendar auto-sync (timed tasks)', () => {
 
     it('a timed standalone done split moves the event and its base to Part 2; the parent inserts its marker', async () => {
       const { g, b } = await connected();
-      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+      const t = await b.createTask({
+        title: 'x',
+        estimateMin: 30,
+        dueDay: '2026-10-09',
+        dueTime: '16:00',
+      });
       await b.transitionTask(t.id, 'in_progress');
+      await b.setTaskActual(t.id, 20);
       const insert = vi.spyOn(g, 'insertEvent');
       const { parent, original, followUp } = await b.splitTask(t.id, {
         finish: 'done',
@@ -909,10 +942,16 @@ describe('calendar auto-sync (timed tasks)', () => {
 
   it('finishing a task with an owed removal carries it out; if Google still fails the note stays', async () => {
     const { g, b } = await connected();
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     g.markDead('A');
     await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null }); // remove fails → owed
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     const stillDown = await b.transitionTask(t.id, 'done');
     expect(stillDown.gcalEventId).toBe(t.gcalEventId);
     expect(stillDown.gcalSyncError).toMatch(/^Couldn’t remove/); // not silently dropped
@@ -926,10 +965,16 @@ describe('calendar auto-sync (timed tasks)', () => {
 
   it('a split with an owed removal reports a failure instead of orphaning the event', async () => {
     const { g, b } = await connected();
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     g.markDead('A');
     await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     const { original } = await b.splitTask(t.id, {
       finish: 'done',
       followUp: { title: 'x, part 2', estimateMin: null },
@@ -954,8 +999,14 @@ describe('calendar auto-sync (timed tasks)', () => {
   it('finishing a task clears its failure note', async () => {
     const { g, b } = await connected();
     g.markDead('A');
-    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     expect((await b.transitionTask(t.id, 'done')).gcalSyncError).toBeNull();
   });
 
@@ -1242,6 +1293,7 @@ describe('calendar pull (two-way sync)', () => {
     const { g, b, tick, baseline, timed } = await setup();
     const t = await timed();
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     await b.transitionTask(t.id, 'done');
     await baseline();
     await b.setTaskTitle(t.id, 'done and renamed'); // done tasks don't push
@@ -1376,6 +1428,7 @@ describe('calendar pull (two-way sync)', () => {
     const { g, b, tick, baseline, timed } = await setup();
     const t = await timed();
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     await b.transitionTask(t.id, 'done');
     await baseline();
     g.editEvent(t.gcalEventId!, { title: 'G' });
@@ -1390,6 +1443,7 @@ describe('calendar pull (two-way sync)', () => {
     const { g, b, tick, baseline, timed } = await setup();
     const t = await timed();
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     await baseline();
     const realPatch = g.patchEvent.bind(g);
     g.patchEvent = async () => {
@@ -1471,6 +1525,7 @@ describe('calendar pull (two-way sync)', () => {
     const { g, b, tick, baseline, timed } = await setup();
     const t = await timed();
     await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskActual(t.id, 20);
     await b.transitionTask(t.id, 'done');
     await baseline();
     g.editEvent(t.gcalEventId!, { startMs: at('2026-10-09', '13:00') });

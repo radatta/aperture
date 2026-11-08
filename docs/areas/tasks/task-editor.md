@@ -55,7 +55,7 @@ The card keeps only the actions you press without thinking. No overflow menu.
   wanted (2026-09-27) — only Close / Esc / backdrop, Mark done, Drop and Delete leave. Estimate + buffer (the working estimate) are **editable at any
   open status** since 2026-10-05 ([split.md](split.md) D1) — the calibration baseline frozen at start is
   separate and never moves; the form says "Started at 45m — calibration is measured against that." A parent's estimate is read-only, "2h 40m — the sum of its parts", with its lock as "Locked at … when the first part started" ([parts.md](parts.md) D9); a part's due fields read Ends / Ends at. They
-  go **read-only once done or cancelled** (`canEditEstimate`; `withEstimate` throws there). Category stays editable at any status (no machine guard); **due locks
+  go **read-only once done or cancelled** (`canEditEstimate`; `withEstimate` throws there, except one MCP backfill on a done task with no lock — [integrity](../calibration/integrity.md)). The Done form and a done split ask for an estimate when the task has none, in hindsight, and refuse 0 minutes; Scope and Keep going take an estimate in whole minutes, at least 1, or none. Category stays editable at any status (no machine guard); **due locks
   once the task is done or cancelled** — a UI rule (`isTerminal` in `TaskDetailsForm`), since re-dating
   history is meaningless.
 - **Done opens the modal in a finish intent** (actual-minutes capture, `DoneForm` reused) focused on

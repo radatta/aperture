@@ -353,7 +353,8 @@ export interface ApiClient {
   // active categories and day start (quickParse.ts). Writes nothing. A ' | ' line takes the strict
   // grammar instead. Never throws for a parse failure — `ok: false` means save the line raw.
   parseTask(text: string): Promise<ParseTaskResult>;
-  // The working estimate — any open status; rejects done/cancelled. Never touches estimateLockedMin.
+  // The working estimate — any open status; rejects done/cancelled and never touches estimateLockedMin. The
+  // one exception: a done task with no baseline takes one retro estimate, which becomes it (machines.ts).
   setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task>;
   // Category can change any time — labels resolve live and wasWork is snapshotted on sessions, so
   // there's no freeze constraint here (unlike the estimate).

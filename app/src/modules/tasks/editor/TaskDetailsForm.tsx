@@ -32,7 +32,7 @@ import { fmtDuration } from '../../../lib/format';
 import { NotesField } from '../notes/NotesField';
 import { REFLECTION_FIELD } from '../notes/reflectionField';
 import { notesValue } from '../notes/parseNotes';
-import { scopeLabel, suggestedBuffer } from '../taskMath';
+import { scopeLabel, suggestedBuffer, typedBadMinutes, WHOLE_MINUTES_ERROR } from '../taskMath';
 import { useEditSlot } from './editState';
 import type { EditSlots } from './editState';
 
@@ -154,6 +154,10 @@ export function TaskDetailsForm({
     (String(task.estimateMin ?? '') !== estimate || String(task.bufferMin ?? '') !== buffer);
   const dueDirty =
     !isTerminal && ((task.dueDay ?? '') !== dueDay || (task.dueTime ?? '') !== dueTime);
+  // Whole minutes, at least 1 (or none): a 0 would read "0m est" on a task Start still calls unscoped. An
+  // older row's own number stays saveable, so it never blocks an edit to another field.
+  const estimateBad =
+    editEstimate && String(task.estimateMin ?? '') !== estimate && typedBadMinutes(estimate);
   const notesTrimmed = notesValue(notes);
   // Only a draft being edited counts: in view mode the field shows the live task.notes, so a stale draft
   // must never read as a change (or be saved back over a newer note).
@@ -199,7 +203,7 @@ export function TaskDetailsForm({
   // touched since pressing Save, so typing during a slow save is never overwritten. Stays open; a
   // failure keeps the edits and says so.
   async function save() {
-    if (saving || !dirty) return;
+    if (saving || !dirty || estimateBad) return;
     const sent = fields;
     setSaving(true);
     setFailed(false);
@@ -272,7 +276,7 @@ export function TaskDetailsForm({
               ref={estimateRef}
               label="Estimate (min)"
               type="number"
-              min={0}
+              min={1}
               inputMode="numeric"
               value={estimate}
               onChange={(e) => setEstimate_(e.target.value)}
@@ -298,6 +302,11 @@ export function TaskDetailsForm({
                 +25%
               </Button>
             </div>
+            {estimateBad && (
+              <Text size="xs" tone="danger" className="w-full">
+                {WHOLE_MINUTES_ERROR}
+              </Text>
+            )}
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted" className="w-full">
                 Started at {fmtDuration(task.estimateLockedMin)} — calibration is measured against
@@ -506,7 +515,7 @@ export function TaskDetailsForm({
         <Button
           size="sm"
           onClick={save}
-          aria-disabled={saving || !dirty}
+          aria-disabled={saving || !dirty || estimateBad}
           disabled={!titleTrimmed || notesOver || reflectionOver}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >

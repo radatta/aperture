@@ -205,6 +205,8 @@ export const phoneNits: Scenario = {
         await at(ctx, FLOOR, async () => {
           await findRow(ctx, 'backlog');
           await ctx.page.getByRole('button', { name: 'Start', exact: true }).click();
+          // Unscoped by design here: Start asks first (calibration-integrity's own scenario proves the chips).
+          await ctx.page.getByRole('button', { name: 'Start without one' }).click();
           await cardDone(ctx).waitFor({ timeout: 15_000 });
           const title = await findRow(ctx, 'today');
           await cardDone(ctx).waitFor({ timeout: 15_000 });

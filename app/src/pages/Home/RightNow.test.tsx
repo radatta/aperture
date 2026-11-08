@@ -291,4 +291,81 @@ describe('Right now card', () => {
     expect(await screen.findByText('Nothing planned today.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start 25-min focus' })).toBeTruthy();
   });
+  it('Start on an unscoped row asks for an estimate, and a chip starts it', async () => {
+    const api = stub();
+    const t = await plan(api, 'Unscoped', { order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+    expect((await api.getTask(t.id))?.status).not.toBe('in_progress'); // asking, not started
+    await user.click(screen.getByRole('button', { name: '45' }));
+    await waitFor(async () =>
+      expect(await api.getTask(t.id)).toMatchObject({
+        status: 'in_progress',
+        estimateLockedMin: 45,
+      }),
+    );
+  });
+
+  it('Start again leaves the chips open; Cancel gives focus back to Start', async () => {
+    const api = stub();
+    await plan(api, 'Unscoped', { order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    const start = await screen.findByRole('button', { name: 'Start' });
+    await user.click(start);
+    await user.click(start);
+    expect(screen.getByRole('group', { name: 'Estimate for Unscoped' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: 'Estimate for Unscoped' })).toBeNull();
+    expect(document.activeElement).toBe(start);
+  });
+
+  it('Done on an unscoped hero asks for the estimate in hindsight, and finishes retro', async () => {
+    const api = stub();
+    const t = await plan(api, 'Unscoped', { order: 0, start: true });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '30');
+    await user.type(screen.getByLabelText('Estimate in hindsight'), '20');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(async () =>
+      expect(await api.getTask(t.id)).toMatchObject({
+        status: 'done',
+        estimateLockedMin: 20,
+        estimateSource: 'retro',
+      }),
+    );
+  });
+
+  it('a hero’s open Done form never carries over to the task that takes the hero', async () => {
+    const api = stub();
+    const off = await api.createTask({ title: 'Off plan', estimateMin: 30 });
+    await api.transitionTask(off.id, 'in_progress');
+    const next = await plan(api, 'Big three', { est: 20, order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '40');
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(async () => expect((await api.getTask(next.id))?.status).toBe('in_progress'));
+    await waitFor(() => expect(screen.queryByLabelText('Actual (min)')).toBeNull());
+    expect((await api.getTask(next.id))?.actualAccruedMin).toBe(0);
+  });
+
+  it('Start on a scoped row starts at once, with no chips', async () => {
+    const api = stub();
+    const t = await plan(api, 'Scoped', { est: 30, order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+    await waitFor(async () => expect((await api.getTask(t.id))?.status).toBe('in_progress'));
+    expect(screen.queryByRole('button', { name: '45' })).toBeNull();
+  });
 });

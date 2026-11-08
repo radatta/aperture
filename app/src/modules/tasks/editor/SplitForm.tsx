@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import { canTransitionTask, STANDALONE_PART_TITLE } from '@aperture/shared';
+import {
+  canTransitionTask,
+  isCalibrated,
+  isTimed,
+  needsEstimate,
+  STANDALONE_PART_TITLE,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -9,7 +15,12 @@ import { useSplitTask } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 import { liveElapsedMin } from '../../home/rightNow';
 import { usePomodoro } from '../../pomodoro/pomodoro-context';
-import { SPLIT_TITLE_SUFFIX, splitDefaults } from '../taskMath';
+import {
+  SPLIT_TITLE_SUFFIX,
+  splitDefaults,
+  typedBadMinutes,
+  WHOLE_MINUTES_ERROR,
+} from '../taskMath';
 import { useEditSlot } from './editState';
 import type { EditSlots } from './editState';
 
@@ -19,8 +30,8 @@ const minutes = (v: string): number | null => (v.trim() === '' ? null : Number(v
 const valid = (v: string) => v.trim() === '' || Number(v) >= 0; // empty, or real non-negative minutes
 const str = (n: number | null) => n?.toString() ?? '';
 
-// Split always yields parent + parts (split.ts). This part is either done (an actual is required — it
-// feeds calibration, like Mark done) or keeps going (rescoped), and the rest becomes a new part with its
+// Split always yields parent + parts (split.ts). This part is either done (an actual is required, and an
+// estimate if it has none — it feeds calibration, like Mark done) or keeps going (rescoped), and the rest becomes a new part with its
 // own estimate. A standalone task becomes Part 1 under a new parent that keeps its deadline — all three
 // titles are editable here, so what's typed is what's stored; a part (`parentTitle` set) gains a sibling.
 // Never cancels. `onDone(finish)` lets the editor close on done and stay open on keep. A done split stops
@@ -52,7 +63,10 @@ export function SplitForm({
     const tracked = Math.round(liveElapsedMin(task, timers));
     return tracked > 0 ? String(tracked) : '';
   });
-  const [estimate, setEstimate] = useState(str(splitDefaults(task, 'keep').thisPart));
+  // An unscoped task's starts empty: an estimate of 0 with time logged would prefill the actual, as hindsight.
+  const [estimate, setEstimate] = useState(
+    needsEstimate(task) ? '' : str(splitDefaults(task, 'keep').thisPart),
+  );
   const [restTitle, setRestTitle] = useState(
     standalone ? 'Part 2' : `${task.title}${SPLIT_TITLE_SUFFIX}`,
   );
@@ -88,22 +102,35 @@ export function SplitForm({
   useEditSlot(edits, 'reveal', sent ? 'clean' : splitting ? 'saving' : dirty ? 'dirty' : 'clean');
 
   const done = finish === 'done';
+  // A done split of an unscoped task asks for the estimate too, in hindsight (the done gate, machines.ts).
+  const askEstimate = done && needsEstimate(task);
   // Where the rest lands — the server rule, stated generally: plan rows are loaded per day here, and a
   // planned task can have rows ahead of today (the night "Tomorrow"), so naming a day could be wrong.
-  const landing =
-    task.status === 'planned' || task.status === 'in_progress'
+  const landing = isTimed(task)
+    ? 'Lands on its day, by its time'
+    : task.status === 'planned' || task.status === 'in_progress'
       ? 'Lands on this one’s latest plan day, else the backlog'
       : 'Lands in the backlog';
   // The two parts' total vs the original working estimate — the size of the rescope, at a glance.
   const thisPart = done ? minutes(actual) : minutes(estimate);
   const rest = minutes(restEstimate);
-  const numbersOk = valid(actual) && valid(estimate) && valid(restEstimate);
+  // Only what shows counts: a done part's estimate field is there only when it's asked for.
+  // An estimate is whole minutes or none (0 would read as scoped); what the form prefilled always passes, an
+  // older fractional estimate included. An errand's actual takes what it always did.
+  const calibrated = isCalibrated(task);
+  const estimateOk = (v: string, seed: string) => v === seed || !typedBadMinutes(v);
+  const numbersOk =
+    (!done || (calibrated ? !typedBadMinutes(actual) : valid(actual))) &&
+    (done ? !askEstimate || !typedBadMinutes(estimate) : estimateOk(estimate, initial.estimate)) &&
+    estimateOk(restEstimate, str(splitDefaults(task, finish).rest));
+  const negative = [done ? actual : estimate, restEstimate].some((v) => Number(v) < 0);
   const total = numbersOk && thisPart != null && rest != null ? thisPart + rest : null;
   const canSubmit =
     !!title.trim() &&
     !!restTitle.trim() &&
     (!standalone || !!deliverable.trim()) &&
     (!done || actual.trim() !== '') &&
+    (!askEstimate || estimate.trim() !== '') &&
     numbersOk;
 
   async function submit() {
@@ -125,7 +152,10 @@ export function SplitForm({
           ...(standalone ? { parentTitle: deliverable.trim() } : {}),
           ...(standalone || title.trim() !== task.title ? { title: title.trim() } : {}),
           ...(done
-            ? { actualMin: Number(actual) }
+            ? {
+                actualMin: Number(actual),
+                ...(askEstimate ? { estimateMin: minutes(estimate) } : {}),
+              }
             : minutes(estimate) !== task.estimateMin
               ? { estimateMin: minutes(estimate) }
               : {}),
@@ -187,17 +217,32 @@ export function SplitForm({
           onChange={(e) => setTitle(e.target.value)}
         />
         {done ? (
-          <Field
-            label="Actual (min)"
-            aria-label="This part's actual (min)"
-            type="number"
-            min={0}
-            inputMode="numeric"
-            placeholder="minutes"
-            value={actual}
-            onChange={(e) => setActual(e.target.value)}
-            className="w-28"
-          />
+          <div className="flex flex-wrap items-end gap-3">
+            <Field
+              label="Actual (min)"
+              aria-label="This part's actual (min)"
+              type="number"
+              min={calibrated ? 1 : 0}
+              inputMode="numeric"
+              placeholder="minutes"
+              value={actual}
+              onChange={(e) => setActual(e.target.value)}
+              className="w-28"
+            />
+            {askEstimate && (
+              <Field
+                label="Estimate in hindsight"
+                aria-label="This part's estimate in hindsight"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                placeholder="minutes"
+                value={estimate}
+                onChange={(e) => setEstimate(e.target.value)}
+                className="w-28"
+              />
+            )}
+          </div>
         ) : (
           <Field
             label="Estimate (min)"
@@ -246,9 +291,14 @@ export function SplitForm({
         )}
       </div>
 
+      {askEstimate && (task.estimateLockedMin ?? 0) < 1 && (
+        <Text size="xs" tone="muted">
+          No estimate yet — what would you have said? It counts as estimated after the fact.
+        </Text>
+      )}
       {!numbersOk && (
         <Text size="xs" tone="danger">
-          Minutes can&apos;t be negative.
+          {negative ? "Minutes can't be negative." : WHOLE_MINUTES_ERROR}
         </Text>
       )}
       <div className="flex gap-2">

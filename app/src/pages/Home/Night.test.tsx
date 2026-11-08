@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, ulid } from '@aperture/shared';
-import type { ApiClient, TaskStatus } from '@aperture/shared';
+import type { ApiClient, Task, TaskStatus } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -12,6 +12,19 @@ beforeEach(() => {
 });
 
 const today = () => todayKey(4);
+
+// A done row from before the done gate (no estimate, no lock): the API can't make one any more.
+function makeLegacyRow(api: ApiClient, id: string) {
+  const { store } = api as unknown as { store: { tasks: Task[] } };
+  Object.assign(
+    store.tasks.find((t) => t.id === id)!,
+    {
+      estimateMin: null,
+      estimateLockedMin: null,
+      estimateSource: null,
+    },
+  );
+}
 
 async function onToday(api: ApiClient, title: string, status: TaskStatus, order: number) {
   const t = await api.createTask({ title, estimateMin: 30 });
@@ -226,10 +239,11 @@ describe('night: today in review', () => {
     const skipped = await api.createTask({ title: 'skipped', parentId: parent.id });
     await api.transitionTask(skipped.id, 'cancelled'); // dropped: not one of the rollup's parts
     await api.transitionTask(parent.id, 'done');
-    const loose = await api.createTask({ title: 'quick errand' }); // never estimated
+    const loose = await api.createTask({ title: 'quick errand', estimateMin: 10 });
     await api.transitionTask(loose.id, 'in_progress');
     await api.setTaskActual(loose.id, 10);
     await api.transitionTask(loose.id, 'done');
+    makeLegacyRow(api, loose.id); // never estimated
     const user = userEvent.setup();
     renderApp({ api });
     await user.click(screen.getByRole('button', { name: 'Night' }));

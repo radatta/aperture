@@ -148,24 +148,51 @@ export function createMcpClient({
     // never taps Start).
     async updateTask(
       id: string,
-      patch: { place?: string | null; reflection?: string | null; status?: 'in_progress' },
+      patch: {
+        place?: string | null;
+        reflection?: string | null;
+        estimateMin?: number;
+        status?: 'in_progress' | 'done';
+      },
     ): Promise<DevTask> {
       assertLedgerTask(id);
       return data<DevTask>('update_task', { id, ...patch });
     },
     // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
-    // a parent) — omitted here, it is left out of the call, never sent as null; so is an omitted reflection.
+    // a parent) — omitted here, it is left out of the call, never sent as null; so is an omitted reflection
+    // or estimate.
     async completeTask(
       id: string,
       actualMin?: number,
       reflection?: string | null,
+      estimateMin?: number,
     ): Promise<{ task: DevTask; previousActualMin: number | null }> {
       assertLedgerTask(id);
       return data('complete_task', {
         id,
         ...(actualMin === undefined ? {} : { actualMin }),
         ...(reflection === undefined ? {} : { reflection }),
+        ...(estimateMin === undefined ? {} : { estimateMin }),
       });
+    },
+    // Split one of this run's tasks; what it creates is recorded from the response, so cleanup can remove it.
+    async splitTask(
+      id: string,
+      input: {
+        finish: 'done' | 'keep';
+        followUpTitle: string;
+        actualMin?: number;
+        estimateMin?: number;
+      },
+    ): Promise<{ parent: DevTask; original: DevTask; followUp: DevTask }> {
+      assertLedgerTask(id);
+      const out = await data<{ parent: DevTask; original: DevTask; followUp: DevTask }>(
+        'split_task',
+        { id, ...input },
+      );
+      for (const t of [out.parent, out.followUp])
+        ledger.append({ run, op: 'created', id: t.id, via: MCP_CREATE_VIA, title: t.title });
+      return out;
     },
     // Deleting a parent deletes its parts, so a recorded parent with a part the ledger doesn't know is
     // refused, as the pipeline's cleanup does. A task already gone answers Not found — returned, not thrown.

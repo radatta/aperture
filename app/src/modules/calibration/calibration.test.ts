@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { CalibrationPoint } from '@aperture/shared';
-import { aggregate, plannedVsAvailable, recentPoints } from './calibration';
+import { aggregate, driftLabel, plannedVsAvailable, recentPoints } from './calibration';
 
 const pt = (estimateLockedMin: number, actualAccruedMin: number): CalibrationPoint => ({
   taskId: 't',
   day: '2026-08-01',
+  estimateMin: estimateLockedMin,
   estimateLockedMin,
+  estimateSource: 'planned',
   actualAccruedMin,
   categoryId: null,
   reflection: null,
@@ -56,7 +58,9 @@ describe('recentPoints', () => {
   const point = (taskId: string, day: string): CalibrationPoint => ({
     taskId,
     day,
+    estimateMin: 30,
     estimateLockedMin: 30,
+    estimateSource: 'planned',
     actualAccruedMin: 30,
     categoryId: null,
     reflection: null,
@@ -76,5 +80,42 @@ describe('recentPoints', () => {
     const points = [point('x', '2026-10-12'), point('y', '2026-10-12'), point('z', '2026-10-11')];
     const at = (id: string) => (id === 'y' ? 10 : undefined);
     expect(recentPoints(points, at, 2).map((p) => p.taskId)).toEqual(['y', 'x']);
+  });
+});
+
+describe('calibration integrity on the page', () => {
+  const at = (over: Partial<CalibrationPoint>): CalibrationPoint => ({
+    taskId: 't',
+    day: '2026-11-05',
+    estimateLockedMin: 30,
+    estimateMin: 30,
+    estimateSource: 'planned',
+    actualAccruedMin: 40,
+    categoryId: null,
+    reflection: null,
+    parts: 0,
+    ...over,
+  });
+
+  it('counts retro points, leaving rollups out', () => {
+    const agg = aggregate([
+      at({ estimateSource: 'retro' }),
+      at({}),
+      at({ estimateSource: 'retro', parts: 2 }),
+    ]);
+    expect(agg).toMatchObject({ count: 2, retroCount: 1 });
+  });
+
+  it('a rescoped row reads est → actual; the headline stays the lock', () => {
+    const p = at({ estimateMin: 60, estimateSource: 'revised', actualAccruedMin: 75 });
+    expect(driftLabel(p)).toBe('est 30m → 1h · actual 1h 15m');
+    expect(aggregate([p]).totalEstimateMin).toBe(30);
+  });
+
+  it('no label when it never moved, on a retro point, on a rollup, or from an older Lambda', () => {
+    expect(driftLabel(at({}))).toBeNull();
+    expect(driftLabel(at({ estimateSource: 'retro' }))).toBeNull();
+    expect(driftLabel(at({ estimateMin: null, parts: 2 }))).toBeNull();
+    expect(driftLabel(at({ estimateMin: undefined as unknown as null }))).toBeNull();
   });
 });

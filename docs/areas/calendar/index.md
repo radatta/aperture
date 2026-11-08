@@ -245,8 +245,8 @@ the task now matches its event, except where a pull kept Aperture's value — th
 | made recurring | ignored |
 | a parent's **due marker**: end moved / start moved | `dueDay` / `dueTime` / nothing — its length maps to no field (a parent has no estimate) |
 
-- **Status.** Done: the end and title apply, a start drag is ignored (the estimate is history — revisit
-  task in prod). Cancelled: nothing (its event went with the cancel). In-progress: the start sets the
+- **Status.** Done: the end and title apply, a start drag is ignored (decided 2026-11-05: stays ignored — a done
+  task's estimate is history; its actual is the number that could change, and a drag can't carry it). Cancelled: nothing (its event went with the cancel). In-progress: the start sets the
   working estimate, matching the editable-estimate rule.
 - **Untimed tasks**: an event on a task with no due time syncs its title only — there's no window to map.
 - **A three-way merge.** `gcalSeen` is the base: Google changed a field iff the event differs from it

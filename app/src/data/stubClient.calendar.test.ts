@@ -163,11 +163,12 @@ describe('stub calendar auto-sync parity', () => {
   it('createTasks links only the timed rows; a done timed split moves the link to the follow-up', async () => {
     const api = stub();
     const made = await api.createTasks([
-      { title: 'a', dueDay: '2026-10-09', dueTime: '10:00' },
+      { title: 'a', estimateMin: 30, dueDay: '2026-10-09', dueTime: '10:00' },
       { title: 'b', dueDay: '2026-10-09' },
     ]);
     expect(made.map((t) => !!t.gcalEventId)).toEqual([true, false]);
     await api.transitionTask(made[0]!.id, 'in_progress');
+    await api.setTaskActual(made[0]!.id, 20);
     const { original, followUp } = await api.splitTask(made[0]!.id, {
       finish: 'done',
       followUp: { title: 'a, part 2', estimateMin: null },
@@ -189,7 +190,7 @@ describe('stub calendar auto-sync parity', () => {
   it('split keeps a manual event on an untimed original, done or kept going', async () => {
     for (const finish of ['done', 'keep'] as const) {
       const api = stub();
-      const t = await api.createTask({ title: 'u', dueDay: '2026-10-09' });
+      const t = await api.createTask({ title: 'u', estimateMin: 30, dueDay: '2026-10-09' });
       await api.insertCalendarEvent({
         taskId: t.id,
         accountSub: 'seed-personal',
@@ -199,6 +200,7 @@ describe('stub calendar auto-sync parity', () => {
         endMs: 2000,
       });
       await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 20);
       const { original, followUp } = await api.splitTask(t.id, {
         finish,
         followUp: { title: 'u, part 2', estimateMin: null },
@@ -228,7 +230,12 @@ describe('stub calendar auto-sync parity', () => {
   it('a done split moves a picked block on a timed task to the follow-up', async () => {
     const api = stub();
     await api.updateSettings({ autoCalendar: false });
-    const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await api.createTask({
+      title: 't',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     const picked = await api.insertCalendarEvent({
       taskId: t.id,
       accountSub: 'seed-personal',
@@ -239,6 +246,7 @@ describe('stub calendar auto-sync parity', () => {
     });
     await api.updateSettings({ autoCalendar: true });
     await api.transitionTask(t.id, 'in_progress');
+    await api.setTaskActual(t.id, 20);
     const { original, followUp } = await api.splitTask(t.id, {
       finish: 'done',
       followUp: { title: 't, part 2', estimateMin: null },
@@ -328,6 +336,7 @@ describe('stub calendar: parent + parts', () => {
     const moved = await api.setTaskDue(p.id, { dueDay: '2026-10-10', dueTime: '12:00' });
     expect(moved.gcalSeen).toMatchObject(markerOf('2026-10-10', '12:00'));
     await api.transitionTask(part.id, 'in_progress');
+    await api.setTaskActual(part.id, 30);
     await api.transitionTask(part.id, 'done');
     const done = await api.transitionTask(p.id, 'done');
     expect(done.gcalEventId).toBe(p.gcalEventId);
@@ -338,9 +347,10 @@ describe('stub calendar: parent + parts', () => {
     const p = await api.createTask({ title: 'P2' });
     const at = { dueDay: '2026-10-09', dueTime: '10:00' };
     const a = await api.createTask({ title: 'Part 1', parentId: p.id, ...at });
-    const b = await api.createTask({ title: 'Part 2', parentId: p.id, ...at });
+    const b = await api.createTask({ title: 'Part 2', parentId: p.id, estimateMin: 30, ...at });
     expect(a.gcalSeen?.title).toBe('P2 · Part 1');
     await api.transitionTask(b.id, 'in_progress');
+    await api.setTaskActual(b.id, 20);
     await api.transitionTask(b.id, 'done');
     await api.setTaskTitle(p.id, 'P2 final');
     expect((await api.getTask(a.id))!.gcalSeen?.title).toBe('P2 final · Part 1');
@@ -388,8 +398,14 @@ describe('stub calendar: parent + parts', () => {
 
   it('a timed standalone done split moves the event (with its base) to Part 2; the parent its own', async () => {
     const api = stub();
-    const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });
+    const t = await api.createTask({
+      title: 'a',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '10:00',
+    });
     await api.transitionTask(t.id, 'in_progress');
+    await api.setTaskActual(t.id, 20);
     const { parent, original, followUp } = await api.splitTask(t.id, {
       finish: 'done',
       followUp: { title: 'a, part 2', estimateMin: null },

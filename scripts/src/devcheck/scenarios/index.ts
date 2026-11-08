@@ -5,6 +5,7 @@
 import type { Scenario, Tier } from '../scenario';
 import { areas } from './areas';
 import { attachmentDelete } from './attachment-delete';
+import { calibrationIntegrity } from './calibration-integrity';
 import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
 import { categorySuggest } from './category-suggest';
@@ -45,6 +46,7 @@ export const SCENARIOS: Scenario[] = [
   reflectionLine,
   phoneNits,
   timerCredit,
+  calibrationIntegrity,
   recurring,
   areas,
   categorySuggest, // after areas: its 27 seeded tasks would push areas' Home picker past its cap of 30

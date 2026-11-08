@@ -19,6 +19,30 @@ export function canTransitionTask(from: TaskStatus, to: TaskStatus): boolean {
   return TASK_EDGES[from].includes(to);
 }
 
+// Does this task feed calibration at all? An errand (a placed task) is checked off, not timed (places.ts).
+// The one predicate behind the done gate, the start nudge and contributesCalibration.
+export const isCalibrated = (task: Pick<Task, 'place'>): boolean => !task.place;
+// No estimate worth measuring against yet: what the Start nudge, the Done form and complete_task ask for.
+export const needsEstimate = (task: Pick<Task, 'place' | 'estimateMin'>): boolean =>
+  isCalibrated(task) && !((task.estimateMin ?? 0) >= 1);
+export const DONE_NEEDS_NUMBERS_ERROR =
+  "Needs an estimate and an actual (minutes) before it's marked done";
+
+// Done gate (docs/areas/calibration/integrity.md): every calibrated done task is a point. Started unscoped,
+// its lock comes now, in hindsight, and the source says so; a lock of 0 was never a baseline. Stored, not
+// derived: complete_task's chain through in_progress would otherwise make a retro number look honest.
+const hasBaseline = (task: Task): boolean => (task.estimateLockedMin ?? 0) >= 1;
+function finishCalibrated(task: Task, next: Task): void {
+  if (needsEstimate(task) || !(task.actualAccruedMin >= 1))
+    throw new Error(DONE_NEEDS_NUMBERS_ERROR);
+  if (!hasBaseline(task)) {
+    next.estimateLockedMin = task.estimateMin;
+    next.estimateSource = 'retro';
+    return;
+  }
+  next.estimateSource = task.estimateLockedMin === task.estimateMin ? 'planned' : 'revised';
+}
+
 // The heart of calibration: the estimate FREEZES on first exit from planning. After that the
 // locked value is what "done" is measured against — hindsight can't launder it.
 export function taskTransition(task: Task, to: TaskStatus, now: number): Task {
@@ -29,8 +53,9 @@ export function taskTransition(task: Task, to: TaskStatus, now: number): Task {
   const leavingPlanning = task.status === 'backlog' || task.status === 'planned';
   const enteringWork = to === 'in_progress' || to === 'done';
   if (leavingPlanning && enteringWork && next.estimateLockedMin === null) {
-    next.estimateLockedMin = task.estimateMin; // may be null → this task yields no calibration point
+    next.estimateLockedMin = task.estimateMin; // may be null → the done gate asks for a retro estimate
   }
+  if (to === 'done' && isCalibrated(task)) finishCalibrated(task, next);
   if (to === 'in_progress' && next.startedAt === null) next.startedAt = now;
   if (to === 'done') next.completedAt = now;
   if (to === 'cancelled') next.cancelledAt = now;
@@ -103,12 +128,30 @@ export function canEditEstimate(task: Task): boolean {
   return task.status !== 'done' && task.status !== 'cancelled';
 }
 
+// The one way into a finished estimate: a done task with no baseline (from before the gate, or a parent
+// whose parts all went) takes one retro
+// estimate. Once it has that lock it's history like any other. Not offered in the UI (canEditEstimate).
+export const canBackfillEstimate = (task: Task): boolean =>
+  task.status === 'done' && isCalibrated(task) && !hasBaseline(task);
+
 export function withEstimate(
   task: Task,
   estimateMin: number | null,
   bufferMin: number | null,
   now: number,
 ): Task {
+  if (canBackfillEstimate(task)) {
+    if (estimateMin === null || !(estimateMin >= 1))
+      throw new Error('A backfilled estimate needs at least 1 minute');
+    return {
+      ...task,
+      estimateMin,
+      bufferMin,
+      estimateLockedMin: estimateMin,
+      estimateSource: 'retro',
+      updatedAt: now,
+    };
+  }
   if (!canEditEstimate(task)) {
     throw new Error(`Estimate is history once a task is finished (status: ${task.status})`);
   }
@@ -119,7 +162,13 @@ export function withEstimate(
 // their own, and so is a done parent (its lock vs Σ parts — parts.ts). An errand (a placed task) never is,
 // even with an estimate typed: it's checked off, not timed (places.ts).
 export function contributesCalibration(task: Task): boolean {
-  return task.status === 'done' && task.estimateLockedMin !== null && !task.place;
+  return task.status === 'done' && task.estimateLockedMin !== null && isCalibrated(task);
+}
+
+// While open an actual can still read 0 (nothing tracked yet). A done calibrated task's is a measurement.
+export function assertActualAllowed(task: Task, actualMin: number): void {
+  if (task.status === 'done' && isCalibrated(task) && !(actualMin >= 1))
+    throw new Error(DONE_NEEDS_NUMBERS_ERROR);
 }
 
 // A closing work session adds its minutes only to a task still open. A done task's actual is the one typed

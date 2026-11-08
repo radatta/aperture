@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   accruesTime,
+  canEditEstimate,
   canTransitionTask,
+  isCalibrated,
+  needsEstimate,
   completeSession,
   extendSession,
   contributesCalibration,
@@ -62,12 +65,76 @@ describe('taskTransition — estimate freeze', () => {
     const rescoped = withEstimate(started, 120, 0, 2000);
     expect(rescoped.estimateMin).toBe(120);
     expect(rescoped.estimateLockedMin).toBe(60);
-    expect(taskTransition(rescoped, 'done', 3000).estimateLockedMin).toBe(60);
+    const worked = { ...rescoped, actualAccruedMin: 45 };
+    expect(taskTransition(worked, 'done', 3000).estimateLockedMin).toBe(60);
   });
 
   it("a finished task's estimate is history", () => {
-    expect(() => withEstimate(baseTask({ status: 'done' }), 90, 0, 1)).toThrow();
+    expect(() =>
+      withEstimate(baseTask({ status: 'done', estimateLockedMin: 60 }), 90, 0, 1),
+    ).toThrow();
     expect(() => withEstimate(baseTask({ status: 'cancelled' }), 90, 0, 1)).toThrow();
+  });
+
+  it('a done task with no lock takes one backfill', () => {
+    const legacy = baseTask({
+      status: 'done',
+      estimateMin: null,
+      estimateLockedMin: null,
+      actualAccruedMin: 90,
+    });
+    expect(canEditEstimate(legacy)).toBe(false); // the UI never offers it
+    expect(() => withEstimate(legacy, null, null, 1)).toThrow(/at least 1/);
+    expect(() => withEstimate(legacy, 0, null, 1)).toThrow(/at least 1/);
+    const filled = withEstimate(legacy, 60, null, 2);
+    expect(filled).toMatchObject({
+      estimateMin: 60,
+      estimateLockedMin: 60,
+      estimateSource: 'retro',
+    });
+    expect(contributesCalibration(filled)).toBe(true);
+    expect(() => withEstimate(filled, 70, null, 3)).toThrow(/history/);
+  });
+
+  it('a done errand with no lock takes no backfill: it is never measured', () => {
+    const errand = baseTask({ status: 'done', estimateLockedMin: null, place: 'safeway' });
+    expect(() => withEstimate(errand, 5, null, 1)).toThrow(/history/);
+  });
+
+  it('the gate spares an errand, which stamps no source', () => {
+    const errand = baseTask({ status: 'in_progress', estimateMin: null, place: 'safeway' });
+    const done = taskTransition(errand, 'done', 1);
+    expect(done.status).toBe('done');
+    expect(done.estimateSource ?? null).toBeNull();
+    expect(isCalibrated(errand)).toBe(false);
+  });
+
+  it('a done row locked at 0 can be repaired once, like one with no lock', () => {
+    const zero = baseTask({ status: 'done', estimateLockedMin: 0, actualAccruedMin: 9 });
+    expect(withEstimate(zero, 12, null, 1)).toMatchObject({
+      estimateLockedMin: 12,
+      estimateSource: 'retro',
+    });
+  });
+
+  it('a lock of 0 is no baseline: the finish takes the estimate as retro', () => {
+    const t = baseTask({
+      status: 'in_progress',
+      estimateMin: 20,
+      estimateLockedMin: 0,
+      actualAccruedMin: 5,
+    });
+    expect(taskTransition(t, 'done', 1)).toMatchObject({
+      estimateLockedMin: 20,
+      estimateSource: 'retro',
+    });
+  });
+
+  it('needsEstimate: none or 0 asks, unless it is an errand', () => {
+    expect(needsEstimate({ place: null, estimateMin: null })).toBe(true);
+    expect(needsEstimate({ place: null, estimateMin: 0 })).toBe(true);
+    expect(needsEstimate({ place: null, estimateMin: 1 })).toBe(false);
+    expect(needsEstimate({ place: 'safeway', estimateMin: null })).toBe(false);
   });
 
   it('rejects illegal transitions', () => {

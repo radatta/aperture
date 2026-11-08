@@ -43,7 +43,8 @@ import {
   completeSession,
   countsTowardCap,
   createUlid,
-  dayKey,
+  dayKeyInZone,
+  USER_TIME_ZONE,
   dayKeyForOffset,
   discardSession,
   eventLengthMin,
@@ -100,6 +101,7 @@ import {
   rescopedPlanMinutes,
   splitOriginal,
   stalePlannedMoves,
+  assertActualAllowed,
   taskTransition,
   UPLOAD_URL_TTL_MS,
   withEstimate,
@@ -994,6 +996,7 @@ class StubClient implements ApiClient {
     // Normalized before anything is read or written: an over-cap reflection lands nothing.
     const note = reflection === undefined ? {} : { reflection: normalizeReflection(reflection) };
     if (hasParts(this.alive(this.store.tasks), id)) throw new Error(PARENT_NO_ACTUAL_ERROR);
+    assertActualAllowed(this.mustFind(this.store.tasks, id), actualMin);
     return this.writes.patch(this.store.tasks, id, { actualAccruedMin: actualMin, ...note });
   }
   async splitTask(
@@ -2146,8 +2149,10 @@ class StubClient implements ApiClient {
       .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
-        day: dayKey(t.completedAt!, start),
+        day: dayKeyInZone(t.completedAt!, USER_TIME_ZONE, start),
         estimateLockedMin: t.estimateLockedMin!,
+        estimateMin: t.estimateMin,
+        estimateSource: t.estimateSource ?? null,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
         reflection: t.reflection ?? null,
