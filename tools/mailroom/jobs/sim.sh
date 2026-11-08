@@ -965,7 +965,8 @@ sim_op_scroll() {
 # nav can't confirm the tab switched (no active-tab signal), so a stamp that isn't there gets one more visit: a dropped
 # Settings tap leaves the page where it was (job …065125Z…-launch-4810 stayed on Home), and the note says so.
 sim_op_readBuild() {
-  local i y e b try again=""
+  local i y e b try
+  SIM_RB_AGAIN="" # expectBuild's relaunch note keeps it too
   for try in 1 2; do
     sim_op_nav '{"op":"nav","tab":"Settings"}' || return 1
     for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x $((SIM_W - 12)) --start-y 700 --end-x $((SIM_W - 12)) --end-y 150 --duration 0.15 >/dev/null 2>&1 || true; done
@@ -978,15 +979,15 @@ sim_op_readBuild() {
     done
     [ -z "$b" ] || break
     sim_hung_err "looking for the build stamp" && return 1
-    [ "$try" = 2 ] || again="; went to Settings again (no stamp the first time)"
+    [ "$try" = 2 ] || SIM_RB_AGAIN="; went to Settings again (no stamp the first time)"
   done
   if [ -z "$b" ]; then
-    sim_fail MISS "no build stamp at the bottom of Settings, after two visits"
+    sim_fail MISS "no build stamp found after two Settings visits"
     return 1
   fi
   echo "$b" >>"$SIM_P.builds"
   sim_op_nav '{"op":"nav","tab":"Home"}' || return 1
-  SIM_NOTE="running $b$again"
+  SIM_NOTE="running $b$SIM_RB_AGAIN"
 }
 
 sim_op_expectBuild() {
@@ -999,7 +1000,7 @@ sim_op_expectBuild() {
     first="$got"
     sim_op_kill '{"op":"kill","method":"terminate"}' && sim_op_launch && sim_op_readBuild || return 1
     got="$(tail -1 "$SIM_P.builds")"
-    if [ "$got" = "$want" ]; then SIM_NOTE="first launch ran $first, second $got"; return 0; fi
+    if [ "$got" = "$want" ]; then SIM_NOTE="first launch ran $first, second $got$SIM_RB_AGAIN"; return 0; fi
   fi
   sim_fail STALE_BUILD "ran build $got, expected $want — rerun"
 }
@@ -1035,7 +1036,7 @@ run_sim() {
   SIM_RD="$3"
   sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
-  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK=""
+  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN=""
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
