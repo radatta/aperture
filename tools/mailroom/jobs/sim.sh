@@ -403,11 +403,11 @@ sim_icon_count() {
     | select((.frame.width // 0) > 0 and (.frame.height // 0) > 0 and (.frame.x // -1) >= 0 and (.frame.x + .frame.width) <= $w and (.frame.y // -1) >= 0 and (.frame.y + .frame.height) <= $h)] | length' <<<"$1" 2>/dev/null
 }
 sim_find_icon() {
-  local t page i e prev="" scrolled=""
+  local t page app="" i e prev="" scrolled=""
   SIM_ICON=""
+  SIM_PRESSES=1 # the caller's
   for i in 1 2 3 4 5 6; do
     t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
-    sim_probe "icon-read-$i" "$t"
     page="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
     case "$page" in
       "Page 2 of 2")
@@ -429,20 +429,34 @@ sim_find_icon() {
         fi
         sleep 1
         ;;
-      "") prev=""; sleep 2 ;;
+      "")
+        # No Home Screen: a press AXe reported done can be one iOS never got (job …192707Z…-relaunch-bd33 left the app
+        # in front), so press again, three presses in all; another app in front with no pill is a stale tree.
+        prev=""
+        app="$(jq -r '[.. | objects | select(.role? == "AXApplication")][0].AXLabel // ""' <<<"$t" 2>/dev/null)"
+        if [ "$SIM_PRESSES" -lt 3 ]; then
+          ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+          SIM_PRESSES=$((SIM_PRESSES + 1))
+        else
+          sleep 2
+        fi
+        ;;
       *) break ;;
     esac
   done
-  if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "the Home Screen's tree has no page pill; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
+  if [ -z "$page" ] && [ "$app" = Web ]; then
+    sim_fail HOME_PRESS_DROPPED "the app is still in front after $SIM_PRESSES home presses AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+    return 1
+  fi
+  if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "no page pill, ${app:-no app} in front after $SIM_PRESSES home presses; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
   sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon on Home Screen page 2 (found: $page); add dev to the sim's Home Screen"
 }
 
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
-  local i s t clean=""
+  local i s t clean="" taps=1
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
-  sim_probe launch-pressed -
   sim_find_icon || return 1
   sim_tap_el "$SIM_ICON" || return 1
   i=0
@@ -451,9 +465,10 @@ sim_op_launch() {
     s="$(sim_landmark)" || return 1
     [ -e "$SIM_P.unread" ] || clean=1 # at least one pass read every point and got an answer
     if [ -n "$s" ]; then
-      sim_probe launch-done -
       SIM_SIGNED="$s"
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
+      [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
+      [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
       return 0
     fi
     i=$((i + 1))
@@ -462,23 +477,37 @@ sim_op_launch() {
         sim_err SIM_UNAVAILABLE AX_TIMEOUT "point reads timed out looking for Home or the sign-in card"
         return 1
       fi
+      # Still the Home Screen after every tap is AXe's taps dropped (job …223625Z…-relaunch-07aa), not the app.
+      if t="$(sim_tree)" && sim_tree_home "$t"; then
+        sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+        return 1
+      fi
       sim_fail LANDMARK "neither Home nor the sign-in card after launch"
       return 1
     fi
-    if [ "$i" = 10 ]; then
-      # Still on the Home Screen: the icon tap dropped, so tap it again (a swipe there opens Search). In the app, the
-      # page can draw offset from its accessibility frames after a kill: nudge it.
-      # An unreadable tree does neither.
-      t="$(sim_tree)" || t=""
-      if [ -n "$t" ] && ! jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
-        sim_tap_el "$SIM_ICON" || return 1
-      elif [ -n "$t" ]; then
-        ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
-        ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
-      fi
-    fi
+    case "$i" in
+      3 | 6 | 10)
+        # Read back the icon tap: still the Home Screen means it dropped, so tap again (a swipe there opens Search), up
+        # to four taps. In the app, the page can draw offset from its accessibility frames after a kill: at 10, nudge it.
+        # An unreadable tree does neither.
+        t="$(sim_tree)" || t=""
+        if [ -n "$t" ] && sim_tree_home "$t"; then
+          sim_tap_el "$SIM_ICON" || return 1
+          taps=$((taps + 1))
+        elif [ "$i" = 10 ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
+          ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
+          ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
+        fi
+        ;;
+    esac
     sleep 2
   done
+}
+
+# Is tree $1 the Home Screen: not the web app, with the page pill?
+sim_tree_home() {
+  jq -e '([.. | objects | select(.role? == "AXApplication")][0].AXLabel // "") != "Web"
+    and any(.. | objects | .AXValue?; type == "string" and test("^Page [0-9]+ of [0-9]+$"))' <<<"$1" >/dev/null 2>&1
 }
 
 # Is the front sheet dev's Cognito? Read from the sheet's own address bar: native chrome (role, id "URL"), owned
@@ -669,59 +698,67 @@ sim_sign_in() {
 }
 
 sim_op_kill() {
-  local m sx sy ex ey bx by
-  local before
+  local m
   m="$(jq -r .method <<<"$1")"
-  sim_probe "kill-$m-before"
-  before="$SIM_PROBE_WEB"
+  SIM_NOTE=""
   case "$m" in
     terminate) sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; } ;;
-    switcher)
-      ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
-        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-      sim_probe switcher-pressed
-      read -r sx sy ex ey <<<"$SIM_CARD_SWIPE" && read -r bx by <<<"$SIM_PT_BACKGROUND" \
-        && ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
-        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-      sleep 1
-      sim_probe switcher-swiped
-      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 \
-        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; } ;;
+    switcher) sim_kill_switcher || return 1 ;;
     reboot)
       sim_shutdown || return 1
       sim_boot || return 1
       SIM_BOOTED=rebooted ;;
   esac
-  if [ "$m" = reboot ]; then sim_probe "kill-$m-after" -; else sim_probe "kill-$m-after"; fi # a fresh boot's first reads can hang
   SIM_SIGNED=unknown
-  SIM_NOTE="killed by $m; web before: $before after: $SIM_PROBE_WEB"
+  SIM_NOTE="killed by $m; web: $(sim_web_alive && echo alive || echo gone)$SIM_NOTE"
 }
 
-# MEASURE ONLY (sim-home-readback, round A; removed with the fix): which signal tells the web app running from killed,
-# and what is in front around each home press and kill. One line per call to probe.jsonl; nothing here acts on it.
-# $2 empty: read the tree and the switcher's two points too; "-": pgrep and launchctl only; else the tree the caller read.
-sim_probe() {
-  local tag="$1" t="${2:-}" rc=0 n lc card='{}' bg='{}'
-  pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >"$SIM_P.pg" 2>/dev/null || rc=$?
-  n="$(grep -c . "$SIM_P.pg" 2>/dev/null || true)"
-  lc="$(sx 10 spawn "$SIM_U" launchctl list 2>/dev/null | grep -c com.apple.webapp || true)"
-  if [ -z "$t" ]; then
-    t="$(ax describe-ui 2>/dev/null || true)"
-    card="$(sim_point 340 560 || echo '{}')"
-    bg="$(sim_point 400 880 || echo '{}')"
-  fi
-  [ "$t" != - ] || t=""
-  SIM_PROBE_WEB="$([ "$rc" = 0 ] && echo "alive($n)" || echo gone)"
-  jq -cn --arg tag "$tag" --argjson ms "$(sim_ms)" --argjson rc "$rc" --argjson n "${n:-0}" --argjson lc "${lc:-0}" \
-    --argjson card "$card" --argjson bg "$bg" --arg t "$t" '
-    ($t | try fromjson catch null) as $tr
-    | ([$tr | .. | objects | select(.role? == "AXApplication")][0] // {}) as $app
-    | {tag: $tag, ms: $ms, web: {rc: $rc, n: $n}, lc: $lc,
-       front: (if $tr == null then null else {app: ($app.AXLabel // ""),
-         page: (first($tr | .. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""),
-         kids: (($app.children // []) | map({role, label: .AXLabel}) | .[0:12])} end),
-       card: (if $card == {} then null else $card | {role, label, value, pid} end), bg: (if $bg == {} then null else $bg | {role, label, value, pid} end)}' >>"$SIM_P.probe" 2>/dev/null || true
-  rm -f "$SIM_P.unread" # a probe's hung read is not the next op's
+# The standalone web app's process, by name (a backgrounded app is still running; a killed one is gone).
+sim_web_alive() { pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >/dev/null 2>&1; }
+
+# What one tree read shows in front: SIM_FRONT_APP (the first AXApplication's label) and SIM_FRONT_PAGE (the Home
+# Screen's "Page N of M" pill, or "").
+sim_front() {
+  local t
+  t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
+  SIM_FRONT_APP="$(jq -r '[.. | objects | select(.role? == "AXApplication")][0].AXLabel // ""' <<<"$t" 2>/dev/null)"
+  SIM_FRONT_PAGE="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
+}
+
+# Double home opens the switcher, a swipe up on the card kills the app, a tap on the background leaves (a home press
+# doesn't). Each step is read back, since AXe reports presses and swipes iOS never got (job …192707Z…-relaunch-bd33):
+# swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
+# is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
+sim_kill_switcher() {
+  local try sx sy ex ey bx by why=""
+  read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
+  read -r bx by <<<"$SIM_PT_BACKGROUND"
+  for try in 1 2; do
+    ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
+      || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+    sim_front || return 1
+    if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then
+      why="$why; the switcher didn't open (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+      continue
+    fi
+    ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
+      || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+    sleep 1
+    ! sim_web_alive || sleep 1
+    if ! sim_web_alive; then
+      # The last card gone can close the switcher by itself: on the Home Screen the background spot is a dock icon.
+      sim_front || return 1
+      if [ -n "$SIM_FRONT_PAGE" ] || [ "$SIM_FRONT_APP" = Web ]; then
+        SIM_NOTE="$why; no switcher left to leave (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+        return 0
+      fi
+      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      SIM_NOTE="$why"
+      return 0
+    fi
+    why="$why; still running after the swipe"
+  done
+  sim_fail SWITCHER_FAILED "the app switcher didn't kill the app in two tries$why: iOS dropped the input; rerun the step, don't debug the app"
 }
 
 sim_to_top() { local i; for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y $((SIM_H - 74)) --duration 0.15 >/dev/null 2>&1 || true; done; }
@@ -1080,7 +1117,7 @@ run_sim() {
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"
-  rm -f -- "$SIM_P.over" "$SIM_P.late" "$SIM_P.unread" "$SIM_P.axerr" "$SIM_P.probe"
+  rm -f -- "$SIM_P.over" "$SIM_P.late" "$SIM_P.unread" "$SIM_P.axerr"
   : >"$SIM_P.steps"
   : >"$SIM_P.builds"
   : >"$SIM_P.shots"
@@ -1129,7 +1166,6 @@ run_sim() {
     if sim_shutdown; then SIM_BOOTED=off; fi
   fi
   kill "$caf" 2>/dev/null || true
-  [ ! -s "$SIM_P.probe" ] || sim_rd "$SIM_P.probe" probe.jsonl || true # MEASURE ONLY (round A)
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg detail "$detail" --arg name "$SIM_NAME" --arg udid "$SIM_U" \
     --arg rt "$SIM_RUNTIME" --arg axe "$SIM_AXE_VERSION" --arg xcode "$SIM_XCODE" --arg booted "$SIM_BOOTED" --arg signed "$SIM_SIGNED" \
     --slurpfile steps "$SIM_P.steps" --slurpfile reads "$SIM_P.reads" \
