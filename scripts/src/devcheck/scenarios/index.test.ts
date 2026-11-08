@@ -124,6 +124,43 @@ describe('the slow tier', () => {
       ).toHaveLength(3);
       expect(sent.relaunch!.at(-1)).toEqual({ op: 'shutdown' });
     });
+
+    it('capture-long pads Tasks, asks for clearance above the accessory bar, and deletes the padding either way', async () => {
+      const made: string[] = [];
+      const gone: string[] = [];
+      let plan: IosOp[] = [];
+      const long = (note: string) =>
+        ({
+          nonce: 'x1full',
+          log: () => {},
+          api: {
+            writes: {
+              createTask: async () => ({ id: `t${made.push('x')}` }),
+              deleteTask: async (id: string) => void gone.push(id),
+            },
+          },
+          ios: {
+            run: async (_: string, ops: IosOp[]) => {
+              plan = ops;
+              return { steps: [{ i: 5, op: 'expect', status: 'pass', ms: 1, note }] };
+            },
+          },
+        }) as unknown as Ctx;
+      await step('capture-long').run(long('long-bar bottom 490 vs keyboard top 558'));
+      expect(
+        validateSimParams({ sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan }),
+      ).toBeNull();
+      expect(made.length).toBeGreaterThanOrEqual(12);
+      expect(gone).toHaveLength(made.length);
+      gone.length = 0;
+      await expect(
+        step('capture-long').run(long('long-bar bottom 548 vs keyboard top 558')),
+      ).rejects.toThrow('the dock sits low on a long page');
+      expect(gone).toHaveLength(16);
+      gone.length = 0;
+      await expect(step('capture-long').run(long('long-bar ok'))).rejects.toThrow('no clearance');
+      expect(gone).toHaveLength(16);
+    });
   });
 
   it('every ios-standalone slow path exists: a rename would silently stop the sim running', () => {
