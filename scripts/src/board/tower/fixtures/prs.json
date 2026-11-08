@@ -1,0 +1,23 @@
+[
+  {
+    "number": 41,
+    "title": "Charlie: the open change",
+    "headRefName": "charlie-branch",
+    "state": "OPEN",
+    "mergedAt": null
+  },
+  {
+    "number": 40,
+    "title": "Alpha: an earlier change",
+    "headRefName": "alpha-branch",
+    "state": "MERGED",
+    "mergedAt": "2026-11-08T03:55:00Z"
+  },
+  {
+    "number": 39,
+    "title": "Golf: closed",
+    "headRefName": "golf-branch",
+    "state": "CLOSED",
+    "mergedAt": null
+  }
+]
