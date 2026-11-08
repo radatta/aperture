@@ -43,7 +43,8 @@ import {
   completeSession,
   countsTowardCap,
   createUlid,
-  dayKey,
+  dayKeyInZone,
+  USER_TIME_ZONE,
   dayKeyForOffset,
   discardSession,
   eventLengthMin,
@@ -2109,7 +2110,7 @@ class StubClient implements ApiClient {
       .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
-        day: dayKey(t.completedAt!, start),
+        day: dayKeyInZone(t.completedAt!, USER_TIME_ZONE, start),
         estimateLockedMin: t.estimateLockedMin!,
         estimateMin: t.estimateMin,
         estimateSource: t.estimateSource ?? null,

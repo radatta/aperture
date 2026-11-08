@@ -10,7 +10,6 @@ import {
   syncedFieldsChanged,
   countsTowardCap,
   createUlid,
-  dayKey,
   dayKeyForOffset,
   eventWindow,
   syncWindow,
@@ -2034,7 +2033,8 @@ export class BackendClient implements ApiClient {
 
   // --- Calibration ---
   // Parity with the stub: every done+locked task (parts.ts calibrationTasks), by completion DAY
-  // (dayStartHour offset).
+  // (dayStartHour offset) in the user's zone: the Lambda's clock is UTC, so a local dayKey moved an evening
+  // finish onto tomorrow (calibration/integrity.md).
   // TODO(scale): swap the full task scan for `repo.doneTasksInWindow` over the GSI once the
   // day-range → epoch-window mapping (with the offset) is nailed down.
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
@@ -2044,7 +2044,7 @@ export class BackendClient implements ApiClient {
       .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
-        day: dayKey(t.completedAt as number, start),
+        day: dayKeyInZone(t.completedAt as number, USER_TIME_ZONE, start),
         estimateLockedMin: t.estimateLockedMin as number,
         estimateMin: t.estimateMin,
         estimateSource: t.estimateSource ?? null,
