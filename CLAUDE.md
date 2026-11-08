@@ -13,7 +13,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 - `cdk/` — CDK infrastructure.
 - `packages/shared/` — the cross-cutting contract (types shared between app and lambdas).
 - `scripts/` — dev/CI utilities.
-- `tools/` — user-side clients that run on the Mac (Raycast quick-add) and the Mac mailroom's runner (`docs/ops/MAILROOM.md`); not a workspace package.
+- `tools/` — user-side clients that run on the Mac (Raycast quick-add), the Mac mailroom's runner (`docs/ops/MAILROOM.md`), and the container's tmux config + restore script (`tools/coi/`); not a workspace package.
 - `docs/` — specs and cross-cutting rules (start at `docs/index.md`).
 - `localNotes/` — gitignored scratch; never tracked.
 
