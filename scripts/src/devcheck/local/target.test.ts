@@ -153,6 +153,7 @@ describe('toLocalReport over a real render', () => {
     failedDeletes: [],
     consoleErrors: [],
     throttled: [],
+    failedLoads: [],
     injected: [],
     shots: [],
     durationMs: 1000,

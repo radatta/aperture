@@ -89,7 +89,6 @@ const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous sh
 
 export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const t0 = d.now();
-  const failedLoads: string[] = []; // r's, held here: optional on RunResult
   const r: RunResult = {
     runId: d.runId,
     tier: d.tier,
@@ -109,7 +108,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     failedDeletes: [],
     consoleErrors: [],
     throttled: [],
-    failedLoads,
+    failedLoads: [],
     injected: [],
     shots: [],
     durationMs: 0,
@@ -191,13 +190,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // and URL, in order, so the report can name it. Informational only — the console line is what fails a row.
     page.on('response', (res) => {
       if (res.status() >= 400 && !injectedRequests.has(res.request()))
-        failedLoads.push(`${res.status()} ${res.request().method()} ${loadUrl(res.url())}`);
+        r.failedLoads.push(`${res.status()} ${res.request().method()} ${loadUrl(res.url())}`);
     });
     page.on('requestfailed', (req) => {
       const why = req.failure?.()?.errorText ?? 'failed';
       // A navigation or unmount cancelling its own request is no failed load (and prints no console line).
       if (why !== 'net::ERR_ABORTED' && !injectedRequests.has(req))
-        failedLoads.push(`${why} ${req.method()} ${loadUrl(req.url())}`);
+        r.failedLoads.push(`${why} ${req.method()} ${loadUrl(req.url())}`);
     });
     const ui = createUi(page);
     const shot = makeShot(page, ui, d.shotsDir, () => prefix, r.shots);
