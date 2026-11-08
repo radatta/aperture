@@ -126,6 +126,12 @@ it **ends at the deadline** and is as long as the estimate (`DEFAULT_EVENT_MIN` 
 after every task write in **both** `ApiClient` impls — `BackendClient.syncCalendar` executes it against the
 gateway, the stub against a fake id — so app, bulk add and MCP all get the same behaviour.
 
+**Popup (2026-11-04, [reminders](../tasks/reminders.md) D9):** every insert and patch body carries
+`reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 0 }] }`. Google's overrides count from
+the event's _start_, so the phone's calendar alerts when the block starts and Aperture's push arrives at the
+deadline. A patch merges, so existing events pick it up on their next edit; there is no backfill. It is always
+on, with no toggle; reverting it is one line in `liveGoogle.ts`.
+
 | Task change | Event |
 | --- | --- |
 | gains a time (create, edit, bulk, MCP) — no event | created |

@@ -3,6 +3,7 @@
 // every write is declared in the one `writes` object below and nowhere else, and the only reads are the
 // `reads` object. Every request asserts the dev origin; a delete must name a ledger id. The one exception to
 // the origin is a presigned URL the dev BFF minted for an attachment, under assertPresignedDevUrl.
+import { createHash } from 'node:crypto';
 import { AUTH_HEADER, assertDevOrigin, assertPresignedDevUrl, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import { pendingIds, type Ledger, type LedgerEntry } from './ledger';
@@ -122,6 +123,40 @@ export interface DevPlaceTokenStatus {
   hint: string | null;
   readsToday: number;
 }
+// The slices of @aperture/shared's reminders contract the check reads (packages/shared/src/reminders.ts).
+// A device never carries its endpoint or keys back; the check's own subscription input is the only place
+// they exist, in the step's memory.
+export interface DevPushDevice {
+  id: string;
+  label: string;
+  createdAt: number;
+  lastOkAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+export interface DevPushStatus {
+  configured: boolean;
+  vapidPublicKey: string | null;
+  devices: DevPushDevice[];
+  removedDeviceIds: string[];
+  poller: {
+    lastRunAt: number | null;
+    lastSentAt: number | null;
+    lastError: string | null;
+    lastErrorAt: number | null;
+  };
+}
+export interface DevSubscribePushInput {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  label: string;
+}
+// The three reminder toggles — the only settings the check may write, so a restore can't touch the rest.
+export type DevReminderSettings = Partial<
+  Record<'remindTimed' | 'remindDueDay' | 'remindPlanned', boolean>
+>;
+const REMINDER_SETTING_KEYS = new Set(['remindTimed', 'remindDueDay', 'remindPlanned']);
+
 export interface DevCalibrationPoint {
   taskId: string;
   day: string;
@@ -188,7 +223,7 @@ export interface DevAttachment {
 }
 
 // The settings the check reads and, for one row, writes back.
-export interface DevSettings {
+export interface DevSettings extends Required<DevReminderSettings> {
   dayStartHour: number;
   pomodoroWorkMin: number;
   fluxSets: Record<string, number>;
@@ -236,6 +271,28 @@ export const MCP_SERIES_VIA = 'mcp:create_series';
 const SERIES_VIAS: readonly string[] = [SERIES_VIA, UI_SERIES_VIA, MCP_SERIES_VIA];
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
 export const placeTokenId = (run: string): string => `place-token:${run}`;
+// A push device this harness subscribed — by the id the server answered with (a sha256(endpoint) prefix) —
+// through the API, or Settings' Enable (the browser's subscribePush response, recorder.ts).
+export const PUSH_SUB_VIA = 'api:subscribePush';
+export const UI_PUSH_SUB_VIA = 'ui:subscribePush';
+// The harness's push devices sit on fixed endpoints (one per slot, never issued by Apple), so a device's
+// id — the BFF's sha256(endpoint) prefix, lambdas/src/backend.ts pushDeviceId — repeats run to run and a
+// live one is known as the harness's own whatever the ledger says.
+export const HARNESS_PUSH_SLOTS = ['e2e', 'b', 'c', 'r', 'dup', 'banner'] as const;
+export type HarnessPushSlot = (typeof HARNESS_PUSH_SLOTS)[number];
+export const harnessPushEndpoint = (slot: HarnessPushSlot): string =>
+  `https://web.push.apple.com/devcheck-${slot}`;
+export const harnessPushId = (slot: HarnessPushSlot): string =>
+  createHash('sha256').update(harnessPushEndpoint(slot)).digest('hex').slice(0, 16);
+const HARNESS_PUSH_IDS = new Set(HARNESS_PUSH_SLOTS.map(harnessPushId));
+export const isHarnessPushId = (id: string): boolean => HARNESS_PUSH_IDS.has(id);
+// The test user's reminder toggles, flipped by a run: like the place token, no id of its own, so
+// `reminder-toggles:<run>` is recorded before the first flip (API or Settings) — a run that dies mid-way
+// still leaves the next run's sweep to switch them back on. It exists while any toggle reads off.
+export const REMINDER_TOGGLES_VIA = 'api:setReminderSettings';
+export const reminderTogglesId = (run: string): string => `reminder-toggles:${run}`;
+export const REMINDERS_ON = { remindTimed: true, remindDueDay: true, remindPlanned: true } as const;
+
 // A bucket set or a refund link on a fixture bank row. Neither has an id of its own, so, like the token, a run
 // records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` — before the click that sets it (the
 // browser does the write), run-scoped so two runs on the same row never resolve each other's entry. Cleanup
@@ -260,6 +317,8 @@ export type LedgerKind =
   | 'financeBucket'
   | 'financeLink'
   | 'financeRule'
+  | 'pushsub'
+  | 'reminderToggles'
   | 'series';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
@@ -272,6 +331,8 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
+  if (via === PUSH_SUB_VIA || via === UI_PUSH_SUB_VIA) return 'pushsub';
+  if (via === REMINDER_TOGGLES_VIA) return 'reminderToggles';
   return via === PLACE_TOKEN_VIA ? 'placeToken' : 'task';
 }
 
@@ -367,6 +428,17 @@ export function createApiClient({
     if (!pendingIds(ledger.read()).includes(id))
       ledger.append({ run, op: 'created', id, via: PLACE_TOKEN_VIA, title: 'place token' });
   }
+  function recordToggles(): void {
+    const id = reminderTogglesId(run);
+    if (!pendingIds(ledger.read()).includes(id))
+      ledger.append({
+        run,
+        op: 'created',
+        id,
+        via: REMINDER_TOGGLES_VIA,
+        title: 'reminder toggles',
+      });
+  }
   // Attachments this client created; deleteAttachment refuses any other id.
   const attachmentIds = new Set<string>();
 
@@ -408,6 +480,8 @@ export function createApiClient({
     // The digest as an RPC read — no heartbeat, no count (the Shortcut route below is the one that counts).
     listPlaceTasks: (slug: string) => call<DevPlaceDigest>('listPlaceTasks', [slug]),
     getPlaceTokenStatus: () => call<DevPlaceTokenStatus>('getPlaceTokenStatus', []),
+    // Devices (never their endpoint or keys), the removed list, and the poller's health line.
+    getPushStatus: () => call<DevPushStatus>('getPushStatus', []),
     getCalibration: (range: { from: string; to: string }) =>
       call<DevCalibrationPoint[]>('getCalibration', [range]),
     listFinanceTransactions: (range: { from: string; to: string }) =>
@@ -478,6 +552,14 @@ export function createApiClient({
           `refusing to delete Flux set ${id} — the ledger never recorded it`,
         );
       await call<null>('deleteFluxSet', [id]);
+    },
+    // A run's own task re-dated (timed-reminders moves its reminder on a minute when a tick ran late).
+    async setTaskDue(
+      id: string,
+      due: { dueDay: string | null; dueTime?: string | null },
+    ): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>('setTaskDue', [id, due]);
     },
     // The reflection scenario's direct BFF call (its over-cap refusal), on a task this harness created.
     async setTaskActual(
@@ -730,6 +812,101 @@ export function createApiClient({
           'refusing to revoke the place token — no run recorded minting it',
         );
       await call<null>('revokePlaceToken', []);
+    },
+    // Reminders. A subscribe is ledgered like createTask — intent, then the server's id — so cleanup removes
+    // the device by id; a device the poller already dropped (a 404/410 from the push service) reads as gone.
+    async subscribePush(input: DevSubscribePushInput): Promise<DevPushDevice> {
+      ledger.append({ run, op: 'intent', via: PUSH_SUB_VIA, title: input.label });
+      const device = await call<DevPushDevice>('subscribePush', [input]);
+      ledger.append({ run, op: 'created', id: device.id, via: PUSH_SUB_VIA, title: input.label });
+      return device;
+    },
+    // A harness slot's device: its id is known before the call (harnessPushId), so `created` is recorded
+    // first — a response lost after the BFF wrote it still leaves cleanup the id to remove. The server must
+    // answer with that id (the derivation is pinned in api.test.ts and backend.push.test.ts).
+    async subscribeHarnessPush(
+      slot: HarnessPushSlot,
+      keys: DevSubscribePushInput['keys'],
+      label: string,
+    ): Promise<DevPushDevice> {
+      const id = harnessPushId(slot);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: PUSH_SUB_VIA, title: label });
+      const device = await call<DevPushDevice>('subscribePush', [
+        { endpoint: harnessPushEndpoint(slot), keys, label },
+      ]);
+      if (device.id !== id)
+        throw new Error(
+          `slot ${slot} subscribed as ${device.id}, not ${id} — the id derivation moved`,
+        );
+      return device;
+    },
+    // The SSRF row: a subscribe the BFF must refuse (HTTP 400), so nothing is ledgered first — an intent
+    // with no create would read as a leak. Answers the refusal's message. Should it land after all, its id
+    // is recorded (cleanup removes it) and the call throws.
+    async subscribePushExpectingRefusal(input: DevSubscribePushInput): Promise<string> {
+      const url = `${targetOrigin()}/api/subscribePush`;
+      assertDevOrigin(url);
+      const { status, text } = await backoff(() =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token()}` },
+          body: JSON.stringify({ args: [input] }),
+        }),
+      );
+      if (status === 200) {
+        const id = (JSON.parse(text) as { id?: unknown }).id;
+        if (typeof id === 'string')
+          ledger.append({ run, op: 'created', id, via: PUSH_SUB_VIA, title: input.label });
+        throw new Error(`subscribePush accepted ${input.endpoint} — it should have refused`);
+      }
+      if (status !== 400 || !bffError(text))
+        throw new Error(`subscribePush → HTTP ${status}: ${text.slice(0, 200)}`);
+      return (JSON.parse(text) as { error: string }).error;
+    },
+    // A harness device still live with no pending ledger entry (a run killed between the subscribe and its
+    // record, or a ledger lost): adopted by its fixed-slot id — recorded first, so cleanup knows it — then
+    // removed. Any id that isn't a harness slot's is refused.
+    async removeHarnessStray(id: string, label: string): Promise<void> {
+      if (!isHarnessPushId(id))
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          `refusing to remove device ${id} — not one of the harness's fixed endpoints`,
+        );
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: PUSH_SUB_VIA, title: `stray ${label}` });
+      await call<null>('unsubscribePush', [id]);
+    },
+    async unsubscribePush(id: string): Promise<void> {
+      assertLedger(id, 'pushsub');
+      await call<null>('unsubscribePush', [id]);
+    },
+    // Queues a test on the test user's devices — all of them this harness's (the test user has no phone).
+    sendTestPush: () => call<null>('sendTestPush', []),
+    // Only the three reminder toggles, recorded before the write (`reminder-toggles:<run>`) so cleanup
+    // switches them back on whatever happens; cleanup's own restore goes through here too.
+    async setReminderSettings(patch: DevReminderSettings): Promise<void> {
+      for (const k of Object.keys(patch))
+        if (!REMINDER_SETTING_KEYS.has(k))
+          throw new DevcheckError(
+            'LEDGER_GUARD',
+            `refusing to write setting ${k} — reminder toggles only`,
+          );
+      recordToggles();
+      await call<unknown>('updateSettings', [patch]);
+    },
+    // The ledger half alone, for a Settings toggle click: called before it. Writes nothing to dev.
+    recordReminderToggles: (): void => recordToggles(),
+    // Cleanup's restore (this run's or a swept older one's): all three on, recording nothing new — a sweep
+    // must not open a `reminder-toggles:<this run>` it never flipped. Only while some run's flip is pending.
+    async restoreReminderToggles(): Promise<void> {
+      const entries = ledger.read();
+      if (!pendingIds(entries).some((id) => ledgerKind(entries, id) === 'reminderToggles'))
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          'refusing to restore the reminder toggles — no run recorded flipping them',
+        );
+      await call<unknown>('updateSettings', [{ ...REMINDERS_ON }]);
     },
   };
 

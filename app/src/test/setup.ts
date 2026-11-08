@@ -9,6 +9,7 @@ import { forgetAudio } from '../modules/pomodoro/chime';
 import { resetFluxEngineFactory } from '../modules/flux/engine/engine';
 import { resetFluxOutboxStore } from '../modules/flux/fluxOutbox';
 import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
+import { resetPushSync } from '../modules/push/browserPush';
 
 // Files share one jsdom and one module graph (isolate: false), so whatever a test leaves behind is the
 // next file's starting state. One hook, not several: after-hooks run in reverse, and the unmount (RTL
@@ -27,6 +28,7 @@ afterEach(() => {
   resetFluxEngineFactory();
   resetFluxOutboxStore();
   resetFluxOutboxSends();
+  resetPushSync();
   localStorage.clear();
   sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');

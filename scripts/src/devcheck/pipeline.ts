@@ -457,6 +457,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // exists while the status reads active and is removed by a revoke.
   // A finance bucket or link names a row the fixture bank owns (api.ts financeRowOf): it "exists" while
   // the row still carries what the run set, and removing it clears that, never the row.
+  // A push device exists while it's among the status's alive devices (a removed one is a keyless
+  // tombstone; one the poller dropped is gone).
+  // The reminder toggles, `reminder-toggles:<run>`, exist while any reads off; removing them switches all on.
   async function exists(client: ApiClient, id: string): Promise<boolean> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
@@ -477,6 +480,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.listFinanceRules()).some((x) => x.id === id);
       case 'series':
         return (await client.reads.listSeries()).some((x) => x.id === id);
+      case 'pushsub':
+        return (await client.reads.getPushStatus()).devices.some((d) => d.id === id);
+      case 'reminderToggles': {
+        const st = await client.reads.getSettings();
+        return !st.remindTimed || !st.remindDueDay || !st.remindPlanned;
+      }
       case 'task':
         return (await client.reads.getTask(id)) !== null;
     }
@@ -509,6 +518,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'series':
         await client.writes.deleteSeries(id); // its occurrences first, by this id (api.ts)
+        return true;
+      case 'pushsub':
+        await client.writes.unsubscribePush(id);
+        return true;
+      case 'reminderToggles':
+        await client.writes.restoreReminderToggles();
         return true;
       case 'task':
         return safeDelete(client, id);
@@ -579,7 +594,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       });
     for (const rec of r.created) {
       if (await stillThere(rec.id)) continue; // stays 'left'
-      rec.final = after.some((e) => e.id === rec.id && e.op === 'gone') ? 'gone' : 'deleted';
+      // This run's own `gone` — a reused id (a push device) may carry an older run's.
+      rec.final = after.some((e) => e.id === rec.id && e.op === 'gone' && e.run === d.runId)
+        ? 'gone'
+        : 'deleted';
     }
     for (const id of r.swept)
       if (await stillThere(id)) r.created.push({ id, via: 'swept', final: 'left' });

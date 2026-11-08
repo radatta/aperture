@@ -121,13 +121,13 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **finance** — Plaid-synced bank data: `financeItems` (a bank login), `financeSyncStates` (per item: cursor, lock, request/refresh stamps), `financeAccounts`, `financeTransactions`, `financeRules` (ULID ids). Transaction fields are Plaid-owned (amount, date, merchant…) except the **user-owned** ones a sync never overwrites: `bucket · bucketSetBy · periodOverride · note · refundOfId · startsPeriod`. Design: [finances/](../areas/finances/index.md).
 
-**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` (default 60000), `financePaymentDay` (default 20), etc.
+**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` (default 60000), `financePaymentDay` (default 20), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts). No calibrated task reaches done without an estimate and an actual of at least 1 minute (machines.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
-4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance never; AWS deletes some time after a row is due), and `toEntity` strips it. Prod writes nothing new and has no TTL.
+4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance and a removed push device never; AWS deletes some time after a row is due), and `toEntity` strips it. Prod writes nothing new and has no TTL.
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
@@ -151,15 +151,27 @@ SK (type-prefixed range keys):
   fin#item#<id> · fin#sync#<itemId> · fin#acct#<id> · fin#txn#<id> · fin#rule#<ulid>   finances
   gcal#sync#<sub>               calendar two-way sync cursor, one per Google account
   place#<id> · ptoken           errand places; the place token's pointer {hash|null, createdAt, hint, retiring[], updatedAt}
+  pushsub#<sha256(endpoint) prefix>  a device's Web Push subscription (a credential: never exported or returned;
+                                a user's Remove tombstones it keyless, a push-service 404/410 deletes it)
+  psent#<fireAt 13d>#<key> · pcount#<LA day> · ptest#<ulid> · pushhealth · pusharm
+                                the reminder poller's dedup rows (swept after 48 h), daily guard counter,
+                                Send-test candidates, this user's last send / error, and when each reminder
+                                toggle was last switched back on (tasks/reminders.md)
+  (task# / plan# rows on the remind index also carry remindArmedAt — table-only, never on the entity: when
+  their current fire time was set, for the armed-before-it-fires rule)
 PK = placetoken#<sha256hex> / SK = placetoken
-                                the place token's lookup row {userId, …} — the one non-u# partition: the
-                                Shortcut route resolves a user from a token (tasks/places.md §4)
+                                the place token's lookup row {userId, …}: the Shortcut route resolves a user
+                                from a token (tasks/places.md §4)
+PK = push / SK = user#<userId> · health
+                                the reminder poller's registry (who has a device) and its stage-wide
+                                heartbeat — derived, never client-set, never exported (tasks/reminders.md)
 ```
-- **One GSI, two key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms).
+- **Two non-`u#` partitions:** `placetoken#<hash>` and `push`. Everything else is under the user's.
+- **One GSI, three key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms); reminders — what may ping, by when (`GSI1PK = u#<userId>#remind`, `GSI1SK` = fire time epoch ms) on open dated tasks, plans and Send-test rows, set atomically with the item's own write.
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".
 - **Balance / time-budget aggregate in the Lambda** over the day/week range (no GSI needed at this volume).
-- Access patterns as built: the keys above satisfy them with prefix reads + the one GSI's two key spaces.
+- Access patterns as built: the keys above satisfy them with prefix reads + the one GSI's three key spaces.
 
 ---
 
@@ -202,6 +214,7 @@ aperture/
       auth/            # Cognito/OIDC glue (userManager, OidcBridge, AuthProvider)
       styles/          # Tailwind tokens (CSS-var theme)
   lambdas/src/         # BFF — index.ts, handler.ts, backend.ts, sessions.ts (pomodoro sessions); auth/ (verify),
+                       #   push/ (service.ts: reminder devices + Send test; the poller's sender),
                        #   ddb/ (keys, repo, writes, mapping, DocClient), google/, mcp/, s3/
   cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
   extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a

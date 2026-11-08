@@ -40,6 +40,9 @@ export interface DocClient {
   // GSI1 range read, ascending by GSI1SK (done-task calibration window).
   queryIndex(gsi1pk: string, range?: IndexRange): Promise<Item[]>;
   delete(pk: string, sk: string): Promise<void>;
+  // Delete only while the stored row's `updatedAt` still equals `expectedUpdatedAt` — a write since (a
+  // tombstone, a revive) wins. Throws ConditionFailedError otherwise, a missing row included.
+  deleteIf(pk: string, sk: string, expectedUpdatedAt: number): Promise<void>;
   batchPut(items: Item[]): Promise<void>;
 }
 
@@ -64,6 +67,7 @@ const clone = <T>(v: T): T => structuredClone(v);
 export class InMemoryDoc implements DocClient {
   private items = new Map<string, Item>();
   private intercepts = new Map<string, { fn: () => void; when?: (item: Item) => boolean }>();
+  private deleteIntercepts = new Map<string, () => void>();
   private stale = new Map<string, { snapshot: Item | null; left: number }>();
   private staleQueries = new Map<string, { snapshot: Item | null; left: number }>();
   // Test-only: every get, and whether it asked for a strongly consistent read.
@@ -156,6 +160,23 @@ export class InMemoryDoc implements DocClient {
 
   async delete(pk: string, sk: string): Promise<void> {
     this.items.delete(keyOf(pk, sk));
+  }
+
+  async deleteIf(pk: string, sk: string, expectedUpdatedAt: number): Promise<void> {
+    // Like LiveDoc: an unknown version can't be matched.
+    if (typeof expectedUpdatedAt !== 'number') throw new ConditionFailedError();
+    const key = keyOf(pk, sk);
+    const hook = this.deleteIntercepts.get(key);
+    if (hook) {
+      this.deleteIntercepts.delete(key);
+      hook(); // a "concurrent" write lands between this caller's read and its delete
+    }
+    if (this.items.get(key)?.updatedAt !== expectedUpdatedAt) throw new ConditionFailedError();
+    this.items.delete(key);
+  }
+  // Test-only: run `fn` once, just before the next deleteIf on this key checks its condition.
+  interceptNextDeleteIf(pk: string, sk: string, fn: () => void): void {
+    this.deleteIntercepts.set(keyOf(pk, sk), fn);
   }
 
   async batchPut(items: Item[]): Promise<void> {

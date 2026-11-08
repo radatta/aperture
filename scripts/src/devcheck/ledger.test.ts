@@ -28,6 +28,15 @@ describe('pendingIds', () => {
   it('counts a re-recorded id once', () => {
     expect(pendingIds([e('created', 'a'), e('created', 'a')])).toEqual(['a']);
   });
+  it('an id created again after it was resolved is pending again (a reused push endpoint)', () => {
+    const later = (op: LedgerEntry['op'], id: string) => e(op, id, { run: 'r2' });
+    expect(pendingIds([e('created', 'a'), e('deleted', 'a'), later('created', 'a')])).toEqual([
+      'a',
+    ]);
+    expect(
+      pendingIds([e('created', 'a'), e('gone', 'a'), later('created', 'a'), later('deleted', 'a')]),
+    ).toEqual([]);
+  });
 });
 
 describe('orphanIntents', () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ApiClient } from './api';
+import type { ApiClient, SettingsPatch } from './api';
 import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
@@ -21,8 +21,25 @@ import {
   resolveRefundLinks,
 } from './finance';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS } from './financeFixtures';
+import {
+  PUSH_ENDPOINT_ERROR,
+  PUSH_ENDPOINT_MAX,
+  PUSH_KEY_MAX,
+  PUSH_KEYS_ERROR,
+  PUSH_LABEL_MAX,
+  PUSH_NO_DEVICE_ERROR,
+  PUSH_UNKNOWN_DEVICE_ERROR,
+} from './reminders';
+import type { SubscribePushInput } from './reminders';
 import type { RecordFluxSetInput } from './api';
 import { ulid } from './ulid';
+
+// A browser's push subscription as subscribePush receives it; override the endpoint per device.
+const pushSub = (endpoint = 'https://web.push.apple.com/QGdev-1'): SubscribePushInput => ({
+  endpoint,
+  keys: { p256dh: 'BPk-p256dh-sample', auth: 'auth-sample' },
+  label: 'iPhone · Safari',
+});
 
 // A finished Flux set as the stage hands it over; override what a test is about.
 const fluxSet = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
@@ -1813,6 +1830,16 @@ export function runApiContract(
       const reset = await api.updateSettings({ fluxRollId: null, fluxDisclaimerAckAt: null });
       expect(reset.fluxRollId).toBeNull();
       expect((await api.getSettings()).fluxDisclaimerAckAt).toBeNull();
+      expect(s).toMatchObject({ remindTimed: true, remindDueDay: true, remindPlanned: true });
+      const quiet = await api.updateSettings({ remindTimed: false, remindPlanned: false });
+      expect(quiet).toMatchObject({ remindTimed: false, remindDueDay: true, remindPlanned: false });
+      expect(await api.getSettings()).toMatchObject({ remindTimed: false, remindPlanned: false });
+      // A toggle off the wire must be a real boolean: a string "false" would read as on.
+      for (const bad of ['false', 0, null])
+        await expect(
+          api.updateSettings({ remindDueDay: bad } as unknown as SettingsPatch),
+        ).rejects.toThrow('remindDueDay must be true or false');
+      expect((await api.getSettings()).remindDueDay).toBe(true);
     });
 
     it('flux sets (D61): default {}, round-trips, refuses a bad count or an unknown exercise', async () => {
@@ -2907,6 +2934,98 @@ export function runApiContract(
       expect((await api.exportData()).places.map((p) => p.slug)).toEqual(['safeway']);
       await api.revokePlaceToken();
       expect((await api.getPlaceTokenStatus()).active).toBe(false);
+    });
+
+    it('reminders: subscribing the same endpoint twice is one device; unsubscribe removes it', async () => {
+      const status = await api.getPushStatus();
+      expect(status.configured).toBe(true);
+      expect(status.vapidPublicKey).toBeTruthy();
+      expect(status.devices).toEqual([]);
+      expect(status.removedDeviceIds).toEqual([]);
+      const a = await api.subscribePush(pushSub());
+      expect(a).toMatchObject({
+        label: 'iPhone · Safari',
+        createdAt: clock,
+        lastOkAt: null,
+        lastError: null,
+      });
+      advance(1000);
+      const again = await api.subscribePush({ ...pushSub(), label: 'iPhone · Safari (again)' });
+      expect(again.id).toBe(a.id);
+      const b = await api.subscribePush(pushSub('https://fcm.googleapis.com/fcm/send/dev-2'));
+      expect(b.id).not.toBe(a.id);
+      expect((await api.getPushStatus()).devices.map((d) => d.id).sort()).toEqual(
+        [a.id, b.id].sort(),
+      );
+      await api.unsubscribePush(a.id);
+      const after = await api.getPushStatus();
+      expect(after.devices.map((d) => d.id)).toEqual([b.id]);
+      expect(after.removedDeviceIds).toEqual([a.id]); // the removed device stops, not re-adds
+      await api.unsubscribePush(a.id); // removing twice is a no-op
+      await api.unsubscribePush('nope'); // so is an unknown id
+      expect((await api.getPushStatus()).devices).toHaveLength(1);
+      expect((await api.getPushStatus()).removedDeviceIds).toEqual([a.id]);
+      const back = await api.subscribePush(pushSub()); // Enable again revives it
+      expect(back.id).toBe(a.id);
+      expect((await api.getPushStatus()).removedDeviceIds).toEqual([]);
+    });
+
+    it('reminders: refuses an endpoint off the push-service allowlist, and writes nothing', async () => {
+      for (const bad of [
+        'https://evil.example/x',
+        'http://web.push.apple.com/x',
+        'https://user:pw@web.push.apple.com/x',
+        'https://web.push.apple.com:8443/x',
+        'https://web.push.apple.com.evil.example/x',
+        'not a url',
+        `https://web.push.apple.com/${'a'.repeat(PUSH_ENDPOINT_MAX)}`, // over-long
+      ])
+        await expect(api.subscribePush(pushSub(bad))).rejects.toThrow(PUSH_ENDPOINT_ERROR);
+      expect((await api.getPushStatus()).devices).toEqual([]);
+    });
+
+    it('reminders: refuses missing, empty or over-long keys; cleans and clips the label', async () => {
+      const keyless = [
+        undefined,
+        { p256dh: 'BPk-p256dh-sample', auth: '' },
+        { p256dh: '', auth: 'auth-sample' },
+        { p256dh: 'x'.repeat(PUSH_KEY_MAX + 1), auth: 'auth-sample' },
+      ];
+      for (const keys of keyless)
+        await expect(
+          api.subscribePush({ ...pushSub(), keys } as unknown as SubscribePushInput),
+        ).rejects.toThrow(PUSH_KEYS_ERROR);
+      expect((await api.getPushStatus()).devices).toEqual([]);
+      const messy = await api.subscribePush({ ...pushSub(), label: '  iPhone \n ·  Safari ' });
+      expect(messy.label).toBe('iPhone · Safari');
+      const long = await api.subscribePush({ ...pushSub(), label: 'x'.repeat(200) });
+      expect(long.label).toHaveLength(PUSH_LABEL_MAX);
+      expect((await api.subscribePush({ ...pushSub(), label: '   ' })).label).toBe('This device');
+    });
+
+    it('reminders: unsubscribing with no id refuses; removed ids read sorted', async () => {
+      await expect(api.unsubscribePush('')).rejects.toThrow(PUSH_UNKNOWN_DEVICE_ERROR);
+      const ids: string[] = [];
+      for (const n of [1, 2, 3])
+        ids.push((await api.subscribePush(pushSub(`https://web.push.apple.com/QGsort-${n}`))).id);
+      for (const id of [...ids].reverse()) await api.unsubscribePush(id);
+      expect((await api.getPushStatus()).removedDeviceIds).toEqual([...ids].sort());
+    });
+
+    it("reminders: a device's keys never leave — not in status, not in the export", async () => {
+      await api.subscribePush(pushSub());
+      const status = JSON.stringify(await api.getPushStatus());
+      const data = JSON.stringify(await api.exportData());
+      for (const leaked of ['BPk-p256dh-sample', 'auth-sample', 'QGdev-1']) {
+        expect(status).not.toContain(leaked);
+        expect(data).not.toContain(leaked);
+      }
+    });
+
+    it('reminders: a test push needs a device, then queues', async () => {
+      await expect(api.sendTestPush()).rejects.toThrow(PUSH_NO_DEVICE_ERROR);
+      await api.subscribePush(pushSub());
+      await expect(api.sendTestPush()).resolves.toBeUndefined();
     });
 
     // --- Flux weekly note (D62) ----------------------------------------------

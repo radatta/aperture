@@ -20,7 +20,7 @@ export interface LedgerEntry {
   run: string;
   op: LedgerOp;
   id?: string;
-  via?: string; // 'api:createTask', 'ui:createTask', 'ui:splitTask', …
+  via?: string; // 'api:createTask', 'ui:createTask', 'ui:splitTask', 'api:subscribePush' (a push device), …
   title?: string; // for the human report only — never matched on
   status?: string; // run-end: PASS / FAIL / CRASH
 }
@@ -38,16 +38,17 @@ export function parseLedger(text: string): LedgerEntry[] {
     .map((l) => JSON.parse(l) as LedgerEntry);
 }
 
-// Ids created and not yet resolved (deleted, gone or swept) — what a cleanup must still handle.
+// Ids created and not yet resolved (deleted, gone or swept) — what a cleanup must still handle. In ledger
+// order: an id created again after it was resolved is pending again (a push device's id is its endpoint's
+// hash, and the dev check reuses its endpoints, so a later run revives the same device). Creation order.
 export function pendingIds(entries: LedgerEntry[]): string[] {
-  const created: string[] = [];
-  const resolved = new Set<string>();
+  const pending = new Map<string, boolean>();
   for (const e of entries) {
     if (!e.id) continue;
-    if (e.op === 'created' && !created.includes(e.id)) created.push(e.id);
-    if (e.op === 'deleted' || e.op === 'gone' || e.op === 'swept') resolved.add(e.id);
+    if (e.op === 'created') pending.set(e.id, true);
+    if (e.op === 'deleted' || e.op === 'gone' || e.op === 'swept') pending.set(e.id, false);
   }
-  return created.filter((id) => !resolved.has(id));
+  return [...pending].filter(([, p]) => p).map(([id]) => id);
 }
 
 // An `intent` with no `created` (or `refused`) after it in the same run: the create may have landed with its

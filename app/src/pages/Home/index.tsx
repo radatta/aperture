@@ -28,6 +28,8 @@ import { ComingUpCard } from './ComingUpCard';
 import { StillOpenSection } from './StillOpenSection';
 import { FinanceGlance } from './FinanceGlance';
 import { FluxGlance } from './FluxGlance';
+import { PushSyncNotice } from '../../modules/push/PushSyncNotice';
+import { API_MODE } from '../../shared/env';
 
 // The glanceable home. Auto morning/day/night (HomeModeProvider), ≤5 elements per mode — the global
 // capture bar is element 1 everywhere, so each mode adds ~3 cards. Phase 5 lit up the plan / tasks /
@@ -37,9 +39,19 @@ export function HomePage() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
 
-  if (mode === 'morning') return <MorningHome />;
-  if (mode === 'day') return <DaytimeHome />;
-  return <NightHome today={today} />;
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Every mode: a device whose reminders couldn't refresh on launch says so (reminders D7). */}
+      <PushSyncNotice enabled={API_MODE === 'http'} />
+      {mode === 'morning' ? (
+        <MorningHome />
+      ) : mode === 'day' ? (
+        <DaytimeHome />
+      ) : (
+        <NightHome today={today} />
+      )}
+    </div>
+  );
 }
 
 // ☀️ Plan the day — catch under-scoping before it becomes stress.

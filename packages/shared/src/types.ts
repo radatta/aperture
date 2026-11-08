@@ -280,6 +280,23 @@ export interface Settings extends BaseEntity {
   // The sets stepper's opening count per exercise — learned, written on Start when it differs from the
   // stored one (D61). Absent → the stepper's default. Whole numbers 1–5 (fluxSetsError).
   fluxSets: Partial<Record<ExerciseId, number>>; // default {}
+  // Reminders (reminders.ts): which kinds ping this user's devices. Rows from before read back undefined
+  // and count as on (reminderEnabled).
+  remindTimed: boolean; // default true — a deadline with a clock time, at that time
+  remindDueDay: boolean; // default true — a day-only deadline, at 09:00
+  remindPlanned: boolean; // default true — a task planned for the day, at 09:00
+}
+
+// One device's Web Push subscription (reminders.ts). Never exported or returned: endpoint + p256dh + auth
+// let anyone push to the device. id = a sha256(endpoint) prefix, so re-subscribing is an upsert.
+export interface PushSub extends BaseEntity {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  label: string; // "iPhone · Safari"
+  lastOkAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
 }
 
 // Flux's weekly note (D62): one cached line per week, written by the model from this week's sets (or the

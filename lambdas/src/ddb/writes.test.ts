@@ -40,6 +40,8 @@ describe('expiresAtOf', () => {
     ])
       expect(expiresAtOf(row(SK, T)), SK).toBeNull();
   });
+  it("a removed push device's tombstone never expires: it keeps the device removed", () =>
+    expect(expiresAtOf(row('pushsub#ab12', T))).toBeNull());
   it('a live row, or one with no deletedAt, never expires', () => {
     expect(expiresAtOf(row('task#1', null))).toBeNull();
     expect(expiresAtOf({ PK: 'u#a', SK: 'settings' })).toBeNull();

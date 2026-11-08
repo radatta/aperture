@@ -78,6 +78,7 @@ import {
   PLACE_PART_ERROR,
   PLACE_TOKEN_RACE_ERROR,
   slugify,
+  REMINDER_SETTINGS_DEFAULTS,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -127,6 +128,9 @@ import type {
   PlaceDigest,
   PlaceTokenStatus,
   PomodoroSession,
+  PushDevice,
+  PushStatus,
+  ReminderSettingKey,
   RecordLeetcodeAttemptInput,
   Roll,
   Settings,
@@ -134,6 +138,7 @@ import type {
   StartSessionInput,
   Story,
   StoryPatch,
+  SubscribePushInput,
   CreateStoryInput,
   GcalSyncState,
   PullAction,
@@ -166,6 +171,8 @@ import {
   inRange,
 } from '@aperture/shared/flux';
 import type { Repo } from './ddb/repo';
+import type { PushRegistry } from './ddb/pushRegistry';
+import type { PublicKeyReader } from './push/publicKey';
 import type { PlaceTokenPointer, PlaceTokenStore } from './ddb/placeTokens';
 import { ConditionFailedError } from './ddb/DocClient';
 import {
@@ -177,6 +184,7 @@ import {
 } from './auth/placeToken';
 import { FinanceService } from './finance/service';
 import { SessionService } from './sessions';
+import { PushService } from './push/service';
 import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
@@ -200,6 +208,8 @@ export interface BackendOptions {
   financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
   anthropic?: AnthropicGateway; // gated Claude API seam (quick add's parse); defaults to the inert noop
   placeTokens?: PlaceTokenStore; // the Shortcut token's lookup rows (outside the user partition)
+  pushRegistry?: PushRegistry; // the reminder poller's user list + heartbeat (outside the user partition)
+  pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM); none → reminders unconfigured
 }
 
 // Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
@@ -269,6 +279,8 @@ function partPlace(given: string | null, parent: Task | undefined): string | nul
   if (given !== null && given !== parent.place) throw new Error(PLACE_PART_ERROR);
   return parent.place;
 }
+const REMINDER_KEYS: readonly string[] = Object.keys(REMINDER_SETTINGS_DEFAULTS);
+
 // Every hash a new pointer must retire: the live one it replaces, plus any a cut-short delete left.
 const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
   prev ? [...new Set([...(prev.hash ? [prev.hash] : []), ...prev.retiring])] : [];
@@ -288,6 +300,7 @@ export class BackendClient implements ApiClient {
   private readonly sessions: SessionService;
   private readonly anthropic: AnthropicGateway;
   private readonly placeTokens: PlaceTokenStore;
+  private readonly push: PushService;
 
   constructor(
     private readonly repo: Repo,
@@ -312,6 +325,14 @@ export class BackendClient implements ApiClient {
       settings: () => this.ensureSettings(),
     });
     this.sessions = new SessionService({ repo, now: this.now, base: () => this.base() });
+    this.push = new PushService({
+      repo,
+      userId: this.userId,
+      now: this.now,
+      ulid: this.ulid,
+      registry: opts.pushRegistry,
+      publicKey: opts.pushPublicKey,
+    });
   }
 
   private baseAt(t: number): BaseEntity {
@@ -410,6 +431,7 @@ export class BackendClient implements ApiClient {
       fluxRollId: null,
       fluxDisclaimerAckAt: null,
       fluxSets: {},
+      ...REMINDER_SETTINGS_DEFAULTS,
     };
     const row = await this.repo.getSettingsRow(opts);
     // Backfill defaults over an existing row: fields added later (the calendar set) read as their
@@ -1772,8 +1794,42 @@ export class BackendClient implements ApiClient {
       const err = fluxSetsError(patch.fluxSets);
       if (err) throw new Error(err);
     }
+    // A reminder toggle off the wire must be a real boolean — a string "false" would read as on.
+    for (const k of REMINDER_KEYS) {
+      const v = (patch as Record<string, unknown>)[k];
+      if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
+    }
     const current = await this.ensureSettings({ consistent: true });
-    return this.repo.putSettings({ ...current, ...patch, updatedAt: this.now() });
+    const now = this.now();
+    // A kind switched back on pings from now on: nothing that fell due while it was off (reminders.md → §3).
+    const switchedOn = REMINDER_KEYS.filter(
+      (k) =>
+        (patch as Record<string, unknown>)[k] === true &&
+        current[k as ReminderSettingKey] === false,
+    );
+    if (switchedOn.length > 0) {
+      const arm = await this.repo.getPushArm();
+      await this.repo.putPushArm({
+        ...arm,
+        ...Object.fromEntries(switchedOn.map((k) => [k, now])),
+        updatedAt: Math.max(now, (arm?.updatedAt ?? 0) + 1),
+      });
+    }
+    return this.repo.putSettings({ ...current, ...patch, updatedAt: now });
+  }
+
+  // --- Reminders (push/service.ts) ---
+  async subscribePush(input: SubscribePushInput): Promise<PushDevice> {
+    return this.push.subscribePush(input);
+  }
+  async unsubscribePush(id: string): Promise<void> {
+    return this.push.unsubscribePush(id);
+  }
+  async getPushStatus(): Promise<PushStatus> {
+    return this.push.getPushStatus();
+  }
+  async sendTestPush(): Promise<void> {
+    return this.push.sendTestPush();
   }
 
   // --- Google Calendar (multi-account) ---

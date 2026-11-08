@@ -19,6 +19,26 @@ describe('InMemoryDoc', () => {
     expect((await db.get('u#1', 'task#a'))?.title).toBe('x'); // store unaffected
   });
 
+  it('deleteIf deletes only the version read: a write since, or a missing row, wins', async () => {
+    await db.put(item({ PK: 'u#1', SK: 'pushsub#a', updatedAt: 5 }));
+    await expect(db.deleteIf('u#1', 'pushsub#a', 4)).rejects.toBeInstanceOf(ConditionFailedError);
+    expect(await db.get('u#1', 'pushsub#a')).not.toBeNull();
+    db.interceptNextDeleteIf('u#1', 'pushsub#a', () =>
+      db.putNow(item({ PK: 'u#1', SK: 'pushsub#a', updatedAt: 6 })),
+    );
+    await expect(db.deleteIf('u#1', 'pushsub#a', 5)).rejects.toBeInstanceOf(ConditionFailedError);
+    expect((await db.get('u#1', 'pushsub#a'))?.updatedAt).toBe(6);
+    await db.deleteIf('u#1', 'pushsub#a', 6);
+    expect(await db.get('u#1', 'pushsub#a')).toBeNull();
+    await expect(db.deleteIf('u#1', 'pushsub#a', 6)).rejects.toBeInstanceOf(ConditionFailedError);
+    // No version to match (a row without updatedAt, or none passed): never a delete.
+    await db.put(item({ PK: 'u#1', SK: 'pushsub#b' }));
+    await expect(
+      db.deleteIf('u#1', 'pushsub#b', undefined as unknown as number),
+    ).rejects.toBeInstanceOf(ConditionFailedError);
+    expect(await db.get('u#1', 'pushsub#b')).not.toBeNull();
+  });
+
   it('get misses return null', async () => {
     expect(await db.get('u#1', 'nope')).toBeNull();
   });

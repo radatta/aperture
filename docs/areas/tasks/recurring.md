@@ -32,7 +32,7 @@ Rows from before read back `undefined` for all three → readers use `?? null` /
 
 Materialization is still **lazy**: an occurrence exists once `getDay(today)` runs — the app's first load of the
 day, not a clock. A consequence timed reminders accept and document: a day whose first app open comes after
-the morning ping has no "planned today" reminder for that occurrence (see Reminders, once timed-reminders lands).
+the morning ping has no "planned today" reminder for that occurrence ([reminders.md](reminders.md) §2).
 
 The shared helpers (`packages/shared/src/recurrence.ts`) are the one rule both impls run, so the stub and the
 Lambda spawn identical occurrences: `seriesDueOn` (the rule within `[anchorDate, until]`),

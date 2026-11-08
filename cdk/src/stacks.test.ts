@@ -432,6 +432,8 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       Statistic: 'Maximum',
       MetricName: 'Duration',
     });
+    // The push dispatch adds none (no fixed monthly cost): the account-wide Errors alarm covers it.
+    expect(Object.keys(t.findResources('AWS::CloudWatch::Alarm')).filter((id) => id.includes('PushDispatch'))).toEqual([]);
     t.resourceCountIs('AWS::SNS::Topic', 1);
     t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
   });
@@ -657,8 +659,12 @@ describe('ApertureAppStack finance sync', () => {
       }),
     });
     app.hasResourceProperties('AWS::Scheduler::ScheduleGroup', { Name: 'aperture-finance-dev' });
-    const schedule = Object.values(app.findResources('AWS::Scheduler::Schedule'))[0]!;
-    const [groupId] = Object.keys(app.findResources('AWS::Scheduler::ScheduleGroup'));
+    const schedule = Object.values(
+      app.findResources('AWS::Scheduler::Schedule', { Properties: { Name: 'aperture-finance-sync-dev' } }),
+    )[0]!;
+    const [groupId] = Object.keys(
+      app.findResources('AWS::Scheduler::ScheduleGroup', { Properties: { Name: 'aperture-finance-dev' } }),
+    );
     expect((schedule.Properties as { GroupName: unknown }).GroupName).toEqual({ Ref: groupId });
     const roleArn = (schedule.Properties as { Target: { RoleArn: unknown } }).Target.RoleArn;
     expect(policiesOfRole(roleArn)).toEqual([
@@ -718,11 +724,150 @@ describe('ApertureAppStack finance sync by stage', () => {
     expect(Object.values(retention).map((r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays)).toEqual([90, 90]);
   });
 
-  it('no device user → no schedule (the sync still runs on Refresh)', () => {
+  it('no device user → no finance schedule (the sync still runs on Refresh)', () => {
     const t = build('dev');
-    t.resourceCountIs('AWS::Scheduler::Schedule', 0);
-    t.resourceCountIs('AWS::Scheduler::ScheduleGroup', 0);
+    expect(Object.keys(t.findResources('AWS::Scheduler::Schedule', { Properties: { Name: 'aperture-finance-sync-dev' } }))).toEqual([]);
+    expect(Object.keys(t.findResources('AWS::Scheduler::ScheduleGroup', { Properties: { Name: 'aperture-finance-dev' } }))).toEqual([]);
+    // The reminder poller needs no device user: it ticks over the push registry.
+    t.hasResourceProperties('AWS::Scheduler::Schedule', { Name: 'aperture-push-dispatch-dev' });
     t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'aperture-finance-sync-dev' });
+  });
+});
+
+describe('ApertureAppStack push dispatch (reminders)', () => {
+  const build = (stage: string) => {
+    const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
+    const env = { account: '111111111111', region: 'us-west-1' };
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env, allowedOrigins: ['*'] });
+    return Template.fromStack(
+      new ApertureAppStack(app, `ApertureApp-${stage}`, {
+        stage,
+        env,
+        table: data.table,
+        userPool: data.userPool,
+        filesBucket: data.filesBucket,
+        cognitoDomain: data.cognitoDomain,
+        originSecret: 'o',
+        deviceToken: 'd',
+        agentToken: 'a',
+      }),
+    );
+  };
+  const dev = build('dev');
+  const prod = build('prod');
+  const fnOf = (t: Template, name: string) => {
+    const [id, res] = Object.entries(t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }))[0]!;
+    return { id, props: res.Properties as Record<string, unknown> };
+  };
+  const statementsOf = (t: Template, fnRole: unknown) =>
+    Object.values(t.findResources('AWS::IAM::Policy'))
+      .filter((p) =>
+        JSON.stringify(p.Properties.Roles).includes(JSON.stringify({ Ref: (fnRole as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0] })),
+      )
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as { Action: unknown; Resource: unknown }[]);
+  const actionsOf = (stmts: { Action: unknown }[]) => stmts.flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action]));
+  const poller = fnOf(dev, 'aperture-push-dispatch-dev');
+
+  it('runs a fourth function, 20 s / 256 MB on Node 22, with no Function URL and only table/stage/app env', () => {
+    dev.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'aperture-push-dispatch-dev',
+      Runtime: 'nodejs22.x',
+      Timeout: 20,
+      MemorySize: 256,
+    });
+    dev.resourceCountIs('AWS::Lambda::Url', 2); // BFF + MCP only
+    const env = (poller.props.Environment as { Variables: Record<string, unknown> }).Variables;
+    expect(Object.keys(env).sort()).toEqual(['APP_URL', 'STAGE', 'TABLE_NAME']);
+    expect(JSON.stringify(env)).not.toMatch(/vapid|ORIGIN|TOKEN/i); // the key is read from SSM, never env
+  });
+
+  it('times out well inside its one-minute rate, so two ticks never overlap', () => {
+    expect(poller.props.Timeout as number).toBeLessThan(60);
+  });
+
+  it('reserves one concurrent tick on prod only — dev asks for none (its SCP and quota forbid it)', () => {
+    expect(fnOf(prod, 'aperture-push-dispatch-prod').props.ReservedConcurrentExecutions).toBe(1);
+    expect(poller.props.ReservedConcurrentExecutions).toBeUndefined();
+    for (const name of ['aperture-bff-prod', 'aperture-mcp-prod', 'aperture-finance-sync-prod'])
+      expect(fnOf(prod, name).props.ReservedConcurrentExecutions).toBeUndefined();
+  });
+
+  it('is never retried by Lambda, and keeps logs two weeks on dev, a month on prod', () => {
+    const invoke = Object.values(dev.findResources('AWS::Lambda::EventInvokeConfig')).filter(
+      (r) => JSON.stringify(r.Properties.FunctionName) === JSON.stringify({ Ref: poller.id }),
+    );
+    expect(invoke.map((r) => r.Properties)).toEqual([
+      expect.objectContaining({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 }),
+    ]);
+    dev.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: '/aws/lambda/aperture-push-dispatch-dev', RetentionInDays: 14 });
+    prod.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: '/aws/lambda/aperture-push-dispatch-prod', RetentionInDays: 30 });
+  });
+
+  it('its role gets Get/Put/Query/Delete on the table + GSI1 and the private key only — nothing else', () => {
+    const stmts = statementsOf(dev, poller.props.Role);
+    const actions = actionsOf(stmts);
+    expect(actions.filter((a) => String(a).startsWith('dynamodb:')).sort()).toEqual([
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+    ]);
+    expect(actions.filter((a) => !String(a).startsWith('dynamodb:')).sort()).toEqual([
+      'logs:CreateLogStream',
+      'logs:PutLogEvents',
+      'ssm:GetParameter',
+    ]);
+    const ssm = stmts.filter((st) => actionsOf([st]).includes('ssm:GetParameter'));
+    expect(JSON.stringify(ssm.map((st) => st.Resource)).match(/parameter\/aperture\/[^"]*/g)).toEqual([
+      'parameter/aperture/dev/push/vapid_private_key',
+    ]);
+    expect(JSON.stringify(stmts)).not.toMatch(/\*"|index\/\*|s3:|lambda:/);
+  });
+
+  it('its role is its own: no managed policy, so it can never re-create its log group outside the stack', () => {
+    const roleId = (poller.props.Role as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
+    const role = dev.findResources('AWS::IAM::Role')[roleId]!;
+    expect(role.Properties.ManagedPolicyArns).toBeUndefined();
+    expect(actionsOf(statementsOf(dev, poller.props.Role))).not.toContain('logs:CreateLogGroup');
+    const logs = statementsOf(dev, poller.props.Role).filter((st) => actionsOf([st]).includes('logs:PutLogEvents'));
+    const groupId = Object.keys(dev.findResources('AWS::Logs::LogGroup', { Properties: { LogGroupName: '/aws/lambda/aperture-push-dispatch-dev' } }))[0]!;
+    expect(logs.map((st) => st.Resource)).toEqual([{ 'Fn::GetAtt': [groupId, 'Arn'] }]); // that one group, nothing wider
+  });
+
+  it('the BFF may read the public key and never the private one; the MCP function neither', () => {
+    const bff = statementsOf(dev, fnOf(dev, 'aperture-bff-dev').props.Role);
+    const mcp = statementsOf(dev, fnOf(dev, 'aperture-mcp-dev').props.Role);
+    expect(JSON.stringify(bff)).toContain('parameter/aperture/dev/push/vapid_public_key');
+    for (const stmts of [bff, mcp]) {
+      expect(JSON.stringify(stmts)).not.toContain('vapid_private_key');
+      expect(JSON.stringify(stmts)).not.toMatch(/push\/\*/);
+    }
+    expect(JSON.stringify(mcp)).not.toContain('/push/');
+  });
+
+  it('schedules a tick every minute with no user in its input, never retried, in its own group', () => {
+    dev.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: 'aperture-push-dispatch-dev',
+      ScheduleExpression: 'cron(* * * * ? *)',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      Target: Match.objectLike({
+        Arn: { 'Fn::GetAtt': [poller.id, 'Arn'] },
+        Input: Match.serializedJson({ mode: 'tick' }),
+        RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 },
+      }),
+    });
+    const schedule = Object.values(dev.findResources('AWS::Scheduler::Schedule', { Properties: { Name: 'aperture-push-dispatch-dev' } }))[0]!;
+    const [groupId] = Object.keys(dev.findResources('AWS::Scheduler::ScheduleGroup', { Properties: { Name: 'aperture-push-dev' } }));
+    expect((schedule.Properties as { GroupName: unknown }).GroupName).toEqual({ Ref: groupId });
+    const roleArn = (schedule.Properties as { Target: { RoleArn: unknown } }).Target.RoleArn;
+    expect(statementsOf(dev, roleArn)).toEqual([
+      { Action: 'lambda:InvokeFunction', Effect: 'Allow', Resource: { 'Fn::GetAtt': [poller.id, 'Arn'] } },
+    ]);
+    const roleId = (roleArn as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
+    const [trust] = dev.findResources('AWS::IAM::Role')[roleId]!.Properties.AssumeRolePolicyDocument.Statement;
+    expect(trust.Principal).toEqual({ Service: 'scheduler.amazonaws.com' });
+    expect(trust.Condition.StringEquals['aws:SourceAccount']).toBe('111111111111');
+    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({ 'Fn::GetAtt': [groupId, 'Arn'] });
   });
 });
 
@@ -892,7 +1037,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       const buckets = resources(main.templates)
         .filter((r) => r.Type === 'AWS::Lambda::Function')
         .map((r) => JSON.stringify((r.Properties?.Code as { S3Bucket: unknown }).S3Bucket));
-      expect(buckets).toHaveLength(3);
+      expect(buckets).toHaveLength(4);
       for (const b of buckets) expect(b).toContain('cdk-devmain-assets-');
       for (const a of main.artifacts) expect(JSON.stringify(a.assets)).not.toContain('hnb659fds');
     });

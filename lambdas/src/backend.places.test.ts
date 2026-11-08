@@ -40,6 +40,7 @@ function countingWrites(doc: InMemoryDoc) {
         return Promise.reject(new Error('ProvisionedThroughputExceeded'));
       return live.delete(p, s);
     },
+    deleteIf: (p, s, e) => (log.push({ kind: 'deleteIf', pk: p, sk: s }), live.deleteIf(p, s, e)),
     batchPut: (items) => (
       items.forEach((i: Item) => log.push({ kind: 'batchPut', pk: i.PK, sk: i.SK })),
       live.batchPut(items)

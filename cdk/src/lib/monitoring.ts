@@ -83,7 +83,7 @@ export class Monitoring extends Construct {
       'Errors',
       new cloudwatch.Metric({ namespace: 'AWS/Lambda', metricName: 'Errors', statistic: 'Sum', period }),
       1,
-      'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync (or a CDK provider function, deploy-time only) → Monitor',
+      'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync / push-dispatch (or a CDK provider function, deploy-time only) → Monitor',
     );
     alarm(
       'Throttles',

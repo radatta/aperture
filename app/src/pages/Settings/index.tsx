@@ -26,6 +26,7 @@ import { fmtMoney, parseDollars } from '../../modules/finances/money';
 import { useRolls } from '../../data/hooks/useRolls';
 import { useVoice } from '../../modules/flux/useVoice';
 import { VoicePicker } from '../../modules/flux/VoicePicker';
+import { NotificationsSection } from './NotificationsSection';
 import { PlacesSection } from './PlacesSection';
 import {
   useConnectGoogle,
@@ -35,8 +36,8 @@ import {
 } from '../../data/hooks/useCalendar';
 
 // Settings (PRODUCT §4, §3, §A.4/§A.12): categories (id-referenced, live labels, reassign-on-delete,
-// isWork backfill), places (errand lists + the iPhone Shortcut), preferences (day-start, pomodoro,
-// theme), and data export.
+// isWork backfill), places (errand lists + the iPhone Shortcut), calendar, notifications (reminders),
+// preferences (day-start, pomodoro, theme), and data export.
 export function SettingsPage() {
   const settings = useSettings();
   return (
@@ -53,6 +54,7 @@ export function SettingsPage() {
       <CategoriesSection />
       <PlacesSection />
       <CalendarSection />
+      <NotificationsSection />
       <PreferencesSection />
       <FinancesSection />
       <FluxSection />

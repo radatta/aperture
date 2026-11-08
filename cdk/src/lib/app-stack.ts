@@ -15,6 +15,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
+import { PushDispatch } from './push-dispatch';
 import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
 
 export interface AppStackProps extends StackProps {
@@ -242,6 +243,15 @@ export class ApertureAppStack extends Stack {
     fn.addToRolePolicy(
       new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [anthropicKeyArn] }),
     );
+    // Reminders (docs/areas/tasks/reminders.md): the BFF reads the VAPID PUBLIC key only (Settings hands it
+    // to the browser); the private one is the poller's alone (below). The operator writes both.
+    const pushSsmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/push`;
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [`${pushSsmBase}/vapid_public_key`],
+      }),
+    );
     ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true, plaid: true });
 
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
@@ -434,6 +444,15 @@ export class ApertureAppStack extends Stack {
     // NB: the Lambda deliberately does NOT take the client id — verifying against the pool is enough
     // for a single-client pool, and consuming it here would form a client→CloudFront→Lambda→client cycle.
 
+    // The reminder poller — after the distribution, since its links (and VAPID `sub`) need appUrl, and
+    // nothing refers back to it, so CloudFront's domain token forms no cycle here.
+    new PushDispatch(this, 'PushDispatch', {
+      stage,
+      table,
+      appUrl,
+      vapidPrivateKeyArn: `${pushSsmBase}/vapid_private_key`,
+    });
+
     new CfnOutput(this, 'AppUrl', { value: appUrl }); // custom domain if set, else CloudFront; also the API base (/api/* same origin)
     new CfnOutput(this, 'CloudFrontDomain', { value: distribution.distributionDomainName }); // alias-CNAME target for the custom domain
     new CfnOutput(this, 'SiteBucket', { value: bucket.bucketName });
@@ -445,7 +464,9 @@ export class ApertureAppStack extends Stack {
     new CfnOutput(this, 'McpUrl', { value: `${appUrl}/mcp` }); // the URL to register in Claude Code / claude.ai
     new CfnOutput(this, 'McpClientId', { value: claudeClient.userPoolClientId }); // paste into claude.ai's connector OAuth Client ID
 
-    // Runtime watch on the Lambdas, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
+    // Runtime watch on the Lambdas, prod only (see monitoring.ts). The push dispatch has no alarm of its own (no
+    // fixed monthly cost — Rahul, 2026-11-04): the account-wide Errors alarm covers it, and a stuck tick's 20 s
+    // timeout lands in Errors. Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
     // worth it, and the synthetic check already proves the edge wiring at deploy time).
     if (stage === 'prod')

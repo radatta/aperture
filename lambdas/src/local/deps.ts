@@ -11,6 +11,8 @@ import { noopObjectStore } from '../s3/objects';
 import { noopPlaid } from '../plaid/gateway';
 import { noopInvoker } from '../finance/invoker';
 import { noopAnthropic } from '../anthropic/gateway';
+import { createECDH } from 'node:crypto';
+import type { PublicKeyReader } from '../push/publicKey';
 import type { BffDeps } from '../index';
 import type { McpDeps } from '../mcp/index';
 
@@ -38,7 +40,13 @@ export function localDeps(auth: LocalAuth): { bff: BffDeps; mcp: McpDeps; doc: I
   const mcpVerifier = createCognitoVerifier(auth.poolId, auth.claudeClientId, { jwks: auth.jwks });
   return {
     doc,
-    bff: { ...shared, verifier: bffVerifier, plaid: noopPlaid(), financeInvoker: noopInvoker() },
+    bff: {
+      ...shared,
+      verifier: bffVerifier,
+      plaid: noopPlaid(),
+      financeInvoker: noopInvoker(),
+      pushPublicKey: localPushKey(), // so Settings' opt-in runs; nothing sends locally — the poller chain is dev's
+    },
     mcp: {
       ...shared,
       mcpVerifier: () => mcpVerifier,
@@ -47,4 +55,13 @@ export function localDeps(auth: LocalAuth): { bff: BffDeps; mcp: McpDeps; doc: I
       },
     },
   };
+}
+
+// A throwaway VAPID public key per run (an uncompressed P-256 point, base64url — the shape SSM holds). Its
+// private half is dropped: no poller runs locally, so nothing is ever signed with it.
+function localPushKey(): PublicKeyReader {
+  const key = createECDH('prime256v1');
+  key.generateKeys();
+  const pub = key.getPublicKey().toString('base64url');
+  return async () => pub;
 }

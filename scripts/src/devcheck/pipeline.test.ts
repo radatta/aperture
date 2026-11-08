@@ -6,6 +6,8 @@ import {
   FLUX_SET_VIA,
   CATEGORY_VIA,
   PLACE_TOKEN_VIA,
+  PUSH_SUB_VIA,
+  REMINDER_TOGGLES_VIA,
   type ApiClient,
   type DevCategory,
   type DevFinanceRule,
@@ -45,7 +47,14 @@ function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & { entries: 
 // A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a request
 // whose response arrives when `respond` says (immediately by default).
 function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[] } = {}) {
-  let settings = { dayStartHour: 4, pomodoroWorkMin: 25, fluxSets: {} };
+  let settings = {
+    dayStartHour: 4,
+    pomodoroWorkMin: 25,
+    fluxSets: {},
+    remindTimed: true,
+    remindDueDay: true,
+    remindPlanned: true,
+  };
   const tasks = new Map<string, DevTask>(
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
   );
@@ -65,6 +74,10 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     unlinked: [] as string[],
     rulesDeleted: [] as string[],
   };
+  const pushDevices = new Set<string>();
+  const pushRemoved: string[] = [];
+  const reminders = { remindTimed: true, remindDueDay: true, remindPlanned: true };
+  const reminderWrites: unknown[] = [];
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
   const consoleListeners: ((m: { type(): string; text(): string }) => void)[] = [];
@@ -207,7 +220,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     reads: {
       listTasks: async () => [...tasks.values()],
       listBacklog: async () => [],
-      getSettings: async () => settings,
+      getSettings: async () => ({ ...settings, ...reminders }),
       getFluxWeekNote: async () => null,
       listRunningSessions: async () => [],
       listSessionsForDay: async () => [],
@@ -239,6 +252,20 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         lastUsedAt: null,
         hint: null,
         readsToday: 0,
+      }),
+      getPushStatus: async () => ({
+        configured: true,
+        vapidPublicKey: 'B',
+        devices: [...pushDevices].map((id) => ({
+          id,
+          label: 'x',
+          createdAt: 0,
+          lastOkAt: null,
+          lastError: null,
+          lastErrorAt: null,
+        })),
+        removedDeviceIds: [...pushRemoved],
+        poller: { lastRunAt: null, lastSentAt: null, lastError: null, lastErrorAt: null },
       }),
       getCalibration: async () => [],
       placeDigestRaw: async () => {
@@ -365,6 +392,39 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         categoriesDeleted.push(id);
         categories.delete(id);
       },
+      subscribePush: async () => {
+        throw new Error('unused');
+      },
+      unsubscribePush: async (id) => {
+        pushDevices.delete(id);
+        pushRemoved.push(id);
+      },
+      sendTestPush: async () => {
+        throw new Error('unused');
+      },
+      setReminderSettings: async () => {
+        throw new Error('unused');
+      },
+      restoreReminderToggles: async () => {
+        const on = { remindTimed: true, remindDueDay: true, remindPlanned: true };
+        reminderWrites.push(on);
+        Object.assign(reminders, on);
+      },
+      recordReminderToggles: () => {
+        throw new Error('unused');
+      },
+      subscribePushExpectingRefusal: async () => {
+        throw new Error('unused');
+      },
+      subscribeHarnessPush: async () => {
+        throw new Error('unused');
+      },
+      removeHarnessStray: async () => {
+        throw new Error('unused');
+      },
+      setTaskDue: async () => {
+        throw new Error('unused');
+      },
     },
   };
   const shells = [...(opts.shells ?? [shell(SHA)])];
@@ -399,6 +459,10 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     placesDeleted,
     placeToken,
     finance,
+    pushDevices,
+    pushRemoved,
+    reminders,
+    reminderWrites,
     uiCreate,
     uiPlace,
     respond,
@@ -832,6 +896,49 @@ describe('runPipeline', () => {
     expect(r.created).toEqual([
       { id: 'place-token:run1', via: PLACE_TOKEN_VIA, title: undefined, final: 'deleted' },
     ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('removes a push device this run subscribed by its id; one the poller already dropped is "gone"', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'D1', via: PUSH_SUB_VIA, title: 'devcheck' });
+      ledger.append({ run: 'run1', op: 'created', id: 'D2', via: PUSH_SUB_VIA, title: 'devcheck' });
+      x.pushDevices.add('D1'); // D2: the push service answered 410 and the poller deleted it
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.pushRemoved).toEqual(['D1']);
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['D1', 'deleted'],
+      ['D2', 'gone'],
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('switches the reminder toggles back on when a run left one off; untouched ones are "gone"', async () => {
+    const w = world();
+    const ledger = memLedger([
+      { run: 'run0', op: 'created', id: 'reminder-toggles:run0', via: REMINDER_TOGGLES_VIA },
+    ]);
+    w.reminders.remindTimed = false; // a crashed run's flip
+    const sc = scenario(async (x) => {
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'reminder-toggles:run1',
+        via: REMINDER_TOGGLES_VIA,
+      });
+      x.reminders.remindPlanned = false; // this run's, left off by a failed step
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.swept).toEqual(['reminder-toggles:run0']);
+    expect(w.reminderWrites).toEqual([
+      { remindTimed: true, remindDueDay: true, remindPlanned: true },
+      { remindTimed: true, remindDueDay: true, remindPlanned: true },
+    ]);
+    expect(w.reminders).toEqual({ remindTimed: true, remindDueDay: true, remindPlanned: true });
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([['reminder-toggles:run1', 'deleted']]);
     expect(r.status).toBe('PASS');
   });
 

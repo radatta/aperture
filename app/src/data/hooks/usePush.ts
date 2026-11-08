@@ -1,0 +1,135 @@
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { PushStatus, SubscribePushInput } from '@aperture/shared';
+import { useApi } from '../api-context';
+import { qk } from '../queryKeys';
+import {
+  afterResync,
+  currentSubscription,
+  deviceIdHere,
+  dropIfRemovedHere,
+  forgetHere,
+  notificationPermission,
+  rememberHere,
+  resyncHere,
+  subscribeStamps,
+} from '../../modules/push/browserPush';
+
+// Reminders (Web Push, docs/areas/tasks/reminders.md): this user's devices and the poller's health, as
+// Settings › Notifications shows them, plus the launch-time re-subscribe (usePushSync).
+
+// `poll`: while Settings is open the health line keeps moving (a Send test lands within a minute). Each
+// fresh read also settles a removal from another device (dropIfRemovedHere) before anything renders it —
+// judged on the read itself, never a cached copy that predates a re-Enable.
+// The cache holds each read with the time it was requested (not answered): what a stale-read guard
+// compares an opt-in against.
+interface PushRead {
+  status: PushStatus;
+  askedAt: number;
+}
+function usePushRead(opts: { poll?: boolean; enabled?: boolean }) {
+  const api = useApi();
+  return useQuery({
+    queryKey: qk.pushStatus(),
+    queryFn: async (): Promise<PushRead> => {
+      const askedAt = Date.now();
+      const status = await api.getPushStatus();
+      await dropIfRemovedHere(status, askedAt);
+      return { status, askedAt };
+    },
+    refetchInterval: opts.poll ? 30_000 : false,
+    enabled: opts.enabled ?? true,
+  });
+}
+export function usePushStatus(opts: { poll?: boolean; enabled?: boolean } = {}) {
+  const q = usePushRead(opts);
+  return { ...q, data: q.data?.status };
+}
+
+const refresh = (qc: ReturnType<typeof useQueryClient>) =>
+  qc.invalidateQueries({ queryKey: qk.pushStatus() });
+
+// Takes the browser's subscription (browserPush.subscribeHere, run inside the tap) and registers it; this
+// device then remembers it opted in.
+export function useSubscribePush() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SubscribePushInput) => api.subscribePush(input),
+    onSuccess: (device) => {
+      // The cached status goes first: until the refetch lands it still lists a revived id as removed,
+      // and Settings would read that as "removed elsewhere" and drop the opt-in just made.
+      qc.setQueryData<PushRead>(
+        qk.pushStatus(),
+        (r) =>
+          r && {
+            ...r,
+            status: {
+              ...r.status,
+              devices: [...r.status.devices.filter((d) => d.id !== device.id), device],
+              removedDeviceIds: r.status.removedDeviceIds.filter((id) => id !== device.id),
+            },
+          },
+      );
+      rememberHere(device, Date.now());
+    },
+    onSettled: () => refresh(qc),
+  });
+}
+
+// Removing this device also drops the browser's subscription and its opt-in. It waits out a launch resync
+// in flight first, so that resync can't revive it — and if the resync re-subscribed this device under a
+// new id meanwhile, that one goes too. Another device's removal sticks (removedDeviceIds).
+export function useUnsubscribePush() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const here = id === deviceIdHere();
+      await afterResync();
+      await api.unsubscribePush(id);
+      if (!here) return;
+      const renewed = deviceIdHere();
+      if (renewed !== null && renewed !== id) await api.unsubscribePush(renewed);
+      forgetHere();
+      try {
+        await (await currentSubscription())?.unsubscribe();
+      } catch {
+        // The server row is gone, so nothing pushes to it; a browser that won't let go is harmless.
+      }
+    },
+    onSettled: () => refresh(qc),
+  });
+}
+
+export function useSendTestPush() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.sendTestPush(),
+    onSettled: () => refresh(qc),
+  });
+}
+
+// D7: once per launch, on a device that turned reminders on and still has permission, heal the
+// subscription (resyncHere). Http mode only — the stub has no push service behind it. A failure is kept
+// on the device (browserPush.syncErrorHere) and shown in Settings and on Home, not thrown at the shell.
+// The read's request time is the resync's askedAt: a read asked before a newer opt-in can't speak for it.
+export function usePushSync(enabled: boolean) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const armed = enabled && deviceIdHere() !== null && notificationPermission() === 'granted';
+  const { data } = usePushRead({ enabled: armed });
+  const ran = useRef(false);
+  useEffect(() => {
+    if (!armed || !data || ran.current) return;
+    ran.current = true;
+    resyncHere(data.status, Date.now(), api, data.askedAt).then(
+      (wrote) => wrote && void refresh(qc),
+      () => void refresh(qc),
+    );
+  }, [armed, data, api, qc]);
+}
+
+// One of this device's push stamps (browserPush's readers), re-read whenever one is written.
+export const usePushStamp = <T>(read: () => T): T => useSyncExternalStore(subscribeStamps, read);

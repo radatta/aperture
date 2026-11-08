@@ -9,10 +9,15 @@ import {
   HABIT_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
+  PUSH_SUB_VIA,
+  REMINDER_TOGGLES_VIA,
   SERIES_VIA,
   UI_CATEGORY_VIA,
   UI_PLACE_VIA,
+  UI_PUSH_SUB_VIA,
   UI_SERIES_VIA,
+  harnessPushId,
+  isHarnessPushId,
   createApiClient,
   financeRowOf,
   isGone,
@@ -64,6 +69,7 @@ describe('createApiClient', () => {
       'getFluxSet',
       'getFluxWeekNote',
       'getPlaceTokenStatus',
+      'getPushStatus',
       'getSettings',
       'getTask',
       'listAttachments',
@@ -101,19 +107,29 @@ describe('createApiClient', () => {
       'recordFinanceLink',
       'recordFluxSet',
       'recordPlaceTokenMint',
+      'recordReminderToggles',
+      'removeHarnessStray',
       'removePlan',
+      'restoreReminderToggles',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'sendTestPush',
       'setCategoryArea',
       'setDayCapacity',
       'setDayIntent',
+      'setReminderSettings',
       'setTaskActual',
+      'setTaskDue',
       'startSession',
       'stopSession',
+      'subscribeHarnessPush',
+      'subscribePush',
+      'subscribePushExpectingRefusal',
       'transitionTask',
       'uncheckHabit',
       'unlinkFinanceRefund',
       'unsetFinanceBucket',
+      'unsubscribePush',
       'updateSettings',
       'upsertCategory',
       'upsertFinanceRule',
@@ -633,6 +649,222 @@ describe('createApiClient', () => {
         `${DEV_ORIGIN}/api/listFinanceTransactions`,
         expect.objectContaining({ body: '{"args":[{"from":"2000-01-01","to":"2100-01-01"}]}' }),
       );
+    });
+  });
+
+  describe('reminders', () => {
+    const input = {
+      endpoint: 'https://web.push.apple.com/devcheck-n1',
+      keys: { p256dh: 'BPk', auth: 'au' },
+      label: 'devcheck',
+    };
+
+    it('ledgers a subscribe (intent, then the server id) and removes only a device it recorded', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'D1', label: 'devcheck' }));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      expect(await api.writes.subscribePush(input)).toMatchObject({ id: 'D1' });
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/subscribePush`,
+        expect.objectContaining({ body: JSON.stringify({ args: [input] }) }),
+      );
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'intent', via: PUSH_SUB_VIA, title: 'devcheck' },
+        { run: 'r1', op: 'created', id: 'D1', via: PUSH_SUB_VIA, title: 'devcheck' },
+      ]);
+      expect(ledgerKind(ledger.read(), 'D1')).toBe('pushsub');
+      // The ledger never holds the endpoint or keys.
+      expect(JSON.stringify(ledger.entries)).not.toMatch(/devcheck-n1|BPk|"au"/);
+      await api.writes.unsubscribePush('D1');
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/unsubscribePush`,
+        expect.objectContaining({ body: '{"args":["D1"]}' }),
+      );
+      await expect(api.writes.unsubscribePush('D9')).rejects.toThrow(
+        /never recorded it as a pushsub/,
+      );
+      ledger.append({ run: 'r1', op: 'created', id: 'T1', via: 'api:createTask' });
+      await expect(api.writes.unsubscribePush('T1')).rejects.toThrow(
+        /never recorded it as a pushsub/,
+      );
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('reads status and queues a test through the BFF', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      await api.reads.getPushStatus();
+      await api.writes.sendTestPush();
+      expect(fetch.mock.calls.map((c) => c[0])).toEqual([
+        `${DEV_ORIGIN}/api/getPushStatus`,
+        `${DEV_ORIGIN}/api/sendTestPush`,
+      ]);
+    });
+
+    it('a refused subscribe ledgers nothing and answers the refusal; one that lands is recorded and fails', async () => {
+      const ledger = memLedger();
+      const refuse = vi.fn<FetchLike>(async () => reply(400, { error: 'not a push service' }));
+      const api = createApiClient({ fetch: refuse, token: () => 't', ledger, run: 'r1' });
+      expect(await api.writes.subscribePushExpectingRefusal(input)).toBe('not a push service');
+      expect(ledger.entries).toEqual([]);
+      const accept = vi.fn<FetchLike>(async () => reply(200, { id: 'D7' }));
+      const api2 = createApiClient({ fetch: accept, token: () => 't', ledger, run: 'r1' });
+      await expect(api2.writes.subscribePushExpectingRefusal(input)).rejects.toThrow(
+        /should have refused/,
+      );
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'created', id: 'D7', via: PUSH_SUB_VIA, title: 'devcheck' },
+      ]);
+      // A throttle is backed off; any other failure isn't a refusal.
+      const broken = vi.fn<FetchLike>(async () => reply(500, 'oops'));
+      const api3 = createApiClient({
+        fetch: broken,
+        token: () => 't',
+        ledger: memLedger(),
+        run: 'r1',
+      });
+      await expect(api3.writes.subscribePushExpectingRefusal(input)).rejects.toThrow(/HTTP 500/);
+    });
+
+    it('names a device Enable subscribed, and the toggles a run flipped, by their via', () => {
+      const entries = [
+        { run: 'r', op: 'created' as const, id: 'U', via: UI_PUSH_SUB_VIA },
+        { run: 'r', op: 'created' as const, id: 'reminder-toggles:r', via: REMINDER_TOGGLES_VIA },
+      ].map((e) => ({ t: '', ...e }));
+      expect(['U', 'reminder-toggles:r'].map((id) => ledgerKind(entries, id))).toEqual([
+        'pushsub',
+        'reminderToggles',
+      ]);
+    });
+
+    it('removes a harness device by its fixed-slot id — recorded first — and refuses any other', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      const id = harnessPushId('e2e');
+      // lambdas/src/backend.push.test.ts pins the BFF's id for the same endpoint: they can't drift apart.
+      expect(id).toBe('54c270db2e586463');
+      await api.writes.removeHarnessStray(id, 'Devcheck A x');
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'created', id, via: PUSH_SUB_VIA, title: 'stray Devcheck A x' },
+      ]);
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/unsubscribePush`,
+        expect.objectContaining({ body: JSON.stringify({ args: [id] }) }),
+      );
+      await expect(api.writes.removeHarnessStray('0123456789abcdef', 'iPhone')).rejects.toThrow(
+        /not one of the harness's fixed endpoints/,
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(isHarnessPushId(harnessPushId('banner'))).toBe(true);
+    });
+
+    it('records a harness slot’s id before the subscribe, so a lost answer still leaves it to clean', async () => {
+      const ledger = memLedger();
+      const lost = vi.fn<FetchLike>(async () => {
+        throw new Error('socket hang up');
+      });
+      const api = createApiClient({ fetch: lost, token: () => 't', ledger, run: 'r1' });
+      const keys = { p256dh: 'BPk', auth: 'au' };
+      await expect(api.writes.subscribeHarnessPush('e2e', keys, 'Devcheck A x')).rejects.toThrow();
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: '54c270db2e586463',
+          via: PUSH_SUB_VIA,
+          title: 'Devcheck A x',
+        },
+      ]);
+      expect(ledgerKind(ledger.read(), '54c270db2e586463')).toBe('pushsub');
+      // Answered: posted to the slot's endpoint, recorded once; an id the server derives otherwise fails.
+      const ok = vi.fn<FetchLike>(async () => reply(200, { id: '54c270db2e586463', label: 'x' }));
+      const api2 = createApiClient({ fetch: ok, token: () => 't', ledger, run: 'r1' });
+      await api2.writes.subscribeHarnessPush('e2e', keys, 'Devcheck A x');
+      expect(ok).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/subscribePush`,
+        expect.objectContaining({
+          body: JSON.stringify({
+            args: [
+              { endpoint: 'https://web.push.apple.com/devcheck-e2e', keys, label: 'Devcheck A x' },
+            ],
+          }),
+        }),
+      );
+      expect(ledger.entries).toHaveLength(1);
+      const moved = vi.fn<FetchLike>(async () => reply(200, { id: 'ffffffffffffffff' }));
+      const api3 = createApiClient({ fetch: moved, token: () => 't', ledger, run: 'r1' });
+      await expect(api3.writes.subscribeHarnessPush('c', keys, 'C')).rejects.toThrow(
+        /derivation moved/,
+      );
+    });
+
+    it('re-dates only a task this harness created', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'T1', title: 'x' }));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await expect(api.writes.setTaskDue('T9', { dueDay: '2026-11-05' })).rejects.toThrow(
+        /never recorded/,
+      );
+      await api.writes.createTask({ title: 'x' });
+      await api.writes.setTaskDue('T1', { dueDay: '2026-11-05', dueTime: '10:00' });
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/setTaskDue`,
+        expect.objectContaining({
+          body: JSON.stringify({ args: ['T1', { dueDay: '2026-11-05', dueTime: '10:00' }] }),
+        }),
+      );
+    });
+
+    it('restoring the toggles records nothing new, and needs some run to have flipped them', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, {}));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r2' });
+      await expect(api.writes.restoreReminderToggles()).rejects.toThrow(/no run recorded flipping/);
+      expect(fetch).not.toHaveBeenCalled();
+      ledger.append({
+        run: 'r1',
+        op: 'created',
+        id: 'reminder-toggles:r1',
+        via: REMINDER_TOGGLES_VIA,
+      });
+      await api.writes.restoreReminderToggles(); // the sweep restoring r1's flip
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/updateSettings`,
+        expect.objectContaining({
+          body: JSON.stringify({
+            args: [{ remindTimed: true, remindDueDay: true, remindPlanned: true }],
+          }),
+        }),
+      );
+      expect(ledger.entries.map((e) => e.id)).toEqual(['reminder-toggles:r1']); // no r2 entry
+    });
+
+    it('writes only the three reminder toggles to settings, recording the run before the first', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, {}));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      api.writes.recordReminderToggles();
+      await api.writes.setReminderSettings({ remindTimed: false, remindPlanned: true });
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'reminder-toggles:r1',
+          via: REMINDER_TOGGLES_VIA,
+          title: 'reminder toggles',
+        },
+      ]);
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/updateSettings`,
+        expect.objectContaining({
+          body: JSON.stringify({ args: [{ remindTimed: false, remindPlanned: true }] }),
+        }),
+      );
+      await expect(
+        api.writes.setReminderSettings({ dayStartHour: 0 } as unknown as { remindTimed: boolean }),
+      ).rejects.toThrow(/reminder toggles only/);
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 });

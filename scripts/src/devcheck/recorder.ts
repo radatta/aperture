@@ -3,6 +3,8 @@
 // place, category or recurring series added in the app (upsertPlace / upsertCategory / upsertSeries with no id) is
 // recorded the same way; an upsert naming an id is an edit of an existing row and is never recorded — cleanup would
 // delete a row the run didn't make.
+// A push device Settings' Enable subscribed (subscribePush) is recorded by the id the server answered with,
+// so cleanup removes it like one the API subscribed.
 export const CREATE_METHODS = [
   'createTask',
   'createTasks',
@@ -10,6 +12,7 @@ export const CREATE_METHODS = [
   'upsertPlace',
   'upsertSeries',
   'upsertCategory',
+  'subscribePush',
 ] as const;
 const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries', 'upsertCategory'];
 type CreateMethod = (typeof CREATE_METHODS)[number];
@@ -50,7 +53,7 @@ export function idsFromCreateResponse(
   ownsSplitParent: (original: string, parent: string) => boolean = () => false,
 ): string[] {
   if (!isCreate(method)) return [];
-  if (method === 'createTask' || UPSERTS.includes(method))
+  if (method === 'createTask' || method === 'subscribePush' || UPSERTS.includes(method))
     return [idOf(json)].filter((x): x is string => !!x);
   if (method === 'createTasks')
     return Array.isArray(json) ? json.map(idOf).filter((x): x is string => !!x) : [];

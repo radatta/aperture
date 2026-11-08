@@ -9,6 +9,7 @@ export const qk = {
   places: () => ['places'] as const,
   placeDigest: (slug: string) => ['places', 'digest', slug] as const,
   placeToken: () => ['placeToken'] as const,
+  pushStatus: () => ['pushStatus'] as const,
   series: () => ['series'] as const,
   calibration: (from: string, to: string) => ['calibration', from, to] as const,
   leetcodeAttempts: (from = 'all', to = 'all') => ['leetcodeAttempts', from, to] as const,

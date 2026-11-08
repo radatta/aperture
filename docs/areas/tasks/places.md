@@ -2,8 +2,8 @@
 
 **Area:** tasks · **Branch:** `places-shortcuts`
 
-**Status: building 2026-11-03.** PR 1 of the reminders feature (prod task "Reminders + notifications"). PR 2 adds
-Declarative Web Push for timed reminders (09:00 for day-only tasks, planned-day pings, a GCal popup on timed
+**Status: merged 2026-11-04 (PR 86).** PR 1 of the reminders feature (prod task "Reminders + notifications"). PR 2
+([reminders](reminders.md)) adds Declarative Web Push for timed reminders (09:00 for day-only tasks, planned-day pings, a GCal popup on timed
 events); PR 3 the morning/night ritual nudges. Research and path comparison: the branch's
 `localNotes/synthesis.md` (archived with the branch).
 

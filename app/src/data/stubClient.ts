@@ -110,6 +110,11 @@ import {
   PLACE_PART_ERROR,
   PLACE_TOKEN_PREFIX,
   placeDigestOf,
+  PUSH_DEVICE_ID_LEN,
+  PUSH_NO_DEVICE_ERROR,
+  PUSH_UNKNOWN_DEVICE_ERROR,
+  parsePushInput,
+  REMINDER_SETTINGS_DEFAULTS,
   placeError,
   placeUnknownError,
   slugify,
@@ -166,6 +171,11 @@ import type {
   PlaceDigest,
   PlaceTokenStatus,
   PomodoroSession,
+  PushDevice,
+  PushPollerHealth,
+  PushStatus,
+  PushSub,
+  SubscribePushInput,
   RecordLeetcodeAttemptInput,
   Roll,
   Settings,
@@ -211,6 +221,17 @@ const FINANCE_SETTINGS_DEFAULTS = {
 };
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null, fluxSets: {} };
 const STORAGE_KEY = 'aperture.stub.v1';
+// The stub's VAPID public key: a real uncompressed P-256 point (65 bytes, base64url), generated once with
+// node:crypto, so the browser's pushManager.subscribe accepts it. Nothing holds its private half — the
+// stub has no poller, so a subscription made against it never receives a push.
+export const STUB_VAPID_PUBLIC_KEY =
+  'BAuD2GLQNc-o5pGNgH9oDVlMVDBmI7fGShjqf4MGIOLBM1FLyvGDRLbxOm9GyIk-W7OvqPVECPjdOna3bq-sx6A';
+const NO_POLLER_RUN: PushPollerHealth = {
+  lastRunAt: null,
+  lastSentAt: null,
+  lastError: null,
+  lastErrorAt: null,
+};
 // Done or dropped: a finished task's place is history (places.ts PLACE_FINISHED_ERROR).
 const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
 // A part's place is its parent's: none given takes it, a different slug is refused (PLACE_PART_ERROR).
@@ -241,6 +262,8 @@ export interface Store {
   categories: Category[];
   places: Place[];
   placeToken: StubPlaceToken | null; // a credential: never exported
+  pushSubs: PushSub[]; // credentials (endpoint + keys): never exported
+  pushHealth: PushPollerHealth; // the poller's heartbeat, which only Send test moves here: not user data
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[];
@@ -270,6 +293,8 @@ export function emptyStore(): Store {
     categories: [],
     places: [],
     placeToken: null,
+    pushSubs: [],
+    pushHealth: NO_POLLER_RUN,
     leetcodeAttempts: [],
     stories: [],
     attachments: [],
@@ -388,6 +413,7 @@ class StubClient implements ApiClient {
         store.settings = {
           ...FINANCE_SETTINGS_DEFAULTS,
           ...FLUX_SETTINGS_DEFAULTS,
+          ...REMINDER_SETTINGS_DEFAULTS,
           ...store.settings,
         };
         delete (store.settings as { financeCycleDay?: number }).financeCycleDay; // → financePaymentDay
@@ -603,7 +629,8 @@ class StubClient implements ApiClient {
     return slug;
   }
   private ensureSettings(): Settings {
-    if (this.store.settings) return this.store.settings;
+    // A row from before the reminder toggles reads them on, like the backend's (reminderEnabled).
+    if (this.store.settings) return { ...REMINDER_SETTINGS_DEFAULTS, ...this.store.settings };
     const settings: Settings = {
       ...this.base(),
       dayStartHour: 4,
@@ -618,6 +645,7 @@ class StubClient implements ApiClient {
       dayEndHour: 22,
       ...FINANCE_SETTINGS_DEFAULTS,
       ...FLUX_SETTINGS_DEFAULTS,
+      ...REMINDER_SETTINGS_DEFAULTS,
     };
     this.store.settings = settings;
     this.persist();
@@ -1570,6 +1598,92 @@ class StubClient implements ApiClient {
     this.persist();
   }
 
+  // --- Reminders (Web Push) ------------------------------------------------
+  // Devices are keyed by endpoint (id = a sha256 prefix, the backend's shape), so re-subscribing the same
+  // endpoint is an upsert — one removed (a tombstone, listed in removedDeviceIds so that device stops
+  // re-adding itself) comes back under the same id. The stub has no poller: Send test stamps the heartbeat
+  // and each device's last delivery itself, so the Settings health line moves as it would on a stage.
+  private pushDevice = (s: PushSub): PushDevice => ({
+    id: s.id,
+    label: s.label,
+    createdAt: s.createdAt,
+    lastOkAt: s.lastOkAt,
+    lastError: s.lastError,
+    lastErrorAt: s.lastErrorAt,
+  });
+  // The backend's rules: parsePushInput's checks; createdAt / lastOkAt kept, even across a revive; the
+  // last error kept unless the endpoint or keys changed or the device is revived.
+  async subscribePush(given: SubscribePushInput): Promise<PushDevice> {
+    const input = parsePushInput(given);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.endpoint));
+    const id = [...new Uint8Array(digest)]
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+      .slice(0, PUSH_DEVICE_ID_LEN);
+    const prev = this.store.pushSubs.find((x) => x.id === id);
+    const same =
+      !!prev &&
+      prev.deletedAt === null &&
+      prev.endpoint === input.endpoint &&
+      prev.p256dh === input.keys.p256dh &&
+      prev.auth === input.keys.auth;
+    const t = this.now();
+    return this.pushDevice(
+      this.writes.put(this.store.pushSubs, {
+        id,
+        userId: USER_ID,
+        createdAt: prev?.createdAt ?? t,
+        updatedAt: t,
+        deletedAt: null,
+        endpoint: input.endpoint,
+        p256dh: input.keys.p256dh,
+        auth: input.keys.auth,
+        label: input.label,
+        lastOkAt: prev?.lastOkAt ?? null,
+        lastError: same ? (prev?.lastError ?? null) : null,
+        lastErrorAt: same ? (prev?.lastErrorAt ?? null) : null,
+      }),
+    );
+  }
+  // A tombstone, so the removal sticks; its endpoint and keys go — nothing will push to it again.
+  async unsubscribePush(id: string): Promise<void> {
+    if (typeof id !== 'string' || id === '') throw new Error(PUSH_UNKNOWN_DEVICE_ERROR);
+    const s = this.find(this.store.pushSubs, id);
+    if (!s) return; // removing twice, or an unknown id
+    const t = this.now();
+    this.writes.put(this.store.pushSubs, {
+      ...s,
+      endpoint: '',
+      p256dh: '',
+      auth: '',
+      deletedAt: t,
+      updatedAt: t,
+    });
+  }
+  async getPushStatus(): Promise<PushStatus> {
+    return {
+      configured: true,
+      vapidPublicKey: STUB_VAPID_PUBLIC_KEY,
+      devices: this.alive(this.store.pushSubs)
+        .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
+        .map(this.pushDevice),
+      removedDeviceIds: this.store.pushSubs
+        .filter((s) => s.deletedAt !== null)
+        .map((s) => s.id)
+        .sort(),
+      poller: this.store.pushHealth,
+    };
+  }
+  async sendTestPush(): Promise<void> {
+    const subs = this.alive(this.store.pushSubs);
+    if (subs.length === 0) throw new Error(PUSH_NO_DEVICE_ERROR);
+    const t = this.now();
+    for (const s of subs) this.writes.patch(this.store.pushSubs, s.id, { lastOkAt: t });
+    // A singleton, not a collection — set directly, like ensureSettings.
+    this.store.pushHealth = { ...this.store.pushHealth, lastRunAt: t, lastSentAt: t };
+    this.persist();
+  }
+
   // --- Settings ------------------------------------------------------------
   async getSettings(): Promise<Settings> {
     return this.ensureSettings();
@@ -1578,6 +1692,11 @@ class StubClient implements ApiClient {
     if (patch.fluxSets !== undefined) {
       const err = fluxSetsError(patch.fluxSets);
       if (err) throw new Error(err);
+    }
+    // As the BFF: a reminder toggle must be a real boolean — a string "false" would read as on.
+    for (const k of Object.keys(REMINDER_SETTINGS_DEFAULTS)) {
+      const v = (patch as Record<string, unknown>)[k];
+      if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
     }
     const current = this.ensureSettings();
     const next: Settings = { ...current, ...patch, updatedAt: this.now() };
@@ -2198,8 +2317,12 @@ class StubClient implements ApiClient {
     // automatically, which made the contract's key-set assertion go red until the backend caught up.
     // Enumerating lost that signal, so assert coverage explicitly: add a collection to Store and this
     // stops compiling, which forces it into ExportBundle, which in turn breaks the backend's literal.
-    // Left out on purpose: the place token is a credential, and the week-note cache is derived from the
-    // sets (rebuilt on the next read).
-    return bundle satisfies Record<Exclude<keyof Store, 'placeToken' | 'fluxNotes'>, unknown>;
+    // The Store keys left out on purpose: the place token and push subscriptions are credentials, the
+    // poller's heartbeat is stage health, not your data, and the week-note cache is derived from the sets
+    // (rebuilt on the next read).
+    return bundle satisfies Record<
+      Exclude<keyof Store, 'placeToken' | 'pushSubs' | 'pushHealth' | 'fluxNotes'>,
+      unknown
+    >;
   }
 }
