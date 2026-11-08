@@ -134,7 +134,9 @@ describe('the slow tier', () => {
           nonce: 'x1full',
           log: () => {},
           api: {
+            reads: { getSettings: async () => ({ dayStartHour: 4 }) },
             writes: {
+              upsertPlan: async () => ({}),
               createTask: async () => ({ id: `t${made.push('x')}` }),
               deleteTask: async (id: string) => void gone.push(id),
             },
@@ -146,7 +148,7 @@ describe('the slow tier', () => {
             },
           },
         }) as unknown as Ctx;
-      await step('capture-long').run(long('long-bar bottom 490 vs keyboard top 558'));
+      await step('capture-long').run(long('long-preview bottom 490 vs keyboard top 558'));
       expect(
         validateSimParams({ sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan }),
       ).toBeNull();
@@ -154,11 +156,13 @@ describe('the slow tier', () => {
       expect(gone).toHaveLength(made.length);
       gone.length = 0;
       await expect(
-        step('capture-long').run(long('long-bar bottom 548 vs keyboard top 558')),
+        step('capture-long').run(long('long-preview bottom 548 vs keyboard top 558')),
       ).rejects.toThrow('the dock sits low on a long page');
       expect(gone).toHaveLength(16);
       gone.length = 0;
-      await expect(step('capture-long').run(long('long-bar ok'))).rejects.toThrow('no clearance');
+      await expect(step('capture-long').run(long('long-preview ok'))).rejects.toThrow(
+        'no clearance',
+      );
       expect(gone).toHaveLength(16);
     });
   });

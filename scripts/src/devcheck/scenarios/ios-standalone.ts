@@ -6,7 +6,7 @@
 // draft by key taps and erases it. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
 // re-measure (keyboard up, the capture bar sits at y 462); a MISS after an app change means a plan needs new ones —
 // read the step's screenshot.
-import { needsYou, type Ctx, type Scenario } from '../scenario';
+import { datesFor, needsYou, type Ctx, type Scenario } from '../scenario';
 import type { IosOp } from '../../mailroom/sim';
 
 // One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters. Six: the run's time of day
@@ -76,11 +76,15 @@ const CAPTURE: IosOp[] = [
   { op: 'blur' },
 ];
 
-// A long page, scrolled, then the capture bar: on PR 118's run the dock lifted ~56 pt short there, its bottom on the
-// keyboard's accessory bar, while a short page lifted right — and `aboveKeyboard` still passed. So the step asks for
-// clearance (CLEARANCE, below), read from the expect's note. Tasks, not Home: Home's length depends on the hour.
+// A long page, scrolled, then the capture bar in Task mode and a Review: on PR 118's run the dock lifted ~56 pt short
+// there, its preview row on the keyboard's accessory bar, while a short page lifted right — and `aboveKeyboard` still
+// passed. A long page alone lifts right (run 2026-11-08T19-29-11: 120 pt clear); the Review's preview row growing the
+// lifted dock is the other half of PR 118's case. So the step asks for clearance (CLEARANCE) under the preview row,
+// read from the expect's note. Tasks' Today list, not Home: Home's length depends on the hour. The Review parses
+// (real Haiku on dev) and saves nothing; the field is erased and the mode put back to Log.
 const LONG_PAD = 16;
 const CLEARANCE = 30;
+const LONG_LINE = 'shim the flux gasket';
 const CAPTURE_LONG: IosOp[] = [
   { op: 'nav', tab: 'Tasks' },
   { op: 'scroll', dir: 'down', pt: 400 },
@@ -93,12 +97,25 @@ const CAPTURE_LONG: IosOp[] = [
     role: 'AXTextArea',
     as: 'long-bar',
   },
-  { op: 'expect', as: 'long-bar', aboveKeyboard: true },
+  { op: 'tap', label: 'Task', scan: { x: 110, from: 300, to: 650 }, role: 'AXCheckBox' },
+  { op: 'keys', text: LONG_LINE, in: 'long-bar' },
+  {
+    op: 'tap',
+    label: 'Review before saving',
+    scan: { x: 355, from: 300, to: 650 },
+    role: 'AXButton',
+  },
+  { op: 'wait', s: 6 },
+  // Scanned up from the keyboard: the preview's copy of the line sits below the field's.
+  { op: 'find', label: LONG_LINE, scan: { x: 40, from: 650, to: 300 }, as: 'long-preview' },
+  { op: 'expect', as: 'long-preview', aboveKeyboard: true },
   { op: 'shot', name: 'capture-long' },
+  { op: 'erase', n: LONG_LINE.length + 2 },
+  { op: 'tap', label: 'Log', scan: { x: 49, from: 300, to: 650 }, role: 'AXCheckBox' },
   { op: 'blur' },
 ];
 
-// "long-bar bottom B vs keyboard top T" — sim.sh's aboveKeyboard note.
+// "long-preview bottom B vs keyboard top T" — sim.sh's aboveKeyboard note.
 export function clearanceOf(note: string | undefined): { bottom: number; top: number } | null {
   const m = /bottom (\d+(?:\.\d+)?) vs keyboard top (\d+(?:\.\d+)?)/.exec(note ?? '');
   return m ? { bottom: Number(m[1]), top: Number(m[2]) } : null;
@@ -253,7 +270,7 @@ export const iosStandalone: Scenario = {
       id: 'capture-long-page',
       entry: 'ios',
       kind: 'edge',
-      what: `On a long page scrolled down, the focused capture bar clears the keyboard’s accessory bar by at least ${CLEARANCE} pt, as on a short page`,
+      what: `On a long page scrolled down, a Task-mode Review's preview row in the lifted dock clears the keyboard's accessory bar by at least ${CLEARANCE} pt`,
     },
     {
       id: 'done-form-above-keyboard',
@@ -364,42 +381,6 @@ export const iosStandalone: Scenario = {
       },
     },
     {
-      id: 'capture-long',
-      title: 'On a long Tasks page scrolled down, the capture bar clears the accessory bar',
-      entry: 'ios',
-      cost: 'slow',
-      proves: ['capture-long-page'],
-      async run(ctx) {
-        // Backlog padding so Tasks is longer than the screen; gone again before the Done form searches it.
-        const pad: string[] = [];
-        try {
-          for (let i = 0; i < LONG_PAD; i++)
-            pad.push(
-              (await ctx.api.writes.createTask({ title: `devcheck-pad ${ctx.nonce} ${i}` })).id,
-            );
-          // The warm app holds the list it loaded before the padding: relaunch so Tasks is long.
-          const r = await ctx.ios.run('capture-long', [
-            { op: 'launch' },
-            { op: 'kill', method: 'terminate' },
-            { op: 'launch' },
-            ...CAPTURE_LONG,
-          ]);
-          const note = r.steps?.find(
-            (s) => s.op === 'expect' && s.note?.startsWith('long-bar'),
-          )?.note;
-          const c = clearanceOf(note);
-          if (!c) throw new Error(`no clearance in the expect's note: ${note ?? 'none'}`);
-          ctx.log(`  capture bar on a long page: bottom ${c.bottom}, accessory bar top ${c.top}`);
-          if (c.top - c.bottom < CLEARANCE)
-            throw new Error(
-              `the dock sits low on a long page: the capture bar's bottom ${c.bottom} is ${c.top - c.bottom} pt above the accessory bar (${c.top}), want ≥ ${CLEARANCE}`,
-            );
-        } finally {
-          for (const id of pad) await ctx.api.writes.deleteTask(id);
-        }
-      },
-    },
-    {
       id: 'done-form',
       title:
         'The Done form’s Reflection box above the soft keyboard, refocused, a draft erased, cancelled',
@@ -415,6 +396,53 @@ export const iosStandalone: Scenario = {
       async run(ctx) {
         await ctx.ios.run('done-form', doneForm(ctx));
         drove = true;
+      },
+    },
+    {
+      id: 'capture-long',
+      title:
+        'On a long Tasks page scrolled down, a Review grows the lifted dock: its preview row clears the accessory bar',
+      entry: 'ios',
+      cost: 'slow',
+      proves: ['capture-long-page'],
+      async run(ctx) {
+        // Padding planned for today, so Tasks (it opens on Today) is longer than the screen — backlog-only padding
+        // isn't on that list, and left the page short (run 2026-11-08T19-19-51). Deleted again (its plans with it)
+        // so later runs' Tasks lists start short.
+        const pad: string[] = [];
+        try {
+          const { dayStartHour } = await ctx.api.reads.getSettings();
+          const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
+          for (let i = 0; i < LONG_PAD; i++) {
+            const t = await ctx.api.writes.createTask({ title: `devcheck-pad ${ctx.nonce} ${i}` });
+            pad.push(t.id);
+            await ctx.api.writes.upsertPlan({
+              taskId: t.id,
+              day: today,
+              plannedMinutes: 15,
+              order: i,
+            });
+          }
+          // The warm app holds the list it loaded before the padding: relaunch so Tasks is long.
+          const r = await ctx.ios.run('capture-long', [
+            { op: 'launch' },
+            { op: 'kill', method: 'terminate' },
+            { op: 'launch' },
+            ...CAPTURE_LONG,
+          ]);
+          const note = r.steps?.find(
+            (s) => s.op === 'expect' && s.note?.startsWith('long-preview'),
+          )?.note;
+          const c = clearanceOf(note);
+          if (!c) throw new Error(`no clearance in the expect's note: ${note ?? 'none'}`);
+          ctx.log(`  capture bar on a long page: bottom ${c.bottom}, accessory bar top ${c.top}`);
+          if (c.top - c.bottom < CLEARANCE)
+            throw new Error(
+              `the dock sits low on a long page: the capture bar's bottom ${c.bottom} is ${c.top - c.bottom} pt above the accessory bar (${c.top}), want ≥ ${CLEARANCE}`,
+            );
+        } finally {
+          for (const id of pad) await ctx.api.writes.deleteTask(id);
+        }
       },
     },
     {
