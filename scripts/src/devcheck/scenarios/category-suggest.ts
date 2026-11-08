@@ -225,7 +225,12 @@ async function barWithHistory(ctx: Ctx) {
 
 // The sim types through its own keyboard, so the line is the fixed words of R_REAL_CHIP, no nonce. Nothing is
 // saved. The field and the chip are found by scanning: the preview lifts the bar by its own height.
+// Opens with its own launch: run last, it can't count on ios-standalone leaving the sim up.
+// A filled field reads as its value, and only over its text, with no textarea role (as ios-standalone
+// finds 'zzqx'): near the text's start, nearest first, so the preview's copy of the title below loses.
 const REVIEW_KEYBOARD: IosOp[] = [
+  { op: 'launch' },
+  { op: 'signIn' },
   { op: 'nav', tab: 'Home' },
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
   { op: 'wait', s: 2 },
@@ -235,17 +240,34 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'wait', s: 6 },
   { op: 'shot', name: 'review-chip' },
   {
+    op: 'find',
+    label: R_REAL_CHIP,
+    near: { x: 60, y: 444 },
+    radius: 40,
+    as: 'bar0',
+  },
+  { op: 'expect', as: 'bar0', aboveKeyboard: true },
+  {
+    op: 'find',
+    label: 'Use suggested category',
+    scan: { x: 195, from: 300, to: 600 },
+    role: 'AXButton',
+    as: 'chip',
+  },
+  { op: 'expect', as: 'chip', aboveKeyboard: true },
+  {
     op: 'tap',
     label: 'Use suggested category',
     scan: { x: 195, from: 300, to: 600 },
     role: 'AXButton',
   },
   { op: 'wait', s: 1 },
+  { op: 'shot', name: 'review-chip-tapped' },
   {
     op: 'find',
-    label: 'Capture task',
-    scan: { x: 200, from: 300, to: 560 },
-    role: 'AXTextArea',
+    label: R_REAL_CHIP,
+    near: { x: 60, y: 444 },
+    radius: 40,
     as: 'bar',
   },
   { op: 'expect', as: 'bar', aboveKeyboard: true },
@@ -600,16 +622,6 @@ export const categorySuggest: Scenario = {
       },
     },
     {
-      id: 'review-keyboard',
-      entry: 'ios',
-      cost: 'slow',
-      proves: ['review-keyboard'],
-      title: 'On the Simulator: Review, tap the chip; the keyboard stays up over a real parse',
-      async run(ctx) {
-        await ctx.ios.run('review-chip', REVIEW_KEYBOARD);
-      },
-    },
-    {
       id: 'review-chip',
       entry: 'ui',
       proves: ['review-accept', 'review-steady'],
@@ -857,7 +869,11 @@ export const categorySuggest: Scenario = {
         await openTaskBar(ctx);
         await review(ctx, title);
         await ctx.page.getByRole('button', { name: chipName('Garden') }).click({ timeout: 15_000 });
-        await ctx.page.getByRole('button', { name: /today/i }).first().click();
+        // By its title: the Tasks page's own "Today" filter also matches a name of /today/i.
+        const toToday = ctx.page.locator('button[title="Put this task on today\'s plan"]');
+        await toToday.click();
+        if ((await toToday.getAttribute('aria-pressed')) !== 'true')
+          throw new Error('"→ today" did not turn on');
         await captureField(ctx).press('Enter');
         await ctx.ui.expectText(/Task added/, 15_000);
         const garden = (await ctx.api.reads.listCategories()).find((c) => c.label === 'Garden');
@@ -925,6 +941,17 @@ export const categorySuggest: Scenario = {
         const t = await newestTask(ctx, before);
         if (!t.title) throw new Error('the task landed with no title');
         if ((await anyChip(ctx).count()) !== 0) throw new Error('a chip shows after an Auto save');
+      },
+    },
+    // Last: a Simulator miss fails only its own row, never the browser steps after it.
+    {
+      id: 'review-keyboard',
+      entry: 'ios',
+      cost: 'slow',
+      proves: ['review-keyboard'],
+      title: 'On the Simulator: Review, tap the chip; the keyboard stays up over a real parse',
+      async run(ctx) {
+        await ctx.ios.run('review-chip', REVIEW_KEYBOARD);
       },
     },
     noConsoleErrors,
