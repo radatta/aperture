@@ -1,6 +1,7 @@
 // Pure date helpers. The day-start offset lives here so the whole app buckets days through
-// ONE function — late-night activity lands on the intended day. All day keys are YYYY-MM-DD
-// in the runtime's LOCAL timezone (a personal app; "my day" is my wall clock).
+// ONE function — late-night activity lands on the intended day. All day keys are YYYY-MM-DD; dayKey
+// uses the runtime's LOCAL timezone (the browser: "my day" is my wall clock). The UTC Lambda buckets
+// the user's day with dayKeyInZone instead.
 
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
@@ -36,9 +37,9 @@ export function dayKeyForOffset(
   return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
 }
 
-// Day bucketing on a server that knows the user's IANA zone but not their clock (the MCP tools): the
-// calendar date in `timeZone` of the instant `dayStartHour` hours earlier. Needs ICU time-zone data
-// (Node 22 ships it). Across a DST change the rollover lands an hour off for that one night.
+// Day bucketing on a server that knows the user's IANA zone but not their clock (the MCP tools, getDay,
+// calibration points; the stub too, for parity): the calendar date in `timeZone` of the instant
+// `dayStartHour` hours earlier. Needs ICU time-zone data (Node 22 ships it). Across a DST change the rollover lands an hour off for that one night.
 export function dayKeyInZone(epochMs: number, timeZone: string, dayStartHour: number): string {
   // en-CA formats a date as YYYY-MM-DD.
   return new Intl.DateTimeFormat('en-CA', {

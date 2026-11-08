@@ -159,6 +159,17 @@ export const calibrationIntegrity: Scenario = {
       },
     },
     {
+      id: 'evening-day',
+      entry: 'api',
+      kind: 'edge',
+      what: 'a finish after 20:00 PST counts for that day on the Calibration page, not tomorrow',
+      offDev: {
+        file: 'lambdas/src/backend.calibration-day.test.ts',
+        test: 'a finish at 21:30 PST lands on that day',
+        why: 'the server stamps completedAt from its own clock, so dev can only produce an evening finish by running at that hour; the test pins the process to UTC like the Lambda',
+      },
+    },
+    {
       id: 'mcp-scoped',
       entry: 'mcp',
       kind: 'nominal',
