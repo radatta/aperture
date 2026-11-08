@@ -102,6 +102,11 @@ async function openTask(ctx: Ctx, title: string) {
   await open.click();
   const dialog = ctx.page.getByRole('dialog', { name: `Task: ${title}` });
   await categorySelect(dialog).waitFor({ timeout: 10_000 });
+  // The page load refetches categories, and until they land the select holds only Uncategorized and no
+  // chip can show; the row above already waited on the task list. Both loaded, a "no chip" means something.
+  await categorySelect(dialog)
+    .locator('option:text-is("Garden")')
+    .waitFor({ state: 'attached', timeout: 10_000 });
   return dialog;
 }
 
