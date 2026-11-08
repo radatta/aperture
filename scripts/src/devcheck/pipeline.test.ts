@@ -729,6 +729,12 @@ describe('runPipeline', () => {
               seen.push(`del:${token()}`);
               return del(id);
             };
+            // The end sweep's read, as on dev: through fresh, unrecorded in `seen`.
+            const list = w.api.reads.listTasks;
+            w.api.reads.listTasks = async () => {
+              await fresh();
+              return list();
+            };
             return w.api;
           },
         });
@@ -836,8 +842,9 @@ describe('runPipeline', () => {
       const r = await run();
       expect(r.steps[0]?.status).toBe('pass');
       expect(seen).toEqual(['tok']);
-      expect(r.status).not.toBe('CRASH');
-      expect(r.codes).toContain('LEFTOVERS'); // cleanup's delete was refused, never sent
+      // Cleanup's delete was refused, never sent, and the end sweep's read fails naming why, not a crash.
+      expect(r.status).toBe('FAIL');
+      expect(r.codes).toEqual(expect.arrayContaining(['LEFTOVERS', 'AUTH_REJECTED']));
       expect(w.deleted).toEqual([]);
     });
 

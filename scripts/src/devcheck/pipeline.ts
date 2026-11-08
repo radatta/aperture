@@ -355,7 +355,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       await d.ios.finish().catch(() => undefined);
       r.shots.push(...d.ios.shots);
     }
+    // A coded error (a dead session the refresh couldn't renew, WRONG_USER) fails the run naming it, as the
+    // outer catch does; anything else is a crash.
     await cleanup().catch((err: unknown) => {
+      const code = codeOf(err);
+      if (code) return fail(code, `cleanup: ${detailOf(err)}`);
       r.status = 'CRASH';
       r.crash = `${r.crash ? `${r.crash}\n` : ''}cleanup: ${err instanceof Error ? err.message : String(err)}`;
     });
