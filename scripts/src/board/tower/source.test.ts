@@ -98,4 +98,23 @@ describe('Source', () => {
     ]);
     expect(src.refresh(Date.parse('2026-11-09T02:00:00Z')).leaseFeed).toEqual([]);
   });
+
+  it('keeps full runs past 7 days for the TTL proof, pruning the rest', () => {
+    const { src } = setup();
+    const rec = (run: string, op: string, t: string, status?: string) =>
+      JSON.stringify({ t, run, op, status }) + '\n';
+    writeFileSync(
+      join(dir, 'ledger.jsonl'),
+      rec('2026-10-28T01-00-00-full', 'run-start', '2026-10-28T01:00:00Z') +
+        rec('2026-10-28T01-00-00-full', 'run-end', '2026-10-28T01:10:00Z', 'PASS') +
+        rec('2026-10-28T02-00-00-delta', 'run-start', '2026-10-28T02:00:00Z') +
+        rec('2026-10-28T02-00-00-delta', 'run-end', '2026-10-28T02:10:00Z', 'PASS') +
+        rec('2026-11-07T01-00-00-full', 'run-end', '2026-11-07T01:10:00Z', 'PASS'),
+    );
+    const s = src.refresh(Date.parse('2026-11-08T06:00:00Z'));
+    expect(s.runs.map((r) => r.run)).toEqual([
+      '2026-10-28T01-00-00-full',
+      '2026-11-07T01-00-00-full',
+    ]);
+  });
 });

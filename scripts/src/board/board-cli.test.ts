@@ -36,6 +36,7 @@ function cgroup(pids: number, anonBytes: number) {
       'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n',
     'cpu.pressure': 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n',
     'cpu.stat': 'usage_usec 1000\n',
+    'cpu.max': '900000 100000\n', // 9 CPUs whatever the host has: the sampler's null bound is 1.5 × these
     'pids.current': `${pids}\n`,
     'pids.max': '4096\n',
   };
@@ -199,6 +200,10 @@ describe('sampler.sh', () => {
     const spent = (Date.now() - t0) / 1000;
     expect(quick).toBeGreaterThanOrEqual((7 * 0.5) / (0.5 + spent) - 0.05);
     expect(quick).toBeLessThanOrEqual(7.05);
+    // a 2-CPU cpu.max: 7 cores' worth can't be this cgroup's
+    writeFileSync(join(tmp, 'cg/cpu.max'), '200000 100000\n');
+    expect(tick(62_700_000_000, 62_700_000_000 + 7 * 30e6, 30)).toBeNull();
+    expect(tick(62_700_000_000, 62_700_000_000 + 2.5 * 30e6, 30)).not.toBeNull();
   });
 });
 

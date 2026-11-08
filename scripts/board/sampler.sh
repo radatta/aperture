@@ -32,8 +32,9 @@ tick() {  # $1 = print → stdout only, nothing written
   mapfile -t live < <(sb_live_slots)  # a dead wrapper's slot is not a running job (lib.sh)
   [ "${#live[@]}" -eq 0 ] ||
     jq -r '[.pid, .label // .class] | @tsv' "${live[@]}" >"$slots" 2>/dev/null
+  local epr=${EPOCHREALTIME:-}; epr=${epr/,/.} # µs clock, '.' whatever the locale; unset before bash 5: awk falls back to seconds
   line=$(sb_procs args | awk -f "$SB_SCRIPTS/sample.awk" \
-    -v t="$(sb_now)" -v ep="$(sb_epoch)" -v epr="${EPOCHREALTIME/,/.}" -v interval="$interval" -v page="$page" -v hz="$hz" \
+    -v t="$(sb_now)" -v ep="$(sb_epoch)" -v epr="$epr" -v interval="$interval" -v page="$page" -v hz="$hz" \
     -v anon="$(cg_anon)" -v file="$(cg_file)" -v current="$(cg_current)" -v high="$(cg_high)" \
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" -v cpus="$(cg_cpus)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \

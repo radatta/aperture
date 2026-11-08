@@ -41,8 +41,7 @@ function tailText(p: string, n = 4096): string | null {
   try {
     const size = fstatSync(fd).size;
     const buf = Buffer.alloc(Math.min(n, size));
-    readSync(fd, buf, 0, buf.length, size - buf.length);
-    return buf.toString('utf8');
+    return buf.subarray(0, readSync(fd, buf, 0, buf.length, size - buf.length)).toString('utf8'); // a shrink mid-read reads less
   } finally {
     closeSync(fd);
   }
@@ -169,8 +168,9 @@ export class Source {
     this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
     foldRuns(this.runs, parseLines(readNew(this.ledgerTail)));
+    // full runs stay: the TTL proof counts them from queue.json's `since`, however old (a handful a day)
     for (const [id, r] of this.runs)
-      if ((r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);
+      if (!r.full && (r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);
 
     const sessions = this.sessionsNow();
     const lock = this.lockNow(sessions, now);
