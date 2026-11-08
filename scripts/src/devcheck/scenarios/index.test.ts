@@ -106,6 +106,22 @@ describe('the slow tier', () => {
       }
       for (const name of ['capture', 'done-form'])
         expect(sent[name]!.find((o) => o.op === 'erase')).toEqual({ op: 'erase', n: 6 });
+      // every typed key is read back where an earlier find/tap found its field
+      for (const [name, plan] of Object.entries(sent))
+        for (const [i, o] of plan.entries()) {
+          if (o.op !== 'keys') continue;
+          expect(o.in, `${name} op ${i}`).toBeDefined();
+          expect(
+            plan.slice(0, i).some((p) => (p.op === 'find' || p.op === 'tap') && p.as === o.in),
+            `${name} op ${i}`,
+          ).toBe(true);
+          expect(o.text.length, `${name} op ${i}`).toBeLessThanOrEqual(6);
+        }
+      expect(
+        Object.values(sent)
+          .flat()
+          .filter((o) => o.op === 'keys'),
+      ).toHaveLength(3);
       expect(sent.relaunch!.at(-1)).toEqual({ op: 'shutdown' });
     });
   });

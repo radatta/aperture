@@ -64,16 +64,20 @@ export function createIos(d: IosDeps): Ios {
   let ran = false;
   let lastBooted: string | undefined;
   let warned = false;
+  // This checkout's runner when the Mac's is another version, else null (unknown counts as the same).
+  const staleAgainst = (r: { runnerVersion?: string | undefined }): string | null => {
+    if (!d.repoVersion || !r.runnerVersion) return null;
+    try {
+      const want = d.repoVersion();
+      return r.runnerVersion === want ? null : want;
+    } catch {
+      return null;
+    }
+  };
   // A line only: nothing here may fail a row.
   const warnStaleRunner = (r: { runnerVersion?: string | undefined }) => {
-    if (warned || !d.repoVersion || !r.runnerVersion) return;
-    let want: string;
-    try {
-      want = d.repoVersion();
-    } catch {
-      return;
-    }
-    if (r.runnerVersion === want) return;
+    const want = staleAgainst(r);
+    if (warned || !want || !r.runnerVersion) return;
     warned = true;
     d.log(
       `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall (from merged main; a branch that changes the runner: its sha in ?ref= and --ref, MAILROOM.md → Install): ${INSTALL_LINE}`,
@@ -144,7 +148,23 @@ export function createIos(d: IosDeps): Ios {
             warnStaleRunner(err.result);
             throw new Error(`iOS: ${err.message}`, { cause: err });
           }
+          // A plan this checkout writes that an older runner can't read: the Mac needs a reinstall, not a fix here.
+          if (err instanceof IosRejected && staleAgainst(err)) {
+            out = 'RUNNER_STALE';
+            jobs.push({
+              id: job.id,
+              step: name,
+              status: 'rejected',
+              reason: out,
+              buildsSeen: [],
+              runnerVersion: err.runnerVersion,
+            });
+            needsYou(
+              `${IOS_NOTE}: RUNNER_STALE — the Mac's runner refused a plan from a newer one; reinstall it`,
+            );
+          }
           if (err instanceof IosUnavailable) {
+            if (err.result) keepShots(scenarioId, name, err.result);
             if (runWide(err.reason)) out = err.reason;
             jobs.push({
               id: job.id,

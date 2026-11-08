@@ -180,8 +180,42 @@ describe('ctx.ios', () => {
       () => ({ status: 'rejected', reason: 'BAD_OP', runnerVersion: 'old' }),
       () => 'new',
     );
-    await caught(client.run('a', [{ op: 'launch' }]));
+    const err = await caught(client.run('a', [{ op: 'launch' }]));
+    expect(needsYouReason(err)).toMatch(new RegExp(`^${IOS_NOTE}: RUNNER_STALE`));
+    expect((err as NeedsYou).stepOnly).toBe(false);
     expect(logs.filter((l) => l.includes('reinstall'))).toHaveLength(1);
+    // the run's later iOS steps don't send a plan the Mac can't read
+    expect(needsYouReason(await caught(client.run('b', [{ op: 'launch' }])))).toBe(
+      `${IOS_NOTE}: RUNNER_STALE`,
+    );
+  });
+
+  it('a plan the current runner refuses is a harness bug, not needs-you', async () => {
+    const { client } = mac(
+      () => ({ status: 'rejected', reason: 'BAD_OP', runnerVersion: 'same' }),
+      () => 'same',
+    );
+    const err = await caught(client.run('a', [{ op: 'launch' }]));
+    expect(needsYouReason(err)).toBeNull();
+    expect(String(err)).toMatch(/harness bug/);
+  });
+
+  it('a sim that stopped mid-plan keeps its screenshots', async () => {
+    const { client, copy, ios } = mac(() => ({
+      status: 'error',
+      reason: 'SIM_UNAVAILABLE',
+      detail: 'AX_TIMEOUT',
+      shots: ['shots/01-fail.png'],
+      steps: [],
+    }));
+    expect(needsYouReason(await caught(client.run('k', [{ op: 'launch' }])))).toBe(
+      `${IOS_NOTE}: SIM_UNAVAILABLE/AX_TIMEOUT`,
+    );
+    expect(copy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/shots\/01-fail\.png$/),
+      '/run/shots/ios-ios-standalone-k-01-fail.png',
+    );
+    expect(ios.shots).toEqual(['ios-ios-standalone-k-01-fail.png']);
   });
 
   it('a repo version that throws fails nothing', async () => {

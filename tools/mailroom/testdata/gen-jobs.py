@@ -230,7 +230,7 @@ def spass(name, steps=None, **k):
 spass('sim: launch, read the build, screenshot (the canonical plan)', ts=None,
       expect={'buildsSeen': ['aaaaaaa'], 'shots': ['shots/01-home.png'], 'signedIn': 'already', 'booted': 'warm', 'detail': None,
               'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '1.8.0', 'xcode': 'Xcode 27.2'}},
-      files=['shots/01-home.png', 'progress.json'],
+      files=['shots/01-home.png', 'progress.json', 'plan.json'],
       simIncludes=['axe --version', 'xcrun simctl list devices -j', 'pgrep -x DeviceHub', 'defaults read com.apple.keyboard.preferences HardwareKeyboardLastSeen',
                    'batch --step button home', 'tap -x 371 -y 247 --tap-style physical', '--point 395,168', '--point 57,935', 'screenshot --output'],
       simExcludes=['axe type', 'terminate', 'bootstatus', 'defaults write'])
@@ -239,7 +239,9 @@ EVERY = [L, {'op': 'signIn'}, {'op': 'nav', 'tab': 'Tasks'}, F('Capture log', 22
          {'op': 'keys', 'text': 'ab'}, {'op': 'erase', 'n': 2}, {'op': 'blur'}, {'op': 'scroll', 'dir': 'down', 'pt': 200}, {'op': 'readBuild'},
          {'op': 'expectBuild', 'relaunches': 0}, {'op': 'shot', 'name': 'all-ops'}, {'op': 'wait', 's': 1}, {'op': 'kill', 'method': 'terminate'}, L,
          {'op': 'expect', 'signedIn': True}, {'op': 'shutdown'}]
-spass('sim: a plan using every op passes', EVERY, ts=None, expect={'booted': 'off'},
+SPACE = el('AXButton', 'space', '', 206, 836, 30, 40)
+KB_GOES = [pt(221, 856, SPACE, n=2), pt(221, 856, {})]  # keys and erase see the keyboard; after blur's Done it's gone
+spass('sim: a plan using every op passes', EVERY, ts=None, expect={'booted': 'off'}, tape=KB_GOES,
       simIncludes=['tap -x 48 -y 744', 'tap -x 264 -y 800', 'tap -x 409 -y 800', 'tap -x 395 -y 575', 'swipe --start-x 220 --start-y 650 --end-x 220 --end-y 450',
                    'simctl terminate ' + U + ' com.apple.webapp', 'simctl shutdown'], simExcludes=['axe type'])
 
@@ -291,6 +293,11 @@ srej('sim: tapping Focus is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label'
 srej('sim: tapping Mark done is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Mark done', 'near': {'x': 200, 'y': 600}}])
 srej('sim: tapping Save log is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Save log', 'near': {'x': 360, 'y': 810}}])
 srej('sim: tapping " Save " (padded) is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': ' Save ', 'near': {'x': 200, 'y': 600}}])
+srej('sim: tapping send (the capture bar\'s return key) is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'send', 'near': {'x': 400, 'y': 856}}])
+srej('sim: keys in an unknown name is BAD_OP', 'BAD_OP', [L, {'op': 'keys', 'text': 'ab', 'in': 'nope'}])
+srej('sim: keys in a name defined after it is BAD_OP', 'BAD_OP', [L, {'op': 'keys', 'text': 'ab', 'in': 'bar'}, F('Capture log', 220, 895, 'bar')])
+srej('sim: keys in a capitalised name is BAD_OP', 'BAD_OP', [L, F('Capture log', 220, 895, 'Bar'), {'op': 'keys', 'text': 'ab', 'in': 'Bar'}])
+srej('sim: keys in a number is BAD_OP', 'BAD_OP', [L, F('Capture log', 220, 895, 'bar'), {'op': 'keys', 'text': 'ab', 'in': 1}])
 srej('sim: an unknown job field is BAD_JSON', 'BAD_JSON', patch={'device': 'iPhone'})
 
 # --- the sim can't run it: error, so the devcheck says "needs you" ---
@@ -384,7 +391,7 @@ spass('sim: a fresh sign-in types the password once, dismisses Save Password and
 spass('sim: signIn when already signed in does nothing', [L, {'op': 'signIn'}], simExcludes=['axe type', '--point 228,85'])
 serr('sim: no soft keyboard where one is due is KEYBOARD_SETUP (needs you, not a fail)', 'KEYBOARD_SETUP',
      [L, F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}],
-     tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36)), pt(221, 856, {})])
+     tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36)), pt(221, 856, {})], files=['shots/01-fail.png'])
 serr('sim: keys with no soft keyboard is KEYBOARD_SETUP', 'KEYBOARD_SETUP', [L, {'op': 'keys', 'text': 'ab'}], tape=[pt(221, 856, {})], simExcludes=['tap -x 48', 'tap -x 264'])
 serr('sim: a plan without launch on a shut-down sim is NOT_LAUNCHED (readiness still runs)', 'NOT_LAUNCHED', [F('Capture log', 220, 895, 'bar')],
      tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}], simIncludes=['axe --version', 'bootstatus'], simExcludes=['--point'])
@@ -448,6 +455,64 @@ sfail('sim: a prefix that lands on a write button is DENIED, not tapped', 'DENIE
       tape=[pt(200, 300, el('AXButton', 'Save', '', 180, 280, 80, 40))], simExcludes=['tap -x 220 -y 300'], ts=None)
 sfail('sim: a key not where the layout puts it is MISS', 'MISS', [L, {'op': 'keys', 'text': 'z'}], tape=[pt(91, 800, el('AXButton', 'x', '', 76, 780, 30, 40))],
       simExcludes=['tap -x 91 -y 800'])
+
+# --- a hung read is the sim's, never a miss or a wrong runbook row ---
+HANG = lambda m: {'m': m, 'rc': 124}
+serr('sim: a hung read in the nav row is AX_TIMEOUT, not a missing tab', 'AX_TIMEOUT', [L, {'op': 'nav', 'tab': 'Home'}], tape=[HANG('--point 38,168')])
+serr('sim: a hung read of a key is AX_TIMEOUT, not a moved layout', 'AX_TIMEOUT', [L, {'op': 'keys', 'text': 'z'}], tape=[HANG('--point 91,800')], simExcludes=['tap -x 91 -y 800'])
+serr('sim: a hung re-read in expect is AX_TIMEOUT, not VALUE', 'AX_TIMEOUT', [L, F('Capture log', 220, 895, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'What happened?'}],
+     tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')])
+serr('sim: hung reads of the build stamp are AX_TIMEOUT, not a missing stamp', 'AX_TIMEOUT', [L, {'op': 'readBuild'}], tape=[HANG('--point 57,')])
+serr('sim: a hung read of the space bar is AX_TIMEOUT, not KEYBOARD_SETUP', 'AX_TIMEOUT', [L, {'op': 'keys', 'text': 'ab'}], tape=[HANG('--point 221,856')], simExcludes=['tap -x 48'])
+serr('sim: hung reads of the accessory bar in blur are AX_TIMEOUT, never "no keyboard"', 'AX_TIMEOUT', [L, {'op': 'blur'}], tape=[HANG('--point 395,')])
+serr('sim: hung reads after submit are AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
+     tape=[pt(220, 895, {}, n=1), HANG('--point 220,895'), pt(220, 530, SIGNIN, n=2), pt(220, 530, {})] + FORM, pwTyped=1)
+
+# --- keys read the field back ---
+BAR = F('Capture log', 220, 895, 'bar')
+def typed(v, **k): return pt(220, 895, el('AXStaticText', '', v, 33, 469, 10 * len(v), 22), **k)
+spass('sim: keys in a field read it back once', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'typed 2 keys'}, simCount={'tap -x 48 -y 744': 1}, simExcludes=['tap -x 409 -y 800'])
+spass('sim: a slow key gets a second look, not a retype', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=1), typed('Ab')], simCount={'tap -x 48 -y 744': 1}, simExcludes=['tap -x 409 -y 800', 'retyped'])
+spass('sim: a dropped key is erased and retyped once, and the note says so', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=2), typed('Ab')],
+      notes={'2': 'typed 2 keys; retyped once (first read AXStaticText "A")'}, simCount={'tap -x 48 -y 744': 2, 'tap -x 264 -y 800': 2, 'tap -x 409 -y 800': 4})
+spass('sim: a second drop is retyped twice', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=4), typed('Ab')], notes={'2': 'retyped twice'}, simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8})
+sfail('sim: a field that never holds the text is TYPED, with what it read and a screenshot', 'TYPED', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A')], notes={'2': 'typed "ab" 3 times; the field reads AXStaticText "A" at 220,895'},
+      simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8}, files=['shots/01-fail.png'])
+serr('sim: a hung read-back is AX_TIMEOUT, not TYPED', 'AX_TIMEOUT', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+     tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')], simExcludes=['tap -x 409 -y 800'])
+sfail('sim: a miss names an unlabelled element by its value', 'MISS', [L, F('Zzqx', 100, 300, 'x')], tape=[pt(100, 300, el('AXStaticText', '', 'Zzq', 33, 290, 30, 22))],
+      notes={'1': 'saw: Zzq)'})
+sfail('sim: a miss names a match its role excluded', 'MISS', [L, F('Capture', 100, 300, 'x', role='AXButton')],
+      tape=[pt(100, 300, el('AXTextArea', 'Capture log', '', 25, 290, 346, 36))], notes={'1': 'saw: Capture log (AXTextArea))'})
+
+# --- taps that must have landed ---
+spass('sim: blur taps Done again when the keyboard stays up', [L, {'op': 'blur'}], tape=[pt(221, 856, SPACE, n=1), pt(221, 856, {})],
+      notes={'1': 'dismissed on the second tap'}, simCount={'tap -x 395 -y 575': 2})
+spass('sim: blur checks the keyboard went down once', [L, {'op': 'blur'}], tape=[pt(221, 856, {})], notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1})
+sfail('sim: a keyboard that stays up after two Done taps is BLUR', 'BLUR', [L, {'op': 'blur'}], simCount={'tap -x 395 -y 575': 2})
+spass('sim: blur with no keyboard up does nothing', [L, {'op': 'blur'}], tape=[pt(395, 575, {})], notes={'1': 'no keyboard to dismiss'}, simExcludes=['tap -x 395'])
+spass('sim: a dropped icon tap (still on the Home Screen) is tapped again, not swiped', [L],
+      tape=[pt(220, 895, {}, n=10), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
+      simExcludes=['swipe --start-x 220 --start-y 450'])
+FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
+spass('sim: a dropped submit tap is tapped again on the same form', [L, {'op': 'signIn'}],
+      tape=[pt(220, 895, {}, n=13)] + SIGNED_OUT[1:] + FORMP + [pt(220, 588, {})], expect={'signedIn': 'fresh'}, pwTyped=1, simCount={'tap -x 201 -y 453': 2})
+serr('sim: a password still rejected after the retap is AUTH_REJECTED', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + FORMP, pwTyped=1, simCount={'tap -x 201 -y 453': 2})
+serr('sim: a submit button under another process is not tapped again', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + FORM, pwTyped=1, simCount={'tap -x 201 -y 453': 1})
+
+# --- shutdown says when it fails ---
+serr('sim: a shutdown simctl refuses is SHUTDOWN_FAILED', 'SHUTDOWN_FAILED', [{'op': 'shutdown'}], tape=[{'m': 'simctl shutdown', 'rc': 1}], ts=None)
+spass('sim: shutdown: true that fails leaves the rows passed and booted warm', patch={'params': {'shutdown': True}}, expect={'booted': 'warm'},
+      tape=[{'m': 'simctl shutdown', 'rc': 1}])
+serr('sim: a reboot whose shutdown fails is SHUTDOWN_FAILED, no boot', 'SHUTDOWN_FAILED', [L, {'op': 'kill', 'method': 'reboot'}, L],
+     tape=[{'m': 'simctl shutdown', 'rc': 1}], simExcludes=['bootstatus'])
 
 # --- recipes ---
 spass('sim: keyboard prefs at 1 are re-armed with a reboot', [L], tape=[{'m': 'defaults read com.apple.keyboard.preferences', 'out': '1', 'n': 1}],

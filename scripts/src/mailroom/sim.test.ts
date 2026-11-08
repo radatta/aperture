@@ -142,9 +142,15 @@ describe('runSimJob', () => {
     expect((fail as Error).message).toBe(
       'ASSERT/BELOW_KEYBOARD at op 1 expect: bar bottom 831 vs keyboard top 493',
     );
-    const err = await run({ status: 'error', reason: 'SIM_UNAVAILABLE', detail: 'KEYBOARD_SETUP' });
+    const err = await run({
+      status: 'error',
+      reason: 'SIM_UNAVAILABLE',
+      detail: 'KEYBOARD_SETUP',
+      shots: ['shots/01-fail.png'],
+    });
     expect((err as IosUnavailable).reason).toBe('SIM_UNAVAILABLE/KEYBOARD_SETUP');
     expect((err as Error).message).toContain('KEYBOARD_SETUP');
+    expect((err as IosUnavailable).result?.shots).toEqual(['shots/01-fail.png']); // ios.ts keeps them
     expect(((await run({ status: 'expired', reason: 'EXPIRED' })) as IosUnavailable).reason).toBe(
       'MAC_UNREACHABLE',
     );
@@ -182,8 +188,23 @@ describe('validateSimParams', () => {
       validateSimParams({ ...params, steps: [{ op: 'tap', label, near: { x: 1, y: 1 } }] });
     expect(tap('Start timer')).toBe('DENIED_TAP'); // an entry and a space
     expect(tap('Focus')).toBe('DENIED_TAP');
+    expect(tap('send')).toBe('DENIED_TAP');
     expect(tap('Saved')).toBeNull();
     expect(tap('Done')).toBeNull();
+    // keys `in` names an earlier find/tap, like expect's `as`
+    const find = { op: 'find', label: 'Capture log', near: { x: 1, y: 1 }, as: 'bar' };
+    const keys = (inName: unknown, before = true) =>
+      validateSimParams({
+        ...params,
+        steps: before
+          ? [find, { op: 'keys', text: 'ab', in: inName }]
+          : [{ op: 'keys', text: 'ab', in: inName }, find],
+      });
+    expect(keys('bar')).toBeNull();
+    expect(keys('nope')).toBe('BAD_OP');
+    expect(keys('bar', false)).toBe('BAD_OP');
+    expect(keys('Bar')).toBe('BAD_OP');
+    expect(keys(1)).toBe('BAD_OP');
     // the first bad op decides: a malformed op before a denied tap is BAD_OP
     expect(
       validateSimParams({

@@ -9,18 +9,20 @@
 import { needsYou, type Ctx, type Scenario } from '../scenario';
 import type { IosOp } from '../../mailroom/sim';
 
-// One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters.
+// One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters. Six: the run's time of day
+// (the nonce's tail is the tier), and each typed key is a tap that can drop.
 const marker = (ctx: Ctx) =>
   ctx.nonce
     .toLowerCase()
     .replace(/[0-9]/g, (d) => 'abcdefghij'[Number(d)] ?? 'a')
     .replace(/[^a-z]/g, '')
-    .slice(0, 12);
+    .slice(0, 6);
 const title = (ctx: Ctx) => `devcheck-ios ${marker(ctx)}`;
 let taskId = '';
 let drove = false; // the sim got through the Done form, so "untouched" means something
 // Four typed keys, two spare deletes: a delete tap can drop silently (job …043145Z…-capture-d571 left a Z), and one on an
-// empty field does nothing. The rows still prove the placeholder returns; this does hide how often taps drop.
+// empty field does nothing. The rows still prove the placeholder returns; this does hide how often deletes drop. Typed
+// keys are read back (`keys … in`) and retyped, with a note saying so (job …083234Z…-capture-5c12 lost one).
 const ERASE = 6;
 
 const LAUNCH: IosOp[] = [
@@ -57,7 +59,7 @@ const CAPTURE: IosOp[] = [
   { op: 'find', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox', as: 'mode' },
   { op: 'expect', as: 'mode', aboveKeyboard: true },
   { op: 'shot', name: 'capture-keyboard' },
-  { op: 'keys', text: 'zzqx' },
+  { op: 'keys', text: 'zzqx', in: 'bar' },
   { op: 'find', label: 'zzqx', near: { x: 60, y: 480 }, radius: 40, as: 'typed' },
   {
     op: 'find',
@@ -89,7 +91,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'expect', as: 'search', aboveKeyboard: true },
   // …and the capture dock didn't lift over the page: lifted, its bar would sit just above the keyboard
   { op: 'absent', label: 'Capture log', near: { x: 200, y: 480 }, radius: 40, role: 'AXTextArea' },
-  { op: 'keys', text: marker(ctx) },
+  { op: 'keys', text: marker(ctx), in: 'search' },
   { op: 'blur' },
   // The row's Done opens the modal with the Done form on top, as on the phone. Opening only: the form's own button submits.
   { op: 'tap', label: 'Done', scan: { x: 395, from: 390, to: 840 }, role: 'AXButton' },
@@ -106,7 +108,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'wait', s: 2 },
   { op: 'find', label: 'Reflection', scan: { x: 200, from: 120, to: 690 }, as: 'again' },
   { op: 'expect', as: 'again', aboveKeyboard: true },
-  { op: 'keys', text: 'zzqx' },
+  { op: 'keys', text: 'zzqx', in: 'again' },
   { op: 'erase', n: ERASE },
   { op: 'blur' },
   { op: 'tap', label: 'Cancel', scan: { x: 190, from: 150, to: 720 }, role: 'AXButton' },

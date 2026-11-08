@@ -40,7 +40,7 @@ SIM_MAX_PROBES=400
 if [ "$(uname)" = Darwin ]; then SIM_MV_NOFOLLOW=-fh; else SIM_MV_NOFOLLOW=-fT; fi # mv onto a link: replace it
 SIM_TABS='["Home","Log","Tasks","Recruiting","Habits","Rolls","Flux","Finances","Inbox","Settings"]'
 # The app's write buttons, refused for `tap` (lowercased: an entry, or an entry and a space). A belt: the boundary is the test user's partition.
-SIM_DENY='["save","save log","save task","save idea","mark done","start","stop","delete","complete","export json","generate token","rotate","connect google calendar","sign out","save password","not now","return","add to today","add place","focus"]'
+SIM_DENY='["save","save log","save task","save idea","mark done","start","stop","delete","complete","export json","generate token","rotate","connect google calendar","sign out","save password","not now","return","add to today","add place","focus","send"]'
 
 # Prints a reason code, or nothing when the plan is good. Same order as sim.ts → validateSimParams.
 SIM_JQ='
@@ -76,7 +76,8 @@ SIM_JQ='
          elif has("aboveKeyboard") then .aboveKeyboard == true
          elif has("sameWidthAs") then (.sameWidthAs | asname)
          else false end) end
-    elif .op == "keys" then keysok(["op","text"]; []) and (.text | whole("^[a-z ]{1,24}$"))
+    elif .op == "keys" then keysok(["op","text"]; ["in"]) and (.text | whole("^[a-z ]{1,24}$"))
+      and (if has("in") then (.in | asname) else true end)
     elif .op == "erase" then keysok(["op","n"]; []) and (.n | int(1; 24))
     elif .op == "scroll" then keysok(["op","dir","pt"]; []) and (.dir == "up" or .dir == "down") and (.pt | int(100; 600))
     elif .op == "expectBuild" then keysok(["op"]; ["relaunches"]) and (if has("relaunches") then (.relaunches | int(0; 1)) else true end)
@@ -95,6 +96,7 @@ SIM_JQ='
       else (if $o.op == "expect" and ($o | has("as")) then
               (.def | index($o.as)) != null
               and (if $o | has("sameWidthAs") then (.def | index($o.sameWidthAs)) != null else true end)
+            elif $o.op == "keys" and ($o | has("in")) then (.def | index($o.in)) != null
             else true end) as $refok
         | (($o.op == "find" or $o.op == "tap") and ($o | has("as"))) as $defines
         | {ok: ($refok and (if $defines then (.def | index($o.as)) == null else true end)),
@@ -222,6 +224,11 @@ sim_point() {
       | if $sens then del(.value) else . end end' <<<"$raw" 2>/dev/null || echo '{}'
 }
 
+# A hung read answers {}, which isn't "nothing there". Clear the flag before an op's reads; on a negative path,
+# `sim_hung_err "<doing what>" && return 1` makes it AX_TIMEOUT (needs you) instead of a false MISS or a wrong row.
+sim_hung() { [ -e "$SIM_P.unread" ]; }
+sim_hung_err() { sim_hung || return 1; sim_err SIM_UNAVAILABLE AX_TIMEOUT "a point read timed out $1"; return 0; }
+
 # Does element JSON $1 start with label $2 (case-insensitive, label or value) and have role $3 (any when empty)?
 sim_match() {
   jq -e --arg l "$2" --arg r "$3" '($l | ascii_downcase) as $w
@@ -283,9 +290,12 @@ sim_find() {
       SIM_HIT="$e"
       return 0
     fi
-    seen="$seen$(jq -r '(.label // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:24]' <<<"$e")|"
+    # the label, or the value when there is none (typed text is an unlabelled AXStaticText); a role the op excluded is named
+    seen="$seen$(jq -r '(if (.label // "") != "" then .label else (.value // "") end) | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:24]' <<<"$e")"
+    if [ -n "$role" ] && sim_match "$e" "$label" ""; then seen="$seen ($(jq -r '.role' <<<"$e"))"; fi
+    seen="$seen|"
   done < <(sim_points "$op")
-  [ ! -e "$SIM_P.unread" ] || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "a point read timed out looking for \"$label\""; return 1; }
+  sim_hung_err "looking for \"$label\"" && return 1
   seen="$(printf '%s' "$seen" | tr '|' '\n' | awk 'NF && !s[$0]++' | head -3 | paste -sd ',' -)"
   sim_fail MISS "no \"$label\" found (saw: ${seen:-nothing})"
 }
@@ -310,15 +320,20 @@ sim_device() {
   }
 }
 
-sim_boot() { sx 90 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 90 s"; return 1; }; }
-sim_shutdown() { sx 30 shutdown "$SIM_U" >/dev/null 2>&1 || true; }
+sim_boot() { sx 90 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 90 s"; return 1; }; SIM_STATE=Booted; }
+# simctl refuses a sim that is already off, so that one isn't asked; any other refusal is the caller's to report.
+sim_shutdown() {
+  [ "$SIM_STATE" != Shutdown ] || return 0
+  sx 30 shutdown "$SIM_U" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE SHUTDOWN_FAILED "simctl shutdown failed"; return 1; }
+  SIM_STATE=Shutdown
+}
 sim_pref() { sx 30 spawn "$SIM_U" defaults read "$SIM_KB" "$1" 2>/dev/null | tr -d '[:space:]'; }
 # The soft keyboard (IOS-CHECK.md → Keyboard): both prefs 0, applied only at boot; HID typing flips them back to 1.
 sim_arm() {
   sx 30 spawn "$SIM_U" defaults write "$SIM_KB" HardwareKeyboardLastSeen -bool false >/dev/null 2>&1 \
     && sx 30 spawn "$SIM_U" defaults write "$SIM_KB" AutomaticMinimizationEnabled -bool false >/dev/null 2>&1 \
     || { sim_err SIM_UNAVAILABLE BOOT_FAILED "could not write the keyboard prefs"; return 1; }
-  sim_shutdown
+  sim_shutdown || return 1
   sim_boot || return 1
   SIM_BOOTED=rebooted
 }
@@ -422,7 +437,7 @@ sim_find_icon() {
 
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
-  local i s clean=""
+  local i s t clean=""
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
@@ -446,9 +461,15 @@ sim_op_launch() {
       sim_fail LANDMARK "neither Home nor the sign-in card after launch"
       return 1
     fi
-    if [ "$i" = 10 ]; then # the page can draw offset from its accessibility frames after a kill: nudge it
-      ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
-      ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
+    if [ "$i" = 10 ]; then
+      # Still on the Home Screen: the icon tap dropped, so tap it again (a swipe there opens Search). In the app, the
+      # page can draw offset from its accessibility frames after a kill: nudge it.
+      if t="$(sim_tree)" && ! jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
+        sim_tap_el "$SIM_ICON" || return 1
+      else
+        ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
+        ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
+      fi
     fi
     sleep 2
   done
@@ -525,7 +546,7 @@ sim_op_signIn() {
   return "$rc"
 }
 sim_sign_in() {
-  local e ef fp n pf pt i s app clean
+  local e ef fp n pf pt i s app clean pass x y
   if [ "$SIM_SIGNED" != false ]; then SIM_NOTE="already signed in"; return 0; fi
   sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \
     || { sim_err PASSWORD_MISSING "" "no readable Keychain item $SIM_KEYCHAIN"; return 1; }
@@ -587,14 +608,31 @@ sim_sign_in() {
   done
   [ -n "$e" ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED FORM_CHANGED "no submit button"; return 1; }
   sim_tap_el "$e" 2 || { SIM_SENSITIVE=false; return 1; }
-  i=0
-  while :; do
-    s="$(sim_landmark)" || { SIM_SENSITIVE=false; return 1; }
-    [ "$s" != already ] || break
-    i=$((i + 1))
-    [ "$i" -lt 12 ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED AUTH_REJECTED "still not on Home after submit"; return 1; }
-    sleep 2
+  # A dropped submit tap reads like a wrong password: when the same form's submit button is still there, tap it once more.
+  clean=""
+  s=""
+  for pass in 1 2; do
+    i=0
+    while [ "$i" -lt 12 ]; do
+      rm -f "$SIM_P.unread"
+      s="$(sim_landmark)" || { SIM_SENSITIVE=false; return 1; }
+      [ -e "$SIM_P.unread" ] || clean=1
+      [ "$s" != already ] || break 2
+      i=$((i + 1))
+      sleep 2
+    done
+    [ "$pass" = 1 ] || break
+    read -r x y < <(jq -r '.at | "\(.x) \(.y)"' <<<"$e")
+    n="$(sim_point "$x" "$y")" || { SIM_SENSITIVE=false; return 1; }
+    [ "$(jq -r .role <<<"$n")" = AXButton ] && sim_label_is "$n" "submit" && jq -e --argjson p "$fp" '.pid == $p' <<<"$n" >/dev/null 2>&1 || break
+    sim_tap_el "$n" 2 || { SIM_SENSITIVE=false; return 1; }
   done
+  if [ "$s" != already ]; then
+    SIM_SENSITIVE=false
+    if [ -z "$clean" ]; then sim_err SIM_UNAVAILABLE AX_TIMEOUT "point reads timed out looking for Home after submit"; return 1; fi
+    sim_err SIGNIN_FAILED AUTH_REJECTED "still not on Home after submit"
+    return 1
+  fi
   SIM_SENSITIVE=false
   e="$(sim_point "$SIM_X" "$SIM_Y_NEVER")" || return 1
   if sim_label_is "$e" "Never for This Website"; then sim_tap_el "$e" || return 1; fi
@@ -634,7 +672,7 @@ sim_op_kill() {
         && ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 \
         || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; } ;;
     reboot)
-      sim_shutdown
+      sim_shutdown || return 1
       sim_boot || return 1
       SIM_BOOTED=rebooted ;;
   esac
@@ -658,6 +696,7 @@ sim_op_nav() {
   tab="$(jq -r .tab <<<"$1")"
   sim_in_app || return 1
   sim_to_top
+  rm -f "$SIM_P.unread"
   sim_nav_probe "$tab"; rc=$?
   if [ "$rc" = 2 ]; then
     ax swipe --start-x $((SIM_W - 42)) --start-y "$SIM_Y_NAV" --end-x 40 --end-y "$SIM_Y_NAV" --duration 0.4 >/dev/null 2>&1 || true
@@ -669,7 +708,11 @@ sim_op_nav() {
     sim_nav_probe "$tab"; rc=$?
   fi
   [ "$rc" != 1 ] || return 1
-  [ "$rc" = 0 ] || { sim_fail MISS "no $tab tab in the nav row"; return 1; }
+  if [ "$rc" != 0 ]; then
+    sim_hung_err "looking for the $tab tab" && return 1
+    sim_fail MISS "no $tab tab in the nav row"
+    return 1
+  fi
   sim_tap_el "$SIM_HIT" || return 1
   sleep 2
   SIM_NOTE="on $tab"
@@ -702,14 +745,16 @@ sim_op_tap() {
 }
 
 # The soft keyboard is up when its space bar answers; its accessory bar's top is the line a field must clear.
-sim_kb_up() { local e x y; read -r x y <<<"$SIM_PT_SPACE"; e="$(sim_point "$x" "$y")" || return 1; sim_label_is "$e" "space"; }
+sim_kb_up() { local e x y; read -r x y <<<"$SIM_PT_SPACE"; rm -f "$SIM_P.unread"; e="$(sim_point "$x" "$y")" || return 1; sim_label_is "$e" "space"; }
 # No soft keyboard where one is due: the keyboard recipe rests on undocumented iOS prefs, so an Xcode or iOS update
 # can break it for every branch at once. That is the environment, not the row: error (needs you), never a fail.
 sim_kb_missing() {
+  sim_hung_err "looking for the soft keyboard" && return 1
   sim_err SIM_UNAVAILABLE KEYBOARD_SETUP "no soft keyboard (prefs $(sim_pref HardwareKeyboardLastSeen)/$(sim_pref AutomaticMinimizationEnabled), $SIM_XCODE) - re-check IOS-CHECK.md Keyboard after an Xcode or iOS update"
 }
 sim_accessory_top() {
   local e y
+  rm -f "$SIM_P.unread"
   for y in $SIM_YS_ACCESSORY; do
     e="$(sim_point "$SIM_X_DONE" "$y")" || return 1
     if [ "$(jq -r .role <<<"$e")" = AXButton ] && jq -e '(.label // "") | ascii_downcase | test("^(done|previous|next)$")' <<<"$e" >/dev/null; then
@@ -746,7 +791,9 @@ sim_op_expect() {
     return 0
   fi
   # value / label / enabled: read again at the point the element was found.
+  rm -f "$SIM_P.unread"
   e="$(sim_point "$(jq -r '.at.x' <<<"$r")" "$(jq -r '.at.y' <<<"$r")")" || return 1
+  sim_hung_err "reading $a again" && return 1
   sim_read_put "$a" "$e"
   if jq -e 'has("enabled")' <<<"$1" >/dev/null; then
     f="$(jq -r .enabled <<<"$e")"
@@ -780,24 +827,72 @@ sim_key_xy() {
 sim_key() {
   local k="$1" x y e
   read -r x y < <(sim_key_xy "$k")
+  rm -f "$SIM_P.unread"
   e="$(sim_point "$x" "$y")" || return 1
-  sim_label_is "$e" "$k" || { sim_fail MISS "the $k key isn't where the layout puts it"; return 1; }
+  if ! sim_label_is "$e" "$k"; then
+    sim_hung_err "reading the $k key" && return 1
+    sim_fail MISS "the $k key isn't where the layout puts it"
+    return 1
+  fi
   ax tap -x "$x" -y "$y" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "key tap failed"; return 1; }
   sleep 0.6
 }
 
-sim_op_keys() {
-  local text ch i
-  text="$(jq -r .text <<<"$1")"
-  sim_kb_up || { sim_kb_missing; return 1; }
-  i=0
-  while [ "$i" -lt "${#text}" ]; do
-    ch="${text:$i:1}"
+sim_type_keys() {
+  local ch i=0
+  while [ "$i" -lt "${#1}" ]; do
+    ch="${1:$i:1}"
     [ "$ch" != " " ] || ch=space
     sim_key "$ch" || return 1
     i=$((i + 1))
   done
+}
+
+# The field, read where `in` was found: SIM_TYPED_OK=1 when it holds the text (case-insensitive: the app's fields
+# auto-capitalise), and SIM_TYPED is what it read, filtered like a MISS note.
+sim_typed_read() {
+  local e
+  SIM_TYPED_OK=""
+  rm -f "$SIM_P.unread"
+  e="$(sim_point "$2" "$3")" || return 1
+  sim_hung_err "reading the typed text" && return 1
+  SIM_TYPED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
+  if jq -e --arg t "$1" '((.value // "") | ascii_downcase) == $t' <<<"$e" >/dev/null 2>&1; then SIM_TYPED_OK=1; fi
+}
+
+# Taps can be dropped silently, and a key AXe reports done may never land. With `in`, the field is read back: a slow
+# tap gets a second look, then up to two retypes (deletes first: extra ones do nothing on an empty field), and the
+# note says so, so a rising drop rate stays visible. Assumes the field held nothing before.
+sim_op_keys() {
+  local text in x y d tries=0 first=""
+  text="$(jq -r .text <<<"$1")"
+  in="$(jq -r '.in // ""' <<<"$1")"
+  sim_kb_up || { sim_kb_missing; return 1; }
+  sim_type_keys "$text" || return 1
   SIM_NOTE="typed ${#text} keys"
+  [ -n "$in" ] || return 0
+  read -r x y < <(sim_read_get "$in" | jq -r '"\(.at.x // 0) \(.at.y // 0)"')
+  while :; do
+    sim_typed_read "$text" "$x" "$y" || return 1
+    if [ -z "$SIM_TYPED_OK" ]; then
+      sleep 1
+      sim_typed_read "$text" "$x" "$y" || return 1
+    fi
+    [ -z "$SIM_TYPED_OK" ] || break
+    [ -n "$first" ] || first="$SIM_TYPED"
+    if [ "$tries" -ge 2 ]; then
+      sim_fail TYPED "typed \"$text\" 3 times; the field reads $SIM_TYPED at $x,$y"
+      return 1
+    fi
+    tries=$((tries + 1))
+    d=0
+    while [ "$d" -lt $((${#text} + 2)) ]; do sim_key delete || return 1; d=$((d + 1)); done
+    sim_type_keys "$text" || return 1
+  done
+  case "$tries" in
+    1) SIM_NOTE="$SIM_NOTE; retyped once (first read $first)" ;;
+    2) SIM_NOTE="$SIM_NOTE; retyped twice (first read $first)" ;;
+  esac
 }
 
 sim_op_erase() {
@@ -808,14 +903,29 @@ sim_op_erase() {
   SIM_NOTE="erased $n"
 }
 
+# Done is a tap like any other: the keyboard must be gone afterwards (one retap), or the next op aims at a moved page.
 sim_op_blur() {
-  local rc
+  local rc done
   sim_accessory_top >/dev/null; rc=$?
   [ "$rc" != 1 ] || return 1
-  [ "$rc" = 0 ] || { SIM_NOTE="no keyboard to dismiss"; return 0; }
-  sim_tap_el "$SIM_HIT" || return 1
+  if [ "$rc" != 0 ]; then
+    sim_hung_err "looking for the keyboard's Done" && return 1
+    SIM_NOTE="no keyboard to dismiss"
+    return 0
+  fi
+  done="$SIM_HIT"
+  sim_tap_el "$done" || return 1
   sleep 1
   SIM_NOTE="keyboard dismissed"
+  if sim_kb_up; then
+    sleep 1
+    sim_tap_el "$done" || return 1
+    sleep 1
+    if sim_kb_up; then sim_fail BLUR "the keyboard stayed up after Done, tapped twice"; return 1; fi
+    SIM_NOTE="keyboard dismissed on the second tap"
+  fi
+  sim_hung_err "checking the keyboard went down" && return 1
+  return 0
 }
 
 sim_op_scroll() {
@@ -834,12 +944,17 @@ sim_op_readBuild() {
   sim_op_nav '{"op":"nav","tab":"Settings"}' || return 1
   for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x $((SIM_W - 12)) --start-y 700 --end-x $((SIM_W - 12)) --end-y 150 --duration 0.15 >/dev/null 2>&1 || true; done
   b=""
+  rm -f "$SIM_P.unread"
   for y in $SIM_YS_BUILD; do
     e="$(sim_point "$SIM_X_BUILD" "$y")" || return 1
     b="$(jq -r '(.value // "") | select(test("^Build [0-9a-f]{7}$")) | .[6:]' <<<"$e")"
     [ -z "$b" ] || break
   done
-  [ -n "$b" ] || { sim_fail MISS "no build stamp at the bottom of Settings"; return 1; }
+  if [ -z "$b" ]; then
+    sim_hung_err "looking for the build stamp" && return 1
+    sim_fail MISS "no build stamp at the bottom of Settings"
+    return 1
+  fi
   echo "$b" >>"$SIM_P.builds"
   sim_op_nav '{"op":"nav","tab":"Home"}' || return 1
   SIM_NOTE="running $b"
@@ -860,7 +975,7 @@ sim_op_expectBuild() {
   sim_fail STALE_BUILD "ran build $got, expected $want — rerun"
 }
 
-# What the screen showed when a row failed; a plan's own shots already reached their cap, or a sign-in, gets none. Its own
+# What the screen showed when a row failed or the sim stopped mid-plan; a plan's own shots already reached their cap, or a sign-in, gets none. Its own
 # failure changes nothing about the row's.
 sim_fail_shot() {
   local st="$SIM_ST" rs="$SIM_RS" dt="$SIM_DT" note="$SIM_NOTE"
@@ -882,15 +997,16 @@ sim_op_shot() {
 }
 
 sim_op_wait() { sleep "$(jq -r '.s | floor' <<<"$1")"; }
-sim_op_shutdown() { sim_shutdown; SIM_BOOTED=off; SIM_NOTE="shut down"; }
+sim_op_shutdown() { sim_shutdown || return 1; SIM_BOOTED=off; SIM_NOTE="shut down"; }
 
 # --- the run ------------------------------------------------------------------------------------------------------
 run_sim() {
   local w="$1" n i op opj t0 status=pass reason=- detail="" started budget caf
   SIM_P="$2"
   SIM_RD="$3"
+  sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
-  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE=""
+  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK=""
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
@@ -930,7 +1046,8 @@ run_sim() {
         [ ! -e "$SIM_P.over" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT=PROBES SIM_NOTE="over $SIM_MAX_PROBES point reads"; }
         [ ! -e "$SIM_P.late" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT="" SIM_NOTE="over the ${budget} s budget"; }
         status="${SIM_ST:-error}"
-        if [ "$status" = fail ]; then sim_fail_shot "$op"; fi
+        # a failure, or a sim that was up and then couldn't go on (not a blown budget: nothing more may run)
+        if [ "$status" = fail ] || { [ "$status" = error ] && [ -n "$SIM_READY" ] && [ "$SIM_RS" != TIMEOUT ]; }; then sim_fail_shot "$op"; fi
       fi
     fi
     jq -cn --argjson i "$i" --arg op "$op" --arg st "$status" --argjson ms "$(($(sim_ms) - t0))" --arg note "$SIM_NOTE" \
@@ -938,9 +1055,9 @@ run_sim() {
     if [ "$status" != pass ]; then reason="${SIM_RS:-SIM_UNAVAILABLE}"; detail="$SIM_DT"; fi
     i=$((i + 1))
   done
+  # The rows already passed; a sim that wouldn't shut down says so in `booted` (the container's finish() asks again).
   if [ "$status" = pass ] && [ -n "$SIM_U" ] && [ "$(jq -r .params.shutdown "$w")" = true ] && [ "$SIM_BOOTED" != off ]; then
-    sim_shutdown
-    SIM_BOOTED=off
+    if sim_shutdown; then SIM_BOOTED=off; fi
   fi
   kill "$caf" 2>/dev/null || true
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg detail "$detail" --arg name "$SIM_NAME" --arg udid "$SIM_U" \

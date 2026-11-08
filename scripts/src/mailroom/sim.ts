@@ -55,6 +55,7 @@ export const TAP_DENY = [
   'add to today',
   'add place',
   'focus',
+  'send', // the capture bar's return key (enterKeyHint) saves the log
 ];
 // sim.sh's device profile screen, in points: coordinates past it are refused (runner-fixtures.test.ts pins both).
 export const SIM_W = 440;
@@ -81,7 +82,7 @@ export type IosOp =
   | { op: 'expect'; as: string; enabled: boolean }
   | { op: 'expect'; as: string; aboveKeyboard: true }
   | { op: 'expect'; as: string; sameWidthAs: string }
-  | { op: 'keys'; text: string }
+  | { op: 'keys'; text: string; in?: string } // in: read the field back where that find/tap found it
   | { op: 'erase'; n: number }
   | { op: 'scroll'; dir: 'up' | 'down'; pt: number }
   | { op: 'expectBuild'; relaunches?: 0 | 1 }
@@ -255,7 +256,11 @@ function opOk(o: unknown): boolean {
       if ('sameWidthAs' in o) return asName(o.sameWidthAs);
       return false;
     case 'keys':
-      return keysOk(o, ['op', 'text'], []) && whole(o.text, /^[a-z ]{1,24}$/);
+      return (
+        keysOk(o, ['op', 'text'], ['in']) &&
+        whole(o.text, /^[a-z ]{1,24}$/) &&
+        (!('in' in o) || asName(o.in))
+      );
     case 'erase':
       return keysOk(o, ['op', 'n'], []) && int(o.n, 1, 24);
     case 'scroll':
@@ -295,6 +300,7 @@ function crossOk(steps: Obj[]): boolean {
       if (!defs.includes(s.as as string)) return false;
       if ('sameWidthAs' in s && !defs.includes(s.sameWidthAs as string)) return false;
     }
+    if (s.op === 'keys' && 'in' in s && !defs.includes(s.in as string)) return false;
     if ((s.op === 'find' || s.op === 'tap') && 'as' in s) {
       if (defs.includes(s.as as string)) return false;
       defs.push(s.as as string);
@@ -324,7 +330,7 @@ export const SIM_REASON_HINT: Record<SimReason, string> = {
   BAD_PARAM: 'sim params: sha (40 hex), timeoutSec 60–600, shutdown (boolean), steps (1–80 ops)',
   TOO_MANY_OPS: `a sim plan holds at most ${MAX_OPS} ops`,
   BAD_OP:
-    'an op off the allowlist, a bad argument, an unknown `as`, a kill not followed by launch, a signIn before any launch, or shutdown not last (docs/ops/IOS-CHECK.md → Ops)',
+    'an op off the allowlist, a bad argument, an unknown `as` (or `in`), a kill not followed by launch, a signIn before any launch, or shutdown not last (docs/ops/IOS-CHECK.md → Ops)',
   DENIED_TAP: 'that label is one of the app’s write buttons — the sim never saves',
 };
 
@@ -339,10 +345,12 @@ const GRACE_MS = 60_000;
 export class IosUnavailable extends Error {
   readonly reason: string;
   readonly runnerVersion?: string; // the Mac answered: which runner did
-  constructor(reason: string, message: string, runnerVersion?: string) {
+  readonly result?: SimResult; // the Mac ran part of the plan: its steps and screenshots
+  constructor(reason: string, message: string, runnerVersion?: string, result?: SimResult) {
     super(`${reason}: ${message}`);
     this.reason = reason;
     if (runnerVersion) this.runnerVersion = runnerVersion;
+    if (result) this.result = result;
   }
 }
 // The Mac refused the plan. A harness bug, or a runner older than the plan (ios.ts says which).
@@ -392,6 +400,7 @@ function settle(r: SimResult): SimResult {
     r.detail ? `${code}/${r.detail}` : code,
     failingNote(r),
     r.runnerVersion,
+    r.status === 'error' ? r : undefined,
   );
 }
 
