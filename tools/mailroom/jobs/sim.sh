@@ -407,6 +407,7 @@ sim_find_icon() {
   SIM_ICON=""
   for i in 1 2 3 4 5 6; do
     t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
+    sim_probe "icon-read-$i" "$t"
     page="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
     case "$page" in
       "Page 2 of 2")
@@ -441,6 +442,7 @@ sim_op_launch() {
   local i s t clean=""
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+  sim_probe launch-pressed -
   sim_find_icon || return 1
   sim_tap_el "$SIM_ICON" || return 1
   i=0
@@ -449,6 +451,7 @@ sim_op_launch() {
     s="$(sim_landmark)" || return 1
     [ -e "$SIM_P.unread" ] || clean=1 # at least one pass read every point and got an answer
     if [ -n "$s" ]; then
+      sim_probe launch-done -
       SIM_SIGNED="$s"
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
       return 0
@@ -667,22 +670,58 @@ sim_sign_in() {
 
 sim_op_kill() {
   local m sx sy ex ey bx by
+  local before
   m="$(jq -r .method <<<"$1")"
+  sim_probe "kill-$m-before"
+  before="$SIM_PROBE_WEB"
   case "$m" in
     terminate) sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; } ;;
     switcher)
       ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
-        && read -r sx sy ex ey <<<"$SIM_CARD_SWIPE" && read -r bx by <<<"$SIM_PT_BACKGROUND" \
+        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      sim_probe switcher-pressed
+      read -r sx sy ex ey <<<"$SIM_CARD_SWIPE" && read -r bx by <<<"$SIM_PT_BACKGROUND" \
         && ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
-        && ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 \
+        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      sleep 1
+      sim_probe switcher-swiped
+      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 \
         || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; } ;;
     reboot)
       sim_shutdown || return 1
       sim_boot || return 1
       SIM_BOOTED=rebooted ;;
   esac
+  if [ "$m" = reboot ]; then sim_probe "kill-$m-after" -; else sim_probe "kill-$m-after"; fi # a fresh boot's first reads can hang
   SIM_SIGNED=unknown
-  SIM_NOTE="killed by $m"
+  SIM_NOTE="killed by $m; web before: $before after: $SIM_PROBE_WEB"
+}
+
+# MEASURE ONLY (sim-home-readback, round A; removed with the fix): which signal tells the web app running from killed,
+# and what is in front around each home press and kill. One line per call to probe.jsonl; nothing here acts on it.
+# $2 empty: read the tree and the switcher's two points too; "-": pgrep and launchctl only; else the tree the caller read.
+sim_probe() {
+  local tag="$1" t="${2:-}" rc=0 n lc card='{}' bg='{}'
+  pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >"$SIM_P.pg" 2>/dev/null || rc=$?
+  n="$(grep -c . "$SIM_P.pg" 2>/dev/null || true)"
+  lc="$(sx 10 spawn "$SIM_U" launchctl list 2>/dev/null | grep -c com.apple.webapp || true)"
+  if [ -z "$t" ]; then
+    t="$(ax describe-ui 2>/dev/null || true)"
+    card="$(sim_point 340 560 || echo '{}')"
+    bg="$(sim_point 400 880 || echo '{}')"
+  fi
+  [ "$t" != - ] || t=""
+  SIM_PROBE_WEB="$([ "$rc" = 0 ] && echo "alive($n)" || echo gone)"
+  jq -cn --arg tag "$tag" --argjson ms "$(sim_ms)" --argjson rc "$rc" --argjson n "${n:-0}" --argjson lc "${lc:-0}" \
+    --argjson card "$card" --argjson bg "$bg" --arg t "$t" '
+    ($t | try fromjson catch null) as $tr
+    | ([$tr | .. | objects | select(.role? == "AXApplication")][0] // {}) as $app
+    | {tag: $tag, ms: $ms, web: {rc: $rc, n: $n}, lc: $lc,
+       front: (if $tr == null then null else {app: ($app.AXLabel // ""),
+         page: (first($tr | .. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""),
+         kids: (($app.children // []) | map({role, label: .AXLabel}) | .[0:12])} end),
+       card: (if $card == {} then null else $card | {role, label, value, pid} end), bg: (if $bg == {} then null else $bg | {role, label, value, pid} end)}' >>"$SIM_P.probe" 2>/dev/null || true
+  rm -f "$SIM_P.unread" # a probe's hung read is not the next op's
 }
 
 sim_to_top() { local i; for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y $((SIM_H - 74)) --duration 0.15 >/dev/null 2>&1 || true; done; }
@@ -1041,7 +1080,7 @@ run_sim() {
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"
-  rm -f -- "$SIM_P.over" "$SIM_P.late" "$SIM_P.unread" "$SIM_P.axerr"
+  rm -f -- "$SIM_P.over" "$SIM_P.late" "$SIM_P.unread" "$SIM_P.axerr" "$SIM_P.probe"
   : >"$SIM_P.steps"
   : >"$SIM_P.builds"
   : >"$SIM_P.shots"
@@ -1090,6 +1129,7 @@ run_sim() {
     if sim_shutdown; then SIM_BOOTED=off; fi
   fi
   kill "$caf" 2>/dev/null || true
+  [ ! -s "$SIM_P.probe" ] || sim_rd "$SIM_P.probe" probe.jsonl || true # MEASURE ONLY (round A)
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg detail "$detail" --arg name "$SIM_NAME" --arg udid "$SIM_U" \
     --arg rt "$SIM_RUNTIME" --arg axe "$SIM_AXE_VERSION" --arg xcode "$SIM_XCODE" --arg booted "$SIM_BOOTED" --arg signed "$SIM_SIGNED" \
     --slurpfile steps "$SIM_P.steps" --slurpfile reads "$SIM_P.reads" \

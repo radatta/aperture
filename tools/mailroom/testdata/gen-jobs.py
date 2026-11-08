@@ -199,7 +199,7 @@ KEYS = {'q': (26, 688), 'w': (69, 688), 'e': (113, 688), 'r': (156, 688), 't': (
         'z': (91, 800), 'x': (134, 800), 'c': (178, 800), 'v': (221, 800), 'b': (264, 800), 'n': (308, 800), 'm': (351, 800), 'delete': (409, 800), 'space': (221, 856)}
 deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version', 'out': 'Xcode 27.2'},
             {'m': 'xcrun simctl list devices -j', 'out': dev()}, {'m': 'defaults read com.apple.keyboard.preferences', 'out': '0'},
-            {'m': 'pgrep -x DeviceHub'},
+            {'m': 'pgrep -x DeviceHub'}, {'m': 'Web.app/Web', 'rc': 1},  # the web app: not running unless a case says so
             pt(220, 895, CAPTURE), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38)),
             pt(57, 935, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
             pt(38, 168, el('AXLink', 'Home', 'Home', 20, 158, 37, 20)), pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 158, 36, 20)),
@@ -550,6 +550,12 @@ spass('sim: a stale first landmark read is read again', [L], tape=[pt(220, 895, 
 spass('sim: kill by app switcher', [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}],
       simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', 'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40',
                    'tap -x 400 -y 880 --tap-style physical'])
+# MEASURE ONLY (sim-home-readback round A): the probe records, never acts. pgrep says alive through the launch's 4 probes,
+# kill-before and switcher-pressed.
+spass('sim: the measure-only probe records each kill and home press to probe.jsonl', [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}],
+      tape=[{'m': 'Web.app/Web', 'out': '4242', 'n': 6}], notes={'1': 'killed by switcher; web before: alive(1) after: gone'},
+      files=['probe.jsonl'], simIncludes=['pgrep -f RuntimeRoot/Applications/Web.app/Web', 'spawn ' + U + ' launchctl list', '--point 340,560', '--point 400,880',
+                                          'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40', 'tap -x 400 -y 880 --tap-style physical'])
 spass('sim: kill by reboot', [L, {'op': 'kill', 'method': 'reboot'}, L], expect={'booted': 'rebooted'}, simIncludes=['simctl shutdown', 'bootstatus'])
 spass('sim: keys are tapped on the soft keyboard, never typed', [L, {'op': 'keys', 'text': 'zq x'}],
       simIncludes=['tap -x 91 -y 800', 'tap -x 26 -y 688', 'tap -x 221 -y 856', 'tap -x 134 -y 800'], simExcludes=['axe type'])
