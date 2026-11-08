@@ -13,11 +13,10 @@ export type Point = {
   t: number; // epoch ms
   anon: number; // MiB
   pids: number;
-  cpu: number; // cores
+  cpu: number | null; // cores; null for a bad tick
   heavy: number;
   working: number;
   names: string[]; // working sessions
-  gap: boolean; // the sampler restarted before this tick
 };
 
 export type Job = {
@@ -61,7 +60,7 @@ export type Gauges = {
   pidsMax: number;
   pidsSoft: number;
   pidsHard: number;
-  cpu: number;
+  cpu: number | null;
   cores: number;
   enforcing: boolean;
 };

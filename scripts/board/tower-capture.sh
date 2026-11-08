@@ -13,6 +13,7 @@ args=(--fixtures "$fixtures" --now 2026-11-08T06:10:00Z)
 tag=fixtures
 if [ "${2:-}" = --live ]; then args=(); tag=live; fi
 mkdir -p "$out"
+out="$(cd "$out" && pwd)" # absolute: the PNG step opens each frame as a file:// URL
 sock="tower-proof-$$"
 tm() { tmux -L "$sock" -f /dev/null "$@"; }
 trap 'tm kill-server 2>/dev/null || true' EXIT
@@ -50,9 +51,11 @@ JS
 
 for size in 210x55 100x50; do
   w=${size%x*} h=${size#*x}
-  tm new-session -d -s proof -x "$w" -y "$h" "bash '$here/tower.sh' ${args[*]:-}"
-  tm set -g default-terminal tmux-256color >/dev/null
-  sleep 2
+  # the terminal type before the session exists, so the tower's pane gets it; argv quoted for the pane's shell
+  tm start-server \; set -g default-terminal tmux-256color \; set -g exit-empty off >/dev/null
+  tm new-session -d -s proof -x "$w" -y "$h" "$(printf '%q ' bash "$here/tower.sh" "${args[@]}")"
+  for _ in $(seq 50); do tm capture-pane -p -t proof | grep -q TOWER && break; sleep 0.2; done # the first frame
+  sleep 0.3
   shot "$size-1h"
   tm send-keys -t proof 6; sleep 0.5; shot "$size-6h"
   tm send-keys -t proof Left Left Left Left Left Left Left Left Left Left Left Left; sleep 0.5; shot "$size-6h-readout"

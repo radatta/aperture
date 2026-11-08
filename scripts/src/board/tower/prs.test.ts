@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PrCache, parsePrs } from './prs.ts';
 
 const json = JSON.stringify([
-  { number: 41, title: 'Open one', headRefName: 'a', state: 'OPEN', mergedAt: null },
+  { number: 41, title: 'Open one\n🚀', headRefName: 'a', state: 'OPEN', mergedAt: null },
   {
     number: 40,
     title: 'Merged one',
@@ -16,7 +16,7 @@ const json = JSON.stringify([
 describe('prs', () => {
   it('parses gh pr list', () => {
     expect(parsePrs(json)).toEqual([
-      { number: 41, title: 'Open one', branch: 'a', state: 'OPEN', mergedAt: null },
+      { number: 41, title: 'Open one?', branch: 'a', state: 'OPEN', mergedAt: null },
       {
         number: 40,
         title: 'Merged one',

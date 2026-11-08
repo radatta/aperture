@@ -1,7 +1,7 @@
 // Pull requests from `gh pr list`, at most once a minute (the container token is read-only). A failed
 // fetch keeps the last list and says how old it is.
 import { execFile } from 'node:child_process';
-import { parseTime } from './fmt.ts';
+import { clean, parseTime } from './fmt.ts';
 
 export type Pr = {
   number: number;
@@ -19,8 +19,8 @@ export function parsePrs(text: string): Pr[] {
     .filter((x) => Number.isInteger(x.number))
     .map((x) => ({
       number: x.number as number,
-      title: typeof x.title === 'string' ? x.title : '',
-      branch: typeof x.headRefName === 'string' ? x.headRefName : '',
+      title: typeof x.title === 'string' ? clean(x.title) : '',
+      branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
       state: typeof x.state === 'string' ? x.state : '',
       mergedAt: parseTime(x.mergedAt),
     }));

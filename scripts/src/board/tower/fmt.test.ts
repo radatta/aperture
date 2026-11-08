@@ -1,7 +1,7 @@
 process.env.TZ = 'America/Los_Angeles';
 import { describe, expect, it } from 'vitest';
-import { fit, rpad, spread, strip, width } from './ansi.ts';
-import { age, countdown, gib, hhmm, parseTime, wall } from './fmt.ts';
+import { BASE, fit, rpad, spread, strip, width } from './ansi.ts';
+import { age, clean, countdown, gib, hhmm, parseTime, wall } from './fmt.ts';
 
 describe('fmt', () => {
   const t = Date.parse('2026-11-08T06:10:00Z');
@@ -23,6 +23,16 @@ describe('fmt', () => {
   });
 });
 
+describe('clean', () => {
+  it('drops controls, keeps one column per glyph', () => {
+    expect(clean('a\nb\rc\x1b[2Jd\te\x7f')).toBe('abc[2Jd e');
+    expect(clean('ship 🚀 中文 ok')).toBe('ship ? ?? ok');
+    expect(clean('e\u0301 a\u200bb')).toBe('e ab');
+    expect(clean('│ ⣿ — ok')).toBe('│ ⣿ — ok'); // box drawing and braille are narrow
+    expect(clean('☀ ✔')).toBe('? ?'); // the dingbat block can render as emoji: replaced in outside text
+  });
+});
+
 describe('ansi', () => {
   const red = '\x1b[38;2;191;97;106mred\x1b[38;2;216;222;233m';
   it('measures and cuts without breaking an escape', () => {
@@ -32,5 +42,6 @@ describe('ansi', () => {
     expect(width(fit('⣿⣿⣿', 2))).toBe(2);
     expect(strip(spread('left side', 'right', 12))).toBe('left … right');
     expect(rpad(red, 5)).toBe('  ' + red);
+    expect(fit('\x1b[1mboldtext', 4).endsWith('…\x1b[22m' + BASE.slice(5))).toBe(true); // a cut ends bold
   });
 });

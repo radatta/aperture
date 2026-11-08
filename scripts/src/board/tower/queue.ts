@@ -1,6 +1,6 @@
 // queue.json: the hub's hand-kept dev queue, Rahul's to-dos and the wave checklist (schema v1:
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
-import { parseTime } from './fmt.ts';
+import { clean, parseTime } from './fmt.ts';
 
 export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building'] as const;
 export const WAVE_STATES = ['merged', 'open', 'in-flight', 'not-started'] as const;
@@ -40,7 +40,7 @@ export type Queue = {
   problems: string[];
 };
 
-const str = (x: unknown) => (typeof x === 'string' && x.length > 0 ? x : null);
+const str = (x: unknown) => (typeof x === 'string' && x.length > 0 ? clean(x) : null);
 const int = (x: unknown) => (Number.isInteger(x) ? (x as number) : null);
 const arr = (x: unknown) => (Array.isArray(x) ? (x as unknown[]) : []);
 
@@ -83,7 +83,7 @@ export function parseQueue(text: string | null, prev: QueueData | null = null): 
   const rahul: Todo[] = [];
   arr(raw.rahul).forEach((x, i) => {
     const t = x as Record<string, unknown>;
-    const text = typeof x === 'string' ? x : str(t?.text);
+    const text = typeof x === 'string' ? str(x) : str(t?.text);
     if (!text) return void problems.push(`rahul[${i}]: no text`);
     rahul.push({ text, since: typeof x === 'string' ? null : str(t.since) });
   });

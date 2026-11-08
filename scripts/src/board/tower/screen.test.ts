@@ -10,6 +10,8 @@ describe('decodeKeys', () => {
     expect(decodeKeys('\x1b')).toEqual(['live']);
     expect(decodeKeys('\x1b[F\x1b[Hr')).toEqual(['live', 'oldest', 'refresh']);
     expect(decodeKeys('\x1b[Ax')).toEqual([]); // up arrow and unknown keys do nothing
+    expect(decodeKeys('\x1b[21~')).toEqual([]); // F10: its "1" is part of the sequence, not the 1h key
+    expect(decodeKeys('\x1b[1;5Dq')).toEqual(['quit']);
   });
 });
 
@@ -40,5 +42,6 @@ describe('Screen', () => {
     s.restore();
     expect(out.filter((x) => x.includes('\x1b[?1049l'))).toHaveLength(1);
     expect(out.at(-1)).toContain('\x1b[?25h');
+    expect(out.at(-1)).toContain('\x1b[?7h'); // autowrap back on
   });
 });

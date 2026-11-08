@@ -1,6 +1,6 @@
 // Devcheck runs from the dev ledger (scripts/src/devcheck/ledger.ts writes it): `run-start` / `run-end`
 // pairs by run id, and the dead-row TTL proof's count (queue.json → proofs.deadRows).
-import { parseTime } from './fmt.ts';
+import { clean, parseTime } from './fmt.ts';
 
 export type Run = {
   run: string;
@@ -16,15 +16,16 @@ export function foldRuns(runs: Map<string, Run>, records: unknown[]): void {
     const r = raw as { op?: unknown; run?: unknown; t?: unknown; status?: unknown };
     if ((r?.op !== 'run-start' && r?.op !== 'run-end') || typeof r.run !== 'string') continue;
     const t = parseTime(r.t);
-    let run = runs.get(r.run);
+    const id = clean(r.run);
+    let run = runs.get(id);
     if (!run) {
-      run = { run: r.run, start: null, end: null, status: null, full: r.run.endsWith('-full') };
-      runs.set(r.run, run);
+      run = { run: id, start: null, end: null, status: null, full: id.endsWith('-full') };
+      runs.set(id, run);
     }
     if (r.op === 'run-start') run.start = t;
     else {
       run.end = t;
-      run.status = typeof r.status === 'string' ? r.status : null;
+      run.status = typeof r.status === 'string' ? clean(r.status) : null;
     }
   }
 }

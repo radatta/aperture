@@ -41,3 +41,14 @@ export function parseTime(s: unknown): number | null {
   const t = Date.parse(s);
   return Number.isNaN(t) ? null : t;
 }
+
+// Text from outside the tower (queue.json, gh, session and branch names, logs) as one-column glyphs: control
+// characters dropped (a newline or ESC would move the cursor mid-row), tabs as spaces, zero-width marks
+// removed, and double-width glyphs (CJK, emoji) as "?" so every row stays exactly the terminal's width.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/g;
+const ZERO = /[\p{M}\u200b-\u200f]/gu; // combining marks, variation selectors, zero-width spaces and joiners
+const WIDE =
+  /[\u1100-\u115f\u2600-\u27bf\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f000}-\u{1faff}\u{20000}-\u{3fffd}]/gu;
+export const clean = (s: string) =>
+  s.replace(/\t/g, ' ').replace(CONTROL, '').replace(ZERO, '').replace(WIDE, '?');

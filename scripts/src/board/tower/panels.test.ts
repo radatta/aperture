@@ -7,6 +7,13 @@ import type { TowerState } from './model.ts';
 import { compose, feedItems, since, waveItems, type Ui } from './panels.ts';
 
 const NOW = '2026-11-08T06:10:00Z';
+// glyphs width() would mis-measure: controls, CJK, emoji (the fixtures carry all three)
+const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\u{1f000}-\u{1faff}]/u;
+const mismeasured = (row: string) =>
+  WIDE.test(row) ||
+  [...row].some(
+    (ch) => ch.charCodeAt(0) < 0x20 || (ch.charCodeAt(0) >= 0x7f && ch.charCodeAt(0) <= 0x9f),
+  );
 let state: TowerState;
 const live: Ui = { range: '1h', cursor: 0 };
 const text = (lines: string[]) => lines.map(strip).join('\n');
@@ -32,7 +39,14 @@ describe('frame', () => {
       expect(f).toHaveLength(rows);
       for (const l of f) expect(width(l)).toBe(cols);
       expect(f.join('')).not.toContain('\x1b[0m'); // a full reset would drop the Nord background
+      for (const l of f) expect(mismeasured(strip(l))).toBe(false);
     }
+  });
+
+  it('external text arrives one column per glyph', () => {
+    const f = text(compose(state, live, 210, 55));
+    expect(f).toContain('Charlie: the open change ? ??');
+    expect(f).toContain('echo  review round 2 now[2J'); // newline dropped, tab a space, ESC gone
   });
 
   it('wide: lock, gauges, queue, wave, sessions and history from the fixtures', () => {
@@ -109,19 +123,37 @@ describe('panels', () => {
     expect(items.find((i) => i.kind === 'job' && i.text.includes('exit 143'))!.tone).toBe('normal');
   });
 
-  it('gh upgrades a wave item to merged, never downgrades', () => {
-    const s = {
-      ...state,
-      prs: {
-        ...state.prs,
-        list: [
-          ...state.prs.list,
-          { number: 50, title: 'x', branch: 'delta-branch', state: 'MERGED', mergedAt: 1 },
-        ],
-      },
+  it('gh upgrades a wave item to merged by its named PR only, and never downgrades', () => {
+    const merged = { number: 50, title: 'x', branch: 'delta-branch', state: 'MERGED', mergedAt: 1 };
+    const reopened = {
+      number: 51,
+      title: 'reopened',
+      branch: 'delta-branch',
+      state: 'OPEN',
+      mergedAt: null,
     };
-    const it = waveItems(s).find((i) => i.branch === 'delta-branch')!;
-    expect(it).toMatchObject({ state: 'merged', gh: true, pr: 50 });
+    const withPr = (pr: number | null): TowerState => ({
+      ...state,
+      queue: {
+        ...state.queue,
+        data: {
+          ...state.queue.data!,
+          wave: {
+            name: 'W',
+            items: [{ branch: 'delta-branch', state: 'in-flight', pr, session: null, title: null }],
+          },
+        },
+      },
+      prs: { ...state.prs, list: [merged, reopened] },
+    });
+    expect(waveItems(withPr(50))[0]).toMatchObject({ state: 'merged', gh: true, pr: 50 });
+    // no PR named: an old merged PR on a reused branch name doesn't count; an open one lends number and title
+    expect(waveItems(withPr(null))[0]).toMatchObject({
+      state: 'in-flight',
+      gh: false,
+      pr: 51,
+      title: 'reopened',
+    });
     const open = {
       ...state,
       prs: {

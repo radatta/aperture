@@ -1,35 +1,40 @@
 // The machine-history maths: compact samples and job events, bucket them onto a chart's columns, mark
 // event ticks, and the failures-by-concurrency table (docs/ops/SESSION-BOARD.md → Control tower).
-import { parseTime } from './fmt.ts';
+import { clean, parseTime } from './fmt.ts';
 import type { Job, Point } from './model.ts';
 import type { Run } from './ledger.ts';
 
 const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0);
 
-export function compactSample(raw: unknown): Point | null {
+// cpuCores over maxCpu (the caller passes 2 × the cores) is a bad tick (SESSION-BOARD.md → History): unknown.
+export function compactSample(raw: unknown, maxCpu = 64): Point | null {
   const r = raw as {
     t?: unknown;
     cg?: Record<string, unknown>;
     mix?: Record<string, unknown>;
-    sessions?: { name?: unknown; state?: unknown }[];
-    gapSec?: unknown;
+    sessions?: unknown;
   };
   const t = parseTime(r?.t);
-  if (t === null || !r.cg) return null;
-  const sessions = Array.isArray(r.sessions) ? r.sessions : [];
+  if (t === null || !r.cg || typeof r.cg !== 'object') return null;
+  const sessions = (Array.isArray(r.sessions) ? r.sessions : []) as ({
+    name?: unknown;
+    state?: unknown;
+  } | null)[];
+  const cpu = r.cg.cpuCores;
   return {
     t,
     anon: num(r.cg.anonMiB),
     pids: num(r.cg.pids),
-    cpu: num(r.cg.cpuCores),
+    cpu: typeof cpu === 'number' && Number.isFinite(cpu) && cpu >= 0 && cpu <= maxCpu ? cpu : null,
     heavy: num(r.mix?.heavy),
     working: num(r.mix?.working),
     names: sessions
-      .filter((s) => s.state === 'working' && typeof s.name === 'string')
-      .map((s) => s.name as string),
-    gap: typeof r.gapSec === 'number' && r.gapSec > 0,
+      .filter((x) => x?.state === 'working' && typeof x.name === 'string')
+      .map((x) => clean(x!.name as string)),
   };
 }
+
+const text = (x: unknown) => (typeof x === 'string' && x ? clean(x) : null);
 
 export function compactJob(raw: unknown): Job | null {
   const r = raw as Record<string, unknown>;
@@ -40,14 +45,15 @@ export function compactJob(raw: unknown): Job | null {
   return {
     t,
     start: t - wallSec * 1000,
-    cls: typeof r.class === 'string' ? r.class : 'other',
-    label: typeof r.label === 'string' ? r.label : '',
-    name: typeof r.name === 'string' ? r.name : null,
-    branch: typeof r.branch === 'string' && r.branch ? r.branch : null,
+    cls: text(r.class) ?? 'other',
+    label: text(r.label) ?? '',
+    name: text(r.name),
+    branch: text(r.branch),
     exit: typeof r.exit === 'number' ? r.exit : null,
-    signal: typeof r.signal === 'string' ? r.signal : null,
+    signal:
+      typeof r.signal === 'string' || typeof r.signal === 'number' ? `signal ${r.signal}` : null, // heavy.sh writes a number
     wallSec,
-    verdict: typeof r.verdict === 'string' ? r.verdict : null,
+    verdict: text(r.verdict),
     excluded: r.loadTest === true || r.guard === true,
   };
 }
@@ -95,7 +101,7 @@ export function bucket(points: Point[], from: number, to: number, n: number): Bu
     const b = out[Math.min(n - 1, Math.floor((p.t - from) / w))]!;
     b.anon = mx(b.anon, p.anon);
     b.pids = mx(b.pids, p.pids);
-    b.cpu = mx(b.cpu, p.cpu);
+    if (p.cpu !== null) b.cpu = mx(b.cpu, p.cpu);
     b.heavy = mx(b.heavy, p.heavy);
     b.working = mx(b.working, p.working);
     b.last = p;

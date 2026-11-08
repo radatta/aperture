@@ -27,9 +27,13 @@ export function decodeKeys(s: string): Key[] {
     const ch = s[i]!;
     i++;
     if (ch === '\x1b') {
-      if (s[i] === '[' || s[i] === 'O')
-        i += 2; // an unknown sequence: skip it
-      else out.push('live');
+      if (s[i] === 'O') i += 2;
+      else if (s[i] === '[') {
+        // an unknown CSI (F10 is ESC [ 2 1 ~): skip through its final byte, 0x40–0x7E
+        i++;
+        while (i < s.length && !(s.charCodeAt(i) >= 0x40 && s.charCodeAt(i) <= 0x7e)) i++;
+        i++;
+      } else out.push('live');
     } else if (ch === 'q' || ch === 'Q' || ch === '\x03') out.push('quit');
     else if (ch === '1') out.push('1h');
     else if (ch === '6') out.push('6h');

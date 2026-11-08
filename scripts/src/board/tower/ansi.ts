@@ -1,5 +1,5 @@
-// Nord truecolor, matching tools/coi/tmux.conf. Every row starts on the base background and no style ever
-// emits a full reset, so a cleared tail (CSI K) and every gap keep the Nord background.
+// Nord truecolor, matching tools/coi/tmux.conf. Every row starts on BASE and no style ever emits a full
+// reset, so every gap keeps the Nord background. BASE also ends bold, so a style cut by fit() never leaks.
 import type { Tone } from './model.ts';
 
 export const NORD = {
@@ -25,7 +25,7 @@ const rgb = (hex: string) => {
 };
 export const fgc = (hex: string) => `\x1b[38;2;${rgb(hex)}m`;
 export const bgc = (hex: string) => `\x1b[48;2;${rgb(hex)}m`;
-export const BASE = bgc(NORD.bg) + fgc(NORD.fg);
+export const BASE = '\x1b[22m' + bgc(NORD.bg) + fgc(NORD.fg);
 
 export type Style = { fg?: string; bg?: string; bold?: boolean };
 

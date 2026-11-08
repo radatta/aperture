@@ -1,4 +1,5 @@
 // The overnight vitest bench (localNotes/bench-vitest/): results.tsv rows and bench.log's last line.
+import { clean } from './fmt.ts';
 
 export type BenchRow = {
   cell: string;
@@ -32,13 +33,13 @@ export function parseBench(tsv: string, log: string | null): Bench {
   }
   const last =
     log
-      ?.split('\n')
+      ?.split(/\r?\n|\r/) // a progress line may end in \r
       .filter((l) => l.trim())
       .pop() ?? null;
   return {
     rows,
     runs: new Set(rows.map((r) => `${r.cell} ${r.mode} ${r.rep}`)).size, // a pair run writes two rows
     failedRows: rows.filter((r) => r.exit !== 0 || r.failedFiles > 0 || r.timeouts > 0).length,
-    state: last,
+    state: last === null ? null : clean(last),
   };
 }

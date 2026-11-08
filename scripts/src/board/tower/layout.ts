@@ -55,7 +55,7 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
         { id: 'rahul', w: 'rest' },
       ],
     });
-    bands.push({ h: clamp(want.wave + 3, 3, 8), min: 3, cells: [{ id: 'wave', w: cols }] });
+    bands.push({ h: clamp(want.wave + 2, 3, 14), min: 3, cells: [{ id: 'wave', w: cols }] });
     bands.push({ h: 11, min: 8, cells: [{ id: 'history', w: cols }] });
     bands.push({
       h: clamp(want.sessions + 2, 7, 10),

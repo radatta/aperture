@@ -20,7 +20,6 @@ const pt = (sec: number, v: Partial<Point> = {}): Point => ({
   heavy: 0,
   working: 1,
   names: ['a'],
-  gap: false,
   ...v,
 });
 const job = (
@@ -64,9 +63,22 @@ describe('compact', () => {
       heavy: 1,
       working: 2,
       names: ['a'],
-      gap: true,
     });
     expect(compactSample({ t: 'nope', cg: {} })).toBeNull();
+  });
+
+  it('a bad cpu tick is unknown, and stray sessions or text are survived', () => {
+    const at = '2026-11-08T05:38:53Z';
+    expect(compactSample({ t: at, cg: { cpuCores: 62763.68 } }, 18)!.cpu).toBeNull(); // the real 05:38:53Z tick
+    expect(compactSample({ t: at, cg: { cpuCores: null } })!.cpu).toBeNull(); // the fixed sampler's null
+    expect(compactSample({ t: at, cg: { cpuCores: 8.4 } }, 18)!.cpu).toBe(8.4);
+    const p = compactSample({
+      t: at,
+      cg: {},
+      sessions: [null, { name: 'a\x1b[2Jb\nc', state: 'working' }],
+    });
+    expect(p!.names).toEqual(['a[2Jbc']);
+    expect(compactSample({ t: at, cg: {}, sessions: 'x' })!.names).toEqual([]);
   });
 
   it('turns a job event into an interval, marking load tests and guards', () => {
@@ -101,6 +113,10 @@ describe('bucket', () => {
   it('takes each bucket max and leaves a real gap empty', () => {
     const pts = [pt(0, { cpu: 1 }), pt(10, { cpu: 3 }), pt(30, { cpu: 2 }), pt(400, { cpu: 5 })];
     const b = bucket(pts, T0, T0 + 600 * 1000, 10); // 60 s buckets
+    expect(bucket([pt(0, { cpu: null, pids: 9 })], T0, T0 + 60000, 1)[0]).toMatchObject({
+      cpu: null,
+      pids: 9,
+    });
     expect(b[0]!.cpu).toBe(3);
     expect(b[0]!.last?.cpu).toBe(2);
     expect(b[1]!.cpu).toBe(2); // carried: within CARRY_MS of the 30 s tick

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { parseBench, type Bench } from './bench.ts';
-import { hhmm } from './fmt.ts';
+import { clean, hhmm } from './fmt.ts';
 import { compactJob, compactSample } from './history.ts';
 import { DayFiles, parseLines, readNew, stamp, tail, type Tail } from './jsonl.ts';
 import { foldRuns, type Run } from './ledger.ts';
@@ -98,6 +98,7 @@ export class Source {
   private limits: Watched<Limits>;
   private queue: Watched<Queue>;
   private benchTsv: Watched<string | null>;
+  private benchLog: Watched<string | null>;
   private lockFeed: FeedItem[] = [];
   private lastHolder: string | null | undefined = undefined;
   private cores = availableParallelism();
@@ -124,11 +125,16 @@ export class Source {
       (t, prev) => parseQueue(t, prev.data as QueueData | null),
     );
     this.benchTsv = new Watched(join(paths.bench, 'results.tsv'), null, (t) => t);
+    this.benchLog = new Watched(
+      join(paths.bench, 'bench.log'),
+      null,
+      (t) => t?.slice(-4096) ?? null,
+    );
   }
 
   refresh(now: number): TowerState {
     for (const raw of this.samples.read(now - DAY, now)) {
-      const p = compactSample(raw);
+      const p = compactSample(raw, 2 * this.cores);
       if (!p) continue;
       this.points.push(p);
       this.lastRaw = raw as Record<string, unknown>;
@@ -144,6 +150,7 @@ export class Source {
     this.jobs.sort((a, b) => a.t - b.t);
     this.jobs = this.jobs.filter((j) => j.t >= now - JOB_DAYS * DAY);
     this.leaseFeed = this.leaseFeed.filter((f) => f.t >= now - DAY);
+    this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
     foldRuns(this.runs, parseLines(readNew(this.ledgerTail)));
 
@@ -151,8 +158,7 @@ export class Source {
     const lock = this.lockNow(sessions, now);
     const tsv = this.benchTsv.get();
     let bench: Bench | null = null;
-    if (tsv !== null)
-      bench = parseBench(tsv, readOr(join(this.paths.bench, 'bench.log'))?.slice(-4096) ?? null);
+    if (tsv !== null) bench = parseBench(tsv, this.benchLog.get());
 
     return {
       now,
@@ -175,12 +181,13 @@ export class Source {
   private lease(r: Record<string, unknown>) {
     if (r?.kind !== 'lease' || typeof r.t !== 'string') return;
     const t = Date.parse(r.t);
-    const who = (r.name ?? r.holderName ?? '') as string;
+    if (Number.isNaN(t)) return;
+    const s = (x: unknown) => (typeof x === 'string' ? clean(x) : '');
     const tone = r.action === 'gaveUp' || r.action === 'denied' ? 'bad' : 'warn';
     this.leaseFeed.push({
       t,
       kind: 'lease',
-      text: `${r.lease} ${r.action}  ${who} ${r.class ?? r.branch ?? ''}`.trim(),
+      text: `${s(r.lease)} ${s(r.action)}  ${s(r.name ?? r.holderName)} ${s(r.class ?? r.branch)}`.trim(),
       tone,
     });
   }
@@ -202,23 +209,27 @@ export class Source {
       pidsMax: pmax,
       pidsSoft: pmax * l.pidsSoftFrac,
       pidsHard: pmax * l.pidsHardFrac,
-      cpu: cg.cpuCores ?? 0,
+      // a bad tick (null, or over 2 × the cores: SESSION-BOARD.md → History) shows as unknown
+      cpu: typeof cg.cpuCores === 'number' && cg.cpuCores <= 2 * this.cores ? cg.cpuCores : null,
       cores: this.cores,
       enforcing: l.enforce,
     };
   }
 
   private sessionsNow(): Session[] {
-    const raw = (this.lastRaw?.sessions ?? []) as Record<string, unknown>[];
-    return raw
-      .filter((s) => s.state !== 'gone')
+    const raw = this.lastRaw?.sessions;
+    const str = (x: unknown) => (typeof x === 'string' && x ? clean(x) : null);
+    return ((Array.isArray(raw) ? raw : []) as (Record<string, unknown> | null)[])
+      .filter(
+        (s): s is Record<string, unknown> => !!s && typeof s === 'object' && s.state !== 'gone',
+      )
       .map((s) => ({
-        name: String(s.name ?? '?'),
-        branch: typeof s.branch === 'string' && s.branch ? s.branch : null,
-        state: String(s.state ?? '?'),
-        thr: Number(s.thr ?? 0),
-        rssMiB: Number(s.rssMiB ?? 0),
-        heavy: typeof s.heavy === 'string' ? s.heavy : null,
+        name: str(s.name) ?? '?',
+        branch: str(s.branch),
+        state: str(s.state) ?? '?',
+        thr: Number(s.thr) || 0,
+        rssMiB: Number(s.rssMiB) || 0,
+        heavy: str(s.heavy),
       }))
       .sort(
         (a, b) =>
@@ -230,7 +241,7 @@ export class Source {
   private lockNow(sessions: Session[], now: number): Lock | null {
     const f = this.lockFile.get();
     if (!f) return null;
-    const branch = f.holder?.branch ?? null;
+    const branch = typeof f.holder?.branch === 'string' ? clean(f.holder.branch) : null;
     const expiresAt = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : null;
     const lock: Lock = {
       branch,

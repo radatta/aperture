@@ -124,9 +124,9 @@ export function header(s: TowerState, w: number): string[] {
       val(`${g.pids}/${g.pidsMax}`) +
       '   ' +
       lab('cpu ') +
-      gauge(g.cpu, g.cores, gw, null, null) +
+      gauge(g.cpu ?? 0, g.cores, gw, null, null) +
       ' ' +
-      val(`${g.cpu.toFixed(1)}/${g.cores}`) +
+      val(`${g.cpu === null ? '?' : g.cpu.toFixed(1)}/${g.cores}`) +
       (stale ? c(NORD.amber, `   sampler stale ${age((s.now - g.t) / 1000)}`) : '') +
       (g.enforcing ? '' : c(NORD.amber, '   cap off'));
   }
@@ -221,15 +221,17 @@ const WAVE_BADGE: Record<WaveState, string> = {
   'not-started': 'todo',
 };
 
-// queue.json's items, upgraded to merged when gh says so (never downgraded: the hub may know better)
+// queue.json's items, upgraded to merged when gh says their PR merged (never downgraded: the hub may know better)
 export function waveItems(s: TowerState): (WaveItem & { gh: boolean })[] {
   const items = s.queue.data?.wave?.items ?? [];
   return items.map((it) => {
+    // only a named PR can mark an item merged: a reused branch name may carry an old merged PR. By branch,
+    // an open PR just lends its number and title.
     const pr =
       it.pr !== null
         ? s.prs.list.find((p) => p.number === it.pr)
-        : s.prs.list.find((p) => p.branch === it.branch);
-    const merged = pr?.state === 'MERGED' && it.state !== 'merged';
+        : s.prs.list.find((p) => p.branch === it.branch && p.state === 'OPEN');
+    const merged = it.pr !== null && pr?.state === 'MERGED' && it.state !== 'merged';
     return {
       ...it,
       state: merged ? 'merged' : it.state,
@@ -335,10 +337,19 @@ const TICK: Record<NonNullable<Tick>, string> = {
 
 const STEP_MIN: Record<Range, number> = { '1h': 10, '6h': 60, '24h': 180 };
 
+const LABEL_W = 13;
+const chartW = (r: Rect) => Math.max(10, r.w - 4 - LABEL_W);
+
+// The history chart's width in cells at this size (0 without one): the readout cursor's range.
+export function chartCols(s: TowerState, cols: number, rows: number): number {
+  const r = layout(cols, rows, wants(s)).rects.history;
+  return r ? chartW(r) : 0;
+}
+
 export function history(s: TowerState, ui: Ui, r: Rect): string[] {
   const iw = r.w - 4;
-  const L = 13;
-  const cw = Math.max(10, iw - L);
+  const L = LABEL_W;
+  const cw = chartW(r);
   const to = s.now;
   const from = to - RANGE_SEC[ui.range] * 1000;
   const bk = bucket(s.points, from, to, cw * 2);

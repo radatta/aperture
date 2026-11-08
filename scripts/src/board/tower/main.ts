@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Range } from './model.ts';
-import { compose, type Ui } from './panels.ts';
+import { chartCols, compose, type Ui } from './panels.ts';
 import { PrCache, ghFetch, type Fetch } from './prs.ts';
 import { Screen, decodeKeys, type Key } from './screen.ts';
 import { Source, defaultPaths, type Paths } from './source.ts';
@@ -103,10 +103,11 @@ function run(a: Args) {
       .then(() => (state = { ...state, prs: { list: prs.list, at: prs.at, error: prs.error } }));
     if (!a.fixtures && now - devlockAt >= DEVLOCK_MS) {
       devlockAt = now;
-      // the board's own lock peek, cached in devlock.json; skips itself while the cache is under 60 s old
+      // the board's own lock peek, which rewrites the devlock.json cache; 50, not 60: the cache is stamped after
+      // the peek, so a minute later it is ~59 s old and a 60 s max-age would skip every other minute
       execFile(
         'bash',
-        [join(REPO, 'scripts/board/devlock.sh'), 'refresh', '--max-age', '60'],
+        [join(REPO, 'scripts/board/devlock.sh'), 'refresh', '--max-age', '50'],
         { timeout: 15000 },
         () => {},
       );
@@ -136,18 +137,22 @@ function run(a: Args) {
     process.exit(1);
   });
   process.on('SIGWINCH', () => {
+    ui.cursor = Math.min(
+      ui.cursor,
+      Math.max(0, chartCols(state, out.columns || 100, out.rows || 40) - 1),
+    );
     screen.invalidate();
     render();
   });
 
   const onKey = (k: Key) => {
-    const cols = out.columns || 100;
+    const last = Math.max(0, chartCols(state, out.columns || 100, out.rows || 40) - 1); // the oldest cell
     if (k === 'quit') return quit(0);
     if (k === '1h' || k === '6h' || k === '24h') ui.range = k as Range;
-    else if (k === 'left') ui.cursor = Math.min(cols, ui.cursor + 1);
+    else if (k === 'left') ui.cursor = Math.min(last, ui.cursor + 1);
     else if (k === 'right') ui.cursor = Math.max(0, ui.cursor - 1);
     else if (k === 'live') ui.cursor = 0;
-    else if (k === 'oldest') ui.cursor = cols;
+    else if (k === 'oldest') ui.cursor = last;
     else if (k === 'refresh') return tick();
     render();
   };

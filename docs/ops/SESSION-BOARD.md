@@ -316,7 +316,7 @@ What it means:
 
 ## Control tower
 
-`scripts/board/tower.sh` — a full-screen, read-only board for its own tmux window (it replaces a
+`scripts/board/tower.sh` — a full-screen board for its own tmux window (it replaces a
 `watch board.sh status` window): `tmux new-window -n tower /workspace/scripts/board/tower.sh`. Keys: `q` quit ·
 `1` / `6` / `2` history over 1 h / 6 h / 24 h · `←` `→` (or `h` `l`) move the readout column back / forward ·
 `Esc` back to live · `r` refresh now. Node, no dependencies: `scripts/src/board/tower/`.
@@ -326,8 +326,8 @@ memory and pids (soft / hard marks from `limits.json`) and CPU against the cores
 Rahul_ and the wave (a merged / open / in-flight / not-started bar, then the unmerged items, merged ones on one
 `done` line) come from `queue.json` (below). _Sessions_: the latest sample's sessions, working first. _Machine_:
 CPU, memory, pids, heavy jobs and working sessions on one time axis, each bucket's peak, a sampler gap blank;
-under it the event ticks — `✗` a failed suite, `◆` a devcheck run's end (green PASS, red otherwise), `▲` a merge,
-`·` a passed suite (one per column, in that order of precedence) — and a readout of the exact values at the
+under it the event ticks, one per column by precedence — `✗` a failed suite, a red `◆` a devcheck run that ended
+other than PASS, `▲` a merge, a green `◆` a PASS, `·` a passed suite — and a readout of the exact values at the
 readout column. _Test failures_: the last 7 days of suites (`class: test`, not load tests) by how many other
 slot-class jobs (`test ui typecheck lint build dev`) overlapped each one at any point, with the failure rate
 and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are the operator). _Activity_: the
@@ -344,16 +344,20 @@ before _Activity_ drops under 4 rows; a cut list ends `+n more`. Resizing redraw
 **Reads, and what it costs.** The board's files, never `board.sh status` (which scans `/proc` and peeks at
 GitHub each call): incremental tails of `history/samples-<UTC day>.jsonl` (24 h, two files across UTC
 midnight; each tick compacted to a few numbers) and `events-*.jsonl` (7 days), `devlock.json`, `limits.json`,
-`queue.json`, the devcheck ledger and the bench file, each re-read only when its size or mtime changes.
-`gh pr list` at most once a minute, a failure keeping the last list; `devlock.sh refresh --max-age 60` once a
-minute (fewer GitHub calls than a `watch` on `status`, which refreshes at 30 s). It redraws every 5 s, writing
+`queue.json`, the devcheck ledger and the bench files, each re-read only when its size or mtime changes. Text
+from them (and from gh) is cleaned to one column per glyph: control characters dropped, tabs as spaces,
+double-width glyphs (CJK, emoji) as `?`. A `cpuCores` over 2 × the cores is a bad tick (_History_) and shows
+as unknown. `gh pr list` at most once a minute, a failure keeping the last list; `devlock.sh refresh --max-age 50`
+once a minute (50: the cache is stamped after its peek), which rewrites the `devlock.json` cache — the tower's
+only write, and fewer GitHub calls than a `watch` on `status`, which refreshes at 30 s. It redraws every 5 s, writing
 only changed rows (no clear, no flicker), on the alternate screen; exit, Ctrl-C, TERM, HUP and a crash restore
 the terminal. Measured (2026-11-07, live board, 210 × 55): first tick 18 ms, then ~6 ms wall / 4–8 ms CPU
 per tick, RSS ~100–120 MiB. `tower.sh --measure` logs each tick to stderr.
 
 **`queue.json`** (`/workspace/localNotes/board/queue.json`, schema v1). The hub owns and writes it
 (`docs/ops/HUB.md` → _The hub's duties_), tmp file + rename; `scripts/board/queue.example.json` is the seed.
-Only `v` and `updatedAt` are required; unknown keys are ignored; lists show in file order.
+Only `v` and `updatedAt` are required; unknown keys are ignored; the dev queue and to-dos show in file order,
+the wave grouped by state (in flight, open, not started, then merged) and in file order within each.
 
 ```json
 {
@@ -387,8 +391,9 @@ Only `v` and `updatedAt` are required; unknown keys are ignored; lists show in f
 }
 ```
 
-A wave item's PR (by number, else by branch) fills a missing title from gh, and gh's `MERGED` upgrades the item
-to merged (marked `(gh)`) but never downgrades one. The age shows amber past 30 min, red past 2 h. A malformed
+A wave item's named `pr` fills a missing title from gh, and gh's `MERGED` for it upgrades the item to merged
+(marked `(gh)`) but never downgrades one; an item with no `pr` takes the number and title of an open PR on its
+branch, never a merged one (a reused branch name would carry an old PR). The age shows amber past 30 min, red past 2 h. A malformed
 file keeps the last good parse on screen and names the problem; a missing one prints the seed's `cp` line.
 `excludedRuns` is for full runs that don't count toward the TTL proof (a purge, a cap hit) — the ledger can't
 tell.
@@ -397,7 +402,8 @@ tell.
 (`scripts/src/board/tower/fixtures/`, a fixed clock) in a private tmux server at 210 × 55 and 100 × 50,
 presses `6`, `←`×12 and `2`, and writes each frame as ANSI text (`cat` it in a truecolor terminal), SVG and
 PNG (headless Chromium from `~/pw`, else ImageMagick, whose SVG renderer drops braille); `--live` captures
-the real board instead. `tower.sh --once <cols>x<rows>` prints one frame without a terminal.
+the real board instead. `tower.sh --once <cols>x<rows>` prints one frame without a terminal; `--no-gh` skips
+`gh pr list` (live, the minute's `devlock.sh` peek still runs; `--fixtures` skips both).
 
 **A web page later.** Everything under `tower/` except `screen.ts`, `main.ts` and the ANSI rendering is
 terminal-free (`source.ts` → `TowerState` in `model.ts`), so a page would reuse the data half as is.
