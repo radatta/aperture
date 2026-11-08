@@ -83,5 +83,14 @@ another branch holding it never works around it:
    when) or 1 (three GitHub errors in a row: say so, and retry once).
 3. On 0, `pnpm bot deploy-dev` again — it takes the lock (an expired one is taken over).
 
+**In a named dev order, lanes take the lock themselves** (the user, 2026-11-08). The hub sends the order and
+keeps it current as `devQueue` in `queue.json`, in file order; only the hub changes it. A lane is ready once its
+own local check is green (`pnpm devcheck:local`, phase 8); it sends the hub `[local]` as information and never
+waits for a reply. When the board shows the lock free, a ready lane runs `pnpm bot deploy-dev` without waiting
+for the hub to say go, unless `devQueue` shows a lane ahead of it in state `next`: then it yields to that one.
+`next` is the hub's way to give one lane priority, not a gate. A lane that isn't ready is skipped. Two ready
+lanes racing for a free lock: `deploy-dev`'s lock decides, and the loser takes steps 1–3, applying the same
+`next` check after `lock wait` exits 0. The `[lock]` and `[pr-open]` messages still apply.
+
 The board shows the real lock (`board.sh status`, the SessionStart hook, the status line's `dev:`), from a
 read-only cache (`docs/ops/SESSION-BOARD.md` → _Dev lock line_).
