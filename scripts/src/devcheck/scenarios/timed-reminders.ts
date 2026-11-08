@@ -149,7 +149,20 @@ async function until<T>(
     await new Promise((r) => setTimeout(r, everyMs));
   }
 }
-const status = (ctx: Ctx) => ctx.api.reads.getPushStatus();
+// Every read logs a tick start it hasn't seen, so the run's log shows where in the minute the schedule fires
+// (cron at :00 — reminders.md → §3).
+const ticksSeen = new Set<number>();
+async function status(ctx: Ctx) {
+  const s = await ctx.api.reads.getPushStatus();
+  const at = s.poller.lastRunAt;
+  if (at !== null && !ticksSeen.has(at)) {
+    ticksSeen.add(at);
+    ctx.log(
+      `poller tick started ${new Date(at).toISOString()} (:${String(new Date(at).getUTCSeconds()).padStart(2, '0')} past the minute)`,
+    );
+  }
+  return s;
+}
 // Every alert's text on the page (most are empty until something goes wrong).
 async function alertTexts(ctx: Ctx): Promise<string[]> {
   const alerts = ctx.page.getByRole('alert');
