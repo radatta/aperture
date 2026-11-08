@@ -10,6 +10,10 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
   'attachment-delete': {
     reason: 'local: presigned S3 URLs and the dev Files bucket — runs on dev',
   },
+  'category-suggest': {
+    steps: ['real-review', 'real-named', 'real-auto'],
+    reason: 'local: the real Haiku parse is dev’s (parsing is off locally) — runs on dev',
+  },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
   'flux-history': {
     reason:

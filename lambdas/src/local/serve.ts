@@ -36,3 +36,6 @@ server.listen(0, '127.0.0.1', () => {
 // The harness kills by PID; exit cleanly on its signal rather than leaving the listener.
 for (const sig of ['SIGTERM', 'SIGINT'] as const)
   process.once(sig, () => server.close(() => process.exit(0)));
+// The harness holds stdin open; its end means the harness died without stopping us (even a SIGKILL), so go too.
+process.stdin.on('end', () => process.exit(0));
+process.stdin.resume();

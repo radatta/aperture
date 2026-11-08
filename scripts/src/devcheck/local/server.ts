@@ -4,11 +4,13 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { DevcheckError } from '../errors';
 
 export interface Proc {
   pid: number;
   stop(): Promise<void>;
+  killNow(): void; // sync, for process 'exit': SIGKILL only while the child is still ours (not reaped)
 }
 
 const fail = (msg: string) => new DevcheckError('LOCAL_SERVER_FAILED', msg);
@@ -28,9 +30,23 @@ export function freePort(): Promise<number> {
 function asProc(child: ChildProcess, name: string): Proc {
   if (!child.pid) throw fail(`${name} did not start`);
   const pid = child.pid;
-  const exited = new Promise<void>((r) => child.once('exit', () => r()));
+  let gone = false;
+  const exited = new Promise<void>((r) =>
+    child.once('exit', () => {
+      gone = true;
+      r();
+    }),
+  );
   return {
     pid,
+    killNow() {
+      if (gone) return;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    },
     async stop() {
       if (child.exitCode !== null || child.signalCode !== null) return;
       process.kill(pid, 'SIGTERM');
@@ -66,7 +82,7 @@ export async function startLocalServer(o: {
       STAGE: 'dev',
       ...o.env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'], // stdin held open: it closes when the harness dies, however it dies
   });
   const log = createWriteStream(o.logPath);
   child.stdout!.pipe(log);
@@ -132,13 +148,26 @@ export async function startVite(o: {
   const proc = asProc(child, 'vite');
   o.track(proc);
   const origin = `http://127.0.0.1:${o.port}`;
+  // Ours only once this Vite has printed its own URL: the port is free when probed but not reserved, so another
+  // lane's Vite could take it first, and a fetch alone would then succeed against that lane's app.
+  let own = false;
+  let out = '';
+  const onOut = (b: Buffer) => {
+    out += stripVTControlCharacters(String(b));
+    if (!out.includes(`${origin}/`)) return;
+    own = true;
+    child.stdout!.off('data', onOut);
+  };
+  child.stdout!.on('data', onOut);
   const t0 = Date.now();
   for (;;) {
     if (child.exitCode !== null || child.signalCode !== null)
       throw fail(`vite exited (${child.exitCode ?? child.signalCode}) — see ${o.logPath}`);
     try {
-      const res = await fetch(`${origin}/`, { signal: AbortSignal.timeout(5_000) });
-      if (res.ok) return proc;
+      if (own) {
+        const res = await fetch(`${origin}/`, { signal: AbortSignal.timeout(5_000) });
+        if (res.ok && child.exitCode === null) return proc;
+      }
     } catch {
       // not listening yet
     }

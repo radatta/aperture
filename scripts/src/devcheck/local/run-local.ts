@@ -101,6 +101,8 @@ async function main(): Promise<number> {
     ['SIGTERM', 143],
   ] as const)
     process.once(sig, () => void stopAll().then(() => process.exit(code)));
+  // A crash (an unhandled rejection, a thrown handler) skips finally: never leave the children in the shared container.
+  process.once('exit', () => procs.forEach((p) => p.killNow()));
 
   try {
     const auth = makeLocalAuth();
