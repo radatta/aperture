@@ -16,11 +16,13 @@ export interface Writes {
 // reads that list them run dev into its read cap (CI-BOT.md → Compute). Epoch seconds, as DynamoDB TTL wants: due at
 // deletion, and AWS deletes some time after. A flux tombstone is due a week on, because an outbox retry of a deleted
 // set must still find it. Finance tombstones are never due: a returning account revives from its row, and a posted
-// row inherits from a removed pending one.
+// row inherits from a removed pending one. Nor is a removed push device's: its tombstone is what keeps it removed
+// (reminders.md §4), and a launch would re-subscribe the device once it expired.
 const FLUX_KEEP_S = 7 * 24 * 3600;
 export function expiresAtOf(item: Item): number | null {
   const { deletedAt, SK } = item;
-  if (typeof deletedAt !== 'number' || SK.startsWith('fin#')) return null;
+  if (typeof deletedAt !== 'number' || SK.startsWith('fin#') || SK.startsWith('pushsub#'))
+    return null;
   return Math.floor(deletedAt / 1000) + (SK.startsWith('flux#') ? FLUX_KEEP_S : 0);
 }
 const stamped = (item: Item): Item => {

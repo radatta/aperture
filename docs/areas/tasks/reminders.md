@@ -69,7 +69,9 @@ EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
   1. Lists the user registry (`PK=push`, `SK=user#<uid>`, written on first subscribe).
   2. Queries GSI1's third key space for each user: `GSI1PK=u#<uid>#remind`, `GSI1SK=fireAt`, set on task and
      plan items atomically with their write.
-  3. Re-reads each task (or plan) consistently.
+  3. Re-reads each task (or plan) consistently. A plan moved to another day writes its new key before deleting
+     the old one (`putPlan`), so a tick landing between those two writes still sees the old copy: a move off
+     today during 09:00–09:30 can send that one "Planned for today". Accepted: the gap is one write wide.
   4. Applies the toggles and the arm rule (below).
   5. Writes the dedup row `psent#<fireAt>#<taskId>` with `putIf` **before** sending.
   6. Bumps the daily guard `pcount#<day>`.
@@ -134,7 +136,8 @@ proves the whole chain. The BFF never holds the private key.
   `removedDeviceIds`. When a status read finds this device's id there, the app drops its opt-in and its
   browser subscription and writes nothing to the server. Settings then shows a one-time note worded for
   what this browser can do next: tap Enable, allow notifications first, open the Home Screen app, or
-  nothing works here. The note stays until Enable or Dismiss. A launch never re-adds a removed device.
+  nothing works here. The note stays until Enable or Dismiss. A launch never re-adds a removed device. So
+  that tombstone never expires, not even on dev's TTL table (`expiresAtOf` in `writes.ts` exempts `pushsub#`).
 - **Home banner.** A failed resync is remembered on the device. Home shows "Reminders couldn't refresh on
   this device — open Settings", with Dismiss. A dismissal holds until a new failure, and the next healthy
   launch clears it.

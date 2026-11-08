@@ -175,6 +175,25 @@ export const timedReminders: Scenario = {
   id: 'timed-reminders',
   title: 'Timed reminders: Web Push from the minute poller',
   tiers: ['full'],
+  // The poller chain (fuse-test → api-e2e-sent) waits on real ticks, ~3.5 min: slow, so it runs only where a
+  // branch can change what it proves — the poller and its rows, the push gateway, the Send-test UI, the
+  // schedule, and the fire-time maths.
+  slowPaths: [
+    'lambdas/src/push/**',
+    'lambdas/src/pushDispatch.ts',
+    'lambdas/src/backend.ts',
+    'lambdas/src/ddb/pushRegistry.ts',
+    'lambdas/src/ddb/repo.ts',
+    'lambdas/src/ddb/mapping.ts',
+    'lambdas/src/ddb/keys.ts',
+    'lambdas/src/ddb/writes.ts',
+    'packages/shared/src/reminders.ts',
+    'packages/shared/src/dates.ts',
+    'app/src/pages/Settings/NotificationsSection.tsx',
+    'app/src/data/hooks/usePush.ts',
+    'cdk/src/lib/push-dispatch.ts',
+    'scripts/src/devcheck/scenarios/timed-reminders.ts',
+  ],
   rows: [
     {
       id: 'api-e2e',
@@ -737,6 +756,7 @@ export const timedReminders: Scenario = {
     },
     {
       id: 'fuse-test',
+      cost: 'slow',
       entry: 'ui',
       proves: ['ui-send-test'],
       title:
@@ -765,6 +785,7 @@ export const timedReminders: Scenario = {
     },
     {
       id: 'fuse-ping',
+      cost: 'slow',
       entry: 'api',
       proves: ['api-e2e'],
       title: 'A task due at the first minute boundary well past the tick that takes the test',
@@ -784,6 +805,7 @@ export const timedReminders: Scenario = {
     },
     {
       id: 'server-test-sent',
+      cost: 'slow',
       entry: 'api',
       proves: ['ui-send-test'],
       title:
@@ -814,6 +836,7 @@ export const timedReminders: Scenario = {
     },
     {
       id: 'fuse-device',
+      cost: 'slow',
       entry: 'api',
       proves: ['api-e2e'],
       title:
@@ -831,6 +854,7 @@ export const timedReminders: Scenario = {
     },
     {
       id: 'api-e2e-sent',
+      cost: 'slow',
       entry: 'api',
       proves: ['api-e2e'],
       title:

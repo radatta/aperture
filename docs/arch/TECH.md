@@ -127,7 +127,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts). No calibrated task reaches done without an estimate and an actual of at least 1 minute (machines.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
-4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance never; AWS deletes some time after a row is due), and `toEntity` strips it. Prod writes nothing new and has no TTL.
+4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance and a removed push device never; AWS deletes some time after a row is due), and `toEntity` strips it. Prod writes nothing new and has no TTL.
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
