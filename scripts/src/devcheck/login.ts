@@ -1,5 +1,5 @@
 // Signing the test user in through dev's classic Cognito Hosted UI, then caching the session (Playwright
-// storageState) so later runs skip the form until the 7-day refresh token lapses. Selectors are exact, not
+// storageState) so later runs skip the form until the 30-day refresh token lapses. Selectors are exact, not
 // guessed: if the Hosted UI changes, the run fails AUTH_PAGE_CHANGED with a screenshot rather than typing a
 // password into whatever field looks close.
 import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
