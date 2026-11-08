@@ -14,6 +14,18 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     steps: ['real-review', 'real-named', 'real-auto'],
     reason: 'local: the real Haiku parse is dev’s (parsing is off locally) — runs on dev',
   },
+  'timed-reminders': {
+    steps: [
+      'ui-health',
+      'fuse-test',
+      'fuse-ping',
+      'server-test-sent',
+      'fuse-device',
+      'api-e2e-sent',
+    ],
+    reason:
+      'local: the push-dispatch poller’s minute ticks and the push services are dev’s — runs on dev',
+  },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
 };
 
