@@ -78,8 +78,12 @@ const INJECTED_CONSOLE =
 
 // A failed load's URL for the report: host and path, never the query (a sign-in callback's code rides there).
 const loadUrl = (u: string) => {
-  const url = new URL(u);
-  return url.host + url.pathname;
+  try {
+    const url = new URL(u);
+    return url.host + url.pathname;
+  } catch {
+    return u.split(/[?#]/)[0]; // never throw inside a page listener
+  }
 };
 const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous shell first (pwa-two-launch-refresh)
 

@@ -187,7 +187,14 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       request: () => request,
       continue: async () => void (out = 'real'),
       fallback: async () => void (out = 'real'),
-      abort: async () => void (out = 'dropped'),
+      abort: async () => {
+        out = 'dropped';
+        // Playwright fails the route's own request object: the one the harness marked as injected.
+        const failed = Object.assign(request, {
+          failure: () => ({ errorText: 'net::ERR_FAILED' }),
+        });
+        for (const l of failedListeners) l(failed);
+      },
       fulfill: async ({ status, body }) => {
         out = status;
         injectedBodies.push(body);
@@ -1223,9 +1230,12 @@ describe('runPipeline', () => {
       const i = await ctx.intercept('listCategories', { times: 1 });
       await x.call('listCategories');
       await i.release();
+      const dropped = await ctx.intercept('getDay', { abort: true, times: 1 });
+      await x.call('getDay');
+      await dropped.release();
     })(w);
     const r = await runPipeline(deps(w, [sc]));
-    expect(r.injected).toEqual(['/api/listCategories → 429']);
+    expect(r.injected).toEqual(['/api/listCategories → 429', '/api/getDay → dropped']);
     expect(r.failedLoads).toEqual([]);
   });
 
