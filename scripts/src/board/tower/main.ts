@@ -54,6 +54,7 @@ export function fixturePaths(dir: string): Paths {
     limits: join(REPO, 'scripts/board/limits.json'),
     ledger: join(dir, 'ledger.dev.jsonl'),
     bench: join(dir, 'bench'),
+    cores: 9, // recorded on the 9-core container: the frame must not depend on the host (CI has 2)
   };
 }
 

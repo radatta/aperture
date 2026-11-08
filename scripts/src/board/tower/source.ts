@@ -17,6 +17,7 @@ export type Paths = {
   limits: string; // scripts/board/limits.json
   ledger: string; // localNotes/devcheck/ledger.dev.jsonl
   bench: string; // localNotes/bench-vitest/
+  cores?: number; // the CPU-guard's core count; default the host's (fixtures pin theirs)
 };
 
 const DAY = 86400000;
@@ -120,11 +121,12 @@ export class Source {
   private benchLog: Watched<string | null>;
   private lockFeed: FeedItem[] = [];
   private lastHolder: string | null | undefined = undefined;
-  private cores = availableParallelism();
+  private cores: number;
 
   constructor(paths: Paths, prs: PrCache | null) {
     this.paths = paths;
     this.prs = prs;
+    this.cores = paths.cores ?? availableParallelism();
     const hist = join(paths.boardDir, 'history');
     this.samples = new DayFiles(hist, 'samples');
     this.events = new DayFiles(hist, 'events');

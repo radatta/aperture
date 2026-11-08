@@ -31,6 +31,7 @@ function setup() {
       limits: join(dir, 'none.json'),
       ledger: join(dir, 'ledger.jsonl'),
       bench: join(dir, 'bench'),
+      cores: 9,
     },
     null,
   );
