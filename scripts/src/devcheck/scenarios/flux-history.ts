@@ -143,6 +143,23 @@ export const fluxHistory: Scenario = {
       },
     },
     {
+      id: 'note-rebuilt',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Deleting a set rebuilds the week’s note: History shows the new note (a fresh generatedAt), never the one from before',
+    },
+    {
+      id: 'note-honest-count',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With a set stopped early, a note that reads one count across sets ("6 holds each") is refused and the deterministic line is kept',
+      offDev: {
+        file: 'lambdas/src/backend.fluxNote.test.ts',
+        test: 'refuses a note claiming every set reached a count when one was stopped early — the stored and served text is the deterministic line',
+        why: 'dev can’t force Haiku’s wording (that sentence passed on dev, 2026-11-07); the test drives the real backend over the Fake gateway with it',
+      },
+    },
+    {
       id: 'note-earns-its-line',
       entry: 'ios',
       kind: 'nominal',
@@ -281,7 +298,7 @@ export const fluxHistory: Scenario = {
     {
       id: 'history',
       entry: 'ui',
-      proves: ['history', 'sparkline', 'history-note', 'chip-order'],
+      proves: ['history', 'sparkline', 'history-note', 'chip-order', 'note-rebuilt'],
       title:
         'History lists both, the stopped one marked; deleting it holds the chips’ order; the rotation trend’s sparkline spans its tile',
       async run(ctx) {
@@ -314,12 +331,36 @@ export const fluxHistory: Scenario = {
         // The stopped tuck is this run's own newest set: delete it from the screen, the chips hold still.
         const before = await chips.textContent();
         const stopped = ctx.page.getByText(/2 of 6 holds · stopped early/);
+        // Armed before the delete: once it settles the app refetches the note (it sits under the fluxSets
+        // key), and that refetch is the rebuild — one Haiku call, ~1.6 s, the old line on screen meanwhile.
+        // The API read below waits for it, so it's a cache hit on the row the app holds; read first, it
+        // would race the app into two rebuilds and the screen onto a third text.
+        const noteResponse = () =>
+          ctx.page.waitForResponse((r) => r.url().endsWith('/api/getFluxWeekNote'), {
+            timeout: 20_000,
+          });
+        const refetch = noteResponse();
         await stopped
           .locator('xpath=ancestor::*[.//button[starts-with(@aria-label, "Delete ")]][1]')
           .getByRole('button', { name: /^Delete / })
           .click();
         await ctx.page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
         await stopped.waitFor({ state: 'hidden', timeout: 15_000 });
+        type Shown = { text: string; generatedAt: number } | null;
+        let shown = (await (await refetch).json()) as Shown;
+        // A refetch that beat the delete (a focus refetch) hands back the old row: the rebuild is the next.
+        if (shown?.generatedAt === note.generatedAt)
+          shown = (await (await noteResponse()).json()) as Shown;
+        const fresh = await ctx.api.reads.getFluxWeekNote();
+        if (!fresh || !shown) throw new Error('no week note after the delete');
+        if (fresh.generatedAt === note.generatedAt)
+          throw new Error(`the delete did not rebuild the note: ${fresh.text}`);
+        if (fresh.generatedAt !== shown.generatedAt)
+          throw new Error('the app and the API hold different notes after the delete');
+        await ctx.page
+          .getByText(fresh.text, { exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
+        ctx.log(`rebuilt note: ${fresh.text}`);
         const after = await chips.textContent();
         if (!before?.includes('rotation') || before !== after)
           throw new Error(`the chips moved: ${before} → ${after}`);

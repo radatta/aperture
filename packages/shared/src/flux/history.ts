@@ -379,19 +379,25 @@ export const fluxNoteFingerprint = (weekSets: readonly Pick<FluxSet, 'id'>[]): s
 export const FLUX_NOTE_MIN_SETS = 2;
 
 // What the model is shown (fluxNotePrompt): the summary without its dates, targets or directions — only
-// what a descriptive line may repeat, each exercise by the short name History uses.
+// what a descriptive line may repeat, each exercise by the short name History uses. The names carry each
+// number's scope: an angle is over every set (a stopped set's angle counts), a count over finished sets
+// only (a stopped set ended short of it, D55) — "6 holds" read across both sets was a dev slip (D62).
 export interface FluxNoteData {
   totalSets: number;
   lastWeekSets: number;
   exercises: {
     name: string;
     sets: number;
+    finishedSets: number;
     stoppedEarly: number;
-    first?: number;
-    latest?: number;
-    unit?: string;
+    angle?: { first: number; latest: number };
+    finishedCount?: { first: number; latest: number; unit: string };
     sides: FluxWeekExercise['sides'];
-    lastWeek: FluxWeekExercise['lastWeek'];
+    lastWeek: {
+      sets: number;
+      angle?: { latest: number };
+      finishedCount?: { latest: number };
+    } | null;
   }[];
 }
 
@@ -399,27 +405,47 @@ export function fluxNoteData(s: FluxWeekSummary): FluxNoteData {
   return {
     totalSets: s.totalSets,
     lastWeekSets: s.lastWeekSets,
-    exercises: s.exercises.map((e) => ({
-      name: isExerciseId(e.exerciseId) ? SHORT_NAMES[e.exerciseId] : e.exerciseId,
-      sets: e.sets,
-      stoppedEarly: e.stoppedEarly,
-      ...(e.first !== undefined ? { first: Math.round(e.first) } : {}),
-      ...(e.latest !== undefined ? { latest: Math.round(e.latest) } : {}),
-      ...(e.unit !== undefined ? { unit: e.unit } : {}),
-      sides: e.sides,
-      lastWeek: e.lastWeek
-        ? {
-            sets: e.lastWeek.sets,
-            ...(e.lastWeek.latest !== undefined ? { latest: Math.round(e.lastWeek.latest) } : {}),
-          }
-        : null,
-    })),
+    exercises: s.exercises.map((e) => {
+      const key = e.unit === '°' ? 'angle' : 'finishedCount';
+      const pair =
+        e.first !== undefined && e.latest !== undefined
+          ? key === 'angle'
+            ? { angle: { first: Math.round(e.first), latest: Math.round(e.latest) } }
+            : {
+                finishedCount: {
+                  first: Math.round(e.first),
+                  latest: Math.round(e.latest),
+                  unit: e.unit ?? '',
+                },
+              }
+          : {};
+      const lastLatest =
+        e.lastWeek?.latest !== undefined
+          ? { [key]: { latest: Math.round(e.lastWeek.latest) } }
+          : {};
+      return {
+        name: isExerciseId(e.exerciseId) ? SHORT_NAMES[e.exerciseId] : e.exerciseId,
+        sets: e.sets,
+        finishedSets: e.sets - e.stoppedEarly,
+        stoppedEarly: e.stoppedEarly,
+        ...pair,
+        sides: e.sides,
+        lastWeek: e.lastWeek ? { sets: e.lastWeek.sets, ...lastLatest } : null,
+      };
+    }),
   };
 }
 
 // A note the server may hand back: a trimmed, non-empty line within the cap that names at least one of
 // the week's exercises and carries no number the data lacks (the model is asked to describe, never to
-// invent — a number from nowhere is the one slip that reads as a score). Anything else → the line.
+// invent — a number from nowhere is the one slip that reads as a score), and, in a week with a set
+// stopped early, never reads a count across sets (GENERALISES_A_COUNT). Anything else → the line.
+// A stopped set ended short of its count, so in a week with one a note may never read a count across
+// sets (D55/D62): "2 chin tuck sets with 6 holds each" over a tuck stopped at 2 is the slip the number
+// check can't see. Run on the folded text (lowercased, dashes as spaces, so "per-set" is "per set").
+const GENERALISES_A_COUNT =
+  /\b(each|every|all|both|apiece|per set|a set|at least|always|consistently)\b|\bsets?\s+(of|at|with|to|reaching|hitting)\s+\d|\b\d+\s*[x×]\s*\d/;
+
 export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): string | null {
   if (typeof note !== 'string') return null;
   const text = note.trim().replace(/\s+/g, ' ');
@@ -438,20 +464,27 @@ export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): s
   add(data.totalSets - data.lastWeekSets); // a difference the model may state is a number it was given
   for (const e of data.exercises) {
     add(e.sets);
+    add(e.finishedSets);
     add(e.stoppedEarly);
-    add(e.first);
-    add(e.latest);
-    if (e.first !== undefined && e.latest !== undefined) add(e.latest - e.first);
+    for (const pair of [e.angle, e.finishedCount]) {
+      if (!pair) continue;
+      add(pair.first);
+      add(pair.latest);
+      add(pair.latest - pair.first);
+    }
     add(e.sides?.right);
     add(e.sides?.left);
     add(e.lastWeek?.sets);
-    add(e.lastWeek?.latest);
     if (e.lastWeek) add(e.sets - e.lastWeek.sets);
-    if (e.lastWeek?.latest !== undefined && e.latest !== undefined)
-      add(e.latest - e.lastWeek.latest);
+    const thisLatest = e.angle?.latest ?? e.finishedCount?.latest;
+    const lastLatest = e.lastWeek?.angle?.latest ?? e.lastWeek?.finishedCount?.latest;
+    add(lastLatest);
+    if (thisLatest !== undefined && lastLatest !== undefined) add(thisLatest - lastLatest);
   }
   for (const n of line.match(/\d+/g) ?? []) allowed.add(n);
   for (const n of text.match(/\d+/g) ?? []) if (!allowed.has(n)) return null;
+  if (data.exercises.some((e) => e.stoppedEarly > 0) && GENERALISES_A_COUNT.test(folded))
+    return null;
   return text;
 }
 

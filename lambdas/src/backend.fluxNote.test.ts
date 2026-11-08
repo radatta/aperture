@@ -116,6 +116,46 @@ describe('backend getFluxWeekNote', () => {
     }
   });
 
+  it('refuses a note claiming every set reached a count when one was stopped early — the stored and served text is the deterministic line', async () => {
+    // The dev week (2026-11-06): Haiku read a finished tuck's 6 holds across a tuck stopped at 2.
+    const { b, anthropic, tick, notePuts } = makeBackend();
+    const tuck = {
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      avgPeakDeg: null,
+      planned: 6,
+    } as const;
+    await b.recordFluxSet(set({ ...tuck, count: 6, completedAt: MONDAY - 5000 }));
+    await b.recordFluxSet(
+      set({ ...tuck, count: 2, stoppedEarly: true, completedAt: MONDAY - 4000 }),
+    );
+    await b.recordFluxSet(set({ avgPeakDeg: 44, completedAt: MONDAY - 3000 }));
+    await b.recordFluxSet(set({ avgPeakDeg: 48, completedAt: MONDAY - 2000 }));
+    await b.recordFluxSet(set({ avgPeakDeg: 53, completedAt: MONDAY - 1000 }));
+    anthropic.nextNote = {
+      ok: true,
+      fields: {
+        note: 'This week you did 3 rotation sets, angle rising from 44° to 53°, and 2 chin tuck sets with 6 holds each, with no prior week to compare.',
+      },
+    };
+    const note = await b.getFluxWeekNote();
+    expect(note).toEqual({
+      weekStart: '2026-11-02',
+      text: 'This week: 3 sets rotation 44° → 53°, 2 chin tuck · first week',
+      generatedAt: MONDAY,
+    });
+    expect(anthropic.noteCalls).toHaveLength(1);
+    expect(anthropic.noteCalls[0]?.summary.exercises[1]).toMatchObject({
+      exerciseId: 'chin-tuck',
+      sets: 2,
+      stoppedEarly: 1,
+    });
+    expect(notePuts()).toBe(1);
+    tick(60_000);
+    expect(await b.getFluxWeekNote()).toEqual(note); // stored: served again with no second call
+    expect(anthropic.noteCalls).toHaveLength(1);
+  });
+
   it('is null under two sets this week, and last week’s sets only count as last week', async () => {
     const { b, anthropic } = makeBackend();
     await b.recordFluxSet(set({ day: '2026-10-30', completedAt: MONDAY - 3 * 86_400_000 }));

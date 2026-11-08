@@ -7,6 +7,7 @@ import {
   fluxExerciseSummary,
   fluxFilterError,
   fluxNoteFingerprint,
+  fluxNoteData,
   fluxNoteText,
   fluxSetError,
   fluxSetsError,
@@ -383,5 +384,94 @@ describe('fluxNoteText', () => {
     expect(fluxNoteText('x'.repeat(141), line, s)).toBeNull();
     expect(fluxNoteText('Rotation up 12 degrees.', line, s)).toBeNull();
     expect(fluxNoteText('Two sets, 44° to 53°.', line, s)).toBeNull();
+  });
+
+  // The dev week (2026-11-06): three rotations rising, a finished chin tuck and one stopped at 2 holds.
+  const tuck = {
+    exerciseId: 'chin-tuck',
+    kind: 'holdAtTarget',
+    avgPeakDeg: null,
+    planned: 6,
+  } as const;
+  const devWeek = fluxWeekSummary(
+    [
+      weekSet({ ...tuck, count: 6, completedAt: 1 }),
+      weekSet({ ...tuck, count: 2, stoppedEarly: true, completedAt: 2 }),
+      weekSet({ avgPeakDeg: 44, completedAt: 3 }),
+      weekSet({ avgPeakDeg: 48, completedAt: 4 }),
+      weekSet({ avgPeakDeg: 53, completedAt: 5 }),
+    ],
+    '2026-11-02',
+  );
+  const devLine = fluxWeekLine(devWeek);
+  it('refuses a note that generalises a count across sets when one was stopped early', () => {
+    for (const note of [
+      'This week you did 3 rotation sets, angle rising from 44° to 53°, and 2 chin tuck sets with 6 holds each, with no prior week to compare.',
+      'Both chin tuck sets reached 6 holds.',
+      '2 chin tuck sets of 6 holds, 3 rotation sets.',
+      'Chin tuck 6 holds per-set.',
+      'Chin tuck 6 × 2.',
+    ])
+      expect(fluxNoteText(note, devLine, devWeek), note).toBeNull();
+    expect(
+      fluxNoteText(
+        '2 chin tuck sets, 1 stopped early, and 3 rotation sets, 44° to 53°.',
+        devLine,
+        devWeek,
+      ),
+    ).toBe('2 chin tuck sets, 1 stopped early, and 3 rotation sets, 44° to 53°.');
+  });
+  it('accepts "6 holds each" over a week with no stopped set — the gate is the stopped set, not the word', () => {
+    const finished = fluxWeekSummary(
+      [
+        weekSet({ ...tuck, count: 6, completedAt: 1 }),
+        weekSet({ ...tuck, count: 6, completedAt: 2 }),
+      ],
+      '2026-11-02',
+    );
+    expect(
+      fluxNoteText('Two chin-tuck sets with 6 holds each.', fluxWeekLine(finished), finished),
+    ).toBe('Two chin-tuck sets with 6 holds each.');
+  });
+});
+
+describe('fluxNoteData', () => {
+  it('names a count’s first → latest as finished sets only and an angle as every set, with finishedSets beside stoppedEarly', () => {
+    const tuck = {
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      avgPeakDeg: null,
+      planned: 6,
+    } as const;
+    const data = fluxNoteData(
+      fluxWeekSummary(
+        [
+          weekSet({ ...tuck, count: 6, completedAt: 1 }),
+          weekSet({ ...tuck, count: 2, stoppedEarly: true, completedAt: 2 }),
+          weekSet({ avgPeakDeg: 44, completedAt: 3 }),
+          weekSet({ avgPeakDeg: 50, stoppedEarly: true, count: 3, completedAt: 4 }),
+        ],
+        '2026-11-02',
+      ),
+    );
+    const byName = Object.fromEntries(data.exercises.map((e) => [e.name, e]));
+    expect(byName['chin tuck']).toEqual({
+      name: 'chin tuck',
+      sets: 2,
+      finishedSets: 1,
+      stoppedEarly: 1,
+      finishedCount: { first: 6, latest: 6, unit: 'holds' },
+      sides: null,
+      lastWeek: null,
+    });
+    expect(byName['rotation']).toEqual({
+      name: 'rotation',
+      sets: 2,
+      finishedSets: 1,
+      stoppedEarly: 1,
+      angle: { first: 44, latest: 50 },
+      sides: null,
+      lastWeek: null,
+    });
   });
 });
