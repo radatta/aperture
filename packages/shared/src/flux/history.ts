@@ -380,8 +380,8 @@ export const FLUX_NOTE_MIN_SETS = 2;
 
 // What the model is shown (fluxNotePrompt): the summary without its dates, targets or directions — only
 // what a descriptive line may repeat, each exercise by the short name History uses. The names carry each
-// number's scope: an angle is over every set (a stopped set's angle counts), a count over finished sets
-// only (a stopped set ended short of it, D55) — "6 holds" read across both sets was a dev slip (D62).
+// number's scope: `angle` is over every set (a stopped set's angle counts), `finishedCount` over finished
+// sets only (D55).
 export interface FluxNoteData {
   totalSets: number;
   lastWeekSets: number;
@@ -406,7 +406,11 @@ export function fluxNoteData(s: FluxWeekSummary): FluxNoteData {
     totalSets: s.totalSets,
     lastWeekSets: s.lastWeekSets,
     exercises: s.exercises.map((e) => {
-      const key = e.unit === '°' ? 'angle' : 'finishedCount';
+      // By the exercise's kind, not this week's unit: a week whose sets carry no angle still sends last
+      // week's angle as an angle.
+      const def = isExerciseId(e.exerciseId) ? getExercise(e.exerciseId) : null;
+      const angled = def ? def.kind === 'romReps' || def.kind === 'reposition' : e.unit === '°';
+      const key = angled ? 'angle' : 'finishedCount';
       const pair =
         e.first !== undefined && e.latest !== undefined
           ? key === 'angle'
@@ -438,13 +442,19 @@ export function fluxNoteData(s: FluxWeekSummary): FluxNoteData {
 
 // A note the server may hand back: a trimmed, non-empty line within the cap that names at least one of
 // the week's exercises and carries no number the data lacks (the model is asked to describe, never to
-// invent — a number from nowhere is the one slip that reads as a score), and, in a week with a set
-// stopped early, never reads a count across sets (GENERALISES_A_COUNT). Anything else → the line.
-// A stopped set ended short of its count, so in a week with one a note may never read a count across
-// sets (D55/D62): "2 chin tuck sets with 6 holds each" over a tuck stopped at 2 is the slip the number
-// check can't see. Run on the folded text (lowercased, dashes as spaces, so "per-set" is "per set").
-const GENERALISES_A_COUNT =
-  /\b(each|every|all|both|apiece|per set|a set|at least|always|consistently)\b|\bsets?\s+(of|at|with|to|reaching|hitting)\s+\d|\b\d+\s*[x×]\s*\d/;
+// invent — a number from nowhere is the one slip that reads as a score). Anything else → the line.
+//
+// And in a week with a set stopped early, no count claim at all (CLAIMS_A_COUNT): a stopped set ended
+// short of its count, so "6 holds" can't be read across sets — on dev Haiku wrote "2 chin tuck sets with
+// 6 holds each" over a tuck stopped at 2 (D62), a slip the number check can't see. The prompt asks it to
+// leave the count out then; "sets with 1 stopped early" and angles ("sets at 44°") still pass. Run on the
+// folded text (lowercased, dashes as spaces).
+const NUM = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)';
+const CLAIMS_A_COUNT = new RegExp(
+  `\\b${NUM}\\s+(reps?|holds?|trials?|cycles?)\\b` + // "6 holds", "six holds each"
+    `|\\bsets?\\s+(of|at|with|reaching|reached|hitting|hit)\\s+${NUM}\\b(?!\\s*(°|degrees?|stopped|finished|ended|of them))` + // "sets of 6"
+    `|\\b\\d+\\s*[x×]\\s*\\d`, // "6 × 2"
+);
 
 export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): string | null {
   if (typeof note !== 'string') return null;
@@ -483,8 +493,7 @@ export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): s
   }
   for (const n of line.match(/\d+/g) ?? []) allowed.add(n);
   for (const n of text.match(/\d+/g) ?? []) if (!allowed.has(n)) return null;
-  if (data.exercises.some((e) => e.stoppedEarly > 0) && GENERALISES_A_COUNT.test(folded))
-    return null;
+  if (data.exercises.some((e) => e.stoppedEarly > 0) && CLAIMS_A_COUNT.test(folded)) return null;
   return text;
 }
 

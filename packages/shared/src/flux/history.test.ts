@@ -404,22 +404,24 @@ describe('fluxNoteText', () => {
     '2026-11-02',
   );
   const devLine = fluxWeekLine(devWeek);
-  it('refuses a note that generalises a count across sets when one was stopped early', () => {
+  it('refuses any count claim in a week with a set stopped early, and keeps counts of stopped sets and angles', () => {
     for (const note of [
       'This week you did 3 rotation sets, angle rising from 44° to 53°, and 2 chin tuck sets with 6 holds each, with no prior week to compare.',
       'Both chin tuck sets reached 6 holds.',
       '2 chin tuck sets of 6 holds, 3 rotation sets.',
+      '2 chin tuck sets, 6 holds.',
+      'Chin tuck: six holds each.',
       'Chin tuck 6 holds per-set.',
+      '2 chin tuck sets of 6.',
       'Chin tuck 6 × 2.',
     ])
       expect(fluxNoteText(note, devLine, devWeek), note).toBeNull();
-    expect(
-      fluxNoteText(
-        '2 chin tuck sets, 1 stopped early, and 3 rotation sets, 44° to 53°.',
-        devLine,
-        devWeek,
-      ),
-    ).toBe('2 chin tuck sets, 1 stopped early, and 3 rotation sets, 44° to 53°.');
+    for (const note of [
+      '2 chin tuck sets with 1 stopped early, and 3 rotation sets at 44° to 53°.',
+      'Both exercises this week: 3 rotation sets rising from 44° to 53° and 2 chin tuck sets, 1 stopped early.',
+      'All 3 rotation sets rose, 44° to 53°; 2 chin tuck sets, one of them stopped early.',
+    ])
+      expect(fluxNoteText(note, devLine, devWeek), note).toBe(note);
   });
   it('accepts "6 holds each" over a week with no stopped set — the gate is the stopped set, not the word', () => {
     const finished = fluxWeekSummary(
@@ -473,5 +475,19 @@ describe('fluxNoteData', () => {
       sides: null,
       lastWeek: null,
     });
+  });
+  it('scopes last week’s number by the exercise’s kind: an angle stays an angle when this week’s sets carry none', () => {
+    const [rotation] = fluxNoteData(
+      fluxWeekSummary(
+        [
+          weekSet({ day: '2026-10-28', avgPeakDeg: 40, completedAt: 1 }),
+          weekSet({ avgPeakDeg: null, completedAt: 2 }),
+          weekSet({ avgPeakDeg: null, completedAt: 3 }),
+        ],
+        '2026-11-02',
+      ),
+    ).exercises;
+    expect(rotation?.lastWeek).toEqual({ sets: 1, angle: { latest: 40 } });
+    expect(rotation).not.toHaveProperty('finishedCount');
   });
 });

@@ -11,7 +11,7 @@ Rules:
 - One sentence, at most ${FLUX_NOTE_MAX} characters, plain words, no emoji.
 - Describe only: say what was done and how the numbers moved (this week against last, first against latest, right against left). Never praise, judge, advise, encourage, warn, or mention streaks, goals or consistency.
 - Use only numbers that appear in the input, rounded as given. Never invent a number, a date or an exercise.
-- A set stopped early ended short of its count; finishedCount is from finished sets only, angle from every set. When any set was stopped early, never say every, each, all or both sets reached a number — say how many were stopped early, or leave the count out.
+- A set stopped early ended short of its count; finishedCount is from finished sets only, angle from every set. When any set was stopped early, give no count of reps, holds, trials or cycles at all — say how many sets were stopped early instead.
 - Angles are relative to each session's own calibrated neutral, from a webcam — describe them as a trend, never as a measurement or a diagnosis.
 - Name the exercises by the names in the data, every one the note mentions; the note names at least one.
 - If nothing changed, say so plainly.`;
