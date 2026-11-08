@@ -1,7 +1,7 @@
 // The app client's refresh token goes 7 → 30 days, revocation pinned on (TECH §3). A refresh token is
 // opaque, so dev can't read its expiry: what dev proves is that a refresh-token grant against the updated
 // client works. The value itself is the template's (stacks.test.ts) and the live client's (a one-line read).
-import type { Scenario } from '../scenario';
+import { noConsoleErrors, type Scenario } from '../scenario';
 
 const STACKS = 'cdk/src/stacks.test.ts';
 const OPAQUE = 'a refresh token is opaque: nothing in the app or the harness can read its expiry';
@@ -98,15 +98,20 @@ export const cognitoRefresh: Scenario = {
           (r) => r.url().includes('.amazoncognito.com/oauth2/token'),
           { timeout: 20_000 },
         );
-        await ctx.ui.goto('/tasks');
+        // The shell shows only once the renewal succeeds, so the grant is checked first: its failure names
+        // the cause, and the page load's own wait is caught here so it can't go unhandled behind it.
+        const load = ctx.ui.goto('/tasks');
+        load.catch(() => {});
         const res = await grant;
         if (!res.request().postData?.()?.includes('grant_type=refresh_token'))
           throw new Error('the token request was not a refresh-token grant');
         if (res.status() !== 200)
           throw new Error(`the refresh-token grant answered ${res.status()}`);
+        await load;
         await ctx.ui.expectText('Backlog');
         await ctx.shot('signed-in');
       },
     },
+    noConsoleErrors,
   ],
 };

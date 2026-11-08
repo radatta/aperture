@@ -259,8 +259,8 @@ describe('ApertureAppStack', () => {
 
   // The refresh token is the session's real ceiling — it's what the app renews with across relaunches,
   // so this is what sets how often a password gets typed. CDK emits validity in minutes. Pinned to the
-  // SPA client by name so the claude.ai client, also 30 days, can't mask a regression. Revocation is the
-  // recovery for a leaked one (TECH §3), so it's pinned too rather than left to Cognito's default.
+  // SPA client by name so the claude.ai client, also 30 days, can't mask a regression. Global sign-out is
+  // the recovery for a leaked one (TECH §3); revocation is pinned too rather than left to Cognito's default.
   it('caps the SPA refresh token at 30 days, revocable', () => {
     app.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       ClientName: 'aperture-app-dev',
