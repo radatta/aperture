@@ -470,18 +470,19 @@ serr('sim: hung reads after submit are AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEO
 
 # --- keys read the field back ---
 BAR = F('Capture log', 220, 895, 'bar')
-def typed(v, **k): return pt(220, 895, el('AXStaticText', '', v, 33, 469, 10 * len(v), 22), **k)
+def typed(v, x=220, **k): return pt(x, 895, el('AXStaticText', '', v, 33, 469, 10 * len(v), 22), **k)  # x 198: the bar's frame centre, the second look
 spass('sim: keys in a field read it back once', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
       tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'typed 2 keys'}, simCount={'tap -x 48 -y 744': 1}, simExcludes=['tap -x 409 -y 800'])
 spass('sim: a slow key gets a second look, not a retype', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
-      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=1), typed('Ab')], simCount={'tap -x 48 -y 744': 1}, simExcludes=['tap -x 409 -y 800', 'retyped'])
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A'), typed('Ab', 198)], notes={'2': 'typed 2 keys'}, simCount={'tap -x 48 -y 744': 1, '--point 198,895': 1},
+      simExcludes=['tap -x 409 -y 800'])
 spass('sim: a dropped key is erased and retyped once, and the note says so', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
-      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=2), typed('Ab')],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=1), typed('A', 198, n=1), typed('Ab')],
       notes={'2': 'typed 2 keys; retyped once (first read AXStaticText "A")'}, simCount={'tap -x 48 -y 744': 2, 'tap -x 264 -y 800': 2, 'tap -x 409 -y 800': 4})
 spass('sim: a second drop is retyped twice', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
-      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=4), typed('Ab')], notes={'2': 'retyped twice'}, simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8})
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=2), typed('A', 198, n=2), typed('Ab')], notes={'2': 'retyped twice'}, simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8})
 sfail('sim: a field that never holds the text is TYPED, with what it read and a screenshot', 'TYPED', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
-      tape=[pt(220, 895, CAPTURE, n=2), typed('A')], notes={'2': 'typed "ab" 3 times; the field reads AXStaticText "A" at 220,895'},
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A'), typed('A', 198)], notes={'2': 'typed "ab" 3 times; the field reads AXStaticText "A" at 220,895'},
       simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8}, files=['shots/01-fail.png'])
 serr('sim: a hung read-back is AX_TIMEOUT, not TYPED', 'AX_TIMEOUT', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
      tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')], simExcludes=['tap -x 409 -y 800'])
@@ -493,6 +494,9 @@ sfail('sim: a miss names a match its role excluded', 'MISS', [L, F('Capture', 10
 # --- taps that must have landed ---
 spass('sim: blur taps Done again when the keyboard stays up', [L, {'op': 'blur'}], tape=[pt(221, 856, SPACE, n=1), pt(221, 856, {})],
       notes={'1': 'dismissed on the second tap'}, simCount={'tap -x 395 -y 575': 2})
+spass('sim: a keyboard that goes down late gets no second tap where Done was', [L, {'op': 'blur'}],
+      tape=[pt(221, 856, SPACE, n=1), pt(221, 856, {}), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), {'m': '--point 395,', 'out': el('AXButton', 'Mark done', '', 340, 556, 100, 38)}],
+      notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1}, simExcludes=['tap -x 390'])
 spass('sim: blur checks the keyboard went down once', [L, {'op': 'blur'}], tape=[pt(221, 856, {})], notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1})
 sfail('sim: a keyboard that stays up after two Done taps is BLUR', 'BLUR', [L, {'op': 'blur'}], simCount={'tap -x 395 -y 575': 2})
 spass('sim: blur with no keyboard up does nothing', [L, {'op': 'blur'}], tape=[pt(395, 575, {})], notes={'1': 'no keyboard to dismiss'}, simExcludes=['tap -x 395'])
@@ -500,6 +504,8 @@ spass('sim: a dropped icon tap (still on the Home Screen) is tapped again, not s
       tape=[pt(220, 895, {}, n=10), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
       simExcludes=['swipe --start-x 220 --start-y 450'])
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
+serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
+     tape=SIGNED_OUT + FORMP[:-1] + [{**FORMP[-1], 'n': 1}, HANG('--point 220,454')], pwTyped=1, simCount={'tap -x 201 -y 453': 1})
 spass('sim: a dropped submit tap is tapped again on the same form', [L, {'op': 'signIn'}],
       tape=[pt(220, 895, {}, n=13)] + SIGNED_OUT[1:] + FORMP + [pt(220, 588, {})], expect={'signedIn': 'fresh'}, pwTyped=1, simCount={'tap -x 201 -y 453': 2})
 serr('sim: a password still rejected after the retap is AUTH_REJECTED', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',

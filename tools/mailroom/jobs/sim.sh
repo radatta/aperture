@@ -321,9 +321,10 @@ sim_device() {
 }
 
 sim_boot() { sx 90 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 90 s"; return 1; }; SIM_STATE=Booted; }
-# simctl refuses a sim that is already off, so that one isn't asked; any other refusal is the caller's to report.
+# simctl refuses a sim that is off or on its way there, so only a booted or booting one is asked; any other refusal
+# is the caller's to report.
 sim_shutdown() {
-  [ "$SIM_STATE" != Shutdown ] || return 0
+  case "$SIM_STATE" in Booted | Booting) ;; *) return 0 ;; esac
   sx 30 shutdown "$SIM_U" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE SHUTDOWN_FAILED "simctl shutdown failed"; return 1; }
   SIM_STATE=Shutdown
 }
@@ -464,9 +465,11 @@ sim_op_launch() {
     if [ "$i" = 10 ]; then
       # Still on the Home Screen: the icon tap dropped, so tap it again (a swipe there opens Search). In the app, the
       # page can draw offset from its accessibility frames after a kill: nudge it.
-      if t="$(sim_tree)" && ! jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
+      # An unreadable tree does neither.
+      t="$(sim_tree)" || t=""
+      if [ -n "$t" ] && ! jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
         sim_tap_el "$SIM_ICON" || return 1
-      else
+      elif [ -n "$t" ]; then
         ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
         ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
       fi
@@ -623,7 +626,9 @@ sim_sign_in() {
     done
     [ "$pass" = 1 ] || break
     read -r x y < <(jq -r '.at | "\(.x) \(.y)"' <<<"$e")
+    rm -f "$SIM_P.unread"
     n="$(sim_point "$x" "$y")" || { SIM_SENSITIVE=false; return 1; }
+    sim_hung_err "re-reading the submit button" && { SIM_SENSITIVE=false; return 1; }
     [ "$(jq -r .role <<<"$n")" = AXButton ] && sim_label_is "$n" "submit" && jq -e --argjson p "$fp" '.pid == $p' <<<"$n" >/dev/null 2>&1 || break
     sim_tap_el "$n" 2 || { SIM_SENSITIVE=false; return 1; }
   done
@@ -861,22 +866,23 @@ sim_typed_read() {
 }
 
 # Taps can be dropped silently, and a key AXe reports done may never land. With `in`, the field is read back: a slow
-# tap gets a second look, then up to two retypes (deletes first: extra ones do nothing on an empty field), and the
-# note says so, so a rising drop rate stays visible. Assumes the field held nothing before.
+# tap gets a second look (at the field's frame centre: the point it was found at can sit outside its frame, as the
+# Done form's Reflection does), then up to two retypes (deletes first: extra ones do nothing on an empty field), and
+# the note says so, so a rising drop rate stays visible. Assumes the field held nothing before.
 sim_op_keys() {
-  local text in x y d tries=0 first=""
+  local text field x y cx cy d tries=0 first=""
   text="$(jq -r .text <<<"$1")"
-  in="$(jq -r '.in // ""' <<<"$1")"
+  field="$(jq -r '.in // ""' <<<"$1")"
   sim_kb_up || { sim_kb_missing; return 1; }
   sim_type_keys "$text" || return 1
   SIM_NOTE="typed ${#text} keys"
-  [ -n "$in" ] || return 0
-  read -r x y < <(sim_read_get "$in" | jq -r '"\(.at.x // 0) \(.at.y // 0)"')
+  [ -n "$field" ] || return 0
+  read -r x y cx cy < <(sim_read_get "$field" | jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"')
   while :; do
     sim_typed_read "$text" "$x" "$y" || return 1
     if [ -z "$SIM_TYPED_OK" ]; then
       sleep 1
-      sim_typed_read "$text" "$x" "$y" || return 1
+      sim_typed_read "$text" "$cx" "$cy" || return 1
     fi
     [ -z "$SIM_TYPED_OK" ] || break
     [ -n "$first" ] || first="$SIM_TYPED"
@@ -905,7 +911,7 @@ sim_op_erase() {
 
 # Done is a tap like any other: the keyboard must be gone afterwards (one retap), or the next op aims at a moved page.
 sim_op_blur() {
-  local rc done
+  local rc
   sim_accessory_top >/dev/null; rc=$?
   [ "$rc" != 1 ] || return 1
   if [ "$rc" != 0 ]; then
@@ -913,17 +919,22 @@ sim_op_blur() {
     SIM_NOTE="no keyboard to dismiss"
     return 0
   fi
-  done="$SIM_HIT"
-  sim_tap_el "$done" || return 1
+  sim_tap_el "$SIM_HIT" || return 1
   sleep 1
   SIM_NOTE="keyboard dismissed"
   if sim_kb_up; then
     sleep 1
-    sim_tap_el "$done" || return 1
-    sleep 1
-    if sim_kb_up; then sim_fail BLUR "the keyboard stayed up after Done, tapped twice"; return 1; fi
-    SIM_NOTE="keyboard dismissed on the second tap"
+    # Done again only where it is now: a keyboard that went down late leaves a page button at the old spot.
+    sim_accessory_top >/dev/null; rc=$?
+    [ "$rc" != 1 ] || return 1
+    if [ "$rc" = 0 ]; then
+      sim_tap_el "$SIM_HIT" || return 1
+      sleep 1
+      SIM_NOTE="keyboard dismissed on the second tap"
+    fi
+    if sim_kb_up; then sim_fail BLUR "the keyboard stayed up after Done"; return 1; fi
   fi
+  [ ! -e "$SIM_P.over" ] && [ ! -e "$SIM_P.late" ] || return 1 # a read refused for the budget is no answer
   sim_hung_err "checking the keyboard went down" && return 1
   return 0
 }
@@ -1047,7 +1058,7 @@ run_sim() {
         [ ! -e "$SIM_P.late" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT="" SIM_NOTE="over the ${budget} s budget"; }
         status="${SIM_ST:-error}"
         # a failure, or a sim that was up and then couldn't go on (not a blown budget: nothing more may run)
-        if [ "$status" = fail ] || { [ "$status" = error ] && [ -n "$SIM_READY" ] && [ "$SIM_RS" != TIMEOUT ]; }; then sim_fail_shot "$op"; fi
+        if [ "$status" = fail ] || { [ "$status" = error ] && [ -n "$SIM_READY" ] && [ "$SIM_RS" != TIMEOUT ] && [ "$SIM_DT" != BOOT_FAILED ] && [ "$SIM_DT" != SHUTDOWN_FAILED ]; }; then sim_fail_shot "$op"; fi
       fi
     fi
     jq -cn --argjson i "$i" --arg op "$op" --arg st "$status" --argjson ms "$(($(sim_ms) - t0))" --arg note "$SIM_NOTE" \
