@@ -142,6 +142,16 @@ describe('refreshSession', () => {
       refreshSession(page(stored), renv, grant(200, 's9', 'x@example.com'), () => 0),
     ).rejects.toThrow(/WRONG_USER/);
   });
+  it('an unreadable stored session is AUTH_REJECTED, never quoting the record', async () => {
+    const torn = {
+      evaluate: async () => ({ [key]: '{"refresh_token":"RT-SECRET"' }),
+    } as unknown as PwPage;
+    const fetch = grant(200);
+    const err = await refreshSession(torn, renv, fetch, () => 0).catch((e: unknown) => e as Error);
+    expect(String(err)).toMatch(/AUTH_REJECTED.*unreadable/);
+    expect(String(err)).not.toMatch(/RT-SECRET/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("throws AUTH_REJECTED naming Cognito's error, never the body or the token", async () => {
     const err = await refreshSession(
       page(stored),

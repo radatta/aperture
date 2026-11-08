@@ -122,7 +122,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const renewSession = async () => {
     try {
       const fresh = await browser?.readSession();
-      if (fresh) session = fresh;
+      // Never back to an older token: after a refresh from here the page still holds the expired one.
+      if (fresh && (!session || fresh.expiresAt >= session.expiresAt)) session = fresh;
     } catch (err) {
       if (codeOf(err) === 'WRONG_USER') throw err;
     }
@@ -139,7 +140,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       const s = await browser?.refreshSession?.();
       if (s) session = s;
     })().finally(() => (refreshing = undefined));
-    await refreshing;
+    // A failed refresh (a dead page, the network, invalid_grant) still lets a token with life left go out;
+    // another identity never does.
+    await refreshing.catch((err: unknown) => {
+      if (codeOf(err) === 'WRONG_USER' || session!.expiresAt * 1000 <= d.now()) throw err;
+    });
   };
   const fail = (code: ReasonCode, message?: string) => {
     if (r.status !== 'CRASH') r.status = 'FAIL';

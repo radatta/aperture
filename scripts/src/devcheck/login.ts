@@ -54,7 +54,16 @@ export async function refreshSession(
     'Object.assign({}, window.localStorage)',
   );
   const raw = storage[userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID)];
-  const refresh = raw ? (JSON.parse(raw) as { refresh_token?: unknown }).refresh_token : undefined;
+  let refresh: unknown;
+  try {
+    refresh = raw ? (JSON.parse(raw) as { refresh_token?: unknown }).refresh_token : undefined;
+  } catch {
+    // never the parser's message: it quotes the record, tokens and all
+    throw new DevcheckError(
+      'AUTH_REJECTED',
+      'session refresh: the page’s stored session is unreadable',
+    );
+  }
   if (typeof refresh !== 'string' || !refresh) return null;
   const { accessToken, expiresAt, email, sub } = await tokenGrant(
     fetch,

@@ -66,3 +66,11 @@ describe('nearExpiry', () => {
     expect(nearExpiry(s, 1000_000 + 1)).toBe(true);
   });
 });
+
+describe('sessionFromStorage on a torn record', () => {
+  it('throws without quoting it', () => {
+    expect(() => sessionFromStorage({ [KEY]: '{"access_token":"AT-SECRET"' }, KEY)).toThrow(
+      /^unreadable oidc session in storage$/,
+    );
+  });
+});

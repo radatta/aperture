@@ -35,11 +35,16 @@ export function decodeJwtPayload(jwt: string): Record<string, unknown> {
 export function sessionFromStorage(storage: Record<string, string>, key: string): Session | null {
   const raw = storage[key];
   if (!raw) return null;
-  const user = JSON.parse(raw) as {
+  let user: {
     access_token?: string;
     expires_at?: number;
     profile?: { email?: string; sub?: string };
   };
+  try {
+    user = JSON.parse(raw) as typeof user;
+  } catch {
+    throw new Error('unreadable oidc session in storage'); // never the parser's message: it quotes the tokens
+  }
   if (!user.access_token) return null;
   return {
     accessToken: user.access_token,
