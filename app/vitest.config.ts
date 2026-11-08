@@ -7,6 +7,11 @@ import react from '@vitejs/plugin-react';
 // one worker. setup.ts resets the shared state between tests.
 const REBUILDS_MODULES = 'src/auth/auth.test.tsx';
 
+// The app runs in the user's browser, so its tests run in the user's zone, whatever the shell or CI's
+// (UTC) is: a stub date bug then reads as it would on the phone. Set before vitest forks its workers,
+// which inherit it; src/test/tz.test.ts guards it. (lambdas pins UTC, the Lambda's zone.)
+process.env.TZ = 'America/Los_Angeles';
+
 export default defineConfig({
   plugins: [react()],
   test: {

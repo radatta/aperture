@@ -49,7 +49,10 @@ emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it
 
 **Command shape:** typecheck is one root `tsc -b` over the project-reference graph; lint is one root
 `eslint .` (flat config). `test` and `build` fan out per-package (`pnpm -r`). Vitest runs two envs —
-**jsdom** for `app`, **node** for everything else (Lambda runtime parity).
+**jsdom** for `app`, **node** for everything else (Lambda runtime parity). Each suite also pins its
+runtime's zone in its `vitest.config.ts`, whatever the shell's or CI's: `lambdas` UTC (the Lambda's),
+`app` `America/Los_Angeles` (the user's browser), so a local-time date bug fails in tests and not only
+in prod. A `tz.test.ts` in each guards its pin.
 
 **App test files share one jsdom and one module graph per worker** (`isolate: false` — a fresh jsdom
 per file was most of CI's runtime on its single worker). CI runs the suite as two `vitest --shard`

@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  addDays,
+  FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FIXTURE_ACCOUNT_IDS,
   FIXTURE_INSTITUTION,
   FIXTURE_ITEM_ID,
@@ -311,5 +313,21 @@ describe('finance backend', () => {
     expect(plaid.calls).toEqual([]);
     expect(invoked).toEqual([]);
     expect(doc.size).toBe(before); // noop writes: not even the lazy settings row
+  });
+
+  it("the server's finance day is the user's Pacific day, not the Lambda's UTC one", async () => {
+    // 10pm PDT on Aug 1 is 05:00 UTC on Aug 2: past the 4am day start in UTC, still Aug 1 for the user.
+    const evening = () => Date.parse('2026-08-01T22:00:00-07:00');
+    await connect(); // the fixture rows, synced at the suite's clock
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const range = vi.spyOn(repo, 'listFinanceTxnsInRange'); // this instance only: nothing to restore
+    const client = new BackendClient(repo, {
+      userId: U,
+      now: evening,
+      plaid,
+      financeInvoker: noopInvoker(),
+    });
+    await client.linkFinanceRefund('fx-refund-1', 'fx-card-8'); // reads the overview's window back from today
+    expect(range).toHaveBeenCalledWith(addDays('2026-08-01', -FINANCE_OVERVIEW_LOOKBACK_DAYS));
   });
 });

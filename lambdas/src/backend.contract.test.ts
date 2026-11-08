@@ -1,4 +1,4 @@
-import { API_METHODS, todayKey } from '@aperture/shared';
+import { API_METHODS, dayKeyInZone, USER_TIME_ZONE } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { runApiContract } from '@aperture/shared/contract';
 import { InMemoryDoc } from './ddb/DocClient';
@@ -18,10 +18,11 @@ import { fakeObjectStore } from './s3/objects';
 // whole page-first architecture rests on. Two passes:
 //   1. BackendClient directly (the business logic over the in-memory table)
 //   2. through handleRpc — the real RPC dispatch (method validation + arg passing), end-to-end server-side
-// Finances: Plaid is the in-memory fake replaying the shared fixtures, anchored to the same day-key the
-// stub uses, and a sync runs inline (the RPC returns after it), so the stub's inline sync compares 1:1.
+// Finances: Plaid is the in-memory fake replaying the shared fixtures, anchored to the user's day like
+// the suite's finToday, and a sync runs inline (the RPC returns after it), so the stub's inline sync
+// compares 1:1.
 function financeDeps(doc: DocClient, now: () => number) {
-  const plaid = new InMemoryPlaid({ today: () => todayKey(4, now()) });
+  const plaid = new InMemoryPlaid({ today: () => dayKeyInZone(now(), USER_TIME_ZONE, 4) });
   const financeInvoker = inlineInvoker((e) =>
     runFinanceSync(
       {

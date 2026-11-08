@@ -3,7 +3,7 @@ import type { ApiClient } from './api';
 import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
-import { addDays, todayKey } from './dates';
+import { addDays, dayKeyInZone, USER_TIME_ZONE } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
 import { FUTURE_DAY_ERROR } from './machines';
 import { SERIES_OFFSET_ERROR, SERIES_UNTIL_ERROR } from './recurrence';
@@ -73,7 +73,7 @@ export function runApiContract(
     };
     // getDay refuses a day after the user's app day: a case that reads a 2026-08 day sets the clock to
     // that day first (20:00Z = early afternoon LA, well past any day start). The stub compares against
-    // the runner's local day, so this suite assumes a runner at or west of UTC (CI is UTC, the container LA).
+    // the runner's local day, which app/vitest.config.ts pins to the user's zone, as the Lambda reads it.
     const at = (day: string) => {
       clock = Date.parse(`${day}T20:00:00Z`);
     };
@@ -2009,9 +2009,10 @@ export function runApiContract(
 
     // --- Finances ------------------------------------------------------------
     // Both impls replay the shared Sandbox-shaped fixtures (financeFixtures.ts) anchored to the same
-    // day, and both run the sync inline here (stub: in-process; lambda: InlineInvoker + InMemoryPlaid),
-    // so the whole connect → sync → sort loop is compared end to end.
-    const finToday = () => todayKey(4, clock);
+    // day, the user's (the stub's local day, under the app's pinned zone), and both run the sync inline
+    // here (stub: in-process; lambda: InlineInvoker + InMemoryPlaid), so the whole connect → sync →
+    // sort loop is compared end to end.
+    const finToday = () => dayKeyInZone(clock, USER_TIME_ZONE, 4); // the user's day, as the Lambda reads it
     const connectBare = () =>
       api.exchangePlaidPublicToken({
         publicToken: 'public-fixture',

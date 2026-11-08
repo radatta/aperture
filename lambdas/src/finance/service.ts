@@ -2,6 +2,7 @@ import {
   addDays,
   applyRules,
   buildFinanceOverview,
+  dayKeyInZone,
   detectInternalMoves,
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
@@ -11,7 +12,7 @@ import {
   normalizeRulePattern,
   periodStartError,
   refundLinkError,
-  todayKey,
+  USER_TIME_ZONE,
 } from '@aperture/shared';
 import type {
   CreateLinkTokenInput,
@@ -57,7 +58,8 @@ export class FinanceService {
     return this.d.repo;
   }
   private async today(): Promise<string> {
-    return todayKey((await this.d.settings()).dayStartHour, this.d.now());
+    // The user's day in their zone: on the UTC Lambda, local getters read tomorrow by evening.
+    return dayKeyInZone(this.d.now(), USER_TIME_ZONE, (await this.d.settings()).dayStartHour);
   }
   private txnUpdate(
     id: string,
