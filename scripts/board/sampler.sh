@@ -5,13 +5,18 @@
 #   sampler.sh          run forever
 #   sampler.sh --once   one tick, no lock (tests, probe)
 #   sampler.sh --print  compute a tick to stdout; writes nothing (board.sh status/json)
+#   sampler.sh --prev-path  where the previous tick's counters live (tests check a fake cgroup's is its own)
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 interval="${SAMPLER_INTERVAL:-30}"
 page=$(getconf PAGESIZE); hz=$(getconf CLK_TCK)
 work="${TMPDIR:-/tmp}/aperture-sampler.$$"
-prev="${APERTURE_SAMPLER_PREV:-/tmp/aperture-sampler.prev}"
+# The previous tick's counters. A fake cgroup (tests) keeps its own beside it: sharing the live sampler's
+# file once fed it a test's usage_usec, and the next real tick divided all the container's CPU time by a few
+# seconds (thousands of "cores").
+prev="${APERTURE_SAMPLER_PREV:-${APERTURE_CGROUP_DIR:+$APERTURE_CGROUP_DIR/sampler.prev}}"
+prev="${prev:-/tmp/aperture-sampler.prev}"
 
 
 tick() {  # $1 = print → stdout only, nothing written
@@ -27,10 +32,11 @@ tick() {  # $1 = print → stdout only, nothing written
   mapfile -t live < <(sb_live_slots)  # a dead wrapper's slot is not a running job (lib.sh)
   [ "${#live[@]}" -eq 0 ] ||
     jq -r '[.pid, .label // .class] | @tsv' "${live[@]}" >"$slots" 2>/dev/null
+  local epr=${EPOCHREALTIME:-}; epr=${epr/,/.} # µs clock, '.' whatever the locale; unset before bash 5: awk falls back to seconds
   line=$(sb_procs args | awk -f "$SB_SCRIPTS/sample.awk" \
-    -v t="$(sb_now)" -v ep="$(sb_epoch)" -v interval="$interval" -v page="$page" -v hz="$hz" \
+    -v t="$(sb_now)" -v ep="$(sb_epoch)" -v epr="$epr" -v interval="$interval" -v page="$page" -v hz="$hz" \
     -v anon="$(cg_anon)" -v file="$(cg_file)" -v current="$(cg_current)" -v high="$(cg_high)" \
-    -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" \
+    -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" -v cpus="$(cg_cpus)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \
     -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" -v dev="$(jq -r --argjson now "$(sb_epoch)" '.holder | select(. and (.expiresAt | sub("\\.[0-9]+"; "") | fromdate) > $now) | .branch' "$BOARD_DIR/devlock.json" 2>/dev/null)" \
     -v prevOut="$pOut" -v statusOut="$sOut" -v F1="$panes" -v F2="$sess" -v F3="$slots" -v F4="$prev" \
@@ -42,6 +48,7 @@ tick() {  # $1 = print → stdout only, nothing written
   [ -n "$line" ] && sb_append samples "$line"
 }
 
+if [ "${1:-}" = --prev-path ]; then printf '%s\n' "$prev"; exit 0; fi
 if [ "${1:-}" = --once ]; then tick; exit 0; fi
 if [ "${1:-}" = --print ]; then tick print; exit 0; fi
 

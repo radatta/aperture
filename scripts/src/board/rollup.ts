@@ -3,7 +3,7 @@
 
 export type Sample = {
   t: string;
-  cg: { anonMiB: number; pids: number; cpuCores: number; psiMemFull10?: number };
+  cg: { anonMiB: number; pids: number; cpuCores: number | null; psiMemFull10?: number };
   sessions?: { state: string; rssMiB: number; thr: number }[];
   mix: { working: number; idle: number; heavy: number };
   gapSec?: number | null;
@@ -21,6 +21,12 @@ export type JobEvent = {
 };
 
 export type Stat = { median: number; p95: number; max: number };
+
+// cpuCores the sampler could really have measured. Before the sampler kept a fake cgroup's prev file apart
+// (2026-11-07), a test run could make the next tick read thousands of cores; newer ticks write null instead.
+export const MAX_PLAUSIBLE_CORES = 64;
+export const plausibleCores = (c: number | null | undefined): c is number =>
+  typeof c === 'number' && c >= 0 && c <= MAX_PLAUSIBLE_CORES;
 
 // Nearest-rank percentile of xs (0 for none).
 export function pct(xs: number[], q: number): number {
@@ -208,7 +214,7 @@ export function rollup(
       ticks: xs.length,
       anonMiB: stat(xs.map((x) => x.cg.anonMiB)),
       pids: stat(xs.map((x) => x.cg.pids)),
-      cores: stat(xs.map((x) => x.cg.cpuCores)),
+      cores: stat(xs.map((x) => x.cg.cpuCores).filter(plausibleCores)),
     }))
     .sort((a, b) => b.ticks - a.ticks);
 
