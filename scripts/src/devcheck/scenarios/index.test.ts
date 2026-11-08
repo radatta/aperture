@@ -211,6 +211,8 @@ describe('the slow tier', () => {
         validateSimParams({ sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan }),
       ).toBeNull();
       for (const o of plan) if (o.op === 'keys') expect(o.text.length).toBeLessThanOrEqual(6);
+      // a fresh start, whatever the Done form step left on screen
+      expect(plan.slice(0, 2)).toEqual([{ op: 'kill', method: 'terminate' }, { op: 'launch' }]);
       // the field is measured at focus (after it's found, before anything is typed) and after the Review
       const keys = plan.findIndex((o) => o.op === 'keys');
       expect(opAs('find', 'long-bar')(plan)).toBeLessThan(opAs('expect', 'long-bar')(plan));

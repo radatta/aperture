@@ -473,9 +473,10 @@ export const iosStandalone: Scenario = {
               order: i,
             });
           }
-          // The warm app holds the list it loaded before the padding: relaunch so Tasks is long.
+          // The warm app holds the list it loaded before the padding: relaunch so Tasks is long. Kill first, never a
+          // launch onto the warm app: whatever the Done form step left up (its modal, when a Cancel tap dropped — run
+          // 2026-11-08T23-00-16) hides Home's landmark from `launch`.
           const plan: IosOp[] = [
-            { op: 'launch' },
             { op: 'kill', method: 'terminate' },
             { op: 'launch' },
             ...CAPTURE_LONG,
