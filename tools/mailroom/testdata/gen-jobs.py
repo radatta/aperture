@@ -240,7 +240,7 @@ EVERY = [L, {'op': 'signIn'}, {'op': 'nav', 'tab': 'Tasks'}, F('Capture log', 22
          {'op': 'expectBuild', 'relaunches': 0}, {'op': 'shot', 'name': 'all-ops'}, {'op': 'wait', 's': 1}, {'op': 'kill', 'method': 'terminate'}, L,
          {'op': 'expect', 'signedIn': True}, {'op': 'shutdown'}]
 SPACE = el('AXButton', 'space', '', 206, 836, 30, 40)
-KB_GOES = [pt(221, 856, SPACE, n=2), pt(221, 856, {})]  # keys and erase see the keyboard; after blur's Done it's gone
+KB_GOES = [pt(221, 856, SPACE, n=3), pt(221, 856, {})]  # the field tap, keys and erase see the keyboard; after blur's Done it's gone
 spass('sim: a plan using every op passes', EVERY, ts=None, expect={'booted': 'off'}, tape=KB_GOES,
       simIncludes=['tap -x 48 -y 744', 'tap -x 264 -y 800', 'tap -x 409 -y 800', 'tap -x 395 -y 575', 'swipe --start-x 220 --start-y 650 --end-x 220 --end-y 450',
                    'simctl terminate ' + U + ' com.apple.webapp', 'simctl shutdown'], simExcludes=['axe type'])
@@ -497,6 +497,13 @@ spass('sim: blur taps Done again when the keyboard stays up', [L, {'op': 'blur'}
 spass('sim: a keyboard that goes down late gets no second tap where Done was', [L, {'op': 'blur'}],
       tape=[pt(221, 856, SPACE, n=1), pt(221, 856, {}), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), {'m': '--point 395,', 'out': el('AXButton', 'Mark done', '', 340, 556, 100, 38)}],
       notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1}, simExcludes=['tap -x 390'])
+TAPBAR = {'op': 'tap', 'label': 'Capture', 'near': {'x': 220, 'y': 895}}
+spass('sim: a field tap that brings no keyboard is tapped once more', [L, TAPBAR], tape=[pt(221, 856, {}, n=1)],
+      notes={'1': 'tapped again (no keyboard after the first)'}, simCount={'tap -x 198 -y 895': 2})
+spass('sim: a field tap that brings the keyboard is not repeated', [L, TAPBAR], simCount={'tap -x 198 -y 895': 1})
+spass('sim: a button tap never checks for the keyboard', [L, {'op': 'tap', 'label': 'Home', 'near': {'x': 38, 'y': 168}, 'radius': 10}],
+      simCount={'tap -x 38 -y 168': 1, '--point 221,856': 0})
+serr('sim: a hung keyboard read after a field tap is AX_TIMEOUT', 'AX_TIMEOUT', [L, TAPBAR], tape=[HANG('--point 221,856')], simCount={'tap -x 198 -y 895': 1})
 spass('sim: blur checks the keyboard went down once', [L, {'op': 'blur'}], tape=[pt(221, 856, {})], notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1})
 sfail('sim: a keyboard that stays up after two Done taps is BLUR', 'BLUR', [L, {'op': 'blur'}], simCount={'tap -x 395 -y 575': 2})
 spass('sim: blur with no keyboard up does nothing', [L, {'op': 'blur'}], tape=[pt(395, 575, {})], notes={'1': 'no keyboard to dismiss'}, simExcludes=['tap -x 395'])

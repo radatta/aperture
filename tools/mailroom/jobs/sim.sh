@@ -747,6 +747,18 @@ sim_op_tap() {
   if [ "$(jq -r '.as // ""' <<<"$1")" != "" ]; then sim_read_put "$(jq -r .as <<<"$1")" "$SIM_HIT"; fi
   sleep 1
   SIM_NOTE="$(jq -r '"tapped \(.role) at \(.frame.x + (.frame.w / 2 | floor)),\(.frame.y + (.frame.h / 2 | floor))"' <<<"$SIM_HIT")"
+  # A tapped field must take focus: no soft keyboard means the tap dropped (job …054323Z…-done-form-e8e2 read as
+  # KEYBOARD_SETUP), so tap it once more. Focusing writes nothing; a keyboard still missing is the next op's to report.
+  case "$(jq -r .role <<<"$SIM_HIT")" in
+    AXTextArea | AXTextField)
+      if ! sim_kb_up; then
+        sim_hung_err "checking the field took focus" && return 1
+        sim_tap_el "$SIM_HIT" || return 1
+        sleep 1
+        SIM_NOTE="$SIM_NOTE; tapped again (no keyboard after the first)"
+      fi
+      ;;
+  esac
 }
 
 # The soft keyboard is up when its space bar answers; its accessory bar's top is the line a field must clear.
