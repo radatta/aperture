@@ -64,6 +64,10 @@ const R_ROLLOVER = 'hill the flux gasket';
 const R_TODAY = 'thin the flux gasket';
 const R_MODE = 'seed the flux gasket';
 const R_REAL_CHIP = 'torque the flux gasket';
+// The Simulator's own line: a verb no other step saves. A full run's real-review can file its line under
+// another category (the model matches the run nonce to another scenario's category), and the same words
+// then outvote Garden; measured, this one still clears the margin after every earlier save (2.8 nats).
+const R_SIM_CHIP = 'shim the flux gasket';
 const R_REAL_NAMED = 'kitchen, polish the flux gasket';
 const R_REAL_AUTO = 'grease the flux gasket';
 const R_LONG =
@@ -244,13 +248,13 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
   { op: 'wait', s: 2 },
   { op: 'tap', label: 'Task', near: { x: 110, y: 437 }, radius: 40, role: 'AXCheckBox' },
-  { op: 'keys', text: R_REAL_CHIP },
+  { op: 'keys', text: R_SIM_CHIP },
   { op: 'tap', label: 'Review before saving', near: { x: 355, y: 480 }, radius: 60 },
   { op: 'wait', s: 6 },
   { op: 'shot', name: 'review-chip' },
   {
     op: 'find',
-    label: R_REAL_CHIP,
+    label: R_SIM_CHIP,
     scan: { x: 60, from: 300, to: 600 },
     as: 'bar0',
   },
@@ -273,14 +277,14 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'shot', name: 'review-chip-tapped' },
   {
     op: 'find',
-    label: R_REAL_CHIP,
+    label: R_SIM_CHIP,
     scan: { x: 60, from: 300, to: 600 },
     as: 'bar',
   },
   { op: 'expect', as: 'bar', aboveKeyboard: true },
   { op: 'absent', label: 'Use suggested category', scan: { x: 195, from: 300, to: 600 } },
   { op: 'shot', name: 'review-chip-taken' },
-  { op: 'erase', n: 22 },
+  { op: 'erase', n: R_SIM_CHIP.length },
   { op: 'tap', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox' },
   { op: 'blur' },
 ];
