@@ -214,6 +214,7 @@ aperture/
       auth/            # Cognito/OIDC glue (userManager, OidcBridge, AuthProvider)
       styles/          # Tailwind tokens (CSS-var theme)
   lambdas/src/         # BFF — index.ts, handler.ts, backend.ts, sessions.ts (pomodoro sessions); auth/ (verify),
+                       #   push/ (service.ts: reminder devices + Send test; the poller's sender),
                        #   ddb/ (keys, repo, writes, mapping, DocClient), google/, mcp/, s3/
   cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
   extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a

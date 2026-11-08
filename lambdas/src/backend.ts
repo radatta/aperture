@@ -78,15 +78,7 @@ import {
   PLACE_PART_ERROR,
   PLACE_TOKEN_RACE_ERROR,
   slugify,
-  planFireAt,
-  PUSH_DEVICE_ID_LEN,
-  PUSH_NO_DEVICE_ERROR,
-  PUSH_UNCONFIGURED_ERROR,
-  PUSH_UNKNOWN_DEVICE_ERROR,
-  parsePushInput,
   REMINDER_SETTINGS_DEFAULTS,
-  REMINDER_WINDOW_MS,
-  taskFireAt,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -138,7 +130,6 @@ import type {
   PomodoroSession,
   PushDevice,
   PushStatus,
-  PushSub,
   ReminderSettingKey,
   RecordLeetcodeAttemptInput,
   Roll,
@@ -165,7 +156,6 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
-import { createHash } from 'node:crypto';
 import {
   FLUX_NOTE_MIN_SETS,
   fluxFilterError,
@@ -182,9 +172,7 @@ import {
 } from '@aperture/shared/flux';
 import type { Repo } from './ddb/repo';
 import type { PushRegistry } from './ddb/pushRegistry';
-import { noPublicKey } from './push/publicKey';
 import type { PublicKeyReader } from './push/publicKey';
-import { mapLimit } from './util/mapLimit';
 import type { PlaceTokenPointer, PlaceTokenStore } from './ddb/placeTokens';
 import { ConditionFailedError } from './ddb/DocClient';
 import {
@@ -196,6 +184,7 @@ import {
 } from './auth/placeToken';
 import { FinanceService } from './finance/service';
 import { SessionService } from './sessions';
+import { PushService } from './push/service';
 import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
@@ -250,20 +239,6 @@ const unconfiguredPlaceTokens = {
   delete: noPlaceTokens,
   pointer: noPlaceTokens,
 } as unknown as PlaceTokenStore;
-// And for the push registry: only the reminder methods touch it.
-const noPushRegistry = (): never => {
-  throw new Error('Reminders unavailable: no push registry configured.');
-};
-const unconfiguredPushRegistry = {
-  listUsers: noPushRegistry,
-  hasUser: noPushRegistry,
-  addUser: noPushRegistry,
-  removeUser: noPushRegistry,
-  dropUser: noPushRegistry,
-  getUser: noPushRegistry,
-  getPoller: noPushRegistry,
-  putPoller: noPushRegistry,
-} as unknown as PushRegistry;
 const INACTIVE_TOKEN: PlaceTokenStatus = {
   active: false,
   createdAt: null,
@@ -304,27 +279,7 @@ function partPlace(given: string | null, parent: Task | undefined): string | nul
   if (given !== null && given !== parent.place) throw new Error(PLACE_PART_ERROR);
   return parent.place;
 }
-// The device id: a sha256(endpoint) prefix, so re-subscribing the same endpoint is an upsert.
-const pushDeviceId = (endpoint: string): string =>
-  createHash('sha256').update(endpoint).digest('hex').slice(0, PUSH_DEVICE_ID_LEN);
-// What Settings sees of a device — never its endpoint or keys.
-const deviceOf = (s: PushSub): PushDevice => ({
-  id: s.id,
-  label: s.label,
-  createdAt: s.createdAt,
-  lastOkAt: s.lastOkAt ?? null,
-  lastError: s.lastError ?? null,
-  lastErrorAt: s.lastErrorAt ?? null,
-});
 const REMINDER_KEYS: readonly string[] = Object.keys(REMINDER_SETTINGS_DEFAULTS);
-// A fire time the zone math can't compute (a malformed legacy deadline) is none.
-const fireAtOrNull = (at: () => number | null): number | null => {
-  try {
-    return at();
-  } catch {
-    return null;
-  }
-};
 
 // Every hash a new pointer must retire: the live one it replaces, plus any a cut-short delete left.
 const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
@@ -345,8 +300,7 @@ export class BackendClient implements ApiClient {
   private readonly sessions: SessionService;
   private readonly anthropic: AnthropicGateway;
   private readonly placeTokens: PlaceTokenStore;
-  private readonly pushRegistry: PushRegistry;
-  private readonly pushPublicKey: PublicKeyReader;
+  private readonly push: PushService;
 
   constructor(
     private readonly repo: Repo,
@@ -361,8 +315,6 @@ export class BackendClient implements ApiClient {
     this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
     this.placeTokens = opts.placeTokens ?? unconfiguredPlaceTokens;
-    this.pushRegistry = opts.pushRegistry ?? unconfiguredPushRegistry;
-    this.pushPublicKey = opts.pushPublicKey ?? noPublicKey;
     this.finance = new FinanceService({
       repo,
       userId: this.userId,
@@ -373,6 +325,14 @@ export class BackendClient implements ApiClient {
       settings: () => this.ensureSettings(),
     });
     this.sessions = new SessionService({ repo, now: this.now, base: () => this.base() });
+    this.push = new PushService({
+      repo,
+      userId: this.userId,
+      now: this.now,
+      ulid: this.ulid,
+      registry: opts.pushRegistry,
+      publicKey: opts.pushPublicKey,
+    });
   }
 
   private baseAt(t: number): BaseEntity {
@@ -1858,142 +1818,18 @@ export class BackendClient implements ApiClient {
     return this.repo.putSettings({ ...current, ...patch, updatedAt: now });
   }
 
-  // --- Reminders (reminders.md) ---
-  // The BFF never sends: it stores devices and queues Send-test candidates; the push-dispatch poller is
-  // the only sender and the only holder of the private key. Every write goes through the repo / registry
-  // `writes`; a device's endpoint and keys never leave (deviceOf).
-
-  // Upsert by endpoint. Refuses an endpoint off PUSH_ENDPOINT_HOSTS (the one SSRF gate — the poller POSTs
-  // only to stored endpoints) and a stage with no VAPID key; parsePushInput (shared with the stub) checks
-  // the shape. A re-subscribe keeps createdAt / lastOkAt, and the device's last error unless the endpoint
-  // or keys changed (a new subscription) — the same keys re-sent can't have fixed it. On a removed
-  // device's tombstone it revives it (same id, off removedDeviceIds, error cleared). The first device puts the user in the poller's
-  // registry — after re-keying their live deadlines and plans onto the remind index (rows written before
-  // it existed have no keys), so a failure there fails the call and the next subscribe retries it.
+  // --- Reminders (push/service.ts) ---
   async subscribePush(input: SubscribePushInput): Promise<PushDevice> {
-    const {
-      endpoint,
-      keys: { p256dh, auth },
-      label,
-    } = parsePushInput(input);
-    if (!(await this.pushPublicKey())) throw new Error(PUSH_UNCONFIGURED_ERROR);
-    const now = this.now();
-    const id = pushDeviceId(endpoint);
-    const prev = await this.repo.getPushSub(id);
-    const same =
-      !!prev &&
-      prev.deletedAt === null &&
-      prev.endpoint === endpoint &&
-      prev.p256dh === p256dh &&
-      prev.auth === auth;
-    const sub: PushSub = {
-      id,
-      userId: this.userId,
-      createdAt: prev?.createdAt ?? now,
-      updatedAt: prev ? Math.max(now, prev.updatedAt + 1) : now,
-      deletedAt: null,
-      endpoint,
-      p256dh,
-      auth,
-      label,
-      lastOkAt: prev?.lastOkAt ?? null,
-      lastError: same ? (prev?.lastError ?? null) : null,
-      lastErrorAt: same ? (prev?.lastErrorAt ?? null) : null,
-    };
-    await this.repo.putPushSub(sub);
-    await this.ensurePushUser(now);
-    return deviceOf(sub);
+    return this.push.subscribePush(input);
   }
-  // Removes the caller's device only (its own partition). Removal sticks: the row stays as a tombstone, so
-  // the device's own launch-time resync sees it in removedDeviceIds and stops instead of re-adding itself —
-  // with its endpoint and keys cleared (a revive re-sends them), so a tombstone holds no credential. An
-  // unknown or already-removed id is a no-op. The last alive device out takes the user off the registry.
   async unsubscribePush(id: string): Promise<void> {
-    if (typeof id !== 'string' || id === '') throw new Error(PUSH_UNKNOWN_DEVICE_ERROR);
-    const prev = await this.repo.getPushSub(id);
-    if (!prev || prev.deletedAt !== null) return;
-    const now = this.now();
-    await this.repo.putPushSub({
-      ...prev,
-      endpoint: '',
-      p256dh: '',
-      auth: '',
-      deletedAt: now,
-      updatedAt: Math.max(now, prev.updatedAt + 1),
-    });
-    const alive = async () => (await this.repo.listPushSubs({ consistent: true })).length > 0;
-    // dropUser re-reads after its delete, so a subscribe on another device racing this one stays registered.
-    if (!(await alive())) await this.pushRegistry.dropUser(this.userId, alive, now);
+    return this.push.unsubscribePush(id);
   }
-  // Health in three signals (D6): this user's devices, the poller's heartbeat (stage-wide), and the last
-  // send / error — the stage's current error when there is one, else this user's last.
   async getPushStatus(): Promise<PushStatus> {
-    const [key, rows, poller, mine] = await Promise.all([
-      this.pushPublicKey(),
-      // Consistent: the self-heal below decides on it, and a device a moment old must count.
-      this.repo.listAllPushSubs({ consistent: true }),
-      this.pushRegistry.getPoller(),
-      this.repo.getPushUserHealth(),
-    ]);
-    const stageError = poller?.lastError ?? null;
-    // Cheap self-heal: a user with a live device must be on the poller's registry (one consistent read).
-    if (rows.some((r) => r.deletedAt === null)) await this.ensurePushUser(this.now());
-    return {
-      configured: key !== null,
-      vapidPublicKey: key,
-      devices: rows
-        .filter((r) => r.deletedAt === null)
-        .map(deviceOf)
-        .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1)),
-      removedDeviceIds: rows
-        .filter((r) => r.deletedAt !== null)
-        .map((r) => r.id)
-        .sort(),
-      poller: {
-        lastRunAt: poller?.lastRunAt ?? null,
-        lastSentAt: mine?.lastSentAt ?? null, // a push service last ACCEPTED one (a refusal is an error)
-        lastError: stageError ?? mine?.lastError ?? null,
-        lastErrorAt: stageError ? (poller?.lastErrorAt ?? null) : (mine?.lastErrorAt ?? null),
-      },
-    };
+    return this.push.getPushStatus();
   }
-  // Queues a test on the remind index at now; the poller's next tick sends it like any reminder, so it
-  // proves the whole chain (schedule → poller → key → push service → device).
   async sendTestPush(): Promise<void> {
-    if ((await this.repo.listPushSubs({ consistent: true })).length === 0)
-      throw new Error(PUSH_NO_DEVICE_ERROR);
-    if (!(await this.pushPublicKey())) throw new Error(PUSH_UNCONFIGURED_ERROR);
-    const now = this.now();
-    await this.ensurePushUser(now); // heals a registry row a subscribe/remove race dropped
-    await this.clearPushTests(); // one test queued at a time: a newer Send test replaces an unsent one
-    await this.repo.putPushTest({ id: this.ulid(), createdAt: now });
-  }
-  // A user going live again starts with no queued test: one left unsent (the poller ticks only registered
-  // users) must not fire on a later re-enable.
-  private async ensurePushUser(now: number): Promise<void> {
-    if (await this.pushRegistry.hasUser(this.userId)) return;
-    await this.backfillReminders(now);
-    await this.clearPushTests();
-    await this.pushRegistry.addUser(this.userId, now);
-  }
-  private async clearPushTests(): Promise<void> {
-    for (const t of await this.repo.listPushTests({ consistent: true }))
-      await this.repo.deletePushTest(t.id);
-  }
-  // Re-key every alive task and plan that can still fire (from the window's start on) onto the remind
-  // index, each conditional on the version read (Repo.rekey — a write since already keyed it), armed now: what
-  // fell due before this backfill stays quiet. Idempotent. Consistent: a task written a moment ago counts.
-  private async backfillReminders(now: number): Promise<void> {
-    const from = now - REMINDER_WINDOW_MS;
-    const live = (at: number | null) => at !== null && at >= from;
-    const tasks = (await this.repo.listTasks({ consistent: true })).filter((t) =>
-      live(fireAtOrNull(() => taskFireAt(t, this.dueEpoch))),
-    );
-    const plans = (await this.repo.listAllPlans({ consistent: true })).filter((p) =>
-      live(fireAtOrNull(() => planFireAt(p, this.dueEpoch))),
-    );
-    await mapLimit(tasks, 8, (t) => this.repo.rekeyTask(t, now));
-    await mapLimit(plans, 8, (p) => this.repo.rekeyPlan(p, now));
+    return this.push.sendTestPush();
   }
 
   // --- Google Calendar (multi-account) ---

@@ -176,30 +176,19 @@ export const timedReminders: Scenario = {
   title: 'Timed reminders: Web Push from the minute poller',
   tiers: ['full'],
   // The poller chain (fuse-test → api-e2e-sent) waits on real ticks, ~3.5 min: slow, so it runs only where a
-  // branch can change what it proves — the poller and its rows, the push gateway, the Send-test UI, the
-  // schedule, and the fire-time maths.
+  // branch changes the reminder code itself — the BFF's push service and the poller (push/**), the registry,
+  // the fire-time rules, the push UI and the schedule. The shared files every branch touches (backend.ts's
+  // one-line delegates, repo, handler, rpc, dates) stay out, as timer-credit's do: the contract suite and
+  // push/dispatch.test.ts cover them off dev (DEV-CHECK.md → Slow tier).
   slowPaths: [
     'lambdas/src/push/**',
     'lambdas/src/pushDispatch.ts',
-    'lambdas/src/backend.ts',
     'lambdas/src/ddb/pushRegistry.ts',
-    'lambdas/src/ddb/repo.ts',
-    'lambdas/src/ddb/mapping.ts',
-    'lambdas/src/ddb/keys.ts',
-    'lambdas/src/ddb/writes.ts',
-    'lambdas/src/ddb/DocClient.ts',
-    'lambdas/src/ddb/LiveDoc.ts',
-    'lambdas/src/handler.ts',
-    'packages/shared/src/rpc.ts',
-    'packages/shared/src/api.ts',
     'packages/shared/src/reminders.ts',
-    'packages/shared/src/dates.ts',
     'app/src/pages/Settings/NotificationsSection.tsx',
     'app/src/data/hooks/usePush.ts',
     'app/src/modules/push/**',
     'cdk/src/lib/push-dispatch.ts',
-    'cdk/src/lib/app-stack.ts',
-    'scripts/src/devcheck/api.ts',
     'scripts/src/devcheck/scenarios/timed-reminders.ts',
   ],
   rows: [
