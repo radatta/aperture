@@ -232,10 +232,14 @@ async function barWithHistory(ctx: Ctx) {
 // saved. The field and the chip are found by scanning: the preview lifts the bar by its own height.
 // Opens with its own launch: run last, it can't count on ios-standalone leaving the sim up.
 // A filled field reads as its value, and only over its text, with no textarea role (as ios-standalone
-// finds 'zzqx'): near the text's start, nearest first, so the preview's copy of the title below loses.
+// finds 'zzqx'). Scanned down from the top, so the field wins over the preview's copy of the title below
+// it, wherever the dock sits.
 const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'launch' },
   { op: 'signIn' },
+  // A warm app holds the task list it loaded earlier in the run, before this scenario seeded its history.
+  { op: 'kill', method: 'terminate' },
+  { op: 'launch' },
   { op: 'nav', tab: 'Home' },
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
   { op: 'wait', s: 2 },
@@ -247,8 +251,7 @@ const REVIEW_KEYBOARD: IosOp[] = [
   {
     op: 'find',
     label: R_REAL_CHIP,
-    near: { x: 60, y: 444 },
-    radius: 40,
+    scan: { x: 60, from: 300, to: 600 },
     as: 'bar0',
   },
   { op: 'expect', as: 'bar0', aboveKeyboard: true },
@@ -271,8 +274,7 @@ const REVIEW_KEYBOARD: IosOp[] = [
   {
     op: 'find',
     label: R_REAL_CHIP,
-    near: { x: 60, y: 444 },
-    radius: 40,
+    scan: { x: 60, from: 300, to: 600 },
     as: 'bar',
   },
   { op: 'expect', as: 'bar', aboveKeyboard: true },
