@@ -203,7 +203,8 @@ deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version',
             pt(220, 895, CAPTURE), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38)),
             pt(57, 935, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
             pt(38, 168, el('AXLink', 'Home', 'Home', 20, 158, 37, 20)), pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 158, 36, 20)),
-            pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20))]
+            pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20)),
+            pt(340, 560, el('AXGenericElement', 'Aperture', 'Active', 239, 136, 306, 664))]  # the switcher's card (round A)
            + [pt(x, y, el('AXButton', k, '', x - 15, y - 20, 30, 40)) for k, (x, y) in KEYS.items()]
            + [{'m': 'describe-ui --udid', 'out': tree()}])
 simbase = {'v': 1, 'id': '20261104T190000Z-ios-launch-ab12', 'job': 'sim', 'submittedAt': 'now', 'expiresInMin': 10,
@@ -581,6 +582,12 @@ spass('sim: an app still running after the card swipe is swiped again', KS,
       simCount={DOUBLE: 2, SWIPE: 2, LEAVE: 1, WEB: 5})  # 2 alive, then gone before and after the wait, then the note's
 sfail('sim: an app still running after two card swipes is SWITCHER_FAILED, no leave tap', 'SWITCHER_FAILED', KS,
       tape=[dtree(tree(), 3), dtree(SWITCHER, 2), {'m': 'Web.app/Web', 'out': '4242'}], simCount={SWIPE: 2, LEAVE: 0}, files=['shots/01-fail.png'])
+spass("sim: a switcher without Aperture's card at the swipe spot is not swiped; pressed again", KS,
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 3), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
+      notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
+sfail('sim: no Aperture card in two tries is SWITCHER_FAILED, never swiped', 'SWITCHER_FAILED', KS,
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 0})
+serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 1), HANG('--point 340,560')], simCount={SWIPE: 0})
 spass('sim: a switcher that closed itself with the last card is not tapped (the spot is a dock icon)', KS,
       tape=[dtree(tree(), 3), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1)], notes={'1': 'no switcher left to leave (SpringBoard, Page 2 of 2)'},
       simCount={SWIPE: 1, LEAVE: 0})

@@ -730,7 +730,7 @@ sim_front() {
 # swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
 # is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
 sim_kill_switcher() {
-  local try sx sy ex ey bx by why=""
+  local try sx sy ex ey bx by e why=""
   read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
   read -r bx by <<<"$SIM_PT_BACKGROUND"
   for try in 1 2; do
@@ -739,6 +739,14 @@ sim_kill_switcher() {
     sim_front || return 1
     if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then
       why="$why; the switcher didn't open (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+      continue
+    fi
+    # Only Aperture's own card is swiped (the switcher also holds Safari's): it reads AXGenericElement "Aperture".
+    rm -f "$SIM_P.unread"
+    e="$(sim_point "$sx" "$sy")" || return 1
+    sim_hung_err "reading the switcher card" && return 1
+    if ! sim_match "$e" Aperture ""; then
+      why="$why; no Aperture card at $sx,$sy ($(jq -r '"\(.role) \(.label // "")"' <<<"$e"))"
       continue
     fi
     ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
