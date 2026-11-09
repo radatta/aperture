@@ -324,7 +324,7 @@ describe('flux voice (D58)', () => {
     setTimeout(() => (voices = full), 300);
     const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });
     renderApp({ api, path: '/settings' });
-    expect(await screen.findByLabelText('Voice', {}, { timeout: 2000 })).toBeTruthy();
+    expect(await screen.findByLabelText('Voice')).toBeTruthy();
     expect(screen.queryByText(/No voices found on this device/)).toBeNull();
   });
 
@@ -335,9 +335,7 @@ describe('flux voice (D58)', () => {
     await screen.findByLabelText('Count sessions as reps of');
     // WebKit can answer [] until voiceschanged: not yet a claim that there are none.
     expect(screen.queryByText(/No voices found on this device/)).toBeNull();
-    expect(
-      await screen.findByText(/No voices found on this device/, {}, { timeout: 2000 }),
-    ).toBeTruthy();
+    expect(await screen.findByText(/No voices found on this device/)).toBeTruthy();
     expect(screen.queryByLabelText('Voice')).toBeNull();
   });
 });

@@ -314,11 +314,11 @@ What it means:
   `cli.ts barriers` so it can be loosened with data.
 - **CPU plus memory pressure is what breaks the app suite's waits (2026-11-09).** Beside 16 threads
   sweeping 256 MB each (container anon about 13.5 GiB, as in the gate runs that failed), 4 runs in 6
-  failed one wait: opening a Flux exercise from the list took 1.5–2.2 s against Testing Library's 1 s.
-  CPU-only load (up to 24 busy threads) failed 0 in 30. Capping workers at 4 cut that to 1 in 6 but ran
-  about 18 % slower and misses the tuning bar below, so it isn't set. `app/src/test/setup.ts` raises
-  `asyncUtilTimeout` to 3000 ms instead: 0 in 6 under the same load, and no change in idle wall time
-  (about 20 s for the app suite).
+  failed one wait: opening a Flux exercise from the list outran Testing Library's 1 s (each failing test
+  ran 1.5–2.2 s). CPU-only load (up to 24 busy threads) failed 0 in 23. Capping workers at 4 still failed
+  1 in 6, ran about 18 % slower and misses the tuning bar below, so it isn't set. `app/src/test/setup.ts`
+  raises `asyncUtilTimeout` to 3000 ms instead: 0 in 6 under the same load, and no change in idle
+  duration (about 20 s for the app suite).
 - **Three sessions' full gate + UI at once is fine** (+6.6 GiB, +776 pids, all green), just CPU-bound.
 - **Test tuning: none** (answer 3's bar is ≥ 30 % peak-anon cut for ≤ 15 % more wall time).
   `VITEST_MAX_WORKERS=3` cuts 24 % at no wall cost; `--workspace-concurrency=1` saves nothing and is 15 %

@@ -11,11 +11,9 @@ import { resetFluxOutboxStore } from '../modules/flux/fluxOutbox';
 import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
 import { resetPushSync } from '../modules/push/browserPush';
 
-// findBy*/waitFor wait up to 3 s, not Testing Library's 1 s. Under a crowded container (CPU plus memory
-// pressure from other suites), opening a Flux exercise from the list (a second React.lazy suspend, then
-// React's reveal throttle) measured 1.5-2.2 s and failed 4 runs in 6 at 1 s; the shared worker cap fails
-// the board's bar (docs/ops/SESSION-BOARD.md -> Container-only tuning). A condition that never comes true
-// still fails, 2 s later; nothing passes that wouldn't.
+// findBy*/waitFor wait 3 s, not Testing Library's 1 s: under CPU plus memory pressure, opening a Flux
+// exercise outran 1 s, and a worker cap alone didn't clear it (docs/ops/SESSION-BOARD.md). No assertion is
+// loosened: a condition that never comes true still fails.
 configure({ asyncUtilTimeout: 3000 });
 
 // Files share one jsdom and one module graph (isolate: false), so whatever a test leaves behind is the
