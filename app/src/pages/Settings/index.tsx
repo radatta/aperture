@@ -184,29 +184,16 @@ function CategoryRow({
   function move(dir: -1 | 1) {
     const swap = siblings[index + dir];
     if (!swap) return;
-    upsert.mutate({
-      id: cat.id,
-      label: cat.label,
-      isWork: cat.isWork,
-      order: swap.order,
-      active: cat.active,
-    });
-    upsert.mutate({
-      id: swap.id,
-      label: swap.label,
-      isWork: swap.isWork,
-      order: cat.order,
-      active: swap.active,
-    });
+    // Each write names only the field it changes (api.ts: update is patch-style), so a stale snapshot can't
+    // revert a rename or a work flip that landed first.
+    upsert.mutate({ id: cat.id, order: swap.order });
+    upsert.mutate({ id: swap.id, order: cat.order });
   }
 
   // Retire hides it from every picker; tasks keep the label. Restore brings it back. The row moves
   // between groups once the list refetches, and a moved DOM node drops focus — so refocus after that.
   function setActive(active: boolean) {
-    upsert.mutate(
-      { id: cat.id, label: cat.label, isWork: cat.isWork, order: cat.order, active },
-      { onSuccess: closePanel },
-    );
+    upsert.mutate({ id: cat.id, active }, { onSuccess: closePanel });
   }
 
   async function flip(backfillPast: boolean) {
@@ -242,13 +229,8 @@ function CategoryRow({
             onBlur={() =>
               label.trim() &&
               label !== cat.label &&
-              upsert.mutate({
-                id: cat.id,
-                label: label.trim(),
-                isWork: cat.isWork,
-                order: cat.order,
-                active: cat.active,
-              })
+              // The label only: a flip tapped straight after must not be reverted by this write landing last.
+              upsert.mutate({ id: cat.id, label: label.trim() })
             }
             className={cx(
               // Inside a column now: the column shrinks (flex-1 min-w-0), the box fills it; sm keeps w-40.

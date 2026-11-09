@@ -1889,20 +1889,25 @@ export class BackendClient implements ApiClient {
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.area !== undefined) assertArea(input.area);
-    if (input.id) {
-      // Consistent: a work flip straight after a rename keeps the rename.
-      const existing = await this.repo.getCategory(input.id, { consistent: true });
-      if (!existing) throw new Error(`Not found: ${input.id}`);
-      return this.repo.putCategory({
-        ...existing,
-        label: input.label,
-        isWork: input.isWork,
-        order: input.order ?? existing.order,
-        active: input.active ?? existing.active,
-        area: input.area === undefined ? existing.area : input.area,
-        updatedAt: this.now(),
-      });
+    if (input.id !== undefined) {
+      // Every field patch-style, merged over the row as read and written back conditionally (casUpdate):
+      // a rename and a work flip racing on two instances can't revert each other.
+      return this.repo.updateCategory(
+        input.id,
+        (c) => ({
+          ...c,
+          label: input.label ?? c.label,
+          isWork: input.isWork ?? c.isWork,
+          order: input.order ?? c.order,
+          active: input.active ?? c.active,
+          area: input.area === undefined ? c.area : input.area,
+        }),
+        this.now(),
+      );
     }
+    // No RPC arg validation: a create must still name both.
+    if (typeof input.label !== 'string' || typeof input.isWork !== 'boolean')
+      throw new Error('upsertCategory: create needs label and isWork');
     return this.repo.putCategory({
       ...this.base(),
       label: input.label,
@@ -1914,18 +1919,14 @@ export class BackendClient implements ApiClient {
   }
   async setCategoryArea(id: string, area: Area | null): Promise<Category> {
     assertArea(area); // before any read: a bad value never reaches the table
-    const existing = await this.repo.getCategory(id, { consistent: true });
-    if (!existing) throw new Error(`Not found: ${id}`);
-    return this.repo.putCategory({ ...existing, area, updatedAt: this.now() });
+    return this.repo.updateCategory(id, (c) => ({ ...c, area }), this.now());
   }
   async setCategoryWork(
     id: string,
     isWork: boolean,
     backfillPast: boolean,
   ): Promise<{ category: Category; backfilled: number }> {
-    const existing = await this.repo.getCategory(id, { consistent: true });
-    if (!existing) throw new Error(`Not found: ${id}`);
-    const category = await this.repo.putCategory({ ...existing, isWork, updatedAt: this.now() });
+    const category = await this.repo.updateCategory(id, (c) => ({ ...c, isWork }), this.now());
     let backfilled = 0;
     if (backfillPast) {
       for (const s of (await this.repo.listAllSessions()).filter((x) => x.categoryId === id)) {
@@ -1955,8 +1956,14 @@ export class BackendClient implements ApiClient {
       await this.repo.putSeries({ ...s, categoryId: reassignToId, updatedAt: this.now() });
     for (const r of rolls)
       await this.repo.putRoll({ ...r, categoryId: reassignToId, updatedAt: this.now() });
-    const cat = await this.repo.getCategory(id, { consistent: true });
-    if (cat) await this.repo.putCategory({ ...cat, deletedAt: this.now(), updatedAt: this.now() });
+    // Conditional too, so an edit racing the delete can't write the live row back over the tombstone.
+    if (await this.repo.getCategory(id, { consistent: true }))
+      await this.repo.updateCategory(
+        id,
+        (c) => (c.deletedAt !== null ? null : { ...c, deletedAt: this.now() }), // a second delete keeps the first time
+        this.now(),
+        { allowDeleted: true },
+      );
   }
 
   // --- Places (errand lists — places.ts) ---

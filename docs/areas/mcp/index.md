@@ -136,9 +136,9 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   `update_task` (replaces; `null` or `""` clears). Checked before any dispatch like notes, so an over-cap one
   (1,000 chars) applies nothing. `list_tasks`, `list_backlog` and `get_calibration` return it. The tool text
   says to record it only in the user's own words — never invented or summarised.
-- **`update_category`** (rename / reorder / `isWork` / retire) merges `label` + `isWork` over the current
-  row, since `upsertCategory` requires both; `order` and `active` are patch-style in the contract (omitted
-  keeps the current value), so they're sent only when given. `active:false` **retires** the category —
+- **`update_category`** (rename / reorder / `isWork` / retire) sends only the fields given: every field of
+  an update is patch-style in the contract (omitted keeps the current value), so a stale value read back
+  can't revert a concurrent edit (a work flip from the app, say). `active:false` **retires** the category —
   the app's pickers hide it, existing tasks keep the label — and `active:true` restores it (the same as
   Settings → Retire / Restore). `isWork` here is forward-only; the app's `setCategoryWork` (backfill past sessions) stays unexposed, as does
   `deleteCategory` (reassign-everything).

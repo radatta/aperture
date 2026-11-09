@@ -29,13 +29,16 @@ function makeEnv() {
     google,
     stateSecret: 'test',
   });
+  const dispatched: { method: ApiMethod; args: unknown[] }[] = []; // what the tools sent the BFF
   const ctx: ToolContext = {
-    dispatch: (method: ApiMethod, args: unknown[]) =>
+    dispatch: (method: ApiMethod, args: unknown[]) => (
+      dispatched.push({ method, args }),
       handleRpc(
         doc,
         { userId: 'local', method, args, now, google, stateSecret: 'test' },
         { presigner: fakePresigner(), objects, anthropic },
-      ),
+      )
+    ),
     upload: async (url, bytes, contentType) => {
       uploads.push({ url, bytes, contentType });
     },
@@ -47,7 +50,7 @@ function makeEnv() {
     if (!tool) throw new Error(`no tool ${name}`);
     return tool.run(args, ctx);
   };
-  return { doc, google, anthropic, uploads, objects, setup, call };
+  return { doc, google, anthropic, uploads, objects, setup, call, dispatched };
 }
 
 describe('mcp tools — parse_task (Raycast quick add)', () => {
@@ -512,6 +515,20 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     expect(renamed).toMatchObject({ label: 'CS 61B', isWork: true, order: 4, active: false });
     const reordered = (await call('update_category', { id: cat.id, order: 1 })) as Category;
     expect(reordered).toMatchObject({ label: 'CS 61B', order: 1, active: false });
+  });
+
+  it('update_category sends only the fields given — a stale label or isWork never rides along', async () => {
+    const { call, setup, dispatched } = makeEnv();
+    const cat = (await call('create_category', { label: 'Side', isWork: false })) as Category;
+    const sent = () => dispatched.filter((d) => d.method === 'upsertCategory').at(-1)!.args[0];
+    await call('update_category', { id: cat.id, isWork: true });
+    expect(sent()).toStrictEqual({ id: cat.id, isWork: true });
+    await call('update_category', { id: cat.id, label: 'Side gig' });
+    expect(sent()).toStrictEqual({ id: cat.id, label: 'Side gig' });
+    expect((await setup.listCategories()).find((c) => c.id === cat.id)).toMatchObject({
+      label: 'Side gig',
+      isWork: true,
+    });
   });
 
   it('create_category / update_category carry area; list_categories returns it; a bad value is refused', async () => {

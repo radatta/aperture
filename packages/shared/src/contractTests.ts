@@ -1827,6 +1827,40 @@ export function runApiContract(
       await expect(api.setCategoryArea('nope', 'school')).rejects.toThrow(/Not found/);
     });
 
+    it('categories: an update is patch-style for label and isWork too — a label-only write keeps a flip', async () => {
+      const cat = await api.upsertCategory({ label: 'A', isWork: false });
+      await api.setCategoryWork(cat.id, true, false);
+      // Sequential: the semantics. Two writes racing on two instances: backend.test.ts (casUpdate).
+      expect(await api.upsertCategory({ id: cat.id, label: 'B' })).toMatchObject({
+        label: 'B',
+        isWork: true,
+      });
+      expect(await api.upsertCategory({ id: cat.id, order: 7 })).toMatchObject({
+        label: 'B',
+        isWork: true,
+        order: 7,
+      });
+      expect(await api.upsertCategory({ id: cat.id, active: false })).toMatchObject({
+        label: 'B',
+        isWork: true,
+        active: false,
+      });
+      expect(await api.upsertCategory({ id: cat.id, isWork: false })).toMatchObject({
+        label: 'B',
+        isWork: false,
+      });
+      const listed = (await api.listCategories()).find((c) => c.id === cat.id);
+      expect(listed).toMatchObject({ label: 'B', isWork: false, order: 7, active: false });
+    });
+
+    it('categories: a create without label and isWork is refused', async () => {
+      const before = (await api.listCategories()).length;
+      await expect(
+        api.upsertCategory({ label: 'x' } as unknown as Parameters<ApiClient['upsertCategory']>[0]),
+      ).rejects.toThrow(/needs label and isWork/);
+      expect(await api.listCategories()).toHaveLength(before);
+    });
+
     it('categories: update keeps order/active when omitted; retire and restore round-trip', async () => {
       const cat = await api.upsertCategory({ label: 'Homework', isWork: true, order: 3 });
       const renamed = await api.upsertCategory({ id: cat.id, label: 'HW', isWork: true });
@@ -2176,7 +2210,7 @@ export function runApiContract(
     // Soft-deleted rows stay out of the export. The two impls used to disagree — the stub spread its
     // raw store (tombstones included), the backend's repo reads are alive()-filtered (excluded) — and
     // no type can catch that, since both are well-typed arrays of the same element. Two probes because
-    // they take different paths: deleteCategory writes deletedAt via putCategory, removePlan goes
+    // they take different paths: deleteCategory writes deletedAt (the backend via updateCategory's casUpdate), removePlan goes
     // through the stub's softDelete. (Not uncheckHabit — the stub soft-deletes it but the backend
     // hard-deletes, so it can't distinguish filtering from absence.)
     it('export: excludes soft-deleted rows', async () => {

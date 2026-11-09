@@ -33,7 +33,8 @@ import type {
   SplitTaskInput,
   Task,
   TaskStatus,
-  UpsertCategoryInput,
+  CreateCategoryInput,
+  UpdateCategoryInput,
 } from '@aperture/shared';
 import { FINANCE_TOOLS } from './financeTools';
 import { FLUX_TOOLS } from './fluxTools';
@@ -630,7 +631,7 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     run(args, ctx) {
-      const input: UpsertCategoryInput = {
+      const input: CreateCategoryInput = {
         label: reqStr(args, 'label'),
         isWork: reqBool(args, 'isWork'),
       };
@@ -661,16 +662,13 @@ export const TOOLS: Tool[] = [
       if (!['label', 'isWork', 'order', 'active', 'area'].some((f) => present(args, f))) {
         throw new RpcParamError('update_category needs at least one field to change');
       }
-      // upsertCategory requires label + isWork, so those merge over the current row; order/active are
-      // patch-style in the contract (omitted keeps the current value), so they're sent only when given.
+      // Every field is patch-style in the contract, so only what was given is sent: a label or isWork read
+      // here and sent back could revert a concurrent edit.
       const cats = (await ctx.dispatch('listCategories', [])) as Category[];
-      const cat = cats.find((c) => c.id === id);
-      if (!cat) throw new Error(`Not found: ${id}`);
-      const input: UpsertCategoryInput = {
-        id,
-        label: present(args, 'label') ? reqStr(args, 'label') : cat.label,
-        isWork: present(args, 'isWork') ? reqBool(args, 'isWork') : cat.isWork,
-      };
+      if (!cats.some((c) => c.id === id)) throw new Error(`Not found: ${id}`);
+      const input: UpdateCategoryInput = { id };
+      if (present(args, 'label')) input.label = reqStr(args, 'label');
+      if (present(args, 'isWork')) input.isWork = reqBool(args, 'isWork');
       if (present(args, 'order')) input.order = reqInt(args, 'order');
       if (present(args, 'active')) input.active = reqBool(args, 'active');
       // null clears; absent keeps (present() is the "sent" test, so a null goes through).

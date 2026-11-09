@@ -67,6 +67,38 @@ describe('categories: retire / restore', () => {
   });
 });
 
+// A write that carries a stale snapshot of fields it isn't changing reverts whatever landed first: on dev
+// (2026-11-09) a rename's put landed after a "Make work" flip and wrote isWork back to false.
+describe('categories: each write names only the field it changes', () => {
+  it('rename sends the label, move the orders, retire the active flag', async () => {
+    const { api, hw } = await twoCats();
+    const courses = (await api.listCategories()).find((c) => c.label === 'Courses')!;
+    const writes = vi.spyOn(api, 'upsertCategory');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+
+    const field = await screen.findByLabelText('Rename Homework');
+    await user.clear(field);
+    await user.type(field, 'Old homework');
+    await user.tab();
+    await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
+    expect(writes.mock.calls[0]![0]).toStrictEqual({ id: hw.id, label: 'Old homework' });
+
+    await user.click(await screen.findByLabelText('Move Old homework down'));
+    await waitFor(() => expect(writes).toHaveBeenCalledTimes(3));
+    expect(writes.mock.calls[1]![0]).toStrictEqual({ id: hw.id, order: courses.order });
+    expect(writes.mock.calls[2]![0]).toStrictEqual({ id: courses.id, order: hw.order });
+
+    await user.click(await screen.findByLabelText('More actions for Old homework'));
+    await user.click(screen.getByRole('menuitem', { name: 'Retire…' }));
+    await user.click(screen.getByRole('button', { name: 'Retire' }));
+    await waitFor(() => expect(writes).toHaveBeenCalledTimes(4));
+    expect(writes.mock.calls[3]![0]).toStrictEqual({ id: hw.id, active: false });
+    const saved = (await api.listCategories()).find((c) => c.id === hw.id);
+    expect(saved).toMatchObject({ label: 'Old homework', isWork: true, active: false });
+  });
+});
+
 describe('categories: area (D14)', () => {
   it('Area… opens a panel; one tap is one write, the row reads it, focus returns to the menu', async () => {
     const { api, hw } = await twoCats();
