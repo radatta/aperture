@@ -65,7 +65,8 @@ export function background(extra: Record<string, unknown>) {
 export function fakeExtension(opts: { onMessage?: (msg: unknown) => unknown; id?: string } = {}) {
   const id = opts.id ?? 'ext-id';
   const listeners: Array<(changes: object, area: string) => void> = [];
-  const msgListeners: Array<(m: unknown, s: unknown, r: (v: unknown) => void) => boolean | void> = [];
+  const msgListeners: Array<(m: unknown, s: unknown, r: (v: unknown) => void) => boolean | void> =
+    [];
   const area = (name: string) => {
     const data: Record<string, unknown> = {};
     // A listener from a closed test page may throw; the others still hear the change.

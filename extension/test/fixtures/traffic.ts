@@ -29,7 +29,10 @@ export const T = {
           questionId: QID,
           questionFrontendId: '1',
           difficulty: 'Easy',
-          topicTags: [{ name: 'Array', slug: 'array' }, { name: 'Hash Table', slug: 'hash-table' }],
+          topicTags: [
+            { name: 'Array', slug: 'array' },
+            { name: 'Hash Table', slug: 'hash-table' },
+          ],
           companyTagStatsV2: '{"threeMonths":[{"name":"Acme","timesEncountered":3}]}',
         },
       },
@@ -39,7 +42,9 @@ export const T = {
     url: 'https://leetcode.com/graphql/',
     reqText: gql('questionDetail', { titleSlug: 'add-two-numbers' }),
     resText: JSON.stringify({
-      data: { question: { title: 'Add Two Numbers', titleSlug: 'add-two-numbers', questionId: '2' } },
+      data: {
+        question: { title: 'Add Two Numbers', titleSlug: 'add-two-numbers', questionId: '2' },
+      },
     }),
   },
   submissionDetails: {
@@ -113,7 +118,12 @@ export const T = {
   },
   run: {
     url: `https://leetcode.com/problems/${SLUG}/interpret_solution/`,
-    reqText: JSON.stringify({ lang: 'python3', question_id: QID, typed_code: CODE, data_input: '[2,7]\n9' }),
+    reqText: JSON.stringify({
+      lang: 'python3',
+      question_id: QID,
+      typed_code: CODE,
+      data_input: '[2,7]\n9',
+    }),
     resText: JSON.stringify({ interpret_id: 'runcode_1_2_x', test_case: '[2,7]\n9' }),
   },
   runCheck: {

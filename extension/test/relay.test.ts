@@ -25,8 +25,16 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     expect(await relay.accept(await msg(snapshot), active)).toMatchObject({ ok: true });
 
     const forger = await tag.keyOf(tag.newNonce());
-    expect(await relay.accept(await msg(snapshot, { key: forger }), active)).toEqual({ ok: false, reason: 'bad-tag' });
-    expect(await relay.accept(JSON.stringify({ body: JSON.stringify({ v: 2, seq: 99, ...snapshot }) }), active)).toEqual({
+    expect(await relay.accept(await msg(snapshot, { key: forger }), active)).toEqual({
+      ok: false,
+      reason: 'bad-tag',
+    });
+    expect(
+      await relay.accept(
+        JSON.stringify({ body: JSON.stringify({ v: 2, seq: 99, ...snapshot }) }),
+        active,
+      ),
+    ).toEqual({
       ok: false,
       reason: 'bad-tag',
     });
@@ -35,7 +43,9 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     expect((await relay.accept(replayed, active)).ok).toBe(true);
     expect(await relay.accept(replayed, active)).toEqual({ ok: false, reason: 'replayed-seq' });
 
-    expect(await relay.accept(await msg({ ...snapshot, kind: 'note', slug: 'other' }), active)).toEqual({
+    expect(
+      await relay.accept(await msg({ ...snapshot, kind: 'note', slug: 'other' }), active),
+    ).toEqual({
       ok: false,
       reason: 'off-screen-slug',
     });
@@ -43,18 +53,34 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
       ok: false,
       reason: 'foreign-question',
     });
-    expect(await relay.accept({ not: 'a string' }, active)).toEqual({ ok: false, reason: 'not-string' });
+    expect(await relay.accept({ not: 'a string' }, active)).toEqual({
+      ok: false,
+      reason: 'not-string',
+    });
   });
 
   it('drops events when no sitting is open for the problem on screen, but still caches problem docs and hints', async () => {
     const { relay, msg } = await handshake();
     const none = { screenSlug: 'two-sum', binding: null };
-    expect(await relay.accept(await msg(snapshot), none)).toEqual({ ok: false, reason: 'no-sitting' });
+    expect(await relay.accept(await msg(snapshot), none)).toEqual({
+      ok: false,
+      reason: 'no-sitting',
+    });
     const ended = { screenSlug: 'two-sum', binding: { questionId: '1', status: 'done' } };
-    expect(await relay.accept(await msg(snapshot), ended)).toEqual({ ok: false, reason: 'no-sitting' });
-    expect((await relay.accept(await msg({ kind: 'problem', slug: 'next-one', payload: {} }), none)).ok).toBe(true);
-    expect((await relay.accept(await msg({ kind: 'hint', slug: null, questionId: '1' }), none)).ok).toBe(true);
-    expect(await relay.accept(await msg({ kind: 'start', slug: 'two-sum' }), active)).toEqual({ ok: false, reason: 'kind' });
+    expect(await relay.accept(await msg(snapshot), ended)).toEqual({
+      ok: false,
+      reason: 'no-sitting',
+    });
+    expect(
+      (await relay.accept(await msg({ kind: 'problem', slug: 'next-one', payload: {} }), none)).ok,
+    ).toBe(true);
+    expect(
+      (await relay.accept(await msg({ kind: 'hint', slug: null, questionId: '1' }), none)).ok,
+    ).toBe(true);
+    expect(await relay.accept(await msg({ kind: 'start', slug: 'two-sum' }), active)).toEqual({
+      ok: false,
+      reason: 'kind',
+    });
   });
 
   it('takes the first hello only, and nothing before it', async () => {
@@ -66,7 +92,9 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     expect(relay.hello(JSON.stringify({ nonce: tag.newNonce() }))).toBeNull();
     const key = await tag.keyOf(first);
     const body = JSON.stringify({ v: 2, seq: 1, ...snapshot });
-    expect((await relay.accept(JSON.stringify({ body, tag: await tag.sign(key, body) }), active)).ok).toBe(true);
+    expect(
+      (await relay.accept(JSON.stringify({ body, tag: await tag.sign(key, body) }), active)).ok,
+    ).toBe(true);
   });
 
   it('reads the problem on screen from the path only', () => {

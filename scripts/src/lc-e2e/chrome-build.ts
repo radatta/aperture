@@ -18,6 +18,9 @@ export function chromeBuild(extensionDir: string): string {
   manifest.background = { service_worker: 'sw.js' };
   manifest.host_permissions = [...manifest.host_permissions, 'http://127.0.0.1/*'];
   writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
-  writeFileSync(join(out, 'sw.js'), `importScripts(${scripts.map((s) => JSON.stringify(s)).join(', ')});\n`);
+  writeFileSync(
+    join(out, 'sw.js'),
+    `importScripts(${scripts.map((s) => JSON.stringify(s)).join(', ')});\n`,
+  );
   return out;
 }

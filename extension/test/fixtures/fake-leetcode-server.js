@@ -23,22 +23,32 @@
       if (path === '/graphql/' && method === 'POST') {
         const op = JSON.parse(reqText || '{}');
         const v = op.variables || {};
-        const data = {
-          syncedCode: { syncedCode: { timestamp: 1, code: 'pass' } },
-          updateSyncedCode: { updateSyncedCode: { ok: true } },
-          updateNote: { updateNote: { ok: true } },
-          PracticeReplayUploadEvents: { createPracticeReplayEvents: { ok: true } },
-          questionDetail: { question: question(v.titleSlug) },
-          submissionDetails: {
-            submissionDetails: { code: 'x', statusCode: 10, user: { username: 'user' }, question: { titleSlug: 'two-sum' } },
-          },
-        }[op.operationName] || {};
+        const data =
+          {
+            syncedCode: { syncedCode: { timestamp: 1, code: 'pass' } },
+            updateSyncedCode: { updateSyncedCode: { ok: true } },
+            updateNote: { updateNote: { ok: true } },
+            PracticeReplayUploadEvents: { createPracticeReplayEvents: { ok: true } },
+            questionDetail: { question: question(v.titleSlug) },
+            submissionDetails: {
+              submissionDetails: {
+                code: 'x',
+                statusCode: 10,
+                user: { username: 'user' },
+                question: { titleSlug: 'two-sum' },
+              },
+            },
+          }[op.operationName] || {};
         return { status: 200, body: JSON.stringify({ data }) };
       }
       let m = path.match(/^\/problems\/([^/]+)\/submit\/$/);
       if (m) return { status: 200, body: JSON.stringify({ submission_id: nextId++ }) };
       m = path.match(/^\/problems\/([^/]+)\/interpret_solution\/$/);
-      if (m) return { status: 200, body: JSON.stringify({ interpret_id: `runcode_${nextId++}_x`, test_case: '[2,7]\n9' }) };
+      if (m)
+        return {
+          status: 200,
+          body: JSON.stringify({ interpret_id: `runcode_${nextId++}_x`, test_case: '[2,7]\n9' }),
+        };
       m = path.match(/^\/submissions\/detail\/([^/]+)\/(v2\/)?check\/$/);
       if (m) {
         const n = (checks.get(m[1]) || 0) + 1;

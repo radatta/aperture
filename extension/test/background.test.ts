@@ -4,7 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { AUTH_HEADER, SITTING_ACTIVE_ERROR, SITTING_ENDED_ERROR } from '@aperture/shared';
 import { background, fakeExtension, src, until } from './load';
 
-type Call = { url: string; headers: Record<string, string>; body: { args: [Record<string, unknown>] } };
+type Call = {
+  url: string;
+  headers: Record<string, string>;
+  body: { args: [Record<string, unknown>] };
+};
 function setup(script: (call: Call, n: number) => { status: number; body: unknown }) {
   const ext = fakeExtension();
   const calls: Call[] = [];
@@ -15,11 +19,17 @@ function setup(script: (call: Call, n: number) => { status: number; body: unknow
     return new Response(JSON.stringify(r.body), { status: r.status });
   };
   background({ chrome: ext.api, fetch, Response });
-  const send = (msg: object) => ext.api.runtime.sendMessage(msg) as Promise<Record<string, unknown>>;
+  const send = (msg: object) =>
+    ext.api.runtime.sendMessage(msg) as Promise<Record<string, unknown>>;
   return { ext, calls, send };
 }
 const events = (n: number, from = 0) =>
-  Array.from({ length: n }, (_, i) => ({ id: `E${from + i}`, type: 'snapshot', at: 1, payload: { code: `v${from + i}` } }));
+  Array.from({ length: n }, (_, i) => ({
+    id: `E${from + i}`,
+    type: 'snapshot',
+    at: 1,
+    payload: { code: `v${from + i}` },
+  }));
 const ok = { status: 200, body: { accepted: 1, duplicates: 0, version: 3, status: 'active' } };
 
 describe('background', () => {
@@ -31,7 +41,10 @@ describe('background', () => {
 
   it('posts events with the device token, in order, and records the sync for the badge', async () => {
     const { ext, calls, send } = setup(() => ok);
-    await ext.local.set({ apiOrigin: 'https://aperture.test/', deviceToken: 'test-token-not-a-secret' });
+    await ext.local.set({
+      apiOrigin: 'https://aperture.test/',
+      deviceToken: 'test-token-not-a-secret',
+    });
     await send({ type: 'enqueue', sittingId: 'SIT', slug: 'two-sum', events: events(60) });
     await until(() => calls.length === 2);
     expect(calls[0]!.url).toBe('https://aperture.test/api/lcSittingEvents');
@@ -64,16 +77,28 @@ describe('background', () => {
     mode = 'auth';
     await send({ type: 'retry-now' });
     await until(() => (ext.local.data.outbox as { paused: string }).paused === 'auth');
-    expect(calls.map((c) => (c.body.args[0].events as Array<{ id: string }>)[0]!.id)).toEqual(['E0', 'E0']);
+    expect(calls.map((c) => (c.body.args[0].events as Array<{ id: string }>)[0]!.id)).toEqual([
+      'E0',
+      'E0',
+    ]);
 
     mode = 'refuse';
     await ext.local.set({ deviceToken: 't2' });
     await send({ type: 'config-changed' });
     // E0 is refused and kept as failed; the one behind it still goes.
-    await until(() => calls.length === 4 && (ext.local.data.outbox as { entries: unknown[] }).entries.length === 1);
+    await until(
+      () =>
+        calls.length === 4 &&
+        (ext.local.data.outbox as { entries: unknown[] }).entries.length === 1,
+    );
     expect((calls[3]!.body.args[0].events as Array<{ id: string }>)[0]!.id).toBe('E1');
-    const failed = (ext.local.data.outbox as { entries: Array<Record<string, unknown>> }).entries[0]!;
-    expect(failed).toMatchObject({ state: 'failed', lastStatus: 400, lastError: 'A snapshot needs its code' });
+    const failed = (ext.local.data.outbox as { entries: Array<Record<string, unknown>> })
+      .entries[0]!;
+    expect(failed).toMatchObject({
+      state: 'failed',
+      lastStatus: 400,
+      lastError: 'A snapshot needs its code',
+    });
     await send({ type: 'clear-failed' });
     await until(() => (ext.local.data.outbox as { entries: unknown[] }).entries.length === 0);
   });
@@ -87,10 +112,19 @@ describe('background', () => {
   });
 
   it('answers Start directly, says when it isn’t configured, and remembers Just looking for the session', async () => {
-    const { ext, calls, send } = setup(() => ({ status: 200, body: { sitting: { id: 'S' }, resumed: false } }));
-    expect(await send({ type: 'start', body: {} })).toMatchObject({ status: -1, error: expect.stringContaining('options') });
+    const { ext, calls, send } = setup(() => ({
+      status: 200,
+      body: { sitting: { id: 'S' }, resumed: false },
+    }));
+    expect(await send({ type: 'start', body: {} })).toMatchObject({
+      status: -1,
+      error: expect.stringContaining('options'),
+    });
     await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
-    expect(await send({ type: 'start', body: { problemSlug: 'two-sum' } })).toMatchObject({ status: 200, json: { sitting: { id: 'S' } } });
+    expect(await send({ type: 'start', body: { problemSlug: 'two-sum' } })).toMatchObject({
+      status: 200,
+      json: { sitting: { id: 'S' } },
+    });
     expect(calls[0]!.url).toBe('https://aperture.test/api/lcSittingStart');
     expect(await send({ type: 'dismissed?', slug: 'two-sum' })).toEqual({ dismissed: false });
     await send({ type: 'dismiss', slug: 'two-sum' });
@@ -103,7 +137,8 @@ describe('background', () => {
     const { ext, calls } = setup(() => ok);
     await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
     const replies: unknown[] = [];
-    for (const l of ext.msgListeners) l({ type: 'start', body: {} }, { id: 'someone-else' }, (v) => replies.push(v));
+    for (const l of ext.msgListeners)
+      l({ type: 'start', body: {} }, { id: 'someone-else' }, (v) => replies.push(v));
     await new Promise((r) => setTimeout(r, 50));
     expect(calls).toEqual([]);
     expect(replies).toEqual([]);

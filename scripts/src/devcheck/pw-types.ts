@@ -141,6 +141,9 @@ export interface PwBrowser {
 export interface PwModule {
   chromium: {
     launch(opts: Record<string, unknown>): Promise<PwBrowser>;
-    launchPersistentContext?(userDataDir: string, opts: Record<string, unknown>): Promise<PwContext>;
+    launchPersistentContext?(
+      userDataDir: string,
+      opts: Record<string, unknown>,
+    ): Promise<PwContext>;
   };
 }

@@ -22,19 +22,23 @@ afterEach(() => dom?.window.close());
 
 function loadMain(pairs: Pair[]) {
   dom = page('https://leetcode.com/problems/two-sum/description/');
-  const w = dom.window as unknown as Window & Record<string, unknown>;
+  const w = dom.window as unknown as Window & typeof globalThis & Record<string, unknown>;
   const answer = byUrl(pairs);
   const relay = relayLib.createRelay();
   const accepted: Array<Record<string, unknown>> = [];
   const rejected: string[] = [];
   let chain = Promise.resolve();
   w.addEventListener('aperture-lc-hello', (e: Event) => {
-    if (relay.hello((e as CustomEvent).detail)) w.dispatchEvent(new w.CustomEvent('aperture-lc-ack'));
+    if (relay.hello((e as CustomEvent).detail))
+      w.dispatchEvent(new w.CustomEvent('aperture-lc-ack'));
   });
   w.addEventListener('aperture-lc', (e: Event) => {
     const detail = (e as CustomEvent).detail;
     chain = chain.then(async () => {
-      const r = await relay.accept(detail, { screenSlug: 'two-sum', binding: { questionId: '1', status: 'active' } });
+      const r = await relay.accept(detail, {
+        screenSlug: 'two-sum',
+        binding: { questionId: '1', status: 'active' },
+      });
       if (r.ok) accepted.push(r.msg);
       else rejected.push(r.reason);
     });
@@ -42,8 +46,16 @@ function loadMain(pairs: Pair[]) {
   // LeetCode's two transports: fetch …
   w.fetch = (async (input: string | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.url;
-    const body = init?.body != null ? String(init.body) : typeof input === 'string' ? null : await input.text();
-    return new Response(answer(url, body), { status: 200, headers: { 'content-type': 'application/json' } });
+    const body =
+      init?.body != null
+        ? String(init.body)
+        : typeof input === 'string'
+          ? null
+          : await input.text();
+    return new Response(answer(url, body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   }) as unknown as typeof fetch;
   // … and XMLHttpRequest.
   class FakeXHR extends (w.EventTarget as typeof EventTarget) {
@@ -92,20 +104,36 @@ describe('inject-main in a page', () => {
     await post(T.submissionDetails);
     await w.fetch(new Request(T.run.url, { method: 'POST', body: T.run.reqText }));
     await w.fetch(T.runCheck.url);
-    await w.fetch('https://example.com/graphql/', { method: 'POST', body: T.updateSyncedCode.reqText });
+    await w.fetch('https://example.com/graphql/', {
+      method: 'POST',
+      body: T.updateSyncedCode.reqText,
+    });
 
     const kinds = await until(() => (accepted.length >= 9 ? accepted.map((m) => m.kind) : null));
     expect(rejected).toEqual([]);
-    expect(new Set(kinds)).toEqual(new Set(['hint', 'snapshot', 'note', 'replay', 'problem', 'submit', 'submitDetails', 'run']));
-    expect(accepted.find((m) => m.kind === 'run')).toMatchObject({ slug: 'two-sum', payload: { interpretId: 'runcode_1_2_x' } });
-    expect(accepted.find((m) => m.kind === 'submit')).toMatchObject({ payload: { submissionId: '900001', result: { status_msg: 'Wrong Answer' } } });
-    expect(accepted.filter((m) => m.kind === 'problem').map((m) => m.slug)).toEqual(['two-sum', 'add-two-numbers']);
+    expect(new Set(kinds)).toEqual(
+      new Set(['hint', 'snapshot', 'note', 'replay', 'problem', 'submit', 'submitDetails', 'run']),
+    );
+    expect(accepted.find((m) => m.kind === 'run')).toMatchObject({
+      slug: 'two-sum',
+      payload: { interpretId: 'runcode_1_2_x' },
+    });
+    expect(accepted.find((m) => m.kind === 'submit')).toMatchObject({
+      payload: { submissionId: '900001', result: { status_msg: 'Wrong Answer' } },
+    });
+    expect(accepted.filter((m) => m.kind === 'problem').map((m) => m.slug)).toEqual([
+      'two-sum',
+      'add-two-numbers',
+    ]);
     expect(accepted.map((m) => m.seq)).toEqual(accepted.map((_, i) => i + 1));
   });
 
   it('never changes what the page gets back', async () => {
     const { w } = loadMain([T.questionDetail as Pair]);
-    const res = await w.fetch(T.questionDetail.url, { method: 'POST', body: T.questionDetail.reqText });
+    const res = await w.fetch(T.questionDetail.url, {
+      method: 'POST',
+      body: T.questionDetail.reqText,
+    });
     expect(await res.json()).toEqual(JSON.parse(T.questionDetail.resText));
   });
 });

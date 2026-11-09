@@ -38,18 +38,33 @@
   // The timer keeps its state in localStorage, as LeetCode's does.
   const writeTimer = (s) => localStorage.setItem('QD_TIMER_STATE', JSON.stringify(s));
   $('[data-fake=timer-reset]').addEventListener('click', () =>
-    writeTimer({ mode: 'stopwatch', startTimestamp: null, pauseMs: 0, endMs: 3600000, status: 'pause' }),
+    writeTimer({
+      mode: 'stopwatch',
+      startTimestamp: null,
+      pauseMs: 0,
+      endMs: 3600000,
+      status: 'pause',
+    }),
   );
   $('[data-fake=timer-start]').addEventListener('click', () => {
     fake.timerStarts++;
-    writeTimer({ mode: 'stopwatch', startTimestamp: Date.now(), pauseMs: 0, endMs: 3600000, status: 'running' });
+    writeTimer({
+      mode: 'stopwatch',
+      startTimestamp: Date.now(),
+      pauseMs: 0,
+      endMs: 3600000,
+      status: 'running',
+    });
   });
 
   // Typing syncs the full code, debounced, as updateSyncedCode does.
   let typing = null;
   code.addEventListener('input', () => {
     clearTimeout(typing);
-    typing = setTimeout(() => gql('updateSyncedCode', { code: code.value, lang: 11, questionId: qid }), 300);
+    typing = setTimeout(
+      () => gql('updateSyncedCode', { code: code.value, lang: 11, questionId: qid }),
+      300,
+    );
   });
 
   const poll = async (id, path) => {
@@ -82,7 +97,12 @@
     const r = await fetch(`/problems/${slug}/interpret_solution/`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ lang: 'python3', question_id: String(qid), typed_code: code.value, data_input: '[2,7]\n9' }),
+      body: JSON.stringify({
+        lang: 'python3',
+        question_id: String(qid),
+        typed_code: code.value,
+        data_input: '[2,7]\n9',
+      }),
     }).then((x) => x.json());
     await poll(r.interpret_id, 'check/');
   });
@@ -94,7 +114,12 @@
     if (!edits) return;
     const events = JSON.stringify([{ questionId: String(qid), type: 7, ts: Date.now(), n: edits }]);
     edits = 0;
-    gql('PracticeReplayUploadEvents', { questionSlug: slug, clientSessionId: 'practice-1', events, activeSessionId: 1 });
+    gql('PracticeReplayUploadEvents', {
+      questionSlug: slug,
+      clientSessionId: 'practice-1',
+      events,
+      activeSessionId: 1,
+    });
   }, 2000);
 
   // "Next problem" is a single-page navigation, as on LeetCode.

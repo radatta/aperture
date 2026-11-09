@@ -7,7 +7,13 @@ const wire = lib('wire');
 const ulid = lib('ulid');
 type Pair = { url: string; reqText: string | null; resText: string };
 const seen = (capture: { observe(x: object): unknown[] }, p: Pair, at = 1000) =>
-  capture.observe({ url: p.url, reqText: p.reqText, resText: p.resText, reqAt: at, resAt: at + 50 });
+  capture.observe({
+    url: p.url,
+    reqText: p.reqText,
+    resText: p.resText,
+    reqAt: at,
+    resAt: at + 50,
+  });
 
 describe('wire: what LeetCode traffic means', () => {
   it('reads only LeetCode paths, and only the requests it uses', () => {
@@ -25,10 +31,18 @@ describe('wire: what LeetCode traffic means', () => {
   it('turns each GraphQL operation into its item, and ignores the rest', () => {
     const c = wire.createCapture();
     expect(seen(c, T.updateSyncedCode)).toEqual([
-      { kind: 'snapshot', slug: null, questionId: QID, at: 1000, payload: { code: CODE, questionId: QID, lang: '11' } },
+      {
+        kind: 'snapshot',
+        slug: null,
+        questionId: QID,
+        at: 1000,
+        payload: { code: CODE, questionId: QID, lang: '11' },
+      },
     ]);
     expect(seen(c, T.syncedCode)).toMatchObject([{ kind: 'hint', questionId: QID }]);
-    expect(seen(c, T.updateNote)).toMatchObject([{ kind: 'note', slug: SLUG, payload: { slug: SLUG, content: 'use a map' } }]);
+    expect(seen(c, T.updateNote)).toMatchObject([
+      { kind: 'note', slug: SLUG, payload: { slug: SLUG, content: 'use a map' } },
+    ]);
     const [replay] = seen(c, T.replay) as Array<Record<string, unknown>>;
     expect(replay).toMatchObject({ kind: 'replay', slug: SLUG, clientSessionId: 'practice-0000' });
     expect(typeof replay!.events).toBe('string');
@@ -52,7 +66,11 @@ describe('wire: what LeetCode traffic means', () => {
         kind: 'submit',
         slug: SLUG,
         at: 1000,
-        payload: { submissionId: '900001', request: { typed_code: CODE }, result: { status_msg: 'Wrong Answer' } },
+        payload: {
+          submissionId: '900001',
+          request: { typed_code: CODE },
+          result: { status_msg: 'Wrong Answer' },
+        },
       },
     ]);
     expect(seen(c, T.submitCheck, 4000)).toEqual([]); // LeetCode polls again: still once
@@ -62,7 +80,12 @@ describe('wire: what LeetCode traffic means', () => {
     const c = wire.createCapture();
     seen(c, T.run, 1000);
     expect(seen(c, T.runCheck, 1500)).toMatchObject([
-      { kind: 'run', slug: SLUG, at: 1000, payload: { interpretId: 'runcode_1_2_x', result: { status_msg: 'Accepted' } } },
+      {
+        kind: 'run',
+        slug: SLUG,
+        at: 1000,
+        payload: { interpretId: 'runcode_1_2_x', result: { status_msg: 'Accepted' } },
+      },
     ]);
   });
 
@@ -70,7 +93,9 @@ describe('wire: what LeetCode traffic means', () => {
     const c = wire.createCapture();
     seen(c, T.submit, 1000);
     expect(c.sweep(1000 + wire.PAIR_TIMEOUT_MS)).toEqual([]);
-    expect(c.sweep(1001 + wire.PAIR_TIMEOUT_MS)).toMatchObject([{ kind: 'submit', payload: { result: { pending: true } } }]);
+    expect(c.sweep(1001 + wire.PAIR_TIMEOUT_MS)).toMatchObject([
+      { kind: 'submit', payload: { result: { pending: true } } },
+    ]);
     expect(seen(c, T.submitCheck, 999_999)).toEqual([]);
   });
 
@@ -86,11 +111,19 @@ describe('wire: what LeetCode traffic means', () => {
     const events = items.flatMap((i) => wire.toEventInputs(i, ulid.ulid));
     expect(events.every((e: { id: string }) => isUlid(e.id))).toBe(true);
     const n = normalizeSittingEvents({ sittingId: ulid.ulid(), events });
-    expect(n.events.map((e) => e.type)).toEqual(['snapshot', 'note', 'replay', 'submitDetails', 'submit']);
+    expect(n.events.map((e) => e.type)).toEqual([
+      'snapshot',
+      'note',
+      'replay',
+      'submitDetails',
+      'submit',
+    ]);
   });
 
   it('splits a replay over 60 KB along its array, and drops one that isn’t an array', () => {
-    const big = JSON.stringify(Array.from({ length: 2000 }, (_, i) => ({ type: 7, ts: i, text: 'x'.repeat(40) })));
+    const big = JSON.stringify(
+      Array.from({ length: 2000 }, (_, i) => ({ type: 7, ts: i, text: 'x'.repeat(40) })),
+    );
     const parts = wire.splitReplay(big);
     expect(parts.length).toBeGreaterThan(1);
     expect(parts.every((p: string) => wire.bytes(p) <= 60 * 1024)).toBe(true);

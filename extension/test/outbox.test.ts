@@ -3,10 +3,18 @@ import { SITTING_CALL_BYTES, SITTING_EVENTS_PER_CALL } from '@aperture/shared';
 import { lib } from './load';
 
 const ob = lib('outbox');
-const snap = (i: number, size = 10) => ({ id: `e${i}`, type: 'snapshot', at: i, payload: { code: 'x'.repeat(size) } });
+const snap = (i: number, size = 10) => ({
+  id: `e${i}`,
+  type: 'snapshot',
+  at: i,
+  payload: { code: 'x'.repeat(size) },
+});
 const submit = (i: number) => ({ id: `s${i}`, type: 'submit', at: i, payload: { result: {} } });
 const queueOf = (...batches: object[][]) =>
-  ob.enqueue(ob.empty(), batches.map((ev, i) => ob.entryOf(`q${i}`, 'SIT', 'two-sum', ev, 0))).queue;
+  ob.enqueue(
+    ob.empty(),
+    batches.map((ev, i) => ob.entryOf(`q${i}`, 'SIT', 'two-sum', ev, 0)),
+  ).queue;
 
 describe('outbox', () => {
   it('matches the server’s per-call caps', () => {
@@ -19,8 +27,15 @@ describe('outbox', () => {
     expect(ob.splitBatch(many).batches.map((b: unknown[]) => b.length)).toEqual([50, 50, 20]);
     const fat = Array.from({ length: 6 }, (_, i) => snap(i, 60 * 1024));
     const { batches } = ob.splitBatch(fat);
-    expect(batches.every((b: object[]) => b.reduce((n, e) => n + ob.eventBytes(e), 0) <= SITTING_CALL_BYTES)).toBe(true);
-    expect(ob.splitBatch([snap(1, 70 * 1024), snap(2)])).toMatchObject({ dropped: 1, batches: [[{ id: 'e2' }]] });
+    expect(
+      batches.every(
+        (b: object[]) => b.reduce((n, e) => n + ob.eventBytes(e), 0) <= SITTING_CALL_BYTES,
+      ),
+    ).toBe(true);
+    expect(ob.splitBatch([snap(1, 70 * 1024), snap(2)])).toMatchObject({
+      dropped: 1,
+      batches: [[{ id: 'e2' }]],
+    });
   });
 
   it('keeps a 401-rejected entry as failed and visible, and retries a 5xx in order behind nothing', () => {
@@ -41,9 +56,18 @@ describe('outbox', () => {
     expect(ob.counts(r.queue)).toEqual({ queued: 1, failed: 0, paused: 'auth' });
     expect(ob.next(ob.unpause(r.queue), 9000).entry.id).toBe('q1');
 
-    r = ob.applyResult(ob.unpause(r.queue), 'q1', { status: 400, error: 'A snapshot needs its code' }, 9000);
+    r = ob.applyResult(
+      ob.unpause(r.queue),
+      'q1',
+      { status: 400, error: 'A snapshot needs its code' },
+      9000,
+    );
     expect(r.outcome).toBe('failed');
-    expect(r.queue.entries[0]).toMatchObject({ state: 'failed', lastStatus: 400, lastError: 'A snapshot needs its code' });
+    expect(r.queue.entries[0]).toMatchObject({
+      state: 'failed',
+      lastStatus: 400,
+      lastError: 'A snapshot needs its code',
+    });
     expect(ob.next(r.queue, 9000)).toBeNull();
     expect(ob.counts(ob.retryNow(r.queue, 9000)).queued).toBe(1);
     expect(ob.clearFailed(r.queue).entries).toEqual([]);
@@ -65,7 +89,9 @@ describe('outbox', () => {
     const q = queueOf([snap(1), snap(2), snap(3)]);
     const r = ob.applyResult(q, 'q0', { status: 413 }, 0);
     expect(r.outcome).toBe('split');
-    expect(r.queue.entries.map((e: { id: string; events: unknown[] }) => [e.id, e.events.length])).toEqual([
+    expect(
+      r.queue.entries.map((e: { id: string; events: unknown[] }) => [e.id, e.events.length]),
+    ).toEqual([
       ['q0.1', 2],
       ['q0.2', 1],
     ]);
@@ -78,6 +104,8 @@ describe('outbox', () => {
     const entries = Array.from({ length: 30 }, (_, i) => ob.entryOf(`b${i}`, 'SIT', 's', big, 0));
     q = ob.enqueue(q, [ob.entryOf('sub', 'SIT', 's', [submit(1)], 0), ...entries]).queue;
     expect(q.entries[0].id).toBe('sub');
-    expect(q.entries.reduce((n: number, e: { bytes: number }) => n + e.bytes, 0)).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect(
+      q.entries.reduce((n: number, e: { bytes: number }) => n + e.bytes, 0),
+    ).toBeLessThanOrEqual(5 * 1024 * 1024);
   });
 });
