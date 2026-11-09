@@ -255,9 +255,9 @@ export const iosStandalone: Scenario = {
       id: 'fresh-sign-in',
       entry: 'ios',
       kind: 'edge',
-      what: 'After the 7-day refresh token lapses the runner signs in from the Mac Keychain',
+      what: 'After the 30-day refresh token lapses the runner signs in from the Mac Keychain',
       needsYou:
-        'only when the token has lapsed (≤ weekly); the report’s iOS section shows signedIn: fresh when it did — forcing it would clear the service worker too',
+        'only when the token has lapsed (≤ monthly); the report’s iOS section shows signedIn: fresh when it did — forcing it would clear the service worker too',
     },
     {
       id: 'capture-refocus',

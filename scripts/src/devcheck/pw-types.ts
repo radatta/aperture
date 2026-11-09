@@ -4,7 +4,7 @@
 export interface PwResponse {
   url(): string;
   status(): number;
-  request(): { method(): string }; // the same Request object the `request` event carried — stable identity
+  request(): { method(): string; postData?(): string | null }; // the same Request object the `request` event carried — stable identity
   json(): Promise<unknown>;
 }
 

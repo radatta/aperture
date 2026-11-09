@@ -140,7 +140,7 @@ export class ApertureAppStack extends Stack {
       authFlows: {}, // none requested → Cognito's defaults (refresh/SRP/custom); claude.ai only uses the hosted-UI code flow
       preventUserExistenceErrors: true,
       // 30 days (D13, docs/areas/mcp/index.md): this refresh token lives in claude.ai's server-side store,
-      // so the SPA client's 7-day localStorage reasoning doesn't apply.
+      // not a browser, so it leaks only with that store.
       refreshTokenValidity: Duration.days(30),
       oAuth: {
         flows: { authorizationCodeGrant: true },
@@ -430,10 +430,14 @@ export class ApertureAppStack extends Stack {
       generateSecret: false,
       authFlows: { userSrp: true },
       preventUserExistenceErrors: true,
-      // 7 days (Cognito allows up to 3650): the refresh token sits in browser localStorage, so a leaked one
-      // stays useful for at most a week, at the cost of a weekly sign-in. Access/ID stay at the 1-hour
-      // default (they cross the network on every request and are cheap to renew). Why: TECH §3.
-      refreshTokenValidity: Duration.days(7),
+      // 30 days, Cognito's default (7 until 2026-11): the refresh token sits in browser localStorage, so a
+      // leaked one stays useful for up to a month — traded for a monthly sign-in on the phone and the sim,
+      // not a weekly one. Recovery is AdminUserGlobalSignOut: no new tokens from then on, though the last
+      // access token still passes the BFF's local JWT check until its hour is up. Revocation is pinned on
+      // rather than left to Cognito's default. Access/ID stay at the 1-hour default (they cross the network
+      // on every request and are cheap to renew). Why: TECH §3.
+      refreshTokenValidity: Duration.days(30),
+      enableTokenRevocation: true,
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],

@@ -343,9 +343,10 @@ exchange; the façade only publishes correct metadata from our origin.
   it signs the dev test user in as the public claude client with PKCE, catches the redirect to claude.ai's
   callback in its own browser (it fails in the browser — claude hosts resolve nowhere — and the harness proves it did) and swaps the code itself. No cdk
   change: the client already allows the code grant with no secret. Mechanics: `docs/ops/DEV-CHECK.md`.
-- **D13 — 30-day refresh token** for the claude client (vs the SPA client's 7). Its refresh token lives
-  in claude.ai's server-side store, not a browser, and expiry means re-running the connector OAuth dance
-  on web _and_ phone; the localStorage-leak reasoning behind the 7-day SPA ceiling doesn't apply.
+- **D13 — 30-day refresh token** for the claude client (the SPA client was 7 then; it's 30 too since
+  2026-11, for its own reasons, TECH §3). Its refresh token lives in claude.ai's server-side store, not a
+  browser, and expiry means re-running the connector OAuth dance on web _and_ phone; the localStorage-leak
+  reasoning that once kept the SPA at 7 days doesn't apply.
 - **`Authorization` forwards via a cache policy, not the origin-request policy.** CloudFront strips
   `Authorization` by default, and CDK's L2 origin-request policy _refuses_ it (throws at synth) — so the
   `McpCachePolicy` carries it in the cache key (AWS's documented path; the header in the key means a

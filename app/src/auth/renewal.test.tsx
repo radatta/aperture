@@ -372,7 +372,7 @@ describe('renewal — authority rejects the grant', () => {
     expect(status()).toBe('unauthenticated');
   });
 
-  // The weekly expiry is expected, not a fault. react-oidc-context sets `error` on silentRenewError and
+  // The routine expiry is expected, not a fault. react-oidc-context sets `error` on silentRenewError and
   // clears it only on USER_LOADED, so the teardown path would otherwise leave "invalid_grant" in red
   // under the sign-in button.
   it('does not surface an error when the session expires normally', async () => {

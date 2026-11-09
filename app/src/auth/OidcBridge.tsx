@@ -31,7 +31,7 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
   const oidc = useOidc();
   const [phase, setPhase] = useState<Phase>('idle');
   // react-oidc-context sets `error` on every silentRenewError and clears it only on USER_LOADED — and
-  // the invalid_grant teardown goes out through USER_UNLOADED, so without this a routine weekly expiry
+  // the invalid_grant teardown goes out through USER_UNLOADED, so without this a routine expiry
   // renders "invalid_grant" in danger text under the sign-in button and reads as a crash.
   const [hideError, setHideError] = useState(false);
 
@@ -84,7 +84,7 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
         // dropped by a password change. Clearing the user is what puts RequireAuth back on sign-in; if
         // even that fails (storage full, private mode) fall through to the button rather than spin.
         if (err instanceof ErrorResponse && err.error === 'invalid_grant') {
-          setHideError(true); // an expected weekly expiry, not a fault to show the user
+          setHideError(true); // an expected expiry, not a fault to show the user
           await manager.removeUser().catch(() => settle('stalled', false));
           return;
         }
