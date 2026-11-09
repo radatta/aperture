@@ -116,6 +116,8 @@ The scenario's last job ends with `shutdown`, so the sim is off for the rest of 
 
 **Nothing heavy runs on the Mac while a sim job does:** no build, test suite or mailroom fixture suite (its stubs skip the sim but still load the CPU). Under load the sim's reads slow about threefold and keys drop, which reads as a failed row (_Failures_ → the Mac under load). So the Mac-side steps that prove a runner change go one at a time, before the devcheck, never beside it (_Proving the Mac side_).
 
+How long these jobs take on a given Mac, and what the machine goes through meanwhile, is the sim bench's job (SIM-BENCH.md).
+
 ## Failures
 
 | Symptom                                                                              | Cause                                                                                                                                                                                             | Fix                                                                                                                                                                         |
