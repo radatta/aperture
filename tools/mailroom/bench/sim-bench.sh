@@ -98,15 +98,17 @@ done
 [ -n "$TAG" ] || TAG=mac
 
 # --- preflight: refuse (75) before anything runs ------------------------------------------------------------------
-# Never run code, or keep the job inbox, where the container can write: on the main Mac that's the shared checkout.
-# The bench runs from a tarball at a reviewed commit in a Mac-only dir, and writes results there (SIM-BENCH.md → Setup).
-if [ "${SIM_BENCH_FX_ALLOW_SHARE:-}" != 1 ]; then
-  ! in_share "$MR" || die "$MR is inside a checkout the mailroom shares with the container — run the bench from a tarball in a Mac-only dir (docs/ops/SIM-BENCH.md → Setup)"
-  ! in_share "$(mkdir -p "$OUT" 2>/dev/null; cd "$OUT" 2>/dev/null && pwd -P || echo "$OUT")" \
-    || die "--out $OUT is inside the shared checkout — write results to a Mac-only dir, then move them (docs/ops/SIM-BENCH.md → Results)"
-fi
 if [ "$(uname)" != Darwin ] && [ "${SIM_BENCH_FIXTURE:-}" != 1 ]; then
   die "the bench drives the iOS Simulator: run it on a Mac (SIM_BENCH_FIXTURE=1 is the container's fixture mode)"
+fi
+# Never run code, or keep the job inbox, where the container can write: on the main Mac that's the shared checkout.
+# The bench runs from a tarball at a reviewed commit in a Mac-only dir, and writes results there (SIM-BENCH.md → Setup).
+if [ "${SIM_BENCH_FX_ALLOW_SHARE:-}" != 1 ] || [ "${SIM_BENCH_FIXTURE:-}" != 1 ] || [ "$(uname)" = Darwin ]; then
+  for p in "$MR" "$(cd "$(dirname "$RUNNER")" && pwd -P)" "$(cd "$(dirname "$PLANS")" && pwd -P)"; do
+    ! in_share "$p" || die "$p is inside a checkout the mailroom shares with the container — run the bench from a tarball in a Mac-only dir (docs/ops/SIM-BENCH.md → Setup)"
+  done
+  ! in_share "$(mkdir -p "$OUT" 2>/dev/null; cd "$OUT" 2>/dev/null && pwd -P || echo "$OUT")" \
+    || die "--out $OUT is inside the shared checkout — write results to a Mac-only dir, then move them (docs/ops/SIM-BENCH.md → Results)"
 fi
 for t in jq axe xcrun security curl; do
   p="$(command -v "$t" 2>/dev/null)" || die "no $t on PATH ($PATH) — docs/ops/SIM-BENCH.md → Setup"
@@ -191,14 +193,18 @@ jq -n --arg tag "$TAG" --arg stamp "$STAMP" --arg host "$(q hostname -s)" \
 SPID=""
 RPID=""
 # The runner runs in its own process group (set -m below), so a stop takes its axe/simctl grandchildren too.
-stop_runner() { kill -TERM -- "-$1" 2>/dev/null || kill -TERM "$1" 2>/dev/null || true; }
+# CONT after TERM: a member stopped on the terminal would otherwise hold the signal pending and `wait` forever.
+stop_runner() {
+  kill -TERM -- "-$1" 2>/dev/null || kill -TERM "$1" 2>/dev/null || true
+  kill -CONT -- "-$1" 2>/dev/null || true
+}
 cleanup() {
   [ -z "$RPID" ] || stop_runner "$RPID"
   [ -z "$SPID" ] || kill "$SPID" 2>/dev/null || true
   rm -f -- "$RD/sampler.pid"
 }
 trap cleanup EXIT
-trap 'cleanup; exit 130' INT TERM
+trap 'cleanup; exit 130' INT TERM HUP
 # Awake for the whole bench, not only inside each job (sim.sh's own caffeinate ends with the job's runner).
 if [ "$(uname)" = Darwin ]; then caffeinate -is -w $$ >/dev/null 2>&1 & fi
 if [ "$SAMPLER" = 1 ]; then
@@ -234,8 +240,10 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
   mv -- "$f" "$HJ/inbox/$id.json"
   t0="$(date +%s)"
   kill_after="${SIM_BENCH_KILL_AFTER:-$((tmo + 120))}" # sim.sh stops itself at the budget; this is the backstop
-  set -m # a process group of its own, led by the runner's PID
-  bash "$RUNNER" "$HJ" "$ST" >>"$LOG" 2>&1 &
+  # A process group of its own, led by the runner's PID. stdin from /dev/null as under launchd: with -m, bash no longer
+  # does that for `&`, and sim.sh hands its stdin to every axe/simctl call (sim_cap), so a tty there could stop the group.
+  set -m
+  bash "$RUNNER" "$HJ" "$ST" </dev/null >>"$LOG" 2>&1 &
   RPID=$!
   set +m
   while kill -0 "$RPID" 2>/dev/null; do

@@ -130,6 +130,16 @@ describe('sim-bench seed', () => {
     expect(calls.at(-1)).toBe('runUnlock');
   });
 
+  it('an acquire that fails after taking the lock (an answer it could not parse) still frees dev', async () => {
+    const d = deps();
+    d.acquire = async () => {
+      held = 'ours';
+      throw new Error('pnpm bot lock acquire said: something new');
+    };
+    await expect(seed(d)).rejects.toThrow('something new');
+    expect(held).toBe('none');
+  });
+
   it('a failed seed keeps a lock the branch held before it (its own dev test)', async () => {
     held = 'ours';
     failCreate = true;

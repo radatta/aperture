@@ -325,10 +325,24 @@ why=""
 check "an unreadable result.json is recorded BAD_RESULT and the bench goes on" "$why" "$T/log"
 rm -r -f -- "$T"
 
+# --- 10b. a runner that dies mid-drain leaves its envelope and lock: cleared, so the next job runs alone ----------------
+new_dir
+SIM_BENCH_FAKE_STRAND=launch bench --runs 1 --jobs launch,capture --no-prelude --no-sampler
+rc=$?
+R="$(rdir)"
+why=""
+[ "$rc" = 0 ] || why="exit $rc"
+[ -n "$why" ] || jqe -s 'length == 2 and .[0].reason == "NO_RESULT" and .[1].job == "capture" and .[1].status == "pass"' "$R/runs.jsonl" || why="runs $(cat "$R/runs.jsonl")"
+[ -n "$why" ] || [ -z "$(find "$R/hostjobs/results" -mindepth 1 -maxdepth 1 -name '*-launch')" ] || why="the stranded launch ran inside capture's turn"
+[ -n "$why" ] || [ -z "$(ls -A "$R/hostjobs/inbox")" ] || why="inbox not empty: $(ls -A "$R/hostjobs/inbox")"
+[ -n "$why" ] || [ ! -d "$R/state/lock" ] || why="the runner lock was left"
+check "a runner that dies mid-drain: its envelope and lock are cleared and the next job runs alone" "$why" "$T/log"
+rm -r -f -- "$T"
+
 # --- 11. never from, or into, a checkout the mailroom shares with the container -----------------------------------------
 share_case() { # NAME GREP BENCH-ROOT OUT
   local rc why=""
-  (unset SIM_BENCH_FX_ALLOW_SHARE; /bin/bash "$3/tools/mailroom/bench/sim-bench.sh" --out "$4" --tag fx --runner "$FX/fake-runner.sh" \
+  (unset SIM_BENCH_FX_ALLOW_SHARE; /bin/bash "$3/tools/mailroom/bench/sim-bench.sh" --out "$4" --tag fx --runner "$3/tools/mailroom/bench/fixtures/fake-runner.sh" \
     --runs 1 --jobs launch --no-prelude --no-sampler) >"$T/log" 2>&1
   rc=$?
   [ "$rc" = 75 ] || why="exit $rc, want 75"
@@ -342,6 +356,10 @@ cp -R "$MR" "$T/share/tools/mailroom"
 cp -R "$MR" "$T/own/tools/mailroom"
 share_case "refuses to run from a checkout with a .hostjobs (the container can write it)" "shares with the container" "$T/share" "$T/out"
 share_case "refuses to write results inside the shared checkout" "inside the shared checkout" "$T/own" "$T/share/localNotes/sim-bench"
+(unset SIM_BENCH_FX_ALLOW_SHARE; /bin/bash "$T/own/tools/mailroom/bench/sim-bench.sh" --out "$T/out2" --tag fx --runner "$T/share/tools/mailroom/bench/fixtures/fake-runner.sh" \
+  --runs 1 --jobs launch --no-prelude --no-sampler) >"$T/log" 2>&1
+rc=$?
+check "refuses a --runner inside the shared checkout" "$([ "$rc" = 75 ] && grep -q 'shares with the container' "$T/log" || echo "exit $rc")" "$T/log"
 rm -r -f -- "$T"
 
 echo "# $pass passed, $failed failed, of $cases cases"

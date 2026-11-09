@@ -87,8 +87,10 @@ export async function seed(
   let took = false;
   try {
     const { heldBefore } = await slotA(d);
-    const expiresAt = await d.acquire();
+    // Before the call: an acquire that took the lock and then failed (an unparsed answer) must still be released. A
+    // release when this branch holds nothing is a no-op (`pnpm bot lock release` → "already free").
     took = !heldBefore;
+    const expiresAt = await d.acquire();
     d.log(
       `dev lock held until ${expiresAt} — the bench must finish (or \`pnpm bot lock renew\`) before then`,
     );

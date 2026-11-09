@@ -6,7 +6,13 @@
 # SIM_BENCH_FAKE_HANG=1 hangs (a child sleep) so the bench's kill path runs.
 set -uo pipefail
 HJ="$1"
+ST="$2"
 TAPE="${SIM_BENCH_FAKE_TAPE:-/dev/null}"
+# runner.sh's single instance: a held lock turns the drain away
+mkdir "$ST/lock" 2>/dev/null || exit 0
+# SIM_BENCH_FAKE_STRAND=<job>: die mid-drain on that job's envelope, leaving it in the inbox and the lock held
+if [ -n "${SIM_BENCH_FAKE_STRAND:-}" ] && ls "$HJ"/inbox/*-"$SIM_BENCH_FAKE_STRAND".json >/dev/null 2>&1; then exit 1; fi
+trap 'rmdir "$ST/lock" 2>/dev/null || true' EXIT
 if [ "${SIM_BENCH_FAKE_HANG:-}" = 1 ]; then
   command sleep 30 &
   echo $! >"$HJ/../../hang.pid" # the results dir's parent: case 9 checks the stop took this child too
