@@ -217,7 +217,22 @@ describe('live_sitting', () => {
     await backend.transitionTask(s.repTaskId, 'done');
     expect(await run()).toMatchObject({
       active: false,
-      lastSitting: { id: s.id, status: 'done', liveReads: 1, problem: { slug: 'two-sum' } },
+      lastSitting: {
+        id: s.id,
+        status: 'done',
+        expired: false,
+        liveReads: 1,
+        problem: { slug: 'two-sum' },
+      },
+    });
+  });
+
+  it('a sitting left open past its window: inactive, its last sitting marked expired with minutes stopped at the window', async () => {
+    const s = await open();
+    t = T0 + 30 * 3600_000;
+    expect(await run()).toMatchObject({
+      active: false,
+      lastSitting: { id: s.id, status: 'active', expired: true, minutes: 24 * 60 },
     });
   });
 

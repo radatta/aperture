@@ -202,7 +202,7 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   (the night line's sentence, `summarizeSets`) when the window is one day (`from = to`, any day). Every result carries the
   honesty `note`: angles are relative to each session's own neutral, a trend and not a clinical
   measurement. `list_flux_exercises` gives the ids, sides and prescriptions.
-- **LeetCode is read-only, and a pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
+- **LeetCode: one tool, and a pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
   the sitting open right now: its code in full, the newest Run and Submit with the failing case, counts,
   LeetCode's timer, editing facts — or, with nothing open, `lastSitting`. Code is at most ~30 s behind (one
   snapshot per 30 s, plus one right before each Run or Submit), and a Run or Submit judged after Rahul leaves

@@ -4,13 +4,15 @@ import {
   sittingMinutes,
   sittingProblemUrl,
   verdictOf,
+  isSittingOpen,
+  SITTING_INGEST_WINDOW_MS,
 } from '@aperture/shared';
 import type { LiveSittingPull, Sitting, SittingEvent, SittingVerdict } from '@aperture/shared';
 import { RpcParamError } from './types';
 import type { Tool } from './types';
 
-// LeetCode sittings for Claude (docs/areas/recruiting → Claude watches live; docs/areas/mcp → Tools). Read-only:
-// the one write is pullLiveSitting's own count of the pull ("Claude watched live" on the sitting).
+// LeetCode sittings for Claude (docs/areas/recruiting → Claude watches live; docs/areas/mcp → Tools). Not
+// read-only: each pull of an open sitting writes its own count ("Claude watched live" on the sitting) — nothing else.
 
 // How fresh the capture is — the extension's pacing (PR A2: extension/src/lib/batch.js), in the description and
 // on every answer, so the model never reads a 30-second-old snapshot as the whole truth.
@@ -111,6 +113,9 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
 
 function inactive(pull: LiveSittingPull, now: number) {
   const s = pull.lastSitting;
+  // Left active past its window: closed for capture, ended only by the next Start. Said outright, and its
+  // minutes stop at the window instead of growing.
+  const expired = !!s && s.status === 'active' && !isSittingOpen(s, now);
   return {
     active: false,
     lastSitting: s
@@ -119,8 +124,9 @@ function inactive(pull: LiveSittingPull, now: number) {
           problem: problemOf(s),
           status: s.status,
           startedAt: iso(s.startedAt),
+          expired,
           endedAt: iso(s.endedAt),
-          minutes: sittingMinutes(s, now),
+          minutes: sittingMinutes(s, expired ? s.startedAt + SITTING_INGEST_WINDOW_MS : now),
           submitCount: s.summary.submits,
           outcome: outcomeOf(s),
           liveReads: pull.liveReads,
@@ -139,7 +145,8 @@ export const LEETCODE_TOOLS: Tool[] = [
       'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are his Mac’s clock, so their ages can be off by its skew.',
       'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste his code back at him — point at a line, a name or a case.',
       '`active: false` carries `lastSitting`, the most recent one.',
-      'Read-only, except that each pull of an open sitting is counted on it as "Claude watched live".',
+      '`expired: true` marks a last sitting left open past its 24 h window (no longer capturing; the next Start ends it).',
+      'Not read-only: each pull of an open sitting writes one count on it ("Claude watched live") — nothing else.',
     ].join(' '),
     inputSchema: {
       type: 'object',

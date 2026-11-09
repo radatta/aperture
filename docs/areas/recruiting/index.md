@@ -93,7 +93,8 @@ sees a sitting while it happens: the problem, minutes since Start, the newest co
 Submit with the failing case, expected vs output and the error head (`judgeDetail`),
 counts, LeetCode's timer, editing facts. The Start gate names the open sitting; a sitting is open while
 `active` and inside its 24 h window (`isSittingOpen`). One past it reads closed with nothing written, and the
-next Start ends it. With nothing open, the tool names the most recent sitting instead.
+next Start ends it. With nothing open, the tool names the most recent sitting instead: one left active past
+its window is marked `expired: true`, its minutes stopped at the window.
 
 - **Freshness.** Code is at most ~30 s behind: the extension sends one snapshot per 30 s (the latest code)
   and the pending one right before each Run or Submit. A Run or Submit judged after Rahul leaves the page
