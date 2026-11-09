@@ -726,6 +726,20 @@ spass('sim: a hint that misses scans as before', [L, HF], tape=[pt(200, 316, {})
 sfail('sim: a hint miss and a scan miss is still MISS', 'MISS', [L, HF], simCount={'--point 200,316': 1, '--point 200,720': 1})
 spass('sim: a tap with a hint taps what the hint found', [L, {'op': 'tap', 'label': 'Cancel', 'scan': {'x': 190, 'from': 150, 'to': 720}, 'hint': {'x': 190, 'y': 378}, 'role': 'AXButton'}],
       tape=[pt(190, 378, el('AXButton', 'Cancel', '', 160, 360, 60, 36))], simIncludes=['tap -x 190 -y 378'], simCount={'--point 190,150': 0})
+sfail('sim: a hung hint read, then a scan that reads and misses, is MISS', 'MISS', [L, HF], tape=[{'m': '--point 200,316', 'rc': 124, 'n': 1}])
+serr('sim: a hung scan read after a hint miss is still AX_TIMEOUT', 'AX_TIMEOUT', [L, HF], tape=[pt(200, 316, {}), HANG('--point 200,240')])
+spass('sim: a hint read with the label but the wrong role scans on', [L, {**HF, 'role': 'AXTextArea'}],
+      tape=[pt(200, 316, {**REFL, 'role': 'AXStaticText'}), pt(200, 240, {**REFL, 'frame': {'x': 53, 'y': 210, 'width': 334, 'height': 67}})],
+      simIncludes=['--point 200,316', '--point 200,150', '--point 200,240'])
+spass('sim: a stored y of two of the stamp\'s ys is ignored', [L, {'op': 'readBuild'}], setup='build-y=935 920',
+      tape=[pt(57, 935, {}), pt(57, 920, {}), pt(57, 905, STAMP('aaaaaaa'))], simCount={'--point 57,935': 1, '--point 57,920': 1})
+spass('sim: a stored y that isn\'t a number is ignored', [L, {'op': 'readBuild'}], setup='build-y=abc', simCount={'--point 57,935': 1})
+spass('sim: stay after a second Settings visit says both', [L, {'op': 'readBuild', 'stay': True}], tape=[{'m': '--point 57,', 'out': {}, 'n': 21}],
+      notes={'1': 'running aaaaaaa; went to Settings again (no stamp the first time); stayed on Settings'}, simCount={'tap -x 38 -y 168': 0})
+spass('sim: a fast nav read with no frame is the full path', NT, tape=[pt(136, 168, {'role': 'AXLink', 'AXLabel': 'Tasks', 'AXValue': 'Tasks'}, n=1)],
+      simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1})
+srej('sim: a hint off its scan\'s line is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 230, 'y': 316}}])
+srej('sim: a hint past its scan\'s range is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 721}}])
 srej('sim: a hint beside near is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'hint': {'x': 200, 'y': 200}}])
 srej('sim: a hint on absent is BAD_OP', 'BAD_OP', [L, {'op': 'absent', 'label': 'Home', 'scan': {'x': 200, 'from': 100, 'to': 200}, 'hint': {'x': 200, 'y': 150}}])
 srej('sim: a hint off the screen is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 957}}])

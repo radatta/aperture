@@ -57,7 +57,8 @@ SIM_JQ='
          else (.scan | type == "object" and keysok(["x","from","to"]; []) and (.x | int(0; $w)) and (.from | int(0; $h))
            and (.to | int(0; $h)) and ((((.to - .from) | fabs) / 30 | floor) + 1 <= 20)) end)
     and (if has("radius") then (has("near") and (.radius | int(10; 80))) else true end)
-    and (if has("hint") then (has("scan") and (.hint | type == "object" and keysok(["x","y"]; []) and (.x | int(0; $w)) and (.y | int(0; $h)))) else true end)
+    and (if has("hint") then (has("scan") and (.scan as $s | .hint | type == "object" and keysok(["x","y"]; []) and (.x | int(0; $w)) and (.y | int(0; $h))
+      and ((.x - $s.x) | fabs) <= 20 and .y >= ([$s.from, $s.to] | min) and .y <= ([$s.from, $s.to] | max))) else true end)
     and (if has("role") then (.role | role) else true end);
   def opok:
     . as $o | type == "object" and (.op | type) == "string" and
@@ -284,8 +285,9 @@ sim_points() {
 
 # SIM_HIT ← the first element matching the op's label (and role); a miss names what it saw instead.
 sim_find() {
-  local op="$1" label role x y e seen=""
+  local op="$1" label role x y e seen="" hint
   label="$(jq -r .label <<<"$op")"
+  hint="$(jq -r 'has("hint")' <<<"$op")"
   role="$(jq -r '.role // ""' <<<"$op")"
   sim_in_app || return 1
   rm -f "$SIM_P.unread"
@@ -299,6 +301,8 @@ sim_find() {
     seen="$seen$(jq -r '(if (.label // "") != "" then .label else (.value // "") end) | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:24]' <<<"$e")"
     if [ -n "$role" ] && sim_match "$e" "$label" ""; then seen="$seen ($(jq -r '.role' <<<"$e"))"; fi
     seen="$seen|"
+    # a hung hint read is no evidence either way (the scan covers its spot), so only the scan's own reads decide AX_TIMEOUT
+    if [ "$hint" = true ]; then hint=false; rm -f "$SIM_P.unread"; fi
   done < <(sim_points "$op")
   sim_hung_err "looking for \"$label\"" && return 1
   seen="$(printf '%s' "$seen" | tr '|' '\n' | awk 'NF && !s[$0]++' | head -3 | paste -sd ',' -)"
@@ -850,7 +854,8 @@ sim_nav_probe() {
   return 2
 }
 
-# Hit-first: one read where the tab sits with the page at its top and the row unswiped (the first seven of SIM_XS_NAV).
+# Hit-first: one read where the tab sits with the page at its top and the row not swiped (the first seven of SIM_XS_NAV;
+# a swiped row puts another tab there, or this one, which the label decides).
 # The row scrolls with the page (AppNav is in the flow, not sticky), so the tab's centre within 4 pt of SIM_Y_NAV means
 # the page is at its top, as the swipes would leave it. Anything else (the page scrolled, the row swiped sideways,
 # relaunch's shifted AX geometry, a hung read) is 2: today's full path. 1 is the probe budget.

@@ -156,7 +156,8 @@ describe('the slow tier', () => {
         ['launch', { op: 'readBuild' }],
         ['relaunch', { op: 'readBuild', stay: true }],
       ]);
-      // a hint only where the label is one element's: two roles under one label are told apart by the scan's order
+      // no hint on a label the plan itself uses for two roles (long-field/long-preview): the scan's order tells those
+      // apart. A plan-level check only: it can't see the screen, so a hinted label must also be unique there (by hand)
       for (const [name, plan] of Object.entries(sent))
         for (const o of plan) {
           if ((o.op !== 'find' && o.op !== 'tap') || !('hint' in o)) continue;
