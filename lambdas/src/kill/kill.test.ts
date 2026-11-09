@@ -50,7 +50,7 @@ function fakeGateways(fail: Fail = {}, opts: { already?: boolean; functions?: st
           'aperture-bff-dev',
           'aperture-mcp-dev',
           'aperture-finance-sync-dev',
-          'ApertureApp-dev-LogRetention',
+          'ApertureCicdDev-CustomAWSCDKOpenIdConnectProv-AbC123',
         ]
       );
     },
@@ -84,7 +84,7 @@ describe('kill', () => {
       'concurrency aperture-bff-dev 0',
       'concurrency aperture-mcp-dev 0',
       'concurrency aperture-finance-sync-dev 0',
-      'concurrency ApertureApp-dev-LogRetention 0',
+      'concurrency ApertureCicdDev-CustomAWSCDKOpenIdConnectProv-AbC123 0',
       'url aperture-bff-dev AWS_IAM',
       'url aperture-mcp-dev AWS_IAM',
       'distributions false',
@@ -187,11 +187,13 @@ describe('restore with an app function off the record', () => {
   // Only CloudFormation's own provider names (`Aperture…` stacks) go back unreserved: anything else a branch might
   // have created while the freeze was open stays at 0 rather than coming back uncapped.
   it('leaves any other unlisted function at 0 too, named', async () => {
-    const { gw, calls } = fakeGateways({}, { functions: ['aperture-bff-dev', 'evil'] });
-    await expect(restore(cfg, reservations, gw, () => {})).rejects.toThrow(
-      /unthrottle evil: .*left at 0/,
-    );
-    expect(calls.filter((c) => c.startsWith('concurrency evil'))).toEqual([]);
+    const others = ['evil', 'ApertureApp-dev-Sneaky-ABC123'];
+    const { gw, calls } = fakeGateways({}, { functions: ['aperture-bff-dev', ...others] });
+    const err = await restore(cfg, reservations, gw, () => {}).catch((e: Error) => e);
+    for (const fn of others) {
+      expect(String(err)).toMatch(new RegExp(`unthrottle ${fn}: .*left at 0`));
+      expect(calls.filter((c) => c.startsWith(`concurrency ${fn}`))).toEqual([]);
+    }
   });
 
   it('never removes an app function’s reservation', async () => {
@@ -225,7 +227,7 @@ describe('a function that doesn’t exist', () => {
     };
     const opts = { functions: [] };
     await expect(kill(cfg, fakeGateways(fail, opts).gw, () => {})).rejects.toThrow(
-      /lock: none of aperture-bff-dev, aperture-mcp-dev exists in us-west-1/,
+      /lock: none of aperture-bff-dev, aperture-mcp-dev has a function or URL in us-west-1/,
     );
     await expect(restore(cfg, reservations, fakeGateways(fail, opts).gw, () => {})).rejects.toThrow(
       /unlock: none of/,
@@ -278,6 +280,20 @@ describe('runKillSwitch', () => {
       ),
     ).rejects.toThrow(/RESERVED_CONCURRENCY entry "garbage"/);
     expect(calls).toEqual([]);
+  });
+
+  it('fails closed on a missing variable before building any gateway', async () => {
+    let built = false;
+    const partial: Record<string, string | undefined> = { ...env, KILL_POLICY_ID: undefined };
+    await expect(
+      runKillSwitch(
+        alarm,
+        partial,
+        () => ((built = true), fakeGateways().gw),
+        () => {},
+      ),
+    ).rejects.toThrow(/KILL_POLICY_ID/);
+    expect(built).toBe(false);
   });
 
   it('restores with a good table', async () => {

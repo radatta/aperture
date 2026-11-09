@@ -119,7 +119,7 @@ function liveGateways(cfg: KillConfig): KillGateways {
 export const handler = async (event: unknown): Promise<void> => {
   // A literal label: the bundle is minified, so a function's own name would log as a single letter.
   console.log(
-    `${isRestore(event) ? 'restore' : 'kill'} triggered: ${JSON.stringify(event).slice(0, 2000)}`,
+    `${isRestore(event) ? 'restore' : 'kill'} triggered: ${String(JSON.stringify(event)).slice(0, 2000)}`,
   );
   await runKillSwitch(event, process.env, liveGateways, (l) => console.log(l));
 };

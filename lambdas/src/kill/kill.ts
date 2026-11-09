@@ -77,12 +77,16 @@ async function eachUrlFunction(
     if ((await eachFunction(failures, log, `${verb} ${name}`, () => fn(name))) === 'missing')
       missing++;
   if (missing === cfg.urlFunctions.length)
-    failures.push(`${verb}: none of ${cfg.urlFunctions.join(', ')} exists in ${cfg.devRegion}`);
+    failures.push(
+      `${verb}: none of ${cfg.urlFunctions.join(', ')} has a function or URL in ${cfg.devRegion}`,
+    );
 }
 
-// CDK's provider functions, which no template reserves, are named by CloudFormation `<stack>-…`, and every stack is
-// `Aperture…` (FrozenProviderCode, org-stack.ts); the app's own functions are `aperture-…`.
-const isCdkProvider = (fn: string) => fn.startsWith('Aperture');
+// The one CDK provider function in the dev account, which no template reserves: ApertureCicdDev's OIDC provider,
+// named by CloudFormation `<stack>-<logicalId>-<suffix>` (dev's app stacks carry none: stacks.test.ts). Exactly this
+// stack, so a function a branch made while the freeze was open can't pass for one; a new provider elsewhere fails
+// safe, left at 0 and named.
+const isCdkProvider = (fn: string) => fn.startsWith('ApertureCicdDev-');
 
 export async function kill(cfg: KillConfig, gw: KillGateways, log: Log): Promise<void> {
   const failures: string[] = [];
