@@ -104,8 +104,33 @@ describe('the slow tier', () => {
         const params = { sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: plan };
         expect(validateSimParams(params), name).toBeNull();
       }
-      for (const name of ['capture', 'done-form'])
-        expect(sent[name]!.find((o) => o.op === 'erase')).toEqual({ op: 'erase', n: 6 });
+      // every erase reads its field back where the keys before it did (found empty, before typing)
+      for (const name of ['capture', 'done-form']) {
+        const plan = sent[name]!;
+        const i = plan.findIndex((o) => o.op === 'erase');
+        const before = plan.slice(0, i).filter((o) => o.op === 'keys');
+        expect(plan[i], name).toEqual({
+          op: 'erase',
+          n: 6,
+          in: (before.at(-1) as { in?: string }).in,
+        });
+      }
+      // only the done form's Cancel must go away after its tap
+      const closing = Object.values(sent)
+        .flat()
+        .filter((o) => o.op === 'tap' && 'closes' in o);
+      expect(closing).toEqual([
+        expect.objectContaining({ label: 'Cancel', role: 'AXButton', closes: true }),
+      ]);
+      // and the modal is positively gone: the search field is found, keyboard down, right after Cancel (a modal covers it)
+      const form = sent['done-form']!;
+      const cancel = form.findIndex((o) => o.op === 'tap' && 'closes' in o);
+      expect(form[cancel + 1]).toMatchObject({
+        op: 'find',
+        label: 'Search tasks',
+        near: { x: 200, y: 332 },
+        role: 'AXTextField',
+      });
       // every typed key is read back where an earlier find/tap found its field
       for (const [name, plan] of Object.entries(sent))
         for (const [i, o] of plan.entries()) {

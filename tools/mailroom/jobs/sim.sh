@@ -65,8 +65,8 @@ SIM_JQ='
     elif .op == "nav" then keysok(["op","tab"]; []) and (.tab | type == "string") and ($tabs | index($o.tab)) != null
     elif .op == "find" then keysok(["op","label","as"]; ["near","scan","radius","role"]) and (.label | lbl) and (.as | asname) and where
     elif .op == "absent" then keysok(["op","label"]; ["near","scan","radius","role"]) and (.label | lbl) and where
-    elif .op == "tap" then keysok(["op","label"]; ["near","scan","radius","role","as"]) and (.label | lbl)
-      and (if has("as") then (.as | asname) else true end) and where
+    elif .op == "tap" then keysok(["op","label"]; ["near","scan","radius","role","as","closes"]) and (.label | lbl)
+      and (if has("as") then (.as | asname) else true end) and (if has("closes") then .closes == true else true end) and where
     elif .op == "expect" then
       if has("signedIn") then keysok(["op","signedIn"]; []) and .signedIn == true
       else (.as | asname) and (keys | length) == 3 and
@@ -78,7 +78,7 @@ SIM_JQ='
          else false end) end
     elif .op == "keys" then keysok(["op","text"]; ["in"]) and (.text | whole("^[a-z ]{1,24}$"))
       and (if has("in") then (.in | asname) else true end)
-    elif .op == "erase" then keysok(["op","n"]; []) and (.n | int(1; 24))
+    elif .op == "erase" then keysok(["op","n"]; ["in"]) and (.n | int(1; 24)) and (if has("in") then (.in | asname) else true end)
     elif .op == "scroll" then keysok(["op","dir","pt"]; []) and (.dir == "up" or .dir == "down") and (.pt | int(100; 600))
     elif .op == "expectBuild" then keysok(["op"]; ["relaunches"]) and (if has("relaunches") then (.relaunches | int(0; 1)) else true end)
     elif .op == "shot" then keysok(["op","name"]; []) and (.name | whole("^[a-z0-9-]{1,32}$"))
@@ -96,7 +96,7 @@ SIM_JQ='
       else (if $o.op == "expect" and ($o | has("as")) then
               (.def | index($o.as)) != null
               and (if $o | has("sameWidthAs") then (.def | index($o.sameWidthAs)) != null else true end)
-            elif $o.op == "keys" and ($o | has("in")) then (.def | index($o.in)) != null
+            elif ($o.op == "keys" or $o.op == "erase") and ($o | has("in")) then (.def | index($o.in)) != null
             else true end) as $refok
         | (($o.op == "find" or $o.op == "tap") and ($o | has("as"))) as $defines
         | {ok: ($refok and (if $defines then (.def | index($o.as)) == null else true end)),
@@ -329,6 +329,47 @@ sim_shutdown() {
   SIM_STATE=Shutdown
 }
 sim_pref() { sx 30 spawn "$SIM_U" defaults read "$SIM_KB" "$1" 2>/dev/null | tr -d '[:space:]'; }
+# Everything that changes what a key does or when it lands is pinned (Rahul, 2026-11-08: "as deterministic as possible";
+# job …233129Z…-done-form-80c5 typed "cdcgac" three times and kept "Cdc"): autocorrect, auto-capitalisation, spell check,
+# predictions and the suggestion bar, inline completion, the "." shortcut, smart quotes and dashes, slide to type, the
+# hardware keyboard's own three, and the slide-to-type, gesture and inline-completion tips marked seen. Keys from
+# pest-plugin-simulator PR 32 (iOS 26.5) and WDA; seen to reach the web app on 2026-11-08 (typed text no longer capitalised,
+# no suggestion bar). IOS-CHECK.md → Keyboard lists what can't be pinned.
+SIM_KB_OFF="KeyboardAutocorrection KeyboardAutocapitalization KeyboardCheckSpelling KeyboardPrediction KeyboardShowPredictionBar KeyboardInlineCompletion KeyboardPeriodShortcut SmartQuotesEnabled SmartDashesEnabled KeyboardContinuousPathEnabled HWKeyboardAutocorrection HWKeyboardAutocapitalization HWKeyboardPeriodShortcut"
+SIM_KB_ON="DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction DidShowInlineCompletionEducationTip"
+
+# The pinned keys a `defaults export` plist ($1) doesn't hold at their value, space-separated ("" when all are pinned).
+sim_kb_unpinned() {
+  local tags k v want out=""
+  tags="$(tr -d ' \t\r\n' <"$1" | awk '{gsub(/></, ">\n<"); print}')"
+  for k in $SIM_KB_OFF $SIM_KB_ON; do
+    v="$(awk -v k="<key>$k</key>" 'f { print; exit } $0 == k { f = 1 }' <<<"$tags")"
+    case " $SIM_KB_ON " in *" $k "*) want=1 ;; *) want=0 ;; esac
+    case "$want:$v" in 0:"<false/>" | 0:"<integer>0</integer>" | 1:"<true/>" | 1:"<integer>1</integer>") ;; *) out="$out $k" ;; esac
+  done
+  printf '%s' "${out# }"
+}
+
+# A precondition, read back every readiness check: anything not pinned is written (all of it), the web app is quit so
+# its next launch reads them, and a second read must find them pinned, else KEYBOARD_SETUP (needs you, loudly).
+sim_kb_pin() {
+  local bad k
+  SIM_KB_SET=""
+  sx 30 spawn "$SIM_U" defaults export "$SIM_KB" - >"$SIM_P.kb" 2>/dev/null || : >"$SIM_P.kb"
+  bad="$(sim_kb_unpinned "$SIM_P.kb")"
+  [ -n "$bad" ] || return 0
+  for k in $SIM_KB_OFF; do sx 30 spawn "$SIM_U" defaults write "$SIM_KB" "$k" -bool false >/dev/null 2>&1 || true; done
+  for k in $SIM_KB_ON; do sx 30 spawn "$SIM_U" defaults write "$SIM_KB" "$k" -bool true >/dev/null 2>&1 || true; done
+  sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || true
+  SIM_KB_WROTE=1
+  sx 30 spawn "$SIM_U" defaults export "$SIM_KB" - >"$SIM_P.kb" 2>/dev/null || : >"$SIM_P.kb"
+  k="$(sim_kb_unpinned "$SIM_P.kb")"
+  if [ -n "$k" ]; then
+    sim_err SIM_UNAVAILABLE KEYBOARD_SETUP "keyboard prefs didn't take: $k ($SIM_XCODE) - re-check IOS-CHECK.md Keyboard after an Xcode or iOS update"
+    return 1
+  fi
+  SIM_KB_SET="$(printf '%s' "$bad" | wc -w | tr -d ' ')"
+}
 # The soft keyboard (IOS-CHECK.md → Keyboard): both prefs 0, applied only at boot; HID typing flips them back to 1.
 sim_arm() {
   sx 30 spawn "$SIM_U" defaults write "$SIM_KB" HardwareKeyboardLastSeen -bool false >/dev/null 2>&1 \
@@ -366,6 +407,7 @@ sim_ready() {
   if [ "$(sim_pref HardwareKeyboardLastSeen)" != 0 ] || [ "$(sim_pref AutomaticMinimizationEnabled)" != 0 ]; then
     sim_arm || return 1
   fi
+  sim_kb_pin || return 1
   sim_tree >/dev/null || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
   SIM_READY=1
 }
@@ -376,7 +418,7 @@ sim_lazy_ready() {
   case "$1" in launch | shutdown | wait | kill) return 0 ;; esac
   [ -z "$SIM_READY" ] || return 0
   sim_ready || return 1
-  [ "$SIM_BOOTED" = warm ] || { sim_err SIM_UNAVAILABLE NOT_LAUNCHED "the sim was off, or rebooted to re-arm the keyboard; this plan needs a launch first"; return 1; }
+  [ "$SIM_BOOTED" = warm ] && [ -z "$SIM_KB_WROTE" ] || { sim_err SIM_UNAVAILABLE NOT_LAUNCHED "the sim was off, rebooted to re-arm the keyboard, or its keyboard prefs were just pinned (the app quit); this plan needs a launch first"; return 1; }
 }
 
 # The app's landmark: Home's capture bar (signed in) or the sign-in card. Echoes already | false | "" (neither).
@@ -403,8 +445,9 @@ sim_icon_count() {
     | select((.frame.width // 0) > 0 and (.frame.height // 0) > 0 and (.frame.x // -1) >= 0 and (.frame.x + .frame.width) <= $w and (.frame.y // -1) >= 0 and (.frame.y + .frame.height) <= $h)] | length' <<<"$1" 2>/dev/null
 }
 sim_find_icon() {
-  local t page i e prev="" scrolled=""
+  local t page app="" i e prev="" scrolled=""
   SIM_ICON=""
+  SIM_PRESSES=1 # the caller's
   for i in 1 2 3 4 5 6; do
     t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
     page="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
@@ -428,17 +471,32 @@ sim_find_icon() {
         fi
         sleep 1
         ;;
-      "") prev=""; sleep 2 ;;
+      "")
+        # No Home Screen: a press AXe reported done can be one iOS never got (job …192707Z…-relaunch-bd33 left the app
+        # in front), so press again, three presses in all; another app in front with no pill is a stale tree.
+        prev=""
+        app="$(jq -r '[.. | objects | select(.role? == "AXApplication")][0].AXLabel // ""' <<<"$t" 2>/dev/null)"
+        if [ "$SIM_PRESSES" -lt 3 ]; then
+          ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+          SIM_PRESSES=$((SIM_PRESSES + 1))
+        else
+          sleep 2
+        fi
+        ;;
       *) break ;;
     esac
   done
-  if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "the Home Screen's tree has no page pill; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
+  if [ -z "$page" ] && [ "$app" = Web ]; then
+    sim_fail HOME_PRESS_DROPPED "the app is still in front after $SIM_PRESSES home presses AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+    return 1
+  fi
+  if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "no page pill, ${app:-no app} in front after $SIM_PRESSES home presses; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
   sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon on Home Screen page 2 (found: $page); add dev to the sim's Home Screen"
 }
 
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
-  local i s t clean=""
+  local i s t clean="" taps=1
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
@@ -451,6 +509,9 @@ sim_op_launch() {
     if [ -n "$s" ]; then
       SIM_SIGNED="$s"
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
+      [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
+      [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
+      [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; pinned the keyboard prefs ($SIM_KB_SET off)"
       return 0
     fi
     i=$((i + 1))
@@ -459,23 +520,37 @@ sim_op_launch() {
         sim_err SIM_UNAVAILABLE AX_TIMEOUT "point reads timed out looking for Home or the sign-in card"
         return 1
       fi
+      # Still the Home Screen after every tap is AXe's taps dropped (job …223625Z…-relaunch-07aa), not the app.
+      if t="$(sim_tree)" && sim_tree_home "$t"; then
+        sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+        return 1
+      fi
       sim_fail LANDMARK "neither Home nor the sign-in card after launch"
       return 1
     fi
-    if [ "$i" = 10 ]; then
-      # Still on the Home Screen: the icon tap dropped, so tap it again (a swipe there opens Search). In the app, the
-      # page can draw offset from its accessibility frames after a kill: nudge it.
-      # An unreadable tree does neither.
-      t="$(sim_tree)" || t=""
-      if [ -n "$t" ] && ! jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
-        sim_tap_el "$SIM_ICON" || return 1
-      elif [ -n "$t" ]; then
-        ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
-        ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
-      fi
-    fi
+    case "$i" in
+      3 | 6 | 10)
+        # Read back the icon tap: still the Home Screen means it dropped, so tap again (a swipe there opens Search), up
+        # to four taps. In the app, the page can draw offset from its accessibility frames after a kill: at 10, nudge it.
+        # An unreadable tree does neither.
+        t="$(sim_tree)" || t=""
+        if [ -n "$t" ] && sim_tree_home "$t"; then
+          sim_tap_el "$SIM_ICON" || return 1
+          taps=$((taps + 1))
+        elif [ "$i" = 10 ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
+          ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
+          ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
+        fi
+        ;;
+    esac
     sleep 2
   done
+}
+
+# Is tree $1 the Home Screen: not the web app, with the page pill?
+sim_tree_home() {
+  jq -e '([.. | objects | select(.role? == "AXApplication")][0].AXLabel // "") != "Web"
+    and any(.. | objects | .AXValue?; type == "string" and test("^Page [0-9]+ of [0-9]+$"))' <<<"$1" >/dev/null 2>&1
 }
 
 # Is the front sheet dev's Cognito? Read from the sheet's own address bar: native chrome (role, id "URL"), owned
@@ -666,23 +741,97 @@ sim_sign_in() {
 }
 
 sim_op_kill() {
-  local m sx sy ex ey bx by
+  local m
   m="$(jq -r .method <<<"$1")"
+  SIM_NOTE=""
   case "$m" in
     terminate) sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; } ;;
-    switcher)
-      ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
-        && read -r sx sy ex ey <<<"$SIM_CARD_SWIPE" && read -r bx by <<<"$SIM_PT_BACKGROUND" \
-        && ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
-        && ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 \
-        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; } ;;
+    switcher) sim_kill_switcher || return 1 ;;
     reboot)
       sim_shutdown || return 1
       sim_boot || return 1
       SIM_BOOTED=rebooted ;;
   esac
   SIM_SIGNED=unknown
-  SIM_NOTE="killed by $m"
+  SIM_NOTE="killed by $m; web: $(sim_web_alive && echo alive || echo gone)$SIM_NOTE"
+}
+
+# The standalone web app's process, by name (a backgrounded app is still running; a killed one is gone).
+sim_web_alive() { pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >/dev/null 2>&1; }
+
+# What one tree read shows in front: SIM_FRONT_APP (the first AXApplication's label) and SIM_FRONT_PAGE (the Home
+# Screen's "Page N of M" pill, or "").
+sim_front() {
+  local t
+  t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
+  SIM_FRONT_APP="$(jq -r '[.. | objects | select(.role? == "AXApplication")][0].AXLabel // ""' <<<"$t" 2>/dev/null)"
+  SIM_FRONT_PAGE="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
+}
+
+# Double home opens the switcher, a swipe up on the card kills the app, a tap on the background leaves (a home press
+# doesn't). Each step is read back, since AXe reports presses and swipes iOS never got (job …192707Z…-relaunch-bd33):
+# swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
+# is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
+sim_kill_switcher() {
+  local try sx sy ex ey bx by e why="" sawcard="" inswitcher=""
+  read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
+  read -r bx by <<<"$SIM_PT_BACKGROUND"
+  for try in 1 2; do
+    # After a swipe that left the app running the switcher is still up: pressing home there reopens the app (relaunch
+    # job …011904Z… run 2026-11-09T01-14-43), so the card is read and swiped again without pressing.
+    if [ -z "$inswitcher" ]; then
+      ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
+        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      sim_front || return 1
+      if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then
+        why="$why; the switcher didn't open (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+        continue
+      fi
+    fi
+    inswitcher=""
+    # Only Aperture's own card is swiped (the switcher also holds Safari's): it reads AXGenericElement "Aperture".
+    rm -f "$SIM_P.unread"
+    e="$(sim_point "$sx" "$sy")" || return 1
+    sim_hung_err "reading the switcher card" && return 1
+    if ! sim_match "$e" Aperture ""; then
+      why="$why; no Aperture card at $sx,$sy ($(jq -r '"\(.role) \(.label // "")"' <<<"$e"))"
+      # leave the switcher (its background, as below) so the next try, or op, starts from the Home Screen
+      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      sleep 1
+      continue
+    fi
+    sawcard=1
+    ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
+      || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+    sleep 1
+    ! sim_web_alive || sleep 1
+    if ! sim_web_alive; then
+      # The last card gone can close the switcher by itself: on the Home Screen the background spot is a dock icon.
+      sim_front || return 1
+      if [ -n "$SIM_FRONT_PAGE" ] || [ "$SIM_FRONT_APP" = Web ]; then
+        SIM_NOTE="$why; no switcher left to leave (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+        return 0
+      fi
+      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      SIM_NOTE="$why"
+      return 0
+    fi
+    why="$why; still running after the swipe"
+    inswitcher=1
+  done
+  # Still in the switcher (the card read as Aperture's, then a swipe left it running): leave it by its background.
+  # Swiped and still running is the gesture not killing (2 of 2 runs on 2026-11-08, iOS 27.0), not a dropped input:
+  # needs you (Rahul, option a), never a pass, until the swipe is re-trialled.
+  if [ -n "$inswitcher" ]; then
+    ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
+    sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app: re-trial the gesture (IOS-CHECK.md -> Failures)$why"
+    return 1
+  fi
+  if [ -z "$sawcard" ] && [ "${why#*no Aperture card}" != "$why" ]; then
+    sim_fail SWITCHER_FAILED "no Aperture card in the app switcher in two tries$why: was the app running? Rerun from a launch"
+    return 1
+  fi
+  sim_fail SWITCHER_FAILED "the app switcher didn't kill the app in two tries$why: iOS dropped the input; rerun the step, don't debug the app"
 }
 
 sim_to_top() { local i; for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y $((SIM_H - 74)) --duration 0.15 >/dev/null 2>&1 || true; done; }
@@ -738,6 +887,7 @@ sim_op_absent() {
 }
 
 sim_op_tap() {
+  local cx cy e
   sim_find "$1" || return 1
   if jq -e --argjson deny "$SIM_DENY" '((.label // "") | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | any(. as $d | $l == $d or ($l | startswith($d + " ")))' <<<"$SIM_HIT" >/dev/null; then
     sim_fail DENIED "the match is a write button; not tapped"
@@ -748,17 +898,58 @@ sim_op_tap() {
   sleep 1
   SIM_NOTE="$(jq -r '"tapped \(.role) at \(.frame.x + (.frame.w / 2 | floor)),\(.frame.y + (.frame.h / 2 | floor))"' <<<"$SIM_HIT")"
   # A tapped field must take focus: no soft keyboard means the tap dropped (job …054323Z…-done-form-e8e2 read as
-  # KEYBOARD_SETUP), so tap it once more. Focusing writes nothing; a keyboard still missing is the next op's to report.
+  # KEYBOARD_SETUP), so tap it once more. But a keyboard can come up late, and a retap then lands on it (job
+  # …014933Z…-capture-7ac9 typed a space into the bar at 198,895): wait a second, look again, and retap only where a
+  # point read still shows the field. A keyboard still missing is the next op's to report.
   case "$(jq -r .role <<<"$SIM_HIT")" in
     AXTextArea | AXTextField)
       if ! sim_kb_up; then
         sim_hung_err "checking the field took focus" && return 1
-        sim_tap_el "$SIM_HIT" || return 1
         sleep 1
-        SIM_NOTE="$SIM_NOTE; tapped again (no keyboard after the first)"
+        if sim_kb_up; then
+          SIM_NOTE="$SIM_NOTE; the keyboard came up late"
+        else
+          sim_hung_err "checking the field took focus" && return 1
+          read -r cx cy < <(jq -r '.frame // {} | "\(((.x // 0) + (.w // 0) / 2) | floor) \(((.y // 0) + (.h // 0) / 2) | floor)"' <<<"$SIM_HIT")
+          rm -f "$SIM_P.unread"
+          e="$(sim_point "$cx" "$cy")" || return 1
+          sim_hung_err "checking the field is still there" && return 1
+          if sim_match "$e" "$(jq -r '.label // ""' <<<"$SIM_HIT")" "$(jq -r .role <<<"$SIM_HIT")"; then
+            sim_tap_el "$SIM_HIT" || return 1
+            sleep 1
+            SIM_NOTE="$SIM_NOTE; tapped again (no keyboard after the first)"
+          else
+            SIM_NOTE="$SIM_NOTE; not tapped again (the field's spot reads $(jq -r '"\(.role) \(.label // "")"' <<<"$e"))"
+          fi
+        fi
       fi
       ;;
   esac
+  [ "$(jq -r '.closes // false' <<<"$1")" != true ] || sim_tap_gone "$1" || return 1
+}
+
+# A `closes` tap must make its element go: read its centre (where it was tapped) now and 1 s later; any other element
+# there, or none, is gone (closed, or covered by what it opened). Still there both times means the tap dropped (job
+# …230610Z…-done-form-4385: Cancel left the task modal open), so one more tap at that same spot, then TAP_DROPPED.
+sim_tap_gone() {
+  local label role cx cy e try look
+  label="$(jq -r .label <<<"$1")"
+  role="$(jq -r '.role // ""' <<<"$1")"
+  read -r cx cy < <(jq -r '.frame // {} | "\(((.x // 0) + (.w // 0) / 2) | floor) \(((.y // 0) + (.h // 0) / 2) | floor)"' <<<"$SIM_HIT")
+  for try in 1 2; do
+    for look in 1 2; do
+      [ "$look" = 1 ] || sleep 1
+      rm -f "$SIM_P.unread"
+      e="$(sim_point "$cx" "$cy")" || return 1
+      sim_hung_err "checking \"$label\" went away" && return 1
+      sim_match "$e" "$label" "$role" || return 0
+    done
+    [ "$try" = 1 ] || break
+    sim_tap_el "$SIM_HIT" || return 1
+    sleep 1
+    SIM_NOTE="$SIM_NOTE; tapped again (still there after the first)"
+  done
+  sim_fail TAP_DROPPED "\"$label\" is still there after 2 taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
 }
 
 # The soft keyboard is up when its space bar answers; its accessory bar's top is the line a field must clear.
@@ -913,12 +1104,68 @@ sim_op_keys() {
   esac
 }
 
+# The field read where `in` found it: SIM_ERASED_OK=1 when it is the same role (and label) and holds nothing: "" or the
+# value `in` recorded while it was empty (iOS reads a placeholder as the AXValue). Else SIM_LEFT is the characters
+# left (0 when it isn't the field), and SIM_ERASED what it read, filtered like a MISS note.
+sim_erased_read() {
+  local e
+  SIM_ERASED_OK="" SIM_LEFT=0 SIM_ERASED_FIELD=""
+  rm -f "$SIM_P.unread"
+  e="$(sim_point "$2" "$3")" || return 1
+  sim_hung_err "reading the erased field" && return 1
+  SIM_ERASED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
+  jq -e --argjson r "$1" '(.role // "") != "" and (.role // "") == ($r.role // "")
+    and (($r.label // "") == "" or ((.label // "") | ascii_downcase) == (($r.label // "") | ascii_downcase))' <<<"$e" >/dev/null 2>&1 || return 0
+  SIM_ERASED_FIELD=1
+  if jq -e --argjson r "$1" '(.value // "") == "" or (.value // "") == ($r.value // "")' <<<"$e" >/dev/null 2>&1; then
+    SIM_ERASED_OK=1
+  else
+    SIM_LEFT="$(jq -r '(.value // "") | length | if . > 24 then 24 else . end' <<<"$e")"
+  fi
+}
+
+# Deletes AXe reports done can be ones iOS never got (job …230610Z…-done-form-4385 left a Z after six), so with `in`
+# the field is read back (where `in` found it, then at its centre, as keys does) and anything left gets that many
+# deletes plus two, at most twice, before ERASED. `in` must have found the field empty, before any keys.
 sim_op_erase() {
-  local n i=0
+  local n i=0 field r x y cx cy rounds=0 more first="" more1="" found
   n="$(jq -r '.n | floor' <<<"$1")"
   sim_kb_up || { sim_kb_missing; return 1; }
   while [ "$i" -lt "$n" ]; do sim_key delete || return 1; i=$((i + 1)); done
   SIM_NOTE="erased $n"
+  field="$(jq -r '.in // ""' <<<"$1")"
+  [ -n "$field" ] || return 0
+  r="$(sim_read_get "$field")"
+  read -r x y cx cy < <(jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$r")
+  while :; do
+    sim_erased_read "$r" "$x" "$y" || return 1
+    found="$SIM_ERASED_FIELD"
+    if [ -z "$SIM_ERASED_OK" ]; then
+      sleep 1
+      sim_erased_read "$r" "$cx" "$cy" || return 1
+      [ -z "$SIM_ERASED_FIELD" ] || found=1
+    fi
+    [ -z "$SIM_ERASED_OK" ] || break
+    if [ -z "$found" ]; then # the field moved, or the page changed: not dropped input, and more deletes can't help
+      sim_fail MISS "the field \`$field\` found isn't at $x,$y or its centre after erasing (saw $SIM_ERASED)"
+      return 1
+    fi
+    [ -n "$first" ] || first="$SIM_ERASED"
+    if [ "$rounds" -ge 2 ]; then
+      sim_fail ERASED "deleted $n, then more twice; the field still reads $SIM_ERASED at $x,$y: iOS dropped the input; rerun the step, don't debug the app"
+      return 1
+    fi
+    more=$((SIM_LEFT + 2))
+    [ "$more" -le 24 ] || more=24
+    [ -z "$more1" ] && more1="$more" || more1="$more1 and $more"
+    rounds=$((rounds + 1))
+    i=0
+    while [ "$i" -lt "$more" ]; do sim_key delete || return 1; i=$((i + 1)); done
+  done
+  case "$rounds" in
+    1) SIM_NOTE="$SIM_NOTE; deleted $more1 more (first read $first)" ;;
+    2) SIM_NOTE="$SIM_NOTE; deleted more twice, $more1 (first read $first)" ;;
+  esac
 }
 
 # Done is a tap like any other: the keyboard must be gone afterwards (one retap), or the next op aims at a moved page.
@@ -1037,7 +1284,7 @@ run_sim() {
   sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
   SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN=""
-  SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0
+  SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0 SIM_KB_WROTE="" SIM_KB_SET=""
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"

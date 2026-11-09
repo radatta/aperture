@@ -197,13 +197,23 @@ CAPTURE = el('AXTextArea', 'Capture log', 'What happened?', 25, 877, 346, 36)
 KEYS = {'q': (26, 688), 'w': (69, 688), 'e': (113, 688), 'r': (156, 688), 't': (199, 688), 'y': (243, 688), 'u': (286, 688), 'i': (329, 688), 'o': (373, 688), 'p': (416, 688),
         'a': (48, 744), 's': (91, 744), 'd': (134, 744), 'f': (178, 744), 'g': (221, 744), 'h': (264, 744), 'j': (308, 744), 'k': (351, 744), 'l': (394, 744),
         'z': (91, 800), 'x': (134, 800), 'c': (178, 800), 'v': (221, 800), 'b': (264, 800), 'n': (308, 800), 'm': (351, 800), 'delete': (409, 800), 'space': (221, 856)}
+# sim.sh's pinned keyboard prefs (SIM_KB_OFF / SIM_KB_ON) as `defaults export` prints them, on one line (the tape is a line).
+KB_OFF = ['KeyboardAutocorrection', 'KeyboardAutocapitalization', 'KeyboardCheckSpelling', 'KeyboardPrediction', 'KeyboardShowPredictionBar',
+          'KeyboardInlineCompletion', 'KeyboardPeriodShortcut', 'SmartQuotesEnabled', 'SmartDashesEnabled', 'KeyboardContinuousPathEnabled',
+          'HWKeyboardAutocorrection', 'HWKeyboardAutocapitalization', 'HWKeyboardPeriodShortcut']
+KB_ON = ['DidShowContinuousPathIntroduction', 'DidShowGestureKeyboardIntroduction', 'DidShowInlineCompletionEducationTip']
+def kbx(over=None, drop=()):
+    v = {**{k: '<false/>' for k in KB_OFF}, **{k: '<true/>' for k in KB_ON}, 'HardwareKeyboardLastSeen': '<integer>0</integer>', **(over or {})}
+    return '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' + ''.join(f'<key>{k}</key>{x}' for k, x in v.items() if k not in drop) + '</dict></plist>'
 deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version', 'out': 'Xcode 27.2'},
             {'m': 'xcrun simctl list devices -j', 'out': dev()}, {'m': 'defaults read com.apple.keyboard.preferences', 'out': '0'},
-            {'m': 'pgrep -x DeviceHub'},
+            {'m': 'defaults export com.apple.keyboard.preferences', 'out': kbx()},
+            {'m': 'pgrep -x DeviceHub'}, {'m': 'Web.app/Web', 'rc': 1},  # the web app: not running unless a case says so
             pt(220, 895, CAPTURE), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38)),
             pt(57, 935, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
             pt(38, 168, el('AXLink', 'Home', 'Home', 20, 158, 37, 20)), pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 158, 36, 20)),
-            pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20))]
+            pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20)),
+            pt(340, 560, el('AXGenericElement', 'Aperture', 'Active', 239, 136, 306, 664))]  # the switcher's card (round A)
            + [pt(x, y, el('AXButton', k, '', x - 15, y - 20, 30, 40)) for k, (x, y) in KEYS.items()]
            + [{'m': 'describe-ui --udid', 'out': tree()}])
 simbase = {'v': 1, 'id': '20261104T190000Z-ios-launch-ab12', 'job': 'sim', 'submittedAt': 'now', 'expiresInMin': 10,
@@ -213,6 +223,14 @@ L = {'op': 'launch'}
 def ST(*steps): return {'params': {'steps': list(steps)}}
 def F(label, x, y, as_, **k): return {'op': 'find', 'label': label, 'near': {'x': x, 'y': y}, 'radius': 10, 'as': as_, **k}
 NOSIM = ['axe ', 'xcrun ']
+# Trees for the read-backs (home presses, the switcher, the icon tap).
+def dtree(out, n=0): return {'m': 'describe-ui --udid', 'out': out, 'n': n}
+FULL = {'x': 0, 'y': 0, 'width': 440, 'height': 956}
+APPFRONT = [{'role': 'AXApplication', 'AXLabel': 'Web', 'frame': FULL, 'children': []}]  # the incident: the app, no pill
+SWITCHER = [{'role': 'AXApplication', 'AXLabel': 'SpringBoard', 'frame': FULL, 'children': [{**ICON, 'frame': {'x': 120, 'y': 200, 'width': 200, 'height': 430}}]}]
+KS = [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}]
+DOUBLE, SWIPE, LEAVE, PRESS = 'button home --step sleep 0.15', 'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40', 'tap -x 400 -y 880', 'home --step sleep 1 --udid'
+WEB = 'pgrep -f RuntimeRoot/Applications/Web.app/Web'
 def sc(name, steps=None, **k):
     if steps is not None: k['patch'] = {**k.get('patch', {}), **ST(*steps)}
     c(name, kind='sim', **k)
@@ -364,7 +382,8 @@ sfail('sim: an empty spot read as an error is still a miss', 'MISS', [L, F('Nope
 serr('sim: a point read that times out is AX_TIMEOUT, not a miss', 'AX_TIMEOUT', [L, F('Nope', 100, 300, 'x')], tape=[{'m': '--point 100,300', 'rc': 124}])
 serr('sim: absent with a timed-out read is AX_TIMEOUT, never a pass', 'AX_TIMEOUT', [L, {'op': 'absent', 'label': 'Nope', 'near': {'x': 100, 'y': 300}, 'radius': 10}], tape=[{'m': '--point 100,300', 'rc': 124}])
 serr('sim: a Home Screen tree with no page pill is HOME_TREE_STALE, no scroll, no tap', 'HOME_TREE_STALE',
-     tape=[{'m': 'describe-ui --udid', 'out': [{'role': 'AXApplication', 'AXLabel': 'Safari', 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': []}]}], simExcludes=['gesture scroll-left', 'tap -x'])
+     tape=[{'m': 'describe-ui --udid', 'out': [{'role': 'AXApplication', 'AXLabel': 'Safari', 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': []}]}], simExcludes=['gesture scroll-left', 'tap -x'],
+     simCount={'home --step sleep 1 --udid': 3})
 spass('sim: page 2 in the tree does not scroll', [L], simExcludes=['gesture scroll-left'])
 serr('sim: two Aperture icons on page 2 is WEBCLIP_MISSING, no tap', 'WEBCLIP_MISSING',
      tape=[{'m': 'describe-ui --udid', 'out': [{'role': 'AXApplication', 'AXLabel': 'SpringBoard', 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': [{'AXValue': 'Page 2 of 2'}, ICON, {**ICON, 'frame': {**ICON['frame'], 'x': 33}}]}]}], simExcludes=['tap -x 371', 'tap -x 69'])
@@ -497,6 +516,51 @@ sfail('sim: a field that never holds the text is TYPED, with what it read and a 
       simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8}, files=['shots/01-fail.png'])
 serr('sim: a hung read-back is AX_TIMEOUT, not TYPED', 'AX_TIMEOUT', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
      tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')], simExcludes=['tap -x 409 -y 800'])
+# erase … in reads the field back (job …230610Z…-done-form-4385: six deletes left a Z): empty is "" or the placeholder.
+def left(v, x=220, **k): return pt(x, 895, el('AXTextArea', 'Capture log', v, 25, 877, 346, 36), **k)
+ER = [L, BAR, {'op': 'erase', 'n': 2, 'in': 'bar'}]
+DEL = 'tap -x 409 -y 800'
+spass('sim: erase in a field reads it back once; the placeholder is empty', ER, tape=[pt(220, 895, CAPTURE, n=2)], notes={'2': 'erased 2'},
+      simCount={DEL: 2, '--point 198,895': 0})
+spass('sim: erase: an empty value is empty', ER, tape=[pt(220, 895, CAPTURE, n=2), left('')], notes={'2': 'erased 2'}, simCount={DEL: 2})
+spass('sim: a dropped delete (a letter left) is deleted again, and the note says so', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), left('A', n=1), left('A', 198, n=1)], notes={'2': 'erased 2; deleted 3 more (first read AXTextArea "A")'},
+      simCount={DEL: 5})
+spass('sim: letters still left after the extra deletes get a second round', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), left('Ab', n=1), left('Ab', 198, n=1), left('A', n=1), left('A', 198, n=1)],
+      notes={'2': 'deleted more twice, 4 and 3 (first read AXTextArea "Ab")'}, simCount={DEL: 9})
+sfail('sim: a field that never empties is ERASED, with what it read and a screenshot', 'ERASED', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), left('A'), left('A', 198)], notes={'2': 'the field still reads AXTextArea "A" at 220,895'},
+      simCount={DEL: 8}, files=['shots/01-fail.png'])
+serr('sim: a hung erase read-back is AX_TIMEOUT, not ERASED', 'AX_TIMEOUT', ER, tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')], simCount={DEL: 2})
+spass('sim: another element at the find point gets the centre look, no extra deletes', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20), n=1), pt(198, 895, CAPTURE)],
+      notes={'2': 'erased 2'}, simCount={'--point 198,895': 1, DEL: 2})
+sfail('sim: an empty-valued element that isn\'t the field never passes as empty: the field moved is MISS', 'MISS', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20)), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20))],
+      notes={'2': "the field `bar` found isn't at 220,895 or its centre after erasing (saw AXStaticText \"\")"}, simCount={DEL: 2})
+sfail('sim: the field\'s label on another role never passes as empty', 'MISS', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Capture log', '', 25, 877, 346, 36)), pt(198, 895, el('AXStaticText', 'Capture log', '', 25, 877, 346, 36))],
+      simCount={DEL: 2})
+srej('sim: erase in an unknown name is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 2, 'in': 'nope'}])
+srej('sim: erase in a name defined after it is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 2, 'in': 'bar'}, BAR])
+srej('sim: erase in a number is BAD_OP', 'BAD_OP', [L, BAR, {'op': 'erase', 'n': 2, 'in': 1}])
+# tap … closes: the element must be gone after the tap (…4385: the Cancel tap left the task modal open).
+CANCEL = el('AXButton', 'Cancel', '', 150, 590, 100, 30)
+CL = [L, {'op': 'tap', 'label': 'Cancel', 'near': {'x': 200, 'y': 600}, 'radius': 10, 'role': 'AXButton', 'closes': True}]
+CTAP, CREAD = 'tap -x 200 -y 605', '--point 200,605'
+spass('sim: a closes tap whose element is gone passes with one tap', CL, tape=[pt(200, 600, CANCEL, n=1)], simCount={CTAP: 1, CREAD: 1})
+spass('sim: a closes tap whose element is still there 1 s later is tapped once more, and the note says so', CL,
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=2)], notes={'1': 'tapped again (still there after the first)'}, simCount={CTAP: 2, CREAD: 3})
+sfail('sim: a closes tap still there after the second tap is TAP_DROPPED', 'TAP_DROPPED', CL,
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL)], simCount={CTAP: 2, CREAD: 4}, files=['shots/01-fail.png'])
+spass('sim: a closes tap replaced by another element at that spot counts as gone', CL,
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, el('AXStaticText', '', 'TODAY 1', 40, 595, 100, 20))], simCount={CTAP: 1})
+spass('sim: a slow close (gone at the second look) is not tapped again', CL, tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=1)],
+      simCount={CTAP: 1, CREAD: 2})
+serr('sim: a hung look after a closes tap is AX_TIMEOUT', 'AX_TIMEOUT', CL, tape=[pt(200, 600, CANCEL, n=1), HANG(CREAD)], simCount={CTAP: 1})
+srej('sim: closes false on a tap is BAD_OP', 'BAD_OP', [L, {'op': 'tap', 'label': 'Cancel', 'near': {'x': 200, 'y': 600}, 'closes': False}])
+srej('sim: closes on a find is BAD_OP', 'BAD_OP', [L, {**F('Cancel', 200, 600, 'c'), 'closes': True}])
 sfail('sim: a miss names an unlabelled element by its value', 'MISS', [L, F('Zzqx', 100, 300, 'x')], tape=[pt(100, 300, el('AXStaticText', '', 'Zzq', 33, 290, 30, 22))],
       notes={'1': 'saw: Zzq)'})
 sfail('sim: a miss names a match its role excluded', 'MISS', [L, F('Capture', 100, 300, 'x', role='AXButton')],
@@ -509,8 +573,13 @@ spass('sim: a keyboard that goes down late gets no second tap where Done was', [
       tape=[pt(221, 856, SPACE, n=1), pt(221, 856, {}), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), {'m': '--point 395,', 'out': el('AXButton', 'Mark done', '', 340, 556, 100, 38)}],
       notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1}, simExcludes=['tap -x 390'])
 TAPBAR = {'op': 'tap', 'label': 'Capture', 'near': {'x': 220, 'y': 895}}
-spass('sim: a field tap that brings no keyboard is tapped once more', [L, TAPBAR], tape=[pt(221, 856, {}, n=1)],
-      notes={'1': 'tapped again (no keyboard after the first)'}, simCount={'tap -x 198 -y 895': 2})
+spass('sim: a field tap that brings no keyboard, still none a second later, with the field still there, is tapped once more', [L, TAPBAR],
+      tape=[pt(221, 856, {}, n=2), pt(198, 895, CAPTURE)], notes={'1': 'tapped again (no keyboard after the first)'}, simCount={'tap -x 198 -y 895': 2})
+spass('sim: a keyboard that comes up late is not tapped into (job …014933Z…-capture-7ac9 typed a space)', [L, TAPBAR],
+      tape=[pt(221, 856, {}, n=1)], notes={'1': 'the keyboard came up late'}, simCount={'tap -x 198 -y 895': 1})
+spass('sim: no keyboard, but something else at the field\'s spot, is not tapped again', [L, TAPBAR],
+      tape=[pt(221, 856, {}, n=2), pt(198, 895, el('AXButton', 'space', '', 100, 880, 240, 40))],
+      notes={'1': 'not tapped again (the field\'s spot reads AXButton space)'}, simCount={'tap -x 198 -y 895': 1})
 spass('sim: a field tap that brings the keyboard is not repeated', [L, TAPBAR], simCount={'tap -x 198 -y 895': 1})
 spass('sim: a button tap never checks for the keyboard', [L, {'op': 'tap', 'label': 'Home', 'near': {'x': 38, 'y': 168}, 'radius': 10}],
       simCount={'tap -x 38 -y 168': 1, '--point 221,856': 0})
@@ -518,9 +587,16 @@ serr('sim: a hung keyboard read after a field tap is AX_TIMEOUT', 'AX_TIMEOUT', 
 spass('sim: blur checks the keyboard went down once', [L, {'op': 'blur'}], tape=[pt(221, 856, {})], notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1})
 sfail('sim: a keyboard that stays up after two Done taps is BLUR', 'BLUR', [L, {'op': 'blur'}], simCount={'tap -x 395 -y 575': 2})
 spass('sim: blur with no keyboard up does nothing', [L, {'op': 'blur'}], tape=[pt(395, 575, {})], notes={'1': 'no keyboard to dismiss'}, simExcludes=['tap -x 395'])
-spass('sim: a dropped icon tap (still on the Home Screen) is tapped again, not swiped', [L],
-      tape=[pt(220, 895, {}, n=10), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
-      simExcludes=['swipe --start-x 220 --start-y 450'])
+spass('sim: a dropped icon tap (still on the Home Screen) is tapped again at the third poll, not swiped', [L],
+      tape=[pt(220, 895, {}, n=3), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
+      notes={'0': 'icon tapped 2 times'}, simExcludes=['swipe --start-x 220 --start-y 450'])
+spass('sim: icon taps that keep dropping are tapped again at polls 3, 6 and 10', [L],
+      tape=[pt(220, 895, {}, n=11), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4},
+      notes={'0': 'icon tapped 4 times'})
+sfail('sim: still the Home Screen after four icon taps is ICON_TAP_DROPPED, not LANDMARK', 'ICON_TAP_DROPPED', [L],
+      tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4}, files=['shots/01-fail.png'])
+sfail('sim: the app in front without its landmark stays LANDMARK, its icon never tapped again', 'LANDMARK', [L],
+      tape=[pt(220, 895, {}), dtree(tree(), 3), dtree(APPFRONT)], simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1})
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
 serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
      tape=SIGNED_OUT + FORMP[:-1] + [{**FORMP[-1], 'n': 1}, HANG('--point 220,454')], pwTyped=1, simCount={'tap -x 201 -y 453': 1})
@@ -539,6 +615,22 @@ serr('sim: a reboot whose shutdown fails is SHUTDOWN_FAILED, no boot', 'SHUTDOWN
      tape=[{'m': 'simctl shutdown', 'rc': 1}], simExcludes=['bootstatus'])
 
 # --- recipes ---
+KBX = 'defaults export com.apple.keyboard.preferences'
+spass('sim: keyboard prefs already pinned are read once, never written', [L], simCount={KBX: 1}, simExcludes=['defaults write', 'terminate'])
+spass('sim: a keyboard pref missing or on is pinned (all of them), the app quit, read back, and the launch note says so', [L],
+      tape=[{'m': KBX, 'out': kbx({'KeyboardAutocapitalization': '<true/>'}, drop=['KeyboardPrediction']), 'n': 1}],
+      notes={'0': 'pinned the keyboard prefs (2 off)'}, simCount={KBX: 2, 'defaults write com.apple.keyboard.preferences': 16},
+      simIncludes=['defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false',
+                   'defaults write com.apple.keyboard.preferences DidShowGestureKeyboardIntroduction -bool true', 'simctl terminate'])
+spass('sim: a tip not marked seen is pinned too', [L], tape=[{'m': KBX, 'out': kbx({'DidShowGestureKeyboardIntroduction': '<false/>'}), 'n': 1}],
+      notes={'0': 'pinned the keyboard prefs (1 off)'})
+spass('sim: keyboard prefs stored as integers count as pinned', [L],
+      tape=[{'m': KBX, 'out': kbx({**{k: '<integer>0</integer>' for k in KB_OFF}, **{k: '<integer>1</integer>' for k in KB_ON}})}], simExcludes=['defaults write'])
+serr('sim: keyboard prefs that don\'t take are KEYBOARD_SETUP, naming them', 'KEYBOARD_SETUP', [L], tape=[{'m': KBX, 'out': kbx(drop=['KeyboardPrediction'])}],
+     notes={'0': "keyboard prefs didn't take: KeyboardPrediction"}, simExcludes=['tap -x 371'])
+serr('sim: an unreadable keyboard domain is pinned, then KEYBOARD_SETUP if it stays unreadable', 'KEYBOARD_SETUP', [L], tape=[{'m': KBX, 'rc': 1}])
+serr('sim: a plan without launch after the prefs were pinned is NOT_LAUNCHED', 'NOT_LAUNCHED', [F('Capture log', 220, 895, 'bar')],
+     tape=[{'m': KBX, 'out': kbx(drop=['KeyboardPrediction']), 'n': 1}])
 spass('sim: keyboard prefs at 1 are re-armed with a reboot', [L], tape=[{'m': 'defaults read com.apple.keyboard.preferences', 'out': '1', 'n': 1}],
       expect={'booted': 'rebooted'}, simIncludes=['defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false',
                                                   'defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false', 'simctl shutdown', 'bootstatus'])
@@ -547,9 +639,42 @@ spass('sim: an icon on the other Home Screen page is reached with scroll-left', 
       simIncludes=['gesture scroll-left --screen-width 440 --screen-height 956', 'tap -x 371 -y 247'])
 spass('sim: a stale first landmark read is read again', [L], tape=[pt(220, 895, el('AXRadioButton', 'Capture log', '1', 25, 877, 346, 36), n=1)],
       expect={'signedIn': 'already'})
-spass('sim: kill by app switcher', [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}],
-      simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', 'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40',
-                   'tap -x 400 -y 880 --tap-style physical'])
+# The switcher and home presses are read back (job …192707Z…-relaunch-bd33: AXe reported presses iOS never got). One launch
+# reads the tree three times (ready, then two icon reads that agree), so a kill's own read is the fourth.
+spass('sim: kill by app switcher', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 2)], notes={'1': 'killed by switcher; web: gone'},
+      simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', SWIPE, 'tap -x 400 -y 880 --tap-style physical', WEB],
+      simCount={DOUBLE: 1, SWIPE: 1, LEAVE: 1})
+spass('sim: a dropped switcher press (the app still in front) is pressed again before any swipe', KS,
+      tape=[dtree(tree(), 3), dtree(APPFRONT, 1), dtree(SWITCHER, 2)], notes={'1': "killed by switcher; web: gone; the switcher didn't open (Web)"},
+      simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
+spass('sim: one press of the two landing (the Home Screen) is pressed again, not swiped', KS,
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 1), dtree(SWITCHER, 2)], notes={'1': "the switcher didn't open (SpringBoard, Page 2 of 2)"},
+      simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
+sfail('sim: the app still in front after two switcher tries is SWITCHER_FAILED, never swiped or tapped', 'SWITCHER_FAILED', KS,
+      tape=[dtree(tree(), 3), dtree(APPFRONT, 2)], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 0}, files=['shots/01-fail.png'])
+spass('sim: an app still running after the card swipe is swiped again', KS,
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 3), {'m': 'Web.app/Web', 'out': '4242', 'n': 2}], notes={'1': 'still running after the swipe'},
+      simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1, WEB: 5})  # 2 alive, then gone before and after the wait, then the note's
+serr('sim: an app still running after two card swipes is SWITCHER_FAILED, needs you (re-trial the gesture); the switcher is left', 'SWITCHER_FAILED', KS,
+     notes={'1': "the switcher swipe didn't kill the app: re-trial the gesture"},
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), {'m': 'Web.app/Web', 'out': '4242'}], simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1}, files=['shots/01-fail.png'])
+spass("sim: a switcher without Aperture's card at the swipe spot is not swiped; pressed again", KS,
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 3), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
+      notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 2})
+sfail('sim: no Aperture card in two tries is SWITCHER_FAILED, never swiped', 'SWITCHER_FAILED', KS,
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 2},
+      notes={'1': 'no Aperture card in the app switcher in two tries'})
+serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 1), HANG('--point 340,560')], simCount={SWIPE: 0})
+spass('sim: a switcher that closed itself with the last card is not tapped (the spot is a dock icon)', KS,
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1)], notes={'1': 'no switcher left to leave (SpringBoard, Page 2 of 2)'},
+      simCount={SWIPE: 1, LEAVE: 0})
+serr('sim: an unreadable tree after the switcher press is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS,
+     tape=[dtree(tree(), 3), {'m': 'describe-ui --udid', 'rc': 1}], simCount={SWIPE: 0, LEAVE: 0})
+spass('sim: kill by terminate says the web app is gone', [L, {'op': 'kill', 'method': 'terminate'}, L], notes={'1': 'killed by terminate; web: gone'})
+spass('sim: a dropped home press at launch (the app still in front) is pressed again', [L],
+      tape=[dtree(tree(), 1), dtree(APPFRONT, 1)], notes={'0': 'home pressed 2 times'}, simCount={PRESS: 2}, simIncludes=['tap -x 371 -y 247'])
+sfail('sim: the app still in front after three home presses is HOME_PRESS_DROPPED, not HOME_TREE_STALE', 'HOME_PRESS_DROPPED', [L],
+      tape=[dtree(tree(), 1), dtree(APPFRONT)], simCount={PRESS: 3}, simExcludes=['tap -x 371', 'gesture scroll-left'], files=['shots/01-fail.png'])
 spass('sim: kill by reboot', [L, {'op': 'kill', 'method': 'reboot'}, L], expect={'booted': 'rebooted'}, simIncludes=['simctl shutdown', 'bootstatus'])
 spass('sim: keys are tapped on the soft keyboard, never typed', [L, {'op': 'keys', 'text': 'zq x'}],
       simIncludes=['tap -x 91 -y 800', 'tap -x 26 -y 688', 'tap -x 221 -y 856', 'tap -x 134 -y 800'], simExcludes=['axe type'])
