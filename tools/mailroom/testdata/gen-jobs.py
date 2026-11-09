@@ -695,6 +695,14 @@ AB, D409 = [(48, 744), (264, 800)], (409, 800)
 TRIAL = 'trial.jsonl'
 srej('sim: a via off the list is BAD_OP', 'BAD_OP', [L, BAR, {'op': 'keys', 'text': 'ab', 'via': 'env'}])
 srej('sim: via on a find is BAD_OP', 'BAD_OP', [L, {**BAR, 'via': 'batch'}])
+srej('sim: via without in is BAD_OP (its count is the read-back)', 'BAD_OP', [L, BAR, {'op': 'keys', 'text': 'ab', 'via': 'tap'}])
+spass('sim: a whole word dropped (the field still reads its placeholder) counts every letter', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=3), pt(198, 895, CAPTURE, n=1), typed('Ab')], notes={'2': 'via batch, drops 2; retyped once'},
+      fileHas=[[TRIAL, '"op":"keys","via":"batch","n":2,"drops":2']])
+spass('sim: an erase drop the first look saw counts even when the centre look hits another element', EV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), left('A', n=1), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20), n=1)],
+      notes={'2': 'erased 2; via batch, drops 1; deleted 3 more'}, simCount={BATCH('1', *[D409] * 3): 1},
+      fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":1']])
 spass('sim: keys via tap (the baseline) is the per-key path, counted in trial.jsonl with the load', KV('tap'),
       tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'typed 2 keys; via tap, drops 0'}, simCount={'tap -x 48 -y 744 --tap-style physical --udid': 1},
       simExcludes=['batch --tap-style', 'hid=', '--post-delay'], fileHas=[[TRIAL, '{"load":{"start":'], [TRIAL, '"op":"keys","via":"tap","n":2,"drops":0']])

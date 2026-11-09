@@ -74,13 +74,24 @@ export interface TrialRow {
   msPerTap: number | null; // median over its ops
 }
 
-export function parseTrial(raw: string | null): Pick<TrialRound, 'load' | 'lines'> {
-  const out: Pick<TrialRound, 'load' | 'lines'> = { load: null, lines: [] };
+// bad: lines that aren't JSON (the round says so: a count it can't read is never a zero)
+export function parseTrial(
+  raw: string | null,
+): Pick<TrialRound, 'load' | 'lines'> & { bad: number } {
+  const out: Pick<TrialRound, 'load' | 'lines'> & { bad: number } = {
+    load: null,
+    lines: [],
+    bad: 0,
+  };
   for (const l of (raw ?? '').split('\n')) {
     if (!l.trim()) continue;
-    const o = JSON.parse(l) as Partial<TrialLine> & { load?: TrialRound['load'] };
-    if (o.load) out.load = o.load;
-    else out.lines.push(o as TrialLine);
+    try {
+      const o = JSON.parse(l) as Partial<TrialLine> & { load?: TrialRound['load'] };
+      if (o.load) out.load = o.load;
+      else out.lines.push(o as TrialLine);
+    } catch {
+      out.bad++;
+    }
   }
   return out;
 }
@@ -112,7 +123,7 @@ export function trialTable(tag: string, rounds: TrialRound[]): string[] {
   const pad = (s: string | number, n: number) => String(s).padEnd(n);
   const out = [
     `sim-trial ${tag}: ${rounds.length} round(s)`,
-    `${pad('via', 9)}${pad('taps', 6)}${pad('drops', 7)}${pad('drop %', 8)}${pad('retried', 9)}ms/tap`,
+    `${pad('via', 9)}${pad('taps', 6)}${pad('drops', 7)}${pad('drop %', 8)}${pad('retried', 9)}ms/tap (wall: key reads + lead sleep)`,
     ...rows.map(
       (r) =>
         `${pad(r.via, 9)}${pad(r.taps, 6)}${pad(r.drops, 7)}${pad(r.taps ? ((100 * r.drops) / r.taps).toFixed(1) : '-', 8)}${pad(r.retried, 9)}${r.msPerTap ?? '-'}`,
@@ -128,8 +139,8 @@ export function trialTable(tag: string, rounds: TrialRound[]): string[] {
 const retriedSteps = (r: SimResult | undefined) =>
   (r?.steps ?? []).filter((s) => /retyped|deleted .*more/.test(s.note ?? '')).map((s) => s.i);
 
-// Exit 0: every round ran clean; 1: a round failed (its drops still count up to the failure, and the table says so);
-// 3: the Mac couldn't run one (what ran before it is still printed).
+// Exit 0: every round ran clean; 1: a round failed or left no readable count (its drops still count up to the
+// failure, and the table says so); 2: a bad --tag; 3: the Mac couldn't run one (what ran before it is still printed).
 export async function simTrial(
   d: SimDeps,
   tag: string,
@@ -162,10 +173,20 @@ export async function simTrial(
         code = 3;
       } else throw err;
     }
-    const t = parseTrial(d.fs.read(join(d.dir, 'results', job.id, 'trial.jsonl')));
+    const { bad: unreadable, ...t } = parseTrial(
+      d.fs.read(join(d.dir, 'results', job.id, 'trial.jsonl')),
+    );
+    if (!failure && (unreadable || !t.lines.length)) {
+      failure = unreadable
+        ? `${unreadable} unreadable trial.jsonl line(s)`
+        : 'no trial.jsonl lines';
+      code = Math.max(code, 1);
+    }
     rounds.push({ round, id: job.id, ...t, retried: retriedSteps(result), failure });
     if (code === 3) break;
   }
   for (const l of trialTable(tag, rounds)) d.log(l);
+  // only a clean last round shuts the sim down
+  if (code) d.log('the sim may still be booted: pnpm mailroom sim-shutdown');
   return code;
 }

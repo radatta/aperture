@@ -195,7 +195,9 @@ const scanEnds = (o: Obj) => {
   const s = o.scan as { from: number; to: number };
   return [s.from, s.to];
 };
-const via = (o: Obj) => !('via' in o) || (VIAS as readonly unknown[]).includes(o.via);
+// a trial's way of sending; it counts drops only through a read-back, so it needs `in`
+const via = (o: Obj) =>
+  !('via' in o) || ('in' in o && (VIAS as readonly unknown[]).includes(o.via));
 
 function where(o: Obj): boolean {
   if ('near' in o === 'scan' in o) return false;

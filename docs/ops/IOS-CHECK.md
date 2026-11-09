@@ -182,7 +182,7 @@ Mac bash is outside lint and typecheck, so its proof is the fixtures plus a real
 
 AXe can report a tap done that iOS never got. AXe issue 71: on Xcode 27 with iOS 27, a new `axe` process can lose its first touch before the sim's input service is up, and the runner spawns one per key. The runner's read-backs catch those drops and retry them. The trial measures which way of sending cuts them at the source.
 
-- **Variants:** `keys` and `erase` take `via`. Without it they use `tap`; the scenarios never set it.
+- **Variants:** `keys` and `erase` take `via`, which needs `in`, since the count comes from the read-back. Without it they use `tap`; the scenarios never set it.
   - `tap`: today's per-key `axe tap`.
   - `post`: `--post-delay 0.5`, with a 0.1 s sleep after.
   - `hid`: `AXE_HID_STABILIZATION_MS=500` in that tap's environment.
@@ -197,7 +197,8 @@ AXe can report a tap done that iOS never got. AXe issue 71: on Xcode 27 with iOS
   - It runs 5 jobs (rounds). In each, one word of 6 letters is typed into the capture bar and erased with exactly 6 deletes, once per variant.
   - The variant order rotates each round, so a change in load hits all of them alike.
   - It prints taps, drops, the drop %, the ops retried, and the median ms per tap for each variant, plus each round's load. The files stay in `.hostjobs/results/<id>/`.
-  - Exit codes: 1 means a round failed (named in the table), 3 means the Mac couldn't run a round.
+  - Exit codes: 1 means a round failed or left no readable count (named in the table), 2 means a bad `--tag`, 3 means the Mac couldn't run a round. A non-zero exit can leave the sim booted (`pnpm mailroom sim-shutdown`).
+  - `ms/tap` is wall time: it includes the key reads and the batch lead sleep. Read it as the cost per tap, not the speed of the method.
 - **Conditions:** compare a run on an idle Mac against a loaded one.
   - The container runs in a VM on the Mac, so other sessions' tests count as load. Get the hub to call a quiet window for the idle run.
   - A high `loadavg` in an "idle" run means rerun it, don't count it.
