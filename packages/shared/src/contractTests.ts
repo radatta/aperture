@@ -2210,7 +2210,7 @@ export function runApiContract(
     // Soft-deleted rows stay out of the export. The two impls used to disagree — the stub spread its
     // raw store (tombstones included), the backend's repo reads are alive()-filtered (excluded) — and
     // no type can catch that, since both are well-typed arrays of the same element. Two probes because
-    // they take different paths: deleteCategory writes deletedAt via putCategory, removePlan goes
+    // they take different paths: deleteCategory writes deletedAt (the backend via updateCategory's casUpdate), removePlan goes
     // through the stub's softDelete. (Not uncheckHabit — the stub soft-deletes it but the backend
     // hard-deletes, so it can't distinguish filtering from absence.)
     it('export: excludes soft-deleted rows', async () => {

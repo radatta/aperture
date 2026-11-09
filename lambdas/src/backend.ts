@@ -1958,9 +1958,12 @@ export class BackendClient implements ApiClient {
       await this.repo.putRoll({ ...r, categoryId: reassignToId, updatedAt: this.now() });
     // Conditional too, so an edit racing the delete can't write the live row back over the tombstone.
     if (await this.repo.getCategory(id, { consistent: true }))
-      await this.repo.updateCategory(id, (c) => ({ ...c, deletedAt: this.now() }), this.now(), {
-        allowDeleted: true,
-      });
+      await this.repo.updateCategory(
+        id,
+        (c) => (c.deletedAt !== null ? null : { ...c, deletedAt: this.now() }), // a second delete keeps the first time
+        this.now(),
+        { allowDeleted: true },
+      );
   }
 
   // --- Places (errand lists — places.ts) ---

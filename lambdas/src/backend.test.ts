@@ -900,6 +900,17 @@ describe('backend read-then-write under lagging reads', () => {
     expect((await backend.listCategories()).some((c) => c.id === cat.id)).toBe(false);
   });
 
+  it('deleting a category twice keeps the first deletion time', async () => {
+    const { backend, doc } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: false });
+    await backend.deleteCategory(cat.id, null);
+    const first = await doc.get('u#local', sk.cat(cat.id), { consistent: true });
+    await backend.deleteCategory(cat.id, null);
+    const second = await doc.get('u#local', sk.cat(cat.id), { consistent: true });
+    expect(second?.deletedAt).toBe(first?.deletedAt);
+    expect(second?.updatedAt).toBe(first?.updatedAt);
+  });
+
   it('a settings patch straight after another keeps both', async () => {
     const { backend, doc } = setup();
     await backend.getSettings();
