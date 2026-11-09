@@ -6,6 +6,9 @@ export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building', 'ready', 'n
 export const WAVE_STATES = ['merged', 'open', 'in-flight', 'not-started'] as const;
 export type LaneState = (typeof LANE_STATES)[number];
 export type WaveState = (typeof WAVE_STATES)[number];
+// the dev slot a lane is on (CI-BOT.md → Dev slots): optional, `dev` when absent
+export const LANE_SLOTS = ['dev', 'devb'] as const;
+export type LaneSlot = (typeof LANE_SLOTS)[number];
 export const PLAN_KINDS = ['dev', 'merge', 'rahul', 'ci'] as const;
 export type PlanKind = (typeof PLAN_KINDS)[number];
 
@@ -13,6 +16,7 @@ export type Lane = {
   branch: string;
   session: string | null;
   state: LaneState;
+  slot: LaneSlot;
   pr: number | null;
   eta: number | null;
   waitingOn: string | null;
@@ -93,10 +97,14 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     if (!branch) return void problems.push(`devQueue[${i}]: no branch`);
     if (!LANE_STATES.includes(state))
       return void problems.push(`devQueue[${i}]: state ${JSON.stringify(l.state)}`);
+    const slot = (l.slot ?? 'dev') as LaneSlot;
+    if (!LANE_SLOTS.includes(slot))
+      return void problems.push(`devQueue[${i}]: slot ${JSON.stringify(l.slot)}`);
     devQueue.push({
       branch,
       session: str(l.session),
       state,
+      slot,
       pr: int(l.pr),
       eta: parseTime(l.eta),
       waitingOn: str(l.waitingOn),

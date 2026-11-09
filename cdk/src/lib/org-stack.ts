@@ -138,6 +138,11 @@ export const guardrailsPolicy = () =>
         's3:GetAccountPublicAccessBlock',
         's3:ListAllMyBuckets',
         's3:GetBucketLocation',
+        // Attaching the us-east-1 cert to CloudFront reads and grants on ACM's `aws/acm` key there under the deploying
+        // role (CloudTrail 2026-11-09: kms:DescribeKey denied here, surfacing as CloudFront's InvalidViewerCertificate).
+        // Free and data-free in any region: no key can be made to grant on (NoCostSinks denies kms:CreateKey).
+        'kms:DescribeKey',
+        'kms:CreateGrant',
       ],
       Resource: '*',
       Condition: { ...exempt, StringNotEquals: { 'aws:RequestedRegion': DEV_REGION } },

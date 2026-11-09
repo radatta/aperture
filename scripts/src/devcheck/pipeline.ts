@@ -47,6 +47,7 @@ export interface PipelineDeps {
   feature?: string[]; // --feature: whose rows the report shows as this feature's
   expectedSha: string;
   scenarioSha?: string; // HEAD, where the scenarios came from
+  target?: string; // the dev slot and its origin, from the branch's lock (slot.ts); the report's header names it
   scenarios: Scenario[];
   ledger: Ledger;
   shotsDir: string;
@@ -97,6 +98,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     feature: d.feature ?? [],
     expectedSha: d.expectedSha,
     scenarioSha: d.scenarioSha,
+    ...(d.target ? { target: d.target } : {}),
     status: 'PASS',
     codes: [],
     failures: [],

@@ -20,13 +20,17 @@ import { hostjobsDir, nodeFs, repoRunnerVersion } from '../mailroom/submit.ts';
 import { createApiClient } from './api';
 import { launch, loadPlaywright } from './browser';
 import {
-  DEV_ORIGIN,
+  currentSlot,
   devcheckHome,
   envPath,
+  ledgerFile,
   loadEnv,
   mainCheckout,
   runDir,
+  runLockFile,
+  slotOrigin,
   statePath,
+  useSlot,
   worktreeRoot,
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
@@ -39,6 +43,7 @@ import { ensureSignedIn, readCheckedSession, refreshSession, validateCachedState
 import { createIos } from './ios';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
+import { pickSlot } from './slot';
 import {
   SCENARIOS,
   selectFeature,
@@ -131,7 +136,7 @@ async function listRuns(): Promise<DeployRun[]> {
       '--workflow',
       'deploy-dev.yml',
       '--limit',
-      '10',
+      '20', // both slots' dispatches share this list
       '--json',
       RUN_FIELDS,
     ]);
@@ -145,7 +150,7 @@ async function listRuns(): Promise<DeployRun[]> {
 
 const fetchShell = async (): Promise<string> =>
   (
-    await fetch(`${DEV_ORIGIN}/`, {
+    await fetch(`${slotOrigin()}/`, {
       headers: { 'cache-control': 'no-cache' },
       signal: AbortSignal.timeout(15_000),
     })
@@ -185,12 +190,30 @@ async function main(): Promise<number> {
     read: (p) => readFileSync(p, 'utf8'),
   });
   if (gaps.length) throw new DevcheckError('MATRIX_GAP', gaps.join('\n  '));
+  // The slot is the lock's (slot.ts) — set before anything reads an origin, a host or a per-slot file.
+  const branch = await git(['symbolic-ref', '--short', 'HEAD']).catch(() => '');
+  const pick = await pickSlot(branch, {
+    lsRemote: () => git(['ls-remote', 'origin', 'refs/locks/dev', 'refs/locks/devb']),
+    tagMessage: async (tag) =>
+      (
+        await exec('gh', ['api', `repos/radatta/aperture/git/tags/${tag}`, '--jq', '.message'], {
+          cwd: worktree,
+        })
+      ).stdout.trim(),
+  }).catch((err: unknown) => {
+    if (err instanceof DevcheckError) throw err; // NO_LOCK, as is
+    throw new DevcheckError(
+      'SLOT_UNKNOWN',
+      `couldn't read the dev locks (${err instanceof Error ? err.message : String(err)}) — rerun`,
+    );
+  });
+  useSlot(pick.slot);
   const env = loadEnv(envPath(main));
   const pw = loadPlaywright();
 
   const home = devcheckHome(main);
   mkdirSync(home, { recursive: true });
-  const release = takeLock(join(home, 'run.lock'));
+  const release = takeLock(join(home, runLockFile()));
   // A kill (Ctrl-C, a background job's timeout) skips the pipeline's finally — cleanup doesn't run, and the
   // next run's sweep deletes what this one left. The lock must not outlive the process either way.
   for (const [sig, code] of [
@@ -201,12 +224,13 @@ async function main(): Promise<number> {
       release();
       process.exit(code);
     });
-  const ledger = openLedger(join(home, 'ledger.dev.jsonl'));
+  const ledger = openLedger(join(home, ledgerFile()));
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}-${args.tier}`;
   const out = runDir(worktree, runId);
   const shotsDir = join(out, 'shots');
   mkdirSync(shotsDir, { recursive: true });
   const log = (msg: string) => console.log(`[devcheck] ${msg}`);
+  log(`target: ${currentSlot()} → ${slotOrigin()} (${pick.why})`);
   log(
     `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} against ${sha.slice(0, 7)} → ${out}`,
   );
@@ -225,6 +249,7 @@ async function main(): Promise<number> {
       feature,
       expectedSha: sha,
       scenarioSha,
+      target: `${currentSlot()} (${slotOrigin()})`,
       scenarios,
       ledger,
       shotsDir,
@@ -238,6 +263,7 @@ async function main(): Promise<number> {
         copy: copyFileSync,
         log,
         repoVersion: () => repoRunnerVersion(sh('git', ['rev-parse', '--show-toplevel'])),
+        slot: currentSlot(),
       }),
       waitForDeploy: args.deployWait
         ? () =>

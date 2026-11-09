@@ -16,6 +16,7 @@ export type Paths = {
   boardDir: string; // devlock.json, queue.json, history/
   limits: string; // scripts/board/limits.json
   ledger: string; // localNotes/devcheck/ledger.dev.jsonl
+  ledgerB?: string; // slot B's, ledger.devb.jsonl (absent: slot A's runs only)
   bench: string; // localNotes/bench-vitest/
   cores?: number; // the CPU-guard's core count; default the host's (fixtures pin theirs)
 };
@@ -97,6 +98,7 @@ function parseLimitsFile(text: string | null): Limits {
   };
 }
 
+type LockSlot = 'dev' | 'devb';
 type LockFile = {
   holder?: { branch?: string; expiresAt?: string } | null;
   t?: string;
@@ -112,15 +114,18 @@ export class Source {
   private jobs: Job[] = [];
   private leaseFeed: FeedItem[] = [];
   private lastRaw: Record<string, unknown> | null = null;
-  private ledgerTail: Tail;
+  private ledgerTails: [Run['slot'], Tail][];
   private runs = new Map<string, Run>();
-  private lockFile: Watched<LockFile | null>;
+  private lockFiles: Record<LockSlot, Watched<LockFile | null>>;
   private limits: Watched<Limits>;
   private queue: Watched<Queue>;
   private benchTsv: Watched<string | null>;
   private benchLog: Watched<string | null>;
   private lockFeed: FeedItem[] = [];
-  private lastHolder: string | null | undefined = undefined;
+  private lastHolder: Record<LockSlot, string | null | undefined> = {
+    dev: undefined,
+    devb: undefined,
+  };
   private cores: number;
 
   constructor(paths: Paths, prs: PrCache | null) {
@@ -131,14 +136,18 @@ export class Source {
     this.samples = new DayFiles(hist, 'samples');
     this.events = new DayFiles(hist, 'events');
     // The ledger is mostly created/deleted rows (~2 MB): read it once, then only what's appended.
-    this.ledgerTail = tail(paths.ledger);
-    this.lockFile = new Watched(join(paths.boardDir, 'devlock.json'), null, (t) => {
-      try {
-        return t === null ? null : (JSON.parse(t) as LockFile);
-      } catch {
-        return null;
-      }
-    });
+    this.ledgerTails = [['dev', tail(paths.ledger)]];
+    if (paths.ledgerB) this.ledgerTails.push(['devb', tail(paths.ledgerB)]);
+    const lockFile = (name: string) =>
+      new Watched<LockFile | null>(join(paths.boardDir, name), null, (t) => {
+        try {
+          return t === null ? null : (JSON.parse(t) as LockFile);
+        } catch {
+          return null;
+        }
+      });
+    // one cache per dev slot, both written by devlock.sh / the bot (docs/ops/SESSION-BOARD.md → Dev lock line)
+    this.lockFiles = { dev: lockFile('devlock.json'), devb: lockFile('devlock.devb.json') };
     this.limits = new Watched(paths.limits, parseLimitsFile(null), parseLimitsFile);
     this.queue = new Watched<Queue>(
       join(paths.boardDir, 'queue.json'),
@@ -169,13 +178,14 @@ export class Source {
     this.leaseFeed = this.leaseFeed.filter((f) => f.t >= now - DAY);
     this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
-    foldRuns(this.runs, parseLines(readNew(this.ledgerTail)));
+    for (const [slot, t] of this.ledgerTails) foldRuns(this.runs, parseLines(readNew(t)), slot);
     // full runs stay: the TTL proof counts them from queue.json's `since`, however old (a handful a day)
     for (const [id, r] of this.runs)
       if (!r.full && (r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);
 
     const sessions = this.sessionsNow();
-    const lock = this.lockNow(sessions, now);
+    const lock = this.lockNow('dev', sessions, now);
+    const lockB = this.lockNow('devb', sessions, now);
     const tsv = this.benchTsv.get();
     let bench: Bench | null = null;
     if (tsv !== null) bench = parseBench(tsv, this.benchLog.get());
@@ -185,6 +195,7 @@ export class Source {
       gauges: this.gauges(),
       sessions,
       lock,
+      lockB,
       points: this.points,
       jobs: this.jobs,
       runs: [...this.runs.values()].sort(
@@ -258,8 +269,8 @@ export class Source {
       );
   }
 
-  private lockNow(sessions: Session[], now: number): Lock | null {
-    const f = this.lockFile.get();
+  private lockNow(slot: LockSlot, sessions: Session[], now: number): Lock | null {
+    const f = this.lockFiles[slot].get();
     if (!f) return null;
     const branch = typeof f.holder?.branch === 'string' ? clean(f.holder.branch) : null;
     const expiresAt = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : null;
@@ -271,14 +282,17 @@ export class Source {
       failed: !!f.failedAt,
     };
     // The feed's lock lines: transitions seen by this tower, in memory only (a viewer writes no history).
-    if (this.lastHolder !== undefined && branch !== this.lastHolder) {
+    // Slot A's lines keep their `lock:` text; slot B's say `lock devb:`.
+    const last = this.lastHolder[slot];
+    if (last !== undefined && branch !== last) {
+      const tag = slot === 'dev' ? 'lock:' : `lock ${slot}:`;
       const text = branch
-        ? `lock: ${branch}${lock.session ? ` (${lock.session})` : ''}${expiresAt ? ` until ${hhmm(expiresAt)}` : ''}`
-        : `lock: free (was ${this.lastHolder})`;
+        ? `${tag} ${branch}${lock.session ? ` (${lock.session})` : ''}${expiresAt ? ` until ${hhmm(expiresAt)}` : ''}`
+        : `${tag} free (was ${last})`;
       this.lockFeed.push({ t: now, kind: 'lock', text, tone: branch ? 'warn' : 'good' });
       if (this.lockFeed.length > 50) this.lockFeed.shift();
     }
-    this.lastHolder = branch;
+    this.lastHolder[slot] = branch;
     return lock;
   }
 }
@@ -295,6 +309,7 @@ export function defaultPaths(repo: string): Paths {
     boardDir: board,
     limits: join(repo, 'scripts/board/limits.json'),
     ledger: join(notes, 'devcheck/ledger.dev.jsonl'),
+    ledgerB: join(notes, 'devcheck/ledger.devb.jsonl'),
     bench: join(notes, 'bench-vitest'),
   };
 }

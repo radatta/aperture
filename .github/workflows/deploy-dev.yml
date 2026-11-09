@@ -6,6 +6,9 @@ name: Deploy dev (dispatch)
 # the tree — or, for a branch that changes `.github/`, on that branch, so its own workflows are what run on dev
 # (only the user can push workflow changes: the bot has no `workflows` permission). `verify` also prints what merging
 # the commit would deploy to each stage, with the same script deploy.yml's `changes` job runs.
+# Two slots in the dev account (INFRA §2): `slot` picks the stack — `dev` (slot A) or `devb` — and the bot's lock decides
+# it (refs/locks/dev or refs/locks/devb). Both run in the `dev` environment with the same role and `_DEV` secrets; the
+# call job's name tells them apart (`deploy` vs `deploy-b`), which is how the bot's currentBase reads what each serves.
 # The run-name is a contract: `deploy-dev <40-hex sha> <key>`. Dispatch returns no run id, so the bot finds
 # its run by that title, and dev-e2e's devcheck matches dispatched runs by it (head_sha is the ref's, not sha).
 run-name: deploy-dev ${{ inputs.sha }} ${{ inputs.key }}
@@ -22,14 +25,19 @@ on:
         required: true
         type: string
       base:
-        description: Commit dev serves now (the last dispatched sha); empty → origin/main
+        description: Commit the slot serves now (the last dispatched sha); empty → origin/main
         required: false
         type: string
         default: ''
+      slot:
+        description: Which dev stack — dev (slot A) or devb (slot B); the bot's lock decides it
+        required: false
+        type: string
+        default: dev
 
-# One dispatch at a time; the bot's refs/locks/dev lock already serializes them. Queue, never cancel.
+# One dispatch per slot at a time; the bot's per-slot lock already serializes them. Queue, never cancel.
 concurrency:
-  group: deploy-dev-dispatch
+  group: deploy-dev-dispatch-${{ inputs.slot }}
   cancel-in-progress: false
 
 permissions:
@@ -57,6 +65,7 @@ jobs:
           SHA: ${{ inputs.sha }}
           KEY: ${{ inputs.key }}
           BASE: ${{ inputs.base }}
+          SLOT: ${{ inputs.slot }}
           GITHUB_TOKEN: ${{ github.token }}
           # Set to `true` by the user at dev-cutover, once dev ran in its own account under the SCPs; `false` pauses every
           # dispatch. A repository variable: the bot can't set it (the App has no Variables permission).
@@ -67,6 +76,7 @@ jobs:
           [ "$DEV_DEPLOY_ISOLATED" = "true" ] || fail "dispatched dev deploys are paused — repository variable DEV_DEPLOY_ISOLATED is not true (docs/ops/CI-BOT.md)"
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "sha must be 40 lowercase hex"
           [[ "$KEY" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "key must be [A-Za-z0-9._-], at most 100 chars"
+          case "$SLOT" in dev|devb) echo "Slot: $SLOT" ;; *) fail "slot must be dev or devb" ;; esac
           git cat-file -e "$SHA^{commit}" 2>/dev/null || fail "$SHA is not on any branch of this repo"
           # Contains main → dev runs what a squash-merge would produce (the old dev-branch rule).
           git merge-base --is-ancestor origin/main "$SHA" || fail "$SHA is behind main — rebase and push first"
@@ -105,12 +115,14 @@ jobs:
           # and it is the only run of deploy-base.ts against the real API before a merge: main-push classification runs
           # only on main. Read the log lines above this one for that proof, not the modes: a broken walk also prints `full`. API
           # trouble prints `full` with a ::warning; a crash fails here, on purpose. Assigned, so a crash can't be masked.
-          merged_dev=$(node scripts/src/deploy-base.ts dev-main "$SHA")
+          merged_dev=$(node scripts/src/deploy-base.ts dev-main "$SHA" --slot dev)
+          merged_devb=$(node scripts/src/deploy-base.ts dev-main "$SHA" --slot devb)
           merged_prod=$(node scripts/src/deploy-base.ts prod "$SHA")
-          echo "If merged now: dev-main=$merged_dev prod=$merged_prod"
+          echo "If merged now: dev-main=$merged_dev devb=$merged_devb prod=$merged_prod"
 
   deploy:
     needs: [verify]
+    if: inputs.slot == 'dev'
     permissions:
       id-token: write
       contents: read
@@ -129,9 +141,31 @@ jobs:
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
 
+  # Slot B: the same call on the devb stack. No custom domain until CERT_ARN_DEVB is set; no finance schedule ever.
+  deploy-b:
+    needs: [verify]
+    if: inputs.slot == 'devb'
+    permissions:
+      id-token: write
+      contents: read
+      deployments: read # deploy-stage's job declares it; a caller granting less fails the whole run at startup
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      stage: devb
+      mode: ${{ needs.verify.outputs.mode }}
+      ref: ${{ inputs.sha }}
+      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+      aws_region: ${{ vars.AWS_REGION }}
+      cert_arn: ${{ vars.CERT_ARN_DEVB }}
+      device_user_id: ''
+    secrets:
+      origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
+      device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
+      agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
+
   # Same ntfy channel as deploy.yml; the bot also reports the conclusion to the session that dispatched.
   notify:
-    needs: [verify, deploy]
+    needs: [verify, deploy, deploy-b]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -139,13 +173,15 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           VERIFY_RESULT: ${{ needs.verify.result }}
-          DEV_RESULT: ${{ needs.deploy.result }}
+          # The slot that ran; the other's job is skipped.
+          DEV_RESULT: ${{ inputs.slot == 'devb' && needs.deploy-b.result || needs.deploy.result }}
+          SLOT: ${{ inputs.slot }}
           SHA: ${{ inputs.sha }}
           KEY: ${{ inputs.key }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="verify=$VERIFY_RESULT dev=$DEV_RESULT  $SHA"
+          body="verify=$VERIFY_RESULT $SLOT=$DEV_RESULT  $SHA"
           if [ "$VERIFY_RESULT" = "success" ] && [ "$DEV_RESULT" = "success" ]; then
             curl -s -H "Title: ✅ dev dispatch ok ($KEY)" -H "Priority: min" \
               -d "$body" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"

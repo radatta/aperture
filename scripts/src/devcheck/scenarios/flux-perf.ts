@@ -5,7 +5,7 @@
 // local dist. The chunk evidence is the page's resource timing, which sees a chunk the service worker
 // served as well as one from the network.
 import { assertBrWasmHeaders } from '../../../aws/flux-wasm.mjs';
-import { DEV_ORIGIN, assertDevOrigin } from '../config';
+import { assertDevOrigin, targetOrigin } from '../config';
 import { noConsoleErrors, type Scenario } from '../scenario';
 
 const CHUNK = /\/assets\/flux-pages-[\w-]+\.js$/;
@@ -34,7 +34,7 @@ async function pastTheGate(ctx: Parameters<Scenario['steps'][number]['run']>[0])
 }
 
 async function fetchDev(path: string, init?: RequestInit): Promise<Response> {
-  const url = `${DEV_ORIGIN}${path}`;
+  const url = `${targetOrigin()}${path}`;
   assertDevOrigin(url);
   const r = await fetch(url, init);
   if (r.status !== 200) throw new Error(`${path}: expected 200, got ${r.status}`);

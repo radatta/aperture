@@ -15,7 +15,14 @@
 //   list exhausted, API error, a shape we can't read → unknown
 // Unknown → full, always: a wrong `full` costs CI minutes, a wrong skip leaves a stage stale.
 //
-// Run: `node scripts/src/deploy-base.ts <environment> <head sha>` prints the tier on stdout, the reasoning on stderr,
+// Both dev slots record in `dev-main` (one GitHub environment, INFRA §2), told apart by job name, exactly (slotOfJob):
+// deploy.yml's `deploy-dev / …` is slot A's — every older record carries it — and `deploy-devb / …` slot B's; any other
+// name is unknown to both walks (→ full), never guessed. `--slot` walks one slot's records
+// only, so a devb deploy is never read as dev's base or the other way round. Slot B's main lane deploys only a shape
+// change (cdk/, the lockfile or shared's stage.ts — shapeModeFor): its code moves with every dispatch, but the freeze refuses a branch whose
+// shape devb doesn't already run (docs/ops/CI-BOT.md → Dev slots).
+//
+// Run: `node scripts/src/deploy-base.ts <environment> <head sha> [--slot dev|devb]` prints the tier on stdout, the reasoning on stderr,
 // with GITHUB_TOKEN (deployments: read, actions: read) and GITHUB_REPOSITORY in the env. API trouble still prints a
 // tier; only misuse exits non-zero. Same constraint as classify-changes: CI runs this with no install, so erasable
 // syntax, and only node: builtins past the two relative modules below (`import type` is erased; bot/api.ts imports
@@ -32,8 +39,16 @@ interface Status {
   log_url?: string;
 }
 interface JobSteps {
+  name?: string;
   steps?: { name: string; conclusion: string | null }[];
 }
+
+export type Slot = 'dev' | 'devb';
+export const SLOTS: readonly Slot[] = ['dev', 'devb']; // = @aperture/shared DEV_SLOTS (no imports here; a test pins it)
+// By deploy.yml's call-job ids, exactly: a name neither of them gives is unknown to both walks (→ full), so a renamed
+// job can never pass one slot's record off as the other's base.
+export const slotOfJob = (name: string | undefined): Slot | null =>
+  name?.startsWith('deploy-devb / ') ? 'devb' : name?.startsWith('deploy-dev / ') ? 'dev' : null;
 
 // Only the latest state decides, looking through `inactive`: GitHub lays that over a deployment it superseded.
 export function outcome(statuses: Status[]): 'success' | 'failure' | 'running' {
@@ -60,6 +75,7 @@ export async function servedBy(
   repo: string,
   environment: string,
   log: (line: string) => void = () => undefined,
+  slot?: Slot,
 ): Promise<Base> {
   const unknown = (why: string): Base => {
     log(`::warning::${environment}: unknown, so full — ${why}`); // an annotation: a walk that always fails shows up
@@ -76,11 +92,33 @@ export async function servedBy(
         'GET',
         `/repos/${repo}/deployments/${id}/statuses?per_page=20`,
       );
+      // A slot walk reads the record's job first: the other slot's record — failed, running or done — isn't this one's.
+      let seen: { id: string; job: JobSteps } | undefined;
+      if (slot) {
+        const anyId = jobIdOf(statuses.find((s) => s.log_url)?.log_url);
+        if (!anyId && slot === 'devb') return unknown(`deployment ${id} at ${sha} names no job`);
+        if (anyId) {
+          seen = {
+            id: anyId,
+            job: await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${anyId}`),
+          };
+          const of = slotOfJob(seen.job.name);
+          if (!of)
+            return unknown(
+              `job ${anyId} at ${sha} is ${seen.job.name ?? 'unnamed'}, neither slot's`,
+            );
+          if (of !== slot) continue;
+        }
+      }
       const state = outcome(statuses);
       if (state !== 'success') return unknown(`deployment ${id} at ${sha} is ${state}`);
       const jobId = jobIdOf(statuses.find((s) => s.state === 'success')?.log_url);
       if (!jobId) return unknown(`deployment ${id} at ${sha} names no job`);
-      const tier = deployedTier(await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${jobId}`));
+      const tier = deployedTier(
+        seen?.id === jobId
+          ? seen.job
+          : await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${jobId}`),
+      );
       if (tier === 'unknown') return unknown(`job ${jobId} at ${sha} has unreadable steps`);
       log(`${environment}: ${sha} deployed ${tier}`);
       if (tier === 'app') front ??= sha;
@@ -111,6 +149,28 @@ export function modeFor(
   }
 }
 
+// Slot B's main lane: full only when the shape moved since devb's last full deploy (a cdk/ change, the lockfile —
+// an aws-cdk-lib bump — or the one shared file whose change reaches a frozen shape: DEV_SLOTS / isDevSlot set devb's
+// table settings), else none. Unknown or a failed diff → full, as everywhere. cdk's other shared import is rpc.ts's
+// header names, which reach only CloudFront policies the freeze doesn't hold, so the next dispatch carries them; the
+// test pins that list, so a new cdk import from shared makes someone choose.
+export const SHAPE_PATHS = (p: string) =>
+  p.startsWith('cdk/') || p === 'pnpm-lock.yaml' || p === 'packages/shared/src/stage.ts';
+export function shapeModeFor(
+  base: Base,
+  head: string,
+  diff: Diff,
+  log: (line: string) => void = () => undefined,
+): 'full' | 'none' {
+  if (base === 'unknown') return 'full';
+  try {
+    return diff(base.infra, head).some(SHAPE_PATHS) ? 'full' : 'none';
+  } catch (err) {
+    log(`diff failed, so full — ${(err as Error).message}`);
+    return 'full';
+  }
+}
+
 // --no-renames lists both sides: a move out of lambdas/ into docs/ must still classify by where it came from.
 export const gitDiff =
   (cwd?: string): Diff =>
@@ -121,10 +181,11 @@ export const gitDiff =
       stdio: ['ignore', 'pipe', 'pipe'],
     }).split('\n');
 
-// A hang or a slow walk must end in `full` like any other API trouble, not in the job being killed: two walks of
-// WALK_MS fit well inside the jobs' 5-minute limits, and any one abort ends the walk.
+// A hang or a slow walk must end in `full` like any other API trouble, not in the job being killed: three walks of
+// WALK_MS (dev, devb, prod) plus a full-history checkout fit inside the jobs' 5-minute limits, and any one abort ends
+// the walk.
 const REQUEST_MS = 20_000;
-const WALK_MS = 90_000;
+const WALK_MS = 60_000;
 export function withTimeout(
   fetchImpl: typeof fetch,
   requestMs = REQUEST_MS,
@@ -148,25 +209,30 @@ export interface Deps {
 
 // Returns the exit code. Only misuse is non-zero; `write` runs once, with the tier and nothing else.
 export async function run({ argv, env, fetchImpl, diff, write, log, requestMs, walkMs }: Deps) {
-  const [environment, head] = argv;
+  const [environment, head, flag, slotArg] = argv;
   const { GITHUB_TOKEN: token, GITHUB_REPOSITORY: repo } = env;
+  const slot = flag === '--slot' ? (SLOTS.find((x) => x === slotArg) ?? null) : undefined;
   if (
     !environment ||
     !head ||
     !/^[a-z-]+$/.test(environment) ||
     !/^[0-9a-f]{40}$/.test(head) ||
+    (flag !== undefined && !slot) ||
+    argv.length > 4 ||
+    (slot && environment !== 'dev-main') ||
     !token ||
     !repo
   ) {
     log(
-      'usage: deploy-base.ts <environment> <40-hex head>, with GITHUB_TOKEN and GITHUB_REPOSITORY set',
+      'usage: deploy-base.ts <environment> <40-hex head> [--slot dev|devb (dev-main only)], with GITHUB_TOKEN and GITHUB_REPOSITORY set',
     );
     return 1;
   }
   const api = makeApi(token, withTimeout(fetchImpl, requestMs, walkMs));
-  const base = await servedBy(api, repo, environment, log);
-  const mode = modeFor(base, head, diff, log);
-  log(`${environment}: base ${JSON.stringify(base)} → ${mode}`);
+  const base = await servedBy(api, repo, environment, log, slot ?? undefined);
+  const mode =
+    slot === 'devb' ? shapeModeFor(base, head, diff, log) : modeFor(base, head, diff, log);
+  log(`${environment}${slot ? ` ${slot}` : ''}: base ${JSON.stringify(base)} → ${mode}`);
   write(mode);
   return 0;
 }

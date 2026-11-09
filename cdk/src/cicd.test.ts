@@ -215,7 +215,7 @@ describe('ApertureCicdStack roles', () => {
     });
   });
 
-  it('lets the logs role read only the three dev Lambda groups, and nothing else', () => {
+  it("lets the logs role read only the dev slots' Lambda groups, and nothing else", () => {
     const roles = t.findResources('AWS::IAM::Role', {
       Properties: { RoleName: 'aperture-github-logs-dev' },
     });
@@ -239,14 +239,41 @@ describe('ApertureCicdStack roles', () => {
     const actions = stmts.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
     expect(actions.every((a) => a.startsWith('logs:'))).toBe(true); // no bootstrap assume, S3, CFN
     const resources = JSON.stringify(stmts.map((s) => s.Resource));
-    for (const fn of ['bff', 'mcp', 'finance-sync'])
-      expect(resources).toContain(`/aws/lambda/aperture-${fn}-dev:*`);
+    const groups = [...resources.matchAll(/\/aws\/lambda\/([a-z-]+):\*/g)].map((m) => m[1]).sort();
+    const fns = ['bff', 'mcp', 'finance-sync', 'push-dispatch'];
+    expect(groups).toEqual(
+      fns.flatMap((fn) => [`aperture-${fn}-dev`, `aperture-${fn}-devb`]).sort(),
+    );
     expect(resources).not.toContain('-prod');
     // Only the three id-addressed query calls sit on `*`.
     const star = stmts
       .filter((s) => s.Resource === '*')
       .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
     expect(star.sort()).toEqual(['logs:DescribeQueries', 'logs:GetQueryResults', 'logs:StopQuery']);
+  });
+
+  // One account, both slots: a devb deploy publishes, smokes and reads outputs through the same two roles.
+  it('lets both dev deploy roles publish, smoke and read outputs on both dev slots, never prod', () => {
+    for (const role of ['aperture-github-deploy-dev', 'aperture-github-dev-main']) {
+      const grants = JSON.stringify(
+        statementsOf(role).filter(
+          (s) => s.Action !== 'sts:AssumeRole' && s.Action !== 'ssm:GetParameter',
+        ),
+      );
+      for (const slot of ['dev', 'devb']) {
+        expect(grants, role).toContain(`apertureapp-${slot}-*`);
+        expect(grants, role).toContain(`function:aperture-bff-${slot}"`);
+        expect(grants, role).toContain(`stack/ApertureData-${slot}/*`);
+        expect(grants, role).toContain(`stack/ApertureApp-${slot}/*`);
+      }
+      expect(grants, role).not.toContain('prod');
+    }
+  });
+
+  it("keeps prod's role to prod's own resources", () => {
+    const grants = JSON.stringify(statementsOf('aperture-github-deploy-prod'));
+    expect(grants).toContain('apertureapp-prod-*');
+    expect(grants).not.toMatch(/-devb?[-/:"]/);
   });
 
   it('grants read-only DescribeStacks for the app-only deploy tier', () => {

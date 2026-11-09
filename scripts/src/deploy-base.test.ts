@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,11 +21,25 @@ import {
   outcome,
   run,
   servedBy,
+  shapeModeFor,
+  SHAPE_PATHS,
+  slotOfJob,
+  SLOTS,
   withTimeout,
 } from './deploy-base';
 import { fakeApi, ghError } from './bot/fakes';
 
 type Tier = 'full' | 'app' | 'none';
+
+// packages/shared's DEV_SLOTS, read as text: this module runs with no install, so it keeps its own copy.
+const sharedSlots = () =>
+  JSON.parse(
+    (
+      /DEV_SLOTS = (\[[^\]]*\])/.exec(
+        readFileSync(new URL('../../packages/shared/src/stage.ts', import.meta.url), 'utf8'),
+      )?.[1] ?? '[]'
+    ).replace(/'/g, '"'),
+  ) as string[];
 type Row = { sha: string; tier?: Tier; states?: string[]; logUrl?: string };
 
 const step = (name: string, conclusion: string) => ({ name, conclusion });
@@ -189,6 +211,168 @@ describe('servedBy', () => {
     const { api, calls } = fakeApi({ 'GET /repos/o/r/deployments': () => [] });
     await servedBy(api, 'o/r', 'dev-main');
     expect(calls[0]?.path).toBe('/repos/o/r/deployments?environment=dev-main&per_page=100');
+  });
+});
+
+// Both dev slots record in dev-main; `job` is the recorded job's name (deploy.yml's call job / the stage job).
+type SlotRow = Row & { job: string };
+function devMain(rows: SlotRow[]) {
+  const routes: Parameters<typeof fakeApi>[0] = {
+    'GET /repos/o/r/deployments?environment=dev-main': () =>
+      rows.map((r, id) => ({ id, sha: r.sha })),
+  };
+  rows.forEach((r, id) => {
+    routes[`GET /repos/o/r/deployments/${id}/statuses`] = () =>
+      (r.states ?? ['success', 'in_progress', 'queued']).map((state) => ({
+        state,
+        log_url: `https://github.com/o/r/actions/runs/9/job/${1000 + id}`,
+      }));
+    routes[`GET /repos/o/r/actions/jobs/${1000 + id}`] = () => ({
+      name: r.job,
+      steps: stepsFor(r.tier ?? 'full'),
+    });
+  });
+  return fakeApi(routes);
+}
+const A = 'deploy-dev / deploy';
+const B = 'deploy-devb / deploy';
+
+describe('servedBy, per dev slot', () => {
+  it('keeps its slot list in step with the shared one', () => {
+    expect([...SLOTS]).toEqual(sharedSlots());
+  });
+
+  it("tells the slots apart by deploy.yml's call-job names, and knows no other", () => {
+    expect(slotOfJob(A)).toBe('dev');
+    expect(slotOfJob(B)).toBe('devb');
+    for (const other of [
+      undefined,
+      'deploy-dev',
+      'deploy-devb',
+      'Deploy devb / deploy',
+      'deploy / deploy',
+    ])
+      expect(slotOfJob(other)).toBeNull();
+  });
+
+  it("is unknown for either slot on a record whose job is neither slot's", async () => {
+    const rows: SlotRow[] = [
+      { sha: 'x1', job: 'renamed / deploy' },
+      { sha: 'a1', job: A },
+      { sha: 'b1', job: B },
+    ];
+    for (const slot of ['dev', 'devb'] as const)
+      expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, slot)).toBe('unknown');
+  });
+
+  it("walks past the other slot's records, failed ones included", async () => {
+    const rows: SlotRow[] = [
+      { sha: 'b2', job: B, states: ['failure'] },
+      { sha: 'a2', job: A, tier: 'app' },
+      { sha: 'b1', job: B },
+      { sha: 'a1', job: A },
+    ];
+    expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, 'dev')).toEqual({
+      infra: 'a1',
+      front: 'a2',
+    });
+    expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, 'devb')).toBe('unknown'); // its newest failed
+    expect(
+      await servedBy(devMain(rows.slice(1)).api, 'o/r', 'dev-main', undefined, 'devb'),
+    ).toEqual({
+      infra: 'b1',
+      front: 'b1',
+    });
+  });
+
+  it('is unknown for devb with no devb record yet (its first main deploy creates or updates it in full)', async () => {
+    const rows: SlotRow[] = [{ sha: 'a1', job: A }];
+    expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, 'devb')).toBe('unknown');
+  });
+
+  it("reads each record's job once", async () => {
+    const { api, calls } = devMain([{ sha: 'a1', job: A }]);
+    await servedBy(api, 'o/r', 'dev-main', undefined, 'dev');
+    expect(calls.filter((c) => c.path.includes('/actions/jobs/')).length).toBe(1);
+  });
+});
+
+describe('shapeModeFor (devb on a main merge)', () => {
+  const order: [string, string[]][] = [
+    ['f', []],
+    ['l1', ['lambdas/z.ts', 'app/x.tsx', 'scripts/y.ts']],
+    ['c1', ['cdk/src/lib/app-stack.ts']],
+    ['p1', ['pnpm-lock.yaml']],
+    ['s1', ['packages/shared/src/stage.ts']],
+    ['r1', ['packages/shared/src/rpc.ts', 'packages/shared/src/index.ts']],
+  ];
+  const diff = diffOf(order);
+  it("deploys only a shape change: cdk/, the lockfile or shared's stage.ts", () => {
+    expect(shapeModeFor({ infra: 'f', front: 'f' }, 'l1', diff)).toBe('none');
+    expect(shapeModeFor({ infra: 'f', front: 'f' }, 'c1', diff)).toBe('full');
+    expect(shapeModeFor({ infra: 'c1', front: 'c1' }, 'p1', diff)).toBe('full');
+    expect(shapeModeFor({ infra: 'p1', front: 'p1' }, 'p1', diff)).toBe('none');
+    expect(shapeModeFor({ infra: 'p1', front: 'p1' }, 's1', diff)).toBe('full');
+    expect(shapeModeFor({ infra: 's1', front: 's1' }, 'r1', diff)).toBe('none'); // the rest of shared isn't shape
+  });
+  it('counts shared stage.ts as shape, and pins what else cdk takes from shared', () => {
+    expect(SHAPE_PATHS('packages/shared/src/stage.ts')).toBe(true);
+    expect(SHAPE_PATHS('packages/shared/src/rpc.ts')).toBe(false);
+    const root = fileURLToPath(new URL('../../cdk/src/', import.meta.url));
+    const names = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name))
+          for (const m of readFileSync(p, 'utf8').matchAll(
+            /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@aperture\/shared'/g, // the bare package; subpaths: below
+          ))
+            for (const n of m[1]!.split(',')) if (n.trim()) names.add(n.trim());
+      }
+    };
+    walk(root);
+    // stage.ts (shape) and rpc.ts's headers (not frozen). A new name: is its file shape? then SHAPE_PATHS takes it.
+    expect([...names].sort()).toEqual(
+      [
+        'AGENT_TOKEN_HEADER',
+        'AUTH_HEADER',
+        'DEV_SLOTS',
+        'ORIGIN_SECRET_HEADER',
+        'isDevSlot',
+      ].sort(),
+    );
+    // ...and each is defined where this test says: a move to another file (a re-export) must fail here too
+    const shared = (f: string) =>
+      readFileSync(
+        fileURLToPath(new URL(`../../packages/shared/src/${f}`, import.meta.url)),
+        'utf8',
+      );
+    const defines = (src: string, n: string) => new RegExp(`export const ${n}\\b`).test(src);
+    for (const n of ['DEV_SLOTS', 'isDevSlot']) expect(defines(shared('stage.ts'), n)).toBe(true);
+    for (const n of ['AGENT_TOKEN_HEADER', 'AUTH_HEADER', 'ORIGIN_SECRET_HEADER'])
+      expect(defines(shared('rpc.ts'), n)).toBe(true);
+    expect(shared('stage.ts')).not.toMatch(/^\s*import\s/m); // a leaf: its values can't come from an unpinned file
+    // and no cdk file reaches shared another static way: a namespace import, a re-export, a subpath (./contract, ./flux)
+    const other = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? other(join(dir, e.name))
+          : /(?<!\.test)\.ts$/.test(e.name) &&
+              /(?:import\s*(?:type\s*)?\*|export\s[^;]*from)\s*[^;]*'@aperture\/shared[/']|'@aperture\/shared\//.test(
+                readFileSync(join(dir, e.name), 'utf8'),
+              )
+            ? [e.name]
+            : [],
+      );
+    expect(other(root)).toEqual([]);
+  });
+  it('is full when unknown or when the diff fails', () => {
+    expect(shapeModeFor('unknown', 'h', diff)).toBe('full');
+    const bad = () => {
+      throw new Error('bad object');
+    };
+    expect(shapeModeFor({ infra: 'f', front: 'f' }, 'h', bad)).toBe('full');
   });
 });
 
@@ -455,6 +639,12 @@ describe('run', () => {
     expect(await run({ ...base, argv: ['Prod!', HEAD], env: good })).toBe(1);
     expect(await run({ ...base, argv: ['prod', HEAD], env: { GITHUB_REPOSITORY: 'o/r' } })).toBe(1);
     expect(await run({ ...base, argv: ['prod', HEAD], env: { GITHUB_TOKEN: 't' } })).toBe(1);
+    expect(await run({ ...base, argv: ['prod', HEAD, '--slot', 'devb'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['dev-main', HEAD, '--slot', 'devc'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['dev-main', HEAD, '--slot'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['dev-main', HEAD, '--slot', 'devb', 'x'], env: good })).toBe(
+      1,
+    );
     expect(writes).toEqual([]);
   });
 });

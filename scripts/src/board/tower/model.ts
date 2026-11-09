@@ -77,7 +77,8 @@ export type TowerState = {
   now: number;
   gauges: Gauges | null; // null: no sample yet
   sessions: Session[];
-  lock: Lock | null; // null: no cache file
+  lock: Lock | null; // slot A (`dev`); null: no cache file
+  lockB: Lock | null; // slot B (`devb`, devlock.devb.json); null: no cache file — the header leaves it out
   points: Point[]; // oldest first, the last 24 h
   jobs: Job[]; // oldest first, the last 7 d
   runs: Run[]; // devcheck runs, oldest first

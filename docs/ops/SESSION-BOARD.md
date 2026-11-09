@@ -13,17 +13,17 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 
 ## Use it
 
-| Want                              | Run                                                                                                                                                                                              |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                                |
-| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                           |
-| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_); another branch holds it → `pnpm bot lock wait` in the background. The board shows the holder (_Dev lock line_) |
-| Who is the hub, is it up          | `board.sh hub` — the name from `scripts/board/hub.json` and whether a live session by that name is on the board (`docs/ops/HUB.md`)                                                              |
-| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                              |
-| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)   |
-| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                          |
-| The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                            |
-| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                           |
+| Want                              | Run                                                                                                                                                                                                                                 |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                                                                   |
+| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                                                              |
+| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes a free slot's lock, `refs/locks/dev` or `refs/locks/devb` (`docs/ops/CI-BOT.md` → _Dev slots_); both held → `pnpm bot lock wait --any` in the background. The board shows the holders (_Dev lock line_) |
+| Who is the hub, is it up          | `board.sh hub` — the name from `scripts/board/hub.json` and whether a live session by that name is on the board (`docs/ops/HUB.md`)                                                                                                 |
+| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                                                                 |
+| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)                                      |
+| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                                                             |
+| The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                                                               |
+| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                                                              |
 
 Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
 pids 315/4096 · dev: flux`; `dev:` is the branch holding a live `refs/locks/dev`) —
@@ -172,10 +172,13 @@ by the next acquire and by `gc`.
 
 `board.sh status`, the SessionStart hook and the status line's `dev:` show the real `refs/locks/dev`
 (`docs/ops/CI-BOT.md` → _Dev lock_), from one cache, `board/devlock.json`
-(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?}`). Two writers:
+(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?}`); slot B's
+`refs/locks/devb` has its own, `board/devlock.devb.json`, the same shape (_Dev slots_). `devlock.sh line` prints
+slot A as before, then ` · devb: free` / `· devb: <branch> (<session>) until HH:MM` once slot B has a cache; the
+status line's `dev:` and `board.sh json` still read slot A only. Two writers, each for both files:
 
 - **`scripts/board/devlock.sh refresh`** peeks read-only with the container's own credential —
-  `git ls-remote origin refs/locks/dev`, then `gh api …/git/tags/<sha>` for the holder — each call under
+  one `git ls-remote origin refs/locks/dev refs/locks/devb` for both slots, then `gh api …/git/tags/<sha>` for each held slot's holder — each call under
   `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
   the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
   `failedAt`, and the next peek waits a minute after it; a peek that finds the bot wrote while it was asking keeps
@@ -322,7 +325,7 @@ What it means:
 `1` / `6` / `2` history over 1 h / 6 h / 24 h · `←` `→` (or `h` `l`) move the readout column back / forward ·
 `Esc` back to live · `r` refresh now. Node, no dependencies: `scripts/src/board/tower/`. It draws in Nord colours on the terminal's own background, like the tmux bar (painting Nord's grey over iTerm's navy read as haze).
 
-**Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`; gauges for anon
+**Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`, then slot B's lock (` · devb …`, from `devlock.devb.json`; left out until that cache exists); gauges for anon
 memory and pids (soft / hard marks from `limits.json`) and CPU against the cores. _Dev queue_, _Waiting on
 Rahul_ (an age only past a day: `1d`), the wave (a merged / open / in-flight / not-started bar, then the
 unmerged items; merged ones are counted in the bar, legend and title, not listed) and _Plan_ come from
@@ -338,12 +341,12 @@ readout column. _Test failures_: the last 7 days of suites (`class: test`, not l
 slot-class jobs (`test ui typecheck lint build dev`) overlapped each one at any point, with the failure rate
 and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are the operator). _Activity_: what
 changed in the last 24 h, not what ran — failed jobs (local only: CI checks need an API the container's token
-can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl`; a start only while in flight),
+can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl` and slot B's `ledger.devb.jsonl`, whose runs read `on devb`; a start only while in flight),
 merges, PRs opened (gh `createdAt`), heavy leases that gave up or were denied, and the dev lock taken (a
 `pnpm bot deploy-dev`) as this tower saw it (kept in memory: a viewer writes no history). Passing jobs, the Vite dev server, waits and the lock freed
 stay out (_Machine_ and _Status_ count the suites); `other` and `test-file` jobs take no heavy slot and show
 nowhere in the tower. _Status_: the dead-row TTL proof
-(full runs that ended PASS since `proofs.deadRows.since`, minus `excludedRuns`), the overnight vitest bench
+(slot A's full runs that ended PASS since `proofs.deadRows.since`, minus `excludedRuns`; devb's rows are another table), the overnight vitest bench
 when `localNotes/bench-vitest/results.tsv` exists, `queue.json`'s age, gh, the sampler's last tick, suites in
 24 h, heavy jobs now.
 
@@ -356,12 +359,12 @@ before _Activity_ drops under 4 rows; a cut list ends `+n more`. Resizing redraw
 
 **Reads, and what it costs.** The board's files, never `board.sh status` (which scans `/proc` and peeks at
 GitHub each call): incremental tails of `history/samples-<UTC day>.jsonl` (24 h, two files across UTC
-midnight; each tick compacted to a few numbers) and `events-*.jsonl` (7 days), `devlock.json`, `limits.json`,
-`queue.json`, the devcheck ledger and the bench files, each re-read only when its size or mtime changes. Text
+midnight; each tick compacted to a few numbers) and `events-*.jsonl` (7 days), `devlock.json` and `devlock.devb.json`, `limits.json`,
+`queue.json`, both slots' devcheck ledgers and the bench files, each re-read only when its size or mtime changes. Text
 from them (and from gh) is cleaned to one column per glyph: control characters dropped, tabs as spaces,
 double-width glyphs (CJK, emoji) as `?`. A `cpuCores` over 2 × the cores is a bad tick (_History_) and shows
 as unknown. `gh pr list` at most once a minute, a failure keeping the last list; `devlock.sh refresh --max-age 50`
-once a minute (50: the cache is stamped after its peek), which rewrites the `devlock.json` cache — the tower's
+once a minute (50: the cache is stamped after its peek), which rewrites both slots' lock caches — the tower's
 only write, and fewer GitHub calls than a `watch` on `status`, which refreshes at 30 s. It redraws every 5 s, writing
 only changed rows (no clear, no flicker), on the alternate screen; exit, Ctrl-C, TERM, HUP and a crash restore
 the terminal. Measured (2026-11-07, live board, 210 × 55): first tick 18 ms, then ~6 ms wall / 4–8 ms CPU
@@ -381,6 +384,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "branch": "",
       "session": "",
       "state": "on-dev | next | waiting | building | ready | needs-you",
+      "slot": "dev | devb (optional, dev when absent)",
       "pr": 41,
       "eta": "<ISO, on-dev>",
       "waitingOn": "<waiting, needs-you>",
@@ -405,7 +409,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
 }
 ```
 
-Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
+A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
 is blocked on a Rahul step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
 read check status, and the tower on a `main` without them drops such lanes as a bad write. `plan` is the one
 source for the next merge — the PLAN panel's title and the statusline (`localNotes/board/next-merge.sh`) both

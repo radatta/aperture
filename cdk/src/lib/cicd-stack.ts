@@ -2,6 +2,7 @@ import { CfnOutput, Duration, Stack, Token, Validations } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
+import { DEV_SLOTS } from '@aperture/shared';
 import { DEV_MAIN_GITHUB_ROLE, DEVMAIN_QUALIFIER, STOCK_QUALIFIER } from '../config/devAccount';
 
 export interface CicdStackProps extends StackProps {
@@ -15,6 +16,9 @@ export interface CicdStackProps extends StackProps {
   // real segment via `-c githubSubject=...`. Kept out of committed code (deploy-time context).
   githubSubject?: string;
 }
+
+// The dev Lambdas whose logs `pnpm bot logs` reads, on each dev slot (scripts/src/bot/logs-spec.ts lists the same).
+export const LOG_FNS = ['bff', 'mcp', 'finance-sync', 'push-dispatch'] as const;
 
 const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com';
 const GITHUB_OIDC_URL = `https://${GITHUB_OIDC_HOST}`;
@@ -44,12 +48,13 @@ export class ApertureCicdStack extends Stack {
     });
 
     // lane 'devmain' (dev only): main's own dev deploy, through the second bootstrap (config/lane.ts) — its deploy,
-    // lookup and publishing roles, named exactly, and its own version parameter.
+    // lookup and publishing roles, named exactly, and its own version parameter. `stages`: the stages this role
+    // publishes and smokes — prod's one, or both dev slots (one account, one role per lane, INFRA §2).
     const makeRole = (
       id: string,
       roleName: string,
       subs: string[],
-      stage: string,
+      stages: readonly string[],
       lane?: typeof DEVMAIN_QUALIFIER,
     ): iam.Role => {
       const role = new iam.Role(this, id, {
@@ -90,16 +95,18 @@ export class ApertureCicdStack extends Stack {
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['s3:PutObject', 's3:DeleteObject', 's3:GetObject', 's3:ListBucket'],
-          resources: [
+          resources: stages.flatMap((stage) => [
             `arn:aws:s3:::apertureapp-${stage}-*`,
             `arn:aws:s3:::apertureapp-${stage}-*/*`,
-          ],
+          ]),
         }),
       );
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['lambda:InvokeFunction'],
-          resources: [`arn:aws:lambda:${region}:${account}:function:aperture-bff-${stage}`],
+          resources: stages.map(
+            (stage) => `arn:aws:lambda:${region}:${account}:function:aperture-bff-${stage}`,
+          ),
         }),
       );
       // App-only deploys skip `cdk deploy`, so they can't read its --outputs-file; fetch-stack-outputs.mjs
@@ -107,10 +114,10 @@ export class ApertureCicdStack extends Stack {
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['cloudformation:DescribeStacks'],
-          resources: [
+          resources: stages.flatMap((stage) => [
             `arn:aws:cloudformation:${region}:${account}:stack/ApertureData-${stage}/*`,
             `arn:aws:cloudformation:${region}:${account}:stack/ApertureApp-${stage}/*`,
-          ],
+          ]),
         }),
       );
 
@@ -126,12 +133,26 @@ export class ApertureCicdStack extends Stack {
               [`AwsSolutions-IAM5[Resource::arn:aws:iam::${nagAccount}:role/cdk-${BOOTSTRAP_QUALIFIER}-*-${nagAccount}-${region}]`]:
                 'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
             }),
-        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]: `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
-        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]: `Object-level access to the same ${stage} site bucket.`,
-        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureApp-${stage}/*]`]:
-          'app-tier deploy reads stack outputs via DescribeStacks; CFN stack ARNs carry a wildcard suffix.',
-        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureData-${stage}/*]`]:
-          'Same, for the data stack outputs.',
+        ...Object.fromEntries(
+          stages.flatMap((stage) => [
+            [
+              `AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`,
+              `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`,
+              `Object-level access to the same ${stage} site bucket.`,
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureApp-${stage}/*]`,
+              'app-tier deploy reads stack outputs via DescribeStacks; CFN stack ARNs carry a wildcard suffix.',
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureData-${stage}/*]`,
+              'Same, for the data stack outputs.',
+            ],
+          ]),
+        ),
       });
       return role;
     };
@@ -143,7 +164,7 @@ export class ApertureCicdStack extends Stack {
         'DeployProd',
         'aperture-github-deploy-prod',
         [`repo:${githubSubject}:environment:prod`],
-        'prod',
+        ['prod'],
       );
       new CfnOutput(this, 'ProdRoleArn', { value: prodRole.roleArn });
       return;
@@ -156,7 +177,7 @@ export class ApertureCicdStack extends Stack {
       'DeployDev',
       'aperture-github-deploy-dev',
       [`repo:${githubSubject}:environment:dev`],
-      'dev',
+      DEV_SLOTS,
     );
     // dev-main: main's own dev deploy (deploy.yml on a `main` push), in the main-only `dev-main` environment, through
     // the `devmain` bootstrap the freeze exempts (docs/ops/CI-BOT.md → Two lanes). The guardrails SCP lets only this
@@ -165,14 +186,14 @@ export class ApertureCicdStack extends Stack {
       'DeployDevMain',
       DEV_MAIN_GITHUB_ROLE,
       [`repo:${githubSubject}:environment:dev-main`],
-      'dev',
+      DEV_SLOTS,
       DEVMAIN_QUALIFIER,
     );
 
     // dev logs: read-only CloudWatch Logs for fetch-dev-logs.yml (the bot's `pnpm bot logs`). Built apart from
     // makeRole — it gets none of the deploy power (no bootstrap assume, S3, CFN). Trusted only from
-    // the `dev-logs` environment (main-only branch policy), and reads only the three dev Lambda groups: prod
-    // logs hold the user's real activity and stay unreachable by construction.
+    // the `dev-logs` environment (main-only branch policy), and reads only the dev slots' Lambda groups (LOG_FNS, on
+    // both slots): prod logs hold the user's real activity and stay unreachable by construction.
     const logsRole = new iam.Role(this, 'LogsDev', {
       roleName: 'aperture-github-logs-dev',
       maxSessionDuration: Duration.hours(1),
@@ -181,8 +202,9 @@ export class ApertureCicdStack extends Stack {
         StringLike: { [`${GITHUB_OIDC_HOST}:sub`]: [`repo:${githubSubject}:environment:dev-logs`] },
       }),
     });
-    const devGroups = ['bff', 'mcp', 'finance-sync'].map(
-      (fn) => `arn:aws:logs:${region}:${account}:log-group:/aws/lambda/aperture-${fn}-dev:*`,
+    const groupNames = DEV_SLOTS.flatMap((slot) => LOG_FNS.map((fn) => `aperture-${fn}-${slot}`));
+    const devGroups = groupNames.map(
+      (name) => `arn:aws:logs:${region}:${account}:log-group:/aws/lambda/${name}:*`,
     );
     logsRole.addToPolicy(
       new iam.PolicyStatement({
@@ -204,8 +226,8 @@ export class ApertureCicdStack extends Stack {
     );
     logsRole.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
       ...Object.fromEntries(
-        ['bff', 'mcp', 'finance-sync'].map((fn) => [
-          `AwsSolutions-IAM5[Resource::arn:aws:logs:${region}:${nagAccount}:log-group:/aws/lambda/aperture-${fn}-dev:*]`,
+        groupNames.map((name) => [
+          `AwsSolutions-IAM5[Resource::arn:aws:logs:${region}:${nagAccount}:log-group:/aws/lambda/${name}:*]`,
           'Log events live under the group ARN with a `:*` stream suffix; the group itself is named exactly.',
         ]),
       ),

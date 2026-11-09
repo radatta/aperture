@@ -250,6 +250,34 @@ describe('devlock.sh', () => {
     expect(devlock(['line']).out).toMatch(/^dev lock: flux \(flux\) until \d\d:\d\d$/);
   });
 
+  it('adds slot B after slot A once devb has a cache, each judged on its own', () => {
+    const a = liveSession();
+    board(['register', '--pid', `${a}`, '--cwd', repo('lc')]);
+    ghLock('');
+    writeFileSync(
+      join(tmp, 'gh-lock.devb'),
+      JSON.stringify({ branch: 'lc', sha: SHA, expiresAt: iso(20 * 60_000) }),
+    );
+    expect(devlock(['refresh']).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(tmp, 'board/devlock.devb.json'), 'utf8'))).toMatchObject({
+      v: 1,
+      source: 'peek',
+      holder: { branch: 'lc' },
+    });
+    expect(devlock(['line']).out).toMatch(/^dev lock: free · devb: lc \(lc\) until \d\d:\d\d$/);
+    writeFileSync(
+      join(tmp, 'gh-lock.devb'),
+      JSON.stringify({ branch: 'lc', sha: SHA, expiresAt: iso(-60_000) }),
+    );
+    devlock(['refresh', '--max-age', '0']);
+    expect(devlock(['line']).out).toMatch(
+      /^dev lock: free · devb: lc — EXPIRED \d\d:\d\d, the next acquire takes it over$/,
+    );
+    writeFileSync(join(tmp, 'gh-lock.devb'), '');
+    devlock(['refresh', '--max-age', '0']);
+    expect(devlock(['line']).out).toBe('dev lock: free · devb: free');
+  });
+
   it('says free when the ref is absent, and EXPIRED past expiresAt', () => {
     ghLock('');
     devlock(['refresh']);

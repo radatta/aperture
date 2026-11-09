@@ -48,13 +48,32 @@ Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--fea
 printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status, and when the
 harness itself failed (the deploy wait, a sign-in, the build check, cleanup) the error's text follows it, with a
 `**Failed:** <code> — <message>` line per failure under _Leftovers_ (a step's error is in its _Steps_ row, so a
-step-only failure's first line is exactly `# Dev check — FAIL: STEP_FAILED`) — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
+step-only failure's first line is exactly `# Dev check — FAIL: STEP_FAILED`) — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`; per slot once the quota allows — _Dev slots_).
+
+## Dev slots
+
+The dev account has two stacks, `dev` (slot A) and `devb` (slot B, CI-BOT.md → _Dev slots_). **A run targets the slot
+its branch's dev lock is on** — read at start from `refs/locks/dev` / `refs/locks/devb` with the container's read-only
+token (`slot.ts`), never from a flag. No lock of its own → `dev`, as every run was before slot B (a check of main's
+deploy holds none) — unless another branch holds `dev` live: then the run stops (`NO_LOCK`) rather than sweep and
+write into that branch's test. So a run never lands on a stack another branch holds live. A lock read that fails stops the
+run too (`SLOT_UNKNOWN`). The report's header names the target (`· on devb (https://…)`). Everything a run keeps is
+per slot: the env file
+(`.secrets/devcheck.<slot>.env`), the signed-in state (`devcheck.<slot>.state.json`), the ledger
+(`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
+scope (`config.ts` → `SLOT_TARGETS`). The run lock stays one for both slots while the dev account's Lambda quota is
+10: two runs (~10 calls in flight each) would throttle each other. Once it reads ≥ 160 with the reservations in
+(CI-BOT.md → Compute), `PER_SLOT_RUNS` in `config.ts` gives each slot its own (`run.devb.lock`), so two sessions can
+each run one devcheck at once. On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's). The `dev-slot-b` scenario's
+rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its
+reminders are configured and its poller ticking — so it stays as a standing check that a run is where its lock says.
 
 ## One-time setup
 
 1. **Test user** (dev pool only — never prod). On the Mac, the plan's operator step creates it with
    `aws cognito-idp admin-create-user` (invite suppressed, email verified) and a permanent random password,
-   and writes `/workspace/.secrets/devcheck.dev.env` (mode 600, gitignored) with `DEVCHECK_EMAIL`,
+   and writes `/workspace/.secrets/devcheck.dev.env` (mode 600, gitignored; slot B's is `devcheck.devb.env`, from the
+   same line against `ApertureData-devb` / `ApertureApp-devb`, with the claude client below in it) with `DEVCHECK_EMAIL`,
    `DEVCHECK_PASSWORD`, `DEVCHECK_SUB`, `DEVCHECK_COGNITO_HOST`, `DEVCHECK_CLIENT_ID`, `DEVCHECK_POOL_ID`. The
    password is never shown; the harness reads the file. `docs/arch/INFRA.md` §6 records the user. **Since the
    dev-account PR** dev's pool lives in the dev account (`--profile aperture-dev`), so the user was re-created
@@ -221,6 +240,8 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 | Code                       | Means                                                                                                                                                                                                                  | Do                                                                                                                                                                                                                                         |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ENV_MISSING`              | env file absent or a key missing                                                                                                                                                                                       | setup step 1                                                                                                                                                                                                                               |
+| `SLOT_UNKNOWN`             | the dev locks couldn't be read at start, so the run can't tell which slot its branch deployed to (_Dev slots_)                                                                                                         | rerun; `pnpm bot lock status` shows both locks                                                                                                                                                                                             |
+| `NO_LOCK`                  | the branch holds no dev lock and another branch holds `dev` live — the run would land in that branch's test (_Dev slots_)                                                                                              | `pnpm bot deploy-dev` takes a slot (or wait for `dev` to free)                                                                                                                                                                             |
 | `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                                                                                                | setup step 2                                                                                                                                                                                                                               |
 | `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                                                                                                   | did `pnpm bot deploy-dev` run for it?                                                                                                                                                                                                      |
 | `DEPLOY_FAILED`            | the run failed                                                                                                                                                                                                         | read the run; a failed `verify` job names why in its `::error::` line                                                                                                                                                                      |
@@ -394,7 +415,7 @@ paste as they are — from _Other scenarios (regression)_: per-scenario counts a
 since those belong to their own features. Without `--feature` there are no paste lists: the table is every
 scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
 carry its verdict: they hold only once a run passes.
-Shared, in the main checkout: the two ledgers and `run.lock`. Secrets beside the env file:
+Shared, in the main checkout: the ledgers (one per slot) and `run.lock` (_Dev slots_). Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session and the Hosted UI cookie, mode 600 — re-saved after the MCP
 sign-in).
 

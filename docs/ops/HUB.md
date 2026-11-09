@@ -73,18 +73,20 @@ touch <area>; whichever merges second rebases — agree an order.`
 
 ## Lock etiquette
 
-One branch on dev at a time, under `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_). A session that finds
-another branch holding it never works around it:
+One branch per dev slot at a time, under `refs/locks/dev` (slot A) and `refs/locks/devb` (slot B) (`docs/ops/CI-BOT.md`
+→ _Dev lock_, _Dev slots_). `deploy-dev` takes a free slot itself, so a session waits only when **both** are held, and
+never works around it:
 
-1. The refusal (`pnpm bot deploy-dev`, or `lock acquire`, saying "dev is locked by …") prints, above its error
-   line, the two messages to send **now**, once each: `[lock] … queued behind …` to the hub, and, when the board
-   names the holder's live session, a note to the holder: "Queued behind you for the dev lock — release at
-   phase 10 rather than letting the TTL run; no rush."
-2. `pnpm bot lock wait` in the background (the harness wakes the session when it exits; don't poll its output).
-   It polls every 30 s, wakes when the holder releases or its TTL lapses, and exits 0 (free, expired or already
+1. The refusal (`pnpm bot deploy-dev`, or `lock acquire`, saying "both dev slots are locked — …") prints, above its
+   error line, the messages to send **now**, once each: `[lock] … queued behind <holder> on dev and <holder> on
+devb …` to the hub, and, for each holder whose live session the board names, a note to it: "Queued behind you
+   for the <slot> lock — release at phase 10 rather than letting the TTL run; no rush."
+2. `pnpm bot lock wait --any` (the command the refusal names) in the background (the harness wakes the session when it exits; don't poll its output).
+   It polls every 30 s, wakes when either holder releases or its TTL lapses, and exits 0 (free, expired or already
    ours), **75** (still held after `--max`, default 45 min, at most 55: tell the user who holds it and until
    when) or 1 (three GitHub errors in a row: say so, and retry once).
-3. On 0, `pnpm bot deploy-dev` again — it takes the lock (an expired one is taken over).
+3. On 0, `pnpm bot deploy-dev` again — it takes the freed slot (an expired one is taken over). The `[lock]` taken
+   message names the slot: `[lock] <branch> — taken devb until <HH:MM>, ETA <n> min.`
 
 **In a named dev order, lanes take the lock themselves** (the user, 2026-11-08). The hub sends the order and
 keeps it current as `devQueue` in `queue.json`, in file order; only the hub changes it. A lane is ready once its

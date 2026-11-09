@@ -30,6 +30,7 @@ function setup() {
       boardDir: board,
       limits: join(dir, 'none.json'),
       ledger: join(dir, 'ledger.jsonl'),
+      ledgerB: join(dir, 'ledger.devb.jsonl'),
       bench: join(dir, 'bench'),
       cores: 9,
     },
@@ -80,6 +81,22 @@ describe('Source', () => {
     expect(src.refresh(t0 + 25 * 3600000).lockFeed).toEqual([]);
   });
 
+  it("reads slot B's cache on its own, and feeds its changes as `lock devb:`", () => {
+    const { board, src } = setup();
+    const t0 = Date.parse('2026-11-08T00:00:00Z');
+    writeFileSync(join(board, 'devlock.json'), lock('a-branch'));
+    expect(src.refresh(t0).lockB).toBeNull(); // no devb cache yet
+    writeFileSync(join(board, 'devlock.devb.json'), lock('b-branch'));
+    let s = src.refresh(t0 + 60000);
+    expect(s.lock!.branch).toBe('a-branch');
+    expect(s.lockB!.branch).toBe('b-branch');
+    expect(s.lockFeed).toEqual([]); // devb's first read is its baseline too
+    writeFileSync(join(board, 'devlock.devb.json'), lock(null));
+    s = src.refresh(t0 + 120000);
+    expect(s.lockFeed.map((f) => f.text)).toEqual(['lock devb: free (was b-branch)']);
+    expect(s.lock!.branch).toBe('a-branch');
+  });
+
   it('lease events join the feed and age out after 24 h', () => {
     const { hist, src } = setup();
     writeFileSync(
@@ -116,6 +133,25 @@ describe('Source', () => {
     expect(s.runs.map((r) => r.run)).toEqual([
       '2026-10-28T01-00-00-full',
       '2026-11-07T01-00-00-full',
+    ]);
+  });
+
+  it("folds slot B's ledger in, each run tagged with its slot", () => {
+    const { src } = setup();
+    const rec = (run: string, op: string, t: string, status?: string) =>
+      JSON.stringify({ t, run, op, status }) + '\n';
+    writeFileSync(
+      join(dir, 'ledger.jsonl'),
+      rec('2026-11-08T01-00-00-full', 'run-end', '2026-11-08T01:10:00Z', 'PASS'),
+    );
+    writeFileSync(
+      join(dir, 'ledger.devb.jsonl'),
+      rec('2026-11-08T02-00-00-full', 'run-start', '2026-11-08T02:00:00Z'),
+    );
+    const s = src.refresh(Date.parse('2026-11-08T06:00:00Z'));
+    expect(s.runs.map((r) => [r.run, r.slot])).toEqual([
+      ['2026-11-08T01-00-00-full', 'dev'],
+      ['2026-11-08T02-00-00-full', 'devb'],
     ]);
   });
 });

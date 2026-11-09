@@ -2,11 +2,17 @@
 // scripts/aws/fetch-dev-logs.mjs (checks again on the runner, where the inputs are untrusted). Node builtins
 // only and erasable syntax: the runner imports this under plain `node` (type stripping).
 
-// The whole allowlist. Each maps to a `-dev` group, so no input can name a prod group (docs/ops/CI-BOT.md).
+// The whole allowlist. Each maps to a dev slot's group — slot A bare, slot B with `-devb` — so no input can name a
+// prod group (docs/ops/CI-BOT.md). The dev-logs role reads exactly these (cdk/src/lib/cicd-stack.ts → LOG_FNS).
 export const LOG_GROUPS = {
   bff: '/aws/lambda/aperture-bff-dev',
   mcp: '/aws/lambda/aperture-mcp-dev',
   'finance-sync': '/aws/lambda/aperture-finance-sync-dev',
+  'push-dispatch': '/aws/lambda/aperture-push-dispatch-dev',
+  'bff-devb': '/aws/lambda/aperture-bff-devb',
+  'mcp-devb': '/aws/lambda/aperture-mcp-devb',
+  'finance-sync-devb': '/aws/lambda/aperture-finance-sync-devb',
+  'push-dispatch-devb': '/aws/lambda/aperture-push-dispatch-devb',
 } as const;
 export type LogGroup = keyof typeof LOG_GROUPS;
 

@@ -18,13 +18,25 @@ const repo = () =>
     ['git diff --quiet', ''],
   ]);
 
-// GitHub with a free lock, no prior dev deploys, and a run that takes `minutes` then ends with `conclusion`.
-function github(clock: { now: () => number }, minutes: number, conclusion: string) {
-  let ref: string | null = null;
+// GitHub with free locks (or slot A held by `heldA`), no prior dev deploys, and a run that takes `minutes` then ends
+// with `conclusion`. Each slot's lock is its own ref (refs/locks/dev, refs/locks/devb).
+function github(
+  clock: { now: () => number },
+  minutes: number,
+  conclusion: string,
+  heldA?: { branch: string; sha: string; expiresAt: string },
+) {
+  const refs: Record<string, string | null> = { dev: null, devb: null };
   let tags = 0;
   const messages = new Map<string, string>();
+  if (heldA) {
+    messages.set('held', JSON.stringify(heldA));
+    refs.dev = 'held';
+  }
+  const slotOf = (path: string) => path.split('/').pop() ?? '';
   let dispatchedAt = 0;
   let title = '';
+  const inputs: Record<string, string>[] = [];
   const h = fakeApi({
     [`POST ${R}/git/tags`]: (c: Call) => {
       const sha = `t${++tags}`;
@@ -32,25 +44,28 @@ function github(clock: { now: () => number }, minutes: number, conclusion: strin
       return { sha };
     },
     [`POST ${R}/git/refs`]: (c: Call) => {
-      if (ref) throw ghError(422);
-      ref = (c.body as { sha: string }).sha;
+      const { ref, sha } = c.body as { ref: string; sha: string };
+      if (refs[slotOf(ref)]) throw ghError(422);
+      refs[slotOf(ref)] = sha;
       return {};
     },
-    [`GET ${R}/git/ref/locks/dev`]: () => {
+    [`GET ${R}/git/ref/locks/`]: (c: Call) => {
+      const ref = refs[slotOf(c.path)];
       if (!ref) throw ghError(404);
       return { object: { sha: ref, type: 'tag' } };
     },
     [`GET ${R}/git/tags/`]: (c: Call) => ({ message: messages.get(c.path.split('/').pop() ?? '') }),
-    [`PATCH ${R}/git/refs/locks/dev`]: (c: Call) => {
-      ref = (c.body as { sha: string }).sha;
+    [`PATCH ${R}/git/refs/locks/`]: (c: Call) => {
+      refs[slotOf(c.path)] = (c.body as { sha: string }).sha;
       return {};
     },
-    [`DELETE ${R}/git/refs/locks/dev`]: () => {
-      ref = null;
+    [`DELETE ${R}/git/refs/locks/`]: (c: Call) => {
+      refs[slotOf(c.path)] = null;
       return undefined;
     },
     [`GET ${R}/actions/workflows/deploy.yml/runs`]: () => ({ workflow_runs: [] }),
     [`POST ${R}/actions/workflows/deploy-dev.yml/dispatches`]: (c: Call) => {
+      inputs.push((c.body as { inputs: Record<string, string> }).inputs);
       dispatchedAt = clock.now();
       title = deployTitle(SHA, (c.body as { inputs: { key: string } }).inputs.key);
       return undefined;
@@ -81,12 +96,64 @@ function github(clock: { now: () => number }, minutes: number, conclusion: strin
       };
     },
   });
-  const lock = () =>
-    ref ? (JSON.parse(messages.get(ref) ?? 'null') as { expiresAt: string }) : null;
-  return { ...h, lock };
+  const lockOf = (slot: 'dev' | 'devb') => {
+    const ref = refs[slot];
+    return ref
+      ? (JSON.parse(messages.get(ref) ?? 'null') as { branch: string; expiresAt: string })
+      : null;
+  };
+  return { ...h, lock: () => lockOf('dev'), lockOf, inputs };
 }
 
 describe('deployDev', () => {
+  it('takes slot B when another branch holds A, dispatches devb, and leaves A alone', async () => {
+    const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
+    const flux = {
+      branch: 'flux',
+      sha: SHA,
+      expiresAt: new Date(clock.now() + 30 * 60_000).toISOString(),
+    };
+    const g = github(clock, 3, 'success', flux);
+    const slots: string[] = [];
+    const lines: string[] = [];
+    await deployDev(
+      repo().run,
+      g.api,
+      clock,
+      (l) => lines.push(l),
+      (_, slot) => slots.push(slot),
+    );
+    expect(g.inputs).toHaveLength(1);
+    expect(g.inputs[0]).toMatchObject({ sha: SHA, base: 'unknown', slot: 'devb' }); // never deployed → full
+    expect(g.lockOf('devb')?.branch).toBe('ci-bot');
+    expect(g.lockOf('dev')).toEqual(flux);
+    expect(new Set(slots)).toEqual(new Set(['devb']));
+    expect(lines.at(-1)).toMatch(/^devb now serves .*`pnpm devcheck` aims at devb/);
+  });
+
+  it('sends slot A no slot input, so an older main YAML still accepts it', async () => {
+    const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
+    const g = github(clock, 3, 'success');
+    await deployDev(repo().run, g.api, clock, quiet);
+    expect(g.inputs).toHaveLength(1);
+    expect(g.inputs[0]).toMatchObject({ sha: SHA, base: '' });
+    expect(g.inputs[0]).not.toHaveProperty('slot');
+    expect(g.lockOf('devb')).toBeNull();
+  });
+
+  it('releases slot B, not A, when a devb run fails', async () => {
+    const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
+    const flux = {
+      branch: 'flux',
+      sha: SHA,
+      expiresAt: new Date(clock.now() + 30 * 60_000).toISOString(),
+    };
+    const g = github(clock, 3, 'failure', flux);
+    await expect(deployDev(repo().run, g.api, clock, quiet)).rejects.toThrow(/lock released/);
+    expect(g.lockOf('devb')).toBeNull();
+    expect(g.lockOf('dev')).toEqual(flux);
+  });
+
   it('keeps the lock alive through a long deploy and hands the devcheck a full TTL', async () => {
     const clock = fakeClock();
     const g = github(clock, 60, 'success'); // longer than the 45-minute TTL

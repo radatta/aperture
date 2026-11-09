@@ -53,8 +53,10 @@ describe('frame', () => {
 
   it('wide: lock, gauges, queue, wave, sessions and history from the fixtures', () => {
     const f = text(compose(state, live, 210, 55));
-    expect(f).toContain('dev lock bravo-branch (bravo) until 22:37 27m left');
-    expect(f).toContain('next charlie-branch (charlie)');
+    expect(f).toContain(
+      'dev lock bravo-branch (bravo) until 22:37 27m left   next charlie-branch (charlie) · devb juliet-branch until 22:45 35m left',
+    );
+    expect(f).toContain('ON DEV juliet-branch@devb  35m');
     expect(f).toMatch(/mem ━+.*9\.0G\/18G/);
     expect(f).toContain('ON DEV bravo-branch bravo  27m');
     expect(f).toContain('WAIT   delta-branch delta  on Rahul: merge PR 41');
@@ -168,6 +170,22 @@ describe('panels', () => {
     ]);
   });
 
+  it('a devcheck run on devb says so in the feed; slot A stays unmarked', () => {
+    const t = Date.parse(NOW) - 60000;
+    const r = { start: t - 60000, end: t, status: 'PASS', full: true };
+    const items = feedItems({
+      ...state,
+      runs: [
+        { ...r, run: 'x-full', slot: 'dev' },
+        { ...r, run: 'y-full', slot: 'devb' },
+      ],
+    }).filter((i) => i.kind === 'run');
+    expect(items.map((i) => i.text)).toEqual([
+      'devcheck full PASS  60s',
+      'devcheck full on devb PASS  60s',
+    ]);
+  });
+
   it('the feed keeps the dev lock taken (a deploy-dev) and drops it freed', () => {
     const t = Date.parse(NOW) - 60000;
     const items = feedItems({
@@ -277,6 +295,18 @@ describe('panels', () => {
     expect(
       head({ branch: 'x', session: null, expiresAt: at + 3e6, asOf: at - 6 * 60000, failed: true }),
     ).toContain('(as of 22:04, refresh failed)');
+    // slot B: its own free / expired reading, and no devb at all until its cache exists
+    const headB = (lockB: TowerState['lockB']) =>
+      strip(compose({ ...state, lockB }, live, 210, 55)[0]!);
+    expect(
+      headB({ branch: null, session: null, expiresAt: null, asOf: at, failed: false }),
+    ).toContain('· devb free');
+    expect(
+      headB({ branch: 'y', session: 'ys', expiresAt: at - 1, asOf: at, failed: false }),
+    ).toContain('· devb y (ys) until 22:09 EXPIRED');
+    const noB = headB(null);
+    expect(noB).not.toContain('devb');
+    expect(noB).toContain('dev lock bravo-branch');
   });
 
   it('a stale sampler dims the gauges and says so', () => {

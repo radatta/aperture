@@ -267,6 +267,17 @@ describe('dev-account SCPs', () => {
     for (const g of ['iam:*', 'sts:*', 'cloudfront:*', 'acm:*'])
       expect(region.NotAction).toContain(g);
     expect(region.NotAction).not.toContain('lambda:*'); // Lambda@Edge replicates from us-east-1
+    expect(region.NotAction).not.toContain('kms:*');
+  });
+
+  it('let the CloudFront cert reach KMS in us-east-1: two free actions, with no key to use them on', () => {
+    const g = statements(standing.guardrails);
+    const region = g.find((s) => s.Sid === 'OnlyDevRegion')!;
+    const kms = (region.NotAction ?? []).filter((a) => a.startsWith('kms:'));
+    expect(kms.sort()).toEqual(['kms:CreateGrant', 'kms:DescribeKey']);
+    expect(actions(standing.guardrails)).toEqual(
+      expect.arrayContaining(['kms:CreateKey', 'kms:CreateCustomKeyStore']),
+    );
   });
 
   it('deny every lever the cost analysis found that an SCP can name', () => {

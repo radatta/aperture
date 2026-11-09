@@ -5,7 +5,7 @@
 // Uses Node's global fetch (Node 22) — no curl/jq. The first check polls `/` until the edge serves the
 // shell publish just built (asset refs from app/dist/index.html), bounded at ~60s — the shell is no-store, so
 // the edge refetches it within its 1s min TTL — so every later check runs against a settled edge.
-// Usage: node scripts/aws/health-check.mjs [dev|prod]
+// Usage: node scripts/aws/health-check.mjs [dev|devb|prod]
 // Run it right after publish-frontend.mjs, in the same checkout: the shell check compares the edge against
 // that build's app/dist/index.html. A missing, stale or other-stage build fails it as "edge still stale".
 import { readdirSync, readFileSync } from 'node:fs';
@@ -22,7 +22,19 @@ if (!app?.AppUrl || !app?.FunctionUrl)
 const appUrl = app.AppUrl.replace(/\/$/, '');
 const fnUrl = app.FunctionUrl.replace(/\/$/, '');
 
+// No custom domain: AppUrl is the CloudFront default, and the MCP OAuth façade runs only with APP_URL (app-stack.ts).
+// Only devb's first create is expected there (before its cert: CI-BOT.md → Dev slots); then the façade's checks are
+// skipped — out loud, and only those; every other check, the /mcp token path included, still runs. Any other stage
+// without its domain lost its CERT_ARN var (domains.ts drops the alias without one): that fails here, before any check.
+const onDefaultDomain = new URL(appUrl).hostname.endsWith('.cloudfront.net');
+if (onDefaultDomain && stage !== 'devb')
+  throw new Error(
+    `${stage} serves on ${appUrl}, not its custom domain — is its CERT_ARN variable set?`,
+  );
+const NO_DOMAIN = 'no custom domain yet, and the MCP OAuth façade needs one (APP_URL)';
+
 let failures = 0;
+const skip = (name) => console.log(`  – ${name} — skipped: ${NO_DOMAIN}`);
 const expect = (cond, msg) => {
   if (!cond) throw new Error(msg);
 };
@@ -175,7 +187,8 @@ await check('MCP edge: GET /mcp → 405 (POST only)', async () => {
 // Phase 2 (claude.ai OAuth): the metadata façade must advertise the PKCE field Cognito omits and name OUR
 // origin as issuer; the protected-resource doc must serve at the path-suffixed URL claude.ai probes first;
 // and a bearer token must reach the Lambda (R7).
-await check(
+const facade = (name, fn) => (onDefaultDomain ? skip(name) : check(name, fn));
+await facade(
   'MCP façade: /.well-known/oauth-authorization-server advertises S256 + our issuer',
   async () => {
     const r = await fetch(`${appUrl}/.well-known/oauth-authorization-server`);
@@ -190,7 +203,7 @@ await check(
   },
 );
 
-await check(
+await facade(
   'MCP façade: /.well-known/oauth-protected-resource/mcp names /mcp as the resource',
   async () => {
     const r = await fetch(`${appUrl}/.well-known/oauth-protected-resource/mcp`);
@@ -215,6 +228,8 @@ await check(
     expect(r.status === 401, `expected 401, got ${r.status}`);
     const body = await r.json();
     expect(body?.error === 'Unauthorized: invalid token', `body was ${JSON.stringify(body)}`);
+    if (onDefaultDomain)
+      return console.log(`    (its resource_metadata pointer: skipped, ${NO_DOMAIN})`);
     const pointer = r.headers.get('x-amzn-remapped-www-authenticate') ?? '';
     expect(
       pointer.includes('resource_metadata'),
@@ -227,4 +242,6 @@ if (failures) {
   console.error(`\n✗ health check FAILED: ${failures} check(s)\n`);
   process.exit(1);
 }
-console.log(`\n✓ health check passed (${stage})\n`);
+console.log(
+  `\n✓ health check passed (${stage})${onDefaultDomain ? ` — the MCP OAuth façade unchecked: ${NO_DOMAIN}` : ''}\n`,
+);

@@ -9,6 +9,7 @@ import { REPO_SLUG } from './config.ts';
 import type { Clock, Run } from './dispatch.ts';
 import { dispatchAndWait } from './dispatch.ts';
 import { featureBranch, runKey } from './git.ts';
+import { heldSlot, type Slot } from './lock.ts';
 import { parseLogsRequest } from './logs-spec.ts';
 import type { Run as Sh } from './sh.ts';
 
@@ -48,6 +49,27 @@ export function checkLoopGuard(file: string, nowMs: number, max = MAX_FETCHES_PE
   }
 }
 
+// No --groups: the slot this branch holds a lock on (slot B's groups carry `-devb`), else slot A's. A lock read that
+// fails says so and reads slot A's — never silently another slot's logs as this branch's.
+export async function defaultGroups(
+  branch: string | null, // null: a detached checkout, which holds no lock
+  held: (branch: string) => Promise<Slot | null>,
+  log: (line: string) => void,
+): Promise<string> {
+  const slot =
+    branch === null
+      ? null
+      : await held(branch).catch((err: unknown) => {
+          log(
+            `couldn't read the dev locks (${(err as Error).message}) — reading slot A's groups; --groups to choose`,
+          );
+          return null;
+        });
+  if (slot === 'devb')
+    log(`${branch} holds the devb lock — reading devb's groups (--groups to choose)`);
+  return slot === 'devb' ? 'bff-devb,mcp-devb' : 'bff,mcp';
+}
+
 export async function fetchLogs(
   sh: Sh,
   api: Api,
@@ -68,7 +90,10 @@ export async function fetchLogs(
     // keep the generic label
   }
   const key = runKey(label, now);
-  const req = parseLogsRequest({ start, end, groups: args.groups ?? 'bff,mcp', key }, now); // before spending a run
+  const groups =
+    args.groups ??
+    (await defaultGroups(label === 'logs' ? null : label, (b) => heldSlot(api, b), log));
+  const req = parseLogsRequest({ start, end, groups, key }, now); // before spending a run
   const dir = join(root, 'localNotes', 'devlogs');
   mkdirSync(dir, { recursive: true });
   const ledger = join(dir, 'fetches.jsonl');

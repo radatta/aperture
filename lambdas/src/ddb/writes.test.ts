@@ -52,15 +52,17 @@ describe('liveWrites stamps by stage', () => {
   const dead = row('task#1', T);
   const raw = (doc: InMemoryDoc, SK = 'task#1') => doc.get('u#a', SK);
 
-  it('dev stamps put, putIf and batchPut', async () => {
-    const doc = new InMemoryDoc();
-    const writes = liveWrites(doc, 'dev');
-    await writes.put(dead);
-    await writes.putIf(row('task#2', T), null);
-    await writes.batchPut([row('task#3', T), row('task#4', null)]);
-    for (const SK of ['task#1', 'task#2', 'task#3'])
-      expect((await raw(doc, SK))?.expiresAt, SK).toBe(1_700_000_000);
-    expect(await raw(doc, 'task#4')).not.toHaveProperty('expiresAt');
+  it('every dev slot stamps put, putIf and batchPut', async () => {
+    for (const stage of ['dev', 'devb']) {
+      const doc = new InMemoryDoc();
+      const writes = liveWrites(doc, stage);
+      await writes.put(dead);
+      await writes.putIf(row('task#2', T), null);
+      await writes.batchPut([row('task#3', T), row('task#4', null)]);
+      for (const SK of ['task#1', 'task#2', 'task#3'])
+        expect((await raw(doc, SK))?.expiresAt, `${stage} ${SK}`).toBe(1_700_000_000);
+      expect(await raw(doc, 'task#4')).not.toHaveProperty('expiresAt');
+    }
   });
   it('prod writes the item unchanged, as does a Lambda with no stage', async () => {
     const before = process.env.STAGE;

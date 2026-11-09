@@ -55,6 +55,7 @@ export interface RunResult {
   feature: string[]; // scenario ids whose rows are this feature's ([] = none named)
   expectedSha: string;
   scenarioSha?: string; // the commit the scenarios came from — differs from expectedSha on a scenario-only check
+  target?: string; // the dev slot the run was on and its origin (DEV-CHECK.md → Dev slots)
   startSha?: string;
   endSha?: string;
   deployUrl?: string;
@@ -269,7 +270,7 @@ export function renderReport(r: RunResult): string {
   const lines = [
     `# Dev check — ${statusLine(r)}`,
     '',
-    `Run \`${r.runId}\` · tier ${r.tier} · ${sec(r.durationMs)}`,
+    `Run \`${r.runId}\` · tier ${r.tier}${r.target ? ` · on ${r.target}` : ''} · ${sec(r.durationMs)}`,
     `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];

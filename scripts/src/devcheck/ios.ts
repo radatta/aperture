@@ -46,7 +46,13 @@ export interface IosDeps {
   copy: (from: string, to: string) => void;
   log: (s: string) => void;
   repoVersion?: () => string; // the runner this checkout would install; an older one on the Mac gets a line once
+  slot?: 'dev' | 'devb'; // the run's dev slot: the Simulator is slot A's
 }
+
+// The sim's Home Screen app, Keychain item and sign-in host (tools/mailroom/jobs/sim.sh) are slot A's, so a devb run's
+// iOS rows read "needs you" with this reason before any job is queued — never a failure (docs/ops/IOS-CHECK.md).
+export const SIM_SLOT_A_ONLY =
+  'SIM_SLOT_A_ONLY — the Simulator is set up for dev (slot A) only; this run is on devb';
 
 export interface Ios {
   forScenario(scenarioId: string): IosClient;
@@ -60,7 +66,7 @@ export interface Ios {
 const runWide = (reason: string) => !reason.endsWith('/KEYBOARD_SETUP');
 
 export function createIos(d: IosDeps): Ios {
-  let out: string | null = null;
+  let out: string | null = d.slot && d.slot !== 'dev' ? SIM_SLOT_A_ONLY : null;
   let ran = false;
   let lastBooted: string | undefined;
   let warned = false;

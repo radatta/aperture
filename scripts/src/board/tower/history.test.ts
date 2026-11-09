@@ -142,8 +142,8 @@ describe('bucket', () => {
 
 describe('ticks', () => {
   const runs: Run[] = [
-    { run: 'r1-full', start: T0, end: T0 + 50_000, status: 'PASS', full: true },
-    { run: 'r2-full', start: T0, end: T0 + 70_000, status: 'FAIL', full: true },
+    { run: 'r1-full', start: T0, end: T0 + 50_000, status: 'PASS', full: true, slot: 'dev' },
+    { run: 'r2-full', start: T0, end: T0 + 70_000, status: 'FAIL', full: true, slot: 'dev' },
   ];
   it('puts the highest-ranked event of each column in it', () => {
     const t = ticks(
