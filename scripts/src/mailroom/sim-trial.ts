@@ -141,21 +141,27 @@ const retriedSteps = (r: SimResult | undefined) =>
 
 // Exit 0: every round ran clean; 1: a round failed or left no readable count (its drops still count up to the
 // failure, and the table says so); 2: a bad --tag; 3: the sim couldn't go on in a round (the rest still run) or the
-// Mac never answered (the trial stops there; what ran is still printed).
+// Mac never answered (the trial stops there; what ran is still printed). `only` reruns one round (its word and order),
+// for a round a load spike spoiled.
 export async function simTrial(
   d: SimDeps,
   tag: string,
   run: (d: SimDeps, job: SimJob) => Promise<SimResult> = runSimJob,
+  only?: number,
 ): Promise<number> {
   if (!TAG_RE.test(tag)) {
     d.log('sim-trial needs --tag <a-z 0-9 ->, e.g. idle or loaded');
     return 2;
   }
+  if (only !== undefined && !(Number.isInteger(only) && only >= 0 && only < TRIAL_ROUNDS)) {
+    d.log(`--round wants 0–${TRIAL_ROUNDS - 1}`);
+    return 2;
+  }
   const rounds: TrialRound[] = [];
   let code = 0;
   let stop = false;
-  for (let round = 0; round < TRIAL_ROUNDS; round++) {
-    const params = trialPlan(round, round === TRIAL_ROUNDS - 1);
+  for (let round = only ?? 0; round < (only ?? TRIAL_ROUNDS - 1) + 1; round++) {
+    const params = trialPlan(round, only !== undefined || round === TRIAL_ROUNDS - 1);
     const bad = validateSimParams(params);
     if (bad) throw new Error(`the trial plan is invalid: ${bad}`);
     const job = makeSimJob(`trial-${tag}-${round}`, params, d.clock.now());

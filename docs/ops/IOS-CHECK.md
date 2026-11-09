@@ -194,7 +194,7 @@ AXe can report a tap done that iOS never got. AXe issue 71: on Xcode 27 with iOS
   - The first line of `trial.jsonl` holds the Mac's `vm.loadavg` at the job's start and end.
   - The read-backs still retry, and fail as `TYPED` or `ERASED`. A trial hides nothing.
 - **Running it:** `pnpm mailroom sim-trial --tag <idle|loaded|…>`. This needs no dev lock and no deploy.
-  - It runs 5 jobs (rounds). In each, one word of 6 letters is typed into the capture bar and erased with exactly 6 deletes, once per variant.
+  - It runs 5 jobs (rounds); `--round N` reruns one of them (same word and order), for a round a load spike spoiled. In each, one word of 6 letters is typed into the capture bar and erased with exactly 6 deletes, once per variant.
   - The variant order rotates each round, so a change in load hits all of them alike.
   - It prints taps, drops, the drop %, the ops retried, and the median ms per tap for each variant, plus each round's load. The files stay in `.hostjobs/results/<id>/`.
   - Exit codes: 1 means a round failed or left no readable count (named in the table), 2 means a bad `--tag`, 3 means the sim couldn't finish a round (a hung read: the other rounds still run) or the Mac never answered (the trial stops there). A non-zero exit can leave the sim booted (`pnpm mailroom sim-shutdown`).

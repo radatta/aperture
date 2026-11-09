@@ -161,6 +161,13 @@ describe('simTrial', () => {
       lines: [],
     });
   });
+  it('--round reruns just that round, its word and order, then shuts down', async () => {
+    const h = harness((job) => result(job));
+    expect(await simTrial(h.d, 'idle2b', h.runner, 2)).toBe(0);
+    expect(h.jobs).toHaveLength(1);
+    expect(h.jobs[0]?.params).toEqual(trialPlan(2, true));
+    expect(await simTrial(h.d, 'x', h.runner, TRIAL_ROUNDS)).toBe(2);
+  });
   it('refuses a bad tag', async () => {
     const h = harness((job) => result(job));
     expect(await simTrial(h.d, 'Idle Mac', h.runner)).toBe(2);
