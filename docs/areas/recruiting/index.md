@@ -90,7 +90,7 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 
 The MCP tool `live_sitting` (`lambdas/src/mcp/leetcodeTools.ts`, over the `pullLiveSitting` RPC) is how Claude
 sees a sitting while it happens: the problem, minutes since Start, the newest code in full, the newest Run and
-Submit with the failing case, expected vs output and the error head (`judgeDetail`, from the `jd#` payloads),
+Submit with the failing case, expected vs output and the error head (`judgeDetail`),
 counts, LeetCode's timer, editing facts. The Start gate names the open sitting; a sitting is open while
 `active` and inside its 24 h window (`isSittingOpen`). One past it reads closed with nothing written, and the
 next Start ends it. With nothing open, the tool names the most recent sitting instead.
@@ -98,12 +98,19 @@ next Start ends it. With nothing open, the tool names the most recent sitting in
 - **Freshness.** Code is at most ~30 s behind: the extension sends one snapshot per 30 s (the latest code)
   and the pending one right before each Run or Submit. A Run or Submit judged after Rahul leaves the page
   still lands in its sitting (PR A2), so a pull a minute later may show more.
-- **A pull counts.** Each pull of an open sitting adds one to its count row, by an atomic add on a row of its own.
-  It isn't on the head, because a refold rewrites the head whole and would drop a concurrent add; and a
-  conditional write would make ingest retry. A pull with nothing open writes nothing. The app never calls
-  `pullLiveSitting`: a pull is Claude watching. Reads are strongly consistent, so a pull right after a
-  snapshot or submit sees it. Cost: ~10 read units and 1 write unit a pull, ≈ $0.02 a month at 60 pulls
-  a sitting; no fixed part.
+- **One read.** The head rows (compact, `hd#`) give the counts and which Run and Submit are newest, and only
+  those two payloads (`jd#`) are read in full, so a verdict, its failing case and the counts always agree. A
+  payload that never landed leaves its case null rather than borrowing an older one's. Every read is strongly
+  consistent, so a pull right after a Start, snapshot, submit or Done sees it.
+- **A pull counts.** Each pull of an open sitting adds one to its count row, by an atomic add on a row of its
+  own. It isn't on the head, because a refold rewrites the head whole and would drop a concurrent add; and a
+  conditional write would make ingest retry. The count is taken only once the reads are in hand, and a failed
+  count still answers, with the stored one. A pull with nothing open writes nothing. The app never calls
+  `pullLiveSitting`: a pull is Claude watching. A pull racing `deleteSitting` can leave its count row behind
+  the sweep; nothing reads it.
+- **Cost.** A pull reads the gate, the head, the head rows, the live row (up to 64 KB) and two payloads (up to
+  96 KB each), all strongly consistent: typically ~5 read units, ~60 at the caps, plus 1 write unit. At 60 pulls
+  a sitting and ~45 sittings a month that's cents; no fixed part.
 
 ### Storage and expiry
 

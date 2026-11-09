@@ -38,6 +38,7 @@ export interface DevLiveSitting {
   unchangedSinceVersion?: boolean;
   runCount?: number;
   submitCount?: number;
+  lastRun?: DevJudged | null;
   lastSubmit?: DevJudged | null;
   lastSitting?: {
     id: string;

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ulid, type ApiMethod } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
+import { pk, sk } from '../ddb/keys';
 import { liveWrites } from '../ddb/writes';
 import { BackendClient } from '../backend';
 import { handleRpc } from '../handler';
@@ -16,11 +17,12 @@ let t = T0;
 const now = () => t;
 let backend: BackendClient;
 let repo: Repo;
+let doc: InMemoryDoc;
 let ctx: ToolContext;
 
 beforeEach(() => {
   t = T0;
-  const doc = new InMemoryDoc();
+  doc = new InMemoryDoc();
   repo = new Repo(doc, liveWrites(doc), U);
   backend = new BackendClient(repo, { userId: U, now });
   ctx = {
@@ -168,6 +170,10 @@ describe('live_sitting', () => {
       statusMsg: 'Wrong Answer',
       detail: { input: '[9]' },
     });
+    // Its payload lost (the head row landed, the jd# row didn't): the verdict stays, the case is unknown — never
+    // an older submit's.
+    await doc.delete(pk(U), sk.sittingJudged(s.id, late.id));
+    expect((await run()).lastSubmit).toMatchObject({ verdict: 'wrong_answer', detail: null });
   });
 
   it('sinceVersion says whether the code moved, and every pull counts', async () => {

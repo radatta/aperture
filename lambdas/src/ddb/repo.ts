@@ -276,18 +276,16 @@ export class Repo {
   // Every stored event of a sitting with its payload — runs, submits, notes, and the raw bulk — for its detail read.
   async listSittingEvents(id: string): Promise<SittingEvent[]> {
     const [judged, bulk] = await Promise.all([
-      this.listSittingJudged(id, { consistent: true }),
+      this.doc.query(this.p(), sk.sittingJudgedPrefix(id), { consistent: true }),
       this.doc.query(this.p(), sk.sittingEventPrefix(id), { consistent: true }),
     ]);
-    return [...judged, ...alive(bulk.map((i) => toEntity<SittingEvent>(i)))];
+    return alive([...judged, ...bulk].map((i) => toEntity<SittingEvent>(i)));
   }
-  // Only the judged events' payloads (`jd#`: runs, submits, notes) — the live pull's newest run and submit.
-  async listSittingJudged(id: string, opts?: { consistent?: boolean }): Promise<SittingEvent[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.sittingJudgedPrefix(id), opts)).map((i) =>
-        toEntity<SittingEvent>(i),
-      ),
-    );
+  // One judged event's full payload by id (strongly consistent): the live pull's newest Run and Submit.
+  async getSittingJudged(id: string, eventId: string): Promise<SittingEvent | null> {
+    const it = await this.doc.get(this.p(), sk.sittingJudged(id, eventId), { consistent: true });
+    const e = it ? toEntity<SittingEvent>(it) : null;
+    return e && e.deletedAt === null ? e : null;
   }
   // Claude's live pulls of a sitting (keys.ts → sittingReads): an atomic add, so a pull never contends with
   // ingest's head writes. Returns the count after this pull; under noopWrites, the stored count.
@@ -300,6 +298,8 @@ export class Repo {
       { id, sittingId: id, userId: this.userId, createdAt: now, deletedAt: null },
       { updatedAt: now },
     );
+    // A pull racing deleteSitting can land its add after the sweep and leave a live count row whose sitting is
+    // gone. Nothing reads it (getSitting needs the head); a few hundred bytes, not worth a transaction.
     return n ?? (await this.getSittingReads(id));
   }
   async getSittingReads(id: string, opts?: { consistent?: boolean }): Promise<number> {

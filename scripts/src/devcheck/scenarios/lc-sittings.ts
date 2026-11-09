@@ -135,23 +135,13 @@ export const lcSittings: Scenario = {
       id: 'live-big-code',
       entry: 'mcp',
       kind: 'edge',
-      what: 'Code at the 64 KB snapshot cap comes back whole',
-      offDev: {
-        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
-        test: 'returns the full code at the snapshot cap',
-        why: 'the same path as live-active (proven on dev); only the size differs',
-      },
+      what: 'Code at the 64 KB snapshot cap comes back whole through MCP',
     },
     {
       id: 'live-race',
       entry: 'mcp',
       kind: 'edge',
-      what: 'Pulls racing a submit’s ingest all count, and the submit still folds',
-      offDev: {
-        file: 'lambdas/src/backend.sittings.test.ts',
-        test: 'a pull writes only its count row, and pulls racing a submit all count while the submit folds',
-        why: 'dev can’t make the two interleave on purpose; the in-memory table runs them together',
-      },
+      what: 'Pulls racing a run’s ingest all count, the run still folds, and its failing case comes back',
     },
     {
       id: 'live-real',
@@ -585,6 +575,63 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'live-big',
+      entry: 'mcp',
+      proves: ['live-big-code'],
+      title: 'A snapshot near the 64 KB cap comes back whole from live_sitting',
+      async run(ctx) {
+        const big = `# devcheck\n${'x'.repeat(63 * 1024)}`;
+        await ctx.api.writes.lcSittingEvents(state.a, [snap(big, Date.now())]);
+        const out = await ctx.mcp.reads.liveSitting();
+        if (out.code?.text !== big || out.code.version !== 4 || out.sitting?.liveReads !== 3)
+          throw new Error(
+            `big: ${out.code?.text?.length} chars, v${out.code?.version}, ${out.sitting?.liveReads} pulls`,
+          );
+      },
+    },
+    {
+      id: 'live-race',
+      entry: 'mcp',
+      proves: ['live-race'],
+      title:
+        'Five pulls at once with a run’s ingest: all five count, the run folds, its case comes back',
+      async run(ctx) {
+        const run: DevSittingEvent = {
+          id: devUlid(),
+          type: 'run',
+          at: Date.now(),
+          payload: {
+            request: { lang: 'python3', typed_code: 'print("devcheck")', data_input: '[2,7]\n9' },
+            result: {
+              status_code: 11,
+              status_msg: 'Wrong Answer',
+              total_correct: 0,
+              total_testcases: 1,
+              code_answer: ['[0,0]'],
+              expected_code_answer: ['[0,1]'],
+            },
+          },
+        };
+        await Promise.all([
+          ...Array.from({ length: 5 }, () => ctx.mcp.reads.liveSitting()),
+          ctx.api.writes.lcSittingEvents(state.a, [run]),
+        ]);
+        const out = await ctx.mcp.reads.liveSitting();
+        const d = out.lastRun?.detail;
+        if (
+          out.sitting?.liveReads !== 9 ||
+          out.runCount !== 2 ||
+          out.lastRun?.verdict !== 'wrong_answer' ||
+          d?.input !== '[2,7]\n9' ||
+          d.expected !== '[0,1]' ||
+          d.output !== '[0,0]'
+        )
+          throw new Error(
+            `race: ${JSON.stringify({ n: out.sitting?.liveReads, runs: out.runCount, last: out.lastRun })}`,
+          );
+      },
+    },
+    {
       id: 'replay',
       entry: 'api',
       proves: ['replay'],
@@ -664,7 +711,7 @@ export const lcSittings: Scenario = {
         const out = await ctx.mcp.reads.liveSitting();
         if (out.active || out.lastSitting?.id !== state.a || out.lastSitting.status !== 'done')
           throw new Error(`after Done: ${JSON.stringify(out)}`);
-        if (out.lastSitting.liveReads !== 2)
+        if (out.lastSitting.liveReads !== 9)
           throw new Error(`an inactive pull counted: ${out.lastSitting.liveReads}`);
       },
     },

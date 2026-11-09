@@ -12,8 +12,8 @@ import type { Tool } from './types';
 // LeetCode sittings for Claude (docs/areas/recruiting → Claude watches live; docs/areas/mcp → Tools). Read-only:
 // the one write is pullLiveSitting's own count of the pull ("Claude watched live" on the sitting).
 
-// How fresh the capture is — the extension's pacing (extension/src/lib/batch.js), said once so the model never
-// reads a 30-second-old snapshot as the whole truth.
+// How fresh the capture is — the extension's pacing (PR A2: extension/src/lib/batch.js), in the description and
+// on every answer, so the model never reads a 30-second-old snapshot as the whole truth.
 const FRESHNESS =
   'Code arrives as snapshots at most once per 30 s (the latest code) and right before each Run or Submit, so it can be up to ~30 s behind what is on screen. A Run or Submit judged after he leaves the page still lands in its sitting.';
 
@@ -39,11 +39,11 @@ const outcomeOf = (s: Sitting) => {
   };
 };
 
-// A judged Run or Submit: its verdict and what its payload says beyond it (failing case, expected vs output, the
-// error head), both from the one newest payload — so they always belong to the same event, even while the head's
-// summary lags a refold. The summary's verdict stands in only when no payload was read.
+// A judged Run or Submit: its verdict (the summary the pull folded from the same head rows that named this
+// event as newest) and what its payload says beyond it — failing case, expected vs output, the error head. A
+// payload that never landed leaves `detail` null rather than borrowing an older one's.
 function judged(v: SittingVerdict | null, e: SittingEvent | null, now: number) {
-  const verdict = e ? verdictOf(e.payload, e.at) : v;
+  const verdict = v ?? (e ? verdictOf(e.payload, e.at) : null);
   if (!verdict && !e) return null;
   const at = verdict?.at ?? e?.at ?? null;
   return {
@@ -135,8 +135,9 @@ export const LEETCODE_TOOLS: Tool[] = [
     name: 'live_sitting',
     description: [
       "The LeetCode sitting Rahul has open right now, captured by Aperture's Safari extension: the problem, minutes since Start, his current code in full, the newest Run and Submit with verdict, failing input, expected vs output and the error head, run/submit counts, LeetCode's own timer, and editing facts.",
-      'Code arrives as snapshots at most once per 30 s (the latest code) and right before each Run or Submit, so `code.ageSec` can read up to about 30; `extensionSeenAgoSec` says when the extension last reached the server. A Run or Submit judged after he leaves the page still lands in its sitting, so a pull a minute later may show more.',
-      'Pass `sinceVersion` (the last `code.version` you saw) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste his code back at him — point at a line, a name or a case.',
+      FRESHNESS,
+      'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are his Mac’s clock, so their ages can be off by its skew.',
+      'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste his code back at him — point at a line, a name or a case.',
       '`active: false` carries `lastSitting`, the most recent one.',
       'Read-only, except that each pull of an open sitting is counted on it as "Claude watched live".',
     ].join(' '),

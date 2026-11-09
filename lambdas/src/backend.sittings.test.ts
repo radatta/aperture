@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
@@ -226,11 +226,20 @@ describe('live pulls on the table', () => {
     await linked(backend);
     const { sitting } = await backend.lcSittingStart(start());
     const before = doc.snapshot();
+    const [g0, q0] = [doc.gets.length, doc.queries.length];
     await backend.pullLiveSitting();
+    // Every read the pull made is strongly consistent: a pull right after a write must see it.
+    expect(doc.gets.slice(g0).every((g) => g.consistent)).toBe(true);
+    expect(doc.queries.slice(q0).every((q) => q.consistent)).toBe(true);
     const readsKey = sk.sittingReads(sitting.id);
     expect(doc.snapshot().filter((r) => r.SK !== readsKey)).toEqual(before); // the head untouched too
     const reads = await doc.get(pk('u1'), readsKey);
-    expect(reads).toMatchObject({ count: 1, sittingId: sitting.id, deletedAt: null });
+    expect(reads).toMatchObject({
+      count: 1,
+      sittingId: sitting.id,
+      deletedAt: null,
+      updatedAt: T0,
+    });
     expect(reads?.expiresAt).toBeUndefined(); // kept as long as its sitting, on prod
 
     const pulls = Array.from({ length: 6 }, () => backend.pullLiveSitting());
@@ -324,5 +333,33 @@ describe('live pulls on the table', () => {
     await backend.pullLiveSitting();
     await backend.deleteSitting(sitting.id);
     expect((await doc.get(pk('u1'), sk.sittingReads(sitting.id)))?.deletedAt).not.toBeNull();
+  });
+
+  it('a pull whose reads fail counts nothing; a count that fails still answers, with the stored count', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const query = vi.spyOn(doc, 'query').mockRejectedValueOnce(new Error('throttled'));
+    await expect(backend.pullLiveSitting()).rejects.toThrow('throttled');
+    expect(await doc.get(pk('u1'), sk.sittingReads(sitting.id))).toBeNull();
+    query.mockRestore();
+    vi.spyOn(doc, 'add').mockRejectedValueOnce(new Error('throttled'));
+    expect(await backend.pullLiveSitting()).toMatchObject({
+      sitting: { id: sitting.id },
+      liveReads: 0,
+    });
+    expect((await backend.pullLiveSitting()).liveReads).toBe(1);
+  });
+
+  it('inactive pulls read consistently too: right after Done, the last sitting reads done', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.setTaskActual(sitting.repTaskId, 30);
+    await backend.transitionTask(sitting.repTaskId, 'done');
+    const [g0, q0] = [doc.gets.length, doc.queries.length];
+    expect((await backend.pullLiveSitting()).lastSitting?.status).toBe('done');
+    expect(doc.gets.slice(g0).every((g) => g.consistent)).toBe(true);
+    expect(doc.queries.slice(q0).every((q) => q.consistent)).toBe(true);
   });
 });

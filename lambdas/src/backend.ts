@@ -957,11 +957,33 @@ export class BackendClient implements ApiClient {
     const id = (await this.repo.getLcStart({ consistent: true }))?.openSittingId ?? null;
     const head = id ? await this.repo.getSitting(id, { consistent: true }) : null;
     if (head && isSittingOpen(head, now)) {
-      const [liveReads, live, judged] = await Promise.all([
-        this.repo.bumpSittingReads(head.id, now),
+      // The head rows (compact) give the counts and which Run and Submit are newest, so those always agree;
+      // only those two payloads are read in full.
+      const [rows, live] = await Promise.all([
+        this.repo.listSittingHeadRows(head.id),
         this.repo.getSittingLive(head.id, { consistent: true }),
-        this.repo.listSittingJudged(head.id, { consistent: true }),
       ]);
+      const run = newestOfType(rows, 'run');
+      const submit = newestOfType(rows, 'submit');
+      const [lastRun, lastSubmit] = await Promise.all([
+        run ? this.repo.getSittingJudged(head.id, run.id) : null,
+        submit ? this.repo.getSittingJudged(head.id, submit.id) : null,
+      ]);
+      // Counted only once the reads are in hand, and never at the cost of the view: a failed count reads
+      // the stored one instead.
+      let liveReads: number;
+      try {
+        liveReads = await this.repo.bumpSittingReads(head.id, now);
+      } catch (err) {
+        console.log(
+          JSON.stringify({
+            event: 'lc_live_read_count_failed',
+            sittingId: head.id,
+            err: String(err),
+          }),
+        );
+        liveReads = await this.repo.getSittingReads(head.id, { consistent: true });
+      }
       console.log(
         JSON.stringify({
           event: 'lc_live_read',
@@ -971,10 +993,10 @@ export class BackendClient implements ApiClient {
         }),
       );
       return {
-        sitting: head,
+        sitting: { ...head, summary: summarizeHeadRows(rows) },
         live,
-        lastRun: newestOfType(judged, 'run'),
-        lastSubmit: newestOfType(judged, 'submit'),
+        lastRun,
+        lastSubmit,
         liveReads,
         lastSitting: null,
       };
