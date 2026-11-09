@@ -237,9 +237,10 @@ export class Repo {
   async putSittingEventIfAbsent(e: SittingEvent, expiresAt: number | null): Promise<boolean> {
     if (!isHeadEvent(e.type))
       return this.putChildIfAbsent(sk.sittingEvent(e.sittingId, e.id), e, expiresAt);
+    const row = headRowOf(e.sittingId, e as Parameters<typeof headRowOf>[1]);
     const fresh = await this.putChildIfAbsent(
       sk.sittingHeadRow(e.sittingId, e.id),
-      headRowOf(e.sittingId, e as Parameters<typeof headRowOf>[1]),
+      { ...row, userId: e.userId, createdAt: e.createdAt, updatedAt: e.updatedAt },
       null,
     );
     if (e.type !== 'timer')
@@ -315,7 +316,7 @@ export class Repo {
         id: r.id,
         sittingId: r.sittingId ?? id,
         deletedAt: now,
-        updatedAt: Math.max(now, (r.updatedAt as number) + 1),
+        updatedAt: Math.max(now, (typeof r.updatedAt === 'number' ? r.updatedAt : 0) + 1),
         ...(r.expiresAt !== undefined ? { expiresAt: r.expiresAt } : {}),
       })),
     );

@@ -864,7 +864,7 @@ function LeetcodeSection() {
           onChange={(e) => update.mutate({ leetcodeRollId: e.target.value || null })}
           placeholder="No Roll"
           options={active.map((r) => ({ value: r.id, label: r.name }))}
-          disabled={rollsFailed} // "No Roll" alone would read as the setting
+          disabled={rollsFailed || rollsQ.isPending} // "No Roll" alone would read as the setting
           className="w-60"
         />
         {rollsFailed && (
@@ -873,9 +873,11 @@ function LeetcodeSection() {
           </LoadError>
         )}
         <Text size="xs" tone="muted">
-          {active.some((r) => r.id === linked)
-            ? 'The extension’s Start opens a sitting as this Roll’s rep and starts it; Done on the rep ends the sitting.'
-            : 'With no Roll, the extension’s Start is refused — pick the one a sitting is a rep of.'}
+          {rollsQ.isPending
+            ? 'Loading your Rolls…'
+            : active.some((r) => r.id === linked)
+              ? 'The extension’s Start opens a sitting as this Roll’s rep and starts it; Done on the rep ends the sitting.'
+              : 'With no Roll, the extension’s Start is refused — pick the one a sitting is a rep of.'}
           {active.length === 0 && !rollsFailed && ' Add a Roll on the Rolls page first.'}
         </Text>
         {update.isError && (

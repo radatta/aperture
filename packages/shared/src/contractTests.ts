@@ -3374,7 +3374,19 @@ export function runApiContract(
 
       it('deleting the rep removes the sitting; deleteSitting is idempotent', async () => {
         const { sitting } = await startSitting(api);
-        await api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0 + 1)] });
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            lcSnap('a', LC_T0 + 1),
+            lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 2, 1, 3),
+            {
+              id: ulid(),
+              type: 'timer',
+              at: LC_T0 + 3,
+              payload: { state: { status: 'pause', pauseMs: 9 } },
+            },
+          ],
+        });
         await api.deleteTask(sitting.repTaskId);
         expect(await api.listSittings()).toEqual([]);
         await expect(api.getSitting(sitting.id)).rejects.toThrow(/Not found/);

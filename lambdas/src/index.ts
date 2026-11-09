@@ -143,12 +143,18 @@ const INGEST_BODY_MAX = 300 * 1024;
 // ingest call says which it was: a lost CAS race is a 409; DynamoDB pushing back a 429; any other AWS or
 // internal fault a 500; a refusal of the input itself (the normalizers, guards and caps) a 400.
 function ingestFailureStatus(err: unknown): number {
-  const e = err as { name?: string; $metadata?: unknown };
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
   if (e?.name === 'ConflictError') return 409;
-  if (e?.name === 'ProvisionedThroughputExceededException' || e?.name === 'ThrottlingException')
-    return 429;
-  if (e?.$metadata !== undefined || /Exception$/.test(e?.name ?? '')) return 500;
-  return 400;
+  const throttles = [
+    'ProvisionedThroughputExceededException',
+    'ThrottlingException',
+    'RequestLimitExceeded',
+  ];
+  if (throttles.includes(e?.name ?? '')) return 429;
+  // An AWS error: its own status says whether retrying can help (a ValidationException never will).
+  if (e?.$metadata !== undefined) return (e.$metadata.httpStatusCode ?? 500) >= 500 ? 500 : 400;
+  // Our own refusals are plain Errors; a TypeError or RangeError is a fault in our code — retry, never drop.
+  return err instanceof Error && err.constructor === Error ? 400 : 500;
 }
 async function ingestUserId(
   authHeader: string | undefined,

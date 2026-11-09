@@ -1,4 +1,4 @@
-import { fmtDayHeading, fmtDuration, sittingElapsedMs, todayKey } from '@aperture/shared';
+import { fmtDayHeading, fmtDuration, sittingMinutes, todayKey } from '@aperture/shared';
 import type { Sitting } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
@@ -70,7 +70,7 @@ export function SittingsSection() {
 function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
   const outcome = sittingOutcome(sitting);
   const open = sitting.status === 'active';
-  const minutes = Math.max(1, Math.round(sittingElapsedMs(sitting, now) / 60_000));
+  const minutes = sittingMinutes(sitting, now);
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="flex min-w-0 flex-col gap-0.5">

@@ -274,7 +274,8 @@ describe('planSittingStart', () => {
     expect(p.ends.map((e) => e.to)).toEqual(['abandoned']);
     expect(p).toMatchObject({ kind: 'attach', rep: { id: 't1' } });
   });
-  it('abandons a half-made Start on another problem, but resumes it on its own', () => {
+  it('abandons a half-made Start on another problem once it can’t be in flight, but resumes it on its own', () => {
+    expect(() => plan([open({ startedAt: H - 1000 })], [], 'b')).toThrow(SITTING_ACTIVE_ERROR); // still writing
     expect(plan([open({})], [], 'b').ends.map((e) => e.to)).toEqual(['abandoned']);
     expect(plan([open({})], [], 'a')).toMatchObject({ kind: 'resume', ends: [] });
   });
@@ -287,6 +288,7 @@ describe('the Start gate', () => {
     for (let i = 0; i < LC_START_ATTEMPTS_PER_DAY; i++) g = countStartAttempt(g, 'd1');
     expect(() => countStartAttempt(g, 'd1')).toThrow(LC_START_ATTEMPT_CAP_ERROR);
     expect(countStartAttempt(g, 'd2').attempts).toBe(1);
+    expect(countStartAttempt(emptyGate('d2'), 'd1').day).toBe('d2'); // never rolls back
   });
   it('lets one sitting through; a parallel Start sees the fresh claim and is refused', () => {
     const g = claimStart(emptyGate('d'), 'd', 'A', [], new Set(), T)!;

@@ -776,10 +776,13 @@ class StubClient implements ApiClient {
     const plan = planSittingStart(n, sittings, this.alive(this.store.tasks), roll.id, now);
     for (const e of plan.ends) this.endSitting(e.sitting.id, e.to);
     if (plan.kind === 'resume') {
-      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, false);
+      const shaped = await this.resumeShape(plan.sitting, roll);
       this.keepProblem(n, false);
-      return { sitting: plan.sitting, resumed: true };
+      return { sitting: shaped, resumed: true };
     }
+    // A deleted sitting's id, reused (backend parity: its tombstone wins the head's put-if-absent).
+    if (this.store.sittings.some((x) => x.id === n.clientSittingId))
+      throw new Error(`Not found: ${n.clientSittingId}`);
     const ended = new Set(plan.ends.map((e) => e.sitting.id));
     const claimed = claimStart(
       this.store.lcStartGate,
@@ -811,11 +814,27 @@ class StubClient implements ApiClient {
       rollId: roll.id,
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
+      shapedAt: null,
       summary: emptySummary(),
     });
-    await this.shapeRep(sitting, roll, true);
+    const shaped = await this.finishShaping(sitting, roll);
     this.keepProblem(n, true);
-    return { sitting, resumed: false };
+    return { sitting: shaped, resumed: false };
+  }
+  private async resumeShape(s: Sitting, linked: Roll): Promise<Sitting> {
+    if (s.status !== 'active') return s;
+    const roll =
+      s.rollId === linked.id ? linked : (this.find(this.store.rolls, s.rollId) ?? linked);
+    if (s.shapedAt == null) return this.finishShaping(s, roll);
+    await this.shapeRep(s, roll, false);
+    return s;
+  }
+  private async finishShaping(s: Sitting, roll: Roll): Promise<Sitting> {
+    await this.shapeRep(s, roll, true);
+    const cur = this.mustFind(this.store.sittings, s.id);
+    return cur.shapedAt == null
+      ? this.writes.patch(this.store.sittings, s.id, { shapedAt: this.now() })
+      : cur;
   }
   // Mirrors the backend's shapeRep: from the stored sitting; only a new sitting (or a rep just made) titles,
   // notes and plans it (no plan for a timed rep); a resume only starts it.

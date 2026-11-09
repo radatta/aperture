@@ -667,6 +667,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       rollId: leetcode.id,
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: null,
+      shapedAt: startedAt,
       summary: emptySummary(),
     };
     let live = { ...mk(snapAt), id: sitting.id, ...emptyLiveFields(sitting.id) };

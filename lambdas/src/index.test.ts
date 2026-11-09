@@ -221,7 +221,15 @@ describe('handler device-token ingest branch', () => {
       });
       const fault = Object.assign(new Error('boom'), {
         name: 'InternalServerError',
+        $metadata: { httpStatusCode: 500 },
+      });
+      const limit = Object.assign(new Error('limit'), {
+        name: 'RequestLimitExceeded',
         $metadata: {},
+      });
+      const invalid = Object.assign(new Error('bad item'), {
+        name: 'ValidationException',
+        $metadata: { httpStatusCode: 400 },
       });
       const events = [
         {
@@ -232,7 +240,10 @@ describe('handler device-token ingest branch', () => {
       for (const [e, code] of [
         [conflict, 409],
         [throttle, 429],
+        [limit, 429],
         [fault, 500],
+        [invalid, 400],
+        [new TypeError('our bug'), 500],
       ] as const) {
         fail(e);
         expect((await rpc('lcSittingEvents', headers, events)).statusCode).toBe(code);

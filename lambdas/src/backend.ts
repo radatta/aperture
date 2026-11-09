@@ -713,9 +713,9 @@ export class BackendClient implements ApiClient {
     );
     for (const e of plan.ends) await this.endSitting(e.sitting.id, e.to, now);
     if (plan.kind === 'resume') {
-      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, false);
+      const shaped = await this.resumeShape(plan.sitting, roll);
       await this.keepProblem(n, false);
-      return { sitting: plan.sitting, resumed: true };
+      return { sitting: shaped, resumed: true };
     }
     const ended = new Set(plan.ends.map((e) => e.sitting.id));
     await this.repo.casUpdate(
@@ -745,15 +745,18 @@ export class BackendClient implements ApiClient {
       rollId: roll.id,
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
+      shapedAt: null,
       summary: emptySummary(),
     };
     if (!(await this.repo.putSittingIfAbsent(sitting))) {
       const won = await this.repo.getSitting(n.clientSittingId, { consistent: true });
-      if (!won) throw new Error(`Not found: ${n.clientSittingId}`); // a deleted sitting's id, reused
-      if (won.status === 'active') await this.shapeRep(won, roll, false);
-      return { sitting: won, resumed: true };
+      if (!won) {
+        await this.releaseStartGate(n.clientSittingId, now); // a deleted sitting's id, reused: free the gate
+        throw new Error(`Not found: ${n.clientSittingId}`);
+      }
+      return { sitting: await this.resumeShape(won, roll), resumed: true };
     }
-    await this.shapeRep(sitting, roll, true);
+    const shaped = await this.finishShaping(sitting, roll);
     await this.keepProblem(n, true);
     console.log(
       JSON.stringify({
@@ -762,7 +765,27 @@ export class BackendClient implements ApiClient {
         attach: plan.kind === 'attach',
       }),
     );
-    return { sitting, resumed: false };
+    return { sitting: shaped, resumed: false };
+  }
+  // A resume: an open sitting whose shaping never finished (a Start that died after its head) is shaped fully,
+  // with its own roll; a shaped one only has its rep started.
+  private async resumeShape(s: Sitting, linked: Roll): Promise<Sitting> {
+    if (s.status !== 'active') return s;
+    const roll = s.rollId === linked.id ? linked : ((await this.repo.getRoll(s.rollId)) ?? linked);
+    if (s.shapedAt == null) return this.finishShaping(s, roll);
+    await this.shapeRep(s, roll, false);
+    return s;
+  }
+  private async finishShaping(s: Sitting, roll: Roll): Promise<Sitting> {
+    await this.shapeRep(s, roll, true);
+    const at = this.now();
+    return this.repo.casUpdate(
+      this.repo.sittingShape(s.id),
+      s.id,
+      (cur) => (cur.shapedAt == null ? { ...cur, shapedAt: at } : null),
+      at,
+      { consistent: true },
+    );
   }
   // The problem doc: a new sitting upserts it; a resume only fills it in when it's missing.
   private async keepProblem(n: NormalizedSittingStart, upsert: boolean): Promise<void> {
@@ -951,9 +974,17 @@ export class BackendClient implements ApiClient {
   private async endSittingsFor(task: Task, to: TaskStatus): Promise<void> {
     if (!task.rollId || (to !== 'done' && to !== 'cancelled')) return;
     const now = this.now();
-    for (const x of await this.repo.listSittings({ consistent: true }))
-      if (x.repTaskId === task.id && x.status === 'active')
-        await this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned', now);
+    // Best-effort: the task's own change is already saved, so a failure here (a lost race under ingest) is
+    // logged, never thrown back as a failed Done — the next Start ends a sitting whose rep finished.
+    try {
+      for (const x of await this.repo.listSittings({ consistent: true }))
+        if (x.repTaskId === task.id && x.status === 'active')
+          await this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned', now);
+    } catch (err) {
+      console.log(
+        JSON.stringify({ event: 'lc_sitting_end_deferred', taskId: task.id, error: String(err) }),
+      );
+    }
   }
   // Ends it (once), healing its summary first — a fold lost just before Done would otherwise stay lost — and
   // frees the Start gate when it holds this sitting.

@@ -84,7 +84,7 @@ describe('sittings on the table', () => {
   // A Start that claimed its head and died before shaping the rep (a timeout, a throttle): its retry finishes
   // it, and a Start on another problem doesn't stay blocked behind it.
   it('a half-made Start finishes on its retry, and never blocks another problem', async () => {
-    const { backend, doc } = setup();
+    const { backend, doc, now } = setup();
     await linked(backend);
     const repo = new Repo(doc, liveWrites(doc, 'prod'), 'u1');
     const half = (await backend.lcSittingStart(start())).sitting;
@@ -110,6 +110,7 @@ describe('sittings on the table', () => {
       repTaskId: ulid(),
       deletedAt: null,
     });
+    now.t += 3 * 60_000; // past the in-flight window: a rep-less sitting this old died half-way
     const other = await backend.lcSittingStart({
       ...start(),
       problemSlug: 'three-sum',
@@ -117,6 +118,34 @@ describe('sittings on the table', () => {
     });
     expect(other.resumed).toBe(false);
     expect((await backend.getSitting(id2)).sitting.status).toBe('abandoned');
+  });
+
+  // A Start that made its rep, then died before titling, planning and starting it: the retry finishes all of it.
+  it('a Start that died after making its rep finishes the shaping on its retry', async () => {
+    const { backend, doc } = setup();
+    await linked(backend);
+    const roll = (await backend.listRolls())[0]!;
+    const repo = new Repo(doc, liveWrites(doc, 'prod'), 'u1');
+    const first = (await backend.lcSittingStart(start())).sitting; // a sitting to copy the shape of
+    await backend.deleteTask(first.repTaskId);
+    const { task: rep } = await backend.pickRollToday(roll.id, '2023-11-10');
+    const id = ulid();
+    await repo.putSittingIfAbsent({
+      ...first,
+      id,
+      clientSittingId: id,
+      repTaskId: rep.id,
+      shapedAt: null,
+      deletedAt: null,
+    });
+    const retry = await backend.lcSittingStart(start(id));
+    expect(retry).toMatchObject({ resumed: true, sitting: { shapedAt: expect.any(Number) } });
+    expect(await backend.getTask(rep.id)).toMatchObject({
+      status: 'in_progress',
+      title: 'LeetCode · Two Sum',
+    });
+    const plans = await backend.listPlansForDay(first.day);
+    expect(plans.filter((p) => p.taskId === rep.id)).toHaveLength(1);
   });
 
   it('a double-fired Start makes one sitting and one rep', async () => {

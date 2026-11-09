@@ -39,8 +39,9 @@ Done on the rep ─────────────────────�
   its reminder rows stay right. A new sitting (or a rep the Start had to create) gets its title
   (`LeetCode · <problem>`), the problem URL as notes when empty, and a plan row on the sitting's day (id = the
   sitting's, so one however many Starts race; none for a timed rep — rolls.md D6); a linked calendar event is
-  renamed with it, once. A resume only starts the rep (and creates it under its fixed id, put-if-absent, if a
-  Start died half-way) — it never renames or re-plans, so it can't undo your own edits.
+  renamed with it, once. When that shaping completes the head is stamped `shapedAt`; a repeat Start of a
+  sitting without it (a Start that died part-way, rep made or not) shapes it fully, with the sitting's own roll.
+  After that a resume only starts the rep — it never renames or re-plans, so it can't undo your own edits.
 - **A sitting ends through its rep** (`transitionTask` / `deleteTask` hooks, for tasks with a `rollId`; any
   other finish is caught at the next Start). Ending it refolds its summary first, so a fold lost just before
   Done heals. An Accepted submit never ends it — you may keep going. A repeat Start of an ended sitting returns
@@ -49,7 +50,9 @@ Done on the rep ─────────────────────�
   day, refused ones included — before any read); a new sitting then **claims** it — refused while the gate
   holds another open sitting, or one claimed in the last two minutes that this Start can't see yet (a
   parallel Start) — and only then claims its head (put-if-absent on the Start's `clientSittingId`). Ending or
-  deleting a sitting releases the gate. So parallel Starts open one sitting, and a double-fired Start makes
+  deleting a sitting releases the gate (best-effort on a task's Done or Drop, which is already saved — a
+  missed release lets go once its sitting reads ended). A rep-less open sitting counts as a dead half-made
+  Start only after those same two minutes, so a parallel Start can't end one still being written. So parallel Starts open one sitting, and a double-fired Start makes
   one sitting, one rep, one plan row. Days are the user's (LA) day, never the client's tz.
 - `startedAt` is the server's clock at Start (the sitting clock); the click's own time is `clientStartedAt`,
   which must be within a day of it — the clock event times and time-to-first-submit are measured on.
@@ -101,19 +104,21 @@ parsing (413). Sizes are UTF-8 bytes. Per call ≤ 50 events / 256 KB; per event
 64 KB, run/submit ≤ 96 KB …); payloads nested ≤ 20 deep with exact numbers (what DynamoDB stores as given);
 per sitting ≤ 3,000 events / 16 MB, any type, held by a **budget row** (`lcs#<id>#budget`) that every call
 reserves in — a CAS, duplicates included — before writing anything, so parallel calls and retries can't pass
-it; the Start gate's ≤ 60 Starts and ≤ 400 attempts a day; events refused once the sitting ended or 24 h after
+it; the Start gate's ≤ 100 Starts and ≤ 400 attempts a day; events refused once the sitting ended or 24 h after
 Start, or timed off the sitting's clock. Each event is idempotent on its id. The server recomputes everything
 it decides on (`userId`, `day`, `startedAt`, verdicts, counters); payloads are opaque.
 
 **Statuses** (the extension's outbox retries 409, 429 and 5xx; anything else it keeps as failed): 400 a refused
-input, 401 a bad token, 409 a lost race (`ConflictError`), 413 over the body cap, 429 DynamoDB pushing back,
-500 another fault.
+input (our own refusals, and an AWS error with a 4xx status such as `ValidationException`), 401 a bad token,
+409 a lost race (`ConflictError`), 413 over the body cap, 429 DynamoDB pushing back (incl.
+`RequestLimitExceeded`), 500 any other AWS fault or a bug in our code (a `TypeError` is retried, never dropped).
 
 **A leaked device token** (or a hostile leetcode.com page driving the extension, which can use the token
 without seeing it — the server caps are the boundary, not the token's secrecy): within the caps it can make
 junk sittings (visible reps, each renamed once — and a linked calendar event with it) and write events — into
 the open sitting too, so it could forge that sitting's headline. It can read only what Start and Events return
-(the open sitting's head, by trying slugs), end only stale or half-made sittings, and never delete, mark a task
+(the open sitting's head, by trying slugs), end only stale or half-made sittings, use up the day's 400 Start
+attempts (then the user's own Starts are refused until the LA day rolls over — accepted, visible), and never delete, mark a task
 done, or reach another partition. `problem.raw` is LeetCode's HTML: nothing renders it today, and anything that
 ever does must sanitise it.
 

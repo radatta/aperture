@@ -32,9 +32,9 @@ export const SITTING_EVENTS_PER_CALL = 50;
 export const SITTING_CALL_BYTES = 256 * 1024;
 export const SITTING_MAX_EVENTS = 3000;
 export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
-// Starts a day: well above real use (a handful) and the dev check's few a run across a day's lanes; a leaked
+// Starts a day: well above real use (a handful) and the dev check's three a run across a day's lanes; a leaked
 // token's ceiling is this many visible junk reps a day.
-export const SITTING_STARTS_PER_DAY = 60;
+export const SITTING_STARTS_PER_DAY = 100;
 // Events are refused this long after Start: a sitting left open forever stops taking writes.
 export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
 // Raw bulk (snapshots, replay, submitDetails) is kept this long past the ingest window, then DynamoDB's TTL
@@ -127,7 +127,9 @@ export const jsonSize = (v: unknown): number => {
 export function payloadError(v: unknown, depth = 0): string | null {
   if (depth > 20) return 'Payload is nested too deep';
   if (typeof v === 'number')
-    return Number.isFinite(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER
+    return Number.isFinite(v) &&
+      Math.abs(v) <= Number.MAX_SAFE_INTEGER &&
+      (v === 0 || Math.abs(v) >= 1e-130) // DynamoDB's smallest magnitude
       ? null
       : 'Payload has an unstorable number';
   if (Array.isArray(v)) {
@@ -346,6 +348,8 @@ export const isHeadEvent = (type: SittingEventType | 'replay') =>
 const verdictOrOther = (payload: unknown, at: number): SittingVerdict =>
   verdictOf(payload, at) ?? { verdict: 'other', statusMsg: null, passed: null, total: null, at };
 export type HeadEventType = SittingHeadRow['type'];
+const timerWithoutRaw = (t: LcTimerState | null): LcTimerState | null =>
+  t ? { ...t, raw: null } : null;
 // The compact row a head event is folded from, taken from its payload once, at write.
 export function headRowOf(
   sittingId: string,
@@ -358,7 +362,8 @@ export function headRowOf(
     type: e.type,
     at: e.at,
     verdict: judged ? verdictOrOther(e.payload, e.at) : null,
-    timer: e.type === 'timer' ? lcTimerState(e.payload, e.at) : null,
+    // The timer's state without its raw value: a head row stays ~200 B, whatever the payload carried.
+    timer: e.type === 'timer' ? timerWithoutRaw(lcTimerState(e.payload, e.at)) : null,
     deletedAt: null,
   };
 }
@@ -565,8 +570,8 @@ export function planSittingStart(
   const onThis = open.find((x) => x.problemSlug === input.problemSlug);
   if (onThis) return { kind: 'resume', sitting: onThis, ends };
   for (const x of open)
-    if (repOf(x)) throw new Error(SITTING_ACTIVE_ERROR);
-    else ends.push({ sitting: x, to: 'abandoned' }); // a Start that never made its rep
+    if (repOf(x) || now - x.startedAt < CLAIM_IN_FLIGHT_MS) throw new Error(SITTING_ACTIVE_ERROR);
+    else ends.push({ sitting: x, to: 'abandoned' }); // a Start that died before making its rep
   // No sitting is open past this point, so the roll's open rep is free — one left by a sitting that ran out
   // its window is reused (one open rep per roll).
   const rep = findOpenRollTask(tasks, rollId);
@@ -603,8 +608,10 @@ export const emptyGate = (day: string): GateFields => ({
   openSittingId: null,
   openClaimedAt: null,
 });
+// Counts roll forward to a new day only — a call that worked out its day just before the rollover never
+// resets a gate another call already moved on.
 const onDay = <G extends GateFields>(g: G, day: string): G =>
-  g.day === day ? g : { ...g, day, attempts: 0, starts: 0 };
+  day > g.day ? { ...g, day, attempts: 0, starts: 0 } : g;
 export function countStartAttempt<G extends GateFields>(g: G, day: string): G {
   const d = onDay(g, day);
   if (d.attempts >= LC_START_ATTEMPTS_PER_DAY) throw new Error(LC_START_ATTEMPT_CAP_ERROR);

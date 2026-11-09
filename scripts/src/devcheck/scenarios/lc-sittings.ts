@@ -58,7 +58,7 @@ async function refused(what: string, p: Promise<unknown>, match: RegExp): Promis
 }
 
 // What later steps build on, set by the steps that make it.
-const state = { rollId: '', a: '', aRep: '', aClient: '', aStartedAt: 0 };
+const state = { rollId: '', a: '', aRep: '', aClient: '', aStartedAt: 0, c: '' };
 async function sittingA(ctx: Ctx) {
   if (!state.a) throw new Error('no sitting A — the start step failed');
   return ctx.api.reads.getSitting(state.a);
@@ -134,7 +134,7 @@ export const lcSittings: Scenario = {
       id: 'end-drop',
       entry: 'api',
       kind: 'edge',
-      what: 'Dropping the rep abandons its sitting',
+      what: 'Dropping a rep abandons its sitting',
     },
     {
       id: 'ui-open',
@@ -220,7 +220,7 @@ export const lcSittings: Scenario = {
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
         test: 'abandons one past its window and reuses its still-open rep',
-        why: 'dev can’t wait a day; the contract suite runs the same planner with an advanced clock',
+        why: 'dev can’t wait a day; the planner is pure, and this unit test runs it past the window',
       },
     },
     {
@@ -238,12 +238,13 @@ export const lcSittings: Scenario = {
       id: 'parallel-starts',
       entry: 'api',
       kind: 'edge',
-      what: 'Parallel Starts on different problems open one sitting',
-      offDev: {
-        file: 'lambdas/src/backend.sittings.test.ts',
-        test: 'parallel Starts on different problems open one sitting',
-        why: 'which claim lands first on dev is timing; double-start (proven on dev) runs the same gate and claim',
-      },
+      what: 'Parallel Starts on different problems open one sitting; the other is refused as still open',
+    },
+    {
+      id: 'delete-cascade',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Deleting a rep removes its sitting — runs, submits and all — and frees the gate',
     },
     {
       id: 'attempt-cap',
@@ -264,7 +265,7 @@ export const lcSittings: Scenario = {
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
         test: 'reserves a call in the budget, refusing one that would pass a cap',
-        why: 'dev can’t take it: 3,000 writes would run into dev’s write cap; the guard is this pure reservation, which the contract suite also drives with submit details alone',
+        why: 'dev can’t take it: 3,000 writes would run into dev’s write cap; the guard is this pure reservation',
       },
     },
     {
@@ -324,6 +325,7 @@ export const lcSittings: Scenario = {
           a: sitting.id,
           aRep: sitting.repTaskId,
           aClient: input.clientSittingId,
+          aStartedAt: input.startedAt,
         });
         const rep = await ctx.api.reads.getTask(sitting.repTaskId);
         if (rep?.status !== 'in_progress' || rep.title !== `LeetCode · ${titleOf(ctx, 'a')}`)
@@ -484,9 +486,8 @@ export const lcSittings: Scenario = {
     {
       id: 'end',
       entry: 'api',
-      proves: ['end-done', 'end-drop'],
-      title:
-        'Done on A’s rep ends it and refuses later events; B starts, and dropping its rep abandons it',
+      proves: ['end-done'],
+      title: 'Done on A’s rep ends it, and events after it are refused',
       async run(ctx) {
         await ctx.api.writes.setTaskActual(state.aRep, 40);
         await ctx.api.writes.finishTask(state.aRep, 'done');
@@ -498,19 +499,14 @@ export const lcSittings: Scenario = {
           ctx.api.writes.lcSittingEvents(state.a, [snap('late', Date.now())]),
           /ended/,
         );
-        const { sitting: b } = await ctx.api.writes.lcSittingStart(start(ctx, 'b'));
-        if (b.repTaskId === state.aRep) throw new Error('B reused A’s finished rep');
-        await ctx.api.writes.finishTask(b.repTaskId, 'cancelled');
-        const after = (await ctx.api.reads.getSitting(b.id)).sitting;
-        if (after.status !== 'abandoned') throw new Error(`B after Drop: ${after.status}`);
       },
     },
     {
       id: 'double-start',
       entry: 'api',
-      proves: ['double-start', 'prep-target', 'delete-sitting'],
+      proves: ['double-start', 'prep-target', 'end-drop'],
       title:
-        'Start C twice at once (one sitting, one rep); tag it; delete it — its rep stays, then drops',
+        'Start C twice at once (one sitting, one rep, one plan row); tag it; dropping its rep abandons it',
       async run(ctx) {
         const input = start(ctx, 'c');
         const [x, y] = await Promise.all([
@@ -522,22 +518,20 @@ export const lcSittings: Scenario = {
         const reps = (await ctx.api.reads.listTasks()).filter(
           (t) => t.title === `LeetCode · ${titleOf(ctx, 'c')}`,
         );
-        if (reps.length !== 1) throw new Error(`${reps.length} reps for C`);
+        if (reps.length !== 1 || reps[0]!.status !== 'in_progress')
+          throw new Error(`reps for C: ${JSON.stringify(reps)}`);
+        const plans = await ctx.api.reads.listPlansForDay(x.sitting.day);
+        if (plans.filter((p) => p.taskId === reps[0]!.id).length !== 1)
+          throw new Error('C’s rep isn’t on its day exactly once');
         const id = x.sitting.id;
+        state.c = id;
         const tagged = await ctx.api.writes.setSittingPrepTarget(id, '  devcheck-target ');
         const blank = await ctx.api.writes.setSittingPrepTarget(id, '   ');
-        if (
-          (tagged as { prepTarget?: string }).prepTarget !== 'devcheck-target' ||
-          (blank as { prepTarget?: string }).prepTarget !== 'General'
-        )
+        if (tagged.prepTarget !== 'devcheck-target' || blank.prepTarget !== 'General')
           throw new Error('the prep target didn’t normalize');
-        await ctx.api.writes.deleteSitting(id);
-        if ((await ctx.api.reads.listSittings()).some((s) => s.id === id))
-          throw new Error('the deleted sitting is still listed');
-        await refused('read after delete', ctx.api.reads.getSitting(id), /Not found/);
-        const rep = await ctx.api.reads.getTask(x.sitting.repTaskId);
-        if (!rep) throw new Error('deleting the sitting took its rep');
-        await ctx.api.writes.finishTask(rep.id, 'cancelled'); // free the roll for the steps after
+        await ctx.api.writes.finishTask(reps[0]!.id, 'cancelled');
+        const after = (await ctx.api.reads.getSitting(id)).sitting;
+        if (after.status !== 'abandoned') throw new Error(`C after Drop: ${after.status}`);
       },
     },
     {
@@ -556,7 +550,7 @@ export const lcSittings: Scenario = {
       cost: 'slow',
       proves: ['ui-ended', 'settings-select'],
       title:
-        'After a reload, A reads “accepted on submit 2” and B “dropped”; Settings shows the linked roll',
+        'After a reload, A reads “accepted on submit 2” and C “dropped”; Settings shows the linked roll',
       async run(ctx) {
         await ctx.ui.goto('/recruiting');
         await ctx.page.reload();
@@ -564,10 +558,10 @@ export const lcSittings: Scenario = {
           .getByText(titleOf(ctx, 'a'))
           .locator('xpath=ancestor::div[contains(@class,"justify-between")][1]');
         await rowA.getByText('accepted on submit 2').waitFor({ timeout: 15_000 });
-        const rowB = ctx.page
-          .getByText(titleOf(ctx, 'b'))
+        const rowC = ctx.page
+          .getByText(titleOf(ctx, 'c'))
           .locator('xpath=ancestor::div[contains(@class,"justify-between")][1]');
-        await rowB.getByText(/dropped/).waitFor({ timeout: 5_000 });
+        await rowC.getByText(/dropped/).waitFor({ timeout: 5_000 });
         if (await ctx.page.getByRole('region', { name: 'Now' }).count())
           throw new Error('an ended sitting is still pinned as open');
         await ctx.shot('sittings-ended');
@@ -593,6 +587,48 @@ export const lcSittings: Scenario = {
         await ctx.shot('settings-leetcode-none');
         await select.selectOption({ label: titleOf(ctx, 'roll') });
         await until(state.rollId);
+      },
+    },
+    {
+      id: 'deletes',
+      entry: 'api',
+      proves: ['delete-sitting', 'delete-cascade'],
+      title:
+        'Delete C’s sitting (its rep stays); delete A’s rep (its sitting, with its submits, goes with it)',
+      async run(ctx) {
+        const c = (await ctx.api.reads.getSitting(state.c)).sitting;
+        await ctx.api.writes.deleteSitting(state.c);
+        if ((await ctx.api.reads.listSittings()).some((s) => s.id === state.c))
+          throw new Error('the deleted sitting is still listed');
+        await refused('read after delete', ctx.api.reads.getSitting(state.c), /Not found/);
+        if (!(await ctx.api.reads.getTask(c.repTaskId)))
+          throw new Error('deleting the sitting took its rep');
+        await ctx.api.writes.deleteTask(state.aRep);
+        if ((await ctx.api.reads.listSittings()).some((s) => s.id === state.a))
+          throw new Error('deleting A’s rep left its sitting');
+      },
+    },
+    {
+      id: 'parallel',
+      entry: 'api',
+      proves: ['parallel-starts'],
+      title:
+        'Start E and F at once: one opens, the other is refused as still open; drop the winner',
+      async run(ctx) {
+        const results = await Promise.allSettled([
+          ctx.api.writes.lcSittingStart(start(ctx, 'e')),
+          ctx.api.writes.lcSittingStart(start(ctx, 'f')),
+        ]);
+        const won = results.filter((r) => r.status === 'fulfilled');
+        const lost = results.filter((r) => r.status === 'rejected');
+        if (won.length !== 1 || lost.length !== 1)
+          throw new Error(`${won.length} opened, ${lost.length} refused`);
+        const why = String((lost[0] as PromiseRejectedResult).reason);
+        if (!/HTTP 400/.test(why) || !/still open/.test(why))
+          throw new Error(`refused oddly: ${why}`);
+        const { sitting } = (won[0] as PromiseFulfilledResult<{ sitting: { repTaskId: string } }>)
+          .value;
+        await ctx.api.writes.finishTask(sitting.repTaskId, 'cancelled');
       },
     },
     {
