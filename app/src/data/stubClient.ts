@@ -126,7 +126,12 @@ import {
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
   normalizeSittingEvents,
+  normalizeSittingReview,
   normalizeSittingStart,
+  draftMistakes,
+  DRAFT_LINES_MAX,
+  REVIEW_LINE_MAX,
+  timelineOf,
   planSittingStart,
   reserveBudget,
   summarizeHeadRows,
@@ -235,6 +240,8 @@ import type {
   SittingEventsResult,
   SittingLive,
   SittingReplayChunk,
+  SittingReviewInput,
+  ReviewDraft,
   SittingStartInput,
   SittingStartResult,
 } from '@aperture/shared';
@@ -1059,6 +1066,32 @@ class StubClient implements ApiClient {
   async setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting> {
     const tag = normalizePrepTarget(prepTarget);
     return this.writes.patch(this.store.sittings, id, { prepTarget: tag });
+  }
+  async setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting> {
+    this.mustFind(this.store.sittings, id);
+    const r = normalizeSittingReview(review);
+    return this.writes.patch(this.store.sittings, id, {
+      review: r && { ...r, updatedAt: this.now() },
+    });
+  }
+  // Deterministic stand-in for the Haiku draft (same shape and rules, no model): one line per judged Run or
+  // Submit that wasn't accepted, naming its failing case or error head.
+  async draftSittingReview(id: string): Promise<ReviewDraft> {
+    const { sitting, events } = await this.getSitting(id);
+    const judged = timelineOf(sitting, events).flatMap((x) => (x.kind === 'judged' ? [x] : []));
+    if (!judged.length) return { ok: false, reason: 'nothing-to-draft' };
+    const lines = judged
+      .filter((x) => x.verdict.verdict !== 'accepted')
+      .map((x) => {
+        const what = `${x.type === 'run' ? 'Run' : 'Submit'} ${x.n} (${x.verdict.statusMsg ?? x.verdict.verdict})`;
+        const d = x.detail;
+        const why =
+          d.error ??
+          (d.input ? `${d.input} → expected ${d.expected}, got ${d.output}` : 'no case captured');
+        const line = `${what}: ${why}`.replace(/\s+/g, ' ');
+        return line.length > REVIEW_LINE_MAX ? `${line.slice(0, REVIEW_LINE_MAX - 1)}…` : line;
+      });
+    return { ok: true, mistakes: draftMistakes(lines.slice(0, DRAFT_LINES_MAX)) ?? [] };
   }
   async deleteSitting(id: string): Promise<void> {
     if (!this.find(this.store.sittings, id)) return;

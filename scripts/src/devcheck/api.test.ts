@@ -85,6 +85,7 @@ describe('createApiClient', () => {
       run: 'r1',
     });
     expect(Object.keys(api.reads).sort()).toEqual([
+      'draftSittingReview',
       'getAttachmentDownloadUrl',
       'getCalibration',
       'getDay',
@@ -155,6 +156,8 @@ describe('createApiClient', () => {
       'setReminderSettings',
       'setRollActive',
       'setSittingPrepTarget',
+      'setSittingReview',
+      'setSittingReviewToUnknown',
       'setTaskActual',
       'setTaskDue',
       'startSession',

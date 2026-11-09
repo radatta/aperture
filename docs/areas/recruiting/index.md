@@ -64,8 +64,8 @@ Done on the rep ─────────────────────�
 
 All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda share them):
 
-- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI) and the
-  `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
+- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), his review
+  (`review`, _Review and the Claude draft_ below) and the `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
   runs before the first submit, LeetCode's timer state, and `headEvents`, how many rows it folds.
   **Recomputed, never incremented:** any events call carrying a head event — fresh or a repeat — rebuilds it
   from every head row (`summarizeHeadRows`), and writes it only when it folds more rows than the stored one, so
@@ -113,6 +113,38 @@ its window is marked `expired: true`, its minutes stopped at the window.
   96 KB each), all strongly consistent: typically ~5 read units, ~60 at the caps, plus 1 write unit. At 60 pulls
   a sitting and ~45 sittings a month that's cents; no fixed part.
 
+### Review and the Claude draft
+
+A sitting's review is his own words, on the head (`review`, `setSittingReview`): a one-liner, how much help it
+took (`none` / `hint` / `solution`), up to 8 mistakes, how it went, up to 10 pattern tags of his own, and
+`draftUsed`. One normalizer (`normalizeSittingReview`) folds whitespace, lowercases and dedupes the tags, refuses
+anything over a cap naming the field, and turns a review that says nothing into `null`. It's on the head, not a
+row of its own, so the list's reviewed dot and `list_sittings` read it free; a refold spreads the head and keeps
+it, and a review and a refold racing are both CAS writes over the current head. Writable at any status, an open
+sitting included. The form starts help on `hint` once a submit failed before the accepted one (`suggestedHelp`).
+
+**Draft with Claude** (`draftSittingReview`) is a button, never automatic: one Haiku call (`claude-haiku-5-5`,
+`lambdas/src/anthropic/sittingReviewPrompt.ts`, snapshot-tested) over the problem, the newest 8 judged Runs and
+Submits with their cases (each field ≤ 400 chars), and the code at the first submit and the final code (≤ 4 KB
+each; his code goes to the API — decided). It proposes **mistake lines only** — at most 5, each ≤ 160
+characters, each naming a failing case or a concrete code change, describing and never judging; the one-liner and
+how it went are never drafted. The answer is validated (`draftMistakes`); anything else is `bad-shape`. It writes
+nothing: the lines arrive unticked and editable, "Use all" ticks them, and only the ticked ones reach the review on
+Save. Nothing judged yet → `nothing-to-draft` with no model call; a failure says why inline and the form keeps
+working. A smoke run never reaches the model; the log line carries counts, never code. Cost: ≈ 2.5k tokens in and
+150 out at $0.10 / $0.50 per MTok ≈ $0.0003 a draft — at one or three a sitting, ≈ $0.015–0.04 a month of API
+credit; no AWS cost.
+
+### Reading a sitting back
+
+`get_sitting {id?}` (no id: the newest sitting) and `list_sittings {from?, to?, limit?}`, both read-only, for the
+talk-through after a sitting and for prep planning. `get_sitting` carries the problem statement as text
+(`problemStatementText`, ≤ 3 KB) and the companies that asked it lately (`problemCompanies`), the timeline
+(`timelineOf`: every judged Run and Submit with verdict and case, each case field ≤ 300 chars, the newest 30, and
+`codeChanged` markers counting the snapshots between them — snapshots expire with the raw bulk, so an older
+sitting has none), the final code in full, editing facts and the review. `list_sittings` rows are heads only:
+day, problem, status, minutes, outcome, prep target, `reviewed` and his tags; at most 100, `more` when cut.
+
 ### Storage and expiry
 
 Kept forever: the head, the live row, the live-pull count, the head rows and the runs', submits' and notes'
@@ -156,7 +188,16 @@ ever does must sanitise it.
 
 `/recruiting` → **Sittings**: the open sitting pinned with its running clock, the rest by day with the
 outcome (`first submit accepted` / `accepted on submit N` / `not accepted` / `no submit yet`), runs, and
-`dropped`. Stories is the other tab.
+`dropped`; a dot marks a reviewed one. Stories is the other tab.
+
+Each row opens **`/recruiting/sittings/:id`**: the problem (linked to LeetCode) with its tags and companies; the
+outcome, time to first submit, duration, runs and submits, and "Claude watched live · N pulls"; the timeline
+(teal accepted, gold otherwise — never red — with the failing case folded away); the final code, collapsed; and
+the review form, one Save for all of it. While the sitting is open and its rep in progress, **End sitting** opens
+the rep's Done form prefilled with the sitting's minutes (Start to now) and the Roll's estimate when the rep lost
+one; Mark done ends the sitting through the rep, Cancel writes nothing. On Home, a LeetCode rep whose sitting is
+open links to that page ("End the LeetCode sitting →"), and its Done prefills from the sitting too; the list is
+read only while a LeetCode-roll rep is in progress, so an ordinary day costs no read.
 
 ## The shape
 
@@ -269,18 +310,20 @@ storage — a different risk class from a JWT. A device token sent to any other 
 | `extension/`                                             | MV3 web extension — Safari daily (wrapped in an Xcode app), Firefox AMO-signed. No runtime deps, no bundler, no build step. `README.md` there is the wire contract, how it works and the Safari build steps; `test/` its unit and jsdom tests. |
 | `scripts/src/lc-e2e/`                                    | the extension's E2E: headless Chromium, a fake LeetCode page, A1's BFF run locally                                                                                                                                                             |
 | `packages/shared/src/types.ts`                           | `Sitting`, `SittingLive`, `SittingEvent`, `SittingReplayChunk`, `LeetcodeProblem`; `LeetcodeAttempt` (retired), `LeetcodeVerdict`                                                                                                              |
-| `packages/shared/src/sittings.ts`                        | the sittings' rules: normalizers, caps, `planSittingStart`, folds, `sittingMetrics`, the raw expiry                                                                                                                                            |
+| `packages/shared/src/sittings.ts`                        | the sittings' rules: normalizers, caps, `planSittingStart`, folds, `sittingMetrics`, the raw expiry; the review's normalizer, the draft's validator, `timelineOf`, the problem doc's text                                                      |
 | `packages/shared/src/api.ts`                             | the sitting methods, `SittingDetail`, `RecordLeetcodeAttemptInput` (legacy)                                                                                                                                                                    |
 | `packages/shared/src/leetcode.ts`                        | `normalizeVerdict` — status_code first, status_msg fallback; `LC_INGEST_METHODS`                                                                                                                                                               |
 | `packages/shared/src/dates.ts`                           | `dayKeyForOffset` — bucket by the client's tz + `dayStartHour`                                                                                                                                                                                 |
 | `packages/shared/src/contractTests.ts`                   | one suite, run 3× — stub, backend direct, backend via handleRpc (`lc sittings`)                                                                                                                                                                |
-| `app/src/pages/Recruiting/`                              | `SittingsSection.tsx` + `recruitingHelpers.ts` (outcome, summary, grouping, verdict tone)                                                                                                                                                      |
-| `app/src/data/hooks/useSittings.ts`                      | React Query read hook                                                                                                                                                                                                                          |
+| `app/src/pages/Recruiting/`                              | `SittingsSection.tsx` + `recruitingHelpers.ts` (outcome, summary, grouping, verdict tone); `SittingDetail.tsx`, `SittingTimeline.tsx`, `ReviewForm.tsx` — the sitting's page                                                                   |
+| `app/src/data/hooks/useSittings.ts`                      | the list and one sitting, the review save, the draft (a mutation), `useOpenSittingFor` (Home)                                                                                                                                                  |
+| `app/src/pages/Home/RightNowCard.tsx`                    | the rep's link to its open sitting, and Done's prefill from it                                                                                                                                                                                 |
+| `lambdas/src/anthropic/sittingReviewPrompt.ts`           | the draft's prompt, data and output schema (`gateway.ts` / `liveAnthropic.ts` carry the call)                                                                                                                                                  |
 | `app/src/pages/Settings/index.tsx`                       | `LeetcodeSection` — the roll a sitting is a rep of                                                                                                                                                                                             |
 | `lambdas/src/index.ts`                                   | the ingest gate: device token or JWT for `LC_INGEST_METHODS`, the 300 KB pre-parse cap                                                                                                                                                         |
 | `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                                                                          |
 | `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks, `pullLiveSitting`; `recordLeetcodeAttempt` (legacy)                                                                                                                                                  |
-| `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_                                                                                                                                                                                                         |
+| `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_; `get_sitting`, `list_sittings` — _Reading a sitting back_                                                                                                                                              |
 | `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#<day>#<id>` (legacy)                                                                                                                                                                                |
 | `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                                                                               |
 | `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                                                                              |

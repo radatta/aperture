@@ -201,6 +201,8 @@ describe('handler device-token ingest branch', () => {
         'pullLiveSitting',
         'listSittingReplay',
         'setSittingPrepTarget',
+        'setSittingReview',
+        'draftSittingReview',
         'deleteSitting',
       ])
         expect(

@@ -1,4 +1,9 @@
 import {
+  isDayKey,
+  isUlid,
+  problemCompanies,
+  problemStatementText,
+  timelineOf,
   judgeDetail,
   sittingMetrics,
   sittingMinutes,
@@ -7,12 +12,19 @@ import {
   isSittingOpen,
   SITTING_INGEST_WINDOW_MS,
 } from '@aperture/shared';
-import type { LiveSittingPull, Sitting, SittingEvent, SittingVerdict } from '@aperture/shared';
+import type {
+  LiveSittingPull,
+  Sitting,
+  SittingDetail,
+  SittingEvent,
+  SittingVerdict,
+} from '@aperture/shared';
 import { RpcParamError } from './types';
 import type { Tool } from './types';
 
-// LeetCode sittings for Claude (docs/areas/recruiting → Claude watches live; docs/areas/mcp → Tools). Not
-// read-only: each pull of an open sitting writes its own count ("Claude watched live" on the sitting) — nothing else.
+// LeetCode sittings for Claude (docs/areas/recruiting → Claude watches live, Reading a sitting back; docs/areas/mcp
+// → Tools). live_sitting is not read-only: each pull of an open sitting writes its own count ("Claude watched live"
+// on the sitting) — nothing else. get_sitting and list_sittings only read.
 
 // How fresh the capture is — the extension's pacing (PR A2: extension/src/lib/batch.js), in the description and
 // on every answer, so the model never reads a 30-second-old snapshot as the whole truth.
@@ -136,6 +148,95 @@ function inactive(pull: LiveSittingPull, now: number) {
   };
 }
 
+// --- Reading a sitting back (get_sitting, list_sittings) ---
+const TIMELINE_MAX = 30; // the newest judged entries a get_sitting carries
+const CASE_TEXT_MAX = 300; // each case field there
+const cap = (s: string | null) =>
+  s === null ? null : s.length > CASE_TEXT_MAX ? `${s.slice(0, CASE_TEXT_MAX - 1)}…` : s;
+const expiredAt = (s: Sitting, now: number) => s.status === 'active' && !isSittingOpen(s, now);
+const minutesOf = (s: Sitting, now: number) =>
+  sittingMinutes(s, expiredAt(s, now) ? s.startedAt + SITTING_INGEST_WINDOW_MS : now);
+
+function sittingRow(s: Sitting, now: number) {
+  return {
+    id: s.id,
+    day: s.day,
+    problem: { title: s.problemTitle, slug: s.problemSlug, difficulty: s.difficulty },
+    status: s.status,
+    expired: expiredAt(s, now),
+    minutes: minutesOf(s, now),
+    submitCount: s.summary.submits,
+    outcome: outcomeOf(s),
+    prepTarget: s.prepTarget,
+    reviewed: !!s.review,
+    tags: s.review?.tags ?? [],
+  };
+}
+
+function sittingRead(d: SittingDetail, now: number) {
+  const { sitting: s, live } = d;
+  const f = live?.facts ?? null;
+  const entries = timelineOf(s, d.events);
+  // The newest TIMELINE_MAX judged entries and the markers between them.
+  let judgedLeft = TIMELINE_MAX;
+  const kept: typeof entries = [];
+  for (let i = entries.length - 1; i >= 0 && judgedLeft > 0; i--) {
+    const e = entries[i]!;
+    if (e.kind === 'judged') judgedLeft--;
+    kept.unshift(e);
+  }
+  return {
+    sitting: {
+      id: s.id,
+      problem: problemOf(s),
+      lang: s.lang,
+      status: s.status,
+      expired: expiredAt(s, now),
+      day: s.day,
+      startedAt: iso(s.startedAt),
+      endedAt: iso(s.endedAt),
+      minutes: minutesOf(s, now),
+      prepTarget: s.prepTarget,
+      liveReads: d.liveReads,
+      runCount: s.summary.runs,
+      submitCount: s.summary.submits,
+      outcome: outcomeOf(s),
+    },
+    problem: { statement: problemStatementText(d.problem), companies: problemCompanies(d.problem) },
+    timeline: kept.map((e) =>
+      e.kind === 'codeChanged'
+        ? e
+        : {
+            kind: e.kind,
+            type: e.type,
+            n: e.n,
+            minute: Math.round(e.offsetMs / 60_000),
+            verdict: e.verdict.verdict,
+            statusMsg: e.verdict.statusMsg,
+            passed: e.verdict.passed,
+            total: e.verdict.total,
+            detail: {
+              input: cap(e.detail.input),
+              expected: cap(e.detail.expected),
+              output: cap(e.detail.output),
+              error: cap(e.detail.error),
+            },
+          },
+    ),
+    code: { final: live?.code ?? null, version: live?.version ?? 0, lang: live?.lang ?? s.lang },
+    editing:
+      f && f.edits > 0
+        ? {
+            edits: f.edits,
+            longestStallMin: minutes(f.longestStallMs),
+            rewrites: f.rewrites,
+          }
+        : null,
+    review: s.review ?? null,
+    note: 'Snapshots between submits are kept 14 days, so an older sitting may have no "codeChanged" markers. `review` is his own words.',
+  };
+}
+
 export const LEETCODE_TOOLS: Tool[] = [
   {
     name: 'live_sitting',
@@ -177,6 +278,75 @@ export const LEETCODE_TOOLS: Tool[] = [
             (sinceVersion as number | undefined) ?? null,
           )
         : inactive(pull, now);
+    },
+  },
+  {
+    name: 'get_sitting',
+    description: [
+      'One LeetCode sitting, read back whole — for talking it through afterwards ("how did that sitting go?"). With no `id`, the most recent sitting.',
+      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, his final code in full, editing facts, and his review (his own words — never rewrite them back to him as yours).',
+      'Talk from this data, not from memory, and never paste his code back at him — point at a line, a name or a case.',
+      'Read-only.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'A sitting id (from list_sittings); omit for the latest',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const { id } = args;
+      if (id !== undefined && (typeof id !== 'string' || !isUlid(id)))
+        throw new RpcParamError('"id" must be a sitting id — list_sittings gives them');
+      const now = ctx.now?.() ?? Date.now();
+      let target = id as string | undefined;
+      if (target === undefined) {
+        const all = (await ctx.dispatch('listSittings', [])) as Sitting[];
+        if (!all.length) return { sitting: null, note: 'No sittings yet.' };
+        target = all[0]!.id; // startedAt desc
+      }
+      return sittingRead((await ctx.dispatch('getSitting', [target])) as SittingDetail, now);
+    },
+  },
+  {
+    name: 'list_sittings',
+    description: [
+      'LeetCode sittings, newest first — for planning prep ("what have I done this week?", "which problems took a hint?"). Each row: day, problem, status, minutes, submit count, the outcome (first submit accepted, submits before accepted, time to first submit), prep target, and whether he reviewed it with his own pattern tags.',
+      'Optional from/to day keys (pass BOTH or NEITHER) and `limit` (1–100, default 30). `get_sitting` with a row’s id reads one in full.',
+      'Read-only.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'YYYY-MM-DD, inclusive' },
+        to: { type: 'string', description: 'YYYY-MM-DD, inclusive' },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const { from, to, limit = 30 } = args;
+      if ((from === undefined) !== (to === undefined))
+        throw new RpcParamError('pass both "from" and "to", or neither');
+      for (const [k, v] of [
+        ['from', from],
+        ['to', to],
+      ] as const)
+        if (v !== undefined && (typeof v !== 'string' || !isDayKey(v)))
+          throw new RpcParamError(`"${k}" must be an ISO date (YYYY-MM-DD)`);
+      if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        throw new RpcParamError('"limit" must be a whole number from 1 to 100');
+      const now = ctx.now?.() ?? Date.now();
+      const range = from !== undefined ? [{ from, to }] : [];
+      const all = (await ctx.dispatch('listSittings', range)) as Sitting[];
+      return {
+        sittings: all.slice(0, limit).map((s) => sittingRow(s, now)),
+        more: all.length > limit,
+      };
     },
   },
 ];

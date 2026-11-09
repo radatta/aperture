@@ -80,7 +80,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | attachments     | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`                                                                                                                                                                                      |
 | finances (read) | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`                                                                                                                                                                                      |
 | flux (read)     | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                                                                                                                                                                                               |
-| leetcode        | `live_sitting {sinceVersion?}` — the open sitting, live; counts the pull ([recruiting](../recruiting/index.md) → _Claude watches live_)                                                                                                                                                                                       |
+| leetcode        | `live_sitting {sinceVersion?}` — the open sitting, live; counts the pull. `get_sitting {id?}`, `list_sittings {from?,to?,limit?}` — read-only ([recruiting](../recruiting/index.md) → _Claude watches live_, _Reading a sitting back_)                                                                                        |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -202,12 +202,15 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   (the night line's sentence, `summarizeSets`) when the window is one day (`from = to`, any day). Every result carries the
   honesty `note`: angles are relative to each session's own neutral, a trend and not a clinical
   measurement. `list_flux_exercises` gives the ids, sides and prescriptions.
-- **LeetCode: one tool, and a pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
+- **LeetCode: three tools, and a live pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
   the sitting open right now: its code in full, the newest Run and Submit with the failing case, counts,
   LeetCode's timer, editing facts — or, with nothing open, `lastSitting`. Code is at most ~30 s behind (one
   snapshot per 30 s, plus one right before each Run or Submit), and a Run or Submit judged after Rahul leaves
   the page still lands in its sitting. Its one write is the pull's own count on that sitting ("Claude watched
   live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
+  `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final
+  code, his review — and `list_sittings` lists heads with `reviewed` and his tags; both only read. No MCP write
+  for reviews: they're his words, typed in the app.
 
 ## Claude Code's standing approvals and the dev ledger
 
@@ -250,7 +253,7 @@ transport. See `lambdas/src/mcp/protocol.ts`.
   (`packages/shared/src/dates.ts`).
 - `lambdas/src/mcp/fluxTools.ts` — the read-only Flux tools, over `setMetric` / `sideLabel` /
   `summarizeSets` (`packages/shared/src/flux/history.ts`, shared with the History tab).
-- `lambdas/src/mcp/leetcodeTools.ts` — `live_sitting`, over the `pullLiveSitting` RPC and `judgeDetail`
+- `lambdas/src/mcp/leetcodeTools.ts` — `live_sitting`, over the `pullLiveSitting` RPC and `judgeDetail`; `get_sitting` and `list_sittings` over `getSitting` / `listSittings` and `timelineOf`
   (`packages/shared/src/sittings.ts`).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
   become `isError` results the model self-corrects from).
@@ -422,7 +425,8 @@ the model as the only UI — so:
   and its `summary`; "did I do my neck exercises today?" → the same with `from = to = today` and its
   `daySummary` line.
 - **LeetCode by voice:** "what am I working on?" / "why is my submit failing?" → `live_sitting`, pulled at most
-  once per turn.
+  once per turn; "how did that sitting go?" → `get_sitting` with no id; "what did I do this week?" →
+  `list_sittings`.
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
 timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation

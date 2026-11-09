@@ -43,6 +43,8 @@ import {
   SITTING_MAX_EVENTS,
   SITTING_START_TIME_ERROR,
   sittingMetrics,
+  DRAFT_LINES_MAX,
+  REVIEW_LINE_MAX,
 } from './sittings';
 import type { SittingEventInput, SittingStartInput } from './sittings';
 
@@ -3431,6 +3433,103 @@ export function runApiContract(
         await api.deleteSitting(other.sitting.id);
         expect(await api.listSittings()).toEqual([]);
         expect(await api.getTask(other.sitting.repTaskId)).toMatchObject({ status: 'in_progress' }); // rep stays
+      });
+
+      // The review (setSittingReview) rides the head: normalized, whole-replaced, cleared when empty, and kept
+      // by a later ingest's refold.
+      it('a review saves normalized, reads back on get and list, and survives a refold', async () => {
+        const { sitting } = await startSitting(api);
+        const saved = await api.setSittingReview(sitting.id, {
+          insight: '  two   pointers ',
+          help: 'hint',
+          mistakes: [' off  by one ', ''],
+          howItWent: ' slow start ',
+          tags: ['Two-Pointers', 'two-pointers', ' Greedy '],
+          draftUsed: true,
+        });
+        const want = {
+          insight: 'two pointers',
+          help: 'hint',
+          mistakes: ['off by one'],
+          howItWent: 'slow start',
+          tags: ['two-pointers', 'greedy'],
+          draftUsed: true,
+        };
+        expect(saved.review).toMatchObject(want);
+        expect((await api.getSitting(sitting.id)).sitting.review).toMatchObject(want);
+        expect((await api.listSittings())[0]!.review).toMatchObject(want);
+        // A run after the review folds into the head without losing it.
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [lcJudged('run', 11, 'Wrong Answer', LC_T0 + 60_000, 1, 3)],
+        });
+        const after = (await api.getSitting(sitting.id)).sitting;
+        expect(after.summary.runs).toBe(1);
+        expect(after.review).toMatchObject(want);
+      });
+
+      it('a second review replaces the first; saying nothing clears it', async () => {
+        const { sitting } = await startSitting(api);
+        const base = { insight: null, mistakes: [], howItWent: null, tags: [], draftUsed: false };
+        await api.setSittingReview(sitting.id, { ...base, help: 'solution', tags: ['dp'] });
+        const second = await api.setSittingReview(sitting.id, {
+          ...base,
+          help: 'none',
+          insight: 'x',
+        });
+        expect(second.review).toMatchObject({ help: 'none', insight: 'x', tags: [] });
+        expect(
+          (await api.setSittingReview(sitting.id, { ...base, help: 'none' })).review,
+        ).toBeNull();
+      });
+
+      it('an invalid review is refused, the head unchanged; an unknown sitting is Not found', async () => {
+        const { sitting } = await startSitting(api);
+        const ok = {
+          insight: null,
+          help: 'none' as const,
+          mistakes: [],
+          howItWent: null,
+          tags: [],
+          draftUsed: false,
+        };
+        await api.setSittingReview(sitting.id, { ...ok, insight: 'kept' });
+        for (const bad of [
+          { ...ok, mistakes: Array(9).fill('m') },
+          { ...ok, insight: 'x'.repeat(201) },
+          { ...ok, mistakes: ['m'.repeat(REVIEW_LINE_MAX + 1)] },
+          { ...ok, help: 'cheat' as never },
+        ])
+          await expect(api.setSittingReview(sitting.id, bad)).rejects.toThrow(/limited|Help/);
+        expect((await api.getSitting(sitting.id)).sitting.review?.insight).toBe('kept');
+        await expect(api.setSittingReview(ulid(), { ...ok, insight: 'x' })).rejects.toThrow(
+          /Not found/,
+        );
+      });
+
+      // Each side answers in its own way (the stub deterministically, the Lambda's noop model as unavailable),
+      // but within the contract, and neither writes.
+      it('a draft writes nothing: nothing judged → nothing-to-draft; else lines within the caps or a reason', async () => {
+        const { sitting } = await startSitting(api);
+        expect(await api.draftSittingReview(sitting.id)).toEqual({
+          ok: false,
+          reason: 'nothing-to-draft',
+        });
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 60_000, 1, 3)],
+        });
+        const before = await api.getSitting(sitting.id);
+        const draft = await api.draftSittingReview(sitting.id);
+        if (draft.ok) {
+          expect(draft.mistakes.length).toBeLessThanOrEqual(DRAFT_LINES_MAX);
+          for (const l of draft.mistakes) expect(l.length).toBeLessThanOrEqual(REVIEW_LINE_MAX);
+        } else
+          expect(['unavailable', 'timeout', 'network', 'api', 'bad-json', 'bad-shape']).toContain(
+            draft.reason,
+          );
+        expect(await api.getSitting(sitting.id)).toEqual(before);
+        await expect(api.draftSittingReview(ulid())).rejects.toThrow(/Not found/);
       });
 
       it('a live pull returns the open sitting’s code and newest Run and Submit, and counts itself', async () => {

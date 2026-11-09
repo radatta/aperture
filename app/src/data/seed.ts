@@ -32,6 +32,7 @@ import type {
   PomodoroSession,
   FluxSet,
   Roll,
+  Sitting,
   Task,
   TaskSeries,
 } from '@aperture/shared';
@@ -615,6 +616,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     min: number,
     ok: number,
     all: number,
+    detail?: Record<string, unknown>, // more of LeetCode's /check/ fields: the failing case, the error
   ];
   const sit = (
     task: Task,
@@ -624,15 +626,21 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     topicTags: string[],
     judged: Judged[],
     code: string,
+    snapMins: number[] = [4], // snapshots between the judged events read as "code changed ×N"
   ) => {
     task.title = sittingRepTitle(title);
     const startedAt = task.startedAt!;
-    const snapAt = startedAt + 4 * 60_000;
+    const snapAt = startedAt + snapMins[0]! * 60_000;
     const { events } = normalizeSittingEvents({
       sittingId: ulid(),
       events: [
-        { id: ulid(), type: 'snapshot', at: snapAt, payload: { code, lang: 11 } },
-        ...judged.map(([type, status, msg, min, ok, all]) => ({
+        ...snapMins.map((m) => ({
+          id: ulid(),
+          type: 'snapshot' as const,
+          at: startedAt + m * 60_000,
+          payload: { code, lang: 11 },
+        })),
+        ...judged.map(([type, status, msg, min, ok, all, detail]) => ({
           id: ulid(),
           type,
           at: startedAt + min * 60_000,
@@ -643,12 +651,13 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
               status_msg: msg,
               total_correct: ok,
               total_testcases: all,
+              ...detail,
             },
           },
         })),
       ],
     });
-    const sitting = {
+    const sitting: Sitting = {
       ...mk(startedAt),
       day: dayKey(startedAt, START_HOUR),
       startedAt,
@@ -690,22 +699,65 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     }
     store.sittings.push(sitting);
     store.sittingLive.push(live);
+    return sitting;
   };
   const TS = ['Array', 'Hash Table'];
   const SW = ['Hash Table', 'String', 'Sliding Window'];
-  sit(
+  const twoSum = sit(
     lcReps[3]!,
     'two-sum',
     'Two Sum',
     'Easy',
     TS,
     [
-      ['submit', 15, 'Runtime Error', 18, 0, 63],
+      [
+        'submit',
+        15,
+        'Runtime Error',
+        18,
+        0,
+        63,
+        {
+          last_testcase: '[3,3]\n6',
+          full_runtime_error:
+            'KeyError: 3\n    return [seen[target - n], i]\nLine 6 in twoSum (Solution.py)',
+        },
+      ],
       ['submit', 10, 'Accepted', 24, 63, 63],
     ],
     'class Solution:\n    def twoSum(self, nums, target):\n        seen = {}\n        ...',
+    [4, 12, 21, 22],
   );
-  sit(
+  // Claude watched this one live (pullLiveSitting's counter row), and its problem doc was captured at Start.
+  store.sittingReads.push({
+    ...mk(twoSum.startedAt),
+    id: twoSum.id,
+    sittingId: twoSum.id,
+    count: 14,
+  });
+  store.leetcodeProblems.push({
+    ...mk(twoSum.startedAt),
+    slug: 'two-sum',
+    questionId: '1',
+    frontendId: '1',
+    title: 'Two Sum',
+    difficulty: 'Easy',
+    topicTags: TS,
+    raw: {
+      titleSlug: 'two-sum',
+      content:
+        '<p>Given an array of integers <code>nums</code>&nbsp;and an integer <code>target</code>, return <em>indices of the two numbers such that they add up to <code>target</code></em>.</p>\n\n<p>You may assume that each input would have <strong>exactly one solution</strong>, and you may not use the <em>same</em> element twice.</p>',
+      companyTagStatsV2: JSON.stringify({
+        three_months: [
+          { name: 'Google', slug: 'google', timesEncountered: 41 },
+          { name: 'Amazon', slug: 'amazon', timesEncountered: 37 },
+          { name: 'Meta', slug: 'facebook', timesEncountered: 12 },
+          { name: 'Apple', slug: 'apple', timesEncountered: 9 },
+        ],
+      }),
+    },
+  });
+  const addTwo = sit(
     lcReps[2]!,
     'add-two-numbers',
     'Add Two Numbers',
@@ -714,6 +766,16 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     [['submit', 10, 'Accepted', 31, 1568, 1568]],
     'class Solution:\n    def addTwoNumbers(self, l1, l2):\n        ...',
   );
+  // Reviewed (setSittingReview's shape — his words, no draft).
+  addTwo.review = {
+    insight: 'Carry handled on the first try — walk both lists at once.',
+    help: 'none',
+    mistakes: [],
+    howItWent: null,
+    tags: ['linked-list'],
+    draftUsed: false,
+    updatedAt: addTwo.endedAt ?? addTwo.startedAt,
+  };
   sit(
     lcReps[0]!,
     'longest-substring-without-repeating-characters',
@@ -722,10 +784,19 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     SW,
     [
       ['run', 11, 'Wrong Answer', 20, 2, 3],
-      ['submit', 11, 'Wrong Answer', 33, 912, 987],
+      [
+        'submit',
+        11,
+        'Wrong Answer',
+        33,
+        912,
+        987,
+        { last_testcase: '"abba"', expected_output: '2', code_output: '3' },
+      ],
       ['submit', 10, 'Accepted', 38, 987, 987],
     ],
     'class Solution:\n    def lengthOfLongestSubstring(self, s):\n        left = 0\n        ...',
+    [4, 26, 35],
   );
 
   // Flux sets — three weeks of neck work so History's rows and trends aren't judged empty: rotation every

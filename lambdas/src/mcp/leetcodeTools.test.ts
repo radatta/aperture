@@ -33,11 +33,12 @@ beforeEach(() => {
   };
 });
 
-const run = (args: Record<string, unknown> = {}) => {
-  const tool = TOOLS.find((x) => x.name === 'live_sitting');
-  if (!tool) throw new Error('no live_sitting');
+const call = (name: string, args: Record<string, unknown> = {}) => {
+  const tool = TOOLS.find((x) => x.name === name);
+  if (!tool) throw new Error(`no ${name}`);
   return tool.run(args, ctx) as Promise<Record<string, any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
 };
+const run = (args: Record<string, unknown> = {}) => call('live_sitting', args);
 async function open() {
   const roll = await backend.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
   await backend.updateSettings({ leetcodeRollId: roll.id });
@@ -241,5 +242,142 @@ describe('live_sitting', () => {
     for (const bad of ['3', -1, 1.5, null])
       await expect(run({ sinceVersion: bad })).rejects.toBeInstanceOf(RpcParamError);
     expect((await backend.getSitting(s.id)).liveReads).toBe(0);
+  });
+});
+
+// Reading a sitting back (docs/areas/recruiting → Reading a sitting back): both read-only.
+describe('get_sitting and list_sittings', () => {
+  async function reviewed() {
+    const s = await open();
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [
+        snap('v1', T0 + 60_000),
+        {
+          id: ulid(),
+          type: 'submit',
+          at: T0 + 120_000,
+          payload: {
+            request: { typed_code: 'v1' },
+            result: {
+              status_code: 11,
+              status_msg: 'Wrong Answer',
+              total_correct: 1,
+              total_testcases: 3,
+              last_testcase: 'x'.repeat(500),
+              expected_output: '[1,2]',
+              code_output: '[0,0]',
+            },
+          },
+        },
+        snap('v2', T0 + 180_000),
+      ] as never,
+    });
+    await backend.setSittingReview(s.id, {
+      insight: 'two pointers',
+      help: 'hint',
+      mistakes: ['m'],
+      howItWent: null,
+      tags: ['two-pointers'],
+      draftUsed: false,
+    });
+    return s;
+  }
+
+  it('get_sitting with no id reads the latest: statement, timeline with capped cases, full code, review — writing nothing', async () => {
+    const s = await reviewed();
+    await repo.putLeetcodeProblem({
+      id: 'two-sum',
+      userId: U,
+      slug: 'two-sum',
+      title: 'Two Sum',
+      questionId: '1',
+      frontendId: '1',
+      difficulty: 'Easy',
+      topicTags: ['Array'],
+      raw: { content: '<p>Find <code>two</code> numbers.</p>' },
+      createdAt: T0,
+      updatedAt: T0,
+      deletedAt: null,
+    });
+    t = T0 + 600_000;
+    const before = JSON.stringify(doc.snapshot());
+    const out = await call('get_sitting');
+    expect(out).toMatchObject({
+      sitting: {
+        id: s.id,
+        status: 'active',
+        expired: false,
+        minutes: 10,
+        submitCount: 1,
+        liveReads: 0,
+      },
+      problem: { statement: 'Find two numbers.', companies: [] },
+      timeline: [
+        { kind: 'codeChanged', count: 1 },
+        {
+          kind: 'judged',
+          type: 'submit',
+          n: 1,
+          minute: 2,
+          verdict: 'wrong_answer',
+          passed: 1,
+          total: 3,
+          detail: { expected: '[1,2]', output: '[0,0]' },
+        },
+        { kind: 'codeChanged', count: 1 },
+      ],
+      code: { final: 'v2', version: 2 },
+      review: { insight: 'two pointers', help: 'hint', tags: ['two-pointers'] },
+    });
+    expect(out.timeline[1].detail.input).toHaveLength(300);
+    expect(JSON.stringify(doc.snapshot())).toBe(before);
+    expect(await call('get_sitting', { id: s.id })).toMatchObject({ sitting: { id: s.id } });
+  });
+
+  it('get_sitting: nothing yet says so; a bad id is a param error; a foreign one is Not found', async () => {
+    expect(await call('get_sitting')).toEqual({ sitting: null, note: 'No sittings yet.' });
+    await expect(call('get_sitting', { id: 'x' })).rejects.toBeInstanceOf(RpcParamError);
+    await expect(call('get_sitting', { id: ulid() })).rejects.toThrow(/Not found/);
+  });
+
+  it('list_sittings: newest first with reviewed and tags, a range, a limit, and bad arguments refused', async () => {
+    const s = await reviewed();
+    await backend.setTaskActual(s.repTaskId, 30);
+    await backend.transitionTask(s.repTaskId, 'done');
+    t = T0 + 3600_000;
+    const { sitting: other } = await backend.lcSittingStart({
+      clientSittingId: ulid(),
+      problemSlug: 'three-sum',
+      problemTitle: '3Sum',
+      lang: 'python3',
+      startedAt: t,
+      tzOffsetMinutes: 480,
+    });
+    const all = await call('list_sittings');
+    expect(all.sittings.map((x: { id: string }) => x.id)).toEqual([other.id, s.id]);
+    expect(all.sittings[1]).toMatchObject({
+      status: 'done',
+      reviewed: true,
+      tags: ['two-pointers'],
+      outcome: { firstSubmitAccepted: false },
+    });
+    expect(all.sittings[0]).toMatchObject({ reviewed: false, tags: [], status: 'active' });
+    expect(await call('list_sittings', { limit: 1 })).toMatchObject({
+      sittings: [{ id: other.id }],
+      more: true,
+    });
+    expect(await call('list_sittings', { from: '2026-10-01', to: '2026-10-31' })).toEqual({
+      sittings: [],
+      more: false,
+    });
+    for (const bad of [
+      { limit: '5' },
+      { limit: 0 },
+      { limit: 101 },
+      { from: 'yesterday', to: '2026-11-09' },
+      { from: '2026-11-09' },
+    ])
+      await expect(call('list_sittings', bad)).rejects.toBeInstanceOf(RpcParamError);
   });
 });

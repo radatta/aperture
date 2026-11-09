@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  draftMistakes,
+  firstSubmitCode,
+  normalizeSittingReview,
+  problemCompanies,
+  problemStatementText,
+  PROBLEM_STATEMENT_MAX,
+  REVIEW_LINE_MAX,
+  suggestedHelp,
+  timelineOf,
   isSittingOpen,
   newestOfType,
   judgeDetail,
@@ -39,7 +48,7 @@ import {
   utf8Bytes,
 } from './sittings';
 import type { NormalizedSittingEvent, SittingStartInput } from './sittings';
-import type { Sitting, Task } from './types';
+import type { Sitting, SittingEvent, Task } from './types';
 import { ulid } from './ulid';
 
 const start = (over: Partial<SittingStartInput> = {}): SittingStartInput => ({
@@ -369,5 +378,169 @@ describe('the live pull’s helpers', () => {
     const none = { input: null, expected: null, output: null, error: null };
     for (const junk of [null, 'x', 7, [], { result: 3 }, { result: { code_answer: [1, 2] } }])
       expect(judgeDetail(junk)).toEqual(none);
+  });
+});
+
+describe('the review', () => {
+  const blank = {
+    insight: null,
+    help: 'none',
+    mistakes: [],
+    howItWent: null,
+    tags: [],
+    draftUsed: false,
+  };
+
+  it('folds whitespace, drops empties, lowercases and dedupes tags in order, keeps how-it-went’s lines', () => {
+    expect(
+      normalizeSittingReview({
+        insight: '  two   pointers\n',
+        help: 'hint',
+        mistakes: [' off  by one ', '', '  '],
+        howItWent: '  slow start\r\nthen fine  ',
+        tags: ['Two-Pointers', ' sliding window ', 'two-pointers', ''],
+        draftUsed: true,
+      }),
+    ).toEqual({
+      insight: 'two pointers',
+      help: 'hint',
+      mistakes: ['off by one'],
+      howItWent: 'slow start\nthen fine',
+      tags: ['two-pointers', 'sliding window'],
+      draftUsed: true,
+    });
+  });
+
+  it('saying nothing is no review, and draftUsed needs a mistake', () => {
+    expect(normalizeSittingReview(blank)).toBeNull();
+    expect(normalizeSittingReview({ ...blank, mistakes: ['  '], draftUsed: true })).toBeNull();
+    expect(normalizeSittingReview({ ...blank, help: 'solution' })).toMatchObject({
+      help: 'solution',
+    });
+    expect(normalizeSittingReview({ ...blank, insight: 'x', draftUsed: true })?.draftUsed).toBe(
+      false,
+    );
+  });
+
+  it('refuses, naming the field, anything over a cap or of the wrong kind', () => {
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{ help: 'cheat' }, /Help/],
+      [{ insight: 'x'.repeat(201) }, /One-liner/],
+      [{ insight: 3 }, /One-liner/],
+      [{ mistakes: Array(9).fill('m') }, /Mistakes are limited to 8/],
+      [{ mistakes: ['m'.repeat(REVIEW_LINE_MAX + 1)] }, /A mistake/],
+      [{ mistakes: 'm' }, /Mistakes must be a list/],
+      [{ howItWent: 'h'.repeat(1001) }, /How it went/],
+      [{ tags: Array.from({ length: 11 }, (_, i) => `t${i}`) }, /Tags are limited/],
+      [{ tags: ['t'.repeat(41)] }, /A tag/],
+    ];
+    for (const [over, msg] of bad)
+      expect(() => normalizeSittingReview({ ...blank, ...over })).toThrow(msg);
+    expect(() => normalizeSittingReview(null)).toThrow(/object/);
+  });
+
+  it('suggests a hint once a submit failed before the accepted one', () => {
+    const s = (n: number | null) => ({ summary: { ...emptySummary(), submitsBeforeAccepted: n } });
+    expect(suggestedHelp(s(null))).toBe('none');
+    expect(suggestedHelp(s(0))).toBe('none');
+    expect(suggestedHelp(s(2))).toBe('hint');
+  });
+
+  it('draftMistakes keeps up to five folded lines, and refuses any other shape', () => {
+    expect(draftMistakes([' a  b ', '', 'a b', 'c'])).toEqual(['a b', 'c']);
+    expect(draftMistakes([])).toEqual([]);
+    for (const junk of [
+      'x',
+      null,
+      [1],
+      Array(6)
+        .fill(0)
+        .map((_, i) => `l${i}`),
+      ['x'.repeat(161)],
+    ])
+      expect(draftMistakes(junk)).toBeNull();
+  });
+});
+
+describe('reading a sitting back', () => {
+  const e = (id: string, type: SittingEvent['type'], at: number, payload: unknown = {}) =>
+    ({ id, type, at, payload }) as SittingEvent;
+  const wa = {
+    request: { typed_code: 'v1' },
+    result: { status_code: 11, status_msg: 'Wrong Answer', last_testcase: '[1]' },
+  };
+  const ac = { request: { typed_code: 'v2' }, result: { status_code: 10, status_msg: 'Accepted' } };
+
+  it('timelineOf numbers runs and submits in time order, with the snapshots between as code-changed markers', () => {
+    const events = [
+      e('01E', 'submit', 500, ac),
+      e('01A', 'snapshot', 100),
+      e('01B', 'run', 200, { result: { status_code: 15 } }),
+      e('01C', 'snapshot', 300),
+      e('01D', 'snapshot', 350),
+      e('01F', 'submit', 400, wa),
+      e('01G', 'snapshot', 600),
+      e('01H', 'timer', 650),
+    ];
+    const t = timelineOf({ clientStartedAt: 50 }, events);
+    expect(
+      t.map((x) => (x.kind === 'judged' ? `${x.type}${x.n}:${x.verdict.verdict}` : `×${x.count}`)),
+    ).toEqual(['×1', 'run1:runtime_error', '×2', 'submit1:wrong_answer', 'submit2:accepted', '×1']);
+    expect(t[3]).toMatchObject({ offsetMs: 350, detail: { input: '[1]' } });
+    expect(timelineOf({ clientStartedAt: 0 }, [e('01A', 'submit', 1, {})])[0]).toMatchObject({
+      verdict: { verdict: 'other' },
+    });
+    expect(timelineOf({ clientStartedAt: 0 }, [])).toEqual([]);
+  });
+
+  it('firstSubmitCode is the first submit’s typed code', () => {
+    expect(firstSubmitCode([e('01B', 'submit', 9, ac), e('01A', 'submit', 5, wa)])).toBe('v1');
+    expect(firstSubmitCode([e('01A', 'run', 5, wa)])).toBeNull();
+    expect(firstSubmitCode([e('01A', 'submit', 5, { request: { typed_code: 3 } })])).toBeNull();
+  });
+
+  it('problemStatementText turns questionDetail’s HTML into text, capped; unknown → null', () => {
+    const raw = {
+      content:
+        '<p>Given <code>nums</code> &amp; <code>target</code>, 10<sup>4</sup> &lt; n &#39;x&#39; &#x41;&nbsp;b</p>\n\n<ul>\n\t<li>one</li>\n\t<li>two</li>\n</ul>',
+    };
+    expect(problemStatementText({ raw })).toBe(
+      "Given nums & target, 10^4 < n 'x' A b\n\n- one\n\n- two",
+    );
+    expect(problemStatementText({ raw: { content: `<p>${'w '.repeat(5000)}</p>` } })).toHaveLength(
+      PROBLEM_STATEMENT_MAX,
+    );
+    for (const junk of [
+      null,
+      { raw: null },
+      { raw: { content: 3 } },
+      { raw: { content: '<p></p>' } },
+    ])
+      expect(problemStatementText(junk)).toBeNull();
+  });
+
+  it('problemCompanies names the top three of the most recent non-empty window', () => {
+    const stats = {
+      three_months: [],
+      six_months: [
+        { name: 'B', timesEncountered: 3 },
+        { name: 'A', timesEncountered: 16 },
+        { name: 'C', timesEncountered: 2 },
+        { name: 'D', timesEncountered: 1 },
+        { slug: 'nameless' },
+      ],
+    };
+    expect(problemCompanies({ raw: { companyTagStatsV2: JSON.stringify(stats) } })).toEqual([
+      'A',
+      'B',
+      'C',
+    ]);
+    for (const junk of [
+      null,
+      { raw: {} },
+      { raw: { companyTagStatsV2: '{bad' } },
+      { raw: { companyTagStatsV2: '[]' } },
+    ])
+      expect(problemCompanies(junk)).toEqual([]);
   });
 });

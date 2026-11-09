@@ -363,3 +363,56 @@ describe('live pulls on the table', () => {
     expect(doc.queries.slice(q0).every((q) => q.consistent)).toBe(true);
   });
 });
+
+// The review rides the head (setSittingReview); ingest's refold rewrites the head too. Both are CAS writes that
+// spread the current head, so neither drops the other however they interleave.
+describe('the review on the head', () => {
+  const judged = (type: 'run' | 'submit', at: number) => ({
+    id: ulid(),
+    type,
+    at,
+    payload: { result: { status_code: 11, status_msg: 'Wrong Answer' } },
+  });
+  it('a review saved while a submit is ingested: both land', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const review = {
+      insight: 'kept',
+      help: 'hint' as const,
+      mistakes: ['m'],
+      howItWent: null,
+      tags: ['dp'],
+      draftUsed: false,
+    };
+    await Promise.all([
+      backend.setSittingReview(sitting.id, review),
+      backend.lcSittingEvents({
+        sittingId: sitting.id,
+        events: [judged('submit', T0 + 60_000)] as never,
+      }),
+      backend.setSittingPrepTarget(sitting.id, 'Google'),
+    ]);
+    const head = (await backend.getSitting(sitting.id)).sitting;
+    expect(head.summary.submits).toBe(1);
+    expect(head.review).toMatchObject({ ...review, updatedAt: T0 });
+    expect(head.prepTarget).toBe('Google');
+  });
+
+  it('deleting the sitting takes its review with the head', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.setSittingReview(sitting.id, {
+      insight: 'x',
+      help: 'none',
+      mistakes: [],
+      howItWent: null,
+      tags: [],
+      draftUsed: false,
+    });
+    await backend.deleteSitting(sitting.id);
+    await expect(backend.getSitting(sitting.id)).rejects.toThrow(/Not found/);
+    expect(await backend.listSittings()).toEqual([]);
+  });
+});

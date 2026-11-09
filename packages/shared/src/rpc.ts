@@ -84,6 +84,8 @@ export const API_METHODS = [
   'pullLiveSitting',
   'listSittingReplay',
   'setSittingPrepTarget',
+  'setSittingReview',
+  'draftSittingReview',
   'deleteSitting',
   'recordFluxSet',
   'listFluxSets',

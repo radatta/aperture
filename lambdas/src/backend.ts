@@ -98,6 +98,8 @@ import {
   SITTING_START_TIME_ERROR,
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
+  normalizeSittingReview,
+  draftMistakes,
   normalizeSittingEvents,
   normalizeSittingStart,
   planSittingStart,
@@ -190,6 +192,8 @@ import type {
   SittingReplayChunk,
   SittingStartInput,
   SittingStartResult,
+  ReviewDraft,
+  SittingReviewInput,
   NormalizedSittingStart,
   SittingLive,
 } from '@aperture/shared';
@@ -233,6 +237,7 @@ import type { Presigner } from './s3/presigner';
 import type { ObjectStore } from './s3/objects';
 import { noopAnthropic } from './anthropic/gateway';
 import type { AnthropicGateway } from './anthropic/gateway';
+import { SITTING_DRAFT_TIMEOUT_MS, sittingDraftData } from './anthropic/sittingReviewPrompt';
 
 export interface BackendOptions {
   userId?: string;
@@ -1024,6 +1029,39 @@ export class BackendClient implements ApiClient {
       (cur) => ({ ...cur, prepTarget: tag }),
       this.now(),
     );
+  }
+  // His review, on the head by the same CAS as the prep target; a refold spreads the head, so it keeps it.
+  async setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting> {
+    const r = normalizeSittingReview(review);
+    const now = this.now();
+    return this.repo.casUpdate(
+      this.repo.sittingShape(id),
+      id,
+      (cur) => ({ ...cur, review: r && { ...r, updatedAt: now } }),
+      now,
+    );
+  }
+  // Claude's draft of mistake lines: one model call over the judged runs and submits and the two codes, its
+  // answer validated (draftMistakes). Writes nothing; nothing judged yet → no call at all.
+  async draftSittingReview(id: string): Promise<ReviewDraft> {
+    const sitting = await this.mustSitting(id);
+    const [events, live] = await Promise.all([
+      this.repo.listSittingEvents(id),
+      this.repo.getSittingLive(id, { consistent: true }),
+    ]);
+    if (!events.some((e) => e.type === 'run' || e.type === 'submit'))
+      return { ok: false, reason: 'nothing-to-draft' };
+    const out = await this.anthropic.sittingReviewDraft({
+      data: sittingDraftData(sitting, events, live?.code ?? null),
+      timeoutMs: SITTING_DRAFT_TIMEOUT_MS,
+    });
+    if (!out.ok) return { ok: false, reason: out.reason };
+    const mistakes = draftMistakes((out.fields as { mistakes?: unknown }).mistakes);
+    if (!mistakes) {
+      console.log(JSON.stringify({ event: 'lc_review_draft_rejected', sittingId: id }));
+      return { ok: false, reason: 'bad-shape' };
+    }
+    return { ok: true, mistakes };
   }
   async deleteSitting(id: string): Promise<void> {
     const s = await this.repo.getSitting(id, { consistent: true });

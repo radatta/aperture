@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Link } from 'react-router';
 import {
   deadlineOf,
   dueUrgency,
@@ -8,6 +9,7 @@ import {
   needsEstimate,
   parentOf,
   placedByTime,
+  sittingMinutes,
   todayKey,
 } from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
@@ -19,6 +21,7 @@ import { fmtDuration, fmtTime } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
 import { useRowAction } from '../../lib/useRowAction';
 import { useSettings } from '../../data/hooks/useSettings';
+import { useOpenSittingFor } from '../../data/hooks/useSittings';
 import { urgencyClass, urgencyLabel } from '../../modules/tasks/dueStyle';
 import { useUpsertPlan } from '../../data/hooks/usePlans';
 import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
@@ -157,6 +160,10 @@ export function RightNowCard() {
   const rn = rightNow(rows, allTasks);
   const hero = rn.hero;
   const heroElapsed = hero ? liveElapsedMin(hero, timers) : 0;
+  // A LeetCode rep with its sitting open: Done starts on the sitting's minutes, Start to now — what the
+  // sitting's own End offers — not the focus timer's.
+  const now = useNow();
+  const heroSitting = useOpenSittingFor(hero, now);
   const heroTimer = hero
     ? timers.find((t) => t.session.kind === 'work' && t.session.taskId === hero.id)
     : undefined;
@@ -230,7 +237,8 @@ export function RightNowCard() {
               <Button
                 size="sm"
                 onClick={async () => {
-                  const elapsed = heroElapsed; // capture before the timer stops
+                  // capture before the timer stops
+                  const elapsed = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
                   // A stop that didn't land keeps the timer; its row in the bar below says so, and the
                   // Actual form waits until the time is really saved.
                   if (
@@ -247,6 +255,7 @@ export function RightNowCard() {
                 Done
               </Button>
             </div>
+            {heroSitting && <SittingLink id={heroSitting.id} />}
             {doneOpen?.taskId === hero.id && (
               <DoneForm
                 task={hero}
@@ -399,8 +408,25 @@ function FocusRow({
       {asking && open && (
         <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
       )}
+      {t.status === 'in_progress' && <RowSittingLink task={t} />}
     </div>
   );
+}
+
+// To the open sitting's page, where End sitting is — on a LeetCode rep whose sitting is still open.
+function SittingLink({ id }: { id: string }) {
+  return (
+    <Link
+      to={`/recruiting/sittings/${id}`}
+      className="self-start text-sm text-teal underline underline-offset-2"
+    >
+      End the LeetCode sitting →
+    </Link>
+  );
+}
+function RowSittingLink({ task }: { task: Task }) {
+  const open = useOpenSittingFor(task, useNow());
+  return open ? <SittingLink id={open.id} /> : null;
 }
 
 // A lighter "also today" row — the plan's tail + any off-plan in-progress task. "Focus this" is the
@@ -440,6 +466,7 @@ function AlsoRow({
             not planned today
           </Text>
         )}
+        {t.status === 'in_progress' && <RowSittingLink task={t} />}
       </RowText>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'in_progress' && (

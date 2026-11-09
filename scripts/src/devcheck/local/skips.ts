@@ -36,6 +36,10 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason: 'local: the reminder poller’s minute schedule is dev’s — runs on dev',
   },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
+  'lc-sittings': {
+    steps: ['draft-real'],
+    reason: 'local: the real Haiku draft is dev’s (the model is off locally) — runs on dev',
+  },
   'dev-slot-b': {
     steps: ['shell', 'push'],
     reason:
