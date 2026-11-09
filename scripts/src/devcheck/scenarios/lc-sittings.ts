@@ -569,7 +569,9 @@ export const lcSittings: Scenario = {
         const select = ctx.page.getByLabel('Sittings are reps of');
         await select.waitFor({ timeout: 15_000 });
         // The select reads empty (and disabled) until the Rolls load — wait for it to settle on the link.
-        for (let i = 0, shown = ''; (shown = await select.inputValue()) !== state.rollId; i++) {
+        for (let i = 0; ; i++) {
+          const shown = await select.inputValue();
+          if (shown === state.rollId) break;
           if (i >= 40) throw new Error(`Settings shows “${shown}”, not the linked roll`);
           await new Promise((r) => setTimeout(r, 250));
         }
