@@ -103,6 +103,20 @@ describe('draftSittingReview', () => {
     expect(JSON.stringify(data)).not.toContain(sitting.id);
   });
 
+  it('too many or too long lines are cut to fit, not refused', async () => {
+    const { anthropic, b, sitting } = await setup();
+    await b.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [submit(T0 + 1, 11, 'Wrong Answer', 'x')],
+    });
+    const six = Array.from({ length: 6 }, (_, i) => `l${i}`);
+    anthropic.nextDraft = { ok: true, fields: { mistakes: ['z'.repeat(161), ...six] } };
+    expect(await b.draftSittingReview(sitting.id)).toEqual({
+      ok: true,
+      mistakes: [`${'z'.repeat(159)}…`, ...six.slice(0, 4)],
+    });
+  });
+
   it('a bad shape is refused and nothing is written', async () => {
     const { anthropic, b, doc, sitting } = await setup();
     await b.lcSittingEvents({
@@ -110,14 +124,7 @@ describe('draftSittingReview', () => {
       events: [submit(T0 + 1, 11, 'Wrong Answer', 'x')],
     });
     const before = JSON.stringify(doc.snapshot());
-    for (const mistakes of [
-      'x',
-      [1],
-      Array(6)
-        .fill('l')
-        .map((l, i) => l + i),
-      ['z'.repeat(161)],
-    ]) {
+    for (const mistakes of ['x', [1], ['ok', null]]) {
       anthropic.nextDraft = { ok: true, fields: { mistakes } };
       expect(await b.draftSittingReview(sitting.id)).toEqual({ ok: false, reason: 'bad-shape' });
     }

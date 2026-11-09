@@ -466,7 +466,7 @@ export const lcSittings: Scenario = {
       id: 'draft-bad-shape',
       entry: 'api',
       kind: 'edge',
-      what: 'A model answer that breaks the rules (a string, six lines, a 161-character line) is bad-shape, nothing written',
+      what: 'A model answer that isn’t a list of text is bad-shape, nothing written; too many or too long lines are cut to fit',
       offDev: {
         file: 'lambdas/src/backend.sittingDraft.test.ts',
         test: 'a bad shape is refused and nothing is written',
@@ -561,6 +561,17 @@ export const lcSittings: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Home’s Done on a LeetCode rep with an open sitting starts on the sitting’s minutes',
+    },
+    {
+      id: 'home-minutes',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Home’s rep row and hero show the open sitting’s minutes, not the rep’s own',
+      offDev: {
+        file: 'app/src/pages/Home/RightNow.test.tsx',
+        test: 'a rep row under another hero shows its sitting’s minutes and the link',
+        why: 'the server stamps a sitting’s Start, so on dev it is minutes old at most and both counts read ~0m; the stub backdates it 22 min (the row) and 37 min (the hero, in “links to the open sitting and prefills Done with its minutes”)',
+      },
     },
     {
       id: 'prefill-estimate',

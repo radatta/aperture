@@ -789,13 +789,17 @@ export type DraftFailReason =
   | 'bad-shape' // the model's answer broke the rules below
   | 'nothing-to-draft'; // no Run or Submit judged yet — no model call
 export type ReviewDraft = { ok: true; mistakes: string[] } | { ok: false; reason: DraftFailReason };
-// The model's `mistakes`, validated: a list of at most five lines of text, each at most 160 characters after
-// folding, empties dropped, deduped. Anything else → null (bad-shape); an empty list is a fair answer.
+// The model's `mistakes`, made fit: folded, empties dropped, a line over 160 characters cut to 160 ending "…",
+// deduped, the first five kept. Only a non-list, or a list with a non-text item, is null (bad-shape); an empty
+// list is a fair answer.
+const clip = (l: string) =>
+  l.length > REVIEW_LINE_MAX ? `${l.slice(0, REVIEW_LINE_MAX - 1).trimEnd()}…` : l;
 export function draftMistakes(v: unknown): string[] | null {
   if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return null;
-  const lines = [...new Set((v as string[]).map(fold).filter(Boolean))];
-  if (lines.length > DRAFT_LINES_MAX || lines.some((l) => l.length > REVIEW_LINE_MAX)) return null;
-  return lines;
+  return [...new Set((v as string[]).map(fold).filter(Boolean).map(clip))].slice(
+    0,
+    DRAFT_LINES_MAX,
+  );
 }
 
 // --- Reading a sitting back (the detail page, get_sitting, the draft's input) ---

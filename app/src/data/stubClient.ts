@@ -129,8 +129,6 @@ import {
   normalizeSittingReview,
   normalizeSittingStart,
   draftMistakes,
-  DRAFT_LINES_MAX,
-  REVIEW_LINE_MAX,
   timelineOf,
   planSittingStart,
   reserveBudget,
@@ -1088,10 +1086,9 @@ class StubClient implements ApiClient {
         const why =
           d.error ??
           (d.input ? `${d.input} → expected ${d.expected}, got ${d.output}` : 'no case captured');
-        const line = `${what}: ${why}`.replace(/\s+/g, ' ');
-        return line.length > REVIEW_LINE_MAX ? `${line.slice(0, REVIEW_LINE_MAX - 1)}…` : line;
+        return `${what}: ${why}`;
       });
-    return { ok: true, mistakes: draftMistakes(lines.slice(0, DRAFT_LINES_MAX)) ?? [] };
+    return { ok: true, mistakes: draftMistakes(lines) ?? [] }; // the backend's own fit: cut to 160, first 5
   }
   async deleteSitting(id: string): Promise<void> {
     if (!this.find(this.store.sittings, id)) return;

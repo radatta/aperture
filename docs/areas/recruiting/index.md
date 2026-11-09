@@ -128,7 +128,8 @@ sitting included. The form starts help on `hint` once a submit failed before the
 Submits with their cases (each field ≤ 400 chars), and the code at the first submit and the final code (≤ 4 KB
 each; his code goes to the API — decided). It proposes **mistake lines only** — at most 5, each ≤ 160
 characters, each naming a failing case or a concrete code change, describing and never judging; the one-liner and
-how it went are never drafted. The answer is validated (`draftMistakes`); anything else is `bad-shape`. It writes
+how it went are never drafted. The answer is made fit (`draftMistakes`): a line over 160 is cut to 160 ending
+"…" and only the first 5 are kept; only an answer that isn't a list of text is `bad-shape`. It writes
 nothing: the lines arrive unticked and editable, "Use all" ticks them, and only the ticked ones reach the review on
 Save. Nothing judged yet → `nothing-to-draft` with no model call; a failure says why inline and the form keeps
 working. A smoke run never reaches the model; the log line carries counts, never code. Cost: ≈ 2.5k tokens in and
@@ -196,8 +197,8 @@ outcome, time to first submit, duration, runs and submits, and "Claude watched l
 the review form, one Save for all of it. While the sitting is open and its rep in progress, **End sitting** opens
 the rep's Done form prefilled with the sitting's minutes (Start to now) and the Roll's estimate when the rep lost
 one; Mark done ends the sitting through the rep, Cancel writes nothing. On Home, a LeetCode rep whose sitting is
-open links to that page ("End the LeetCode sitting →"), and its Done prefills from the sitting too, the Roll's
-estimate included; the list is read only while a LeetCode-roll rep is in progress, so an ordinary day costs no
+open links to that page ("End the LeetCode sitting →"), shows the sitting's minutes (not the rep's own, 0 while
+no timer ran), and its Done prefills from the sitting too, the Roll's estimate included; the list is read only while a LeetCode-roll rep is in progress, so an ordinary day costs no
 read. Both Done forms wait for the Rolls before opening — the form copies its estimate once, so it must be the
 Roll's, not the 30-minute fallback (used only when the Rolls can't be read).
 

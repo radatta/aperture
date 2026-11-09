@@ -411,12 +411,41 @@ describe('Right now — a LeetCode sitting', () => {
     const link = await screen.findByRole('link', { name: 'End the LeetCode sitting →' });
     expect(done.getAttribute('aria-disabled')).toBeNull();
     expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
+    // The hero counts the sitting's minutes, not the rep's own 0 (no timer ran).
+    expect(screen.getByText(/^37m( |$)/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect((await screen.findByLabelText<HTMLInputElement>('Actual (min)')).value).toBe('37');
     // A rep with no estimate of its own takes the Roll's, as End sitting does.
     expect((await screen.findByLabelText<HTMLInputElement>('Estimate in hindsight')).value).toBe(
       '45',
     );
+  });
+
+  it('a rep row under another hero shows its sitting’s minutes and the link', async () => {
+    const user = userEvent.setup();
+    let shift = -22 * 60_000;
+    const api = createStubClient({
+      seed: false,
+      storageKey: `rn-${Math.random()}`,
+      now: () => Date.now() + shift,
+    });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const { sitting } = await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZY',
+      problemSlug: 'two-sum',
+      problemTitle: 'Two Sum',
+      lang: 'python3',
+      startedAt: Date.now() + shift,
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    });
+    shift = 0;
+    await plan(api, 'Write the brief', { est: 30, order: 0, start: true }); // planned → the hero
+    renderApp({ api, path: '/' });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    const link = await screen.findByRole('link', { name: 'End the LeetCode sitting →' });
+    expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
+    expect(screen.getByText('22m in')).toBeTruthy(); // the unplanned rep's row, not its own 0m
   });
 
   it('an ordinary task in progress has no link, and Done keeps its own prefill', async () => {

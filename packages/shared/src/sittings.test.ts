@@ -446,18 +446,23 @@ describe('the review', () => {
     expect(suggestedHelp(s(2))).toBe('hint');
   });
 
-  it('draftMistakes keeps up to five folded lines, and refuses any other shape', () => {
+  it('draftMistakes folds and dedupes, cuts a long line to 160 with "…", keeps the first five', () => {
     expect(draftMistakes([' a  b ', '', 'a b', 'c'])).toEqual(['a b', 'c']);
     expect(draftMistakes([])).toEqual([]);
-    for (const junk of [
-      'x',
-      null,
-      [1],
-      Array(6)
-        .fill(0)
-        .map((_, i) => `l${i}`),
-      ['x'.repeat(161)],
-    ])
+    expect(draftMistakes(['x'.repeat(160)])).toEqual(['x'.repeat(160)]);
+    const [cut] = draftMistakes(['y'.repeat(158) + ' zzzz'])!;
+    expect(cut).toBe(`${'y'.repeat(158)}…`); // the space before the cut is dropped
+    expect(draftMistakes(['w'.repeat(200)])).toEqual([`${'w'.repeat(159)}…`]);
+    // two lines that differ only past the cut are one line
+    expect(draftMistakes(['q'.repeat(170), `${'q'.repeat(165)}r`])).toEqual([
+      `${'q'.repeat(159)}…`,
+    ]);
+    const seven = Array.from({ length: 7 }, (_, i) => `l${i}`);
+    expect(draftMistakes(seven)).toEqual(seven.slice(0, 5));
+  });
+
+  it('draftMistakes refuses only a non-list or a list with a non-text item', () => {
+    for (const junk of ['x', null, undefined, {}, [1], ['a', null]])
       expect(draftMistakes(junk)).toBeNull();
   });
 });

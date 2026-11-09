@@ -167,10 +167,11 @@ export function RightNowCard() {
   const rn = rightNow(rows, allTasks);
   const hero = rn.hero;
   const heroElapsed = hero ? liveElapsedMin(hero, timers) : 0;
-  // A LeetCode rep with its sitting open: Done starts on the sitting's minutes, Start to now — what the
-  // sitting's own End offers — not the focus timer's.
+  // A LeetCode rep with its sitting open shows, and Done starts on, the sitting's minutes, Start to now — what
+  // the sitting's own End offers — not the focus timer's.
   const now = useNow();
   const heroSitting = useOpenSittingFor(hero, now);
+  const heroMin = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
   const heroTimer = hero
     ? timers.find((t) => t.session.kind === 'work' && t.session.taskId === hero.id)
     : undefined;
@@ -222,7 +223,7 @@ export function RightNowCard() {
               {/* Count-UP vs the estimate, flat — no bar, no colour flip past 100%, no countdown. */}
               <DueTime task={hero} />
               <Text size="sm" tone="muted" tabular>
-                {fmtDuration(heroElapsed)}
+                {fmtDuration(heroMin)}
                 {estimateOf(hero) != null ? ` of ~${fmtDuration(estimateOf(hero)!)}` : ' logged'}
               </Text>
               {hero.startedAt != null && (
@@ -247,8 +248,7 @@ export function RightNowCard() {
                 aria-disabled={heroSitting === undefined || undefined}
                 onClick={async () => {
                   if (heroSitting === undefined) return;
-                  // capture before the timer stops
-                  const elapsed = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
+                  const elapsed = heroMin; // captured before the timer stops
                   // A stop that didn't land keeps the timer; its row in the bar below says so, and the
                   // Actual form waits until the time is really saved.
                   if (
@@ -366,6 +366,7 @@ function FocusRow({
   const [asking, setAsking] = useState(false); // Start on an unscoped task: EstimateChips is open
   const startRef = useRef<HTMLButtonElement>(null);
   const open = t.status === 'backlog' || t.status === 'planned';
+  const rep = useRepSitting(t);
   return (
     <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
       <div className="flex items-center justify-between gap-3">
@@ -401,7 +402,7 @@ function FocusRow({
             </Text>
           ) : t.status === 'in_progress' ? (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(t.actualAccruedMin)} in
+              {fmtDuration(rep.min)} in
             </Text>
           ) : (
             <>
@@ -426,7 +427,7 @@ function FocusRow({
       {asking && open && (
         <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
       )}
-      {t.status === 'in_progress' && <RowSittingLink task={t} />}
+      {rep.sitting && <SittingLink id={rep.sitting.id} />}
     </div>
   );
 }
@@ -461,9 +462,13 @@ function RepDoneForm(props: {
     />
   );
 }
-function RowSittingLink({ task }: { task: Task }) {
-  const open = useOpenSittingFor(task, useNow());
-  return open ? <SittingLink id={open.id} /> : null;
+// A row's open sitting, if it's a LeetCode rep in progress, and the minutes it shows: the sitting's, Start to
+// now, as the hero and End sitting count them — not the task's own (0 while no timer ran). Until the sittings
+// are read, the task's own.
+function useRepSitting(t: Task) {
+  const now = useNow();
+  const sitting = useOpenSittingFor(t, now) ?? null;
+  return { sitting, min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin };
 }
 
 // A lighter "also today" row — the plan's tail + any off-plan in-progress task. "Focus this" is the
@@ -480,6 +485,7 @@ function AlsoRow({
   const t = row.task;
   const canFocus = row.plan != null && (t.status === 'backlog' || t.status === 'planned');
   const u = useUrgency(t);
+  const rep = useRepSitting(t);
   return (
     <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
       <div className="flex items-center justify-between gap-3">
@@ -508,7 +514,7 @@ function AlsoRow({
         <div className="flex shrink-0 items-center gap-2">
           {t.status === 'in_progress' && (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(t.actualAccruedMin)} in
+              {fmtDuration(rep.min)} in
             </Text>
           )}
           {canFocus && (
@@ -519,7 +525,7 @@ function AlsoRow({
         </div>
       </div>
       {/* Its own line, as in a Big-3 row: inside RowText it wrapped and took the row's "·" at phone width. */}
-      {t.status === 'in_progress' && <RowSittingLink task={t} />}
+      {rep.sitting && <SittingLink id={rep.sitting.id} />}
     </div>
   );
 }
