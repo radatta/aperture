@@ -8,6 +8,8 @@ import type { QueryClient } from '@tanstack/react-query';
 // already showing the write (the plan hooks, useAddToDay); a task write's hook drops it (useTasks.ts).
 export function invalidateTaskData(qc: QueryClient): Promise<void> {
   return Promise.all(
-    ['tasks', 'plans', 'calibration'].map((key) => qc.invalidateQueries({ queryKey: [key] })),
+    ['tasks', 'plans', 'calibration', 'sittings'].map((key) =>
+      qc.invalidateQueries({ queryKey: [key] }),
+    ),
   ).then(() => undefined);
 }

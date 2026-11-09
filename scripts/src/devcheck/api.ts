@@ -227,7 +227,71 @@ export interface DevSettings extends Required<DevReminderSettings> {
   dayStartHour: number;
   pomodoroWorkMin: number;
   fluxSets: Record<string, number>;
+  leetcodeRollId?: string | null; // the lc-sittings scenario links its own roll, and unlinks it after
 }
+
+// The slices of a Roll and a LeetCode sitting the lc-sittings scenario writes and reads
+// (packages/shared/src/types.ts Roll, Sitting, SittingLive; sittings.ts for the inputs).
+export interface DevRoll {
+  id: string;
+  name: string;
+  categoryId: string | null;
+  estimateMin: number | null;
+  active: boolean;
+}
+export interface DevVerdict {
+  verdict: string;
+  passed: number | null;
+  total: number | null;
+  at: number;
+}
+export interface DevSitting {
+  id: string;
+  day: string;
+  status: 'active' | 'done' | 'abandoned';
+  repTaskId: string;
+  problemSlug: string;
+  problemTitle: string;
+  endedAt: number | null;
+  summary: {
+    runs: number;
+    submits: number;
+    firstSubmit: DevVerdict | null;
+    lastSubmit: DevVerdict | null;
+    lastRun: DevVerdict | null;
+    submitsBeforeAccepted: number | null;
+    runsBeforeFirstSubmit: number;
+  };
+}
+export interface DevSittingDetail {
+  sitting: DevSitting;
+  live: {
+    version: number;
+    code: string | null;
+    facts: { edits: number; longestStallMs: number; focus: [number, boolean][] };
+  } | null;
+  events: { id: string; type: string; at: number }[];
+  problem: { slug: string } | null;
+}
+export interface DevSittingStart {
+  clientSittingId: string;
+  problemSlug: string;
+  problemTitle: string;
+  difficulty?: string | null;
+  topicTags?: string[] | null;
+  lang: string;
+  startedAt: number;
+  tzOffsetMinutes: number;
+  problem?: unknown;
+}
+export type DevSittingEvent =
+  | {
+      id: string;
+      type: 'snapshot' | 'run' | 'submit' | 'submitDetails' | 'note' | 'timer';
+      at: number;
+      payload: unknown;
+    }
+  | { id: string; type: 'replay'; at: number; clientSessionId?: string | null; events: string };
 
 // The test user's work block. A step may shorten it; the step's `finally` and each run's start put it back.
 export const DEV_WORK_MIN = 25;
@@ -260,6 +324,17 @@ export const MCP_CATEGORY_VIA = 'mcp:create_category';
 // "exists" means listed and active — archived `devcheck …` habits stay on the test user, by design, until
 // a tombstoning deleteHabit lands (day-guards' follow-up).
 export const HABIT_VIA = 'api:upsertHabit';
+// A roll this harness created (the lc-sittings scenario's LeetCode roll). Like habits, no delete: cleanup
+// archives it, and "exists" means listed and active.
+export const ROLL_VIA = 'api:upsertRoll';
+// A sitting this harness started, and the rep task its Start spawned (a task, deleted like one — which
+// removes the sitting too). Both recorded from the Start's response.
+export const SITTING_VIA = 'api:lcSittingStart';
+export const SITTING_REP_VIA = 'api:lcSittingStart:rep';
+// The test user's LeetCode-roll link: no id of its own, so `lc-roll-link:<run>` is recorded before the
+// first link — it exists while the setting names a roll, and removing it unlinks.
+export const LC_ROLL_LINK_VIA = 'api:linkLeetcodeRoll';
+export const lcRollLinkId = (run: string): string => `lc-roll-link:${run}`;
 // The test user's Shortcut token. It has no id, so a rotate records `place-token:<run>` — before the call, like
 // a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
 // A recurring series this harness created — through the API, the browser's upsertSeries create (recorder.ts)
@@ -319,7 +394,10 @@ export type LedgerKind =
   | 'financeRule'
   | 'pushsub'
   | 'reminderToggles'
-  | 'series';
+  | 'series'
+  | 'roll'
+  | 'sitting'
+  | 'lcRollLink';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
@@ -328,6 +406,9 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === CATEGORY_VIA || via === UI_CATEGORY_VIA || via === MCP_CATEGORY_VIA)
     return 'category';
   if (via === HABIT_VIA) return 'habit';
+  if (via === ROLL_VIA) return 'roll';
+  if (via === SITTING_VIA) return 'sitting';
+  if (via === LC_ROLL_LINK_VIA) return 'lcRollLink';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
@@ -454,6 +535,11 @@ export function createApiClient({
     listCategories: () => call<DevCategory[]>('listCategories', []),
     listPlansForDay: (day: string) => call<DevPlan[]>('listPlansForDay', [day]),
     listHabits: () => call<DevHabit[]>('listHabits', []),
+    listRolls: () => call<DevRoll[]>('listRolls', []),
+    listSittings: () => call<DevSitting[]>('listSittings', []),
+    getSitting: (id: string) => call<DevSittingDetail>('getSitting', [id]),
+    listSittingReplay: (id: string) =>
+      call<{ id: string; events: string }[]>('listSittingReplay', [id]),
     listHabitChecks: (range: { from: string; to: string }) =>
       call<DevHabitCheck[]>('listHabitChecks', [range]),
     // The app's own day read (it materializes due series and sweeps the day) — today only, as the app.
@@ -631,6 +717,79 @@ export function createApiClient({
       const habit = await call<DevHabit>('upsertHabit', [input]);
       ledger.append({ run, op: 'created', id: habit.id, via: HABIT_VIA, title: input.name });
       return habit;
+    },
+    // The lc-sittings scenario's roll, recorded from the create response.
+    async upsertRoll(input: { name: string; estimateMin: number }): Promise<DevRoll> {
+      ledger.append({ run, op: 'intent', via: ROLL_VIA, title: input.name });
+      const roll = await call<DevRoll>('upsertRoll', [{ ...input, categoryId: null }]);
+      ledger.append({ run, op: 'created', id: roll.id, via: ROLL_VIA, title: input.name });
+      return roll;
+    },
+    // Cleanup's "delete": the API has no roll delete, so the recorded roll is archived (ROLL_VIA).
+    async archiveRoll(id: string): Promise<void> {
+      assertLedger(id, 'roll');
+      const roll = (await reads.listRolls()).find((r) => r.id === id);
+      if (!roll || !roll.active) return;
+      await call<DevRoll>('upsertRoll', [{ ...roll, active: false }]);
+    },
+    // Link one of this run's rolls as the LeetCode roll, or unlink (null). Recorded before the first link.
+    async linkLeetcodeRoll(rollId: string | null): Promise<DevSettings> {
+      if (rollId) assertLedger(rollId, 'roll');
+      const id = lcRollLinkId(run);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({
+          run,
+          op: 'created',
+          id,
+          via: LC_ROLL_LINK_VIA,
+          title: 'leetcode roll link',
+        });
+      return call<DevSettings>('updateSettings', [{ leetcodeRollId: rollId }]);
+    },
+    // A Start as the extension sends it — through the JWT (the device token writes into another user's
+    // partition: DEV-CHECK.md). A new sitting records its spawned rep, then itself; a resume records nothing.
+    async lcSittingStart(
+      input: DevSittingStart,
+    ): Promise<{ sitting: DevSitting; resumed: boolean }> {
+      const res = await call<{ sitting: DevSitting; resumed: boolean }>('lcSittingStart', [input]);
+      if (!res.resumed && !ledger.has(res.sitting.id)) {
+        const title = `rep ${input.problemSlug}`;
+        ledger.append({
+          run,
+          op: 'created',
+          id: res.sitting.repTaskId,
+          via: SITTING_REP_VIA,
+          title,
+        });
+        ledger.append({
+          run,
+          op: 'created',
+          id: res.sitting.id,
+          via: SITTING_VIA,
+          title: input.problemSlug,
+        });
+      }
+      return res;
+    },
+    async lcSittingEvents(sittingId: string, events: DevSittingEvent[]) {
+      assertLedger(sittingId, 'sitting');
+      return call<{ accepted: number; duplicates: number; version: number; status: string }>(
+        'lcSittingEvents',
+        [{ sittingId, events }],
+      );
+    },
+    // Events for an id no sitting has (a ULID minted by the caller) — the server must refuse them. No row
+    // can exist under it, so the ledger guard has nothing to protect.
+    lcSittingEventsToUnknown: (unknownId: string, events: DevSittingEvent[]) =>
+      call<unknown>('lcSittingEvents', [{ sittingId: unknownId, events }]),
+    // A rep's finish, which ends its sitting (Done needs the actual first: setTaskActual).
+    async finishTask(id: string, to: 'done' | 'cancelled'): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>('transitionTask', [id, to]);
+    },
+    async deleteSitting(id: string): Promise<void> {
+      assertLedger(id, 'sitting');
+      await call<null>('deleteSitting', [id]);
     },
     // Cleanup's "delete": the API has none for habits, so the recorded habit is archived (HABIT_VIA).
     async archiveHabit(id: string): Promise<void> {

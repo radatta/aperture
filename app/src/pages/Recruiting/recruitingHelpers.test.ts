@@ -1,58 +1,75 @@
 import { describe, expect, it } from 'vitest';
-import type { LeetcodeAttempt } from '@aperture/shared';
-import { summarize, verdictLabel, verdictTone, withAttemptOrdinals } from './recruitingHelpers';
+import { emptySummary } from '@aperture/shared';
+import type { Sitting, SittingSummary } from '@aperture/shared';
+import {
+  groupSittings,
+  sittingOutcome,
+  summarizeSittings,
+  verdictLabel,
+  verdictTone,
+} from './recruitingHelpers';
 
-const mk = (over: Partial<LeetcodeAttempt>): LeetcodeAttempt => ({
-  id: 'x',
-  userId: 'local',
-  createdAt: 0,
-  updatedAt: 0,
-  deletedAt: null,
-  day: '2026-08-01',
-  problemSlug: 's',
-  problemTitle: 'T',
-  verdict: 'accepted',
-  submittedAt: 0,
-  lang: 'python3',
-  runtimeMs: null,
-  memory: null,
-  leetcodeSubmissionId: 'id',
-  frontendId: null,
-  difficulty: null,
-  topicTags: null,
-  ...over,
+const v = (verdict: 'accepted' | 'wrong_answer', at = 1) => ({
+  verdict,
+  statusMsg: null,
+  passed: null,
+  total: null,
+  at,
+});
+const mk = (over: Partial<Sitting> = {}, summary: Partial<SittingSummary> = {}): Sitting =>
+  ({
+    id: Math.random().toString(36),
+    day: '2026-11-08',
+    startedAt: 0,
+    endedAt: 1,
+    status: 'done',
+    problemSlug: 'two-sum',
+    summary: { ...emptySummary(), ...summary },
+    ...over,
+  }) as Sitting;
+
+describe('sittingOutcome', () => {
+  it('names the first submit, never in red', () => {
+    expect(sittingOutcome(mk())).toEqual({ label: 'no submit yet', tone: 'muted' });
+    expect(sittingOutcome(mk({}, { submits: 1, firstSubmit: v('accepted') }))).toEqual({
+      label: 'first submit accepted',
+      tone: 'teal',
+    });
+    expect(
+      sittingOutcome(
+        mk({}, { submits: 3, firstSubmit: v('wrong_answer'), submitsBeforeAccepted: 2 }),
+      ),
+    ).toEqual({ label: 'accepted on submit 3', tone: 'gold' });
+    expect(sittingOutcome(mk({}, { submits: 1, firstSubmit: v('wrong_answer') }))).toEqual({
+      label: 'not accepted · 1 submit',
+      tone: 'gold',
+    });
+  });
 });
 
-describe('recruitingHelpers', () => {
-  it('derives per-problem chronological ordinals, returns newest-first', () => {
-    const rows = withAttemptOrdinals([
-      mk({ id: 'a', problemSlug: 'two-sum', submittedAt: 100 }),
-      mk({ id: 'b', problemSlug: 'two-sum', submittedAt: 200 }),
-      mk({ id: 'c', problemSlug: 'add-two', submittedAt: 150 }),
-    ]);
-    expect(rows.map((r) => r.attempt.id)).toEqual(['b', 'c', 'a']); // reverse-chron
-    const b = rows.find((r) => r.attempt.id === 'b')!;
-    expect(b.attemptNo).toBe(2);
-    expect(b.problemAttempts).toBe(2);
-    const c = rows.find((r) => r.attempt.id === 'c')!;
-    expect(c.attemptNo).toBe(1);
-    expect(c.problemAttempts).toBe(1);
+describe('summaries and grouping', () => {
+  it('counts sittings, distinct problems and first-try accepts', () => {
+    const rows = [
+      mk({}, { firstSubmit: v('accepted') }),
+      mk(),
+      mk({ problemSlug: 'three-sum' }, { firstSubmit: v('wrong_answer') }),
+    ];
+    expect(summarizeSittings(rows)).toEqual({ sittings: 3, problems: 2, firstTry: 1 });
   });
-
-  it('summarizes distinct problems, total attempts, and solved-count', () => {
-    const s = summarize([
-      mk({ problemSlug: 'two-sum', verdict: 'wrong_answer' }),
-      mk({ problemSlug: 'two-sum', verdict: 'accepted' }),
-      mk({ problemSlug: 'add-two', verdict: 'wrong_answer' }),
-    ]);
-    expect(s).toEqual({ problems: 2, attempts: 3, solved: 1 });
+  it('pulls the open sitting out and orders days newest first', () => {
+    const open = mk({ status: 'active', day: '2026-11-08', startedAt: 9 });
+    const old = mk({ day: '2026-11-01', startedAt: 1 });
+    const recent = mk({ day: '2026-11-07', startedAt: 5 });
+    const g = groupSittings([old, open, recent]);
+    expect(g.open).toEqual([open]);
+    expect(g.days.map(([d]) => d)).toEqual(['2026-11-07', '2026-11-01']);
   });
+});
 
-  it('labels verdicts and keeps tone non-punitive (accepted teal, others gold — never red)', () => {
-    expect(verdictLabel('wrong_answer')).toBe('Wrong Answer');
-    expect(verdictLabel('accepted')).toBe('Accepted');
+describe('verdict presentation', () => {
+  it('reads accepted as teal and everything else as gold', () => {
     expect(verdictTone('accepted')).toBe('teal');
     expect(verdictTone('runtime_error')).toBe('gold');
-    expect(verdictTone('wrong_answer')).toBe('gold');
+    expect(verdictLabel('time_limit')).toBe('Time Limit');
   });
 });

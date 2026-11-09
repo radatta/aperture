@@ -138,6 +138,80 @@ describe('handler device-token ingest branch', () => {
     const res = await ingest({});
     expect(res.statusCode).toBe(401);
   });
+
+  // The sittings' ingest set: the device token or the user's JWT, nothing else; a body over the cap is
+  // refused before it's parsed.
+  describe('sittings', () => {
+    beforeEach(() => {
+      h.doc = new InMemoryDoc();
+    });
+    const rpc = (
+      method: string,
+      headers: Record<string, string>,
+      args: unknown[] = [{}],
+      raw?: string,
+    ) =>
+      handler({
+        rawPath: `/api/${method}`,
+        requestContext: { http: { method: 'POST', path: `/api/${method}` } },
+        headers,
+        body: raw ?? JSON.stringify({ args }),
+      });
+    const start = {
+      clientSittingId: '01JC0000000000000000000000',
+      problemSlug: 'two-sum',
+      problemTitle: 'Two Sum',
+      lang: 'python3',
+      startedAt: 1,
+      tzOffsetMinutes: 480,
+    };
+
+    it('the device token starts a sitting as DEVICE_USER_ID', async () => {
+      process.env.DEVICE_TOKEN = 'right-token';
+      process.env.DEVICE_USER_ID = 'u-dev';
+      const b = new BackendClient(new Repo(h.doc, liveWrites(h.doc), 'u-dev'), { userId: 'u-dev' });
+      const roll = await b.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+      await b.updateSettings({ leetcodeRollId: roll.id });
+      const res = await rpc(
+        'lcSittingStart',
+        { 'x-aperture-authorization': 'Bearer right-token' },
+        [start],
+      );
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({ resumed: false, sitting: { userId: 'u-dev' } });
+    });
+
+    it('a JWT passes the ingest gate as its own user', async () => {
+      process.env.DEVICE_TOKEN = 'right-token';
+      const res = await rpc('lcSittingStart', { 'x-aperture-authorization': 'Bearer good-jwt' }, [
+        start,
+      ]);
+      expect(res.statusCode).toBe(400); // u1 has no LeetCode roll linked — past auth
+      expect(JSON.parse(res.body).error).toMatch(/LeetCode roll/);
+    });
+
+    it('401s a token that is neither, and the device token on any read', async () => {
+      process.env.DEVICE_TOKEN = 'right-token';
+      expect(
+        (await rpc('lcSittingEvents', { 'x-aperture-authorization': 'Bearer nope' })).statusCode,
+      ).toBe(401);
+      for (const m of ['listSittings', 'getSitting', 'listSittingReplay', 'deleteSitting'])
+        expect(
+          (await rpc(m, { 'x-aperture-authorization': 'Bearer right-token' }, [])).statusCode,
+        ).toBe(401);
+    });
+
+    it('413s an ingest body over the cap before parsing it', async () => {
+      process.env.DEVICE_TOKEN = 'right-token';
+      const res = await rpc(
+        'lcSittingEvents',
+        { 'x-aperture-authorization': 'Bearer right-token' },
+        [],
+        'x'.repeat(301 * 1024),
+      );
+      expect(res.statusCode).toBe(413);
+    });
+  });
 });
 
 // The iPhone Shortcut's read: GET /api/places/<slug>/tasks with a place token (places.md; plan §6).

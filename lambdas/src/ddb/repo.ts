@@ -13,6 +13,11 @@ import type {
   HabitCheck,
   Idea,
   LeetcodeAttempt,
+  LeetcodeProblem,
+  Sitting,
+  SittingEvent,
+  SittingLive,
+  SittingReplayChunk,
   LogEntry,
   Place,
   PomodoroSession,
@@ -172,6 +177,126 @@ export class Repo {
   async putLeetcodeAttempt(a: LeetcodeAttempt): Promise<LeetcodeAttempt> {
     await this.writes.put(entityItem(this.userId, sk.lc(a.day, a.id), a));
     return a;
+  }
+
+  // --- LeetCode sittings (keys.ts → sitting*) ---
+  // Heads, tombstones filtered. A scan of `lcsit#`: a few dozen a month, read at Start and on the page.
+  async listSittings(opts?: { consistent?: boolean }): Promise<Sitting[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.sittingPrefix(), opts)).map((i) => toEntity<Sitting>(i)),
+    );
+  }
+  async getSitting(id: string, opts?: { consistent?: boolean }): Promise<Sitting | null> {
+    const it = await this.doc.get(this.p(), sk.sitting(id), opts);
+    const s = it ? toEntity<Sitting>(it) : null;
+    return s && s.deletedAt === null ? s : null;
+  }
+  // Write only if absent: the head's key is the Start's idempotency key, so a concurrent repeat loses.
+  async putSittingIfAbsent(s: Sitting): Promise<boolean> {
+    try {
+      await this.writes.putIf(entityItem(this.userId, sk.sitting(s.id), s), null);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  sittingShape(id: string): CasShape<Sitting> {
+    return {
+      sk: sk.sitting(id),
+      read: (i) => toEntity<Sitting>(i),
+      toItem: (s) => entityItem(this.userId, sk.sitting(id), s),
+    };
+  }
+  async getSittingLive(id: string, opts?: { consistent?: boolean }): Promise<SittingLive | null> {
+    const it = await this.doc.get(this.p(), sk.sittingLive(id), opts);
+    const l = it ? toEntity<SittingLive>(it) : null;
+    return l && l.deletedAt === null ? l : null;
+  }
+  sittingLiveShape(id: string): CasShape<SittingLive> {
+    return {
+      sk: sk.sittingLive(id),
+      read: (i) => toEntity<SittingLive>(i),
+      toItem: (l) => entityItem(this.userId, sk.sittingLive(id), l),
+    };
+  }
+  // An event or replay chunk, written only if absent (idempotent per id). `expiresAt` (epoch s) marks the
+  // raw bulk for DynamoDB's TTL — the one row kind stamped on prod (writes.ts).
+  async putSittingEventIfAbsent(e: SittingEvent, expiresAt: number | null): Promise<boolean> {
+    return this.putChildIfAbsent(sk.sittingEvent(e.sittingId, e.at, e.id), e, expiresAt);
+  }
+  async putSittingReplayIfAbsent(c: SittingReplayChunk, expiresAt: number): Promise<boolean> {
+    return this.putChildIfAbsent(sk.sittingReplay(c.sittingId, c.at, c.id), c, expiresAt);
+  }
+  private async putChildIfAbsent(
+    skStr: string,
+    row: object,
+    expiresAt: number | null,
+  ): Promise<boolean> {
+    const item = entityItem(this.userId, skStr, row);
+    try {
+      await this.writes.putIf(expiresAt === null ? item : { ...item, expiresAt }, null);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async listSittingEvents(id: string): Promise<SittingEvent[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.sittingEventPrefix(id), { consistent: true })).map((i) =>
+        toEntity<SittingEvent>(i),
+      ),
+    );
+  }
+  async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.sittingReplayPrefix(id))).map((i) =>
+        toEntity<SittingReplayChunk>(i),
+      ),
+    );
+  }
+  // Every live row and event across sittings (export), told apart by their SKs; replay stays out.
+  async listAllSittingChildren(): Promise<{ live: SittingLive[]; events: SittingEvent[] }> {
+    const rows = await this.doc.query(this.p(), sk.sittingChildAllPrefix());
+    const of = <T extends { deletedAt: number | null }>(pred: (skStr: string) => boolean) =>
+      alive(rows.filter((r) => pred(r.SK)).map((r) => toEntity<T>(r)));
+    return {
+      live: of<SittingLive>((x) => x.endsWith('#live')),
+      events: of<SittingEvent>((x) => x.includes('#ev#')),
+    };
+  }
+  // Tombstones a sitting and every child row in one batch (deleteSitting; deleteTask's cascade).
+  async tombstoneSitting(id: string, now: number): Promise<void> {
+    const rows = [
+      ...(await this.doc.query(this.p(), sk.sittingChildPrefix(id), { consistent: true })),
+      ...[await this.doc.get(this.p(), sk.sitting(id), { consistent: true })].filter(
+        (r): r is Item => !!r,
+      ),
+    ].filter((r) => r.deletedAt === null);
+    await this.writes.batchPut(
+      rows.map((r) => ({
+        ...r,
+        deletedAt: now,
+        updatedAt: Math.max(now, (r.updatedAt as number) + 1),
+      })),
+    );
+  }
+  async getLeetcodeProblem(slug: string): Promise<LeetcodeProblem | null> {
+    const it = await this.doc.get(this.p(), sk.lcProblem(slug));
+    const p = it ? toEntity<LeetcodeProblem>(it) : null;
+    return p && p.deletedAt === null ? p : null;
+  }
+  async putLeetcodeProblem(p: LeetcodeProblem): Promise<LeetcodeProblem> {
+    await this.writes.put(entityItem(this.userId, sk.lcProblem(p.slug), p));
+    return p;
+  }
+  async listLeetcodeProblems(): Promise<LeetcodeProblem[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.lcProblemPrefix())).map((i) =>
+        toEntity<LeetcodeProblem>(i),
+      ),
+    );
   }
 
   // --- Flux sets ---

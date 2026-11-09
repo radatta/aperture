@@ -118,6 +118,21 @@ import {
   placeError,
   placeUnknownError,
   slugify,
+  emptyLiveFields,
+  emptySummary,
+  endedSitting,
+  foldLive,
+  foldSummary,
+  isHeadEvent,
+  LC_ROLL_UNLINKED_ERROR,
+  normalizePrepTarget,
+  normalizeSittingEvents,
+  normalizeSittingStart,
+  planSittingStart,
+  PREP_TARGET_DEFAULT,
+  sittingIngestError,
+  sittingProblemUrl,
+  sittingRepTitle,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -196,6 +211,17 @@ import type {
   UpsertSeriesInput,
   FluxWeekNote,
   FluxWeekNoteRow,
+  LeetcodeProblem,
+  NormalizedSittingStart,
+  Sitting,
+  SittingDetail,
+  SittingEvent,
+  SittingEventsInput,
+  SittingEventsResult,
+  SittingLive,
+  SittingReplayChunk,
+  SittingStartInput,
+  SittingStartResult,
 } from '@aperture/shared';
 import {
   FLUX_NOTE_MIN_SETS,
@@ -220,6 +246,7 @@ const FINANCE_SETTINGS_DEFAULTS = {
   financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null, fluxSets: {} };
+const LC_SETTINGS_DEFAULTS = { leetcodeRollId: null };
 const STORAGE_KEY = 'aperture.stub.v1';
 // The stub's VAPID public key: a real uncompressed P-256 point (65 bytes, base64url), generated once with
 // node:crypto, so the browser's pushManager.subscribe accepts it. Nothing holds its private half — the
@@ -264,7 +291,12 @@ export interface Store {
   placeToken: StubPlaceToken | null; // a credential: never exported
   pushSubs: PushSub[]; // credentials (endpoint + keys): never exported
   pushHealth: PushPollerHealth; // the poller's heartbeat, which only Send test moves here: not user data
-  leetcodeAttempts: LeetcodeAttempt[];
+  leetcodeAttempts: LeetcodeAttempt[]; // retired: the legacy ingest still writes, nothing reads
+  sittings: Sitting[];
+  sittingLive: SittingLive[];
+  sittingEvents: SittingEvent[];
+  sittingReplay: SittingReplayChunk[];
+  leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   attachments: Attachment[];
   fluxSets: FluxSet[];
@@ -296,6 +328,11 @@ export function emptyStore(): Store {
     pushSubs: [],
     pushHealth: NO_POLLER_RUN,
     leetcodeAttempts: [],
+    sittings: [],
+    sittingLive: [],
+    sittingEvents: [],
+    sittingReplay: [],
+    leetcodeProblems: [],
     stories: [],
     attachments: [],
     fluxSets: [],
@@ -413,6 +450,7 @@ class StubClient implements ApiClient {
         store.settings = {
           ...FINANCE_SETTINGS_DEFAULTS,
           ...FLUX_SETTINGS_DEFAULTS,
+          ...LC_SETTINGS_DEFAULTS,
           ...REMINDER_SETTINGS_DEFAULTS,
           ...store.settings,
         };
@@ -645,6 +683,7 @@ class StubClient implements ApiClient {
       dayEndHour: 22,
       ...FINANCE_SETTINGS_DEFAULTS,
       ...FLUX_SETTINGS_DEFAULTS,
+      ...LC_SETTINGS_DEFAULTS,
       ...REMINDER_SETTINGS_DEFAULTS,
     };
     this.store.settings = settings;
@@ -691,10 +730,166 @@ class StubClient implements ApiClient {
       topicTags: input.topicTags ?? null,
     });
   }
-  async listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]> {
-    return this.alive(this.store.leetcodeAttempts)
-      .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
-      .sort((a, b) => b.submittedAt - a.submittedAt);
+  // --- LeetCode sittings (sittings.ts) --------------------------------------
+  async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
+    const n = normalizeSittingStart(input);
+    const rollId = this.ensureSettings().leetcodeRollId ?? null;
+    const roll = rollId ? this.find(this.store.rolls, rollId) : undefined;
+    if (!roll) throw new Error(LC_ROLL_UNLINKED_ERROR);
+    const now = this.now();
+    const day = dayKeyForOffset(now, n.tzOffsetMinutes, this.dayStartHour());
+    const tasks = this.alive(this.store.tasks);
+    const plan = planSittingStart(n, day, this.alive(this.store.sittings), tasks, roll.id);
+    if (plan.kind === 'resume') return { sitting: plan.sitting, resumed: true };
+    let repId: string;
+    if (plan.kind === 'attach') repId = plan.rep.id;
+    else {
+      const rep = this.writes.insert(this.store.tasks, { ...this.base(), ...rollRepFields(roll) });
+      this.writes.insert(this.store.plans, {
+        ...this.base(),
+        taskId: rep.id,
+        day,
+        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+        order: this.alive(this.store.plans).filter((p) => p.day === day).length,
+      });
+      repId = rep.id;
+    }
+    await this.setTaskTitle(repId, sittingRepTitle(n.problemTitle));
+    if (!this.mustFind(this.store.tasks, repId).notes)
+      this.writes.patch(this.store.tasks, repId, { notes: sittingProblemUrl(n.problemSlug) });
+    if (this.mustFind(this.store.tasks, repId).status !== 'in_progress')
+      await this.transitionTask(repId, 'in_progress');
+    if (n.problem !== null) this.upsertProblem(n);
+    const sitting = this.writes.insert(this.store.sittings, {
+      ...this.base(),
+      id: n.clientSittingId, // the head's id IS the Start's idempotency key (backend parity)
+      day,
+      startedAt: now,
+      clientStartedAt: n.startedAt,
+      endedAt: null,
+      status: 'active',
+      clientSittingId: n.clientSittingId,
+      problemSlug: n.problemSlug,
+      problemTitle: n.problemTitle,
+      questionId: n.questionId,
+      frontendId: n.frontendId,
+      difficulty: n.difficulty,
+      topicTags: n.topicTags,
+      lang: n.lang,
+      repTaskId: repId,
+      rollId: roll.id,
+      prepTarget: PREP_TARGET_DEFAULT,
+      lcSolveSessionId: n.lcSolveSessionId,
+      summary: emptySummary(),
+    });
+    return { sitting, resumed: false };
+  }
+  private upsertProblem(n: NormalizedSittingStart): void {
+    const fields = {
+      slug: n.problemSlug,
+      questionId: n.questionId,
+      frontendId: n.frontendId,
+      title: n.problemTitle,
+      difficulty: n.difficulty,
+      topicTags: n.topicTags,
+      raw: n.problem,
+    };
+    const had = this.alive(this.store.leetcodeProblems).find((x) => x.slug === n.problemSlug);
+    if (had)
+      this.writes.put(this.store.leetcodeProblems, { ...had, ...fields, updatedAt: this.now() });
+    else this.writes.insert(this.store.leetcodeProblems, { ...this.base(), ...fields });
+  }
+  private sittingLiveOf(id: string): SittingLive | null {
+    return this.store.sittingLive.find((l) => l.id === id && l.deletedAt === null) ?? null;
+  }
+  async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
+    const { sittingId, events } = normalizeSittingEvents(input);
+    const sitting = this.mustFind(this.store.sittings, sittingId);
+    const live = this.sittingLiveOf(sittingId);
+    const seen = new Set(
+      [...this.store.sittingEvents, ...this.store.sittingReplay]
+        .filter((x) => x.sittingId === sittingId)
+        .map((x) => x.id),
+    );
+    const fresh = events.filter((e) => !seen.has(e.id));
+    const now = this.now();
+    const bytes = fresh.reduce((n, e) => n + e.bytes, 0);
+    const err = sittingIngestError(sitting, live, { count: fresh.length, bytes }, now);
+    if (err) throw new Error(err);
+    let summary = sitting.summary;
+    let next: SittingLive = live ?? {
+      ...this.base(),
+      id: sittingId,
+      ...emptyLiveFields(sittingId),
+    };
+    for (const e of fresh) {
+      const row = { ...this.base(), id: e.id, sittingId, at: e.at, receivedAt: now };
+      if (e.type === 'replay')
+        this.writes.insert(this.store.sittingReplay, {
+          ...row,
+          clientSessionId: e.clientSessionId,
+          events: e.events,
+        });
+      else
+        this.writes.insert(this.store.sittingEvents, { ...row, type: e.type, payload: e.payload });
+      if (isHeadEvent(e.type)) summary = foldSummary(summary, e);
+      else next = foldLive(next, e, now);
+    }
+    if (summary !== sitting.summary) this.writes.patch(this.store.sittings, sittingId, { summary });
+    if (next !== live) this.writes.put(this.store.sittingLive, { ...next, updatedAt: now });
+    return {
+      accepted: fresh.length,
+      duplicates: events.length - fresh.length,
+      version: next.version,
+      status: sitting.status,
+    };
+  }
+  async listSittings(range?: DateRange): Promise<Sitting[]> {
+    return this.alive(this.store.sittings)
+      .filter((x) => !range || (x.day >= range.from && x.day <= range.to))
+      .sort((a, b) => b.startedAt - a.startedAt);
+  }
+  async getSitting(id: string): Promise<SittingDetail> {
+    const sitting = this.mustFind(this.store.sittings, id);
+    return {
+      sitting,
+      live: this.sittingLiveOf(id),
+      events: this.alive(this.store.sittingEvents)
+        .filter((e) => e.sittingId === id)
+        .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)),
+      problem:
+        this.alive(this.store.leetcodeProblems).find((x) => x.slug === sitting.problemSlug) ?? null,
+    };
+  }
+  async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
+    this.mustFind(this.store.sittings, id);
+    return this.alive(this.store.sittingReplay)
+      .filter((c) => c.sittingId === id)
+      .sort((a, b) => a.at - b.at);
+  }
+  async setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting> {
+    const tag = normalizePrepTarget(prepTarget);
+    return this.writes.patch(this.store.sittings, id, { prepTarget: tag });
+  }
+  async deleteSitting(id: string): Promise<void> {
+    if (!this.find(this.store.sittings, id)) return;
+    for (const coll of [this.store.sittingEvents, this.store.sittingReplay] as const)
+      for (const row of this.alive<SittingEvent | SittingReplayChunk>(coll).filter(
+        (r) => r.sittingId === id,
+      ))
+        this.writes.softDelete(coll as (SittingEvent | SittingReplayChunk)[], row.id);
+    this.writes.softDelete(this.store.sittingLive, id);
+    this.writes.softDelete(this.store.sittings, id);
+  }
+  // A rep's finish ends its open sitting (Done → done, else abandoned); its delete removes it.
+  private endSittingsFor(taskId: string, to: TaskStatus): void {
+    if (to !== 'done' && to !== 'cancelled') return;
+    for (const x of this.alive(this.store.sittings))
+      if (x.repTaskId === taskId && x.status === 'active')
+        this.writes.put(
+          this.store.sittings,
+          endedSitting(x, to === 'done' ? 'done' : 'abandoned', this.now()),
+        );
   }
 
   // --- Flux sets -------------------------------------------------------------
@@ -981,6 +1176,7 @@ class StubClient implements ApiClient {
     const parts = partsOf(this.alive(this.store.tasks), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
+    this.endSittingsFor(id, to);
     // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
     const firstStart =
       task.startedAt === null &&
@@ -1126,6 +1322,8 @@ class StubClient implements ApiClient {
       forgetStubBlob(a.id);
       this.writes.softDelete(this.store.attachments, a.id);
     }
+    for (const x of this.alive(this.store.sittings).filter((x) => x.repTaskId === id))
+      await this.deleteSitting(x.id);
     this.writes.softDelete(this.store.tasks, id); // task last
     if (release) this.releaseParentState(task.parentId);
   }
@@ -2300,7 +2498,10 @@ class StubClient implements ApiClient {
       days: this.alive(this.store.days),
       categories: this.alive(this.store.categories),
       places: this.alive(this.store.places),
-      leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
+      sittings: this.alive(this.store.sittings),
+      sittingLive: this.alive(this.store.sittingLive),
+      sittingEvents: this.alive(this.store.sittingEvents),
+      leetcodeProblems: this.alive(this.store.leetcodeProblems),
       stories: this.alive(this.store.stories),
       fluxSets: this.alive(this.store.fluxSets),
       attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
@@ -2319,9 +2520,18 @@ class StubClient implements ApiClient {
     // stops compiling, which forces it into ExportBundle, which in turn breaks the backend's literal.
     // The Store keys left out on purpose: the place token and push subscriptions are credentials, the
     // poller's heartbeat is stage health, not your data, and the week-note cache is derived from the sets
-    // (rebuilt on the next read).
+    // (rebuilt on the next read). The retired LeetCode attempts are no longer exported, and a sitting's
+    // replay stays out like attachment bytes (bulk, and it expires).
     return bundle satisfies Record<
-      Exclude<keyof Store, 'placeToken' | 'pushSubs' | 'pushHealth' | 'fluxNotes'>,
+      Exclude<
+        keyof Store,
+        | 'placeToken'
+        | 'pushSubs'
+        | 'pushHealth'
+        | 'fluxNotes'
+        | 'leetcodeAttempts'
+        | 'sittingReplay'
+      >,
       unknown
     >;
   }

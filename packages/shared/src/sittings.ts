@@ -1,0 +1,473 @@
+// LeetCode sittings (docs/areas/recruiting) — the one place the ingest rules live, so the stub and the
+// Lambda can't drift: what an extension write may carry (normalize*), how events fold into the head and
+// the live row (fold*), and the metrics read off them. Pure; no clock, no I/O.
+//
+// The extension only ever observes LeetCode's own traffic; everything it sends is kept raw under
+// `payload`. The server trusts those payloads as opaque bytes and recomputes everything it decides on.
+
+import { normalizeVerdict } from './leetcode';
+import { findOpenRollTask } from './rolls';
+import { isUlid } from './ulid';
+import type {
+  BaseEntity,
+  LcTimerState,
+  Sitting,
+  SittingEventType,
+  SittingFacts,
+  SittingLive,
+  SittingSummary,
+  SittingVerdict,
+  Task,
+} from './types';
+
+export const PREP_TARGET_DEFAULT = 'General';
+// The rep title a sitting gives its task, so Home and the calendar say which problem it is.
+export const sittingRepTitle = (problemTitle: string) => `LeetCode · ${problemTitle}`;
+
+// --- Caps (a leaked device token's ceiling — recruiting doc → Device token) ---
+export const SITTING_EVENTS_PER_CALL = 50;
+export const SITTING_CALL_BYTES = 256 * 1024;
+export const SITTING_MAX_EVENTS = 3000;
+export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
+export const SITTING_STARTS_PER_DAY = 20;
+// Events are refused this long after Start: a sitting left open forever stops taking writes.
+export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
+// Raw bulk (snapshots, replay, submitDetails) is kept this long past the ingest window, then DynamoDB's TTL
+// deletes it. What's kept forever is the head, the live row (final code + facts) and every run/submit.
+export const SITTING_RAW_KEEP_MS = 14 * 24 * 3600_000;
+export const SITTING_FOCUS_MAX = 300;
+const PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = {
+  snapshot: 64 * 1024,
+  run: 96 * 1024,
+  submit: 96 * 1024,
+  submitDetails: 96 * 1024,
+  note: 16 * 1024,
+  timer: 1024,
+  replay: 64 * 1024,
+};
+const PROBLEM_MAX = 64 * 1024;
+const SLUG_RE = /^[a-z0-9-]{1,128}$/;
+
+export const LC_ROLL_UNLINKED_ERROR =
+  'Pick your LeetCode roll in Settings first — a sitting is a rep of it.';
+export const SITTING_ACTIVE_ERROR = 'Another sitting is still open — end it in Aperture first.';
+export const SITTING_ENDED_ERROR = 'This sitting has ended — start a new one.';
+export const SITTING_CAP_ERROR = 'This sitting is over its capture limit.';
+export const SITTING_START_CAP_ERROR = 'Too many sittings started today.';
+
+// --- Inputs ---
+export interface SittingStartInput {
+  clientSittingId: string; // ULID the extension mints — a repeat Start resumes
+  problemSlug: string;
+  problemTitle: string;
+  questionId?: string | null;
+  frontendId?: string | null;
+  difficulty?: string | null;
+  topicTags?: string[] | null;
+  lang: string;
+  startedAt: number; // the click, by the extension's clock
+  tzOffsetMinutes: number;
+  lcSolveSessionId?: string | null;
+  problem?: unknown; // raw questionDetail.question
+}
+export type SittingEventInput =
+  | { id: string; type: SittingEventType; at: number; payload: unknown }
+  | { id: string; type: 'replay'; at: number; clientSessionId?: string | null; events: string };
+export interface SittingEventsInput {
+  sittingId: string;
+  events: SittingEventInput[];
+}
+export interface SittingEventsResult {
+  accepted: number;
+  duplicates: number;
+  version: number; // the live row's snapshot version after this call
+  status: Sitting['status'];
+}
+export interface SittingStartResult {
+  sitting: Sitting;
+  resumed: boolean;
+}
+
+// --- Normalizers (throw with nothing written) ---
+const str = (v: unknown, label: string, max: number): string => {
+  if (typeof v !== 'string' || !v.trim()) throw new Error(`${label} is required`);
+  const s = v.trim();
+  if (s.length > max) throw new Error(`${label} is limited to ${max} characters`);
+  return s;
+};
+const optStr = (v: unknown, label: string, max: number): string | null =>
+  v == null || v === '' ? null : str(v, label, max);
+const finite = (v: unknown, label: string): number => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${label} must be a number`);
+  return v;
+};
+export const jsonSize = (v: unknown): number => {
+  try {
+    return JSON.stringify(v ?? null).length;
+  } catch {
+    throw new Error('Payload must be JSON');
+  }
+};
+
+export interface NormalizedSittingStart extends Omit<SittingStartInput, 'problem'> {
+  questionId: string | null;
+  frontendId: string | null;
+  difficulty: string | null;
+  topicTags: string[] | null;
+  lcSolveSessionId: string | null;
+  problem: unknown; // null when absent
+}
+export function normalizeSittingStart(input: SittingStartInput): NormalizedSittingStart {
+  if (!input || typeof input !== 'object') throw new Error('A sitting start is required');
+  if (typeof input.clientSittingId !== 'string' || !isUlid(input.clientSittingId))
+    throw new Error('A sitting needs a valid id');
+  const slug = str(input.problemSlug, 'Problem slug', 128);
+  if (!SLUG_RE.test(slug)) throw new Error('Problem slug is malformed');
+  let tags: string[] | null = null;
+  if (input.topicTags != null) {
+    if (!Array.isArray(input.topicTags) || input.topicTags.length > 20)
+      throw new Error('Topic tags must be a list of at most 20');
+    tags = input.topicTags.map((t) => str(t, 'Topic tag', 40));
+  }
+  const problem = input.problem ?? null;
+  if (jsonSize(problem) > PROBLEM_MAX) throw new Error('Problem detail is too large');
+  const tz = finite(input.tzOffsetMinutes, 'tzOffsetMinutes');
+  if (Math.abs(tz) > 14 * 60) throw new Error('tzOffsetMinutes is out of range');
+  return {
+    clientSittingId: input.clientSittingId,
+    problemSlug: slug,
+    problemTitle: str(input.problemTitle, 'Problem title', 200),
+    questionId: optStr(input.questionId, 'questionId', 20),
+    frontendId: optStr(input.frontendId, 'frontendId', 20),
+    difficulty: optStr(input.difficulty, 'Difficulty', 20),
+    topicTags: tags,
+    lang: str(input.lang, 'Language', 40),
+    startedAt: finite(input.startedAt, 'startedAt'),
+    tzOffsetMinutes: tz,
+    lcSolveSessionId: optStr(input.lcSolveSessionId, 'Solve session id', 80),
+    problem,
+  };
+}
+
+export type NormalizedSittingEvent =
+  | { id: string; type: SittingEventType; at: number; payload: unknown; bytes: number }
+  | {
+      id: string;
+      type: 'replay';
+      at: number;
+      clientSessionId: string | null;
+      events: string;
+      bytes: number;
+    };
+const EVENT_TYPES: readonly (SittingEventType | 'replay')[] = [
+  'snapshot',
+  'run',
+  'submit',
+  'submitDetails',
+  'note',
+  'timer',
+  'replay',
+];
+export function normalizeSittingEvents(input: SittingEventsInput): {
+  sittingId: string;
+  events: NormalizedSittingEvent[];
+} {
+  if (!input || typeof input !== 'object') throw new Error('Sitting events are required');
+  if (typeof input.sittingId !== 'string' || !input.sittingId)
+    throw new Error('A sitting id is required');
+  if (!Array.isArray(input.events) || input.events.length === 0)
+    throw new Error('At least one event is required');
+  if (input.events.length > SITTING_EVENTS_PER_CALL)
+    throw new Error(`At most ${SITTING_EVENTS_PER_CALL} events per call`);
+  const seen = new Set<string>();
+  let total = 0;
+  const events = input.events.map((e): NormalizedSittingEvent => {
+    if (!e || typeof e !== 'object') throw new Error('An event must be an object');
+    if (typeof e.id !== 'string' || !isUlid(e.id)) throw new Error('An event needs a valid id');
+    if (!EVENT_TYPES.includes(e.type)) throw new Error(`Unknown event type: ${String(e.type)}`);
+    const at = finite(e.at, 'Event time');
+    if (e.type === 'replay') {
+      if (typeof e.events !== 'string') throw new Error('Replay events must be text');
+      const bytes = e.events.length;
+      if (bytes > PAYLOAD_MAX.replay) throw new Error('A replay chunk is too large');
+      total += bytes;
+      return {
+        id: e.id,
+        type: 'replay',
+        at,
+        clientSessionId: optStr(e.clientSessionId, 'clientSessionId', 80),
+        events: e.events,
+        bytes,
+      };
+    }
+    const payload = e.payload ?? null;
+    const bytes = jsonSize(payload);
+    if (bytes > PAYLOAD_MAX[e.type]) throw new Error(`A ${e.type} event is too large`);
+    if (e.type === 'snapshot' && snapshotCode(payload) === null)
+      throw new Error('A snapshot needs its code');
+    total += bytes;
+    return { id: e.id, type: e.type, at, payload, bytes };
+  });
+  for (const e of events) {
+    if (seen.has(e.id)) throw new Error('Duplicate event id in one call');
+    seen.add(e.id);
+  }
+  if (total > SITTING_CALL_BYTES) throw new Error('Too much in one call');
+  return { sittingId: input.sittingId, events };
+}
+
+// --- Reading LeetCode's payloads (defensive: the shapes are LeetCode's, verified 2026-11-08) ---
+const obj = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+const num = (v: unknown): number | null => {
+  const n = typeof v === 'string' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+};
+export function snapshotCode(payload: unknown): string | null {
+  const code = obj(payload)?.code;
+  return typeof code === 'string' ? code : null;
+}
+// A run's or submit's judged result: `payload.result` is the final /check/ response.
+export function verdictOf(payload: unknown, at: number): SittingVerdict | null {
+  const r = obj(obj(payload)?.result);
+  if (!r) return null;
+  const statusMsg = typeof r.status_msg === 'string' ? r.status_msg : null;
+  return {
+    verdict: normalizeVerdict(num(r.status_code), statusMsg),
+    statusMsg,
+    passed: num(r.total_correct),
+    total: num(r.total_testcases),
+    at,
+  };
+}
+// QD_TIMER_STATE (one capture, 2026-11-08): {mode:'reverse', startTimestamp, pauseMs, endMs, status}. The
+// bar read 19:07 while endMs − pauseMs ≈ 19:06, so pauseMs is read as elapsed-at-pause and a running
+// timer as pauseMs + (now − startTimestamp) — an inference until the debug log confirms it.
+export function lcTimerState(payload: unknown, at: number): LcTimerState | null {
+  const s = obj(obj(payload)?.state) ?? obj(payload);
+  if (!s) return null;
+  const pauseMs = num(s.pauseMs) ?? 0;
+  const startTs = num(s.startTimestamp);
+  const status = typeof s.status === 'string' ? s.status : null;
+  const running = startTs !== null && status !== 'pause';
+  return {
+    mode: typeof s.mode === 'string' ? s.mode : null,
+    status,
+    elapsedMs: running ? pauseMs + Math.max(0, at - startTs) : num(s.pauseMs),
+    at,
+    raw: s,
+  };
+}
+
+// --- Folds ---
+export const emptySummary = (): SittingSummary => ({
+  runs: 0,
+  submits: 0,
+  notes: 0,
+  lastRun: null,
+  lastSubmit: null,
+  firstSubmit: null,
+  firstAcceptedAt: null,
+  submitsBeforeAccepted: null,
+  runsBeforeFirstSubmit: 0,
+  lcTimer: null,
+  lastEventAt: null,
+  events: 0,
+  bytes: 0,
+});
+export const emptyFacts = (): SittingFacts => ({
+  firstEditAt: null,
+  lastEditAt: null,
+  edits: 0,
+  longestStallMs: 0,
+  rewrites: 0,
+  maxCodeLength: 0,
+  focus: [],
+});
+// The live row's fields before any snapshot (the BaseEntity is the caller's).
+export const emptyLiveFields = (sittingId: string) => ({
+  sittingId,
+  version: 0,
+  code: null,
+  lang: null,
+  codeAt: null,
+  receivedAt: null,
+  snapshots: 0,
+  replayChunks: 0,
+  bytes: 0,
+  facts: emptyFacts(),
+});
+
+// Whether an event folds into the head (and so costs a head write) or only into the live row.
+export const isHeadEvent = (type: SittingEventType | 'replay') =>
+  type === 'run' || type === 'submit' || type === 'note' || type === 'timer';
+
+export function foldSummary(s: SittingSummary, e: NormalizedSittingEvent): SittingSummary {
+  const next: SittingSummary = {
+    ...s,
+    events: s.events + 1,
+    bytes: s.bytes + e.bytes,
+    lastEventAt: Math.max(s.lastEventAt ?? 0, e.at),
+  };
+  if (e.type === 'run') {
+    next.runs = s.runs + 1;
+    if (!s.firstSubmit) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
+    next.lastRun = verdictOf(e.payload, e.at) ?? s.lastRun;
+  } else if (e.type === 'submit') {
+    const v = verdictOf(e.payload, e.at);
+    next.submits = s.submits + 1;
+    next.lastSubmit = v ?? s.lastSubmit;
+    if (!s.firstSubmit) next.firstSubmit = v;
+    if (v?.verdict === 'accepted' && s.firstAcceptedAt === null) {
+      next.firstAcceptedAt = e.at;
+      next.submitsBeforeAccepted = s.submits; // failed submits before this one
+    }
+  } else if (e.type === 'note') next.notes = s.notes + 1;
+  else if (e.type === 'timer') next.lcTimer = lcTimerState(e.payload, e.at) ?? s.lcTimer;
+  return next;
+}
+
+// LeetCode's replay events (type 7 = an editor change, 3 = a [val] toggle) fold into the facts.
+function foldReplay(f: SittingFacts, raw: string): SittingFacts {
+  let list: unknown;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return f; // kept raw anyway; an unreadable chunk adds no facts
+  }
+  if (!Array.isArray(list)) return f;
+  const next = { ...f, focus: [...f.focus] };
+  const edits = list
+    .map(obj)
+    .filter((e): e is Record<string, unknown> => !!e)
+    .sort((a, b) => (num(a.timestamp) ?? 0) - (num(b.timestamp) ?? 0));
+  for (const e of edits) {
+    const t = num(e.timestamp);
+    if (t === null) continue;
+    if (e.type === 7) {
+      if (next.lastEditAt !== null && t > next.lastEditAt)
+        next.longestStallMs = Math.max(next.longestStallMs, t - next.lastEditAt);
+      next.firstEditAt = next.firstEditAt === null ? t : Math.min(next.firstEditAt, t);
+      next.lastEditAt = Math.max(next.lastEditAt ?? t, t);
+      next.edits += 1;
+    } else if (e.type === 3 && typeof e.val === 'boolean' && next.focus.length < SITTING_FOCUS_MAX)
+      next.focus.push([t, e.val]);
+  }
+  return next;
+}
+
+// Snapshots and replay fold into the live row. A snapshot older than the stored code (an out-of-order
+// retry) still counts but doesn't replace it.
+export function foldLive<L extends Omit<SittingLive, keyof BaseEntity>>(
+  live: L,
+  e: NormalizedSittingEvent,
+  receivedAt: number,
+): L {
+  if (e.type === 'replay')
+    return {
+      ...live,
+      replayChunks: live.replayChunks + 1,
+      bytes: live.bytes + e.bytes,
+      receivedAt,
+      facts: foldReplay(live.facts, e.events),
+    };
+  if (e.type !== 'snapshot') return live;
+  const code = snapshotCode(e.payload) ?? '';
+  const lang = obj(e.payload)?.lang;
+  const facts = { ...live.facts };
+  if (facts.maxCodeLength > 200 && code.length < facts.maxCodeLength / 2) {
+    facts.rewrites += 1;
+    facts.maxCodeLength = code.length;
+  } else facts.maxCodeLength = Math.max(facts.maxCodeLength, code.length);
+  const newer = live.codeAt === null || e.at >= live.codeAt;
+  return {
+    ...live,
+    version: live.version + 1,
+    snapshots: live.snapshots + 1,
+    bytes: live.bytes + e.bytes,
+    receivedAt,
+    facts,
+    ...(newer ? { code, codeAt: e.at, lang: lang == null ? live.lang : String(lang) } : {}),
+  };
+}
+
+// The raw bulk's TTL (epoch seconds, as DynamoDB wants): past the ingest window plus the keep.
+export const sittingRawExpiresAt = (s: Pick<Sitting, 'startedAt'>): number =>
+  Math.floor((s.startedAt + SITTING_INGEST_WINDOW_MS + SITTING_RAW_KEEP_MS) / 1000);
+export const isRawEventType = (type: SittingEventType | 'replay') =>
+  type === 'snapshot' || type === 'submitDetails' || type === 'replay';
+
+// Why an events call is refused before anything is written, or null.
+export function sittingIngestError(
+  s: Sitting,
+  live: Pick<SittingLive, 'snapshots' | 'replayChunks' | 'bytes'> | null,
+  incoming: { count: number; bytes: number },
+  now: number,
+): string | null {
+  if (s.status !== 'active' || now - s.startedAt > SITTING_INGEST_WINDOW_MS)
+    return SITTING_ENDED_ERROR;
+  const events =
+    s.summary.events + (live ? live.snapshots + live.replayChunks : 0) + incoming.count;
+  const bytes = s.summary.bytes + (live?.bytes ?? 0) + incoming.bytes;
+  return events > SITTING_MAX_EVENTS || bytes > SITTING_MAX_BYTES ? SITTING_CAP_ERROR : null;
+}
+
+// --- Metrics (derived, never stored) ---
+export function sittingElapsedMs(s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number {
+  return Math.max(0, (s.endedAt ?? now) - s.startedAt);
+}
+export interface SittingMetrics {
+  firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
+  submitsBeforeAccepted: number | null;
+  timeToFirstSubmitMs: number | null;
+}
+export function sittingMetrics(s: Pick<Sitting, 'startedAt' | 'summary'>): SittingMetrics {
+  const first = s.summary.firstSubmit;
+  return {
+    firstSubmitAccepted: first ? first.verdict === 'accepted' : null,
+    submitsBeforeAccepted: s.summary.submitsBeforeAccepted,
+    timeToFirstSubmitMs: first ? Math.max(0, first.at - s.startedAt) : null,
+  };
+}
+
+// --- Start: which rep, and whether to refuse (one open rep per roll — rolls.md D6) ---
+export type SittingStartPlan =
+  { kind: 'resume'; sitting: Sitting } | { kind: 'attach'; rep: Task } | { kind: 'spawn' };
+// `sittings` and `tasks` are the alive rows. A repeat Start (same clientSittingId), or any Start on the
+// problem a still-open sitting is on, resumes it; a Start on another problem while one is open is refused;
+// otherwise the roll's open rep is attached when no sitting holds it, else a fresh rep is spawned.
+export function planSittingStart(
+  input: Pick<NormalizedSittingStart, 'clientSittingId' | 'problemSlug'>,
+  day: string,
+  sittings: readonly Sitting[],
+  tasks: Task[],
+  rollId: string,
+): SittingStartPlan {
+  const same = sittings.find((x) => x.clientSittingId === input.clientSittingId);
+  if (same) return { kind: 'resume', sitting: same };
+  const open = sittings.filter((x) => x.status === 'active');
+  const onThis = open.find((x) => x.problemSlug === input.problemSlug);
+  if (onThis) return { kind: 'resume', sitting: onThis };
+  if (open.length) throw new Error(SITTING_ACTIVE_ERROR);
+  if (sittings.filter((x) => x.day === day).length >= SITTING_STARTS_PER_DAY)
+    throw new Error(SITTING_START_CAP_ERROR);
+  const rep = findOpenRollTask(tasks, rollId);
+  if (rep && !sittings.some((x) => x.repTaskId === rep.id)) return { kind: 'attach', rep };
+  return { kind: 'spawn' };
+}
+export const sittingProblemUrl = (slug: string) => `https://leetcode.com/problems/${slug}/`;
+// A tag of at most 40 characters; blank is the default target.
+export function normalizePrepTarget(v: unknown): string {
+  if (typeof v !== 'string') throw new Error('Prep target must be text');
+  const t = v.trim();
+  if (!t) return PREP_TARGET_DEFAULT;
+  if (t.length > 40) throw new Error('Prep target is limited to 40 characters');
+  return t;
+}
+// The sitting a rep's finish ends, as the hook writes it: Done → done, anything else → abandoned.
+export const endedSitting = (s: Sitting, rep: 'done' | 'abandoned', now: number): Sitting => ({
+  ...s,
+  status: rep,
+  endedAt: now,
+  updatedAt: Math.max(now, s.updatedAt + 1),
+});

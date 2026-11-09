@@ -280,6 +280,9 @@ export interface Settings extends BaseEntity {
   // The sets stepper's opening count per exercise — learned, written on Start when it differs from the
   // stored one (D61). Absent → the stepper's default. Whole numbers 1–5 (fluxSetsError).
   fluxSets: Partial<Record<ExerciseId, number>>; // default {}
+  // LeetCode: the Roll whose rep a sitting is (docs/areas/recruiting). Unset → the extension's Start is
+  // refused (LC_ROLL_UNLINKED_ERROR). Rows from before read back undefined → `?? null`.
+  leetcodeRollId: string | null; // default null
   // Reminders (reminders.ts): which kinds ping this user's devices. Rows from before read back undefined
   // and count as on (reminderEnabled).
   remindTimed: boolean; // default true — a deadline with a clock time, at that time
@@ -351,6 +354,130 @@ export interface LeetcodeAttempt extends BaseEntity {
   frontendId: string | null;
   difficulty: string | null; // 'Easy' | 'Medium' | 'Hard' | null
   topicTags: string[] | null;
+}
+
+// --- Recruiting: LeetCode sittings ------------------------------------------
+// A sitting is one go at one problem (docs/areas/recruiting): the extension's Start opens it, Done on its
+// rep task ends it. Everything it captures is LeetCode's own traffic, kept raw; the counts and metrics
+// are folds over it (sittings.ts) so the stub and the Lambda can't drift. The legacy LeetcodeAttempt
+// rows above are retired: still written by the old extension build, read by nothing.
+export type SittingStatus = 'active' | 'done' | 'abandoned';
+
+// A judged Run or Submit, as the fold keeps it (the raw response stays on the event).
+export interface SittingVerdict {
+  verdict: LeetcodeVerdict;
+  statusMsg: string | null;
+  passed: number | null; // total_correct
+  total: number | null; // total_testcases
+  at: number; // epoch ms — the event's `at`
+}
+
+// LeetCode's top-bar timer as last read from its localStorage (QD_TIMER_STATE). Semantics are inferred
+// from one capture (lcTimerElapsedMs); `raw` keeps the whole value for when they're confirmed.
+export interface LcTimerState {
+  mode: string | null; // 'reverse' = countdown; the stopwatch's name isn't captured yet
+  status: string | null; // 'pause' | running …
+  elapsedMs: number | null;
+  at: number;
+  raw: unknown;
+}
+
+// The head's fold: only Runs, Submits, timer and note events move it (snapshots and replay fold into
+// SittingLive instead, so the frequent writes stay small).
+export interface SittingSummary {
+  runs: number;
+  submits: number;
+  notes: number;
+  lastRun: SittingVerdict | null;
+  lastSubmit: SittingVerdict | null;
+  firstSubmit: SittingVerdict | null;
+  firstAcceptedAt: number | null;
+  submitsBeforeAccepted: number | null; // null until an accepted submit
+  runsBeforeFirstSubmit: number;
+  lcTimer: LcTimerState | null;
+  lastEventAt: number | null;
+  events: number; // head-side events stored (cap accounting)
+  bytes: number;
+}
+
+export interface Sitting extends BaseEntity {
+  day: string; // YYYY-MM-DD — startedAt bucketed by the client's tz offset + dayStartHour
+  startedAt: number; // server clock at Start — the sitting clock
+  clientStartedAt: number; // the Start click as the extension saw it; kept, never used for maths
+  endedAt: number | null; // set only by the rep task finishing (Done, Drop) or being deleted
+  status: SittingStatus;
+  clientSittingId: string; // the extension's idempotency key for Start
+  problemSlug: string;
+  problemTitle: string;
+  questionId: string | null;
+  frontendId: string | null;
+  difficulty: string | null;
+  topicTags: string[] | null;
+  lang: string;
+  repTaskId: string;
+  rollId: string;
+  prepTarget: string; // 'General' until the company UI exists
+  lcSolveSessionId: string | null; // LeetCode's own qd_solve_session id at Start (context only)
+  summary: SittingSummary;
+}
+
+// What the extension's replay stream says about how the sitting went, folded at ingest so it outlives the
+// raw replay's expiry. `focus` is LeetCode's type-3 event as [at, val] pairs, capped: its meaning (focus?
+// visibility?) is unconfirmed, so it's kept raw rather than turned into "time away" on a guess.
+export interface SittingFacts {
+  firstEditAt: number | null;
+  lastEditAt: number | null;
+  edits: number;
+  longestStallMs: number; // the longest gap between consecutive editor changes
+  rewrites: number; // a snapshot under half the longest code so far (a restart), counted once each
+  maxCodeLength: number;
+  focus: [number, boolean][];
+}
+
+// The live row: the newest code (kept forever — it's the final code once the sitting ends), the snapshot
+// version Claude's live read reports, and the facts. One per sitting, id = the sitting's id.
+export interface SittingLive extends BaseEntity {
+  sittingId: string;
+  version: number; // snapshot count
+  code: string | null;
+  lang: string | null;
+  codeAt: number | null; // the newest snapshot's `at`
+  receivedAt: number | null; // when the server last got a snapshot or replay — staleness
+  snapshots: number;
+  replayChunks: number;
+  bytes: number;
+  facts: SittingFacts;
+}
+
+export type SittingEventType = 'snapshot' | 'run' | 'submit' | 'submitDetails' | 'note' | 'timer';
+// One captured moment, payload kept verbatim. Snapshots and submitDetails carry expiresAt in the table
+// (they're raw bulk); runs, submits, notes and timer reads are kept forever.
+export interface SittingEvent extends BaseEntity {
+  sittingId: string;
+  type: SittingEventType;
+  at: number; // when it happened, by the extension's clock
+  receivedAt: number;
+  payload: unknown;
+}
+
+// One PracticeReplayUploadEvents body, raw (its `events` is LeetCode's JSON string). Expires with the raw bulk.
+export interface SittingReplayChunk extends BaseEntity {
+  sittingId: string;
+  at: number;
+  receivedAt: number;
+  clientSessionId: string | null;
+  events: string;
+}
+
+// LeetCode's questionDetail for a problem, raw, upserted once per slug (shared by every sitting on it).
+export interface LeetcodeProblem extends BaseEntity {
+  slug: string;
+  questionId: string | null;
+  frontendId: string | null;
+  title: string;
+  difficulty: string | null;
+  topicTags: string[] | null;
+  raw: unknown;
 }
 
 // --- Recruiting: behavioral story bank -------------------------------------

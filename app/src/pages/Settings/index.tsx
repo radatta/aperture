@@ -58,6 +58,7 @@ export function SettingsPage() {
       <PreferencesSection />
       <FinancesSection />
       <FluxSection />
+      <LeetcodeSection />
       <DataSection />
       {/* The visible build stamp — the iOS Simulator check reads it off the screen (docs/ops/DEV-CHECK.md). */}
       <Text size="xs" tone="muted" tabular>
@@ -836,6 +837,52 @@ function FluxSection() {
         )}
       </Card>
       <FluxVoiceCard />
+    </section>
+  );
+}
+
+// LeetCode (docs/areas/recruiting): the Roll a sitting is a rep of. The extension's Start is refused until
+// one is picked — a sitting has no task of its own to land on otherwise.
+function LeetcodeSection() {
+  const { data: settings } = useSettings();
+  const rollsQ = useRolls();
+  const { data: rolls = [] } = rollsQ;
+  const rollsFailed = rollsQ.isError && rollsQ.data === undefined;
+  const update = useUpdateSettings();
+  if (!settings) return null;
+  const active = rolls.filter((r) => r.active);
+  const linked = settings.leetcodeRollId ?? null;
+  return (
+    <section id="leetcode" className="flex flex-col gap-3">
+      <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
+        LeetCode
+      </Text>
+      <Card className="flex flex-col gap-3">
+        <Select
+          label="Sittings are reps of"
+          value={active.some((r) => r.id === linked) ? (linked ?? '') : ''}
+          onChange={(e) => update.mutate({ leetcodeRollId: e.target.value || null })}
+          placeholder="No Roll"
+          options={active.map((r) => ({ value: r.id, label: r.name }))}
+          disabled={rollsFailed} // "No Roll" alone would read as the setting
+          className="w-60"
+        />
+        {rollsFailed && (
+          <LoadError size="xs" onRetry={() => void rollsQ.refetch()}>
+            Couldn’t load your Rolls.
+          </LoadError>
+        )}
+        <Text size="xs" tone="muted">
+          The extension&apos;s Start opens a sitting as this Roll&apos;s rep and starts it; Done on
+          the rep ends the sitting.
+          {active.length === 0 && !rollsFailed && ' Add a Roll on the Rolls page first.'}
+        </Text>
+        {update.isError && (
+          <p role="alert" className="text-xs text-danger">
+            Couldn&apos;t save that — try again.
+          </p>
+        )}
+      </Card>
     </section>
   );
 }

@@ -33,6 +33,14 @@ import {
 import type { SubscribePushInput } from './reminders';
 import type { RecordFluxSetInput } from './api';
 import { ulid } from './ulid';
+import {
+  LC_ROLL_UNLINKED_ERROR,
+  SITTING_ACTIVE_ERROR,
+  SITTING_ENDED_ERROR,
+  SITTING_INGEST_WINDOW_MS,
+  sittingMetrics,
+} from './sittings';
+import type { SittingEventInput, SittingStartInput } from './sittings';
 
 // A browser's push subscription as subscribePush receives it; override the endpoint per device.
 const pushSub = (endpoint = 'https://web.push.apple.com/QGdev-1'): SubscribePushInput => ({
@@ -62,6 +70,48 @@ const fluxSet = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => 
   planned: 10,
   ...over,
 });
+
+// A LeetCode sitting's Start as the extension sends it, and its events (LeetCode's shapes, minimized).
+const LC_T0 = 1_700_000_000_000; // the suite's clock: 2023-11-14T22:13:20Z
+const sittingStart = (over: Partial<SittingStartInput> = {}): SittingStartInput => ({
+  clientSittingId: ulid(),
+  problemSlug: 'two-sum',
+  problemTitle: 'Two Sum',
+  difficulty: 'Easy',
+  topicTags: ['Array', 'Hash Table'],
+  lang: 'python3',
+  startedAt: LC_T0,
+  tzOffsetMinutes: 300, // UTC-5 → 2023-11-14 17:13 local
+  ...over,
+});
+const lcSnap = (code: string, at: number): SittingEventInput => ({
+  id: ulid(),
+  type: 'snapshot',
+  at,
+  payload: { code, lang: 11, questionId: 1 },
+});
+const lcJudged = (
+  type: 'run' | 'submit',
+  status: number,
+  msg: string,
+  at: number,
+  passed: number,
+  total: number,
+): SittingEventInput => ({
+  id: ulid(),
+  type,
+  at,
+  payload: {
+    request: { lang: 'python3', typed_code: 'print("x")' },
+    result: { status_code: status, status_msg: msg, total_correct: passed, total_testcases: total },
+  },
+});
+// A roll linked as the LeetCode roll, then a Start — the common opening.
+async function startSitting(api: ApiClient, over: Partial<SittingStartInput> = {}) {
+  const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+  await api.updateSettings({ leetcodeRollId: roll.id });
+  return { ...(await api.lcSittingStart(sittingStart(over))), roll };
+}
 
 // ONE behavior suite, run against every ApiClient implementation — the in-memory stub, the in-process
 // Lambda (BackendClient over an in-memory table), and any future transport. If the swap is faithful,
@@ -144,11 +194,10 @@ export function runApiContract(
         statusMsg: 'Accepted',
         submittedAt: base.submittedAt + 60_000,
       });
-      const list = await api.listLeetcodeAttempts();
-      expect(list).toHaveLength(2); // dup didn't add a row
-      expect(list[0]!.id).toBe(ac.id); // reverse-chron: newer first
-      expect(list[0]!.difficulty).toBeNull(); // unset → null, not undefined
-      expect(list[0]!.verdict).toBe('accepted');
+      // Retired legacy ingest (read by nothing): it still records, a new submission is its own row.
+      expect(ac.id).not.toBe(wrong.id);
+      expect(ac.difficulty).toBeNull(); // unset → null, not undefined
+      expect(ac.verdict).toBe('accepted');
     });
 
     it('stories: create defaults empty S/A/R, lists updatedAt-desc, patches, and soft-deletes', async () => {
@@ -2057,15 +2106,7 @@ export function runApiContract(
 
     it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
-      const lc = await api.recordLeetcodeAttempt({
-        leetcodeSubmissionId: 'sub-export',
-        problemSlug: 'two-sum',
-        problemTitle: 'Two Sum',
-        statusCode: 10,
-        submittedAt: 1_700_000_000_000,
-        tzOffsetMinutes: 300,
-        lang: 'python3',
-      });
+      const { sitting } = await startSitting(api, { problem: { titleSlug: 'two-sum' } });
       const story = await api.createStory({ title: 'exportable story' });
       const flux = await api.recordFluxSet(fluxSet());
       const { attachment } = await api.createAttachmentUploadUrl({
@@ -2092,7 +2133,7 @@ export function runApiContract(
           'habitChecks',
           'habits',
           'ideas',
-          'leetcodeAttempts',
+          'leetcodeProblems',
           'logEntries',
           'places',
           'plans',
@@ -2100,13 +2141,17 @@ export function runApiContract(
           'series',
           'sessions',
           'settings',
+          'sittingEvents',
+          'sittingLive',
+          'sittings',
           'stories',
           'tasks',
           'userId',
         ].sort(),
       );
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
-      expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
+      expect(data.sittings.map((x) => x.id)).toContain(sitting.id);
+      expect(data.leetcodeProblems.map((x) => x.slug)).toContain('two-sum');
       expect(data.stories.map((x) => x.id)).toContain(story.id);
       expect(data.fluxSets.map((x) => x.id)).toContain(flux.id);
       expect(data.attachments.map((x) => x.id)).toContain(attachment.id); // ready rows only
@@ -3029,6 +3074,242 @@ export function runApiContract(
     });
 
     // --- Flux weekly note (D62) ----------------------------------------------
+    describe('lc sittings', () => {
+      it('start refuses without a linked roll, writing nothing', async () => {
+        await expect(api.lcSittingStart(sittingStart())).rejects.toThrow(LC_ROLL_UNLINKED_ERROR);
+        expect(await api.listSittings()).toEqual([]);
+        expect(await api.listTasks()).toEqual([]);
+      });
+
+      it('start attaches the open rep, starts it, titles it, and stores the problem', async () => {
+        const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+        await api.updateSettings({ leetcodeRollId: roll.id });
+        const { task: picked } = await api.pickRollToday(roll.id, '2023-11-14');
+        const { sitting, resumed } = await api.lcSittingStart(
+          sittingStart({ problem: { titleSlug: 'two-sum', difficulty: 'Easy' } }),
+        );
+        expect(resumed).toBe(false);
+        expect(sitting).toMatchObject({
+          repTaskId: picked.id,
+          rollId: roll.id,
+          status: 'active',
+          day: '2023-11-14',
+          problemSlug: 'two-sum',
+          prepTarget: 'General',
+          endedAt: null,
+          startedAt: LC_T0,
+        });
+        const rep = await api.getTask(picked.id);
+        expect(rep).toMatchObject({ status: 'in_progress', title: 'LeetCode · Two Sum' });
+        const detail = await api.getSitting(sitting.id);
+        expect(detail.problem).toMatchObject({ slug: 'two-sum', raw: { difficulty: 'Easy' } });
+        expect(detail.live).toBeNull();
+        expect((await api.listSittings()).map((x) => x.id)).toEqual([sitting.id]);
+      });
+
+      it('start spawns a fresh rep on the plan when none is open, and resumes on a repeat', async () => {
+        const first = await startSitting(api);
+        const rep = await api.getTask(first.sitting.repTaskId);
+        expect(rep).toMatchObject({ status: 'in_progress', rollId: first.roll.id });
+        const plans = await api.listPlansForDay(first.sitting.day);
+        expect(plans.map((p) => p.taskId)).toContain(rep!.id);
+        const again = await api.lcSittingStart(
+          sittingStart({ clientSittingId: first.sitting.clientSittingId }),
+        );
+        expect(again.resumed).toBe(true);
+        expect(again.sitting.id).toBe(first.sitting.id);
+        // The same problem still open resumes it too (the extension lost its memory of the Start).
+        const same = await api.lcSittingStart(sittingStart());
+        expect(same).toMatchObject({ resumed: true, sitting: { id: first.sitting.id } });
+        expect((await api.listTasks()).filter((t) => t.rollId === first.roll.id)).toHaveLength(1);
+      });
+
+      it('start on another problem is refused while a sitting is open, and spawns after Done', async () => {
+        const { sitting } = await startSitting(api);
+        await expect(
+          api.lcSittingStart(
+            sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two' }),
+          ),
+        ).rejects.toThrow(SITTING_ACTIVE_ERROR);
+        await api.setTaskActual(sitting.repTaskId, 40);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        const ended = (await api.getSitting(sitting.id)).sitting;
+        expect(ended.status).toBe('done');
+        expect(ended.endedAt).not.toBeNull();
+        const next = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two' }),
+        );
+        expect(next.sitting.repTaskId).not.toBe(sitting.repTaskId);
+        expect(await api.getTask(next.sitting.repTaskId)).toMatchObject({
+          status: 'in_progress',
+          title: 'LeetCode · Add Two',
+        });
+      });
+
+      it('snapshots version the live code, newest wins, and repeats are duplicates', async () => {
+        const { sitting } = await startSitting(api);
+        const a = lcSnap('class Solution: pass', LC_T0 + 60_000);
+        const b = lcSnap('class Solution:\n    def twoSum(self): ...', LC_T0 + 120_000);
+        const older = lcSnap('stale', LC_T0 + 90_000);
+        const r1 = await api.lcSittingEvents({ sittingId: sitting.id, events: [a, b] });
+        expect(r1).toEqual({ accepted: 2, duplicates: 0, version: 2, status: 'active' });
+        const r2 = await api.lcSittingEvents({ sittingId: sitting.id, events: [a, older] });
+        expect(r2).toMatchObject({ accepted: 1, duplicates: 1, version: 3 });
+        const { live, events } = await api.getSitting(sitting.id);
+        expect(live).toMatchObject({
+          version: 3,
+          code: 'class Solution:\n    def twoSum(self): ...',
+        });
+        expect(events.map((e) => e.type)).toEqual(['snapshot', 'snapshot', 'snapshot']);
+        expect(events.map((e) => e.at)).toEqual([LC_T0 + 60_000, LC_T0 + 90_000, LC_T0 + 120_000]);
+      });
+
+      it('runs and submits fold into the metrics; Accepted does not end the sitting', async () => {
+        const { sitting } = await startSitting(api);
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            lcJudged('run', 15, 'Runtime Error', LC_T0 + 5 * 60_000, 0, 3),
+            lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 30 * 60_000, 88, 307),
+            lcJudged('submit', 10, 'Accepted', LC_T0 + 32 * 60_000, 307, 307),
+          ],
+        });
+        const s = (await api.getSitting(sitting.id)).sitting;
+        expect(s.status).toBe('active');
+        expect(s.summary).toMatchObject({
+          runs: 1,
+          submits: 2,
+          runsBeforeFirstSubmit: 1,
+          firstSubmit: { verdict: 'wrong_answer', passed: 88, total: 307 },
+          lastSubmit: { verdict: 'accepted' },
+          lastRun: { verdict: 'runtime_error' },
+          firstAcceptedAt: LC_T0 + 32 * 60_000,
+          submitsBeforeAccepted: 1,
+        });
+        expect(sittingMetrics(s)).toEqual({
+          firstSubmitAccepted: false,
+          submitsBeforeAccepted: 1,
+          timeToFirstSubmitMs: 30 * 60_000,
+        });
+      });
+
+      it('replay is stored raw, kept out of getSitting, and folds into the facts', async () => {
+        const { sitting } = await startSitting(api);
+        const replay = JSON.stringify([
+          { type: 7, timestamp: LC_T0 + 1000 },
+          { type: 3, val: true, timestamp: LC_T0 + 2000 },
+          { type: 7, timestamp: LC_T0 + 61_000 },
+        ]);
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            {
+              id: ulid(),
+              type: 'replay',
+              at: LC_T0 + 61_000,
+              clientSessionId: 'p-1',
+              events: replay,
+            },
+          ],
+        });
+        const { live, events } = await api.getSitting(sitting.id);
+        expect(events).toEqual([]);
+        expect(live?.facts).toMatchObject({
+          edits: 2,
+          firstEditAt: LC_T0 + 1000,
+          longestStallMs: 60_000,
+          focus: [[LC_T0 + 2000, true]],
+        });
+        const chunks = await api.listSittingReplay(sitting.id);
+        expect(chunks.map((c) => c.events)).toEqual([replay]);
+      });
+
+      it('a timer read lands on the summary', async () => {
+        const { sitting } = await startSitting(api);
+        const state = {
+          mode: 'reverse',
+          startTimestamp: null,
+          pauseMs: 60_000,
+          endMs: 3_600_000,
+          status: 'pause',
+        };
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [{ id: ulid(), type: 'timer', at: LC_T0 + 70_000, payload: { state } }],
+        });
+        expect((await api.getSitting(sitting.id)).sitting.summary.lcTimer).toMatchObject({
+          mode: 'reverse',
+          status: 'pause',
+          elapsedMs: 60_000,
+        });
+      });
+
+      it('events refuse bad input, unknown and ended sittings, with nothing written', async () => {
+        const { sitting } = await startSitting(api);
+        const huge = lcSnap('x'.repeat(70 * 1024), LC_T0 + 1000);
+        await expect(
+          api.lcSittingEvents({ sittingId: sitting.id, events: [huge] }),
+        ).rejects.toThrow(/too large/);
+        const many = Array.from({ length: 51 }, (_, i) => lcSnap('a', LC_T0 + i));
+        await expect(api.lcSittingEvents({ sittingId: sitting.id, events: many })).rejects.toThrow(
+          /At most 50/,
+        );
+        await expect(
+          api.lcSittingEvents({
+            sittingId: sitting.id,
+            events: [{ ...lcSnap('a', LC_T0), id: 'nope' }],
+          }),
+        ).rejects.toThrow(/valid id/);
+        await expect(
+          api.lcSittingEvents({ sittingId: ulid(), events: [lcSnap('a', LC_T0)] }),
+        ).rejects.toThrow(/Not found/);
+        expect((await api.getSitting(sitting.id)).live).toBeNull();
+        await api.transitionTask(sitting.repTaskId, 'cancelled');
+        expect((await api.getSitting(sitting.id)).sitting.status).toBe('abandoned');
+        await expect(
+          api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0)] }),
+        ).rejects.toThrow(SITTING_ENDED_ERROR);
+      });
+
+      it('events stop a day after Start', async () => {
+        const { sitting } = await startSitting(api);
+        advance(SITTING_INGEST_WINDOW_MS + 1);
+        await expect(
+          api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0)] }),
+        ).rejects.toThrow(SITTING_ENDED_ERROR);
+      });
+
+      it('prep target is normalized, and listSittings filters by day', async () => {
+        const { sitting } = await startSitting(api);
+        expect((await api.setSittingPrepTarget(sitting.id, '  Nominal ')).prepTarget).toBe(
+          'Nominal',
+        );
+        expect((await api.setSittingPrepTarget(sitting.id, '   ')).prepTarget).toBe('General');
+        await expect(api.setSittingPrepTarget(sitting.id, 'x'.repeat(41))).rejects.toThrow(
+          /limited/,
+        );
+        expect(await api.listSittings({ from: '2023-11-15', to: '2023-11-20' })).toEqual([]);
+        expect(
+          (await api.listSittings({ from: '2023-11-14', to: '2023-11-14' })).map((x) => x.id),
+        ).toEqual([sitting.id]);
+      });
+
+      it('deleting the rep removes the sitting; deleteSitting is idempotent', async () => {
+        const { sitting } = await startSitting(api);
+        await api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0 + 1)] });
+        await api.deleteTask(sitting.repTaskId);
+        expect(await api.listSittings()).toEqual([]);
+        await expect(api.getSitting(sitting.id)).rejects.toThrow(/Not found/);
+        await api.deleteSitting(sitting.id); // already gone — a no-op
+        const other = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'three-sum', problemTitle: '3Sum' }),
+        );
+        await api.deleteSitting(other.sitting.id);
+        expect(await api.listSittings()).toEqual([]);
+        expect(await api.getTask(other.sitting.repTaskId)).toMatchObject({ status: 'in_progress' }); // rep stays
+      });
+    });
+
     describe('flux week note', () => {
       const week = (over: Partial<RecordFluxSetInput> = {}) =>
         fluxSet({ day: dayKeyInZone(clock, USER_TIME_ZONE, 4), completedAt: clock, ...over }); // the user's day, as the Lambda reads it

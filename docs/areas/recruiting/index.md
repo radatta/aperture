@@ -1,15 +1,91 @@
-# Recruiting — LeetCode attempt capture
+# Recruiting — LeetCode
 
-The Recruiting module records **every** LeetCode submission you make — accepted _and_ wrong — and shows
-them at `/recruiting` as a reverse-chron list with a derived per-problem attempt count ("attempt 2 of 2").
-
-Wrong attempts are the point. A solved-problems counter is a scoreboard; the wrong→accepted arc is the
-same **calibration** move as tasks — what it actually took versus what you thought. Presentation follows
-the anti-guilt rule: accepted reads teal (positive), everything else reads gold (attention), never red.
+The Recruiting module follows how LeetCode is actually practised: a **sitting** is one go at one problem —
+you open it, the extension's Start clears LeetCode's editor and starts its timer, you work, you mark the rep
+Done in Aperture. Everything LeetCode itself sends while you work (your code as you type, every Run and
+Submit with its full result, its replay stream, its timer) is captured raw, and `/recruiting` lists the
+sittings with their outcome. The headline is **whether the first submit was accepted** — the same
+calibration move as tasks, what it took versus what you thought. Presentation follows the anti-guilt rule:
+accepted reads teal, everything else gold or muted, never red.
 
 Rows are written by a **browser extension**, not by the app. There is no authoring UI and never will be.
 
-## The shape
+**Redesign in progress (lc-redesign, 2026-11).** A1 — sittings: contract, server, list page — is the section
+below. The extension still runs the per-submission capture under _The shape_ until A2 rebuilds it around
+sittings; its rows (`leetcodeAttempts`) are **retired**: still written, read by nothing, not exported, and
+the old ingest method goes once the prod Safari build is rebuilt (PR D). The redesign's evidence (what
+LeetCode exposes, from a HAR capture on 2026-11-08) and plan live in the lc-redesign worktree's
+`localNotes/` until it lands; durable decisions are recorded here.
+
+## Sittings
+
+### The unit and its lifecycle
+
+```
+extension Start ──► lcSittingStart ──► a rep of settings.leetcodeRollId, in progress, titled "LeetCode · <problem>"
+LeetCode traffic ─► lcSittingEvents ─► events stored raw; runs/submits/notes/timer fold into the head,
+                                       snapshots/replay into the live row
+Done on the rep ─────────────────────► sitting done          Drop ─► abandoned          delete ─► gone with it
+```
+
+- **One sitting = one problem = one Roll rep.** Start resumes a sitting already open on the same problem (or
+  a repeat of the same Start), refuses another problem while one is open (`SITTING_ACTIVE_ERROR` — one
+  open rep per roll), attaches the roll's open rep when no sitting holds it, and otherwise spawns a fresh
+  rep on the sitting's day plan. The rep is shaped through the normal task paths (title, notes = the problem
+  URL, start), so its calendar and reminder rows stay right. Unlinked roll → `LC_ROLL_UNLINKED_ERROR`
+  (Settings → LeetCode).
+- **A sitting ends only through its rep** (`transitionTask` / `deleteTask` hooks, only for tasks with a
+  `rollId`). An Accepted submit never ends it — you may keep going.
+- **The head's id is the Start's `clientSittingId`**, claimed put-if-absent before any rep write, so a
+  double-fired Start makes one sitting and one rep.
+- `startedAt` is the server's clock at Start (the sitting clock); the click's own time is kept as
+  `clientStartedAt`. LeetCode's `solve_elapsed_ms` counts from the first time a problem was ever opened, so
+  it's context only. `day` buckets `startedAt` by the client's tz offset and `dayStartHour`.
+
+### What's stored, what's derived
+
+All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda share them):
+
+- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI) and the
+  `summary` fold — runs, submits, first/last verdicts, `submitsBeforeAccepted`, runs before the first
+  submit, LeetCode's timer state. The fold is a cache of a pure function over the events; if its CAS loses
+  four times running, the events stay stored but unfolded (rebuildable later).
+- **Live row** (`lcs#<id>#live`): the newest code (the final code once ended), the snapshot `version` live
+  reads report, and **facts** folded from the replay at ingest — first/last edit, edits, longest stall,
+  rewrites, LeetCode's type-3 toggles raw (`focus`; meaning unconfirmed). Folded at ingest so they outlive
+  the raw replay.
+- **Events** (`lcs#<id>#ev#…`), payloads verbatim; **replay chunks** (`lcs#<id>#rp#…`), raw, never in
+  `getSitting` (read with `listSittingReplay`); **problem doc** (`lcq#<slug>`): LeetCode's
+  `questionDetail`, upserted per slug.
+- **Derived, never stored:** `sittingMetrics` — first submit accepted (headline), submits before accepted,
+  time to first submit — and the elapsed time.
+
+### Storage and expiry
+
+Kept forever: the head, the live row, every run, submit, note and timer event, the problem doc. The **raw
+bulk** — snapshot and submit-detail events, replay chunks — is stamped `expiresAt` at write: 14 days past the
+sitting's 24 h ingest window, deleted by DynamoDB's TTL (free). This is prod's one TTL'd row kind (TECH §2.3
+rule 4), chosen so storage doesn't grow with keystrokes: kept data is ~25 KB a sitting. Export carries
+heads, live rows, events and problems; the replay stays out like attachment bytes.
+
+### Ingest: the device token and the caps
+
+`lcSittingStart` and `lcSittingEvents` (`LC_INGEST_METHODS`) take the extension's device token **or** the
+user's JWT (the dev check drives them as the test user); every other method — every read — is JWT only, so a
+device token anywhere else 401s. Ingest bodies over 300 KB are refused before parsing (413). Per call ≤ 50
+events / 256 KB; per event type a size cap (snapshot ≤ 64 KB, run/submit ≤ 96 KB …); per sitting ≤ 3,000
+events / 16 MB; ≤ 20 Starts a day; events refused once the sitting ended or 24 h after Start. Each event is
+idempotent on its id. The server recomputes everything it decides on (`userId`, `day`, `startedAt`,
+verdicts, counters); payloads are opaque. A leaked device token can make junk sittings (visible reps) and
+write within those caps; it can't read, delete, end a sitting, or reach any other partition.
+
+### The page
+
+`/recruiting` → **Sittings**: the open sitting pinned with its running clock, the rest by day with the
+outcome (`first submit accepted` / `accepted on submit N` / `not accepted` / `no submit yet`), runs, and
+`dropped`. Stories is the other tab.
+
+## The shape (legacy capture — until A2)
 
 Two paths that only meet at one place: the userId under which rows are written and read.
 
@@ -65,15 +141,18 @@ DynamoDB   PK = u#<userId>   SK = lc#<YYYY-MM-DD>#<ulid>
 ### Read path
 
 ```
-PWA /recruiting → useLeetcodeAttempts() → api.listLeetcodeAttempts(range?)
+PWA /recruiting → useSittings() → api.listSittings(range?)        (every task write invalidates it: a Done ends one)
   │  Cognito JWT, same-origin /api/*
   ▼
 Lambda → resolveUserId → userId = JWT `sub`
   ▼
-Repo: query PK=u#<sub>, SK begins_with 'lc#'  → range filter → sort submittedAt DESC
+Repo: query PK=u#<sub>, SK begins_with 'lcsit#' → range filter by day → sort startedAt DESC
   ▼
-recruitingHelpers.withAttemptOrdinals()   ← "attempt N of M" computed at render, never stored
+recruitingHelpers.sittingOutcome()   ← "first submit accepted" … derived at render (sittingMetrics), never stored
 ```
+
+The legacy attempts' read path (`listLeetcodeAttempts`, the Attempts tab, `list_leetcode_attempts`) was
+removed at A1.
 
 ## Design decisions worth not re-litigating
 
@@ -106,16 +185,21 @@ storage — a different risk class from a JWT. A device token sent to any other 
 | Path                                                     | What                                                                                                                                                                                   |
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `extension/`                                             | MV3 web extension — Safari daily (wrapped in an Xcode app), Firefox AMO-signed. No deps, no bundler, no build step. `README.md` there is the wire contract and the Safari build steps. |
-| `packages/shared/src/types.ts`                           | `LeetcodeAttempt`, `LeetcodeVerdict`                                                                                                                                                   |
-| `packages/shared/src/api.ts`                             | `RecordLeetcodeAttemptInput`, the two `ApiClient` methods                                                                                                                              |
-| `packages/shared/src/leetcode.ts`                        | `normalizeVerdict` — status_code first, status_msg fallback                                                                                                                            |
+| `packages/shared/src/types.ts`                           | `Sitting`, `SittingLive`, `SittingEvent`, `SittingReplayChunk`, `LeetcodeProblem`; `LeetcodeAttempt` (retired), `LeetcodeVerdict`                                                      |
+| `packages/shared/src/sittings.ts`                        | the sittings' rules: normalizers, caps, `planSittingStart`, folds, `sittingMetrics`, the raw expiry                                                                                    |
+| `packages/shared/src/api.ts`                             | the sitting methods, `SittingDetail`, `RecordLeetcodeAttemptInput` (legacy)                                                                                                            |
+| `packages/shared/src/leetcode.ts`                        | `normalizeVerdict` — status_code first, status_msg fallback; `LC_INGEST_METHODS`                                                                                                       |
 | `packages/shared/src/dates.ts`                           | `dayKeyForOffset` — bucket by the client's tz + `dayStartHour`                                                                                                                         |
-| `packages/shared/src/contractTests.ts`                   | one suite, run 3× — stub, backend direct, backend via handleRpc                                                                                                                        |
-| `app/src/pages/Recruiting/`                              | page + `recruitingHelpers.ts` (ordinals, summary, verdict tone)                                                                                                                        |
-| `app/src/data/hooks/useLeetcodeAttempts.ts`              | React Query read hook                                                                                                                                                                  |
+| `packages/shared/src/contractTests.ts`                   | one suite, run 3× — stub, backend direct, backend via handleRpc (`lc sittings`)                                                                                                        |
+| `app/src/pages/Recruiting/`                              | `SittingsSection.tsx` + `recruitingHelpers.ts` (outcome, summary, grouping, verdict tone)                                                                                              |
+| `app/src/data/hooks/useSittings.ts`                      | React Query read hook                                                                                                                                                                  |
+| `app/src/pages/Settings/index.tsx`                       | `LeetcodeSection` — the roll a sitting is a rep of                                                                                                                                     |
+| `lambdas/src/index.ts`                                   | the ingest gate: device token or JWT for `LC_INGEST_METHODS`, the 300 KB pre-parse cap                                                                                                 |
 | `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                  |
-| `lambdas/src/backend.ts`                                 | `recordLeetcodeAttempt` / `listLeetcodeAttempts`                                                                                                                                       |
-| `lambdas/src/ddb/keys.ts`                                | `lc#<day>#<id>` sort keys                                                                                                                                                              |
+| `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks; `recordLeetcodeAttempt` (legacy)                                                                                                             |
+| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#<day>#<id>` (legacy)                                                                                                                        |
+| `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                       |
+| `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                      |
 | `cdk/src/config/ciSecrets.ts`, `cdk/src/bin/aperture.ts` | `stageSecret('DEVICE_TOKEN', stage)` / `deviceUserIdFor`                                                                                                                               |
 
 ## Operator setup
@@ -344,7 +428,9 @@ Since a submission is a real write to real data, dev is where you do this — no
 
 ### Watching an ingest
 
-Every ingest logs one line: `{"event":"leetcode_ingest","problemSlug":…,"metaCaptured":true|false}`.
+Sittings log `{"event":"lc_sitting_start","sittingId":…,"attach":bool}` per Start and
+`{"event":"lc_ingest","sittingId":…,"accepted":n,"duplicates":n,"bytes":n}` per events call — never code or
+payloads. The legacy ingest logs one line: `{"event":"leetcode_ingest","problemSlug":…,"metaCaptured":true|false}`.
 `metaCaptured` is the DOM-scrape hit rate — a run of `false` means the scrape broke. It's a CloudWatch
 Logs Insights query, deliberately **not** a custom metric: at $0.30/month a metric would be the single
 largest line item in this project.

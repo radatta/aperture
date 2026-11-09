@@ -18,6 +18,7 @@ import { fluxHistory } from './flux-history';
 import { fluxPerf } from './flux-perf';
 import { inflightCap } from './inflight-cap';
 import { iosStandalone } from './ios-standalone';
+import { lcSittings } from './lc-sittings';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
 import { partsV2bReads } from './parts-v2b-reads';
@@ -55,6 +56,7 @@ export const SCENARIOS: Scenario[] = [
   finance,
   timedReminders, // its cheap rows first; its poller chain (two tick waits) last, so it can defer whole
   cognitoRefresh,
+  lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

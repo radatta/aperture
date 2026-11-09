@@ -12,7 +12,9 @@ export const qk = {
   pushStatus: () => ['pushStatus'] as const,
   series: () => ['series'] as const,
   calibration: (from: string, to: string) => ['calibration', from, to] as const,
-  leetcodeAttempts: (from = 'all', to = 'all') => ['leetcodeAttempts', from, to] as const,
+  // LeetCode sittings: one prefix, so a task write (a rep's Done ends its sitting) refreshes them all.
+  sittings: (from = 'all', to = 'all') => ['sittings', from, to] as const,
+  sitting: (id: string) => ['sittings', 'one', id] as const,
   stories: () => ['stories'] as const,
   // Flux sets: one prefix, so a save or delete refreshes every History / night-line read.
   fluxSetsAll: () => ['fluxSets'] as const,

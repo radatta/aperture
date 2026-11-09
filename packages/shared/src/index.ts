@@ -7,6 +7,7 @@ export * from './machines';
 export * from './recurrence';
 export * from './calendar';
 export * from './leetcode';
+export * from './sittings';
 export * from './stories';
 export * from './rolls';
 export * from './split';

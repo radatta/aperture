@@ -110,7 +110,9 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **Retire** = `active: false` (Settings → Retire…, or MCP `update_category`): hidden from every picker, sorted after active ones in Settings, but the label still resolves on existing tasks and an edit form shows the item's own retired category as "X (retired)". On update `order`/`active` are patch-style — omitted keeps the current value, so a rename never un-retires.
 - Referenced by **id**. **Labels resolve live** (renames propagate to display). **`isWork` is snapshotted** onto sessions (`wasWork`) so history is frozen. Flipping `isWork` prompts an **optional retroactive backfill** ("also reclassify N past records?"). **Deleting** forces reassignment of all referencing items to another category first, then soft-deletes the empty one.
 
-**leetcodeAttempts** — one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.
+**sittings** — one go at one LeetCode problem, written by the browser extension through the ingest methods; the model, its folds and its caps live in [recruiting](../areas/recruiting/index.md) → _Sittings_ (`packages/shared/src/sittings.ts`).
+
+**leetcodeAttempts** — **retired** (lc-redesign, 2026-11): the old extension build still posts one row per submission until the prod rebuild, and nothing reads them; not exported. As built: one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.
 
 - `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
 - `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`. **Normalized server-side** from LeetCode's raw `status_code`/`status_msg` — the dep-free extension forwards raw signals only.
@@ -139,7 +141,9 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts). No calibrated task reaches done without an estimate and an actual of at least 1 minute (machines.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
-4. Never hard-delete — `deletedAt` tombstones everywhere. **Dev's table only** expires them through DynamoDB TTL: `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance and a removed push device never; AWS deletes some time after a row is due), and `toEntity` strips it. Prod writes nothing new and has no TTL.
+4. Never hard-delete — `deletedAt` tombstones everywhere. Both tables have TTL on `expiresAt`, and `toEntity` strips it:
+   - **Dev expires tombstones:** `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance and a removed push device never; AWS deletes some time after a row is due).
+   - **Prod's one exception (2026-11, lc-redesign):** a LeetCode sitting's raw bulk — snapshot and submit-detail events, replay chunks — is stamped at write to expire 14 days past the sitting's 24 h ingest window (`sittingRawExpiresAt`). What a sitting keeps forever (head, live row with the final code and facts, every run and submit) is never stamped, and prod tombstones never are. [recruiting](../areas/recruiting/index.md) → _Storage_.
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
@@ -150,11 +154,16 @@ PK = u#<userId>            (one partition per user — fine at single-user volum
 SK (type-prefixed range keys):
   log#<day>#<ulid>              day's log entries          (begins_with log#<day>)
   task#<ulid>                   task by id
-  (any tombstone, dev only)     expiresAt: DynamoDB TTL attribute, epoch seconds (§2.3 rule 4)
+  (any tombstone on dev; a sitting's raw bulk on both)  expiresAt: DynamoDB TTL attribute, epoch seconds (§2.3 rule 4)
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
-  lc#<day>#<ulid>               LeetCode attempts, day-bucketed  (begins_with lc#)
+  lc#<day>#<ulid>               LeetCode attempts — retired: the legacy ingest still writes, nothing reads
+  lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
+  lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
+  lcs#<id>#ev#<epoch13>#<ulid>  a sitting's events by time (snapshots/submitDetails carry expiresAt)
+  lcs#<id>#rp#<epoch13>#<ulid>  a sitting's replay chunks, raw (expiresAt)
+  lcq#<slug>                    LeetCode's questionDetail for a problem, raw, one per slug
   flux#<day>#<ulid>             Flux sets, day-bucketed; the client mints the ulid (idempotent put-if-absent; soft-delete tombstones)
   fluxnote#<weekStart>          Flux's weekly note cache (direct get, consistent): {text, fingerprint, generatedAt} — derived from the sets, rebuilt when they change, so no userId/ulid/updatedAt
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)

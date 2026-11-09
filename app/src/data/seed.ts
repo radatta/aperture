@@ -10,8 +10,16 @@ import {
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   localEpochFromDayTime,
+  emptyLiveFields,
+  emptySummary,
+  foldLive,
+  foldSummary,
+  isHeadEvent,
+  normalizeSittingEvents,
+  PREP_TARGET_DEFAULT,
   REMINDER_SETTINGS_DEFAULTS,
   rollRepFields,
+  sittingRepTitle,
   syncWindow,
   weekdayOf,
 } from '@aperture/shared';
@@ -21,7 +29,6 @@ import type {
   Category,
   CompetencyTag,
   Habit,
-  LeetcodeVerdict,
   PomodoroSession,
   FluxSet,
   Roll,
@@ -89,6 +96,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     fluxRollId: null,
     fluxDisclaimerAckAt: null,
     fluxSets: {},
+    leetcodeRollId: null, // linked below, once the LeetCode roll exists
     ...REMINDER_SETTINGS_DEFAULTS,
   };
 
@@ -541,12 +549,12 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   store.series.push(prelab);
 
   // One done rep = one filled cell. `seq` offsets a second rep on the same day so a cell can read "2".
-  const rep = (roll: Roll, dAgo: number, seq = 0) => {
+  const rep = (roll: Roll, dAgo: number, seq = 0): Task => {
     const completedAt = nowMs - dAgo * DAY - (2 + seq) * HOUR;
     const est = roll.estimateMin ?? 30;
     const actual = Math.round(est * factors[dAgo % factors.length]!);
     const startedAt = completedAt - actual * 60_000;
-    store.tasks.push({
+    const task: Task = {
       ...mk(startedAt),
       title: roll.name,
       status: 'done',
@@ -570,11 +578,13 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
-    });
+    };
+    store.tasks.push(task);
+    return task;
   };
   // Frequent-but-gappy for LeetCode (with two two-a-day cells), sparser for the others — a lived-in sheet.
-  [1, 2, 4, 5, 6, 8, 9, 11, 13, 15, 16, 18, 20, 22, 23, 25, 27, 29, 31, 34].forEach((d) =>
-    rep(leetcode, d),
+  const lcReps = [1, 2, 4, 5, 6, 8, 9, 11, 13, 15, 16, 18, 20, 22, 23, 25, 27, 29, 31, 34].map(
+    (d) => rep(leetcode, d),
   );
   [2, 6].forEach((d) => rep(leetcode, d, 1));
   [3, 7, 12, 17, 21, 28, 33].forEach((d) => rep(study, d));
@@ -594,50 +604,125 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     order: planSeeds.length,
   });
 
-  // LeetCode attempts — a few backdated, with wrong→accepted arcs so the derived attempt-count reads > 1.
-  const lc = (
-    dAgo: number,
+  // LeetCode sittings on three of the done reps, folded with the SAME shared folds the server runs, so the
+  // page can't drift from what ingest writes: a wrong→accepted arc, a first-submit accept, and one with a
+  // run first. The legacy attempt rows are retired (read by nothing), so the seed writes none.
+  store.settings!.leetcodeRollId = leetcode.id;
+  type Judged = [
+    type: 'run' | 'submit',
+    status: number,
+    msg: string,
+    min: number,
+    ok: number,
+    all: number,
+  ];
+  const sit = (
+    task: Task,
     slug: string,
     title: string,
-    verdict: LeetcodeVerdict,
     difficulty: string,
     topicTags: string[],
-    subId: string,
+    judged: Judged[],
+    code: string,
   ) => {
-    const t = nowMs - dAgo * DAY - 2 * HOUR;
-    store.leetcodeAttempts.push({
-      ...mk(t),
-      day: dayKey(t, START_HOUR),
+    task.title = sittingRepTitle(title);
+    const startedAt = task.startedAt!;
+    const snapAt = startedAt + 4 * 60_000;
+    const { events } = normalizeSittingEvents({
+      sittingId: 'seed',
+      events: [
+        { id: ulid(), type: 'snapshot', at: snapAt, payload: { code, lang: 11 } },
+        ...judged.map(([type, status, msg, min, ok, all]) => ({
+          id: ulid(),
+          type,
+          at: startedAt + min * 60_000,
+          payload: {
+            request: { lang: 'python3', typed_code: code },
+            result: {
+              status_code: status,
+              status_msg: msg,
+              total_correct: ok,
+              total_testcases: all,
+            },
+          },
+        })),
+      ],
+    });
+    const sitting = {
+      ...mk(startedAt),
+      day: dayKey(startedAt, START_HOUR),
+      startedAt,
+      clientStartedAt: startedAt,
+      endedAt: task.completedAt,
+      status: 'done' as const,
+      clientSittingId: ulid(),
       problemSlug: slug,
       problemTitle: title,
-      verdict,
-      submittedAt: t,
-      lang: 'python3',
-      runtimeMs: verdict === 'accepted' ? 12 : null,
-      memory: verdict === 'accepted' ? 20_800_000 : null,
-      leetcodeSubmissionId: subId,
+      questionId: null,
       frontendId: null,
       difficulty,
       topicTags,
-    });
+      lang: 'python3',
+      repTaskId: task.id,
+      rollId: leetcode.id,
+      prepTarget: PREP_TARGET_DEFAULT,
+      lcSolveSessionId: null,
+      summary: emptySummary(),
+    };
+    let live = { ...mk(snapAt), id: sitting.id, ...emptyLiveFields(sitting.id) };
+    for (const e of events) {
+      if (e.type === 'replay') continue;
+      store.sittingEvents.push({
+        ...mk(e.at),
+        id: e.id,
+        sittingId: sitting.id,
+        type: e.type,
+        at: e.at,
+        receivedAt: e.at,
+        payload: e.payload,
+      });
+      if (isHeadEvent(e.type)) sitting.summary = foldSummary(sitting.summary, e);
+      else live = foldLive(live, e, e.at);
+    }
+    store.sittings.push(sitting);
+    store.sittingLive.push(live);
   };
   const TS = ['Array', 'Hash Table'];
   const SW = ['Hash Table', 'String', 'Sliding Window'];
-  lc(5.02, 'two-sum', 'Two Sum', 'runtime_error', 'Easy', TS, 'seed-lc-1');
-  lc(5, 'two-sum', 'Two Sum', 'accepted', 'Easy', TS, 'seed-lc-2');
-  lc(
-    3,
+  sit(
+    lcReps[3]!,
+    'two-sum',
+    'Two Sum',
+    'Easy',
+    TS,
+    [
+      ['submit', 15, 'Runtime Error', 18, 0, 63],
+      ['submit', 10, 'Accepted', 24, 63, 63],
+    ],
+    'class Solution:\n    def twoSum(self, nums, target):\n        seen = {}\n        ...',
+  );
+  sit(
+    lcReps[2]!,
     'add-two-numbers',
     'Add Two Numbers',
-    'accepted',
     'Medium',
     ['Linked List', 'Math'],
-    'seed-lc-3',
+    [['submit', 10, 'Accepted', 31, 1568, 1568]],
+    'class Solution:\n    def addTwoNumbers(self, l1, l2):\n        ...',
   );
-  const LS = 'longest-substring-without-repeating-characters';
-  const LST = 'Longest Substring Without Repeating Characters';
-  lc(1.02, LS, LST, 'wrong_answer', 'Medium', SW, 'seed-lc-4');
-  lc(1, LS, LST, 'accepted', 'Medium', SW, 'seed-lc-5');
+  sit(
+    lcReps[0]!,
+    'longest-substring-without-repeating-characters',
+    'Longest Substring Without Repeating Characters',
+    'Medium',
+    SW,
+    [
+      ['run', 11, 'Wrong Answer', 20, 2, 3],
+      ['submit', 11, 'Wrong Answer', 33, 912, 987],
+      ['submit', 10, 'Accepted', 38, 987, 987],
+    ],
+    'class Solution:\n    def lengthOfLongestSubstring(self, s):\n        left = 0\n        ...',
+  );
 
   // Flux sets — three weeks of neck work so History's rows and trends aren't judged empty: rotation every
   // other day with a slowly rising peak, chin tuck, upper-trap pairs on both sides, a few joint-position

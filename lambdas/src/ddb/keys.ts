@@ -31,11 +31,29 @@ export const sk = {
   logPrefix: (day: string) => `log#${day}#`,
   logAllPrefix: () => `log#`,
 
-  // LeetCode attempts, day-bucketed like log. Derived reads scan the `lc#` prefix (single-user volume,
-  // same posture as calibration scanning tasks). Dedup-by-submission-id is a prefix scan for now.
+  // LeetCode attempts (retired: the legacy ingest still writes, nothing reads), day-bucketed like log.
+  // Dedup-by-submission-id is a prefix scan.
   lc: (day: string, id: string) => `lc#${day}#${id}`,
   lcPrefix: (day: string) => `lc#${day}#`,
   lcAllPrefix: () => `lc#`,
+
+  // LeetCode sittings (docs/areas/recruiting). The head is `lcsit#<id>` (id = the Start's clientSittingId,
+  // so a double-fired Start can't make two); its children sit under `lcs#<id>#` — the live row, events by
+  // time (`ev#`) and replay chunks (`rp#`), each its own begins_with. `lcs#` never matches `lcsit#`, and
+  // neither matches the legacy `lc#`. The problem doc is one row per slug, shared by its sittings.
+  sitting: (id: string) => `lcsit#${id}`,
+  sittingPrefix: () => `lcsit#`,
+  sittingChildPrefix: (id: string) => `lcs#${id}#`,
+  sittingChildAllPrefix: () => `lcs#`,
+  sittingLive: (id: string) => `lcs#${id}#live`,
+  sittingEvent: (id: string, at: number, eventId: string) =>
+    `lcs#${id}#ev#${padEpoch(at)}#${eventId}`,
+  sittingEventPrefix: (id: string) => `lcs#${id}#ev#`,
+  sittingReplay: (id: string, at: number, chunkId: string) =>
+    `lcs#${id}#rp#${padEpoch(at)}#${chunkId}`,
+  sittingReplayPrefix: (id: string) => `lcs#${id}#rp#`,
+  lcProblem: (slug: string) => `lcq#${slug}`,
+  lcProblemPrefix: () => `lcq#`,
 
   // Flux sets (D47), day-bucketed like lc. A few rows a day: reads and the by-id lookup scan `flux#`.
   flux: (day: string, id: string) => `flux#${day}#${id}`,

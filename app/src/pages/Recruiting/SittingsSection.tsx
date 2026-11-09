@@ -1,0 +1,100 @@
+import { fmtDuration, fmtMonthDayYear, sittingElapsedMs } from '@aperture/shared';
+import type { Sitting } from '@aperture/shared';
+import { EmptyState } from '../../components/EmptyState';
+import { Text } from '../../components/Text';
+import { useSittings } from '../../data/hooks/useSittings';
+import { useNow } from '../../lib/useNow';
+import { groupSittings, sittingOutcome, summarizeSittings } from './recruitingHelpers';
+
+// The Sittings tab: every go at a LeetCode problem, captured by the extension (docs/areas/recruiting).
+// The open sitting sits on top with its running clock; the rest are grouped by day. No authoring here —
+// a sitting starts from the extension's overlay and ends with Done on its rep.
+export function SittingsSection() {
+  const { data: sittings = [], isPending, isError, refetch } = useSittings();
+  const now = useNow();
+  const { open, days } = groupSittings(sittings);
+  const s = summarizeSittings(sittings);
+
+  if (sittings.length === 0)
+    return (
+      <div className="py-8">
+        <EmptyState
+          pending={isPending}
+          error={isError}
+          onRetry={() => void refetch()}
+          title="No sittings yet."
+        >
+          Open a LeetCode problem with the extension installed and press Start — it lands here.
+        </EmptyState>
+      </div>
+    );
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Only once there's something to count — a zero summary would assert a total while loading. */}
+      <Text as="p" size="sm" tone="muted">
+        {s.sittings} {s.sittings === 1 ? 'sitting' : 'sittings'} · {s.problems}{' '}
+        {s.problems === 1 ? 'problem' : 'problems'} · {s.firstTry} first-submit accepted
+      </Text>
+      {open.length > 0 && (
+        <section aria-label="Open sitting" className="flex flex-col divide-y divide-line">
+          {open.map((x) => (
+            <SittingRow key={x.id} sitting={x} now={now} />
+          ))}
+        </section>
+      )}
+      {days.map(([day, rows]) => (
+        <section key={day} aria-label={fmtMonthDayYear(day)} className="flex flex-col gap-1">
+          <Text
+            as="h2"
+            size="xs"
+            tone="subtle"
+            weight="medium"
+            className="uppercase tracking-wider"
+          >
+            {fmtMonthDayYear(day)}
+          </Text>
+          <div className="flex flex-col divide-y divide-line">
+            {rows.map((x) => (
+              <SittingRow key={x.id} sitting={x} now={now} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
+  const outcome = sittingOutcome(sitting);
+  const open = sitting.status === 'active';
+  const minutes = Math.max(1, Math.round(sittingElapsedMs(sitting, now) / 60_000));
+  return (
+    <div className="flex items-start justify-between gap-4 py-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          <Text weight="medium" className="truncate">
+            {sitting.problemTitle}
+          </Text>
+          {sitting.difficulty && (
+            <Text size="xs" tone="subtle">
+              {sitting.difficulty}
+            </Text>
+          )}
+        </div>
+        <Text size="xs" tone="subtle">
+          {open ? 'In progress · ' : ''}
+          {fmtDuration(minutes)}
+          {sitting.summary.runs > 0
+            ? ` · ${sitting.summary.runs} ${sitting.summary.runs === 1 ? 'run' : 'runs'}`
+            : ''}
+          {sitting.status === 'abandoned' ? ' · dropped' : ''}
+          {sitting.prepTarget !== 'General' ? ` · ${sitting.prepTarget}` : ''}
+        </Text>
+      </div>
+      <Text size="sm" weight="medium" tone={outcome.tone} className="shrink-0 text-right">
+        {outcome.label}
+      </Text>
+    </div>
+  );
+}

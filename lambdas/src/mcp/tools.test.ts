@@ -565,10 +565,10 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     );
   });
 
-  it('list_leetcode_attempts wants both dates or neither', async () => {
+  // Retired with the legacy attempts (docs/areas/recruiting): the sittings' tools replace it.
+  it('no longer offers list_leetcode_attempts', async () => {
     const { call } = makeEnv();
-    expect(await call('list_leetcode_attempts')).toEqual([]);
-    await expect(call('list_leetcode_attempts', { from: '2026-09-01' })).rejects.toThrow(/both/);
+    await expect(call('list_leetcode_attempts')).rejects.toThrow();
   });
 });
 

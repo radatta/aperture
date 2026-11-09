@@ -3,9 +3,9 @@ import { cx } from '../../lib/cx';
 
 // The recruiting hub's tab bar. Styled like the ModeToggle segmented control, but each tab is a real
 // NavLink to a route — so the active tab comes from the URL (aria-current for free), it's linkable, and
-// back/forward moves between tabs. `end` on Attempts so it isn't marked active on /recruiting/stories.
+// back/forward moves between tabs. `end` on Sittings so it isn't marked active on /recruiting/stories.
 const TABS = [
-  { to: '/recruiting', label: 'Attempts', end: true },
+  { to: '/recruiting', label: 'Sittings', end: true },
   { to: '/recruiting/stories', label: 'Stories', end: false },
 ];
 
