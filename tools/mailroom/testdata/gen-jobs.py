@@ -528,7 +528,7 @@ spass('sim: a dropped delete (a letter left) is deleted again, and the note says
       simCount={DEL: 5})
 spass('sim: letters still left after the extra deletes get a second round', ER,
       tape=[pt(220, 895, CAPTURE, n=2), left('Ab', n=1), left('Ab', 198, n=1), left('A', n=1), left('A', 198, n=1)],
-      notes={'2': 'deleted more twice (first read AXTextArea "Ab")'}, simCount={DEL: 9})
+      notes={'2': 'deleted more twice, 4 and 3 (first read AXTextArea "Ab")'}, simCount={DEL: 9})
 sfail('sim: a field that never empties is ERASED, with what it read and a screenshot', 'ERASED', ER,
       tape=[pt(220, 895, CAPTURE, n=2), left('A'), left('A', 198)], notes={'2': 'the field still reads AXTextArea "A" at 220,895'},
       simCount={DEL: 8}, files=['shots/01-fail.png'])
@@ -536,12 +536,12 @@ serr('sim: a hung erase read-back is AX_TIMEOUT, not ERASED', 'AX_TIMEOUT', ER, 
 spass('sim: another element at the find point gets the centre look, no extra deletes', ER,
       tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20), n=1), pt(198, 895, CAPTURE)],
       notes={'2': 'erased 2'}, simCount={'--point 198,895': 1, DEL: 2})
-sfail('sim: an empty-valued element that isn\'t the field never passes as empty', 'ERASED', ER,
+sfail('sim: an empty-valued element that isn\'t the field never passes as empty: the field moved is MISS', 'MISS', ER,
       tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20)), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20))],
-      notes={'2': 'AXStaticText ""'}, simCount={DEL: 6})
-sfail('sim: the field\'s label on another role never passes as empty', 'ERASED', ER,
+      notes={'2': "the field `bar` found isn't at 220,895 or its centre after erasing (saw AXStaticText \"\")"}, simCount={DEL: 2})
+sfail('sim: the field\'s label on another role never passes as empty', 'MISS', ER,
       tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Capture log', '', 25, 877, 346, 36)), pt(198, 895, el('AXStaticText', 'Capture log', '', 25, 877, 346, 36))],
-      simCount={DEL: 6})
+      simCount={DEL: 2})
 srej('sim: erase in an unknown name is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 2, 'in': 'nope'}])
 srej('sim: erase in a name defined after it is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 2, 'in': 'bar'}, BAR])
 srej('sim: erase in a number is BAD_OP', 'BAD_OP', [L, BAR, {'op': 'erase', 'n': 2, 'in': 1}])
@@ -614,11 +614,11 @@ KBX = 'defaults export com.apple.keyboard.preferences'
 spass('sim: keyboard prefs already pinned are read once, never written', [L], simCount={KBX: 1}, simExcludes=['defaults write', 'terminate'])
 spass('sim: a keyboard pref missing or on is pinned (all of them), the app quit, read back, and the launch note says so', [L],
       tape=[{'m': KBX, 'out': kbx({'KeyboardAutocapitalization': '<true/>'}, drop=['KeyboardPrediction']), 'n': 1}],
-      notes={'0': 'keyboard prefs pinned (2 were off)'}, simCount={KBX: 2, 'defaults write com.apple.keyboard.preferences': 16},
+      notes={'0': 'pinned the keyboard prefs (2 off)'}, simCount={KBX: 2, 'defaults write com.apple.keyboard.preferences': 16},
       simIncludes=['defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false',
                    'defaults write com.apple.keyboard.preferences DidShowGestureKeyboardIntroduction -bool true', 'simctl terminate'])
 spass('sim: a tip not marked seen is pinned too', [L], tape=[{'m': KBX, 'out': kbx({'DidShowGestureKeyboardIntroduction': '<false/>'}), 'n': 1}],
-      notes={'0': 'keyboard prefs pinned (1 were off)'})
+      notes={'0': 'pinned the keyboard prefs (1 off)'})
 spass('sim: keyboard prefs stored as integers count as pinned', [L],
       tape=[{'m': KBX, 'out': kbx({**{k: '<integer>0</integer>' for k in KB_OFF}, **{k: '<integer>1</integer>' for k in KB_ON}})}], simExcludes=['defaults write'])
 serr('sim: keyboard prefs that don\'t take are KEYBOARD_SETUP, naming them', 'KEYBOARD_SETUP', [L], tape=[{'m': KBX, 'out': kbx(drop=['KeyboardPrediction'])}],
@@ -654,9 +654,10 @@ sfail('sim: an app still running after two card swipes is SWITCHER_FAILED, no le
       tape=[dtree(tree(), 3), dtree(SWITCHER, 2), {'m': 'Web.app/Web', 'out': '4242'}], simCount={SWIPE: 2, LEAVE: 0}, files=['shots/01-fail.png'])
 spass("sim: a switcher without Aperture's card at the swipe spot is not swiped; pressed again", KS,
       tape=[dtree(tree(), 3), dtree(SWITCHER, 3), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
-      notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
+      notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 2})
 sfail('sim: no Aperture card in two tries is SWITCHER_FAILED, never swiped', 'SWITCHER_FAILED', KS,
-      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 0})
+      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 2},
+      notes={'1': 'no Aperture card in the app switcher in two tries'})
 serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 1), HANG('--point 340,560')], simCount={SWIPE: 0})
 spass('sim: a switcher that closed itself with the last card is not tapped (the spot is a dock icon)', KS,
       tape=[dtree(tree(), 3), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1)], notes={'1': 'no switcher left to leave (SpringBoard, Page 2 of 2)'},

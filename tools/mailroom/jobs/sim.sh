@@ -343,7 +343,7 @@ sim_kb_unpinned() {
   local tags k v want out=""
   tags="$(tr -d ' \t\r\n' <"$1" | awk '{gsub(/></, ">\n<"); print}')"
   for k in $SIM_KB_OFF $SIM_KB_ON; do
-    v="$(printf '%s\n' "$tags" | awk -v k="<key>$k</key>" 'f { print; exit } $0 == k { f = 1 }')"
+    v="$(awk -v k="<key>$k</key>" 'f { print; exit } $0 == k { f = 1 }' <<<"$tags")"
     case " $SIM_KB_ON " in *" $k "*) want=1 ;; *) want=0 ;; esac
     case "$want:$v" in 0:"<false/>" | 0:"<integer>0</integer>" | 1:"<true/>" | 1:"<integer>1</integer>") ;; *) out="$out $k" ;; esac
   done
@@ -511,7 +511,7 @@ sim_op_launch() {
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
       [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
       [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
-      [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; keyboard prefs pinned ($SIM_KB_SET were off)"
+      [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; pinned the keyboard prefs ($SIM_KB_SET off)"
       return 0
     fi
     i=$((i + 1))
@@ -773,7 +773,7 @@ sim_front() {
 # swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
 # is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
 sim_kill_switcher() {
-  local try sx sy ex ey bx by e why=""
+  local try sx sy ex ey bx by e why="" sawcard=""
   read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
   read -r bx by <<<"$SIM_PT_BACKGROUND"
   for try in 1 2; do
@@ -790,8 +790,12 @@ sim_kill_switcher() {
     sim_hung_err "reading the switcher card" && return 1
     if ! sim_match "$e" Aperture ""; then
       why="$why; no Aperture card at $sx,$sy ($(jq -r '"\(.role) \(.label // "")"' <<<"$e"))"
+      # leave the switcher (its background, as below) so the next try, or op, starts from the Home Screen
+      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      sleep 1
       continue
     fi
+    sawcard=1
     ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
       || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
     sleep 1
@@ -809,6 +813,10 @@ sim_kill_switcher() {
     fi
     why="$why; still running after the swipe"
   done
+  if [ -z "$sawcard" ] && [ "${why#*no Aperture card}" != "$why" ]; then
+    sim_fail SWITCHER_FAILED "no Aperture card in the app switcher in two tries$why: was the app running? Rerun from a launch"
+    return 1
+  fi
   sim_fail SWITCHER_FAILED "the app switcher didn't kill the app in two tries$why: iOS dropped the input; rerun the step, don't debug the app"
 }
 
@@ -1070,13 +1078,14 @@ sim_op_keys() {
 # left (0 when it isn't the field), and SIM_ERASED what it read, filtered like a MISS note.
 sim_erased_read() {
   local e
-  SIM_ERASED_OK="" SIM_LEFT=0
+  SIM_ERASED_OK="" SIM_LEFT=0 SIM_ERASED_FIELD=""
   rm -f "$SIM_P.unread"
   e="$(sim_point "$2" "$3")" || return 1
   sim_hung_err "reading the erased field" && return 1
   SIM_ERASED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
   jq -e --argjson r "$1" '(.role // "") != "" and (.role // "") == ($r.role // "")
     and (($r.label // "") == "" or ((.label // "") | ascii_downcase) == (($r.label // "") | ascii_downcase))' <<<"$e" >/dev/null 2>&1 || return 0
+  SIM_ERASED_FIELD=1
   if jq -e --argjson r "$1" '(.value // "") == "" or (.value // "") == ($r.value // "")' <<<"$e" >/dev/null 2>&1; then
     SIM_ERASED_OK=1
   else
@@ -1088,7 +1097,7 @@ sim_erased_read() {
 # the field is read back (where `in` found it, then at its centre, as keys does) and anything left gets that many
 # deletes plus two, at most twice, before ERASED. `in` must have found the field empty, before any keys.
 sim_op_erase() {
-  local n i=0 field r x y cx cy rounds=0 more first="" more1=""
+  local n i=0 field r x y cx cy rounds=0 more first="" more1="" found
   n="$(jq -r '.n | floor' <<<"$1")"
   sim_kb_up || { sim_kb_missing; return 1; }
   while [ "$i" -lt "$n" ]; do sim_key delete || return 1; i=$((i + 1)); done
@@ -1099,11 +1108,17 @@ sim_op_erase() {
   read -r x y cx cy < <(jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$r")
   while :; do
     sim_erased_read "$r" "$x" "$y" || return 1
+    found="$SIM_ERASED_FIELD"
     if [ -z "$SIM_ERASED_OK" ]; then
       sleep 1
       sim_erased_read "$r" "$cx" "$cy" || return 1
+      [ -z "$SIM_ERASED_FIELD" ] || found=1
     fi
     [ -z "$SIM_ERASED_OK" ] || break
+    if [ -z "$found" ]; then # the field moved, or the page changed: not dropped input, and more deletes can't help
+      sim_fail MISS "the field \`$field\` found isn't at $x,$y or its centre after erasing (saw $SIM_ERASED)"
+      return 1
+    fi
     [ -n "$first" ] || first="$SIM_ERASED"
     if [ "$rounds" -ge 2 ]; then
       sim_fail ERASED "deleted $n, then more twice; the field still reads $SIM_ERASED at $x,$y: iOS dropped the input; rerun the step, don't debug the app"
@@ -1111,14 +1126,14 @@ sim_op_erase() {
     fi
     more=$((SIM_LEFT + 2))
     [ "$more" -le 24 ] || more=24
-    [ -n "$more1" ] || more1="$more"
+    [ -z "$more1" ] && more1="$more" || more1="$more1 and $more"
     rounds=$((rounds + 1))
     i=0
     while [ "$i" -lt "$more" ]; do sim_key delete || return 1; i=$((i + 1)); done
   done
   case "$rounds" in
     1) SIM_NOTE="$SIM_NOTE; deleted $more1 more (first read $first)" ;;
-    2) SIM_NOTE="$SIM_NOTE; deleted more twice (first read $first)" ;;
+    2) SIM_NOTE="$SIM_NOTE; deleted more twice, $more1 (first read $first)" ;;
   esac
 }
 

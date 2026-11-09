@@ -122,6 +122,10 @@ describe('the slow tier', () => {
       expect(closing).toEqual([
         expect.objectContaining({ label: 'Cancel', role: 'AXButton', closes: true }),
       ]);
+      // and the modal is positively gone: the search field reads back right after Cancel (a discard confirm covers it)
+      const form = sent['done-form']!;
+      const cancel = form.findIndex((o) => o.op === 'tap' && 'closes' in o);
+      expect(form[cancel + 1]).toEqual({ op: 'expect', as: 'search', labelIs: 'Search tasks' });
       // every typed key is read back where an earlier find/tap found its field
       for (const [name, plan] of Object.entries(sent))
         for (const [i, o] of plan.entries()) {

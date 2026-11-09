@@ -215,6 +215,8 @@ const doneForm = (ctx: Ctx): IosOp[] => [
     role: 'AXButton',
     closes: true,
   },
+  // and the modal is really gone: Tasks' search reads back where it was found (the modal, or its discard confirm, covers it)
+  { op: 'expect', as: 'search', labelIs: 'Search tasks' },
   { op: 'shot', name: 'done-form-closed' },
 ];
 
