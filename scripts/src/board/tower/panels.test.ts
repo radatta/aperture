@@ -30,6 +30,7 @@ beforeAll(async () => {
 describe('frame', () => {
   it.each([
     [210, 55],
+    [185, 52],
     [160, 40],
     [100, 50],
     [95, 30],
@@ -124,7 +125,7 @@ describe('panels', () => {
     expect(new Set(items.map((i) => i.kind))).toEqual(
       new Set(['job', 'run', 'merge', 'pr', 'lease']),
     );
-    // jobs: failures only (exit 1, 137), never a pass, a 143 (killed by us), lint/typecheck or the dev server
+    // jobs: failures only (exit 1, 137), never a pass (a passing lint/typecheck included) or a 143 (killed by us)
     const jobs = items.filter((i) => i.kind === 'job');
     expect(jobs.map((j) => j.text.match(/exit \d+/)![0]).sort()).toEqual([
       'exit 1',
@@ -320,9 +321,27 @@ describe('tower v2', () => {
   it("the middle band is MACHINE's full height, every series drawn", () => {
     expect(layout(210, 55, wants(state)).rects.history!.h).toBe(HISTORY_H);
     const f = text(compose(state, live, 210, 55));
-    for (const lab of ['cpu ', 'mem ', 'pids ', 'heavy ', 'working ', 'events', 'live 22:09'])
-      expect(f).toContain(lab);
-    expect(f).not.toMatch(/\+\d+ more/);
+    // inside MACHINE's rect: each series a label row and a /max row, then events, axis, readout
+    const r = layout(210, 55, wants(state)).rects.history!;
+    const rows = f
+      .split('\n')
+      .slice(r.y + 1, r.y + r.h - 1)
+      .map((l) => [...l].slice(r.x + 2, r.x + 15).join(''));
+    expect(rows.map((l) => l.trim().split(' ')[0])).toEqual([
+      'cpu',
+      '/9.0',
+      'mem',
+      '/18.0G',
+      'pids',
+      '/768',
+      'heavy',
+      '/4',
+      'working',
+      '/4',
+      'events',
+      '',
+      'live',
+    ]);
   });
 
   it('PLAN: by time, the past due dimmed with ?, the unscheduled last, next merge in the title', () => {
@@ -371,6 +390,13 @@ describe('tower v2', () => {
       { at: at + (10 * 60 + 5) * 60000, what: 'overnight', kind: 'dev', who: null },
     ]);
     expect(far).toContain('│ 08:15 10h05m dev   overnight');
+    // a merge over 2 h past drops off the title too: the next live one names it
+    expect(
+      withPlan([
+        { at: at - 3 * 3600000, what: 'stale', kind: 'merge', who: null },
+        { at: at + 1800000, what: 'live', kind: 'merge', who: null },
+      ]),
+    ).toMatch(/next merge ~22:40/);
     // a merge already past due keeps the title, marked ?
     expect(withPlan([{ at: at - 60000, what: 'm', kind: 'merge', who: null }])).toMatch(
       /next merge \?22:09/,

@@ -39,6 +39,8 @@ export type QueueData = {
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
 };
 
+const ISO_DT = /^\d{4}-\d{2}-\d{2}T/;
+
 // `data` is the last good parse (kept through a bad write); `problems` say what's wrong with the current file.
 export type Queue = {
   status: 'ok' | 'missing' | 'bad';
@@ -138,7 +140,8 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     if (!what) return void problems.push(`plan[${i}]: no what`);
     if (!PLAN_KINDS.includes(kind))
       return void problems.push(`plan[${i}]: kind ${JSON.stringify(p.kind)}`);
-    const at = parseTime(p.at);
+    // a full date-time only: "22:40" or a bare date would read differently in the statusline's `date -d`
+    const at = typeof p.at === 'string' && ISO_DT.test(p.at) ? parseTime(p.at) : null;
     if (at === null && p.at != null) problems.push(`plan[${i}]: at is not an ISO time`); // kept, unscheduled
     plan.push({ at, what, kind, who: str(p.who) });
   });

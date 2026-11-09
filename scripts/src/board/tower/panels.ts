@@ -625,14 +625,14 @@ const PLAN_KIND: Record<PlanKind, string> = {
   ci: c(NORD.frost, 'ci   '),
 };
 
-// The first merge with a time, among items not dropped as stale: the PLAN title. The statusline
-// (localNotes/board/next-merge.sh) takes the same item.
-export function nextMerge(plan: PlanItem[]): PlanItem | null {
-  return plan.find((p) => p.kind === 'merge' && p.at !== null) ?? null;
-}
-
 export const livePlan = (plan: PlanItem[], now: number) =>
   plan.filter((p) => p.at === null || p.at >= now - PLAN_STALE);
+
+// The first merge with a time not dropped as stale: the PLAN title. The statusline
+// (localNotes/board/next-merge.sh) takes the same item.
+export function nextMerge(plan: PlanItem[], now: number): PlanItem | null {
+  return livePlan(plan, now).find((p) => p.kind === 'merge' && p.at !== null) ?? null;
+}
 
 export function plan(s: TowerState, r: Rect): string[] {
   const trouble = queueTrouble(s);
@@ -657,7 +657,7 @@ export function plan(s: TowerState, r: Rect): string[] {
       c(NORD.dim, who)
     );
   });
-  const m = nextMerge(items);
+  const m = nextMerge(items, s.now);
   const right = m
     ? c(NORD.green, `next merge ${m.at! < s.now ? '?' : '~'}${hhmm(m.at!)}`)
     : c(NORD.dim, `${items.length} planned`);
@@ -750,7 +750,7 @@ export function wants(s: TowerState): Wants {
     queue: q ? Math.max(1, q.devQueue.length) : 3,
     rahul: q ? Math.max(1, q.rahul.length) : 3,
     wave: q?.wave ? q.wave.items.filter((i) => i.state !== 'merged').length + 2 : 1,
-    plan: Math.max(1, q?.plan.length ?? 1),
+    plan: Math.max(1, livePlan(q?.plan ?? [], s.now).length),
     sessions: sessionSplit(s)[0].length + 2, // + the column header and the idle line
   };
 }

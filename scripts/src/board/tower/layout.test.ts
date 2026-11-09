@@ -17,6 +17,7 @@ function tiles(cols: number, rows: number) {
 describe('layout', () => {
   it.each([
     [210, 55, 'wide'],
+    [185, 52, 'wide'],
     [160, 40, 'wide'],
     [100, 50, 'narrow'],
     [95, 30, 'narrow'],

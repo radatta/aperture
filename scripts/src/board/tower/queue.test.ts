@@ -107,6 +107,8 @@ describe('parseQueue', () => {
           { what: 'x', kind: 'deploy' },
           { kind: 'merge' },
           { at: 'soon', what: 'kept, unscheduled', kind: 'ci' },
+          { at: '22:40', what: 'a bare time', kind: 'merge' },
+          { at: '2026-11-08', what: 'a bare date', kind: 'merge' },
         ],
         rahul: ['plain text works', { since: '2026-11-08' }],
         wave: { items: [{ branch: 'c', state: 'done' }] },
@@ -119,6 +121,8 @@ describe('parseQueue', () => {
     expect(q.data!.plan.map((p) => [p.what, p.at])).toEqual([
       ['ok', null],
       ['kept, unscheduled', null],
+      ['a bare time', null],
+      ['a bare date', null],
     ]);
     expect(q.problems).toEqual([
       'devQueue[1]: state "sleeping"',
@@ -129,6 +133,8 @@ describe('parseQueue', () => {
       'plan[1]: kind "deploy"',
       'plan[2]: no what',
       'plan[3]: at is not an ISO time',
+      'plan[4]: at is not an ISO time',
+      'plan[5]: at is not an ISO time',
     ]);
   });
 
