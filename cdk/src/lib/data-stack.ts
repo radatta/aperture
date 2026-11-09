@@ -36,7 +36,10 @@ export class ApertureDataStack extends Stack {
     // dev's on-demand ceiling (INFRA §11): caps what branch code in the dev account can spend on the table, and
     // the dev account's SCP denies UpdateTable, so it can't lift the cap. Prod stays uncapped — no agent reaches
     // it, and a cap there would only throttle a large finance sync.
-    const devThroughput = stage === 'dev' ? { maxReadRequestUnits: DEV_MAX_READ_UNITS, maxWriteRequestUnits: DEV_MAX_WRITE_UNITS } : {};
+    const devThroughput =
+      stage === 'dev'
+        ? { maxReadRequestUnits: DEV_MAX_READ_UNITS, maxWriteRequestUnits: DEV_MAX_WRITE_UNITS }
+        : {};
     // Single table (TECH §2.4): PK/SK strings, on-demand, PITR (35-day backup), RETAIN.
     this.table = new dynamodb.Table(this, 'Table', {
       tableName: `aperture-${stage}`,
@@ -70,7 +73,8 @@ export class ApertureDataStack extends Stack {
     // Hosted UI domain (free Cognito prefix; the login page). Account-suffixed for global uniqueness —
     // override via `-c cognitoPrefix=...` if the default is taken.
     const prefix =
-      (this.node.tryGetContext('cognitoPrefix') as string | undefined) ?? `aperture-${stage}-${this.account}`;
+      (this.node.tryGetContext('cognitoPrefix') as string | undefined) ??
+      `aperture-${stage}-${this.account}`;
     this.userPool.addDomain('HostedUi', { cognitoDomain: { domainPrefix: prefix } });
     this.cognitoDomain = `${prefix}.auth.${this.region}.amazoncognito.com`;
 

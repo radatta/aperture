@@ -77,7 +77,9 @@ describe('story bank', () => {
     await user.type(result, 'Cut MTTR in half.');
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(async () => expect((await api.listStories())[0]?.result).toBe('Cut MTTR in half.'));
+    await waitFor(async () =>
+      expect((await api.listStories())[0]?.result).toBe('Cut MTTR in half.'),
+    );
   });
 
   it('asks before deleting, then removes the story', async () => {

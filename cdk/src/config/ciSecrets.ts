@@ -28,13 +28,18 @@ export interface StageSecretOptions {
 // In CI an EMPTY value throws instead of falling through to the file: the runner has no file, so CDK would mint a
 // fresh value and silently rotate the token — MCP clients and the extension stop matching, and nothing errors.
 // A misnamed or missing secret now fails the synth, naming what to set.
-export function stageSecret(kind: SecretKind, stage: string, opts: StageSecretOptions = {}): string {
+export function stageSecret(
+  kind: SecretKind,
+  stage: string,
+  opts: StageSecretOptions = {},
+): string {
   const env = opts.env ?? process.env;
   const name = `APERTURE_${kind}`;
   const fromEnv = env[name]?.trim();
   if (fromEnv) return fromEnv;
   if (env.GITHUB_ACTIONS) {
-    const where = stage === 'prod' ? 'a secret in the prod GitHub environment' : 'a repository secret';
+    const where =
+      stage === 'prod' ? 'a secret in the prod GitHub environment' : 'a repository secret';
     throw new Error(`${name} is empty in CI — set ${kind}_${stage.toUpperCase()} (${where})`);
   }
   const dir = opts.dir ?? SECRETS_DIR;

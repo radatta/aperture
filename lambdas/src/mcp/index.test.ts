@@ -41,7 +41,15 @@ function get(path: string, headers: Record<string, string | undefined> = OK_ORIG
 
 describe('mcp edge', () => {
   afterEach(() => {
-    for (const k of ['ORIGIN_SECRET', 'AGENT_TOKEN', 'DEVICE_USER_ID', 'USER_POOL_ID', 'MCP_CLIENT_ID', 'COGNITO_DOMAIN', 'APP_URL']) {
+    for (const k of [
+      'ORIGIN_SECRET',
+      'AGENT_TOKEN',
+      'DEVICE_USER_ID',
+      'USER_POOL_ID',
+      'MCP_CLIENT_ID',
+      'COGNITO_DOMAIN',
+      'APP_URL',
+    ]) {
       delete process.env[k];
     }
   });

@@ -75,7 +75,9 @@ describe('ApertureDataStack', () => {
         RestrictPublicBuckets: true,
       },
       CorsConfiguration: {
-        CorsRules: Match.arrayWith([Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) })]),
+        CorsRules: Match.arrayWith([
+          Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) }),
+        ]),
       },
     });
     // The one bucket in the precious stack is never auto-deleted.
@@ -192,7 +194,9 @@ describe('ApertureAppStack', () => {
     const policies = app.findResources('AWS::IAM::Policy');
     const putCount = Object.values(policies).filter((p) => {
       const stmts = (p.Properties?.PolicyDocument?.Statement ?? []) as { Action?: unknown }[];
-      return stmts.some((s) => Array.isArray(s.Action) && (s.Action as string[]).includes('ssm:PutParameter'));
+      return stmts.some(
+        (s) => Array.isArray(s.Action) && (s.Action as string[]).includes('ssm:PutParameter'),
+      );
     }).length;
     expect(putCount).toBe(1); // the BFF connects/disconnects Google accounts; the MCP function never writes SSM
   });
@@ -435,14 +439,22 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       MetricName: 'Duration',
     });
     // The push dispatch adds none (no fixed monthly cost): the account-wide Errors alarm covers it.
-    expect(Object.keys(t.findResources('AWS::CloudWatch::Alarm')).filter((id) => id.includes('PushDispatch'))).toEqual([]);
+    expect(
+      Object.keys(t.findResources('AWS::CloudWatch::Alarm')).filter((id) =>
+        id.includes('PushDispatch'),
+      ),
+    ).toEqual([]);
     t.resourceCountIs('AWS::SNS::Topic', 1);
     t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
   });
 
   it("watches the MCP function's p99 duration at 80% of its 15 s timeout", () => {
     const t = build('prod');
-    const [mcpFnId] = Object.keys(t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: 'aperture-mcp-prod' } }));
+    const [mcpFnId] = Object.keys(
+      t.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: 'aperture-mcp-prod' },
+      }),
+    );
     expect(mcpFnId).toBeDefined();
     const durations = alarmsNamed(t, 'Duration');
     expect(durations.map(([id]) => id.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual([
@@ -461,14 +473,21 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
 
   // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org — so
   // Errors and Throttles are one alarm each for the whole account, at the BFF alarm's old id so it updates in place.
-  it.each(['Errors', 'Throttles'])('%s: one account-wide alarm, at the BFF alarm\'s old id', (metricName) => {
-    const alarms = alarmsNamed(build('prod'), metricName);
-    expect(alarms).toHaveLength(1);
-    const [[id = '', r] = []] = alarms;
-    expect(id).toMatch(new RegExp(`^Monitoring${metricName}`));
-    expect(r?.Properties).toMatchObject({ Namespace: 'AWS/Lambda', Statistic: 'Sum', Threshold: 1 });
-    expect(r?.Properties.Dimensions).toBeUndefined();
-  });
+  it.each(['Errors', 'Throttles'])(
+    "%s: one account-wide alarm, at the BFF alarm's old id",
+    (metricName) => {
+      const alarms = alarmsNamed(build('prod'), metricName);
+      expect(alarms).toHaveLength(1);
+      const [[id = '', r] = []] = alarms;
+      expect(id).toMatch(new RegExp(`^Monitoring${metricName}`));
+      expect(r?.Properties).toMatchObject({
+        Namespace: 'AWS/Lambda',
+        Statistic: 'Sum',
+        Threshold: 1,
+      });
+      expect(r?.Properties.Dimensions).toBeUndefined();
+    },
+  );
 
   // enforceSSL's TopicPolicy replaces SNS's default policy, so CloudWatch needs its own Allow or no alarm ever emails.
   it('lets CloudWatch alarms publish to the email topic, with the SSL-only deny kept', () => {
@@ -495,7 +514,14 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
               StringEquals: { 'aws:SourceAccount': '111111111111' },
               ArnLike: {
                 'aws:SourceArn': {
-                  'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-west-1:111111111111:alarm:*']],
+                  'Fn::Join': [
+                    '',
+                    [
+                      'arn:',
+                      { Ref: 'AWS::Partition' },
+                      ':cloudwatch:us-west-1:111111111111:alarm:*',
+                    ],
+                  ],
                 },
               },
             },
@@ -630,9 +656,9 @@ describe('ApertureAppStack finance sync', () => {
       expect(anth.length).toBeGreaterThan(0);
       for (const st of anth) {
         expect(st.Action).toBe('ssm:GetParameter');
-        expect(JSON.stringify(st.Resource).match(/parameter\/aperture\/dev\/anthropic[^"]*/g)).toEqual([
-          'parameter/aperture/dev/anthropic/api_key',
-        ]);
+        expect(
+          JSON.stringify(st.Resource).match(/parameter\/aperture\/dev\/anthropic[^"]*/g),
+        ).toEqual(['parameter/aperture/dev/anthropic/api_key']);
       }
     }
   });
@@ -662,10 +688,14 @@ describe('ApertureAppStack finance sync', () => {
     });
     app.hasResourceProperties('AWS::Scheduler::ScheduleGroup', { Name: 'aperture-finance-dev' });
     const schedule = Object.values(
-      app.findResources('AWS::Scheduler::Schedule', { Properties: { Name: 'aperture-finance-sync-dev' } }),
+      app.findResources('AWS::Scheduler::Schedule', {
+        Properties: { Name: 'aperture-finance-sync-dev' },
+      }),
     )[0]!;
     const [groupId] = Object.keys(
-      app.findResources('AWS::Scheduler::ScheduleGroup', { Properties: { Name: 'aperture-finance-dev' } }),
+      app.findResources('AWS::Scheduler::ScheduleGroup', {
+        Properties: { Name: 'aperture-finance-dev' },
+      }),
     );
     expect((schedule.Properties as { GroupName: unknown }).GroupName).toEqual({ Ref: groupId });
     const roleArn = (schedule.Properties as { Target: { RoleArn: unknown } }).Target.RoleArn;
@@ -683,7 +713,9 @@ describe('ApertureAppStack finance sync', () => {
     expect(Object.keys(trust.Condition)).toEqual(['StringEquals']);
     expect(trust.Condition.StringEquals['aws:SourceAccount']).toBe('111111111111');
     // Scheduler matches SourceArn against the schedule group; a schedule ARN fails CreateSchedule.
-    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({ 'Fn::GetAtt': [groupId, 'Arn'] });
+    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({
+      'Fn::GetAtt': [groupId, 'Arn'],
+    });
   });
 });
 
@@ -723,13 +755,29 @@ describe('ApertureAppStack finance sync by stage', () => {
 
   it('prod keeps BFF and MCP logs for 90 days', () => {
     const retention = build('prod', 'u').findResources('Custom::LogRetention');
-    expect(Object.values(retention).map((r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays)).toEqual([90, 90]);
+    expect(
+      Object.values(retention).map(
+        (r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays,
+      ),
+    ).toEqual([90, 90]);
   });
 
   it('no device user → no finance schedule (the sync still runs on Refresh)', () => {
     const t = build('dev');
-    expect(Object.keys(t.findResources('AWS::Scheduler::Schedule', { Properties: { Name: 'aperture-finance-sync-dev' } }))).toEqual([]);
-    expect(Object.keys(t.findResources('AWS::Scheduler::ScheduleGroup', { Properties: { Name: 'aperture-finance-dev' } }))).toEqual([]);
+    expect(
+      Object.keys(
+        t.findResources('AWS::Scheduler::Schedule', {
+          Properties: { Name: 'aperture-finance-sync-dev' },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      Object.keys(
+        t.findResources('AWS::Scheduler::ScheduleGroup', {
+          Properties: { Name: 'aperture-finance-dev' },
+        }),
+      ),
+    ).toEqual([]);
     // The reminder poller needs no device user: it ticks over the push registry.
     t.hasResourceProperties('AWS::Scheduler::Schedule', { Name: 'aperture-push-dispatch-dev' });
     t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'aperture-finance-sync-dev' });
@@ -740,7 +788,11 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
   const build = (stage: string) => {
     const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
-    const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env, allowedOrigins: ['*'] });
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
+      stage,
+      env,
+      allowedOrigins: ['*'],
+    });
     return Template.fromStack(
       new ApertureAppStack(app, `ApertureApp-${stage}`, {
         stage,
@@ -758,16 +810,23 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
   const dev = build('dev');
   const prod = build('prod');
   const fnOf = (t: Template, name: string) => {
-    const [id, res] = Object.entries(t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }))[0]!;
+    const [id, res] = Object.entries(
+      t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }),
+    )[0]!;
     return { id, props: res.Properties as Record<string, unknown> };
   };
   const statementsOf = (t: Template, fnRole: unknown) =>
     Object.values(t.findResources('AWS::IAM::Policy'))
       .filter((p) =>
-        JSON.stringify(p.Properties.Roles).includes(JSON.stringify({ Ref: (fnRole as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0] })),
+        JSON.stringify(p.Properties.Roles).includes(
+          JSON.stringify({ Ref: (fnRole as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0] }),
+        ),
       )
-      .flatMap((p) => p.Properties.PolicyDocument.Statement as { Action: unknown; Resource: unknown }[]);
-  const actionsOf = (stmts: { Action: unknown }[]) => stmts.flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action]));
+      .flatMap(
+        (p) => p.Properties.PolicyDocument.Statement as { Action: unknown; Resource: unknown }[],
+      );
+  const actionsOf = (stmts: { Action: unknown }[]) =>
+    stmts.flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action]));
   const poller = fnOf(dev, 'aperture-push-dispatch-dev');
 
   it('runs a fourth function, 20 s / 256 MB on Node 22, with no Function URL and only table/stage/app env', () => {
@@ -801,8 +860,14 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
     expect(invoke.map((r) => r.Properties)).toEqual([
       expect.objectContaining({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 }),
     ]);
-    dev.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: '/aws/lambda/aperture-push-dispatch-dev', RetentionInDays: 14 });
-    prod.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: '/aws/lambda/aperture-push-dispatch-prod', RetentionInDays: 30 });
+    dev.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/aws/lambda/aperture-push-dispatch-dev',
+      RetentionInDays: 14,
+    });
+    prod.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/aws/lambda/aperture-push-dispatch-prod',
+      RetentionInDays: 30,
+    });
   });
 
   it('its role gets Get/Put/Query/Delete on the table + GSI1 and the private key only — nothing else', () => {
@@ -820,9 +885,9 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
       'ssm:GetParameter',
     ]);
     const ssm = stmts.filter((st) => actionsOf([st]).includes('ssm:GetParameter'));
-    expect(JSON.stringify(ssm.map((st) => st.Resource)).match(/parameter\/aperture\/[^"]*/g)).toEqual([
-      'parameter/aperture/dev/push/vapid_private_key',
-    ]);
+    expect(
+      JSON.stringify(ssm.map((st) => st.Resource)).match(/parameter\/aperture\/[^"]*/g),
+    ).toEqual(['parameter/aperture/dev/push/vapid_private_key']);
     expect(JSON.stringify(stmts)).not.toMatch(/\*"|index\/\*|s3:|lambda:/);
   });
 
@@ -831,8 +896,14 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
     const role = dev.findResources('AWS::IAM::Role')[roleId]!;
     expect(role.Properties.ManagedPolicyArns).toBeUndefined();
     expect(actionsOf(statementsOf(dev, poller.props.Role))).not.toContain('logs:CreateLogGroup');
-    const logs = statementsOf(dev, poller.props.Role).filter((st) => actionsOf([st]).includes('logs:PutLogEvents'));
-    const groupId = Object.keys(dev.findResources('AWS::Logs::LogGroup', { Properties: { LogGroupName: '/aws/lambda/aperture-push-dispatch-dev' } }))[0]!;
+    const logs = statementsOf(dev, poller.props.Role).filter((st) =>
+      actionsOf([st]).includes('logs:PutLogEvents'),
+    );
+    const groupId = Object.keys(
+      dev.findResources('AWS::Logs::LogGroup', {
+        Properties: { LogGroupName: '/aws/lambda/aperture-push-dispatch-dev' },
+      }),
+    )[0]!;
     expect(logs.map((st) => st.Resource)).toEqual([{ 'Fn::GetAtt': [groupId, 'Arn'] }]); // that one group, nothing wider
   });
 
@@ -858,18 +929,33 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
         RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 },
       }),
     });
-    const schedule = Object.values(dev.findResources('AWS::Scheduler::Schedule', { Properties: { Name: 'aperture-push-dispatch-dev' } }))[0]!;
-    const [groupId] = Object.keys(dev.findResources('AWS::Scheduler::ScheduleGroup', { Properties: { Name: 'aperture-push-dev' } }));
+    const schedule = Object.values(
+      dev.findResources('AWS::Scheduler::Schedule', {
+        Properties: { Name: 'aperture-push-dispatch-dev' },
+      }),
+    )[0]!;
+    const [groupId] = Object.keys(
+      dev.findResources('AWS::Scheduler::ScheduleGroup', {
+        Properties: { Name: 'aperture-push-dev' },
+      }),
+    );
     expect((schedule.Properties as { GroupName: unknown }).GroupName).toEqual({ Ref: groupId });
     const roleArn = (schedule.Properties as { Target: { RoleArn: unknown } }).Target.RoleArn;
     expect(statementsOf(dev, roleArn)).toEqual([
-      { Action: 'lambda:InvokeFunction', Effect: 'Allow', Resource: { 'Fn::GetAtt': [poller.id, 'Arn'] } },
+      {
+        Action: 'lambda:InvokeFunction',
+        Effect: 'Allow',
+        Resource: { 'Fn::GetAtt': [poller.id, 'Arn'] },
+      },
     ]);
     const roleId = (roleArn as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
-    const [trust] = dev.findResources('AWS::IAM::Role')[roleId]!.Properties.AssumeRolePolicyDocument.Statement;
+    const [trust] =
+      dev.findResources('AWS::IAM::Role')[roleId]!.Properties.AssumeRolePolicyDocument.Statement;
     expect(trust.Principal).toEqual({ Service: 'scheduler.amazonaws.com' });
     expect(trust.Condition.StringEquals['aws:SourceAccount']).toBe('111111111111');
-    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({ 'Fn::GetAtt': [groupId, 'Arn'] });
+    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({
+      'Fn::GetAtt': [groupId, 'Arn'],
+    });
   });
 });
 
@@ -909,7 +995,12 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   const prod = build('prod');
   const resources = (ts: Template[]) =>
     ts.flatMap((t) =>
-      Object.values(t.toJSON().Resources as Record<string, { Type: string; Properties?: Record<string, unknown> }>),
+      Object.values(
+        t.toJSON().Resources as Record<
+          string,
+          { Type: string; Properties?: Record<string, unknown> }
+        >,
+      ),
     );
 
   it("deploys both stages through their own account's stock bootstrap", () => {
@@ -920,16 +1011,25 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   });
 
   it("caps dev's table and GSI1 on-demand throughput, and leaves prod uncapped", () => {
-    const cap = { MaxReadRequestUnits: DEV_MAX_READ_UNITS, MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS };
+    const cap = {
+      MaxReadRequestUnits: DEV_MAX_READ_UNITS,
+      MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS,
+    };
     const [devTable] = resources(dev.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
     expect(devTable?.Properties?.OnDemandThroughput).toEqual(cap);
-    expect((devTable?.Properties?.GlobalSecondaryIndexes as { OnDemandThroughput?: unknown }[])[0]?.OnDemandThroughput).toEqual(cap);
+    expect(
+      (devTable?.Properties?.GlobalSecondaryIndexes as { OnDemandThroughput?: unknown }[])[0]
+        ?.OnDemandThroughput,
+    ).toEqual(cap);
     expect(JSON.stringify(resources(prod.templates))).not.toContain('OnDemandThroughput');
   });
 
   it("expires tombstones on dev's table only", () => {
     const [devTable] = resources(dev.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
-    expect(devTable?.Properties?.TimeToLiveSpecification).toEqual({ AttributeName: 'expiresAt', Enabled: true });
+    expect(devTable?.Properties?.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expiresAt',
+      Enabled: true,
+    });
     expect(JSON.stringify(resources(prod.templates))).not.toContain('TimeToLiveSpecification');
   });
 
@@ -940,7 +1040,11 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     for (const r of all.filter((x) => x.Type === 'AWS::Lambda::Function'))
       expect(r.Properties?.ReservedConcurrentExecutions).toBeUndefined();
     const types = all.map((r) => r.Type);
-    for (const t of ['AWS::Lambda::EventSourceMapping', 'AWS::Lambda::Alias', 'AWS::Lambda::Version'])
+    for (const t of [
+      'AWS::Lambda::EventSourceMapping',
+      'AWS::Lambda::Alias',
+      'AWS::Lambda::Version',
+    ])
       expect(types).not.toContain(t);
     for (const r of all.filter((x) => x.Type === 'AWS::Lambda::EventInvokeConfig'))
       expect(r.Properties?.DestinationConfig).toBeUndefined();
@@ -948,9 +1052,15 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
   // The kill switch locks DEV_URL_FUNCTIONS' URLs; a URL on any other function would stay open through a kill.
   it('gives a public Function URL only to the functions the kill switch locks', () => {
-    const t = dev.templates[1]!.toJSON().Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+    const t = dev.templates[1]!.toJSON().Resources as Record<
+      string,
+      { Type: string; Properties: Record<string, unknown> }
+    >;
     const fnName = (ref: unknown) => {
-      const id = (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ?? (ref as { Ref?: string }).Ref ?? '';
+      const id =
+        (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ??
+        (ref as { Ref?: string }).Ref ??
+        '';
       return t[id]?.Properties.FunctionName;
     };
     const urls = Object.values(t)
@@ -975,17 +1085,27 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       'AWS::CloudFront::MonitoringSubscription': 'cloudfront:CreateMonitoringSubscription',
     };
     const standing = JSON.stringify(guardrailsPolicy());
-    for (const [type, action] of Object.entries(deniedBy)) expect(standing, `${type} → ${action}`).toContain(action);
+    for (const [type, action] of Object.entries(deniedBy))
+      expect(standing, `${type} → ${action}`).toContain(action);
     const types = new Set(resources(dev.templates).map((r) => r.Type));
-    for (const type of Object.keys(deniedBy)) expect(types.has(type), `${type}: the guardrails SCP denies it in dev`).toBe(false);
+    for (const type of Object.keys(deniedBy))
+      expect(types.has(type), `${type}: the guardrails SCP denies it in dev`).toBe(false);
   });
 
   it('uses only services the dev allowlist SCP admits — a new one means widening it in ApertureOrg first', () => {
     const allowed = (allowlistPolicy().Statement[0] as { NotAction: string[] }).NotAction;
     // The allowlist entry each resource type's service needs (SSM is admitted for Parameter Store only).
     const entry: Record<string, string> = {
-      Lambda: 'lambda:*', IAM: 'iam:*', Logs: 'logs:*', S3: 's3:*', CloudFront: 'cloudfront:*', Cognito: 'cognito-idp:*',
-      DynamoDB: 'dynamodb:*', Scheduler: 'scheduler:*', SSM: 'ssm:*Parameter*', KMS: 'kms:*',
+      Lambda: 'lambda:*',
+      IAM: 'iam:*',
+      Logs: 'logs:*',
+      S3: 's3:*',
+      CloudFront: 'cloudfront:*',
+      Cognito: 'cognito-idp:*',
+      DynamoDB: 'dynamodb:*',
+      Scheduler: 'scheduler:*',
+      SSM: 'ssm:*Parameter*',
+      KMS: 'kms:*',
     };
     for (const type of new Set(resources(dev.templates).map((r) => r.Type))) {
       if (type.startsWith('Custom::') || type === 'AWS::CDK::Metadata') continue; // CDK providers run as Lambdas
@@ -1001,17 +1121,22 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   // and the freeze denies the bot lane new code in one (FrozenProviderCode). Dev carries none; prod keeps its two.
   it('gives dev no CDK provider function, so a lane switch never touches frozen provider code', () => {
     const unnamed = (ts: Template[]) =>
-      resources(ts).filter((r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.FunctionName === undefined);
+      resources(ts).filter(
+        (r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.FunctionName === undefined,
+      );
     expect(unnamed(dev.templates)).toEqual([]);
     expect(resources(dev.templates).filter((r) => r.Type.startsWith('Custom::'))).toEqual([]);
     expect(unnamed(prod.templates)).toHaveLength(2); // LogRetention and S3 auto-delete
   });
 
   it("names functions so the freeze's provider-code deny would catch a CDK provider and none of the app's", () => {
-    const fns = resources([...dev.templates, ...prod.templates]).filter((r) => r.Type === 'AWS::Lambda::Function');
+    const fns = resources([...dev.templates, ...prod.templates]).filter(
+      (r) => r.Type === 'AWS::Lambda::Function',
+    );
     for (const f of fns) {
       const name = f.Properties?.FunctionName as string | undefined;
-      if (name !== undefined) expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
+      if (name !== undefined)
+        expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
     }
     for (const a of dev.artifacts) expect(a.stackName).toMatch(/^Aperture/); // so an unnamed function's name does
   });
@@ -1045,9 +1170,16 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     });
 
     it("differs from the frozen lane's templates only in the bootstrap version parameter and the asset bucket", () => {
-      const same = (t: Template) => JSON.parse(JSON.stringify(strip(t)).replaceAll('cdk-devmain-assets-', 'cdk-hnb659fds-assets-'));
-      main.templates.forEach((t, i) => expect(same(t)).toEqual(strip(dev.templates[i] as Template)));
-      expect(JSON.stringify(main.templates[0]?.toJSON().Parameters)).toContain('/cdk-bootstrap/devmain/version');
+      const same = (t: Template) =>
+        JSON.parse(
+          JSON.stringify(strip(t)).replaceAll('cdk-devmain-assets-', 'cdk-hnb659fds-assets-'),
+        );
+      main.templates.forEach((t, i) =>
+        expect(same(t)).toEqual(strip(dev.templates[i] as Template)),
+      );
+      expect(JSON.stringify(main.templates[0]?.toJSON().Parameters)).toContain(
+        '/cdk-bootstrap/devmain/version',
+      );
     });
 
     it('takes a lane only for dev, and only a known one', () => {
@@ -1062,7 +1194,9 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
 describe('ApertureBillingStack (hand-deployed cost guard)', () => {
   const app = new App();
-  const t = Template.fromStack(new ApertureBillingStack(app, 'ApertureBilling', { env: { region: 'us-east-1' } }));
+  const t = Template.fromStack(
+    new ApertureBillingStack(app, 'ApertureBilling', { env: { region: 'us-east-1' } }),
+  );
 
   it('has a monthly cost budget with email notifications', () => {
     t.hasResourceProperties('AWS::Budgets::Budget', {

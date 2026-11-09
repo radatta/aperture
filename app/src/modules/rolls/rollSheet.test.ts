@@ -29,7 +29,13 @@ describe('contactSheet', () => {
 
   it('counts ALL-TIME reps, including days older than the window', () => {
     const old = '2026-01-01'; // far before the 5-week window
-    const s = contactSheet(new Map([[old, 3], ['2026-09-20', 2]]), today);
+    const s = contactSheet(
+      new Map([
+        [old, 3],
+        ['2026-09-20', 2],
+      ]),
+      today,
+    );
     expect(s.total).toBe(5); // the out-of-window 3 still counts
     expect(s.rows.flat().some((c) => c.date === old)).toBe(false); // but isn't drawn
   });

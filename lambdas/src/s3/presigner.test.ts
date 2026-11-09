@@ -12,7 +12,11 @@ describe('s3 presigner', () => {
   });
 
   it('signs content-length into the PUT with the 15-min upload TTL', async () => {
-    const url = await createS3Presigner('aperture-files').putUrl('u/alice/t1/att1', 'image/png', 1234);
+    const url = await createS3Presigner('aperture-files').putUrl(
+      'u/alice/t1/att1',
+      'image/png',
+      1234,
+    );
     const params = new URL(url).searchParams;
     const signed = decodeURIComponent(params.get('X-Amz-SignedHeaders') ?? '');
     // content-length is signed, so the byte size is cryptographically fixed — the cap can't be exceeded

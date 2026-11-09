@@ -1,6 +1,6 @@
 # Recruiting — LeetCode attempt capture
 
-The Recruiting module records **every** LeetCode submission you make — accepted *and* wrong — and shows
+The Recruiting module records **every** LeetCode submission you make — accepted _and_ wrong — and shows
 them at `/recruiting` as a reverse-chron list with a derived per-problem attempt count ("attempt 2 of 2").
 
 Wrong attempts are the point. A solved-problems counter is a scoreboard; the wrong→accepted arc is the
@@ -77,7 +77,7 @@ recruitingHelpers.withAttemptOrdinals()   ← "attempt N of M" computed at rende
 
 ## Design decisions worth not re-litigating
 
-**The extension is 100% passive toward LeetCode.** It never issues a request *to LeetCode* — it only
+**The extension is 100% passive toward LeetCode.** It never issues a request _to LeetCode_ — it only
 observes calls LeetCode already made. No scraping, no polling, no automation. (It does make exactly one
 request of its own: the `POST` to our own backend.) That's the best ToS posture available and the reason
 this exists as an extension rather than a scheduled scraper.
@@ -103,27 +103,27 @@ storage — a different risk class from a JWT. A device token sent to any other 
 
 ## Files
 
-| Path | What |
-| --- | --- |
-| `extension/` | MV3 web extension — Safari daily (wrapped in an Xcode app), Firefox AMO-signed. No deps, no bundler, no build step. `README.md` there is the wire contract and the Safari build steps. |
-| `packages/shared/src/types.ts` | `LeetcodeAttempt`, `LeetcodeVerdict` |
-| `packages/shared/src/api.ts` | `RecordLeetcodeAttemptInput`, the two `ApiClient` methods |
-| `packages/shared/src/leetcode.ts` | `normalizeVerdict` — status_code first, status_msg fallback |
-| `packages/shared/src/dates.ts` | `dayKeyForOffset` — bucket by the client's tz + `dayStartHour` |
-| `packages/shared/src/contractTests.ts` | one suite, run 3× — stub, backend direct, backend via handleRpc |
-| `app/src/pages/Recruiting/` | page + `recruitingHelpers.ts` (ordinals, summary, verdict tone) |
-| `app/src/data/hooks/useLeetcodeAttempts.ts` | React Query read hook |
-| `lambdas/src/auth/verify.ts` | `resolveDeviceUserId` |
-| `lambdas/src/backend.ts` | `recordLeetcodeAttempt` / `listLeetcodeAttempts` |
-| `lambdas/src/ddb/keys.ts` | `lc#<day>#<id>` sort keys |
-| `cdk/src/config/ciSecrets.ts`, `cdk/src/bin/aperture.ts` | `stageSecret('DEVICE_TOKEN', stage)` / `deviceUserIdFor` |
+| Path                                                     | What                                                                                                                                                                                   |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extension/`                                             | MV3 web extension — Safari daily (wrapped in an Xcode app), Firefox AMO-signed. No deps, no bundler, no build step. `README.md` there is the wire contract and the Safari build steps. |
+| `packages/shared/src/types.ts`                           | `LeetcodeAttempt`, `LeetcodeVerdict`                                                                                                                                                   |
+| `packages/shared/src/api.ts`                             | `RecordLeetcodeAttemptInput`, the two `ApiClient` methods                                                                                                                              |
+| `packages/shared/src/leetcode.ts`                        | `normalizeVerdict` — status_code first, status_msg fallback                                                                                                                            |
+| `packages/shared/src/dates.ts`                           | `dayKeyForOffset` — bucket by the client's tz + `dayStartHour`                                                                                                                         |
+| `packages/shared/src/contractTests.ts`                   | one suite, run 3× — stub, backend direct, backend via handleRpc                                                                                                                        |
+| `app/src/pages/Recruiting/`                              | page + `recruitingHelpers.ts` (ordinals, summary, verdict tone)                                                                                                                        |
+| `app/src/data/hooks/useLeetcodeAttempts.ts`              | React Query read hook                                                                                                                                                                  |
+| `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                  |
+| `lambdas/src/backend.ts`                                 | `recordLeetcodeAttempt` / `listLeetcodeAttempts`                                                                                                                                       |
+| `lambdas/src/ddb/keys.ts`                                | `lc#<day>#<id>` sort keys                                                                                                                                                              |
+| `cdk/src/config/ciSecrets.ts`, `cdk/src/bin/aperture.ts` | `stageSecret('DEVICE_TOKEN', stage)` / `deviceUserIdFor`                                                                                                                               |
 
 ## Operator setup
 
 ### 1. GitHub secrets + vars (do this before the first deploy)
 
 - [ ] **secret** `DEVICE_TOKEN_DEV` — any long random hex string (`openssl rand -hex 24`).
-- [ ] **secret** `DEVICE_TOKEN_PROD` — a *different* one, in the `prod` GitHub environment (`gh secret set DEVICE_TOKEN_PROD --env prod`), not repo-level.
+- [ ] **secret** `DEVICE_TOKEN_PROD` — a _different_ one, in the `prod` GitHub environment (`gh secret set DEVICE_TOKEN_PROD --env prod`), not repo-level.
 - [ ] **var** `DEVICE_USER_ID_DEV` — your **dev** Cognito `sub`.
 - [ ] **var** `DEVICE_USER_ID_PROD` — your **prod** Cognito `sub`.
 
@@ -131,7 +131,7 @@ Both pairs are load-bearing, and they fail in different ways:
 
 - `DEVICE_TOKEN_*` unset or misnamed → the CI synth **fails, naming the secret** (`stageSecret`, since
   prod-secrets). Before that guard, each CI deploy minted a fresh random token, so the token saved in your
-  extension options silently stopped matching after any deploy. (A *local* `cdk synth`
+  extension options silently stopped matching after any deploy. (A _local_ `cdk synth`
   reuses the gitignored `cdk/.secrets/device-token.<stage>` file, so it's stable there — which is
   exactly why this is easy to miss until CI runs.)
 - `DEVICE_USER_ID_*` unset → the handler falls back to userId `'local'`, so attempts are written under
@@ -153,10 +153,10 @@ validating a stage.
 
 ### The origins
 
-| Stage | Origin |
-| --- | --- |
-| prod | `https://aperture.rahuldatta.dev` |
-| dev | `https://dev.aperture.rahuldatta.dev` |
+| Stage | Origin                                |
+| ----- | ------------------------------------- |
+| prod  | `https://aperture.rahuldatta.dev`     |
+| dev   | `https://dev.aperture.rahuldatta.dev` |
 
 Both have been live on their custom domains since 2026-08 (INFRA §8). **There is no local origin** — the
 Vite dev server has no `/api/*` route and there's no local API script, so "point it at localhost" has
@@ -169,7 +169,7 @@ Safari has been the daily browser since 2026-10-04; the Firefox install below is
 **1. Daily driver — the Safari prod app, prod origin, your personal Safari profile.**
 This is the only one that needs to be permanent, and it genuinely does: a temporary extension you forgot
 to re-load after a restart doesn't error, it just silently stops capturing. Same silent-failure family as
-the identity seam. Build: `extension/README.md` → *Build it for Safari*.
+the identity seam. Build: `extension/README.md` → _Build it for Safari_.
 
 **2. Stage validation — the Safari dev app (red icon), dev origin, an "Aperture Dev" Safari profile.**
 A second app with its own bundle ID (`…ApertureLeetCodeDev`), so its options are separate, and enabled
@@ -178,7 +178,7 @@ practice never lands in dev. Its Xcode project references `extension/` live, so 
 is a rebuild plus the re-copy (README step 4). This is where the four ingest checks get run.
 
 **3. Extension code iteration — the dev app, or a temporary extension, no endpoint needed.** See
-*Testing* → "Extension against no live endpoint" (the log strings, and how the capture half was verified
+_Testing_ → "Extension against no live endpoint" (the log strings, and how the capture half was verified
 on 2026-08-09).
 
 ### Safari: free signing (layer 1 and 2)
@@ -195,14 +195,14 @@ Settings → Accounts → Manage Certificates (or rebuild after expiry), then re
 steps 2–4).
 
 The packager warns that `world` is unsupported — wrong: `world: "MAIN"` works in Safari 26 (capture
-verified end-to-end 2026-10-04). An extension that isn't enabled in the *current* profile just looks
+verified end-to-end 2026-10-04). An extension that isn't enabled in the _current_ profile just looks
 like a failed patch (`window.fetch` stays `[native code]`).
 
 ### Loading a temporary extension (layer 3)
 
 Safari: Develop → **Add Temporary Extension…** → this repo's `extension/` folder (Safari 18.4+; the
-Develop menu needs Settings → Advanced → *Show features for web developers*). Firefox: steps and the
-128+ requirement in `extension/README.md` → *Load it in Firefox*. Options: README → *Configure*.
+Develop menu needs Settings → Advanced → _Show features for web developers_). Firefox: steps and the
+128+ requirement in `extension/README.md` → _Load it in Firefox_. Options: README → _Configure_.
 Temporary extensions don't survive a restart; re-add each time — acceptable for iteration, not for the
 daily driver.
 
@@ -222,7 +222,7 @@ free. Install it via `about:addons` → gear icon → **Install Add-on From File
 `version` bump in `manifest.json`.
 
 **The extension ID is permanent once signed.** It's `aperture-leetcode@rahuldatta.dev` — changing it
-later makes it a *different* add-on, meaning a reinstall and a lost stored token. Settle it before the
+later makes it a _different_ add-on, meaning a reinstall and a lost stored token. Settle it before the
 first submission, not after.
 
 **`data_collection_permissions` is required.** New submissions are rejected without
@@ -232,8 +232,8 @@ only sensitive categories (PII, health, financial, auth, personal communications
 categories like `websiteActivity` exist **only** in `optional`, which would create a user-toggleable
 consent the extension doesn't check before POSTing — worse than not declaring it.
 
-**Two AMO error messages that mislead.** A schema failure can surface as *"Your add-on should end with
-.zip, .xpi or .crx"* on a perfectly valid `.zip` — ignore the filename advice and look for the real
+**Two AMO error messages that mislead.** A schema failure can surface as _"Your add-on should end with
+.zip, .xpi or .crx"_ on a perfectly valid `.zip` — ignore the filename advice and look for the real
 error in the validation results. And the review-history panel may render raw `$action_label` /
 `$comments` template placeholders; that's an AMO front-end bug, not information about your submission.
 
@@ -250,7 +250,7 @@ things.
 ### Why not two permanent installs (one per stage)
 
 **Firefox:** two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
-the ID *is* the add-on's identity. That's two manifests, two names, two AMO submissions, and two signing
+the ID _is_ the add-on's identity. That's two manifests, two names, two AMO submissions, and two signing
 rounds on every change, forever. And what it buys is two live capture paths, which is the opposite of
 what you want: real practice should land in exactly one stage. A separate profile gets the same
 isolation for free.
@@ -264,17 +264,17 @@ The token exists in three places — the GitHub secret (source of truth), the La
 automatically on every deploy), and the extension's `storage.local` (manual, **never** syncs). Only the
 third one is ongoing work, and only for these events:
 
-| Event | What you redo |
-| --- | --- |
-| Any normal deploy | **nothing** |
-| Rotating the token deliberately | update the GitHub secret → redeploy → re-paste in the extension |
-| Cognito pool replaced | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never |
-| Origin changes | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08 |
-| New browser / profile / machine | paste the token there — `storage.local` is per-profile |
-| Browser restart (temporary extension only) | re-add it. The installed apps / signed add-on are unaffected |
-| Free Apple certificate expiry (2027-09-28) | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData |
+| Event                                                                                | What you redo                                                                                                                           |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Any normal deploy                                                                    | **nothing**                                                                                                                             |
+| Rotating the token deliberately                                                      | update the GitHub secret → redeploy → re-paste in the extension                                                                         |
+| Cognito pool replaced                                                                | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never                                            |
+| Origin changes                                                                       | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08                             |
+| New browser / profile / machine                                                      | paste the token there — `storage.local` is per-profile                                                                                  |
+| Browser restart (temporary extension only)                                           | re-add it. The installed apps / signed add-on are unaffected                                                                            |
+| Free Apple certificate expiry (2027-09-28)                                           | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData                                                   |
 | Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |
-| Extension code change | rebuild per README → *Build it for Safari* (prod: re-copy files first; both: redo step 4) |
+| Extension code change                                                                | rebuild per README → _Build it for Safari_ (prod: re-copy files first; both: redo step 4)                                               |
 
 **Every "paste the token" above needs its current value.** A GitHub secret can't be read back, so the
 Lambda is the only place to recover it. Run on the Mac (the container has no AWS credentials), with
@@ -301,13 +301,13 @@ There are **three** testable surfaces here, not two, and conflating the first tw
 never talks to the app's dev server. It POSTs to whatever origin you type into its options page, so
 `pnpm dev` is irrelevant to it in both directions.
 
-| | App locally (`pnpm dev`) | Extension, no live endpoint | dev stage (deployed) |
-| --- | --- | --- | --- |
-| API | `StubClient`, localStorage | — | real Lambda + DynamoDB |
-| Auth | bypassed, `local@aperture.dev` | — | real Cognito JWT |
-| Data | `seed.ts` (5 attempts, two arcs) | — | what you actually submitted |
-| Proves | the whole UI surface | interception + DOM scrape | the ingest half |
-| Iteration | instant HMR | reload the add-on | full CI deploy |
+|           | App locally (`pnpm dev`)         | Extension, no live endpoint | dev stage (deployed)        |
+| --------- | -------------------------------- | --------------------------- | --------------------------- |
+| API       | `StubClient`, localStorage       | —                           | real Lambda + DynamoDB      |
+| Auth      | bypassed, `local@aperture.dev`   | —                           | real Cognito JWT            |
+| Data      | `seed.ts` (5 attempts, two arcs) | —                           | what you actually submitted |
+| Proves    | the whole UI surface             | interception + DOM scrape   | the ingest half             |
+| Iteration | instant HMR                      | reload the add-on           | full CI deploy              |
 
 **App locally** proves the page renders, ordinals and the summary line are right, verdict tones are
 right, all three list states (loading / error / empty) are right, and the ApiClient contract holds —
@@ -366,10 +366,10 @@ largest line item in this project.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
   same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
-- ~~Not signed yet.~~ **Done 2026-09-08** (*Firefox: signing via AMO* → Status). Superseded as the
-  daily driver by Safari on 2026-10-04 (*Safari: free signing*).
+- ~~Not signed yet.~~ **Done 2026-09-08** (_Firefox: signing via AMO_ → Status). Superseded as the
+  daily driver by Safari on 2026-10-04 (_Safari: free signing_).
 - ~~Is the free build really permanent past 7 days?~~ **No 7-day clock (2026-10-04).** Free Personal Team
-  *provisioning profiles* expire after 7 days on iOS, but this build embeds none: no
+  _provisioning profiles_ expire after 7 days on iOS, but this build embeds none: no
   `embedded.provisionprofile` in the app or the `.appex`, and the extension's entitlements are only
   `app-sandbox`, `files.user-selected.read-only` and `get-task-allow` (`codesign -d --entitlements -`),
   none of which needs a profile on macOS (Apple TN3125; Apple DTS on forum thread 705932: free profiles

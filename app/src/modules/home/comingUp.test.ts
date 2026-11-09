@@ -40,7 +40,13 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
 describe('comingUp', () => {
   it('shows soonest-due first with overdue leading, capped', () => {
     const cu = comingUp(
-      [mkTask('far', 10), mkTask('overdue', -2), mkTask('today', 0), mkTask('soon', 1), mkTask('mid', 4)],
+      [
+        mkTask('far', 10),
+        mkTask('overdue', -2),
+        mkTask('today', 0),
+        mkTask('soon', 1),
+        mkTask('mid', 4),
+      ],
       TODAY,
       new Set(),
       4,
@@ -51,7 +57,13 @@ describe('comingUp', () => {
 
   it('excludes undated, done, cancelled, and excluded ids', () => {
     const cu = comingUp(
-      [mkTask('undated', null), mkTask('done', 1, 'done'), mkTask('cancelled', 1, 'cancelled'), mkTask('planned-today', 1), mkTask('keep', 2)],
+      [
+        mkTask('undated', null),
+        mkTask('done', 1, 'done'),
+        mkTask('cancelled', 1, 'cancelled'),
+        mkTask('planned-today', 1),
+        mkTask('keep', 2),
+      ],
       TODAY,
       new Set(['planned-today']),
       4,
@@ -67,7 +79,14 @@ describe('comingUp', () => {
 
   it('counts the overflow split into this-week vs later', () => {
     const cu = comingUp(
-      [mkTask('a', 0), mkTask('b', 1), mkTask('c', 2), mkTask('d', 5), mkTask('e', 6), mkTask('f', 20)],
+      [
+        mkTask('a', 0),
+        mkTask('b', 1),
+        mkTask('c', 2),
+        mkTask('d', 5),
+        mkTask('e', 6),
+        mkTask('f', 20),
+      ],
       TODAY,
       new Set(),
       4,

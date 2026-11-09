@@ -21,9 +21,11 @@ describe('wellKnown façade builders', () => {
   it('authorization-server metadata: issuer is OUR origin, endpoints are Cognito, PKCE injected', () => {
     expect(authorizationServer(env)).toEqual({
       issuer: 'https://dev.aperture.rahuldatta.dev',
-      authorization_endpoint: 'https://aperture-dev-123.auth.us-west-1.amazoncognito.com/oauth2/authorize',
+      authorization_endpoint:
+        'https://aperture-dev-123.auth.us-west-1.amazoncognito.com/oauth2/authorize',
       token_endpoint: 'https://aperture-dev-123.auth.us-west-1.amazoncognito.com/oauth2/token',
-      jwks_uri: 'https://cognito-idp.us-west-1.amazonaws.com/us-west-1_ABC123/.well-known/jwks.json',
+      jwks_uri:
+        'https://cognito-idp.us-west-1.amazonaws.com/us-west-1_ABC123/.well-known/jwks.json',
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       token_endpoint_auth_methods_supported: ['none'],

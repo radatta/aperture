@@ -12,26 +12,26 @@ below is the load-bearing part of this doc — Claude reads it before generating
 
 ## 1. Why
 
-Batch entry is the *morning plan pass*, not capture (PRODUCT §2). The global capture bar is deliberately
+Batch entry is the _morning plan pass_, not capture (PRODUCT §2). The global capture bar is deliberately
 structure-free — it never asks for estimate/category/due. Bulk add is the opposite surface: a deliberate,
 reviewable sit-down where structure is welcome. So tokens-at-entry here is not a violation of the
 capture rule; it's the plan pass wearing a keyboard.
 
-Capture later took the same grammar as an *optional* single line (2026-09-28): typing `#Aperture` at
+Capture later took the same grammar as an _optional_ single line (2026-09-28): typing `#Aperture` at
 capture time was wanted, and an opt-in token asks nothing of a bare capture. Since 2026-10-12 a Task line
-*without* ` | ` is parsed by Claude Haiku instead ([quick-add.md](quick-add.md)); ` | ` is the deterministic
+_without_ `|` is parsed by Claude Haiku instead ([quick-add.md](quick-add.md)); `|` is the deterministic
 bypass — the model never sees a grammar line.
 
 ## 2. Decision log
 
 - **Dedicated modal, not the capture bar.** The capture bar stays structure-free (its whole premise).
-  Bulk add is a separate, roomy surface — the app's first `<dialog>`. *Superseded in part 2026-09-28:*
+  Bulk add is a separate, roomy surface — the app's first `<dialog>`. _Superseded in part 2026-09-28:_
   bulk add is still the many-lines surface, but capture's Task mode now takes one line of the grammar.
 - **Capture tokens (2026-09-28).** Task mode only; Log and Idea are untouched.
-  - **Gated on ` | ` in the raw text.** Without it nothing is parsed — `a|b`, `- milk`, `fix #42 ~5`
+  - **Gated on `|` in the raw text.** Without it nothing is parsed — `a|b`, `- milk`, `fix #42 ~5`
     save literally, exactly as before. The raw (not trimmed) text, so `milk | ` is the red "nothing
-    after" error rather than a task titled `milk |`. Cost: a capture title can no longer contain ` | `.
-  - **Never fails silently.** A red error refuses Enter *and* the Send tap, keeps the text, and the
+    after" error rather than a task titled `milk |`. Cost: a capture title can no longer contain `|`.
+  - **Never fails silently.** A red error refuses Enter _and_ the Send tap, keeps the text, and the
     receipt says "Not saved" (the full reason is in the preview row, and in the status
     region for screen readers). Send is `aria-disabled`, not `disabled`, so a tap still explains. The
     notice clears once its cause is gone (line fixed, categories arrived, mode switched). Gold warnings
@@ -43,20 +43,20 @@ bypass — the model never sees a grammar line.
     second press saves. Any edit, Put back or mode switch resets that. No control in the bar takes focus
     from the field (mousedown guard), so a revealed warning can't move a button out from under a tap.
   - **One line only.** Tokens plus a line break is red — splitting would turn one capture into N tasks,
-    truncating would drop text. Bulk add takes many. Multi-line captures *without* ` | ` are unchanged.
+    truncating would drop text. Bulk add takes many. Multi-line captures _without_ `|` are unchanged.
   - **Waits for categories.** A `#label` line before the list first loads is refused ("Loading
     categories…", or a red "couldn't load" on a query error) instead of parsing as unknown and landing
-    uncategorised — the dialog's guard, keyed on *having data* rather than `isSuccess`, so a failed
+    uncategorised — the dialog's guard, keyed on _having data_ rather than `isSuccess`, so a failed
     background refetch over a good cached list doesn't refuse. Label-free lines save meanwhile.
   - **No duplicate-title warning** — repeating a title is normal in quick capture, and it would need
     the full task list in an always-mounted component.
   - **"→ today" composes:** the estimate flows into `plannedMinutes` via `plannedDefault`.
   - The placeholder stays "New task…" — teaching syntax there is the structure prompt §2 forbids.
 - **Token autocomplete in capture (2026-09-30).** Chips under the field complete the token under the
-  caret; a tap (or Tab) types the *literal* token, so the grammar and parser are unchanged.
-  - **Only once a token is started** — `#`, `~` or `due:` after the first ` | `, never inside
+  caret; a tap (or Tab) types the _literal_ token, so the grammar and parser are unchanged.
+  - **Only once a token is started** — `#`, `~` or `due:` after the first `|`, never inside
     `notes:"…"`. No starter chips at an empty position: a bare `~ # due:` row is a structure prompt
-    (PRODUCT §2), and it would claim Tab everywhere after ` | `.
+    (PRODUCT §2), and it would claim Tab everywhere after `|`.
   - **`#`** — active categories, case-insensitive **word-start** match (`#work` → Deep Work; `#e`
     doesn't light up everything), in category order. Multi-word labels insert `#"Deep Work"`; a label
     containing `"` is omitted (the grammar can't write it). Nothing shows until categories load — the
@@ -82,9 +82,9 @@ bypass — the model never sees a grammar line.
     so the IME commits and nothing half-composed is saved (2026-11).
   - **Caret placement is keyed on an accept nonce, not the text** — accepting an already-complete token
     changes nothing, and a text-keyed effect would skip it and jump the caret on the next keystroke.
-- **Explicit ` | ` separator** (space-pipe-space) between title and tokens. The one grammar with zero
-  ambiguity: a `#`/`~`/`due:` in a *title* is literal and never parsed; any junk after the pipe is a
-  loud red error. Cost: a title can't contain ` | ` (it errors; the operator re-emits). Chosen over
+- **Explicit `|` separator** (space-pipe-space) between title and tokens. The one grammar with zero
+  ambiguity: a `#`/`~`/`due:` in a _title_ is literal and never parsed; any junk after the pipe is a
+  loud red error. Cost: a title can't contain `|` (it errors; the operator re-emits). Chosen over
   trailing-tokens ("fix issue #42" silently reading `#42` as a category).
 - **ISO-only dates, no keywords.** `due:2026-09-25` only — no `fri`/`tomorrow`. The operator is Claude,
   which knows today's date and emits a concrete one; friendly shortcuts buy nothing and add ambiguity.
@@ -95,7 +95,7 @@ bypass — the model never sees a grammar line.
   folded to match.
 - **`#label` no-match is a warning, not an error.** The task is created uncategorised (categoryId null);
   the preview flags it gold. Categories are a small managed set — never auto-created from a paste. An
-  *ambiguous* label (two categories collide case-insensitively) IS a hard error.
+  _ambiguous_ label (two categories collide case-insensitively) IS a hard error.
 - **Titles are never rewritten.** A leading list marker (`- `, `1. `) is a hard error, not a silent
   strip — a hidden transform is worse than a loud stop.
 - **Red gates, gold doesn't.** A token that declares intent but can't be parsed (`due:garbage`, `~30m`)
@@ -106,7 +106,7 @@ bypass — the model never sees a grammar line.
   backslash — without it `\nabla` or `C:\new` would silently become a newline. No `"` inside (reword,
   or use `'`) — a `\"` escape buys little and doubles the ways to get it wrong. Over the
   5,000-character cap is red here, before submit, and the server rejects the whole batch anyway
-  ([notes.md](notes.md)). A `notes:"` in the *title* (the ` | ` was forgotten) is legal but gold.
+  ([notes.md](notes.md)). A `notes:"` in the _title_ (the `|` was forgotten) is legal but gold.
 - **One `createdAt` stamp per batch.** `listTasks` sorts `createdAt` desc, stably; a shared stamp + the
   monotonic ULID factory makes the batch render as one top block in paste order.
 - **Best-effort batch write, not a transaction.** `createTasks` goes through the existing `writes.batchPut`
@@ -126,7 +126,7 @@ bypass — the model never sees a grammar line.
   writes nothing.
 - The parser is pure and lives in `packages/shared/src/bulkTasks.ts` (`parseBulkTasks`, `toCreateInputs`)
   — the contract package, so a future non-browser operator (CLI/MCP) posts the same grammar. Capture
-  uses `hasTaskTokens` (the ` | ` gate), `parseTaskLine` (one line, red on a line break) and
+  uses `hasTaskTokens` (the `|` gate), `parseTaskLine` (one line, red on a line break) and
   `toCreateInput`; still one validator. `useCreateTask` / `createToday` take `string | CreateTaskInput`.
   The chip preview is `app/src/modules/tasks/TaskTokenChips.tsx`, shared by both surfaces. `isDayKey`
   (the `due:` validator) is in `packages/shared/src/dates.ts`.
@@ -157,13 +157,14 @@ One task per line. A line is:   <title>[ | <tokens>]
 ```
 
 The `notes:"…"` value is the task's notes (light markdown — see [notes.md](notes.md)). Inside the
-quotes everything is literal: `~30`, `#Admin`, `due:…`, even ` | `. Two escapes: `\n` becomes a
+quotes everything is literal: `~30`, `#Admin`, `due:…`, even `|`. Two escapes: `\n` becomes a
 newline and `\\` a literal backslash — so write LaTeX and Windows paths with doubled backslashes
 (`\\nabla`, `C:\\new`), or a `\n` inside them turns into a line break. The value is trimmed, and must
 be at most 5,000 characters after unescaping.
 
 Rules that produce a **red error** (blocks the entire submit — fix or remove):
-- empty title; a leading list marker (`- `, `* `, `1. `); a `|` in the title; ` | ` with nothing after it
+
+- empty title; a leading list marker (`- `, `* `, `1. `); a `|` in the title; `|` with nothing after it
 - `~` that isn't a whole minute ≥ 1 (`~30m`, `~0`, `~1.5`, `~`)
 - `due:` that isn't a real ISO date (`due:2026-02-30`, `due:2026-2-5`); a capitalized `Due:`
 - an `@` time that isn't zero-padded 24h `HH:MM` (`@5pm`, `@5:00`, `@24:00`, a bare `@`)
@@ -173,11 +174,13 @@ Rules that produce a **red error** (blocks the entire submit — fix or remove):
   notes; notes over 5,000 characters; a capitalized `Notes:`
 
 Rules that produce a **gold warning** (task still created):
-- a `notes:"` inside the title — the ` | ` before it was probably forgotten
+
+- a `notes:"` inside the title — the `|` before it was probably forgotten
 - `#label` matches no category → created uncategorised
 - a title duplicated within the paste, or already held by a live task
 
 Good paste:
+
 ```
 email coach
 finish 214 pset | ~90 #"Deep Work" due:2026-09-25@17:00
@@ -190,7 +193,7 @@ The category labels are shown live in the dialog header — read the valid set o
 
 **In capture (Task mode):** exactly one line of the above, one task per capture — e.g.
 `draft memo | ~30 #Admin due:2026-10-03`. Same red/gold rules, minus the duplicate-title warning; a
-line break alongside ` | ` is red. The suggestion chips are a thumb aid that type these same tokens —
+line break alongside `|` is red. The suggestion chips are a thumb aid that type these same tokens —
 the contract above is unchanged.
 
 ## 5. Build record
@@ -207,8 +210,9 @@ Page-first, one atomic contract change so `tsc -b` stays green. ~20 files across
   retry in `LiveDoc.batchPut`.
 
 Tests: parser table-driven unit tests; `isDayKey`; `createTasks` in the cross-impl contract suite (stub
-+ lambda + handler); a `BulkAddDialog` integration test (gating, submit-in-order, warning-still-submits,
-cancel-drops-draft + focus-return, failure-keeps-text).
+
+- lambda + handler); a `BulkAddDialog` integration test (gating, submit-in-order, warning-still-submits,
+  cancel-drops-draft + focus-return, failure-keeps-text).
 
 **Due times (2026-10-05):** the `@HH:MM` suffix in `parseLine` (`isTimeKey`), `BulkLine.dueTime` →
 `toCreateInput`; time chips in `suggestions.ts`; `TaskTokenChips` shows the time. A timed line is
@@ -223,7 +227,7 @@ label, "→ today" minutes, categories loading, failed refetch over cached data,
 announce + clear, and failure-restores-text.
 
 **Token autocomplete (2026-09-30):** shared `scanTokens` → spans + `tokenAtCaret`, `duePresets`
-(+ tests: caret table incl. quotes/notes/second ` | `; presets across weekdays, year end, DST,
+(+ tests: caret table incl. quotes/notes/second `|`; presets across weekdays, year end, DST,
 day-start rollover); app `suggestions.ts` (+ test), `TokenSuggestions.tsx`, `CaptureBar` caret
 tracking + Tab. `CaptureBar` cases: tap completes + keeps focus, word-start + quoting, due chips under
 a fixed clock, Tab accept vs mode cycle, Shift+Tab, none outside a token, mid-line completion,

@@ -24,7 +24,10 @@ const req = (method: string, params?: unknown, id: string | number | null = 1) =
 
 describe('handleMcpMessage', () => {
   it('initialize echoes a supported protocol version and advertises tools', async () => {
-    const res = await handleMcpMessage(req('initialize', { protocolVersion: '2025-03-26' }), makeCtx());
+    const res = await handleMcpMessage(
+      req('initialize', { protocolVersion: '2025-03-26' }),
+      makeCtx(),
+    );
     expect(res?.result).toMatchObject({
       protocolVersion: '2025-03-26',
       capabilities: { tools: {} },
@@ -33,12 +36,18 @@ describe('handleMcpMessage', () => {
   });
 
   it('initialize falls back to our version for an unknown one', async () => {
-    const res = await handleMcpMessage(req('initialize', { protocolVersion: '1999-01-01' }), makeCtx());
+    const res = await handleMcpMessage(
+      req('initialize', { protocolVersion: '1999-01-01' }),
+      makeCtx(),
+    );
     expect((res?.result as { protocolVersion: string }).protocolVersion).toBe('2025-06-18');
   });
 
   it('a notification (no id) yields no response', async () => {
-    const res = await handleMcpMessage({ jsonrpc: '2.0', method: 'notifications/initialized' }, makeCtx());
+    const res = await handleMcpMessage(
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      makeCtx(),
+    );
     expect(res).toBeNull();
   });
 
@@ -58,8 +67,12 @@ describe('handleMcpMessage', () => {
   });
 
   it('rejects a missing method / wrong jsonrpc as invalid request', async () => {
-    expect((await handleMcpMessage({ jsonrpc: '2.0', id: 1 }, makeCtx()))?.error?.code).toBe(-32600);
-    expect((await handleMcpMessage({ jsonrpc: '1.0', id: 1, method: 'ping' }, makeCtx()))?.error?.code).toBe(-32600);
+    expect((await handleMcpMessage({ jsonrpc: '2.0', id: 1 }, makeCtx()))?.error?.code).toBe(
+      -32600,
+    );
+    expect(
+      (await handleMcpMessage({ jsonrpc: '1.0', id: 1, method: 'ping' }, makeCtx()))?.error?.code,
+    ).toBe(-32600);
   });
 
   it('unknown method → -32601', async () => {
@@ -68,7 +81,8 @@ describe('handleMcpMessage', () => {
 
   it('tools/list returns every tool as an object schema', async () => {
     const res = await handleMcpMessage(req('tools/list'), makeCtx());
-    const tools = (res?.result as { tools: { name: string; inputSchema: { type: string } }[] }).tools;
+    const tools = (res?.result as { tools: { name: string; inputSchema: { type: string } }[] })
+      .tools;
     expect(tools.length).toBeGreaterThan(10);
     expect(tools.every((t) => t.inputSchema.type === 'object')).toBe(true);
     expect(tools.map((t) => t.name)).toContain('create_task');

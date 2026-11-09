@@ -45,7 +45,13 @@ export class ApertureCicdStack extends Stack {
 
     // lane 'devmain' (dev only): main's own dev deploy, through the second bootstrap (config/lane.ts) — its deploy,
     // lookup and publishing roles, named exactly, and its own version parameter.
-    const makeRole = (id: string, roleName: string, subs: string[], stage: string, lane?: typeof DEVMAIN_QUALIFIER): iam.Role => {
+    const makeRole = (
+      id: string,
+      roleName: string,
+      subs: string[],
+      stage: string,
+      lane?: typeof DEVMAIN_QUALIFIER,
+    ): iam.Role => {
       const role = new iam.Role(this, id, {
         roleName,
         maxSessionDuration: Duration.hours(1),
@@ -58,19 +64,24 @@ export class ApertureCicdStack extends Stack {
 
       // cdk deploy: assume the account's bootstrap roles (which hold the real deploy power) + read the bootstrap
       // version parameter the CLI checks first.
-      const bootstrapRole = (q: string, kind: string) => `arn:aws:iam::${account}:role/cdk-${q}-${kind}-${account}-${region}`;
+      const bootstrapRole = (q: string, kind: string) =>
+        `arn:aws:iam::${account}:role/cdk-${q}-${kind}-${account}-${region}`;
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['sts:AssumeRole'],
           resources: lane
-            ? ['deploy-role', 'lookup-role', 'file-publishing-role'].map((kind) => bootstrapRole(lane, kind))
+            ? ['deploy-role', 'lookup-role', 'file-publishing-role'].map((kind) =>
+                bootstrapRole(lane, kind),
+              )
             : [bootstrapRole(BOOTSTRAP_QUALIFIER, '*')],
         }),
       );
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter'],
-          resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${lane ?? BOOTSTRAP_QUALIFIER}/version`],
+          resources: [
+            `arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${lane ?? BOOTSTRAP_QUALIFIER}/version`,
+          ],
         }),
       );
       // Frontend publish (S3 sync) + smoke (direct Lambda invoke) — outside CFN, scoped to this stage's
@@ -128,7 +139,12 @@ export class ApertureCicdStack extends Stack {
     if (props.roles === 'prod') {
       // prod: environment-based — only a job running in the `prod` environment gets this sub (no
       // required reviewers are configured on it today — INFRA §9 caveat).
-      const prodRole = makeRole('DeployProd', 'aperture-github-deploy-prod', [`repo:${githubSubject}:environment:prod`], 'prod');
+      const prodRole = makeRole(
+        'DeployProd',
+        'aperture-github-deploy-prod',
+        [`repo:${githubSubject}:environment:prod`],
+        'prod',
+      );
       new CfnOutput(this, 'ProdRoleArn', { value: prodRole.roleArn });
       return;
     }
@@ -136,7 +152,12 @@ export class ApertureCicdStack extends Stack {
     // dev: the frozen lane — deploy-dev.yml on a bot dispatch (and deploy.yml's on a `dev` push, until dev-cutover) — runs in
     // the `dev` GitHub environment, so its OIDC sub is `…:environment:dev` and the trust is scoped to the environment
     // alone. A `main` push deploys dev through the dev-main role below instead.
-    const devRole = makeRole('DeployDev', 'aperture-github-deploy-dev', [`repo:${githubSubject}:environment:dev`], 'dev');
+    const devRole = makeRole(
+      'DeployDev',
+      'aperture-github-deploy-dev',
+      [`repo:${githubSubject}:environment:dev`],
+      'dev',
+    );
     // dev-main: main's own dev deploy (deploy.yml on a `main` push), in the main-only `dev-main` environment, through
     // the `devmain` bootstrap the freeze exempts (docs/ops/CI-BOT.md → Two lanes). The guardrails SCP lets only this
     // role assume that bootstrap's roles, and lets nothing but break-glass change it.

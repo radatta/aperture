@@ -32,18 +32,28 @@ describe('ApertureCicdStack, per account', () => {
   // A dev credential must never exist in prod's account, nor a prod one in dev's.
   it("puts only prod's role in the management account and only dev's roles in the dev account", () => {
     expect(roleNames(prod)).toEqual(['aperture-github-deploy-prod']);
-    expect(roleNames(dev)).toEqual(['aperture-github-deploy-dev', 'aperture-github-dev-main', 'aperture-github-logs-dev']);
+    expect(roleNames(dev)).toEqual([
+      'aperture-github-deploy-dev',
+      'aperture-github-dev-main',
+      'aperture-github-logs-dev',
+    ]);
   });
 
   // Redeploying ApertureCicd must update prod's role and OIDC provider in place, never replace them: a new provider
   // or role would break every prod deploy until the trust caught up. These logical ids are main's.
   it("keeps prod's role and OIDC provider at their deployed logical ids", () => {
     const ids = Object.keys(prod.toJSON().Resources as object);
-    for (const id of ['DeployProd4D593C1D', 'DeployProdDefaultPolicy4A11419E', 'GithubOidc86785739']) expect(ids).toContain(id);
+    for (const id of [
+      'DeployProd4D593C1D',
+      'DeployProdDefaultPolicy4A11419E',
+      'GithubOidc86785739',
+    ])
+      expect(ids).toContain(id);
   });
 
   it('grants neither deploy role any CloudFront action (publish no longer invalidates)', () => {
-    for (const t of [prod, dev]) expect(JSON.stringify(t.findResources('AWS::IAM::Policy'))).not.toContain('cloudfront:');
+    for (const t of [prod, dev])
+      expect(JSON.stringify(t.findResources('AWS::IAM::Policy'))).not.toContain('cloudfront:');
   });
 });
 
@@ -119,16 +129,26 @@ describe('ApertureCicdStack roles', () => {
       .join(' ');
 
   it("lets each deploy role assume only its own account's stock bootstrap", () => {
-    expect(bootstrapGrants('aperture-github-deploy-dev')).toContain('arn:aws:iam::222222222222:role/cdk-hnb659fds-*-222222222222-');
-    expect(bootstrapGrants('aperture-github-deploy-prod')).toContain('arn:aws:iam::111111111111:role/cdk-hnb659fds-*-111111111111-');
+    expect(bootstrapGrants('aperture-github-deploy-dev')).toContain(
+      'arn:aws:iam::222222222222:role/cdk-hnb659fds-*-222222222222-',
+    );
+    expect(bootstrapGrants('aperture-github-deploy-prod')).toContain(
+      'arn:aws:iam::111111111111:role/cdk-hnb659fds-*-111111111111-',
+    );
     for (const r of ['aperture-github-deploy-dev', 'aperture-github-deploy-prod'])
       expect(bootstrapGrants(r)).not.toContain('devsandbox');
   });
 
   // Main's own dev deploy (docs/ops/CI-BOT.md → Two lanes): the one role that may enter the freeze-exempt bootstrap.
   it('trusts the dev-main role only from the main-only dev-main environment', () => {
-    const [role] = Object.values(t.findResources('AWS::IAM::Role', { Properties: { RoleName: 'aperture-github-dev-main' } })) as {
-      Properties: { AssumeRolePolicyDocument: { Statement: { Condition: Record<string, Record<string, unknown>> }[] } };
+    const [role] = Object.values(
+      t.findResources('AWS::IAM::Role', { Properties: { RoleName: 'aperture-github-dev-main' } }),
+    ) as {
+      Properties: {
+        AssumeRolePolicyDocument: {
+          Statement: { Condition: Record<string, Record<string, unknown>> }[];
+        };
+      };
     }[];
     const subs = role?.Properties.AssumeRolePolicyDocument.Statement.map(
       (s) => s.Condition.StringLike?.['token.actions.githubusercontent.com:sub'],
@@ -137,7 +157,9 @@ describe('ApertureCicdStack roles', () => {
   });
 
   it("lets the dev-main role assume exactly the devmain bootstrap's deploy, lookup and publishing roles", () => {
-    const assume = statementsOf('aperture-github-dev-main').filter((s) => s.Action === 'sts:AssumeRole');
+    const assume = statementsOf('aperture-github-dev-main').filter(
+      (s) => s.Action === 'sts:AssumeRole',
+    );
     expect(assume.map((s) => s.Resource)).toEqual([
       [
         'arn:aws:iam::222222222222:role/cdk-devmain-deploy-role-222222222222-us-west-1',
@@ -145,7 +167,9 @@ describe('ApertureCicdStack roles', () => {
         'arn:aws:iam::222222222222:role/cdk-devmain-file-publishing-role-222222222222-us-west-1',
       ],
     ]);
-    expect(bootstrapGrants('aperture-github-dev-main')).toContain('parameter/cdk-bootstrap/devmain/version');
+    expect(bootstrapGrants('aperture-github-dev-main')).toContain(
+      'parameter/cdk-bootstrap/devmain/version',
+    );
     expect(bootstrapGrants('aperture-github-dev-main')).not.toContain('hnb659fds');
     expect(bootstrapGrants('aperture-github-dev-main')).not.toContain('*');
   });
@@ -158,7 +182,9 @@ describe('ApertureCicdStack roles', () => {
 
   it('gives the dev-main role the same dev publish, smoke and outputs grants as the dev role', () => {
     const rest = (r: string) =>
-      statementsOf(r).filter((s) => s.Action !== 'sts:AssumeRole' && s.Action !== 'ssm:GetParameter');
+      statementsOf(r).filter(
+        (s) => s.Action !== 'sts:AssumeRole' && s.Action !== 'ssm:GetParameter',
+      );
     expect(rest('aperture-github-dev-main')).toEqual(rest('aperture-github-deploy-dev'));
   });
 

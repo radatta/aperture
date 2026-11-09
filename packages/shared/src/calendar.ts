@@ -66,11 +66,21 @@ export function computeDayShape(
   const windowMin = Math.round(windowMs / MS_PER_MIN);
   const { allDayCount } = busy;
   if (windowMs === 0) {
-    return { windowMin, committedMin: 0, freeMin: 0, longestFreeStretchMin: 0, fragmentCount: 0, allDayCount };
+    return {
+      windowMin,
+      committedMin: 0,
+      freeMin: 0,
+      longestFreeStretchMin: 0,
+      fragmentCount: 0,
+      allDayCount,
+    };
   }
 
   const clipped = busy.intervals
-    .map((iv) => ({ startMs: Math.max(iv.startMs, windowStartMs), endMs: Math.min(iv.endMs, windowEndMs) }))
+    .map((iv) => ({
+      startMs: Math.max(iv.startMs, windowStartMs),
+      endMs: Math.min(iv.endMs, windowEndMs),
+    }))
     .filter((iv) => iv.endMs > iv.startMs);
   const merged = mergeBusyIntervals(clipped);
 

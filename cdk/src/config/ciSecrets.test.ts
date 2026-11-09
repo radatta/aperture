@@ -26,11 +26,16 @@ describe('stageSecret', () => {
 
   it('in CI, an empty secret fails the synth naming the GitHub secret to set, never a fresh token', () => {
     const dir = tmp();
-    expect(() => stageSecret('AGENT_TOKEN', 'prod', { env: { GITHUB_ACTIONS: 'true' }, dir })).toThrow(
+    expect(() =>
+      stageSecret('AGENT_TOKEN', 'prod', { env: { GITHUB_ACTIONS: 'true' }, dir }),
+    ).toThrow(
       'APERTURE_AGENT_TOKEN is empty in CI — set AGENT_TOKEN_PROD (a secret in the prod GitHub environment)',
     );
     expect(() =>
-      stageSecret('DEVICE_TOKEN', 'dev', { env: { GITHUB_ACTIONS: 'true', APERTURE_DEVICE_TOKEN: '   ' }, dir }),
+      stageSecret('DEVICE_TOKEN', 'dev', {
+        env: { GITHUB_ACTIONS: 'true', APERTURE_DEVICE_TOKEN: '   ' },
+        dir,
+      }),
     ).toThrow('APERTURE_DEVICE_TOKEN is empty in CI — set DEVICE_TOKEN_DEV (a repository secret)');
     expect(readdirSync(dir)).toEqual([]); // nothing minted on the way out
   });
@@ -43,13 +48,19 @@ describe('stageSecret', () => {
     expect(readFileSync(join(dir, 'origin-secret.dev'), 'utf8')).toBe(`${first}\n`);
     expect(stageSecret('ORIGIN_SECRET', 'prod', { env: {}, dir })).not.toBe(first);
     expect(stageSecret('DEVICE_TOKEN', 'dev', { env: {}, dir })).not.toBe(first);
-    expect(readdirSync(dir).sort()).toEqual(['device-token.dev', 'origin-secret.dev', 'origin-secret.prod']);
+    expect(readdirSync(dir).sort()).toEqual([
+      'device-token.dev',
+      'origin-secret.dev',
+      'origin-secret.prod',
+    ]);
   });
 
   it('outside CI, an existing file wins over nothing, trimmed; the env var wins over the file', () => {
     const dir = tmp();
     writeFileSync(join(dir, 'device-token.prod'), 'fromfile\n');
     expect(stageSecret('DEVICE_TOKEN', 'prod', { env: {}, dir })).toBe('fromfile');
-    expect(stageSecret('DEVICE_TOKEN', 'prod', { env: { APERTURE_DEVICE_TOKEN: 'fromenv' }, dir })).toBe('fromenv');
+    expect(
+      stageSecret('DEVICE_TOKEN', 'prod', { env: { APERTURE_DEVICE_TOKEN: 'fromenv' }, dir }),
+    ).toBe('fromenv');
   });
 });

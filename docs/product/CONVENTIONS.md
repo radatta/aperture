@@ -19,12 +19,14 @@ Cross-cutting rules that override defaults everywhere in this repo.
 **Default to rolling our own.** Most small utilities are less code than the dependency's own footprint, and third-party libs drag bloat, transitive deps, and maintenance/security surface we don't need.
 
 **Only propose adding a dependency when EITHER:**
+
 - **(A)** it's a substantial amount of code/logic not worth the time/effort to implement and maintain ourselves, **OR**
 - **(B)** it's logic we should **not** implement ourselves for a good reason — security-critical, subtle correctness we'd likely get wrong, or hard standards/cross-platform edge cases.
 
 When proposing a dep, **justify against A/B explicitly**, note its footprint + transitive deps, and state the roll-our-own alternative. **"It's popular" is not a reason.**
 
 **Worked calls (applying the rule):**
+
 - **Justified (B):** `react-oidc-context` — OIDC/PKCE + token refresh is subtle and security-critical.
 - **Roll our own:** date helpers — day-start offset + ISO-week cadence are small and targeted; hand-roll them. Only reach for a date lib if DST edge cases prove genuinely gnarly.
 - **Rolled our own (decided at the point of need):** ULID generation — small, but ID correctness (monotonicity, base32, entropy) is subtle; hand-rolled at `packages/shared/src/ulid.ts` (+ `ulid.test.ts`), reasoning in `V1_PLAN.md` §B.
@@ -44,7 +46,7 @@ Rationale: it's far cheaper to discover the product is wrong against a stub than
 Workspace packages export **TypeScript source**, not built JS. `@aperture/shared` sets
 `"exports": "./src/index.ts"`; `app` and `lambdas` import it directly and their bundler (Vite / esbuild)
 transpiles it — **no build step in the dev or test loop**. `shared` still emits a **gitignored `dist/`**
-purely to satisfy TS project references, which forbid a *referenced* composite project from disabling
+purely to satisfy TS project references, which forbid a _referenced_ composite project from disabling
 emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it exists, that's why.
 
 **Command shape:** typecheck is one root `tsc -b` over the project-reference graph; lint is one root
@@ -92,7 +94,7 @@ WCAG, not eyeballed:
 - `ink-subtle` clears **3:1 only**. It is **supplementary**: de-emphasised metadata, column headers,
   separators. **Nothing a reader needs may use it** — not placeholders, not hints, not the sentence
   in an empty state (which is often the only text on screen).
-- `line-strong` is opaque and clears 3:1 on `panel`, because it is the *sole* carrier of an unchecked
+- `line-strong` is opaque and clears 3:1 on `panel`, because it is the _sole_ carrier of an unchecked
   habit cell. `line` is a decorative hairline between surfaces that also differ by fill, so it is
   deliberately below 3:1.
 
@@ -103,7 +105,7 @@ ground crushes contrast for everything sitting on the dock.
 **The bottom dock is one element.** `AppShell` renders a single fixed column holding the timer stack
 above the capture bar. Never add a second `fixed` bottom-anchored element — that is exactly how the
 timers ended up covering the capture bar and the page's last card. The shell measures the dock
-(`offsetHeight`, *not* `contentRect`, which excludes `pb-safe`) and reserves that much bottom
+(`offsetHeight`, _not_ `contentRect`, which excludes `pb-safe`) and reserves that much bottom
 padding, because the dock's height varies from ~112px idle to ~400px with several timers and a
 wrapped capture. A route can drop the capture bar (never the timers) with `handle: { hideCapture: true }`
 (`lib/routeHandle.ts`) — the Flux exercise stage does; the dock stays one element. The column is

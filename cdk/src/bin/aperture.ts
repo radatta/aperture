@@ -46,7 +46,12 @@ const laneProps = () => {
   return synthesizer ? { synthesizer } : {};
 };
 
-const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env, allowedOrigins, ...laneProps() });
+const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
+  stage,
+  env,
+  allowedOrigins,
+  ...laneProps(),
+});
 const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   stage,
   env,
@@ -99,7 +104,11 @@ if (app.node.tryGetContext('org')) {
   new ApertureOrgStack(app, 'ApertureOrg', {
     env: { region: 'us-east-1', account: mgmt },
     devAccountId: need(devAccountId, 'devAccountId', 'ApertureOrg'),
-    devOuId: need(app.node.tryGetContext('devOuId') as string | undefined, 'devOuId', 'ApertureOrg'),
+    devOuId: need(
+      app.node.tryGetContext('devOuId') as string | undefined,
+      'devOuId',
+      'ApertureOrg',
+    ),
   });
 }
 if (app.node.tryGetContext('devGuard')) {
@@ -125,16 +134,45 @@ Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }));
 // Fine-by-design suppressions for a single-user personal PWA — each acknowledged rule is a deliberate
 // non-goal, not an oversight. The useful checks stay ACTIVE and will fail synth if regressed: OAC on the
 // S3 origin, DynamoDB PITR, and S3/SNS TLS enforcement (enforceSSL, fixed rather than suppressed).
-const ack = (scope: IConstruct, id: string, reason: string) => Validations.of(scope).acknowledge({ id, reason });
-ack(data, 'AwsSolutions-COG1', 'Invite-only single-user pool; the operator sets their own password.');
-ack(data, 'AwsSolutions-S1', 'Private files bucket reached only via short-lived presigned URLs; S3 access logs add a bucket + cost for no value on a single-user app.');
+const ack = (scope: IConstruct, id: string, reason: string) =>
+  Validations.of(scope).acknowledge({ id, reason });
+ack(
+  data,
+  'AwsSolutions-COG1',
+  'Invite-only single-user pool; the operator sets their own password.',
+);
+ack(
+  data,
+  'AwsSolutions-S1',
+  'Private files bucket reached only via short-lived presigned URLs; S3 access logs add a bucket + cost for no value on a single-user app.',
+);
 ack(data, 'AwsSolutions-COG2', 'No MFA — single-user personal app.');
-ack(data, 'AwsSolutions-COG8', 'Cognito Plus tier (advanced security) is unwarranted for one user and costs money.');
-ack(appStack, 'AwsSolutions-L1', 'Node 22 is the current LTS target; runtime bumps are deliberate, not gated on every deploy.');
+ack(
+  data,
+  'AwsSolutions-COG8',
+  'Cognito Plus tier (advanced security) is unwarranted for one user and costs money.',
+);
+ack(
+  appStack,
+  'AwsSolutions-L1',
+  'Node 22 is the current LTS target; runtime bumps are deliberate, not gated on every deploy.',
+);
 // IAM4/IAM5 are granular rules — acknowledged on the BFF function construct itself (see app-stack.ts),
 // since a stack-scope acknowledge doesn't reach their per-finding matches.
-ack(appStack, 'AwsSolutions-S1', 'Private OAC bucket of re-syncable built assets; access logs add a bucket + cost for no value.');
+ack(
+  appStack,
+  'AwsSolutions-S1',
+  'Private OAC bucket of re-syncable built assets; access logs add a bucket + cost for no value.',
+);
 ack(appStack, 'AwsSolutions-CFR1', 'No geo restriction — a personal single-user app.');
 ack(appStack, 'AwsSolutions-CFR2', 'No WAF — single-user personal app, not worth the cost.');
-ack(appStack, 'AwsSolutions-CFR3', 'No CloudFront access logs — single-user; adds a logging bucket + cost for no value.');
-ack(appStack, 'AwsSolutions-CFR4', 'Default CloudFront cert (TLSv1 min) only in the pre-domain synth; prod serves on a custom-domain cert.');
+ack(
+  appStack,
+  'AwsSolutions-CFR3',
+  'No CloudFront access logs — single-user; adds a logging bucket + cost for no value.',
+);
+ack(
+  appStack,
+  'AwsSolutions-CFR4',
+  'Default CloudFront cert (TLSv1 min) only in the pre-domain synth; prod serves on a custom-domain cert.',
+);

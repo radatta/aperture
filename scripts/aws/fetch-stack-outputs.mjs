@@ -17,7 +17,16 @@ const outputs = {};
 for (const stack of stacks) {
   const json = execFileSync(
     'aws',
-    ['cloudformation', 'describe-stacks', '--stack-name', stack, '--query', 'Stacks[0].Outputs', '--output', 'json'],
+    [
+      'cloudformation',
+      'describe-stacks',
+      '--stack-name',
+      stack,
+      '--query',
+      'Stacks[0].Outputs',
+      '--output',
+      'json',
+    ],
     { encoding: 'utf8' },
   );
   const arr = JSON.parse(json) ?? [];

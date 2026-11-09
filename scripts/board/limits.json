@@ -44,6 +44,11 @@
       "p95Sec": 0,
       "source": "quiet window 2026-10-13: vite dev, 90 s"
     },
-    "build": { "pids": 120, "anonMiB": 1500, "p95Sec": 60, "source": "estimate — not in the matrix" }
+    "build": {
+      "pids": 120,
+      "anonMiB": 1500,
+      "p95Sec": 60,
+      "source": "estimate — not in the matrix"
+    }
   }
 }

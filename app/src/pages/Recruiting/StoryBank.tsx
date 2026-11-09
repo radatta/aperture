@@ -48,7 +48,12 @@ export function StoryBank() {
 
       <div className="flex flex-col gap-3">
         {stories.length === 0 ? (
-          <EmptyState pending={isPending} error={isError} onRetry={() => void refetch()} title="No stories yet.">
+          <EmptyState
+            pending={isPending}
+            error={isError}
+            onRetry={() => void refetch()}
+            title="No stories yet."
+          >
             Add your first with “New story” — a title now, the STAR details whenever you have them.
           </EmptyState>
         ) : (
@@ -115,9 +120,7 @@ function StoryRow({ story }: { story: Story }) {
           </Button>
           <Menu
             label={`More actions for ${story.title}`}
-            items={[
-              { label: 'Delete…', tone: 'danger', onSelect: () => setConfirming(true) },
-            ]}
+            items={[{ label: 'Delete…', tone: 'danger', onSelect: () => setConfirming(true) }]}
           />
         </div>
       </div>

@@ -1,7 +1,7 @@
 # Aperture on code-on-incus (COI) — sandbox runbook
 
 Run Claude Code against this repo inside an **Incus system container** — as a day-to-day dev
-environment *and* an unattended overnight rig (`--dangerously-skip-permissions`). The container,
+environment _and_ an unattended overnight rig (`--dangerously-skip-permissions`). The container,
 not Claude's own Bash sandbox, is the isolation boundary. Two profiles off one base config.
 
 Posture, either profile: **code / test / build only — no local deploy, no AWS creds.** Deploys run
@@ -43,15 +43,15 @@ coi shell --resume                        # → you are now in the container
 claude --resume                           # (prompt: code@coi-88cded0c-1) pick your session
 ```
 
-**Reach for `coi attach` first — it is the normal case.** A persistent container is *kept running*
+**Reach for `coi attach` first — it is the normal case.** A persistent container is _kept running_
 when you leave, so the `claude` process and its tmux session survive; `coi attach` is a
 `tmux attach` — you land back in the same conversation, and nothing resumes (source references:
-*Ending a session*).
+_Ending a session_).
 
 **`coi shell --resume` is for when the container is gone**, after a `coi shutdown` or a VM rebuild.
 It rebuilds from `~/.coi/sessions-claude/` and your transcripts, prompt history (`↑`), settings and
-statusline all come back — verified 2026-09-07, see *Ending a session*. Bare `coi shell` is only for a
-*stopped* container (it restarts it, disk intact — 2026-10-13); on a torn-down container it gives you an
+statusline all come back — verified 2026-09-07, see _Ending a session_. Bare `coi shell` is only for a
+_stopped_ container (it restarts it, disk intact — 2026-10-13); on a torn-down container it gives you an
 empty box, and on a running one v0.15 starts a second container instead.
 
 **Every `coi shell --resume` forks the session** — a new session id, another `(N)` entry in the
@@ -59,7 +59,7 @@ empty box, and on a running one v0.15 starts a second container instead.
 evidence: [COI-INCIDENTS.md → Incident G](COI-INCIDENTS.md).
 
 **If either check on the `ls ~/.coi/ && … --check` line fails**, you're on a fresh Mac or a rebuilt VM — go do
-*One-time setup* below (~20 min, mostly `coi build`), then come back. `ls ~/.coi/` failing means no
+_One-time setup_ below (~20 min, mostly `coi build`), then come back. `ls ~/.coi/` failing means no
 COI state at all; `coi-vm-setup.sh --check` failing means `~/.coi/` exists but isn't mirrored to Mac
 disk, which quietly costs you sessions on the next VM rebuild.
 
@@ -87,7 +87,7 @@ disk, which quietly costs you sessions on the next VM rebuild.
 > **The toolchain.** `~/.config/mise/` and `~/.local/share/mise/` are on the rootfs. The image ships
 > mise configured with `"npm:pnpm" = "latest"`, which is wrong for this repo twice over — it shadows
 > corepack on `PATH`, and "latest" is a different major from the `packageManager` field CI reads.
-> **pnpm's version belongs to the repo, not the machine** (`CLAUDE.md` → *Conventions*). The image
+> **pnpm's version belongs to the repo, not the machine** (`CLAUDE.md` → _Conventions_). The image
 > ships the same conflict three times — `typescript` and `tsx` too. Undo it per container:
 >
 > ```bash
@@ -101,7 +101,7 @@ disk, which quietly costs you sessions on the next VM rebuild.
 >
 > Bare `tsc` and `tsx` stop existing, which is the point — nothing should invoke them outside a
 > project. If something needs to survive rebuilds, it belongs in the image (`[container.build]`, see
-> *Deferred*) or on the repo mount — never in a container-local dotfile.
+> _Deferred_) or on the repo mount — never in a container-local dotfile.
 
 ### 2. I want to debug at the VM layer
 
@@ -119,7 +119,7 @@ coi unfreeze coi-88cded0c-1               # container stuck Frozen
 
 **A session didn't come back — look at the export before resuming.** After `coi shutdown` and before
 `coi shell --resume` the container is gone and nothing has been restored yet, which separates
-*"COI never exported it"* from *"COI exported it and the restore failed"*:
+_"COI never exported it"_ from _"COI exported it and the restore failed"_:
 
 ```bash
 NEW=$(ls -t ~/.coi/sessions-claude/ | head -1)
@@ -127,7 +127,7 @@ ls -l  ~/.coi/sessions-claude/$NEW/.claude/projects/-workspace/   # transcripts 
 find   ~/.coi/sessions-claude/$NEW -type l -printf '%p -> %l\n'   # symlinks are NOT followed at export
 ```
 
-Transcripts present → the export is fine. Absent, with a symlink showing → *One-time setup* step 12.
+Transcripts present → the export is fine. Absent, with a symlink showing → _One-time setup_ step 12.
 
 **`coi` and `incus` only exist here.** Typing them inside the container is the single most common
 wrong-layer mistake — they aren't on `PATH`, so the line echoes back mangled with no error worth
@@ -196,16 +196,16 @@ PY
 ```
 
 **Attribute before you theorise** — the process list names the real culprit (worked case:
-[COI-INCIDENTS.md → Incident E → *Second freeze*](COI-INCIDENTS.md)).
+[COI-INCIDENTS.md → Incident E → _Second freeze_](COI-INCIDENTS.md)).
 
 **Triage — is it real?** Four checks, in this order:
 
-| Check | Benign | Worth investigating |
-| --- | --- | --- |
-| `category` | `filesystem` | `network` — an actual egress verdict |
-| The process list at that timestamp | a build, install, or test you started (`pnpm install`, `vite build`, `tsc`) | nothing that explains the I/O |
-| `files_read` (read verdicts) | **`0`** — bulk read the monitor couldn't attribute to any file, i.e. interpreter/tool startup indexing | a real count, naming files it could attribute |
-| New outbound connections at that timestamp | none; same steady-state HTTPS to the Anthropic API | anything new |
+| Check                                      | Benign                                                                                                 | Worth investigating                           |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| `category`                                 | `filesystem`                                                                                           | `network` — an actual egress verdict          |
+| The process list at that timestamp         | a build, install, or test you started (`pnpm install`, `vite build`, `tsc`)                            | nothing that explains the I/O                 |
+| `files_read` (read verdicts)               | **`0`** — bulk read the monitor couldn't attribute to any file, i.e. interpreter/tool startup indexing | a real count, naming files it could attribute |
+| New outbound connections at that timestamp | none; same steady-state HTTPS to the Anthropic API                                                     | anything new                                  |
 
 All benign → false positive. Unfreeze and carry on:
 
@@ -213,26 +213,26 @@ All benign → false positive. Unfreeze and carry on:
 coi unfreeze coi-88cded0c-1
 ```
 
-**A Bash line containing `/curl` or `/wget` pauses the container too** — Sigma's *Suspicious Download
-and Execute Pattern via Curl/Wget* wants `/curl`|`/wget` + `/tmp/`|`/dev/shm/` + `sh -c`, and the Bash
+**A Bash line containing `/curl` or `/wget` pauses the container too** — Sigma's _Suspicious Download
+and Execute Pattern via Curl/Wget_ wants `/curl`|`/wget` + `/tmp/`|`/dev/shm/` + `sh -c`, and the Bash
 tool's wrapper supplies the last two on every call. Bare `curl` is fine; read `…/curl/…` paths with the
 Read tool. The guard hook denies it ([Incident H](COI-INCIDENTS.md)). `[detection] sigma_dir =
 "/nonexistent"` switches every Sigma rule off — a fallback, not the fix.
 
 **Two exec-watcher shapes pause it as well** (`procwatcher.go:41-76`, matched on the started process's
 own command line): a command starting with `nc` (`nc`, `ncat`, `nc.openbsd`…) whose text holds `-e`
-*anywhere* — a hostname like `db.us-east-1…` counts — and `node -e`/`-p` with both `child_process` and
+_anywhere_ — a hostname like `db.us-east-1…` counts — and `node -e`/`-p` with both `child_process` and
 `net`. Use `curl -sI` for reachability and put node scripts in a file. The Bash guard denies both.
 
-**Two detectors, don't confuse them.** In `allowlist` mode (the night profile) *any* non-allowlisted
+**Two detectors, don't confuse them.** In `allowlist` mode (the night profile) _any_ non-allowlisted
 egress fires HIGH — benign Ubuntu/Canonical background traffic trips it, which is the known-noisy
 one and why the night profile sets `[monitoring.nft] enabled = false`. The startup freeze above is a
-*different* detector, `file_read_rate_mb_per_sec`, which arms in `restricted` mode too, so daytime
+_different_ detector, `file_read_rate_mb_per_sec`, which arms in `restricted` mode too, so daytime
 sessions get it as well.
 
-**There is a *write* detector too, and it is the one that will actually bite you** — `pnpm install`
+**There is a _write_ detector too, and it is the one that will actually bite you** — `pnpm install`
 freezes the container. Five things about it were read from COI's source (`d304121`, 2026-09-07) and
-live in [COI-INCIDENTS.md → Incident E → *Second freeze*](COI-INCIDENTS.md). The operational
+live in [COI-INCIDENTS.md → Incident E → _Second freeze_](COI-INCIDENTS.md). The operational
 consequence: the `file_read_*` keys drive the write detector too, and the burst and rate thresholds
 are one check, so you are really picking one number:
 
@@ -262,23 +262,23 @@ A cold `docker build` may still trip this occasionally. That is the intended tra
 process list in the verdict tells you why in one command.
 
 A threshold above the container's real write ceiling is `enabled = false` with extra steps; measured
-headroom here is 5–10x (Incident E → *Write ceiling*).
+headroom here is 5–10x (Incident E → _Write ceiling_).
 
 **Writes to `/workspace` are invisible to this detector.** It reads cgroup `io.stat` `wbytes` —
 block I/O — and virtiofs writes happen on the Mac. So:
 
-| Written to | Counts toward the threshold? |
-| --- | --- |
-| `/tmp`, `~`, container rootfs — temp files, Docker layers, `~/.cache` | **yes** |
-| `/workspace/**` — the repo, `node_modules`, **and the pnpm store** | **no** |
+| Written to                                                            | Counts toward the threshold? |
+| --------------------------------------------------------------------- | ---------------------------- |
+| `/tmp`, `~`, container rootfs — temp files, Docker layers, `~/.cache` | **yes**                      |
+| `/workspace/**` — the repo, `node_modules`, **and the pnpm store**    | **no**                       |
 
 Measurements, the store-dir correction and the copies-not-hardlinks finding: Incident E →
-*Writes to `/workspace` are invisible to this detector*.
+_Writes to `/workspace` are invisible to this detector_.
 
 **Confirming a config change reached the daemon.** The monitors run in a detached `coi supervise`
 process that reads the config when the container starts and lives until it stops
 (`cli/supervise.go:26-33,48-56`, v0.15) — a new `coi shell` or `coi attach` on a running container
-keeps the old one. A change needs the container stopped (*Start here → 4*, step 3). Verify from the
+keeps the old one. A change needs the container stopped (_Start here → 4_, step 3). Verify from the
 detector's own output rather than by inspection — trip it deliberately and read the threshold back:
 
 ```bash
@@ -287,7 +287,7 @@ grep '"level":"high"' "$A" | tail -1
 ```
 
 The verdict echoes the new number (still `50` would mean the edit hadn't landed); the 2026-09-07
-readback is in Incident E → *Config-change readback*. Then `coi unfreeze <name>`.
+readback is in Incident E → _Config-change readback_. Then `coi unfreeze <name>`.
 
 **Keep `auto_pause_on_high = true`** — `internal/monitor/responder.go:131-147` (v0.15) shows turning it off
 disarms auto-pause for **network** HIGH threats too — unexpected outbound connections, the ones
@@ -295,18 +295,18 @@ actually worth freezing on. Raise the thresholds instead; that is the targeted f
 
 **Levers that do not exist:** no zero-to-disable, no process/path exemption, no per-category switch,
 no env/CLI override, and `[limits.disk]` is a throttle, not the detector — the checked list is
-Incident E → *Levers that do not exist*. Since v0.14 there are three narrow exceptions:
+Incident E → _Levers that do not exist_. Since v0.14 there are three narrow exceptions:
 `[monitoring] reverse_shell_one_liners` (one class), `[detection] sigma_dir`/`gtfobins_dir` (a
 nonexistent dir disables that source), and `[[network.hosts]]` destinations, which the network checks
 now exempt.
 
 After `coi unfreeze`, further HIGH threats — network ones included — are only logged: `r.paused` is
 never reset (`responder.go:182-218`), and on v0.15 the responder lives until the container stops, so
-that is the container's whole life (*inference* — no reset code). A stop re-arms it. Fix the config.
+that is the container's whole life (_inference_ — no reset code). A stop re-arms it. Fix the config.
 
 Full reasoning: [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md).
 
-#### Container *killed* — the CRITICAL path is a different animal
+#### Container _killed_ — the CRITICAL path is a different animal
 
 A freeze is the polite failure; CRITICAL kills the container, and a repeated shape kills the next
 container too (mechanism: [COI-INCIDENTS.md → Incident F](COI-INCIDENTS.md)). What triggers it in practice is not
@@ -329,18 +329,18 @@ A network token (`process.go:500-508`) is `tcp`, `udp`, `socket`, `fsockopen`, `
 whitespace-delimited IP, or a non-loopback `host:port` — anywhere on the same command line, and the
 Bash wrapper is one command line. Until v0.14 any `:` satisfied it (Incident F). **Grep is exposed
 too:** its `rg` argv is a command line, so a pattern carrying a strong token kills (`/dev/tcp/` and the
-`/curl` pause shouldn't fire there — *inference*: `rg` is spawned without a shell, so no `sh -c`).
+`/curl` pause shouldn't fire there — _inference_: `rg` is spawned without a shell, so no `sh -c`).
 
 **The fix is not `auto_kill_on_critical = false`** — that flag is the sandbox's actual purpose. The
 list is compiled in, but `[monitoring] reverse_shell_one_liners = "warn"` (set in `.coi/config.toml`)
 downgrades the one-liner class to audit-only. Otherwise stop emitting the shape:
 
-| Instead of | Use |
-| --- | --- |
-| `python3 -c '…'` on a line that also mentions tcp/udp/socket/an IP/`host:port` | `python3 - <<'PY' … PY` — runs as `python3 -`, not on the list |
-| any JSON one-liner | `jq`, which is installed and matches nothing (plain `python3 -c "print(1)"` is safe on v0.15) |
-| `bash -i -c '…'` | run the command directly |
-| searching for a flagged token (Bash or Grep) | an escape or fragment: `socket\.sock`, `bash\s-i`, `fsock[o]pen` |
+| Instead of                                                                     | Use                                                                                           |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `python3 -c '…'` on a line that also mentions tcp/udp/socket/an IP/`host:port` | `python3 - <<'PY' … PY` — runs as `python3 -`, not on the list                                |
+| any JSON one-liner                                                             | `jq`, which is installed and matches nothing (plain `python3 -c "print(1)"` is safe on v0.15) |
+| `bash -i -c '…'`                                                               | run the command directly                                                                      |
+| searching for a flagged token (Bash or Grep)                                   | an escape or fragment: `socket\.sock`, `bash\s-i`, `fsock[o]pen`                              |
 
 `.claude/hooks/coi-reverse-shell-guard.sh` (Bash) and `coi-grep-guard.sh` (Grep) deny these at
 `PreToolUse`, sharing their rules through `_coi-patterns.sh`. They no-op outside a `coi-*` host, and
@@ -372,7 +372,7 @@ incus exec coi-88cded0c-1 -t --user 1000 --cwd /workspace --env HOME=/home/code 
 Then the usual: `paste -d/ /sys/fs/cgroup/pids.{current,max}` (want `.../4096`),
 `ls ~/.claude/projects/-workspace/`, `df -h`, `mount | grep workspace`.
 
-To relaunch Claude this way instead of `bash`, add the token env var — see *Ops notes → Resume*.
+To relaunch Claude this way instead of `bash`, add the token env var — see _Ops notes → Resume_.
 
 ### 4. I'm done
 
@@ -409,22 +409,21 @@ reattach.
 **Stepping away without ending? DETACH, don't exit.** If you run your own tmux around the session,
 `Ctrl+B` then `D` detaches it (the container's own tmux: `Ctrl+A`, _tmux_ below) — Claude Code, `coi shell`,
 every pane and the container stay alive; reattach later with `tmux attach` (or `coi attach`). Nothing exits,
-nothing forks. This is the routine nightly move: the `exit` in step 2 *closes* the pane you'd detach from.
+nothing forks. This is the routine nightly move: the `exit` in step 2 _closes_ the pane you'd detach from.
 The tradeoff: a detach does **not** end `coi shell`, so **no fresh export snapshot is written** — you're relying on
 the container surviving. Before anything risky (a VM change, a Mac reboot), run the step-1/2 exit
 first to force a snapshot, then come back with `coi attach` (the container is still running — `coi
 shell --resume` against a running one isn't re-checked on v0.15 and may start a second container).
-*(The no-snapshot-on-detach
+_(The no-snapshot-on-detach
 point is inferred from the export firing on `coi shell` exit, not raced empirically; the
-export-on-exit mechanism itself is verified — see *Ending a session*.)*
+export-on-exit mechanism itself is verified — see *Ending a session*.)_
 
 **Exiting `coi shell` is the save. `coi shutdown` is the delete.** Two different programs, two
 different jobs — this doc had it backwards until 2026-09-07. Mechanism and source references:
-*Run → Ending a session*.
+_Run → Ending a session_.
 
 **Don't run `coi shutdown` while Claude Code is still up** — it races the teardown's save and leaves
-your terminal broken; see *Ending a session*.
-
+your terminal broken; see _Ending a session_.
 
 ---
 
@@ -456,12 +455,12 @@ cd ~/Coding/Personal/aperture && coi shell --resume    # container gone
 ```
 
 Bypass perms, restricted network, the Vite range mapped out, no runtime cap. `pnpm dev` inside binds
-`6173` (not `5173` — see *Ports* below), and the host port is pinned to match, so
+`6173` (not `5173` — see _Ports_ below), and the host port is pinned to match, so
 `http://localhost:6173` in your Mac browser is the same server.
 
 `coi attach` when the container is running; bare `coi shell` when it is stopped; `coi shell --resume`
 when it is gone (it rebuilds a destroyed container from its exported session — but it resumes rather
-than attaches, which forks the session; *Start here → 1*). On a running container a plain `coi shell`
+than attaches, which forks the session; _Start here → 1_). On a running container a plain `coi shell`
 starts a second one on v0.15 (`Auto-allocated slot 2`, failing on the pinned Vite port — seen
 2026-10-13); `--resume` was a no-op there on v0.12, not re-checked on v0.15.
 
@@ -484,15 +483,15 @@ Strict allowlist network, 10h hard cap.
 **Keeping an unattended run alive — read this, the obvious answer is wrong.**
 `caffeinate` blocks **idle** sleep only. It does **not** block lid-close sleep. Two further traps:
 `caffeinate -s` asserts PreventSystemSleep **only on AC power** — on battery it is a no-op — and
-"clamshell mode" here means *lid shut but machine awake* (external display + AC + input device),
-which is the opposite of macOS's `'Clamshell Sleep'` log string (sleep *caused by* the lid shutting).
+"clamshell mode" here means _lid shut but machine awake_ (external display + AC + input device),
+which is the opposite of macOS's `'Clamshell Sleep'` log string (sleep _caused by_ the lid shutting).
 So:
 
-| Situation            | What actually keeps it alive                                                                                                                                                                                                                                    |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lid open, unattended | `caffeinate -s -- coi run ...`                                                                                                                                                                                                                                |
+| Situation            | What actually keeps it alive                                                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lid open, unattended | `caffeinate -s -- coi run ...`                                                                                                                                                                                                                   |
 | Lid closed           | **Clamshell mode** (lid shut, machine awake — needs external display + AC + input device), or **Amphetamine**'s closed-display option, which on most Macs wants AC plus an external display or input device too. `caffeinate` will not save you. |
-| Any of the above     | **On AC.** A flat battery hibernates the Mac and no assertion of any kind prevents that.                                                                                                                                                                  |
+| Any of the above     | **On AC.** A flat battery hibernates the Mac and no assertion of any kind prevents that.                                                                                                                                                         |
 
 Why (reasoning, not log evidence — caffeinate wasn't running): a display-tied assertion cannot
 survive the display closing, and `caffeinate` on battery asserts nothing at all — the 2026-08-22
@@ -501,14 +500,14 @@ log lines are in
 
 ### Ending a session — do this, every time
 
-Commands: *Start here → 4*. What each step does, and why:
+Commands: _Start here → 4_. What each step does, and why:
 
 Step 1 (`Ctrl+D`) costs nothing and eliminates a whole failure class: a full-screen TUI only
 restores your local terminal on a clean exit —
-[COI-INCIDENTS.md → Incident B → *The invariant*](COI-INCIDENTS.md#incident-b--a-13-hour-unattended-run-died-and-left-the-terminal-broken).
+[COI-INCIDENTS.md → Incident B → _The invariant_](COI-INCIDENTS.md#incident-b--a-13-hour-unattended-run-died-and-left-the-terminal-broken).
 
 **Step 2 is the one that protects your data, and it is the step people don't know exists.** `Ctrl+D`
-leaves *Claude Code*; you are still inside the container with `coi shell` running, and nothing has
+leaves _Claude Code_; you are still inside the container with `coi shell` running, and nothing has
 been exported yet. The `exit` in step 2 ends `coi shell`, and its teardown
 (`internal/cli/phases_shell.go:443-466`, `SaveSession: true`) is what writes
 `~/.coi/sessions-claude/<id>/` — it builds `session.CleanupOptions{SaveSession: true, SessionsDir: …}`
@@ -518,42 +517,42 @@ and calls `session.Cleanup`, and runs whenever that `coi shell` process ends: a 
 **After step 2 the container is still running — come back with `coi attach`, not `coi shell`.**
 Persistent containers are kept alive on exit (`internal/session/cleanup.go:305-315` prints "use
 'coi attach' to reconnect"), and `coi attach` is `tmux attach -t <session>` (`internal/cli/attach.go:160`), so
-you rejoin the *same* live `claude` process. Nothing resumes, and nothing forks. Using
+you rejoin the _same_ live `claude` process. Nothing resumes, and nothing forks. Using
 `coi shell --resume` here instead would mint a new session id and another `(N)` entry in your
-picker — see *Start here → 1*.
+picker — see _Start here → 1_.
 
 Step 3 picks up a `.coi/config.toml` change and keeps the container: `coi container stop` stops it and
-removes its firewall rules, and `coi shell` restarts a *stopped* persistent container
+removes its firewall rules, and `coi shell` restarts a _stopped_ persistent container
 (`session/setup_phase_reuse.go`; `naming.go` `FindReusablePersistentSlot` skips running ones) and
 re-applies isolation. Neither step exports — the container's disk keeps `~/.claude`.
 
 Step 4 is optional and does **not** export — `internal/cli/shutdown.go` is stop → firewall cleanup →
 `mgr.Delete(true)`, with no save call in it (grep it for `SaveSession`, `Cleanup`,
 `saveSessionData`, `SessionsDir`: no hits). Run it to reclaim disk. Skipping it repeatedly is how you accumulate containers holding GBs each (this rig once had four,
-one at 2.93 GiB — [Incident B → *Container leak*](COI-INCIDENTS.md)).
+one at 2.93 GiB — [Incident B → _Container leak_](COI-INCIDENTS.md)).
 
 **Don't run `coi shutdown` while Claude Code is still up.** It turns the export into a race you do
 not control: the dying container ends `coi shell`, whose teardown starts saving
 ("Save session data immediately — no pre-delay", `internal/session/cleanup.go:243`), while
 `coi shutdown` proceeds to `Delete`. `cleanup.go` does handle a mid-shutdown race — on an SFTP error
 it waits for the container to fully stop and retries via incus direct file access — but **that
-fallback still needs the container to exist**, and `Delete` removes it. *(Inference from the code
-ordering; not raced empirically. It went our way on 2026-09-07.)* You also lose the in-flight turn,
+fallback still needs the container to exist**, and `Delete` removes it. _(Inference from the code
+ordering; not raced empirically. It went our way on 2026-09-07.)_ You also lose the in-flight turn,
 and your terminal keeps whatever modes the TUI set — the `35;97;27M…` garbage, fixed with `reset`,
 never `stty sane`.
 
 > **Nothing is exported until `coi shell` exits**, and there is **no continuous backup**: everything
 > since your last exit lives only inside the container. Exit properly at every real break, not just
-> at the end of the day. The export *is* a restore — `coi shell --resume` reads the whole `~/.claude`
+> at the end of the day. The export _is_ a restore — `coi shell --resume` reads the whole `~/.claude`
 > tree back into a fresh container, settled 2026-09-07 (an earlier version of this doc said the
 > opposite). The evidence, the two things the restore does not carry, and what `persistent = true`
-> does and doesn't buy: [COI-INCIDENTS.md → Incident D → *Fix* → *Correction, 2026-09-07*](COI-INCIDENTS.md)
-> and its *Open follow-ups*. Alive / deleted is not the whole set of container states — check
+> does and doesn't buy: [COI-INCIDENTS.md → Incident D → _Fix_ → _Correction, 2026-09-07_](COI-INCIDENTS.md)
+> and its _Open follow-ups_. Alive / deleted is not the whole set of container states — check
 > `uptime -p` before calling a container new.
 
 > **`coi shutdown` verified 2026-09-06** (the rig is COI v0.15.0 as of 2026-10-13, on Incus 7.4 as of 2026-09-26; "COI
 > 7.4" in older notes was the Incus version) — it exists; it deletes, and exports nothing (above). On
-> another COI version, check `coi --help`: the *ritual* (exit TUI → tear down container
+> another COI version, check `coi --help`: the _ritual_ (exit TUI → tear down container
 > → stop VM) is what matters, not the spelling.
 
 ## One-time setup
@@ -575,11 +574,11 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
 
    ```yaml
    mounts:
-   - location: "~/Coding/Personal/aperture"
-     writable: true
+     - location: '~/Coding/Personal/aperture'
+       writable: true
    ```
 
-   > **Get the indentation right.** `writable` belongs *under* `location`, no dash. A stray `-`
+   > **Get the indentation right.** `writable` belongs _under_ `location`, no dash. A stray `-`
    > makes it `mounts[1]` — a second entry with no path — and Lima rejects the buffer with
    > `field 'mounts[1].location' must be an absolute path, got '.'`. Recovering from that rejection
    > is what destroyed this VM once already (Incident D). Mount changes also restart the VM
@@ -621,29 +620,29 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
 
 5. **`sudo incus admin init`** — storage pool + network bridge. A fresh install has **neither**, and
    everything downstream fails with cryptic errors (`Failed getting root disk: No root device could
-   be found`) until this runs.
+be found`) until this runs.
 
-   | Prompt | Answer | Why |
-   | --- | --- | --- |
-   | Clustering? | no | single-node |
-   | New storage pool? | yes → `default` | required |
-   | Backend | `dir` | `zfs` triggers a DKMS kernel-module compile on first use — multi-minute and CPU-bound. `dir` is near-instant. Tradeoff: `dir` re-unpacks the image every launch and forgoes `coi snapshot`; `coi health` will warn about it forever. Revisit deliberately, not mid-rebuild. |
-   | Location | default | |
-   | New bridge? | yes → `incusbr0` | |
-   | IPv4 | `10.66.66.1/24` — **explicit** | see below |
-   | NAT IPv4 | yes | |
-   | IPv6 | none | not needed |
-   | Available over network? | no | |
-   | Auto-update images? | yes | |
-   | Print YAML preseed? | **yes** | save it — `incus admin init --preseed < file.yaml` turns this whole table into one command next time. (Skipped during the real rebuild; still an open follow-up.) |
+   | Prompt                  | Answer                         | Why                                                                                                                                                                                                                                                                         |
+   | ----------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Clustering?             | no                             | single-node                                                                                                                                                                                                                                                                 |
+   | New storage pool?       | yes → `default`                | required                                                                                                                                                                                                                                                                    |
+   | Backend                 | `dir`                          | `zfs` triggers a DKMS kernel-module compile on first use — multi-minute and CPU-bound. `dir` is near-instant. Tradeoff: `dir` re-unpacks the image every launch and forgoes `coi snapshot`; `coi health` will warn about it forever. Revisit deliberately, not mid-rebuild. |
+   | Location                | default                        |                                                                                                                                                                                                                                                                             |
+   | New bridge?             | yes → `incusbr0`               |                                                                                                                                                                                                                                                                             |
+   | IPv4                    | `10.66.66.1/24` — **explicit** | see below                                                                                                                                                                                                                                                                   |
+   | NAT IPv4                | yes                            |                                                                                                                                                                                                                                                                             |
+   | IPv6                    | none                           | not needed                                                                                                                                                                                                                                                                  |
+   | Available over network? | no                             |                                                                                                                                                                                                                                                                             |
+   | Auto-update images?     | yes                            |                                                                                                                                                                                                                                                                             |
+   | Print YAML preseed?     | **yes**                        | save it — `incus admin init --preseed < file.yaml` turns this whole table into one command next time. (Skipped during the real rebuild; still an open follow-up.)                                                                                                           |
 
    > **Don't bother with `--auto`.** It fails at subnet detection —
    > `Failed to automatically find an unused IPv4 subnet, manual configuration required` — even
    > when `ip addr`/`ip route` show only Lima's own `192.168.5.0/24` in use. Never diagnosed.
    > Specifying the subnet explicitly works; don't burn time here.
 
-6. **Delegate host UID 501 to Incus.** Launch otherwise fails *"UID namespace isolation not
-   supported"*. Confirmed entirely absent on a fresh VM:
+6. **Delegate host UID 501 to Incus.** Launch otherwise fails _"UID namespace isolation not
+   supported"_. Confirmed entirely absent on a fresh VM:
 
    ```bash
    echo 'root:501:1' | sudo tee -a /etc/subuid
@@ -691,7 +690,7 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
      real-time nft threat-monitoring component that `.coi/config.toml` enables.
    - `dir` re-unpacks the image every launch → the accepted tradeoff from step 5.
 
-   *36 checks passed with 2 warnings* is the known-good end state for this rig.
+   _36 checks passed with 2 warnings_ is the known-good end state for this rig.
 
 10. **Make COI's own state durable (VM half) — don't skip this one.** `~` in the Lima VM is
     `/home/<user>.guest`, **VM-local**; the Mac is reachable only at `/Users/<you>/…`, and only
@@ -710,9 +709,9 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
     replacing it, refuses rather than clobbering anything unexpected. **Deliberately not a
     `lima.yaml` edit** — mount changes restart the VM, and a typo in one is what caused the rebuild
     in the first place. Verify any time with `scripts/coi-vm-setup.sh --check` (exit 1 if the links
-    are gone). It only mirrors what the teardown exports; nothing is written between exits (*Run →
-    Ending a session*). Open question — whether `coi` recreates those paths with `mkdir -p` (a
-    symlink survives) or replaces them outright: [Incident D → *Open follow-ups*](COI-INCIDENTS.md).
+    are gone). It only mirrors what the teardown exports; nothing is written between exits (_Run →
+    Ending a session_). Open question — whether `coi` recreates those paths with `mkdir -p` (a
+    symlink survives) or replaces them outright: [Incident D → _Open follow-ups_](COI-INCIDENTS.md).
 
 11. **First shell, trust, and verify the scoping.**
 
@@ -745,7 +744,7 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
 
     It was built to cover "nothing is exported unless `coi` runs its graceful teardown" — but it
     **caused** the problem it was believed to be solving: COI does not follow that symlink at export
-    time. Removing it was the whole fix — [Incident D → *Fix* → *Correction, 2026-09-07*](COI-INCIDENTS.md).
+    time. Removing it was the whole fix — [Incident D → _Fix_ → _Correction, 2026-09-07_](COI-INCIDENTS.md).
 
     **Is this container affected?** `ls -ld ~/.claude/projects` showing an arrow into `/workspace`
     is the obvious case, but a bind mount looks exactly like a real directory. Compare filesystems —
@@ -784,12 +783,12 @@ Two design choices make it work end to end.
 
 **1. A range, not a single port.** Several Claude sessions often share one container, and Vite walks
 upward when its base port is taken (`6173 → 6174 → …`). Container network namespaces are separate, so
-two *containers* could both hold `6173` — the range exists for multiple servers inside **one** box.
+two _containers_ could both hold `6173` — the range exists for multiple servers inside **one** box.
 `vite preview` deliberately shares the base and increments into the same range.
 
 **2. Pin `host` == `container`, so the port you see inside is the port on the Mac.** `PortEntry`
-takes an explicit `host` field — *"Exact host port to bind (omit for stable auto-allocation per
-workspace/slot)"*. Omit it and COI assigns something unrelated (`6173` → `localhost:42100`), and then
+takes an explicit `host` field — _"Exact host port to bind (omit for stable auto-allocation per
+workspace/slot)"_. Omit it and COI assigns something unrelated (`6173` → `localhost:42100`), and then
 the number carries no information and has to be looked up. Pin it and there is nothing to look up:
 
 ```toml
@@ -807,13 +806,13 @@ host      = 6173
 containers pinning `6173` means the second one's proxy device fails to bind. Because
 `.coi/config.toml` is per-repo, give each project its own band:
 
-| Project         | Band           |
-| --------------- | -------------- |
+| Project         | Band        |
+| --------------- | ----------- |
 | you, on the Mac | `5173–5183` |
 | aperture        | `6173–6183` |
 | next project    | `6273–6283` |
 
-There is also a `ports` field for *identity-mapped* ports — a count, published host==container,
+There is also a `ports` field for _identity-mapped_ ports — a count, published host==container,
 "allocated per workspace/slot". Fewer lines, but COI chooses the numbers, which defeats the
 convention. Explicit entries are worth the verbosity.
 
@@ -825,7 +824,7 @@ With `host` pinned, `ss` inside the container is the whole answer:
 ss -ltn | grep -oE ':(5|6)[12][78][0-9]' | tr -d ':' | sort -u
 ```
 
-If a mapping is ever *not* pinned, the authoritative view is host-side — worth a shell function, since
+If a mapping is ever _not_ pinned, the authoritative view is host-side — worth a shell function, since
 this is the "what is Claude serving right now?" question:
 
 ```bash
@@ -834,8 +833,8 @@ for c in $(incus list -c n --format csv); do
 done
 ```
 
-> **`COI_PORT_<NAME>` appears only once `host` is pinned.** The schema says each entry is *"exposed to
-> the session as `COI_PORT_<NAME>`"*. While `host` was auto-allocated, the live Claude process's own
+> **`COI_PORT_<NAME>` appears only once `host` is pinned.** The schema says each entry is _"exposed to
+> the session as `COI_PORT_<NAME>`"_. While `host` was auto-allocated, the live Claude process's own
 > `/proc/<pid>/environ` held no `COI_*` variable at all — only the OAuth token — so the
 > `COI_PORT_VITE=…` line COI writes into the generated `CLAUDE.md` preamble looked like prose rather
 > than proof. With `host` pinned, all 11 are present and correct (verified 2026-08-22:
@@ -848,12 +847,12 @@ done
 
 Four files. Only the first lives in this repo; the rest are machine-local and never committed.
 
-| File                                           | Scope                      | Purpose                                                                                                                                                                                                        |
-| ---------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                                         | Scope                | Purpose                                                                                                                                                                                            |
+| -------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.coi/config.toml`                           | **repo (committed)** | Daytime posture: `coi-default` image, `permission_mode=bypass`, CPU/mem caps, `network.mode=restricted`, the Vite `6173–6183` port map (`host` pinned == `container`), monitoring on. Secret-free. |
-| `~/.coi/config.toml`                         | user (trusted)             | Auth injection: `[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`.                                                                                                        |
-| `~/.coi-claude-token`                        | user, mode 600             | The token itself. Never mounted into the workspace.                                                                                                                                                            |
-| `~/.coi/profiles/aperture-night/config.toml` | user (trusted)             | Night deltas: `network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`.                                                  |
+| `~/.coi/config.toml`                         | user (trusted)       | Auth injection: `[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`.                                                                                               |
+| `~/.coi-claude-token`                        | user, mode 600       | The token itself. Never mounted into the workspace.                                                                                                                                                |
+| `~/.coi/profiles/aperture-night/config.toml` | user (trusted)       | Night deltas: `network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`.                                               |
 
 Night profile, in full:
 
@@ -911,7 +910,7 @@ compare against is whatever the Mac last fetched.** That produced two confidentl
 fact from refs that were structurally incapable of being current.
 
 **Setup — redo after any container recreate** (`~/.gitconfig` and `~/.git-credentials` are outside
-`~/.claude`, so the export does not carry them — *Start here → 1*):
+`~/.claude`, so the export does not carry them — _Start here → 1_):
 
 ```bash
 git config --global url."https://github.com/".insteadOf git@github.com:
@@ -921,7 +920,7 @@ gh auth setup-git
 
 - **Run this in a separate tmux window, never through Claude.** A token pasted into a Claude prompt
   lands in the session transcript on disk.
-- **The `--global` rewrite is the point.** `/workspace/.git/config` is *shared with the Mac*, so
+- **The `--global` rewrite is the point.** `/workspace/.git/config` is _shared with the Mac_, so
   changing the remote there would switch your own pushes to HTTPS and break your working SSH setup.
   A global `insteadOf` is container-only and leaves both untouched.
 - The token lives in `~/.git-credentials` in the container home — never under `/workspace`, which is
@@ -929,14 +928,14 @@ gh auth setup-git
 
 **Scope: read-only.** The PAT deliberately grants no write anywhere:
 
-| Permission | Why |
-| --- | --- |
-| Contents: **read** | `git fetch` — the whole point |
-| Pull requests: **read** | PR state. **Write would allow merging, and a merge to `main` IS the prod deploy** |
-| Actions: read | run status, job logs, the CDK diff |
-| Variables · Secrets · Deployments · Commit statuses: read | verify config instead of asking; secret *values* are never returned by any permission |
+| Permission                                                | Why                                                                                   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Contents: **read**                                        | `git fetch` — the whole point                                                         |
+| Pull requests: **read**                                   | PR state. **Write would allow merging, and a merge to `main` IS the prod deploy**     |
+| Actions: read                                             | run status, job logs, the CDK diff                                                    |
+| Variables · Secrets · Deployments · Commit statuses: read | verify config instead of asking; secret _values_ are never returned by any permission |
 
-**Writes go through a second identity — the bot.** A fine-grained PAT authenticates *as you*, GitHub has
+**Writes go through a second identity — the bot.** A fine-grained PAT authenticates _as you_, GitHub has
 no per-branch token scoping, and a ruleset binds identities, not credentials — so a write PAT couldn't
 distinguish "you" from "Claude acting as you" (and would inherit your admin bypass). So the PAT stays
 read-only, and pushes, dev deploys and dev logs go through the GitHub App `aperture-cc-bot`
@@ -953,20 +952,20 @@ fails regardless. Use `gh run list` / `gh run view` — same information, Action
 - **Two config formats — the big one.** The main/project config (`~/.coi/config.toml`,
   `.coi/config.toml`) is the `Config` struct: `forward_env` / `env_commands` live under
   **`[defaults]`**, and it is **not** schema-validated. Profile files
-  (`~/.coi/profiles/<name>/config.toml`) are **flat** top-level keys and *are* validated by
+  (`~/.coi/profiles/<name>/config.toml`) are **flat** top-level keys and _are_ validated by
   `coi validate profile`. **Do not run `coi validate profile` against a main/project config** — wrong
   schema (it rejects `[defaults]`), and "fixing" it by hoisting a key to top level makes that key
   silently no-op at runtime. This is what broke auth for an afternoon.
 - **Auth: use `env_commands`, not `forward_env`.** `forward_env` didn't deliver reliably.
-  `env_commands` runs *in the VM* (Linux), so the Mac Keychain is unreachable — a mode-600 file is
-  the equivalent. It's stripped from *untrusted project* configs, so it **must** be user-scope.
+  `env_commands` runs _in the VM_ (Linux), so the Mac Keychain is unreachable — a mode-600 file is
+  the equivalent. It's stripped from _untrusted project_ configs, so it **must** be user-scope.
 - **Exit the TUI before you walk away — and `caffeinate` does not stop lid-close sleep.** Terminal
-  garbage, clamshell sleep, VM-wide mount restart, shared `node_modules` — signatures in *Known
-  failure modes*, evidence in
+  garbage, clamshell sleep, VM-wide mount restart, shared `node_modules` — signatures in _Known
+  failure modes_, evidence in
   [COI-INCIDENTS.md → Incident B](COI-INCIDENTS.md#incident-b--a-13-hour-unattended-run-died-and-left-the-terminal-broken).
 - **Night profile needs `[monitoring.nft] enabled = false`.** The nft monitor **hardcodes**
   auto-pause-on-high (ignores `auto_pause_on_high`), and "unauthorized connection attempt" fires HIGH
-  on *any* non-allowlisted egress — so benign OS background traffic (Ubuntu/Canonical, esp.
+  on _any_ non-allowlisted egress — so benign OS background traffic (Ubuntu/Canonical, esp.
   `unattended-upgrades`) freezes the run. Disabling the monitor **keeps the allowlist DROP rules in
   force** (network isolation ≠ the monitor daemon); process + filesystem monitoring stay on. Only the
   not-allowlisted check is allowlist-only; the detector's other checks arm in **every** mode: a
@@ -978,19 +977,19 @@ fails regardless. Use `gh run list` / `gh run view` — same information, Action
 Full forensics — timelines, log locations, ruled-out hypotheses, exact commands — live in
 **[COI-INCIDENTS.md](COI-INCIDENTS.md)**. Signatures only, so you can recognise which one you have:
 
-| Symptom                                                                                                             | Cause                                                                                                                                                | Fix                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Prompt fills with`35;97;27M…` garbage                                                                            | A killed TUI never restored your terminal's mouse-reporting mode                                                                                     | Exit Claude cleanly (`Ctrl+D`). To recover: accept iTerm's "turn it off" prompt, or `reset`. **`stty sane` does not work.**                                                                                                                                                                                                                                                          |
-| Long unattended run died ~when you shut the laptop                                                                  | `'Clamshell Sleep'` — lid close forces sleep; **`caffeinate` does not prevent it** (and on battery it does nothing at all)                | Lid open + AC +`caffeinate -s`; or clamshell mode / Amphetamine closed-display. Always on AC.                                                                                                                                                                                                                                                                                                  |
-| `Session can't start — SIGABRT (134)` on a 2nd/3rd session                                                       | Container **pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (now `4096`, 2026-10-13; `2048` was verified landing). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Always verify a fresh container reports the number you wrote** — `1024` silently didn't take, `2048` did, and the difference was never explained. |
-| Every container loses its mounts at once, then the VM reboots                                                       | A host-mount config change: the path must be visible in the Lima VM first, so applying it restarts the VM and kills every session                    | Make mount changes **before** starting a long run                                                                                                                                                                                                                                                                                                                                           |
-| `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error) | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last                                                     | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`.                                                                                                                                                                                                                                                                                 |
-| Container `Frozen`, "PAUSED due to security threat" — on session start, or the moment you run `pnpm install`                                     | Two detectors, one pair of keys: startup read I/O, or `pnpm install` writes (the write detector borrows `file_read_*`, `detector.go:36-37` on v0.15, so 50 MB / 10 MB/s applies to a 127 MB, 61 MB/s install). Whole-container cgroup I/O, not just the workspace. Both false positives; or a Bash line containing `/curl`/`/wget` (Sigma — Incident H) | `coi unfreeze <name>`. Triage: *Start here → 2 → Container frozen — find out what tripped it* (raw file, never `coi audit <name>`). Reasoning: [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md)                                                                                                                                                         |
-| `coi audit <name>` prints nothing for a container you can see in `coi list`                                         | CLI read-path defect — the on-disk history exists and is complete                                                                                                                                          | Read `~/.coi/audit/<name>.jsonl` directly — see *Start here → 2 → Container frozen*. `coi audit -f` is for live monitoring only.                                                                                                                                                                                                                                                        |
-| Session lost after a crash / reboot / lid-close, with no `coi shell` teardown                                       | The export only fires on the `coi shell` teardown — an ungraceful death exports nothing, so everything since the last exit is gone with the container                                                    | No fix, by design — no continuous backup. Exit `coi shell` at every real break and reattach with `coi attach`; not `coi shutdown`, which exports nothing and forks the session. If it ever bites for real, `CLAUDE_CONFIG_DIR` (*Deferred*) — **not** a `projects` symlink, which breaks the restore. After a monitor **kill**, the `forensics_on_kill` copy holds it — *Start here → 2 → Container killed* |
-| Previous session gone; `--resume` doesn't offer it                                                                  | Bare `coi shell` on a torn-down container; or a `~/.claude/projects` symlink (removed 2026-09-07 — *One-time setup* step 12), which COI skips at export; or `~/.coi/` lost to a VM rebuild, since it is VM-local                                                       | `ls -ld ~/.claude/projects` — an arrow into `/workspace` is the symlink; remove it per step 12. Otherwise `coi shell --resume`. Recover by hand from `localNotes/coi-state/sessions-claude/<id>/.claude/projects/` or `.../container/projects/`. Prevent the rebuild case with step 10 (`scripts/coi-vm-setup.sh`).                                                                                                                                                                                                                                             |
-| `coi` profiles or `~/.coi` config vanished                                                                          | Same cause: `~/.coi/` lives on the VM disk, not the Mac                                                                                                                                                    | *One-time setup* step 10 (`scripts/coi-vm-setup.sh`). Recreate the profile once, then it persists.                                                                                                                                                                                                                                                                                                                        |
-| Four "ephemeral" containers alive, GBs each                                                                         | Ephemeral destroy +`--resume` write happen only on the `coi shell` teardown                                                                             | Tear down properly when done — see*Run → Ending a session*                                                                                                                                                                                                                                                                                                                                   |
+| Symptom                                                                                                      | Cause                                                                                                                                                                                                                                                                                                                                                   | Fix                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prompt fills with`35;97;27M…` garbage                                                                        | A killed TUI never restored your terminal's mouse-reporting mode                                                                                                                                                                                                                                                                                        | Exit Claude cleanly (`Ctrl+D`). To recover: accept iTerm's "turn it off" prompt, or `reset`. **`stty sane` does not work.**                                                                                                                                                                                                                                                                                 |
+| Long unattended run died ~when you shut the laptop                                                           | `'Clamshell Sleep'` — lid close forces sleep; **`caffeinate` does not prevent it** (and on battery it does nothing at all)                                                                                                                                                                                                                              | Lid open + AC +`caffeinate -s`; or clamshell mode / Amphetamine closed-display. Always on AC.                                                                                                                                                                                                                                                                                                               |
+| `Session can't start — SIGABRT (134)` on a 2nd/3rd session                                                   | Container **pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug                                                                                                                                                                                                                            | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (now `4096`, 2026-10-13; `2048` was verified landing). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Always verify a fresh container reports the number you wrote** — `1024` silently didn't take, `2048` did, and the difference was never explained.                 |
+| Every container loses its mounts at once, then the VM reboots                                                | A host-mount config change: the path must be visible in the Lima VM first, so applying it restarts the VM and kills every session                                                                                                                                                                                                                       | Make mount changes **before** starting a long run                                                                                                                                                                                                                                                                                                                                                           |
+| `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error)  | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last                                                                                                                                                                                                                                                          | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`.                                                                                                                                                                                                                                                                                                    |
+| Container `Frozen`, "PAUSED due to security threat" — on session start, or the moment you run `pnpm install` | Two detectors, one pair of keys: startup read I/O, or `pnpm install` writes (the write detector borrows `file_read_*`, `detector.go:36-37` on v0.15, so 50 MB / 10 MB/s applies to a 127 MB, 61 MB/s install). Whole-container cgroup I/O, not just the workspace. Both false positives; or a Bash line containing `/curl`/`/wget` (Sigma — Incident H) | `coi unfreeze <name>`. Triage: _Start here → 2 → Container frozen — find out what tripped it_ (raw file, never `coi audit <name>`). Reasoning: [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md)                                                                                                                                                                                                            |
+| `coi audit <name>` prints nothing for a container you can see in `coi list`                                  | CLI read-path defect — the on-disk history exists and is complete                                                                                                                                                                                                                                                                                       | Read `~/.coi/audit/<name>.jsonl` directly — see _Start here → 2 → Container frozen_. `coi audit -f` is for live monitoring only.                                                                                                                                                                                                                                                                            |
+| Session lost after a crash / reboot / lid-close, with no `coi shell` teardown                                | The export only fires on the `coi shell` teardown — an ungraceful death exports nothing, so everything since the last exit is gone with the container                                                                                                                                                                                                   | No fix, by design — no continuous backup. Exit `coi shell` at every real break and reattach with `coi attach`; not `coi shutdown`, which exports nothing and forks the session. If it ever bites for real, `CLAUDE_CONFIG_DIR` (_Deferred_) — **not** a `projects` symlink, which breaks the restore. After a monitor **kill**, the `forensics_on_kill` copy holds it — _Start here → 2 → Container killed_ |
+| Previous session gone; `--resume` doesn't offer it                                                           | Bare `coi shell` on a torn-down container; or a `~/.claude/projects` symlink (removed 2026-09-07 — _One-time setup_ step 12), which COI skips at export; or `~/.coi/` lost to a VM rebuild, since it is VM-local                                                                                                                                        | `ls -ld ~/.claude/projects` — an arrow into `/workspace` is the symlink; remove it per step 12. Otherwise `coi shell --resume`. Recover by hand from `localNotes/coi-state/sessions-claude/<id>/.claude/projects/` or `.../container/projects/`. Prevent the rebuild case with step 10 (`scripts/coi-vm-setup.sh`).                                                                                         |
+| `coi` profiles or `~/.coi` config vanished                                                                   | Same cause: `~/.coi/` lives on the VM disk, not the Mac                                                                                                                                                                                                                                                                                                 | _One-time setup_ step 10 (`scripts/coi-vm-setup.sh`). Recreate the profile once, then it persists.                                                                                                                                                                                                                                                                                                          |
+| Four "ephemeral" containers alive, GBs each                                                                  | Ephemeral destroy +`--resume` write happen only on the `coi shell` teardown                                                                                                                                                                                                                                                                             | Tear down properly when done — see*Run → Ending a session*                                                                                                                                                                                                                                                                                                                                                  |
 
 ## Ops notes
 
@@ -1031,14 +1030,14 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
   confirmed), and now the last
   known instance of it. Nothing has been observed starving, so this is config correctness, not a live
   failure. Diagnosis commands:
-  [COI-INCIDENTS.md → Incident A → *Verify it took*](COI-INCIDENTS.md#verify-it-took).
+  [COI-INCIDENTS.md → Incident A → _Verify it took_](COI-INCIDENTS.md#verify-it-took).
 - **`coi audit`'s read path.** `~/.coi/audit/<container>.jsonl` holds complete per-poll telemetry;
   `coi audit <name>` returned empty for a fully populated file (corrected 2026-09-06) — just
   `cat`/`grep` the file. Worth filing
   upstream as a CLI defect, not a missing feature. See [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md).
 
 - **Session-restore leftovers (2026-09-07).** `coi shell --resume` restores `~/.claude` completely
-  (*Run → Ending a session*). Three loose ends, none blocking:
+  (_Run → Ending a session_). Three loose ends, none blocking:
 
   - **Memory restore is untested.** `~/.claude/projects/-workspace/memory/` comes back as a
     directory, but it has been empty for this project's whole life — no files, no `MEMORY.md`. So
@@ -1054,8 +1053,8 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 
 - **`CLAUDE_CONFIG_DIR` via `env_commands` — the only remaining answer to an ungraceful death.**
   Nothing is exported between `coi shell` exits, so a VM rebuild or storage loss without one
-  still costs you the window. The fix is *not* a `projects` symlink (that breaks the restore — see
-  *One-time setup* step 12); it's relocating all of `~/.claude` onto Mac disk:
+  still costs you the window. The fix is _not_ a `projects` symlink (that breaks the restore — see
+  _One-time setup_ step 12); it's relocating all of `~/.claude` onto Mac disk:
 
   ```toml
   # ~/.coi/config.toml — user scope, trusted
@@ -1075,7 +1074,7 @@ Not blockers — the rig is fully operational without these. Polish, in rough pr
   "Docker" image, so `dockerd` + `containerd` + `unattended-upgrades` + a pile of Ubuntu daemons run
   idle. Measured 2026-08-22: **66 idle tasks → 30** after trimming, with the toolchain unaffected —
   over half the box's pids budget was noise (full table: [COI-INCIDENTS.md](COI-INCIDENTS.md) →
-  *Incident A → What's actually burning pids*). Because the container is **ephemeral**, doing it in a
+  _Incident A → What's actually burning pids_). Because the container is **ephemeral**, doing it in a
   running box doesn't persist; it has to be baked. Supported path is a **profile** with a
   `[container.build]` section (never `COI_BUILD_SCRIPT_FROM_DISK=1` — that replaces COI's embedded
   security provisioning):
@@ -1105,15 +1104,16 @@ Not blockers — the rig is fully operational without these. Polish, in rough pr
   `unattended-upgrades` removes the night-pause trigger we currently paper over with
   `[monitoring.nft] enabled=false`, so the night profile could re-enable the monitor — verify no
   other benign egress trips it first.
-- **Verify nft network *alerting* on Mac.** Containment (allowlist DROP rules) is proven; whether the
-  monitor *daemon* raises anomaly events on Mac is unconfirmed — we sidestepped it by disabling the
+
+- **Verify nft network _alerting_ on Mac.** Containment (allowlist DROP rules) is proven; whether the
+  monitor _daemon_ raises anomaly events on Mac is unconfirmed — we sidestepped it by disabling the
   monitor at night. To verify: in a daytime `restricted` shell, stream `coi audit -f` and trip a
   benign detector (e.g. a `grep -r secret /home/code` credential-scan pattern, or an egress to a
   non-allowlisted host); a WARNING/HIGH event means alerting works. If nothing fires, it's the
   "network monitoring degraded on macOS" case — accept containment-only, or set
   `[monitoring.nft] lima_host = "incus"` and retry.
 - [x] **Strip the dead `[defaults] forward_env` line from `.coi/config.toml`** — done. Auth moved to
-  `env_commands` in the user config; only the header comment on line 3 still mentions `forward_env`.
+      `env_commands` in the user config; only the header comment on line 3 still mentions `forward_env`.
 - **Explore `coi snapshot` (checkpoint / rollback).** Never exercised. Would let an unattended run
   checkpoint container state before a risky step and roll back on failure. Check the Snapshot
   Management wiki page for syntax; decide whether it's worth wiring into the night flow.

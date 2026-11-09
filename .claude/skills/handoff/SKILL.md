@@ -1,7 +1,7 @@
 ---
 name: handoff
 description: Compaction-only. The PreCompact hook runs this in a forked copy of the session to write localNotes/handoffs/handoff-<date>-<branch>-<sid8>.md (decisions and why, dead ends, open questions, file pointers) before the context is summarised. Not for manual use — /compact is how to get one.
-argument-hint: "session=<id> trigger=<manual|auto> [instructions=file]"
+argument-hint: 'session=<id> trigger=<manual|auto> [instructions=file]'
 disable-model-invocation: true
 ---
 
@@ -38,8 +38,8 @@ Two sources, both the user's input, **not verified state**:
 
 **Route each item into the section it belongs in** — state into the verified block, a choice into
 Decisions, a failed path into Dead ends — rather than dumping it verbatim at the top. Confirm each
-factual claim in step 1 where a command can reach it, otherwise record it marked "unverified" (*Mark
-beliefs as beliefs* applies here too). "PR 42 is merged", said in passing, is the single easiest way
+factual claim in step 1 where a command can reach it, otherwise record it marked "unverified" (_Mark
+beliefs as beliefs_ applies here too). "PR 42 is merged", said in passing, is the single easiest way
 for a stale claim to land as fact.
 
 ## Why this exists (don't shortcut it)
@@ -99,37 +99,45 @@ Drop any section with nothing real in it. An empty heading is noise.
 # Handoff — <branch> — <YYYY-MM-DD HH:MM TZ>
 
 Session: <sid> · Trigger: <manual|auto>
-Previous: `handoff-<...>.md`   (omit if this is the first for this branch)
+Previous: `handoff-<...>.md` (omit if this is the first for this branch)
 
 ## Goal
+
 One or two sentences. What is this branch for, and what does done look like?
 
 ## Session arc
+
 One line per exchange, in order — what was asked, what came of it. Enough that a reader who saw none
 of the conversation understands how the decisions below were reached. Compress hard: this is the
 shape of the session, not a transcript. Mark corrections explicitly ("was wrong about X, actually
 Y") — those are the highest-value lines.
 
 ## State as of <HH:MM>
+
 Verified output from step 1 — branch, recent commits, open PRs, last deploy.
 **Re-verify anything load-bearing before acting on it.** This is a snapshot, not a claim about now.
 
 ## Decisions + why
+
 The reasoning, not just the outcome. "Chose X over Y because Z" — Z is the part that stops the next
 reader relitigating it.
 
 ## Dead ends — do not retry
+
 What was tried and failed, and why. The highest-value section, because it's exactly what compaction
 drops.
 
 ## Open questions
+
 Things genuinely undecided, and who or what would settle them. Distinguish "blocked on the user" from
 "blocked on a fact nobody has checked yet."
 
 ## Files in play
+
 Paths with a phrase on why each matters. Pointers, not contents.
 
 ## Next action
+
 One concrete step, not a list of everything remaining.
 ```
 
@@ -145,7 +153,7 @@ One concrete step, not a list of everything remaining.
   a gotcha, a resolved architecture question — list it under Open questions as a `docs/` candidate,
   with where it belongs. A handoff that accumulates project knowledge is a doc-rot vector.
 - **Narrate the arc, not the transcript.** The arc belongs here, compressed to one line per exchange
-  (*Why this exists* covers why `/compact`'s summary is not enough). What does *not* belong is
+  (_Why this exists_ covers why `/compact`'s summary is not enough). What does _not_ belong is
   blow-by-blow: individual tool calls, what was read in what order, or anything a reader wouldn't
   act on.
 - **Mark beliefs as beliefs.** If something wasn't actually verified this session, write "believed" or
@@ -155,6 +163,6 @@ One concrete step, not a list of everything remaining.
 
 ## Length
 
-**Soft guidance: ~500 lines** — a ceiling, *not a target*; a good handoff is often 40 lines. Never pad.
+**Soft guidance: ~500 lines** — a ceiling, _not a target_; a good handoff is often 40 lines. Never pad.
 Approaching 500 is a smell, not a limit to trim to: narration belongs in `/compact`'s summary, durable
 project knowledge in `docs/` — either way the content moves, it isn't deleted.

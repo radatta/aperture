@@ -106,7 +106,11 @@ describe('attachments panel', () => {
     });
     await api.confirmAttachment(attachment.id);
     // Register a blob so the stub's resolveViewUrl returns one (the transport map is module-scoped).
-    await uploadTo(`stub:${attachment.id}`, file('a.pdf', 10, 'application/pdf'), 'application/pdf');
+    await uploadTo(
+      `stub:${attachment.id}`,
+      file('a.pdf', 10, 'application/pdf'),
+      'application/pdf',
+    );
 
     const fakeTab = { location: { href: '' }, close: vi.fn(), opener: {} };
     vi.spyOn(window, 'open').mockReturnValue(fakeTab as unknown as Window);
@@ -146,7 +150,9 @@ describe('attachments panel', () => {
     await waitFor(() => expect(fakeTab.close).toHaveBeenCalled());
     expect(await screen.findByText(/not available/i)).toBeTruthy();
     // The row stays clickable — a transient failure must be retryable, not permanently locked.
-    expect((screen.getByRole('button', { name: /^b\.pdf/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: /^b\.pdf/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it('uploads a file dropped onto the panel', async () => {

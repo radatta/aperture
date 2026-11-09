@@ -48,7 +48,8 @@ export class ApertureBillingStack extends Stack {
     });
 
     new CfnOutput(this, 'BillingNote', {
-      value: 'Confirm the budget email once; requires the root billing-access toggle enabled first.',
+      value:
+        'Confirm the budget email once; requires the root billing-access toggle enabled first.',
     });
   }
 }
