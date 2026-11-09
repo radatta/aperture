@@ -521,9 +521,36 @@ sim_launch_again() {
   sim_tap_el "$SIM_ICON"
 }
 
+# A leftover draft (job …060606Z…-idle5-1 stopped mid-keys and never erased) changes how the bar reads: empty label, the
+# draft as its value (peek jobs …062810Z… and …062816Z…), never "Capture log", so neither landmark shows (idle5-2..4
+# failed LANDMARK). Is element $1 that: no label, some text, on the bar's row?
+sim_draft_el() {
+  jq -e --argjson x "$SIM_X" '(.label // "") == "" and (.value // "") != "" and ((.role // "") | IN("AXButton", "AXLink") | not)
+    and (.frame.y // 0) >= 850 and (.frame.y // 0) <= 930 and (.frame.x // 0) <= $x and ((.frame.x // 0) + (.frame.w // 0)) >= $x' <<<"$1" >/dev/null 2>&1
+}
+# Focus it, delete it (its length plus two), put the keyboard down. No read-back here: the landmark loop is it — the bar
+# reads "Capture log" again only once it's empty. No keyboard after the tap leaves the draft for the polls to fail on.
+sim_clear_draft() {
+  local n i=0
+  n="$(jq -r '(.value // "") | length + 2 | if . > 24 then 24 else . end' <<<"$1")"
+  sim_tap_el "$1" || return 1
+  sleep 1
+  if ! sim_kb_up; then
+    sim_hung_err "looking for the keyboard after tapping a leftover draft" && return 1
+    SIM_DRAFT_TRY=" (a leftover draft in the bar; tapping it brought no keyboard, so nothing was deleted)"
+    return 0
+  fi
+  while [ "$i" -lt "$n" ]; do sim_key delete || return 1; i=$((i + 1)); done
+  sim_op_blur || return 1
+  if sim_kb_up; then sim_fail BLUR "the keyboard stayed up after deleting a leftover draft"; return 1; fi
+  sim_hung_err "checking the keyboard went down after deleting a leftover draft" && return 1
+  SIM_DRAFT_DEL="$n"
+  SIM_DRAFT_TRY=" (a leftover draft in the bar; $n deletes didn't bring Home's bar back)"
+}
+
 sim_op_launch() {
-  local i s t clean="" taps=1 again=""
-  SIM_AGAIN_DEAD=""
+  local i s t e clean="" taps=1 again="" cleared=""
+  SIM_AGAIN_DEAD="" SIM_DRAFT_DEL="" SIM_DRAFT_TRY=""
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
@@ -540,6 +567,7 @@ sim_op_launch() {
       [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
       [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; pinned the keyboard prefs ($SIM_KB_SET off)"
       [ -z "$again" ] || SIM_NOTE="$SIM_NOTE; relaunched (it resumed mid-typing, keyboard up$SIM_AGAIN_DEAD)"
+      [ -z "$SIM_DRAFT_DEL" ] || SIM_NOTE="$SIM_NOTE; deleted a leftover draft in the bar ($SIM_DRAFT_DEL deletes)"
       return 0
     fi
     i=$((i + 1))
@@ -553,7 +581,7 @@ sim_op_launch() {
         sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
         return 1
       fi
-      sim_fail LANDMARK "neither Home nor the sign-in card after launch"
+      sim_fail LANDMARK "neither Home nor the sign-in card after launch$SIM_DRAFT_TRY"
       return 1
     fi
     case "$i" in
@@ -569,6 +597,13 @@ sim_op_launch() {
           && sim_kb_up; then
           sim_launch_again || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's relaunch of an app left mid-typing)"; return 1; }
           again=1 i=0 clean="" taps=1
+          sleep 2
+          continue
+        elif [ -z "$cleared" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
+          && e="$(sim_point "$SIM_X" "$SIM_Y_HOME")" && sim_draft_el "$e"; then
+          cleared=1
+          sim_clear_draft "$e" || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's delete of a leftover draft)"; return 1; }
+          i=0 clean=""
           sleep 2
           continue
         elif [ "$i" = 10 ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then

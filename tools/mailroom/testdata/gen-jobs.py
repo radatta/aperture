@@ -597,7 +597,7 @@ sfail('sim: still the Home Screen after four icon taps is ICON_TAP_DROPPED, not 
       tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4}, files=['shots/01-fail.png'])
 sfail('sim: the app in front without its landmark stays LANDMARK, its icon never tapped again', 'LANDMARK', [L],
       tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(APPFRONT)],  # keyboard down: no mid-typing relaunch
-      simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1, 'simctl terminate': 0})
+      simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1, 'simctl terminate': 0, 'tap -x 409 -y 800': 0})
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
 serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
      tape=SIGNED_OUT + FORMP[:-1] + [{**FORMP[-1], 'n': 1}, HANG('--point 220,454')], pwTyped=1, simCount={'tap -x 201 -y 453': 1})
@@ -755,8 +755,8 @@ spass('sim: launch onto an app left mid-typing (keyboard up, no landmark) relaun
       tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'},
       simCount={TERM: 1}, simIncludes=[TERM, 'Web.app/Web', 'batch --step button home', 'tap -x 371 -y 247'])
 spass('sim: a keyboard first seen at poll 6 relaunches then, and the polls start again', [L],
-      tape=[pt(220, 895, {}, n=6), pt(220, 530, {}, n=6), pt(221, 856, {}, n=1), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}],
-      notes={'0': 'relaunched'}, simCount={TERM: 1, '--point 220,895': 7})
+      tape=[pt(220, 895, {}, n=7), pt(220, 530, {}, n=6), pt(221, 856, {}, n=1), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}],  # 7: poll 3 also looks for a draft
+      notes={'0': 'relaunched'}, simCount={TERM: 1, '--point 220,895': 8})
 serr('sim: a relaunch whose terminate fails says it was launch\'s relaunch', 'TERMINATE', [L],
      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}, {'m': 'simctl terminate', 'rc': 1}],
      notes={'0': "simctl terminate failed (in launch's relaunch of an app left mid-typing)"})
@@ -768,6 +768,32 @@ spass('sim: a relaunch onto a web app already gone skips the terminate (simctl r
       tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3)], notes={'0': 'keyboard up; no web process though the tree showed the app, so not terminated)'}, simCount={TERM: 0, 'tap -x 371 -y 247': 2})
 serr('sim: a web app that survives the relaunch\'s terminate is TERMINATE', 'TERMINATE', [L],
      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0}], simCount={TERM: 1})
+
+# --- launch onto a bar holding a leftover draft (…060606Z…-idle5-1; reads: empty label, the draft as value) ---
+DRAFT = el('AXStaticText', '', 'wkbpxa', 25, 884, 346, 22)  # spans 100 and 220: the peek jobs saw it at both
+DEL = 'tap -x 409 -y 800'
+KB_DRAFT = [pt(221, 856, {}, n=1), pt(221, 856, SPACE, n=1), pt(221, 856, {})]  # down at poll 3, up after the tap, down after Done
+spass('sim: launch onto a leftover draft deletes it, and Home\'s bar is the read-back', [L],
+      tape=[pt(220, 895, DRAFT, n=4)] + KB_DRAFT, notes={'0': 'deleted a leftover draft in the bar (8 deletes)'},
+      simCount={DEL: 8, 'simctl terminate': 0}, simIncludes=['tap -x 198 -y 895', DEL, 'tap -x 395 -y 575'])
+sfail('sim: a leftover draft that stays after its deletes is LANDMARK, deleted once only', 'LANDMARK', [L],
+      tape=[pt(220, 895, DRAFT)] + KB_DRAFT, notes={'0': "8 deletes didn't bring Home's bar back"}, simCount={DEL: 8})
+serr('sim: a hung keyboard read after tapping the draft is AX_TIMEOUT, not LANDMARK', 'AX_TIMEOUT', [L],
+     tape=[pt(220, 895, DRAFT), pt(221, 856, {}, n=1), HANG('--point 221,856')], simCount={DEL: 0})
+sfail('sim: the keyboard still up after the draft\'s deletes is BLUR', 'BLUR', [L],
+      tape=[pt(220, 895, DRAFT, n=4), pt(221, 856, {}, n=1)], simCount={DEL: 8})
+sfail('sim: a button holding text on the bar\'s row is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXButton', '', 'wkbpxa', 25, 884, 346, 22)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 198 -y 895'])
+sfail('sim: text on the bar\'s row not under the probe is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXStaticText', '', 'wkbpxa', 25, 884, 60, 22)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 55 -y 895'])
+sfail('sim: a blur that finds no Done while the keyboard stays up is BLUR, not a pass', 'BLUR', [L],
+      tape=[pt(220, 895, DRAFT, n=4), pt(221, 856, {}, n=1), {'m': '--point 395,', 'out': {}}], simCount={DEL: 8})
+sfail('sim: a labelled element at the bar\'s spot is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXButton', 'Undo', 'wkbpxa', 180, 880, 80, 30)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 220 -y 895'])
+sfail('sim: unlabelled text off the bar\'s row is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXStaticText', '', 'wkbpxa', 20, 600, 400, 300)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 220 -y 750'])
+sfail('sim: no keyboard after tapping the draft deletes nothing and stays LANDMARK', 'LANDMARK', [L],
+      tape=[pt(220, 895, DRAFT), pt(221, 856, {})], simCount={DEL: 0}, notes={'0': 'tapping it brought no keyboard, so nothing was deleted'})
 
 with open(out, 'w') as f:
     f.write(json.dumps({'base': base, 'simBase': simbase}) + '\n')
