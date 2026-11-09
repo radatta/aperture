@@ -12,6 +12,10 @@
   const tag = tagLib || (typeof require === 'function' ? require('./tag.js') : null);
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const CACHE_ONLY = ['problem', 'hint'];
+  // LeetCode's judging can finish after you've moved on: these may also go to their own problem's open
+  // sitting (content.js asks admit() again with that problem as ctx), never to the one on screen (Rahul,
+  // 2026-11-08).
+  const LATE = ['run', 'submit', 'submitDetails'];
   // Far over any one item LeetCode sends (the outbox trims to the server's caps); bounds a flood's parse.
   const DETAIL_MAX = 6 * 1024 * 1024; // two raw texts at RAW_MAX, JSON-escaped twice over
   const RAW_MAX = 1024 * 1024; // one request's or response's text (inject-main.js skips anything longer)
@@ -100,5 +104,5 @@
     return { ok: true };
   }
 
-  return { createRelay, admit, slugOf, SENDABLE, RAW_MAX };
+  return { createRelay, admit, slugOf, SENDABLE, LATE, RAW_MAX };
 });

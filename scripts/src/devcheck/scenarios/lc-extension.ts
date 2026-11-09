@@ -155,6 +155,17 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-late-submit',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submit LeetCode judges after you moved to the next problem lands in its own problem’s sitting, not the new one',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'sends a submit judged after moving to the next problem to its own problem’s sitting',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
       id: 'ext-snapshots',
       entry: 'extension',
       kind: 'nominal',

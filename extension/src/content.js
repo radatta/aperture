@@ -118,6 +118,7 @@
   function onItem(m) {
     const a = relayLib.admit(m, { screenSlug, binding: liveBinding() });
     if (!a.ok) {
+      if (a.reason === 'off-screen-slug' && relayLib.LATE.includes(m.kind)) return lateItem(m);
       if (a.reason !== 'no-sitting') debug.log('relay.reject', { reason: a.reason, kind: m.kind });
       return;
     }
@@ -136,6 +137,22 @@
       return;
     }
     queue(wire.toEventInputs(m, mintId));
+  }
+  // A run or submit judged after you moved to another problem goes to its own problem's open sitting — the
+  // one this extension bound there — never to the one on screen.
+  async function lateItem(m) {
+    const slug = m.slug;
+    const got = await local.get([`sitting:${slug}`, `sync:${slug}`]).catch(() => ({}));
+    const b = got[`sitting:${slug}`];
+    const s = got[`sync:${slug}`];
+    const status = (s && s.sittingId === (b && b.sittingId) && s.status) || 'active';
+    const a = b
+      ? relayLib.admit(m, { screenSlug: slug, binding: { questionId: b.questionId, status } })
+      : { ok: false, reason: 'no-sitting' };
+    debug.log('late', { kind: m.kind, ok: a.ok, reason: a.ok ? null : a.reason });
+    if (!a.ok) return;
+    const events = wire.toEventInputs(m, mintId);
+    send({ type: 'enqueue', sittingId: b.sittingId, slug, events }).catch(() => {});
   }
   // A run or submit LeetCode never judged goes out unjudged after two minutes.
   setInterval(() => capture.sweep(Date.now()).forEach(onItem), 15_000);
