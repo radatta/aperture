@@ -28,12 +28,14 @@ import {
   type Interception,
   type Scenario,
 } from './scenario';
-import type { Session } from './token';
+import { nearExpiry, type Session } from './token';
 
 export interface BrowserSession {
   page: PwPage;
   signIn(shot: (name: string) => Promise<void>): Promise<Session>;
   readSession(): Promise<Session | null>; // throws WRONG_USER if the page's session isn't the test user
+  // The page hasn't renewed: a refresh_token grant from node (login.ts). Absent locally (12 h tokens).
+  refreshSession?(): Promise<Session | null>;
   // The claude client, as the test user; screenshots come from its own sign-in page.
   signInMcp(shotOf: (page: PwPage) => (name: string) => Promise<void>): Promise<McpSession>;
   close(): Promise<void>;
@@ -51,7 +53,7 @@ export interface PipelineDeps {
   waitForDeploy?: () => Promise<DeployRun>; // absent with --no-deploy-wait
   fetchShell: () => Promise<string>;
   openBrowser: () => Promise<BrowserSession>;
-  makeApi: (token: () => string) => ApiClient;
+  makeApi: (token: () => string, fresh: () => Promise<void>) => ApiClient;
   makeMcp: (token: () => string) => McpClient;
   now: () => number;
   log: (msg: string) => void;
@@ -120,10 +122,29 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const renewSession = async () => {
     try {
       const fresh = await browser?.readSession();
-      if (fresh) session = fresh;
+      // Never back to an older token: after a refresh from here the page still holds the expired one.
+      if (fresh && (!session || fresh.expiresAt >= session.expiresAt)) session = fresh;
     } catch (err) {
       if (codeOf(err) === 'WRONG_USER') throw err;
     }
+  };
+  // Before every API request (api.ts backoff): a token within the margin is re-read from the page — the app
+  // renews itself (automaticSilentRenew) — and, if the page hasn't, renewed from here with its refresh token.
+  // One renewal at a time: a step's parallel calls share it.
+  let refreshing: Promise<void> | undefined;
+  const fresh = async () => {
+    if (!session || !nearExpiry(session, d.now())) return;
+    await renewSession();
+    if (!nearExpiry(session, d.now())) return;
+    refreshing ??= (async () => {
+      const s = await browser?.refreshSession?.();
+      if (s) session = s;
+    })().finally(() => (refreshing = undefined));
+    // A failed refresh (a dead page, the network, invalid_grant) still lets a token with life left go out;
+    // another identity never does.
+    await refreshing.catch((err: unknown) => {
+      if (codeOf(err) === 'WRONG_USER' || session!.expiresAt * 1000 <= d.now()) throw err;
+    });
   };
   const fail = (code: ReasonCode, message?: string) => {
     if (r.status !== 'CRASH') r.status = 'FAIL';
@@ -202,7 +223,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const shot = makeShot(page, ui, d.shotsDir, () => prefix, r.shots);
 
     session = await browser.signIn(shot);
-    api = d.makeApi(() => session!.accessToken);
+    api = d.makeApi(() => session!.accessToken, fresh);
 
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
     for (const id of pendingIds(d.ledger.read())) {
@@ -334,7 +355,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       await d.ios.finish().catch(() => undefined);
       r.shots.push(...d.ios.shots);
     }
+    // A coded error (a dead session the refresh couldn't renew, WRONG_USER) fails the run naming it, as the
+    // outer catch does; anything else is a crash.
     await cleanup().catch((err: unknown) => {
+      const code = codeOf(err);
+      if (code) {
+        fail(code, `cleanup: ${detailOf(err)}`);
+        return fail(
+          'LEFTOVERS',
+          'cleanup stopped before the leak check: dev may hold more of this run',
+        );
+      }
       r.status = 'CRASH';
       r.crash = `${r.crash ? `${r.crash}\n` : ''}cleanup: ${err instanceof Error ? err.message : String(err)}`;
     });

@@ -430,7 +430,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const shells = [...(opts.shells ?? [shell(SHA)])];
   const browser: BrowserSession = {
     page,
-    signIn: async () => ({ accessToken: 'tok', expiresAt: 0, email: 'x', sub: 's' }),
+    // Far from expiry, like the MCP session below; the token-renewal tests set their own.
+    signIn: async () => ({ accessToken: 'tok', expiresAt: 1e10, email: 'x', sub: 's' }),
     readSession: async () => null,
     // Far from expiry; a test overrides it to check the MCP sign-in's failure path.
     signInMcp: async () => ({
@@ -681,7 +682,7 @@ describe('runPipeline', () => {
     const seen: string[] = [];
     let token: () => string = () => '';
     w.browser.readSession = async () =>
-      seen.length ? { accessToken: 'renewed', expiresAt: 0, email: 'x', sub: 's' } : null;
+      seen.length ? { accessToken: 'renewed', expiresAt: 2e10, email: 'x', sub: 's' } : null;
     const base = scenario(async () => void seen.push(token()))(w);
     const sc = { ...base, steps: [base.steps[0]!, { ...base.steps[0]!, id: 'second' }] };
     const r = await runPipeline({
@@ -693,6 +694,182 @@ describe('runPipeline', () => {
     });
     expect(r.steps.map((x) => x.status)).toEqual(['pass', 'pass']);
     expect(seen).toEqual(['tok', 'renewed']);
+  });
+
+  describe('a step that outlives its token', () => {
+    // The session expires at 1000 s; the clock is the test's. Each call is what api.ts backoff does per
+    // request: await fresh, then read the token.
+    // Cleanup's deleteTask goes through it too, recorded as `del:<token>`.
+    const setup = (
+      w: ReturnType<typeof world>,
+      ...steps: ((call: () => Promise<string>) => Promise<void>)[]
+    ) => {
+      let t = 0;
+      const seen: string[] = [];
+      let call: () => Promise<string> = async () => '';
+      w.browser.signIn = async () => ({
+        accessToken: 'tok',
+        expiresAt: 1000,
+        email: 'x',
+        sub: 's',
+      });
+      const run = () =>
+        runPipeline({
+          ...deps(w, [scenario(...steps.map((f) => async () => f(call)))(w)]),
+          now: () => t,
+          makeApi: (token, fresh) => {
+            call = async () => {
+              await fresh();
+              seen.push(token());
+              return token();
+            };
+            const del = w.api.writes.deleteTask;
+            w.api.writes.deleteTask = async (id) => {
+              await fresh();
+              seen.push(`del:${token()}`);
+              return del(id);
+            };
+            // The end sweep's read, as on dev: through fresh, unrecorded in `seen`.
+            const list = w.api.reads.listTasks;
+            w.api.reads.listTasks = async () => {
+              await fresh();
+              return list();
+            };
+            return w.api;
+          },
+        });
+      return { seen, run, at: (ms: number) => void (t = ms) };
+    };
+
+    it('an API call near expiry runs on the session the page renewed', async () => {
+      const w = world();
+      let renewed = false;
+      w.browser.readSession = async () =>
+        renewed ? { accessToken: 'renewed', expiresAt: 5000, email: 'x', sub: 's' } : null;
+      const { seen, run, at } = setup(w, async (call) => {
+        await call();
+        at(950_000); // 50 s left, while the page sat idle and renewed itself
+        renewed = true;
+        await call();
+      });
+      const r = await run();
+      expect(r.steps[0]?.status).toBe('pass');
+      expect(seen).toEqual(['tok', 'renewed']);
+    });
+
+    it('when the page has not renewed, the harness refreshes once, shared by parallel calls', async () => {
+      const w = world();
+      const refresh = vi.fn(async () => ({
+        accessToken: 'refreshed',
+        expiresAt: 5000,
+        email: 'x',
+        sub: 's',
+      }));
+      w.browser.refreshSession = refresh;
+      // The page still holds the expired token, before every step and at cleanup alike.
+      w.browser.readSession = async () => ({
+        accessToken: 'tok',
+        expiresAt: 1000,
+        email: 'x',
+        sub: 's',
+      });
+      const { seen, run, at } = setup(
+        w,
+        async (call) => {
+          at(950_000);
+          await Promise.all([call(), call()]);
+        },
+        async (call) => void (await call()),
+      );
+      const r = await run();
+      expect(r.steps.map((x) => x.status)).toEqual(['pass', 'pass']);
+      expect(seen).toEqual(['refreshed', 'refreshed', 'refreshed']);
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('a refreshed session that is not the test user fails the step, sending nothing', async () => {
+      const w = world();
+      w.browser.refreshSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
+      const { seen, run, at } = setup(w, async (call) => {
+        at(950_000);
+        await call();
+      });
+      const r = await run();
+      expect(seen).toEqual([]);
+      expect(r.steps[0]?.status).toBe('fail');
+      expect(r.steps[0]?.error).toMatch(/WRONG_USER/);
+    });
+
+    it('without a refresh path (the local check), a near-expiry call goes on the token in hand', async () => {
+      const w = world();
+      const { seen, run, at } = setup(w, async (call) => {
+        at(950_000);
+        await call();
+      });
+      const r = await run();
+      expect(r.steps[0]?.status).toBe('pass');
+      expect(seen).toEqual(['tok']);
+    });
+
+    it("cleanup's delete after a step that outlived the token carries the refreshed one", async () => {
+      const w = world();
+      w.browser.refreshSession = async () => ({
+        accessToken: 'refreshed',
+        expiresAt: 5000,
+        email: 'x',
+        sub: 's',
+      });
+      const { seen, run, at } = setup(w, async () => {
+        await w.uiCreate('a');
+        at(1_200_000); // the step ran past the token's hour
+      });
+      const r = await run();
+      expect(r.codes).toEqual([]);
+      expect(w.deleted).toHaveLength(1);
+      expect(seen).toEqual(['del:refreshed']);
+    });
+
+    it('a failed refresh lets a token with life left go out, and fails one that has none', async () => {
+      const w = world();
+      w.browser.refreshSession = async () =>
+        Promise.reject(new DevcheckError('AUTH_REJECTED', 'r'));
+      const { seen, run, at } = setup(w, async (call) => {
+        await w.uiCreate('a');
+        at(950_000);
+        await call(); // 50 s left: goes out on the token in hand
+        at(1_200_000);
+      });
+      const r = await run();
+      expect(r.steps[0]?.status).toBe('pass');
+      expect(seen).toEqual(['tok']);
+      // Cleanup's delete stops at its first read, never sent, and the end sweep's read fails naming why,
+      // not a crash.
+      expect(r.status).toBe('FAIL');
+      expect(r.codes).toEqual(expect.arrayContaining(['LEFTOVERS', 'AUTH_REJECTED']));
+      expect(r.failures.some((f) => f.message.startsWith('cleanup: '))).toBe(true);
+      expect(
+        r.failures.some((f) => f.message.startsWith('cleanup stopped before the leak check')),
+      ).toBe(true);
+      expect(w.deleted).toEqual([]);
+    });
+
+    it('far from expiry, a call reads nothing from the page', async () => {
+      const w = world();
+      let reads = 0;
+      w.browser.readSession = async () => {
+        reads++;
+        return null;
+      };
+      let during = -1;
+      const { run } = setup(w, async (call) => {
+        const before = reads;
+        await call();
+        await call();
+        during = reads - before;
+      });
+      await run();
+      expect(during).toBe(0);
+    });
   });
 
   it('a page session that stopped being the test user mid-run fails the step before it runs', async () => {

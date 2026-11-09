@@ -94,7 +94,11 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   `NoSuchKey` — and `isGone` (`api.ts`) counts both as gone.
 - **The test user only.** The env file must name the test user, and before any write the signed-in
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes. The MCP
-  session is held to the same check (below).
+  session is held to the same check (below). A step can outlive the hour-long token (an iOS step runs minutes
+  while the page sits idle), so before every API request a session with under 60 s left is re-read from the
+  page, which renews itself, and if the page hasn't, renewed from here with the page's refresh token at the
+  env's dev-pool token endpoint (`login.ts` `refreshSession`, `assertDevCognitoUrl`, never following a
+  redirect), then checked again (`WRONG_USER`). Nothing is written back to the page or logged.
 - **MCP as the test user.** Dev's `/mcp` accepts only tokens minted for the claude client (D14,
   `docs/areas/mcp/index.md`), so after the sweep the harness signs the test user in as `aperture-claude-dev` —
   authorization code + PKCE, no secret (a public client), the Hosted UI cookie reused so the form usually
@@ -104,7 +108,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   env's dev-pool token endpoint (`assertDevCognitoUrl`), never following a redirect. The token's email and `sub`
   (ID token), `sub`, `client_id` and `token_use` (access token) must be the test user's claude-client access
   token — else `WRONG_USER` or `MCP_AUTH_FAILED` before any step runs. It lives in memory for the run (never on
-  disk: no refresh token is kept), the BFF refuses it (D14), and errors name Cognito's `error` field, never a
+  disk: no refresh token is kept, so a step using it with under 60 s left fails instead, the same margin as the
+  app session's renewal), the BFF refuses it (D14), and errors name Cognito's `error` field, never a
   token, code or body. Smoke checks MCP and the API list the same backlog; capture-task's MCP task showing in the
   app's Backlog is the stronger same-partition proof. `ctx.mcp` (`mcp.ts`) mirrors `api.ts`: declared reads and
   writes, creates ledgered from the response (`via: mcp:create_task`), deletes only of ledger ids (a parent with
@@ -222,7 +227,7 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 | `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                                                                                                             | the message names what it serves                                                                                                                                                                                                           |
 | `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                                                                                                 | check the env file's host                                                                                                                                                                                                                  |
 | `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                                                                                               | screenshot in `shots/`; update `login.ts` deliberately                                                                                                                                                                                     |
-| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                                                                                                        | password expired or user disabled — operator                                                                                                                                                                                               |
+| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a refresh's `invalid_grant` means the cached session is dead: the operator deletes `.secrets/devcheck.dev.state.json`, then rerun                                                            |
 | `WRONG_USER`               | the session isn't the test user                                                                                                                                                                                        | delete `.secrets/devcheck.dev.state.json`, rerun                                                                                                                                                                                           |
 | `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                                                                                                             | rerun; persistent → service-worker bug                                                                                                                                                                                                     |
 | `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                                                                                               | the message names the scenario and row; fix the scenario, never the rule                                                                                                                                                                   |

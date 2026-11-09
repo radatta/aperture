@@ -195,7 +195,7 @@ async function main(): Promise<number> {
           close: () => browser.close(),
         };
       },
-      makeApi: (token) => createApiClient({ fetch, token, ledger, run: runId }),
+      makeApi: (token, fresh) => createApiClient({ fetch, token, fresh, ledger, run: runId }),
       makeMcp: (token) => createMcpClient({ fetch, token, ledger, run: runId }),
       now: Date.now,
       log,

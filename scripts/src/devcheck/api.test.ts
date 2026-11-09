@@ -54,6 +54,29 @@ describe('createApiClient', () => {
     });
   });
 
+  it('awaits fresh before reading the bearer, once a request however often it retries', async () => {
+    let tok = 'a';
+    const fresh = vi.fn(async () => {
+      tok = 'b';
+    });
+    let n = 0;
+    const fetch = vi.fn<FetchLike>(async () => (++n < 2 ? reply(429, {}) : reply(200, null)));
+    const api = createApiClient({
+      fetch,
+      token: () => tok,
+      fresh,
+      ledger: memLedger(),
+      run: 'r1',
+      sleep: async () => undefined,
+    });
+    await api.reads.getTask('t1');
+    expect(fetch.mock.calls.map((c) => c[1].headers['x-aperture-authorization'])).toEqual([
+      'Bearer b',
+      'Bearer b',
+    ]);
+    expect(fresh).toHaveBeenCalledTimes(1);
+  });
+
   it('exposes exactly the declared reads and writes', () => {
     const api = createApiClient({
       fetch: vi.fn(),

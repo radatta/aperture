@@ -4,7 +4,9 @@ import {
   assertTestUser,
   cognitoAuthority,
   decodeJwtPayload,
+  nearExpiry,
   sessionFromStorage,
+  TOKEN_MARGIN_MS,
   userStoreKey,
 } from './token';
 
@@ -52,5 +54,23 @@ describe('token', () => {
     expect(() =>
       assertTestUser(sessionFromStorage(stored('s1', TEST_USER_EMAIL, 'other'), KEY)!, 's1'),
     ).toThrow(/WRONG_USER/);
+  });
+});
+
+describe('nearExpiry', () => {
+  it('is true from the shared margin before expiry on', () => {
+    const s = { accessToken: 'a', expiresAt: 1000, email: '', sub: '' };
+    expect(TOKEN_MARGIN_MS).toBe(60_000);
+    expect(nearExpiry(s, 1000_000 - 60_001)).toBe(false);
+    expect(nearExpiry(s, 1000_000 - 59_999)).toBe(true);
+    expect(nearExpiry(s, 1000_000 + 1)).toBe(true);
+  });
+});
+
+describe('sessionFromStorage on a torn record', () => {
+  it('throws without quoting it', () => {
+    expect(() => sessionFromStorage({ [KEY]: '{"access_token":"AT-SECRET"' }, KEY)).toThrow(
+      /^unreadable oidc session in storage$/,
+    );
   });
 });
