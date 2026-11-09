@@ -1042,7 +1042,7 @@ export class BackendClient implements ApiClient {
     );
   }
   // Claude's draft of mistake lines: one model call over the judged runs and submits and the two codes, its
-  // answer validated (draftMistakes). Writes nothing; nothing judged yet → no call at all.
+  // answer made fit (draftMistakes: first 5, each cut to 160; not a list of text → bad-shape). Writes nothing; nothing judged yet → no call at all.
   async draftSittingReview(id: string): Promise<ReviewDraft> {
     const sitting = await this.mustSitting(id);
     const [events, live] = await Promise.all([

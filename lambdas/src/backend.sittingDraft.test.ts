@@ -104,17 +104,19 @@ describe('draftSittingReview', () => {
   });
 
   it('too many or too long lines are cut to fit, not refused', async () => {
-    const { anthropic, b, sitting } = await setup();
+    const { anthropic, b, doc, sitting } = await setup();
     await b.lcSittingEvents({
       sittingId: sitting.id,
       events: [submit(T0 + 1, 11, 'Wrong Answer', 'x')],
     });
+    const before = JSON.stringify(doc.snapshot());
     const six = Array.from({ length: 6 }, (_, i) => `l${i}`);
     anthropic.nextDraft = { ok: true, fields: { mistakes: ['z'.repeat(161), ...six] } };
     expect(await b.draftSittingReview(sitting.id)).toEqual({
       ok: true,
       mistakes: [`${'z'.repeat(159)}…`, ...six.slice(0, 4)],
     });
+    expect(JSON.stringify(doc.snapshot())).toBe(before); // a draft writes nothing
   });
 
   it('a bad shape is refused and nothing is written', async () => {

@@ -31,7 +31,7 @@ export interface AnthropicGateway {
   parseTask(req: ParseRequest): Promise<ModelOutcome>;
   // `fields` is `{ note }` on success; the backend validates it (fluxNoteText) before storing anything.
   fluxWeekNote(req: FluxNoteRequest): Promise<ModelOutcome>;
-  // `fields` is `{ mistakes }` on success; the backend validates it (draftMistakes) and stores nothing.
+  // `fields` is `{ mistakes }` on success; the backend makes it fit (draftMistakes) and stores nothing.
   sittingReviewDraft(req: SittingDraftRequest): Promise<ModelOutcome>;
 }
 

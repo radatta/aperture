@@ -786,14 +786,18 @@ export type DraftFailReason =
   | 'network'
   | 'api'
   | 'bad-json'
-  | 'bad-shape' // the model's answer broke the rules below
+  | 'bad-shape' // the model's answer wasn't a list of text (draftMistakes)
   | 'nothing-to-draft'; // no Run or Submit judged yet — no model call
 export type ReviewDraft = { ok: true; mistakes: string[] } | { ok: false; reason: DraftFailReason };
 // The model's `mistakes`, made fit: folded, empties dropped, a line over 160 characters cut to 160 ending "…",
 // deduped, the first five kept. Only a non-list, or a list with a non-text item, is null (bad-shape); an empty
 // list is a fair answer.
-const clip = (l: string) =>
-  l.length > REVIEW_LINE_MAX ? `${l.slice(0, REVIEW_LINE_MAX - 1).trimEnd()}…` : l;
+const clip = (l: string) => {
+  if (l.length <= REVIEW_LINE_MAX) return l;
+  const end = REVIEW_LINE_MAX - 1;
+  const lead = l.charCodeAt(end - 1); // never split a surrogate pair (an emoji) at the cut
+  return `${l.slice(0, lead >= 0xd800 && lead <= 0xdbff ? end - 1 : end).trimEnd()}…`;
+};
 export function draftMistakes(v: unknown): string[] | null {
   if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return null;
   return [...new Set((v as string[]).map(fold).filter(Boolean).map(clip))].slice(

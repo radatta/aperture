@@ -453,6 +453,8 @@ describe('the review', () => {
     const [cut] = draftMistakes(['y'.repeat(158) + ' zzzz'])!;
     expect(cut).toBe(`${'y'.repeat(158)}…`); // the space before the cut is dropped
     expect(draftMistakes(['w'.repeat(200)])).toEqual([`${'w'.repeat(159)}…`]);
+    // an emoji straddling the cut goes whole, never half a surrogate pair
+    expect(draftMistakes([`${'e'.repeat(158)}😀tail`])).toEqual([`${'e'.repeat(158)}…`]);
     // two lines that differ only past the cut are one line
     expect(draftMistakes(['q'.repeat(170), `${'q'.repeat(165)}r`])).toEqual([
       `${'q'.repeat(159)}…`,

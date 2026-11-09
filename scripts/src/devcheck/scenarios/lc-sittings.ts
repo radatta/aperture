@@ -4,7 +4,7 @@
 // review, the Haiku draft, End sitting), Home's link to it, and get_sitting / list_sittings. Driven through the JWT: the device token writes into the
 // user's own dev partition, not the test user's, so its gate is proven off dev (lambdas index.test.ts).
 // Slugs and titles carry the run's nonce; every row this scenario makes is ledgered from a response.
-import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import type { DevSittingReview } from '../api';
 import type { DevSittingEvent, DevSittingStart } from '../api';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
@@ -466,11 +466,22 @@ export const lcSittings: Scenario = {
       id: 'draft-bad-shape',
       entry: 'api',
       kind: 'edge',
-      what: 'A model answer that isn’t a list of text is bad-shape, nothing written; too many or too long lines are cut to fit',
+      what: 'A model answer that isn’t a list of text is bad-shape, nothing written',
       offDev: {
         file: 'lambdas/src/backend.sittingDraft.test.ts',
         test: 'a bad shape is refused and nothing is written',
         why: 'dev can’t make Haiku misbehave on demand; the test runs the real backend over the Fake gateway',
+      },
+    },
+    {
+      id: 'draft-fit',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A model answer with too many or too long lines is cut to fit (first 5, each ≤ 160 ending “…”), nothing written',
+      offDev: {
+        file: 'lambdas/src/backend.sittingDraft.test.ts',
+        test: 'too many or too long lines are cut to fit, not refused',
+        why: 'dev can’t make Haiku over-answer on demand; the test runs the real backend over the Fake gateway',
       },
     },
     {
@@ -566,12 +577,7 @@ export const lcSittings: Scenario = {
       id: 'home-minutes',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Home’s rep row and hero show the open sitting’s minutes, not the rep’s own',
-      offDev: {
-        file: 'app/src/pages/Home/RightNow.test.tsx',
-        test: 'a rep row under another hero shows its sitting’s minutes and the link',
-        why: 'the server stamps a sitting’s Start, so on dev it is minutes old at most and both counts read ~0m; the stub backdates it 22 min (the row) and 37 min (the hero, in “links to the open sitting and prefills Done with its minutes”)',
-      },
+      what: 'Home shows the open sitting’s minutes (at least 1) on D’s rep, as the hero and as a row under a planned neighbour — not the rep’s own 0m',
     },
     {
       id: 'prefill-estimate',
@@ -1296,27 +1302,43 @@ export const lcSittings: Scenario = {
         'prefill-estimate',
         'home-link',
         'home-neighbour',
+        'home-minutes',
         'end-cancel',
         'end-ui',
       ],
       title:
-        'Start D: as Home’s hero its Done starts on D’s minutes; Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
+        'Start D: as Home’s hero it shows and its Done starts on D’s minutes, and as a row under a planned neighbour it shows them too; Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
       async run(ctx) {
         const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
         state.d = sitting.id;
         state.dRep = sitting.repTaskId;
         await ctx.api.writes.lcSittingEvents(state.d, [snap('print("d")', Date.now())]);
         await ctx.api.writes.setTaskEstimate(state.dRep, null, null); // the Roll's 45 fills it in hindsight
+        const link = ctx.page.getByRole('link', { name: 'End the LeetCode sitting →' });
         const hindsight = async (where: string) => {
           const shown = await ctx.page.getByLabel('Estimate in hindsight').inputValue();
           if (shown !== '45')
             throw new Error(`${where}: estimate in hindsight “${shown}”, not the Roll’s 45`);
         };
         const dMinutes = () => Math.max(1, Math.round((Date.now() - sitting.startedAt) / 60_000));
+        // The minutes D's rep shows on Home, as the hero ("Nm of ~45m" / "Nm logged") or a row ("Nm in"): the
+        // sitting's, never below 1 — the rep's own reads 0m, as no timer ran.
+        const homeMinutes = async (where: string) => {
+          const text = link
+            .first()
+            .locator('xpath=..')
+            .getByText(/^\d+m( in| of ~| logged|$)/);
+          const shown = Number(
+            /^(\d+)m/.exec((await text.first().textContent()) ?? '')?.[1] ?? NaN,
+          );
+          if (!(shown >= 1) || Math.abs(shown - dMinutes()) > 1)
+            throw new Error(
+              `Home's ${where} shows ${shown}m for D, the sitting's is ${dMinutes()}m`,
+            );
+        };
         // D's rep alone in progress, so it is Home's hero: its Done prefills from the sitting.
         await ctx.ui.goto('/');
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
-        const link = ctx.page.getByRole('link', { name: 'End the LeetCode sitting →' });
         await link.first().waitFor({ timeout: 15_000 });
         const heroDone = link
           .first()
@@ -1326,20 +1348,39 @@ export const lcSittings: Scenario = {
           throw new Error(
             'D’s rep isn’t Home’s hero — is another task in progress for the test user?',
           );
+        await homeMinutes('hero');
         await heroDone.click();
         const heroShown = Number(await ctx.page.getByLabel('Actual (min)').inputValue());
-        if (Math.abs(heroShown - dMinutes()) > 1)
+        if (!(heroShown >= 1) || Math.abs(heroShown - dMinutes()) > 1)
           throw new Error(`Home's Done prefilled ${heroShown}, D's ${dMinutes()}`);
         await hindsight('Home');
         await ctx.shot('home-done-prefill');
         await ctx.page.getByRole('button', { name: 'Cancel' }).click();
         if ((await ctx.api.reads.getSitting(state.d)).sitting.status !== 'active')
           throw new Error('Cancel on Home ended D');
+        // A planned neighbour in progress takes the hero, so D's rep drops to an Also-today row.
         const other = await ctx.api.writes.createTask({ title: titleOf(ctx, 'neighbour') });
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
+        await ctx.api.writes.upsertPlan({
+          taskId: other.id,
+          day: today,
+          plannedMinutes: 30,
+          order: -1,
+        });
         await ctx.api.writes.transitionTask(other.id, 'in_progress');
         await ctx.ui.goto('/');
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
         await link.first().waitFor({ timeout: 15_000 });
+        if (
+          (await link
+            .first()
+            .locator('xpath=..')
+            .getByRole('button', { name: 'Done', exact: true })
+            .count()) !== 0
+        )
+          throw new Error('D’s rep is still Home’s hero after the planned neighbour started');
+        await homeMinutes('row');
         const hrefs: (string | null)[] = [];
         for (let i = 0; i < (await link.count()); i++)
           hrefs.push(await link.nth(i).getAttribute('href'));
