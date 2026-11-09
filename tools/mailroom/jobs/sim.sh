@@ -50,6 +50,7 @@ SIM_JQ='
   def text: type == "string" and length <= 200 and (explode | all(. >= 32 and . != 127));
   def lbl: whole("^[A-Za-z0-9 .,:;()/+_&'"'"'?…-]{1,60}$");
   def asname: whole("^[a-z][a-z0-9-]{0,23}$");
+  def via: if has("via") then (.via | type == "string" and (. as $v | ["tap","post","hid","batch","batch15"] | index($v)) != null) else true end;
   def role: type == "string" and (. as $r | ["AXButton","AXLink","AXTextArea","AXTextField","AXStaticText","AXCheckBox"] | index($r) != null);
   def where:
     ((has("near")) != (has("scan")))
@@ -79,9 +80,9 @@ SIM_JQ='
          elif has("aboveKeyboard") then .aboveKeyboard == true
          elif has("sameWidthAs") then (.sameWidthAs | asname)
          else false end) end
-    elif .op == "keys" then keysok(["op","text"]; ["in"]) and (.text | whole("^[a-z ]{1,24}$"))
-      and (if has("in") then (.in | asname) else true end)
-    elif .op == "erase" then keysok(["op","n"]; ["in"]) and (.n | int(1; 24)) and (if has("in") then (.in | asname) else true end)
+    elif .op == "keys" then keysok(["op","text"]; ["in","via"]) and (.text | whole("^[a-z ]{1,24}$"))
+      and (if has("in") then (.in | asname) else true end) and via
+    elif .op == "erase" then keysok(["op","n"]; ["in","via"]) and (.n | int(1; 24)) and (if has("in") then (.in | asname) else true end) and via
     elif .op == "scroll" then keysok(["op","dir","pt"]; []) and (.dir == "up" or .dir == "down") and (.pt | int(100; 600))
     elif .op == "expectBuild" then keysok(["op"]; ["relaunches"]) and (if has("relaunches") then (.relaunches | int(0; 1)) else true end)
     elif .op == "shot" then keysok(["op","name"]; []) and (.name | whole("^[a-z0-9-]{1,32}$"))
@@ -167,6 +168,8 @@ ax() {
 }
 sx() { local cap="$1"; shift; sim_tick; sim_cap "$cap" xcrun simctl "$@"; }
 sim_ms() { jq -nr 'now * 1000 | floor'; }
+# The Mac's load averages ("{ 1.20 1.05 0.98 }"), for a trial's record; "-" where there's no such sysctl.
+sim_load() { sysctl -n vm.loadavg 2>/dev/null || echo -; }
 
 # An op's outcome: fail = the row's assertion didn't hold; error = the sim couldn't run it (needs you).
 sim_fail() { SIM_ST=fail; SIM_RS=ASSERT; SIM_DT="$1"; SIM_NOTE="${2:-}"; return 1; }
@@ -1128,40 +1131,87 @@ sim_key_xy() {
   esac
 }
 
-# One on-screen key, confirmed by its label first (HID typing would hide the soft keyboard).
-sim_key() {
-  local k="$1" x y e
-  read -r x y < <(sim_key_xy "$k")
+# A key at the spot the layout puts it, confirmed by its label (HID typing would hide the soft keyboard): SIM_KX SIM_KY.
+sim_key_at() {
+  local e
+  read -r SIM_KX SIM_KY < <(sim_key_xy "$1")
   rm -f "$SIM_P.unread"
-  e="$(sim_point "$x" "$y")" || return 1
-  if ! sim_label_is "$e" "$k"; then
-    sim_hung_err "reading the $k key" && return 1
-    sim_fail MISS "the $k key isn't where the layout puts it"
-    return 1
-  fi
-  ax tap -x "$x" -y "$y" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "key tap failed"; return 1; }
+  e="$(sim_point "$SIM_KX" "$SIM_KY")" || return 1
+  sim_label_is "$e" "$1" && return 0
+  sim_hung_err "reading the $1 key" && return 1
+  sim_fail MISS "the $1 key isn't where the layout puts it"
+}
+
+# One on-screen key, sent the way SIM_VIA says: tap (the default), or a trial's other per-key ways (IOS-CHECK.md →
+# Input-gap trial). post keeps the process up after the touch; hid has AXe wait before it (the env var is AXe's).
+sim_key() {
+  local rc=0
+  sim_key_at "$1" || return 1
+  case "$SIM_VIA" in
+    post) ax tap -x "$SIM_KX" -y "$SIM_KY" --tap-style physical --post-delay 0.5 >/dev/null 2>&1 || rc=$? ;;
+    hid)
+      export AXE_HID_STABILIZATION_MS=500
+      ax tap -x "$SIM_KX" -y "$SIM_KY" --tap-style physical >/dev/null 2>&1 || rc=$?
+      unset AXE_HID_STABILIZATION_MS ;;
+    *) ax tap -x "$SIM_KX" -y "$SIM_KY" --tap-style physical >/dev/null 2>&1 || rc=$? ;;
+  esac
+  [ "$rc" = 0 ] || { sim_err SIM_UNAVAILABLE AXE_FAILED "key tap failed"; return 1; }
+  if [ "$SIM_VIA" = post ]; then sleep 0.1; else sleep 0.6; fi
+}
+
+# Keys in order. batch/batch15 send them all in one AXe process, so one HID session (AXe issue 71: a new process can
+# lose its first touch before the sim's input service is up), after a lead sleep. Every key is read at its spot
+# first, so a key off its spot is MISS before any tap goes out. Letters, space and delete never change the layout,
+# so reading them all up front sees what a per-key read would.
+sim_send() {
+  local k lead=1 steps
+  case "$SIM_VIA" in batch | batch15) ;; *)
+    for k in "$@"; do sim_key "$k" || return 1; done
+    return 0 ;;
+  esac
+  [ "$SIM_VIA" != batch15 ] || lead=1.5
+  steps=(--step "sleep $lead")
+  for k in "$@"; do
+    sim_key_at "$k" || return 1
+    [ "${#steps[@]}" = 2 ] || steps+=(--step "sleep 0.6")
+    steps+=(--step "tap -x $SIM_KX -y $SIM_KY")
+  done
+  ax batch --tap-style physical "${steps[@]}" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "key batch failed"; return 1; }
   sleep 0.6
 }
 
 sim_type_keys() {
-  local ch i=0
+  local ch i=0 ks=()
   while [ "$i" -lt "${#1}" ]; do
     ch="${1:$i:1}"
     [ "$ch" != " " ] || ch=space
-    sim_key "$ch" || return 1
+    ks+=("$ch")
     i=$((i + 1))
   done
+  sim_send "${ks[@]}"
+}
+sim_deletes() {
+  local i=0 ks=()
+  while [ "$i" -lt "$1" ]; do ks+=(delete); i=$((i + 1)); done
+  sim_send "${ks[@]}"
+}
+
+# A trial op's line in trial.jsonl: how many of its n taps the first read-back found dropped.
+sim_trial() {
+  jq -cn --argjson i "$SIM_OPI" --arg op "$1" --arg via "$SIM_VIA" --argjson n "$2" --argjson drops "$3" --argjson ms "$4" \
+    '{i: $i, op: $op, via: $via, n: $n, drops: $drops, sendMs: $ms}' >>"$SIM_P.trial"
 }
 
 # The field, read where `in` was found: SIM_TYPED_OK=1 when it holds the text (case-insensitive: the app's fields
 # auto-capitalise), and SIM_TYPED is what it read, filtered like a MISS note.
 sim_typed_read() {
   local e
-  SIM_TYPED_OK=""
+  SIM_TYPED_OK="" SIM_TYPED_LEN=0
   rm -f "$SIM_P.unread"
   e="$(sim_point "$2" "$3")" || return 1
   sim_hung_err "reading the typed text" && return 1
   SIM_TYPED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
+  SIM_TYPED_LEN="$(jq -r '(.value // "") | length' <<<"$e")"
   if jq -e --arg t "$1" '((.value // "") | ascii_downcase) == $t' <<<"$e" >/dev/null 2>&1; then SIM_TYPED_OK=1; fi
 }
 
@@ -1169,12 +1219,17 @@ sim_typed_read() {
 # tap gets a second look (at the field's frame centre: the point it was found at can sit outside its frame, as the
 # Done form's Reflection does), then up to two retypes (deletes first: extra ones do nothing on an empty field), and
 # the note says so, so a rising drop rate stays visible. Assumes the field held nothing before.
+# A trial's `via` also counts the first read-back's drops (letters missing; at least 1 when it reads wrong) in trial.jsonl.
 sim_op_keys() {
-  local text field x y cx cy d tries=0 first=""
+  local text field x y cx cy tries=0 first="" via t0 ms drops
   text="$(jq -r .text <<<"$1")"
   field="$(jq -r '.in // ""' <<<"$1")"
+  via="$(jq -r '.via // ""' <<<"$1")"
+  SIM_VIA="${via:-tap}"
   sim_kb_up || { sim_kb_missing; return 1; }
+  t0="$(sim_ms)"
   sim_type_keys "$text" || return 1
+  ms=$(($(sim_ms) - t0))
   SIM_NOTE="typed ${#text} keys"
   [ -n "$field" ] || return 0
   read -r x y cx cy < <(sim_read_get "$field" | jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"')
@@ -1184,6 +1239,12 @@ sim_op_keys() {
       sleep 1
       sim_typed_read "$text" "$cx" "$cy" || return 1
     fi
+    if [ -n "$via" ] && [ "$tries" = 0 ]; then
+      drops=0
+      if [ -z "$SIM_TYPED_OK" ]; then drops=$((${#text} - SIM_TYPED_LEN)); [ "$drops" -ge 1 ] || drops=1; fi
+      sim_trial keys "${#text}" "$drops" "$ms"
+      SIM_NOTE="$SIM_NOTE; via $via, drops $drops"
+    fi
     [ -z "$SIM_TYPED_OK" ] || break
     [ -n "$first" ] || first="$SIM_TYPED"
     if [ "$tries" -ge 2 ]; then
@@ -1191,8 +1252,7 @@ sim_op_keys() {
       return 1
     fi
     tries=$((tries + 1))
-    d=0
-    while [ "$d" -lt $((${#text} + 2)) ]; do sim_key delete || return 1; d=$((d + 1)); done
+    sim_deletes $((${#text} + 2)) || return 1
     sim_type_keys "$text" || return 1
   done
   case "$tries" in
@@ -1224,11 +1284,17 @@ sim_erased_read() {
 # Deletes AXe reports done can be ones iOS never got (job …230610Z…-done-form-4385 left a Z after six), so with `in`
 # the field is read back (where `in` found it, then at its centre, as keys does) and anything left gets that many
 # deletes plus two, at most twice, before ERASED. `in` must have found the field empty, before any keys.
+# A trial's `via` also counts the first read-back's letters left in trial.jsonl (with n = the letters typed, each is a
+# dropped delete).
 sim_op_erase() {
-  local n i=0 field r x y cx cy rounds=0 more first="" more1="" found
+  local n field r x y cx cy rounds=0 more first="" more1="" found via t0 ms drops
   n="$(jq -r '.n | floor' <<<"$1")"
+  via="$(jq -r '.via // ""' <<<"$1")"
+  SIM_VIA="${via:-tap}"
   sim_kb_up || { sim_kb_missing; return 1; }
-  while [ "$i" -lt "$n" ]; do sim_key delete || return 1; i=$((i + 1)); done
+  t0="$(sim_ms)"
+  sim_deletes "$n" || return 1
+  ms=$(($(sim_ms) - t0))
   SIM_NOTE="erased $n"
   field="$(jq -r '.in // ""' <<<"$1")"
   [ -n "$field" ] || return 0
@@ -1241,6 +1307,12 @@ sim_op_erase() {
       sleep 1
       sim_erased_read "$r" "$cx" "$cy" || return 1
       [ -z "$SIM_ERASED_FIELD" ] || found=1
+    fi
+    if [ -n "$via" ] && [ "$rounds" = 0 ] && [ -n "$found" ]; then
+      drops=0
+      [ -n "$SIM_ERASED_OK" ] || drops="$SIM_LEFT"
+      sim_trial erase "$n" "$drops" "$ms"
+      SIM_NOTE="$SIM_NOTE; via $via, drops $drops"
     fi
     [ -z "$SIM_ERASED_OK" ] || break
     if [ -z "$found" ]; then # the field moved, or the page changed: not dropped input, and more deletes can't help
@@ -1256,8 +1328,7 @@ sim_op_erase() {
     [ "$more" -le 24 ] || more=24
     [ -z "$more1" ] && more1="$more" || more1="$more1 and $more"
     rounds=$((rounds + 1))
-    i=0
-    while [ "$i" -lt "$more" ]; do sim_key delete || return 1; i=$((i + 1)); done
+    sim_deletes "$more" || return 1
   done
   case "$rounds" in
     1) SIM_NOTE="$SIM_NOTE; deleted $more1 more (first read $first)" ;;
@@ -1389,20 +1460,22 @@ sim_op_shutdown() { sim_shutdown || return 1; SIM_BOOTED=off; SIM_NOTE="shut dow
 
 # --- the run ------------------------------------------------------------------------------------------------------
 run_sim() {
-  local w="$1" n i op opj t0 status=pass reason=- detail="" started budget caf
+  local w="$1" n i op opj t0 status=pass reason=- detail="" started budget caf load0
   SIM_P="$2"
   SIM_RD="$3"
   sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
   SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN="" SIM_RB_STAY=false
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0 SIM_KB_WROTE="" SIM_KB_SET=""
-  SIM_ST="" SIM_RS="" SIM_DT=""
+  SIM_ST="" SIM_RS="" SIM_DT="" SIM_VIA=tap SIM_OPI=0
+  load0="$(sim_load)"
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"
   rm -f -- "$SIM_P.over" "$SIM_P.late" "$SIM_P.unread" "$SIM_P.axerr"
   : >"$SIM_P.steps"
   : >"$SIM_P.builds"
   : >"$SIM_P.shots"
+  : >"$SIM_P.trial"
   started="$(date +%s)"
   budget="$(jq -r '.params.timeoutSec | floor' "$w")"
   SIM_DEADLINE=$((started + budget))
@@ -1427,7 +1500,7 @@ run_sim() {
     else
       sim_progress "$i" "$n" "$op"
       sim_touch # a long job must not look like a stale lock
-      SIM_NOTE=""
+      SIM_NOTE="" SIM_VIA=tap SIM_OPI="$i"
       if sim_lazy_ready "$op" && "sim_op_$op" "$opj"; then
         status=pass
       else
@@ -1448,6 +1521,10 @@ run_sim() {
     if sim_shutdown; then SIM_BOOTED=off; fi
   fi
   kill "$caf" 2>/dev/null || true
+  if [ -s "$SIM_P.trial" ]; then
+    { jq -cn --arg a "$load0" --arg b "$(sim_load)" '{load: {start: $a, end: $b}}'; cat "$SIM_P.trial"; } >"$SIM_P.trialout"
+    sim_rd "$SIM_P.trialout" trial.jsonl || true
+  fi
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg detail "$detail" --arg name "$SIM_NAME" --arg udid "$SIM_U" \
     --arg rt "$SIM_RUNTIME" --arg axe "$SIM_AXE_VERSION" --arg xcode "$SIM_XCODE" --arg booted "$SIM_BOOTED" --arg signed "$SIM_SIGNED" \
     --slurpfile steps "$SIM_P.steps" --slurpfile reads "$SIM_P.reads" \

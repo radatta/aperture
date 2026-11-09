@@ -84,7 +84,7 @@ sim_stub() {
   if [ "$1 ${2:-} ${3:-}" = "axe type --stdin" ]; then
     printf '%s <<<%s\n' "$argv" "$(cat)" >>"$MAILROOM_FIXTURE_SIMCALLS"
   else
-    printf '%s\n' "$argv" >>"$MAILROOM_FIXTURE_SIMCALLS"
+    printf '%s%s\n' "$argv" "${AXE_HID_STABILIZATION_MS:+ hid=$AXE_HID_STABILIZATION_MS}" >>"$MAILROOM_FIXTURE_SIMCALLS"
   fi
   if [ "$1 ${2:-}" = "axe screenshot" ]; then
     while [ $# -gt 0 ]; do [ "$1" != --output ] || o="${2:-}"; shift; done
@@ -363,6 +363,14 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -z "$why" ] && [ -n "$f" ] || continue
       [ -f "$hj/results/$rid/$f" ] || why="no results/$rid/$f"
     done < <(jq -r '.files // [] | .[]' <<<"$c")
+    while IFS= read -r f; do
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      [ ! -e "$hj/results/$rid/$f" ] || why="results/$rid/$f exists"
+    done < <(jq -r '.filesAbsent // [] | .[]' <<<"$c")
+    while IFS=$'\t' read -r f want; do # a result file holding a substring (trial.jsonl's lines)
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      grep -q -F -- "$want" "$hj/results/$rid/$f" 2>/dev/null || why="results/$rid/$f has no \"$want\""
+    done < <(jq -r '.fileHas // [] | .[] | [.[0], .[1]] | @tsv' <<<"$c")
   fi
   # fixtures cases: lines the sandbox profile must hold, and the log tail the job kept.
   if [ -z "$why" ] && [ "$kind" = fixtures ]; then
