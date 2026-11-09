@@ -348,6 +348,7 @@ share_case() { # NAME GREP BENCH-ROOT OUT
   [ "$rc" = 75 ] || why="exit $rc, want 75"
   [ -n "$why" ] || grep -q -- "$2" "$T/log" || why="no \"$2\" in the output"
   [ -n "$why" ] || [ -z "$(find "$4" -name result.json 2>/dev/null)" ] || why="a job ran"
+  [ -n "$why" ] || [ ! -e "$4" ] || why="the refused run made $4"
   check "$1" "$why" "$T/log"
 }
 new_dir

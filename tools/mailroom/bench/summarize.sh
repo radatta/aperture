@@ -15,7 +15,7 @@ shift
 AGAINST=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --against) AGAINST="${2:-}"; shift 2 ;;
+    --against) [ $# -ge 2 ] || { echo "summarize: --against needs a summary.json" >&2; exit 2; }; AGAINST="$2"; shift 2 ;;
     *) echo "summarize: unknown argument $1" >&2; exit 2 ;;
   esac
 done

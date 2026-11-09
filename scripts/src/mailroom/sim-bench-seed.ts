@@ -133,8 +133,11 @@ export async function clean(
   const out = { deleted: [] as string[], gone: [] as string[], failed: [] as string[] };
   const unlock = d.runLock();
   let session: Awaited<ReturnType<SeedDeps['signIn']>> | undefined;
+  let mine = false; // past the slot check: dev is free or this branch's, so it's freed below whatever fails
+  let failed: { err: unknown } | undefined;
   try {
     await slotA(d);
+    mine = true;
     const ids = pendingSeeds(d.ledger);
     if (ids.length) {
       const run = runId(d);
@@ -157,11 +160,20 @@ export async function clean(
         }
       }
     }
+  } catch (err) {
+    failed = { err };
   } finally {
     await session?.close().catch(() => {});
     unlock();
   }
-  await d.release();
+  // A sign-in that dies (Chromium under load, a stale session) must not leave slot A locked: the seed stays pending in
+  // the ledger for the next devcheck's sweep, and the error still surfaces.
+  if (mine)
+    await d.release().catch((e: unknown) => {
+      if (!failed) throw e;
+      d.log(`  couldn't release the dev lock: ${String(e)}`);
+    });
+  if (failed) throw failed.err;
   d.log(
     `seed: ${out.deleted.length} deleted, ${out.gone.length} already gone, ${out.failed.length} left for the sweep · dev lock released`,
   );

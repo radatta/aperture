@@ -56,6 +56,12 @@ in_share() {
   done
   return 1
 }
+# The real path of P's nearest existing dir, creating nothing: a refused --out leaves no dir in the shared checkout.
+near() {
+  local d="$1"
+  while [ ! -d "$d" ]; do d="$(dirname "$d")"; done
+  cd "$d" && pwd -P
+}
 sha256() { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
 
 while [ $# -gt 0 ]; do
@@ -79,9 +85,9 @@ while [ $# -gt 0 ]; do
 done
 
 # --- arguments ----------------------------------------------------------------------------------------------------
-[[ "$RUNS" =~ ^[0-9]+$ ]] && [ "$RUNS" -ge 1 ] && [ "$RUNS" -le 50 ] || die "--runs takes 1–50"
+[[ "$RUNS" =~ ^[1-9][0-9]*$ ]] && [ "$RUNS" -ge 1 ] && [ "$RUNS" -le 50 ] || die "--runs takes 1–50"
 [[ "$INTERVAL" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "--interval takes seconds"
-[ -z "$TIMEOUT" ] || { [[ "$TIMEOUT" =~ ^[0-9]+$ ]] && [ "$TIMEOUT" -ge 60 ] && [ "$TIMEOUT" -le 600 ]; } || die "--timeout takes 60–600 (sim.sh's own range)"
+[ -z "$TIMEOUT" ] || { [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] && [ "$TIMEOUT" -ge 60 ] && [ "$TIMEOUT" -le 600 ]; } || die "--timeout takes 60–600 (sim.sh's own range)"
 [ "$SHA" = auto ] || [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "--sha takes auto or a 40-hex commit"
 [[ "$TAG" =~ ^[a-z0-9-]{0,20}$ ]] || die "--tag takes up to 20 of a-z 0-9 -"
 [ -f "$PLANS" ] && jq -e '.jobs | length > 0' "$PLANS" >/dev/null 2>&1 || die "no plans at $PLANS (pnpm sim-bench:plans)"
@@ -107,7 +113,7 @@ if [ "${SIM_BENCH_FX_ALLOW_SHARE:-}" != 1 ] || [ "${SIM_BENCH_FIXTURE:-}" != 1 ]
   for p in "$MR" "$(cd "$(dirname "$RUNNER")" && pwd -P)" "$(cd "$(dirname "$PLANS")" && pwd -P)"; do
     ! in_share "$p" || die "$p is inside a checkout the mailroom shares with the container — run the bench from a tarball in a Mac-only dir (docs/ops/SIM-BENCH.md → Setup)"
   done
-  ! in_share "$(mkdir -p "$OUT" 2>/dev/null; cd "$OUT" 2>/dev/null && pwd -P || echo "$OUT")" \
+  ! in_share "$(near "$OUT")" \
     || die "--out $OUT is inside the shared checkout — write results to a Mac-only dir, then move them (docs/ops/SIM-BENCH.md → Results)"
 fi
 for t in jq axe xcrun security curl; do
@@ -165,8 +171,10 @@ device_j() {
 # The sim.sh that runs is the one beside the runner (runner.sh sources $(dirname runner)/jobs/*.sh).
 SIM_SH_SHA="$(sha256 <"$(dirname "$RUNNER")/jobs/sim.sh")"
 RUNNER_SHA="$(sha256 <"$RUNNER")"
-REPO_SHA="$(git -C "$MR" rev-parse HEAD 2>/dev/null || echo unknown)"
-REPO_DIRTY="$(git -C "$MR" status --porcelain -- . 2>/dev/null | head -1)"
+# A tarball has no .git: never let git walk up into an unrelated repo above it (a git-tracked home).
+CEIL="$(dirname "$(dirname "$(dirname "$MR")")")" # above the repo root, so its own .git is still found
+REPO_SHA="$(GIT_CEILING_DIRECTORIES="$CEIL" git -C "$MR" rev-parse HEAD 2>/dev/null || echo unknown)"
+REPO_DIRTY="$(GIT_CEILING_DIRECTORIES="$CEIL" git -C "$MR" status --porcelain -- . 2>/dev/null | head -1)"
 jq -n --arg tag "$TAG" --arg stamp "$STAMP" --arg host "$(q hostname -s)" \
   --arg macos "$(q sw_vers -productVersion)" --arg macbuild "$(q sw_vers -buildVersion)" \
   --arg model "$(q sysctl -n hw.model)" --arg mem "$(q sysctl -n hw.memsize)" --arg cpu "$(q sysctl -n machdep.cpu.brand_string)" \

@@ -164,6 +164,24 @@ describe('sim-bench seed', () => {
     expect(held).toBe('none');
   });
 
+  it('--clean whose sign-in dies still frees dev, keeps the seed pending, and fails', async () => {
+    await seed(deps());
+    const d = deps();
+    d.signIn = async () => {
+      throw new Error('browserType.launch: Target page, context or browser has been closed');
+    };
+    await expect(clean(d)).rejects.toThrow('browser has been closed');
+    expect(held).toBe('none');
+    expect(pendingSeeds(ledger)).toEqual(['t1']);
+    expect(calls.at(-1)).toBe('release');
+  });
+
+  it('--clean refused by another branch on dev releases nothing', async () => {
+    held = 'other';
+    await expect(clean(deps())).rejects.toThrow('another-lane is testing on dev');
+    expect(calls).not.toContain('release');
+  });
+
   it('--clean records a seed already gone and still frees dev', async () => {
     await seed(deps());
     tasks.clear();
