@@ -573,8 +573,13 @@ spass('sim: a keyboard that goes down late gets no second tap where Done was', [
       tape=[pt(221, 856, SPACE, n=1), pt(221, 856, {}), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), {'m': '--point 395,', 'out': el('AXButton', 'Mark done', '', 340, 556, 100, 38)}],
       notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1}, simExcludes=['tap -x 390'])
 TAPBAR = {'op': 'tap', 'label': 'Capture', 'near': {'x': 220, 'y': 895}}
-spass('sim: a field tap that brings no keyboard is tapped once more', [L, TAPBAR], tape=[pt(221, 856, {}, n=1)],
-      notes={'1': 'tapped again (no keyboard after the first)'}, simCount={'tap -x 198 -y 895': 2})
+spass('sim: a field tap that brings no keyboard, still none a second later, with the field still there, is tapped once more', [L, TAPBAR],
+      tape=[pt(221, 856, {}, n=2), pt(198, 895, CAPTURE)], notes={'1': 'tapped again (no keyboard after the first)'}, simCount={'tap -x 198 -y 895': 2})
+spass('sim: a keyboard that comes up late is not tapped into (job …014933Z…-capture-7ac9 typed a space)', [L, TAPBAR],
+      tape=[pt(221, 856, {}, n=1)], notes={'1': 'the keyboard came up late'}, simCount={'tap -x 198 -y 895': 1})
+spass('sim: no keyboard, but something else at the field\'s spot, is not tapped again', [L, TAPBAR],
+      tape=[pt(221, 856, {}, n=2), pt(198, 895, el('AXButton', 'space', '', 100, 880, 240, 40))],
+      notes={'1': 'not tapped again (the field\'s spot reads AXButton space)'}, simCount={'tap -x 198 -y 895': 1})
 spass('sim: a field tap that brings the keyboard is not repeated', [L, TAPBAR], simCount={'tap -x 198 -y 895': 1})
 spass('sim: a button tap never checks for the keyboard', [L, {'op': 'tap', 'label': 'Home', 'near': {'x': 38, 'y': 168}, 'radius': 10}],
       simCount={'tap -x 38 -y 168': 1, '--point 221,856': 0})

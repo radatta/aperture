@@ -887,6 +887,7 @@ sim_op_absent() {
 }
 
 sim_op_tap() {
+  local cx cy e
   sim_find "$1" || return 1
   if jq -e --argjson deny "$SIM_DENY" '((.label // "") | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | any(. as $d | $l == $d or ($l | startswith($d + " ")))' <<<"$SIM_HIT" >/dev/null; then
     sim_fail DENIED "the match is a write button; not tapped"
@@ -897,14 +898,30 @@ sim_op_tap() {
   sleep 1
   SIM_NOTE="$(jq -r '"tapped \(.role) at \(.frame.x + (.frame.w / 2 | floor)),\(.frame.y + (.frame.h / 2 | floor))"' <<<"$SIM_HIT")"
   # A tapped field must take focus: no soft keyboard means the tap dropped (job …054323Z…-done-form-e8e2 read as
-  # KEYBOARD_SETUP), so tap it once more. Focusing writes nothing; a keyboard still missing is the next op's to report.
+  # KEYBOARD_SETUP), so tap it once more. But a keyboard can come up late, and a retap then lands on it (job
+  # …014933Z…-capture-7ac9 typed a space into the bar at 198,895): wait a second, look again, and retap only where a
+  # point read still shows the field. A keyboard still missing is the next op's to report.
   case "$(jq -r .role <<<"$SIM_HIT")" in
     AXTextArea | AXTextField)
       if ! sim_kb_up; then
         sim_hung_err "checking the field took focus" && return 1
-        sim_tap_el "$SIM_HIT" || return 1
         sleep 1
-        SIM_NOTE="$SIM_NOTE; tapped again (no keyboard after the first)"
+        if sim_kb_up; then
+          SIM_NOTE="$SIM_NOTE; the keyboard came up late"
+        else
+          sim_hung_err "checking the field took focus" && return 1
+          read -r cx cy < <(jq -r '.frame // {} | "\(((.x // 0) + (.w // 0) / 2) | floor) \(((.y // 0) + (.h // 0) / 2) | floor)"' <<<"$SIM_HIT")
+          rm -f "$SIM_P.unread"
+          e="$(sim_point "$cx" "$cy")" || return 1
+          sim_hung_err "checking the field is still there" && return 1
+          if sim_match "$e" "$(jq -r '.label // ""' <<<"$SIM_HIT")" "$(jq -r .role <<<"$SIM_HIT")"; then
+            sim_tap_el "$SIM_HIT" || return 1
+            sleep 1
+            SIM_NOTE="$SIM_NOTE; tapped again (no keyboard after the first)"
+          else
+            SIM_NOTE="$SIM_NOTE; not tapped again (the field's spot reads $(jq -r '"\(.role) \(.label // "")"' <<<"$e"))"
+          fi
+        fi
       fi
       ;;
   esac
