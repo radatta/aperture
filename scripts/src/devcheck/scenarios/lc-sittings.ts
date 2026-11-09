@@ -568,8 +568,11 @@ export const lcSittings: Scenario = {
         await ctx.ui.goto('/settings#leetcode');
         const select = ctx.page.getByLabel('Sittings are reps of');
         await select.waitFor({ timeout: 15_000 });
-        if ((await select.inputValue()) !== state.rollId)
-          throw new Error(`Settings shows ${await select.inputValue()}, not the linked roll`);
+        // The select reads empty (and disabled) until the Rolls load — wait for it to settle on the link.
+        for (let i = 0, shown = ''; (shown = await select.inputValue()) !== state.rollId; i++) {
+          if (i >= 40) throw new Error(`Settings shows “${shown}”, not the linked roll`);
+          await new Promise((r) => setTimeout(r, 250));
+        }
         await select.scrollIntoViewIfNeeded();
         await ctx.shot('settings-leetcode');
         // Unlink and relink through the select itself, each landing on the server.
