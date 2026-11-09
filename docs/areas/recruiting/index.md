@@ -187,7 +187,7 @@ ever does must sanitise it.
 ### The page
 
 `/recruiting` → **Sittings**: the open sitting pinned with its running clock, the rest by day with the
-outcome (`first submit accepted` / `accepted on submit N` / `not accepted` / `no submit yet`), runs, and
+outcome (`first submit accepted` / `accepted on submit N` / `not accepted` / `no submit yet`, or `no submit` once ended), runs, and
 `dropped`; a dot marks a reviewed one. Stories is the other tab.
 
 Each row opens **`/recruiting/sittings/:id`**: the problem (linked to LeetCode) with its tags and companies; the
@@ -196,8 +196,10 @@ outcome, time to first submit, duration, runs and submits, and "Claude watched l
 the review form, one Save for all of it. While the sitting is open and its rep in progress, **End sitting** opens
 the rep's Done form prefilled with the sitting's minutes (Start to now) and the Roll's estimate when the rep lost
 one; Mark done ends the sitting through the rep, Cancel writes nothing. On Home, a LeetCode rep whose sitting is
-open links to that page ("End the LeetCode sitting →"), and its Done prefills from the sitting too; the list is
-read only while a LeetCode-roll rep is in progress, so an ordinary day costs no read.
+open links to that page ("End the LeetCode sitting →"), and its Done prefills from the sitting too, the Roll's
+estimate included; the list is read only while a LeetCode-roll rep is in progress, so an ordinary day costs no
+read. Both Done forms wait for the Rolls before opening — the form copies its estimate once, so it must be the
+Roll's, never the 30-minute fallback.
 
 ## The shape
 

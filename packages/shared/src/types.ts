@@ -468,7 +468,7 @@ export interface SittingReview {
   mistakes: string[];
   howItWent: string | null;
   tags: string[]; // his own pattern tags: lowercased, deduped, order kept
-  draftUsed: boolean; // a ticked Claude draft line is among `mistakes`
+  draftUsed: boolean; // a Claude draft line was ticked into `mistakes` (kept while any mistake remains)
   updatedAt: number;
 }
 

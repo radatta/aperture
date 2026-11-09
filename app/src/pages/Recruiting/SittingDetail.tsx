@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import {
   isSittingOpen,
@@ -19,7 +19,7 @@ import { useAllTasks } from '../../data/hooks/useTasks';
 import { fmtDuration } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
 import { DoneForm } from '../../modules/tasks/DoneForm';
-import { ReviewForm } from './ReviewForm';
+import { REVIEW_ID, ReviewForm } from './ReviewForm';
 import { sittingOutcome } from './recruitingHelpers';
 import { SittingTimeline } from './SittingTimeline';
 
@@ -117,6 +117,8 @@ function Loaded({ detail }: { detail: Detail }) {
 
       {open && (
         <EndSitting
+          // Mark done takes End sitting away: focus goes on to the review, the next thing to do.
+          onEnded={() => requestAnimationFrame(() => document.getElementById(REVIEW_ID)?.focus())}
           repTaskId={sitting.repTaskId}
           rollId={sitting.rollId}
           minutes={sittingMinutes(sitting, now)}
@@ -167,18 +169,21 @@ function EndSitting({
   repTaskId,
   rollId,
   minutes,
+  onEnded,
 }: {
   repTaskId: string;
   rollId: string;
   minutes: number;
+  onEnded: () => void;
 }) {
   const [ending, setEnding] = useState(false);
   const back = useRef(false); // Cancel hands focus back to End sitting
+  const id = useId();
   const { data: tasks } = useAllTasks();
-  const { data: rolls } = useRolls();
+  const rolls = useRolls();
   const rep = tasks?.find((t) => t.id === repTaskId);
   if (!rep || rep.status !== 'in_progress') return null;
-  const roll = rolls?.find((r) => r.id === rollId);
+  const roll = rolls.data?.find((r) => r.id === rollId);
   if (!ending)
     return (
       <Button
@@ -187,22 +192,27 @@ function EndSitting({
           if (el && back.current) el.focus();
           back.current = false;
         }}
-        onClick={() => setEnding(true)}
+        // The form waits for the Rolls: its estimate is copied once, and must be the Roll's, not the fallback.
+        aria-disabled={rolls.isPending || undefined}
+        onClick={() => !rolls.isPending && setEnding(true)}
       >
         End sitting
       </Button>
     );
   // Focus lands on the form, not its Actual field — no keyboard springs up on a phone.
   return (
-    <div ref={focusOnMount} tabIndex={-1} className="outline-none">
-      <Text size="sm" weight="medium">
+    <div ref={focusOnMount} tabIndex={-1} aria-labelledby={`${id}-end`} className="outline-none">
+      <Text size="sm" weight="medium" id={`${id}-end`}>
         End the sitting — mark its rep done
       </Text>
       <DoneForm
         task={rep}
         initialActualMin={minutes}
         initialEstimateMin={Math.max(1, Math.round(roll?.estimateMin ?? ROLL_PLAN_FALLBACK_MIN))}
-        onDone={() => setEnding(false)}
+        onDone={() => {
+          setEnding(false);
+          onEnded();
+        }}
         onCancel={() => {
           back.current = true;
           setEnding(false);

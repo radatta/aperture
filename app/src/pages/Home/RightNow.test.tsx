@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey } from '@aperture/shared';
@@ -374,6 +374,9 @@ describe('Right now card', () => {
 // its Done starts on the sitting's minutes — Start to now — not the focus timer's (none ran here).
 describe('Right now — a LeetCode sitting', () => {
   it('links to the open sitting and prefills Done with its minutes', async () => {
+    // 1pm: daytime Home from the first render, so nothing (Plan today's Roll picker) has read the Rolls first.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 10, 9, 13, 0) });
+    onTestFinished(() => void vi.useRealTimers());
     const user = userEvent.setup();
     let shift = -37 * 60_000; // the Start happened 37 minutes ago
     const api = createStubClient({
@@ -398,9 +401,11 @@ describe('Right now — a LeetCode sitting', () => {
     const link = await screen.findByRole('link', { name: 'End the LeetCode sitting →' });
     expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
     await user.click(screen.getByRole('button', { name: 'Done' }));
-    expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('37');
+    expect((await screen.findByLabelText<HTMLInputElement>('Actual (min)')).value).toBe('37');
     // A rep with no estimate of its own takes the Roll's, as End sitting does.
-    expect(screen.getByLabelText<HTMLInputElement>('Estimate in hindsight').value).toBe('45');
+    expect((await screen.findByLabelText<HTMLInputElement>('Estimate in hindsight')).value).toBe(
+      '45',
+    );
   });
 
   it('an ordinary task in progress has no link, and Done keeps its own prefill', async () => {

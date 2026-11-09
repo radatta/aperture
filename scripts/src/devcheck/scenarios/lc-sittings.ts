@@ -562,6 +562,12 @@ export const lcSittings: Scenario = {
       kind: 'nominal',
       what: 'Home’s Done on a LeetCode rep with an open sitting starts on the sitting’s minutes',
     },
+    {
+      id: 'prefill-estimate',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A rep that lost its estimate: Home’s Done and End sitting both offer the Roll’s 45 as the estimate in hindsight',
+    },
   ],
   steps: [
     {
@@ -1103,6 +1109,12 @@ export const lcSittings: Scenario = {
         for (let i = 0; i < (await boxes.count()); i++)
           if (await boxes.nth(i).isChecked()) throw new Error('a draft line arrived ticked');
         await ctx.shot('review-draft');
+        // Again with the mistake and draft lines open: they are their own (autogrow) fields.
+        const grown = await fieldSizes(ctx, 'section[aria-labelledby]');
+        if (grown.length <= sizes.length || grown.some((px) => px < 16))
+          throw new Error(
+            `review field sizes with lines ${JSON.stringify(grown)} — under 16px zooms iOS`,
+          );
         await draft.getByLabel('Draft line 2', { exact: true }).fill('devcheck draft two, edited');
         await draft.getByLabel('Keep draft line 2', { exact: true }).click();
         await form.getByLabel('Tags', { exact: true }).fill('Devcheck-Tag');
@@ -1268,7 +1280,14 @@ export const lcSittings: Scenario = {
       id: 'ui-end',
       entry: 'ui',
       cost: 'slow',
-      proves: ['home-prefill', 'home-link', 'home-neighbour', 'end-cancel', 'end-ui'],
+      proves: [
+        'home-prefill',
+        'prefill-estimate',
+        'home-link',
+        'home-neighbour',
+        'end-cancel',
+        'end-ui',
+      ],
       title:
         'Start D: as Home’s hero its Done starts on D’s minutes; Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
       async run(ctx) {
@@ -1276,6 +1295,12 @@ export const lcSittings: Scenario = {
         state.d = sitting.id;
         state.dRep = sitting.repTaskId;
         await ctx.api.writes.lcSittingEvents(state.d, [snap('print("d")', Date.now())]);
+        await ctx.api.writes.setTaskEstimate(state.dRep, null, null); // the Roll's 45 fills it in hindsight
+        const hindsight = async (where: string) => {
+          const shown = await ctx.page.getByLabel('Estimate in hindsight').inputValue();
+          if (shown !== '45')
+            throw new Error(`${where}: estimate in hindsight “${shown}”, not the Roll’s 45`);
+        };
         const dMinutes = () => Math.max(1, Math.round((Date.now() - sitting.startedAt) / 60_000));
         // D's rep alone in progress, so it is Home's hero: its Done prefills from the sitting.
         await ctx.ui.goto('/');
@@ -1294,6 +1319,7 @@ export const lcSittings: Scenario = {
         const heroShown = Number(await ctx.page.getByLabel('Actual (min)').inputValue());
         if (Math.abs(heroShown - dMinutes()) > 1)
           throw new Error(`Home's Done prefilled ${heroShown}, D's ${dMinutes()}`);
+        await hindsight('Home');
         await ctx.shot('home-done-prefill');
         await ctx.page.getByRole('button', { name: 'Cancel' }).click();
         if ((await ctx.api.reads.getSitting(state.d)).sitting.status !== 'active')
@@ -1318,6 +1344,7 @@ export const lcSittings: Scenario = {
         const shown = Number(await ctx.page.getByLabel('Actual (min)').inputValue());
         const want = dMinutes();
         if (Math.abs(shown - want) > 1) throw new Error(`Actual prefilled ${shown}, D's ${want}`);
+        await hindsight('End sitting');
         await ctx.shot('end-sitting');
         await ctx.page.getByRole('button', { name: 'Cancel' }).click();
         if ((await ctx.api.reads.getSitting(state.d)).sitting.status !== 'active')

@@ -10,7 +10,7 @@ export function SittingTimeline({ sitting, events }: { sitting: Sitting; events:
   if (!entries.some((e) => e.kind === 'judged'))
     return (
       <Text as="p" size="sm" tone="muted">
-        No runs or submits yet.
+        {sitting.status === 'active' ? 'No runs or submits yet.' : 'No runs or submits.'}
       </Text>
     );
   return (

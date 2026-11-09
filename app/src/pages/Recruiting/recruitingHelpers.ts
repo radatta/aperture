@@ -33,7 +33,8 @@ export interface SittingOutcome {
 export function sittingOutcome(s: Sitting): SittingOutcome {
   const m = sittingMetrics(s);
   const submits = s.summary.submits;
-  if (m.firstSubmitAccepted === null) return { label: 'no submit yet', tone: 'muted' };
+  if (m.firstSubmitAccepted === null)
+    return { label: s.status === 'active' ? 'no submit yet' : 'no submit', tone: 'muted' };
   if (m.firstSubmitAccepted) return { label: 'first submit accepted', tone: 'teal' };
   if (m.submitsBeforeAccepted !== null)
     return { label: `accepted on submit ${m.submitsBeforeAccepted + 1}`, tone: 'gold' };

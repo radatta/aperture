@@ -154,7 +154,12 @@ export function RightNowCard() {
   const focusAction = useRowAction(alsoRef);
   // The hero the Done form is open for: if another task takes the hero, the form goes with its own, so typed
   // minutes never land on the wrong task.
-  const [doneOpen, setDoneOpen] = useState<{ taskId: string; initialMin: number } | null>(null);
+  // `rep`: the form opened for a sitting's rep — fixed then, so a refetch can't swap the form (and lose typing).
+  const [doneOpen, setDoneOpen] = useState<{
+    taskId: string;
+    initialMin: number;
+    rep: boolean;
+  } | null>(null);
   // Done opens the form with Actual focused, as the task modal's finish intent does — you tapped Done to
   // enter the number. Stable, so it focuses once on mount, not on every render.
   const focusActual = useCallback((el: HTMLInputElement | null) => el?.focus(), []);
@@ -251,7 +256,7 @@ export function RightNowCard() {
                     ))
                   )
                     return;
-                  setDoneOpen({ taskId: hero.id, initialMin: elapsed });
+                  setDoneOpen({ taskId: hero.id, initialMin: elapsed, rep: !!heroSitting });
                 }}
               >
                 Done
@@ -259,7 +264,7 @@ export function RightNowCard() {
             </div>
             {heroSitting && <SittingLink id={heroSitting.id} />}
             {doneOpen?.taskId === hero.id &&
-              (heroSitting ? (
+              (doneOpen.rep ? (
                 <RepDoneForm
                   task={hero}
                   initialActualMin={doneOpen.initialMin}
@@ -428,7 +433,7 @@ function SittingLink({ id }: { id: string }) {
   return (
     <Link
       to={`/recruiting/sittings/${id}`}
-      className="self-start text-sm text-teal underline underline-offset-2"
+      className="-my-1 self-start py-1 text-sm text-teal underline underline-offset-2"
     >
       End the LeetCode sitting →
     </Link>
@@ -442,7 +447,10 @@ function RepDoneForm(props: {
   actualRef: Ref<HTMLInputElement>;
   onDone: () => void;
 }) {
-  const roll = useRolls().data?.find((r) => r.id === props.task.rollId);
+  const rolls = useRolls();
+  // DoneForm copies its estimate once: wait for the Rolls (daytime Home hasn't read them), so it's the Roll's.
+  if (rolls.isPending) return null;
+  const roll = rolls.data?.find((r) => r.id === props.task.rollId);
   return (
     <DoneForm
       {...props}

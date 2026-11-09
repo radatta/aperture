@@ -304,6 +304,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setTaskActual: async () => {
         throw new Error('unused');
       },
+      setTaskEstimate: async () => {
+        throw new Error('unused');
+      },
       recordPlaceTokenMint: () => {
         throw new Error('unused');
       },

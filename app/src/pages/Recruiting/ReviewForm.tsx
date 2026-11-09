@@ -20,6 +20,7 @@ import {
   useSetSittingReview,
 } from '../../data/hooks/useSittings';
 import { NotesField } from '../../modules/tasks/notes/NotesField';
+import { notesValue } from '../../modules/tasks/notes/parseNotes';
 import { Textarea } from '../../components/Textarea';
 
 const HELP: { value: HelpLevel; label: string }[] = [
@@ -37,6 +38,7 @@ const DRAFT_FAILED: Record<DraftFailReason, string> = {
   'bad-shape': 'Couldn’t draft — the answer broke the rules. Write your own.',
 };
 type DraftLine = { text: string; ticked: boolean };
+export const REVIEW_ID = 'sitting-review'; // End sitting's Mark done sends focus here
 const folded = (s: string) => s.replace(/\s+/g, ' ').trim(); // as the server counts it
 const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 
@@ -70,7 +72,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const ticked = draft.filter((d) => d.ticked && d.text.trim());
   const insightLen = folded(insight).length;
   const insightOver = insightLen > REVIEW_INSIGHT_MAX;
-  const howOver = folded(howItWent).length > REVIEW_HOW_MAX;
+  const howOver = notesValue(howItWent).length > REVIEW_HOW_MAX; // multi-line: the server keeps line breaks
 
   function addTag(raw: string) {
     const t = raw.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -135,6 +137,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       if (prepTag !== sitting.prepTarget)
         await setPrepTarget.mutateAsync({ id: sitting.id, prepTarget: prepTag });
       // The form now shows what was saved — a tag still in the box becomes a chip, so the next Save keeps it.
+      setFocusMistake(null);
       setMistakes(normal?.mistakes ?? []);
       setTags(normal?.tags ?? []);
       setDraft([]);
@@ -152,7 +155,12 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
   }
 
   return (
-    <section aria-labelledby={`${id}-h`} className="flex flex-col gap-4">
+    <section
+      id={REVIEW_ID}
+      tabIndex={-1}
+      aria-labelledby={`${id}-h`}
+      className="flex flex-col gap-4 outline-none"
+    >
       <Text as="h2" id={`${id}-h`} size="lg" weight="semibold">
         Review
       </Text>
@@ -195,6 +203,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
             <div className="min-w-0 flex-1">
               <Textarea
                 aria-label={`Mistake ${i + 1}`}
+                placeholder="What went wrong"
                 rows={1}
                 autogrow
                 ref={i === focusMistake ? focusOnMount : undefined}
@@ -265,7 +274,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
               <div key={i} className="flex items-start gap-2">
                 <input
                   type="checkbox"
-                  className="mt-3.5 shrink-0"
+                  className="mt-3 size-5 shrink-0"
                   aria-label={`Keep draft line ${i + 1}`}
                   checked={d.ticked}
                   onChange={(e) =>
@@ -341,7 +350,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
                   type="button"
                   aria-label={`Remove tag ${t}`}
                   onClick={() => removeTag(t)}
-                  className="rounded-full px-1.5 text-sm text-ink-muted hover:bg-panel-2 hover:text-ink"
+                  className="-my-1 grid size-7 place-items-center rounded-full text-sm text-ink-muted hover:bg-panel-2 hover:text-ink"
                 >
                   ×
                 </button>

@@ -1,5 +1,6 @@
 import {
   isDayKey,
+  msToMin,
   isUlid,
   problemCompanies,
   problemStatementText,
@@ -34,7 +35,7 @@ const FRESHNESS =
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 const agoSec = (ms: number | null, now: number) =>
   ms === null ? null : Math.max(0, Math.round((now - ms) / 1000));
-const minutes = (ms: number | null) => (ms === null ? null : Math.round(ms / 60_000));
+const minutes = (ms: number | null) => (ms === null ? null : msToMin(ms));
 
 const problemOf = (s: Sitting) => ({
   title: s.problemTitle,
@@ -210,7 +211,7 @@ function sittingRead(d: SittingDetail, now: number) {
             kind: e.kind,
             type: e.type,
             n: e.n,
-            minute: Math.round(e.offsetMs / 60_000),
+            minute: msToMin(e.offsetMs),
             verdict: e.verdict.verdict,
             statusMsg: e.verdict.statusMsg,
             passed: e.verdict.passed,

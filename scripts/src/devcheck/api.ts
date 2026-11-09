@@ -682,6 +682,14 @@ export function createApiClient({
         reflection === undefined ? [id, actualMin] : [id, actualMin, reflection],
       );
     },
+    async setTaskEstimate(
+      id: string,
+      estimateMin: number | null,
+      bufferMin: number | null,
+    ): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>('setTaskEstimate', [id, estimateMin, bufferMin]);
+    },
     async deleteTask(id: string): Promise<void> {
       assertLedgerTask(id);
       await call<null>('deleteTask', [id]);

@@ -160,6 +160,7 @@ describe('createApiClient', () => {
       'setSittingReviewToUnknown',
       'setTaskActual',
       'setTaskDue',
+      'setTaskEstimate',
       'startSession',
       'stopSession',
       'subscribeHarnessPush',
@@ -240,6 +241,15 @@ describe('createApiClient', () => {
     const fetch = vi.fn<FetchLike>();
     const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
     await expect(api.writes.setTaskActual('someone-elses', 10, 'x')).rejects.toThrow(
+      /LEDGER_GUARD/,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses setTaskEstimate on an id the ledger never recorded — without a request', async () => {
+    const fetch = vi.fn<FetchLike>();
+    const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+    await expect(api.writes.setTaskEstimate('someone-elses', null, null)).rejects.toThrow(
       /LEDGER_GUARD/,
     );
     expect(fetch).not.toHaveBeenCalled();

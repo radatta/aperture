@@ -30,7 +30,11 @@ const mk = (over: Partial<Sitting> = {}, summary: Partial<SittingSummary> = {}):
 
 describe('sittingOutcome', () => {
   it('names the first submit, never in red', () => {
-    expect(sittingOutcome(mk())).toEqual({ label: 'no submit yet', tone: 'muted' });
+    expect(sittingOutcome(mk({ status: 'active' }))).toEqual({
+      label: 'no submit yet',
+      tone: 'muted',
+    });
+    expect(sittingOutcome(mk())).toEqual({ label: 'no submit', tone: 'muted' }); // ended: no "yet"
     expect(sittingOutcome(mk({}, { submits: 1, firstSubmit: v('accepted') }))).toEqual({
       label: 'first submit accepted',
       tone: 'teal',

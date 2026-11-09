@@ -233,6 +233,36 @@ describe('the review', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Prep target').value).toBe('Stripe');
   });
 
+  it('a later Save never pulls focus into a mistake field', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    await open(api);
+    await user.click(await screen.findByRole('button', { name: 'Add a mistake' }));
+    await user.click(screen.getByRole('button', { name: 'Save review' })); // the blank line is dropped
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect(screen.queryByLabelText('Mistake 1')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    await user.click(await screen.findByRole('button', { name: 'Use all' }));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await screen.findByLabelText('Mistake 1');
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Mistake 1'));
+  });
+
+  it('How it went counts line breaks as the server does: many short lines still save', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const save = vi.spyOn(api, 'setSittingReview');
+    await open(api);
+    const how = await screen.findByLabelText('How it went');
+    // 1,802 characters as the server counts them (it keeps line breaks and spaces) — over 1,000 — though folding
+    // whitespace would make it 902. The form must count the server's way and refuse.
+    await user.click(how);
+    await user.paste(Array(301).fill('ab').join('\n   '));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/too long to save/).length).toBeGreaterThan(0);
+  });
+
   it('a draft with nothing judged yet says there’s nothing to draft', async () => {
     const user = userEvent.setup();
     const { api, sitting } = await withOpenSitting();
@@ -247,10 +277,19 @@ describe('End sitting', () => {
   it('opens the rep’s Done form on the sitting’s minutes; Cancel writes nothing, Mark done ends it', async () => {
     const user = userEvent.setup();
     const { api, sitting } = await withOpenSitting();
+    await api.setTaskEstimate(sitting.repTaskId, null, null); // the rep lost its estimate
+    // The Rolls arrive late: the form must still start on the Roll's 45, not the 30-minute fallback.
+    const listRolls = api.listRolls.bind(api);
+    vi.spyOn(api, 'listRolls').mockImplementation(
+      () => new Promise((r) => setTimeout(() => r(listRolls()), 50)),
+    );
     renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
     expect(await screen.findByText(/In progress/)).toBeTruthy();
-    await user.click(await screen.findByRole('button', { name: 'End sitting' }));
+    const end = await screen.findByRole('button', { name: 'End sitting' });
+    await waitFor(() => expect(end.getAttribute('aria-disabled')).toBeNull());
+    await user.click(end);
     expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('1');
+    expect(screen.getByLabelText<HTMLInputElement>('Estimate in hindsight').value).toBe('45');
     // Focus moves into the form (not Actual — no phone keyboard), and Cancel hands it back.
     expect(document.activeElement?.contains(screen.getByLabelText('Actual (min)'))).toBe(true);
     expect(document.activeElement).not.toBe(screen.getByLabelText('Actual (min)'));
@@ -264,5 +303,10 @@ describe('End sitting', () => {
       expect((await api.getSitting(sitting.id)).sitting.status).toBe('done'),
     );
     await waitFor(() => expect(screen.queryByRole('button', { name: 'End sitting' })).toBeNull());
+    // Focus goes on to the review, not the page body.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Review' })),
+    );
+    expect(screen.getByText('No runs or submits.')).toBeTruthy(); // ended: no "yet"
   });
 });
