@@ -140,7 +140,8 @@ const retriedSteps = (r: SimResult | undefined) =>
   (r?.steps ?? []).filter((s) => /retyped|deleted .*more/.test(s.note ?? '')).map((s) => s.i);
 
 // Exit 0: every round ran clean; 1: a round failed or left no readable count (its drops still count up to the
-// failure, and the table says so); 2: a bad --tag; 3: the Mac couldn't run one (what ran before it is still printed).
+// failure, and the table says so); 2: a bad --tag; 3: the sim couldn't go on in a round (the rest still run) or the
+// Mac never answered (the trial stops there; what ran is still printed).
 export async function simTrial(
   d: SimDeps,
   tag: string,
@@ -152,6 +153,7 @@ export async function simTrial(
   }
   const rounds: TrialRound[] = [];
   let code = 0;
+  let stop = false;
   for (let round = 0; round < TRIAL_ROUNDS; round++) {
     const params = trialPlan(round, round === TRIAL_ROUNDS - 1);
     const bad = validateSimParams(params);
@@ -168,9 +170,12 @@ export async function simTrial(
         failure = err.message;
         code = 1;
       } else if (err instanceof IosUnavailable) {
+        // the Mac ran the round and the sim couldn't go on (a hung read): the next round starts afresh. No result
+        // at all (asleep, stalled) stops the trial.
         result = err.result;
         failure = `unavailable: ${err.message}`;
         code = 3;
+        if (!result) stop = true;
       } else throw err;
     }
     const { bad: unreadable, ...t } = parseTrial(
@@ -183,7 +188,7 @@ export async function simTrial(
       code = Math.max(code, 1);
     }
     rounds.push({ round, id: job.id, ...t, retried: retriedSteps(result), failure });
-    if (code === 3) break;
+    if (stop) break;
   }
   for (const l of trialTable(tag, rounds)) d.log(l);
   // only a clean last round shuts the sim down

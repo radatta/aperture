@@ -121,6 +121,21 @@ describe('simTrial', () => {
     expect(h.jobs).toHaveLength(TRIAL_ROUNDS);
     expect(h.logs.join('\n')).toContain('FAILED: ASSERT/TYPED at op 7 keys');
   });
+  it("a round the sim couldn't finish (a hung read) is exit 3, and the later rounds still run", async () => {
+    const h = harness((job, n) =>
+      n === 2
+        ? new IosUnavailable(
+            'SIM_UNAVAILABLE/AX_TIMEOUT',
+            'hung',
+            'v',
+            result(job, { status: 'error' }),
+          )
+        : result(job),
+    );
+    expect(await simTrial(h.d, 'idle', h.runner)).toBe(3);
+    expect(h.jobs).toHaveLength(TRIAL_ROUNDS);
+    expect(h.logs.join('\n')).toContain('FAILED: unavailable: SIM_UNAVAILABLE/AX_TIMEOUT');
+  });
   it('an unavailable Mac stops the trial at exit 3, printing what ran', async () => {
     const h = harness((job, n) =>
       n === 2 ? new IosUnavailable('MAC_UNREACHABLE', 'no pickup') : result(job),
