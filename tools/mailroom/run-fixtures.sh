@@ -186,6 +186,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     results-symlink)
       mkdir "$T/elsewhere"; rmdir "$hj/results"; ln -s "$T/elsewhere" "$hj/results"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    build-y=*) printf '%s\n' "${setup#build-y=}" >"$st/sim-build-y"; mv "$hj/staging/x" "$hj/inbox/$file" ;; # readBuild's last y
     "") mv "$hj/staging/x" "$hj/inbox/$file" ;;
     *) bad "$name" "unknown setup $setup"; continue ;;
   esac

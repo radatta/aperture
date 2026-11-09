@@ -66,11 +66,13 @@ type Role = (typeof ROLES)[number];
 interface Where {
   near?: { x: number; y: number };
   scan?: { x: number; from: number; to: number };
+  hint?: { x: number; y: number }; // with scan only: read first, then the scan as before (find/tap)
   radius?: number;
   role?: Role;
 }
 export type IosOp =
-  | { op: 'launch' | 'signIn' | 'blur' | 'readBuild' | 'shutdown' }
+  | { op: 'launch' | 'signIn' | 'blur' | 'shutdown' }
+  | { op: 'readBuild'; stay?: true } // stay: end on Settings, no trip back Home
   | { op: 'kill'; method: 'terminate' | 'switcher' | 'reboot' }
   | { op: 'nav'; tab: Tab }
   | ({ op: 'find'; label: string; as: string } & Where)
@@ -204,6 +206,17 @@ function where(o: Obj): boolean {
       return false;
   }
   if ('radius' in o && !('near' in o && int(o.radius, 10, 80))) return false;
+  if ('hint' in o) {
+    const h = o.hint;
+    if (
+      !('scan' in o) ||
+      !isObj(h) ||
+      !keysOk(h, ['x', 'y'], []) ||
+      !int(h.x, 0, SIM_W) ||
+      !int(h.y, 0, SIM_H)
+    )
+      return false;
+  }
   if ('role' in o && !(ROLES as readonly unknown[]).includes(o.role)) return false;
   return true;
 }
@@ -214,9 +227,10 @@ function opOk(o: unknown): boolean {
     case 'launch':
     case 'signIn':
     case 'blur':
-    case 'readBuild':
     case 'shutdown':
       return keysOk(o, ['op'], []);
+    case 'readBuild':
+      return keysOk(o, ['op'], ['stay']) && (!('stay' in o) || o.stay === true);
     case 'kill':
       return (
         keysOk(o, ['op', 'method'], []) &&
@@ -230,7 +244,7 @@ function opOk(o: unknown): boolean {
       );
     case 'find':
       return (
-        keysOk(o, ['op', 'label', 'as'], ['near', 'scan', 'radius', 'role']) &&
+        keysOk(o, ['op', 'label', 'as'], ['near', 'scan', 'hint', 'radius', 'role']) &&
         lbl(o.label) &&
         asName(o.as) &&
         where(o)
@@ -241,7 +255,7 @@ function opOk(o: unknown): boolean {
       );
     case 'tap':
       return (
-        keysOk(o, ['op', 'label'], ['near', 'scan', 'radius', 'role', 'as', 'closes']) &&
+        keysOk(o, ['op', 'label'], ['near', 'scan', 'hint', 'radius', 'role', 'as', 'closes']) &&
         lbl(o.label) &&
         (!('as' in o) || asName(o.as)) &&
         (!('closes' in o) || o.closes === true) &&

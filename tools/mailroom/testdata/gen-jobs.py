@@ -686,6 +686,54 @@ spass('sim: a bare shutdown resolves the device first', [{'op': 'shutdown'}], ex
       simIncludes=['simctl list devices -j', 'simctl shutdown ' + U], simExcludes=['describe-ui', 'bootstatus'])
 sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)
 
+# --- speed-ups (B–E): every fast path has its miss, and the miss is today's path ---
+NAVTOP = 'swipe --start-x 220 --start-y 250 --end-x 220 --end-y 882'  # sim_to_top's swipe, 8 a time
+NT = [L, {'op': 'nav', 'tab': 'Tasks'}]
+spass('sim: nav reads the tab where it sits and taps it, no swipes (fast)', NT, notes={'1': 'on Tasks (fast)'},
+      simCount={NAVTOP: 0, '--point 136,168': 1, 'tap -x 136 -y 168': 1})
+spass('sim: a tab off the row\'s y (the page scrolled) is the full path', NT, tape=[pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 190, 36, 20), n=1)],
+      simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1, 'tap -x 136 -y 200': 0})
+spass('sim: another tab at the spot (the row swiped) is the full path', [L, {'op': 'nav', 'tab': 'Home'}],
+      tape=[pt(38, 168, el('AXLink', 'Log', 'Log', 20, 158, 37, 20), n=1)], simCount={NAVTOP: 8, 'tap -x 38 -y 168': 1})
+spass('sim: the tab\'s label on something not a link is the full path', NT, tape=[pt(136, 168, el('AXStaticText', 'Tasks', 'Tasks', 118, 158, 36, 20), n=1)],
+      simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1})
+spass('sim: a hung fast read falls through to the full path, not AX_TIMEOUT', NT, tape=[{'m': '--point 136,168', 'rc': 124, 'n': 1}],
+      notes={'1': 'on Tasks'}, simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1})
+sfail('sim: a hung fast read, then a full path that reads and misses, is MISS', 'MISS', NT, tape=[{'m': '--point 136,168', 'rc': 124, 'n': 1}, pt(136, 168, {})],
+      simCount={NAVTOP: 8})
+sfail('sim: a fast miss and a full miss is still MISS', 'MISS', NT, tape=[pt(136, 168, {})], simCount={NAVTOP: 8}, simExcludes=['tap -x 136'])
+spass('sim: Settings has no fast read (past the row\'s edge until swiped)', [L, {'op': 'nav', 'tab': 'Settings'}], simCount={NAVTOP: 8, '--point 395,168': 1})
+STAMP = lambda b: el('AXStaticText', '', f'Build {b}', 20, 852, 71, 17)
+spass('sim: readBuild goes back Home by default', [L, {'op': 'readBuild'}], simCount={'tap -x 395 -y 168': 1, 'tap -x 38 -y 168': 1})
+spass('sim: readBuild with stay ends on Settings', [L, {'op': 'readBuild', 'stay': True}], notes={'1': 'running aaaaaaa; stayed on Settings'},
+      simCount={'tap -x 395 -y 168': 1, 'tap -x 38 -y 168': 0})
+spass('sim: expectBuild\'s relaunch keeps readBuild\'s stay', [L, {'op': 'readBuild', 'stay': True}, {'op': 'expectBuild'}],
+      tape=[pt(57, 935, STAMP('bbbbbbb'), n=1)], expect={'buildsSeen': ['bbbbbbb', 'aaaaaaa']}, simCount={'tap -x 395 -y 168': 2, 'tap -x 38 -y 168': 0})
+spass('sim: readBuild reads the stamp first where it was last found', [L, {'op': 'readBuild'}, {'op': 'readBuild'}],
+      tape=[pt(57, 935, {}), pt(57, 920, {}), pt(57, 905, STAMP('aaaaaaa'))], simCount={'--point 57,935': 1, '--point 57,920': 1, '--point 57,905': 2})
+spass('sim: a stamp moved from its last y is found by the full scan', [L, {'op': 'readBuild'}], setup='build-y=905',
+      tape=[pt(57, 905, {}), pt(57, 935, {}), pt(57, 920, STAMP('aaaaaaa'))], simIncludes=['--point 57,905', '--point 57,935', '--point 57,920'],
+      simCount={'--point 57,905': 1}, expect={'buildsSeen': ['aaaaaaa']})
+spass('sim: a stored y that isn\'t one of the stamp\'s is ignored', [L, {'op': 'readBuild'}], setup='build-y=999', simExcludes=['--point 57,999'],
+      simCount={'--point 57,935': 1})
+sfail('sim: a stored y and no stamp anywhere is still MISS after two visits', 'MISS', [L, {'op': 'readBuild'}], setup='build-y=905',
+      tape=[{'m': '--point 57,', 'out': {}}], simCount={'tap -x 395 -y 168': 2, '--point 57,905': 2})
+REFL = el('AXTextArea', 'Reflection', '', 53, 283, 334, 67)
+HF = {'op': 'find', 'label': 'Reflection', 'scan': {'x': 200, 'from': 150, 'to': 720}, 'hint': {'x': 200, 'y': 316}, 'as': 'box'}
+spass('sim: a scan\'s hint is read first, and a hit there ends it', [L, HF], tape=[pt(200, 316, REFL)], simCount={'--point 200,316': 1, '--point 200,150': 0})
+spass('sim: a hint that misses scans as before', [L, HF], tape=[pt(200, 316, {}), pt(200, 240, {**REFL, 'frame': {'x': 53, 'y': 210, 'width': 334, 'height': 67}})],
+      simIncludes=['--point 200,316', '--point 200,150', '--point 200,180', '--point 200,210', '--point 200,240'], simExcludes=['--point 200,270'])
+sfail('sim: a hint miss and a scan miss is still MISS', 'MISS', [L, HF], simCount={'--point 200,316': 1, '--point 200,720': 1})
+spass('sim: a tap with a hint taps what the hint found', [L, {'op': 'tap', 'label': 'Cancel', 'scan': {'x': 190, 'from': 150, 'to': 720}, 'hint': {'x': 190, 'y': 378}, 'role': 'AXButton'}],
+      tape=[pt(190, 378, el('AXButton', 'Cancel', '', 160, 360, 60, 36))], simIncludes=['tap -x 190 -y 378'], simCount={'--point 190,150': 0})
+srej('sim: a hint beside near is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'hint': {'x': 200, 'y': 200}}])
+srej('sim: a hint on absent is BAD_OP', 'BAD_OP', [L, {'op': 'absent', 'label': 'Home', 'scan': {'x': 200, 'from': 100, 'to': 200}, 'hint': {'x': 200, 'y': 150}}])
+srej('sim: a hint off the screen is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 957}}])
+srej('sim: a hint with an extra key is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 316, 'r': 10}}])
+srej('sim: a hint that isn\'t whole is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200.5, 'y': 316}}])
+srej('sim: readBuild stay false is BAD_OP', 'BAD_OP', [L, {'op': 'readBuild', 'stay': False}])
+srej('sim: readBuild with another key is BAD_OP', 'BAD_OP', [L, {'op': 'readBuild', 'home': True}])
+
 with open(out, 'w') as f:
     f.write(json.dumps({'base': base, 'simBase': simbase}) + '\n')
     f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')
