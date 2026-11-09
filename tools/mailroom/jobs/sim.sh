@@ -329,6 +329,47 @@ sim_shutdown() {
   SIM_STATE=Shutdown
 }
 sim_pref() { sx 30 spawn "$SIM_U" defaults read "$SIM_KB" "$1" 2>/dev/null | tr -d '[:space:]'; }
+# Everything that changes what a key does or when it lands is pinned (Rahul, 2026-11-08: "as deterministic as possible";
+# job …233129Z…-done-form-80c5 typed "cdcgac" three times and kept "Cdc"): autocorrect, auto-capitalisation, spell check,
+# predictions and the suggestion bar, inline completion, the "." shortcut, smart quotes and dashes, slide to type, the
+# hardware keyboard's own three, and the slide-to-type, gesture and inline-completion tips marked seen. Keys from
+# pest-plugin-simulator PR 32 (iOS 26.5) and WDA; seen to reach the web app on 2026-11-08 (typed text no longer capitalised,
+# no suggestion bar). IOS-CHECK.md → Keyboard lists what can't be pinned.
+SIM_KB_OFF="KeyboardAutocorrection KeyboardAutocapitalization KeyboardCheckSpelling KeyboardPrediction KeyboardShowPredictionBar KeyboardInlineCompletion KeyboardPeriodShortcut SmartQuotesEnabled SmartDashesEnabled KeyboardContinuousPathEnabled HWKeyboardAutocorrection HWKeyboardAutocapitalization HWKeyboardPeriodShortcut"
+SIM_KB_ON="DidShowContinuousPathIntroduction DidShowGestureKeyboardIntroduction DidShowInlineCompletionEducationTip"
+
+# The pinned keys a `defaults export` plist ($1) doesn't hold at their value, space-separated ("" when all are pinned).
+sim_kb_unpinned() {
+  local tags k v want out=""
+  tags="$(tr -d ' \t\r\n' <"$1" | awk '{gsub(/></, ">\n<"); print}')"
+  for k in $SIM_KB_OFF $SIM_KB_ON; do
+    v="$(printf '%s\n' "$tags" | awk -v k="<key>$k</key>" 'f { print; exit } $0 == k { f = 1 }')"
+    case " $SIM_KB_ON " in *" $k "*) want=1 ;; *) want=0 ;; esac
+    case "$want:$v" in 0:"<false/>" | 0:"<integer>0</integer>" | 1:"<true/>" | 1:"<integer>1</integer>") ;; *) out="$out $k" ;; esac
+  done
+  printf '%s' "${out# }"
+}
+
+# A precondition, read back every readiness check: anything not pinned is written (all of it), the web app is quit so
+# its next launch reads them, and a second read must find them pinned, else KEYBOARD_SETUP (needs you, loudly).
+sim_kb_pin() {
+  local bad k
+  SIM_KB_SET=""
+  sx 30 spawn "$SIM_U" defaults export "$SIM_KB" - >"$SIM_P.kb" 2>/dev/null || : >"$SIM_P.kb"
+  bad="$(sim_kb_unpinned "$SIM_P.kb")"
+  [ -n "$bad" ] || return 0
+  for k in $SIM_KB_OFF; do sx 30 spawn "$SIM_U" defaults write "$SIM_KB" "$k" -bool false >/dev/null 2>&1 || true; done
+  for k in $SIM_KB_ON; do sx 30 spawn "$SIM_U" defaults write "$SIM_KB" "$k" -bool true >/dev/null 2>&1 || true; done
+  sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || true
+  SIM_KB_WROTE=1
+  sx 30 spawn "$SIM_U" defaults export "$SIM_KB" - >"$SIM_P.kb" 2>/dev/null || : >"$SIM_P.kb"
+  k="$(sim_kb_unpinned "$SIM_P.kb")"
+  if [ -n "$k" ]; then
+    sim_err SIM_UNAVAILABLE KEYBOARD_SETUP "keyboard prefs didn't take: $k ($SIM_XCODE) - re-check IOS-CHECK.md Keyboard after an Xcode or iOS update"
+    return 1
+  fi
+  SIM_KB_SET="$(printf '%s' "$bad" | wc -w | tr -d ' ')"
+}
 # The soft keyboard (IOS-CHECK.md → Keyboard): both prefs 0, applied only at boot; HID typing flips them back to 1.
 sim_arm() {
   sx 30 spawn "$SIM_U" defaults write "$SIM_KB" HardwareKeyboardLastSeen -bool false >/dev/null 2>&1 \
@@ -366,6 +407,7 @@ sim_ready() {
   if [ "$(sim_pref HardwareKeyboardLastSeen)" != 0 ] || [ "$(sim_pref AutomaticMinimizationEnabled)" != 0 ]; then
     sim_arm || return 1
   fi
+  sim_kb_pin || return 1
   sim_tree >/dev/null || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
   SIM_READY=1
 }
@@ -376,7 +418,7 @@ sim_lazy_ready() {
   case "$1" in launch | shutdown | wait | kill) return 0 ;; esac
   [ -z "$SIM_READY" ] || return 0
   sim_ready || return 1
-  [ "$SIM_BOOTED" = warm ] || { sim_err SIM_UNAVAILABLE NOT_LAUNCHED "the sim was off, or rebooted to re-arm the keyboard; this plan needs a launch first"; return 1; }
+  [ "$SIM_BOOTED" = warm ] && [ -z "$SIM_KB_WROTE" ] || { sim_err SIM_UNAVAILABLE NOT_LAUNCHED "the sim was off, rebooted to re-arm the keyboard, or its keyboard prefs were just pinned (the app quit); this plan needs a launch first"; return 1; }
 }
 
 # The app's landmark: Home's capture bar (signed in) or the sign-in card. Echoes already | false | "" (neither).
@@ -469,6 +511,7 @@ sim_op_launch() {
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
       [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
       [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
+      [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; keyboard prefs pinned ($SIM_KB_SET were off)"
       return 0
     fi
     i=$((i + 1))
@@ -1195,7 +1238,7 @@ run_sim() {
   sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
   SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN=""
-  SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0
+  SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0 SIM_KB_WROTE="" SIM_KB_SET=""
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"

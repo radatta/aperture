@@ -197,8 +197,17 @@ CAPTURE = el('AXTextArea', 'Capture log', 'What happened?', 25, 877, 346, 36)
 KEYS = {'q': (26, 688), 'w': (69, 688), 'e': (113, 688), 'r': (156, 688), 't': (199, 688), 'y': (243, 688), 'u': (286, 688), 'i': (329, 688), 'o': (373, 688), 'p': (416, 688),
         'a': (48, 744), 's': (91, 744), 'd': (134, 744), 'f': (178, 744), 'g': (221, 744), 'h': (264, 744), 'j': (308, 744), 'k': (351, 744), 'l': (394, 744),
         'z': (91, 800), 'x': (134, 800), 'c': (178, 800), 'v': (221, 800), 'b': (264, 800), 'n': (308, 800), 'm': (351, 800), 'delete': (409, 800), 'space': (221, 856)}
+# sim.sh's pinned keyboard prefs (SIM_KB_OFF / SIM_KB_ON) as `defaults export` prints them, on one line (the tape is a line).
+KB_OFF = ['KeyboardAutocorrection', 'KeyboardAutocapitalization', 'KeyboardCheckSpelling', 'KeyboardPrediction', 'KeyboardShowPredictionBar',
+          'KeyboardInlineCompletion', 'KeyboardPeriodShortcut', 'SmartQuotesEnabled', 'SmartDashesEnabled', 'KeyboardContinuousPathEnabled',
+          'HWKeyboardAutocorrection', 'HWKeyboardAutocapitalization', 'HWKeyboardPeriodShortcut']
+KB_ON = ['DidShowContinuousPathIntroduction', 'DidShowGestureKeyboardIntroduction', 'DidShowInlineCompletionEducationTip']
+def kbx(over=None, drop=()):
+    v = {**{k: '<false/>' for k in KB_OFF}, **{k: '<true/>' for k in KB_ON}, 'HardwareKeyboardLastSeen': '<integer>0</integer>', **(over or {})}
+    return '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' + ''.join(f'<key>{k}</key>{x}' for k, x in v.items() if k not in drop) + '</dict></plist>'
 deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version', 'out': 'Xcode 27.2'},
             {'m': 'xcrun simctl list devices -j', 'out': dev()}, {'m': 'defaults read com.apple.keyboard.preferences', 'out': '0'},
+            {'m': 'defaults export com.apple.keyboard.preferences', 'out': kbx()},
             {'m': 'pgrep -x DeviceHub'}, {'m': 'Web.app/Web', 'rc': 1},  # the web app: not running unless a case says so
             pt(220, 895, CAPTURE), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38)),
             pt(57, 935, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
@@ -601,6 +610,22 @@ serr('sim: a reboot whose shutdown fails is SHUTDOWN_FAILED, no boot', 'SHUTDOWN
      tape=[{'m': 'simctl shutdown', 'rc': 1}], simExcludes=['bootstatus'])
 
 # --- recipes ---
+KBX = 'defaults export com.apple.keyboard.preferences'
+spass('sim: keyboard prefs already pinned are read once, never written', [L], simCount={KBX: 1}, simExcludes=['defaults write', 'terminate'])
+spass('sim: a keyboard pref missing or on is pinned (all of them), the app quit, read back, and the launch note says so', [L],
+      tape=[{'m': KBX, 'out': kbx({'KeyboardAutocapitalization': '<true/>'}, drop=['KeyboardPrediction']), 'n': 1}],
+      notes={'0': 'keyboard prefs pinned (2 were off)'}, simCount={KBX: 2, 'defaults write com.apple.keyboard.preferences': 16},
+      simIncludes=['defaults write com.apple.keyboard.preferences KeyboardAutocorrection -bool false',
+                   'defaults write com.apple.keyboard.preferences DidShowGestureKeyboardIntroduction -bool true', 'simctl terminate'])
+spass('sim: a tip not marked seen is pinned too', [L], tape=[{'m': KBX, 'out': kbx({'DidShowGestureKeyboardIntroduction': '<false/>'}), 'n': 1}],
+      notes={'0': 'keyboard prefs pinned (1 were off)'})
+spass('sim: keyboard prefs stored as integers count as pinned', [L],
+      tape=[{'m': KBX, 'out': kbx({**{k: '<integer>0</integer>' for k in KB_OFF}, **{k: '<integer>1</integer>' for k in KB_ON}})}], simExcludes=['defaults write'])
+serr('sim: keyboard prefs that don\'t take are KEYBOARD_SETUP, naming them', 'KEYBOARD_SETUP', [L], tape=[{'m': KBX, 'out': kbx(drop=['KeyboardPrediction'])}],
+     notes={'0': "keyboard prefs didn't take: KeyboardPrediction"}, simExcludes=['tap -x 371'])
+serr('sim: an unreadable keyboard domain is pinned, then KEYBOARD_SETUP if it stays unreadable', 'KEYBOARD_SETUP', [L], tape=[{'m': KBX, 'rc': 1}])
+serr('sim: a plan without launch after the prefs were pinned is NOT_LAUNCHED', 'NOT_LAUNCHED', [F('Capture log', 220, 895, 'bar')],
+     tape=[{'m': KBX, 'out': kbx(drop=['KeyboardPrediction']), 'n': 1}])
 spass('sim: keyboard prefs at 1 are re-armed with a reboot', [L], tape=[{'m': 'defaults read com.apple.keyboard.preferences', 'out': '1', 'n': 1}],
       expect={'booted': 'rebooted'}, simIncludes=['defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false',
                                                   'defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false', 'simctl shutdown', 'bootstatus'])
