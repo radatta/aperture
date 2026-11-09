@@ -262,9 +262,13 @@ export function normalizeSittingEvents(input: SittingEventsInput): {
 // --- Reading LeetCode's payloads (defensive: the shapes are LeetCode's, verified 2026-11-08) ---
 const obj = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+// A number DynamoDB can store as given (exact, and 0 or at least 1e-130 in magnitude), else null — strings too,
+// so a hostile "1e300" in a payload never reaches a head or live row.
 const num = (v: unknown): number | null => {
   const n = typeof v === 'string' ? Number(v) : v;
-  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  if (typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER)
+    return null;
+  return n === 0 || Math.abs(n) >= 1e-130 ? n : null;
 };
 export function snapshotCode(payload: unknown): string | null {
   const code = obj(payload)?.code;
@@ -537,7 +541,7 @@ export type SittingStartPlan = (
 ) & {
   // Open sittings to end first: past their window, or their rep finished (Done → done, else abandoned),
   // or — for a Start on another problem — a half-made one whose rep was never created.
-  ends: { sitting: Sitting; to: 'done' | 'abandoned' }[];
+  ends: { sitting: Sitting; to: 'done' | 'abandoned'; at: number }[];
 };
 // `sittings` and `tasks` are the alive rows. Stale open sittings end first (they'd otherwise block every
 // Start). Then a repeat Start (same clientSittingId), or one on the problem a still-open sitting is on,
@@ -555,9 +559,12 @@ export function planSittingStart(
   for (const x of sittings) {
     if (x.status !== 'active') continue;
     const rep = repOf(x);
-    if (rep?.status === 'done') ends.push({ sitting: x, to: 'done' });
-    else if (rep?.status === 'cancelled' || now - x.startedAt > SITTING_INGEST_WINDOW_MS)
-      ends.push({ sitting: x, to: 'abandoned' });
+    // A rep finished some other way ends its sitting when it finished, so its minutes don't stretch to now.
+    if (rep?.status === 'done') ends.push({ sitting: x, to: 'done', at: rep.completedAt ?? now });
+    else if (rep?.status === 'cancelled')
+      ends.push({ sitting: x, to: 'abandoned', at: rep.cancelledAt ?? now });
+    else if (now - x.startedAt > SITTING_INGEST_WINDOW_MS)
+      ends.push({ sitting: x, to: 'abandoned', at: now });
   }
   const ended = new Set(ends.map((e) => e.sitting.id));
   const open = sittings.filter((x) => x.status === 'active' && !ended.has(x.id));
@@ -565,13 +572,13 @@ export function planSittingStart(
   const same = sittings.find((x) => x.clientSittingId === input.clientSittingId);
   if (same) {
     const e = finish(same);
-    return { kind: 'resume', sitting: e ? endedSitting(same, e.to, now) : same, ends };
+    return { kind: 'resume', sitting: e ? endedSitting(same, e.to, e.at) : same, ends };
   }
   const onThis = open.find((x) => x.problemSlug === input.problemSlug);
   if (onThis) return { kind: 'resume', sitting: onThis, ends };
   for (const x of open)
     if (repOf(x) || now - x.startedAt < CLAIM_IN_FLIGHT_MS) throw new Error(SITTING_ACTIVE_ERROR);
-    else ends.push({ sitting: x, to: 'abandoned' }); // a Start that died before making its rep
+    else ends.push({ sitting: x, to: 'abandoned', at: now }); // a Start that died before making its rep
   // No sitting is open past this point, so the roll's open rep is free — one left by a sitting that ran out
   // its window is reused (one open rep per roll).
   const rep = findOpenRollTask(tasks, rollId);

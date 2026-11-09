@@ -64,11 +64,13 @@ const clone = <T>(v: T): T => structuredClone(v);
 
 // Stateful in-memory single table. Models exactly the operations above with real begins_with + GSI
 // semantics, so the same contract suite that runs against the stub runs against the Lambda over this.
-// What the real marshaller refuses, refused here too, so a test can't pass on an item DynamoDB would reject
+// What the real marshaller refuses — non-finite and unsafe numbers — refused here too, so a test can't pass on an item DynamoDB would reject
 // (a NaN `updatedAt` once broke every sitting delete on dev while every in-memory test passed).
 function assertMarshallable(v: unknown, path = 'item'): void {
   if (typeof v === 'number' && !Number.isFinite(v))
     throw new Error(`Special numeric value ${v} is not allowed (${path})`);
+  if (typeof v === 'number' && Math.abs(v) > Number.MAX_SAFE_INTEGER)
+    throw new Error(`Number ${v} is greater than Number.MAX_SAFE_INTEGER (${path})`);
   if (Array.isArray(v)) v.forEach((x, i) => assertMarshallable(x, `${path}[${i}]`));
   else if (v && typeof v === 'object')
     for (const [k, x] of Object.entries(v as Record<string, unknown>))

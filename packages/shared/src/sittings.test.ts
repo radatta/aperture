@@ -265,8 +265,11 @@ describe('planSittingStart', () => {
     expect(() => plan([open({})], [rep('t1', 'in_progress')])).toThrow(SITTING_ACTIVE_ERROR);
   });
   it('ends an open sitting whose rep finished, then plans as if it were gone', () => {
-    const p = plan([open({})], [rep('t1', 'done')]);
-    expect(p.ends).toEqual([{ sitting: expect.objectContaining({ id: 's1' }), to: 'done' }]);
+    const p = plan([open({})], [{ ...rep('t1', 'done'), completedAt: 1234 }]);
+    // Ended when its rep finished, not now — its minutes don't stretch to the next Start.
+    expect(p.ends).toEqual([
+      { sitting: expect.objectContaining({ id: 's1' }), to: 'done', at: 1234 },
+    ]);
     expect(p.kind).toBe('spawn');
   });
   it('abandons one past its window and reuses its still-open rep', () => {

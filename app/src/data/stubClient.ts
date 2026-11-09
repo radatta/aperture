@@ -774,7 +774,7 @@ class StubClient implements ApiClient {
     if (!roll?.active) throw new Error(LC_ROLL_UNLINKED_ERROR); // archived reads as unlinked
     const sittings = this.alive(this.store.sittings);
     const plan = planSittingStart(n, sittings, this.alive(this.store.tasks), roll.id, now);
-    for (const e of plan.ends) this.endSitting(e.sitting.id, e.to);
+    for (const e of plan.ends) this.endSitting(e.sitting.id, e.to, e.at);
     if (plan.kind === 'resume') {
       const shaped = await this.resumeShape(plan.sitting, roll);
       this.keepProblem(n, false);
@@ -825,14 +825,14 @@ class StubClient implements ApiClient {
     if (s.status !== 'active') return s;
     const roll =
       s.rollId === linked.id ? linked : (this.find(this.store.rolls, s.rollId) ?? linked);
-    if (s.shapedAt == null) return this.finishShaping(s, roll);
+    if (s.shapedAt === null) return this.finishShaping(s, roll); // undefined = a row from before: shaped
     await this.shapeRep(s, roll, false);
     return s;
   }
   private async finishShaping(s: Sitting, roll: Roll): Promise<Sitting> {
     await this.shapeRep(s, roll, true);
     const cur = this.mustFind(this.store.sittings, s.id);
-    return cur.shapedAt == null
+    return cur.shapedAt === null
       ? this.writes.patch(this.store.sittings, s.id, { shapedAt: this.now() })
       : cur;
   }
@@ -1039,11 +1039,10 @@ class StubClient implements ApiClient {
       if (x.repTaskId === task.id && x.status === 'active')
         this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned');
   }
-  private endSitting(id: string, to: 'done' | 'abandoned'): void {
+  private endSitting(id: string, to: 'done' | 'abandoned', at = this.now()): void {
     this.refoldHead(id);
     const x = this.mustFind(this.store.sittings, id);
-    if (x.status === 'active')
-      this.writes.put(this.store.sittings, endedSitting(x, to, this.now()));
+    if (x.status === 'active') this.writes.put(this.store.sittings, endedSitting(x, to, at));
     this.releaseStartGate(id);
   }
   private releaseStartGate(id: string): void {

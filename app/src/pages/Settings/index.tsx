@@ -878,7 +878,10 @@ function LeetcodeSection() {
             : active.some((r) => r.id === linked)
               ? 'The extension’s Start opens a sitting as this Roll’s rep and starts it; Done on the rep ends the sitting.'
               : 'With no Roll, the extension’s Start is refused — pick the one a sitting is a rep of.'}
-          {active.length === 0 && !rollsFailed && ' Add a Roll on the Rolls page first.'}
+          {active.length === 0 &&
+            !rollsFailed &&
+            !rollsQ.isPending &&
+            ' Add a Roll on the Rolls page first.'}
         </Text>
         {update.isError && (
           <p role="alert" className="text-xs text-danger">

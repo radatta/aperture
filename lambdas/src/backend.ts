@@ -711,7 +711,7 @@ export class BackendClient implements ApiClient {
       roll.id,
       now,
     );
-    for (const e of plan.ends) await this.endSitting(e.sitting.id, e.to, now);
+    for (const e of plan.ends) await this.endSitting(e.sitting.id, e.to, e.at);
     if (plan.kind === 'resume') {
       const shaped = await this.resumeShape(plan.sitting, roll);
       await this.keepProblem(n, false);
@@ -772,7 +772,7 @@ export class BackendClient implements ApiClient {
   private async resumeShape(s: Sitting, linked: Roll): Promise<Sitting> {
     if (s.status !== 'active') return s;
     const roll = s.rollId === linked.id ? linked : ((await this.repo.getRoll(s.rollId)) ?? linked);
-    if (s.shapedAt == null) return this.finishShaping(s, roll);
+    if (s.shapedAt === null) return this.finishShaping(s, roll); // undefined = a row from before: shaped
     await this.shapeRep(s, roll, false);
     return s;
   }
@@ -782,7 +782,7 @@ export class BackendClient implements ApiClient {
     return this.repo.casUpdate(
       this.repo.sittingShape(s.id),
       s.id,
-      (cur) => (cur.shapedAt == null ? { ...cur, shapedAt: at } : null),
+      (cur) => (cur.shapedAt === null ? { ...cur, shapedAt: at } : null),
       at,
       { consistent: true },
     );

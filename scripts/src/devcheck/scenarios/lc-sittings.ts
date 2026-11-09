@@ -227,7 +227,7 @@ export const lcSittings: Scenario = {
       id: 'half-made',
       entry: 'api',
       kind: 'edge',
-      what: 'A Start that died half-way finishes on its retry and never blocks another problem',
+      what: 'A Start that died half-way finishes on its retry, and blocks another problem only while it could still be in flight',
       offDev: {
         file: 'lambdas/src/backend.sittings.test.ts',
         test: 'a half-made Start finishes on its retry, and never blocks another problem',
@@ -244,7 +244,7 @@ export const lcSittings: Scenario = {
       id: 'delete-cascade',
       entry: 'api',
       kind: 'edge',
-      what: 'Deleting a rep removes its sitting — runs, submits and all — and frees the gate',
+      what: 'Deleting a rep removes its sitting — runs, submits and all',
     },
     {
       id: 'attempt-cap',
