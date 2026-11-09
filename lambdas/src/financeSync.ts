@@ -11,6 +11,7 @@ import type { FinanceSyncEvent, ItemSyncReport } from './finance/sync';
 import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
 import { createLivePlaid } from './plaid/livePlaid';
+console.log('caps-probe: temporary, reverted before the PR');
 
 const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 const plaid = createLivePlaid({

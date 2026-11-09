@@ -40,6 +40,7 @@ import { liveInvoker } from './finance/liveInvoker';
 import { createLiveAnthropic } from './anthropic/liveAnthropic';
 import { createPublicKeyReader } from './push/publicKey';
 import type { PublicKeyReader } from './push/publicKey';
+console.log('caps-probe: temporary, reverted before the PR');
 
 export const runtime = `${APERTURE}-lambda` as const;
 

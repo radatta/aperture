@@ -23,6 +23,7 @@ import { createLiveAnthropic } from '../anthropic/liveAnthropic';
 import { handleMcpMessage } from './protocol';
 import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
+console.log('caps-probe: temporary, reverted before the PR');
 
 export const runtime = `${APERTURE}-mcp` as const;
 
