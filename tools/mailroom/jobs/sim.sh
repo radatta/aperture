@@ -773,17 +773,22 @@ sim_front() {
 # swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
 # is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
 sim_kill_switcher() {
-  local try sx sy ex ey bx by e why="" sawcard=""
+  local try sx sy ex ey bx by e why="" sawcard="" inswitcher=""
   read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
   read -r bx by <<<"$SIM_PT_BACKGROUND"
   for try in 1 2; do
-    ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
-      || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-    sim_front || return 1
-    if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then
-      why="$why; the switcher didn't open (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
-      continue
+    # After a swipe that left the app running the switcher is still up: pressing home there reopens the app (relaunch
+    # job …011904Z… run 2026-11-09T01-14-43), so the card is read and swiped again without pressing.
+    if [ -z "$inswitcher" ]; then
+      ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
+        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+      sim_front || return 1
+      if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then
+        why="$why; the switcher didn't open (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+        continue
+      fi
     fi
+    inswitcher=""
     # Only Aperture's own card is swiped (the switcher also holds Safari's): it reads AXGenericElement "Aperture".
     rm -f "$SIM_P.unread"
     e="$(sim_point "$sx" "$sy")" || return 1
@@ -812,7 +817,16 @@ sim_kill_switcher() {
       return 0
     fi
     why="$why; still running after the swipe"
+    inswitcher=1
   done
+  # Still in the switcher (the card read as Aperture's, then a swipe left it running): leave it by its background.
+  # Swiped and still running is the gesture not killing (2 of 2 runs on 2026-11-08, iOS 27.0), not a dropped input:
+  # needs you (Rahul, option a), never a pass, until the swipe is re-trialled.
+  if [ -n "$inswitcher" ]; then
+    ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
+    sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app: re-trial the gesture (IOS-CHECK.md -> Failures)$why"
+    return 1
+  fi
   if [ -z "$sawcard" ] && [ "${why#*no Aperture card}" != "$why" ]; then
     sim_fail SWITCHER_FAILED "no Aperture card in the app switcher in two tries$why: was the app running? Rerun from a launch"
     return 1
