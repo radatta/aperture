@@ -14,7 +14,7 @@ import {
 } from './history.ts';
 import { layout, type PanelId, type Rect, type Wants } from './layout.ts';
 import { ttlProof } from './ledger.ts';
-import { RANGE_SEC, type FeedItem, type Range, type TowerState } from './model.ts';
+import { RANGE_SEC, type FeedItem, type Lock, type Range, type TowerState } from './model.ts';
 import {
   queueAgeTone,
   type Lane,
@@ -75,29 +75,37 @@ function nextLane(s: TowerState): Lane | null {
   return s.queue.data?.devQueue.find((l) => l.state === 'next') ?? null;
 }
 
-export function header(s: TowerState, w: number): string[] {
-  const badge = paint(' TOWER ', { fg: NORD.bg, bg: NORD.accent, bold: true });
+// One slot's lock: `dev lock …` for slot A (unchanged since before slot B), `devb …` for slot B.
+function lockText(L: Lock | null, name: string, now: number): string {
   let lock: string;
-  const L = s.lock;
-  if (!L) lock = c(NORD.dim, 'dev lock: no cache yet');
-  else if (!L.branch) lock = c(NORD.green, 'dev lock free', true);
+  if (!L) lock = c(NORD.dim, `${name}: no cache yet`);
+  else if (!L.branch) lock = c(NORD.green, `${name} free`, true);
   else {
-    const left = L.expiresAt !== null ? L.expiresAt - s.now : null;
+    const left = L.expiresAt !== null ? L.expiresAt - now : null;
     const cd =
       left === null
         ? ''
         : left <= 0
           ? c(NORD.red, ' EXPIRED', true)
-          : c(left < 5 * 60000 ? NORD.red : NORD.amber, ` ${countdown(L.expiresAt!, s.now)} left`);
+          : c(left < 5 * 60000 ? NORD.red : NORD.amber, ` ${countdown(L.expiresAt!, now)} left`);
     lock =
-      c(NORD.amber, 'dev lock ') +
+      c(NORD.amber, `${name} `) +
       c(NORD.bright, L.branch, true) +
       (L.session ? c(NORD.frost, ` (${L.session})`) : '') +
       (L.expiresAt !== null ? c(NORD.dim, ` until ${hhmm(L.expiresAt)}`) : '') +
       cd;
   }
-  if (L?.asOf && s.now - L.asOf > 5 * 60000)
+  if (L?.asOf && now - L.asOf > 5 * 60000)
     lock += c(NORD.dim, ` (as of ${hhmm(L.asOf)}${L.failed ? ', refresh failed' : ''})`);
+  return lock;
+}
+
+export function header(s: TowerState, w: number): string[] {
+  const badge = paint(' TOWER ', { fg: NORD.bg, bg: NORD.accent, bold: true });
+  const lock = lockText(s.lock, 'dev lock', s.now);
+  // slot B last, so a narrow tower cuts it before `next`; its cache appears with devlock.sh's first two-slot
+  // refresh, and until then the header is slot A's alone
+  const lockB = s.lockB ? c(NORD.dim, ' · ') + lockText(s.lockB, 'devb', s.now) : '';
   const nx = nextLane(s);
   const next = nx
     ? c(NORD.dim, '   next ') +
@@ -105,7 +113,7 @@ export function header(s: TowerState, w: number): string[] {
       (nx.session ? c(NORD.dim, ` (${nx.session})`) : '')
     : '';
   const line1 = spread(
-    `${badge} ${lock}${next}`,
+    `${badge} ${lock}${next}${lockB}`,
     c(NORD.dim, w >= 140 ? `${hhmmss(s.now)}  q quit` : hhmm(s.now)),
     w,
   );
@@ -186,7 +194,8 @@ export function devQueue(s: TowerState, r: Rect): string[] {
         tail = c(NORD.amber, `  on ${l.waitingOn}`);
       if (l.note) tail += c(NORD.dim, `  ${l.note}`);
       const who = l.session && l.session !== l.branch ? c(NORD.dim, ` ${l.session}`) : '';
-      body.push(`${LANE_BADGE[l.state]} ${c(NORD.bright, l.branch)}${pr}${who}${tail}`);
+      const at = l.state === 'on-dev' && l.slot !== 'dev' ? c(NORD.green, `@${l.slot}`) : ''; // slot A unmarked
+      body.push(`${LANE_BADGE[l.state]} ${c(NORD.bright, l.branch)}${at}${pr}${who}${tail}`);
     }
     if (!s.queue.data!.devQueue.length) body.push(c(NORD.dim, 'nothing queued'));
   }

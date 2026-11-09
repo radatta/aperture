@@ -80,6 +80,22 @@ describe('Source', () => {
     expect(src.refresh(t0 + 25 * 3600000).lockFeed).toEqual([]);
   });
 
+  it("reads slot B's cache on its own, and feeds its changes as `lock devb:`", () => {
+    const { board, src } = setup();
+    const t0 = Date.parse('2026-11-08T00:00:00Z');
+    writeFileSync(join(board, 'devlock.json'), lock('a-branch'));
+    expect(src.refresh(t0).lockB).toBeNull(); // no devb cache yet
+    writeFileSync(join(board, 'devlock.devb.json'), lock('b-branch'));
+    let s = src.refresh(t0 + 60000);
+    expect(s.lock!.branch).toBe('a-branch');
+    expect(s.lockB!.branch).toBe('b-branch');
+    expect(s.lockFeed).toEqual([]); // devb's first read is its baseline too
+    writeFileSync(join(board, 'devlock.devb.json'), lock(null));
+    s = src.refresh(t0 + 120000);
+    expect(s.lockFeed.map((f) => f.text)).toEqual(['lock devb: free (was b-branch)']);
+    expect(s.lock!.branch).toBe('a-branch');
+  });
+
   it('lease events join the feed and age out after 24 h', () => {
     const { hist, src } = setup();
     writeFileSync(

@@ -15,6 +15,7 @@ describe('parseQueue', () => {
     expect(q.problems).toEqual([]);
     expect(q.data!.devQueue.map((l) => l.state)).toEqual([
       'on-dev',
+      'on-dev',
       'next',
       'waiting',
       'building',
@@ -22,7 +23,16 @@ describe('parseQueue', () => {
       'needs-you',
     ]);
     expect(q.data!.devQueue[0]!.eta).toBe(Date.parse('2026-11-08T06:37:00Z'));
-    expect(q.data!.devQueue[2]!.waitingOn).toBe('Rahul: merge PR 41');
+    expect(q.data!.devQueue.map((l) => l.slot)).toEqual([
+      'dev',
+      'devb',
+      'dev',
+      'dev',
+      'dev',
+      'dev',
+      'dev',
+    ]);
+    expect(q.data!.devQueue[3]!.waitingOn).toBe('Rahul: merge PR 41');
     expect(q.data!.rahul).toHaveLength(2);
     expect(q.data!.wave!.items.map((i) => i.state)).toEqual([
       'merged',
@@ -101,6 +111,8 @@ describe('parseQueue', () => {
           { branch: 'b', state: 'sleeping' },
           { state: 'next' },
           { branch: 'd', state: 'pr-check' },
+          { branch: 'e', state: 'on-dev', slot: 'devb' },
+          { branch: 'f', state: 'on-dev', slot: 'devc' },
         ],
         plan: [
           { what: 'ok', kind: 'dev' },
@@ -115,7 +127,10 @@ describe('parseQueue', () => {
       }),
     );
     expect(q.status).toBe('bad');
-    expect(q.data!.devQueue.map((l) => l.branch)).toEqual(['a']);
+    expect(q.data!.devQueue.map((l) => [l.branch, l.slot])).toEqual([
+      ['a', 'dev'], // no slot: slot A
+      ['e', 'devb'],
+    ]);
     expect(q.data!.rahul).toEqual([{ text: 'plain text works', since: null }]);
     expect(q.data!.wave).toEqual({ name: 'Wave', items: [] });
     expect(q.data!.plan.map((p) => [p.what, p.at])).toEqual([
@@ -128,6 +143,7 @@ describe('parseQueue', () => {
       'devQueue[1]: state "sleeping"',
       'devQueue[2]: no branch',
       'devQueue[3]: state "pr-check"',
+      'devQueue[5]: slot "devc"',
       'rahul[1]: no text',
       'wave.items[0]: state "done"',
       'plan[1]: kind "deploy"',

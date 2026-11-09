@@ -325,7 +325,7 @@ What it means:
 `1` / `6` / `2` history over 1 h / 6 h / 24 h · `←` `→` (or `h` `l`) move the readout column back / forward ·
 `Esc` back to live · `r` refresh now. Node, no dependencies: `scripts/src/board/tower/`. It draws in Nord colours on the terminal's own background, like the tmux bar (painting Nord's grey over iTerm's navy read as haze).
 
-**Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`; gauges for anon
+**Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`, then slot B's lock (` · devb …`, from `devlock.devb.json`; left out until that cache exists); gauges for anon
 memory and pids (soft / hard marks from `limits.json`) and CPU against the cores. _Dev queue_, _Waiting on
 Rahul_ (an age only past a day: `1d`), the wave (a merged / open / in-flight / not-started bar, then the
 unmerged items; merged ones are counted in the bar, legend and title, not listed) and _Plan_ come from
@@ -384,6 +384,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "branch": "",
       "session": "",
       "state": "on-dev | next | waiting | building | ready | needs-you",
+      "slot": "dev | devb (optional, dev when absent)",
       "pr": 41,
       "eta": "<ISO, on-dev>",
       "waitingOn": "<waiting, needs-you>",
@@ -408,7 +409,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
 }
 ```
 
-Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
+A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
 is blocked on a Rahul step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
 read check status, and the tower on a `main` without them drops such lanes as a bad write. `plan` is the one
 source for the next merge — the PLAN panel's title and the statusline (`localNotes/board/next-merge.sh`) both
