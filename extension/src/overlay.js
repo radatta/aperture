@@ -1,6 +1,8 @@
 // The overlay and the badge — painting only (the decisions are lib/overlay-state.js, the actions content.js).
 // Both live in open shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
 // hydration never touches them; their styles are inline in the root, so neither side's CSS leaks into the other.
+// A page script can reach an open root, so a button acts only on a real click (isTrusted), and the host's own
+// style is reasserted every poll — a page that hides the overlay can't turn the user's next click into a Start.
 (function (root) {
   'use strict';
   const STEP_TEXT = {
@@ -34,9 +36,15 @@
       .secondary { color: #ececf0; border-color: #4a4c55; } .err { color: #ff8a80; } .primary { background: #2f8f62; }
     }`;
 
+  const HOST_STYLE =
+    'all: initial !important; position: fixed !important; z-index: 2147483647 !important; ' +
+    'opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; ' +
+    'filter: none !important; transform: none !important; clip-path: none !important;';
+  const styleOf = (shown, full) =>
+    `${HOST_STYLE} inset: ${full ? '0' : 'auto'} !important; display: ${shown ? 'block' : 'none'} !important;`;
   function host(tag) {
     const el = document.createElement(tag);
-    el.setAttribute('style', 'all: initial; position: fixed; z-index: 2147483647; inset: auto;');
+    el.setAttribute('style', styleOf(false, false));
     const shadow = el.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = CSS;
@@ -59,11 +67,13 @@
   function create(on) {
     const overlay = host('aperture-lc-overlay');
     const badge = host('aperture-lc-badge');
+    let overlayShown = false;
+    let badgeShown = false;
     const btn = (cls, ap, text, fn) => {
       const b = node('button', { class: cls, 'data-ap': ap, type: 'button' }, text);
       b.addEventListener('click', (e) => {
         e.stopPropagation();
-        fn();
+        if (e.isTrusted) fn();
       });
       return b;
     };
@@ -72,9 +82,9 @@
       overlay.body.replaceChildren();
       const show =
         state.phase === 'prompt' || state.phase === 'starting' || state.phase === 'failed';
-      overlay.el.style.inset = show ? '0' : 'auto';
+      overlayShown = show;
+      overlay.el.setAttribute('style', styleOf(show, show));
       overlay.el.setAttribute('data-phase', state.phase); // kept on the page even hidden: the state is readable
-      overlay.el.style.display = show ? 'block' : 'none';
       attach(overlay.el);
       if (!show) return;
       const title = (info && info.title) || 'This problem';
@@ -118,11 +128,9 @@
     // text null hides it; tone: '' | 'warn' | 'bad'
     function setBadge(text, tone) {
       badge.body.replaceChildren();
-      if (!text) {
-        badge.el.style.display = 'none';
-        return;
-      }
-      badge.el.style.display = 'block';
+      badgeShown = !!text;
+      badge.el.setAttribute('style', styleOf(badgeShown, false));
+      if (!text) return;
       attach(badge.el);
       badge.body.append(
         node('div', { class: `badge ${tone || ''}`, 'data-ap': 'badge', role: 'status' }, text),
@@ -130,8 +138,10 @@
     }
     // LeetCode may rebuild <html>'s children; the content script's poll calls this to put them back.
     const ensureAttached = () => {
+      overlay.el.setAttribute('style', styleOf(overlayShown, overlayShown));
+      badge.el.setAttribute('style', styleOf(badgeShown, false));
       attach(overlay.el);
-      if (badge.el.style.display === 'block') attach(badge.el);
+      if (badgeShown) attach(badge.el);
     };
     return { render, setBadge, ensureAttached };
   }

@@ -13,6 +13,11 @@
   const mintId = NS.ulid.ulid;
   // packages/shared/src/sittings.ts SITTING_ACTIVE_ERROR (background.test.ts checks the copy).
   const ACTIVE_ERROR = 'Another sitting is still open — end it in Aperture first.';
+  const START_TIME_ERROR = 'The Start’s time is off by more than a day.';
+  const NOT_CONFIGURED =
+    'Set the Aperture origin and device token in the extension’s options first.';
+  const PENDING_MAX = 500; // page messages waiting for the relay; past it a flood is dropped
+  const bootState = document.readyState; // Safari may run document_start late — the debug log says
   const PROBLEM_MAX = 64 * 1024;
   const START_RETRY_MS = 60_000;
 
@@ -63,20 +68,36 @@
       : null;
 
   // ---- the handshake (README → How it works) ----
-  window.addEventListener('aperture-lc-hello', (e) => {
-    const ok = relay.hello(e.detail);
-    if (!ok) return;
-    window.dispatchEvent(new CustomEvent('aperture-lc-ack')); // same tick: no page script can get between
-    ok.then((good) => debug.log('handshake', { ok: good }));
-  });
+  // Both listeners capture: registered before any page script, they run before any page listener could
+  // stop the event.
+  window.addEventListener(
+    'aperture-lc-hello',
+    (e) => {
+      const ok = relay.hello(e.detail);
+      if (!ok) return;
+      window.dispatchEvent(new CustomEvent('aperture-lc-ack')); // same tick: no page script can get between
+      ok.then((good) => debug.log('handshake', { ok: good, bootState }));
+    },
+    true,
+  );
   window.dispatchEvent(new CustomEvent('aperture-lc-ready'));
 
   // ---- page messages, one at a time ----
   let chain = Promise.resolve();
-  window.addEventListener('aperture-lc', (e) => {
-    const detail = e.detail;
-    chain = chain.then(() => onPageMessage(detail)).catch(() => {});
-  });
+  let pending = 0;
+  window.addEventListener(
+    'aperture-lc',
+    (e) => {
+      if (pending >= PENDING_MAX) return debug.log('relay.reject', { reason: 'flood' });
+      pending++;
+      const detail = e.detail;
+      chain = chain
+        .then(() => onPageMessage(detail))
+        .catch(() => {})
+        .then(() => pending--);
+    },
+    true,
+  );
   async function onPageMessage(detail) {
     const r = await relay.accept(detail, { screenSlug, binding: liveBinding() });
     if (!r.ok) {
@@ -160,12 +181,17 @@
     if (binding && binding.slug === slug && !binding.problemSent && state.phase === 'active')
       lateFill();
   }
+  let filling = false;
   async function lateFill() {
+    if (filling) return;
+    filling = true;
+    const b = binding;
     const r = await send({
       type: 'start',
-      body: startBody(binding.clientSittingId, binding.clientStartedAt),
+      body: startBody(b.clientSittingId, b.clientStartedAt),
     }).catch(() => null);
-    if (r && r.status === 200 && binding) await saveBinding({ ...binding, problemSent: true });
+    filling = false;
+    if (r && r.status === 200 && binding === b) await saveBinding({ ...b, problemSent: true });
   }
 
   const humanize = (slug) =>
@@ -292,7 +318,9 @@
     if (step === 'send') return sendStart();
     let r;
     try {
-      r = await STEP[step]();
+      // Nothing is clicked for a Start that can't be sent: the reset is the one destructive step.
+      const ready = await send({ type: 'configured?' }).catch(() => null);
+      r = ready && ready.configured === false ? NOT_CONFIGURED : await STEP[step]();
     } catch (err) {
       r = String((err && err.message) || err);
     }
@@ -377,10 +405,13 @@
       debug.log('resume', { active });
       return act({ type: 'resumed', active });
     }
-    // Unreachable or retrying: trust the binding — the outbox holds events until Aperture is back.
-    const offline = r.status === -1 || r.status === 0 || outbox.retryable(r.status);
-    debug.log('resume', { active: offline, http: r.status });
-    act({ type: 'resumed', active: offline });
+    // Only Aperture saying the sitting is over ends it. Anything else — unreachable, a 401 after a token
+    // change, a 404 — keeps the binding: clearing it would re-prompt mid-solve, one click from a reset; the
+    // outbox holds the events and the badge shows why they wait.
+    const over =
+      r.status === 400 && (r.error === outbox.ENDED_ERROR || r.error === START_TIME_ERROR);
+    debug.log('resume', { active: !over, http: r.status });
+    act({ type: 'resumed', active: !over });
   }
 
   // ---- the overlay ----
@@ -390,9 +421,13 @@
     startAnyway: () => begin('startAnyway'),
     dismiss: () => act({ type: 'dismiss' }),
   });
+  // A retryable failure keeps the id (the first try may have landed: the server resumes it and keeps its
+  // time); the time is always this click's, since the reset and the timer run again.
   function begin(type) {
-    if (!pendingStart || !lastStartRetryable)
-      pendingStart = { clientSittingId: mintId(), startedAt: Date.now() };
+    pendingStart =
+      pendingStart && lastStartRetryable
+        ? { ...pendingStart, startedAt: Date.now() }
+        : { clientSittingId: mintId(), startedAt: Date.now() };
     lastStartRetryable = false;
     act({ type });
   }

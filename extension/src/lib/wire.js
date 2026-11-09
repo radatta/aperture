@@ -228,13 +228,16 @@
     if (!Array.isArray(arr)) return [];
     const parts = [];
     let cur = [];
+    let curBytes = 2; // the brackets; each element adds its bytes and a comma
     for (const e of arr) {
-      const one = JSON.stringify(e);
-      if (bytes(one) + 2 > max) continue; // a single event over the cap: skipped
-      if (cur.length && bytes(JSON.stringify([...cur, e])) > max) {
+      const one = bytes(JSON.stringify(e));
+      if (one + 2 > max) continue; // a single event over the cap: skipped
+      if (cur.length && curBytes + 1 + one > max) {
         parts.push(JSON.stringify(cur));
         cur = [];
+        curBytes = 2;
       }
+      curBytes += (cur.length ? 1 : 0) + one;
       cur.push(e);
     }
     if (cur.length) parts.push(JSON.stringify(cur));

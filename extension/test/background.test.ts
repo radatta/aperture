@@ -1,7 +1,13 @@
 // The real background page (lib/outbox.js + background.js, as the manifest loads them) in a vm, with a fake
 // extension API and a scripted fetch standing in for Aperture.
 import { describe, expect, it } from 'vitest';
-import { AUTH_HEADER, SITTING_ACTIVE_ERROR, SITTING_ENDED_ERROR } from '@aperture/shared';
+import {
+  AUTH_HEADER,
+  SITTING_ACTIVE_ERROR,
+  SITTING_ENDED_ERROR,
+  SITTING_PROBLEM_MAX,
+  SITTING_START_TIME_ERROR,
+} from '@aperture/shared';
 import { background, fakeExtension, src, until } from './load';
 
 type Call = {
@@ -35,8 +41,12 @@ const ok = { status: 200, body: { accepted: 1, duplicates: 0, version: 3, status
 describe('background', () => {
   it('keeps its copies of the shared strings in step with packages/shared', () => {
     expect(src('src/background.js')).toContain(`const AUTH_HEADER = '${AUTH_HEADER}'`);
-    expect(src('src/background.js')).toContain(`const ENDED_ERROR = '${SITTING_ENDED_ERROR}'`);
     expect(src('src/content.js')).toContain(`const ACTIVE_ERROR = '${SITTING_ACTIVE_ERROR}'`);
+    expect(src('src/content.js')).toContain(
+      `const START_TIME_ERROR = '${SITTING_START_TIME_ERROR}'`,
+    );
+    expect(SITTING_PROBLEM_MAX).toBe(64 * 1024);
+    expect(src('src/content.js')).toContain('const PROBLEM_MAX = 64 * 1024;');
   });
 
   it('posts events with the device token, in order, and records the sync for the badge', async () => {
@@ -103,12 +113,51 @@ describe('background', () => {
     await until(() => (ext.local.data.outbox as { entries: unknown[] }).entries.length === 0);
   });
 
-  it('marks the sitting ended when Aperture says so', async () => {
+  it('marks the sitting ended when Aperture says so, and drops what it refused', async () => {
     const { ext, send } = setup(() => ({ status: 400, body: { error: SITTING_ENDED_ERROR } }));
     await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
     await send({ type: 'enqueue', sittingId: 'SIT', slug: 'two-sum', events: events(1) });
     const sync = await until(() => ext.local.data['sync:two-sum'] as Record<string, unknown>);
     expect(sync).toMatchObject({ status: 'ended', http: 400 });
+    await until(() => (ext.local.data.outbox as { entries: unknown[] }).entries.length === 0);
+    expect((ext.local.data.status as Record<string, unknown>).failed).toBe(0);
+  });
+
+  it('never counts a 200 that isn’t Aperture’s answer as sent (CloudFront’s index.html for an /api 404)', async () => {
+    const ext = fakeExtension();
+    const fetch = async () => new Response('<!doctype html><html></html>', { status: 200 });
+    background({ chrome: ext.api, fetch, Response });
+    await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
+    await ext.api.runtime.sendMessage({
+      type: 'enqueue',
+      sittingId: 'SIT',
+      slug: 'two-sum',
+      events: events(1),
+    });
+    await until(
+      () => (ext.local.data.status as Record<string, unknown> | undefined)?.state === 'retrying',
+    );
+    expect((ext.local.data.outbox as { entries: unknown[] }).entries).toHaveLength(1);
+    expect((ext.local.data.status as Record<string, unknown>).detail).toContain('isn’t its API');
+  });
+
+  it('starts a sitting’s sync record afresh, so an old sitting’s late “ended” never marks the next one', async () => {
+    const { ext, send } = setup((call) =>
+      call.body.args[0].sittingId === 'OLD'
+        ? { status: 400, body: { error: SITTING_ENDED_ERROR } }
+        : { status: 503, body: { error: 'busy' } },
+    );
+    await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
+    await send({ type: 'enqueue', sittingId: 'OLD', slug: 'two-sum', events: events(1) });
+    await until(
+      () => (ext.local.data['sync:two-sum'] as { status?: string } | undefined)?.status === 'ended',
+    );
+    await send({ type: 'enqueue', sittingId: 'NEW', slug: 'two-sum', events: events(1, 5) });
+    const sync = await until(() => {
+      const s = ext.local.data['sync:two-sum'] as Record<string, unknown> | undefined;
+      return s && s.sittingId === 'NEW' ? s : null;
+    });
+    expect(sync.status).toBeUndefined();
   });
 
   it('answers Start directly, says when it isn’t configured, and remembers Just looking for the session', async () => {

@@ -42,8 +42,9 @@
     } catch {
       return say('saveStatus', 'The API origin is not a valid URL.', 'err');
     }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
-      return say('saveStatus', 'The API origin must be http(s).', 'err');
+    const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocal))
+      return say('saveStatus', 'The API origin must be https (http only for localhost).', 'err');
     if (!deviceToken) return say('saveStatus', 'Enter a device token.', 'err');
     let asked;
     try {

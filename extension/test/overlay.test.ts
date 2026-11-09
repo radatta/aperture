@@ -4,8 +4,13 @@
 import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JSDOM } from 'jsdom';
-import { SITTING_ACTIVE_ERROR, isUlid, normalizeSittingStart } from '@aperture/shared';
-import { ISOLATED_JS, MAIN_JS, fakeExtension, page, run, src, until } from './load';
+import {
+  SITTING_ACTIVE_ERROR,
+  SITTING_ENDED_ERROR,
+  isUlid,
+  normalizeSittingStart,
+} from '@aperture/shared';
+import { ISOLATED_JS, MAIN_JS, fakeExtension, page, run, src, trustedClick, until } from './load';
 
 const { createServer } = createRequire(import.meta.url)('./fixtures/fake-leetcode-server.js');
 const SELECTORS = {
@@ -21,7 +26,7 @@ type Msg = {
 };
 
 // The background, as far as content.js can tell: A1's Start (resume by clientSittingId, one open sitting).
-function fakeBackground() {
+function fakeBackground(opts: { configured?: boolean } = {}) {
   const sittings: Array<{
     id: string;
     slug: string;
@@ -31,12 +36,20 @@ function fakeBackground() {
   }> = [];
   const dismissed = new Set<string>();
   let n = 0;
-  return {
+  const bg = {
     sittings,
+    refuse: null as null | { status: number; error: string },
     handle(msg: Msg) {
+      if (msg.type === 'configured?') return { configured: opts.configured ?? true };
       if (msg.type === 'dismiss') dismissed.add(String(msg.slug));
       if (msg.type === 'dismissed?') return { dismissed: dismissed.has(String(msg.slug)) };
       if (msg.type !== 'start') return { ok: true };
+      if (bg.refuse)
+        return {
+          status: bg.refuse.status,
+          json: { error: bg.refuse.error },
+          error: bg.refuse.error,
+        };
       const b = msg.body!;
       normalizeSittingStart(b as never); // what A1 refuses, this would throw on
       let s = sittings.find((x) => x.status === 'active' && x.slug === b.problemSlug);
@@ -68,6 +81,7 @@ function fakeBackground() {
       };
     },
   };
+  return bg;
 }
 
 const pages: JSDOM[] = [];
@@ -100,8 +114,9 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
     (
       w.document.querySelector('aperture-lc-badge') as HTMLElement | null
     )?.shadowRoot?.querySelector('[data-ap=badge]')?.textContent;
+  const tap = (ap: string) => trustedClick(button(ap)!);
   const fake = () => w.__fake as { resets: number; timerStarts: number };
-  return { w, phase, button, badge, fake };
+  return { w, phase, button, tap, badge, fake };
 }
 const messages = (ext: ReturnType<typeof fakeExtension>, type: string) =>
   (ext.sent as Msg[]).filter((m) => m.type === type);
@@ -116,7 +131,7 @@ describe('the overlay on a LeetCode problem', () => {
 
     const p = open('/problems/two-sum/description/', ext);
     await until(() => p.phase() === 'prompt');
-    p.button('start')!.click();
+    p.tap('start');
     await until(() => p.phase() === 'active', 8000);
     expect(p.fake()).toMatchObject({ resets: 1, timerStarts: 1 });
     const [start] = messages(ext, 'start');
@@ -167,7 +182,7 @@ describe('the overlay on a LeetCode problem', () => {
     // "Next problem" (an SPA nav) re-prompts; its Start is refused while two-sum is open.
     (r.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
     await until(() => r.phase() === 'prompt', 3000);
-    r.button('start')!.click();
+    r.tap('start');
     await until(() => r.phase() === 'failed', 8000);
     expect(r.w.document.querySelector('aperture-lc-overlay')!.shadowRoot!.textContent).toContain(
       `${SITTING_ACTIVE_ERROR} Then Retry.`,
@@ -179,23 +194,61 @@ describe('the overlay on a LeetCode problem', () => {
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
-    p.button('start')!.click();
+    p.tap('start');
     await until(() => p.phase() === 'failed');
     expect(p.w.document.querySelector('aperture-lc-overlay')!.shadowRoot!.textContent).toContain(
       'reset button isn’t configured',
     );
-    p.button('anyway')!.click();
+    p.tap('anyway');
     await until(() => p.phase() === 'active');
     expect(p.fake().resets).toBe(0);
     expect(bg.sittings).toHaveLength(1);
   });
+
+  it('ignores a page script’s click on Start, and touches nothing for a Start that can’t be sent', async () => {
+    const bg = fakeBackground({ configured: false });
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ selectors: SELECTORS });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.button('start')!.click(); // what a LeetCode script can do: an untrusted click
+    p.button('look')!.click();
+    await new Promise((res) => setTimeout(res, 300));
+    expect(p.phase()).toBe('prompt');
+    expect(messages(ext, 'start')).toEqual([]);
+    p.tap('start');
+    await until(() => p.phase() === 'failed');
+    expect(p.w.document.querySelector('aperture-lc-overlay')!.shadowRoot!.textContent).toContain(
+      'extension’s options first',
+    );
+    expect(p.fake().resets).toBe(0);
+    expect(messages(ext, 'start')).toEqual([]);
+  });
+
+  it('keeps the sitting when a reload’s resume is refused for any reason but its end', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ selectors: SELECTORS });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    bg.refuse = { status: 401, error: 'Unauthorized' };
+    const r = open('/problems/two-sum/', ext);
+    await until(() => r.phase() === 'active', 6000);
+    expect(ext.local.data['sitting:two-sum']).toBeTruthy();
+    bg.refuse = { status: 400, error: SITTING_ENDED_ERROR };
+    const e = open('/problems/two-sum/', ext);
+    await until(() => e.phase() === 'prompt', 6000);
+    expect(ext.local.data['sitting:two-sum']).toBeUndefined();
+  }, 20_000);
 
   it('Just looking dismisses without touching the editor, and is remembered for the problem', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
-    p.button('look')!.click();
+    p.tap('look');
     expect(p.phase()).toBe('hidden');
     await until(() => messages(ext, 'dismiss').length === 1);
     const again = open('/problems/two-sum/', ext);

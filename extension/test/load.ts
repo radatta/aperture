@@ -39,6 +39,18 @@ export function run(dom: JSDOM, files: string[], extra: Record<string, unknown> 
   Object.assign(w, extra);
   for (const f of files) w.eval(src(f));
 }
+// A user's click. The overlay acts only on trusted events and jsdom's own click() is never one, so this
+// dispatches through jsdom's internals (pinned jsdom 30) with isTrusted set — test-side only, no switch in
+// the shipped code.
+export function trustedClick(el: Element) {
+  const idl = require('jsdom/lib/generated/idl/utils.js');
+  const win = el.ownerDocument.defaultView as unknown as typeof globalThis;
+  const ev = idl.implForWrapper(
+    new win.MouseEvent('click', { bubbles: true, cancelable: true, composed: true }),
+  );
+  ev.isTrusted = true;
+  idl.implForWrapper(el)._dispatch(ev);
+}
 // A vm context for the background page, with `extra` as its globals.
 export function background(extra: Record<string, unknown>) {
   const ctx = vm.createContext({

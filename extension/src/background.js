@@ -8,13 +8,15 @@
   const api =
     globalThis.browser && globalThis.browser.runtime ? globalThis.browser : globalThis.chrome;
   const { outbox } = globalThis.ApertureLC;
-  // packages/shared/src/rpc.ts AUTH_HEADER and sittings.ts SITTING_ENDED_ERROR — kept in sync by hand
-  // (extension/test/background.test.ts checks both against the shared package).
+  // packages/shared/src/rpc.ts AUTH_HEADER — kept in sync by hand (background.test.ts checks it).
   const AUTH_HEADER = 'x-aperture-authorization';
-  const ENDED_ERROR = 'This sitting has ended — start a new one.';
+  const SEND_TIMEOUT_MS = 30_000;
+  const NOT_API =
+    'Aperture answered with something that isn’t its API — check the origin in the extension’s options.';
   const NOT_CONFIGURED = 'Set the Aperture origin and device token in the extension’s options.';
   const local = api.storage.local;
-  const session = api.storage.session || null; // Safari before 16.4 has none: then "just looking" lasts the page
+  const session = api.storage.session || null; // Safari before 16.4 has none: then "just looking" lasts
+  // as long as this background page does
   const memSession = new Map();
 
   let idSeq = 0;
@@ -29,7 +31,18 @@
     };
   }
 
-  // One RPC: {status, json, error}. status 0 = unreachable; -1 = not configured (never sent).
+  // A 2xx counts only with the body the method answers: CloudFront serves the app's index.html as a 200
+  // for an /api 403 or 404 (cdk app-stack errorResponses), which must not read as "sent".
+  const SHAPE = {
+    lcSittingEvents: (j) => typeof j.version === 'number',
+    lcSittingStart: (j) => !!j.sitting && typeof j.sitting.id === 'string',
+  };
+  const timeout = () =>
+    typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+      ? AbortSignal.timeout(SEND_TIMEOUT_MS)
+      : undefined;
+
+  // One RPC: {status, json, error}. status 0 = unreachable or not Aperture's API (retried); -1 = not configured.
   async function post(method, body) {
     const { origin, token } = await config();
     if (!origin || !token) return { status: -1, json: null, error: NOT_CONFIGURED };
@@ -38,12 +51,15 @@
         method: 'POST',
         headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token}` },
         body: JSON.stringify({ args: [body] }),
+        signal: timeout(),
       });
       const text = await res.text().catch(() => '');
       let json = null;
       try {
         json = JSON.parse(text);
       } catch {}
+      if (res.ok && !(json && typeof json === 'object' && SHAPE[method](json)))
+        return { status: 0, json: null, error: NOT_API };
       const error = res.ok
         ? null
         : json && typeof json.error === 'string'
@@ -69,15 +85,27 @@
     return run;
   }
 
-  async function setStatus(patch) {
-    const { status } = await local.get('status');
-    await local.set({ status: { ...(status || {}), ...patch, at: Date.now() } });
+  // status and sync:<slug> are read-modify-writes too: one chain of their own, so no patch is lost.
+  let notes = Promise.resolve();
+  function note(fn) {
+    const run = notes.then(fn);
+    notes = run.catch(() => {});
+    return run;
   }
-  async function setSync(slug, patch) {
-    const key = `sync:${slug}`;
-    const cur = (await local.get(key))[key] || {};
-    await local.set({ [key]: { ...cur, ...patch, at: Date.now() } });
-  }
+  const setStatus = (patch) =>
+    note(async () => {
+      const { status } = await local.get('status');
+      await local.set({ status: { ...(status || {}), ...patch, at: Date.now() } });
+    });
+  // A record is one sitting's: a patch for another sitting starts it afresh, so an old sitting's late
+  // "ended" can never be merged into the next one's.
+  const setSync = (slug, patch) =>
+    note(async () => {
+      const key = `sync:${slug}`;
+      const stored = (await local.get(key))[key];
+      const cur = stored && stored.sittingId === patch.sittingId ? stored : {};
+      await local.set({ [key]: { ...cur, ...patch, at: Date.now() } });
+    });
 
   let flushing = false;
   let again = false;
@@ -156,7 +184,7 @@
       await setStatus({ http: r.status, detail: null, lastSentAt: now });
       return;
     }
-    const ended = r.status === 400 && r.error === ENDED_ERROR;
+    const ended = outcome === 'ended';
     await setSync(e.slug, {
       sittingId: e.sittingId,
       http: r.status,
@@ -176,7 +204,7 @@
     if (dropped || shed)
       await setStatus({
         detail:
-          `${dropped ? `${dropped} oversized event(s) dropped. ` : ''}${shed ? `${shed} old snapshot batch(es) shed — the queue was full.` : ''}`.trim(),
+          `${dropped ? `${dropped} oversized event(s) dropped. ` : ''}${shed ? `${shed} old snapshot or replay batch(es) shed — the queue was full.` : ''}`.trim(),
       });
     flush();
   }
@@ -198,6 +226,10 @@
       case 'enqueue':
         await enqueue(msg);
         return { ok: true };
+      case 'configured?': {
+        const { origin, token } = await config();
+        return { configured: !!(origin && token) };
+      }
       case 'flush':
         flush();
         return { ok: true };

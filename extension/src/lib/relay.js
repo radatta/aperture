@@ -11,6 +11,8 @@
   const tag = tagLib || (typeof require === 'function' ? require('./tag.js') : null);
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const CACHE_ONLY = ['problem', 'hint'];
+  // Far over any one item LeetCode sends (the outbox trims to the server's caps); bounds a flood's parse.
+  const DETAIL_MAX = 2 * 1024 * 1024;
 
   const SLUG_PATH = /^\/problems\/([a-z0-9-]{1,128})(?:\/|$)/;
   // The problem on screen, from the isolated world's own location — never from a page message.
@@ -45,6 +47,7 @@
       const key = keyReady && (await keyReady);
       if (!key) return { ok: false, reason: 'no-handshake' };
       if (typeof detail !== 'string') return { ok: false, reason: 'not-string' };
+      if (detail.length > DETAIL_MAX) return { ok: false, reason: 'too-big' };
       const env = parse(detail);
       if (!env || typeof env.body !== 'string') return { ok: false, reason: 'bad-envelope' };
       if (!(await tag.verify(key, env.body, env.tag))) return { ok: false, reason: 'bad-tag' };
