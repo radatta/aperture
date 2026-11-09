@@ -166,6 +166,17 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-late-submit-list',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submit LeetCode judges after you left for the problem list still lands in its problem’s sitting',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'sends a submit judged after leaving for the problem list to its problem’s sitting',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
       id: 'ext-snapshots',
       entry: 'extension',
       kind: 'nominal',

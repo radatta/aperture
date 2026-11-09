@@ -165,7 +165,7 @@
 
   // One per page load: pairs each /submit/ or /interpret_solution/ with its final /check/, once.
   function createCapture() {
-    const pending = new Map(); // submission or interpret id -> {kind, slug, request, at}
+    const pending = new Map(); // submission or interpret id -> {kind, slug, request, at, page}
     const fired = new Set();
     const markFired = (id) => {
       fired.add(id);
@@ -180,19 +180,28 @@
         kind === 'run'
           ? { interpretId: id, slug, request: p ? p.request : null, result }
           : { submissionId: id, slug, request: p ? p.request : null, result };
-      return { kind, slug, questionId: null, at: p ? p.at : at, payload };
+      // `page`: the page the run or submit was made from, not the one polling for its verdict.
+      return { kind, slug, questionId: null, at: p ? p.at : at, payload, page: p ? p.page : null };
     };
 
-    // A finished request: its URL, method, request text, response text (null when unread or failed), times.
-    function observe({ url, reqText, resText, reqAt, resAt }) {
+    // A finished request: its URL, the page it was made from, request text, response text (null when unread
+    // or failed), times. Each item carries the page it came from.
+    function observe({ url, page = null, reqText, resText, reqAt, resAt }) {
       const r = route(url);
       if (!r) return [];
-      if (r.type === 'graphql') return graphqlItems(reqText, resText, reqAt, resAt);
+      if (r.type === 'graphql')
+        return graphqlItems(reqText, resText, reqAt, resAt).map((i) => ({ ...i, page }));
       const res = obj(parse(resText));
       if (r.type === 'submit' || r.type === 'run') {
         const id = idStr(r.type === 'submit' ? res?.submission_id : res?.interpret_id);
         if (!id || fired.has(id)) return [];
-        pending.set(id, { kind: r.type, slug: r.slug, request: obj(parse(reqText)), at: reqAt });
+        pending.set(id, {
+          kind: r.type,
+          slug: r.slug,
+          request: obj(parse(reqText)),
+          at: reqAt,
+          page,
+        });
         return [];
       }
       // check: only the final SUCCESS counts; RUNNING_TESTS / STARTED / PENDING are polls.

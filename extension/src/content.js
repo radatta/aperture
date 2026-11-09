@@ -116,9 +116,15 @@
     items.forEach(onItem);
   }
   function onItem(m) {
+    // Made from another page (the last problem, before a nav): never this one's. A run or submit made on its
+    // own problem's page and judged after you left goes to that problem's sitting.
+    const from = relayLib.slugOf(m.page);
+    if (from !== screenSlug) {
+      if (from && from === m.slug && relayLib.LATE.includes(m.kind)) return lateItem(m);
+      return debug.log('relay.reject', { reason: 'off-page', kind: m.kind });
+    }
     const a = relayLib.admit(m, { screenSlug, binding: liveBinding() });
     if (!a.ok) {
-      if (a.reason === 'off-screen-slug' && relayLib.LATE.includes(m.kind)) return lateItem(m);
       if (a.reason !== 'no-sitting') debug.log('relay.reject', { reason: a.reason, kind: m.kind });
       return;
     }
@@ -138,8 +144,8 @@
     }
     queue(wire.toEventInputs(m, mintId));
   }
-  // A run or submit judged after you moved to another problem goes to its own problem's open sitting — the
-  // one this extension bound there — never to the one on screen.
+  // A run or submit made on its problem's page and judged after you left (for another problem or none) goes
+  // to that problem's open sitting — the one this extension bound there — never to the one on screen.
   async function lateItem(m) {
     const slug = m.slug;
     const got = await local.get([`sitting:${slug}`, `sync:${slug}`]).catch(() => ({}));
@@ -423,7 +429,11 @@
           [`sitting:${slug}`]: b,
           [`sync:${slug}`]: { sittingId: s.id, status: 'active', at: Date.now() },
         });
-        if (stale()) return;
+        if (stale()) {
+          // Back on this problem already (A → B → A mid-send), read before this landed: read it again.
+          if (screenSlug === slug && !binding) navTo(slug);
+          return;
+        }
         binding = b;
         sync = { sittingId: s.id, status: 'active' };
         lastTimerRaw = null;

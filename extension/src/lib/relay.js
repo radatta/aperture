@@ -12,9 +12,9 @@
   const tag = tagLib || (typeof require === 'function' ? require('./tag.js') : null);
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const CACHE_ONLY = ['problem', 'hint'];
-  // LeetCode's judging can finish after you've moved on: these may also go to their own problem's open
-  // sitting (content.js asks admit() again with that problem as ctx), never to the one on screen (Rahul,
-  // 2026-11-08).
+  // LeetCode's judging can finish after you've moved on: these, when made from their own problem's page, go
+  // to that problem's open sitting (content.js asks admit() again with that problem as ctx), never to the one
+  // on screen (Rahul, 2026-11-08).
   const LATE = ['run', 'submit', 'submitDetails'];
   // Far over any one item LeetCode sends (the outbox trims to the server's caps); bounds a flood's parse.
   const DETAIL_MAX = 6 * 1024 * 1024; // two raw texts at RAW_MAX, JSON-escaped twice over
@@ -68,14 +68,16 @@
       if (
         typeof msg.url !== 'string' ||
         msg.url.length > URL_MAX ||
+        typeof msg.page !== 'string' ||
+        msg.page.length > URL_MAX ||
         !text(msg.reqText) ||
         !text(msg.resText) ||
         !Number.isFinite(msg.reqAt) ||
         !Number.isFinite(msg.resAt)
       )
         return { ok: false, reason: 'raw-shape' };
-      const { url, reqText, resText, reqAt, resAt } = msg;
-      return { ok: true, raw: { url, reqText, resText, reqAt, resAt } };
+      const { url, page, reqText, resText, reqAt, resAt } = msg;
+      return { ok: true, raw: { url, page, reqText, resText, reqAt, resAt } };
     }
     return { hello, accept };
   }

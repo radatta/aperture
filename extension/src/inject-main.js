@@ -83,6 +83,15 @@
   // Whether to read the response: always for submit/run/check; for GraphQL only the operations we use.
   const wantsRes = (url, text) => !hits(GRAPHQL, url) || hits(WANT_RES, text);
   const textOr = (v) => (typeof v === 'string' && v.length <= RAW_MAX ? v : null);
+  // The page a request was made from — window.location and its fields are unforgeable, so a page script
+  // can change them only by navigating (pushState), never by redefining the getter.
+  const pageNow = () => {
+    try {
+      return Str(location.pathname);
+    } catch {
+      return null;
+    }
+  };
   const safe = (fn, self, args) => {
     try {
       return fn ? apply(fn, self, args) : null;
@@ -127,13 +136,15 @@
       pump();
     },
   ]);
-  function emit(url, reqBody, resBody, reqAt) {
+  function emit(url, reqBody, resBody, reqAt, page) {
     if (typeof url !== 'string' || url.length > URL_MAX) return;
+    if (typeof page !== 'string' || page.length > URL_MAX) return;
     const body = stringify({
       __proto__: null,
       v: 3,
       seq: ++seq,
       url,
+      page,
       reqText: textOr(reqBody),
       resText: textOr(resBody),
       reqAt,
@@ -211,6 +222,7 @@
       else if (b == null && req) bodyLater = safe(reqText, safe(reqClone, req, []), []);
       const p = apply(realFetch, this, args);
       const reqAt = now();
+      const page = pageNow();
       when(p, (res) => {
         const real = fetched(res);
         if (!real) return;
@@ -219,8 +231,8 @@
         const resP = copy ? safe(resText, copy, []) : null;
         when(bodyLater, (later) => {
           const reqBody = bodyLater ? later : bodyNow;
-          if (!resP || !wantsRes(real, reqBody)) return emit(real, reqBody, null, reqAt);
-          when(resP, (text) => emit(real, reqBody, text, reqAt));
+          if (!resP || !wantsRes(real, reqBody)) return emit(real, reqBody, null, reqAt, page);
+          when(resP, (text) => emit(real, reqBody, text, reqAt, page));
         });
       });
       return p;
@@ -246,6 +258,7 @@
       if (hits(OURS, url)) {
         const reqBody = typeof body === 'string' ? body : null;
         const reqAt = now();
+        const page = pageNow();
         safe(addListener, this, [
           'loadend',
           () => {
@@ -263,7 +276,7 @@
               (type === '' || type === 'text')
             )
               text = safe(xhrText, this, []);
-            emit(real, reqBody, text, reqAt);
+            emit(real, reqBody, text, reqAt, page);
           },
         ]);
       }

@@ -6,6 +6,7 @@ const relayLib = lib('relay');
 
 const raw = {
   url: 'https://leetcode.com/graphql/',
+  page: '/problems/two-sum/description/',
   reqText: '{}',
   resText: null,
   reqAt: 1,
@@ -53,6 +54,7 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
       { reqText: { x: 1 } },
       { resText: 'x'.repeat(relayLib.RAW_MAX + 1) },
       { reqAt: 'now' },
+      { page: 7 },
     ])
       expect(await relay.accept(await msg(bad))).toEqual({ ok: false, reason: 'raw-shape' });
     expect(await relay.accept({ not: 'a string' })).toEqual({ ok: false, reason: 'not-string' });

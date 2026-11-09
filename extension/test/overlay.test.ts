@@ -293,6 +293,26 @@ describe('the overlay on a LeetCode problem', () => {
     expect(messages(ext, 'enqueue').every((m) => m.slug === 'two-sum')).toBe(true); // nothing to the next one
   }, 20_000);
 
+  it('sends a submit judged after leaving for the problem list to its problem’s sitting', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ selectors: SELECTORS });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
+    p.w.history.pushState({}, '', '/problemset/');
+    await until(() => p.phase() === 'hidden', 3000);
+    const late = await until(
+      () =>
+        messages(ext, 'enqueue').find((m) => m.events!.some((e) => e.type === 'submit')) as
+          (Msg & { sittingId?: string }) | undefined,
+      6000,
+    );
+    expect(late).toMatchObject({ slug: 'two-sum' });
+  }, 20_000);
+
   it('hands the pending snapshot over when the page is hidden', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });

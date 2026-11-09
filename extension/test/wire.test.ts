@@ -37,6 +37,7 @@ describe('wire: what LeetCode traffic means', () => {
         questionId: QID,
         at: 1000,
         payload: { code: CODE, questionId: QID, lang: '11' },
+        page: null,
       },
     ]);
     expect(seen(c, T.syncedCode)).toMatchObject([{ kind: 'hint', questionId: QID }]);

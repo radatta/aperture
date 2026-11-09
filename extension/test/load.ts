@@ -31,11 +31,12 @@ export class FetchedResponse extends Response {
     super(body, init);
     this.#url = init.url;
   }
+  // Only for itself: a plain `new Response()` keeps reading as one a page built.
   override get type(): ResponseType {
-    return 'basic';
+    return #url in this ? 'basic' : super.type;
   }
   override get url() {
-    return this.#url;
+    return #url in this ? this.#url : super.url;
   }
 }
 // A jsdom page at `url`, with node's WebCrypto and TextEncoder (jsdom has no SubtleCrypto).

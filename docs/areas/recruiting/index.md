@@ -205,8 +205,8 @@ add a fetch of our own for it: the extension stays passive.
 **The page's world is evidence, never authority** (Rahul, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
 an overlay that is really showing; a page message can only add events to the sitting the extension itself
-opened, for the problem in the tab's address (a run or submit judged after you moved on goes to its own
-problem's open sitting); nothing from Aperture ever flows back into the page (the
+opened, for the problem in the tab's address and made from that problem's page (a run or submit made there
+and judged after you left goes to that problem's open sitting); nothing from Aperture ever flows back into the page (the
 overlay's shadow roots are closed — the page sees only whether it shows); and messages carry an HMAC tag
 keyed by a per-load nonce, with a sequence number. The MAIN world ships raw text and the isolated world
 parses it; everything MAIN calls is bound at load, and `then` is pinned on what its promises settle with, so

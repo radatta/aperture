@@ -3,7 +3,7 @@
 // hydration never touches them, and no page script can read their state, their text or Aperture's words —
 // whether the overlay shows is all the page can see. Their styles are inline in the root, so neither side's
 // CSS leaks into the other. A button acts only on a real click (isTrusted) on an overlay that is really
-// showing: the host a direct child of <html>, its style ours, nothing on it or <html> fading or moving it —
+// showing: the host the last child of <html>, its style ours, nothing on it or <html> fading or moving it —
 // checked at the click, and the host is put back and kept last on every poll. What that can't see (a page
 // element in the browser's top layer, painted over the overlay but letting clicks through) is residual.
 (function (root) {
@@ -56,10 +56,6 @@
     shadow.appendChild(body);
     return { el, body };
   }
-  const attach = (el) => {
-    const parent = document.documentElement;
-    if (parent && el.parentNode !== parent) parent.appendChild(el);
-  };
   // Last among <html>'s children, in this order, so nothing the page appends later stacks above them.
   function keepLast(els) {
     const parent = document.documentElement;
@@ -71,7 +67,9 @@
   // At the click: is the overlay what the user sees? (getComputedStyle here is the isolated world's own.)
   function genuine(el, expected) {
     const html = document.documentElement;
-    if (!html || el.parentNode !== html || el.getAttribute('style') !== expected) return false;
+    // Last among <html>'s children too: a later sibling at the same z-index would paint over it.
+    if (!html || html.lastElementChild !== el || el.getAttribute('style') !== expected)
+      return false;
     const bad = (cs, keys) => keys.some(([k, ok]) => cs[k] !== '' && cs[k] !== ok);
     return (
       !bad(getComputedStyle(el), [
@@ -115,7 +113,7 @@
       overlayShown = show;
       overlay.el.setAttribute('style', styleOf(show, show));
       overlay.body.setAttribute('data-phase', state.phase); // inside the closed root: for tests, not the page
-      attach(overlay.el);
+      order();
       if (!show) return;
       const title = (info && info.title) || 'This problem';
       const meta = info && info.lang ? `Language: ${info.lang}` : '';
@@ -181,18 +179,22 @@
       badge.body.replaceChildren();
       badgeShown = !!text;
       badge.el.setAttribute('style', styleOf(badgeShown, false));
+      order();
       if (!text) return;
-      attach(badge.el);
       badge.body.append(
         node('div', { class: `badge ${tone || ''}`, 'data-ap': 'badge', role: 'status' }, text),
       );
     }
     // LeetCode may rebuild <html>'s children; the content script's poll calls this to put them back.
+    // The shown one last (the overlay over the badge), as soon as either changes and on every poll.
+    function order() {
+      if (!badgeShown) keepLast([overlay.el]);
+      else keepLast(overlayShown ? [badge.el, overlay.el] : [overlay.el, badge.el]);
+    }
     const ensureAttached = () => {
       overlay.el.setAttribute('style', styleOf(overlayShown, overlayShown));
       badge.el.setAttribute('style', styleOf(badgeShown, false));
-      if (!badgeShown) keepLast([overlay.el]);
-      else keepLast(overlayShown ? [badge.el, overlay.el] : [overlay.el, badge.el]);
+      order();
     };
     return { render, setBadge, ensureAttached };
   }
