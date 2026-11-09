@@ -6,13 +6,15 @@
   const TEMPLATE = 'class Solution:\n    def twoSum(self, nums, target):\n        ';
   const slug = (location.pathname.match(/^\/problems\/([^/]+)/) || [])[1] || 'two-sum';
   const qid = slug === 'two-sum' ? 1 : 2;
-  const fake = (window.__fake = { resets: 0, timerStarts: 0, submits: 0, runs: 0 });
-  const gql = (operationName, variables) =>
-    fetch('/graphql/', {
+  const fake = (window.__fake = { resets: 0, timerStarts: 0, submits: 0, runs: 0, syncs: 0 });
+  const gql = (operationName, variables) => {
+    if (operationName === 'updateSyncedCode') fake.syncs++;
+    return fetch('/graphql/', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ operationName, variables, query: `query ${operationName} { x }` }),
     }).then((r) => r.json());
+  };
   const $ = (q) => document.querySelector(q);
   const code = $('[data-fake=code]');
   code.value = TEMPLATE + 'pass\n';

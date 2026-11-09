@@ -203,17 +203,19 @@ and `null`s), and when a `questionDetail` for the problem arrives, a repeat Star
 add a fetch of our own for it: the extension stays passive.
 
 **The page's world is evidence, never authority** (Rahul, 2026-11-08). Any script on leetcode.com can
-spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click;
-a page message can only add events to the sitting the extension itself opened, for the problem on screen;
-nothing from Aperture ever flows back into the page (the overlay's shadow roots are closed); and messages
-carry an HMAC tag keyed by a per-load nonce, with a sequence number. The MAIN world ships raw text and the
-isolated world parses it, with everything MAIN calls at request time bound at load — so the tag stops
-minting and replay, and a later patch of the page's built-ins can't make what's recorded differ from what
-LeetCode got (`extension/README.md` → _How it works_). A problem doc or hint counts only for the problem on
-screen. **Accepted residual:** a hostile leetcode.com script that patched `fetch`/`XMLHttpRequest` or the
-built-ins before our script ran, or that drives the real editor or fakes traffic LeetCode itself receives,
-can still forge events in the open sitting — the server's caps are the boundary. A Start is never forged:
-Aperture is asked first, and only the overlay asks.
+spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
+an overlay that is really showing; a page message can only add events to the sitting the extension itself
+opened, for the problem in the tab's address; nothing from Aperture ever flows back into the page (the
+overlay's shadow roots are closed — the page sees only whether it shows); and messages carry an HMAC tag
+keyed by a per-load nonce, with a sequence number. The MAIN world ships raw text and the isolated world
+parses it; everything MAIN calls is bound at load, and `then` is pinned on what its promises settle with, so
+the key can't be read and a later patch can't make what's recorded differ from what LeetCode got; a Response
+counts only if the browser fetched it from leetcode.com (`extension/README.md` → _How it works_). A Start is
+never forged: Aperture is asked first, and only the overlay asks. **Accepted residual:** a hostile
+leetcode.com script that patched `fetch`/`XMLHttpRequest` or the built-ins before our script ran (Safari may
+run ours late), drives the real editor, fakes traffic LeetCode itself receives, hides an event from us, or
+points the address at the open sitting's problem can still forge or lose events in the one open sitting —
+the server's caps are the boundary.
 
 **The server owns normalization.** The extension ships raw signals (`status_code`, `status_msg`,
 `tzOffsetMinutes`) and stays dumb, because it can't import from the workspace and shouldn't need

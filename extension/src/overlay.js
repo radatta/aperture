@@ -2,8 +2,10 @@
 // Both live in closed shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
 // hydration never touches them, and no page script can read their state, their text or Aperture's words —
 // whether the overlay shows is all the page can see. Their styles are inline in the root, so neither side's
-// CSS leaks into the other. A button acts only on a real click (isTrusted), and the host's own style is
-// reasserted every poll, so a page that hides the overlay can't turn the user's next click into a Start.
+// CSS leaks into the other. A button acts only on a real click (isTrusted) on an overlay that is really
+// showing: the host a direct child of <html>, its style ours, nothing on it or <html> fading or moving it —
+// checked at the click, and the host is put back and kept last on every poll. What that can't see (a page
+// element in the browser's top layer, painted over the overlay but letting clicks through) is residual.
 (function (root) {
   'use strict';
   const STEP_TEXT = {
@@ -56,8 +58,35 @@
   }
   const attach = (el) => {
     const parent = document.documentElement;
-    if (parent && !el.isConnected) parent.appendChild(el);
+    if (parent && el.parentNode !== parent) parent.appendChild(el);
   };
+  // Last among <html>'s children, in this order, so nothing the page appends later stacks above them.
+  function keepLast(els) {
+    const parent = document.documentElement;
+    if (!parent) return;
+    let n = parent.lastElementChild;
+    for (let i = els.length - 1; i >= 0; i--, n = n && n.previousElementSibling)
+      if (n !== els[i]) return els.forEach((el) => parent.appendChild(el));
+  }
+  // At the click: is the overlay what the user sees? (getComputedStyle here is the isolated world's own.)
+  function genuine(el, expected) {
+    const html = document.documentElement;
+    if (!html || el.parentNode !== html || el.getAttribute('style') !== expected) return false;
+    const bad = (cs, keys) => keys.some(([k, ok]) => cs[k] !== '' && cs[k] !== ok);
+    return (
+      !bad(getComputedStyle(el), [
+        ['opacity', '1'],
+        ['visibility', 'visible'],
+        ['display', 'block'],
+      ]) &&
+      !bad(getComputedStyle(html), [
+        ['opacity', '1'],
+        ['filter', 'none'],
+        ['transform', 'none'],
+        ['visibility', 'visible'],
+      ])
+    );
+  }
   function node(tag, attrs, ...kids) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
@@ -74,7 +103,7 @@
       const b = node('button', { class: cls, 'data-ap': ap, type: 'button' }, text);
       b.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (e.isTrusted) fn();
+        if (e.isTrusted && genuine(overlay.el, styleOf(true, true))) fn();
       });
       return b;
     };
@@ -120,8 +149,17 @@
         const row = node('div', { class: 'row' }, btn('primary', 'retry', 'Retry', on.retry));
         // Open: a click step failed after Aperture said yes — Continue keeps the sitting, uncleared.
         // Not open: Aperture refused, and nothing was touched.
+        // Past the reset and its confirm, only LeetCode's timer is missing: the editor was cleared.
+        const cleared = state.step === 'timer';
         if (state.open)
-          row.append(btn('secondary', 'continue', 'Continue without a clear', on.continue));
+          row.append(
+            btn(
+              'secondary',
+              'continue',
+              cleared ? 'Continue without the timer' : 'Continue without a clear',
+              on.continue,
+            ),
+          );
         else row.append(btn('secondary', 'look', 'Just looking', on.dismiss));
         card.append(row);
         if (state.open)
@@ -129,7 +167,9 @@
             node(
               'p',
               { class: 'hint' },
-              'The sitting is open in Aperture; the editor wasn’t cleared.',
+              cleared
+                ? 'The sitting is open in Aperture and the editor was cleared; LeetCode’s timer didn’t start.'
+                : 'The sitting is open in Aperture; the editor wasn’t cleared.',
             ),
           );
       }
@@ -151,8 +191,8 @@
     const ensureAttached = () => {
       overlay.el.setAttribute('style', styleOf(overlayShown, overlayShown));
       badge.el.setAttribute('style', styleOf(badgeShown, false));
-      attach(overlay.el);
-      if (badgeShown) attach(badge.el);
+      if (!badgeShown) keepLast([overlay.el]);
+      else keepLast(overlayShown ? [badge.el, overlay.el] : [overlay.el, badge.el]);
     };
     return { render, setBadge, ensureAttached };
   }

@@ -11,6 +11,7 @@ import {
   normalizeSittingStart,
 } from '@aperture/shared';
 import {
+  FetchedResponse,
   ISOLATED_JS,
   MAIN_JS,
   fakeExtension,
@@ -113,9 +114,10 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
     const url = new URL(typeof input === 'string' ? input : input.url, w.location.href);
     const body = init?.body != null ? String(init.body) : null;
     const r = lc.respond(url.pathname, init?.method ?? 'GET', body) ?? { status: 404, body: '{}' };
-    return new Response(r.body, {
+    return new FetchedResponse(r.body, {
       status: r.status,
       headers: { 'content-type': 'application/json' },
+      url: url.href,
     });
   };
   const rootOf = shadowRoots(dom);
@@ -131,7 +133,7 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
     rootOf(w.document.querySelector('aperture-lc-badge'))?.querySelector('[data-ap=badge]')
       ?.textContent;
   const tap = (ap: string) => trustedClick(button(ap)!);
-  const fake = () => w.__fake as { resets: number; timerStarts: number };
+  const fake = () => w.__fake as { resets: number; timerStarts: number; syncs: number };
   return { w, phase, text, button, tap, badge, fake };
 }
 const messages = (ext: ReturnType<typeof fakeExtension>, type: string) =>
@@ -158,16 +160,25 @@ describe('the overlay on a LeetCode problem', () => {
       difficulty: 'Easy',
       topicTags: ['Array', 'Hash Table'],
       lang: 'Python3',
-      questionId: '1',
     });
+    // LeetCode names the question (syncedCode) on its own schedule: in the Start if it came first, else the
+    // binding learns it — either way the sitting has it.
+    expect([null, '1']).toContain(start!.body!.questionId);
+    await until(
+      () =>
+        (ext.local.data['sitting:two-sum'] as { questionId?: string } | undefined)?.questionId ===
+        '1',
+    );
     await until(() => p.badge()?.startsWith('Aperture · 0m'));
 
     // Typing → a snapshot, held for its 30 s window; Submit → the judged submit at once, and the pending
     // snapshot goes ahead of it in the same hand-off; the timer read.
     const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    const syncs = p.fake().syncs;
     code.value += 'return [0, 1]\n';
     code.dispatchEvent(new p.w.Event('input'));
-    await new Promise((res) => setTimeout(res, 500));
+    await until(() => p.fake().syncs > syncs, 3000); // LeetCode's autosave went
+    await new Promise((res) => setTimeout(res, 100)); // and the relay has it
     expect(sentEvents(ext).some((e) => e.type === 'snapshot')).toBe(false);
     (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
     await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
@@ -257,6 +268,31 @@ describe('the overlay on a LeetCode problem', () => {
     const e = open('/problems/two-sum/', ext);
     await until(() => e.phase() === 'prompt', 6000);
     expect(ext.local.data['sitting:two-sum']).toBeUndefined();
+  }, 20_000);
+
+  it('hands the pending snapshot over when the page is hidden', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ selectors: SELECTORS });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    const syncs = p.fake().syncs;
+    code.value += 'return []\n';
+    code.dispatchEvent(new p.w.Event('input'));
+    await until(() => p.fake().syncs > syncs, 3000);
+    await new Promise((res) => setTimeout(res, 100));
+    expect(
+      sentEvents(ext).some((e) => (e.payload as { code?: string })?.code?.includes('return []')),
+    ).toBe(false);
+    p.w.dispatchEvent(new p.w.Event('pagehide'));
+    await until(() =>
+      sentEvents(ext).some(
+        (e) => e.type === 'snapshot' && (e.payload as { code: string }).code.includes('return []'),
+      ),
+    );
   }, 20_000);
 
   it('Just looking dismisses without touching the editor, and is remembered for the problem', async () => {

@@ -144,6 +144,17 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-forged-response',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A Response a page script built, or one a <base href> sent to another origin, is never captured; then stays pinned',
+      offDev: {
+        file: 'extension/test/replay.test.ts',
+        test: 'ignores a Response the page built or one from another origin, and keeps then pinned',
+        why: `${noStep}; the real page-world script runs in jsdom, fed what a hostile page would`,
+      },
+    },
+    {
       id: 'ext-snapshots',
       entry: 'extension',
       kind: 'nominal',
@@ -151,7 +162,7 @@ export const lcExtension: Scenario = {
       offDev: {
         file: 'extension/test/batch.test.ts',
         test: 'sends at most one snapshot per 30 s window, the latest one, and the pending one before a run or submit and on hide',
-        why: `${noStep}; the batching is a pure function over a fake clock, and the overlay test sees the snapshot ride with a submit`,
+        why: `${noStep}; the batching is a pure function over a fake clock; overlay.test.ts sees the snapshot ride with a submit and go on pagehide`,
       },
     },
     {

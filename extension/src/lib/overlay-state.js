@@ -5,9 +5,10 @@
 //   prompt ─dismiss→ hidden (remembered for the slug, this browser session)
 //   starting ─stepFail→ failed:
 //     not open (the send failed) ─retry→ starting(send) | ─dismiss→ hidden
-//     open (a click failed)      ─retry→ starting(that step) | ─continue→ active (no clear)
+//     open (a click failed)      ─retry→ starting(that step, or an earlier one) | ─continue→ active
+//   active | resuming | open ─ended→ ended
 //   nav(problem with an open sitting) → resuming ─resumed(active)→ active | ─resumed(not)→ prompt
-//   active ─ended→ ended (badge only; the next nav prompts again)
+//   ended: badge only; the next nav prompts again
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -42,9 +43,13 @@
       }
       case 'start':
         return state.phase === 'prompt' ? go(state, 'send') : same(state);
-      case 'retry':
+      case 'retry': {
         if (state.phase !== 'failed') return same(state);
-        return go(state, state.open ? state.step : 'send');
+        if (!state.open) return go(state, 'send');
+        // A click step again; `from` may step back (LeetCode's confirm dialog closed → the reset again).
+        const back = STEPS.indexOf(action.from);
+        return go(state, back > 0 && back <= STEPS.indexOf(state.step) ? action.from : state.step);
+      }
       case 'continue':
         if (state.phase !== 'failed' || !state.open) return same(state);
         return { state: at(state, { phase: 'active', step: null, reason: null }), effects: [] };
@@ -75,7 +80,10 @@
           ? { state: at(state, { phase: 'active', open: true }), effects: [] }
           : { state: at(state, { phase: 'prompt' }), effects: [{ do: 'clearBinding' }] };
       case 'ended':
-        if (state.phase !== 'active' && state.phase !== 'resuming') return same(state);
+        // Also mid-Start once the sitting is open: a Retry would otherwise click LeetCode's reset for a
+        // sitting Aperture has already closed.
+        if (state.phase !== 'active' && state.phase !== 'resuming' && !state.open)
+          return same(state);
         return { state: at(state, { phase: 'ended' }), effects: [{ do: 'clearBinding' }] };
       default:
         return same(state);

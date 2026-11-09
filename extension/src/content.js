@@ -48,7 +48,7 @@
   let sync = null; // storage.local sync:<slug> — the background's last word on it
   let status = null; // storage.local status — the outbox's state
   let sel = selLib.merge(null);
-  let pendingStart = null; // {clientSittingId, startedAt} for the Start in progress
+  let pendingStart = null; // {slug, clientSittingId, startedAt} for the Start in progress
   let lastStartRetryable = false;
   const problems = new Map(); // slug → LeetCode's questionDetail.question, this page load
   const questionIds = new Map(); // slug → questionId (from syncedCode)
@@ -75,7 +75,11 @@
       const ok = relay.hello(e.detail);
       if (!ok) return;
       window.dispatchEvent(new CustomEvent('aperture-lc-ack')); // same tick: no page script can get between
-      ok.then((good) => debug.log('handshake', { ok: good, bootState }));
+      let pageState = null; // the page world's readyState when it ran (inject-main.js)
+      try {
+        pageState = String(JSON.parse(e.detail).readyState || '').slice(0, 20) || null;
+      } catch {}
+      ok.then((good) => debug.log('handshake', { ok: good, bootState, pageState }));
     },
     true,
   );
@@ -119,7 +123,16 @@
     }
     if (m.kind === 'problem') return onProblem(m.slug, m.payload, m.questionId);
     if (m.kind === 'hint') {
-      if (m.questionId) questionIds.set(screenSlug, m.questionId);
+      // A hint (syncedCode) names no slug, so it may be a late answer for the last problem: it's taken only
+      // when no id is known yet and the problem doc, if any, agrees.
+      const doc = problems.get(screenSlug);
+      const docId = doc && doc.questionId != null ? String(doc.questionId) : null;
+      if (
+        m.questionId &&
+        !questionIds.has(screenSlug) &&
+        (!docId || docId === String(m.questionId))
+      )
+        learnQuestionId(screenSlug, m.questionId);
       return;
     }
     queue(wire.toEventInputs(m, mintId));
@@ -166,9 +179,10 @@
     () => document.visibilityState === 'hidden' && flushNow(),
   );
 
-  // LeetCode's timer, read from its own localStorage (shared with this world) every 2 s while a sitting is open.
+  // LeetCode's timer, read from its own localStorage (shared with this world) every 2 s while a sitting is
+  // active — not while Start is still clicking, when it would still hold the last solve's state.
   setInterval(() => {
-    if (!liveBinding() || bindingStatus() !== 'active') return;
+    if (state.phase !== 'active' || !liveBinding() || bindingStatus() !== 'active') return;
     let raw = null;
     try {
       raw = localStorage.getItem(timer.KEY);
@@ -189,10 +203,17 @@
   }, 2000);
 
   // ---- the problem ----
+  // A Start clicked before LeetCode named the question goes without its id; the sitting's binding learns it
+  // when it comes, so the foreign-question check holds for the rest of the sitting.
+  function learnQuestionId(slug, questionId) {
+    questionIds.set(slug, questionId);
+    if (binding && binding.slug === slug && binding.questionId == null)
+      saveBinding({ ...binding, questionId: String(questionId) }).catch(() => {});
+  }
   function onProblem(slug, doc, questionId) {
     if (!doc || wire.bytes(JSON.stringify(doc)) > PROBLEM_MAX) return;
     problems.set(slug, doc);
-    if (questionId) questionIds.set(slug, questionId);
+    if (questionId) learnQuestionId(slug, questionId);
     // A1 fills in a sitting's problem doc on a repeat Start: LeetCode only sends it after a submit or a nav.
     if (binding && binding.slug === slug && !binding.problemSent && state.phase === 'active')
       lateFill();
@@ -250,8 +271,8 @@
       return null;
     }
   }
-  function startBody(clientSittingId, startedAt) {
-    const doc = problems.get(screenSlug) || null;
+  function startBody(clientSittingId, startedAt, slug = screenSlug) {
+    const doc = problems.get(slug) || null;
     const dom = readDom();
     const docTags =
       doc && Array.isArray(doc.topicTags)
@@ -260,16 +281,16 @@
     const idOf = (v) => (v == null ? null : clip(String(v), 20));
     return {
       clientSittingId,
-      problemSlug: screenSlug,
-      problemTitle: clip(doc && doc.title, 200) || dom.title || humanize(screenSlug),
-      questionId: idOf((doc && doc.questionId) ?? questionIds.get(screenSlug)),
+      problemSlug: slug,
+      problemTitle: clip(doc && doc.title, 200) || dom.title || humanize(slug),
+      questionId: idOf((doc && doc.questionId) ?? questionIds.get(slug)),
       frontendId: idOf(doc && doc.questionFrontendId),
       difficulty: clip(doc && doc.difficulty, 20) || dom.difficulty,
       topicTags: docTags && docTags.length ? docTags.slice(0, 20) : dom.topicTags,
       lang: dom.lang || 'python3',
       startedAt,
       tzOffsetMinutes: new Date().getTimezoneOffset(),
-      lcSolveSessionId: solveSession(screenSlug),
+      lcSolveSessionId: solveSession(slug),
       problem: doc,
     };
   }
@@ -331,7 +352,10 @@
   };
 
   async function runStep(step) {
-    if (step === 'send') return sendStart();
+    if (step === 'send')
+      return sendStart().catch((err) =>
+        act({ type: 'stepFail', step: 'send', reason: String((err && err.message) || err) }),
+      );
     let r;
     try {
       r = await STEP[step]();
@@ -352,41 +376,54 @@
     if (r.error === ACTIVE_ERROR) return `${r.error} Then Retry.`;
     return r.error || `Start failed (HTTP ${r.status}).`;
   }
+  // The Start is for the problem it was clicked on: a nav away mid-send stops it acting on this page, and a
+  // sitting Aperture opened meanwhile is still bound to its own problem, so going back resumes it.
   async function sendStart() {
     const start = pendingStart;
+    const slug = start.slug;
+    const stale = () => screenSlug !== slug || pendingStart !== start;
+    await chain; // what LeetCode already sent (the question id, its problem doc) is read before the body
     const deadline = Date.now() + START_RETRY_MS;
     for (let tries = 0; ; tries++) {
-      const body = startBody(start.clientSittingId, start.startedAt);
+      if (stale()) return;
+      const body = startBody(start.clientSittingId, start.startedAt, slug);
       const r = await send({ type: 'start', body }).catch(() => ({
         status: 0,
         error: 'the extension was reloaded — reload this page',
       }));
       const s = r.status === 200 && r.json && r.json.sitting;
-      if (s && s.status === 'active' && s.problemSlug === screenSlug) {
-        await saveBinding({
-          slug: screenSlug,
+      if (s && s.status === 'active' && s.problemSlug === slug) {
+        const b = {
+          slug,
           sittingId: s.id,
           clientSittingId: s.clientSittingId,
           questionId: s.questionId || body.questionId,
           clientStartedAt: s.clientStartedAt,
           title: s.problemTitle,
           problemSent: !!body.problem,
-        });
+        };
         await local.set({
-          [`sync:${screenSlug}`]: { sittingId: s.id, status: 'active', at: Date.now() },
+          [`sitting:${slug}`]: b,
+          [`sync:${slug}`]: { sittingId: s.id, status: 'active', at: Date.now() },
         });
+        if (stale()) return;
+        binding = b;
         sync = { sittingId: s.id, status: 'active' };
         lastTimerRaw = null;
         pendingStart = null;
         debug.log('start', { ok: true, resumed: !!r.json.resumed });
         return act({ type: 'stepOk', step: 'send' }); // the binding is saved: a reload mid-reset resumes
       }
+      if (stale()) return;
       if (s) {
-        pendingStart = null; // an ended sitting came back: the next try mints a fresh id
+        pendingStart = null; // the next try mints a fresh id
         return act({
           type: 'stepFail',
           step: 'send',
-          reason: 'That sitting has already ended — Retry starts a new one.',
+          reason:
+            s.status === 'active'
+              ? `Aperture has a sitting open for ${s.problemSlug} under this Start — end it in Aperture, then Retry.`
+              : 'That sitting has already ended — Retry starts a new one.',
         });
       }
       lastStartRetryable = r.status !== -1 && outbox.retryable(r.status);
@@ -400,8 +437,20 @@
     }
   }
 
-  async function resume() {
+  // A throw (storage full, say) keeps the binding: the same rule as no answer.
+  function resume() {
+    return resumeOnce().catch((err) => {
+      debug.log('resume', { active: true, error: String((err && err.message) || err) });
+      if (state.phase === 'resuming') act({ type: 'resumed', active: true });
+    });
+  }
+  // Once per sitting per page load: a page flipping the path back and forth (pushState) must not turn into
+  // a stream of Start calls. Later visits trust the binding; an end still arrives through sync:<slug>.
+  const resumed = new Set();
+  async function resumeOnce() {
     const b = binding;
+    if (resumed.has(b.sittingId)) return act({ type: 'resumed', active: true });
+    resumed.add(b.sittingId);
     const r = await send({
       type: 'start',
       body: startBody(b.clientSittingId, b.clientStartedAt),
@@ -435,14 +484,18 @@
     continue: () => act({ type: 'continue' }),
     dismiss: () => act({ type: 'dismiss' }),
   });
-  // A retryable failure keeps the id (the first try may have landed: the server resumes it and keeps its
-  // time); the time is always this click's, since the reset and the timer run again.
+  // A retryable failure on this problem keeps the id and sends this click's time; if the first try had in
+  // fact landed, the server resumes that sitting and keeps its own (first) time.
   function begin(type) {
-    if (type === 'retry' && state.open) return act({ type }); // the sitting exists: repeat the click step
+    if (type === 'retry' && state.open) {
+      // The sitting exists: repeat the click step — from the reset if LeetCode's dialog has gone meanwhile.
+      const from = state.step === 'confirm' && !q(sel.dialog) ? 'reset' : state.step;
+      return act({ type, from });
+    }
     pendingStart =
-      pendingStart && lastStartRetryable
+      pendingStart && lastStartRetryable && pendingStart.slug === screenSlug
         ? { ...pendingStart, startedAt: Date.now() }
-        : { clientSittingId: mintId(), startedAt: Date.now() };
+        : { slug: screenSlug, clientSittingId: mintId(), startedAt: Date.now() };
     lastStartRetryable = false;
     act({ type });
   }
@@ -501,12 +554,20 @@
   }, 5000);
 
   // ---- navigation (LeetCode is a single-page app): this world's own location, never a page message ----
-  async function onNav() {
+  // One nav at a time: a second call for the same path (the poll, a popstate and a page message can all
+  // notice it) waits for the one in flight, so nobody reads a half-loaded binding.
+  let navDone = Promise.resolve();
+  function onNav() {
     const slug = relayLib.slugOf(location.pathname);
-    if (navigated && slug === screenSlug) return;
+    if (navigated && slug === screenSlug) return navDone;
+    navDone = navTo(slug);
+    return navDone;
+  }
+  async function navTo(slug) {
     navigated = true;
     flushNow(); // the old problem's events go first
     screenSlug = slug;
+    pendingStart = null; // a Start in flight stops acting on this page (sendStart checks)
     binding = null;
     sync = null;
     lastTimerRaw = null;
@@ -531,7 +592,8 @@
       onNav();
     }
   }, 500);
-  window.addEventListener('popstate', () => {
+  window.addEventListener('popstate', (e) => {
+    if (!e.isTrusted) return; // a page's synthetic popstate waits for the poll
     lastPath = location.pathname;
     onNav();
   });
@@ -547,7 +609,7 @@
       if (
         binding &&
         bindingStatus() !== 'active' &&
-        (state.phase === 'active' || state.phase === 'resuming')
+        (state.phase === 'active' || state.phase === 'resuming' || state.open)
       )
         act({ type: 'ended' });
     }

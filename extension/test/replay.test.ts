@@ -3,7 +3,7 @@
 // content.js does: the handshake, the real relay's envelope check, the real wire parse, the relay's admit.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JSDOM } from 'jsdom';
-import { MAIN_JS, lib, page, run, until } from './load';
+import { FetchedResponse, MAIN_JS, lib, page, run, until } from './load';
 import { T } from './fixtures/traffic';
 
 const relayLib = lib('relay');
@@ -22,7 +22,7 @@ let dom: JSDOM | null = null;
 afterEach(() => dom?.window.close());
 
 const ctx = { screenSlug: 'two-sum', binding: { questionId: '1', status: 'active' } };
-function loadMain(pairs: Pair[]) {
+function loadMain(pairs: Pair[], respond?: (url: string) => Response | null) {
   dom = page('https://leetcode.com/problems/two-sum/description/');
   const w = dom.window as unknown as Window & typeof globalThis & Record<string, unknown>;
   const answer = byUrl(pairs);
@@ -57,15 +57,18 @@ function loadMain(pairs: Pair[]) {
   // LeetCode's two transports: fetch …
   w.fetch = (async (input: string | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.url;
+    const own = respond?.(url);
+    if (own) return own;
     const body =
       init?.body != null
         ? String(init.body)
         : typeof input === 'string'
           ? null
           : await input.text();
-    return new Response(answer(url, body), {
+    return new FetchedResponse(answer(url, body), {
       status: 200,
       headers: { 'content-type': 'application/json' },
+      url: new URL(url, 'https://leetcode.com').href,
     });
   }) as unknown as typeof fetch;
   // … and XMLHttpRequest, its state behind prototype getters as in a browser.
@@ -81,6 +84,9 @@ function loadMain(pairs: Pair[]) {
     }
     get responseText() {
       return this.text;
+    }
+    get responseURL() {
+      return this.s ? new URL(this.url, 'https://leetcode.com').href : '';
     }
     open(_m: string, url: string) {
       this.url = url;
@@ -185,6 +191,34 @@ describe('inject-main in a page', () => {
     } finally {
       Response.prototype.text = realText;
     }
+  });
+
+  it('ignores a Response the page built or one from another origin, and keeps then pinned', async () => {
+    const check = T.submitCheck.url;
+    const m = loadMain([T.submit as Pair], (url) =>
+      url === check
+        ? new Response(T.submitCheck.resText, { status: 200 }) // built by a page script: type 'default'
+        : url.includes('interpret_solution')
+          ? new FetchedResponse('{"interpret_id":"runcode_9"}', {
+              status: 200,
+              url: 'https://evil.example/problems/two-sum/interpret_solution/', // a <base href> elsewhere
+            })
+          : null,
+    );
+    await m.post(T.submit);
+    await m.w.fetch(check);
+    await m.post(T.run);
+    await m.post(T.updateSyncedCode); // a real one still goes, so the relay is known to be listening
+    await until(() => m.raws.length >= 1);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(m.raws.map((r) => r.url).sort()).toEqual([
+      'https://leetcode.com/graphql/',
+      'https://leetcode.com/problems/two-sum/submit/',
+    ]);
+    const proto = (m.w as unknown as { Response: { prototype: object } }).Response.prototype;
+    expect(() =>
+      Object.defineProperty(proto, 'then', { value: (ok: (v: unknown) => void) => ok(null) }),
+    ).toThrow();
   });
 
   it('never changes what the page gets back', async () => {

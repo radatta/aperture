@@ -68,6 +68,23 @@ describe('overlay state', () => {
       effects: [],
     });
     expect(run([{ type: 'dismiss' }], r.state).state).toEqual(r.state); // the sitting is open
+    // LeetCode's dialog closed after the reset: Retry steps back to the reset, never to the send.
+    const confirmFailed = run(
+      [
+        { type: 'retry' },
+        { type: 'stepOk', step: 'reset' },
+        { type: 'stepFail', step: 'confirm', reason: 'Couldn’t find the reset’s confirm button.' },
+      ],
+      r.state,
+    ).state;
+    expect(run([{ type: 'retry', from: 'reset' }], confirmFailed).state.step).toBe('reset');
+    expect(run([{ type: 'retry', from: 'send' }], confirmFailed).state.step).toBe('confirm');
+    expect(run([{ type: 'retry', from: 'timer' }], confirmFailed).state.step).toBe('confirm');
+    // Ended in Aperture while it waits on Retry: no click for a closed sitting.
+    expect(run([{ type: 'ended' }], r.state)).toMatchObject({
+      state: { phase: 'ended' },
+      effects: [{ do: 'clearBinding' }],
+    });
   });
 
   it('resumes an open sitting on load with no overlay and no clicks', () => {

@@ -23,6 +23,21 @@ export const ISOLATED_JS: string[] = manifest.content_scripts.find(
 ).js;
 export const BACKGROUND_JS: string[] = manifest.background.scripts;
 
+// What the browser's fetch hands the page: a Response it fetched (type 'basic', the final URL), which the page
+// world requires — node's own `new Response()` reads as one a page built (type 'default'). Fakes use this.
+export class FetchedResponse extends Response {
+  #url: string;
+  constructor(body: BodyInit | null, init: ResponseInit & { url: string }) {
+    super(body, init);
+    this.#url = init.url;
+  }
+  override get type(): ResponseType {
+    return 'basic';
+  }
+  override get url() {
+    return this.#url;
+  }
+}
 // A jsdom page at `url`, with node's WebCrypto and TextEncoder (jsdom has no SubtleCrypto).
 export function page(url: string, html = '<!doctype html><html><head></head><body></body></html>') {
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
@@ -31,7 +46,7 @@ export function page(url: string, html = '<!doctype html><html><head></head><bod
   w.TextEncoder = TextEncoder;
   // jsdom has no fetch types; the page world captures Response/Request's originals at load, so node's go
   // on the window first.
-  w.Response = Response;
+  w.Response = FetchedResponse;
   w.Request = Request;
   w.TextDecoder = TextDecoder;
   return dom;

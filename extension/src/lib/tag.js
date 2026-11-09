@@ -1,8 +1,10 @@
 // The relay's keyed tag: HMAC-SHA256 over each message, keyed by a per-load nonce. Loaded in both worlds at
 // document_start, before any LeetCode script exists, so the functions it binds are the originals — a page
 // script that patches crypto.subtle, Promise.prototype.then or Array methods later can't see or change what
-// this file holds. sign() runs in the page world at request time, so it neither awaits nor calls a method a
-// page could replace: Reflect.apply over the captured originals, and a plain loop for the hex.
+// this file holds. keyOf() and sign() run in the page world, so neither is async (an async function's result
+// is resolved through a page-replaceable `then`) and sign() reports by callback: Reflect.apply over the
+// captured originals, and a plain loop for the hex. inject-main.js pins `then` on what these promises
+// settle with (CryptoKey, ArrayBuffer) before calling them.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -36,15 +38,23 @@
     return out;
   };
   const newNonce = () => hex(getRandom(new Uint8Array(32)));
-  // A 64-hex-char nonce → its HMAC key (null for anything else).
-  async function keyOf(nonceHex) {
+  // A 64-hex-char nonce → a promise of its HMAC key (null for anything else) — the platform's own promise.
+  function keyOf(nonceHex) {
     const raw = typeof nonceHex === 'string' && nonceHex.length === 64 ? fromHex(nonceHex) : null;
-    return raw ? importRaw('raw', raw, HMAC, false, ['sign', 'verify']) : null;
+    return raw ? importRaw('raw', raw, HMAC, false, ['sign', 'verify']) : Promise.resolve(null);
   }
-  const sign = (key, text) => apply(pThen, signRaw('HMAC', key, encode(text)), [hex]);
+  // done(hex | null), never a promise to chain on.
+  function sign(key, text, done) {
+    try {
+      apply(pThen, signRaw('HMAC', key, encode(text)), [(buf) => done(hex(buf)), () => done(null)]);
+    } catch {
+      done(null);
+    }
+  }
+  const signed = (key, text) => new Promise((ok) => sign(key, text, ok)); // for the isolated world and tests
   async function verify(key, text, tagHex) {
     const sig = typeof tagHex === 'string' && tagHex.length === 64 ? fromHex(tagHex) : null;
     return !!sig && verifyRaw('HMAC', key, sig, encode(text));
   }
-  return { newNonce, keyOf, sign, verify };
+  return { newNonce, keyOf, sign, signed, verify };
 });

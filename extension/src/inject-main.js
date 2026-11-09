@@ -7,9 +7,12 @@
 //
 // A page script can patch built-ins after we load. So everything this file calls at request time is an
 // original captured below and called through Reflect.apply; it never awaits or chains on a promise (a
-// patched `then` could swap the value); and each message is strings and numbers in null-prototype objects,
-// so no page `toJSON` applies. What that can't stop — a patch in place before we ran, or traffic a script
-// makes or fakes for LeetCode itself — is the accepted residual (README → How it works → The relay).
+// patched `then` could swap the value); the browser's own promise resolution can't be steered either —
+// `then` is pinned to undefined on what our promises settle with (Response, CryptoKey, ArrayBuffer); a
+// Response counts only if the browser fetched it from leetcode.com (its own type and final URL); and each
+// message is strings and numbers in null-prototype objects, so no page `toJSON` applies. What that can't
+// stop — a patch in place before we ran, or traffic a script makes or fakes for LeetCode itself, or one it
+// keeps from us (a listener ahead of ours) — is the accepted residual (README → How it works → The relay).
 (() => {
   'use strict';
   const NS = globalThis.ApertureLC;
@@ -21,6 +24,16 @@
   } catch {}
 
   // ---- the originals, bound before any LeetCode script exists ----
+  // First: the objects our promises settle with get a fixed, absent `then`, so the browser's resolution
+  // never runs a page-installed one (which could swap a Response, or read the key).
+  for (const C of [
+    typeof Response === 'function' && Response,
+    typeof CryptoKey === 'function' && CryptoKey,
+    ArrayBuffer,
+  ])
+    try {
+      if (C) Object.defineProperty(C.prototype, 'then', { value: undefined });
+    } catch {}
   const apply = Reflect.apply;
   const dispatch = EventTarget.prototype.dispatchEvent.bind(window);
   const listen = EventTarget.prototype.addEventListener.bind(window);
@@ -48,11 +61,14 @@
   const reqClone = Req && Req.clone;
   const reqText = Req && Req.text;
   const reqUrl = getterOf(typeof Request === 'function' && Request, 'url');
+  const resType = getterOf(typeof Response === 'function' && Response, 'type');
+  const resUrl = getterOf(typeof Response === 'function' && Response, 'url');
   const urlHref = getterOf(typeof URL === 'function' && URL, 'href');
   const XHR = window.XMLHttpRequest;
   const xhrStatus = getterOf(XHR, 'status');
   const xhrType = getterOf(XHR, 'responseType');
   const xhrText = getterOf(XHR, 'responseText');
+  const xhrUrl = getterOf(XHR, 'responseURL');
 
   const RAW_MAX = 1024 * 1024; // lib/relay.js RAW_MAX: a longer text goes as null
   const URL_MAX = 2048;
@@ -60,6 +76,8 @@
   const OURS =
     /^(?:https?:\/\/(?:[a-z0-9-]+\.)*leetcode\.com)?\/(?:graphql\/?(?:[?#]|$)|problems\/[^/?#]+\/(?:submit|interpret_solution)\/?(?:[?#]|$)|submissions\/detail\/[^/?#]+\/(?:v2\/)?check\/?(?:[?#]|$))/;
   const GRAPHQL = /^(?:https?:\/\/(?:[a-z0-9-]+\.)*leetcode\.com)?\/graphql\/?(?:[?#]|$)/;
+  // Where the browser actually went (a page's <base href> can send a relative path elsewhere).
+  const LEETCODE = /^https:\/\/(?:[a-z0-9-]+\.)*leetcode\.com\//;
   const WANT_RES = /"operationName"\s*:\s*"(?:questionDetail|submissionDetails)"/;
   const hits = (re, s) => typeof s === 'string' && apply(reExec, re, [s]) !== null;
   // Whether to read the response: always for submit/run/check; for GraphQL only the operations we use.
@@ -84,7 +102,8 @@
     dispatch(
       new Custom('aperture-lc-hello', {
         __proto__: null,
-        detail: stringify({ __proto__: null, nonce }),
+        // readyState: whether this ran before the page's scripts (Safari's document_start; debug log).
+        detail: stringify({ __proto__: null, nonce, readyState: Str(document.readyState) }),
       }),
     );
   listen('aperture-lc-ack', () => {
@@ -102,7 +121,7 @@
   let head = null;
   let tail = null;
   let busy = false;
-  apply(pThen, tag.keyOf(nonce), [
+  safe(pThen, tag.keyOf(nonce), [
     (k) => {
       key = k;
       pump();
@@ -137,25 +156,43 @@
       busy = false;
       pump();
     };
-    apply(pThen, tag.sign(key, node.body), [
-      (t) => {
-        const detail = stringify({ __proto__: null, body: node.body, tag: t });
-        dispatch(new Custom('aperture-lc', { __proto__: null, detail }));
-        done();
-      },
-      done,
-    ]);
+    tag.sign(key, node.body, (t) => {
+      try {
+        if (t)
+          dispatch(
+            new Custom('aperture-lc', {
+              __proto__: null,
+              detail: stringify({ __proto__: null, body: node.body, tag: t }),
+            }),
+          );
+      } catch {}
+      done();
+    });
   }
   // A promise's value, for side effects only — never chained on, never awaited.
-  const when = (p, ok) => (p ? apply(pThen, p, [ok, () => ok(null)]) : ok(null));
+  const when = (p, ok) => {
+    if (!p) return ok(null);
+    try {
+      apply(pThen, p, [ok, () => ok(null)]);
+    } catch {
+      ok(null);
+    }
+  };
+  // The browser's own Response from leetcode.com → its final URL; else null (one the page built, or a
+  // request a <base href> sent elsewhere).
+  const fetched = (res) => {
+    const type = res ? safe(resType, res, []) : null;
+    const real = type && type !== 'default' && type !== 'error' ? safe(resUrl, res, []) : null;
+    return hits(LEETCODE, real) ? real : null;
+  };
 
   // ---- fetch ----
   const realFetch = window.fetch;
   if (typeof realFetch === 'function') {
     window.fetch = function (input, init) {
-      // The URL, read once and handed to the real fetch as that same string — so what we record is what
-      // was asked for. A Request's url is fixed, so a Request passes through as is.
-      let url = null;
+      // The URL, read once and handed to the real fetch as that same string. A Request's url is fixed, so a
+      // Request passes through as is; an input we can't read passes through untouched, uncaptured.
+      let url;
       let req = null;
       if (typeof input === 'string') url = input;
       else {
@@ -164,6 +201,7 @@
         else url = safe(urlHref, input, []);
         if (url === null) url = safe(Str, undefined, [input]);
       }
+      if (url === null) return apply(realFetch, this, arguments);
       const args = req || typeof input === 'string' ? arguments : [url, init];
       if (!hits(OURS, url)) return apply(realFetch, this, args);
       let bodyNow = null; // the request text when it's in hand now; else read from a clone of the Request
@@ -174,13 +212,15 @@
       const p = apply(realFetch, this, args);
       const reqAt = now();
       when(p, (res) => {
+        const real = fetched(res);
+        if (!real) return;
         // Ours runs first: the page hasn't read the body yet.
-        const copy = res && (bodyLater || wantsRes(url, bodyNow)) ? safe(resClone, res, []) : null;
+        const copy = bodyLater || wantsRes(real, bodyNow) ? safe(resClone, res, []) : null;
         const resP = copy ? safe(resText, copy, []) : null;
         when(bodyLater, (later) => {
           const reqBody = bodyLater ? later : bodyNow;
-          if (!resP || !wantsRes(url, reqBody)) return emit(url, reqBody, null, reqAt);
-          when(resP, (text) => emit(url, reqBody, text, reqAt));
+          if (!resP || !wantsRes(real, reqBody)) return emit(real, reqBody, null, reqAt);
+          when(resP, (text) => emit(real, reqBody, text, reqAt));
         });
       });
       return p;
@@ -209,6 +249,8 @@
         safe(addListener, this, [
           'loadend',
           () => {
+            const real = safe(xhrUrl, this, []); // where the browser went, not what the page wrote
+            if (!hits(LEETCODE, real)) return;
             let text = null;
             const status = safe(xhrStatus, this, []);
             const type = safe(xhrType, this, []);
@@ -221,7 +263,7 @@
               (type === '' || type === 'text')
             )
               text = safe(xhrText, this, []);
-            emit(url, reqBody, text, reqAt);
+            emit(real, reqBody, text, reqAt);
           },
         ]);
       }

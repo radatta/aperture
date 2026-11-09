@@ -203,7 +203,8 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
       .fill('class Solution:\n    def twoSum(self, nums, target):\n        return [0, 1]\n');
     // LeetCode's autosave (300 ms debounce in the fake) lands first; the Submit then carries that pending
     // snapshot ahead of it. Code typed inside the debounce reaches live within the 30 s snapshot window.
-    await new Promise((r) => setTimeout(r, 800));
+    await until(async () => (await page.evaluate<{ syncs: number }>('window.__fake')).syncs >= 2);
+    await new Promise((r) => setTimeout(r, 200)); // the relay's hand-off
     await page.locator('[data-e2e-locator=console-submit-button]').click();
     await page.locator('[data-e2e-locator=console-run-button]').click();
 

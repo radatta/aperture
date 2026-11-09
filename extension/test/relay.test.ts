@@ -19,7 +19,7 @@ async function handshake() {
   let seq = 0;
   const msg = async (fields: object = {}, opts: { seq?: number; key?: CryptoKey } = {}) => {
     const body = JSON.stringify({ v: 3, seq: opts.seq ?? ++seq, ...raw, ...fields });
-    return JSON.stringify({ body, tag: await tag.sign(opts.key ?? key, body) });
+    return JSON.stringify({ body, tag: await tag.signed(opts.key ?? key, body) });
   };
   return { relay, msg };
 }
@@ -112,9 +112,9 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     expect(relay.hello(JSON.stringify({ nonce: tag.newNonce() }))).toBeNull();
     const key = await tag.keyOf(first);
     const body = JSON.stringify({ v: 3, seq: 1, ...raw });
-    expect((await relay.accept(JSON.stringify({ body, tag: await tag.sign(key, body) }))).ok).toBe(
-      true,
-    );
+    expect(
+      (await relay.accept(JSON.stringify({ body, tag: await tag.signed(key, body) }))).ok,
+    ).toBe(true);
   });
 
   it('reads the problem on screen from the path only', () => {
