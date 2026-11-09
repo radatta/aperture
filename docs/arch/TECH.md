@@ -16,6 +16,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 ```
 
 **Frontend**
+
 - **Framework:** Vite + React + TypeScript.
 - **PWA:** `vite-plugin-pwa` — manifest, service worker, installable. App shell caches for offline load; **data is online-first** (see below).
 - **Client data:** **React Query** — fetch/cache/mutate against the Lambda API. (Dexie/local-first dropped in the AWS pivot; may return later only as an offline cache.)
@@ -26,6 +27,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 - **Charts:** deferred; v1 viz is hand-rolled CSS/SVG.
 
 **Backend / infra (resolved — the blueprint is [INFRA.md](INFRA.md))**
+
 - **Hosting:** S3 (static) + CloudFront (CDN + HTTPS — required for the PWA service worker).
 - **Auth:** Cognito (multi-device identity → JWT validated by the API).
 - **Compute:** Lambda(s), TS/esbuild.
@@ -45,6 +47,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 Logical entities below are **storage-agnostic**; the physical DynamoDB shape is §2.4 (single-table, as built).
 
 ### 2.1 Global conventions
+
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items and their sync states, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
@@ -56,10 +59,11 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **logEntries** — `id · createdAt · day · text`. Edit allowed; soft-delete allowed.
 
 **tasks** — the signature module.
+
 - `id · title · status · categoryId · seriesId? · rollId? · dueDay? · dueTime? · notes? · reflection? · createdAt · startedAt? · completedAt? · cancelledAt?`
 - `rollId` (id | null) — set when the task is a **rep** of a [Roll](../areas/home/rolls.md). Required-nullable; readers compare `=== id` / `!rollId` (pre-existing rows read back `undefined`). The contact-sheet momentum is derived from done tasks carrying this — no counter.
 - `status`: `backlog | planned | in_progress | done | cancelled`.
-- `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (*when I'll work it*). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
+- `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (_when I'll work it_). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
 - `dueTime` (`HH:MM` 24h local | null) — the deadline's clock time, only with a `dueDay` (clearing the day clears it). Drives the urgency colour and calendar auto-sync (`gcalSyncError` holds a failed sync; `Settings.autoCalendar` is the toggle — [areas/calendar/index.md](../areas/calendar/index.md) → Auto-sync).
 - Two-way calendar sync bookkeeping — `gcalSeen` (with Google's `updated`) and `gcalPulled` — is **optional** on `Task` (absent on old rows and literals), an exception to required-nullable: sync state, not task data (the other exception is `estimateSource`, stamped only at done). A Google edit can set `title`, `dueDay`/`dueTime` and `estimateMin` ([areas/calendar/index.md](../areas/calendar/index.md) → Two-way sync).
 - `notes` (string | null, ≤ 5,000 chars) — free-form light markdown, editable at any status, **never part of the estimate lock**. Required-nullable; pre-existing rows read back `undefined`, so readers use `!notes`. Design: [areas/tasks/notes.md](../areas/tasks/notes.md).
@@ -67,27 +71,30 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **Estimate handling:** `estimateMin` + `bufferMin` (the **working** estimate) are editable at any open status — not `done`/`cancelled`. On the **first transition out of planning** (→ `in_progress` or `done`), `estimateLockedMin` is snapshotted and frozen; a later edit never touches it. **Calibration = `actualAccruedMin` vs `estimateLockedMin`.** Work that turned out bigger is **split** (this part done or kept going + a linked follow-up), never by editing the locked estimate.
 - **Done gate** ([areas/calibration/integrity.md](../areas/calibration/integrity.md)): `taskTransition(→ done)` refuses a calibrated task (`isCalibrated`: not an errand) without `estimateMin ≥ 1` and `actualAccruedMin ≥ 1`, and a parent bypasses it (`completeParent`). Done also sets `estimateLockedMin` from `estimateMin` when there's no baseline (null or 0), and `estimateSource` (`planned | revised | retro | null`, optional on `Task` like the sync bookkeeping: older rows, parents and errands have none). The one write into a finished estimate: `withEstimate` on a done calibrated task with no lock, once.
 - `parentId` (string | null) — the task this one is a part of (2026-10-08; replaced `splitFromId`, whose stored attribute is inert on old rows). One level; parenthood is derived, never stored. A parent holds the deadline and never takes plans, sessions or its own estimate; its `estimateLockedMin` freezes when its first part starts (the one lock that's ever cleared: a parent whose last part goes is plain again, and its lock goes with them), and its `actualAccruedMin` is stamped with Σ done parts when it's marked done (refused while a part is open). Every part, and a done parent, is a calibration point. A parent's one calendar event is its due marker; a part's block is named after it (v2a). Required-nullable; old rows read `undefined` → `!parentId`. Design: [areas/tasks/parts.md](../areas/tasks/parts.md).
-- `actualAccruedMin` — **denormalized**, bumped when a *work* session closes onto an open task (excludes breaks + paused time; a session stopped onto a `done`/`cancelled` task keeps its minutes in history and adds none — shared `accruesTime`). Avoids scanning sessions.
+- `actualAccruedMin` — **denormalized**, bumped when a _work_ session closes onto an open task (excludes breaks + paused time; a session stopped onto a `done`/`cancelled` task keeps its minutes in history and adds none — shared `accruesTime`). Avoids scanning sessions.
 - `cancelled` tasks are excluded from calibration.
 - **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#delete-on-cancel); each attachment's S3 bytes are deleted first ([attachments D7](../areas/tasks/attachments.md)). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
 
-**taskPlans** — scheduling (the *when*), separate from the task (the *what*). Enables multi-day + ordering.
+**taskPlans** — scheduling (the _when_), separate from the task (the _what_). Enables multi-day + ordering.
+
 - `id · taskId · day · plannedMinutes · order`. One alive row per (task, day): an id-less `upsertPlan` for a task already on that day returns it (`day-guards`, 2026-11). A task may have plan rows on several days. A **timed** task (`dueDay` + `dueTime`) has none: its day is its time, and `upsertPlan` refuses it ([lenses.md](../areas/tasks/lenses.md) D13). Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateMin − actualAccruedMin` (the working estimate).
 - **Stale sweep (lazy rollover).** `getDay(today)` moves every `planned` task with no alive plan row on today or later back to `backlog`, and every timed `planned` task whatever its rows — a recurring untimed occurrence already superseded by its series' copy today is dropped (`cancelled`) instead. Plan rows stay as history; `in_progress` is untouched. Rule: shared `stalePlannedMoves`, fed one consistent range read of the plan rows dated today or later (`listPlansFrom` — `SK BETWEEN plan#<today># AND plan#\uffff`; rows before today never decide a move, and plan history only grows — `day-guards`, 2026-11). It runs on app open, not on a schedule (the server has no timezone), so MCP reads lag until the app loads today. `getDay` refuses a day after the user's app day (`FUTURE_DAY_ERROR` → HTTP 400, both impls; a malformed key is `Invalid day`), since a future day would sweep today's plan; past days are allowed (`day-guards`, 2026-11).
 
 **taskSeries** — recurrence template ([areas/tasks/recurring.md](../areas/tasks/recurring.md)).
+
 - `id · title · categoryId · defaultEstimateMin · rule · active · anchorDate · dueOffsetDays? · until?`. `dueOffsetDays` is the cadence: an occurrence spawns planned on its day, due that many days later, untimed (`null` = no due date). `until` is the last day it spawns (inclusive); past it the row stays `active` and reads "ended". Both read back `undefined` on older rows → `?? null`.
 - `rule` (**simple** for v1): `{ kind: daily | weekdays | weekly | everyN, interval?, daysOfWeek?[] }`. Full RRULE (nth-weekday-of-month, exceptions) is deferred.
 - Each occurrence is a real **task** instance with `seriesId` → its own estimate/actual → **its own calibration point**, stamped `seriesDay` (the day it was spawned for). `getDay` spawns once per `(seriesId, seriesDay)` — shared `seriesHasOccurrence` — so an unplanned occurrence is never respawned (recurring.md §4). Editing one occurrence doesn't touch siblings; editing the series affects future occurrences. `deleteSeries` tombstones the template (API only, the dev check's cleanup); `deactivateSeries` is the user's Stop.
 
 **ideas** — `id · text · createdAt · status(open | triaged | discarded)`.
 
-**habits** — `id · name · categoryId · cadencePerWeek · active`. (Recurring *behaviors*, binary, no estimate — distinct from recurring tasks.)
+**habits** — `id · name · categoryId · cadencePerWeek · active`. (Recurring _behaviors_, binary, no estimate — distinct from recurring tasks.)
 **habitChecks** — `id · habitId · date`. Compound uniqueness on `(habitId, date)`.
 
-**rolls** — `id · name · categoryId · estimateMin · active`. Deadline-free ongoing *efforts* (LeetCode daily, study). A "rep" is a done **task** with `rollId` — momentum is **derived** from those (no stored counter, no streak). Picking one for a day creates a planned rep on that day's plan (`pickRollToday`, reuses an open rep). Distinct from habits (a timed task vs a binary check). Design: [areas/home/rolls.md](../areas/home/rolls.md).
+**rolls** — `id · name · categoryId · estimateMin · active`. Deadline-free ongoing _efforts_ (LeetCode daily, study). A "rep" is a done **task** with `rollId` — momentum is **derived** from those (no stored counter, no streak). Picking one for a day creates a planned rep on that day's plan (`pickRollToday`, reuses an open rep). Distinct from habits (a timed task vs a binary check). Design: [areas/home/rolls.md](../areas/home/rolls.md).
 
 **pomodoroSessions**
+
 - `id · taskId? · categoryId · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt`
 - `kind`: `work | break` — **only `work` accrues** to `task.actualAccruedMin` + time-budget.
 - `wasWork`: **snapshot** of the category's `isWork` at write time → immutable balance history.
@@ -98,11 +105,13 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **days** — per-day singleton: `date(pk) · capacityHours · intent · reflectionPrompt · reflectionText`.
 
 **categories** — `id · label · isWork · order · active · area`.
+
 - **`area`** — the life area the category belongs to: `school | aperture | recruiting | personal | null` (a fixed set, `shared/src/areas.ts`); `null` and a row from before the field both list as `null` and read as Personal. Set in Settings (Area…) or MCP; patch-style on update, so a rename or retire keeps it. A live grouping — never snapshotted — so changing it regroups history. The Backlog folds the Aperture area away; Home's "+ Add" counts the rest. Design: [areas/tasks/areas.md](../areas/tasks/areas.md).
 - **Retire** = `active: false` (Settings → Retire…, or MCP `update_category`): hidden from every picker, sorted after active ones in Settings, but the label still resolves on existing tasks and an edit form shows the item's own retired category as "X (retired)". On update `order`/`active` are patch-style — omitted keeps the current value, so a rename never un-retires.
 - Referenced by **id**. **Labels resolve live** (renames propagate to display). **`isWork` is snapshotted** onto sessions (`wasWork`) so history is frozen. Flipping `isWork` prompts an **optional retroactive backfill** ("also reclassify N past records?"). **Deleting** forces reassignment of all referencing items to another category first, then soft-deletes the empty one.
 
 **leetcodeAttempts** — one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.
+
 - `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
 - `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`. **Normalized server-side** from LeetCode's raw `status_code`/`status_msg` — the dep-free extension forwards raw signals only.
 - `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
@@ -111,11 +120,13 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[recruiting/](../areas/recruiting/index.md)**.
 
 **stories** — behavioral-interview STAR stories, authored in-app (the one place structured-at-entry is right — a story is a slowly-tightened artifact, not a capture).
+
 - `id · title · competencyTags[] · situation · action · result`
 - `competencyTags`: the fixed `CompetencyTag` union (`leadership · conflict · ownership · failure · ambiguity · impact`), a shared constant — not the editable `Category` entity. Multi-select.
 - Title required; S/A/R may be empty (a title-only stub is valid). List is `updatedAt`-desc; soft-delete like everything else. Full design: **[recruiting/story-bank.md](../areas/recruiting/story-bank.md)**.
 
 **attachments** — files on a task (receipt, spec, screenshot); the first entity whose payload is **bytes**, not JSON.
+
 - `id · taskId · filename · contentType · size · s3Key · status(pending|ready)` — metadata only; the bytes live in a separate **precious S3 bucket** at `u/<userId>/<taskId>/<id>`, never in DynamoDB.
 - Bytes move browser↔S3 directly via **presigned URLs** the Lambda signs but never carries — the JSON RPC edge stays binary-free. `pending` until the browser confirms the PUT; only `ready` rows list/export. Delete removes the object (the versioned bucket keeps it 30 days), then tombstones the metadata. Full design: **[tasks/attachments.md](../areas/tasks/attachments.md)**.
 
@@ -124,6 +135,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` (default 60000), `financePaymentDay` (default 20), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
+
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts). No calibrated task reaches done without an estimate and an actual of at least 1 minute (machines.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
@@ -132,6 +144,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
 ### 2.4 Physical model — DynamoDB single-table (as built; `lambdas/src/ddb/keys.ts`)
+
 ```
 PK = u#<userId>            (one partition per user — fine at single-user volume)
 SK (type-prefixed range keys):
@@ -166,6 +179,7 @@ PK = push / SK = user#<userId> · health
                                 the reminder poller's registry (who has a device) and its stage-wide
                                 heartbeat — derived, never client-set, never exported (tasks/reminders.md)
 ```
+
 - **Two non-`u#` partitions:** `placetoken#<hash>` and `push`. Everything else is under the user's.
 - **One GSI, three key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms); reminders — what may ping, by when (`GSI1PK = u#<userId>#remind`, `GSI1SK` = fire time epoch ms) on open dated tasks, plans and Send-test rows, set atomically with the item's own write.
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
@@ -178,12 +192,14 @@ PK = push / SK = user#<userId> · health
 ## 3. Routing & state
 
 **Routes (React Router):**
+
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
 - `/log · /tasks · /recruiting (+ /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route.
 
 **State — three layers:**
+
 - **Server/data → React Query.** One query per access pattern. Task writes are **written through**: what a write returns goes straight into the one tasks list (`app/src/data/taskCache.ts`), newer `updatedAt` wins, and the app remembers its own writes for 60 s so the BFF's eventually consistent `listTasks` (not retried) never undoes one; the invalidate still runs for rows a write changes without returning (a parent's lock, plan rows, the day's sweep). The backlog derives from that list. On the BFF, every read whose copy is written back is strongly consistent — tasks (`mustTask` and kin), plan rows, the day row, categories, settings, stories, habits and their checks, log entries, series, rolls, ideas, attachments, the calendar sync cursor — so two quick RPCs on one row never lose the first; display reads (`listTasks`, `listPlans`, `getSettings` on load) stay eventual; sessions still read eventually (`mustSession`: heartbeat, resume, stop write back what they read) — the one exception, which the stop-session rewrite closes.
 - **UI/session → React Context.** Current home mode, running timer, capture-bar state.
 - **Auth → Cognito session** in a context provider. Frontend lib: **`react-oidc-context` + Cognito Hosted UI** (PKCE auth-code grant, no client secret).
@@ -192,7 +208,7 @@ PK = push / SK = user#<userId> · health
 
 We build the `UserManager` ourselves (`app/src/auth/userManager.ts`) instead of letting `react-oidc-context` construct one from props, because the context wraps every navigator method to swallow rejections into `null` — which hides whether a failed renew was the network or the authority rejecting the grant.
 
-**How renewal decides.** One rule shapes the rest: **wakeups retry a renewal the session already owes; they never start one.** A renew is owed only when the library says the token expired, when a silent renew errored, or when the BFF returns 401 — so `online` and `visibilitychange` are pure retries, and coming back to the app on a fresh token costs zero token requests. `userLoaded` and `userUnloaded` are the only points that reset the state, because the library raises them whoever did the work (us, `SilentRenewService`, or the redirect callback); resetting inside our own success path instead left the UI one expiry away from dropping the whole tree. Renewal clears the session **only** on `invalid_grant` — a network failure never discards the refresh token, it backs off (~30s over five attempts) and stays owed. After that the sign-in button appears: a render-only escape so an offline relaunch can't hang on the loading screen, with the stored token left intact. Retrying continues quietly behind that button every 60s — the `online`/`visibilitychange` listeners only catch failures the browser announces, and a Cognito 5xx, a captive portal or a DNS failure never flips `navigator.onLine`. A session that ends this way is expected rather than broken, so the underlying `invalid_grant` isn't surfaced as an error; asking for a sign-in clears that suppression, since from then on the user is acting and deserves to see what happens. On relaunch the renew is also asked for up front rather than waiting on the expiry timer — but never during the OAuth redirect callback, where it would race the code exchange on the old stored user. A 401 from the BFF routes into the same path via `tokenStore` and invalidates queries on success so panels that failed mid-401 recover; it is capped at **two renewals**, charged only when one actually starts, so a burst of concurrent 401s can't spend the budget without doing work. Uncapped, a 401 that *isn't* about the token (audience or issuer mismatch, clock skew) loops against the BFF and Cognito at network speed.
+**How renewal decides.** One rule shapes the rest: **wakeups retry a renewal the session already owes; they never start one.** A renew is owed only when the library says the token expired, when a silent renew errored, or when the BFF returns 401 — so `online` and `visibilitychange` are pure retries, and coming back to the app on a fresh token costs zero token requests. `userLoaded` and `userUnloaded` are the only points that reset the state, because the library raises them whoever did the work (us, `SilentRenewService`, or the redirect callback); resetting inside our own success path instead left the UI one expiry away from dropping the whole tree. Renewal clears the session **only** on `invalid_grant` — a network failure never discards the refresh token, it backs off (~30s over five attempts) and stays owed. After that the sign-in button appears: a render-only escape so an offline relaunch can't hang on the loading screen, with the stored token left intact. Retrying continues quietly behind that button every 60s — the `online`/`visibilitychange` listeners only catch failures the browser announces, and a Cognito 5xx, a captive portal or a DNS failure never flips `navigator.onLine`. A session that ends this way is expected rather than broken, so the underlying `invalid_grant` isn't surfaced as an error; asking for a sign-in clears that suppression, since from then on the user is acting and deserves to see what happens. On relaunch the renew is also asked for up front rather than waiting on the expiry timer — but never during the OAuth redirect callback, where it would race the code exchange on the old stored user. A 401 from the BFF routes into the same path via `tokenStore` and invalidates queries on success so panels that failed mid-401 recover; it is capped at **two renewals**, charged only when one actually starts, so a burst of concurrent 401s can't spend the budget without doing work. Uncapped, a 401 that _isn't_ about the token (audience or issuer mismatch, clock skew) loops against the BFF and Cognito at network speed.
 
 This machine is unit-tested against an injected fake `UserManager` in `app/src/auth/renewal.test.tsx`. `OidcBridge` takes the manager as a prop precisely so http-mode auth is reachable under vitest, where `API_MODE` is `stub` and `AuthProvider` would otherwise always take the bypass path — that blind spot is where every regression in this logic landed.
 
@@ -232,7 +248,8 @@ aperture/
 
 ## 5. The AI seam (v1.1+, boundary only)
 
-Reflection isn't built — just a clean boundary so it's additive later. The first model call that *is* built is quick add's parse ([tasks/quick-add](../areas/tasks/quick-add.md), 2026-10-12), and it set the pattern.
+Reflection isn't built — just a clean boundary so it's additive later. The first model call that _is_ built is quick add's parse ([tasks/quick-add](../areas/tasks/quick-add.md), 2026-10-12), and it set the pattern.
+
 - **Server-side only:** the Lambda calls the model; never from the browser. This is why sending journal text out is a Lambda concern. The call is a **gated gateway** (`lambdas/src/anthropic/`): noop under testMode/smoke, a fake in tests, live fetch + the SSM key (INFRA §10) only in the Lambda entrypoints.
 - **The 2026-10-09 carve-out is closed (2026-10-12):** the Raycast quick-add (`tools/raycast/`) used to call Haiku from the Mac with the user's own key in Keychain; a second client (the app's capture bar) wanted parsing, so the parse moved behind `parseTask` / the `parse_task` MCP tool and the Mac holds no model key ([areas/mcp → Raycast](../areas/mcp/index.md)).
 - **Substrate already exists:** reflection reads `logEntries` / `tasks` / `pomodoroSessions` over a date range — existing access patterns. **No schema change** needed for basic reflection.
@@ -271,9 +288,9 @@ DynamoDB `DeleteItem` — the row is gone. The stub soft-deletes the same row. E
 app follows the rule (`deleteCategory` and `removePlan` both write `deletedAt`), so this is the lone
 outlier, and two things make it worse than an ordinary bug:
 
-*(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; a plan read keeps one row per id within what it reads, the newest, so no read misses it and a failed write never loses it), and the running-copy
+_(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; a plan read keeps one row per id within what it reads, the newest, so no read misses it and a failed write never loses it), and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
-`deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)*
+`deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)_
 
 - **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
   `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The

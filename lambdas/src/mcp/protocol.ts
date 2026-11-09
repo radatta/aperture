@@ -48,7 +48,12 @@ export async function handleMcpMessage(
   if (typeof msg !== 'object' || msg === null) {
     return fail(null, -32600, 'Invalid Request: expected a JSON-RPC object');
   }
-  const req = msg as { jsonrpc?: unknown; id?: string | number | null; method?: unknown; params?: unknown };
+  const req = msg as {
+    jsonrpc?: unknown;
+    id?: string | number | null;
+    method?: unknown;
+    params?: unknown;
+  };
   if (req.jsonrpc !== '2.0' || typeof req.method !== 'string') {
     return fail(req.id ?? null, -32600, 'Invalid Request');
   }

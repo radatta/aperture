@@ -15,13 +15,13 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 
 `placeOf(task, { today, planOrder, dayStartHour }, parent?, isParent?)`:
 
-| Task | Place |
-| --- | --- |
-| done or dropped | Done |
-| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
-| due today through today+6, or past due | Week |
-| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places |
-| everything else | Backlog |
+| Task                                                                                                                                                                | Place   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| done or dropped                                                                                                                                                     | Done    |
+| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress                                                             | Today   |
+| due today through today+6, or past due                                                                                                                              | Week    |
+| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places  |
+| everything else                                                                                                                                                     | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
 shows under Week or Backlog by its due day. That is deliberate and transient: tomorrow's `getDay` makes

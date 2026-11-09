@@ -36,7 +36,7 @@ but when in doubt, add it; it's fail-open and cheap.
 `coi-reverse-shell-guard.sh` (Bash, and Monitor — its `command` is a shell line too) and
 `coi-grep-guard.sh` (Grep — `rg`'s argv is a command line COI inspects too) deny text COI pauses or kills the container on. Both source `_coi-patterns.sh`, so they
 can't drift, and both are narrowed to what COI really fires on: over-blocking makes Claude timid. The
-rules: `docs/ops/COI-SANDBOX.md` → *Container killed*; re-derive them from
+rules: `docs/ops/COI-SANDBOX.md` → _Container killed_; re-derive them from
 `localNotes/code-on-incus/APERTURE-ANALYSIS.md` on every COI upgrade. Implementation constraint (builtins
 only, deny text over stdin): the Bash guard's header.
 
@@ -47,7 +47,7 @@ tools) records every task id an `aperture-dev` create returns and denies a delet
 or of a recorded parent holding a part it didn't record (the server's delete cascades into parts) — the
 enforcement behind CLAUDE.md's standing approval for dev cleanup. Fails closed (no ledger, no jq, no event name
 → deny; an attach it can't record is denied too); the PostToolUse half never blocks. It finds the ledger from
-its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → *Ledgers*.
+its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → _Ledgers_.
 
 ## Bot and secrets guards
 
@@ -56,7 +56,7 @@ its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → *
 Its push checks see through git's global options (`git -C dir push`, `git -c k=v push`) and deny
 `--all`/`--mirror`. `secrets-read-guard.sh` (Read, Grep, Glob) denies those tools a path into `.secrets/`, and a
 Grep whose glob could re-admit the gitignored dir (`*`, `*.pem`, `*.env`, brace globs) where a `.secrets` sits
-within reach; a Grep *pattern* is content, so searching the repo for the text stays allowed. Both are second walls — the CLI
+within reach; a Grep _pattern_ is content, so searching the repo for the text stays allowed. Both are second walls — the CLI
 refuses on its own, and the ruleset is the real one.
 
 ## Testing
@@ -78,12 +78,12 @@ The shared-container session board (`docs/ops/SESSION-BOARD.md`) runs on four ho
 `scripts/board/` **relative to their own location** (so a worktree's hooks run that worktree's board code),
 exit 0 silently outside the container (no cgroup `memory.stat` — Mac, CI), and never put a command into argv.
 
-| Hook                               | Event                       | Does                                                                                                                                                              |
-| ---------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `board-session.sh`                 | SessionStart (every source) | registers the session, starts the sampler if none runs, injects headroom / the real dev lock / the hub (or the hub's roadmap reminder) / this branch's file overlaps|
-| `board-heartbeat.sh working\|idle` | UserPromptSubmit / Stop     | refreshes the session's state, branch and name (git + tmux, ~5 ms) in one jq write                                                                                 |
+| Hook                               | Event                       | Does                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `board-session.sh`                 | SessionStart (every source) | registers the session, starts the sampler if none runs, injects headroom / the real dev lock / the hub (or the hub's roadmap reminder) / this branch's file overlaps                                                                                                                                                                                   |
+| `board-heartbeat.sh working\|idle` | UserPromptSubmit / Stop     | refreshes the session's state, branch and name (git + tmux, ~5 ms) in one jq write                                                                                                                                                                                                                                                                     |
 | `board-heavy-guard.sh`             | PreToolUse Bash             | heavy command (a segment that starts a runner — a `bash -c` body counts; not `cat`/`grep`/a heredoc that only mentions one) not under `heavy.sh` → allow + a one-line offer; **deny only** with `limits.json` `enforce:true` and the predicted load past the measured hard line or the class's concurrency cap full (records a `denied` barrier event) |
-| `board-session-end.sh`             | SessionEnd                  | marks the session gone, drops its heavy slots                                                                                                                     |
+| `board-session-end.sh`             | SessionEnd                  | marks the session gone, drops its heavy slots                                                                                                                                                                                                                                                                                                          |
 
 `board-heavy-fixtures.jsonl` covers the guard (offer / allow / deny / fail-open); a fixture may set `cgroup`
 (fake cgroup files; `null` = absent), `limits` (patched `limits.json`, e.g. `enforce` or `concurrency`) or `limitsRaw` (its literal text),

@@ -43,11 +43,15 @@ export interface InvokeResult {
 
 export function assertHealthy(call: SmokeCall, result: InvokeResult): void {
   if (result.statusCode !== 200) {
-    throw new Error(`${call.method}: expected 200, got ${result.statusCode} — ${result.body ?? '(no body)'}`);
+    throw new Error(
+      `${call.method}: expected 200, got ${result.statusCode} — ${result.body ?? '(no body)'}`,
+    );
   }
   const parsed: unknown = result.body ? JSON.parse(result.body) : null;
   if (parsed && typeof parsed === 'object' && 'error' in parsed) {
-    throw new Error(`${call.method}: handler error — ${String((parsed as { error: unknown }).error)}`);
+    throw new Error(
+      `${call.method}: handler error — ${String((parsed as { error: unknown }).error)}`,
+    );
   }
 }
 

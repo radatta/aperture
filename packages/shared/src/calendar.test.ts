@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { computeDayShape, mergeBusyIntervals, FRAGMENT_GAP_MIN, type BusyInterval } from './calendar';
+import {
+  computeDayShape,
+  mergeBusyIntervals,
+  FRAGMENT_GAP_MIN,
+  type BusyInterval,
+} from './calendar';
 
 // A fixed reference midnight (UTC) so tests read in clean minute offsets. The pure fn never touches
 // timezones — bounds are ms in, ms out — so the choice of base is arbitrary.
 const BASE = 1_700_000_000_000;
 const at = (min: number) => BASE + min * 60_000;
-const iv = (startMin: number, endMin: number): BusyInterval => ({ startMs: at(startMin), endMs: at(endMin) });
+const iv = (startMin: number, endMin: number): BusyInterval => ({
+  startMs: at(startMin),
+  endMs: at(endMin),
+});
 
 // Window: minute 480 (08:00) → 1320 (22:00) = 840 min, the default focus window.
 const WIN_START = at(480);

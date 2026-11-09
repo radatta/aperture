@@ -40,6 +40,8 @@ describe('attachment transport (stub path)', () => {
 
   it('returns null for an unknown stub id and passes real urls through', () => {
     expect(resolveViewUrl('stub:missing')).toBeNull();
-    expect(resolveViewUrl('https://s3.example.com/obj?sig=x')).toBe('https://s3.example.com/obj?sig=x');
+    expect(resolveViewUrl('https://s3.example.com/obj?sig=x')).toBe(
+      'https://s3.example.com/obj?sig=x',
+    );
   });
 });

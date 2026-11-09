@@ -19,6 +19,7 @@ Be concise. Don't paste raw search result blocks. Don't pad with aspirational me
 ## Source hierarchy
 
 Trust order, highest first:
+
 1. Official docs (the project's own docs site, the npm registry, AWS docs, etc.).
 2. GitHub repos (issues, releases, source code).
 3. Official blogs.

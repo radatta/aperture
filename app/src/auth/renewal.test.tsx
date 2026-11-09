@@ -389,7 +389,9 @@ describe('renewal — authority rejects the grant', () => {
       </OidcProvider>,
     );
     await settle();
-    await act(async () => fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })));
+    await act(async () =>
+      fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })),
+    );
     await settle();
 
     expect(screen.getByTestId('error').textContent).toBe('');
@@ -410,7 +412,9 @@ describe('renewal — authority rejects the grant', () => {
       </OidcProvider>,
     );
     await settle();
-    await act(async () => fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })));
+    await act(async () =>
+      fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })),
+    );
     await settle();
     expect(screen.getByTestId('error').textContent).toBe('');
 
@@ -431,7 +435,9 @@ describe('renewal — authority rejects the grant', () => {
     expect(fake.calls.signinSilent).toHaveBeenCalled();
     expect(fake.calls.removeUser).not.toHaveBeenCalled();
 
-    await act(async () => fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })));
+    await act(async () =>
+      fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })),
+    );
     expect(fake.calls.removeUser).toHaveBeenCalled();
   });
 });
@@ -587,9 +593,7 @@ describe('renewal — state does not get stuck', () => {
   it('does not ladder when a renewal completes elsewhere mid-flight', async () => {
     const fake = createFakeManager(makeUser({ expired: true }));
     let fail: (e: unknown) => void = () => {};
-    fake.calls.signinSilent.mockImplementation(
-      () => new Promise((_res, rej) => void (fail = rej)),
-    );
+    fake.calls.signinSilent.mockImplementation(() => new Promise((_res, rej) => void (fail = rej)));
     renderBridge(fake);
     await settle();
     expect(fake.calls.signinSilent).toHaveBeenCalledTimes(1);

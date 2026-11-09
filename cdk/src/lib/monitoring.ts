@@ -32,7 +32,10 @@ export class Monitoring extends Construct {
   constructor(scope: Construct, id: string, props: MonitoringProps) {
     super(scope, id);
 
-    const topic = new sns.Topic(this, 'AlarmTopic', { displayName: 'Aperture prod alarms', enforceSSL: true });
+    const topic = new sns.Topic(this, 'AlarmTopic', {
+      displayName: 'Aperture prod alarms',
+      enforceSSL: true,
+    });
     // enforceSSL writes a TopicPolicy, which replaces SNS's default policy — so CloudWatch's publish needs its own
     // Allow (without it the alarms never emailed: alarm history read "not authorized to perform: SNS:Publish").
     // The SSL Deny stays: aws:SecureTransport is always in the request context, and a service publishes over TLS
@@ -53,7 +56,12 @@ export class Monitoring extends Construct {
     topic.addSubscription(new subscriptions.EmailSubscription(ALERT_EMAIL));
     const action = new cw_actions.SnsAction(topic);
 
-    const alarm = (id: string, metric: cloudwatch.IMetric, threshold: number, alarmDescription: string) => {
+    const alarm = (
+      id: string,
+      metric: cloudwatch.IMetric,
+      threshold: number,
+      alarmDescription: string,
+    ) => {
       const a = new cloudwatch.Alarm(this, id, {
         metric,
         threshold,
@@ -81,13 +89,23 @@ export class Monitoring extends Construct {
     // BFF's old one, so that alarm updates in place.
     alarm(
       'Errors',
-      new cloudwatch.Metric({ namespace: 'AWS/Lambda', metricName: 'Errors', statistic: 'Sum', period }),
+      new cloudwatch.Metric({
+        namespace: 'AWS/Lambda',
+        metricName: 'Errors',
+        statistic: 'Sum',
+        period,
+      }),
       1,
       'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync / push-dispatch (or a CDK provider function, deploy-time only) → Monitor',
     );
     alarm(
       'Throttles',
-      new cloudwatch.Metric({ namespace: 'AWS/Lambda', metricName: 'Throttles', statistic: 'Sum', period }),
+      new cloudwatch.Metric({
+        namespace: 'AWS/Lambda',
+        metricName: 'Throttles',
+        statistic: 'Sum',
+        period,
+      }),
       1,
       'A Lambda in this account was throttled',
     );

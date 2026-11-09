@@ -22,15 +22,15 @@ this early sketch are called out inline so the record stays honest:
 
 **Retrospective calibration views don't change behaviour.** Buehler, Griffin & Ross (1994) tested exactly
 this: subjects who reviewed their own past task durations and were told to "keep them in mind" showed
-**unchanged** bias. Only those who additionally constructed a scenario linking the past cases to *the task
-in hand* lost the bias. The Personal Software Process — predict, log actual, analyse the deviation, which
+**unchanged** bias. Only those who additionally constructed a scenario linking the past cases to _the task
+in hand_ lost the bias. The Personal Software Process — predict, log actual, analyse the deviation, which
 is almost exactly our loop — showed **no accuracy improvement** in two independent studies (Prechelt &
 Unger 2001; Abrahamsson & Kautz 2006).
 
 So the calibration view is the **data source**, not the intervention. The intervention belongs where you
 type the estimate.
 
-**Honest limit:** every successful debias in this literature removed *bias* while leaving *absolute error*
+**Honest limit:** every successful debias in this literature removed _bias_ while leaving _absolute error_
 unchanged. We can straighten the lean; we can't make estimates precise. Don't write copy promising
 accuracy.
 
@@ -71,7 +71,7 @@ Open time    3h 15m
 ```
 
 This is the anti-overconfidence surface **blaming arithmetic rather than the user**, which is what the
-no-guilt constraint needs. Not a threshold gauge, no red, no warning icon. Needs per-category *spread*,
+no-guilt constraint needs. Not a threshold gauge, no red, no warning icon. Needs per-category _spread_,
 not a point ratio.
 
 ### Piece 3 — the multiplier at estimate time — UNBUILT (PR-D)
@@ -84,7 +84,7 @@ Estimate [ 90 ] min
 The user's number is never overwritten. Shrink toward the category middle — the more uncertain, the more
 you shrink (Halkjelsvik & Jørgensen). Precedent: HM Treasury's Green Book mandates per-category optimism
 uplifts and starts at the upper bound, reducing only as specific risks are identified. Joel Spolsky's
-Evidence-Based Scheduling keeps the whole *distribution* of estimate÷actual ratios per person, not a mean
+Evidence-Based Scheduling keeps the whole _distribution_ of estimate÷actual ratios per person, not a mean
 — worth copying, along with discarding history older than ~6 months.
 
 ### Piece 4 — night reconciliation (later, highest risk) — UNBUILT (PR-D)
@@ -94,7 +94,7 @@ Calendar says a 90-min meeting ran; the log is silent 1:40–4:10 → offer to l
 
 **But it is a nightly failure report by construction.** Epstein et al. (CHI 2016) found "discomfort with
 information revealed" is a top reason people abandon self-tracking, with 16% reporting guilt. Mitigation:
-for anything unfinished, ask *"when?"* rather than scoring it — forming a specific plan discharges the
+for anything unfinished, ask _"when?"_ rather than scoring it — forming a specific plan discharges the
 rumination about as well as finishing does (Masicampo & Baumeister 2011; note that's a Baumeister-lab
 result from the ego-depletion era, so treat as plausible, not established). Never show a completion
 percentage. Never show a streak.
@@ -105,16 +105,16 @@ percentage. Never show a streak.
 
 The early technical plan below sketched a **read-only, single-grant** design. PR-C shipped a **read+write,
 multi-account** design instead (add-to-calendar writes real events; two accounts each with their own
-grant). The rows kept here are the ones that still hold or that explain *why* a choice was made; the
+grant). The rows kept here are the ones that still hold or that explain _why_ a choice was made; the
 scope/read rows are historical.
 
-| Decision | Early choice (some superseded) |
-| --- | --- |
-| **Auth** | **Separate** Google OAuth grant run by the BFF — *not* Cognito federation. **(Held.)** |
-| **Scope** | `calendar.events.readonly`. **Superseded → `calendar.events` (read+write).** |
-| **Read** | `events.list` with `singleEvents=true` — **not** `freebusy.query`. **(Held.)** |
-| **Token** | SSM Parameter Store SecureString, `/aperture/<env>/google/*`. $0. **(Held.)** |
-| **Sync** | On-demand at app open. No push channels, no `syncToken`. **(Held.)** |
+| Decision  | Early choice (some superseded)                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------ |
+| **Auth**  | **Separate** Google OAuth grant run by the BFF — _not_ Cognito federation. **(Held.)**                 |
+| **Scope** | `calendar.events.readonly`. **Superseded → `calendar.events` (read+write).**                           |
+| **Read**  | `events.list` with `singleEvents=true` — **not** `freebusy.query`. **(Held.)**                         |
+| **Token** | SSM Parameter Store SecureString, `/aperture/<env>/google/*`. $0. **(Held.)**                          |
+| **Sync**  | On-demand at app open. No push channels, no `syncToken`. **(Held.)**                                   |
 | **Cache** | 5–15 min, explicit `fetchedAt`. Calendar data is never source of truth. **(Held — client staleTime.)** |
 
 **Cognito federation cannot do this.** AWS: the OIDC IdP flow "doesn't allow the user or application to
@@ -144,9 +144,9 @@ re-login. **Publish the consent screen on day one** (accept the unverified warni
 that Production-but-Unverified gets long-lived tokens, so **verify empirically on day 8–10** before
 trusting the morning ritual to it.
 
-**The statistical one.** **Never bucket calibration stats by *actual* duration.** Doing so reports "you
+**The statistical one.** **Never bucket calibration stats by _actual_ duration.** Doing so reports "you
 underestimate big tasks" as a **pure regression artifact with no underlying truth** — 7 of 7 studies that
-keyed size on actual time found the effect; studies keying on *predicted* time found little or none.
+keyed size on actual time found the effect; studies keying on _predicted_ time found little or none.
 Bucket by estimate, and present the ratio distribution per category rather than a size-sliced trend.
 (This is a load-bearing constraint for PR-D.)
 
@@ -161,20 +161,20 @@ hours. Fixture-test against a recorded real response containing each edge case. 
 ## 5. Don't build
 
 - **Write-back / two-way sync.** Highest complexity, highest blast radius, least value for one user. Once
-  you write events you own their whole lifecycle, including after uninstall. *(Note: PR-C does write
+  you write events you own their whole lifecycle, including after uninstall. _(Note: PR-C does write
   events, but Aperture owns only the events it created and deletes them on cancel. Two-way sync shipped
   2026-10-05 **for those events only**: a pull-based read of Google edits to Aperture-created events
   back onto their tasks — never adopting other events, never writing to Google from the pull
   ([index.md](index.md) → Two-way sync). The warning still holds for full sync of arbitrary calendar
-  state.)*
+  state.)_
 - **Auto-scheduling.** Reproduces Motion's worst failure (packs the day, leaving no room for the
   unplanned). Also: **Clockwise shut down 27 March 2026** — the flagship calendar-defragmentation product,
   $76M raised, killed in an acquihire. Auto-scheduling is where this category struggles.
-- **A calendar grid inside Aperture.** Google Calendar already exists. This should be *numbers and one
-  sentence, never a view*.
+- **A calendar grid inside Aperture.** Google Calendar already exists. This should be _numbers and one
+  sentence, never a view_.
 - **Habit auto-detection from calendar events.** That's daily policing of non-work life — an explicit
   stated non-goal.
-- **Live "you're running over" nudges.** Leroy (2009) found attention residue is *worse* when the prior
+- **Live "you're running over" nudges.** Leroy (2009) found attention residue is _worse_ when the prior
   task was time-pressured, so this would actively degrade the next block.
 - **"Your best hours" / chronotype inference.** One person's task volume against lognormal spread will
   produce confident patterns that are noise.
@@ -191,7 +191,7 @@ hours. Fixture-test against a recorded real response containing each edge case. 
 2, 3 and 4 are gated on real usage history, which is the same thing the 9.2 stub-validation gate produces
 — i.e. they are the **PR-D** work.
 
-**Key sources:** Buehler/Griffin/Ross 1994 (*JPSP* 67:366–381) · Halkjelsvik & Jørgensen, *Time
-Predictions* (Springer 2018, open access) · HM Treasury Green Book optimism-bias supplement · Mark/
-González/Harris CHI 2005 · Leroy 2009 (*OBHDP* 109:168–181) · Epstein et al. CHI 2016 · Spolsky,
+**Key sources:** Buehler/Griffin/Ross 1994 (_JPSP_ 67:366–381) · Halkjelsvik & Jørgensen, _Time
+Predictions_ (Springer 2018, open access) · HM Treasury Green Book optimism-bias supplement · Mark/
+González/Harris CHI 2005 · Leroy 2009 (_OBHDP_ 109:168–181) · Epstein et al. CHI 2016 · Spolsky,
 Evidence-Based Scheduling (2007) · Google Calendar API + OAuth 2.0 docs.

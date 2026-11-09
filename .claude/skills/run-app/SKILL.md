@@ -5,7 +5,7 @@ description: Launch the Aperture PWA and screenshot/drive it with headless Chrom
 
 # Run the Aperture app + screenshot it
 
-Use this when you need a *rendered* UI (screenshots, click paths) — not just lint/tests. Vitest covers logic; this covers "does it actually look/behave right." This is the local stub app; for the **deployed dev stage** use the dev check instead (`devcheck` skill, `docs/ops/DEV-CHECK.md`).
+Use this when you need a _rendered_ UI (screenshots, click paths) — not just lint/tests. Vitest covers logic; this covers "does it actually look/behave right." This is the local stub app; for the **deployed dev stage** use the dev check instead (`devcheck` skill, `docs/ops/DEV-CHECK.md`).
 
 ## The app runs auth-free by default
 
@@ -32,7 +32,7 @@ echo $! >"$SCRATCH/dev.pid"   # the wrapper's PID — `cd … && … &` would ba
 
 **The port depends on where you are, and Vite walks upward if it's taken** — so read it, don't assume
 it. Inside a COI container the base is `6173`; on a bare Mac it's `5173` (`app/vite.config.ts`, and
-`docs/ops/COI-SANDBOX.md` → *Ports*). Other sessions may have their own Vite listening, so take the port
+`docs/ops/COI-SANDBOX.md` → _Ports_). Other sessions may have their own Vite listening, so take the port
 from **this** server's output, not from whatever is listening:
 
 ```bash
@@ -88,10 +88,12 @@ const browser = await chromium.launch({
 });
 const page = await (await browser.newContext({ viewport: { width: 1512, height: 860 } })).newPage();
 const errors = [];
-page.on('console', m => m.type() === 'error' && errors.push(m.text()));
-page.on('pageerror', e => errors.push(String(e)));
+page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+page.on('pageerror', (e) => errors.push(String(e)));
 
-await page.goto(`http://localhost:${process.env.PORT ?? 5173}/tasks`, { waitUntil: 'domcontentloaded' });
+await page.goto(`http://localhost:${process.env.PORT ?? 5173}/tasks`, {
+  waitUntil: 'domcontentloaded',
+});
 await page.waitForSelector('text=Tasks', { timeout: 30000 }); // first Vite compile is slow — wait-for, never sleep
 
 await page.screenshot({ path: 'page.png', fullPage: true });
@@ -139,7 +141,7 @@ for (const viewport of PHONES) {
   // attach the `errors` listeners (console + pageerror) to THIS page too — each context has its own;
   // then goto / waitForSelector as above, and for each screen a light + dark pair:
   for (const theme of ['light', 'dark']) {
-    await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
     await page.waitForTimeout(250); // the theme-flip gotcha below
     await page.screenshot({ path: `${OUT}/${viewport.width}-${theme}-01-home.png` }); // viewport-sized = one phone screen
   }

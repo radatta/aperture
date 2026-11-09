@@ -35,7 +35,12 @@ const DEVMAIN_PUBLISH = 'arn:aws:iam::*:role/cdk-devmain-file-publishing-role-*'
 // IAM's ArnLike, near enough for these patterns: `*` matches any run of characters (a pattern's own `*` included,
 // and across `:`), everything else — `?` too — is literal. Looser than IAM, so only ever used to prove coverage.
 const arnLike = (pattern: string, arn: string) =>
-  new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('.*')}$`).test(arn);
+  new RegExp(
+    `^${pattern
+      .split('*')
+      .map((x) => x.replace(/[.+?^${}()|[\]\\/]/g, '\\$&'))
+      .join('.*')}$`,
+  ).test(arn);
 
 function orgTemplate() {
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
@@ -76,15 +81,20 @@ describe('dev-account SCPs', () => {
     for (const [name, p] of Object.entries(standing))
       for (const s of statements(p)) {
         expect(s.Effect).toBe('Deny');
-        const want = lane[s.Sid] ?? (name === 'freeze' ? [BREAK_GLASS, KILL_ROLES, DEVMAIN_EXEC] : [BREAK_GLASS, KILL_ROLES]);
+        const want =
+          lane[s.Sid] ??
+          (name === 'freeze' ? [BREAK_GLASS, KILL_ROLES, DEVMAIN_EXEC] : [BREAK_GLASS, KILL_ROLES]);
         expect(exempted(s), s.Sid).toEqual(want);
       }
   });
 
   it('put every exempted role out of reach — nothing else in dev may change, create or pass one', () => {
-    const guards = statements(standing.guardrails).filter((x) => ['NoGuardTampering', 'NoLaneTampering'].includes(x.Sid));
+    const guards = statements(standing.guardrails).filter((x) =>
+      ['NoGuardTampering', 'NoLaneTampering'].includes(x.Sid),
+    );
     expect(guards.map((g) => g.Action)).toEqual([['iam:*'], ['iam:*']]);
-    const covered = (arn: string) => guards.some((g) => [g.Resource].flat().some((r) => r !== undefined && arnLike(r, arn)));
+    const covered = (arn: string) =>
+      guards.some((g) => [g.Resource].flat().some((r) => r !== undefined && arnLike(r, arn)));
     for (const p of Object.values(standing))
       for (const s of statements(p)) for (const r of exempted(s)) expect(covered(r), r).toBe(true);
   });
@@ -96,9 +106,15 @@ describe('dev-account SCPs', () => {
       statements(standing.freeze).every((s) => exempted(s).some((e) => arnLike(e, arn)));
 
     it("exempts the devmain exec role from the freeze, and neither the stock exec role nor devmain's deploy role", () => {
-      expect(freezeExempt(`arn:aws:iam::${DEV}:role/cdk-devmain-cfn-exec-role-${DEV}-us-west-1`)).toBe(true);
-      expect(freezeExempt(`arn:aws:iam::${DEV}:role/cdk-hnb659fds-cfn-exec-role-${DEV}-us-west-1`)).toBe(false);
-      expect(freezeExempt(`arn:aws:iam::${DEV}:role/cdk-devmain-deploy-role-${DEV}-us-west-1`)).toBe(false);
+      expect(
+        freezeExempt(`arn:aws:iam::${DEV}:role/cdk-devmain-cfn-exec-role-${DEV}-us-west-1`),
+      ).toBe(true);
+      expect(
+        freezeExempt(`arn:aws:iam::${DEV}:role/cdk-hnb659fds-cfn-exec-role-${DEV}-us-west-1`),
+      ).toBe(false);
+      expect(
+        freezeExempt(`arn:aws:iam::${DEV}:role/cdk-devmain-deploy-role-${DEV}-us-west-1`),
+      ).toBe(false);
       expect(freezeExempt(`arn:aws:iam::${DEV}:role/aperture-github-dev-main`)).toBe(false);
     });
 
@@ -127,12 +143,22 @@ describe('dev-account SCPs', () => {
     // An access point is a second address for a bucket that the bucket-ARN deny may not cover.
     it('denies creating an S3 access point anywhere in dev', () => {
       const sinks = statements(standing.guardrails).find((x) => x.Sid === 'NoCostSinks')!;
-      expect(sinks.Action).toEqual(expect.arrayContaining(['s3:CreateAccessPoint*', 's3:CreateMultiRegionAccessPoint*']));
+      expect(sinks.Action).toEqual(
+        expect.arrayContaining(['s3:CreateAccessPoint*', 's3:CreateMultiRegionAccessPoint*']),
+      );
     });
 
     it("keeps everything but devmain's publishing role off its bucket, and everything but break-glass off its version and stack", () => {
       const s = g('DevMainBootstrapIntact');
-      for (const a of ['s3:PutObject*', 's3:DeleteObject*', 's3:PutBucket*', 'ssm:PutParameter', 'ssm:DeleteParameter*', 'cloudformation:UpdateStack', 'cloudformation:DeleteStack'])
+      for (const a of [
+        's3:PutObject*',
+        's3:DeleteObject*',
+        's3:PutBucket*',
+        'ssm:PutParameter',
+        'ssm:DeleteParameter*',
+        'cloudformation:UpdateStack',
+        'cloudformation:DeleteStack',
+      ])
         expect(s.Action).toContain(a);
       expect(s.Resource).toEqual([
         'arn:aws:s3:::cdk-devmain-*',
@@ -140,8 +166,18 @@ describe('dev-account SCPs', () => {
         'arn:aws:ssm:*:*:parameter/cdk-bootstrap/devmain/*',
         'arn:aws:cloudformation:*:*:stack/CDKToolkit-devmain/*',
       ]);
-      expect(arnLike(DEVMAIN_PUBLISH, `arn:aws:iam::${DEV}:role/cdk-devmain-file-publishing-role-${DEV}-us-west-1`)).toBe(true);
-      expect(arnLike(DEVMAIN_PUBLISH, `arn:aws:iam::${DEV}:role/cdk-hnb659fds-file-publishing-role-${DEV}-us-west-1`)).toBe(false);
+      expect(
+        arnLike(
+          DEVMAIN_PUBLISH,
+          `arn:aws:iam::${DEV}:role/cdk-devmain-file-publishing-role-${DEV}-us-west-1`,
+        ),
+      ).toBe(true);
+      expect(
+        arnLike(
+          DEVMAIN_PUBLISH,
+          `arn:aws:iam::${DEV}:role/cdk-hnb659fds-file-publishing-role-${DEV}-us-west-1`,
+        ),
+      ).toBe(false);
     });
 
     it('lets nothing but break-glass change or pass a devmain or GitHub role, bar the deploy role passing its exec role', () => {
@@ -149,8 +185,18 @@ describe('dev-account SCPs', () => {
         Action: ['iam:*'],
         Resource: ['arn:aws:iam::*:role/cdk-devmain-*', 'arn:aws:iam::*:role/aperture-github-*'],
       });
-      for (const r of ['aperture-github-deploy-dev', 'aperture-github-dev-main', 'aperture-github-logs-dev', `cdk-devmain-cfn-exec-role-${DEV}-us-west-1`])
-        expect([g('NoLaneTampering').Resource].flat().some((p) => arnLike(p!, `arn:aws:iam::${DEV}:role/${r}`)), r).toBe(true);
+      for (const r of [
+        'aperture-github-deploy-dev',
+        'aperture-github-dev-main',
+        'aperture-github-logs-dev',
+        `cdk-devmain-cfn-exec-role-${DEV}-us-west-1`,
+      ])
+        expect(
+          [g('NoLaneTampering').Resource]
+            .flat()
+            .some((p) => arnLike(p!, `arn:aws:iam::${DEV}:role/${r}`)),
+          r,
+        ).toBe(true);
     });
 
     it('still stops the lane on a kill: only break-glass is exempt', () => {
@@ -166,15 +212,47 @@ describe('dev-account SCPs', () => {
 
   it('admit only the services the dev stacks and CI use', () => {
     const allowed = statements(standing.allowlist)[0]!.NotAction!;
-    for (const svc of ['lambda', 'dynamodb', 's3', 'cloudfront', 'cognito-idp', 'logs', 'scheduler', 'kms', 'iam', 'sts', 'cloudformation'])
+    for (const svc of [
+      'lambda',
+      'dynamodb',
+      's3',
+      'cloudfront',
+      'cognito-idp',
+      'logs',
+      'scheduler',
+      'kms',
+      'iam',
+      'sts',
+      'cloudformation',
+    ])
       expect(allowed).toContain(`${svc}:*`);
-    for (const svc of ['ec2', 'bedrock', 'sagemaker', 'sns', 'events', 'cloudwatch', 'ecr', 'ses', 'states', 'acm', 'ssm'])
+    for (const svc of [
+      'ec2',
+      'bedrock',
+      'sagemaker',
+      'sns',
+      'events',
+      'cloudwatch',
+      'ecr',
+      'ses',
+      'states',
+      'acm',
+      'ssm',
+    ])
       expect(allowed).not.toContain(`${svc}:*`);
     // CloudWatch only for reads — alarms cost money and the kill alarms are the break-glass role's; ACM only for
     // reads — the cert is requested by the break-glass role, and exportable public certs bill per name; SSM only
     // Parameter Store — OpsCenter and Automation bill per item or step.
-    expect(allowed.filter((a) => a.startsWith('cloudwatch:'))).toEqual(['cloudwatch:Describe*', 'cloudwatch:Get*', 'cloudwatch:List*']);
-    expect(allowed.filter((a) => a.startsWith('acm:'))).toEqual(['acm:Describe*', 'acm:Get*', 'acm:List*']);
+    expect(allowed.filter((a) => a.startsWith('cloudwatch:'))).toEqual([
+      'cloudwatch:Describe*',
+      'cloudwatch:Get*',
+      'cloudwatch:List*',
+    ]);
+    expect(allowed.filter((a) => a.startsWith('acm:'))).toEqual([
+      'acm:Describe*',
+      'acm:Get*',
+      'acm:List*',
+    ]);
     expect(allowed.filter((a) => a.startsWith('ssm:'))).toEqual([
       'ssm:*Parameter*',
       'ssm:AddTagsToResource',
@@ -245,11 +323,19 @@ describe('dev-account SCPs', () => {
       'iam:UpdateAssumeRolePolicy',
     ])
       expect(frozen).toContain(a);
-    for (const a of ['s3:PutLifecycleConfiguration', 'cloudfront:CopyDistribution', 'cognito-idp:UpdateUserPool*', 'cognito-idp:CreateUserPool*', 'cognito-idp:AdminCreateUser'])
+    for (const a of [
+      's3:PutLifecycleConfiguration',
+      'cloudfront:CopyDistribution',
+      'cognito-idp:UpdateUserPool*',
+      'cognito-idp:CreateUserPool*',
+      'cognito-idp:AdminCreateUser',
+    ])
       expect(frozen).toContain(a);
     // Code updates stay open for the app's own functions — they are what a dev deploy is — and closed only for CDK's
     // 15-minute provider functions, which CloudFormation names `Aperture…` (the app's are `aperture-…`).
-    const code = statements(standing.freeze).filter((x) => [x.Action].flat().includes('lambda:UpdateFunctionCode'));
+    const code = statements(standing.freeze).filter((x) =>
+      [x.Action].flat().includes('lambda:UpdateFunctionCode'),
+    );
     expect(code.map((x) => x.Resource)).toEqual(['arn:aws:lambda:*:*:function:Aperture*']);
   });
 

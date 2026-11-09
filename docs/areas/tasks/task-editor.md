@@ -33,13 +33,13 @@ The card keeps only the actions you press without thinking. No overflow menu.
 ## Decisions + why
 
 - **Built on the existing `components/Modal`, not a new primitive.** That Modal is a native `<dialog>`
-  + `showModal()`, which gives the browser top layer (renders over the fixed dock, no z-index/inert
+  plus `showModal()`, which gives the browser top layer (renders over the fixed dock, no z-index/inert
   work), focus containment, Escape, and a `::backdrop` scrim for free. Rolling our own portal/focus
   trap would have re-owned exactly the "subtle correctness" the native element already handles.
 - **The card slims to lifecycle; the modal is the edit surface.** Start/Focus/Done stay on the card;
   scope/split/due/calendar/files/drop/delete all move into the modal. One editing context, not two.
 - **The full title is an editable field.** It's a `Textarea` at the top of the details form, so a long
-  title reads unclipped (the original complaint) *and* edits in place — settable at any status, since a
+  title reads unclipped (the original complaint) _and_ edits in place — settable at any status, since a
   title is display text that never touches the calibration lock (`setTaskTitle`). Blank is rejected
   (Save disables). This shipped in a second pass, after the branch rebased onto `#25` (the MCP server
   merge) which brought the `setTaskTitle` contract to `main`; the first pass left the title read-only
@@ -60,14 +60,14 @@ The card keeps only the actions you press without thinking. No overflow menu.
   history is meaningless.
 - **Done opens the modal in a finish intent** (actual-minutes capture, `DoneForm` reused) focused on
   the Actual field. Scope opens it focused on Estimate. `TaskModal` owns that focus effect — it sits a
-  parent above `Modal`, so its effect runs *after* `showModal()` (child effects fire first), the same
+  parent above `Modal`, so its effect runs _after_ `showModal()` (child effects fire first), the same
   ordering `BulkAddDialog` relies on. A title tap (`view`) leaves focus on the dialog itself
   (`Modal`'s `initialFocus="dialog"`, 2026-10-06): the browser default focused the Title field, which
   raised the iPhone keyboard over a task opened only to read.
 - **Drop and Delete moved into the modal.** Drop gained a confirm strip (`DropConfirm`) it didn't have
   as a menu item — `cancelled` is terminal and it sits next to Delete, so a misclick is costly. All
   gates are the card's, moved verbatim: Drop only when `canScope`; Delete hidden when `seriesId !==
-  null` (a recurring occurrence respawns — Drop is the right tool). Reveals are exclusive, one level.
+null` (a recurring occurrence respawns — Drop is the right tool). Reveals are exclusive, one level.
 - **The "not scoped" cue + Scope button stay on the card** (superseded 2026-11-05: the cue is the
   button, the Scope button is gone — Build record). Removing the always-visible Scope button
   would have dropped the only "this task is unscoped" signal and made scoping — the morning-pass
@@ -91,7 +91,7 @@ The card keeps only the actions you press without thinking. No overflow menu.
   keyboard navigation), so the title doesn't sit outlined until you click elsewhere.
 - **Click-outside closes, but nothing unsaved is lost without asking.** The task modal opts into
   backdrop-close (an opt-in `closeOnBackdrop` flag on the shared `Modal`, so paste-heavy dialogs like
-  bulk-add stay unaffected); it requires press *and* release on the backdrop, so a text-selection
+  bulk-add stay unaffected); it requires press _and_ release on the backdrop, so a text-selection
   drag-out can't dismiss. Every way out goes through the modal's guard (`TaskModal` `exit`): Esc,
   backdrop, Close, opening another task from inside (a parent's name, a part's row), and the close after
   Mark done / Drop / a done split. Each form reports where its edits stand — clean, dirty or saving —
@@ -120,7 +120,7 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - **Category suggestion (2026-11-05)** — an uncategorised task's editor shows a dashed ghost chip
   `Garden?` above the Category select (beside it from `sm`) when the task's own history is confident, scored on the client
   (`packages/shared/src/categorySuggest.ts`, `useSuggestCategory`): multinomial naive Bayes over the words of title
-  + the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing over each
+  plus the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing over each
   category's words. Per-task probabilities drifted long lines to the smallest category (a word absent from
   a 4-task category outscored one present once in a 17-task category), so the denominator is the category's
   word count plus half the vocabulary. A rare word still scores higher in a small category, so the winner
@@ -139,8 +139,8 @@ The card keeps only the actions you press without thinking. No overflow menu.
 
 ## Non-goals / deferred
 
-- **Rename sync** — renaming a task does *not* rename its recurring series template. Its linked Google
-  Calendar event *is* renamed when auto-sync is on (since 2026-10-05 — `docs/areas/calendar/` → Auto-sync).
+- **Rename sync** — renaming a task does _not_ rename its recurring series template. Its linked Google
+  Calendar event _is_ renamed when auto-sync is on (since 2026-10-05 — `docs/areas/calendar/` → Auto-sync).
 - **Home rows** are not yet wired to the modal. `TaskTitleButton` is the seam — those truncated title
   spots can adopt it later with no new plumbing. (On `/tasks` every row is a `TaskCard`, and a click
   anywhere on the row opens the modal.)

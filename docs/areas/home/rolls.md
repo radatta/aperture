@@ -20,10 +20,10 @@ disagree, fix whichever is wrong and say so here.
 
 Some of the things you most want to keep doing have **no deadline** — LeetCode daily, studying systems
 design, working on Aperture. Nothing forces them, so they're the first to slip, and a plain task or a
-"someday" checkbox has no pull. In Rahul's words: *"I will do things with an actual deadline; LC I will
-keep putting off."*
+"someday" checkbox has no pull. In Rahul's words: _"I will do things with an actual deadline; LC I will
+keep putting off."_
 
-Streaks are the usual fix, and they *do* motivate — but a resetting streak is a guilt machine: one missed
+Streaks are the usual fix, and they _do_ motivate — but a resetting streak is a guilt machine: one missed
 day zeroes it, and you start optimizing to protect the number instead of doing the thing. That's the exact
 stress this app exists to remove. So Rolls give you streak-style momentum **that cannot be failed**: a
 grid that only ever fills. A gap is just a lighter dot; nothing resets, nothing goes red. The pull is
@@ -40,7 +40,7 @@ derived entirely from your completed work.
   rule as LeetCode attempt-counts).
 - The morning ritual is **"pick 1–2 today."** A `RollPicker` chip strip lives in the "Plan today" card;
   tapping a roll drops a planned rep task onto today's plan. That rep flows straight into the daytime
-  **Right now** lane (PR 2) — completing it there *is* the rep, and it fills today's cell. Rolls feed the
+  **Right now** lane (PR 2) — completing it there _is_ the rep, and it fills today's cell. Rolls feed the
   daytime home; they are not a parallel surface.
 - Because a rep is a real task carrying the roll's estimate, **calibration rides ongoing effort too** — no
   special path.
@@ -63,9 +63,9 @@ now     # # #
 ### Rolls vs Habits (they coexist — a deliberate call)
 
 Aperture already has **Habits** (a binary behavior you tap, a weekly cadence target, its own dot grid).
-Rolls are mechanically different and neither subsumes the other: a habit's completion is a *stored check*
-(a counter — the thing Rolls avoid), it has no estimate and no task; a roll's completion is a *timed
-task* that accrues calibration and flows into the daytime lane. Habits fit non-work presence ("call home
+Rolls are mechanically different and neither subsumes the other: a habit's completion is a _stored check_
+(a counter — the thing Rolls avoid), it has no estimate and no task; a roll's completion is a _timed
+task_ that accrues calibration and flows into the daytime lane. Habits fit non-work presence ("call home
 1×/week"); Rolls fit timed work you want to keep at. They read as one system because the contact sheet
 reuses the Habits grid grammar (`recentWeeks`/`weekDates`), but the sheet is **read-only, ring-less, and
 count-less-by-color** — that restraint is the visible difference. Revisit if real use shows the two
@@ -84,7 +84,7 @@ collapse into one (see §6).
 - **D3 — Rolls and Habits stay distinct** (see §2). Rejected: merging now — it would relitigate D1 and
   PRODUCT §4b inside the new-entity PR. Confirmed with Rahul (keep both, reassess after use).
 - **D4 — A Roll is NOT a `TaskSeries`.** A series auto-materializes an occurrence every due day; a roll is
-  open-ended and the *act of picking* is the value. Auto-materializing would make LeetCode appear on the
+  open-ended and the _act of picking_ is the value. Auto-materializing would make LeetCode appear on the
   plan every day unbidden — "another checkbox in the pile," the exact failure the epic names. A rep task
   has `seriesId: null`, `rollId: <roll>`.
 - **D5 — `Task.rollId` is required-nullable, not optional.** Every Task field is required-nullable; an
@@ -96,7 +96,7 @@ collapse into one (see §6).
   it's contract-testable. It reuses the open rep if one exists (so yesterday's unfinished LeetCode
   re-plans onto today, never duplicates) and appends to the plan like `addToDay`. `day` is client-supplied
   (the server is UTC). Named `pick`, not `start` (which collides with `startSession`/`in_progress`).
-  Re-planning a still-open rep onto a later day *adds* a plan row for that day; it does **not** move the
+  Re-planning a still-open rep onto a later day _adds_ a plan row for that day; it does **not** move the
   prior day's row (past-day plan rows are inert in the no-auto-roll model, so a lingering one is harmless).
   An open rep that has been given a time is refused (`TIMED_NO_PLAN_ERROR`, [lenses.md](../tasks/lenses.md)
   D13) rather than spawning a second rep, and the picker shows the message: re-timing the rep to today
@@ -110,7 +110,7 @@ collapse into one (see §6).
   task for the home; `repDays()` is a pure fold over it. A server method would re-run the same fold over
   the same scan. The derivation gets a unit test instead of a contract test.
 - **D10 — The picker lives in the morning "Plan today" card, not a sixth card.** Morning is already at the
-  ≤5-card cap (PRODUCT §3), and picking a roll *is* a plan pull. Daytime needs nothing new — the rep is an
+  ≤5-card cap (PRODUCT §3), and picking a roll _is_ a plan pull. Daytime needs nothing new — the rep is an
   ordinary plan row, so `RightNowCard` shows it and its Done → the rep. Night: nothing (derive-only).
 - **D11 — Archive = `active: false` (habits parity); no `color` field.** Archived rolls leave the picker
   but keep their rep history. No color — the palette has one accent and `CategoryTag` already gives

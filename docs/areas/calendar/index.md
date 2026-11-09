@@ -2,7 +2,7 @@
 
 Connect **two Google accounts** (personal + school), **read** their calendars into a morning "day
 shape" number, and **write real events** onto them from tasks. Aperture owns the events it creates and
-only ever touches those — and since two-way sync (2026-10-05), edits you make to *those* events in Google
+only ever touches those — and since two-way sync (2026-10-05), edits you make to _those_ events in Google
 come back onto their tasks. Built in PR-C on branch `google-calendar`.
 
 ## Why "shape", not "hours free"
@@ -33,9 +33,9 @@ token in SSM; the connected-account list + email live in `Settings`.
 
 ## The two traps
 
-- **7-day refresh-token expiry.** A consent screen in *Testing* status issues refresh tokens that die in
+- **7-day refresh-token expiry.** A consent screen in _Testing_ status issues refresh tokens that die in
   7 days — the same bug class as the Cognito daily re-login. Fix: **publish** the consent screen (status
-  *In production*, unverified is fine for a personal app). One client covers both accounts. Verify
+  _In production_, unverified is fine for a personal app). One client covers both accounts. Verify
   empirically day 8–10 after the first real connect.
 - **Silent normalization bugs.** Parsing `events.list` fails quietly — a plausible wrong number, never an
   error. Every rule is fixture-tested (`lambdas/src/google/normalize.test.ts`): all-day vs timed, `end`
@@ -47,10 +47,10 @@ token in SSM; the connected-account list + email live in `Settings`.
 External side-effects are gated exactly like the DDB `Writes` seam, so a smoke/testMode run touches
 nothing real (no SSM token read, no Google fetch, no burned refresh token):
 
-| Effect | Seam | Live | testMode |
-| --- | --- | --- | --- |
-| DynamoDB writes | `Writes` | `liveWrites` | `noopWrites` |
-| Google + SSM | `GoogleGateway` | `LiveGoogle` (index.ts only) | `noopGoogle` |
+| Effect          | Seam            | Live                         | testMode     |
+| --------------- | --------------- | ---------------------------- | ------------ |
+| DynamoDB writes | `Writes`        | `liveWrites`                 | `noopWrites` |
+| Google + SSM    | `GoogleGateway` | `LiveGoogle` (index.ts only) | `noopGoogle` |
 
 `GoogleGateway` (`lambdas/src/google/gateway.ts`) is account-aware — every method takes the `sub`. Three
 impls: `LiveGoogle` (real `fetch` + SSM, rolled by hand — no `googleapis` lib), `noopGoogle`
@@ -132,15 +132,15 @@ the event's _start_, so the phone's calendar alerts when the block starts and Ap
 deadline. A patch merges, so existing events pick it up on their next edit; there is no backfill. It is always
 on, with no toggle; reverting it is one line in `liveGoogle.ts`.
 
-| Task change | Event |
-| --- | --- |
-| gains a time (create, edit, bulk, MCP) — no event | created |
-| gains a time — a block already exists | **moved** to end at the deadline (no duplicate) |
-| day / time / estimate / title changes | patched (`events.patch`) — **only what the event lacks** (the window moves as one) |
-| untimed task with a block, renamed | title patched; a day move leaves it (gcal owns that clock) |
-| time or day cleared | deleted, pointers cleared |
-| done | left alone · cancel → delete-on-cancel (above) |
-| a **parent** (has parts) with a time | its **due marker**: 15 min ending at the deadline, free, graphite — moved by a due change (Parent + parts, below) |
+| Task change                                       | Event                                                                                                             |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| gains a time (create, edit, bulk, MCP) — no event | created                                                                                                           |
+| gains a time — a block already exists             | **moved** to end at the deadline (no duplicate)                                                                   |
+| day / time / estimate / title changes             | patched (`events.patch`) — **only what the event lacks** (the window moves as one)                                |
+| untimed task with a block, renamed                | title patched; a day move leaves it (gcal owns that clock)                                                        |
+| time or day cleared                               | deleted, pointers cleared                                                                                         |
+| done                                              | left alone · cancel → delete-on-cancel (above)                                                                    |
+| a **parent** (has parts) with a time              | its **due marker**: 15 min ending at the deadline, free, graphite — moved by a due change (Parent + parts, below) |
 
 - **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
   creates one (so an event you removed by hand isn't resurrected).
@@ -241,15 +241,15 @@ scan; everything else in the delta — real meetings — is dropped untouched. N
 with a new id and is never adopted). **The pull never writes to Google**, and never re-runs the push:
 the task now matches its event, except where a pull kept Aperture's value — that goes with the next push.
 
-| Google change (to an Aperture event) | Task |
-| --- | --- |
-| end moved | `dueDay` / `dueTime` (wall clock in `USER_TIME_ZONE`) — the plan day never moves |
-| start moved (length changed) | `estimateMin` = the new length, rounded to the minute — never `estimateLockedMin` |
-| renamed | `title` (trimmed; a blank title is ignored). A part's block: a leading `Parent · ` is stripped first; without it the whole title is taken |
-| deleted, or moved to another calendar | unlinked (pointers cleared), never resurrected |
-| made all-day | time ignored, link kept, title still syncs; the next Aperture time change re-times it |
-| made recurring | ignored |
-| a parent's **due marker**: end moved / start moved | `dueDay` / `dueTime` / nothing — its length maps to no field (a parent has no estimate) |
+| Google change (to an Aperture event)               | Task                                                                                                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| end moved                                          | `dueDay` / `dueTime` (wall clock in `USER_TIME_ZONE`) — the plan day never moves                                                          |
+| start moved (length changed)                       | `estimateMin` = the new length, rounded to the minute — never `estimateLockedMin`                                                         |
+| renamed                                            | `title` (trimmed; a blank title is ignored). A part's block: a leading `Parent · ` is stripped first; without it the whole title is taken |
+| deleted, or moved to another calendar              | unlinked (pointers cleared), never resurrected                                                                                            |
+| made all-day                                       | time ignored, link kept, title still syncs; the next Aperture time change re-times it                                                     |
+| made recurring                                     | ignored                                                                                                                                   |
+| a parent's **due marker**: end moved / start moved | `dueDay` / `dueTime` / nothing — its length maps to no field (a parent has no estimate)                                                   |
 
 - **Status.** Done: the end and title apply, a start drag is ignored (decided 2026-11-05: stays ignored — a done
   task's estimate is history; its actual is the number that could change, and a drag can't carry it). Cancelled: nothing (its event went with the cancel). In-progress: the start sets the
@@ -268,7 +268,7 @@ the task now matches its event, except where a pull kept Aperture's value — th
   recurring or owed-removal one) — a newer state with nothing to map too, so its version advances; a
   push records what it sent. Titles compare trim-insensitively.
 - **One clock, Aperture wins.** `gcalSeen.updatedMs` is **Google's** `updated` for the state the base
-  describes — from the push's response (never the Lambda's clock, which reads *after* Google stamps the
+  describes — from the push's response (never the Lambda's clock, which reads _after_ Google stamps the
   write and would make our own push's echo look stale) or from the pulled event. An event state older
   than it is stale: nothing applies and nothing is recorded — it predates our push, whose echo carries
   anything newer (so a Google edit to a field we didn't send rides in on it). A field **both** sides
@@ -352,7 +352,7 @@ token is a recoverable expected state, not a crash.
 ## Operational prerequisites (done by the user in Google Cloud)
 
 One OAuth client per env (same id/secret in both, in SSM SecureString at `/aperture/<stage>/google/client_id`
-+ `client_secret`), redirect URI `<APP_URL>/api/google/callback`, scope
+and `client_secret`), redirect URI `<APP_URL>/api/google/callback`, scope
 `openid email https://www.googleapis.com/auth/calendar.events`, consent screen **published**. Per-account
 refresh tokens are written by the app at connect time — never pre-created.
 
