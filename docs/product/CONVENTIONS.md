@@ -89,17 +89,20 @@ These are cross-cutting rules for `app/` — they were paid for once and are eas
 **Colour tiers are a contrast contract, not a taste.** `app/src/styles/tokens.css` is solved against
 WCAG, not eyeballed:
 
-- `ink`, `ink-muted`, `teal`, `gold`, `danger` **carry content** and clear **4.5:1 on all three
-  grounds** (`surface`, `panel`, `panel-2`).
-- `ink-subtle` clears **3:1 only**. It is **supplementary**: de-emphasised metadata, column headers,
-  separators. **Nothing a reader needs may use it** — not placeholders, not hints, not the sentence
-  in an empty state (which is often the only text on screen).
+- Every text token — `ink`, `ink-muted`, `ink-subtle`, `teal`, `gold`, `danger` — clears **4.5:1 on
+  all three grounds** (`surface`, `panel`, `panel-2`) in both themes, and under the due-time fills too
+  (a filled row draws the accents with their `--*-on-fill` shades, `dueStyle.ts`).
+  `app/src/styles/tokens.test.ts` measures it, so a palette change that breaks it fails the gate.
+- `ink-subtle` is the **quietest** of three text levels (ink > muted > subtle, also tested): de-emphasised
+  metadata, column headers, separators. It was 3:1 "supplementary only" until 2026-11-08. Text a reader
+  needs to act on (placeholders, hints, the sentence in an empty state) still takes `ink-muted` or
+  stronger: that's hierarchy, not contrast.
 - `line-strong` is opaque and clears 3:1 on `panel`, because it is the _sole_ carrier of an unchecked
   habit cell. `line` is a decorative hairline between surfaces that also differ by fill, so it is
   deliberately below 3:1.
 
-Two traps: **don't stack `opacity-*` on `ink-subtle`** (it composites below 3:1 and a
-computed-colour audit won't catch it), and **keep the dark `panel` steps small** — a lighter raised
+Two traps: **don't stack `opacity-*` on a text token** (it composites below 4.5:1, and neither
+`tokens.test.ts` nor a computed-colour audit catches it), and **keep the dark `panel` steps small** — a lighter raised
 ground crushes contrast for everything sitting on the dock.
 
 **The bottom dock is one element.** `AppShell` renders a single fixed column holding the timer stack
