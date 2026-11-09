@@ -440,7 +440,8 @@ describe('Right now — a LeetCode sitting', () => {
       tzOffsetMinutes: new Date().getTimezoneOffset(),
     });
     shift = 0;
-    await plan(api, 'Write the brief', { est: 30, order: 0, start: true }); // planned → the hero
+    // Start plans the rep at the day's next order (0 here): -1 puts the brief first, so it's the hero.
+    await plan(api, 'Write the brief', { est: 30, order: -1, start: true });
     renderApp({ api, path: '/' });
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
     const link = await screen.findByRole('link', { name: 'End the LeetCode sitting →' });
