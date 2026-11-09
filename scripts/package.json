@@ -8,7 +8,9 @@
     "typecheck": "tsc -b",
     "smoke": "tsx src/smoke.ts",
     "devcheck": "tsx src/devcheck/run.ts",
-    "devcheck:local": "tsx src/devcheck/local/run-local.ts"
+    "devcheck:local": "tsx src/devcheck/local/run-local.ts",
+    "sim-bench:plans": "tsx src/mailroom/sim-bench-plans.ts",
+    "sim-bench:seed": "tsx src/mailroom/sim-bench-seed.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

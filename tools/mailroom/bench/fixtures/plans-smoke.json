@@ -1,0 +1,9 @@
+{
+  "about": "The bench's real-runner smoke plan (run-fixtures.sh): one op the mailroom's default tape answers.",
+  "scenario": "smoke",
+  "nonce": "simbench",
+  "timeoutSec": 120,
+  "prelude": { "name": "prelude", "timeoutSec": 120, "steps": [{ "op": "wait", "s": 1 }] },
+  "seed": { "title": "devcheck-ios simben", "estimateMin": 15, "status": "in_progress" },
+  "jobs": [{ "name": "wait-only", "step": "smoke", "steps": [{ "op": "wait", "s": 1 }] }]
+}

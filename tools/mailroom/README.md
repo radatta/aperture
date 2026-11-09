@@ -6,3 +6,4 @@ A launchd agent on the Mac. It runs allowlisted jobs that Claude drops into `.ho
 - `install.sh`: install or update (`--mode queue|poll`, `--ref <sha>`), or `--uninstall`. Run it fetched from `main`; the one-liner is in MAILROOM.md → _Install_.
 - `dev.rahuldatta.aperture.mailroom.plist.tmpl`: the LaunchAgent that `install.sh` renders.
 - `run-fixtures.sh` + `testdata/jobs.jsonl`: the runner's fixture suite. It also runs inside `pnpm test`.
+- `bench/`: the sim bench. It replays the devcheck's iOS jobs N× through `runner.sh` + `jobs/sim.sh` on any Mac and times them ([docs/ops/SIM-BENCH.md](../../docs/ops/SIM-BENCH.md)).

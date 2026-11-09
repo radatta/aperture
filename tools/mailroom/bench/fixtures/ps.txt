@@ -1,0 +1,10 @@
+  204800  12.5 /Library/Developer/CoreSimulator/Volumes/iOS_24B8117/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.2.simruntime/Contents/Resources/RuntimeRoot/System/Library/CoreServices/SpringBoard.app/SpringBoard
+  512000  30.0 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Resources/Platforms/iphoneos/SimMetalHost
+  256000   5.0 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Resources/Platforms/iphoneos/SimMetalHost
+  102400   1.0 /Library/Developer/CoreSimulator/Volumes/iOS_24B8117/RuntimeRoot/sbin/launchd_sim
+  307200  40.5 /Library/Developer/CoreSimulator/Volumes/iOS 27.2/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.xpc/com.apple.WebKit.WebContent
+   51200   2.0 /Library/Developer/CoreSimulator/Volumes/iOS 27.2/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.Networking.xpc/com.apple.WebKit.Networking
+  153600   8.0 /Library/Developer/CoreSimulator/Volumes/iOS 27.2/Applications/Web.app/Web
+  409600  15.0 /Applications/Xcode.app/Contents/Developer/Applications/Device Hub.app/Contents/MacOS/DeviceHub
+   10000   0.5 /usr/sbin/notifyd
+   20480   3.0 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Resources/SimRenderServer

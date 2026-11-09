@@ -18,6 +18,8 @@
     "format:check": "prettier --check .",
     "devcheck": "pnpm --filter @aperture/scripts devcheck",
     "devcheck:local": "pnpm --filter @aperture/scripts devcheck:local",
+    "sim-bench:plans": "pnpm --filter @aperture/scripts sim-bench:plans",
+    "sim-bench:seed": "pnpm --filter @aperture/scripts sim-bench:seed",
     "bot": "node scripts/src/bot/cli.ts",
     "mailroom": "node scripts/src/mailroom/cli.ts",
     "vapid-keys": "node scripts/src/vapid-keys.ts"
