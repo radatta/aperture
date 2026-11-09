@@ -504,8 +504,26 @@ sim_find_icon() {
 }
 
 # --- ops ----------------------------------------------------------------------------------------------------------
+# An aborted job can leave the app mid-typing (job …043422Z…-trial-idle-2: a hung read in `keys` left the bar focused,
+# the keyboard up and an edit menu over it), and launch resumes that state, so neither landmark ever shows (the next
+# five jobs failed LANDMARK). Terminate it, read back that it's gone, and open it again from the icon; once.
+# simctl refuses to terminate an app that isn't running (mac-sim's idle4 round), so only a running one is terminated.
+sim_launch_again() {
+  if sim_web_alive; then
+    sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; }
+    ! sim_web_alive || sleep 1 # the process takes a moment to exit (as after the switcher's swipe)
+    if sim_web_alive; then sim_err SIM_UNAVAILABLE TERMINATE "the web app still runs after terminate"; return 1; fi
+  else
+    SIM_AGAIN_DEAD="; no web process though the tree showed the app, so not terminated"
+  fi
+  ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+  sim_find_icon || return 1
+  sim_tap_el "$SIM_ICON"
+}
+
 sim_op_launch() {
-  local i s t clean="" taps=1
+  local i s t clean="" taps=1 again=""
+  SIM_AGAIN_DEAD=""
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
@@ -521,6 +539,7 @@ sim_op_launch() {
       [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
       [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
       [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; pinned the keyboard prefs ($SIM_KB_SET off)"
+      [ -z "$again" ] || SIM_NOTE="$SIM_NOTE; relaunched (it resumed mid-typing, keyboard up$SIM_AGAIN_DEAD)"
       return 0
     fi
     i=$((i + 1))
@@ -546,6 +565,12 @@ sim_op_launch() {
         if [ -n "$t" ] && sim_tree_home "$t"; then
           sim_tap_el "$SIM_ICON" || return 1
           taps=$((taps + 1))
+        elif [ -z "$again" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
+          && sim_kb_up; then
+          sim_launch_again || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's relaunch of an app left mid-typing)"; return 1; }
+          again=1 i=0 clean="" taps=1
+          sleep 2
+          continue
         elif [ "$i" = 10 ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
           ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
           ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true

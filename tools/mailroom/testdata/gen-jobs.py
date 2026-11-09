@@ -596,7 +596,8 @@ spass('sim: icon taps that keep dropping are tapped again at polls 3, 6 and 10',
 sfail('sim: still the Home Screen after four icon taps is ICON_TAP_DROPPED, not LANDMARK', 'ICON_TAP_DROPPED', [L],
       tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4}, files=['shots/01-fail.png'])
 sfail('sim: the app in front without its landmark stays LANDMARK, its icon never tapped again', 'LANDMARK', [L],
-      tape=[pt(220, 895, {}), dtree(tree(), 3), dtree(APPFRONT)], simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1})
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(APPFRONT)],  # keyboard down: no mid-typing relaunch
+      simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1, 'simctl terminate': 0})
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
 serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
      tape=SIGNED_OUT + FORMP[:-1] + [{**FORMP[-1], 'n': 1}, HANG('--point 220,454')], pwTyped=1, simCount={'tap -x 201 -y 453': 1})
@@ -747,6 +748,26 @@ srej('sim: a hint with an extra key is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x
 srej('sim: a hint that isn\'t whole is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200.5, 'y': 316}}])
 srej('sim: readBuild stay false is BAD_OP', 'BAD_OP', [L, {'op': 'readBuild', 'stay': False}])
 srej('sim: readBuild with another key is BAD_OP', 'BAD_OP', [L, {'op': 'readBuild', 'home': True}])
+
+# --- launch onto an app left mid-typing by an aborted job (…043422Z…-trial-idle-2; the next five failed LANDMARK) ---
+TERM = 'simctl terminate ' + U
+spass('sim: launch onto an app left mid-typing (keyboard up, no landmark) relaunches it once', [L],
+      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'},
+      simCount={TERM: 1}, simIncludes=[TERM, 'Web.app/Web', 'batch --step button home', 'tap -x 371 -y 247'])
+spass('sim: a keyboard first seen at poll 6 relaunches then, and the polls start again', [L],
+      tape=[pt(220, 895, {}, n=6), pt(220, 530, {}, n=6), pt(221, 856, {}, n=1), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}],
+      notes={'0': 'relaunched'}, simCount={TERM: 1, '--point 220,895': 7})
+serr('sim: a relaunch whose terminate fails says it was launch\'s relaunch', 'TERMINATE', [L],
+     tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}, {'m': 'simctl terminate', 'rc': 1}],
+     notes={'0': "simctl terminate failed (in launch's relaunch of an app left mid-typing)"})
+sfail('sim: still no landmark after the relaunch is LANDMARK, relaunched once only', 'LANDMARK', [L],
+      tape=[pt(220, 895, {}), pt(220, 530, {}), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], simCount={TERM: 1})
+sfail('sim: no landmark and no keyboard is LANDMARK as before, no relaunch', 'LANDMARK', [L],
+      tape=[pt(220, 895, {}), pt(220, 530, {}), pt(221, 856, {})], simCount={TERM: 0})
+spass('sim: a relaunch onto a web app already gone skips the terminate (simctl refuses one)', [L],
+      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3)], notes={'0': 'keyboard up; no web process though the tree showed the app, so not terminated)'}, simCount={TERM: 0, 'tap -x 371 -y 247': 2})
+serr('sim: a web app that survives the relaunch\'s terminate is TERMINATE', 'TERMINATE', [L],
+     tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0}], simCount={TERM: 1})
 
 with open(out, 'w') as f:
     f.write(json.dumps({'base': base, 'simBase': simbase}) + '\n')
