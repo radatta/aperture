@@ -9,7 +9,6 @@ import type { PushTickReport } from './push/dispatch';
 import { noopPush } from './push/gateway';
 import type { PushGateway } from './push/gateway';
 import { createLivePush } from './push/livePush';
-console.log('caps-probe: temporary, reverted before the PR');
 
 const APP_URL = process.env.APP_URL ?? '';
 const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
