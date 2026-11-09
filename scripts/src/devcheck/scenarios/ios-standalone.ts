@@ -215,8 +215,16 @@ const doneForm = (ctx: Ctx): IosOp[] => [
     role: 'AXButton',
     closes: true,
   },
-  // and the modal is really gone: Tasks' search reads back where it was found (the modal, or its discard confirm, covers it)
-  { op: 'expect', as: 'search', labelIs: 'Search tasks' },
+  // and the modal is really gone: Tasks' search is found where the first tap found it, keyboard down (the modal, or
+  // its discard confirm, covers that spot; `search` itself was recorded with the keyboard up, higher on the page)
+  {
+    op: 'find',
+    label: 'Search tasks',
+    near: { x: 200, y: 332 },
+    radius: 40,
+    role: 'AXTextField',
+    as: 'closed',
+  },
   { op: 'shot', name: 'done-form-closed' },
 ];
 
