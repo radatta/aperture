@@ -208,6 +208,10 @@
             "from": 120,
             "to": 540
           },
+          "hint": {
+            "x": 200,
+            "y": 284
+          },
           "role": "AXTextField",
           "as": "search"
         },
@@ -242,6 +246,10 @@
             "from": 390,
             "to": 840
           },
+          "hint": {
+            "x": 395,
+            "y": 601
+          },
           "role": "AXButton"
         },
         {
@@ -256,6 +264,10 @@
             "from": 150,
             "to": 720
           },
+          "hint": {
+            "x": 200,
+            "y": 316
+          },
           "as": "box0"
         },
         {
@@ -265,6 +277,10 @@
             "x": 200,
             "from": 150,
             "to": 720
+          },
+          "hint": {
+            "x": 200,
+            "y": 316
           }
         },
         {
@@ -278,6 +294,10 @@
             "x": 200,
             "from": 120,
             "to": 690
+          },
+          "hint": {
+            "x": 200,
+            "y": 281
           },
           "as": "box"
         },
@@ -305,6 +325,10 @@
             "x": 200,
             "from": 150,
             "to": 720
+          },
+          "hint": {
+            "x": 200,
+            "y": 316
           }
         },
         {
@@ -318,6 +342,10 @@
             "x": 200,
             "from": 120,
             "to": 690
+          },
+          "hint": {
+            "x": 200,
+            "y": 281
           },
           "as": "again"
         },
@@ -346,6 +374,10 @@
             "x": 190,
             "from": 150,
             "to": 720
+          },
+          "hint": {
+            "x": 187,
+            "y": 378
           },
           "role": "AXButton",
           "closes": true
@@ -408,6 +440,10 @@
             "from": 300,
             "to": 650
           },
+          "hint": {
+            "x": 200,
+            "y": 507
+          },
           "role": "AXTextArea",
           "as": "long-bar"
         },
@@ -424,6 +460,10 @@
             "from": 300,
             "to": 650
           },
+          "hint": {
+            "x": 96,
+            "y": 464
+          },
           "role": "AXCheckBox"
         },
         {
@@ -433,6 +473,10 @@
             "x": 200,
             "from": 300,
             "to": 650
+          },
+          "hint": {
+            "x": 200,
+            "y": 507
           },
           "role": "AXTextArea",
           "as": "long-bar-task"
@@ -454,6 +498,10 @@
             "x": 355,
             "from": 300,
             "to": 650
+          },
+          "hint": {
+            "x": 353,
+            "y": 505
           },
           "role": "AXButton"
         },
@@ -501,12 +549,32 @@
           "n": 8
         },
         {
+          "op": "find",
+          "label": "Capture task",
+          "scan": {
+            "x": 200,
+            "from": 300,
+            "to": 650
+          },
+          "role": "AXTextArea",
+          "as": "long-erased"
+        },
+        {
+          "op": "expect",
+          "as": "long-erased",
+          "valueIs": "New task…"
+        },
+        {
           "op": "tap",
           "label": "Log",
           "scan": {
             "x": 49,
             "from": 300,
             "to": 650
+          },
+          "hint": {
+            "x": 49,
+            "y": 500
           },
           "role": "AXCheckBox"
         },
@@ -557,7 +625,8 @@
           "signedIn": true
         },
         {
-          "op": "readBuild"
+          "op": "readBuild",
+          "stay": true
         },
         {
           "op": "expectBuild"
