@@ -12,6 +12,7 @@ import {
   DEV_RESERVED_CONCURRENCY,
   DEV_URL_FUNCTIONS,
   reservedConcurrency,
+  slotOf,
 } from './config/devAccount';
 import { laneFor, synthesizerFor } from './config/lane';
 import type { Lane } from './config/lane';
@@ -1103,14 +1104,19 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       ]),
     );
     expect(deployed).toEqual(DEV_RESERVED_CONCURRENCY);
-    expect(Object.values(DEV_RESERVED_CONCURRENCY).reduce((a, b) => a + b, 0)).toBe(
-      DEV_CONCURRENCY_CEILING,
-    );
+    // The ceiling is per slot (Rahul, 2026-11-08): each dev stack's functions sum to it, whatever the slots number.
+    const perSlot: Record<string, number> = {};
+    for (const [fn, n] of Object.entries(DEV_RESERVED_CONCURRENCY))
+      perSlot[slotOf(fn)] = (perSlot[slotOf(fn)] ?? 0) + n;
+    for (const sum of Object.values(perSlot)) expect(sum).toBe(DEV_CONCURRENCY_CEILING);
     for (const fn of DEV_URL_FUNCTIONS) expect(DEV_RESERVED_CONCURRENCY[fn]).toBeGreaterThan(0);
   });
 
   it('fails synth for a dev function with no reservation on record', () => {
     expect(() => reservedConcurrency('dev', 'aperture-new-dev')).toThrow(/no reserved concurrency/);
+    expect(() => reservedConcurrency('devb', 'aperture-bff-devb')).toThrow(
+      /no reserved concurrency/,
+    ); // any slot
     expect(reservedConcurrency('prod', 'aperture-bff-prod')).toEqual({});
   });
 

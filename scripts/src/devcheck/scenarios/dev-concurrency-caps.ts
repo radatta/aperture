@@ -1,6 +1,7 @@
 // Every dev function reserves its own concurrency (cdk/src/config/devAccount.ts), so dev's ceiling is their sum,
 // not the account quota (CI-BOT.md → What's capped → Compute). Dev proves the reservations leave the app room: a
-// burst past the old quota of 10 at the BFF, and one at /mcp, get no throttle, and the one-tick poller still ticks.
+// burst of 12 at the BFF (more than the old quota of 10 allowed in flight) and one at /mcp get no throttle, and the
+// one-tick poller still ticks.
 // The values themselves, the kill's restore and the SCPs are template and kill-Lambda state the test user can't
 // read; their tests pin them, and the live values and the drill are a hand read.
 import { type Row, type Scenario } from '../scenario';
@@ -29,7 +30,7 @@ export const devConcurrencyCaps: Scenario = {
       id: 'bff-under-cap',
       entry: 'api',
       kind: 'nominal',
-      what: `${BFF_BURST} /api reads at once, past the old quota of 10, all answer with no throttle`,
+      what: `${BFF_BURST} /api reads sent at once all answer with no throttle`,
     },
     {
       id: 'mcp-under-cap',
@@ -66,10 +67,31 @@ export const devConcurrencyCaps: Scenario = {
     ),
     offDev(
       'restore-unknown-fn',
-      'A function with no reservation on record stays at 0 through a restore, and the restore names it',
+      'An app function with no reservation on record stays at 0 through a restore, and the restore names it',
       KILL,
       'leaves it at 0 and names it, and still restores everything else',
-      'needs a function the kill has no record of, which dev never has',
+      'needs an app function missing from the table, which only a template change ahead of an ApertureOrg redeploy makes',
+    ),
+    offDev(
+      'absent-fn-skipped',
+      'A function that doesn’t exist (a slot not yet deployed) is logged and skipped by a kill or restore, not a failure',
+      KILL,
+      'is logged and skipped by the kill and the restore, never a failure',
+      'needs a URL function that isn’t deployed, which dev never has while the harness runs',
+    ),
+    offDev(
+      'kill-without-table',
+      'A malformed restore table can’t stop a kill: only the restore reads it',
+      KILL,
+      'never needs the restore’s table, so a bad one can’t stop a kill',
+      'needs a broken kill Lambda env, which only a hand ApertureOrg deploy makes',
+    ),
+    offDev(
+      'restore-provider',
+      'Restore hands a CDK provider function (never reserved) back unreserved, and succeeds',
+      KILL,
+      'gives a CDK provider function back its unreserved state, and succeeds',
+      'the harness never fires a kill (the drill does, a needs-you row)',
     ),
     offDev(
       'bot-lane-denied',

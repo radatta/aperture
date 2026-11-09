@@ -4,6 +4,7 @@ import {
   isRestore,
   kill,
   killConfigFrom,
+  reservationsFrom,
   restore,
   setDistributionsEnabled,
 } from './kill';
@@ -15,12 +16,14 @@ const cfg = {
   devRegion: 'us-west-1',
   breakGlassRoleArn: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
   urlFunctions: ['aperture-bff-dev', 'aperture-mcp-dev'],
-  reservations: {
-    'aperture-bff-dev': 18,
-    'aperture-mcp-dev': 10,
-    'aperture-finance-sync-dev': 1,
-  } as Record<string, number>,
 };
+const reservations = {
+  'aperture-bff-dev': 18,
+  'aperture-mcp-dev': 10,
+  'aperture-finance-sync-dev': 1,
+};
+const notFound = () =>
+  Object.assign(new Error('Function not found'), { name: 'ResourceNotFoundException' });
 
 interface Fail {
   attach?: Error;
@@ -138,7 +141,7 @@ describe('restore', () => {
       {},
       { functions: ['aperture-bff-dev', 'aperture-finance-sync-dev'] },
     );
-    await restore(cfg, gw, () => {});
+    await restore(cfg, reservations, gw, () => {});
     expect(calls).toEqual([
       'list',
       'concurrency aperture-bff-dev 18',
@@ -149,13 +152,28 @@ describe('restore', () => {
       'distributions true',
     ]);
   });
+
+  // The dev account holds CDK provider functions no template reserves (ApertureCicdDev's OIDC provider); a kill sets
+  // them to 0 like everything else, and a restore must hand them back, not fail on them.
+  it('gives a CDK provider function back its unreserved state, and succeeds', async () => {
+    const { gw, calls } = fakeGateways(
+      {},
+      { functions: ['aperture-bff-dev', 'ApertureCicdDev-AWSCDKOpenIdConnectProvider'] },
+    );
+    const lines: string[] = [];
+    await restore(cfg, reservations, gw, (l) => lines.push(l));
+    expect(calls).toContain('concurrency ApertureCicdDev-AWSCDKOpenIdConnectProvider null');
+    expect(calls).toContain('concurrency aperture-bff-dev 18');
+    expect(lines).toContain(
+      'ApertureCicdDev-AWSCDKOpenIdConnectProvider → reservation removed (not an app function)',
+    );
+  });
 });
 
-describe('restore with a function off the record', () => {
+describe('restore with an app function off the record', () => {
   it('leaves it at 0 and names it, and still restores everything else', async () => {
     const { gw, calls } = fakeGateways({}, { functions: ['aperture-bff-dev', 'aperture-new-dev'] });
-    const lines: string[] = [];
-    await expect(restore(cfg, gw, (l) => lines.push(l))).rejects.toThrow(
+    await expect(restore(cfg, reservations, gw, () => {})).rejects.toThrow(
       /unthrottle aperture-new-dev: .*no reservation on record, left at 0/,
     );
     expect(calls.filter((c) => c.startsWith('concurrency aperture-new-dev'))).toEqual([]);
@@ -165,10 +183,38 @@ describe('restore with a function off the record', () => {
     expect(calls).toContain('distributions true');
   });
 
-  it('never removes a reservation: every concurrency call is a number', async () => {
-    const { gw, calls } = fakeGateways();
-    await restore(cfg, gw, () => {}).catch(() => {}); // the LogRetention provider has no entry
-    for (const c of calls.filter((c) => c.startsWith('concurrency '))) expect(c).toMatch(/ \d+$/);
+  it('never removes an app function’s reservation', async () => {
+    const { gw, calls } = fakeGateways({}, { functions: ['aperture-bff-dev', 'aperture-new-dev'] });
+    await restore(cfg, reservations, gw, () => {}).catch(() => {});
+    for (const c of calls.filter((c) => c.startsWith('concurrency aperture-')))
+      expect(c).toMatch(/ \d+$/);
+  });
+});
+
+describe('a function that doesn’t exist', () => {
+  // A URL function a slot hasn't deployed yet, or one deleted since the listing: it can't run or be reached.
+  it('is logged and skipped by the kill and the restore, never a failure', async () => {
+    const fail = {
+      concurrency: { 'aperture-mcp-dev': notFound() },
+      url: { 'aperture-mcp-dev': notFound() },
+    };
+    const lines: string[] = [];
+    await kill(cfg, fakeGateways(fail).gw, (l) => lines.push(l));
+    await restore(cfg, reservations, fakeGateways(fail).gw, (l) => lines.push(l));
+    expect(lines).toContain('throttle aperture-mcp-dev: no such function, skipped');
+    expect(lines).toContain('lock aperture-mcp-dev: no such function, skipped');
+    expect(lines).toContain('unlock aperture-mcp-dev: no such function, skipped');
+  });
+
+  it('still fails on any other error', async () => {
+    const { gw } = fakeGateways({
+      concurrency: {
+        'aperture-mcp-dev': Object.assign(new Error('x'), { name: 'AccessDeniedException' }),
+      },
+    });
+    await expect(kill(cfg, gw, () => {})).rejects.toThrow(
+      /throttle aperture-mcp-dev: AccessDeniedException/,
+    );
   });
 });
 
@@ -207,7 +253,6 @@ describe('killConfigFrom', () => {
     DEV_REGION: 'us-west-1',
     BREAK_GLASS_ROLE_ARN: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
     URL_FUNCTIONS: 'a-dev, b-dev,',
-    RESERVED_CONCURRENCY: 'a-dev=18, b-dev=10,c-dev=1,',
   };
 
   it('reads the policy, the account, the region, the break-glass role and the URL functions', () => {
@@ -217,30 +262,47 @@ describe('killConfigFrom', () => {
       devRegion: 'us-west-1',
       breakGlassRoleArn: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
       urlFunctions: ['a-dev', 'b-dev'],
-      reservations: { 'a-dev': 18, 'b-dev': 10, 'c-dev': 1 },
     });
-  });
-
-  it('fails closed on a reservation that is not a positive whole number, or a URL function without one', () => {
-    for (const bad of [
-      'a-dev=18,b-dev=0',
-      'a-dev=18,b-dev=1.5',
-      'a-dev=18,b-dev=',
-      'a-dev=18,=3',
-      'a-dev=18,b-dev',
-    ])
-      expect(() => killConfigFrom({ ...env, RESERVED_CONCURRENCY: bad })).toThrow(
-        /RESERVED_CONCURRENCY entry/,
-      );
-    expect(() => killConfigFrom({ ...env, RESERVED_CONCURRENCY: 'a-dev=18' })).toThrow(
-      /RESERVED_CONCURRENCY has no entry for b-dev/,
-    );
   });
 
   it('fails closed on any missing variable', () => {
     for (const k of Object.keys(env))
       expect(() => killConfigFrom({ ...env, [k]: ' ' })).toThrow(new RegExp(k));
     expect(() => killConfigFrom({ ...env, URL_FUNCTIONS: ',' })).toThrow(/URL_FUNCTIONS/);
+  });
+
+  it('never needs the restore’s table, so a bad one can’t stop a kill', () => {
+    expect(() => killConfigFrom({ ...env, RESERVED_CONCURRENCY: 'garbage' })).not.toThrow();
+  });
+});
+
+describe('reservationsFrom', () => {
+  const urls = ['a-dev', 'b-dev'];
+  it('reads each function’s reservation', () => {
+    expect(reservationsFrom({ RESERVED_CONCURRENCY: 'a-dev=18, b-dev=10,c-dev=1,' }, urls)).toEqual(
+      { 'a-dev': 18, 'b-dev': 10, 'c-dev': 1 },
+    );
+  });
+
+  it('fails closed on a missing table, a bad entry, a repeat, or a URL function without one', () => {
+    expect(() => reservationsFrom({ RESERVED_CONCURRENCY: ' ' }, urls)).toThrow(/is not set/);
+    for (const bad of [
+      'a-dev=18,b-dev=0',
+      'a-dev=18,b-dev=1.5',
+      'a-dev=18,b-dev=',
+      'a-dev=18,=3',
+      'a-dev=18,b-dev',
+      'a-dev=18,b-dev=1=2',
+    ])
+      expect(() => reservationsFrom({ RESERVED_CONCURRENCY: bad }, urls)).toThrow(
+        /RESERVED_CONCURRENCY entry/,
+      );
+    expect(() =>
+      reservationsFrom({ RESERVED_CONCURRENCY: 'a-dev=18,b-dev=10,a-dev=2' }, urls),
+    ).toThrow(/names a-dev twice/);
+    expect(() => reservationsFrom({ RESERVED_CONCURRENCY: 'a-dev=18' }, urls)).toThrow(
+      /no entry for b-dev/,
+    );
   });
 });
 

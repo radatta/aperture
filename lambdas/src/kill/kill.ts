@@ -19,30 +19,40 @@ export interface KillConfig {
   devRegion: string;
   breakGlassRoleArn: string; // the dev account's OrganizationAccountAccessRole
   urlFunctions: string[]; // dev functions with a public Function URL
-  reservations: Record<string, number>; // each dev function's reserved concurrency, which restore puts back
 }
+
+// Each dev function's reserved concurrency, which restore puts back. Read only on a restore (reservationsFrom), so a
+// bad value can never stop a kill.
+export type Reservations = Record<string, number>;
 
 export interface KillGateways {
   attachPolicy(policyId: string, targetId: string): Promise<'attached' | 'already'>;
   listFunctions(): Promise<string[]>;
-  setConcurrency(functionName: string, value: number): Promise<void>;
+  setConcurrency(functionName: string, value: number | null): Promise<void>; // null → remove the reservation
   setUrlAuth(functionName: string, auth: 'AWS_IAM' | 'NONE'): Promise<void>;
   setDistributionsEnabled(enabled: boolean): Promise<string[]>; // ids changed
 }
 
 type Log = (line: string) => void;
 
-async function each(failures: string[], label: string, fn: () => Promise<void>) {
+// A function that doesn't exist (gone since the listing, or a URL function a slot hasn't deployed yet) can't run or be
+// reached, so its move is done: logged, not failed.
+async function each(failures: string[], log: Log, label: string, fn: () => Promise<void>) {
   try {
     await fn();
   } catch (err) {
-    failures.push(`${label}: ${message(err)}`);
+    if (err instanceof Error && err.name === 'ResourceNotFoundException')
+      log(`${label}: no such function, skipped`);
+    else failures.push(`${label}: ${message(err)}`);
   }
 }
 
+// App functions are `aperture-…`; CDK's provider functions are `Aperture…` (FrozenProviderCode, org-stack.ts).
+const isAppFunction = (fn: string) => fn.startsWith('aperture-');
+
 export async function kill(cfg: KillConfig, gw: KillGateways, log: Log): Promise<void> {
   const failures: string[] = [];
-  await each(failures, `attach ${cfg.policyId}`, async () => {
+  await each(failures, log, `attach ${cfg.policyId}`, async () => {
     const r = await gw.attachPolicy(cfg.policyId, cfg.devAccountId);
     log(
       r === 'already'
@@ -50,17 +60,17 @@ export async function kill(cfg: KillConfig, gw: KillGateways, log: Log): Promise
         : `kill SCP attached to ${cfg.devAccountId}`,
     );
   });
-  for (const fn of await functionsToCover(cfg, gw, failures))
-    await each(failures, `throttle ${fn}`, async () => {
+  for (const fn of await functionsToCover(cfg, gw, failures, log))
+    await each(failures, log, `throttle ${fn}`, async () => {
       await gw.setConcurrency(fn, 0);
       log(`${fn} → concurrency 0`);
     });
   for (const fn of cfg.urlFunctions)
-    await each(failures, `lock ${fn}`, async () => {
+    await each(failures, log, `lock ${fn}`, async () => {
       await gw.setUrlAuth(fn, 'AWS_IAM');
       log(`${fn} URL → AWS_IAM`);
     });
-  await each(failures, 'disable distributions', async () => {
+  await each(failures, log, 'disable distributions', async () => {
     log(
       `distributions disabled: ${(await gw.setDistributionsEnabled(false)).join(', ') || 'none were enabled'}`,
     );
@@ -68,23 +78,35 @@ export async function kill(cfg: KillConfig, gw: KillGateways, log: Log): Promise
   if (failures.length) throw new Error(`kill incomplete — ${failures.join('; ')}`);
 }
 
-export async function restore(cfg: KillConfig, gw: KillGateways, log: Log): Promise<void> {
+export async function restore(
+  cfg: KillConfig,
+  reservations: Reservations,
+  gw: KillGateways,
+  log: Log,
+): Promise<void> {
   const failures: string[] = [];
-  for (const fn of await functionsToCover(cfg, gw, failures))
-    await each(failures, `unthrottle ${fn}`, async () => {
-      // A function with no reservation on record stays at 0: removing it would lift the cap to the account quota.
-      // The hand fix is a break-glass put-function-concurrency (CI-BOT.md → Unkill).
-      const n = cfg.reservations[fn];
-      if (n === undefined) throw new Error('no reservation on record, left at 0');
-      await gw.setConcurrency(fn, n);
-      log(`${fn} → concurrency ${n}`);
+  for (const fn of await functionsToCover(cfg, gw, failures, log))
+    await each(failures, log, `unthrottle ${fn}`, async () => {
+      const n = reservations[fn];
+      if (n !== undefined) {
+        await gw.setConcurrency(fn, n);
+        log(`${fn} → concurrency ${n}`);
+      } else if (isAppFunction(fn)) {
+        // An app function with no reservation on record stays at 0: removing it would lift its cap to the account
+        // quota. The hand fix is a break-glass put-function-concurrency (CI-BOT.md → Unkill).
+        throw new Error('no reservation on record, left at 0');
+      } else {
+        // A CDK provider function (ApertureCicdDev's OIDC provider, say) was never reserved: this puts it back as it was.
+        await gw.setConcurrency(fn, null);
+        log(`${fn} → reservation removed (not an app function)`);
+      }
     });
   for (const fn of cfg.urlFunctions)
-    await each(failures, `unlock ${fn}`, async () => {
+    await each(failures, log, `unlock ${fn}`, async () => {
       await gw.setUrlAuth(fn, 'NONE');
       log(`${fn} URL → NONE`);
     });
-  await each(failures, 'enable distributions', async () => {
+  await each(failures, log, 'enable distributions', async () => {
     log(
       `distributions enabled: ${(await gw.setDistributionsEnabled(true)).join(', ') || 'none were disabled'}`,
     );
@@ -98,9 +120,10 @@ async function functionsToCover(
   cfg: KillConfig,
   gw: KillGateways,
   failures: string[],
+  log: Log,
 ): Promise<string[]> {
   let listed: string[] = [];
-  await each(failures, 'list functions', async () => {
+  await each(failures, log, 'list functions', async () => {
     listed = await gw.listFunctions();
   });
   return [...new Set([...cfg.urlFunctions, ...listed])];
@@ -131,29 +154,38 @@ export function killConfigFrom(env: Record<string, string | undefined>): KillCon
     .map((s) => s.trim())
     .filter(Boolean);
   if (!urlFunctions.length) throw new Error('kill: URL_FUNCTIONS names no function');
-  const reservations: Record<string, number> = {};
-  for (const pair of need('RESERVED_CONCURRENCY')
-    .split(',')
-    .filter((p) => p.trim())) {
-    const [fn, raw] = pair.split('=').map((s) => s.trim());
-    const n = Number(raw);
-    if (!fn || !raw || !Number.isInteger(n) || n < 1)
-      throw new Error(
-        `kill: RESERVED_CONCURRENCY entry "${pair}" is not <function>=<positive integer>`,
-      );
-    reservations[fn] = n;
-  }
-  const missing = urlFunctions.filter((fn) => reservations[fn] === undefined);
-  if (missing.length)
-    throw new Error(`kill: RESERVED_CONCURRENCY has no entry for ${missing.join(', ')}`);
   return {
     policyId: need('KILL_POLICY_ID'),
     devAccountId: need('DEV_ACCOUNT_ID'),
     devRegion: need('DEV_REGION'),
     breakGlassRoleArn: need('BREAK_GLASS_ROLE_ARN'),
     urlFunctions,
-    reservations,
   };
+}
+
+// The restore's table, `<function>=<n>,…`. Fails closed: a restore that guessed a value would lift or strand a cap.
+export function reservationsFrom(
+  env: Record<string, string | undefined>,
+  urlFunctions: string[],
+): Reservations {
+  const raw = env.RESERVED_CONCURRENCY?.trim();
+  if (!raw) throw new Error('restore: RESERVED_CONCURRENCY is not set');
+  const out: Reservations = {};
+  for (const pair of raw.split(',').filter((p) => p.trim())) {
+    const parts = pair.split('=').map((x) => x.trim());
+    const [fn, value] = parts;
+    const n = Number(value);
+    if (parts.length !== 2 || !fn || !value || !Number.isInteger(n) || n < 1)
+      throw new Error(
+        `restore: RESERVED_CONCURRENCY entry "${pair}" is not <function>=<positive integer>`,
+      );
+    if (fn in out) throw new Error(`restore: RESERVED_CONCURRENCY names ${fn} twice`);
+    out[fn] = n;
+  }
+  const missing = urlFunctions.filter((fn) => out[fn] === undefined);
+  if (missing.length)
+    throw new Error(`restore: RESERVED_CONCURRENCY has no entry for ${missing.join(', ')}`);
+  return out;
 }
 
 const message = (err: unknown) =>
@@ -180,12 +212,18 @@ export async function setDistributionsEnabled(
     const page = await cf.list(marker);
     for (const d of page.items) {
       if (d.enabled === enabled) continue;
-      await each(failures, d.id, async () => {
-        const { config, etag } = await cf.getConfig(d.id);
-        if (!config) throw new Error('no distribution config returned');
-        await cf.update(d.id, etag, { ...config, Enabled: enabled });
-        changed.push(d.id);
-      });
+      // A distribution's not-found stays a failure: only a function's absence means its move is done.
+      await each(
+        failures,
+        (l) => failures.push(l),
+        d.id,
+        async () => {
+          const { config, etag } = await cf.getConfig(d.id);
+          if (!config) throw new Error('no distribution config returned');
+          await cf.update(d.id, etag, { ...config, Enabled: enabled });
+          changed.push(d.id);
+        },
+      );
     }
     marker = page.next;
   } while (marker);

@@ -200,7 +200,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 The app keeps a page's burst under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
 _Dev deploy blast radius_ → Compute; the account quota of 10 before 2026-11): at most 8 `/api` calls in flight (`app/src/data/httpClient.ts` →
-`MAX_IN_FLIGHT`), leaving two for the harness's own calls, so Home's ~10 RPCs on a cold BFF no longer get HTTP 429
+`MAX_IN_FLIGHT`), leaving room for the harness's own calls, so Home's ~10 RPCs on a cold BFF no longer get HTTP 429
 (`inflight-cap`, 2026-11; before it, a dated _Known 429s_ rule here let a run count as green with them). A 429 means
 Lambda never started the function, so that attempt was never tested — the app's retry (`app/src/data/retry.ts`) may
 have recovered the call, but the method isn't proven by this run. Chromium logs every 429 as a console error, retried

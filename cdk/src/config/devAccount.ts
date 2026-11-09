@@ -35,20 +35,25 @@ const PROD_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
   'aperture-push-dispatch-prod': 1,
 };
 
-// The function's reservedConcurrentExecutions prop. A dev function with no entry fails synth, so a new one can't
-// reach dev uncapped.
+// The function's reservedConcurrentExecutions prop. Prod reserves only what its table names; every other stage is a
+// dev slot (dev, and slot B's), where a function with no entry fails synth, so a new function or slot can't reach the
+// dev account uncapped.
 export function reservedConcurrency(
   stage: string,
   functionName: string,
 ): { reservedConcurrentExecutions?: number } {
-  if (stage === 'dev') {
-    const n = DEV_RESERVED_CONCURRENCY[functionName];
-    if (n === undefined)
-      throw new Error(
-        `${functionName} has no reserved concurrency (DEV_RESERVED_CONCURRENCY in config/devAccount.ts)`,
-      );
-    return { reservedConcurrentExecutions: n };
+  if (stage === 'prod') {
+    const n = PROD_RESERVED_CONCURRENCY[functionName];
+    return n === undefined ? {} : { reservedConcurrentExecutions: n };
   }
-  const n = stage === 'prod' ? PROD_RESERVED_CONCURRENCY[functionName] : undefined;
-  return n === undefined ? {} : { reservedConcurrentExecutions: n };
+  const n = DEV_RESERVED_CONCURRENCY[functionName];
+  if (n === undefined)
+    throw new Error(
+      `${functionName} has no reserved concurrency (DEV_RESERVED_CONCURRENCY in config/devAccount.ts)`,
+    );
+  return { reservedConcurrentExecutions: n };
 }
+
+// A dev function's slot: its name's last segment, the stage (`aperture-bff-dev` → `dev`).
+export const slotOf = (functionName: string) =>
+  functionName.slice(functionName.lastIndexOf('-') + 1);

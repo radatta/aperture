@@ -8,6 +8,7 @@ import type { DistributionConfig } from '@aws-sdk/client-cloudfront';
 import {
   LambdaClient,
   ListFunctionsCommand,
+  DeleteFunctionConcurrencyCommand,
   PutFunctionConcurrencyCommand,
   UpdateFunctionUrlConfigCommand,
 } from '@aws-sdk/client-lambda';
@@ -18,6 +19,7 @@ import {
   isRestore,
   kill,
   killConfigFrom,
+  reservationsFrom,
   restore,
   setDistributionsEnabled,
 } from './kill';
@@ -74,9 +76,11 @@ function liveGateways(cfg: KillConfig): KillGateways {
     },
     async setConcurrency(FunctionName, value) {
       const { lambda } = await devClients();
-      await lambda.send(
-        new PutFunctionConcurrencyCommand({ FunctionName, ReservedConcurrentExecutions: value }),
-      );
+      if (value === null) await lambda.send(new DeleteFunctionConcurrencyCommand({ FunctionName }));
+      else
+        await lambda.send(
+          new PutFunctionConcurrencyCommand({ FunctionName, ReservedConcurrentExecutions: value }),
+        );
     },
     async setUrlAuth(FunctionName, AuthType) {
       const { lambda } = await devClients();
@@ -122,10 +126,11 @@ function liveGateways(cfg: KillConfig): KillGateways {
 
 export const handler = async (event: unknown): Promise<void> => {
   const cfg = killConfigFrom(process.env);
+  const log = (l: string) => console.log(l);
   // A literal label: the bundle is minified, so a function's own name would log as a single letter.
-  const [label, run] = isRestore(event)
-    ? (['restore', restore] as const)
-    : (['kill', kill] as const);
+  const label = isRestore(event) ? 'restore' : 'kill';
   console.log(`${label} triggered: ${JSON.stringify(event).slice(0, 2000)}`);
-  await run(cfg, liveGateways(cfg), (l) => console.log(l));
+  if (label === 'kill') return kill(cfg, liveGateways(cfg), log);
+  // Read only here, so a bad table can never stop a kill.
+  await restore(cfg, reservationsFrom(process.env, cfg.urlFunctions), liveGateways(cfg), log);
 };
