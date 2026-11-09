@@ -1,5 +1,5 @@
 import { afterAll, afterEach, vi } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { queryClient } from '../data/queryClient';
 import { setAuthToken, setReauthHandler } from '../auth/tokenStore';
 import { forgetStubBlobs } from '../data/attachmentTransport';
@@ -10,6 +10,11 @@ import { resetFluxEngineFactory } from '../modules/flux/engine/engine';
 import { resetFluxOutboxStore } from '../modules/flux/fluxOutbox';
 import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
 import { resetPushSync } from '../modules/push/browserPush';
+
+// findBy*/waitFor wait 3 s, not Testing Library's 1 s: under CPU plus memory pressure, opening a Flux
+// exercise outran 1 s, and a worker cap alone didn't clear it (docs/ops/SESSION-BOARD.md). No assertion is
+// loosened: a condition that never comes true still fails.
+configure({ asyncUtilTimeout: 3000 });
 
 // Files share one jsdom and one module graph (isolate: false), so whatever a test leaves behind is the
 // next file's starting state. One hook, not several: after-hooks run in reverse, and the unmount (RTL
