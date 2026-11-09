@@ -5,7 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -b",
-    "sync-page": "cp src/lib/tag.js src/lib/wire.js src/page/"
+    "sync-page": "cp src/lib/tag.js src/page/"
   },
   "devDependencies": {
     "@aperture/shared": "workspace:*",

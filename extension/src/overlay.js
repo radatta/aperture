@@ -1,15 +1,16 @@
 // The overlay and the badge — painting only (the decisions are lib/overlay-state.js, the actions content.js).
-// Both live in open shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
-// hydration never touches them; their styles are inline in the root, so neither side's CSS leaks into the other.
-// A page script can reach an open root, so a button acts only on a real click (isTrusted), and the host's own
-// style is reasserted every poll — a page that hides the overlay can't turn the user's next click into a Start.
+// Both live in closed shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
+// hydration never touches them, and no page script can read their state, their text or Aperture's words —
+// whether the overlay shows is all the page can see. Their styles are inline in the root, so neither side's
+// CSS leaks into the other. A button acts only on a real click (isTrusted), and the host's own style is
+// reasserted every poll, so a page that hides the overlay can't turn the user's next click into a Start.
 (function (root) {
   'use strict';
   const STEP_TEXT = {
+    send: 'Opening the sitting in Aperture…',
     reset: 'Resetting the editor…',
     confirm: 'Confirming the reset…',
     timer: 'Starting LeetCode’s timer…',
-    send: 'Opening the sitting in Aperture…',
   };
   const CSS = `
     :host { all: initial; }
@@ -45,7 +46,7 @@
   function host(tag) {
     const el = document.createElement(tag);
     el.setAttribute('style', styleOf(false, false));
-    const shadow = el.attachShadow({ mode: 'open' });
+    const shadow = el.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = CSS;
     shadow.appendChild(style);
@@ -84,7 +85,7 @@
         state.phase === 'prompt' || state.phase === 'starting' || state.phase === 'failed';
       overlayShown = show;
       overlay.el.setAttribute('style', styleOf(show, show));
-      overlay.el.setAttribute('data-phase', state.phase); // kept on the page even hidden: the state is readable
+      overlay.body.setAttribute('data-phase', state.phase); // inside the closed root: for tests, not the page
       attach(overlay.el);
       if (!show) return;
       const title = (info && info.title) || 'This problem';
@@ -103,7 +104,7 @@
           node(
             'p',
             { class: 'hint' },
-            'Start resets the editor, starts LeetCode’s timer and opens a sitting in Aperture.',
+            'Start opens a sitting in Aperture, then resets the editor and starts LeetCode’s timer.',
           ),
         );
       } else if (state.phase === 'starting') {
@@ -117,10 +118,20 @@
           node('p', { class: 'msg err', 'data-ap': 'reason' }, state.reason || 'Start failed.'),
         );
         const row = node('div', { class: 'row' }, btn('primary', 'retry', 'Retry', on.retry));
-        if (state.step !== 'send')
-          row.append(btn('secondary', 'anyway', 'Start anyway (no clear)', on.startAnyway));
-        row.append(btn('secondary', 'look', 'Just looking', on.dismiss));
+        // Open: a click step failed after Aperture said yes — Continue keeps the sitting, uncleared.
+        // Not open: Aperture refused, and nothing was touched.
+        if (state.open)
+          row.append(btn('secondary', 'continue', 'Continue without a clear', on.continue));
+        else row.append(btn('secondary', 'look', 'Just looking', on.dismiss));
         card.append(row);
+        if (state.open)
+          card.append(
+            node(
+              'p',
+              { class: 'hint' },
+              'The sitting is open in Aperture; the editor wasn’t cleared.',
+            ),
+          );
       }
       overlay.body.append(node('div', { class: 'scrim' }, card));
     }

@@ -11,9 +11,12 @@ const run = (actions: object[], s: S = initial()) => {
 const prompt = [{ type: 'nav', slug: 'two-sum', binding: null, dismissed: false }];
 
 describe('overlay state', () => {
-  it('walks Start through reset, confirm and the timer to the server, then goes active', () => {
+  it('opens the sitting first, then walks reset, confirm and the timer, then goes active', () => {
     let r = run([...prompt, { type: 'start' }]);
-    expect(r.state).toMatchObject({ phase: 'starting', step: 'reset' });
+    expect(r.state).toMatchObject({ phase: 'starting', step: 'send', open: false });
+    expect(r.effects).toEqual([{ do: 'step', step: 'send' }]);
+    r = run([{ type: 'stepOk', step: 'send' }], r.state);
+    expect(r.state).toMatchObject({ step: 'reset', open: true });
     expect(r.effects).toEqual([{ do: 'step', step: 'reset' }]);
     r = run([{ type: 'stepOk', step: 'reset' }], r.state);
     expect(r.effects).toEqual([{ do: 'step', step: 'confirm' }]);
@@ -24,30 +27,47 @@ describe('overlay state', () => {
       ],
       r.state,
     );
-    expect(r.state.step).toBe('send');
-    expect(r.effects).toEqual([{ do: 'step', step: 'send' }]);
-    expect(run([{ type: 'started' }], r.state).state.phase).toBe('active');
+    expect(r.state).toMatchObject({ phase: 'active', step: null, open: true });
+    expect(r.effects).toEqual([]);
   });
 
-  it('says the reset button was not found, and Start anyway goes straight to the server start', () => {
-    let r = run([
+  it('retries only the send after a refusal, which clicked nothing, and lets Just looking out', () => {
+    const r = run([
       ...prompt,
       { type: 'start' },
+      { type: 'stepFail', step: 'send', reason: 'Another sitting is still open' },
+    ]);
+    expect(r.state).toMatchObject({ phase: 'failed', step: 'send', open: false });
+    expect(run([{ type: 'retry' }], r.state)).toMatchObject({
+      state: { phase: 'starting', step: 'send' },
+      effects: [{ do: 'step', step: 'send' }],
+    });
+    expect(run([{ type: 'continue' }], r.state).state).toEqual(r.state);
+    expect(run([{ type: 'dismiss' }], r.state).state.phase).toBe('hidden');
+  });
+
+  it('says the reset button was not found once the sitting is open: Retry repeats that click, Continue goes active', () => {
+    const r = run([
+      ...prompt,
+      { type: 'start' },
+      { type: 'stepOk', step: 'send' },
       { type: 'stepFail', step: 'reset', reason: 'Couldn’t find LeetCode’s reset button.' },
     ]);
     expect(r.state).toMatchObject({
       phase: 'failed',
       step: 'reset',
+      open: true,
       reason: 'Couldn’t find LeetCode’s reset button.',
     });
-    r = run([{ type: 'startAnyway' }], r.state);
-    expect(r.state).toMatchObject({ phase: 'starting', step: 'send', reason: null });
-    expect(r.effects).toEqual([{ do: 'step', step: 'send' }]);
-    r = run([{ type: 'stepFail', step: 'send', reason: 'Another sitting is still open' }], r.state);
-    expect(run([{ type: 'retry' }], r.state).state).toMatchObject({
-      phase: 'starting',
-      step: 'reset',
+    expect(run([{ type: 'retry' }], r.state)).toMatchObject({
+      state: { phase: 'starting', step: 'reset' },
+      effects: [{ do: 'step', step: 'reset' }],
     });
+    expect(run([{ type: 'continue' }], r.state)).toMatchObject({
+      state: { phase: 'active', step: null, reason: null },
+      effects: [],
+    });
+    expect(run([{ type: 'dismiss' }], r.state).state).toEqual(r.state); // the sitting is open
   });
 
   it('resumes an open sitting on load with no overlay and no clicks', () => {
@@ -74,18 +94,20 @@ describe('overlay state', () => {
 
   it('ignores actions that don’t fit the phase', () => {
     const s = run(prompt).state;
-    expect(run([{ type: 'started' }], s).state).toEqual(s);
     expect(run([{ type: 'stepOk', step: 'timer' }], s).state).toEqual(s);
-    expect(run([{ type: 'startAnyway' }], s).state).toEqual(s);
+    expect(run([{ type: 'continue' }], s).state).toEqual(s);
+    expect(run([{ type: 'retry' }], s).state).toEqual(s);
     const active = run(
       [
         { type: 'start' },
+        { type: 'stepOk', step: 'send' },
         { type: 'stepFail', step: 'reset', reason: 'x' },
-        { type: 'startAnyway' },
-        { type: 'started' },
+        { type: 'continue' },
       ],
       s,
     );
+    expect(active.state.phase).toBe('active');
+    expect(run([{ type: 'start' }], active.state).state).toEqual(active.state);
     expect(run([{ type: 'ended' }], active.state)).toMatchObject({
       state: { phase: 'ended' },
       effects: [{ do: 'clearBinding' }],

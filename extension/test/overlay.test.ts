@@ -10,7 +10,17 @@ import {
   isUlid,
   normalizeSittingStart,
 } from '@aperture/shared';
-import { ISOLATED_JS, MAIN_JS, fakeExtension, page, run, src, trustedClick, until } from './load';
+import {
+  ISOLATED_JS,
+  MAIN_JS,
+  fakeExtension,
+  page,
+  run,
+  shadowRoots,
+  src,
+  trustedClick,
+  until,
+} from './load';
 
 const { createServer } = createRequire(import.meta.url)('./fixtures/fake-leetcode-server.js');
 const SELECTORS = {
@@ -40,10 +50,15 @@ function fakeBackground(opts: { configured?: boolean } = {}) {
     sittings,
     refuse: null as null | { status: number; error: string },
     handle(msg: Msg) {
-      if (msg.type === 'configured?') return { configured: opts.configured ?? true };
       if (msg.type === 'dismiss') dismissed.add(String(msg.slug));
       if (msg.type === 'dismissed?') return { dismissed: dismissed.has(String(msg.slug)) };
       if (msg.type !== 'start') return { ok: true };
+      if (opts.configured === false)
+        return {
+          status: -1,
+          json: null,
+          error: 'Set the Aperture origin and device token in the extension’s options.',
+        };
       if (bg.refuse)
         return {
           status: bg.refuse.status,
@@ -103,20 +118,21 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
       headers: { 'content-type': 'application/json' },
     });
   };
+  const rootOf = shadowRoots(dom);
   run(dom, MAIN_JS, { fetch: fetchFake });
   run(dom, ISOLATED_JS, { chrome: ext.api });
   run(dom, ['test/fixtures/fake-leetcode.js']);
   const host = () => w.document.querySelector('aperture-lc-overlay') as HTMLElement | null;
-  const phase = () => host()?.getAttribute('data-phase');
-  const button = (ap: string) =>
-    host()?.shadowRoot?.querySelector(`[data-ap=${ap}]`) as HTMLElement | null;
+  const root = () => rootOf(host());
+  const phase = () => root()?.querySelector('[data-phase]')?.getAttribute('data-phase');
+  const text = () => root()?.textContent ?? '';
+  const button = (ap: string) => root()?.querySelector(`[data-ap=${ap}]`) as HTMLElement | null;
   const badge = () =>
-    (
-      w.document.querySelector('aperture-lc-badge') as HTMLElement | null
-    )?.shadowRoot?.querySelector('[data-ap=badge]')?.textContent;
+    rootOf(w.document.querySelector('aperture-lc-badge'))?.querySelector('[data-ap=badge]')
+      ?.textContent;
   const tap = (ap: string) => trustedClick(button(ap)!);
   const fake = () => w.__fake as { resets: number; timerStarts: number };
-  return { w, phase, button, tap, badge, fake };
+  return { w, phase, text, button, tap, badge, fake };
 }
 const messages = (ext: ReturnType<typeof fakeExtension>, type: string) =>
   (ext.sent as Msg[]).filter((m) => m.type === type);
@@ -146,20 +162,20 @@ describe('the overlay on a LeetCode problem', () => {
     });
     await until(() => p.badge()?.startsWith('Aperture · 0m'));
 
-    // Typing → a snapshot (coalesced ≤ 3 s); Submit → the judged submit at once; the timer read.
+    // Typing → a snapshot, held for its 30 s window; Submit → the judged submit at once, and the pending
+    // snapshot goes ahead of it in the same hand-off; the timer read.
     const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
     code.value += 'return [0, 1]\n';
     code.dispatchEvent(new p.w.Event('input'));
-    await until(
-      () =>
-        sentEvents(ext).some(
-          (e) =>
-            e.type === 'snapshot' && (e.payload as { code: string }).code.includes('return [0, 1]'),
-        ),
-      6000,
-    );
+    await new Promise((res) => setTimeout(res, 500));
+    expect(sentEvents(ext).some((e) => e.type === 'snapshot')).toBe(false);
     (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
     await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
+    const withSubmit = messages(ext, 'enqueue').find((m) =>
+      m.events!.some((e) => e.type === 'submit'),
+    )!;
+    expect(withSubmit.events!.map((e) => e.type)).toEqual(['snapshot', 'submit']);
+    expect((withSubmit.events![0]!.payload as { code: string }).code).toContain('return [0, 1]');
     const submit = sentEvents(ext).find((e) => e.type === 'submit')!;
     expect(submit.payload).toMatchObject({
       slug: 'two-sum',
@@ -184,28 +200,26 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => r.phase() === 'prompt', 3000);
     r.tap('start');
     await until(() => r.phase() === 'failed', 8000);
-    expect(r.w.document.querySelector('aperture-lc-overlay')!.shadowRoot!.textContent).toContain(
-      `${SITTING_ACTIVE_ERROR} Then Retry.`,
-    );
+    expect(r.text()).toContain(`${SITTING_ACTIVE_ERROR} Then Retry.`);
   }, 40_000);
 
-  it('says LeetCode’s reset isn’t configured, and Start anyway opens the sitting without a clear', async () => {
+  it('opens the sitting first, says LeetCode’s reset isn’t configured, and Continue without a clear goes active', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
     await until(() => p.phase() === 'failed');
-    expect(p.w.document.querySelector('aperture-lc-overlay')!.shadowRoot!.textContent).toContain(
-      'reset button isn’t configured',
-    );
-    p.tap('anyway');
+    expect(p.text()).toContain('reset button isn’t configured');
+    expect(bg.sittings).toHaveLength(1); // Aperture said yes before any click
+    expect(p.button('look')).toBeNull(); // the sitting is open: Retry or Continue
+    p.tap('continue');
     await until(() => p.phase() === 'active');
     expect(p.fake().resets).toBe(0);
     expect(bg.sittings).toHaveLength(1);
   });
 
-  it('ignores a page script’s click on Start, and touches nothing for a Start that can’t be sent', async () => {
+  it('ignores a page script’s click on Start, and clicks nothing on LeetCode for a Start Aperture refuses', async () => {
     const bg = fakeBackground({ configured: false });
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     await ext.local.set({ selectors: SELECTORS });
@@ -218,11 +232,13 @@ describe('the overlay on a LeetCode problem', () => {
     expect(messages(ext, 'start')).toEqual([]);
     p.tap('start');
     await until(() => p.phase() === 'failed');
-    expect(p.w.document.querySelector('aperture-lc-overlay')!.shadowRoot!.textContent).toContain(
-      'extension’s options first',
-    );
-    expect(p.fake().resets).toBe(0);
-    expect(messages(ext, 'start')).toEqual([]);
+    expect(p.text()).toContain('extension’s options');
+    expect(messages(ext, 'start')).toHaveLength(1); // asked, refused — and nothing on LeetCode was clicked
+    expect(p.fake()).toMatchObject({ resets: 0, timerStarts: 0 });
+    // Nor can the page read what the overlay says: its root is closed and its host carries no state.
+    const host = p.w.document.querySelector('aperture-lc-overlay')!;
+    expect(host.shadowRoot).toBeNull();
+    expect(host.getAttribute('data-phase')).toBeNull();
   });
 
   it('keeps the sitting when a reload’s resume is refused for any reason but its end', async () => {

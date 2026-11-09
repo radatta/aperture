@@ -1,7 +1,8 @@
-// The relay's acceptance rules, as one pure function (the isolated world runs it on every page message).
-// Rahul's forgery rules (docs/areas/recruiting/index.md → Design decisions): a page message can never Start anything — it can only
-// add events to the sitting the extension itself opened, for the problem on screen — and it must carry a
-// valid tag from this load's handshake, in sequence. Messages arrive serialized by content.js.
+// The relay's acceptance rules, pure (the isolated world runs them on every page message). Rahul's forgery
+// rules (docs/areas/recruiting/index.md → Design decisions): a page message can never Start anything — it
+// can only add events to the sitting the extension itself opened, for the problem on screen. accept() checks
+// the envelope: this load's tag, a fresh sequence number, raw text of the right shape. The isolated world
+// then parses that text itself (lib/wire.js), and admit() rules on each item it finds.
 (function (root, factory) {
   const api = factory(root.ApertureLC && root.ApertureLC.tag);
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,7 +13,9 @@
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const CACHE_ONLY = ['problem', 'hint'];
   // Far over any one item LeetCode sends (the outbox trims to the server's caps); bounds a flood's parse.
-  const DETAIL_MAX = 2 * 1024 * 1024;
+  const DETAIL_MAX = 6 * 1024 * 1024; // two raw texts at RAW_MAX, JSON-escaped twice over
+  const RAW_MAX = 1024 * 1024; // one request's or response's text (inject-main.js skips anything longer)
+  const URL_MAX = 2048;
 
   const SLUG_PATH = /^\/problems\/([a-z0-9-]{1,128})(?:\/|$)/;
   // The problem on screen, from the isolated world's own location — never from a page message.
@@ -42,8 +45,9 @@
       return keyReady.then((k) => !!k);
     }
 
-    // ctx: { screenSlug, binding: {questionId, status} | null } → {ok: true, msg} | {ok: false, reason}
-    async function accept(detail, ctx) {
+    // The envelope: ours (the tag verifies), in order, and raw LeetCode text — the page world parses nothing.
+    // → {ok: true, raw: {url, reqText, resText, reqAt, resAt}} | {ok: false, reason}
+    async function accept(detail) {
       const key = keyReady && (await keyReady);
       if (!key) return { ok: false, reason: 'no-handshake' };
       if (typeof detail !== 'string') return { ok: false, reason: 'not-string' };
@@ -52,30 +56,49 @@
       if (!env || typeof env.body !== 'string') return { ok: false, reason: 'bad-envelope' };
       if (!(await tag.verify(key, env.body, env.tag))) return { ok: false, reason: 'bad-tag' };
       const msg = parse(env.body);
-      if (!msg || msg.v !== 2 || !Number.isSafeInteger(msg.seq))
+      if (!msg || msg.v !== 3 || !Number.isSafeInteger(msg.seq))
         return { ok: false, reason: 'version' };
       if (msg.seq <= lastSeq) return { ok: false, reason: 'replayed-seq' };
       lastSeq = msg.seq; // a gap (a lost frame) resyncs here; a tag can't be forged, so it's still ours
-      if (!SENDABLE.includes(msg.kind) && !CACHE_ONLY.includes(msg.kind))
-        return { ok: false, reason: 'kind' };
-      // A problem doc is cached for its own slug (LeetCode prefetches the next problem's); nothing is sent.
-      if (msg.kind === 'problem') return { ok: true, msg };
-      if (!ctx.screenSlug) return { ok: false, reason: 'off-problem' };
-      if (msg.slug != null && msg.slug !== ctx.screenSlug)
-        return { ok: false, reason: 'off-screen-slug' };
-      if (msg.kind === 'hint') return { ok: true, msg };
-      const b = ctx.binding;
-      if (!b || b.status !== 'active') return { ok: false, reason: 'no-sitting' };
+      const text = (v) => v === null || (typeof v === 'string' && v.length <= RAW_MAX);
       if (
-        msg.questionId != null &&
-        b.questionId != null &&
-        String(msg.questionId) !== String(b.questionId)
+        typeof msg.url !== 'string' ||
+        msg.url.length > URL_MAX ||
+        !text(msg.reqText) ||
+        !text(msg.resText) ||
+        !Number.isFinite(msg.reqAt) ||
+        !Number.isFinite(msg.resAt)
       )
-        return { ok: false, reason: 'foreign-question' };
-      return { ok: true, msg };
+        return { ok: false, reason: 'raw-shape' };
+      const { url, reqText, resText, reqAt, resAt } = msg;
+      return { ok: true, raw: { url, reqText, resText, reqAt, resAt } };
     }
     return { hello, accept };
   }
 
-  return { createRelay, slugOf, SENDABLE };
+  // One item the isolated world parsed out of raw traffic (lib/wire.js) → whether it may be used.
+  // ctx: { screenSlug, binding: {questionId, status} | null } → {ok: true} | {ok: false, reason}
+  function admit(item, ctx) {
+    if (!item || (!SENDABLE.includes(item.kind) && !CACHE_ONLY.includes(item.kind)))
+      return { ok: false, reason: 'kind' };
+    if (!ctx.screenSlug) return { ok: false, reason: 'off-problem' };
+    // A problem doc or hint counts only for the problem on screen, so one for another slug can't set this
+    // sitting's title or question id. Nothing about them needs a sitting: they're kept for the next Start.
+    if (item.kind === 'problem' && item.slug !== ctx.screenSlug)
+      return { ok: false, reason: 'off-screen-slug' };
+    if (item.slug != null && item.slug !== ctx.screenSlug)
+      return { ok: false, reason: 'off-screen-slug' };
+    if (item.kind === 'problem' || item.kind === 'hint') return { ok: true };
+    const b = ctx.binding;
+    if (!b || b.status !== 'active') return { ok: false, reason: 'no-sitting' };
+    if (
+      item.questionId != null &&
+      b.questionId != null &&
+      String(item.questionId) !== String(b.questionId)
+    )
+      return { ok: false, reason: 'foreign-question' };
+    return { ok: true };
+  }
+
+  return { createRelay, admit, slugOf, SENDABLE, RAW_MAX };
 });

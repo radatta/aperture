@@ -151,14 +151,16 @@ leetcode.com/problems/<slug>   (your tab)
   ╎  observed — never blocked, altered, or re-issued
   ▼
 inject-main.js          [MAIN world, document_start] — evidence only
-  • patches window.fetch + XMLHttpRequest; lib/wire.js says what each request means
+  • patches window.fetch + XMLHttpRequest; ships the raw URL, request and response text — parses nothing
   • each message tagged HMAC-SHA256(per-load nonce, body) with a sequence number
   │  dispatchEvent(CustomEvent("aperture-lc"))  — nothing ever comes back
   ▼
 content.js              [ISOLATED world]
-  • the relay: tag, sequence, the problem on screen (its own location), a sitting it opened → else dropped
-  • the overlay: Start → LeetCode's reset → its confirm → its timer → lcSittingStart
-  • the binding sitting:<slug> (a reload resumes); LeetCode's QD_TIMER_STATE every 2 s; 3 s batches
+  • the relay: tag, sequence, raw shape; lib/wire.js parses here; then the problem on screen (its own
+    location) and a sitting it opened → else dropped
+  • the overlay (closed shadow roots): Start → lcSittingStart → LeetCode's reset → its confirm → its timer
+  • the binding sitting:<slug> (a reload resumes); LeetCode's QD_TIMER_STATE every 2 s; 3 s batches,
+    one snapshot per 30 s (the latest — live code ≤ 30 s behind)
   ▼   runtime.sendMessage()
 background.js           [extension event page]
   • storage.local → { apiOrigin, deviceToken }; the outbox (persisted, one in flight, in order, backoff)
@@ -201,11 +203,17 @@ and `null`s), and when a `questionDetail` for the problem arrives, a repeat Star
 add a fetch of our own for it: the extension stays passive.
 
 **The page's world is evidence, never authority** (Rahul, 2026-11-08). Any script on leetcode.com can
-spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting; a page message
-can only add events to the sitting the extension itself opened, for the problem on screen; nothing from
-Aperture ever flows back into the page; and messages carry an HMAC tag keyed by a per-load nonce, with a
-sequence number. **Accepted residual:** a hostile leetcode.com script can still forge events in the open
-sitting (by driving the real editor, if nothing else) — the server's caps are the boundary.
+spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click;
+a page message can only add events to the sitting the extension itself opened, for the problem on screen;
+nothing from Aperture ever flows back into the page (the overlay's shadow roots are closed); and messages
+carry an HMAC tag keyed by a per-load nonce, with a sequence number. The MAIN world ships raw text and the
+isolated world parses it, with everything MAIN calls at request time bound at load — so the tag stops
+minting and replay, and a later patch of the page's built-ins can't make what's recorded differ from what
+LeetCode got (`extension/README.md` → _How it works_). A problem doc or hint counts only for the problem on
+screen. **Accepted residual:** a hostile leetcode.com script that patched `fetch`/`XMLHttpRequest` or the
+built-ins before our script ran, or that drives the real editor or fakes traffic LeetCode itself receives,
+can still forge events in the open sitting — the server's caps are the boundary. A Start is never forged:
+Aperture is asked first, and only the overlay asks.
 
 **The server owns normalization.** The extension ships raw signals (`status_code`, `status_msg`,
 `tzOffsetMinutes`) and stays dumb, because it can't import from the workspace and shouldn't need

@@ -67,6 +67,8 @@ export interface PwPage {
   setViewportSize(size: { width: number; height: number }): Promise<void>;
   url(): string;
   setViewportSize(size: { width: number; height: number }): Promise<void>;
+  // A real (trusted) click at viewport coordinates — the lc-e2e clicks inside closed shadow roots.
+  mouse?: { click(x: number, y: number): Promise<void> };
   locator(selector: string): PwLocator;
   getByRole(
     role: string,

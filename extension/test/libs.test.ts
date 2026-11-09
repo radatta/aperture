@@ -69,6 +69,7 @@ describe('selectors', () => {
 // no tag or wire, and every handshake threw. So the page world loads its own copies.
 describe('the manifest', () => {
   it('lists no file in both worlds, and the page world’s copies match lib/', () => {
+    expect(MAIN_JS).toEqual(['src/page/tag.js', 'src/inject-main.js']); // the page world parses nothing
     expect(MAIN_JS.filter((f) => ISOLATED_JS.includes(f))).toEqual([]);
     for (const f of MAIN_JS.filter((f) => f.startsWith('src/page/')))
       expect(src(f), `${f} drifted — pnpm -F @aperture/extension sync-page`).toBe(

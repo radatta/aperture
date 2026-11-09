@@ -57,7 +57,31 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
   let worker: PwWorker;
   let rpc: <T>(method: string, ...args: unknown[]) => Promise<T>;
   let page: PwPage;
-  const phase = () => page.locator('aperture-lc-overlay').getAttribute('data-phase');
+  let tabId = 0;
+  // The overlay's roots are closed: read them in the extension's isolated world (chrome-build.ts).
+  const inIsolated = <T>(func: string, args: unknown[] = []) =>
+    worker.evaluate<T>(
+      `chrome.scripting.executeScript({ target: { tabId: ${tabId} }, world: 'ISOLATED', func: ${func}, args: ${JSON.stringify(args)} }).then((r) => r[0] && r[0].result)`,
+    );
+  const ROOT = `(sel) => globalThis.__apertureTestRoots && globalThis.__apertureTestRoots(document.querySelector(sel))`;
+  const phase = () =>
+    inIsolated<string | null>(
+      `() => { const r = (${ROOT})('aperture-lc-overlay'); const p = r && r.querySelector('[data-phase]'); return p ? p.getAttribute('data-phase') : null; }`,
+    );
+  const textOf = (host: string, sel: string) =>
+    inIsolated<string | null>(
+      `(host, sel) => { const r = (${ROOT})(host); const el = r && r.querySelector(sel); return el ? el.textContent : null; }`,
+      [host, sel],
+    );
+  // A trusted click at the button's centre, as a user's.
+  const click = async (ap: string) => {
+    const at = await inIsolated<{ x: number; y: number } | null>(
+      `(ap) => { const r = (${ROOT})('aperture-lc-overlay'); const b = r && r.querySelector('[data-ap=' + ap + ']'); if (!b) return null; const q = b.getBoundingClientRect(); return { x: q.left + q.width / 2, y: q.top + q.height / 2 }; }`,
+      [ap],
+    );
+    if (!at) throw new Error(`no ${ap} button`);
+    await page.mouse!.click(at.x, at.y);
+  };
 
   beforeAll(async () => {
     const auth = makeLocalAuth();
@@ -164,8 +188,11 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
 
   it('Start resets the editor, starts the timer and opens a sitting; a submit lands with its verdict', async () => {
     await page.goto('https://leetcode.com/problems/two-sum/description/');
+    tabId = await worker.evaluate<number>(
+      "chrome.tabs.query({ url: 'https://leetcode.com/*' }).then((t) => t[0].id)",
+    );
     await until(async () => (await phase()) === 'prompt');
-    await page.locator('aperture-lc-overlay [data-ap=start]').click();
+    await click('start');
     await until(async () => (await phase()) === 'active');
     expect(
       await page.evaluate<{ resets: number; timerStarts: number }>('window.__fake'),
@@ -174,6 +201,9 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     await page
       .locator('[data-fake=code]')
       .fill('class Solution:\n    def twoSum(self, nums, target):\n        return [0, 1]\n');
+    // LeetCode's autosave (300 ms debounce in the fake) lands first; the Submit then carries that pending
+    // snapshot ahead of it. Code typed inside the debounce reaches live within the 30 s snapshot window.
+    await new Promise((r) => setTimeout(r, 800));
     await page.locator('[data-e2e-locator=console-submit-button]').click();
     await page.locator('[data-e2e-locator=console-run-button]').click();
 
@@ -199,9 +229,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
       return r.length ? r : null;
     });
     expect(replay.length).toBeGreaterThan(0);
-    expect(await page.locator('aperture-lc-badge [data-ap=badge]').textContent()).toMatch(
-      /^Aperture · \dm · /,
-    );
+    expect(await textOf('aperture-lc-badge', '[data-ap=badge]')).toMatch(/^Aperture · \dm · /);
   }, 60_000);
 
   it('resumes a reload mid-sitting with no overlay and no reset, and re-prompts on SPA navigation where a second Start is refused', async () => {
@@ -214,11 +242,13 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
 
     await page.locator('[data-fake=next]').click();
     await until(async () => (await phase()) === 'prompt');
-    await page.locator('aperture-lc-overlay [data-ap=start]').click();
+    await click('start');
     await until(async () => (await phase()) === 'failed');
-    expect(await page.locator('aperture-lc-overlay [data-ap=reason]').textContent()).toContain(
+    expect(await textOf('aperture-lc-overlay', '[data-ap=reason]')).toContain(
       'Another sitting is still open',
     );
+    // Refused before any click: the editor is untouched.
+    expect(await page.evaluate<{ resets: number }>('window.__fake')).toMatchObject({ resets: 0 });
     expect((await rpc<Sitting[]>('listSittings')).length).toBe(before.length);
   }, 60_000);
 });

@@ -226,10 +226,6 @@
       case 'enqueue':
         await enqueue(msg);
         return { ok: true };
-      case 'configured?': {
-        const { origin, token } = await config();
-        return { configured: !!(origin && token) };
-      }
       case 'flush':
         flush();
         return { ok: true };

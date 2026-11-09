@@ -1,8 +1,11 @@
 // The overlay's state machine, per tab — pure: reduce(state, action) → {state, effects}. content.js runs the
-// effects (clicks, the server Start) and feeds their outcome back as actions; overlay.js paints the state.
-//   hidden ─nav(problem)→ prompt ─start→ starting(reset → confirm → timer → send) ─started→ active
+// effects (the server Start, then the clicks) and feeds their outcome back as actions; overlay.js paints it.
+// The server goes first: a Start Aperture refuses never touches the editor. `open` says the sitting exists.
+//   hidden ─nav(problem)→ prompt ─start→ starting(send → reset → confirm → timer) → active
 //   prompt ─dismiss→ hidden (remembered for the slug, this browser session)
-//   starting ─stepFail→ failed ─retry→ starting(reset) | ─startAnyway→ starting(send) | ─dismiss→ hidden
+//   starting ─stepFail→ failed:
+//     not open (the send failed) ─retry→ starting(send) | ─dismiss→ hidden
+//     open (a click failed)      ─retry→ starting(that step) | ─continue→ active (no clear)
 //   nav(problem with an open sitting) → resuming ─resumed(active)→ active | ─resumed(not)→ prompt
 //   active ─ended→ ended (badge only; the next nav prompts again)
 (function (root, factory) {
@@ -11,10 +14,21 @@
   else (root.ApertureLC = root.ApertureLC || {}).overlayState = api;
 })(globalThis, function () {
   'use strict';
-  const STEPS = ['reset', 'confirm', 'timer', 'send'];
-  const initial = () => ({ phase: 'hidden', slug: null, step: null, reason: null, retrying: null });
+  const STEPS = ['send', 'reset', 'confirm', 'timer'];
+  const initial = () => ({
+    phase: 'hidden',
+    slug: null,
+    step: null,
+    reason: null,
+    retrying: null,
+    open: false,
+  });
   const at = (state, patch) => ({ ...state, retrying: null, ...patch });
   const same = (state) => ({ state, effects: [] });
+  const go = (state, step) => ({
+    state: at(state, { phase: 'starting', step, reason: null }),
+    effects: [{ do: 'step', step }],
+  });
 
   function reduce(state, action) {
     switch (action.type) {
@@ -27,23 +41,19 @@
         return { state: { ...base, phase: 'prompt' }, effects: [] };
       }
       case 'start':
+        return state.phase === 'prompt' ? go(state, 'send') : same(state);
       case 'retry':
-        if (state.phase !== 'prompt' && state.phase !== 'failed') return same(state);
-        return {
-          state: at(state, { phase: 'starting', step: 'reset', reason: null }),
-          effects: [{ do: 'step', step: 'reset' }],
-        };
-      case 'startAnyway':
         if (state.phase !== 'failed') return same(state);
-        return {
-          state: at(state, { phase: 'starting', step: 'send', reason: null }),
-          effects: [{ do: 'step', step: 'send' }],
-        };
+        return go(state, state.open ? state.step : 'send');
+      case 'continue':
+        if (state.phase !== 'failed' || !state.open) return same(state);
+        return { state: at(state, { phase: 'active', step: null, reason: null }), effects: [] };
       case 'stepOk': {
-        if (state.phase !== 'starting' || state.step !== action.step || action.step === 'send')
-          return same(state);
+        if (state.phase !== 'starting' || state.step !== action.step) return same(state);
         const next = STEPS[STEPS.indexOf(action.step) + 1];
-        return { state: at(state, { step: next }), effects: [{ do: 'step', step: next }] };
+        const open = state.open || action.step === 'send';
+        if (!next) return { state: at(state, { phase: 'active', step: null, open }), effects: [] };
+        return { state: at(state, { step: next, open }), effects: [{ do: 'step', step: next }] };
       }
       case 'stepFail':
         if (state.phase !== 'starting' || state.step !== action.step) return same(state);
@@ -51,11 +61,10 @@
       case 'retrying':
         if (state.phase !== 'starting') return same(state);
         return { state: { ...state, retrying: action.reason }, effects: [] };
-      case 'started':
-        if (state.phase !== 'starting') return same(state);
-        return { state: at(state, { phase: 'active', step: null }), effects: [] };
       case 'dismiss':
-        if (state.phase !== 'prompt' && state.phase !== 'failed') return same(state);
+        // Just looking only while nothing is open; an open sitting's way out is Retry or Continue.
+        if (state.phase !== 'prompt' && !(state.phase === 'failed' && !state.open))
+          return same(state);
         return {
           state: at(state, { phase: 'hidden', step: null, reason: null }),
           effects: [{ do: 'rememberDismiss' }],
@@ -63,7 +72,7 @@
       case 'resumed':
         if (state.phase !== 'resuming') return same(state);
         return action.active
-          ? { state: at(state, { phase: 'active' }), effects: [] }
+          ? { state: at(state, { phase: 'active', open: true }), effects: [] }
           : { state: at(state, { phase: 'prompt' }), effects: [{ do: 'clearBinding' }] };
       case 'ended':
         if (state.phase !== 'active' && state.phase !== 'resuming') return same(state);

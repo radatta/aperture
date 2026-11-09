@@ -18,7 +18,7 @@
       "matches": ["*://leetcode.com/*"],
       "run_at": "document_start",
       "world": "MAIN",
-      "js": ["src/page/tag.js", "src/page/wire.js", "src/inject-main.js"]
+      "js": ["src/page/tag.js", "src/inject-main.js"]
     },
     {
       "matches": ["*://leetcode.com/*"],
@@ -32,6 +32,7 @@
         "src/lib/overlay-state.js",
         "src/lib/selectors.js",
         "src/lib/outbox.js",
+        "src/lib/batch.js",
         "src/debug.js",
         "src/overlay.js",
         "src/content.js"

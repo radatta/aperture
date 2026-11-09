@@ -8,14 +8,12 @@
   const api =
     globalThis.browser && globalThis.browser.runtime ? globalThis.browser : globalThis.chrome;
   const NS = globalThis.ApertureLC;
-  const { relay: relayLib, overlayState, selectors: selLib, timer, wire, outbox } = NS;
+  const { relay: relayLib, overlayState, selectors: selLib, timer, wire, outbox, batch } = NS;
   const debug = NS.debug || { log() {}, dumpControls() {} };
   const mintId = NS.ulid.ulid;
   // packages/shared/src/sittings.ts SITTING_ACTIVE_ERROR (background.test.ts checks the copy).
   const ACTIVE_ERROR = 'Another sitting is still open — end it in Aperture first.';
   const START_TIME_ERROR = 'The Start’s time is off by more than a day.';
-  const NOT_CONFIGURED =
-    'Set the Aperture origin and device token in the extension’s options first.';
   const PENDING_MAX = 500; // page messages waiting for the relay; past it a flood is dropped
   const bootState = document.readyState; // Safari may run document_start late — the debug log says
   const PROBLEM_MAX = 64 * 1024;
@@ -54,7 +52,8 @@
   let lastStartRetryable = false;
   const problems = new Map(); // slug → LeetCode's questionDetail.question, this page load
   const questionIds = new Map(); // slug → questionId (from syncedCode)
-  let buffer = [];
+  const batcher = batch.createBatcher();
+  const capture = wire.createCapture(); // LeetCode's raw traffic → items, parsed here, never in the page
   let flushTimer = null;
   let lastTimerRaw = null;
 
@@ -99,38 +98,61 @@
     true,
   );
   async function onPageMessage(detail) {
-    const r = await relay.accept(detail, { screenSlug, binding: liveBinding() });
-    if (!r.ok) {
-      if (r.reason !== 'no-sitting') debug.log('relay.reject', { reason: r.reason });
+    const r = await relay.accept(detail);
+    if (!r.ok) return debug.log('relay.reject', { reason: r.reason });
+    // A doc fetched at an SPA nav can land before the 500 ms poll sees the new path: catch up first.
+    if (relayLib.slugOf(location.pathname) !== screenSlug) await onNav();
+    const raw = r.raw;
+    const near = (at) => (Math.abs(at - Date.now()) < 3600_000 ? at : Date.now());
+    const items = capture.observe({ ...raw, reqAt: near(raw.reqAt), resAt: near(raw.resAt) });
+    debug.log('wire', {
+      items: items.map((i) => i.kind),
+      bytes: (raw.reqText || '').length + (raw.resText || '').length,
+    });
+    items.forEach(onItem);
+  }
+  function onItem(m) {
+    const a = relayLib.admit(m, { screenSlug, binding: liveBinding() });
+    if (!a.ok) {
+      if (a.reason !== 'no-sitting') debug.log('relay.reject', { reason: a.reason, kind: m.kind });
       return;
     }
-    const m = r.msg;
-    debug.log('wire', {
-      kind: m.kind,
-      slug: m.slug,
-      bytes: typeof detail === 'string' ? detail.length : 0,
-    });
     if (m.kind === 'problem') return onProblem(m.slug, m.payload, m.questionId);
     if (m.kind === 'hint') {
       if (m.questionId) questionIds.set(screenSlug, m.questionId);
       return;
     }
-    buffer.push(...wire.toEventInputs(m, mintId));
-    if (m.kind === 'submit' || m.kind === 'run') flushNow();
-    else scheduleFlush();
+    queue(wire.toEventInputs(m, mintId));
   }
+  // A run or submit LeetCode never judged goes out unjudged after two minutes.
+  setInterval(() => capture.sweep(Date.now()).forEach(onItem), 15_000);
 
-  // ---- events → the background, coalesced 3 s; a run or submit goes at once ----
-  function scheduleFlush() {
-    if (!flushTimer) flushTimer = setTimeout(flushNow, 3000);
+  // ---- events → the background (lib/batch.js: 3 s batches, one snapshot per 30 s, a run or submit at once) ----
+  function queue(events) {
+    let now = false;
+    for (const e of events) if (batcher.push(e, Date.now()) === 'now') now = true;
+    if (now) flushNow();
+    else arm();
+  }
+  function arm() {
+    clearTimeout(flushTimer);
+    const due = batcher.dueAt();
+    if (due == null) return;
+    flushTimer = setTimeout(
+      () => {
+        ship(batcher.drain(Date.now()));
+        arm();
+      },
+      Math.max(0, due - Date.now()),
+    );
   }
   function flushNow() {
     clearTimeout(flushTimer);
     flushTimer = null;
-    if (!buffer.length) return;
-    const events = buffer;
-    buffer = [];
-    if (!binding) return;
+    ship(batcher.flush());
+  }
+  function ship(events) {
+    if (!events.length || !binding) return;
     send({ type: 'enqueue', sittingId: binding.sittingId, slug: binding.slug, events }).catch(
       (err) => {
         debug.log('enqueue.fail', { error: String(err && err.message) });
@@ -163,13 +185,7 @@
     try {
       heartbeat = String(localStorage.getItem(timer.HEARTBEAT_KEY) || '').slice(0, 64) || null;
     } catch {}
-    buffer.push({
-      id: mintId(),
-      type: 'timer',
-      at: Date.now(),
-      payload: { state: parsed, heartbeat },
-    });
-    scheduleFlush();
+    queue([{ id: mintId(), type: 'timer', at: Date.now(), payload: { state: parsed, heartbeat } }]);
   }, 2000);
 
   // ---- the problem ----
@@ -270,7 +286,7 @@
     if (slug) await local.remove([`sitting:${slug}`, `sync:${slug}`]);
   }
 
-  // ---- Start: LeetCode's reset → its confirm → its timer → the server ----
+  // ---- Start: the server → LeetCode's reset → its confirm → its timer (a refusal touches nothing) ----
   const STEP = {
     async reset() {
       if (!sel.editorReset)
@@ -318,9 +334,7 @@
     if (step === 'send') return sendStart();
     let r;
     try {
-      // Nothing is clicked for a Start that can't be sent: the reset is the one destructive step.
-      const ready = await send({ type: 'configured?' }).catch(() => null);
-      r = ready && ready.configured === false ? NOT_CONFIGURED : await STEP[step]();
+      r = await STEP[step]();
     } catch (err) {
       r = String((err && err.message) || err);
     }
@@ -365,7 +379,7 @@
         lastTimerRaw = null;
         pendingStart = null;
         debug.log('start', { ok: true, resumed: !!r.json.resumed });
-        return act({ type: 'started' });
+        return act({ type: 'stepOk', step: 'send' }); // the binding is saved: a reload mid-reset resumes
       }
       if (s) {
         pendingStart = null; // an ended sitting came back: the next try mints a fresh id
@@ -418,12 +432,13 @@
   const view = NS.overlay.create({
     start: () => begin('start'),
     retry: () => begin('retry'),
-    startAnyway: () => begin('startAnyway'),
+    continue: () => act({ type: 'continue' }),
     dismiss: () => act({ type: 'dismiss' }),
   });
   // A retryable failure keeps the id (the first try may have landed: the server resumes it and keeps its
   // time); the time is always this click's, since the reset and the timer run again.
   function begin(type) {
+    if (type === 'retry' && state.open) return act({ type }); // the sitting exists: repeat the click step
     pendingStart =
       pendingStart && lastStartRetryable
         ? { ...pendingStart, startedAt: Date.now() }

@@ -1,6 +1,6 @@
 // Where LeetCode's own controls are. The known ones come from the 2026-11-08 page dump; the editor reset, its
 // confirm and the timer start are UNKNOWN until Rahul's debug session (README → Debug mode), so they ship
-// null and the overlay says "not configured" — Start anyway still opens the sitting. Options → Selectors
+// null and the overlay says "not configured" — Continue without a clear still keeps the sitting. Options → Selectors
 // overrides any of them without a rebuild (LeetCode moves its DOM; a prod Xcode rebuild is the slow path).
 (function (root, factory) {
   const api = factory();

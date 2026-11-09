@@ -29,6 +29,10 @@ export function page(url: string, html = '<!doctype html><html><head></head><bod
   const w = dom.window as unknown as Record<string, unknown>;
   Object.defineProperty(w, 'crypto', { value: globalThis.crypto, configurable: true });
   w.TextEncoder = TextEncoder;
+  // jsdom has no fetch types; the page world captures Response/Request's originals at load, so node's go
+  // on the window first.
+  w.Response = Response;
+  w.Request = Request;
   w.TextDecoder = TextDecoder;
   return dom;
 }
@@ -38,6 +42,19 @@ export function run(dom: JSDOM, files: string[], extra: Record<string, unknown> 
   const w = dom.window as unknown as Record<string, unknown> & { eval(code: string): unknown };
   Object.assign(w, extra);
   for (const f of files) w.eval(src(f));
+}
+// The overlay's roots are closed, so a test records them as they're made: wrap attachShadow on this page's
+// Element before the isolated scripts run (both worlds share one realm in jsdom). Test-side only.
+export function shadowRoots(dom: JSDOM) {
+  const roots = new WeakMap<Element, ShadowRoot>();
+  const proto = (dom.window as unknown as typeof globalThis).Element.prototype;
+  const real = proto.attachShadow;
+  proto.attachShadow = function (this: Element, init: ShadowRootInit) {
+    const root = real.call(this, init);
+    roots.set(this, root);
+    return root;
+  };
+  return (host: Element | null) => (host ? (roots.get(host) ?? null) : null);
 }
 // A user's click. The overlay acts only on trusted events and jsdom's own click() is never one, so this
 // dispatches through jsdom's internals (pinned jsdom 30) with isTrusted set — test-side only, no switch in
