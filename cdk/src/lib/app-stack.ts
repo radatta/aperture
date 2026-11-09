@@ -17,6 +17,7 @@ import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
 import { PushDispatch } from './push-dispatch';
 import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
+import { reservedConcurrency } from '../config/devAccount';
 
 export interface AppStackProps extends StackProps {
   stage: string;
@@ -222,6 +223,7 @@ export class ApertureAppStack extends Stack {
       timeout: fnTimeout,
       memorySize: 512,
       ...logging('BffLogs', `aperture-bff-${stage}`),
+      ...reservedConcurrency(stage, `aperture-bff-${stage}`),
       environment: {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,
@@ -295,6 +297,7 @@ export class ApertureAppStack extends Stack {
       timeout: fnTimeout,
       memorySize: 512,
       ...logging('McpLogs', `aperture-mcp-${stage}`),
+      ...reservedConcurrency(stage, `aperture-mcp-${stage}`),
       environment: {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,

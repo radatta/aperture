@@ -6,22 +6,15 @@ import {
 } from '@aws-sdk/client-cloudfront';
 import type { DistributionConfig } from '@aws-sdk/client-cloudfront';
 import {
-  DeleteFunctionConcurrencyCommand,
   LambdaClient,
   ListFunctionsCommand,
+  DeleteFunctionConcurrencyCommand,
   PutFunctionConcurrencyCommand,
   UpdateFunctionUrlConfigCommand,
 } from '@aws-sdk/client-lambda';
 import { AttachPolicyCommand, OrganizationsClient } from '@aws-sdk/client-organizations';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
-import {
-  isAlreadyAttached,
-  isRestore,
-  kill,
-  killConfigFrom,
-  restore,
-  setDistributionsEnabled,
-} from './kill';
+import { isAlreadyAttached, isRestore, runKillSwitch, setDistributionsEnabled } from './kill';
 import type { KillConfig, KillGateways } from './kill';
 
 // The kill switch's Lambda entry (kill.ts has the logic). The SDK clients are here for SigV4 (dependency rule B);
@@ -124,11 +117,9 @@ function liveGateways(cfg: KillConfig): KillGateways {
 }
 
 export const handler = async (event: unknown): Promise<void> => {
-  const cfg = killConfigFrom(process.env);
   // A literal label: the bundle is minified, so a function's own name would log as a single letter.
-  const [label, run] = isRestore(event)
-    ? (['restore', restore] as const)
-    : (['kill', kill] as const);
-  console.log(`${label} triggered: ${JSON.stringify(event).slice(0, 2000)}`);
-  await run(cfg, liveGateways(cfg), (l) => console.log(l));
+  console.log(
+    `${isRestore(event) ? 'restore' : 'kill'} triggered: ${String(JSON.stringify(event)).slice(0, 2000)}`,
+  );
+  await runKillSwitch(event, process.env, liveGateways, (l) => console.log(l));
 };

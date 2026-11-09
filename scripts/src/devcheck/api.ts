@@ -469,6 +469,7 @@ export function createApiClient({
   run,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }: ApiDeps) {
+  let throttled = 0; // 429s answered so far, each retried below: a call that succeeded may still have been throttled
   // `retry(status, text)` says whether this answer is a throttle to back off from.
   async function backoff(
     send: () => ReturnType<FetchLike>,
@@ -479,6 +480,7 @@ export function createApiClient({
     let text = await res.text();
     for (const wait of THROTTLE_BACKOFF_MS) {
       if (!retry(res.status, text)) break;
+      if (res.status === 429) throttled++;
       await sleep(wait);
       res = await send();
       text = await res.text();
@@ -1104,7 +1106,7 @@ export function createApiClient({
     },
   };
 
-  return { reads, writes };
+  return { reads, writes, throttles: () => throttled };
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;

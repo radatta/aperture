@@ -465,6 +465,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
     },
+    throttles: () => 0,
   };
   const shells = [...(opts.shells ?? [shell(SHA)])];
   const browser: BrowserSession = {

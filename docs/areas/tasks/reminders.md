@@ -168,8 +168,8 @@ proves the whole chain. The BFF never holds the private key.
     **$0.12/day of compute**, about $0.15/day with DynamoDB and logs, with pushes capped by the guard.
   - On prod, reserved concurrency 1. There is no alarm of its own, because a rule says no fixed monthly cost: the
     account-wide Lambda Errors alarm emails on a failing tick, and a stuck tick's 20 s timeout counts as an error.
-  - On dev, reservations are impossible (quota 10, and the SCP denies it). Timeout < rate keeps ticks from
-    overlapping, and the hourly kill alarm trips a stalled poller.
+  - On dev, reserved concurrency 1 too, part of dev's compute cap (`cdk/src/config/devAccount.ts`). Timeout < rate
+    keeps ticks from overlapping, and the hourly kill alarm trips a stalled poller.
 
 ## 6. Setup and rotation
 

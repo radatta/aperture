@@ -7,6 +7,7 @@ import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Construct } from 'constructs';
+import { reservedConcurrency } from '../config/devAccount';
 
 const SYNC_ENTRY = fileURLToPath(new URL('../../../lambdas/src/financeSync.ts', import.meta.url));
 
@@ -48,12 +49,13 @@ export class FinanceSync extends Construct {
       timeout: FINANCE_SYNC_TIMEOUT,
       memorySize: 512,
       logGroup,
+      ...reservedConcurrency(stage, `aperture-finance-sync-${stage}`),
       environment: { TABLE_NAME: table.tableName, STAGE: stage, PLAID_ENV: plaidEnv },
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] },
     });
     // Never retried by Lambda: a failed run is already stamped for the page, and a retry would re-spend
-    // a refresh. A dropped event is harmless — the stored request waits for the next run. No reserved
-    // concurrency: the per-item CAS lock is the concurrency control (a second run exits "locked").
+    // a refresh. A dropped event is harmless — the stored request waits for the next run. The per-item CAS
+    // lock is the concurrency control (a second run exits "locked"); dev's reservation of 1 only caps cost.
     this.fn.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(1) });
 
     // Exactly what the sync does: consistent point reads, conditional puts, begin_with queries. No

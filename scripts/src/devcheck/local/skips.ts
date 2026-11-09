@@ -31,6 +31,10 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason:
       'local: the session is seeded with locally signed tokens, no refresh token and no Cognito token endpoint — runs on dev',
   },
+  'dev-concurrency-caps': {
+    steps: ['poller-ticks'],
+    reason: 'local: the reminder poller’s minute schedule is dev’s — runs on dev',
+  },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
   'dev-slot-b': {
     steps: ['shell', 'push'],

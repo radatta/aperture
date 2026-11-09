@@ -11,7 +11,7 @@ import {
   guardrailsPolicy,
   killPolicy,
 } from './lib/org-stack';
-import { DEV_URL_FUNCTIONS } from './config/devAccount';
+import { DEV_RESERVED_CONCURRENCY, DEV_URL_FUNCTIONS } from './config/devAccount';
 
 type Statement = {
   Sid: string;
@@ -286,7 +286,6 @@ describe('dev-account SCPs', () => {
       'servicequotas:Request*',
       'support:*',
       'organizations:LeaveOrganization',
-      'lambda:PutFunctionConcurrency',
       'lambda:PutProvisionedConcurrencyConfig',
       'lambda:PutFunctionRecursionConfig',
       'lambda:CreateEventSourceMapping',
@@ -311,6 +310,15 @@ describe('dev-account SCPs', () => {
       expect(denied).toContain(a);
   });
 
+  // Reservations are dev's compute cap and main's lane must apply them on a merge, so they're frozen (devmain exempt),
+  // not a guardrail every lane hits; a guardrail here would fail main's dev deploy and, with it, prod's.
+  it("leave reservations to the freeze, so main's lane can deploy them", () => {
+    for (const a of ['lambda:PutFunctionConcurrency', 'lambda:DeleteFunctionConcurrency']) {
+      expect(actions(standing.guardrails)).not.toContain(a);
+      expect(actions(standing.freeze)).toContain(a);
+    }
+  });
+
   it("freeze a function's shape, the table, the schedules, and every grant that would outlive a kill", () => {
     const frozen = actions(standing.freeze);
     for (const a of [
@@ -320,6 +328,8 @@ describe('dev-account SCPs', () => {
       'lambda:UpdateFunctionUrlConfig',
       'lambda:AddPermission',
       'lambda:PutFunctionEventInvokeConfig',
+      'lambda:PutFunctionConcurrency',
+      'lambda:DeleteFunctionConcurrency',
       'dynamodb:CreateTable',
       'dynamodb:UpdateTable',
       'dynamodb:PutResourcePolicy',
@@ -383,7 +393,7 @@ describe('ApertureOrgStack', () => {
     });
   });
 
-  it('gives the kill Lambda the kill SCP, the dev account, its break-glass role and the URL functions, and only the grants it needs', () => {
+  it("gives the kill Lambda the kill SCP, the dev account, its break-glass role, the URL functions and each function's reservation, and only the grants it needs", () => {
     const [, fn] = only('AWS::Lambda::Function');
     const vars = (fn.Properties.Environment as { Variables: Record<string, unknown> }).Variables;
     expect(vars).toMatchObject({
@@ -392,6 +402,14 @@ describe('ApertureOrgStack', () => {
       BREAK_GLASS_ROLE_ARN: `arn:aws:iam::${DEV}:role/${BREAK_GLASS_ROLE}`,
       URL_FUNCTIONS: DEV_URL_FUNCTIONS.join(','),
     });
+    // What restore puts back: the app stack's own table (stacks.test pins the deployed values to it).
+    const restored = Object.fromEntries(
+      String(vars.RESERVED_CONCURRENCY)
+        .split(',')
+        .map((p) => p.split('='))
+        .map(([fn, n]) => [fn, Number(n)]),
+    );
+    expect(restored).toEqual(DEV_RESERVED_CONCURRENCY);
     const [killId] = only('AWS::Organizations::Policy', 'aperture-dev-kill');
     expect(vars.KILL_POLICY_ID).toEqual({ 'Fn::GetAtt': [killId, 'Id'] });
     const grants = JSON.stringify(

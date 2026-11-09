@@ -17,6 +17,7 @@ import { failedReads } from './failed-reads';
 import { finance } from './finance';
 import { fluxHistory } from './flux-history';
 import { fluxPerf } from './flux-perf';
+import { devConcurrencyCaps } from './dev-concurrency-caps';
 import { inflightCap } from './inflight-cap';
 import { iosStandalone } from './ios-standalone';
 import { lcSittings } from './lc-sittings';
@@ -59,6 +60,7 @@ export const SCENARIOS: Scenario[] = [
   timedReminders, // its cheap rows first; its poller chain (two tick waits) last, so it can defer whole
   cognitoRefresh,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
+  devConcurrencyCaps,
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

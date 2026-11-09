@@ -58,6 +58,7 @@ export function createMcpClient({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }: McpDeps) {
   let nextId = 1;
+  let throttled = 0; // 429s answered so far, each retried below
 
   async function rpc<T>(method: string, params: unknown): Promise<T> {
     assertDevOrigin(mcpUrl());
@@ -70,6 +71,7 @@ export function createMcpClient({
     let res = await send();
     for (const wait of THROTTLE_BACKOFF_MS) {
       if (res.status !== 429) break;
+      throttled++;
       await sleep(wait);
       res = await send();
     }
@@ -271,7 +273,7 @@ export function createMcpClient({
     },
   };
 
-  return { reads, writes };
+  return { reads, writes, throttles: () => throttled };
 }
 
 export type McpClient = ReturnType<typeof createMcpClient>;
