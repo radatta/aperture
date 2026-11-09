@@ -5,7 +5,7 @@ import { NORD, fgc, strip, width } from './ansi.ts';
 import { build, parseArgs } from './main.ts';
 import type { TowerState } from './model.ts';
 import { HISTORY_H, layout } from './layout.ts';
-import { compose, feedItems, since, waveItems, wants, type Ui } from './panels.ts';
+import { compose, feedItems, nextMerge, since, waveItems, wants, type Ui } from './panels.ts';
 
 const NOW = '2026-11-08T06:10:00Z';
 // glyphs width() would mis-measure: controls, CJK, emoji (the fixtures carry all three)
@@ -366,6 +366,21 @@ describe('tower v2', () => {
     expect(at('22:40    30m')).not.toContain(fgc(NORD.dim) + '22:40');
     expect(f).toMatch(/PLAN ─+ next merge ~22:40 ╮/);
     expect(f).not.toContain('a stale golf run'); // over 2 h past due
+  });
+
+  it("nextMerge: the statusline's contract", () => {
+    const at = Date.parse(NOW);
+    const m = (what: string, t: number | null) => ({
+      at: t,
+      what,
+      kind: 'merge' as const,
+      who: null,
+    });
+    // over 2 h past drops; the earliest live one wins; a tie keeps file order; an unscheduled merge never names it
+    expect(nextMerge([m('stale', at - 7200001), m('live', at + 60000)], at)?.what).toBe('live');
+    expect(nextMerge([m('edge', at - 7200000), m('live', at + 60000)], at)?.what).toBe('edge');
+    expect(nextMerge([m('first', at), m('second', at)], at)?.what).toBe('first');
+    expect(nextMerge([m('unscheduled', null)], at)).toBeNull();
   });
 
   it('PLAN without a plan, and without a merge', () => {

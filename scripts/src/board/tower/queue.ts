@@ -39,7 +39,17 @@ export type QueueData = {
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
 };
 
-const ISO_DT = /^\d{4}-\d{2}-\d{2}T/;
+// A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
+// statusline's `date -d` reads anything looser differently (a bare 22:40, " PST", 11-31 rolled to 12-01).
+const PLAN_AT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:Z|[+-]\d{2}:?\d{2})?$/;
+export function planAt(x: unknown): number | null {
+  const m = typeof x === 'string' ? PLAN_AT.exec(x) : null;
+  if (!m) return null;
+  const [y, mo, d, h, mi, se] = m.slice(1).map((v) => Number(v ?? 0)) as number[];
+  const days = new Date(Date.UTC(y!, mo!, 0)).getUTCDate(); // day 0 of the next month
+  if (mo! < 1 || mo! > 12 || d! < 1 || d! > days || h! > 23 || mi! > 59 || se! > 59) return null;
+  return parseTime(x);
+}
 
 // `data` is the last good parse (kept through a bad write); `problems` say what's wrong with the current file.
 export type Queue = {
@@ -140,8 +150,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     if (!what) return void problems.push(`plan[${i}]: no what`);
     if (!PLAN_KINDS.includes(kind))
       return void problems.push(`plan[${i}]: kind ${JSON.stringify(p.kind)}`);
-    // a full date-time only: "22:40" or a bare date would read differently in the statusline's `date -d`
-    const at = typeof p.at === 'string' && ISO_DT.test(p.at) ? parseTime(p.at) : null;
+    const at = planAt(p.at);
     if (at === null && p.at != null) problems.push(`plan[${i}]: at is not an ISO time`); // kept, unscheduled
     plan.push({ at, what, kind, who: str(p.who) });
   });

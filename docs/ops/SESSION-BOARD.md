@@ -340,8 +340,9 @@ and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are th
 changed in the last 24 h, not what ran — failed jobs (local only: CI checks need an API the container's token
 can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl`; a start only while in flight),
 merges, PRs opened (gh `createdAt`), heavy leases that gave up or were denied, and the dev lock taken (a
-`pnpm bot deploy-dev`) as this tower saw it (kept in memory: a viewer writes no history). Passing jobs, `other` and
-`test-file` jobs, the Vite dev server, waits and the lock freed stay out: _Machine_ and _Status_ count them. _Status_: the dead-row TTL proof
+`pnpm bot deploy-dev`) as this tower saw it (kept in memory: a viewer writes no history). Passing jobs, the Vite dev server, waits and the lock freed
+stay out (_Machine_ and _Status_ count the suites); `other` and `test-file` jobs take no heavy slot and show
+nowhere in the tower. _Status_: the dead-row TTL proof
 (full runs that ended PASS since `proofs.deadRows.since`, minus `excludedRuns`), the overnight vitest bench
 when `localNotes/bench-vitest/results.tsv` exists, `queue.json`'s age, gh, the sampler's last tick, suites in
 24 h, heavy jobs now.
@@ -410,7 +411,8 @@ read check status, and the tower on a `main` without them drops such lanes as a 
 source for the next merge — the PLAN panel's title and the statusline (`localNotes/board/next-merge.sh`) both
 take the earliest `kind: merge` item with an `at` no more than 2 h past (the statusline also marks `?` once
 `queue.json` is 30 min old) — and the hub rewrites it at every event; a `plan` item without `what` or with an unknown `kind` is dropped and named; one whose `at` isn't a
-full ISO date-time (a bare `22:40` or date) is kept unscheduled and named, so the statusline's `date -d` can't
+whole ISO date-time (a real date, minutes or seconds, an optional `Z` / offset; not a bare `22:40`, a date,
+` PST` or fractions) is kept unscheduled and named, so the statusline's `date -d` can't
 read it differently. A `queue.json` that won't parse leaves the tower on its last good plan while the
 statusline reads the new file. No `plan` is an empty plan, not a problem.
 

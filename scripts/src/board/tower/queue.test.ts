@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseQueue, queueAgeTone } from './queue.ts';
+import { parseQueue, planAt, queueAgeTone } from './queue.ts';
 
 const example = readFileSync(
   join(import.meta.dirname, '../../../board/queue.example.json'),
@@ -147,6 +147,31 @@ describe('parseQueue', () => {
         '{"v":1,"updatedAt":"2026-11-08T06:00:00Z","devQueue":[{"branch":"a","state":"🚀"}]}',
       ).problems,
     ).toEqual(['devQueue[0]: state "?"']);
+  });
+
+  it('takes a plan time only as a whole, real ISO date-time', () => {
+    for (const ok of [
+      '2026-11-08T22:40Z',
+      '2026-11-08T22:40:00-08:00',
+      '2026-11-08T22:40:00+0530',
+      '2026-11-08T22:40:00',
+      '2028-02-29T10:00Z',
+    ])
+      expect(planAt(ok)).toBe(Date.parse(ok));
+    for (const bad of [
+      '22:40',
+      '2026-11-08',
+      '2026-11-08T22:40:00 PST',
+      '2026-11-08T22:40:00+01',
+      '2026-11-08T22:40:00.500Z',
+      '2026-11-08T22:40:00Z tomorrow',
+      '2026-11-08T24:00',
+      '2026-11-31T10:00',
+      '2026-02-30T10:00Z',
+      '2026-13-01T10:00Z',
+      42,
+    ])
+      expect(planAt(bad)).toBeNull();
   });
 
   it('is missing when there is no file', () => {
