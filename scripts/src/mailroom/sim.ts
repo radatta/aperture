@@ -75,7 +75,7 @@ export type IosOp =
   | { op: 'nav'; tab: Tab }
   | ({ op: 'find'; label: string; as: string } & Where)
   | ({ op: 'absent'; label: string } & Where) // passes only when that find would miss
-  | ({ op: 'tap'; label: string; as?: string } & Where)
+  | ({ op: 'tap'; label: string; as?: string; closes?: true } & Where) // closes: the element must be gone after the tap
   | { op: 'expect'; signedIn: true }
   | { op: 'expect'; as: string; valueIs: string }
   | { op: 'expect'; as: string; labelIs: string }
@@ -83,7 +83,7 @@ export type IosOp =
   | { op: 'expect'; as: string; aboveKeyboard: true }
   | { op: 'expect'; as: string; sameWidthAs: string }
   | { op: 'keys'; text: string; in?: string } // in: read the field back where that find/tap found it
-  | { op: 'erase'; n: number }
+  | { op: 'erase'; n: number; in?: string } // in: read the field back, empty, where that find/tap found it
   | { op: 'scroll'; dir: 'up' | 'down'; pt: number }
   | { op: 'expectBuild'; relaunches?: 0 | 1 }
   | { op: 'shot'; name: string }
@@ -241,9 +241,10 @@ function opOk(o: unknown): boolean {
       );
     case 'tap':
       return (
-        keysOk(o, ['op', 'label'], ['near', 'scan', 'radius', 'role', 'as']) &&
+        keysOk(o, ['op', 'label'], ['near', 'scan', 'radius', 'role', 'as', 'closes']) &&
         lbl(o.label) &&
         (!('as' in o) || asName(o.as)) &&
+        (!('closes' in o) || o.closes === true) &&
         where(o)
       );
     case 'expect':
@@ -262,7 +263,7 @@ function opOk(o: unknown): boolean {
         (!('in' in o) || asName(o.in))
       );
     case 'erase':
-      return keysOk(o, ['op', 'n'], []) && int(o.n, 1, 24);
+      return keysOk(o, ['op', 'n'], ['in']) && int(o.n, 1, 24) && (!('in' in o) || asName(o.in));
     case 'scroll':
       return (
         keysOk(o, ['op', 'dir', 'pt'], []) &&
@@ -300,7 +301,8 @@ function crossOk(steps: Obj[]): boolean {
       if (!defs.includes(s.as as string)) return false;
       if ('sameWidthAs' in s && !defs.includes(s.sameWidthAs as string)) return false;
     }
-    if (s.op === 'keys' && 'in' in s && !defs.includes(s.in as string)) return false;
+    if ((s.op === 'keys' || s.op === 'erase') && 'in' in s && !defs.includes(s.in as string))
+      return false;
     if ((s.op === 'find' || s.op === 'tap') && 'as' in s) {
       if (defs.includes(s.as as string)) return false;
       defs.push(s.as as string);

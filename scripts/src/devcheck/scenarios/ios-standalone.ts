@@ -22,8 +22,9 @@ const title = (ctx: Ctx) => `devcheck-ios ${marker(ctx)}`;
 let taskId = '';
 let drove = false; // the sim got through the Done form, so "untouched" means something
 // Four typed keys, two spare deletes: a delete tap can drop silently (job …043145Z…-capture-d571 left a Z), and one on an
-// empty field does nothing. The rows still prove the placeholder returns; this does hide how often deletes drop. Typed
-// keys are read back (`keys … in`) and retyped, with a note saying so (job …083234Z…-capture-5c12 lost one).
+// empty field does nothing. Typed keys are read back (`keys … in`) and retyped (job …083234Z…-capture-5c12 lost one);
+// the field is read back after the deletes too (`erase … in`: …230610Z…-done-form-4385 left a Z after six), and the
+// note counts any extra round, so how often deletes drop stays visible.
 const ERASE = 6;
 
 const LAUNCH: IosOp[] = [
@@ -71,7 +72,7 @@ const CAPTURE: IosOp[] = [
     as: 'send',
   },
   { op: 'expect', as: 'send', enabled: true },
-  { op: 'erase', n: ERASE },
+  { op: 'erase', n: ERASE, in: 'bar' },
   { op: 'expect', as: 'bar', valueIs: 'What happened?' },
   { op: 'expect', as: 'send', enabled: false },
   { op: 'blur' },
@@ -204,9 +205,16 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'find', label: 'Reflection', scan: { x: 200, from: 120, to: 690 }, as: 'again' },
   { op: 'expect', as: 'again', aboveKeyboard: true },
   { op: 'keys', text: 'zzqx', in: 'again' },
-  { op: 'erase', n: ERASE },
+  { op: 'erase', n: ERASE, in: 'again' },
   { op: 'blur' },
-  { op: 'tap', label: 'Cancel', scan: { x: 190, from: 150, to: 720 }, role: 'AXButton' },
+  // closes: still there after the tap means it dropped (…4385 left the modal over Home for the next job's launch)
+  {
+    op: 'tap',
+    label: 'Cancel',
+    scan: { x: 190, from: 150, to: 720 },
+    role: 'AXButton',
+    closes: true,
+  },
   { op: 'shot', name: 'done-form-closed' },
 ];
 

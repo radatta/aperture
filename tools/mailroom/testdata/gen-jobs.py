@@ -507,6 +507,51 @@ sfail('sim: a field that never holds the text is TYPED, with what it read and a 
       simCount={'tap -x 48 -y 744': 3, 'tap -x 409 -y 800': 8}, files=['shots/01-fail.png'])
 serr('sim: a hung read-back is AX_TIMEOUT, not TYPED', 'AX_TIMEOUT', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
      tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')], simExcludes=['tap -x 409 -y 800'])
+# erase … in reads the field back (job …230610Z…-done-form-4385: six deletes left a Z): empty is "" or the placeholder.
+def left(v, x=220, **k): return pt(x, 895, el('AXTextArea', 'Capture log', v, 25, 877, 346, 36), **k)
+ER = [L, BAR, {'op': 'erase', 'n': 2, 'in': 'bar'}]
+DEL = 'tap -x 409 -y 800'
+spass('sim: erase in a field reads it back once; the placeholder is empty', ER, tape=[pt(220, 895, CAPTURE, n=2)], notes={'2': 'erased 2'},
+      simCount={DEL: 2, '--point 198,895': 0})
+spass('sim: erase: an empty value is empty', ER, tape=[pt(220, 895, CAPTURE, n=2), left('')], notes={'2': 'erased 2'}, simCount={DEL: 2})
+spass('sim: a dropped delete (a letter left) is deleted again, and the note says so', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), left('A', n=1), left('A', 198, n=1)], notes={'2': 'erased 2; deleted 3 more (first read AXTextArea "A")'},
+      simCount={DEL: 5})
+spass('sim: letters still left after the extra deletes get a second round', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), left('Ab', n=1), left('Ab', 198, n=1), left('A', n=1), left('A', 198, n=1)],
+      notes={'2': 'deleted more twice (first read AXTextArea "Ab")'}, simCount={DEL: 9})
+sfail('sim: a field that never empties is ERASED, with what it read and a screenshot', 'ERASED', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), left('A'), left('A', 198)], notes={'2': 'the field still reads AXTextArea "A" at 220,895'},
+      simCount={DEL: 8}, files=['shots/01-fail.png'])
+serr('sim: a hung erase read-back is AX_TIMEOUT, not ERASED', 'AX_TIMEOUT', ER, tape=[pt(220, 895, CAPTURE, n=2), HANG('--point 220,895')], simCount={DEL: 2})
+spass('sim: another element at the find point gets the centre look, no extra deletes', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20), n=1), pt(198, 895, CAPTURE)],
+      notes={'2': 'erased 2'}, simCount={'--point 198,895': 1, DEL: 2})
+sfail('sim: an empty-valued element that isn\'t the field never passes as empty', 'ERASED', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20)), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20))],
+      notes={'2': 'AXStaticText ""'}, simCount={DEL: 6})
+sfail('sim: the field\'s label on another role never passes as empty', 'ERASED', ER,
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Capture log', '', 25, 877, 346, 36)), pt(198, 895, el('AXStaticText', 'Capture log', '', 25, 877, 346, 36))],
+      simCount={DEL: 6})
+srej('sim: erase in an unknown name is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 2, 'in': 'nope'}])
+srej('sim: erase in a name defined after it is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 2, 'in': 'bar'}, BAR])
+srej('sim: erase in a number is BAD_OP', 'BAD_OP', [L, BAR, {'op': 'erase', 'n': 2, 'in': 1}])
+# tap … closes: the element must be gone after the tap (…4385: the Cancel tap left the task modal open).
+CANCEL = el('AXButton', 'Cancel', '', 150, 590, 100, 30)
+CL = [L, {'op': 'tap', 'label': 'Cancel', 'near': {'x': 200, 'y': 600}, 'radius': 10, 'role': 'AXButton', 'closes': True}]
+CTAP, CREAD = 'tap -x 200 -y 605', '--point 200,605'
+spass('sim: a closes tap whose element is gone passes with one tap', CL, tape=[pt(200, 600, CANCEL, n=1)], simCount={CTAP: 1, CREAD: 1})
+spass('sim: a closes tap whose element is still there 1 s later is tapped once more, and the note says so', CL,
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=2)], notes={'1': 'tapped again (still there after the first)'}, simCount={CTAP: 2, CREAD: 3})
+sfail('sim: a closes tap still there after the second tap is TAP_DROPPED', 'TAP_DROPPED', CL,
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL)], simCount={CTAP: 2, CREAD: 4}, files=['shots/01-fail.png'])
+spass('sim: a closes tap replaced by another element at that spot counts as gone', CL,
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, el('AXStaticText', '', 'TODAY 1', 40, 595, 100, 20))], simCount={CTAP: 1})
+spass('sim: a slow close (gone at the second look) is not tapped again', CL, tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=1)],
+      simCount={CTAP: 1, CREAD: 2})
+serr('sim: a hung look after a closes tap is AX_TIMEOUT', 'AX_TIMEOUT', CL, tape=[pt(200, 600, CANCEL, n=1), HANG(CREAD)], simCount={CTAP: 1})
+srej('sim: closes false on a tap is BAD_OP', 'BAD_OP', [L, {'op': 'tap', 'label': 'Cancel', 'near': {'x': 200, 'y': 600}, 'closes': False}])
+srej('sim: closes on a find is BAD_OP', 'BAD_OP', [L, {**F('Cancel', 200, 600, 'c'), 'closes': True}])
 sfail('sim: a miss names an unlabelled element by its value', 'MISS', [L, F('Zzqx', 100, 300, 'x')], tape=[pt(100, 300, el('AXStaticText', '', 'Zzq', 33, 290, 30, 22))],
       notes={'1': 'saw: Zzq)'})
 sfail('sim: a miss names a match its role excluded', 'MISS', [L, F('Capture', 100, 300, 'x', role='AXButton')],

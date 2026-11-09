@@ -205,6 +205,29 @@ describe('validateSimParams', () => {
     expect(keys('bar', false)).toBe('BAD_OP');
     expect(keys('Bar')).toBe('BAD_OP');
     expect(keys(1)).toBe('BAD_OP');
+    // erase `in` too; a bare erase stays valid
+    const erase = (inName: unknown, before = true) =>
+      validateSimParams({
+        ...params,
+        steps: before
+          ? [find, { op: 'erase', n: 2, in: inName }]
+          : [{ op: 'erase', n: 2, in: inName }, find],
+      });
+    expect(erase('bar')).toBeNull();
+    expect(erase('nope')).toBe('BAD_OP');
+    expect(erase('bar', false)).toBe('BAD_OP');
+    expect(erase(1)).toBe('BAD_OP');
+    expect(validateSimParams({ ...params, steps: [{ op: 'erase', n: 2 }] })).toBeNull();
+    // tap `closes` is true or absent, and only on a tap
+    const closes = (op: string, v: unknown) =>
+      validateSimParams({
+        ...params,
+        steps: [{ op, label: 'Cancel', near: { x: 1, y: 1 }, as: 'c', closes: v }],
+      });
+    expect(closes('tap', true)).toBeNull();
+    expect(closes('tap', false)).toBe('BAD_OP');
+    expect(closes('tap', 'yes')).toBe('BAD_OP');
+    expect(closes('find', true)).toBe('BAD_OP');
     // the first bad op decides: a malformed op before a denied tap is BAD_OP
     expect(
       validateSimParams({

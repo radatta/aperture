@@ -65,8 +65,8 @@ SIM_JQ='
     elif .op == "nav" then keysok(["op","tab"]; []) and (.tab | type == "string") and ($tabs | index($o.tab)) != null
     elif .op == "find" then keysok(["op","label","as"]; ["near","scan","radius","role"]) and (.label | lbl) and (.as | asname) and where
     elif .op == "absent" then keysok(["op","label"]; ["near","scan","radius","role"]) and (.label | lbl) and where
-    elif .op == "tap" then keysok(["op","label"]; ["near","scan","radius","role","as"]) and (.label | lbl)
-      and (if has("as") then (.as | asname) else true end) and where
+    elif .op == "tap" then keysok(["op","label"]; ["near","scan","radius","role","as","closes"]) and (.label | lbl)
+      and (if has("as") then (.as | asname) else true end) and (if has("closes") then .closes == true else true end) and where
     elif .op == "expect" then
       if has("signedIn") then keysok(["op","signedIn"]; []) and .signedIn == true
       else (.as | asname) and (keys | length) == 3 and
@@ -78,7 +78,7 @@ SIM_JQ='
          else false end) end
     elif .op == "keys" then keysok(["op","text"]; ["in"]) and (.text | whole("^[a-z ]{1,24}$"))
       and (if has("in") then (.in | asname) else true end)
-    elif .op == "erase" then keysok(["op","n"]; []) and (.n | int(1; 24))
+    elif .op == "erase" then keysok(["op","n"]; ["in"]) and (.n | int(1; 24)) and (if has("in") then (.in | asname) else true end)
     elif .op == "scroll" then keysok(["op","dir","pt"]; []) and (.dir == "up" or .dir == "down") and (.pt | int(100; 600))
     elif .op == "expectBuild" then keysok(["op"]; ["relaunches"]) and (if has("relaunches") then (.relaunches | int(0; 1)) else true end)
     elif .op == "shot" then keysok(["op","name"]; []) and (.name | whole("^[a-z0-9-]{1,32}$"))
@@ -96,7 +96,7 @@ SIM_JQ='
       else (if $o.op == "expect" and ($o | has("as")) then
               (.def | index($o.as)) != null
               and (if $o | has("sameWidthAs") then (.def | index($o.sameWidthAs)) != null else true end)
-            elif $o.op == "keys" and ($o | has("in")) then (.def | index($o.in)) != null
+            elif ($o.op == "keys" or $o.op == "erase") and ($o | has("in")) then (.def | index($o.in)) != null
             else true end) as $refok
         | (($o.op == "find" or $o.op == "tap") and ($o | has("as"))) as $defines
         | {ok: ($refok and (if $defines then (.def | index($o.as)) == null else true end)),
@@ -843,6 +843,31 @@ sim_op_tap() {
       fi
       ;;
   esac
+  [ "$(jq -r '.closes // false' <<<"$1")" != true ] || sim_tap_gone "$1" || return 1
+}
+
+# A `closes` tap must make its element go: read its centre (where it was tapped) now and 1 s later; any other element
+# there, or none, is gone (closed, or covered by what it opened). Still there both times means the tap dropped (job
+# …230610Z…-done-form-4385: Cancel left the task modal open), so one more tap at that same spot, then TAP_DROPPED.
+sim_tap_gone() {
+  local label role cx cy e try look
+  label="$(jq -r .label <<<"$1")"
+  role="$(jq -r '.role // ""' <<<"$1")"
+  read -r cx cy < <(jq -r '.frame // {} | "\(((.x // 0) + (.w // 0) / 2) | floor) \(((.y // 0) + (.h // 0) / 2) | floor)"' <<<"$SIM_HIT")
+  for try in 1 2; do
+    for look in 1 2; do
+      [ "$look" = 1 ] || sleep 1
+      rm -f "$SIM_P.unread"
+      e="$(sim_point "$cx" "$cy")" || return 1
+      sim_hung_err "checking \"$label\" went away" && return 1
+      sim_match "$e" "$label" "$role" || return 0
+    done
+    [ "$try" = 1 ] || break
+    sim_tap_el "$SIM_HIT" || return 1
+    sleep 1
+    SIM_NOTE="$SIM_NOTE; tapped again (still there after the first)"
+  done
+  sim_fail TAP_DROPPED "\"$label\" is still there after 2 taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
 }
 
 # The soft keyboard is up when its space bar answers; its accessory bar's top is the line a field must clear.
@@ -997,12 +1022,61 @@ sim_op_keys() {
   esac
 }
 
+# The field read where `in` found it: SIM_ERASED_OK=1 when it is the same role (and label) and holds nothing: "" or the
+# value `in` recorded while it was empty (iOS reads a placeholder as the AXValue). Else SIM_LEFT is the characters
+# left (0 when it isn't the field), and SIM_ERASED what it read, filtered like a MISS note.
+sim_erased_read() {
+  local e
+  SIM_ERASED_OK="" SIM_LEFT=0
+  rm -f "$SIM_P.unread"
+  e="$(sim_point "$2" "$3")" || return 1
+  sim_hung_err "reading the erased field" && return 1
+  SIM_ERASED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
+  jq -e --argjson r "$1" '(.role // "") != "" and (.role // "") == ($r.role // "")
+    and (($r.label // "") == "" or ((.label // "") | ascii_downcase) == (($r.label // "") | ascii_downcase))' <<<"$e" >/dev/null 2>&1 || return 0
+  if jq -e --argjson r "$1" '(.value // "") == "" or (.value // "") == ($r.value // "")' <<<"$e" >/dev/null 2>&1; then
+    SIM_ERASED_OK=1
+  else
+    SIM_LEFT="$(jq -r '(.value // "") | length | if . > 24 then 24 else . end' <<<"$e")"
+  fi
+}
+
+# Deletes AXe reports done can be ones iOS never got (job …230610Z…-done-form-4385 left a Z after six), so with `in`
+# the field is read back (where `in` found it, then at its centre, as keys does) and anything left gets that many
+# deletes plus two, at most twice, before ERASED. `in` must have found the field empty, before any keys.
 sim_op_erase() {
-  local n i=0
+  local n i=0 field r x y cx cy rounds=0 more first="" more1=""
   n="$(jq -r '.n | floor' <<<"$1")"
   sim_kb_up || { sim_kb_missing; return 1; }
   while [ "$i" -lt "$n" ]; do sim_key delete || return 1; i=$((i + 1)); done
   SIM_NOTE="erased $n"
+  field="$(jq -r '.in // ""' <<<"$1")"
+  [ -n "$field" ] || return 0
+  r="$(sim_read_get "$field")"
+  read -r x y cx cy < <(jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$r")
+  while :; do
+    sim_erased_read "$r" "$x" "$y" || return 1
+    if [ -z "$SIM_ERASED_OK" ]; then
+      sleep 1
+      sim_erased_read "$r" "$cx" "$cy" || return 1
+    fi
+    [ -z "$SIM_ERASED_OK" ] || break
+    [ -n "$first" ] || first="$SIM_ERASED"
+    if [ "$rounds" -ge 2 ]; then
+      sim_fail ERASED "deleted $n, then more twice; the field still reads $SIM_ERASED at $x,$y: iOS dropped the input; rerun the step, don't debug the app"
+      return 1
+    fi
+    more=$((SIM_LEFT + 2))
+    [ "$more" -le 24 ] || more=24
+    [ -n "$more1" ] || more1="$more"
+    rounds=$((rounds + 1))
+    i=0
+    while [ "$i" -lt "$more" ]; do sim_key delete || return 1; i=$((i + 1)); done
+  done
+  case "$rounds" in
+    1) SIM_NOTE="$SIM_NOTE; deleted $more1 more (first read $first)" ;;
+    2) SIM_NOTE="$SIM_NOTE; deleted more twice (first read $first)" ;;
+  esac
 }
 
 # Done is a tap like any other: the keyboard must be gone afterwards (one retap), or the next op aims at a moved page.
