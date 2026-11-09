@@ -52,7 +52,7 @@ export function SittingDetail() {
 function Loaded({ detail }: { detail: Detail }) {
   const { sitting, live, events, problem, liveReads } = detail;
   const now = useNow();
-  const outcome = sittingOutcome(sitting);
+  const outcome = sittingOutcome(sitting, now);
   const m = sittingMetrics(sitting);
   const companies = problemCompanies(problem);
   const open = isSittingOpen(sitting, now);
@@ -129,7 +129,7 @@ function Loaded({ detail }: { detail: Detail }) {
         <Text as="h2" id="sitting-timeline" size="lg" weight="semibold">
           Runs and submits
         </Text>
-        <SittingTimeline sitting={sitting} events={events} />
+        <SittingTimeline sitting={sitting} events={events} open={open} />
       </section>
 
       {live?.code && (
@@ -201,7 +201,13 @@ function EndSitting({
     );
   // Focus lands on the form, not its Actual field — no keyboard springs up on a phone.
   return (
-    <div ref={focusOnMount} tabIndex={-1} aria-labelledby={`${id}-end`} className="outline-none">
+    <div
+      ref={focusOnMount}
+      tabIndex={-1}
+      role="group"
+      aria-labelledby={`${id}-end`}
+      className="outline-none"
+    >
       <Text size="sm" weight="medium" id={`${id}-end`}>
         End the sitting — mark its rep done
       </Text>

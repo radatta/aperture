@@ -28,23 +28,28 @@ const mk = (over: Partial<Sitting> = {}, summary: Partial<SittingSummary> = {}):
     ...over,
   }) as Sitting;
 
+const outcome = (s: Sitting, now = 1) => sittingOutcome(s, now);
+
 describe('sittingOutcome', () => {
   it('names the first submit, never in red', () => {
-    expect(sittingOutcome(mk({ status: 'active' }))).toEqual({
+    expect(outcome(mk({ status: 'active' }))).toEqual({
       label: 'no submit yet',
       tone: 'muted',
     });
-    expect(sittingOutcome(mk())).toEqual({ label: 'no submit', tone: 'muted' }); // ended: no "yet"
-    expect(sittingOutcome(mk({}, { submits: 1, firstSubmit: v('accepted') }))).toEqual({
+    expect(outcome(mk())).toEqual({ label: 'no submit', tone: 'muted' }); // ended: no "yet"
+    // Still active but past its 24 h window: no more runs or submits can land, so no "yet" either.
+    expect(outcome(mk({ status: 'active' }), 25 * 3600_000)).toEqual({
+      label: 'no submit',
+      tone: 'muted',
+    });
+    expect(outcome(mk({}, { submits: 1, firstSubmit: v('accepted') }))).toEqual({
       label: 'first submit accepted',
       tone: 'teal',
     });
     expect(
-      sittingOutcome(
-        mk({}, { submits: 3, firstSubmit: v('wrong_answer'), submitsBeforeAccepted: 2 }),
-      ),
+      outcome(mk({}, { submits: 3, firstSubmit: v('wrong_answer'), submitsBeforeAccepted: 2 })),
     ).toEqual({ label: 'accepted on submit 3', tone: 'gold' });
-    expect(sittingOutcome(mk({}, { submits: 1, firstSubmit: v('wrong_answer') }))).toEqual({
+    expect(outcome(mk({}, { submits: 1, firstSubmit: v('wrong_answer') }))).toEqual({
       label: 'not accepted · 1 submit',
       tone: 'gold',
     });

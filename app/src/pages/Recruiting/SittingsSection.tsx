@@ -69,7 +69,7 @@ export function SittingsSection() {
 }
 
 function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
-  const outcome = sittingOutcome(sitting);
+  const outcome = sittingOutcome(sitting, now);
   const open = sitting.status === 'active';
   const minutes = sittingMinutes(sitting, now);
   return (

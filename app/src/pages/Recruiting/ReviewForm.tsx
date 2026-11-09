@@ -167,7 +167,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       <div className="flex flex-col gap-1">
         <Field
           label="One-liner"
-          placeholder="The idea that cracked it, or what to remember"
+          placeholder="The idea that cracked it"
           value={insight}
           onChange={(e) => setInsight(e.target.value)}
           aria-invalid={insightOver || undefined}

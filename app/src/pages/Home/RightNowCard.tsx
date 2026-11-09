@@ -243,7 +243,10 @@ export function RightNowCard() {
               )}
               <Button
                 size="sm"
+                // A LeetCode rep's open sitting not read yet: wait, or Done would start on the wrong minutes.
+                aria-disabled={heroSitting === undefined || undefined}
                 onClick={async () => {
+                  if (heroSitting === undefined) return;
                   // capture before the timer stops
                   const elapsed = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
                   // A stop that didn't land keeps the timer; its row in the bar below says so, and the

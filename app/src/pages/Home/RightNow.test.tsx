@@ -395,10 +395,21 @@ describe('Right now — a LeetCode sitting', () => {
       tzOffsetMinutes: new Date().getTimezoneOffset(),
     });
     await api.setTaskEstimate(sitting.repTaskId, null, null); // a rep that lost its estimate
+    // Hold the sittings read: until it lands, Done waits (it would start on the task's minutes, not the sitting's).
+    const listSittings = api.listSittings.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    vi.spyOn(api, 'listSittings').mockImplementation((...a) => held.then(() => listSittings(...a)));
     shift = 0;
     renderApp({ api, path: '/' });
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    const done = await screen.findByRole('button', { name: 'Done' });
+    expect(done.getAttribute('aria-disabled')).toBe('true');
+    await user.click(done);
+    expect(screen.queryByLabelText('Actual (min)')).toBeNull();
+    release();
     const link = await screen.findByRole('link', { name: 'End the LeetCode sitting →' });
+    expect(done.getAttribute('aria-disabled')).toBeNull();
     expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect((await screen.findByLabelText<HTMLInputElement>('Actual (min)')).value).toBe('37');

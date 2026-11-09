@@ -261,6 +261,11 @@ describe('the review', () => {
     await user.click(screen.getByRole('button', { name: 'Save review' }));
     expect(save).not.toHaveBeenCalled();
     expect(screen.getAllByText(/too long to save/).length).toBeGreaterThan(0);
+    // Refused by the form's own count (Save held), not by the normalizer after a press.
+    expect(screen.getByRole('button', { name: 'Save review' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('a draft with nothing judged yet says there’s nothing to draft', async () => {

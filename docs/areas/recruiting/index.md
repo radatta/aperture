@@ -199,7 +199,7 @@ one; Mark done ends the sitting through the rep, Cancel writes nothing. On Home,
 open links to that page ("End the LeetCode sitting →"), and its Done prefills from the sitting too, the Roll's
 estimate included; the list is read only while a LeetCode-roll rep is in progress, so an ordinary day costs no
 read. Both Done forms wait for the Rolls before opening — the form copies its estimate once, so it must be the
-Roll's, never the 30-minute fallback.
+Roll's, not the 30-minute fallback (used only when the Rolls can't be read).
 
 ## The shape
 

@@ -5,12 +5,20 @@ import { verdictLabel, verdictTone } from './recruitingHelpers';
 
 // The sitting's Runs and Submits in order, each with its verdict (teal accepted, gold otherwise — never red)
 // and, folded away, LeetCode's own failing case; between them how many times the code was snapshotted.
-export function SittingTimeline({ sitting, events }: { sitting: Sitting; events: SittingEvent[] }) {
+export function SittingTimeline({
+  sitting,
+  events,
+  open,
+}: {
+  sitting: Sitting;
+  events: SittingEvent[];
+  open: boolean; // still taking runs and submits — "yet" only then
+}) {
   const entries = timelineOf(sitting, events);
   if (!entries.some((e) => e.kind === 'judged'))
     return (
       <Text as="p" size="sm" tone="muted">
-        {sitting.status === 'active' ? 'No runs or submits yet.' : 'No runs or submits.'}
+        {open ? 'No runs or submits yet.' : 'No runs or submits.'}
       </Text>
     );
   return (

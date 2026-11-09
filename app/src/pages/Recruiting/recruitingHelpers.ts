@@ -1,4 +1,4 @@
-import { sittingMetrics } from '@aperture/shared';
+import { isSittingOpen, sittingMetrics } from '@aperture/shared';
 import type { LeetcodeVerdict, Sitting } from '@aperture/shared';
 
 // Pure view helpers for the Recruiting page. Everything here is DERIVED from the sitting's fold, and verdict
@@ -30,11 +30,11 @@ export interface SittingOutcome {
   label: string;
   tone: 'teal' | 'gold' | 'muted';
 }
-export function sittingOutcome(s: Sitting): SittingOutcome {
+export function sittingOutcome(s: Sitting, now: number): SittingOutcome {
   const m = sittingMetrics(s);
   const submits = s.summary.submits;
   if (m.firstSubmitAccepted === null)
-    return { label: s.status === 'active' ? 'no submit yet' : 'no submit', tone: 'muted' };
+    return { label: isSittingOpen(s, now) ? 'no submit yet' : 'no submit', tone: 'muted' };
   if (m.firstSubmitAccepted) return { label: 'first submit accepted', tone: 'teal' };
   if (m.submitsBeforeAccepted !== null)
     return { label: `accepted on submit ${m.submitsBeforeAccepted + 1}`, tone: 'gold' };

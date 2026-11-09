@@ -50,12 +50,14 @@ export function useDraftSittingReview() {
 }
 
 // The open sitting a rep stands for, if any — Home's link and Done prefill. Only a LeetCode-roll rep in progress
-// asks, so an ordinary day costs no read; the list it reads is the Sittings page's own cache entry.
+// asks, so an ordinary day costs no read; the list it reads is the Sittings page's own cache entry. `undefined`
+// while that read is still pending (a failed read is `null`: no link, the task's own Done).
 export function useOpenSittingFor(task: Task | null | undefined, now: number) {
   const { data: settings } = useSettings();
   const lcRoll = settings?.leetcodeRollId ?? null;
   const wanted = !!task && !!lcRoll && task.rollId === lcRoll && task.status === 'in_progress';
-  const { data } = useSittings(undefined, { enabled: wanted });
+  const q = useSittings(undefined, { enabled: wanted });
   if (!wanted) return null;
-  return data?.find((s) => s.repTaskId === task.id && isSittingOpen(s, now)) ?? null;
+  if (q.isPending) return undefined; // not known yet — Home's Done waits rather than guess
+  return q.data?.find((s) => s.repTaskId === task.id && isSittingOpen(s, now)) ?? null;
 }
