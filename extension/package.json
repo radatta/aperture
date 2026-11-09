@@ -8,6 +8,7 @@
   },
   "devDependencies": {
     "@aperture/shared": "workspace:*",
+    "@types/jsdom": "30.0.0",
     "@types/node": "22.20.1",
     "jsdom": "30.0.1",
     "typescript": "6.0.3",
