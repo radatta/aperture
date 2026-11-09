@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { tellingWhoToTell } from './cli.ts';
+import { parseSlot, tellingWhoToTell } from './cli.ts';
 import { LockHeld } from './lock.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
@@ -58,5 +58,26 @@ describe('the refused acquire', () => {
     const refused = new LockHeld(holder);
     await expect(tellingWhoToTell(c, () => Promise.reject(refused))).rejects.toBe(refused);
     expect(lines[1]).toMatch(/\[lock\] <your branch> — queued behind flux;/);
+  });
+
+  it('names both holders and caches each slot when both refused', async () => {
+    const { dir, lines, c } = ctx();
+    const lc = { branch: 'lc', sha: 'b'.repeat(40), expiresAt: '2026-10-13T20:20:00.000Z' };
+    const refused = new LockHeld(holder, 'dev', [{ slot: 'devb', holder: lc }]);
+    await expect(tellingWhoToTell(c, () => Promise.reject(refused))).rejects.toBe(refused);
+    expect(lines[0]).toMatch(/^both dev slots are locked — .*`pnpm bot lock wait --any`/);
+    expect(lines[1]).toMatch(/queued behind flux on dev and lc on devb; lock wait --any next/);
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toEqual(holder);
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.devb.json'), 'utf8')).holder).toEqual(lc);
+  });
+});
+
+describe('--slot', () => {
+  it('names a slot, or is misuse', () => {
+    expect(parseSlot(undefined)).toBeUndefined();
+    expect(parseSlot('dev')).toBe('dev');
+    expect(parseSlot('devb')).toBe('devb');
+    for (const bad of ['true', 'prod', 'devc', ''])
+      expect(() => parseSlot(bad)).toThrow(/--slot must be/);
   });
 });

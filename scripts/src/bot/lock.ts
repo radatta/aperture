@@ -1,13 +1,18 @@
-// The dev lock: one feature branch on the dev stack at a time, across every session and machine.
-// `refs/locks/dev` → an annotated tag whose message is the holder JSON. Creating a ref that exists is a 422
-// (probed 2026-10-13), so creation is the atomic acquire. Expiry lives in the message: a crashed holder frees
-// the lock after TTL. Holder = branch (one session per branch). docs/ops/CI-BOT.md → Dev lock.
+// The dev locks: one feature branch per dev slot at a time, across every session and machine. Slot A is
+// `refs/locks/dev`, slot B `refs/locks/devb` (INFRA §2) → an annotated tag whose message is the holder JSON. Creating a
+// ref that exists is a 422 (probed 2026-10-13), so creation is the atomic acquire. Expiry lives in the message: a
+// crashed holder frees the lock after TTL. Holder = branch (one session per branch), and a branch holds at most one
+// slot. docs/ops/CI-BOT.md → Dev lock.
 import type { Api } from './api.ts';
 import { GitHubError } from './api.ts';
 import { OWNER, REPO } from './config.ts';
 import type { Clock } from './dispatch.ts';
 
-export const LOCK_REF = 'locks/dev';
+// = @aperture/shared DEV_SLOTS; the bot runs under plain node with builtins only, so a test pins the copy.
+export const SLOTS = ['dev', 'devb'] as const;
+export type Slot = (typeof SLOTS)[number];
+export const lockRef = (slot: Slot = 'dev') => `locks/${slot}`;
+export const LOCK_REF = lockRef('dev');
 export const TTL_MS = 45 * 60 * 1000;
 const R = `/repos/${OWNER}/${REPO}`;
 
@@ -35,10 +40,10 @@ const asHolder = (v: unknown): Holder | null => {
     : null;
 };
 
-export async function readLock(api: Api): Promise<LockState | null> {
+export async function readLock(api: Api, slot: Slot = 'dev'): Promise<LockState | null> {
   let ref: { object: { sha: string; type: string } };
   try {
-    ref = await api('GET', `${R}/git/ref/${LOCK_REF}`);
+    ref = await api('GET', `${R}/git/ref/${lockRef(slot)}`);
   } catch (err) {
     if (err instanceof GitHubError && err.status === 404) return null;
     throw err;
@@ -52,9 +57,9 @@ export async function readLock(api: Api): Promise<LockState | null> {
   }
 }
 
-async function makeTag(api: Api, holder: Holder): Promise<string> {
+async function makeTag(api: Api, holder: Holder, slot: Slot): Promise<string> {
   const tag = await api<{ sha: string }>('POST', `${R}/git/tags`, {
-    tag: LOCK_REF,
+    tag: lockRef(slot),
     message: JSON.stringify(holder),
     object: holder.sha,
     type: 'commit',
@@ -65,14 +70,24 @@ async function makeTag(api: Api, holder: Holder): Promise<string> {
 const describe = (h: Holder | null) =>
   h ? `${h.branch} @ ${h.sha.slice(0, 7)} until ${h.expiresAt}` : 'an unreadable holder';
 
-// Another live branch holds the lock. Typed, so the CLI can print who to tell before the error line.
+// Another live branch holds the lock. Typed, so the CLI can print who to tell before the error line. `held` lists every
+// slot that refused (both, for a deploy-dev that may take either); `holder` is the first one's.
 export class LockHeld extends Error {
   readonly holder: Holder | null;
-  constructor(holder: Holder | null) {
+  readonly held: { slot: Slot; holder: Holder | null }[];
+  constructor(
+    holder: Holder | null,
+    slot: Slot = 'dev',
+    more: { slot: Slot; holder: Holder | null }[] = [],
+  ) {
+    const held = [{ slot, holder }, ...more];
     super(
-      `dev is locked by ${describe(holder)} — \`pnpm bot lock wait\` (in the background) wakes you when it frees`,
+      held.length > 1
+        ? `both dev slots are locked — ${held.map((x) => `${x.slot} by ${describe(x.holder)}`).join('; ')} — \`pnpm bot lock wait --any\` (in the background) wakes you when one frees`
+        : `${slot} is locked by ${describe(holder)} — \`pnpm bot lock wait${slot === 'dev' ? '' : ` --slot ${slot}`}\` (in the background) wakes you when it frees`,
     );
     this.holder = holder;
+    this.held = held;
   }
 }
 
@@ -82,68 +97,115 @@ export async function acquire(
   branch: string,
   sha: string,
   nowMs: number,
+  slot: Slot = 'dev',
 ): Promise<Holder> {
+  const ref = lockRef(slot);
   const holder: Holder = { branch, sha, expiresAt: new Date(nowMs + TTL_MS).toISOString() };
-  const tagSha = await makeTag(api, holder);
+  const tagSha = await makeTag(api, holder, slot);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await api('POST', `${R}/git/refs`, { ref: `refs/${LOCK_REF}`, sha: tagSha });
+      await api('POST', `${R}/git/refs`, { ref: `refs/${ref}`, sha: tagSha });
       return holder;
     } catch (err) {
       if (!(err instanceof GitHubError && err.status === 422)) throw err;
     }
-    const cur = await readLock(api);
+    const cur = await readLock(api, slot);
     if (!cur) continue; // released between our create and read — try again
     if (cur.holder?.branch === branch) {
-      await api('PATCH', `${R}/git/refs/${LOCK_REF}`, { sha: tagSha, force: true });
+      await api('PATCH', `${R}/git/refs/${ref}`, { sha: tagSha, force: true });
       return holder;
     }
-    if (!isExpired(cur.holder, nowMs)) throw new LockHeld(cur.holder);
+    if (!isExpired(cur.holder, nowMs)) throw new LockHeld(cur.holder, slot);
     // Expired: delete only if it still points at the tag we judged expired (narrows the take-over race).
-    const again = await readLock(api);
+    const again = await readLock(api, slot);
     if (again && again.tagSha === cur.tagSha) {
       // Gone already (another session's take-over deleted it first) is fine — the next create decides.
-      await api('DELETE', `${R}/git/refs/${LOCK_REF}`).catch((err: unknown) => {
+      await api('DELETE', `${R}/git/refs/${ref}`).catch((err: unknown) => {
         if (!(err instanceof GitHubError && (err.status === 404 || err.status === 422))) throw err;
       });
     }
   }
   throw new Error(
-    'lost the race for the dev lock — another session took it; check `pnpm bot lock status`',
+    `lost the race for the ${slot} lock — another session took it; check \`pnpm bot lock status\``,
   );
+}
+
+// The slot this branch holds a lock on (live or not), else null. A branch holds at most one.
+export async function heldSlot(api: Api, branch: string): Promise<Slot | null> {
+  for (const slot of SLOTS) if ((await readLock(api, slot))?.holder?.branch === branch) return slot;
+  return null;
+}
+
+// deploy-dev's acquire (docs/ops/CI-BOT.md → Dev lock): the slot this branch already holds, renewed; else the first
+// free one, A before B; else LockHeld naming every holder. `only` asks for one slot by name (`lock acquire --slot`),
+// and is refused while the branch holds the other — a branch never holds both.
+export async function acquireSlot(
+  api: Api,
+  branch: string,
+  sha: string,
+  nowMs: number,
+  only?: Slot,
+): Promise<{ slot: Slot; holder: Holder }> {
+  const mine = await heldSlot(api, branch);
+  if (mine && only && mine !== only)
+    throw new Error(
+      `${branch} holds the ${mine} lock — \`pnpm bot lock release\` first to move to ${only}`,
+    );
+  if (mine) return { slot: mine, holder: await acquire(api, branch, sha, nowMs, mine) };
+  const refused: { slot: Slot; holder: Holder | null }[] = [];
+  for (const slot of only ? [only] : SLOTS) {
+    try {
+      return { slot, holder: await acquire(api, branch, sha, nowMs, slot) };
+    } catch (err) {
+      if (!(err instanceof LockHeld)) throw err;
+      refused.push({ slot, holder: err.holder });
+    }
+  }
+  const [first, ...more] = refused;
+  throw new LockHeld(first?.holder ?? null, first?.slot, more);
 }
 
 // renew and release are read-then-write too (PATCH force / DELETE): a take-over landing between the read and
 // the write is clobbered. Same window and same backstop as acquire's take-over race (CI-BOT.md → Dev lock).
-export async function renew(api: Api, branch: string, nowMs: number): Promise<Holder> {
-  const cur = await readLock(api);
+export async function renew(
+  api: Api,
+  branch: string,
+  nowMs: number,
+  slot: Slot = 'dev',
+): Promise<Holder> {
+  const cur = await readLock(api, slot);
   if (!cur || cur.holder?.branch !== branch)
     throw new Error(
-      `${branch} does not hold the dev lock (holder: ${cur ? describe(cur.holder) : 'none'})`,
+      `${branch} does not hold the ${slot} lock (holder: ${cur ? describe(cur.holder) : 'none'})`,
     );
   const holder: Holder = { ...cur.holder, expiresAt: new Date(nowMs + TTL_MS).toISOString() };
-  await api('PATCH', `${R}/git/refs/${LOCK_REF}`, { sha: await makeTag(api, holder), force: true });
+  await api('PATCH', `${R}/git/refs/${lockRef(slot)}`, {
+    sha: await makeTag(api, holder, slot),
+    force: true,
+  });
   return holder;
 }
 
 // Holder-only: a session never frees another branch's lock (an expired one is taken over by acquire instead).
-export async function release(api: Api, branch: string): Promise<boolean> {
-  const cur = await readLock(api);
+export async function release(api: Api, branch: string, slot: Slot = 'dev'): Promise<boolean> {
+  const cur = await readLock(api, slot);
   if (!cur) return false;
   if (cur.holder?.branch !== branch)
-    throw new Error(`${branch} does not hold the dev lock (holder: ${describe(cur.holder)})`);
-  await api('DELETE', `${R}/git/refs/${LOCK_REF}`);
+    throw new Error(`${branch} does not hold the ${slot} lock (holder: ${describe(cur.holder)})`);
+  await api('DELETE', `${R}/git/refs/${lockRef(slot)}`);
   return true;
 }
 
-export const formatStatus = (cur: LockState | null, nowMs: number) =>
+export const formatStatus = (cur: LockState | null, nowMs: number, slot: Slot = 'dev') =>
   !cur
-    ? 'dev lock: free'
-    : `dev lock: ${describe(cur.holder)}${isExpired(cur.holder, nowMs) ? ' (EXPIRED — the next acquire takes it over)' : ''}`;
+    ? `${slot} lock: free`
+    : `${slot} lock: ${describe(cur.holder)}${isExpired(cur.holder, nowMs) ? ' (EXPIRED — the next acquire takes it over)' : ''}`;
 
-export const status = async (api: Api, nowMs: number) => formatStatus(await readLock(api), nowMs);
+export const status = async (api: Api, nowMs: number, slot: Slot = 'dev') =>
+  formatStatus(await readLock(api, slot), nowMs, slot);
 
-// --- lock wait: block until another branch's lock frees, expires or the cap passes (CI-BOT.md → Dev lock) ---
+// --- lock wait: block until another branch's lock frees, expires or the cap passes (CI-BOT.md → Dev lock). `slots`
+// watches several: `lock wait --any` returns on the first of either slot to free. ---
 
 export type WaitOutcome = 'free' | 'expired' | 'ours' | 'gave-up';
 export interface WaitOptions {
@@ -151,7 +213,8 @@ export interface WaitOptions {
   pollMs?: number;
   log?: (s: string) => void;
   sessionOf?: (branch: string) => string | undefined; // the holder's board session, for the log line
-  onRead?: (cur: LockState | null) => void; // every successful read (the board's lock cache)
+  onRead?: (cur: LockState | null, slot: Slot) => void; // every successful read (the board's lock cache)
+  slots?: readonly Slot[]; // which locks to watch; slot A by default
 }
 
 export const POLL_MS = 30_000;
@@ -159,9 +222,9 @@ const LOG_EVERY_MS = 5 * 60_000;
 const hhmm = (iso: string) =>
   new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-export function holderLine(h: Holder, nowMs: number, session?: string): string {
+export function holderLine(h: Holder, nowMs: number, session?: string, slot: Slot = 'dev'): string {
   const min = Math.max(0, Math.ceil((Date.parse(h.expiresAt) - nowMs) / 60_000));
-  return `dev locked by ${h.branch} @ ${h.sha.slice(0, 7)} until ${hhmm(h.expiresAt)} (${min} min)${session ? ` — session ${session}` : ''}`;
+  return `${slot} locked by ${h.branch} @ ${h.sha.slice(0, 7)} until ${hhmm(h.expiresAt)} (${min} min)${session ? ` — session ${session}` : ''}`;
 }
 
 // Polls every 30 s, and wakes at the holder's expiry when that comes sooner. Read-only: taking the lock is still
@@ -171,41 +234,56 @@ export async function waitForLock(
   branch: string,
   clock: Clock,
   o: WaitOptions,
-): Promise<{ outcome: WaitOutcome; holder: Holder | null }> {
+): Promise<{ outcome: WaitOutcome; holder: Holder | null; slot: Slot }> {
   const pollMs = o.pollMs ?? POLL_MS;
   const log = o.log ?? (() => undefined);
+  const slots = o.slots ?? ['dev'];
   const deadline = clock.now() + o.maxMs;
   let errors = 0;
-  let last: Holder | null = null;
+  let last: { slot: Slot; holder: Holder } | null = null;
   let loggedExpiry = '';
   let loggedAt = -Infinity;
   for (;;) {
-    let cur: LockState | null | undefined;
+    let reads: { slot: Slot; cur: LockState | null }[] | undefined;
     try {
-      cur = await readLock(api);
+      reads = [];
+      for (const slot of slots) reads.push({ slot, cur: await readLock(api, slot) });
       errors = 0;
     } catch (err) {
+      reads = undefined;
       if (++errors >= 3) throw err;
       log(`lock read failed (${(err as Error).message}) — retrying`);
     }
-    if (cur !== undefined) o.onRead?.(cur);
+    for (const { slot, cur } of reads ?? []) o.onRead?.(cur, slot);
     const now = clock.now();
-    if (cur !== undefined) {
-      if (!cur) return { outcome: 'free', holder: null };
-      if (cur.holder?.branch === branch) return { outcome: 'ours', holder: cur.holder };
-      if (isExpired(cur.holder, now)) return { outcome: 'expired', holder: cur.holder };
-      last = cur.holder;
-      if (last && (last.expiresAt !== loggedExpiry || now - loggedAt >= LOG_EVERY_MS)) {
-        log(`waiting: ${holderLine(last, now, o.sessionOf?.(last.branch))}`);
-        loggedExpiry = last.expiresAt;
+    if (reads) {
+      for (const { slot, cur } of reads) {
+        if (!cur) return { outcome: 'free', holder: null, slot };
+        if (cur.holder?.branch === branch) return { outcome: 'ours', holder: cur.holder, slot };
+        if (isExpired(cur.holder, now)) return { outcome: 'expired', holder: cur.holder, slot };
+      }
+      // Every slot is live and someone else's: watch the one that frees soonest.
+      last = null;
+      for (const { slot, cur } of reads)
+        if (cur?.holder && (!last || cur.holder.expiresAt < last.holder.expiresAt))
+          last = { slot, holder: cur.holder };
+      if (last && (last.holder.expiresAt !== loggedExpiry || now - loggedAt >= LOG_EVERY_MS)) {
+        log(
+          `waiting: ${holderLine(last.holder, now, o.sessionOf?.(last.holder.branch), last.slot)}`,
+        );
+        loggedExpiry = last.holder.expiresAt;
         loggedAt = now;
       }
     }
-    if (now >= deadline) return { outcome: 'gave-up', holder: last };
+    if (now >= deadline)
+      return {
+        outcome: 'gave-up',
+        holder: last?.holder ?? null,
+        slot: last?.slot ?? slots[0] ?? 'dev',
+      };
     // Wake at the holder's expiry only after a good read; after a failed one, a full poll (a GitHub blip at the
     // expiry must not burn the three tries in three seconds).
-    const untilExpiry =
-      cur !== undefined && last ? Date.parse(last.expiresAt) - now + 1000 : pollMs;
+    const untilExpiry = reads && last ? Date.parse(last.holder.expiresAt) - now + 1000 : pollMs;
     await clock.sleep(Math.max(0, Math.min(pollMs, untilExpiry, deadline - now)));
   }
 }
@@ -221,14 +299,32 @@ export function parseWaitMax(v: string | undefined): number {
 
 // The two messages a queued session sends at once, once each (docs/ops/HUB.md → Lock etiquette): the hub always,
 // the holder only when the board names its live session. Printed with the foreground refusal (LockHeld).
-export function queueNotes(branch: string, h: Holder, hub?: string, session?: string): string[] {
-  const who = session ? `${h.branch} (${session})` : h.branch;
+// `held` is every slot that refused: one hub note naming them all, and one note per holder the board can name.
+export function queueNotes(
+  branch: string,
+  held: { slot: Slot; holder: Holder }[],
+  hub?: string,
+  sessionOf: (branch: string) => string | undefined = () => undefined,
+): string[] {
+  const who = held
+    .map(({ slot, holder }) => {
+      const s = sessionOf(holder.branch);
+      return `${holder.branch}${s ? ` (${s})` : ''}${held.length > 1 || slot !== 'dev' ? ` on ${slot}` : ''}`;
+    })
+    .join(' and ');
+  const wait =
+    held.length > 1
+      ? 'lock wait --any'
+      : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
   return [
-    `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}; lock wait next."`,
-    ...(session
-      ? [
-          `SendMessage ${session}: "Queued behind you for the dev lock (${branch}) — release at phase 10 rather than letting the TTL run; no rush."`,
-        ]
-      : []),
+    `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}; ${wait} next."`,
+    ...held.flatMap(({ slot, holder }) => {
+      const s = sessionOf(holder.branch);
+      return s
+        ? [
+            `SendMessage ${s}: "Queued behind you for the ${slot} lock (${branch}) — release at phase 10 rather than letting the TTL run; no rush."`,
+          ]
+        : [];
+    }),
   ];
 }

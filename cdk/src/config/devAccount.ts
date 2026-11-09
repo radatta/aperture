@@ -1,8 +1,13 @@
 // The dev account's fixed names (INFRA §2): shared by the management-account kill path (org-stack.ts), the dev
 // account's alarms (dev-guard-stack.ts) and their tests, so a rename can't split them.
+import { DEV_SLOTS } from '@aperture/shared';
+
 export const DEV_REGION = 'us-west-1';
-// The dev functions with a public Function URL — the kill switch locks these to AWS_IAM.
-export const DEV_URL_FUNCTIONS = ['aperture-bff-dev', 'aperture-mcp-dev'];
+// The dev functions with a public Function URL, on every dev slot — the kill switch locks these to AWS_IAM. Named,
+// not discovered: the freeze denies the bot lane a new URL, so the list is complete by construction (a test pins it).
+export const DEV_URL_FUNCTIONS = DEV_SLOTS.flatMap((slot) =>
+  ['bff', 'mcp'].map((fn) => `aperture-${fn}-${slot}`),
+);
 // Alarms named with this prefix trip the kill; the SCP keeps everything but the break-glass role away from them.
 export const KILL_ALARM_PREFIX = 'aperture-kill-';
 // The dev-account role EventBridge assumes to carry a kill alarm to the management account's bus.

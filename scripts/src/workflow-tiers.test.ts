@@ -35,23 +35,26 @@ describe('deploy.yml classifies per stage', () => {
       .split('\n')
       .map((l) => l.trim());
     for (const line of [
-      'mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA")',
+      'mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot dev)',
+      'mode_devb=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot devb)',
       'mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")',
-      '{ echo "mode_dev=$mode_dev"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"',
+      '{ echo "mode_dev=$mode_dev"; echo "mode_devb=$mode_devb"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"',
       'mode_dev: ${{ steps.detect.outputs.mode_dev }}',
+      'mode_devb: ${{ steps.detect.outputs.mode_devb }}',
       'mode_prod: ${{ steps.detect.outputs.mode_prod }}',
     ])
       expect(lines, line).toContain(line);
-    expect(lines.filter((l) => !l.startsWith('#') && l.includes('deploy-base.ts'))).toHaveLength(2);
+    expect(lines.filter((l) => !l.startsWith('#') && l.includes('deploy-base.ts'))).toHaveLength(3);
   });
 
   it('asks about the two environments deploy-stage runs main in', () => {
     expect(stage).toContain(
-      "environment: ${{ inputs.lane == 'devmain' && 'dev-main' || inputs.stage }}",
+      "environment: ${{ inputs.lane == 'devmain' && 'dev-main' || (contains(fromJSON('[\"dev\",\"devb\"]'), inputs.stage) && 'dev' || inputs.stage) }}",
     );
-    expect(job(deploy, 'deploy-dev')).toContain(
-      "lane: ${{ github.ref == 'refs/heads/main' && 'devmain' || '' }}",
-    );
+    for (const j of ['deploy-dev', 'deploy-devb'])
+      expect(job(deploy, j)).toContain(
+        "lane: ${{ github.ref == 'refs/heads/main' && 'devmain' || '' }}",
+      );
     expect(job(deploy, 'deploy-prod')).not.toContain('lane:');
   });
 
@@ -60,13 +63,23 @@ describe('deploy.yml classifies per stage', () => {
     expect(job(deploy, 'deploy-prod')).toContain('mode: ${{ needs.changes.outputs.mode_prod }}');
     expect(job(deploy, 'deploy-dev')).not.toContain('mode_prod');
     expect(job(deploy, 'deploy-prod')).not.toContain('mode_dev');
+    // devb deploys only a shape change, and always in full; it never gates prod.
+    expect(job(deploy, 'deploy-devb')).toContain(
+      "if: github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full'",
+    );
+    expect(job(deploy, 'deploy-devb')).toContain('mode: full');
+    expect(job(deploy, 'deploy-devb')).toContain('stage: devb');
+    expect(job(deploy, 'deploy-prod')).not.toContain('deploy-devb');
+    expect(job(deploy, 'notify')).toContain(
+      'needs: [check, changes, deploy-dev, deploy-devb, deploy-prod]',
+    );
     expect(deploy).not.toContain('outputs.mode }}');
   });
 
   it('assigns and validates both modes before writing, so a crash fails the job instead of emptying an output', () => {
     const changes = job(deploy, 'changes');
     const lines = changes.split('\n').map((l) => l.trim());
-    expect(lines).toContain('for mode in "$mode_dev" "$mode_prod"; do');
+    expect(lines).toContain('for mode in "$mode_dev" "$mode_devb" "$mode_prod"; do');
     expect(lines).toContain(
       'timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full` well inside this',
     );
@@ -97,11 +110,15 @@ describe('the dispatched lane exercises the same lookup', () => {
 
   it('runs the script for both environments, on the commit under test', () => {
     expect(
-      [...verify.matchAll(/=\$\(node scripts\/src\/deploy-base\.ts (\S+) "\$SHA"\)/g)].map(
-        (m) => m[1],
-      ),
-    ).toEqual(['dev-main', 'prod']);
-    expect(verify).toContain('If merged now: dev-main=$merged_dev prod=$merged_prod');
+      [
+        ...verify.matchAll(
+          /=\$\(node scripts\/src\/deploy-base\.ts (\S+) "\$SHA"( --slot \S+)?\)/g,
+        ),
+      ].map((m) => `${m[1]}${m[2] ?? ''}`),
+    ).toEqual(['dev-main --slot dev', 'dev-main --slot devb', 'prod']);
+    expect(verify).toContain(
+      'If merged now: dev-main=$merged_dev devb=$merged_devb prod=$merged_prod',
+    );
   });
 
   it('has the history to diff, and classifies a dispatch by where a move came from too', () => {

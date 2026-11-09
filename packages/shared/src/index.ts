@@ -27,6 +27,7 @@ export * from './rpc';
 export * from './finance';
 export * from './financeFixtures';
 export * from './plaidTypes';
+export * from './stage';
 // NB: ./contractTests is intentionally NOT re-exported here — it imports vitest and is consumed only
 // by test files via the '@aperture/shared/contract' subpath, so it never lands in an app/Lambda bundle.
 

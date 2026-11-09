@@ -13,17 +13,17 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 
 ## Use it
 
-| Want                              | Run                                                                                                                                                                                              |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                                |
-| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                           |
-| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_); another branch holds it → `pnpm bot lock wait` in the background. The board shows the holder (_Dev lock line_) |
-| Who is the hub, is it up          | `board.sh hub` — the name from `scripts/board/hub.json` and whether a live session by that name is on the board (`docs/ops/HUB.md`)                                                              |
-| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                              |
-| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)   |
-| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                          |
-| The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                            |
-| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                           |
+| Want                              | Run                                                                                                                                                                                                                                 |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                                                                   |
+| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                                                              |
+| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes a free slot's lock, `refs/locks/dev` or `refs/locks/devb` (`docs/ops/CI-BOT.md` → _Dev slots_); both held → `pnpm bot lock wait --any` in the background. The board shows the holders (_Dev lock line_) |
+| Who is the hub, is it up          | `board.sh hub` — the name from `scripts/board/hub.json` and whether a live session by that name is on the board (`docs/ops/HUB.md`)                                                                                                 |
+| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                                                                 |
+| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)                                      |
+| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                                                             |
+| The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                                                               |
+| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                                                              |
 
 Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
 pids 315/4096 · dev: flux`; `dev:` is the branch holding a live `refs/locks/dev`) —
@@ -172,7 +172,10 @@ by the next acquire and by `gc`.
 
 `board.sh status`, the SessionStart hook and the status line's `dev:` show the real `refs/locks/dev`
 (`docs/ops/CI-BOT.md` → _Dev lock_), from one cache, `board/devlock.json`
-(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?}`). Two writers:
+(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?}`); slot B's
+`refs/locks/devb` has its own, `board/devlock.devb.json`, the same shape (_Dev slots_). `devlock.sh line` prints
+slot A as before, then ` · devb: free` / `· devb: <branch> (<session>) until HH:MM` once slot B has a cache; the
+status line's `dev:` and `board.sh json` still read slot A only. Two writers, each for both files:
 
 - **`scripts/board/devlock.sh refresh`** peeks read-only with the container's own credential —
   `git ls-remote origin refs/locks/dev`, then `gh api …/git/tags/<sha>` for the holder — each call under

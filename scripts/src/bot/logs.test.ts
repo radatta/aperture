@@ -25,7 +25,16 @@ describe('dev logs request', () => {
       '/aws/lambda/aperture-mcp-dev',
       '/aws/lambda/aperture-finance-sync-dev',
     ]);
-    for (const name of Object.values(LOG_GROUPS)) expect(name).toMatch(/-dev$/);
+    for (const name of Object.values(LOG_GROUPS)) expect(name).toMatch(/-devb?$/);
+  });
+
+  it('covers four functions on each dev slot, slot B keyed with -devb', () => {
+    const fns = ['bff', 'mcp', 'finance-sync', 'push-dispatch'];
+    expect(Object.keys(LOG_GROUPS).sort()).toEqual([...fns, ...fns.map((f) => `${f}-devb`)].sort());
+    expect(req({ groups: 'bff-devb,push-dispatch' }).groupNames).toEqual([
+      '/aws/lambda/aperture-bff-devb',
+      '/aws/lambda/aperture-push-dispatch-dev',
+    ]);
   });
 
   it.each(['bff-prod', '/aws/lambda/aperture-bff-prod', 'aperture-bff-prod', '*', 'bff,prod'])(

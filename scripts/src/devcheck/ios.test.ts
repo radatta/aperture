@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fakeClock } from '../bot/fakes.ts';
 import { memFs } from '../mailroom/fakes.ts';
 import { IosAssert, type SimResult } from '../mailroom/sim.ts';
-import { IOS_NOTE, createIos } from './ios';
+import { IOS_NOTE, SIM_SLOT_A_ONLY, createIos } from './ios';
 import { NeedsYou, needsYouReason } from './scenario';
 
 const HJ = '/repo/.hostjobs';
@@ -12,6 +12,7 @@ const SHA = 'a'.repeat(40);
 function mac(
   answer: (job: { id: string; params: { steps: { op: string }[] } }) => Partial<SimResult> | null,
   repoVersion?: () => string,
+  slot?: 'dev' | 'devb',
 ) {
   const fs = memFs([`${HJ}/inbox`]);
   const submitted: string[] = [];
@@ -53,6 +54,7 @@ function mac(
     copy,
     log: (s) => void logs.push(s),
     ...(repoVersion ? { repoVersion } : {}),
+    ...(slot ? { slot } : {}),
   });
   return { ios, copy, submitted, logs, client: ios.forScenario('ios-standalone') };
 }
@@ -98,6 +100,17 @@ describe('ctx.ios', () => {
     expect(needsYouReason(second)).toBe(`${IOS_NOTE}: MAC_UNREACHABLE`);
     expect(submitted).toHaveLength(1);
     expect(ios.unavailable()).toBe('MAC_UNREACHABLE');
+  });
+
+  it("on devb every iOS step is needs you, and nothing goes to the Mac (the sim is slot A's)", async () => {
+    const { client, submitted, ios } = mac(() => ({}), undefined, 'devb');
+    const first = await caught(client.run('launch', [{ op: 'launch' }]));
+    expect(needsYouReason(first)).toBe(`${IOS_NOTE}: ${SIM_SLOT_A_ONLY}`);
+    expect(submitted).toEqual([]);
+    expect(ios.unavailable()).toBe(SIM_SLOT_A_ONLY);
+    const onA = mac(() => ({ buildsSeen: ['aaaaaaa'] }), undefined, 'dev');
+    await onA.client.run('launch', [{ op: 'launch' }]);
+    expect(onA.submitted).toHaveLength(1);
   });
 
   it('no soft keyboard is needs you for that step only: the next plan still goes to the Mac', async () => {

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isDevSlot } from '@aperture/shared';
 
 // The three per-stage credentials that are plain Lambda env vars, NOT Secrets Manager (INFRA §10) — single-user,
 // tiny blast radius: the CloudFront→Lambda origin secret, the LeetCode extension's device token, and the MCP
@@ -40,7 +41,9 @@ export function stageSecret(
   if (env.GITHUB_ACTIONS) {
     const where =
       stage === 'prod' ? 'a secret in the prod GitHub environment' : 'a repository secret';
-    throw new Error(`${name} is empty in CI — set ${kind}_${stage.toUpperCase()} (${where})`);
+    throw new Error(
+      `${name} is empty in CI — set ${kind}_${isDevSlot(stage) ? 'DEV' : stage.toUpperCase()} (${where})`,
+    );
   }
   const dir = opts.dir ?? SECRETS_DIR;
   const file = `${dir}/${FILE[kind]}.${stage}`;

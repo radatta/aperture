@@ -52,9 +52,9 @@ describe('liveWrites stamps by stage', () => {
   const dead = row('task#1', T);
   const raw = (doc: InMemoryDoc, SK = 'task#1') => doc.get('u#a', SK);
 
-  it('dev stamps put, putIf and batchPut', async () => {
+  it.each(['dev', 'devb'])('%s stamps put, putIf and batchPut', async (stage) => {
     const doc = new InMemoryDoc();
-    const writes = liveWrites(doc, 'dev');
+    const writes = liveWrites(doc, stage);
     await writes.put(dead);
     await writes.putIf(row('task#2', T), null);
     await writes.batchPut([row('task#3', T), row('task#4', null)]);

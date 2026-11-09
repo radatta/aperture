@@ -1,7 +1,8 @@
 // The dev check's reason codes — one home. A FAIL report lists the codes it hit; docs/ops/DEV-CHECK.md says
 // what each means and what to do about it.
 export const REASON_CODES = [
-  'ENV_MISSING', // .secrets/devcheck.dev.env absent or missing a key
+  'ENV_MISSING', // .secrets/devcheck.<slot>.env absent or missing a key
+  'SLOT_UNKNOWN', // the dev locks couldn't be read, so the run can't tell which slot its branch deployed to
   'PW_MISSING', // Playwright not installed at ~/pw (or DEVCHECK_PW_ROOT)
   'DEPLOY_NOT_FOUND', // no dev deploy run for the expected SHA
   'DEPLOY_FAILED', // the run for that SHA did not succeed

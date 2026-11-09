@@ -4,6 +4,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { isDevSlot } from '@aperture/shared';
 
 export const DEV_MAX_READ_UNITS = 100;
 export const DEV_MAX_WRITE_UNITS = 50;
@@ -33,13 +34,12 @@ export class ApertureDataStack extends Stack {
     super(scope, id, props);
     const { stage, allowedOrigins } = props;
 
-    // dev's on-demand ceiling (INFRA §11): caps what branch code in the dev account can spend on the table, and
+    // A dev slot's on-demand ceiling (INFRA §11): caps what branch code in the dev account can spend on the table, and
     // the dev account's SCP denies UpdateTable, so it can't lift the cap. Prod stays uncapped — no agent reaches
     // it, and a cap there would only throttle a large finance sync.
-    const devThroughput =
-      stage === 'dev'
-        ? { maxReadRequestUnits: DEV_MAX_READ_UNITS, maxWriteRequestUnits: DEV_MAX_WRITE_UNITS }
-        : {};
+    const devThroughput = isDevSlot(stage)
+      ? { maxReadRequestUnits: DEV_MAX_READ_UNITS, maxWriteRequestUnits: DEV_MAX_WRITE_UNITS }
+      : {};
     // Single table (TECH §2.4): PK/SK strings, on-demand, PITR (35-day backup), RETAIN.
     this.table = new dynamodb.Table(this, 'Table', {
       tableName: `aperture-${stage}`,
@@ -49,7 +49,7 @@ export class ApertureDataStack extends Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
       ...devThroughput,
-      // TTL on `expiresAt`, both stages (TECH §2.3). Dev's Lambda stamps it on tombstones; on prod the only
+      // TTL on `expiresAt`, both stages (TECH §2.3). the dev slots' Lambda stamps it on tombstones; on prod the only
       // rows that ever carry it are a LeetCode sitting's raw bulk — snapshots, replay, submit details —
       // 14 days past the sitting's ingest window (docs/areas/recruiting). Enabling TTL is free, and so are
       // its deletes.

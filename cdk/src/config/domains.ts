@@ -11,6 +11,7 @@ export interface DomainConfig {
 
 const DOMAIN_BY_STAGE: Record<string, string> = {
   dev: 'dev.aperture.rahuldatta.dev',
+  devb: 'devb.aperture.rahuldatta.dev',
   prod: 'aperture.rahuldatta.dev',
 };
 

@@ -1,11 +1,12 @@
-// The board's copy of the dev lock (docs/ops/SESSION-BOARD.md → Dev lock line): every lock read or change the bot
-// makes is written to <board>/devlock.json, so `board.sh status` and the SessionStart hook show the real
-// refs/locks/dev without a token. scripts/board/devlock.sh writes the same shape from its own read-only peek.
+// The board's copy of the dev locks (docs/ops/SESSION-BOARD.md → Dev lock line): every lock read or change the bot
+// makes is written to <board>/devlock.json (slot A, refs/locks/dev — the v1 file every reader knows) or
+// <board>/devlock.devb.json (slot B, refs/locks/devb, the same shape), so `board.sh status` and the SessionStart hook
+// show the real locks without a token. scripts/board/devlock.sh writes the same shape from its own read-only peek.
 // Best effort: no board dir (CI, the Mac) or any write error → nothing, never a failed bot command.
 import { existsSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { sessionNames } from '../board/sessions.ts';
-import type { Holder } from './lock.ts';
+import type { Holder, Slot } from './lock.ts';
 import type { Run } from './sh.ts';
 
 // Shape shared with devlock.sh. Expiry is never judged here: readers compute it at read time.
@@ -28,9 +29,17 @@ export function boardDir(run: Run): string | null {
   }
 }
 
-export function writeLockCache(dir: string | null, holder: Holder | null, nowMs: number): void {
+export const lockCacheFile = (slot: Slot = 'dev') =>
+  slot === 'dev' ? 'devlock.json' : `devlock.${slot}.json`;
+
+export function writeLockCache(
+  dir: string | null,
+  holder: Holder | null,
+  nowMs: number,
+  slot: Slot = 'dev',
+): void {
   if (!dir || !existsSync(dir)) return;
-  const file = join(dir, 'devlock.json');
+  const file = join(dir, lockCacheFile(slot));
   try {
     const body: LockCache = { v: 1, t: new Date(nowMs).toISOString(), source: 'bot', holder };
     writeFileSync(`${file}.tmp.${process.pid}`, JSON.stringify(body) + '\n');

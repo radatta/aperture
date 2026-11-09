@@ -305,4 +305,74 @@ describe('currentBase', () => {
       await currentBase(world([mainRun(T(10))], [dispatch(SHA, T(11))], [devPush(T(9))])),
     ).toBe(SHA);
   });
+
+  // Slot B: its own jobs (deploy.yml's `deploy-devb`, deploy-dev.yml's `deploy-b`), and a main job's base is the sha it
+  // deployed — main's lane moves devb only on a shape change, so devb's code may be older than main's head.
+  describe('on slot B', () => {
+    const mainB = (sha: string, at: string, conclusion = 'success'): [Partial<Run>, J[]] => [
+      { display_title: 'x', head_sha: sha },
+      [
+        job('deploy-dev / deploy', 'success', at, 'completed', [
+          { name: 'Deploy stacks', conclusion: 'success' },
+        ]),
+        job('deploy-devb / deploy', conclusion, at, 'completed', [
+          { name: 'Deploy stacks', conclusion: conclusion === 'success' ? 'success' : 'failure' },
+        ]),
+      ],
+    ];
+    const mainNoB = (sha: string, at: string): [Partial<Run>, J[]] => [
+      { display_title: 'x', head_sha: sha },
+      [job('deploy-dev / deploy', 'success', at), job('deploy-devb', 'skipped', null)],
+    ];
+    const dispatchB = (sha: string, at: string, conclusion = 'success'): [Partial<Run>, J[]] => [
+      { display_title: deployTitle(sha, 'k') },
+      [
+        job('verify', 'success', at),
+        job('deploy', 'skipped', null),
+        job('deploy-b / deploy', conclusion, at),
+      ],
+    ];
+    const A = 'a'.repeat(40);
+    const B = 'b'.repeat(40);
+    const M = 'c'.repeat(40);
+
+    it('is unknown (a full deploy) before devb has ever been deployed', async () => {
+      expect(await currentBase(world([mainNoB(M, T(10))], [dispatch(A, T(11))]), 'devb')).toBe(
+        'unknown',
+      );
+    });
+
+    it("takes the sha main's devb job deployed, not main's head", async () => {
+      expect(
+        await currentBase(world([mainNoB('d'.repeat(40), T(12)), mainB(M, T(10))], []), 'devb'),
+      ).toBe(M);
+    });
+
+    it("takes the newest devb dispatch's sha, ignoring slot A's dispatches", async () => {
+      expect(
+        await currentBase(
+          world([mainB(M, T(9))], [dispatch(A, T(12)), dispatchB(B, T(11))]),
+          'devb',
+        ),
+      ).toBe(B);
+      // and slot A ignores devb's
+      expect(
+        await currentBase(
+          world([mainB(M, T(9))], [dispatchB(B, T(12)), dispatch(A, T(11))]),
+          'dev',
+        ),
+      ).toBe(A);
+    });
+
+    it('is unknown after a failed devb deploy', async () => {
+      expect(await currentBase(world([mainB(M, T(10), 'failure')], []), 'devb')).toBe('unknown');
+      expect(await currentBase(world([], [dispatchB(B, T(10), 'failure')]), 'devb')).toBe(
+        'unknown',
+      );
+    });
+
+    it('never reads a `dev` branch push for devb', async () => {
+      expect(await currentBase(world([mainB(M, T(9))], [], [mainRun(T(12))]), 'devb')).toBe(M);
+    });
+  });
 });

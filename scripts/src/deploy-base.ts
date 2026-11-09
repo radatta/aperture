@@ -15,7 +15,13 @@
 //   list exhausted, API error, a shape we can't read → unknown
 // Unknown → full, always: a wrong `full` costs CI minutes, a wrong skip leaves a stage stale.
 //
-// Run: `node scripts/src/deploy-base.ts <environment> <head sha>` prints the tier on stdout, the reasoning on stderr,
+// Both dev slots record in `dev-main` (one GitHub environment, INFRA §2), told apart by job name: deploy.yml's
+// `deploy-devb` is slot B's, every other job slot A's (older records predate slot B). `--slot` walks one slot's records
+// only, so a devb deploy is never read as dev's base or the other way round. Slot B's main lane deploys only a shape
+// change (cdk/ or the lockfile, shapeModeFor): its code moves with every dispatch, but the freeze refuses a branch whose
+// shape devb doesn't already run (docs/ops/CI-BOT.md → Dev slots).
+//
+// Run: `node scripts/src/deploy-base.ts <environment> <head sha> [--slot dev|devb]` prints the tier on stdout, the reasoning on stderr,
 // with GITHUB_TOKEN (deployments: read, actions: read) and GITHUB_REPOSITORY in the env. API trouble still prints a
 // tier; only misuse exits non-zero. Same constraint as classify-changes: CI runs this with no install, so erasable
 // syntax, and only node: builtins past the two relative modules below (`import type` is erased; bot/api.ts imports
@@ -32,8 +38,14 @@ interface Status {
   log_url?: string;
 }
 interface JobSteps {
+  name?: string;
   steps?: { name: string; conclusion: string | null }[];
 }
+
+export type Slot = 'dev' | 'devb';
+export const SLOTS: readonly Slot[] = ['dev', 'devb']; // = @aperture/shared DEV_SLOTS (no imports here; a test pins it)
+export const slotOfJob = (name: string | undefined): Slot =>
+  (name ?? '').startsWith('deploy-devb') ? 'devb' : 'dev';
 
 // Only the latest state decides, looking through `inactive`: GitHub lays that over a deployment it superseded.
 export function outcome(statuses: Status[]): 'success' | 'failure' | 'running' {
@@ -60,6 +72,7 @@ export async function servedBy(
   repo: string,
   environment: string,
   log: (line: string) => void = () => undefined,
+  slot?: Slot,
 ): Promise<Base> {
   const unknown = (why: string): Base => {
     log(`::warning::${environment}: unknown, so full — ${why}`); // an annotation: a walk that always fails shows up
@@ -76,11 +89,28 @@ export async function servedBy(
         'GET',
         `/repos/${repo}/deployments/${id}/statuses?per_page=20`,
       );
+      // A slot walk reads the record's job first: the other slot's record — failed, running or done — isn't this one's.
+      let seen: { id: string; job: JobSteps } | undefined;
+      if (slot) {
+        const anyId = jobIdOf(statuses.find((s) => s.log_url)?.log_url);
+        if (!anyId && slot === 'devb') return unknown(`deployment ${id} at ${sha} names no job`);
+        if (anyId) {
+          seen = {
+            id: anyId,
+            job: await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${anyId}`),
+          };
+          if (slotOfJob(seen.job.name) !== slot) continue;
+        }
+      }
       const state = outcome(statuses);
       if (state !== 'success') return unknown(`deployment ${id} at ${sha} is ${state}`);
       const jobId = jobIdOf(statuses.find((s) => s.state === 'success')?.log_url);
       if (!jobId) return unknown(`deployment ${id} at ${sha} names no job`);
-      const tier = deployedTier(await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${jobId}`));
+      const tier = deployedTier(
+        seen?.id === jobId
+          ? seen.job
+          : await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${jobId}`),
+      );
       if (tier === 'unknown') return unknown(`job ${jobId} at ${sha} has unreadable steps`);
       log(`${environment}: ${sha} deployed ${tier}`);
       if (tier === 'app') front ??= sha;
@@ -105,6 +135,24 @@ export function modeFor(
   try {
     if (classify(diff(base.infra, head)) === 'full') return 'full';
     return classify(diff(base.front, head));
+  } catch (err) {
+    log(`diff failed, so full — ${(err as Error).message}`);
+    return 'full';
+  }
+}
+
+// Slot B's main lane: full only when the shape moved since devb's last full deploy (a cdk/ change, or the lockfile —
+// an aws-cdk-lib bump), else none. Unknown or a failed diff → full, as everywhere.
+export const SHAPE_PATHS = (p: string) => p.startsWith('cdk/') || p === 'pnpm-lock.yaml';
+export function shapeModeFor(
+  base: Base,
+  head: string,
+  diff: Diff,
+  log: (line: string) => void = () => undefined,
+): 'full' | 'none' {
+  if (base === 'unknown') return 'full';
+  try {
+    return diff(base.infra, head).some(SHAPE_PATHS) ? 'full' : 'none';
   } catch (err) {
     log(`diff failed, so full — ${(err as Error).message}`);
     return 'full';
@@ -148,25 +196,30 @@ export interface Deps {
 
 // Returns the exit code. Only misuse is non-zero; `write` runs once, with the tier and nothing else.
 export async function run({ argv, env, fetchImpl, diff, write, log, requestMs, walkMs }: Deps) {
-  const [environment, head] = argv;
+  const [environment, head, flag, slotArg] = argv;
   const { GITHUB_TOKEN: token, GITHUB_REPOSITORY: repo } = env;
+  const slot = flag === '--slot' ? (SLOTS.find((x) => x === slotArg) ?? null) : undefined;
   if (
     !environment ||
     !head ||
     !/^[a-z-]+$/.test(environment) ||
     !/^[0-9a-f]{40}$/.test(head) ||
+    (flag !== undefined && !slot) ||
+    argv.length > 4 ||
+    (slot && environment !== 'dev-main') ||
     !token ||
     !repo
   ) {
     log(
-      'usage: deploy-base.ts <environment> <40-hex head>, with GITHUB_TOKEN and GITHUB_REPOSITORY set',
+      'usage: deploy-base.ts <environment> <40-hex head> [--slot dev|devb (dev-main only)], with GITHUB_TOKEN and GITHUB_REPOSITORY set',
     );
     return 1;
   }
   const api = makeApi(token, withTimeout(fetchImpl, requestMs, walkMs));
-  const base = await servedBy(api, repo, environment, log);
-  const mode = modeFor(base, head, diff, log);
-  log(`${environment}: base ${JSON.stringify(base)} → ${mode}`);
+  const base = await servedBy(api, repo, environment, log, slot ?? undefined);
+  const mode =
+    slot === 'devb' ? shapeModeFor(base, head, diff, log) : modeFor(base, head, diff, log);
+  log(`${environment}${slot ? ` ${slot}` : ''}: base ${JSON.stringify(base)} → ${mode}`);
   write(mode);
   return 0;
 }

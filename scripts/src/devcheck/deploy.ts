@@ -2,7 +2,7 @@
 // succeeded (gh), then the edge serves index.html with that SHA in its build marker (fetch, no service
 // worker involved). A branch reaches dev only through `pnpm bot deploy-dev` (deploy-dev.yml) since dev-cutover. Its
 // run is matched by its run name, `deploy-dev <sha> <key>`: a main-ref dispatch's headSha is main's, not the SHA.
-import { DEV_ORIGIN } from './config';
+import { slotOrigin } from './config';
 import { DevcheckError } from './errors';
 
 export interface DeployRun {
@@ -31,7 +31,7 @@ export function parseMarker(html: string): string | undefined {
 
 export interface DeployDeps {
   listRuns: () => Promise<DeployRun[]>; // gh run list over deploy-dev.yml
-  fetchShell: () => Promise<string>; // GET DEV_ORIGIN/ with no-store
+  fetchShell: () => Promise<string>; // GET the slot's origin / with no-store
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   log: (msg: string) => void;
@@ -111,8 +111,8 @@ export async function waitForDeploy(
       throw new DevcheckError(
         'DEPLOY_TIMEOUT',
         fetchError
-          ? `${DEV_ORIGIN} unreachable: ${fetchError}`
-          : `${DEV_ORIGIN} serves build ${marker ?? 'none'}, not ${sha.slice(0, 7)}`,
+          ? `${slotOrigin()} unreachable: ${fetchError}`
+          : `${slotOrigin()} serves build ${marker ?? 'none'}, not ${sha.slice(0, 7)}`,
       );
     await deps.sleep(5_000);
   }

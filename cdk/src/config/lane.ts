@@ -1,4 +1,5 @@
 import { DefaultStackSynthesizer } from 'aws-cdk-lib';
+import { isDevSlot } from '@aperture/shared';
 import { DEVMAIN_QUALIFIER } from './devAccount';
 
 export type Lane = '' | typeof DEVMAIN_QUALIFIER;
@@ -10,7 +11,7 @@ export function laneFor(stage: string, raw = process.env.APERTURE_DEPLOY_LANE ??
   const lane = raw.trim();
   if (lane !== '' && lane !== DEVMAIN_QUALIFIER)
     throw new Error(`APERTURE_DEPLOY_LANE must be empty or '${DEVMAIN_QUALIFIER}', got '${lane}'`);
-  if (lane && stage !== 'dev')
+  if (lane && !isDevSlot(stage))
     throw new Error(`APERTURE_DEPLOY_LANE is dev-only, but the stage is '${stage}'`);
   return lane;
 }

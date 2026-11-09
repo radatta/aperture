@@ -37,6 +37,7 @@ jobs:
       actions: read # the recorded job's steps: what that deployment actually deployed
     outputs:
       mode_dev: ${{ steps.detect.outputs.mode_dev }}
+      mode_devb: ${{ steps.detect.outputs.mode_devb }}
       mode_prod: ${{ steps.detect.outputs.mode_prod }}
     steps:
       - uses: actions/checkout@v7
@@ -58,13 +59,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           node --version
-          mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA")
+          mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot dev)
+          # Slot B: full only on a shape change since its last main deploy (cdk/ or the lockfile), else none.
+          mode_devb=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot devb)
           mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")
-          for mode in "$mode_dev" "$mode_prod"; do
+          for mode in "$mode_dev" "$mode_devb" "$mode_prod"; do
             case "$mode" in none|app|full) ;; *) echo "::error::classifier returned '$mode'"; exit 1 ;; esac
           done
-          echo "Deploy modes: dev-main=$mode_dev prod=$mode_prod"
-          { echo "mode_dev=$mode_dev"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"
+          echo "Deploy modes: dev-main=$mode_dev devb=$mode_devb prod=$mode_prod"
+          { echo "mode_dev=$mode_dev"; echo "mode_devb=$mode_devb"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"
 
   deploy-dev:
     needs: [check, changes]
@@ -84,6 +87,33 @@ jobs:
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEV }}
       device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
+    secrets:
+      origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
+      device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
+      agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
+
+  # Slot B (devb, the dev account's second stack — INFRA §2) through the same freeze-exempt lane, only when a merge
+  # changed its shape: a dispatch onto devb is accepted only if devb already runs main's shape, and every dispatch
+  # brings devb's code to its branch anyway (docs/ops/CI-BOT.md → Dev slots). Parallel to deploy-dev and never
+  # gating prod; skipped otherwise (a skipped job bills nothing). The job name is a contract: deploy-base.ts and the
+  # bot's currentBase tell devb's records by it.
+  deploy-devb:
+    needs: [check, changes]
+    if: github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full'
+    permissions:
+      id-token: write
+      contents: read
+      deployments: read # deploy-stage's job declares it; a caller granting less fails the whole run at startup
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      stage: devb
+      mode: full
+      # The same lane guard as deploy-dev's, though the job's `if:` already stops anything but a main push.
+      lane: ${{ github.ref == 'refs/heads/main' && 'devmain' || '' }}
+      role_arn: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_DEV_MAIN || vars.AWS_DEPLOY_ROLE_DEV }}
+      aws_region: ${{ vars.AWS_REGION }}
+      cert_arn: ${{ vars.CERT_ARN_DEVB }}
+      device_user_id: '' # devb has no finance schedule
     secrets:
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
@@ -115,7 +145,7 @@ jobs:
   # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
   # until the secret is set, so it's safe to land before the topic exists.
   notify:
-    needs: [check, changes, deploy-dev, deploy-prod]
+    needs: [check, changes, deploy-dev, deploy-devb, deploy-prod]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -125,20 +155,22 @@ jobs:
           CHECK_RESULT: ${{ needs.check.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           DEV_RESULT: ${{ needs.deploy-dev.result }}
+          DEVB_RESULT: ${{ needs.deploy-devb.result }}
           PROD_RESULT: ${{ needs.deploy-prod.result }}
           MODE_DEV: ${{ needs.changes.outputs.mode_dev }}
+          MODE_DEVB: ${{ needs.changes.outputs.mode_devb }}
           MODE_PROD: ${{ needs.changes.outputs.mode_prod }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  modes=dev:$MODE_DEV prod:$MODE_PROD  $SHA"
+          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT devb=$DEVB_RESULT prod=$PROD_RESULT  modes=dev:$MODE_DEV devb:$MODE_DEVB prod:$MODE_PROD  $SHA"
           # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod's `if:` can skip it; a
           # docs-only job still reports success (steps just no-op). `changes` is watched too: its failure (the
           # classifier) must not slip through as a success just because the deploy jobs got skipped.
           failed=0
-          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
+          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$DEVB_RESULT" "$PROD_RESULT"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
           done
           if [ "$failed" = "1" ]; then

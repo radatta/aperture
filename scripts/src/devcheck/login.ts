@@ -3,7 +3,7 @@
 // guessed: if the Hosted UI changes, the run fails AUTH_PAGE_CHANGED with a screenshot rather than typing a
 // password into whatever field looks close.
 import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { DEV_ORIGIN, type DevcheckEnv } from './config';
+import { slotOrigin, type DevcheckEnv } from './config';
 import { DevcheckError } from './errors';
 import type { PwContext, PwPage } from './pw-types';
 import type { FetchLike } from './api';
@@ -90,7 +90,7 @@ export function validateCachedState(
     const state = JSON.parse(readFileSync(path, 'utf8')) as {
       origins?: { origin: string; localStorage?: { name: string; value: string }[] }[];
     };
-    const ls = state.origins?.find((o) => o.origin === DEV_ORIGIN)?.localStorage ?? [];
+    const ls = state.origins?.find((o) => o.origin === slotOrigin())?.localStorage ?? [];
     const storage = Object.fromEntries(ls.map((x) => [x.name, x.value]));
     // Every oidc user entry, not just the env's key: a drifted client id would leave another one unchecked,
     // and the app would load it.
@@ -147,7 +147,7 @@ export async function ensureSignedIn(
   env: DevcheckEnv,
   opts: { statePath: string; shot: (name: string) => Promise<void> },
 ): Promise<Session> {
-  await page.goto(`${DEV_ORIGIN}/tasks`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${slotOrigin()}/tasks`, { waitUntil: 'domcontentloaded' });
   const signIn = page.getByRole('button', { name: 'Sign in' });
   await page.locator(`${SHELL}, button:has-text("Sign in")`).first().waitFor({ timeout: 30_000 });
 
@@ -163,7 +163,7 @@ export async function ensureSignedIn(
     }
     await submitHostedUiForm(page, env, opts.shot);
     try {
-      await page.waitForURL((u) => u.origin === DEV_ORIGIN, { timeout: 20_000 });
+      await page.waitForURL((u) => u.origin === slotOrigin(), { timeout: 20_000 });
     } catch {
       await opts.shot('auth-rejected');
       const text = (await page.locator('body').textContent())?.replace(/\s+/g, ' ').slice(0, 200);

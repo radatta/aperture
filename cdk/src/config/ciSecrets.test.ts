@@ -37,6 +37,12 @@ describe('stageSecret', () => {
         dir,
       }),
     ).toThrow('APERTURE_DEVICE_TOKEN is empty in CI — set DEVICE_TOKEN_DEV (a repository secret)');
+    // Slot B reuses the _DEV secret family (same account, same trust domain).
+    expect(() =>
+      stageSecret('ORIGIN_SECRET', 'devb', { env: { GITHUB_ACTIONS: 'true' }, dir }),
+    ).toThrow(
+      'APERTURE_ORIGIN_SECRET is empty in CI — set ORIGIN_SECRET_DEV (a repository secret)',
+    );
     expect(readdirSync(dir)).toEqual([]); // nothing minted on the way out
   });
 

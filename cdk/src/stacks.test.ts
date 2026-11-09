@@ -960,7 +960,8 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
 });
 
 describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
-  const build = (stage: string, lane: Lane = '') => {
+  // deviceUserId: CI sets it on dev (the schedule, its group and role exist there) and leaves it unset on devb.
+  const build = (stage: string, lane: Lane = '', deviceUserId: string | undefined = 'u') => {
     const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
     const synth = () => (lane ? { synthesizer: synthesizerFor(lane) } : {});
@@ -981,7 +982,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       originSecret: 'o',
       deviceToken: 'd',
       agentToken: 'a',
-      deviceUserId: 'u', // CI sets it: the schedule, its group and role exist on dev
+      deviceUserId,
       domainName: `${stage}.example.com`,
       certificateArn: 'arn:aws:acm:us-east-1:111111111111:certificate/test',
     });
@@ -992,6 +993,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     };
   };
   const dev = build('dev');
+  const devb = build('devb', '', undefined);
   const prod = build('prod');
   const resources = (ts: Template[]) =>
     ts.flatMap((t) =>
@@ -1010,12 +1012,16 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     }
   });
 
-  it("caps dev's table and GSI1 on-demand throughput, and leaves prod uncapped", () => {
+  // Both dev slots: the freeze keeps a ceiling only if the table was created with one, so devb must be born capped.
+  it.each([
+    ['dev', dev],
+    ['devb', devb],
+  ])("caps %s's table and GSI1 on-demand throughput, and leaves prod uncapped", (_, slot) => {
     const cap = {
       MaxReadRequestUnits: DEV_MAX_READ_UNITS,
       MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS,
     };
-    const [devTable] = resources(dev.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
+    const [devTable] = resources(slot.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
     expect(devTable?.Properties?.OnDemandThroughput).toEqual(cap);
     expect(
       (devTable?.Properties?.GlobalSecondaryIndexes as { OnDemandThroughput?: unknown }[])[0]
@@ -1024,16 +1030,48 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     expect(JSON.stringify(resources(prod.templates))).not.toContain('OnDemandThroughput');
   });
 
-  // Both stages expire on `expiresAt`: dev's tombstones, and (prod's only stamped rows) a LeetCode
+  // Every stage expires on `expiresAt`: the dev slots' tombstones, and (prod's only stamped rows) a LeetCode
   // sitting's raw bulk. Which rows carry it is the Lambda's rule (writes.ts, backend lcSittingEvents).
-  it('expires on expiresAt on both stages', () => {
-    for (const stage of [dev, prod]) {
+  it('expires on expiresAt on every stage', () => {
+    for (const stage of [dev, devb, prod]) {
       const [table] = resources(stage.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
       expect(table?.Properties?.TimeToLiveSpecification).toEqual({
         AttributeName: 'expiresAt',
         Enabled: true,
       });
     }
+  });
+
+  it('creates devb with the on-demand ceiling and TTL a dev slot needs', () => {
+    const [table] = resources(devb.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
+    expect(table?.Properties?.OnDemandThroughput).toEqual({
+      MaxReadRequestUnits: DEV_MAX_READ_UNITS,
+      MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS,
+    });
+    expect(table?.Properties?.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expiresAt',
+      Enabled: true,
+    });
+    expect(table?.Properties?.TableName).toBe('aperture-devb');
+  });
+
+  // Slot B is slot A renamed: the same functions (finance-sync too — only its schedule needs DEVICE_USER_ID), so the
+  // kill's lists and the reservations cover it the same way.
+  it('gives devb the same functions as dev, renamed to -devb', () => {
+    const names = (t: Template[]) =>
+      resources(t)
+        .filter((r) => r.Type === 'AWS::Lambda::Function')
+        .map((r) => r.Properties?.FunctionName)
+        .filter((n): n is string => typeof n === 'string')
+        .sort();
+    const devNames = names(dev.templates);
+    expect(devNames).toEqual([
+      'aperture-bff-dev',
+      'aperture-finance-sync-dev',
+      'aperture-mcp-dev',
+      'aperture-push-dispatch-dev',
+    ]);
+    expect(names(devb.templates)).toEqual(devNames.map((n) => n.replace(/-dev$/, '-devb')));
   });
 
   // The guardrails SCP denies reserved/provisioned concurrency, event-source mappings and destinations to the dev
@@ -1054,22 +1092,37 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   });
 
   // The kill switch locks DEV_URL_FUNCTIONS' URLs; a URL on any other function would stay open through a kill.
-  it('gives a public Function URL only to the functions the kill switch locks', () => {
-    const t = dev.templates[1]!.toJSON().Resources as Record<
-      string,
-      { Type: string; Properties: Record<string, unknown> }
-    >;
-    const fnName = (ref: unknown) => {
-      const id =
-        (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ??
-        (ref as { Ref?: string }).Ref ??
-        '';
-      return t[id]?.Properties.FunctionName;
-    };
-    const urls = Object.values(t)
-      .filter((r) => r.Type === 'AWS::Lambda::Url')
-      .map((r) => fnName(r.Properties.TargetFunctionArn));
-    expect(urls.sort()).toEqual([...DEV_URL_FUNCTIONS].sort());
+  it.each([
+    ['dev', dev],
+    ['devb', devb],
+  ])(
+    'gives %s a public Function URL only on the functions the kill switch locks',
+    (stage, slot) => {
+      const t = slot.templates[1]!.toJSON().Resources as Record<
+        string,
+        { Type: string; Properties: Record<string, unknown> }
+      >;
+      const fnName = (ref: unknown) => {
+        const id =
+          (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ??
+          (ref as { Ref?: string }).Ref ??
+          '';
+        return t[id]?.Properties.FunctionName;
+      };
+      const urls = Object.values(t)
+        .filter((r) => r.Type === 'AWS::Lambda::Url')
+        .map((r) => fnName(r.Properties.TargetFunctionArn));
+      expect(urls.sort()).toEqual(DEV_URL_FUNCTIONS.filter((f) => f.endsWith(`-${stage}`)).sort());
+    },
+  );
+
+  it("locks both slots' URLs in a kill", () => {
+    expect([...DEV_URL_FUNCTIONS].sort()).toEqual([
+      'aperture-bff-dev',
+      'aperture-bff-devb',
+      'aperture-mcp-dev',
+      'aperture-mcp-devb',
+    ]);
   });
 
   // The standing guardrails deny these creates for good; a template that needs one can never deploy into dev.
@@ -1188,6 +1241,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     it('takes a lane only for dev, and only a known one', () => {
       expect(laneFor('dev', '')).toBe('');
       expect(laneFor('dev', ' devmain ')).toBe('devmain');
+      expect(laneFor('devb', 'devmain')).toBe('devmain');
       expect(laneFor('prod', '')).toBe('');
       expect(() => laneFor('dev', 'bogus')).toThrow(/APERTURE_DEPLOY_LANE/);
       expect(() => laneFor('prod', 'devmain')).toThrow(/dev-only/);

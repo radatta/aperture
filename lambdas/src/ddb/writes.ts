@@ -1,4 +1,5 @@
 import type { DocClient, Item } from './DocClient';
+import { isDevSlot } from '@aperture/shared';
 
 // Every mutation funnels through here — the single audit point (INFRA §A.9), and the switch that makes
 // smoke tests provably write-free: a live request gets `liveWrites` (hits the table); a testMode/smoke
@@ -33,7 +34,7 @@ const stamped = (item: Item): Item => {
 };
 
 export function liveWrites(doc: DocClient, stage = process.env.STAGE): Writes {
-  const out = stage === 'dev' ? stamped : (item: Item) => item;
+  const out = isDevSlot(stage) ? stamped : (item: Item) => item;
   return {
     put: (item) => doc.put(out(item)),
     putIf: (item, expected) => doc.putIf(out(item), expected),

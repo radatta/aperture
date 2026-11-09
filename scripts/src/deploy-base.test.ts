@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,11 +13,24 @@ import {
   outcome,
   run,
   servedBy,
+  shapeModeFor,
+  slotOfJob,
+  SLOTS,
   withTimeout,
 } from './deploy-base';
 import { fakeApi, ghError } from './bot/fakes';
 
 type Tier = 'full' | 'app' | 'none';
+
+// packages/shared's DEV_SLOTS, read as text: this module runs with no install, so it keeps its own copy.
+const sharedSlots = () =>
+  JSON.parse(
+    (
+      /DEV_SLOTS = (\[[^\]]*\])/.exec(
+        readFileSync(new URL('../../packages/shared/src/stage.ts', import.meta.url), 'utf8'),
+      )?.[1] ?? '[]'
+    ).replace(/'/g, '"'),
+  ) as string[];
 type Row = { sha: string; tier?: Tier; states?: string[]; logUrl?: string };
 
 const step = (name: string, conclusion: string) => ({ name, conclusion });
@@ -189,6 +202,96 @@ describe('servedBy', () => {
     const { api, calls } = fakeApi({ 'GET /repos/o/r/deployments': () => [] });
     await servedBy(api, 'o/r', 'dev-main');
     expect(calls[0]?.path).toBe('/repos/o/r/deployments?environment=dev-main&per_page=100');
+  });
+});
+
+// Both dev slots record in dev-main; `job` is the recorded job's name (deploy.yml's call job / the stage job).
+type SlotRow = Row & { job: string };
+function devMain(rows: SlotRow[]) {
+  const routes: Parameters<typeof fakeApi>[0] = {
+    'GET /repos/o/r/deployments?environment=dev-main': () =>
+      rows.map((r, id) => ({ id, sha: r.sha })),
+  };
+  rows.forEach((r, id) => {
+    routes[`GET /repos/o/r/deployments/${id}/statuses`] = () =>
+      (r.states ?? ['success', 'in_progress', 'queued']).map((state) => ({
+        state,
+        log_url: `https://github.com/o/r/actions/runs/9/job/${1000 + id}`,
+      }));
+    routes[`GET /repos/o/r/actions/jobs/${1000 + id}`] = () => ({
+      name: r.job,
+      steps: stepsFor(r.tier ?? 'full'),
+    });
+  });
+  return fakeApi(routes);
+}
+const A = 'deploy-dev / deploy';
+const B = 'deploy-devb / deploy';
+
+describe('servedBy, per dev slot', () => {
+  it('keeps its slot list in step with the shared one', () => {
+    expect([...SLOTS]).toEqual(sharedSlots());
+  });
+
+  it("tells the slots apart by job name, older unnamed records being slot A's", () => {
+    expect(slotOfJob(A)).toBe('dev');
+    expect(slotOfJob(B)).toBe('devb');
+    expect(slotOfJob(undefined)).toBe('dev');
+    expect(slotOfJob('deploy-dev')).toBe('dev');
+  });
+
+  it("walks past the other slot's records, failed ones included", async () => {
+    const rows: SlotRow[] = [
+      { sha: 'b2', job: B, states: ['failure'] },
+      { sha: 'a2', job: A, tier: 'app' },
+      { sha: 'b1', job: B },
+      { sha: 'a1', job: A },
+    ];
+    expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, 'dev')).toEqual({
+      infra: 'a1',
+      front: 'a2',
+    });
+    expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, 'devb')).toBe('unknown'); // its newest failed
+    expect(
+      await servedBy(devMain(rows.slice(1)).api, 'o/r', 'dev-main', undefined, 'devb'),
+    ).toEqual({
+      infra: 'b1',
+      front: 'b1',
+    });
+  });
+
+  it('is unknown for devb with no devb record yet (its first main deploy creates or updates it in full)', async () => {
+    const rows: SlotRow[] = [{ sha: 'a1', job: A }];
+    expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, 'devb')).toBe('unknown');
+  });
+
+  it("reads each record's job once", async () => {
+    const { api, calls } = devMain([{ sha: 'a1', job: A }]);
+    await servedBy(api, 'o/r', 'dev-main', undefined, 'dev');
+    expect(calls.filter((c) => c.path.includes('/actions/jobs/')).length).toBe(1);
+  });
+});
+
+describe('shapeModeFor (devb on a main merge)', () => {
+  const order: [string, string[]][] = [
+    ['f', []],
+    ['l1', ['lambdas/z.ts', 'app/x.tsx', 'scripts/y.ts']],
+    ['c1', ['cdk/src/lib/app-stack.ts']],
+    ['p1', ['pnpm-lock.yaml']],
+  ];
+  const diff = diffOf(order);
+  it('deploys only a shape change: cdk/ or the lockfile', () => {
+    expect(shapeModeFor({ infra: 'f', front: 'f' }, 'l1', diff)).toBe('none');
+    expect(shapeModeFor({ infra: 'f', front: 'f' }, 'c1', diff)).toBe('full');
+    expect(shapeModeFor({ infra: 'c1', front: 'c1' }, 'p1', diff)).toBe('full');
+    expect(shapeModeFor({ infra: 'p1', front: 'p1' }, 'p1', diff)).toBe('none');
+  });
+  it('is full when unknown or when the diff fails', () => {
+    expect(shapeModeFor('unknown', 'h', diff)).toBe('full');
+    const bad = () => {
+      throw new Error('bad object');
+    };
+    expect(shapeModeFor({ infra: 'f', front: 'f' }, 'h', bad)).toBe('full');
   });
 });
 
@@ -455,6 +558,12 @@ describe('run', () => {
     expect(await run({ ...base, argv: ['Prod!', HEAD], env: good })).toBe(1);
     expect(await run({ ...base, argv: ['prod', HEAD], env: { GITHUB_REPOSITORY: 'o/r' } })).toBe(1);
     expect(await run({ ...base, argv: ['prod', HEAD], env: { GITHUB_TOKEN: 't' } })).toBe(1);
+    expect(await run({ ...base, argv: ['prod', HEAD, '--slot', 'devb'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['dev-main', HEAD, '--slot', 'devc'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['dev-main', HEAD, '--slot'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['dev-main', HEAD, '--slot', 'devb', 'x'], env: good })).toBe(
+      1,
+    );
     expect(writes).toEqual([]);
   });
 });

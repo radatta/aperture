@@ -8,7 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FetchLike } from './api';
 import {
   CLAUDE_CALLBACK,
-  MCP_SCOPES,
+  mcpScopes,
   assertDevCognitoUrl,
   isClaudeHost,
   type DevcheckEnv,
@@ -44,7 +44,7 @@ export function authorizeUrl(env: DevcheckEnv, pkce: Pkce): string {
     response_type: 'code',
     client_id: env.DEVCHECK_CLAUDE_CLIENT_ID,
     redirect_uri: CLAUDE_CALLBACK,
-    scope: MCP_SCOPES.join(' '),
+    scope: mcpScopes().join(' '),
     state: pkce.state,
     code_challenge: pkce.challenge,
     code_challenge_method: 'S256',

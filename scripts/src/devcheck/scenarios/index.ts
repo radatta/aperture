@@ -11,6 +11,7 @@ import { captureTask } from './capture-task';
 import { categorySuggest } from './category-suggest';
 import { cognitoRefresh } from './cognito-refresh';
 import { deadRows } from './dead-rows';
+import { devSlotB } from './dev-slot-b';
 import { dayGuards } from './day-guards';
 import { failedReads } from './failed-reads';
 import { finance } from './finance';
@@ -33,6 +34,7 @@ import { timerCredit } from './timer-credit';
 
 export const SCENARIOS: Scenario[] = [
   smoke,
+  devSlotB, // early and cheap: proves the run is on the slot its lock names before the long scenarios
   iosStandalone, // early: an asleep Mac is known (and short-circuits) before the long browser scenarios
   captureTask,
   captureDock,
