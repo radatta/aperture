@@ -20,6 +20,9 @@ export default defineConfig({
     // Shuffled every run so an order dependence between files shows up as a red run, not a false pass.
     // The seed is printed; reproduce with --sequence.seed=<n>.
     sequence: { shuffle: { files: true } },
+    // CSS is stubbed to '' in tests; tokens.css alone comes through, so tokens.test.ts can read its hexes
+    // (`?raw`). Only main.tsx imports it at runtime, and no test imports main.
+    css: { include: [/styles\/tokens\.css(\?|$)/] },
     // `include` lives per project, not here: with `extends: true` arrays concatenate, so a root include
     // would leak the full glob into the isolated project.
     projects: [

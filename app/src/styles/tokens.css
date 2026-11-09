@@ -4,11 +4,11 @@
    family, never a white app (PRODUCT §5). ThemeProvider always stamps data-theme="dark|light"
    (resolving "auto" in JS), so no media query is needed.
 
-   Every value below was solved against WCAG, not eyeballed (scratchpad contrast audit):
-     - ink / ink-muted / teal / gold / danger clear 4.5:1 on ALL THREE grounds (surface, panel,
-       panel-2). These carry content.
-     - ink-subtle clears 3:1. It is supplementary only — de-emphasised metadata and separators.
-       Nothing a reader needs (placeholders, hints, empty-state guidance) may use it.
+   Every value below was solved against WCAG, not eyeballed, and tokens.test.ts measures it:
+     - Every text token — ink / ink-muted / ink-subtle / teal / gold / danger — clears 4.5:1 on ALL
+       THREE grounds (surface, panel, panel-2), and under the due fills too (see --*-on-fill).
+       ink-subtle is the quietest
+       text, not a sub-AA one (lifted 2026-11-08; it was 3:1 "supplementary only" before).
      - line-strong clears 3:1 against panel: it is the *only* thing marking an unchecked habit
        cell, so it's a non-text UI boundary, not decoration.
    The panel steps in dark are deliberately small. A lighter raised ground crushed contrast for
@@ -21,8 +21,8 @@
   --panel: #374a43; /* cards / rows */
   --panel-2: #3e5049; /* raised — dock, active segment ground */
   --ink: #e8ece9; /* primary text */
-  --ink-muted: #b1bfb9; /* secondary / counts — AA on every ground */
-  --ink-subtle: #8c9d97; /* tertiary — 3:1, supplementary only */
+  --ink-muted: #c8d2cd; /* secondary / counts — AA on every ground */
+  --ink-subtle: #b1bfb9; /* tertiary — AA on every ground (4.50 on panel-2, the floor) */
   --line: rgba(255, 255, 255, 0.1); /* hairlines */
   --line-strong: #849690; /* empty habit cells, input borders — 3:1 on panel */
   --teal: #9bc5b7; /* active / links */
@@ -35,6 +35,11 @@
      is lifted to ink-muted). Two distinct hues — olive-amber vs red-brown — not two alphas of one. */
   --due-imminent-fill: rgba(90, 60, 0, 0.5);
   --due-past-fill: rgba(160, 20, 20, 0.45);
+  /* A filled row re-points --teal/--gold/--danger to these (dueStyle.ts). Dark's own accents already
+     clear 4.5:1 under the dark fills, so here they're the same hexes; light needs darker ones. */
+  --teal-on-fill: #9bc5b7;
+  --gold-on-fill: #d8b882;
+  --danger-on-fill: #e7b09e;
 
   --ring: rgba(155, 197, 183, 0.8); /* focus-visible */
   --shadow-dock: 0 -1px 0 rgba(255, 255, 255, 0.05), 0 8px 30px rgba(0, 0, 0, 0.35);
@@ -48,7 +53,7 @@
   --panel-2: #fbfcf9;
   --ink: #1d2b26;
   --ink-muted: #4e605a;
-  --ink-subtle: #78877f;
+  --ink-subtle: #5c6d67;
   --line: rgba(18, 38, 32, 0.12);
   --line-strong: #78877f;
   --teal: #35685a;
@@ -58,6 +63,9 @@
   --danger: #a8492e;
   --due-imminent-fill: rgba(240, 200, 110, 0.3);
   --due-past-fill: rgba(240, 140, 120, 0.28);
+  --teal-on-fill: #336557;
+  --gold-on-fill: #74571d;
+  --danger-on-fill: #974229;
 
   --ring: rgba(53, 104, 90, 0.75);
   --shadow-dock: 0 -1px 0 rgba(18, 38, 32, 0.04), 0 8px 30px rgba(18, 38, 32, 0.12);
