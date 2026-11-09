@@ -994,6 +994,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   };
   const dev = build('dev');
   const devb = build('devb', '', undefined);
+  const devSlots = () => [...dev.templates, ...devb.templates]; // both dev slots, for the SCP mirrors
   const prod = build('prod');
   const resources = (ts: Template[]) =>
     ts.flatMap((t) =>
@@ -1076,8 +1077,9 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
   // The guardrails SCP denies reserved/provisioned concurrency, event-source mappings and destinations to the dev
   // account; a template that sets one fails to deploy there.
+  // The SCP mirrors below read both dev slots' templates: a resource only devb carries must fail here, not at its deploy.
   it('asks for no concurrency, event-source mapping or destination — the guardrails SCP denies them', () => {
-    const all = resources(dev.templates);
+    const all = resources(devSlots());
     for (const r of all.filter((x) => x.Type === 'AWS::Lambda::Function'))
       expect(r.Properties?.ReservedConcurrentExecutions).toBeUndefined();
     const types = all.map((r) => r.Type);
@@ -1143,7 +1145,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     const standing = JSON.stringify(guardrailsPolicy());
     for (const [type, action] of Object.entries(deniedBy))
       expect(standing, `${type} → ${action}`).toContain(action);
-    const types = new Set(resources(dev.templates).map((r) => r.Type));
+    const types = new Set(resources(devSlots()).map((r) => r.Type));
     for (const type of Object.keys(deniedBy))
       expect(types.has(type), `${type}: the guardrails SCP denies it in dev`).toBe(false);
   });
@@ -1163,7 +1165,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       SSM: 'ssm:*Parameter*',
       KMS: 'kms:*',
     };
-    for (const type of new Set(resources(dev.templates).map((r) => r.Type))) {
+    for (const type of new Set(resources(devSlots()).map((r) => r.Type))) {
       if (type.startsWith('Custom::') || type === 'AWS::CDK::Metadata') continue; // CDK providers run as Lambdas
       const needed = entry[type.split('::')[1] ?? ''];
       expect(needed, `${type}: map its service, then check the allowlist`).toBeDefined();
@@ -1175,18 +1177,18 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   // unnamed function (`<stack>-<logicalId>-<suffix>`); the app's own functions must stay outside that pattern.
   // The two lanes publish to different buckets, so a CDK provider's code location would change on every lane switch,
   // and the freeze denies the bot lane new code in one (FrozenProviderCode). Dev carries none; prod keeps its two.
-  it('gives dev no CDK provider function, so a lane switch never touches frozen provider code', () => {
+  it('gives the dev slots no CDK provider function, so a lane switch never touches frozen provider code', () => {
     const unnamed = (ts: Template[]) =>
       resources(ts).filter(
         (r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.FunctionName === undefined,
       );
-    expect(unnamed(dev.templates)).toEqual([]);
-    expect(resources(dev.templates).filter((r) => r.Type.startsWith('Custom::'))).toEqual([]);
+    expect(unnamed(devSlots())).toEqual([]);
+    expect(resources(devSlots()).filter((r) => r.Type.startsWith('Custom::'))).toEqual([]);
     expect(unnamed(prod.templates)).toHaveLength(2); // LogRetention and S3 auto-delete
   });
 
   it("names functions so the freeze's provider-code deny would catch a CDK provider and none of the app's", () => {
-    const fns = resources([...dev.templates, ...prod.templates]).filter(
+    const fns = resources([...devSlots(), ...prod.templates]).filter(
       (r) => r.Type === 'AWS::Lambda::Function',
     );
     for (const f of fns) {
@@ -1194,7 +1196,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       if (name !== undefined)
         expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
     }
-    for (const a of dev.artifacts) expect(a.stackName).toMatch(/^Aperture/); // so an unnamed function's name does
+    for (const a of [...dev.artifacts, ...devb.artifacts]) expect(a.stackName).toMatch(/^Aperture/); // so an unnamed function's name does
   });
 
   // Main's own dev deploy (config/lane.ts, docs/ops/CI-BOT.md → Two lanes).

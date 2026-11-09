@@ -138,9 +138,26 @@ export const guardrailsPolicy = () =>
         's3:GetAccountPublicAccessBlock',
         's3:ListAllMyBuckets',
         's3:GetBucketLocation',
+        'kms:DescribeKey', // ...for ACM's own key only: KmsAwayOnlyForAws, next
+        'kms:CreateGrant',
       ],
       Resource: '*',
       Condition: { ...exempt, StringNotEquals: { 'aws:RequestedRegion': DEV_REGION } },
+    },
+    // Attaching the us-east-1 cert to CloudFront reads and grants on ACM's `aws/acm` key there, as a forward access
+    // session under the deploying role (CloudTrail 2026-11-09: kms:DescribeKey denied by OnlyDevRegion, surfacing as
+    // CloudFront's InvalidViewerCertificate). Outside us-west-1 those two pass only when an AWS service makes the call
+    // on the caller's behalf (aws:ViaAWSService), never a direct one; IfExists, so a request without the key is denied.
+    {
+      Sid: 'KmsAwayOnlyForAws',
+      Effect: 'Deny',
+      Action: ['kms:DescribeKey', 'kms:CreateGrant'],
+      Resource: '*',
+      Condition: {
+        ...exempt,
+        StringNotEquals: { 'aws:RequestedRegion': DEV_REGION },
+        BoolIfExists: { 'aws:ViaAWSService': 'false' },
+      },
     },
     // The Lambda concurrency quota is dev's hard compute cap — nothing in dev may ask for more, or leave.
     deny('NoQuotaOrAccountChanges', [

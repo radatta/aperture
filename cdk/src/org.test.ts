@@ -267,6 +267,21 @@ describe('dev-account SCPs', () => {
     for (const g of ['iam:*', 'sts:*', 'cloudfront:*', 'acm:*'])
       expect(region.NotAction).toContain(g);
     expect(region.NotAction).not.toContain('lambda:*'); // Lambda@Edge replicates from us-east-1
+    expect(region.NotAction).not.toContain('kms:*');
+  });
+
+  it("let only an AWS service's call reach KMS outside us-west-1: ACM's key, for the CloudFront cert", () => {
+    const g = statements(standing.guardrails);
+    const region = g.find((s) => s.Sid === 'OnlyDevRegion')!;
+    const kms = (region.NotAction ?? []).filter((a) => a.startsWith('kms:'));
+    expect(kms.sort()).toEqual(['kms:CreateGrant', 'kms:DescribeKey']);
+    const away = g.find((s) => s.Sid === 'KmsAwayOnlyForAws')!;
+    expect(away.Effect).toBe('Deny');
+    expect([...(away.Action as string[])].sort()).toEqual(kms.sort()); // nothing the region lock lets past goes unguarded
+    expect(away.Condition).toMatchObject({
+      StringNotEquals: { 'aws:RequestedRegion': 'us-west-1' },
+      BoolIfExists: { 'aws:ViaAWSService': 'false' },
+    });
   });
 
   it('deny every lever the cost analysis found that an SCP can name', () => {
