@@ -29,6 +29,7 @@ import type {
   Settings,
   Sitting,
   SittingEvent,
+  SittingHeadRow,
   SittingLive,
   SittingReplayChunk,
   Story,
@@ -269,11 +270,11 @@ export interface ExportBundle {
   days: Day[];
   categories: Category[];
   places: Place[]; // the place token (pointer + lookup row) is a credential and is never exported
-  // LeetCode sittings: heads, live rows, events and problems. The replay is left out (bulk, and it
-  // expires) — like attachment bytes. The legacy leetcodeAttempts are retired and no longer exported.
+  // LeetCode sittings: heads, live rows, head rows and problems. The raw payloads and the replay are left out
+  // (bulk; the export is one Lambda response) — like attachment bytes. The legacy leetcodeAttempts are retired and no longer exported.
   sittings: Sitting[];
   sittingLive: SittingLive[];
-  sittingEvents: SittingEvent[];
+  sittingHeadRows: SittingHeadRow[]; // runs/submits/notes/timer as verdicts — their raw payloads stay in the table
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
@@ -564,9 +565,10 @@ export interface ApiClient {
   // Start opens a sitting as a rep of settings.leetcodeRollId (LC_ROLL_UNLINKED_ERROR when unset): it
   // attaches the open rep when no sitting holds it, else spawns a fresh one, refusing while another
   // sitting is still open (SITTING_ACTIVE_ERROR); the rep goes in_progress and is titled after the
-  // problem. Idempotent on clientSittingId (resumed: true). Events are idempotent per event id, refused
-  // with nothing written once the sitting has ended or is over a cap. A sitting ends only through its rep:
-  // Done → done, Drop or delete → abandoned.
+  // problem. Idempotent on clientSittingId (resumed: true — also for an ended sitting, returned as ended: the
+  // extension mints a new id). Events are idempotent per event id, refused with nothing written once the
+  // sitting has ended or is over a cap. A sitting ends through its rep — Done → done, Drop → abandoned — or as
+  // stale at a later Start; deleting the rep deletes it.
   lcSittingStart(input: SittingStartInput): Promise<SittingStartResult>;
   lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult>;
   listSittings(range?: DateRange): Promise<Sitting[]>; // heads, startedAt desc, by `day`

@@ -58,7 +58,7 @@ async function refused(what: string, p: Promise<unknown>, match: RegExp): Promis
 }
 
 // What later steps build on, set by the steps that make it.
-const state = { rollId: '', a: '', aRep: '', aClient: '' };
+const state = { rollId: '', a: '', aRep: '', aClient: '', aStartedAt: 0 };
 async function sittingA(ctx: Ctx) {
   if (!state.a) throw new Error('no sitting A — the start step failed');
   return ctx.api.reads.getSitting(state.a);
@@ -158,7 +158,7 @@ export const lcSittings: Scenario = {
       id: 'settings-select',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Settings shows the linked LeetCode roll',
+      what: 'Settings shows the linked LeetCode roll; picking No Roll and back saves each',
     },
     {
       id: 'device-token',
@@ -201,6 +201,62 @@ export const lcSittings: Scenario = {
       what: 'Deleting a sitting removes it and its reads, and leaves its rep',
     },
     {
+      id: 'event-clock',
+      entry: 'api',
+      kind: 'edge',
+      what: 'An event timed days off the sitting’s clock is refused',
+    },
+    {
+      id: 'start-archived',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A linked roll that’s been archived reads as unlinked',
+    },
+    {
+      id: 'stale-window',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A sitting left open past its window ends at the next Start, which reuses its rep',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'abandons one past its window and reuses its still-open rep',
+        why: 'dev can’t wait a day; the contract suite runs the same planner with an advanced clock',
+      },
+    },
+    {
+      id: 'half-made',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A Start that died half-way finishes on its retry and never blocks another problem',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'a half-made Start finishes on its retry, and never blocks another problem',
+        why: 'dev can’t make a Start die between its head and its rep without a test-only switch',
+      },
+    },
+    {
+      id: 'parallel-starts',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Parallel Starts on different problems open one sitting',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'parallel Starts on different problems open one sitting',
+        why: 'which claim lands first on dev is timing; double-start (proven on dev) runs the same gate and claim',
+      },
+    },
+    {
+      id: 'attempt-cap',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Start attempts — refused ones too — stop at the day’s cap',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'counts every Start attempt — refused ones too — and stops at the day’s cap',
+        why: 'dev can’t take 400 Starts without locking the test user out for the day',
+      },
+    },
+    {
       id: 'cap',
       entry: 'api',
       kind: 'edge',
@@ -208,7 +264,7 @@ export const lcSittings: Scenario = {
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
         test: 'reserves a call in the budget, refusing one that would pass a cap',
-        why: 'dev can’t take it: 3,000 writes would run into dev’s write cap; the contract suite drives the same guard with submit details alone',
+        why: 'dev can’t take it: 3,000 writes would run into dev’s write cap; the guard is this pure reservation, which the contract suite also drives with submit details alone',
       },
     },
     {
@@ -277,11 +333,19 @@ export const lcSittings: Scenario = {
           throw new Error('the rep isn’t on the sitting’s day');
         if ((await sittingA(ctx)).problem?.slug !== slugOf(ctx, 'a'))
           throw new Error('no problem stored');
-        const again = await ctx.api.writes.lcSittingStart({ ...input });
-        const same = await ctx.api.writes.lcSittingStart(start(ctx, 'a'));
+        const again = await ctx.api.writes.lcSittingStart({
+          ...input,
+          problemTitle: 'devcheck hijack',
+        });
+        const same = await ctx.api.writes.lcSittingStart(
+          start(ctx, 'a', { problemTitle: 'hijack 2' }),
+        );
         for (const r of [again, same])
           if (!r.resumed || r.sitting.id !== sitting.id)
             throw new Error(`resume: ${JSON.stringify(r)}`);
+        // A repeat shapes the rep from the stored sitting: a different title in the request renames nothing.
+        if ((await ctx.api.reads.getTask(rep.id))?.title !== `LeetCode · ${titleOf(ctx, 'a')}`)
+          throw new Error('a repeated Start renamed the rep');
         await refused(
           'start B while A is open',
           ctx.api.writes.lcSittingStart(start(ctx, 'b')),
@@ -331,9 +395,9 @@ export const lcSittings: Scenario = {
     {
       id: 'invalid',
       entry: 'api',
-      proves: ['events-invalid'],
+      proves: ['events-invalid', 'event-clock'],
       title:
-        'Oversized, 51, badly-keyed and unknown-sitting events are all refused; the live row is unchanged',
+        'Off-clock, oversized, 51, badly-keyed and unknown-sitting events are all refused; the live row is unchanged',
       async run(ctx) {
         const t = Date.now();
         const w = ctx.api.writes;
@@ -341,6 +405,11 @@ export const lcSittings: Scenario = {
           'oversized',
           w.lcSittingEvents(state.a, [snap('x'.repeat(70 * 1024), t)]),
           /too large/,
+        );
+        await refused(
+          'an event three days off the sitting’s clock',
+          w.lcSittingEvents(state.a, [snap('a', state.aStartedAt + 3 * 24 * 3600_000)]),
+          /off the sitting/,
         );
         const many = Array.from({ length: 51 }, (_, i) => snap('a', t + i));
         await refused('51 events', w.lcSittingEvents(state.a, many), /At most 50/);
@@ -509,13 +578,36 @@ export const lcSittings: Scenario = {
           throw new Error(`Settings shows ${await select.inputValue()}, not the linked roll`);
         await select.scrollIntoViewIfNeeded();
         await ctx.shot('settings-leetcode');
+        // Unlink and relink through the select itself, each landing on the server.
+        const until = async (want: string | null) => {
+          for (let i = 0; (await ctx.api.reads.getSettings()).leetcodeRollId !== want; i++) {
+            if (i >= 40) throw new Error(`the select never saved ${want}`);
+            await new Promise((r) => setTimeout(r, 250));
+          }
+        };
+        await select.selectOption({ label: 'No Roll' });
+        await until(null);
+        await ctx.page
+          .getByText(/With no Roll, the extension’s Start is refused/)
+          .waitFor({ timeout: 5_000 });
+        await ctx.shot('settings-leetcode-none');
+        await select.selectOption({ label: titleOf(ctx, 'roll') });
+        await until(state.rollId);
       },
     },
     {
-      id: 'unlink',
+      id: 'archived',
       entry: 'api',
-      title: 'Unlink the roll so no later scenario meets it (cleanup archives it)',
+      proves: ['start-archived'],
+      title:
+        'Archive the linked roll: Start reads it as unlinked; then unlink for the scenarios after',
       async run(ctx) {
+        await ctx.api.writes.setRollActive(state.rollId, false);
+        await refused(
+          'start on an archived roll',
+          ctx.api.writes.lcSittingStart(start(ctx, 'd')),
+          /LeetCode roll/,
+        );
         await ctx.api.writes.linkLeetcodeRoll(null);
       },
     },

@@ -86,7 +86,14 @@ import {
   isHeadEvent,
   isRawEventType,
   reserveBudget,
-  summarizeHeadEvents,
+  summarizeHeadRows,
+  newerSummary,
+  claimStart,
+  countStartAttempt,
+  emptyGate,
+  releaseStart,
+  SITTING_INGEST_WINDOW_MS,
+  SITTING_START_TIME_ERROR,
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
   normalizeSittingEvents,
@@ -181,6 +188,7 @@ import type {
   SittingStartInput,
   SittingStartResult,
   NormalizedSittingStart,
+  SittingLive,
 } from '@aperture/shared';
 import {
   FLUX_NOTE_MIN_SETS,
@@ -671,37 +679,56 @@ export class BackendClient implements ApiClient {
     });
   }
   // --- LeetCode sittings (sittings.ts; docs/areas/recruiting) ---
-  // Device token or JWT (index.ts → LC_INGEST_METHODS). The extension's Start: end stale open sittings, decide
-  // resume / attach / spawn (planSittingStart), claim the head (its key is the Start's id, so a double-fire
-  // can't make two), then shape the rep. Shaping is idempotent and also runs on resuming an open sitting, so
-  // a Start that died half-way finishes on its retry.
+  // Device token or JWT (index.ts → LC_INGEST_METHODS). The extension's Start:
+  // 1. count the attempt on the user's Start gate (a CAS, capped a day) before reading anything;
+  // 2. end stale open sittings, decide resume / attach / spawn (planSittingStart);
+  // 3. a new sitting claims the gate (one open sitting, Starts a day) and then its head (put-if-absent on the
+  //    Start's id), and only then shapes its rep. Shaping is idempotent and runs on a resume too — from the
+  //    STORED sitting, never the request — so a Start that died half-way finishes, and a repeat can't rename.
   async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
     const n = normalizeSittingStart(input);
+    const now = this.now();
+    if (Math.abs(n.startedAt - now) > SITTING_INGEST_WINDOW_MS)
+      throw new Error(SITTING_START_TIME_ERROR);
     const settings = await this.ensureSettings();
+    const gateDay = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
+    const gate = this.repo.lcStartShape();
+    const fresh = () => ({ ...this.baseAt(now), id: 'lcstart', ...emptyGate(gateDay) });
+    await this.repo.casUpdate(gate, 'lcstart', (g) => countStartAttempt(g, gateDay), now, {
+      consistent: true,
+      create: () => countStartAttempt(fresh(), gateDay),
+    });
     const linked = settings.leetcodeRollId
       ? await this.repo.getRoll(settings.leetcodeRollId)
       : null;
     const roll = linked?.active ? linked : null; // an archived roll reads as unlinked, as Settings shows it
     if (!roll) throw new Error(LC_ROLL_UNLINKED_ERROR);
-    const now = this.now();
-    const day = dayKeyForOffset(now, n.tzOffsetMinutes, settings.dayStartHour);
+    const sittings = await this.repo.listSittings({ consistent: true });
     const plan = planSittingStart(
       n,
-      day,
-      await this.repo.listSittings({ consistent: true }),
+      sittings,
       await this.repo.listTasks({ consistent: true }),
       roll.id,
       now,
     );
     for (const e of plan.ends) await this.endSitting(e.sitting.id, e.to, now);
     if (plan.kind === 'resume') {
-      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, n);
+      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, false);
+      await this.keepProblem(n, false);
       return { sitting: plan.sitting, resumed: true };
     }
+    const ended = new Set(plan.ends.map((e) => e.sitting.id));
+    await this.repo.casUpdate(
+      gate,
+      'lcstart',
+      (g) => claimStart(g, gateDay, n.clientSittingId, sittings, ended, now),
+      now,
+      { consistent: true },
+    );
     const sitting: Sitting = {
       ...this.baseAt(now),
       id: n.clientSittingId,
-      day,
+      day: dayKeyForOffset(now, n.tzOffsetMinutes, settings.dayStartHour),
       startedAt: now,
       clientStartedAt: n.startedAt,
       endedAt: null,
@@ -723,24 +750,11 @@ export class BackendClient implements ApiClient {
     if (!(await this.repo.putSittingIfAbsent(sitting))) {
       const won = await this.repo.getSitting(n.clientSittingId, { consistent: true });
       if (!won) throw new Error(`Not found: ${n.clientSittingId}`); // a deleted sitting's id, reused
-      if (won.status === 'active') await this.shapeRep(won, roll, n);
+      if (won.status === 'active') await this.shapeRep(won, roll, false);
       return { sitting: won, resumed: true };
     }
-    await this.shapeRep(sitting, roll, n);
-    if (n.problem !== null) {
-      const had = await this.repo.getLeetcodeProblem(n.problemSlug);
-      await this.repo.putLeetcodeProblem({
-        ...(had ?? this.base()),
-        updatedAt: this.now(),
-        slug: n.problemSlug,
-        questionId: n.questionId,
-        frontendId: n.frontendId,
-        title: n.problemTitle,
-        difficulty: n.difficulty,
-        topicTags: n.topicTags,
-        raw: n.problem,
-      });
-    }
+    await this.shapeRep(sitting, roll, true);
+    await this.keepProblem(n, true);
     console.log(
       JSON.stringify({
         event: 'lc_sitting_start',
@@ -750,38 +764,71 @@ export class BackendClient implements ApiClient {
     );
     return { sitting, resumed: false };
   }
-  // The rep as a sitting needs it — through the normal task and plan paths, so its reminder and calendar rows
-  // stay right (a linked event is renamed with it). Idempotent: a missing rep is created under the sitting's
-  // fixed id, a rep is titled after the problem, given its URL when it has no notes, put on the sitting's day,
-  // and started.
-  private async shapeRep(s: Sitting, roll: Roll, n: NormalizedSittingStart): Promise<void> {
-    const title = sittingRepTitle(n.problemTitle);
+  // The problem doc: a new sitting upserts it; a resume only fills it in when it's missing.
+  private async keepProblem(n: NormalizedSittingStart, upsert: boolean): Promise<void> {
+    if (n.problem === null) return;
+    const had = await this.repo.getLeetcodeProblem(n.problemSlug);
+    if (had && !upsert) return;
+    await this.repo.putLeetcodeProblem({
+      ...(had ?? this.base()),
+      updatedAt: this.now(),
+      slug: n.problemSlug,
+      questionId: n.questionId,
+      frontendId: n.frontendId,
+      title: n.problemTitle,
+      difficulty: n.difficulty,
+      topicTags: n.topicTags,
+      raw: n.problem,
+    });
+  }
+  // The rep as the sitting needs it, from the STORED sitting — through the normal task and plan paths, so its
+  // reminder and calendar rows stay right (a linked event is renamed with it, once). A missing rep is created
+  // put-if-absent under the sitting's fixed id (racing Starts make one). Only a new sitting (or a rep just made)
+  // titles it, gives it the problem URL and a plan row on its day (none for a timed rep — rolls.md D6); a
+  // resume only starts it, so it never undoes your own edits.
+  private async shapeRep(s: Sitting, roll: Roll, isNew: boolean): Promise<void> {
+    const title = sittingRepTitle(s.problemTitle);
+    const url = sittingProblemUrl(s.problemSlug);
     let rep = await this.repo.getTask(s.repTaskId, { consistent: true });
-    if (!rep)
-      rep = await this.repo.putTask({
+    let made = false;
+    if (!rep) {
+      made = await this.repo.putTaskIfAbsent({
         ...this.base(),
         ...rollRepFields(roll),
         id: s.repTaskId,
         title,
-        notes: sittingProblemUrl(n.problemSlug),
+        notes: url,
       });
+      rep = await this.mustTask(s.repTaskId);
+    }
     if (rep.status === 'done' || rep.status === 'cancelled') return;
-    if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
-    if (!rep.notes) rep = await this.setTaskNotes(rep.id, sittingProblemUrl(n.problemSlug));
-    const dayPlans = await this.repo.listPlans(s.day, { consistent: true });
-    if (!dayPlans.some((p) => p.taskId === rep.id))
-      await this.repo.putPlan({
-        ...this.base(),
-        taskId: rep.id,
-        day: s.day,
-        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
-        order: dayPlans.length,
-      });
-    if (rep.status !== 'in_progress') await this.transitionTask(rep.id, 'in_progress');
+    if (isNew || made) {
+      if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
+      if (!rep.notes) rep = await this.setTaskNotes(rep.id, url);
+      const dayPlans = await this.repo.listPlans(s.day, { consistent: true });
+      if (!isTimed(rep) && !dayPlans.some((p) => p.taskId === rep!.id))
+        await this.repo.putPlan({
+          ...this.base(),
+          id: s.id, // one plan row per sitting, however many Starts race
+          taskId: rep.id,
+          day: s.day,
+          plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+          order: dayPlans.length,
+        });
+    }
+    if (rep.status === 'in_progress') return;
+    try {
+      await this.transitionTask(rep.id, 'in_progress');
+    } catch (err) {
+      // A racing Start started it first — that's the state we want.
+      if ((await this.repo.getTask(rep.id, { consistent: true }))?.status !== 'in_progress')
+        throw err;
+    }
   }
   // 1. guards; 2. reserve the call in the budget (a CAS — over a cap, or losing the race, refuses with nothing
   // written); 3. write each event put-if-absent; 4. any head event in the call, fresh or a repeat → recompute the
-  // summary from all of them; 5. fold fresh snapshots and replay into the live row.
+  // summary from every head row, written only when it folds more rows than the stored one; 5. fold the call's
+  // snapshots and replay into the live row (a repeat counts nothing but can still land the newest code).
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
     const { sittingId, events } = normalizeSittingEvents(input);
     const sitting = await this.repo.getSitting(sittingId, { consistent: true });
@@ -805,7 +852,7 @@ export class BackendClient implements ApiClient {
       },
     );
     const expiresAt = sittingRawExpiresAt(sitting);
-    const fresh: typeof events = [];
+    const fresh = new Set<string>();
     for (const e of events) {
       const row = { ...this.baseAt(now), id: e.id, sittingId, at: e.at, receivedAt: now };
       const written =
@@ -818,43 +865,36 @@ export class BackendClient implements ApiClient {
               { ...row, type: e.type, payload: e.payload },
               isRawEventType(e.type) ? expiresAt : null,
             );
-      if (written) fresh.push(e);
+      if (written) fresh.add(e.id);
     }
     let status = sitting.status;
-    if (events.some((e) => isHeadEvent(e.type))) {
-      const summary = summarizeHeadEvents(await this.repo.listSittingHeadEvents(sittingId));
-      const head = await this.repo.casUpdate(
-        this.repo.sittingShape(sittingId),
-        sittingId,
-        (cur) => ({ ...cur, summary }),
-        now,
-        { consistent: true },
-      );
-      status = head.status;
-    }
-    const bulk = fresh.filter((e) => !isHeadEvent(e.type));
+    if (events.some((e) => isHeadEvent(e.type)))
+      status = (await this.refoldHead(sittingId, now)).status;
+    const bulk = events.filter((e) => !isHeadEvent(e.type));
+    const fold = (l: SittingLive) => bulk.reduce((x, e) => foldLive(x, e, now, fresh.has(e.id)), l);
     const live = bulk.length
-      ? await this.repo.casUpdate(
-          this.repo.sittingLiveShape(sittingId),
-          sittingId,
-          (cur) => bulk.reduce((l, e) => foldLive(l, e, now), cur),
-          now,
-          {
-            consistent: true,
-            create: () =>
-              bulk.reduce((l, e) => foldLive(l, e, now), {
-                ...this.baseAt(now),
-                id: sittingId,
-                ...emptyLiveFields(sittingId),
-              }),
-          },
-        )
+      ? await this.repo.casUpdate(this.repo.sittingLiveShape(sittingId), sittingId, fold, now, {
+          consistent: true,
+          create: () => fold({ ...this.baseAt(now), id: sittingId, ...emptyLiveFields(sittingId) }),
+        })
       : await this.repo.getSittingLive(sittingId, { consistent: true });
-    const duplicates = events.length - fresh.length;
+    const duplicates = events.length - fresh.size;
     console.log(
-      JSON.stringify({ event: 'lc_ingest', sittingId, accepted: fresh.length, duplicates, bytes }),
+      JSON.stringify({ event: 'lc_ingest', sittingId, accepted: fresh.size, duplicates, bytes }),
     );
-    return { accepted: fresh.length, duplicates, version: live?.version ?? 0, status };
+    return { accepted: fresh.size, duplicates, version: live?.version ?? 0, status };
+  }
+  // The summary from every head row, strongly consistent after this call's own writes, so a later call's set
+  // contains an earlier one's; written only when it folds more rows than the stored one (never rolled back).
+  private async refoldHead(id: string, now: number): Promise<Sitting> {
+    const summary = summarizeHeadRows(await this.repo.listSittingHeadRows(id));
+    return this.repo.casUpdate(
+      this.repo.sittingShape(id),
+      id,
+      (cur) => (newerSummary(cur.summary, summary) ? { ...cur, summary } : null),
+      now,
+      { consistent: true },
+    );
   }
   async listSittings(range?: DateRange): Promise<Sitting[]> {
     return (await this.repo.listSittings())
@@ -901,6 +941,7 @@ export class BackendClient implements ApiClient {
   // The sitting and its rows, and its problem doc once no other sitting is on that problem.
   private async removeSitting(s: Sitting, now: number): Promise<void> {
     await this.repo.tombstoneSitting(s.id, now);
+    await this.releaseStartGate(s.id, now);
     const others = await this.repo.listSittings({ consistent: true });
     if (!others.some((x) => x.problemSlug === s.problemSlug))
       await this.repo.tombstoneLeetcodeProblem(s.problemSlug, now);
@@ -914,7 +955,10 @@ export class BackendClient implements ApiClient {
       if (x.repTaskId === task.id && x.status === 'active')
         await this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned', now);
   }
+  // Ends it (once), healing its summary first — a fold lost just before Done would otherwise stay lost — and
+  // frees the Start gate when it holds this sitting.
   private async endSitting(id: string, to: 'done' | 'abandoned', now: number): Promise<void> {
+    await this.refoldHead(id, now);
     await this.repo.casUpdate(
       this.repo.sittingShape(id),
       id,
@@ -922,6 +966,22 @@ export class BackendClient implements ApiClient {
       now,
       { consistent: true },
     );
+    await this.releaseStartGate(id, now);
+  }
+  private async releaseStartGate(id: string, now: number): Promise<void> {
+    try {
+      await this.repo.casUpdate(
+        this.repo.lcStartShape(),
+        'lcstart',
+        (g) => releaseStart(g, id),
+        now,
+        {
+          consistent: true,
+        },
+      );
+    } catch (err) {
+      if (!(err instanceof Error && err.message.startsWith('Not found'))) throw err; // no gate yet: nothing held
+    }
   }
 
   // --- Flux sets (D47) ---
@@ -2442,16 +2502,16 @@ export class BackendClient implements ApiClient {
       .sort((a, b) => a.day.localeCompare(b.day));
   }
 
-  // Alive sittings with their live rows and head events — a child whose head is gone (a delete that raced an
+  // Alive sittings with their live rows and head rows — a child whose head is gone (a delete that raced an
   // ingest) stays out.
   private async sittingExport() {
     const sittings = await this.repo.listSittings();
     const ids = new Set(sittings.map((x) => x.id));
-    const { live, events } = await this.repo.listAllSittingChildren();
+    const { live, heads } = await this.repo.listAllSittingChildren();
     return {
       sittings,
       sittingLive: live.filter((l) => ids.has(l.sittingId)),
-      sittingEvents: events.filter((e) => ids.has(e.sittingId)),
+      sittingHeadRows: heads.filter((h) => ids.has(h.sittingId)),
     };
   }
   async exportData(): Promise<ExportBundle> {

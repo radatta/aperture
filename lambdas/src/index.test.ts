@@ -162,7 +162,7 @@ describe('handler device-token ingest branch', () => {
       problemSlug: 'two-sum',
       problemTitle: 'Two Sum',
       lang: 'python3',
-      startedAt: 1,
+      startedAt: Date.now(),
       tzOffsetMinutes: 480,
     };
 
@@ -205,6 +205,43 @@ describe('handler device-token ingest branch', () => {
         expect(
           (await rpc(m, { 'x-aperture-authorization': 'Bearer right-token' }, [])).statusCode,
         ).toBe(401);
+    });
+
+    it('says which ingest failures are worth a retry: 409 a lost race, 429 a throttle, 500 a fault', async () => {
+      process.env.DEVICE_TOKEN = 'right-token';
+      const headers = { 'x-aperture-authorization': 'Bearer right-token' };
+      const fail = (e: Error) => {
+        h.doc = new InMemoryDoc();
+        vi.spyOn(h.doc, 'get').mockRejectedValue(e);
+      };
+      const conflict = Object.assign(new Error('Conflict — try again'), { name: 'ConflictError' });
+      const throttle = Object.assign(new Error('slow down'), {
+        name: 'ThrottlingException',
+        $metadata: {},
+      });
+      const fault = Object.assign(new Error('boom'), {
+        name: 'InternalServerError',
+        $metadata: {},
+      });
+      const events = [
+        {
+          sittingId: '01JC0000000000000000000000',
+          events: [{ id: '01JC0000000000000000000001', type: 'note', at: 1, payload: {} }],
+        },
+      ];
+      for (const [e, code] of [
+        [conflict, 409],
+        [throttle, 429],
+        [fault, 500],
+      ] as const) {
+        fail(e);
+        expect((await rpc('lcSittingEvents', headers, events)).statusCode).toBe(code);
+      }
+      vi.restoreAllMocks();
+      h.doc = new InMemoryDoc();
+      expect(
+        (await rpc('lcSittingEvents', headers, [{ sittingId: 'bad', events: [] }])).statusCode,
+      ).toBe(400);
     });
 
     it('413s an ingest body over the cap before parsing it', async () => {

@@ -8,8 +8,16 @@ import {
   lcTimerState,
   normalizeSittingEvents,
   normalizeSittingStart,
+  claimStart,
+  countStartAttempt,
+  emptyGate,
+  LC_START_ATTEMPT_CAP_ERROR,
+  LC_START_ATTEMPTS_PER_DAY,
   planSittingStart,
+  releaseStart,
   reserveBudget,
+  SITTING_START_CAP_ERROR,
+  SITTING_STARTS_PER_DAY,
   SITTING_ACTIVE_ERROR,
   SITTING_CAP_ERROR,
   SITTING_ENDED_ERROR,
@@ -20,7 +28,10 @@ import {
   sittingElapsedMs,
   sittingIngestError,
   sittingRawExpiresAt,
-  summarizeHeadEvents,
+  headRowOf,
+  payloadError,
+  summarizeHeadRows,
+  utf8Bytes,
 } from './sittings';
 import type { NormalizedSittingEvent, SittingStartInput } from './sittings';
 import type { Sitting, Task } from './types';
@@ -37,7 +48,7 @@ const start = (over: Partial<SittingStartInput> = {}): SittingStartInput => ({
 });
 const ev = (type: NormalizedSittingEvent['type'], at: number, payload: unknown = {}) =>
   normalizeSittingEvents({
-    sittingId: 's',
+    sittingId: ulid(),
     events: [
       type === 'replay'
         ? { id: ulid(), type, at, events: String(payload) }
@@ -68,18 +79,32 @@ describe('normalizeSittingStart', () => {
   });
 });
 
+describe('sizes and shapes', () => {
+  it('measures UTF-8 bytes, not characters', () => {
+    expect(utf8Bytes('é')).toBe(2);
+    expect(utf8Bytes('汉')).toBe(3);
+  });
+  it('refuses payloads DynamoDB can’t store as given', () => {
+    let deep: unknown = 1;
+    for (let i = 0; i < 25; i++) deep = [deep];
+    expect(payloadError(deep)).toMatch(/too deep/);
+    expect(payloadError({ n: 2 ** 60 })).toMatch(/unstorable/);
+    expect(payloadError({ n: 1.5, s: 'ok', a: [1, { b: null }] })).toBeNull();
+  });
+});
+
 describe('normalizeSittingEvents', () => {
   it('refuses a duplicate id in one call, an unknown type and a snapshot without code', () => {
     const id = ulid();
     const snap = { id, type: 'snapshot' as const, at: 1, payload: { code: 'a' } };
-    expect(() => normalizeSittingEvents({ sittingId: 's', events: [snap, snap] })).toThrow(
+    expect(() => normalizeSittingEvents({ sittingId: ulid(), events: [snap, snap] })).toThrow(
       /Duplicate/,
     );
     expect(() =>
-      normalizeSittingEvents({ sittingId: 's', events: [{ ...snap, type: 'bogus' as never }] }),
+      normalizeSittingEvents({ sittingId: ulid(), events: [{ ...snap, type: 'bogus' as never }] }),
     ).toThrow(/Unknown/);
     expect(() =>
-      normalizeSittingEvents({ sittingId: 's', events: [{ ...snap, payload: {} }] }),
+      normalizeSittingEvents({ sittingId: ulid(), events: [{ ...snap, payload: {} }] }),
     ).toThrow(/needs its code/);
   });
   it('refuses a call over the byte budget', () => {
@@ -90,7 +115,7 @@ describe('normalizeSittingEvents', () => {
       payload: { result: { pad: 'x'.repeat(90_000) } },
     });
     expect(() =>
-      normalizeSittingEvents({ sittingId: 's', events: [big(1), big(2), big(3)] }),
+      normalizeSittingEvents({ sittingId: ulid(), events: [big(1), big(2), big(3)] }),
     ).toThrow(/Too much/);
   });
 });
@@ -103,31 +128,53 @@ describe('folds', () => {
     );
   });
   it('an unreadable result counts as other and holds its place as the first submit', () => {
-    const s = foldSummary(emptySummary(), ev('submit', 5, { result: null }));
-    const next = foldSummary(s, ev('submit', 6, { result: { status_code: 10 } }));
+    const rows = [
+      headRowOf('s', { id: 'a', type: 'submit', at: 5, payload: { result: null } }),
+      headRowOf('s', { id: 'b', type: 'submit', at: 6, payload: { result: { status_code: 10 } } }),
+    ];
+    const next = rows.reduce(foldSummary, emptySummary());
     expect(next.firstSubmit).toMatchObject({ verdict: 'other', at: 5 });
-    expect(next).toMatchObject({ submits: 2, firstAcceptedAt: 6, submitsBeforeAccepted: 1 });
+    expect(next).toMatchObject({
+      submits: 2,
+      firstAcceptedAt: 6,
+      submitsBeforeAccepted: 1,
+      headEvents: 2,
+    });
   });
-  it('the summary recomputes from the head events whatever order they arrive in', () => {
-    const wa = {
+  it('the summary recomputes from the head rows whatever order they arrive in', () => {
+    const wa = headRowOf('s', {
       id: 'b',
-      type: 'submit' as const,
+      type: 'submit',
       at: 2,
       payload: { result: { status_code: 11 } },
-    };
-    const ac = {
+    });
+    const ac = headRowOf('s', {
       id: 'c',
-      type: 'submit' as const,
+      type: 'submit',
       at: 3,
       payload: { result: { status_code: 10 } },
-    };
-    const run = { id: 'a', type: 'run' as const, at: 1, payload: {} };
-    expect(summarizeHeadEvents([ac, run, wa])).toEqual(summarizeHeadEvents([run, wa, ac]));
-    expect(summarizeHeadEvents([ac, run, wa])).toMatchObject({
+    });
+    const run = headRowOf('s', { id: 'a', type: 'run', at: 1, payload: {} });
+    expect(summarizeHeadRows([ac, run, wa])).toEqual(summarizeHeadRows([run, wa, ac]));
+    expect(summarizeHeadRows([ac, run, wa])).toMatchObject({
       runsBeforeFirstSubmit: 1,
       firstSubmit: { verdict: 'wrong_answer' },
       submitsBeforeAccepted: 1,
     });
+  });
+  it('trims a status message before it reaches the head', () => {
+    const r = headRowOf('s', {
+      id: 'a',
+      type: 'submit',
+      at: 1,
+      payload: { result: { status_msg: 'x'.repeat(5000) } },
+    });
+    expect(r.verdict?.statusMsg).toHaveLength(200);
+  });
+  it('a repeated snapshot counts nothing but still lands its code when newest', () => {
+    const live = foldLive(emptyLiveFields('s'), ev('snapshot', 1, { code: 'old' }), 1);
+    const healed = foldLive(live, ev('snapshot', 5, { code: 'new' }), 9, false);
+    expect(healed).toMatchObject({ version: 1, snapshots: 1, code: 'new', codeAt: 5 });
   });
   it('counts a restart as a rewrite, once', () => {
     const long = 'x'.repeat(400);
@@ -212,7 +259,7 @@ describe('planSittingStart', () => {
       ...over,
     }) as Sitting;
   const plan = (sittings: Sitting[], tasks: Task[], slug = 'b', now = H) =>
-    planSittingStart({ clientSittingId: 'new', problemSlug: slug }, 'd', sittings, tasks, 'r', now);
+    planSittingStart({ clientSittingId: 'new', problemSlug: slug }, sittings, tasks, 'r', now);
 
   it('refuses another problem while one is open on a live rep', () => {
     expect(() => plan([open({})], [rep('t1', 'in_progress')])).toThrow(SITTING_ACTIVE_ERROR);
@@ -230,5 +277,37 @@ describe('planSittingStart', () => {
   it('abandons a half-made Start on another problem, but resumes it on its own', () => {
     expect(plan([open({})], [], 'b').ends.map((e) => e.to)).toEqual(['abandoned']);
     expect(plan([open({})], [], 'a')).toMatchObject({ kind: 'resume', ends: [] });
+  });
+});
+
+describe('the Start gate', () => {
+  const T = 10 * 60_000;
+  it('counts attempts per day, resetting on a new day', () => {
+    let g = emptyGate('d1');
+    for (let i = 0; i < LC_START_ATTEMPTS_PER_DAY; i++) g = countStartAttempt(g, 'd1');
+    expect(() => countStartAttempt(g, 'd1')).toThrow(LC_START_ATTEMPT_CAP_ERROR);
+    expect(countStartAttempt(g, 'd2').attempts).toBe(1);
+  });
+  it('lets one sitting through; a parallel Start sees the fresh claim and is refused', () => {
+    const g = claimStart(emptyGate('d'), 'd', 'A', [], new Set(), T)!;
+    expect(g).toMatchObject({ openSittingId: 'A', starts: 1 });
+    expect(claimStart(g, 'd', 'A', [], new Set(), T)).toBeNull(); // the same Start again
+    expect(() => claimStart(g, 'd', 'B', [], new Set(), T + 1000)).toThrow(SITTING_ACTIVE_ERROR);
+  });
+  it('lets through past a claim that died, an ended sitting, or a released one', () => {
+    const g = claimStart(emptyGate('d'), 'd', 'A', [], new Set(), T)!;
+    expect(claimStart(g, 'd', 'B', [], new Set(), T + 3 * 60_000)?.openSittingId).toBe('B');
+    expect(
+      claimStart(g, 'd', 'B', [{ id: 'A', status: 'done' }], new Set(), T)?.openSittingId,
+    ).toBe('B');
+    expect(
+      claimStart(g, 'd', 'B', [{ id: 'A', status: 'active' }], new Set(['A']), T)?.openSittingId,
+    ).toBe('B');
+    expect(releaseStart(g, 'A')).toMatchObject({ openSittingId: null });
+    expect(releaseStart(g, 'B')).toBeNull();
+  });
+  it('caps Starts a day', () => {
+    const g = { ...emptyGate('d'), starts: SITTING_STARTS_PER_DAY };
+    expect(() => claimStart(g, 'd', 'X', [], new Set(), T)).toThrow(SITTING_START_CAP_ERROR);
   });
 });

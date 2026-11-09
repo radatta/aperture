@@ -41,6 +41,7 @@ import {
   SITTING_EVENTS_PER_CALL,
   SITTING_INGEST_WINDOW_MS,
   SITTING_MAX_EVENTS,
+  SITTING_START_TIME_ERROR,
   sittingMetrics,
 } from './sittings';
 import type { SittingEventInput, SittingStartInput } from './sittings';
@@ -2148,7 +2149,7 @@ export function runApiContract(
           'series',
           'sessions',
           'settings',
-          'sittingEvents',
+          'sittingHeadRows',
           'sittingLive',
           'sittings',
           'stories',
@@ -2160,7 +2161,9 @@ export function runApiContract(
       expect(data.sittings.map((x) => x.id)).toContain(sitting.id);
       expect(data.leetcodeProblems.map((x) => x.slug)).toContain('two-sum');
       // Runs and submits are kept; the raw bulk (snapshots) and the replay stay out.
-      expect(data.sittingEvents.map((e) => e.type)).toEqual(['submit']);
+      expect(data.sittingHeadRows.map((e) => [e.type, e.verdict?.verdict])).toEqual([
+        ['submit', 'accepted'],
+      ]);
       expect(data.sittingLive.map((l) => l.sittingId)).toEqual([sitting.id]);
       expect(data.stories.map((x) => x.id)).toContain(story.id);
       expect(data.fluxSets.map((x) => x.id)).toContain(flux.id);
@@ -3331,7 +3334,9 @@ export function runApiContract(
       it('a sitting left open past its window ends at the next Start, which reuses its rep', async () => {
         const { sitting } = await startSitting(api);
         advance(SITTING_INGEST_WINDOW_MS + 1);
-        const next = await api.lcSittingStart(sittingStart());
+        const next = await api.lcSittingStart(
+          sittingStart({ startedAt: LC_T0 + SITTING_INGEST_WINDOW_MS + 1 }),
+        );
         expect(next.resumed).toBe(false);
         expect(next.sitting.repTaskId).toBe(sitting.repTaskId);
         expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ status: 'abandoned' });
@@ -3344,6 +3349,27 @@ export function runApiContract(
         await expect(
           api.lcSittingStart(sittingStart({ problemSlug: 'three-sum', problemTitle: '3Sum' })),
         ).rejects.toThrow(LC_ROLL_UNLINKED_ERROR);
+      });
+
+      it('a timed rep is attached and started but never planned', async () => {
+        const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+        await api.updateSettings({ leetcodeRollId: roll.id });
+        const { task: picked } = await api.pickRollToday(roll.id, '2023-11-13');
+        await api.setTaskDue(picked.id, { dueDay: '2023-11-14', dueTime: '18:00' });
+        const { sitting } = await api.lcSittingStart(sittingStart());
+        expect(sitting.repTaskId).toBe(picked.id);
+        expect(await api.getTask(picked.id)).toMatchObject({ status: 'in_progress' });
+        const plans = await api.listPlansForDay(sitting.day);
+        expect(plans.filter((p) => p.taskId === picked.id)).toEqual([]);
+      });
+
+      it('a Start whose time is more than a day off is refused', async () => {
+        await startSitting(api, { problemSlug: 'warm-up', problemTitle: 'Warm up' });
+        await expect(
+          api.lcSittingStart(
+            sittingStart({ problemSlug: 'later', startedAt: LC_T0 + 2 * SITTING_INGEST_WINDOW_MS }),
+          ),
+        ).rejects.toThrow(SITTING_START_TIME_ERROR);
       });
 
       it('deleting the rep removes the sitting; deleteSitting is idempotent', async () => {

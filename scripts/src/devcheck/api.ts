@@ -250,8 +250,10 @@ export interface DevSitting {
   day: string;
   status: 'active' | 'done' | 'abandoned';
   repTaskId: string;
+  rollId: string;
   problemSlug: string;
   problemTitle: string;
+  prepTarget: string;
   endedAt: number | null;
   summary: {
     runs: number;
@@ -801,6 +803,23 @@ export function createApiClient({
     async deleteSitting(id: string): Promise<void> {
       assertLedger(id, 'sitting');
       await call<null>('deleteSitting', [id]);
+    },
+    // Cleanup's removal: the sitting AND its rep when the rep is on a roll this harness made — a rep the Start
+    // spawned but the ledger never heard of (a lost answer, a killed run) is still this run's to remove.
+    async removeSitting(id: string): Promise<void> {
+      assertLedger(id, 'sitting');
+      const s = (await reads.listSittings()).find((x) => x.id === id);
+      if (s && ledger.has(s.rollId) && ledgerKind(ledger.read(), s.rollId) === 'roll') {
+        if ((await reads.getTask(s.repTaskId)) !== null)
+          await call<null>('deleteTask', [s.repTaskId]);
+      }
+      await call<null>('deleteSitting', [id]);
+    },
+    async setRollActive(id: string, active: boolean): Promise<DevRoll> {
+      assertLedger(id, 'roll');
+      const roll = (await reads.listRolls()).find((r) => r.id === id);
+      if (!roll) throw new Error(`roll ${id} isn’t listed`);
+      return call<DevRoll>('upsertRoll', [{ ...roll, active }]);
     },
     // Cleanup's "delete": the API has none for habits, so the recorded habit is archived (HABIT_VIA).
     async archiveHabit(id: string): Promise<void> {

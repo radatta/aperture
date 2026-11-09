@@ -14,7 +14,7 @@ import {
   emptySummary,
   foldLive,
   foldSummary,
-  isHeadEvent,
+  headRowOf,
   normalizeSittingEvents,
   PREP_TARGET_DEFAULT,
   REMINDER_SETTINGS_DEFAULTS,
@@ -629,7 +629,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     const startedAt = task.startedAt!;
     const snapAt = startedAt + 4 * 60_000;
     const { events } = normalizeSittingEvents({
-      sittingId: 'seed',
+      sittingId: ulid(),
       events: [
         { id: ulid(), type: 'snapshot', at: snapAt, payload: { code, lang: 11 } },
         ...judged.map(([type, status, msg, min, ok, all]) => ({
@@ -681,8 +681,11 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         receivedAt: e.at,
         payload: e.payload,
       });
-      if (isHeadEvent(e.type)) sitting.summary = foldSummary(sitting.summary, e);
-      else live = foldLive(live, e, e.at);
+      if (e.type === 'run' || e.type === 'submit' || e.type === 'note' || e.type === 'timer') {
+        const row = headRowOf(sitting.id, { id: e.id, type: e.type, at: e.at, payload: e.payload });
+        store.sittingHeadRows.push({ ...mk(e.at), ...row });
+        sitting.summary = foldSummary(sitting.summary, row);
+      } else live = foldLive(live, e, e.at);
     }
     store.sittings.push(sitting);
     store.sittingLive.push(live);

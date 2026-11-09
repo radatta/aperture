@@ -39,8 +39,9 @@ export const sk = {
 
   // LeetCode sittings (docs/areas/recruiting). The head is `lcsit#<id>` (id = the Start's clientSittingId,
   // so a double-fired Start can't make two); its children sit under `lcs#<id>#` — the live row, the capture
-  // budget, head events (`hd#`: runs, submits, notes, timer reads — the summary is recomputed from them), raw
-  // bulk events (`ev#`: snapshots, submit details) and replay chunks (`rp#`), each its own begins_with and each
+  // budget, head rows (`hd#`: a run's, submit's, note's or timer read's verdict — compact; the summary is
+  // recomputed from them), those events' full payloads (`jd#`, kept forever), raw bulk events (`ev#`:
+  // snapshots, submit details) and replay chunks (`rp#`), each its own begins_with and each
   // keyed by its client-minted ULID, so a repeat is a repeat whatever its time. `lcs#` never matches `lcsit#`,
   // and neither matches the legacy `lc#`. The problem doc is one row per slug, shared by its sittings.
   sitting: (id: string) => `lcsit#${id}`,
@@ -49,14 +50,19 @@ export const sk = {
   sittingChildAllPrefix: () => `lcs#`,
   sittingLive: (id: string) => `lcs#${id}#live`,
   sittingBudget: (id: string) => `lcs#${id}#budget`,
-  sittingHeadEvent: (id: string, eventId: string) => `lcs#${id}#hd#${eventId}`,
-  sittingHeadEventPrefix: (id: string) => `lcs#${id}#hd#`,
+  sittingHeadRow: (id: string, eventId: string) => `lcs#${id}#hd#${eventId}`,
+  sittingHeadRowPrefix: (id: string) => `lcs#${id}#hd#`,
+  sittingJudged: (id: string, eventId: string) => `lcs#${id}#jd#${eventId}`,
+  sittingJudgedPrefix: (id: string) => `lcs#${id}#jd#`,
   sittingEvent: (id: string, eventId: string) => `lcs#${id}#ev#${eventId}`,
   sittingEventPrefix: (id: string) => `lcs#${id}#ev#`,
   sittingReplay: (id: string, chunkId: string) => `lcs#${id}#rp#${chunkId}`,
   sittingReplayPrefix: (id: string) => `lcs#${id}#rp#`,
   lcProblem: (slug: string) => `lcq#${slug}`,
   lcProblemPrefix: () => `lcq#`,
+  // The user's Start gate (one row): today's Start attempts and Starts, and the open sitting it let through —
+  // the single decision point that keeps parallel Starts to one open sitting and the daily caps.
+  lcStart: () => `lcstart`,
 
   // Flux sets (D47), day-bucketed like lc. A few rows a day: reads and the by-id lookup scan `flux#`.
   flux: (day: string, id: string) => `flux#${day}#${id}`,

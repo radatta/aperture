@@ -139,6 +139,17 @@ const SMOKE_USER = 'smoke-test';
 // already the whole user (the dev check drives them that way). Their bodies are capped before parsing:
 // a leaked device token can't make the Lambda chew on megabytes (sittings.ts caps a call at 256 KB).
 const INGEST_BODY_MAX = 300 * 1024;
+// The extension's outbox retries 409, 429 and 5xx and keeps anything else as failed (extension/README.md), so an
+// ingest call says which it was: a lost CAS race is a 409; DynamoDB pushing back a 429; any other AWS or
+// internal fault a 500; a refusal of the input itself (the normalizers, guards and caps) a 400.
+function ingestFailureStatus(err: unknown): number {
+  const e = err as { name?: string; $metadata?: unknown };
+  if (e?.name === 'ConflictError') return 409;
+  if (e?.name === 'ProvisionedThroughputExceededException' || e?.name === 'ThrottlingException')
+    return 429;
+  if (e?.$metadata !== undefined || /Exception$/.test(e?.name ?? '')) return 500;
+  return 400;
+}
 async function ingestUserId(
   authHeader: string | undefined,
   verifier: Verifier | null,
@@ -272,7 +283,9 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
       ? 401
       : message.startsWith('Unknown method')
         ? 404
-        : 400;
+        : ingest
+          ? ingestFailureStatus(err)
+          : 400;
     return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
   }
 }

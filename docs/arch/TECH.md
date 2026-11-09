@@ -162,10 +162,12 @@ SK (type-prefixed range keys):
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
   lcs#<id>#budget               a sitting's capture budget (reserved before every events write; internal)
-  lcs#<id>#hd#<ulid>            a sitting's head events: runs, submits, notes, timer reads (the summary's source)
+  lcs#<id>#hd#<ulid>            a sitting's head rows: a run's/submit's/note's/timer read's compact verdict (the summary's source)
+  lcs#<id>#jd#<ulid>            a run's, submit's or note's full payload (kept forever)
   lcs#<id>#ev#<ulid>            a sitting's raw bulk events: snapshots, submit details (expiresAt)
   lcs#<id>#rp#<ulid>            a sitting's replay chunks, raw (expiresAt)
   lcq#<slug>                    LeetCode's questionDetail for a problem, raw, one per slug
+  lcstart                       the user's LeetCode Start gate: attempts/Starts a day, the open sitting it let through
   flux#<day>#<ulid>             Flux sets, day-bucketed; the client mints the ulid (idempotent put-if-absent; soft-delete tombstones)
   fluxnote#<weekStart>          Flux's weekly note cache (direct get, consistent): {text, fingerprint, generatedAt} — derived from the sets, rebuilt when they change, so no userId/ulid/updatedAt
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)

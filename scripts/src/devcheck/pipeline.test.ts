@@ -354,6 +354,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setSittingPrepTarget: async () => {
         throw new Error('unused');
       },
+      removeSitting: async () => {
+        throw new Error('unused');
+      },
+      setRollActive: async () => {
+        throw new Error('unused');
+      },
       upsertHabit: async () => {
         throw new Error('unused');
       },

@@ -17,10 +17,17 @@ export function toEntity<T>(item: Item): T {
   for (const k of ITEM_ATTRS) delete rest[k];
   return rest as T;
 }
+// The write side's guard: an entity never carries a table attribute into its item — a patched-through PK
+// would write into another partition, a stray expiresAt would let TTL hard-delete the row on prod.
+const entityFields = (entity: object): Record<string, unknown> => {
+  const rest: Record<string, unknown> = { ...entity };
+  for (const k of ITEM_ATTRS) delete rest[k];
+  return rest;
+};
 
 // A generic entity stored at a known SK, no secondary index.
 export function entityItem<T extends object>(userId: string, skStr: string, entity: T): Item {
-  return { PK: pk(userId), SK: skStr, ...entity };
+  return { ...entityFields(entity), PK: pk(userId), SK: skStr };
 }
 
 // A fire time the Lambda can't compute (a malformed legacy deadline makes the zone math throw) is no
@@ -58,7 +65,7 @@ export function remindArm(
 // carries no GSI keys, so it shows up in neither window read. `armedAt` (remindArm) defaults to the task's
 // updatedAt.
 export function taskItem(userId: string, task: Task, armedAt?: number): Item {
-  const item: Item = { PK: pk(userId), SK: sk.task(task.id), ...task };
+  const item: Item = { ...entityFields(task), PK: pk(userId), SK: sk.task(task.id) };
   if (task.status === 'done' && task.completedAt != null) {
     item.GSI1PK = gsi1.donePk(userId);
     item.GSI1SK = gsi1.doneSk(task.completedAt);
@@ -76,7 +83,11 @@ export function taskItem(userId: string, task: Task, armedAt?: number): Item {
 // A plan is on the remind index at DAY_REMINDER_TIME on its day; a tombstone drops out. Whether its task
 // is still open and untimed is the poller's check at fire time.
 export function planItem(userId: string, plan: TaskPlan, armedAt?: number): Item {
-  const item: Item = { PK: pk(userId), SK: sk.plan(plan.day, plan.order, plan.id), ...plan };
+  const item: Item = {
+    ...entityFields(plan),
+    PK: pk(userId),
+    SK: sk.plan(plan.day, plan.order, plan.id),
+  };
   const at = planRemindAt(plan);
   if (at !== null) {
     item.GSI1PK = gsi1.remindPk(userId);
@@ -90,11 +101,11 @@ export function planItem(userId: string, plan: TaskPlan, armedAt?: number): Item
 // mid-life; reads filter them. Coalescing on read is defensive: rows written before a field existed.
 export function financeTxnItem(userId: string, t: FinanceTransaction): Item {
   return {
+    ...entityFields(t),
     PK: pk(userId),
     SK: sk.finTxn(t.id),
     GSI1PK: gsi1.finTxnPk(userId),
     GSI1SK: gsi1.finTxnSk(t.date),
-    ...t,
   };
 }
 export function toFinanceTxn(item: Item): FinanceTransaction {

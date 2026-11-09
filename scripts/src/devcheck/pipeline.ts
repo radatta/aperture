@@ -545,7 +545,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         await client.writes.archiveRoll(id);
         return true;
       case 'sitting':
-        await client.writes.deleteSitting(id);
+        await client.writes.removeSitting(id); // its rep too, when the ledger never heard of it
         return true;
       case 'lcRollLink':
         await client.writes.linkLeetcodeRoll(null);

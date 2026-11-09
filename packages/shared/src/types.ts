@@ -396,6 +396,31 @@ export interface SittingSummary {
   runsBeforeFirstSubmit: number;
   lcTimer: LcTimerState | null;
   lastEventAt: number | null;
+  headEvents: number; // how many head rows this summary folds — a recompute never writes over a larger one
+}
+
+// The user's LeetCode Start gate (one row): the day it counts (the user's zone, never the client's), that
+// day's Start attempts and Starts, and the open sitting it last let through with when — the single decision
+// point that keeps parallel Starts to one open sitting and the caps. Internal — never exported.
+export interface LcStartGate extends BaseEntity {
+  day: string;
+  attempts: number;
+  starts: number;
+  openSittingId: string | null;
+  openClaimedAt: number | null;
+}
+
+// A head event as the summary reads it: its type, time and the verdict or timer state taken from its
+// payload at write. Small (the summary's recompute reads every one); the run's, submit's or note's full
+// payload is kept beside it as a SittingEvent.
+export interface SittingHeadRow {
+  id: string;
+  sittingId: string;
+  type: 'run' | 'submit' | 'note' | 'timer';
+  at: number;
+  verdict: SittingVerdict | null; // runs and submits
+  timer: LcTimerState | null; // timer reads
+  deletedAt: number | null;
 }
 
 // A sitting's capture budget: every event the extension sends is reserved here (a CAS increment) before
@@ -410,8 +435,8 @@ export interface SittingBudget extends BaseEntity {
 export interface Sitting extends BaseEntity {
   day: string; // YYYY-MM-DD — startedAt bucketed by the client's tz offset + dayStartHour
   startedAt: number; // server clock at Start — the sitting clock
-  clientStartedAt: number; // the Start click as the extension saw it; kept, never used for maths
-  endedAt: number | null; // set only by the rep task finishing (Done, Drop) or being deleted
+  clientStartedAt: number; // the Start click by the extension's clock — the clock its events' times are on
+  endedAt: number | null; // set when its rep finishes (Done, Drop), or by a later Start ending it as stale
   status: SittingStatus;
   clientSittingId: string; // the extension's idempotency key for Start
   problemSlug: string;

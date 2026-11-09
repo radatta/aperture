@@ -17,7 +17,9 @@ import type {
   Sitting,
   SittingBudget,
   SittingEvent,
+  SittingHeadRow,
   SittingLive,
+  LcStartGate,
   SittingReplayChunk,
   LogEntry,
   Place,
@@ -32,7 +34,7 @@ import type {
   TaskSeries,
   FluxWeekNoteRow,
 } from '@aperture/shared';
-import { isHeadEvent } from '@aperture/shared';
+import { headRowOf, isHeadEvent } from '@aperture/shared';
 import { ConditionFailedError, SK_END } from './DocClient';
 import type { DocClient, Item, QueryOpts } from './DocClient';
 import type { Writes } from './writes';
@@ -229,13 +231,20 @@ export class Repo {
       toItem: (x) => entityItem(this.userId, sk.sittingBudget(id), x),
     };
   }
-  // An event or replay chunk, written only if absent (idempotent per id). Head types (isHeadEvent) go under
-  // `hd#`; `expiresAt` (epoch s) marks the raw bulk for DynamoDB's TTL — the one row kind stamped on prod.
+  // An event or replay chunk, written only if absent (idempotent per id). A head event is two rows: its compact
+  // head row under `hd#` (what the summary reads) and its full payload under `jd#`; a timer read is only its row.
+  // `expiresAt` (epoch s) marks the raw bulk for DynamoDB's TTL — the one row kind stamped on prod.
   async putSittingEventIfAbsent(e: SittingEvent, expiresAt: number | null): Promise<boolean> {
-    const key = isHeadEvent(e.type)
-      ? sk.sittingHeadEvent(e.sittingId, e.id)
-      : sk.sittingEvent(e.sittingId, e.id);
-    return this.putChildIfAbsent(key, e, expiresAt);
+    if (!isHeadEvent(e.type))
+      return this.putChildIfAbsent(sk.sittingEvent(e.sittingId, e.id), e, expiresAt);
+    const fresh = await this.putChildIfAbsent(
+      sk.sittingHeadRow(e.sittingId, e.id),
+      headRowOf(e.sittingId, e as Parameters<typeof headRowOf>[1]),
+      null,
+    );
+    if (e.type !== 'timer')
+      await this.putChildIfAbsent(sk.sittingJudged(e.sittingId, e.id), e, null);
+    return fresh;
   }
   async putSittingReplayIfAbsent(c: SittingReplayChunk, expiresAt: number): Promise<boolean> {
     return this.putChildIfAbsent(sk.sittingReplay(c.sittingId, c.id), c, expiresAt);
@@ -254,22 +263,22 @@ export class Repo {
       throw err;
     }
   }
-  // A sitting's head events (what its summary is recomputed from), strongly consistent: the call that just
-  // wrote one must see it.
-  async listSittingHeadEvents(id: string): Promise<SittingEvent[]> {
+  // A sitting's head rows (what its summary is recomputed from), strongly consistent: the call that just wrote
+  // one must see it. Compact, so the recompute stays cheap however large the payloads.
+  async listSittingHeadRows(id: string): Promise<SittingHeadRow[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.sittingHeadEventPrefix(id), { consistent: true })).map(
-        (i) => toEntity<SittingEvent>(i),
+      (await this.doc.query(this.p(), sk.sittingHeadRowPrefix(id), { consistent: true })).map((i) =>
+        toEntity<SittingHeadRow>(i),
       ),
     );
   }
-  // Every event of a sitting — head and raw bulk — for its detail read.
+  // Every stored event of a sitting with its payload — runs, submits, notes, and the raw bulk — for its detail read.
   async listSittingEvents(id: string): Promise<SittingEvent[]> {
-    const [head, bulk] = await Promise.all([
-      this.listSittingHeadEvents(id),
+    const [judged, bulk] = await Promise.all([
+      this.doc.query(this.p(), sk.sittingJudgedPrefix(id), { consistent: true }),
       this.doc.query(this.p(), sk.sittingEventPrefix(id), { consistent: true }),
     ]);
-    return [...head, ...alive(bulk.map((i) => toEntity<SittingEvent>(i)))];
+    return alive([...judged, ...bulk].map((i) => toEntity<SittingEvent>(i)));
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
     return alive(
@@ -278,15 +287,15 @@ export class Repo {
       ),
     );
   }
-  // What the export carries of every sitting: live rows and head events (runs, submits, notes, timer reads).
-  // The raw bulk and the replay stay out (they expire; the export is one Lambda response).
-  async listAllSittingChildren(): Promise<{ live: SittingLive[]; events: SittingEvent[] }> {
+  // What the export carries of every sitting: live rows and head rows (verdicts, timer reads). The payloads,
+  // the raw bulk and the replay stay out (bulk; the export is one Lambda response).
+  async listAllSittingChildren(): Promise<{ live: SittingLive[]; heads: SittingHeadRow[] }> {
     const rows = await this.doc.query(this.p(), sk.sittingChildAllPrefix());
     const of = <T extends { deletedAt: number | null }>(pred: (skStr: string) => boolean) =>
       alive(rows.filter((r) => pred(r.SK)).map((r) => toEntity<T>(r)));
     return {
       live: of<SittingLive>((x) => x.endsWith('#live')),
-      events: of<SittingEvent>((x) => x.includes('#hd#')),
+      heads: of<SittingHeadRow>((x) => x.includes('#hd#')),
     };
   }
   // Tombstones a sitting and every child row in one batch (deleteSitting; deleteTask's cascade). A tombstone
@@ -314,12 +323,33 @@ export class Repo {
   async tombstoneLeetcodeProblem(slug: string, now: number): Promise<void> {
     const p = await this.getLeetcodeProblem(slug);
     if (p)
-      await this.putLeetcodeProblem({
-        ...p,
+      await this.writes.put({
+        PK: this.p(),
+        SK: sk.lcProblem(slug),
+        id: p.id,
+        slug,
         deletedAt: now,
         updatedAt: Math.max(now, p.updatedAt + 1),
       });
   }
+  // The rep a sitting spawns, written only if absent: two racing Starts for one sitting make one rep.
+  async putTaskIfAbsent(t: Task): Promise<boolean> {
+    try {
+      await this.writes.putIf(await this.taskItemArmed(t), null);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  lcStartShape(): CasShape<LcStartGate> {
+    return {
+      sk: sk.lcStart(),
+      read: (i) => toEntity<LcStartGate>(i),
+      toItem: (g) => entityItem(this.userId, sk.lcStart(), g),
+    };
+  }
+
   async getLeetcodeProblem(slug: string): Promise<LeetcodeProblem | null> {
     const it = await this.doc.get(this.p(), sk.lcProblem(slug));
     const p = it ? toEntity<LeetcodeProblem>(it) : null;

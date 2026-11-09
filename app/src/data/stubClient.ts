@@ -129,7 +129,15 @@ import {
   normalizeSittingStart,
   planSittingStart,
   reserveBudget,
-  summarizeHeadEvents,
+  summarizeHeadRows,
+  newerSummary,
+  headRowOf,
+  claimStart,
+  countStartAttempt,
+  emptyGate,
+  releaseStart,
+  SITTING_INGEST_WINDOW_MS,
+  SITTING_START_TIME_ERROR,
   PREP_TARGET_DEFAULT,
   sittingIngestError,
   sittingProblemUrl,
@@ -217,6 +225,8 @@ import type {
   Sitting,
   SittingDetail,
   SittingBudget,
+  SittingHeadRow,
+  LcStartGate,
   SittingEvent,
   SittingEventsInput,
   SittingEventsResult,
@@ -299,6 +309,8 @@ export interface Store {
   sittingEvents: SittingEvent[];
   sittingReplay: SittingReplayChunk[];
   sittingBudgets: SittingBudget[]; // capture budgets: internal, never exported
+  sittingHeadRows: (SittingHeadRow & BaseEntity)[];
+  lcStartGate: LcStartGate | null; // the Start gate: internal, never exported
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   attachments: Attachment[];
@@ -336,6 +348,8 @@ export function emptyStore(): Store {
     sittingEvents: [],
     sittingReplay: [],
     sittingBudgets: [],
+    sittingHeadRows: [],
+    lcStartGate: null,
     leetcodeProblems: [],
     stories: [],
     attachments: [],
@@ -743,29 +757,44 @@ class StubClient implements ApiClient {
   // --- LeetCode sittings (sittings.ts) --------------------------------------
   async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
     const n = normalizeSittingStart(input);
-    const linked = this.ensureSettings().leetcodeRollId ?? null;
+    const now = this.now();
+    if (Math.abs(n.startedAt - now) > SITTING_INGEST_WINDOW_MS)
+      throw new Error(SITTING_START_TIME_ERROR);
+    const settings = this.ensureSettings();
+    const gateDay = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
+    this.store.lcStartGate = {
+      ...countStartAttempt(
+        this.store.lcStartGate ?? { ...this.base(), id: 'lcstart', ...emptyGate(gateDay) },
+        gateDay,
+      ),
+      updatedAt: now,
+    };
+    const linked = settings.leetcodeRollId ?? null;
     const roll = linked ? this.find(this.store.rolls, linked) : undefined;
     if (!roll?.active) throw new Error(LC_ROLL_UNLINKED_ERROR); // archived reads as unlinked
-    const now = this.now();
-    const day = dayKeyForOffset(now, n.tzOffsetMinutes, this.dayStartHour());
-    const plan = planSittingStart(
-      n,
-      day,
-      this.alive(this.store.sittings),
-      this.alive(this.store.tasks),
-      roll.id,
-      now,
-    );
+    const sittings = this.alive(this.store.sittings);
+    const plan = planSittingStart(n, sittings, this.alive(this.store.tasks), roll.id, now);
     for (const e of plan.ends) this.endSitting(e.sitting.id, e.to);
     if (plan.kind === 'resume') {
-      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, n);
+      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, false);
+      this.keepProblem(n, false);
       return { sitting: plan.sitting, resumed: true };
     }
+    const ended = new Set(plan.ends.map((e) => e.sitting.id));
+    const claimed = claimStart(
+      this.store.lcStartGate,
+      gateDay,
+      n.clientSittingId,
+      sittings,
+      ended,
+      now,
+    );
+    if (claimed) this.store.lcStartGate = { ...claimed, updatedAt: now };
     // The head first, then the rep — the backend's order (its claim is what makes a retry safe).
     const sitting = this.writes.insert(this.store.sittings, {
       ...this.base(),
       id: n.clientSittingId, // the head's id IS the Start's idempotency key (backend parity)
-      day,
+      day: dayKeyForOffset(now, n.tzOffsetMinutes, settings.dayStartHour),
       startedAt: now,
       clientStartedAt: n.startedAt,
       endedAt: null,
@@ -784,38 +813,48 @@ class StubClient implements ApiClient {
       lcSolveSessionId: n.lcSolveSessionId,
       summary: emptySummary(),
     });
-    await this.shapeRep(sitting, roll, n);
-    if (n.problem !== null) this.upsertProblem(n);
+    await this.shapeRep(sitting, roll, true);
+    this.keepProblem(n, true);
     return { sitting, resumed: false };
   }
-  // Mirrors the backend's shapeRep: idempotent, through the normal task paths.
-  private async shapeRep(s: Sitting, roll: Roll, n: NormalizedSittingStart): Promise<void> {
-    const title = sittingRepTitle(n.problemTitle);
+  // Mirrors the backend's shapeRep: from the stored sitting; only a new sitting (or a rep just made) titles,
+  // notes and plans it (no plan for a timed rep); a resume only starts it.
+  private async shapeRep(s: Sitting, roll: Roll, isNew: boolean): Promise<void> {
+    const title = sittingRepTitle(s.problemTitle);
+    const url = sittingProblemUrl(s.problemSlug);
     let rep = this.find(this.store.tasks, s.repTaskId);
+    const made = !rep;
     if (!rep)
       rep = this.writes.insert(this.store.tasks, {
         ...this.base(),
         ...rollRepFields(roll),
         id: s.repTaskId,
         title,
-        notes: sittingProblemUrl(n.problemSlug),
+        notes: url,
       });
     if (rep.status === 'done' || rep.status === 'cancelled') return;
-    if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
-    if (!rep.notes)
-      rep = this.writes.patch(this.store.tasks, rep.id, {
-        notes: sittingProblemUrl(n.problemSlug),
-      });
-    const dayPlans = this.alive(this.store.plans).filter((p) => p.day === s.day);
-    if (!dayPlans.some((p) => p.taskId === rep.id))
-      this.writes.insert(this.store.plans, {
-        ...this.base(),
-        taskId: rep.id,
-        day: s.day,
-        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
-        order: dayPlans.length,
-      });
+    if (isNew || made) {
+      if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
+      if (!rep.notes) rep = this.writes.patch(this.store.tasks, rep.id, { notes: url });
+      const dayPlans = this.alive(this.store.plans).filter((p) => p.day === s.day);
+      const repId = rep.id;
+      if (!isTimed(rep) && !dayPlans.some((p) => p.taskId === repId))
+        this.writes.insert(this.store.plans, {
+          ...this.base(),
+          id: s.id,
+          taskId: repId,
+          day: s.day,
+          plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+          order: dayPlans.length,
+        });
+    }
     if (rep.status !== 'in_progress') await this.transitionTask(rep.id, 'in_progress');
+  }
+  private keepProblem(n: NormalizedSittingStart, upsert: boolean): void {
+    if (n.problem === null) return;
+    const had = this.alive(this.store.leetcodeProblems).find((x) => x.slug === n.problemSlug);
+    if (had && !upsert) return;
+    this.upsertProblem(n);
   }
   private upsertProblem(n: NormalizedSittingStart): void {
     const fields = {
@@ -852,12 +891,20 @@ class StubClient implements ApiClient {
       },
     );
     this.writes.put(this.store.sittingBudgets, { ...budget, updatedAt: now });
-    const seen = new Set(
-      [...this.store.sittingEvents, ...this.store.sittingReplay]
-        .filter((x) => x.sittingId === sittingId)
-        .map((x) => x.id),
+    // Freshness per kind, as the backend's keys: head rows, raw bulk, replay.
+    const mine = <T extends { sittingId: string; id: string }>(rows: T[]) =>
+      new Set(rows.filter((x) => x.sittingId === sittingId).map((x) => x.id));
+    const heads = mine(this.store.sittingHeadRows);
+    const bulkIds = mine(this.store.sittingEvents.filter((x) => !isHeadEvent(x.type)));
+    const replays = mine(this.store.sittingReplay);
+    const fresh = events.filter((e) =>
+      e.type === 'replay'
+        ? !replays.has(e.id)
+        : isHeadEvent(e.type)
+          ? !heads.has(e.id)
+          : !bulkIds.has(e.id),
     );
-    const fresh = events.filter((e) => !seen.has(e.id));
+    const freshIds = new Set(fresh.map((e) => e.id));
     const row = (e: { id: string; at: number }) => ({
       ...this.base(),
       id: e.id,
@@ -873,19 +920,29 @@ class StubClient implements ApiClient {
           : [],
       ),
     );
+    const stored = fresh.flatMap((e) =>
+      e.type === 'replay' ? [] : [{ ...row(e), type: e.type, payload: e.payload }],
+    );
+    // A timer read is only its head row (backend parity); runs, submits and notes keep their payloads too.
     this.writes.insertMany(
       this.store.sittingEvents,
-      fresh.flatMap((e) =>
-        e.type === 'replay' ? [] : [{ ...row(e), type: e.type, payload: e.payload }],
+      stored.filter((e) => e.type !== 'timer'),
+    );
+    this.writes.insertMany(
+      this.store.sittingHeadRows,
+      stored.flatMap((e) =>
+        e.type === 'run' || e.type === 'submit' || e.type === 'note' || e.type === 'timer'
+          ? [
+              {
+                ...row(e),
+                ...headRowOf(sittingId, { id: e.id, type: e.type, at: e.at, payload: e.payload }),
+              },
+            ]
+          : [],
       ),
     );
-    if (events.some((e) => isHeadEvent(e.type))) {
-      const head = this.alive(this.store.sittingEvents).filter(
-        (x) => x.sittingId === sittingId && isHeadEvent(x.type),
-      );
-      this.writes.patch(this.store.sittings, sittingId, { summary: summarizeHeadEvents(head) });
-    }
-    const bulk = fresh.filter((e) => !isHeadEvent(e.type));
+    if (events.some((e) => isHeadEvent(e.type))) this.refoldHead(sittingId);
+    const bulk = events.filter((e) => !isHeadEvent(e.type));
     let live = this.sittingLiveOf(sittingId);
     if (bulk.length) {
       const base: SittingLive = live ?? {
@@ -894,7 +951,7 @@ class StubClient implements ApiClient {
         ...emptyLiveFields(sittingId),
       };
       live = this.writes.put(this.store.sittingLive, {
-        ...bulk.reduce((l, e) => foldLive(l, e, now), base),
+        ...bulk.reduce((l, e) => foldLive(l, e, now, freshIds.has(e.id)), base),
         updatedAt: now,
       });
     }
@@ -904,6 +961,13 @@ class StubClient implements ApiClient {
       version: live?.version ?? 0,
       status: this.mustFind(this.store.sittings, sittingId).status,
     };
+  }
+  private refoldHead(id: string): void {
+    const summary = summarizeHeadRows(
+      this.alive(this.store.sittingHeadRows).filter((x) => x.sittingId === id),
+    );
+    const cur = this.mustFind(this.store.sittings, id);
+    if (newerSummary(cur.summary, summary)) this.writes.patch(this.store.sittings, id, { summary });
   }
   async listSittings(range?: DateRange): Promise<Sitting[]> {
     return this.alive(this.store.sittings)
@@ -939,7 +1003,10 @@ class StubClient implements ApiClient {
         (r) => r.sittingId === id,
       ))
         this.writes.softDelete(coll as (SittingEvent | SittingReplayChunk)[], row.id);
+    for (const r of this.alive(this.store.sittingHeadRows).filter((r) => r.sittingId === id))
+      this.writes.softDelete(this.store.sittingHeadRows, r.id);
     this.writes.softDelete(this.store.sittingLive, id);
+    this.releaseStartGate(id);
     const { problemSlug } = this.mustFind(this.store.sittings, id);
     this.writes.softDelete(this.store.sittings, id);
     const problem = this.alive(this.store.leetcodeProblems).find((x) => x.slug === problemSlug);
@@ -954,9 +1021,16 @@ class StubClient implements ApiClient {
         this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned');
   }
   private endSitting(id: string, to: 'done' | 'abandoned'): void {
+    this.refoldHead(id);
     const x = this.mustFind(this.store.sittings, id);
     if (x.status === 'active')
       this.writes.put(this.store.sittings, endedSitting(x, to, this.now()));
+    this.releaseStartGate(id);
+  }
+  private releaseStartGate(id: string): void {
+    const g = this.store.lcStartGate;
+    const next = g && releaseStart(g, id);
+    if (next) this.store.lcStartGate = { ...next, updatedAt: this.now() };
   }
 
   // --- Flux sets -------------------------------------------------------------
@@ -2568,8 +2642,18 @@ class StubClient implements ApiClient {
       places: this.alive(this.store.places),
       sittings: this.alive(this.store.sittings),
       sittingLive: this.alive(this.store.sittingLive),
-      // Head events only (runs, submits, notes, timer reads) — the raw bulk stays out, as on the backend.
-      sittingEvents: this.alive(this.store.sittingEvents).filter((e) => isHeadEvent(e.type)),
+      // Head rows only (verdicts, timer reads) — payloads and the raw bulk stay out, as on the backend.
+      sittingHeadRows: this.alive(this.store.sittingHeadRows).map(
+        ({ id, sittingId, type, at, verdict, timer, deletedAt }) => ({
+          id,
+          sittingId,
+          type,
+          at,
+          verdict,
+          timer,
+          deletedAt,
+        }),
+      ),
       leetcodeProblems: this.alive(this.store.leetcodeProblems),
       stories: this.alive(this.store.stories),
       fluxSets: this.alive(this.store.fluxSets),
@@ -2590,7 +2674,8 @@ class StubClient implements ApiClient {
     // The Store keys left out on purpose: the place token and push subscriptions are credentials, the
     // poller's heartbeat is stage health, not your data, and the week-note cache is derived from the sets
     // (rebuilt on the next read). The retired LeetCode attempts are no longer exported, and a sitting's
-    // replay stays out like attachment bytes (bulk, and it expires); its capture budget is internal.
+    // replay stays out like attachment bytes (bulk, and it expires); its capture budget and Start gate are internal, and its events' payloads stay out (the head rows carry
+    // their verdicts).
     return bundle satisfies Record<
       Exclude<
         keyof Store,
@@ -2601,6 +2686,8 @@ class StubClient implements ApiClient {
         | 'leetcodeAttempts'
         | 'sittingReplay'
         | 'sittingBudgets'
+        | 'sittingEvents'
+        | 'lcStartGate'
       >,
       unknown
     >;

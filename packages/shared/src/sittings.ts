@@ -10,11 +10,13 @@ import { findOpenRollTask } from './rolls';
 import { isUlid } from './ulid';
 import type {
   BaseEntity,
+  LcStartGate,
   LcTimerState,
   Sitting,
   SittingBudget,
   SittingEventType,
   SittingFacts,
+  SittingHeadRow,
   SittingLive,
   SittingSummary,
   SittingVerdict,
@@ -30,7 +32,9 @@ export const SITTING_EVENTS_PER_CALL = 50;
 export const SITTING_CALL_BYTES = 256 * 1024;
 export const SITTING_MAX_EVENTS = 3000;
 export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
-export const SITTING_STARTS_PER_DAY = 20;
+// Starts a day: well above real use (a handful) and the dev check's few a run across a day's lanes; a leaked
+// token's ceiling is this many visible junk reps a day.
+export const SITTING_STARTS_PER_DAY = 60;
 // Events are refused this long after Start: a sitting left open forever stops taking writes.
 export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
 // Raw bulk (snapshots, replay, submitDetails) is kept this long past the ingest window, then DynamoDB's TTL
@@ -56,6 +60,11 @@ export const SITTING_ENDED_ERROR = 'This sitting has ended — start a new one.'
 export const SITTING_CAP_ERROR = 'This sitting is over its capture limit.';
 export const SITTING_START_CAP_ERROR = 'Too many sittings started today.';
 export const SITTING_EVENT_TIME_ERROR = 'An event’s time is off the sitting’s clock.';
+export const SITTING_START_TIME_ERROR = 'The Start’s time is off by more than a day.';
+export const LC_START_ATTEMPTS_PER_DAY = 400;
+export const LC_START_ATTEMPT_CAP_ERROR = 'Too many Start attempts today.';
+// A gate claim this young may be a Start still writing its head; older and not found, it died — let through.
+const CLAIM_IN_FLIGHT_MS = 2 * 60_000;
 
 // --- Inputs ---
 export interface SittingStartInput {
@@ -103,13 +112,39 @@ const finite = (v: unknown, label: string): number => {
   if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${label} must be a number`);
   return v;
 };
+// Sizes are UTF-8 bytes (what DynamoDB stores), never UTF-16 characters.
+const encoder = new TextEncoder();
+export const utf8Bytes = (s: string): number => encoder.encode(s).length;
 export const jsonSize = (v: unknown): number => {
   try {
-    return JSON.stringify(v ?? null).length;
+    return utf8Bytes(JSON.stringify(v ?? null));
   } catch {
     throw new Error('Payload must be JSON');
   }
 };
+// What DynamoDB can store as given: nesting at most 20 deep, numbers finite and exact. A payload that fails
+// here is refused before the budget is touched (not reserved, then lost to a write that can't happen).
+export function payloadError(v: unknown, depth = 0): string | null {
+  if (depth > 20) return 'Payload is nested too deep';
+  if (typeof v === 'number')
+    return Number.isFinite(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER
+      ? null
+      : 'Payload has an unstorable number';
+  if (Array.isArray(v)) {
+    for (const x of v) {
+      const err = payloadError(x, depth + 1);
+      if (err) return err;
+    }
+    return null;
+  }
+  if (v && typeof v === 'object') {
+    for (const x of Object.values(v as Record<string, unknown>)) {
+      const err = payloadError(x, depth + 1);
+      if (err) return err;
+    }
+  }
+  return null;
+}
 
 export interface NormalizedSittingStart extends Omit<SittingStartInput, 'problem'> {
   questionId: string | null;
@@ -133,6 +168,8 @@ export function normalizeSittingStart(input: SittingStartInput): NormalizedSitti
   }
   const problem = input.problem ?? null;
   if (jsonSize(problem) > PROBLEM_MAX) throw new Error('Problem detail is too large');
+  const problemErr = payloadError(problem);
+  if (problemErr) throw new Error(problemErr);
   const tz = finite(input.tzOffsetMinutes, 'tzOffsetMinutes');
   if (Math.abs(tz) > 14 * 60) throw new Error('tzOffsetMinutes is out of range');
   return {
@@ -175,7 +212,7 @@ export function normalizeSittingEvents(input: SittingEventsInput): {
   events: NormalizedSittingEvent[];
 } {
   if (!input || typeof input !== 'object') throw new Error('Sitting events are required');
-  if (typeof input.sittingId !== 'string' || !input.sittingId)
+  if (typeof input.sittingId !== 'string' || !isUlid(input.sittingId))
     throw new Error('A sitting id is required');
   if (!Array.isArray(input.events) || input.events.length === 0)
     throw new Error('At least one event is required');
@@ -190,7 +227,7 @@ export function normalizeSittingEvents(input: SittingEventsInput): {
     const at = finite(e.at, 'Event time');
     if (e.type === 'replay') {
       if (typeof e.events !== 'string') throw new Error('Replay events must be text');
-      const bytes = e.events.length;
+      const bytes = utf8Bytes(e.events);
       if (bytes > PAYLOAD_MAX.replay) throw new Error('A replay chunk is too large');
       total += bytes;
       return {
@@ -204,6 +241,8 @@ export function normalizeSittingEvents(input: SittingEventsInput): {
     }
     const payload = e.payload ?? null;
     const bytes = jsonSize(payload);
+    const shapeErr = payloadError(payload);
+    if (shapeErr) throw new Error(shapeErr);
     if (bytes > PAYLOAD_MAX[e.type]) throw new Error(`A ${e.type} event is too large`);
     if (e.type === 'snapshot' && snapshotCode(payload) === null)
       throw new Error('A snapshot needs its code');
@@ -233,7 +272,7 @@ export function snapshotCode(payload: unknown): string | null {
 export function verdictOf(payload: unknown, at: number): SittingVerdict | null {
   const r = obj(obj(payload)?.result);
   if (!r) return null;
-  const statusMsg = typeof r.status_msg === 'string' ? r.status_msg : null;
+  const statusMsg = typeof r.status_msg === 'string' ? r.status_msg.slice(0, 200) : null; // it's on the head
   return {
     verdict: normalizeVerdict(num(r.status_code), statusMsg),
     statusMsg,
@@ -274,6 +313,7 @@ export const emptySummary = (): SittingSummary => ({
   runsBeforeFirstSubmit: 0,
   lcTimer: null,
   lastEventAt: null,
+  headEvents: 0,
 });
 export const emptyFacts = (): SittingFacts => ({
   firstEditAt: null,
@@ -305,38 +345,62 @@ export const isHeadEvent = (type: SittingEventType | 'replay') =>
 // An unreadable judge result still counts — as 'other' — so it holds its place in the order.
 const verdictOrOther = (payload: unknown, at: number): SittingVerdict =>
   verdictOf(payload, at) ?? { verdict: 'other', statusMsg: null, passed: null, total: null, at };
-export function foldSummary(
-  s: SittingSummary,
-  e: { type: SittingEventType | 'replay'; at: number; payload?: unknown },
-): SittingSummary {
-  const next: SittingSummary = { ...s, lastEventAt: Math.max(s.lastEventAt ?? 0, e.at) };
-  if (e.type === 'run') {
+export type HeadEventType = SittingHeadRow['type'];
+// The compact row a head event is folded from, taken from its payload once, at write.
+export function headRowOf(
+  sittingId: string,
+  e: { id: string; type: HeadEventType; at: number; payload: unknown },
+): SittingHeadRow {
+  const judged = e.type === 'run' || e.type === 'submit';
+  return {
+    id: e.id,
+    sittingId,
+    type: e.type,
+    at: e.at,
+    verdict: judged ? verdictOrOther(e.payload, e.at) : null,
+    timer: e.type === 'timer' ? lcTimerState(e.payload, e.at) : null,
+    deletedAt: null,
+  };
+}
+export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummary {
+  const next: SittingSummary = {
+    ...s,
+    lastEventAt: Math.max(s.lastEventAt ?? 0, r.at),
+    headEvents: s.headEvents + 1,
+  };
+  const v = r.verdict ?? {
+    verdict: 'other' as const,
+    statusMsg: null,
+    passed: null,
+    total: null,
+    at: r.at,
+  };
+  if (r.type === 'run') {
     next.runs = s.runs + 1;
     if (s.submits === 0) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
-    next.lastRun = verdictOrOther(e.payload, e.at);
-  } else if (e.type === 'submit') {
-    const v = verdictOrOther(e.payload, e.at);
+    next.lastRun = v;
+  } else if (r.type === 'submit') {
     next.submits = s.submits + 1;
     next.lastSubmit = v;
     if (s.submits === 0) next.firstSubmit = v;
     if (v.verdict === 'accepted' && s.firstAcceptedAt === null) {
-      next.firstAcceptedAt = e.at;
+      next.firstAcceptedAt = r.at;
       next.submitsBeforeAccepted = s.submits; // failed submits before this one
     }
-  } else if (e.type === 'note') next.notes = s.notes + 1;
-  else if (e.type === 'timer') next.lcTimer = lcTimerState(e.payload, e.at) ?? s.lcTimer;
+  } else if (r.type === 'note') next.notes = s.notes + 1;
+  else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
   return next;
 }
-// The head's summary, recomputed from every stored head event (runs, submits, notes, timer reads) in time
-// order — never an increment, so a retry or a lost write can't skew it: the next call carrying any head
-// event, fresh or a repeat, rebuilds it.
-export function summarizeHeadEvents(
-  events: readonly { id: string; type: SittingEventType; at: number; payload: unknown }[],
-): SittingSummary {
-  return [...events]
+// The head's summary, recomputed from every stored head row in time order — never an increment, so a retry
+// or a lost write can't skew it: the next call carrying any head event, fresh or a repeat, rebuilds it, and the
+// write is skipped when the stored one already folds more rows (headEvents) — a slower call never rolls it back.
+export function summarizeHeadRows(rows: readonly SittingHeadRow[]): SittingSummary {
+  return [...rows]
     .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1))
     .reduce(foldSummary, emptySummary());
 }
+export const newerSummary = (cur: SittingSummary, next: SittingSummary): boolean =>
+  next.headEvents > (cur.headEvents ?? 0);
 
 // LeetCode's replay events (type 7 = an editor change, 3 = a [val] toggle) fold into the facts.
 function foldReplay(f: SittingFacts, raw: string): SittingFacts {
@@ -373,7 +437,9 @@ export function foldLive<L extends Omit<SittingLive, keyof BaseEntity>>(
   live: L,
   e: NormalizedSittingEvent,
   receivedAt: number,
+  fresh = true,
 ): L {
+  if (e.type === 'replay' && !fresh) return live;
   if (e.type === 'replay')
     return {
       ...live,
@@ -384,6 +450,11 @@ export function foldLive<L extends Omit<SittingLive, keyof BaseEntity>>(
     };
   if (e.type !== 'snapshot') return live;
   const code = snapshotCode(e.payload) ?? '';
+  if (!fresh)
+    // a repeat: count nothing, but its code still lands if it's the newest (a lost fold heals)
+    return live.codeAt === null || e.at > live.codeAt
+      ? { ...live, code, codeAt: e.at, receivedAt }
+      : live;
   const lang = obj(e.payload)?.lang;
   const facts = { ...live.facts };
   if (facts.maxCodeLength > 200 && code.length < facts.maxCodeLength / 2) {
@@ -437,6 +508,9 @@ export function reserveBudget<B extends Pick<SittingBudget, 'events' | 'bytes'>>
 export function sittingElapsedMs(s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number {
   return Math.max(0, (s.endedAt ?? now) - s.startedAt);
 }
+// Whole minutes for display, at least 1.
+export const sittingMinutes = (s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number =>
+  Math.max(1, Math.round(sittingElapsedMs(s, now) / 60_000));
 export interface SittingMetrics {
   firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
   submitsBeforeAccepted: number | null;
@@ -466,7 +540,6 @@ export type SittingStartPlan = (
 // attached when no open sitting holds it, else a fresh rep is spawned.
 export function planSittingStart(
   input: Pick<NormalizedSittingStart, 'clientSittingId' | 'problemSlug'>,
-  day: string,
   sittings: readonly Sitting[],
   tasks: Task[],
   rollId: string,
@@ -494,8 +567,6 @@ export function planSittingStart(
   for (const x of open)
     if (repOf(x)) throw new Error(SITTING_ACTIVE_ERROR);
     else ends.push({ sitting: x, to: 'abandoned' }); // a Start that never made its rep
-  if (sittings.filter((x) => x.day === day).length >= SITTING_STARTS_PER_DAY)
-    throw new Error(SITTING_START_CAP_ERROR);
   // No sitting is open past this point, so the roll's open rep is free — one left by a sitting that ran out
   // its window is reused (one open rep per roll).
   const rep = findOpenRollTask(tasks, rollId);
@@ -518,3 +589,50 @@ export const endedSitting = (s: Sitting, rep: 'done' | 'abandoned', now: number)
   endedAt: now,
   updatedAt: Math.max(now, s.updatedAt + 1),
 });
+
+// --- The Start gate (types.ts LcStartGate): every Start counts an attempt before anything is read, and a new
+// sitting claims the gate before its head is written, both CAS writes on the one row ---
+type GateFields = Pick<
+  LcStartGate,
+  'day' | 'attempts' | 'starts' | 'openSittingId' | 'openClaimedAt'
+>;
+export const emptyGate = (day: string): GateFields => ({
+  day,
+  attempts: 0,
+  starts: 0,
+  openSittingId: null,
+  openClaimedAt: null,
+});
+const onDay = <G extends GateFields>(g: G, day: string): G =>
+  g.day === day ? g : { ...g, day, attempts: 0, starts: 0 };
+export function countStartAttempt<G extends GateFields>(g: G, day: string): G {
+  const d = onDay(g, day);
+  if (d.attempts >= LC_START_ATTEMPTS_PER_DAY) throw new Error(LC_START_ATTEMPT_CAP_ERROR);
+  return { ...d, attempts: d.attempts + 1 };
+}
+// The claim for a new sitting `self`. Refused while the gate holds another sitting that's open by `sittings`
+// (alive, as read for this Start, after its stale ends) — or one this Start can't see yet, claimed moments ago
+// (a parallel Start). null = already this sitting's (a double-fired Start), nothing to write.
+export function claimStart<G extends GateFields>(
+  g: G,
+  day: string,
+  self: string,
+  sittings: readonly Pick<Sitting, 'id' | 'status'>[],
+  ended: ReadonlySet<string>,
+  now: number,
+): G | null {
+  if (g.openSittingId === self) return null;
+  const held = g.openSittingId;
+  if (held) {
+    const known = sittings.find((x) => x.id === held);
+    const open = known
+      ? known.status === 'active' && !ended.has(held)
+      : now - (g.openClaimedAt ?? 0) < CLAIM_IN_FLIGHT_MS;
+    if (open) throw new Error(SITTING_ACTIVE_ERROR);
+  }
+  const d = onDay(g, day);
+  if (d.starts >= SITTING_STARTS_PER_DAY) throw new Error(SITTING_START_CAP_ERROR);
+  return { ...d, starts: d.starts + 1, openSittingId: self, openClaimedAt: now };
+}
+export const releaseStart = <G extends GateFields>(g: G, id: string): G | null =>
+  g.openSittingId === id ? { ...g, openSittingId: null, openClaimedAt: null } : null;

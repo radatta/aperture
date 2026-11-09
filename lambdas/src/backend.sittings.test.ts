@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { SITTING_INGEST_WINDOW_MS, SITTING_RAW_KEEP_MS, ulid } from '@aperture/shared';
+import {
+  LC_START_ATTEMPT_CAP_ERROR,
+  LC_START_ATTEMPTS_PER_DAY,
+  SITTING_INGEST_WINDOW_MS,
+  SITTING_RAW_KEEP_MS,
+  ulid,
+} from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
@@ -123,6 +129,48 @@ describe('sittings on the table', () => {
     ]);
     expect(a.sitting.id).toBe(b.sitting.id);
     expect([a.resumed, b.resumed].sort()).toEqual([false, true]);
+    const reps = (await backend.listTasks()).filter((t) => t.rollId);
+    expect(reps).toHaveLength(1);
+    expect(reps[0]).toMatchObject({ status: 'in_progress' });
+    const plans = await backend.listPlansForDay(a.sitting.day);
+    expect(plans.filter((p) => p.taskId === reps[0]!.id)).toHaveLength(1);
+  });
+
+  // The Start gate: parallel Starts with different ids — a leaked token's burst — open one sitting, not N.
+  it('parallel Starts on different problems open one sitting', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const results = await Promise.allSettled(
+      ['a', 'b', 'c', 'd'].map((x) =>
+        backend.lcSittingStart({ ...start(), problemSlug: `p-${x}`, problemTitle: `P ${x}` }),
+      ),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect((await backend.listSittings()).filter((x) => x.status === 'active')).toHaveLength(1);
     expect((await backend.listTasks()).filter((t) => t.rollId)).toHaveLength(1);
+  });
+
+  it('a repeated Start never renames the rep: it shapes from the stored sitting', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const input = start();
+    const { sitting } = await backend.lcSittingStart(input);
+    await backend.lcSittingStart({ ...input, problemTitle: 'Hijacked' });
+    await backend.lcSittingStart({ ...start(), problemTitle: 'Hijacked again' }); // same slug → resume
+    expect(await backend.getTask(sitting.repTaskId)).toMatchObject({ title: 'LeetCode · Two Sum' });
+  });
+
+  it('counts every Start attempt — refused ones too — and stops at the day’s cap', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    await backend.lcSittingStart(start());
+    let refusedFor = '';
+    for (let i = 0; i < LC_START_ATTEMPTS_PER_DAY + 1 && !refusedFor; i++)
+      await backend
+        .lcSittingStart({ ...start(), problemSlug: `x-${i}`, problemTitle: 'X' })
+        .catch((e: Error) => {
+          if (e.message === LC_START_ATTEMPT_CAP_ERROR) refusedFor = e.message;
+        });
+    expect(refusedFor).toBe(LC_START_ATTEMPT_CAP_ERROR);
   });
 });

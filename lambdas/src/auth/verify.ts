@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
 
@@ -98,7 +98,7 @@ export async function resolveUserId(
 
 // The browser extension authenticates the ingest endpoint with a static DEVICE TOKEN, not a Cognito JWT
 // (a long-lived personal key for a single-user, minimal-power write; credential class: INFRA §10). Scoped
-// by the caller to ONLY the ingest method. Dev (no token configured) falls back to the 'local' user,
+// by the caller to ONLY the ingest methods (LC_INGEST_METHODS). Dev (no token configured) falls back to the 'local' user,
 // mirroring resolveUserId's no-verifier path.
 export function resolveDeviceUserId(
   authHeader: string | undefined,
@@ -108,9 +108,9 @@ export function resolveDeviceUserId(
   if (!expectedToken) return 'local'; // dev: no device token wired → same 'local' user as JWT-less dev
   const token = bearer(authHeader);
   if (!token) throw new Error('Unauthorized: missing device token');
-  const a = Buffer.from(token);
-  const b = Buffer.from(expectedToken);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+  // Compared as SHA-256 digests: equal lengths always, so the comparison leaks nothing, not even the length.
+  const digest = (v: string) => createHash('sha256').update(v).digest();
+  if (!timingSafeEqual(digest(token), digest(expectedToken))) {
     throw new Error('Unauthorized: invalid device token');
   }
   return deviceUserId ?? 'local';
