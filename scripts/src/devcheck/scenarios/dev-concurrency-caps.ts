@@ -67,7 +67,7 @@ export const devConcurrencyCaps: Scenario = {
     ),
     offDev(
       'restore-unknown-fn',
-      'An app function with no reservation on record stays at 0 through a restore, and the restore names it',
+      'A function with no reservation on record, other than a CDK provider, stays at 0 through a restore, named',
       KILL,
       'leaves it at 0 and names it, and still restores everything else',
       'needs an app function missing from the table, which only a template change ahead of an ApertureOrg redeploy makes',
@@ -83,7 +83,7 @@ export const devConcurrencyCaps: Scenario = {
       'kill-without-table',
       'A malformed restore table can’t stop a kill: only the restore reads it',
       KILL,
-      'never needs the restore’s table, so a bad one can’t stop a kill',
+      'kills on a trigger even when the restore’s table is unreadable',
       'needs a broken kill Lambda env, which only a hand ApertureOrg deploy makes',
     ),
     offDev(

@@ -6,6 +6,7 @@ import {
   killConfigFrom,
   reservationsFrom,
   restore,
+  runKillSwitch,
   setDistributionsEnabled,
 } from './kill';
 import type { CloudFrontLike, KillGateways } from './kill';
@@ -165,7 +166,7 @@ describe('restore', () => {
     expect(calls).toContain('concurrency ApertureCicdDev-AWSCDKOpenIdConnectProvider null');
     expect(calls).toContain('concurrency aperture-bff-dev 18');
     expect(lines).toContain(
-      'ApertureCicdDev-AWSCDKOpenIdConnectProvider → reservation removed (not an app function)',
+      'ApertureCicdDev-AWSCDKOpenIdConnectProvider → reservation removed (a CDK provider)',
     );
   });
 });
@@ -181,6 +182,16 @@ describe('restore with an app function off the record', () => {
     expect(calls).toContain('concurrency aperture-mcp-dev 10');
     expect(calls).toContain('url aperture-mcp-dev NONE');
     expect(calls).toContain('distributions true');
+  });
+
+  // Only CloudFormation's own provider names (`Aperture…` stacks) go back unreserved: anything else a branch might
+  // have created while the freeze was open stays at 0 rather than coming back uncapped.
+  it('leaves any other unlisted function at 0 too, named', async () => {
+    const { gw, calls } = fakeGateways({}, { functions: ['aperture-bff-dev', 'evil'] });
+    await expect(restore(cfg, reservations, gw, () => {})).rejects.toThrow(
+      /unthrottle evil: .*left at 0/,
+    );
+    expect(calls.filter((c) => c.startsWith('concurrency evil'))).toEqual([]);
   });
 
   it('never removes an app function’s reservation', async () => {
@@ -206,6 +217,21 @@ describe('a function that doesn’t exist', () => {
     expect(lines).toContain('unlock aperture-mcp-dev: no such function, skipped');
   });
 
+  // Every URL function missing means a region or a name drifted: a kill that reached nothing must fail loudly.
+  it('fails the kill and the restore when none of the URL functions exists', async () => {
+    const fail = {
+      concurrency: { 'aperture-bff-dev': notFound(), 'aperture-mcp-dev': notFound() },
+      url: { 'aperture-bff-dev': notFound(), 'aperture-mcp-dev': notFound() },
+    };
+    const opts = { functions: [] };
+    await expect(kill(cfg, fakeGateways(fail, opts).gw, () => {})).rejects.toThrow(
+      /lock: none of aperture-bff-dev, aperture-mcp-dev exists in us-west-1/,
+    );
+    await expect(restore(cfg, reservations, fakeGateways(fail, opts).gw, () => {})).rejects.toThrow(
+      /unlock: none of/,
+    );
+  });
+
   it('still fails on any other error', async () => {
     const { gw } = fakeGateways({
       concurrency: {
@@ -215,6 +241,55 @@ describe('a function that doesn’t exist', () => {
     await expect(kill(cfg, gw, () => {})).rejects.toThrow(
       /throttle aperture-mcp-dev: AccessDeniedException/,
     );
+  });
+});
+
+describe('runKillSwitch', () => {
+  const env = {
+    KILL_POLICY_ID: 'p-kill',
+    DEV_ACCOUNT_ID: '222222222222',
+    DEV_REGION: 'us-west-1',
+    BREAK_GLASS_ROLE_ARN: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
+    URL_FUNCTIONS: 'aperture-bff-dev,aperture-mcp-dev',
+    RESERVED_CONCURRENCY: 'garbage',
+  };
+  const alarm = { source: 'aws.cloudwatch', 'detail-type': 'CloudWatch Alarm State Change' };
+
+  it('kills on a trigger even when the restore’s table is unreadable', async () => {
+    const { gw, calls } = fakeGateways();
+    await runKillSwitch(
+      alarm,
+      env,
+      () => gw,
+      () => {},
+    );
+    expect(calls).toContain('attach p-kill 222222222222');
+    expect(calls).toContain('concurrency aperture-bff-dev 0');
+  });
+
+  it('refuses a restore with an unreadable table before touching anything', async () => {
+    const { gw, calls } = fakeGateways();
+    await expect(
+      runKillSwitch(
+        { action: 'restore' },
+        env,
+        () => gw,
+        () => {},
+      ),
+    ).rejects.toThrow(/RESERVED_CONCURRENCY entry "garbage"/);
+    expect(calls).toEqual([]);
+  });
+
+  it('restores with a good table', async () => {
+    const { gw, calls } = fakeGateways({}, { functions: [] });
+    const good = { ...env, RESERVED_CONCURRENCY: 'aperture-bff-dev=18,aperture-mcp-dev=10' };
+    await runKillSwitch(
+      { action: 'restore' },
+      good,
+      () => gw,
+      () => {},
+    );
+    expect(calls).toContain('concurrency aperture-bff-dev 18');
   });
 });
 

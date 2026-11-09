@@ -14,15 +14,7 @@ import {
 } from '@aws-sdk/client-lambda';
 import { AttachPolicyCommand, OrganizationsClient } from '@aws-sdk/client-organizations';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
-import {
-  isAlreadyAttached,
-  isRestore,
-  kill,
-  killConfigFrom,
-  reservationsFrom,
-  restore,
-  setDistributionsEnabled,
-} from './kill';
+import { isAlreadyAttached, isRestore, runKillSwitch, setDistributionsEnabled } from './kill';
 import type { KillConfig, KillGateways } from './kill';
 
 // The kill switch's Lambda entry (kill.ts has the logic). The SDK clients are here for SigV4 (dependency rule B);
@@ -125,12 +117,9 @@ function liveGateways(cfg: KillConfig): KillGateways {
 }
 
 export const handler = async (event: unknown): Promise<void> => {
-  const cfg = killConfigFrom(process.env);
-  const log = (l: string) => console.log(l);
   // A literal label: the bundle is minified, so a function's own name would log as a single letter.
-  const label = isRestore(event) ? 'restore' : 'kill';
-  console.log(`${label} triggered: ${JSON.stringify(event).slice(0, 2000)}`);
-  if (label === 'kill') return kill(cfg, liveGateways(cfg), log);
-  // Read only here, so a bad table can never stop a kill.
-  await restore(cfg, reservationsFrom(process.env, cfg.urlFunctions), liveGateways(cfg), log);
+  console.log(
+    `${isRestore(event) ? 'restore' : 'kill'} triggered: ${JSON.stringify(event).slice(0, 2000)}`,
+  );
+  await runKillSwitch(event, process.env, liveGateways, (l) => console.log(l));
 };

@@ -35,24 +35,58 @@ export interface KillGateways {
 
 type Log = (line: string) => void;
 
-// A function that doesn't exist (gone since the listing, or a URL function a slot hasn't deployed yet) can't run or be
-// reached, so its move is done: logged, not failed.
-async function each(failures: string[], log: Log, label: string, fn: () => Promise<void>) {
+async function each(failures: string[], label: string, fn: () => Promise<void>) {
   try {
     await fn();
   } catch (err) {
-    if (err instanceof Error && err.name === 'ResourceNotFoundException')
-      log(`${label}: no such function, skipped`);
-    else failures.push(`${label}: ${message(err)}`);
+    failures.push(`${label}: ${message(err)}`);
   }
 }
 
-// App functions are `aperture-…`; CDK's provider functions are `Aperture…` (FrozenProviderCode, org-stack.ts).
-const isAppFunction = (fn: string) => fn.startsWith('aperture-');
+// A move on one function. A function that doesn't exist (gone since the listing, or a URL function a slot hasn't
+// deployed yet) can't run or be reached, so its move is done: logged, not failed. Answers whether it was missing.
+async function eachFunction(
+  failures: string[],
+  log: Log,
+  label: string,
+  fn: () => Promise<void>,
+): Promise<'missing' | 'reached'> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ResourceNotFoundException') {
+      log(`${label}: no such function, skipped`);
+      return 'missing';
+    }
+    failures.push(`${label}: ${message(err)}`);
+  }
+  return 'reached';
+}
+
+// Every URL function missing means the kill is looking in the wrong place (a region or a name drifted), not that
+// there is nothing to lock: that must fail loudly, never pass as done.
+async function eachUrlFunction(
+  cfg: KillConfig,
+  failures: string[],
+  log: Log,
+  verb: string,
+  fn: (name: string) => Promise<void>,
+) {
+  let missing = 0;
+  for (const name of cfg.urlFunctions)
+    if ((await eachFunction(failures, log, `${verb} ${name}`, () => fn(name))) === 'missing')
+      missing++;
+  if (missing === cfg.urlFunctions.length)
+    failures.push(`${verb}: none of ${cfg.urlFunctions.join(', ')} exists in ${cfg.devRegion}`);
+}
+
+// CDK's provider functions, which no template reserves, are named by CloudFormation `<stack>-…`, and every stack is
+// `Aperture…` (FrozenProviderCode, org-stack.ts); the app's own functions are `aperture-…`.
+const isCdkProvider = (fn: string) => fn.startsWith('Aperture');
 
 export async function kill(cfg: KillConfig, gw: KillGateways, log: Log): Promise<void> {
   const failures: string[] = [];
-  await each(failures, log, `attach ${cfg.policyId}`, async () => {
+  await each(failures, `attach ${cfg.policyId}`, async () => {
     const r = await gw.attachPolicy(cfg.policyId, cfg.devAccountId);
     log(
       r === 'already'
@@ -60,17 +94,16 @@ export async function kill(cfg: KillConfig, gw: KillGateways, log: Log): Promise
         : `kill SCP attached to ${cfg.devAccountId}`,
     );
   });
-  for (const fn of await functionsToCover(cfg, gw, failures, log))
-    await each(failures, log, `throttle ${fn}`, async () => {
+  for (const fn of await functionsToCover(cfg, gw, failures))
+    await eachFunction(failures, log, `throttle ${fn}`, async () => {
       await gw.setConcurrency(fn, 0);
       log(`${fn} → concurrency 0`);
     });
-  for (const fn of cfg.urlFunctions)
-    await each(failures, log, `lock ${fn}`, async () => {
-      await gw.setUrlAuth(fn, 'AWS_IAM');
-      log(`${fn} URL → AWS_IAM`);
-    });
-  await each(failures, log, 'disable distributions', async () => {
+  await eachUrlFunction(cfg, failures, log, 'lock', async (fn) => {
+    await gw.setUrlAuth(fn, 'AWS_IAM');
+    log(`${fn} URL → AWS_IAM`);
+  });
+  await each(failures, 'disable distributions', async () => {
     log(
       `distributions disabled: ${(await gw.setDistributionsEnabled(false)).join(', ') || 'none were enabled'}`,
     );
@@ -85,33 +118,44 @@ export async function restore(
   log: Log,
 ): Promise<void> {
   const failures: string[] = [];
-  for (const fn of await functionsToCover(cfg, gw, failures, log))
-    await each(failures, log, `unthrottle ${fn}`, async () => {
+  for (const fn of await functionsToCover(cfg, gw, failures))
+    await eachFunction(failures, log, `unthrottle ${fn}`, async () => {
       const n = reservations[fn];
       if (n !== undefined) {
         await gw.setConcurrency(fn, n);
         log(`${fn} → concurrency ${n}`);
-      } else if (isAppFunction(fn)) {
-        // An app function with no reservation on record stays at 0: removing it would lift its cap to the account
+      } else if (isCdkProvider(fn)) {
+        // Never reserved (ApertureCicdDev's OIDC provider, say): removing puts it back as it was.
+        await gw.setConcurrency(fn, null);
+        log(`${fn} → reservation removed (a CDK provider)`);
+      } else {
+        // Anything else with no reservation on record stays at 0: removing it would lift its cap to the account
         // quota. The hand fix is a break-glass put-function-concurrency (CI-BOT.md → Unkill).
         throw new Error('no reservation on record, left at 0');
-      } else {
-        // A CDK provider function (ApertureCicdDev's OIDC provider, say) was never reserved: this puts it back as it was.
-        await gw.setConcurrency(fn, null);
-        log(`${fn} → reservation removed (not an app function)`);
       }
     });
-  for (const fn of cfg.urlFunctions)
-    await each(failures, log, `unlock ${fn}`, async () => {
-      await gw.setUrlAuth(fn, 'NONE');
-      log(`${fn} URL → NONE`);
-    });
-  await each(failures, log, 'enable distributions', async () => {
+  await eachUrlFunction(cfg, failures, log, 'unlock', async (fn) => {
+    await gw.setUrlAuth(fn, 'NONE');
+    log(`${fn} URL → NONE`);
+  });
+  await each(failures, 'enable distributions', async () => {
     log(
       `distributions enabled: ${(await gw.setDistributionsEnabled(true)).join(', ') || 'none were disabled'}`,
     );
   });
   if (failures.length) throw new Error(`restore incomplete — ${failures.join('; ')}`);
+}
+
+// Which move an invoke runs. The restore's table is read only on a restore, so a bad one can never stop a kill.
+export async function runKillSwitch(
+  event: unknown,
+  env: Record<string, string | undefined>,
+  gateways: (cfg: KillConfig) => KillGateways,
+  log: Log,
+): Promise<void> {
+  const cfg = killConfigFrom(env);
+  if (!isRestore(event)) return kill(cfg, gateways(cfg), log);
+  await restore(cfg, reservationsFrom(env, cfg.urlFunctions), gateways(cfg), log);
 }
 
 // Every function in the dev region, plus the URL functions even when the listing fails — those are the ones a
@@ -120,10 +164,9 @@ async function functionsToCover(
   cfg: KillConfig,
   gw: KillGateways,
   failures: string[],
-  log: Log,
 ): Promise<string[]> {
   let listed: string[] = [];
-  await each(failures, log, 'list functions', async () => {
+  await each(failures, 'list functions', async () => {
     listed = await gw.listFunctions();
   });
   return [...new Set([...cfg.urlFunctions, ...listed])];
@@ -212,18 +255,12 @@ export async function setDistributionsEnabled(
     const page = await cf.list(marker);
     for (const d of page.items) {
       if (d.enabled === enabled) continue;
-      // A distribution's not-found stays a failure: only a function's absence means its move is done.
-      await each(
-        failures,
-        (l) => failures.push(l),
-        d.id,
-        async () => {
-          const { config, etag } = await cf.getConfig(d.id);
-          if (!config) throw new Error('no distribution config returned');
-          await cf.update(d.id, etag, { ...config, Enabled: enabled });
-          changed.push(d.id);
-        },
-      );
+      await each(failures, d.id, async () => {
+        const { config, etag } = await cf.getConfig(d.id);
+        if (!config) throw new Error('no distribution config returned');
+        await cf.update(d.id, etag, { ...config, Enabled: enabled });
+        changed.push(d.id);
+      });
     }
     marker = page.next;
   } while (marker);

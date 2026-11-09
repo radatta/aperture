@@ -1093,8 +1093,9 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   });
 
   // Dev's compute cap is the sum of its functions' reservations, not the account quota (CI-BOT.md → What's capped):
-  // it holds only if every dev function has one. A new function with no entry fails synth (reservedConcurrency);
-  // this pins the deployed values, and that the kill's restore map (the same table) names only real functions.
+  // it holds only if every dev function has one. reservedConcurrency fails synth for a name with no entry, but only
+  // where a construct calls it, so this is the guarantee: every deployed dev function (all named — the unnamed-
+  // function test below) carries exactly its table value, and the table names nothing that isn't deployed.
   it("reserves each dev function's own share, summing to the slot's ceiling", () => {
     const fns = resources(dev.templates).filter((x) => x.Type === 'AWS::Lambda::Function');
     const deployed = Object.fromEntries(
@@ -1103,7 +1104,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
         r.Properties?.ReservedConcurrentExecutions,
       ]),
     );
-    expect(deployed).toEqual(DEV_RESERVED_CONCURRENCY);
+    expect(deployed).toStrictEqual(DEV_RESERVED_CONCURRENCY); // strict: a function with no reservation fails
     // The ceiling is per slot (Rahul, 2026-11-08): each dev stack's functions sum to it, whatever the slots number.
     const perSlot: Record<string, number> = {};
     for (const [fn, n] of Object.entries(DEV_RESERVED_CONCURRENCY))

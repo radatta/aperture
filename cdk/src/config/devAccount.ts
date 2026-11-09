@@ -36,8 +36,8 @@ const PROD_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
 };
 
 // The function's reservedConcurrentExecutions prop. Prod reserves only what its table names; every other stage is a
-// dev slot (dev, and slot B's), where a function with no entry fails synth, so a new function or slot can't reach the
-// dev account uncapped.
+// dev slot (dev, and slot B's), where a name with no entry fails synth. A construct that never calls this is caught by
+// stacks.test.ts, which fails for any dev function deployed without its table value.
 export function reservedConcurrency(
   stage: string,
   functionName: string,
@@ -54,6 +54,7 @@ export function reservedConcurrency(
   return { reservedConcurrentExecutions: n };
 }
 
-// A dev function's slot: its name's last segment, the stage (`aperture-bff-dev` → `dev`).
+// A dev function's slot: its name's last segment, the stage (`aperture-bff-dev` → `dev`). So a slot's stage name
+// can't contain a hyphen (`devb`, not `dev-b`).
 export const slotOf = (functionName: string) =>
   functionName.slice(functionName.lastIndexOf('-') + 1);
