@@ -33,9 +33,9 @@ The card keeps only the actions you press without thinking. No overflow menu.
 ## Decisions + why
 
 - **Built on the existing `components/Modal`, not a new primitive.** That Modal is a native `<dialog>`
-  - `showModal()`, which gives the browser top layer (renders over the fixed dock, no z-index/inert
-    work), focus containment, Escape, and a `::backdrop` scrim for free. Rolling our own portal/focus
-    trap would have re-owned exactly the "subtle correctness" the native element already handles.
+  plus `showModal()`, which gives the browser top layer (renders over the fixed dock, no z-index/inert
+  work), focus containment, Escape, and a `::backdrop` scrim for free. Rolling our own portal/focus
+  trap would have re-owned exactly the "subtle correctness" the native element already handles.
 - **The card slims to lifecycle; the modal is the edit surface.** Start/Focus/Done stay on the card;
   scope/split/due/calendar/files/drop/delete all move into the modal. One editing context, not two.
 - **The full title is an editable field.** It's a `Textarea` at the top of the details form, so a long
@@ -120,22 +120,22 @@ null` (a recurring occurrence respawns — Drop is the right tool). Reveals are 
 - **Category suggestion (2026-11-05)** — an uncategorised task's editor shows a dashed ghost chip
   `Garden?` above the Category select (beside it from `sm`) when the task's own history is confident, scored on the client
   (`packages/shared/src/categorySuggest.ts`, `useSuggestCategory`): multinomial naive Bayes over the words of title
-  - the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing over each
-    category's words. Per-task probabilities drifted long lines to the smallest category (a word absent from
-    a 4-task category outscored one present once in a 17-task category), so the denominator is the category's
-    word count plus half the vocabulary. A rare word still scores higher in a small category, so the winner
-    must also hold more than half the line's known words. Leave-one-out on prod 2026-11-05 (171 categorised
-    tasks, active categories only, 71% in one): ungated top-1 81%; gated it spoke on 78% of them at 95.5%
-    precision, and at 79% (11 of 14) when it named anything but the biggest category; on the 46 uncategorised
-    tasks, the ones it's for, it spoke on 25. On a skewed roster a lone common word can name the biggest
-    category. So the gates carry it — margin ≥ 2 nats, ≥ 20 categorised tasks, ≥ 3 behind the winner, most of the line seen by the winner,
-    active categories only, the task's own row excluded — and below them nothing is said. **Tap-only, never
-    pre-selected:** the chip fills the select, the form goes dirty, Save writes it like a manual pick (a
-    wrong tag snapshots `wasWork` into sessions, so no auto-assign; PRODUCT §2 — it lives in the enrichment
-    pass). Follows the title and notes as typed; gone once the field has a value; never on a part (its
-    category is its parent's). Capture's Review preview shows the same chip ([quick-add](quick-add.md)); bulk add, voice and MCP don't. If a week of scoping shows it
-    missing, the next step is ~20 recent categorised titles as examples in the parse prompt, not embeddings
-    (dependency rules) and not a new endpoint. Plan: task `01M455ZMVX1H8DH5KANJ00YVS3`.
+  plus the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing over each
+  category's words. Per-task probabilities drifted long lines to the smallest category (a word absent from
+  a 4-task category outscored one present once in a 17-task category), so the denominator is the category's
+  word count plus half the vocabulary. A rare word still scores higher in a small category, so the winner
+  must also hold more than half the line's known words. Leave-one-out on prod 2026-11-05 (171 categorised
+  tasks, active categories only, 71% in one): ungated top-1 81%; gated it spoke on 78% of them at 95.5%
+  precision, and at 79% (11 of 14) when it named anything but the biggest category; on the 46 uncategorised
+  tasks, the ones it's for, it spoke on 25. On a skewed roster a lone common word can name the biggest
+  category. So the gates carry it — margin ≥ 2 nats, ≥ 20 categorised tasks, ≥ 3 behind the winner, most of the line seen by the winner,
+  active categories only, the task's own row excluded — and below them nothing is said. **Tap-only, never
+  pre-selected:** the chip fills the select, the form goes dirty, Save writes it like a manual pick (a
+  wrong tag snapshots `wasWork` into sessions, so no auto-assign; PRODUCT §2 — it lives in the enrichment
+  pass). Follows the title and notes as typed; gone once the field has a value; never on a part (its
+  category is its parent's). Capture's Review preview shows the same chip ([quick-add](quick-add.md)); bulk add, voice and MCP don't. If a week of scoping shows it
+  missing, the next step is ~20 recent categorised titles as examples in the parse prompt, not embeddings
+  (dependency rules) and not a new endpoint. Plan: task `01M455ZMVX1H8DH5KANJ00YVS3`.
 
 ## Non-goals / deferred
 

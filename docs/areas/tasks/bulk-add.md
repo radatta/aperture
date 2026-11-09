@@ -209,10 +209,9 @@ Page-first, one atomic contract change so `tsc -b` stays green. ~20 files across
 - **lambdas:** `createTasks`/`newTask` in `backend.ts`, `putTasks` in `repo.ts`, `UnprocessedItems`
   retry in `LiveDoc.batchPut`.
 
-Tests: parser table-driven unit tests; `isDayKey`; `createTasks` in the cross-impl contract suite (stub
-
-- lambda + handler); a `BulkAddDialog` integration test (gating, submit-in-order, warning-still-submits,
-  cancel-drops-draft + focus-return, failure-keeps-text).
+Tests: parser table-driven unit tests; `isDayKey`; `createTasks` in the cross-impl contract suite (stub,
+lambda and handler); a `BulkAddDialog` integration test (gating, submit-in-order, warning-still-submits,
+cancel-drops-draft + focus-return, failure-keeps-text).
 
 **Due times (2026-10-05):** the `@HH:MM` suffix in `parseLine` (`isTimeKey`), `BulkLine.dueTime` →
 `toCreateInput`; time chips in `suggestions.ts`; `TaskTokenChips` shows the time. A timed line is

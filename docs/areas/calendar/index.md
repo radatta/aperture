@@ -352,10 +352,9 @@ token is a recoverable expected state, not a crash.
 ## Operational prerequisites (done by the user in Google Cloud)
 
 One OAuth client per env (same id/secret in both, in SSM SecureString at `/aperture/<stage>/google/client_id`
-
-- `client_secret`), redirect URI `<APP_URL>/api/google/callback`, scope
-  `openid email https://www.googleapis.com/auth/calendar.events`, consent screen **published**. Per-account
-  refresh tokens are written by the app at connect time — never pre-created.
+and `client_secret`), redirect URI `<APP_URL>/api/google/callback`, scope
+`openid email https://www.googleapis.com/auth/calendar.events`, consent screen **published**. Per-account
+refresh tokens are written by the app at connect time — never pre-created.
 
 ## Dependency note
 

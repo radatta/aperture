@@ -572,10 +572,11 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
    at `~`, the container sees your **entire home directory**, `.ssh` and `.aws` included. Fix both
    with `limactl edit incus`:
 
+   <!-- prettier-ignore -->
    ```yaml
    mounts:
-     - location: '~/Coding/Personal/aperture'
-       writable: true
+   - location: "~/Coding/Personal/aperture"
+     writable: true
    ```
 
    > **Get the indentation right.** `writable` belongs _under_ `location`, no dash. A stray `-`

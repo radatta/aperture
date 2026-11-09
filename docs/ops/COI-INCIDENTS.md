@@ -293,7 +293,7 @@ claude (in container) → incus exec → Lima SSH/vsock → limactl → your iTe
 Claude runs _inside the container_ but its stdout **is your iTerm window**. So:
 
 1. On startup it sends your iTerm "report all mouse movement" — DECSET `1003` (any-event tracking)
-   - `1006` (SGR encoding).
+   plus `1006` (SGR encoding).
 2. On a clean exit it sends the matching DECRST to turn that off.
 3. An abrupt death (SIGHUP from a broken transport, SIGKILL, VM stopped underneath it, terminal
    force-quit) means **step 2 never runs**.
@@ -427,9 +427,10 @@ sudo sh -c 'cat /var/log/incus/<container>/*.log'
 
 **Cause: applying a writable host mount for a project.** The mount block involved was:
 
+<!-- prettier-ignore -->
 ```yaml
 mounts:
-  - location: '~/Coding/Personal/WebDev/psi-omega-website'
+  - location: "~/Coding/Personal/WebDev/psi-omega-website"
     writable: true
 ```
 
@@ -584,10 +585,11 @@ followed it is **Incident E** below.
 
 `limactl edit incus`, narrowing `mounts:` from `~` to the project path. The buffer written was:
 
+<!-- prettier-ignore -->
 ```yaml
 mounts:
-  - location: '/Users/<you>/Coding/Personal/aperture'
-  - writable: true # <-- this dash makes it a SECOND list item
+- location: "/Users/<you>/Coding/Personal/aperture"
+- writable: true      # <-- this dash makes it a SECOND list item
 ```
 
 Lima rejected it:
@@ -600,10 +602,11 @@ field `mounts[1].location` must be an absolute path, got `.`
 The dash turns `writable: true` into `mounts[1]` — a map with no `location`, which Lima defaults to
 `.`. Correct form indents it under the first item:
 
+<!-- prettier-ignore -->
 ```yaml
 mounts:
-  - location: '/Users/<you>/Coding/Personal/aperture'
-    writable: true
+- location: "/Users/<you>/Coding/Personal/aperture"
+  writable: true
 ```
 
 **COI-SANDBOX's _One-time setup_ step 1 already showed it correctly.** The runbook was right; the
@@ -869,6 +872,7 @@ The file existed and was **fully populated** — per-poll JSON Lines telemetry (
 process list, filesystem read/write rates, resource usage) sampled every ~2s for the container's
 entire lifetime, including the event:
 
+<!-- prettier-ignore -->
 ```json
 {
   "timestamp": "2026-09-06T20:33:13.036...",
@@ -876,15 +880,13 @@ entire lifetime, including the event:
   "category": "filesystem",
   "title": "Large workspace read detected",
   "description": "Read 32.45 MB at 16.00 MB/sec (threshold: 10.00 MB)",
-  "evidence": {
-    "filesystem": {
-      "read_bytes_mb": 32.4453125,
-      "read_rate_mb_per_sec": 15.9992890555453,
-      "files_read": 0,
-      "duration": "sustained",
-      "threshold_mb": 10
-    }
-  },
+  "evidence": { "filesystem": {
+    "read_bytes_mb": 32.4453125,
+    "read_rate_mb_per_sec": 15.9992890555453,
+    "files_read": 0,
+    "duration": "sustained",
+    "threshold_mb": 10
+  }},
   "action": "pending"
 }
 ```

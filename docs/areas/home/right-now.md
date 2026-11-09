@@ -117,9 +117,8 @@ at any hour, so you're never _locked out_ of the radar by the clock; it just isn
 full morning. (Revisit if morning loses a card.)
 
 **D10 — Subsumes both `TodayTasksCard` and `FocusCard`.** Right now carries what both did (today's list
-
-- the pomodoro focus launch). _Rejected:_ keeping either — that duplicates the plan and pushes daytime
-  past 5 elements.
+plus the pomodoro focus launch). _Rejected:_ keeping either — that duplicates the plan and pushes daytime
+past 5 elements.
 
 **D11 — Timed tasks are a "By time" tier, never a Big-3 slot (2026-10-30, parts v2b).** A task due today
 at a time is on Today by its time ([lenses.md](../tasks/lenses.md) D13), not by choice, so it doesn't
