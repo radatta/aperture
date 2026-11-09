@@ -847,6 +847,59 @@ describe('backend read-then-write under lagging reads', () => {
     expect(row?.deletedAt).not.toBeNull();
   });
 
+  // Two instances at once (dev, 2026-11-09): both read the row before either writes. `during` runs once,
+  // straight after the first read of the category's key, so it lands in full before that caller writes.
+  const raceCategory = (doc: InMemoryDoc, id: string, during: () => Promise<unknown>) => {
+    const get = doc.get.bind(doc);
+    let fired = false;
+    doc.get = async (...args: Parameters<InMemoryDoc['get']>) => {
+      const item = await get(...args);
+      if (!fired && args[1] === sk.cat(id)) {
+        fired = true;
+        await during();
+      }
+      return item;
+    };
+  };
+
+  it('a rename and a work flip racing keep both, whichever writes last', async () => {
+    const { backend, doc } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: false });
+    raceCategory(doc, cat.id, () => backend.setCategoryWork(cat.id, true, false));
+    expect(await backend.upsertCategory({ id: cat.id, label: 'New' })).toMatchObject({
+      label: 'New',
+      isWork: true,
+    });
+
+    raceCategory(doc, cat.id, () => backend.upsertCategory({ id: cat.id, label: 'Newer' }));
+    const { category } = await backend.setCategoryWork(cat.id, false, false);
+    expect(category).toMatchObject({ label: 'Newer', isWork: false });
+    expect((await backend.listCategories()).find((c) => c.id === cat.id)).toMatchObject({
+      label: 'Newer',
+      isWork: false,
+    });
+  });
+
+  it('an area set racing a rename keeps the rename', async () => {
+    const { backend, doc } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: true });
+    raceCategory(doc, cat.id, () => backend.upsertCategory({ id: cat.id, label: 'New' }));
+    expect(await backend.setCategoryArea(cat.id, 'school')).toMatchObject({
+      label: 'New',
+      area: 'school',
+    });
+  });
+
+  it('an edit racing a delete never writes the live row back over the tombstone', async () => {
+    const { backend, doc } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: false });
+    raceCategory(doc, cat.id, () => backend.deleteCategory(cat.id, null));
+    await expect(backend.upsertCategory({ id: cat.id, label: 'New' })).rejects.toThrow(/Not found/);
+    const row = await doc.get('u#local', sk.cat(cat.id), { consistent: true });
+    expect(row?.deletedAt).not.toBeNull();
+    expect((await backend.listCategories()).some((c) => c.id === cat.id)).toBe(false);
+  });
+
   it('a settings patch straight after another keeps both', async () => {
     const { backend, doc } = setup();
     await backend.getSettings();

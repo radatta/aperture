@@ -1827,10 +1827,10 @@ export function runApiContract(
       await expect(api.setCategoryArea('nope', 'school')).rejects.toThrow(/Not found/);
     });
 
-    it('categories: an update is patch-style for label and isWork too — a stale write never reverts a flip', async () => {
+    it('categories: an update is patch-style for label and isWork too — a label-only write keeps a flip', async () => {
       const cat = await api.upsertCategory({ label: 'A', isWork: false });
       await api.setCategoryWork(cat.id, true, false);
-      // A rename that lands after the flip (two Lambda instances, 2026-11-09 on dev) names only the label.
+      // Sequential: the semantics. Two writes racing on two instances: backend.test.ts (casUpdate).
       expect(await api.upsertCategory({ id: cat.id, label: 'B' })).toMatchObject({
         label: 'B',
         isWork: true,

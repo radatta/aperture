@@ -703,6 +703,21 @@ export class Repo {
     await this.writes.put(entityItem(this.userId, sk.cat(c.id), c));
     return c;
   }
+  // Every write to an existing category: a conditional put on the row as read, re-merged on a lost race
+  // (casUpdate), so a rename and a work flip landing on two instances at once can't revert each other.
+  async updateCategory(
+    id: string,
+    fn: (fresh: Category) => Category,
+    now: number,
+    opts: { allowDeleted?: boolean } = {},
+  ): Promise<Category> {
+    const shape: CasShape<Category> = {
+      sk: sk.cat(id),
+      read: (i) => this.category(i),
+      toItem: (t) => entityItem(this.userId, sk.cat(t.id), t),
+    };
+    return this.casUpdate(shape, id, fn, now, { ...opts, consistent: true });
+  }
 
   // --- Places (errand lists) ---
   async listPlaces(opts?: { consistent?: boolean }): Promise<Place[]> {

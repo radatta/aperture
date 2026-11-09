@@ -523,8 +523,6 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     const sent = () => dispatched.filter((d) => d.method === 'upsertCategory').at(-1)!.args[0];
     await call('update_category', { id: cat.id, isWork: true });
     expect(sent()).toStrictEqual({ id: cat.id, isWork: true });
-    // A rename elsewhere lands between this tool's read and its write: the flag write can't undo it.
-    await setup.upsertCategory({ id: cat.id, label: 'Side project' });
     await call('update_category', { id: cat.id, label: 'Side gig' });
     expect(sent()).toStrictEqual({ id: cat.id, label: 'Side gig' });
     expect((await setup.listCategories()).find((c) => c.id === cat.id)).toMatchObject({
