@@ -46,7 +46,7 @@ export const devConcurrencyCaps: Scenario = {
     },
     offDev(
       'reservation-values',
-      'Each dev function reserves its own share (BFF 18, MCP 10, finance sync 1, poller 1), summing to 30; prod keeps only the poller’s 1',
+      'Each dev function reserves its own share (BFF 18, MCP 10, finance sync 1, poller 1), summing to 30 on each dev slot (dev, devb); prod keeps only the poller’s 1',
       STACKS,
       "reserves each dev function's own share, summing to the slot's ceiling",
       'template state: the test user has no AWS credential to read a reservation, and dev shows only its effect (the rows above)',
@@ -111,7 +111,7 @@ export const devConcurrencyCaps: Scenario = {
       id: 'live-values',
       entry: 'api',
       kind: 'nominal',
-      what: 'Dev’s functions report 18 / 10 / 1 / 1 after the deploy',
+      what: 'Dev’s and devb’s functions each report 18 / 10 / 1 / 1 after the deploy',
       needsYou:
         'the container has no AWS credentials: the get-function-concurrency line in the PR body',
     },
@@ -119,7 +119,7 @@ export const devConcurrencyCaps: Scenario = {
       id: 'kill-drill',
       entry: 'api',
       kind: 'edge',
-      what: 'A live kill sets every function to 0; the unkill puts back 18 / 10 / 1 / 1',
+      what: 'A live kill sets every function on both slots to 0 and locks all four URLs; the unkill puts back 18 / 10 / 1 / 1 on each slot',
       needsYou:
         'the drill kills dev for every lane and needs the management account (CI-BOT.md → Drill)',
     },

@@ -1097,7 +1097,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   // where a construct calls it, so this is the guarantee: every deployed dev function (all named — the unnamed-
   // function test below) carries exactly its table value, and the table names nothing that isn't deployed.
   it("reserves each dev function's own share, summing to the slot's ceiling", () => {
-    const fns = resources(dev.templates).filter((x) => x.Type === 'AWS::Lambda::Function');
+    const fns = resources(devSlots()).filter((x) => x.Type === 'AWS::Lambda::Function');
     const deployed = Object.fromEntries(
       fns.map((r) => [
         r.Properties?.FunctionName as string,
@@ -1109,15 +1109,16 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     const perSlot: Record<string, number> = {};
     for (const [fn, n] of Object.entries(DEV_RESERVED_CONCURRENCY))
       perSlot[slotOf(fn)] = (perSlot[slotOf(fn)] ?? 0) + n;
+    expect(Object.keys(perSlot).sort()).toEqual(['dev', 'devb']);
     for (const sum of Object.values(perSlot)) expect(sum).toBe(DEV_CONCURRENCY_CEILING);
     for (const fn of DEV_URL_FUNCTIONS) expect(DEV_RESERVED_CONCURRENCY[fn]).toBeGreaterThan(0);
   });
 
   it('fails synth for a dev function with no reservation on record', () => {
     expect(() => reservedConcurrency('dev', 'aperture-new-dev')).toThrow(/no reserved concurrency/);
-    expect(() => reservedConcurrency('devb', 'aperture-bff-devb')).toThrow(
+    expect(() => reservedConcurrency('devc', 'aperture-bff-devc')).toThrow(
       /no reserved concurrency/,
-    ); // any slot
+    ); // a stage that isn't a dev slot
     expect(reservedConcurrency('prod', 'aperture-bff-prod')).toEqual({});
   });
 

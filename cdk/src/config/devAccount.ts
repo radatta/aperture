@@ -24,12 +24,18 @@ export const DEV_MAIN_GITHUB_ROLE = `${GITHUB_ROLE_PREFIX}dev-main`;
 // call (2026-11-08) is this ceiling per slot. Keyed by full name like DEV_URL_FUNCTIONS: the kill's restore puts
 // these back (org-stack.ts → RESERVED_CONCURRENCY), so a change here needs an ApertureOrg redeploy too.
 export const DEV_CONCURRENCY_CEILING = 30;
-export const DEV_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
-  'aperture-bff-dev': 18, // a page keeps ≤ 8 /api in flight, the harness ~2: room for a phone beside a devcheck
-  'aperture-mcp-dev': 10, // a devcheck's /mcp steps beside a live connector session
-  'aperture-finance-sync-dev': 1, // the per-item lock serialises anyway; a throttled async event is retried
-  'aperture-push-dispatch-dev': 1, // one tick at a time, as on prod
+// One dev stack's shares, by function; every slot gets the same.
+const SLOT_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
+  bff: 18, // a page keeps ≤ 8 /api in flight, the harness ~2: room for a phone beside a devcheck
+  mcp: 10, // a devcheck's /mcp steps beside a live connector session
+  'finance-sync': 1, // the per-item lock serialises anyway; a throttled async event is retried
+  'push-dispatch': 1, // one tick at a time, as on prod
 };
+export const DEV_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = Object.fromEntries(
+  DEV_SLOTS.flatMap((slot) =>
+    Object.entries(SLOT_RESERVED_CONCURRENCY).map(([fn, n]) => [`aperture-${fn}-${slot}`, n]),
+  ),
+);
 // Prod's only reservation: push-dispatch's one-tick-at-a-time rule (D3). Prod's other functions stay unreserved.
 const PROD_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
   'aperture-push-dispatch-prod': 1,
