@@ -1807,16 +1807,19 @@ class StubClient implements ApiClient {
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.area !== undefined) assertArea(input.area);
-    if (input.id) {
+    if (input.id !== undefined) {
+      // Every field patch-style, as the BFF: a rename racing a work flip can't revert it.
       const existing = this.mustFind(this.store.categories, input.id);
       return this.writes.patch(this.store.categories, input.id, {
-        label: input.label,
-        isWork: input.isWork,
+        label: input.label ?? existing.label,
+        isWork: input.isWork ?? existing.isWork,
         order: input.order ?? existing.order,
         active: input.active ?? existing.active,
         area: input.area === undefined ? (existing.area ?? null) : input.area,
       });
     }
+    if (typeof input.label !== 'string' || typeof input.isWork !== 'boolean')
+      throw new Error('upsertCategory: create needs label and isWork');
     return this.writes.insert(this.store.categories, {
       ...this.base(),
       label: input.label,

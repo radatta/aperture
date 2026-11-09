@@ -150,16 +150,26 @@ export interface UpsertRollInput {
   active?: boolean;
 }
 
-// Create (no id): order defaults per impl, active to true. Update (id set): label/isWork replace;
-// order/active are patch-style — omitted keeps the current value (so a rename never un-retires).
-export interface UpsertCategoryInput {
-  id?: string;
+// Create (no id): label + isWork required; order defaults per impl, active to true, area to Personal.
+// Update (id set): every field is patch-style — omitted keeps the current value — so a rename racing a work
+// flip can't revert it, nor un-retire or clear the area. Callers send only what they change.
+export interface CreateCategoryInput {
+  id?: undefined;
   label: string;
   isWork: boolean;
   order?: number;
   active?: boolean;
-  area?: Area | null; // patch-style too: omitted keeps it (create: null = Personal); off the set → refused
+  area?: Area | null; // create: null/omitted = Personal; off the set → refused
 }
+export interface UpdateCategoryInput {
+  id: string;
+  label?: string;
+  isWork?: boolean;
+  order?: number;
+  active?: boolean;
+  area?: Area | null; // null clears; off the set → refused
+}
+export type UpsertCategoryInput = CreateCategoryInput | UpdateCategoryInput;
 
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive

@@ -1889,20 +1889,24 @@ export class BackendClient implements ApiClient {
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.area !== undefined) assertArea(input.area);
-    if (input.id) {
-      // Consistent: a work flip straight after a rename keeps the rename.
+    if (input.id !== undefined) {
+      // Consistent read, and every field patch-style: a rename and a work flip racing on two instances
+      // can't revert each other (setCategoryWork merges the same way).
       const existing = await this.repo.getCategory(input.id, { consistent: true });
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putCategory({
         ...existing,
-        label: input.label,
-        isWork: input.isWork,
+        label: input.label ?? existing.label,
+        isWork: input.isWork ?? existing.isWork,
         order: input.order ?? existing.order,
         active: input.active ?? existing.active,
         area: input.area === undefined ? existing.area : input.area,
         updatedAt: this.now(),
       });
     }
+    // No RPC arg validation: a create must still name both.
+    if (typeof input.label !== 'string' || typeof input.isWork !== 'boolean')
+      throw new Error('upsertCategory: create needs label and isWork');
     return this.repo.putCategory({
       ...this.base(),
       label: input.label,
