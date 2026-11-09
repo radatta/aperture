@@ -131,6 +131,14 @@ describe('report', () => {
     );
   });
 
+  it('names the dev slot the run was on, when it has one', () => {
+    expect(
+      renderReport({ ...base, target: 'devb (https://devb.aperture.rahuldatta.dev)' }),
+    ).toContain(
+      'Run `2026-10-13T12-00-00-full` · tier full · on devb (https://devb.aperture.rahuldatta.dev) · 61.0s\n',
+    );
+  });
+
   it('renders a pass', () => {
     expect(renderReport(base)).toMatchInlineSnapshot(`
       "# Dev check — PASS

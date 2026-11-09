@@ -253,23 +253,22 @@ describe('ApertureCicdStack roles', () => {
   });
 
   // One account, both slots: a devb deploy publishes, smokes and reads outputs through the same two roles.
-  it.each(['aperture-github-deploy-dev', 'aperture-github-dev-main'])(
-    '%s publishes, smokes and reads outputs on both dev slots, never prod',
-    (role) => {
+  it('lets both dev deploy roles publish, smoke and read outputs on both dev slots, never prod', () => {
+    for (const role of ['aperture-github-deploy-dev', 'aperture-github-dev-main']) {
       const grants = JSON.stringify(
         statementsOf(role).filter(
           (s) => s.Action !== 'sts:AssumeRole' && s.Action !== 'ssm:GetParameter',
         ),
       );
       for (const slot of ['dev', 'devb']) {
-        expect(grants).toContain(`apertureapp-${slot}-*`);
-        expect(grants).toContain(`function:aperture-bff-${slot}"`);
-        expect(grants).toContain(`stack/ApertureData-${slot}/*`);
-        expect(grants).toContain(`stack/ApertureApp-${slot}/*`);
+        expect(grants, role).toContain(`apertureapp-${slot}-*`);
+        expect(grants, role).toContain(`function:aperture-bff-${slot}"`);
+        expect(grants, role).toContain(`stack/ApertureData-${slot}/*`);
+        expect(grants, role).toContain(`stack/ApertureApp-${slot}/*`);
       }
-      expect(grants).not.toContain('prod');
-    },
-  );
+      expect(grants, role).not.toContain('prod');
+    }
+  });
 
   it("keeps prod's role to prod's own resources", () => {
     const grants = JSON.stringify(statementsOf('aperture-github-deploy-prod'));

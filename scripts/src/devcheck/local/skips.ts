@@ -32,6 +32,11 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
       'local: the session is seeded with locally signed tokens, no refresh token and no Cognito token endpoint — runs on dev',
   },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
+  'dev-slot-b': {
+    steps: ['shell', 'push'],
+    reason:
+      'local: the build marker is the CloudFront build’s and the reminder poller ticks only on dev — runs on dev',
+  },
 };
 
 export const IOS_LOCAL = 'local: the iOS Simulator is the Mac’s — runs on dev';

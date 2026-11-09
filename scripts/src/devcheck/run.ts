@@ -201,6 +201,7 @@ async function main(): Promise<number> {
         })
       ).stdout.trim(),
   }).catch((err: unknown) => {
+    if (err instanceof DevcheckError) throw err; // NO_LOCK, as is
     throw new DevcheckError(
       'SLOT_UNKNOWN',
       `couldn't read the dev locks (${err instanceof Error ? err.message : String(err)}) — rerun`,
@@ -248,6 +249,7 @@ async function main(): Promise<number> {
       feature,
       expectedSha: sha,
       scenarioSha,
+      target: `${currentSlot()} (${slotOrigin()})`,
       scenarios,
       ledger,
       shotsDir,

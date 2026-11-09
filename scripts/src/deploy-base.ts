@@ -44,8 +44,10 @@ interface JobSteps {
 
 export type Slot = 'dev' | 'devb';
 export const SLOTS: readonly Slot[] = ['dev', 'devb']; // = @aperture/shared DEV_SLOTS (no imports here; a test pins it)
-export const slotOfJob = (name: string | undefined): Slot =>
-  (name ?? '').startsWith('deploy-devb') ? 'devb' : 'dev';
+// By deploy.yml's call-job ids, exactly: a name neither of them gives is unknown to both walks (→ full), so a renamed
+// job can never pass one slot's record off as the other's base.
+export const slotOfJob = (name: string | undefined): Slot | null =>
+  name?.startsWith('deploy-devb / ') ? 'devb' : name?.startsWith('deploy-dev / ') ? 'dev' : null;
 
 // Only the latest state decides, looking through `inactive`: GitHub lays that over a deployment it superseded.
 export function outcome(statuses: Status[]): 'success' | 'failure' | 'running' {
@@ -99,7 +101,12 @@ export async function servedBy(
             id: anyId,
             job: await api<JobSteps>('GET', `/repos/${repo}/actions/jobs/${anyId}`),
           };
-          if (slotOfJob(seen.job.name) !== slot) continue;
+          const of = slotOfJob(seen.job.name);
+          if (!of)
+            return unknown(
+              `job ${anyId} at ${sha} is ${seen.job.name ?? 'unnamed'}, neither slot's`,
+            );
+          if (of !== slot) continue;
         }
       }
       const state = outcome(statuses);
@@ -169,10 +176,11 @@ export const gitDiff =
       stdio: ['ignore', 'pipe', 'pipe'],
     }).split('\n');
 
-// A hang or a slow walk must end in `full` like any other API trouble, not in the job being killed: two walks of
-// WALK_MS fit well inside the jobs' 5-minute limits, and any one abort ends the walk.
+// A hang or a slow walk must end in `full` like any other API trouble, not in the job being killed: three walks of
+// WALK_MS (dev, devb, prod) plus a full-history checkout fit inside the jobs' 5-minute limits, and any one abort ends
+// the walk.
 const REQUEST_MS = 20_000;
-const WALK_MS = 90_000;
+const WALK_MS = 60_000;
 export function withTimeout(
   fetchImpl: typeof fetch,
   requestMs = REQUEST_MS,

@@ -233,11 +233,27 @@ describe('servedBy, per dev slot', () => {
     expect([...SLOTS]).toEqual(sharedSlots());
   });
 
-  it("tells the slots apart by job name, older unnamed records being slot A's", () => {
+  it("tells the slots apart by deploy.yml's call-job names, and knows no other", () => {
     expect(slotOfJob(A)).toBe('dev');
     expect(slotOfJob(B)).toBe('devb');
-    expect(slotOfJob(undefined)).toBe('dev');
-    expect(slotOfJob('deploy-dev')).toBe('dev');
+    for (const other of [
+      undefined,
+      'deploy-dev',
+      'deploy-devb',
+      'Deploy devb / deploy',
+      'deploy / deploy',
+    ])
+      expect(slotOfJob(other)).toBeNull();
+  });
+
+  it("is unknown for either slot on a record whose job is neither slot's", async () => {
+    const rows: SlotRow[] = [
+      { sha: 'x1', job: 'renamed / deploy' },
+      { sha: 'a1', job: A },
+      { sha: 'b1', job: B },
+    ];
+    for (const slot of ['dev', 'devb'] as const)
+      expect(await servedBy(devMain(rows).api, 'o/r', 'dev-main', undefined, slot)).toBe('unknown');
   });
 
   it("walks past the other slot's records, failed ones included", async () => {

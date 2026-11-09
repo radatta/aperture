@@ -3,6 +3,7 @@
 export const REASON_CODES = [
   'ENV_MISSING', // .secrets/devcheck.<slot>.env absent or missing a key
   'SLOT_UNKNOWN', // the dev locks couldn't be read, so the run can't tell which slot its branch deployed to
+  'NO_LOCK', // the branch holds no dev lock and another branch is testing on dev — it would run into that test
   'PW_MISSING', // Playwright not installed at ~/pw (or DEVCHECK_PW_ROOT)
   'DEPLOY_NOT_FOUND', // no dev deploy run for the expected SHA
   'DEPLOY_FAILED', // the run for that SHA did not succeed

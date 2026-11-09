@@ -9,6 +9,7 @@ import { REPO_SLUG } from './config.ts';
 import type { Clock, Run } from './dispatch.ts';
 import { dispatchAndWait } from './dispatch.ts';
 import { featureBranch, runKey } from './git.ts';
+import { heldSlot } from './lock.ts';
 import { parseLogsRequest } from './logs-spec.ts';
 import type { Run as Sh } from './sh.ts';
 
@@ -68,7 +69,15 @@ export async function fetchLogs(
     // keep the generic label
   }
   const key = runKey(label, now);
-  const req = parseLogsRequest({ start, end, groups: args.groups ?? 'bff,mcp', key }, now); // before spending a run
+  // No --groups: the slot this branch holds a lock on (slot B's groups carry `-devb`), else slot A's.
+  let groups = args.groups;
+  if (groups === undefined) {
+    const slot = label === 'logs' ? null : await heldSlot(api, label).catch(() => null);
+    groups = slot === 'devb' ? 'bff-devb,mcp-devb' : 'bff,mcp';
+    if (slot === 'devb')
+      log(`${label} holds the devb lock — reading devb's groups (--groups to choose)`);
+  }
+  const req = parseLogsRequest({ start, end, groups, key }, now); // before spending a run
   const dir = join(root, 'localNotes', 'devlogs');
   mkdirSync(dir, { recursive: true });
   const ledger = join(dir, 'fetches.jsonl');

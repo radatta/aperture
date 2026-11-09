@@ -15,9 +15,19 @@ set -u
 STALE_SEC=300
 _cache() { if [ "$1" = dev ]; then echo "$BOARD_DIR/devlock.json"; else echo "$BOARD_DIR/devlock.$1.json"; fi; }
 
+# Both refs in one `ls-remote`, made at most once per refresh and only when a cache is due: REFS holds its output,
+# REFS_RC its status (unset until asked).
+REFS='' REFS_RC=''
+_refs() {
+  [ -n "$REFS_RC" ] && return "$REFS_RC"
+  REFS=$(timeout "$1" git -C "$SB_REPO" ls-remote origin refs/locks/dev refs/locks/devb 2>/dev/null); REFS_RC=$?
+  return "$REFS_RC"
+}
+
 # → the holder JSON (or null: no ref, or an unreadable holder — both mean the next acquire takes it) on stdout;
-# 1 when GitHub couldn't be asked, 2 when this machine can't ask (no `timeout`: the Mac). Each network call is bounded by $1 seconds. The repo is spelled out here
-# because this is shell-only (no node): it's config.ts's OWNER/REPO.
+# 1 when GitHub couldn't be asked, 2 when this machine can't ask (no `timeout`: the Mac). Each network call is bounded
+# by $1 seconds: one ls-remote for both slots, then a tag read per held slot. The repo is spelled out here because
+# this is shell-only (no node): it's config.ts's OWNER/REPO.
 _peek() {
   local to="$1" slot="$2" src="${APERTURE_DEVLOCK_SOURCE:-}" ref msg f
   if [ "${src#file:}" != "$src" ]; then
@@ -26,9 +36,10 @@ _peek() {
     msg=$(cat "$f")
   else
     command -v timeout >/dev/null || return 2  # the Mac has none: no peek there, and the container's cache stands
-    ref=$(timeout "$to" git -C "$SB_REPO" ls-remote origin "refs/locks/$slot" 2>/dev/null) || return 1
+    _refs "$to" || return 1
+    ref=$(awk -v r="refs/locks/$slot" '$2 == r {print $1}' <<<"$REFS")
     msg=
-    [ -z "$ref" ] || msg=$(timeout "$to" gh api "repos/radatta/aperture/git/tags/${ref%%[[:space:]]*}" --jq .message 2>/dev/null) || return 1
+    [ -z "$ref" ] || msg=$(timeout "$to" gh api "repos/radatta/aperture/git/tags/$ref" --jq .message 2>/dev/null) || return 1
   fi
   [ -n "$msg" ] || { echo null; return 0; }
   jq -c 'if (.branch | type) == "string" and (.sha | type) == "string" and (.expiresAt | type) == "string"
@@ -50,7 +61,7 @@ cmd_refresh() {
 }
 
 _refresh_one() {
-  local slot="$1" max="$2" to="$3" CACHE t h before f rc
+  local slot="$1" max="$2" to="$3" CACHE t h before f rc src
   CACHE=$(_cache "$slot")
   before=$(jq -r '.t // empty' "$CACHE" 2>/dev/null)
   t=$(jq -r '.t | sub("\\.[0-9]+"; "") | fromdate' "$CACHE" 2>/dev/null)
@@ -58,6 +69,9 @@ _refresh_one() {
   # A peek that failed under a minute ago: don't make every caller wait on GitHub again.
   f=$(jq -r '.failedAt // empty | fromdate' "$CACHE" 2>/dev/null)
   [ -n "$f" ] && [ $(( $(sb_epoch) - f )) -lt 60 ] && return 0
+  # The shared ls-remote runs here, in this shell: _peek's $( ) subshell couldn't keep its answer for the next slot.
+  src="${APERTURE_DEVLOCK_SOURCE:-}"
+  if [ "${src#file:}" = "$src" ] && command -v timeout >/dev/null; then _refs "$to"; fi
   h=$(_peek "$to" "$slot"); rc=$?
   [ "$rc" = 2 ] && return 0
   if [ "$rc" = 0 ]; then
@@ -97,5 +111,5 @@ _line() {
 case "${1:-line}" in
   refresh) shift; cmd_refresh "$@" ;;
   line) cmd_line ;;
-  *) sed -n '5,9p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '5,8p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

@@ -18,9 +18,11 @@ const TITLE_RE = /^deploy-dev ([0-9a-f]{40}) \S+$/;
 const PAGE = 10;
 
 // The newest run of `workflow` whose dev-stack job decides what dev's infrastructure is. Skipped: runs whose dev
-// job never ran (verify or check failed — GitHub then lists the call unexpanded, or not at all), and runs that
-// `setsInfra` rejects. A dev job still running → 'busy'. A full page with no answer → 'busy' too: the decider is
-// further back than we looked, and guessing "never ran" would understate the change.
+// job never ran (verify or check failed — GitHub then lists the call unexpanded, or not at all; or the run was the
+// other slot's), and runs that `setsInfra` rejects. A dev job still running → 'busy'. MAX_PAGES full pages with no
+// answer → 'busy' too: the decider is further back than we looked, and guessing "never ran" would understate the
+// change. Paged, since a slot's runs interleave with the other slot's (a devb dispatch can sit behind ten dev ones).
+const MAX_PAGES = 5;
 async function lastDevJob(
   api: Api,
   workflow: string,
@@ -28,18 +30,21 @@ async function lastDevJob(
   jobPrefix: string,
   setsInfra: (job: Job) => boolean,
 ): Promise<{ run: Run; job: Job } | 'busy' | undefined> {
-  const runs = await listRuns(api, workflow, `per_page=${PAGE}&${query}`);
-  for (const run of runs) {
-    // A run may carry several matching jobs (an old `dev` push run: deploy-dev or deploy-dev-fast) — take the one that ran.
-    const job = (await listJobs(api, run.id)).find(
-      (j) => j.name.startsWith(jobPrefix) && j.conclusion !== 'skipped',
-    );
-    if (!job) continue;
-    if (job.status !== 'completed' || !job.completed_at) return 'busy';
-    if (job.conclusion === 'success' && !setsInfra(job)) continue;
-    return { run, job };
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const runs = await listRuns(api, workflow, `per_page=${PAGE}&page=${page}&${query}`);
+    for (const run of runs) {
+      // A run may carry several matching jobs (an old `dev` push run: deploy-dev or deploy-dev-fast) — take the one that ran.
+      const job = (await listJobs(api, run.id)).find(
+        (j) => j.name.startsWith(jobPrefix) && j.conclusion !== 'skipped',
+      );
+      if (!job) continue;
+      if (job.status !== 'completed' || !job.completed_at) return 'busy';
+      if (job.conclusion === 'success' && !setsInfra(job)) continue;
+      return { run, job };
+    }
+    if (runs.length < PAGE) return undefined;
   }
-  return runs.length >= PAGE ? 'busy' : undefined;
+  return 'busy';
 }
 
 // A main deploy sets dev's infrastructure only when its `Deploy stacks` step ran: an app- or docs-only main

@@ -54,9 +54,11 @@ step-only failure's first line is exactly `# Dev check — FAIL: STEP_FAILED`) �
 
 The dev account has two stacks, `dev` (slot A) and `devb` (slot B, CI-BOT.md → _Dev slots_). **A run targets the slot
 its branch's dev lock is on** — read at start from `refs/locks/dev` / `refs/locks/devb` with the container's read-only
-token (`slot.ts`), never from a flag, so a run can't be aimed at a stack another branch is testing. No lock held →
-`dev`, as every run was before slot B (a check of main's deploy holds none). A lock read that fails stops the run
-(`SLOT_UNKNOWN`). The report's first log line names the target. Everything a run keeps is per slot: the env file
+token (`slot.ts`), never from a flag. No lock of its own → `dev`, as every run was before slot B (a check of main's
+deploy holds none) — unless another branch holds `dev` live: then the run stops (`NO_LOCK`) rather than sweep and
+write into that branch's test. So a run never lands on a stack another branch holds. A lock read that fails stops the
+run too (`SLOT_UNKNOWN`). The report's header names the target (`· on devb (https://…)`). Everything a run keeps is
+per slot: the env file
 (`.secrets/devcheck.<slot>.env`), the signed-in state (`devcheck.<slot>.state.json`), the ledger
 (`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
 scope (`config.ts` → `SLOT_TARGETS`). The run lock stays one for both slots while the dev account's Lambda quota is
@@ -64,7 +66,7 @@ scope (`config.ts` → `SLOT_TARGETS`). The run lock stays one for both slots wh
 (CI-BOT.md → Compute), `PER_SLOT_RUNS` in `config.ts` gives each slot its own (`run.devb.lock`), so two sessions can
 each run one devcheck at once. On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's). The `dev-slot-b` scenario's
 rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its
-push keys are configured — so it stays as a standing check that a run is where its lock says.
+reminders are configured and its poller ticking — so it stays as a standing check that a run is where its lock says.
 
 ## One-time setup
 
@@ -239,6 +241,7 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ENV_MISSING`              | env file absent or a key missing                                                                                                                                                                                       | setup step 1                                                                                                                                                                                                                               |
 | `SLOT_UNKNOWN`             | the dev locks couldn't be read at start, so the run can't tell which slot its branch deployed to (_Dev slots_)                                                                                                         | rerun; `pnpm bot lock status` shows both locks                                                                                                                                                                                             |
+| `NO_LOCK`                  | the branch holds no dev lock and another branch holds `dev` live — the run would land in that branch's test (_Dev slots_)                                                                                              | `pnpm bot deploy-dev` takes a slot (or wait for `dev` to free)                                                                                                                                                                             |
 | `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                                                                                                | setup step 2                                                                                                                                                                                                                               |
 | `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                                                                                                   | did `pnpm bot deploy-dev` run for it?                                                                                                                                                                                                      |
 | `DEPLOY_FAILED`            | the run failed                                                                                                                                                                                                         | read the run; a failed `verify` job names why in its `::error::` line                                                                                                                                                                      |
