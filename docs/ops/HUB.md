@@ -59,8 +59,11 @@ anything a session was refused goes back to its user, not to a peer.
   first)_ (PR, branch, merge sha, note); _Rules the hub enforces_. Start it with an "Updated <date>" line and
   "check every line against `git log origin/main` and `gh pr list` before acting on it".
 - **The tower's queue.** The hub keeps `/workspace/localNotes/board/queue.json` current — the control tower's
-  dev queue, the user's to-dos and the wave checklist (schema: `docs/ops/SESSION-BOARD.md` → _Control tower_),
-  written with a tmp file + rename on every checkpoint that changes them.
+  dev queue, the user's to-dos, the wave checklist and the `plan` timeline (the one source for the next merge;
+  schema: `docs/ops/SESSION-BOARD.md` → _Control tower_), written with a tmp file + rename on every checkpoint
+  that changes them — the `plan` at every event. A lane state or `plan` `kind` the tower's parser doesn't know yet
+  (`/workspace`'s main) is a bad write that drops that entry (new keys are ignored): write new ones only once
+  their change is on main.
 - **Collisions.** On each `[kickoff]`, compare its areas with _In flight_ and with `localNotes/board/overlap.json`
   (the board's file-level overlaps, every 2.5 min). Warn **both** sessions: `collision: <a> and <b> both
 touch <area>; whichever merges second rebases — agree an order.`

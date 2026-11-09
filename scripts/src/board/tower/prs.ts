@@ -9,6 +9,7 @@ export type Pr = {
   branch: string;
   state: string;
   mergedAt: number | null;
+  createdAt: number | null;
 };
 
 export function parsePrs(text: string): Pr[] {
@@ -23,6 +24,7 @@ export function parsePrs(text: string): Pr[] {
       branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
       state: typeof x.state === 'string' ? x.state : '',
       mergedAt: parseTime(x.mergedAt),
+      createdAt: parseTime(x.createdAt),
     }));
 }
 
@@ -34,7 +36,7 @@ export const GH_ARGS = [
   '--limit',
   '40',
   '--json',
-  'number,title,headRefName,state,mergedAt',
+  'number,title,headRefName,state,mergedAt,createdAt',
 ];
 
 export type Fetch = () => Promise<string>;

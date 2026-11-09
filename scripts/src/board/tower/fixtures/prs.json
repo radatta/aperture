@@ -4,20 +4,23 @@
     "title": "Charlie: the open change 🚀 中文",
     "headRefName": "charlie-branch",
     "state": "OPEN",
-    "mergedAt": null
+    "mergedAt": null,
+    "createdAt": "2026-11-08T04:30:00Z"
   },
   {
     "number": 40,
     "title": "Alpha: an earlier change",
     "headRefName": "alpha-branch",
     "state": "MERGED",
-    "mergedAt": "2026-11-08T03:55:00Z"
+    "mergedAt": "2026-11-08T03:55:00Z",
+    "createdAt": "2026-11-06T20:00:00Z"
   },
   {
     "number": 39,
     "title": "Golf: closed",
     "headRefName": "golf-branch",
     "state": "CLOSED",
-    "mergedAt": null
+    "mergedAt": null,
+    "createdAt": "2026-11-01T18:00:00Z"
   }
 ]

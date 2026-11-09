@@ -16,7 +16,14 @@
       "state": "waiting",
       "waitingOn": "Rahul: merge PR 41"
     },
-    { "branch": "echo-branch", "session": "echo", "state": "building", "note": "review round 2" }
+    { "branch": "echo-branch", "session": "echo", "state": "building", "note": "review round 2" },
+    { "branch": "hotel-branch", "session": "hotel", "state": "ready", "pr": 42 },
+    {
+      "branch": "india-branch",
+      "session": "india",
+      "state": "needs-you",
+      "waitingOn": "Rahul: admit to dev"
+    }
   ],
   "rahul": [
     { "text": "Merge PR 41 after its dev run", "since": "2026-11-08" },
@@ -34,5 +41,25 @@
   },
   "proofs": {
     "deadRows": { "since": "2026-11-08T00:00:00Z", "target": 12, "excludedRuns": [] }
-  }
+  },
+  "plan": [
+    {
+      "at": "2026-11-08T06:25:00Z",
+      "what": "Open the dev freeze for delta-branch",
+      "kind": "rahul"
+    },
+    {
+      "at": "2026-11-08T06:40:00Z",
+      "what": "charlie-branch PR 41",
+      "kind": "merge",
+      "who": "Rahul"
+    },
+    {
+      "at": "2026-11-08T07:00:00Z",
+      "what": "hotel-branch devcheck",
+      "kind": "dev",
+      "who": "hotel"
+    },
+    { "what": "PR check on charlie-branch", "kind": "ci" }
+  ]
 }

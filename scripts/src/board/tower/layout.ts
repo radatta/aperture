@@ -1,19 +1,30 @@
 // Where each panel goes for a terminal size. Two arrangements (wide ≥ 160 cols, narrow ≥ 95), each a stack
-// of horizontal bands; the last band (activity + tiles) takes what's left, and when the rows run short the
-// other bands give up height down to their minimums.
+// of horizontal bands; the last band (wide: plan + activity + tiles, narrow: activity + tiles) takes what's
+// left, and when the rows run short the other bands give up height down to their minimums.
 
 export type PanelId =
-  'header' | 'queue' | 'rahul' | 'wave' | 'history' | 'sessions' | 'failures' | 'feed' | 'tiles';
+  | 'header'
+  | 'queue'
+  | 'rahul'
+  | 'wave'
+  | 'plan'
+  | 'history'
+  | 'sessions'
+  | 'failures'
+  | 'feed'
+  | 'tiles';
 export type Rect = { x: number; y: number; w: number; h: number };
 export type Layout = { mode: 'wide' | 'narrow' | 'small'; rects: Partial<Record<PanelId, Rect>> };
 
 // Content lines each list panel would like (the panel adds its 2 border rows).
-export type Wants = { queue: number; rahul: number; wave: number; sessions: number };
+export type Wants = { queue: number; rahul: number; wave: number; plan: number; sessions: number };
 
 export const WIDE_COLS = 160;
 export const NARROW_COLS = 95;
 export const MIN_ROWS = 24;
 const FEED_MIN = 4;
+// MACHINE's full height: 5 series × 2 rows + ticks, axis, readout + 2 borders (panels.ts history())
+export const HISTORY_H = 15;
 
 type Cell = { id: PanelId; w: number | 'rest' };
 type Band = { h: number; min: number; cells: Cell[] };
@@ -31,14 +42,14 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
       h: top,
       min: 5,
       cells: [
-        { id: 'queue', w: Math.round(cols * 0.36) },
-        { id: 'rahul', w: Math.round(cols * 0.28) },
+        { id: 'queue', w: Math.round(cols / 3) },
+        { id: 'rahul', w: Math.round(cols / 3) },
         { id: 'wave', w: 'rest' },
       ],
     });
     const side = Math.max(52, Math.round(cols * 0.32));
     bands.push({
-      h: clamp(want.sessions + 2, 16, 20),
+      h: Math.min(20, Math.max(HISTORY_H, want.sessions + 2)), // shrinks to `min` only when rows run short
       min: 11,
       cells: [
         { id: 'history', w: cols - side },
@@ -55,7 +66,14 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
         { id: 'rahul', w: 'rest' },
       ],
     });
-    bands.push({ h: clamp(want.wave + 2, 3, 14), min: 3, cells: [{ id: 'wave', w: cols }] });
+    bands.push({
+      h: clamp(Math.max(want.wave, want.plan) + 2, 3, 14),
+      min: 3,
+      cells: [
+        { id: 'wave', w: Math.round(cols * 0.56) }, // under the queue; plan under rahul
+        { id: 'plan', w: 'rest' },
+      ],
+    });
     bands.push({ h: 11, min: 8, cells: [{ id: 'history', w: cols }] });
     bands.push({
       h: clamp(want.sessions + 2, 7, 10),
@@ -90,7 +108,9 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
   }
   const feedH = Math.max(0, rows - y);
   if (feedH > 0) {
-    rects.feed = { x: 0, y, w: cols - tilesW, h: feedH };
+    const planW = wide ? Math.max(44, Math.round(cols * 0.26)) : 0;
+    if (planW) rects.plan = { x: 0, y, w: planW, h: feedH };
+    rects.feed = { x: planW, y, w: cols - planW - tilesW, h: feedH };
     const fh = wide && feedH >= FAIL_H + 3 ? FAIL_H : 0;
     if (fh) rects.failures = { x: cols - tilesW, y, w: tilesW, h: fh };
     rects.tiles = { x: cols - tilesW, y: y + fh, w: tilesW, h: feedH - fh };

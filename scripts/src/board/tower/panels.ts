@@ -15,7 +15,14 @@ import {
 import { layout, type PanelId, type Rect, type Wants } from './layout.ts';
 import { ttlProof } from './ledger.ts';
 import { RANGE_SEC, type FeedItem, type Range, type TowerState } from './model.ts';
-import { queueAgeTone, type Lane, type WaveItem, type WaveState } from './queue.ts';
+import {
+  queueAgeTone,
+  type Lane,
+  type PlanItem,
+  type PlanKind,
+  type WaveItem,
+  type WaveState,
+} from './queue.ts';
 
 export type Ui = { range: Range; cursor: number }; // cursor: cells back from "now" (0 = live)
 
@@ -140,6 +147,8 @@ const LANE_BADGE: Record<Lane['state'], string> = {
   next: c(NORD.accent, 'NEXT  ', true),
   waiting: c(NORD.amber, 'WAIT  ', true),
   building: c(NORD.frost, 'BUILD ', true),
+  ready: c(NORD.green, 'READY ', true), // PR check green, Rahul's merge
+  'needs-you': c(NORD.amber, 'RAHUL ', true), // blocked on a Rahul step
 };
 
 function queueTrouble(s: TowerState): string[] | null {
@@ -173,7 +182,8 @@ export function devQueue(s: TowerState, r: Rect): string[] {
       let tail = '';
       if (l.state === 'on-dev' && l.eta !== null)
         tail = c(NORD.green, `  ${countdown(l.eta, s.now)}`);
-      if (l.state === 'waiting' && l.waitingOn) tail = c(NORD.amber, `  on ${l.waitingOn}`);
+      if ((l.state === 'waiting' || l.state === 'needs-you') && l.waitingOn)
+        tail = c(NORD.amber, `  on ${l.waitingOn}`);
       if (l.note) tail += c(NORD.dim, `  ${l.note}`);
       const who = l.session && l.session !== l.branch ? c(NORD.dim, ` ${l.session}`) : '';
       body.push(`${LANE_BADGE[l.state]} ${c(NORD.bright, l.branch)}${pr}${who}${tail}`);
@@ -183,14 +193,14 @@ export function devQueue(s: TowerState, r: Rect): string[] {
   return box(r, 'DEV QUEUE', body, queueAge(s));
 }
 
-// a to-do's age: today · 1d · 3d (a date) or the text as given
+// a to-do's age: '' today (no column) · 1d · 3d (a date) or the text as given
 export function since(x: string, now: number): string {
   const t = Date.parse(x.length === 10 ? `${x}T00:00:00` : x);
   if (Number.isNaN(t)) return x;
   const d = Math.floor(
     (new Date(now).setHours(0, 0, 0, 0) - new Date(t).setHours(0, 0, 0, 0)) / 86400000,
   );
-  return d <= 0 ? 'today' : `${d}d`;
+  return d <= 0 ? '' : `${d}d`;
 }
 
 export function rahul(s: TowerState, r: Rect): string[] {
@@ -222,7 +232,7 @@ const WAVE_BADGE: Record<WaveState, string> = {
 };
 
 // queue.json's items, upgraded to merged when gh says their PR merged (never downgraded: the hub may know better)
-export function waveItems(s: TowerState): (WaveItem & { gh: boolean })[] {
+export function waveItems(s: TowerState): WaveItem[] {
   const items = s.queue.data?.wave?.items ?? [];
   return items.map((it) => {
     // only a named PR can mark an item merged: a reused branch name may carry an old merged PR. By branch,
@@ -237,7 +247,6 @@ export function waveItems(s: TowerState): (WaveItem & { gh: boolean })[] {
       state: merged ? 'merged' : it.state,
       pr: it.pr ?? pr?.number ?? null,
       title: it.title ?? pr?.title ?? null,
-      gh: merged,
     };
   });
 }
@@ -266,21 +275,23 @@ export function wave(s: TowerState, r: Rect): string[] {
     for (const it of items.filter((i) => i.state === st)) {
       const pr = it.pr !== null ? c(NORD.dim, ` PR ${it.pr}`) : '';
       const who = it.session && it.session !== it.branch ? c(NORD.dim, ` ${it.session}`) : '';
-      const gh = it.gh ? c(NORD.dim, ' (gh)') : '';
       const title = it.title ? c(NORD.dim, `  ${it.title}`) : '';
       body.push(
-        `${c(WAVE_COLOR[st], WAVE_BADGE[st], true)} ${c(NORD.bright, it.branch)}${pr}${who}${gh}${title}`,
+        `${c(WAVE_COLOR[st], WAVE_BADGE[st], true)} ${c(NORD.bright, it.branch)}${pr}${who}${title}`,
       );
     }
-  const done = items.filter((i) => i.state === 'merged');
-  if (done.length)
-    body.push(
-      `${c(NORD.green, 'done', true)} ${c(NORD.dim, done.map((i) => i.branch + (i.gh ? ' (gh)' : '')).join(', '))}`,
-    );
+  // merged items list nowhere: the bar, the legend and the title count them
   return box(r, w.name.toUpperCase(), body, c(NORD.green, `${merged}/${items.length} merged`));
 }
 
 // ---- sessions ------------------------------------------------------------------------------------
+
+// A row for each working session and each holding a branch; the rest share one `idle:` line (name order:
+// source.ts sorts working first, then by name).
+function sessionSplit(s: TowerState) {
+  const row = (x: TowerState['sessions'][number]) => x.state === 'working' || x.branch !== null;
+  return [s.sessions.filter(row), s.sessions.filter((x) => !row(x))] as const;
+}
 
 export function sessions(s: TowerState, r: Rect): string[] {
   const iw = r.w - 4;
@@ -294,7 +305,8 @@ export function sessions(s: TowerState, r: Rect): string[] {
     m.padStart(7) +
     (full ? t.padStart(5) + ' ' + fit(h, 5) : '');
   const body = [c(NORD.dim, row('name', 'state', 'branch', 'MiB', 'thr', 'heavy'))];
-  for (const x of s.sessions) {
+  const [listed, idle] = sessionSplit(s);
+  for (const x of listed) {
     const st = x.state === 'working' ? c(NORD.green, 'working') : c(NORD.dim, x.state);
     body.push(
       row(
@@ -307,6 +319,8 @@ export function sessions(s: TowerState, r: Rect): string[] {
       ),
     );
   }
+  if (idle.length)
+    body.push(c(NORD.dim, 'idle: ') + c(NORD.fg, idle.map((x) => x.name).join(', ')));
   const working = s.sessions.filter((x) => x.state === 'working').length;
   return box(
     r,
@@ -526,30 +540,28 @@ export function failures(s: TowerState, r: Rect): string[] {
 
 // ---- activity ------------------------------------------------------------------------------------
 
+// What changed, not what ran: failed jobs (not the Vite dev server's), devcheck runs (their end; the start
+// while in flight), merges, PRs opened, the dev lock taken (a `pnpm bot deploy-dev`) and leases that gave up
+// or were denied. Passing jobs stay in MACHINE and STATUS.
 export function feedItems(s: TowerState): FeedItem[] {
   const since = s.now - DAY;
   const out: FeedItem[] = [];
   for (const j of s.jobs) {
-    if (j.t < since || j.excluded || j.cls === 'other' || j.cls === 'test-file') continue;
-    const bad = failed(j);
+    if (j.t < since || j.excluded || !failed(j)) continue;
+    if (j.cls === 'other' || j.cls === 'test-file' || j.cls === 'dev') continue;
     const who = j.name ?? '?';
-    const ex = j.exit === null ? (j.signal ?? '?') : `exit ${j.exit}`;
+    const ex = `exit ${j.exit}`; // failed() means an exit code
     out.push({
       t: j.t,
       kind: 'job',
       text: `${who}  ${j.label || j.cls}  ${wall(j.wallSec)}  ${ex}${j.verdict && j.verdict !== 'clean' ? `  ${j.verdict}` : ''}`,
-      tone: bad
-        ? 'bad'
-        : j.verdict && j.verdict !== 'clean'
-          ? 'warn'
-          : isSuite(j)
-            ? 'normal'
-            : 'dim',
+      tone: 'bad',
     });
   }
   for (const r of s.runs) {
     const tier = r.run.replace(/^.*-/, '');
-    if (r.start !== null && r.start >= since)
+    if (r.end === null && r.start !== null && r.start >= since)
+      // started shows only while in flight
       out.push({ t: r.start, kind: 'run', text: `devcheck ${tier} started`, tone: 'dim' });
     if (r.end !== null && r.end >= since) {
       const dur = r.start !== null ? `  ${wall((r.end - r.start) / 1000)}` : '';
@@ -569,7 +581,18 @@ export function feedItems(s: TowerState): FeedItem[] {
         text: `merged PR ${p.number}  ${p.title}`,
         tone: 'normal',
       });
-  out.push(...s.lockFeed, ...s.leaseFeed.filter((f) => f.t >= since));
+  for (const p of s.prs.list)
+    if (p.createdAt !== null && p.createdAt >= since)
+      out.push({
+        t: p.createdAt,
+        kind: 'pr',
+        text: `PR ${p.number} opened  ${p.title}`,
+        tone: 'normal',
+      });
+  out.push(
+    ...s.lockFeed.filter((f) => f.tone !== 'good'), // taken, not freed
+    ...s.leaseFeed.filter((f) => f.t >= since && f.tone === 'bad'),
+  );
   return out.sort((a, b) => b.t - a.t);
 }
 
@@ -577,6 +600,7 @@ const KIND: Record<FeedItem['kind'], string> = {
   job: c(NORD.frost, 'job  '),
   run: c(NORD.accent, 'dev  '),
   merge: c(NORD.purple, 'merge'),
+  pr: c(NORD.purple, 'pr   '),
   lock: c(NORD.amber, 'lock '),
   lease: c(NORD.amber, 'cap  '),
 };
@@ -589,6 +613,55 @@ export function feed(s: TowerState, r: Rect): string[] {
   );
   if (!body.length) body.push(c(NORD.dim, 'nothing in the last 24 h'));
   return box(r, 'ACTIVITY', body, c(NORD.dim, '24 h, newest first'));
+}
+
+// ---- plan ----------------------------------------------------------------------------------------
+
+const PLAN_STALE = 2 * 3600000; // past due longer than this drops off
+const PLAN_KIND: Record<PlanKind, string> = {
+  dev: c(NORD.accent, 'dev  '),
+  merge: c(NORD.green, 'merge', true),
+  rahul: c(NORD.amber, 'rahul', true),
+  ci: c(NORD.frost, 'ci   '),
+};
+
+export const livePlan = (plan: PlanItem[], now: number) =>
+  plan.filter((p) => p.at === null || p.at >= now - PLAN_STALE);
+
+// The first merge with a time not dropped as stale: the PLAN title. The statusline
+// (localNotes/board/next-merge.sh) takes the same item.
+export function nextMerge(plan: PlanItem[], now: number): PlanItem | null {
+  return livePlan(plan, now).find((p) => p.kind === 'merge' && p.at !== null) ?? null;
+}
+
+export function plan(s: TowerState, r: Rect): string[] {
+  const trouble = queueTrouble(s);
+  const items = livePlan(s.queue.data?.plan ?? [], s.now);
+  if (trouble || !items.length)
+    return box(r, 'PLAN', trouble ?? [c(NORD.dim, 'no plan in queue.json (dispatch writes it)')]);
+  const body = items.map((p) => {
+    const past = p.at !== null && p.at < s.now;
+    const when = p.at === null ? '--:--' : hhmm(p.at);
+    const cd = p.at === null ? '' : past ? '?' : countdown(p.at, s.now);
+    const who = p.who ? ` (${p.who})` : '';
+    if (past) return c(NORD.dim, `${when} ${cd.padStart(6)} ${p.kind.padEnd(5)} ${p.what}${who}`);
+    const hot = p.kind === 'merge' || p.kind === 'rahul';
+    return (
+      c(NORD.fg, when) +
+      ' ' +
+      c(hot ? NORD.bright : NORD.dim, cd.padStart(6)) + // 10h05m
+      ' ' +
+      PLAN_KIND[p.kind] +
+      ' ' +
+      c(hot ? NORD.bright : NORD.fg, p.what, hot) +
+      c(NORD.dim, who)
+    );
+  });
+  const m = nextMerge(items, s.now);
+  const right = m
+    ? c(NORD.green, `next merge ${m.at! < s.now ? '?' : '~'}${hhmm(m.at!)}`)
+    : c(NORD.dim, `${items.length} planned`);
+  return box(r, 'PLAN', body, right);
 }
 
 // ---- tiles ---------------------------------------------------------------------------------------
@@ -676,8 +749,9 @@ export function wants(s: TowerState): Wants {
   return {
     queue: q ? Math.max(1, q.devQueue.length) : 3,
     rahul: q ? Math.max(1, q.rahul.length) : 3,
-    wave: q?.wave ? q.wave.items.filter((i) => i.state !== 'merged').length + 3 : 1,
-    sessions: s.sessions.length + 1,
+    wave: q?.wave ? q.wave.items.filter((i) => i.state !== 'merged').length + 2 : 1,
+    plan: Math.max(1, livePlan(q?.plan ?? [], s.now).length),
+    sessions: sessionSplit(s)[0].length + 2, // + the column header and the idle line
   };
 }
 
@@ -700,6 +774,7 @@ export function compose(s: TowerState, ui: Ui, cols: number, rows: number): stri
       ['queue', () => devQueue(s, R.queue!)],
       ['rahul', () => rahul(s, R.rahul!)],
       ['wave', () => wave(s, R.wave!)],
+      ['plan', () => plan(s, R.plan!)],
       ['history', () => history(s, ui, R.history!)],
       ['sessions', () => sessions(s, R.sessions!)],
       ['failures', () => failures(s, R.failures!)],

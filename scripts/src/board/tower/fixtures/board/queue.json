@@ -26,6 +26,18 @@
       "session": "echo",
       "state": "building",
       "note": "review round 2\n\tnow\u001b[2J"
+    },
+    {
+      "branch": "hotel-branch",
+      "session": "hotel",
+      "state": "ready",
+      "pr": 42
+    },
+    {
+      "branch": "india-branch",
+      "session": "india",
+      "state": "needs-you",
+      "waitingOn": "Rahul: admit to dev"
     }
   ],
   "rahul": [
@@ -35,7 +47,7 @@
     },
     {
       "text": "Open the dev freeze for delta-branch",
-      "since": "2026-11-07"
+      "since": "2026-11-06"
     }
   ],
   "wave": {
@@ -73,5 +85,33 @@
       "target": 12,
       "excludedRuns": []
     }
-  }
+  },
+  "plan": [
+    {
+      "what": "PR check on charlie-branch",
+      "kind": "ci"
+    },
+    {
+      "at": "2026-11-08T06:40:00Z",
+      "what": "charlie-branch PR 41",
+      "kind": "merge",
+      "who": "Rahul"
+    },
+    {
+      "at": "2026-11-08T05:30:00Z",
+      "what": "bravo-branch final devcheck",
+      "kind": "dev",
+      "who": "bravo"
+    },
+    {
+      "at": "2026-11-08T03:00:00Z",
+      "what": "a stale golf run",
+      "kind": "dev"
+    },
+    {
+      "at": "2026-11-08T06:25:00Z",
+      "what": "Open the dev freeze for delta-branch",
+      "kind": "rahul"
+    }
+  ]
 }
