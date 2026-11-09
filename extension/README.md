@@ -6,12 +6,12 @@ A personal browser extension (Safari daily, Firefox signed) that records **your 
 
 ## Build it for Safari (daily driver)
 
-Safari needs the extension wrapped in a macOS app, signed with a **free Apple ID Personal Team**. Why that's enough, the per-stage setup, and expiry: `docs/areas/recruiting/index.md` → *Deployment & install*.
+Safari needs the extension wrapped in a macOS app, signed with a **free Apple ID Personal Team**. Why that's enough, the per-stage setup, and expiry: `docs/areas/recruiting/index.md` → _Deployment & install_.
 
 1. Convert, from the repo root (needs full Xcode, not just the Command Line Tools):
    - prod: `xcrun safari-web-extension-packager extension --macos-only --copy-resources --project-location ~/Desktop/ApertureSafari --app-name "Aperture LeetCode" --bundle-identifier dev.rahuldatta.ApertureLeetCode`
    - dev: the same **without** `--copy-resources` (the project then reads this folder live, so a rebuild picks up edits), with `~/Desktop/ApertureSafariDev`, `"Aperture LeetCode Dev"`, `dev.rahuldatta.ApertureLeetCodeDev`.
-   - Ignore the `world` / `open_in_tab` "not supported" warnings (recruiting doc → *Safari: free signing*).
+   - Ignore the `world` / `open_in_tab` "not supported" warnings (recruiting doc → _Safari: free signing_).
 2. In Xcode, both targets → **Signing & Capabilities** → Automatically manage signing, Team = **(Personal Team)**.
 3. **Expect "Embedded binary's bundle identifier is not prefixed with the parent app's bundle identifier" on the first ⌘R** — it hit both fresh prod builds. Fix: in each target's **General** tab, make the extension's Bundle Identifier the app's plus `.Extension` (exact case), make `extensionBundleIdentifier` in `Shared (App)/ViewController.swift` equal it, then ⇧⌘K and ⌘R. Same rule if you change a bundle ID.
 4. **⌘R**, then copy the built app to `/Applications`, open that copy once, and delete the project's DerivedData folder (`~/Library/Developer/Xcode/DerivedData/Aperture_LeetCode-*` — spaces become underscores; `…Dev-*` for dev) — otherwise Safari lists the extension twice. **Every rebuild ends with this step**: the installed copy is frozen at the moment it was copied.
@@ -85,7 +85,7 @@ content-type: application/json
 ## How it works
 
 LeetCode's own network calls are observed and mirrored; nothing is blocked or altered. Why the extension
-is passive, and why metadata comes from the DOM: `docs/areas/recruiting/index.md` → *Design decisions*.
+is passive, and why metadata comes from the DOM: `docs/areas/recruiting/index.md` → _Design decisions_.
 
 - **Submit** — `POST https://leetcode.com/problems/<slug>/submit/`, body `{lang, question_id, typed_code}`, response `{submission_id}`. The interceptor remembers `submission_id -> {slug, lang, question_id}`.
 - **Result poll** — `GET https://leetcode.com/submissions/detail/<submission_id>/v2/check/` (note `/v2/`), polled repeatedly. On the **first** response with `state === "SUCCESS"`, the extension fires **once** for that submission.
@@ -109,4 +109,5 @@ All patched code is defensive: JSON parsing is wrapped in try/catch, the origina
   ```sh
   for s in 48 96 128 256 512; do rsvg-convert -w $s -h $s app/public/favicon.svg -o extension/icons/icon-$s.png; sed 's/#33453f/#a8402c/g' app/public/favicon.svg | rsvg-convert -w $s -h $s -o extension/icons/dev/icon-$s.png; done
   ```
+
 - No npm dependencies, no bundler, no build step. Plain JS, MV3, `browser.*` with a `chrome` fallback.

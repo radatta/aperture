@@ -14,11 +14,35 @@ export default tseslint.config(
       '**/*.tsbuildinfo',
       'localNotes/**',
       '.claude/worktrees/**', // gitignored sibling worktrees — other branches' code, not ours to lint
-      'extension/**', // dep-free plain-JS browser extension, not built/linted by the workspace
     ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+
+  // The browser extension ships as plain classic scripts with no build (content scripts, the background
+  // page, the options page) — each one's top level is a script, not a module.
+  {
+    files: ['extension/src/**/*.js', 'extension/test/fixtures/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: {
+        ...globals.browser,
+        ...globals.webextensions,
+        module: 'readonly',
+        require: 'readonly',
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+    },
+  },
+  {
+    files: ['extension/test/**/*.ts'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
 
   // Browser app (React)
   {

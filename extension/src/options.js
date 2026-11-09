@@ -1,135 +1,150 @@
-// Aperture options page logic. Loads stored values on open; on save persists to storage.local and
-// requests the optional host permission for the configured API origin.
-
+// The options page: the connection (origin + device token), the outbox's last send, debug mode and its
+// export, and selector overrides (lib/selectors.js merges them over the defaults).
 (() => {
-  "use strict";
-
+  'use strict';
   const api =
-    (typeof browser !== "undefined" && browser.runtime && browser) ||
-    (typeof chrome !== "undefined" && chrome.runtime && chrome) ||
-    null;
+    globalThis.browser && globalThis.browser.runtime ? globalThis.browser : globalThis.chrome;
+  const local = api.storage.local;
+  const $ = (id) => document.getElementById(id);
+  const say = (id, msg, kind) => {
+    $(id).textContent = msg;
+    $(id).className = `status ${kind || ''}`;
+  };
+  const tell = (type) => api.runtime.sendMessage({ type }).catch(() => {});
 
-  const originInput = document.getElementById("apiOrigin");
-  const tokenInput = document.getElementById("deviceToken");
-  const form = document.getElementById("options-form");
-  const statusEl = document.getElementById("status");
-
-  function setStatus(msg, kind) {
-    statusEl.textContent = msg;
-    statusEl.className = kind || "";
-  }
-
-  function normalizeOrigin(value) {
-    if (typeof value !== "string") return "";
-    return value.trim().replace(/\/+$/, "");
-  }
-
-  // Promise-normalizing wrappers (browser.* is promise-based; chrome.* is callback-based).
-  function storageGet(keys) {
-    try {
-      const p = api.storage.local.get(keys);
-      if (p && typeof p.then === "function") return p;
-    } catch (_e) {
-      /* fall through */
-    }
-    return new Promise((resolve) => api.storage.local.get(keys, (r) => resolve(r || {})));
-  }
-
-  function storageSet(obj) {
-    try {
-      const p = api.storage.local.set(obj);
-      if (p && typeof p.then === "function") return p;
-    } catch (_e) {
-      /* fall through */
-    }
-    return new Promise((resolve) => api.storage.local.set(obj, () => resolve()));
-  }
-
-  function permissionsRequest(perm) {
-    try {
-      const p = api.permissions.request(perm);
-      if (p && typeof p.then === "function") return p;
-    } catch (_e) {
-      /* fall through */
-    }
-    return new Promise((resolve) => api.permissions.request(perm, (granted) => resolve(granted)));
-  }
-
+  // ---- connection ----
   async function load() {
-    if (!api) {
-      setStatus("Extension APIs unavailable.", "err");
-      return;
-    }
-    try {
-      const { apiOrigin, deviceToken } = await storageGet(["apiOrigin", "deviceToken"]);
-      if (typeof apiOrigin === "string") originInput.value = apiOrigin;
-      if (typeof deviceToken === "string") tokenInput.value = deviceToken;
-    } catch (err) {
-      setStatus("Could not load saved settings.", "err");
-    }
+    const got = await local.get([
+      'apiOrigin',
+      'deviceToken',
+      'debug',
+      'selectors',
+      'status',
+      'outbox',
+    ]);
+    if (typeof got.apiOrigin === 'string') $('apiOrigin').value = got.apiOrigin;
+    if (typeof got.deviceToken === 'string') $('deviceToken').value = got.deviceToken;
+    $('debug').checked = !!got.debug;
+    $('selectors').value = got.selectors ? JSON.stringify(got.selectors, null, 2) : '';
+    showStatus(got.status, got.outbox);
   }
 
-  // NOTE: the handler is deliberately NOT async. permissions.request() must be invoked synchronously
-  // inside the user gesture (the click) — any `await` before it drops the gesture and Firefox rejects
-  // it with "may only be called from a user input handler". So we call it FIRST, then persist + report.
-  form.addEventListener("submit", (e) => {
+  // Not async: permissions.request must run inside the click's user gesture, before anything is awaited
+  // (Firefox and Safari reject it otherwise). It resolves true at once when the origin is already granted.
+  $('options-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    setStatus("", "");
-
-    const apiOrigin = normalizeOrigin(originInput.value);
-    const deviceToken = tokenInput.value.trim();
-
-    if (!apiOrigin) {
-      setStatus("Enter an API origin.", "err");
-      return;
-    }
+    say('saveStatus', '');
+    const apiOrigin = $('apiOrigin').value.trim().replace(/\/+$/, '');
+    const deviceToken = $('deviceToken').value.trim();
     let parsed;
     try {
       parsed = new URL(apiOrigin);
-    } catch (_e) {
-      setStatus("API origin is not a valid URL.", "err");
-      return;
+    } catch {
+      return say('saveStatus', 'The API origin is not a valid URL.', 'err');
     }
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      setStatus("API origin must be http(s).", "err");
-      return;
-    }
-    if (!deviceToken) {
-      setStatus("Enter a device token.", "err");
-      return;
-    }
-
-    // FIRST async call — still within the user gesture (nothing awaited yet).
-    let permPromise;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+      return say('saveStatus', 'The API origin must be http(s).', 'err');
+    if (!deviceToken) return say('saveStatus', 'Enter a device token.', 'err');
+    let asked;
     try {
-      permPromise = permissionsRequest({ origins: [parsed.origin + "/*"] });
+      asked = api.permissions.request({ origins: [`${parsed.origin}/*`] });
     } catch (err) {
-      setStatus("Permission request failed: " + (err && err.message ? err.message : err), "err");
-      return;
+      return say('saveStatus', `Permission request failed: ${(err && err.message) || err}`, 'err');
     }
-
-    permPromise.then(
-      (granted) => {
-        storageSet({ apiOrigin, deviceToken }).then(
-          () => {
-            if (granted) {
-              setStatus("Saved. Permission granted for " + parsed.origin + ".", "ok");
-            } else {
-              setStatus(
-                "Saved, but host permission was not granted — attempts won't send until you allow " +
-                  parsed.origin +
-                  ".",
-                "err"
-              );
-            }
-          },
-          () => setStatus("Failed to save settings.", "err"),
-        );
-      },
-      (err) =>
-        setStatus("Permission request failed: " + (err && err.message ? err.message : err), "err"),
-    );
+    Promise.resolve(asked)
+      .then(async (granted) => {
+        await local.set({ apiOrigin: parsed.origin, deviceToken });
+        await tell('config-changed');
+        if (granted) say('saveStatus', `Saved. Allowed to reach ${parsed.origin}.`, 'ok');
+        else say('saveStatus', `Saved, but nothing sends until you allow ${parsed.origin}.`, 'err');
+      })
+      .catch((err) => say('saveStatus', `Couldn’t save: ${(err && err.message) || err}`, 'err'));
   });
 
-  load();
+  // ---- last send ----
+  function showStatus(status, queue) {
+    const s = status || {};
+    const entries = (queue && queue.entries) || [];
+    const failed = entries.filter((e) => e.state === 'failed');
+    const lines = [];
+    if (s.at)
+      lines.push(
+        `${new Date(s.at).toLocaleString()} — ${s.state || 'ok'}${s.http ? ` (HTTP ${s.http})` : ''}`,
+      );
+    if (s.detail) lines.push(s.detail);
+    if (queue && queue.paused === 'auth')
+      lines.push('Paused: Aperture refused the device token. Save a new one to resume.');
+    if (queue && queue.paused === 'config') lines.push('Paused: no origin or token yet.');
+    lines.push(`${entries.length - failed.length} queued · ${failed.length} failed`);
+    for (const f of failed.slice(0, 5))
+      lines.push(`Failed (HTTP ${f.lastStatus}): ${f.lastError || 'refused'}`);
+    $('lastSend').replaceChildren(
+      ...lines.map((l) => Object.assign(document.createElement('div'), { textContent: l })),
+    );
+  }
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && (changes.status || changes.outbox))
+      local.get(['status', 'outbox']).then((g) => showStatus(g.status, g.outbox));
+  });
+  $('retryNow').addEventListener('click', () => tell('retry-now'));
+  $('clearFailed').addEventListener('click', () => {
+    if (confirm('Drop the captures Aperture refused? They will not be sent.')) tell('clear-failed');
+  });
+
+  // ---- debug ----
+  $('debug').addEventListener('change', () => local.set({ debug: $('debug').checked }));
+  const logJson = async () => JSON.stringify((await local.get('debugLog')).debugLog || [], null, 1);
+  $('exportLog').addEventListener('click', async () => {
+    const url = URL.createObjectURL(new Blob([await logJson()], { type: 'application/json' }));
+    const a = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `aperture-lc-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+    });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    say('debugStatus', 'Exported. If Safari opened it in a tab instead, use Copy JSON.', 'ok');
+  });
+  $('copyLog').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(await logJson());
+      say('debugStatus', 'Copied.', 'ok');
+    } catch (err) {
+      say('debugStatus', `Couldn’t copy: ${(err && err.message) || err}`, 'err');
+    }
+  });
+  $('clearLog').addEventListener('click', async () => {
+    await local.remove('debugLog');
+    say('debugStatus', 'Cleared.', 'ok');
+  });
+
+  // ---- selectors ----
+  $('saveSelectors').addEventListener('click', async () => {
+    const text = $('selectors').value.trim();
+    if (!text) {
+      await local.remove('selectors');
+      return say('selectorStatus', 'Using the defaults.', 'ok');
+    }
+    let o;
+    try {
+      o = JSON.parse(text);
+    } catch {
+      return say('selectorStatus', 'That isn’t valid JSON — nothing saved.', 'err');
+    }
+    if (!o || typeof o !== 'object' || Array.isArray(o))
+      return say('selectorStatus', 'Selectors must be a JSON object.', 'err');
+    const unknown = Object.keys(o).filter((k) => !globalThis.ApertureLC.selectors.KEYS.includes(k));
+    if (unknown.length)
+      return say('selectorStatus', `Unknown keys: ${unknown.join(', ')} — nothing saved.`, 'err');
+    await local.set({ selectors: o });
+    say('selectorStatus', 'Saved. Open LeetCode tabs pick it up at once.', 'ok');
+  });
+  $('resetSelectors').addEventListener('click', async () => {
+    await local.remove('selectors');
+    $('selectors').value = '';
+    say('selectorStatus', 'Using the defaults.', 'ok');
+  });
+
+  load().catch(() => say('saveStatus', 'Couldn’t load saved settings.', 'err'));
 })();
