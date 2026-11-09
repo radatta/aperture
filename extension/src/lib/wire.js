@@ -1,7 +1,7 @@
 // What LeetCode's own traffic means — pure, no DOM, no extension APIs. inject-main.js (the page world) feeds
 // it every request it sees and dispatches what comes out; content.js turns those items into the sitting
 // events A1 takes (packages/shared/src/sittings.ts). Shapes verified against the 2026-11-08 captures
-// (localNotes/lc-capture/AVAILABLE.md): Runs poll /check/ with no /v2/; Submits poll /v2/check/.
+// (extension/README.md → Wire contract): Runs poll /check/ with no /v2/; Submits poll /v2/check/.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;

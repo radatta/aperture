@@ -1,5 +1,5 @@
 // The relay's acceptance rules, as one pure function (the isolated world runs it on every page message).
-// Rahul's forgery rules (localNotes/decisions.md, A2): a page message can never Start anything — it can only
+// Rahul's forgery rules (docs/areas/recruiting/index.md → Design decisions): a page message can never Start anything — it can only
 // add events to the sitting the extension itself opened, for the problem on screen — and it must carry a
 // valid tag from this load's handshake, in sequence. Messages arrive serialized by content.js.
 (function (root, factory) {

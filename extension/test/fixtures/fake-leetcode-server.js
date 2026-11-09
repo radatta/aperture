@@ -1,5 +1,5 @@
 // LeetCode's side of the fake page's requests: canned answers by path and GraphQL operation (shapes from
-// localNotes/lc-capture/AVAILABLE.md, values synthetic). Used by the jsdom tests and the Chrome E2E's route.
+// extension/README.md → Wire contract, values synthetic). Used by the jsdom tests and the Chrome E2E's route.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;

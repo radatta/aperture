@@ -1,4 +1,4 @@
-// LeetCode's traffic, hand-written from the shapes in localNotes/lc-capture/AVAILABLE.md (2026-11-08 captures) —
+// LeetCode's traffic, hand-written from the shapes in extension/README.md → Wire contract (2026-11-08 captures) —
 // synthetic values only (slug two-sum, code print("x"), username "user"); no captured text.
 export const SLUG = 'two-sum';
 export const QID = '1';

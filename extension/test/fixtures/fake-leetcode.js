@@ -1,5 +1,5 @@
 // The fake LeetCode page's behaviour (fake-leetcode.html): it makes LeetCode's real requests on LeetCode's
-// real paths, with the shapes in localNotes/lc-capture/AVAILABLE.md, so the extension sees what it would on
+// real paths, with the shapes in extension/README.md → Wire contract, so the extension sees what it would on
 // leetcode.com. What it did is recorded on window.__fake for the tests to read.
 (() => {
   'use strict';

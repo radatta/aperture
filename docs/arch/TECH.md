@@ -246,8 +246,8 @@ aperture/
                        #   push/ (service.ts: reminder devices + Send test; the poller's sender),
                        #   ddb/ (keys, repo, writes, mapping, DocClient), google/, mcp/, s3/
   cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
-  extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a
-                       #   pnpm workspace member, and excluded from eslint + prettier
+  extension/           # MV3 web extension (Safari daily, Firefox) — LeetCode sittings. No runtime deps,
+                       #   bundler or build step; a workspace member for its tests only (vitest, jsdom)
   packages/shared/     # shared TS types + contract across app + lambda (also ulid, dates, machines, contractTests)
   scripts/             # dev + CI utilities
   tools/               # user-side clients run on the Mac (raycast/ quick-add, mailroom/ runner) and the COI

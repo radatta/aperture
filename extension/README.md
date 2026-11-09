@@ -1,8 +1,8 @@
-# Aperture LeetCode Capture (MV3 — Safari, Firefox)
+# Aperture LeetCode (MV3 — Safari, Firefox)
 
-A personal browser extension (Safari daily, Firefox signed) that records **your own** LeetCode submissions — accepted **and** wrong — to your Aperture backend as they happen. It authenticates with a **device token** you set in the options page; it never touches or transmits your LeetCode credentials.
+A personal browser extension (Safari daily, Firefox signed) for **sittings**: one go at one LeetCode problem, a rep of your LeetCode Roll in Aperture (`docs/areas/recruiting/index.md` → _Sittings_). On a problem page it puts up one **Start** button. Start clicks LeetCode's own editor reset, its "Are you sure" confirm and its timer, and opens the sitting. From then until you mark the rep Done in Aperture, it sends what LeetCode itself sends: your code as you type, every Run and Submit with its full result, your notes, LeetCode's timer and its replay stream. It authenticates with a **device token** you set in the options page; it never touches or transmits your LeetCode credentials.
 
-> **Never run this against LeetCode from within the repo tooling; it is the user's to load and use.** This directory is code only. Do not invoke it, load it, or make any LeetCode/backend network calls from automation.
+> **Automation never reaches the real leetcode.com.** The tests run this code in jsdom and, in the E2E, in headless Chromium on a fake LeetCode page served at `leetcode.com` by a Playwright route, sending to a local server (_Tests_, below). Loading it on the real site is the user's.
 
 ## Build it for Safari (daily driver)
 
@@ -41,73 +41,102 @@ For the permanent (AMO-signed) Firefox install and the per-stage origins, see **
 
 ## Configure
 
-Open the extension's **options** page — Safari: Settings → Extensions → the extension → Settings (options are per Safari profile); Firefox: Add-ons Manager → Aperture LeetCode Capture → Preferences, or the "Options" link on the debugging page — and set:
+Open the extension's **options** page — Safari: Settings → Extensions → the extension → Settings (options are per Safari profile); Firefox: Add-ons Manager → Aperture LeetCode → Preferences — and set:
 
-- **API origin** — scheme + host of your Aperture backend, e.g. `https://aperture.example.com` (no trailing path).
+- **API origin** — scheme + host of your Aperture backend, e.g. `https://aperture.example.com`.
 - **Device token** — your Aperture device token.
 
-On **Save** the extension stores both in `storage.local` and requests the optional host permission for that origin (`<origin>/*`) so the background script can POST to it. If you decline the permission, attempts won't send until you grant it.
+**Save** asks for permission to reach that origin (`<origin>/*`) — inside the click, which Safari and Firefox require — then stores both in `storage.local` and resumes a paused outbox. Decline it and nothing sends until you allow it.
+
+The page also shows:
+
+- **Last send** — the outbox's state, its last HTTP status and message, how many batches are queued or failed, and why each failed one was refused. **Retry now** puts failed batches back in line and ends every wait; **Clear failed** drops them (asks first).
+- **Debug mode** — _Debug mode_, below.
+- **Selectors** — overrides for where LeetCode's controls are, as JSON over the defaults in `src/lib/selectors.js`: `editorReset`, `resetConfirm`, `dialog`, and `timerClicks` (a list of selectors clicked in order). Open LeetCode tabs pick a change up at once — no rebuild, which matters for the prod Xcode build.
+
+## The sitting, from LeetCode's side
+
+1. **A problem page** (`/problems/<slug>/…`) puts up a full-screen overlay: the problem, the language, **Start** and **Just looking**.
+2. **Start** runs four steps, each checked before the next:
+   1. click LeetCode's editor reset → a dialog appears;
+   2. click its confirm → the dialog goes;
+   3. click LeetCode's timer controls (`timerClicks`) → `QD_TIMER_STATE` in localStorage reads running, started just now;
+   4. `lcSittingStart` → the sitting is open, and the overlay gives way to a badge: `Aperture · 12m · synced 3s ago`.
+3. **A step that fails** says which, in words ("Couldn't find LeetCode's reset button", "LeetCode's timer didn't start", the server's own message), with **Retry**, **Start anyway (no clear)** (skips to step 4) and **Just looking**. Until the debug session fills in the selectors, the reset, confirm and timer are _not configured_ and say so; Start anyway still opens the sitting.
+4. **Just looking** dismisses the overlay without touching anything, and isn't asked again for that problem until the browser session ends (`storage.session`). Nothing is captured for a problem with no sitting.
+5. **A reload, or a second tab, mid-sitting** resumes with no overlay and no clicks: the per-problem binding (`storage.local['sitting:<slug>']`) repeats the Start with the same `clientSittingId`, which A1 answers with the open sitting.
+6. **Moving to another problem** (LeetCode is a single-page app; the isolated world watches its own `location`) prompts again. A Start there while the first sitting is open is refused by Aperture — "Another sitting is still open — end it in Aperture first. Then Retry." The extension can't end a sitting itself: its token only starts sittings and adds events.
+7. **The sitting ends in Aperture**, at Done (or Drop) on the rep — an Accepted submit never ends it. The next send learns it (`status` in the events reply, or `SITTING_ENDED_ERROR`), the badge says "Sitting ended in Aperture", the binding clears, and the next visit prompts again.
+8. **The problem doc** — LeetCode's `questionDetail`, with its company tags — isn't sent on a fresh page load, only after a submit or a navigation. So Start reads the title, difficulty and tags from the page, and when a `questionDetail` for the problem arrives, the extension repeats the Start with it; A1 fills it in.
 
 ## Wire contract
 
-Each captured submission is sent once as:
+Both calls go to the BFF as RPCs, from the background only:
 
 ```
-POST <apiOrigin>/api/recordLeetcodeAttempt
+POST <apiOrigin>/api/lcSittingStart       { "args": [ SittingStartInput ] }
+POST <apiOrigin>/api/lcSittingEvents      { "args": [ { sittingId, events: SittingEventInput[] } ] }
 x-aperture-authorization: Bearer <deviceToken>
 content-type: application/json
-
-{ "args": [ payload ] }
 ```
 
-`x-aperture-authorization` mirrors `packages/shared/src/rpc.ts` `AUTH_HEADER`; it's hardcoded because the extension can't import from the workspace.
+The shapes, caps and error strings are `packages/shared/src/sittings.ts`; the extension mirrors what it must (`x-aperture-authorization` is `rpc.ts` `AUTH_HEADER`; `test/background.test.ts` checks the copies against the shared package, and the unit tests run the shared normalizers over what the extension makes).
 
-`payload`:
+- **Start** — `{clientSittingId (a ULID the extension mints), problemSlug, problemTitle, questionId, frontendId, difficulty, topicTags, lang, startedAt (the click), tzOffsetMinutes, lcSolveSessionId (LeetCode's qd_solve_session id), problem (questionDetail.question, when captured)}`. A repeat with the same id resumes; the reply is `{sitting, resumed}`.
+- **Events** — at most 50 per call and 256 KB, each `{id (ULID), type, at, payload}` or a replay chunk `{id, type: 'replay', at, clientSessionId, events (text)}`:
 
-```
-{
-  leetcodeSubmissionId: string,   // submission_id, as a string
-  problemSlug: string,            // from the submit URL /problems/<slug>/submit/
-  problemTitle: string,           // document.title minus " - LeetCode", else title-cased from slug
-  statusCode: number,             // status_code from /v2/check/ (10 AC, 11 WA, 12 MLE, 14 TLE, 15 RE, 20 CE)
-  statusMsg: string,              // status_msg
-  submittedAt: number,            // task_finish_time (epoch ms)
-  tzOffsetMinutes: number,        // new Date().getTimezoneOffset(), stamped in background at send time
-  lang: string,                   // pretty_lang, else the submit lang
-  runtimeMs: number | null,       // status_runtime "0 ms" -> 0
-  memory: number | null,          // `memory` bytes number (pretty "20.8 MB" string ignored)
-  frontendId: string | null,      // question_id from the submit body if available, else null
-  difficulty: string | null,      // header pill "Easy"/"Medium"/"Hard" from the DOM (null if not found)
-  topicTags: string[] | null      // from /tag/ anchors in the DOM (null if topics are hidden)
-}
-```
+| LeetCode traffic                                                                                           | event           | payload                                                        |
+| ---------------------------------------------------------------------------------------------------------- | --------------- | -------------------------------------------------------------- |
+| GraphQL `updateSyncedCode` (`{code, lang, questionId}`) — the full code as you type                        | `snapshot`      | `{code, questionId, lang}`                                     |
+| `POST /problems/<slug>/submit/` + its final `/submissions/detail/<id>/v2/check/`                           | `submit`        | `{submissionId, slug, request, result}` — at the submit's time |
+| `POST /problems/<slug>/interpret_solution/` + its final `/submissions/detail/runcode_…/check/` (no `/v2/`) | `run`           | `{interpretId, slug, request, result}`                         |
+| GraphQL `submissionDetails`                                                                                | `submitDetails` | `{submissionId, details}`                                      |
+| GraphQL `updateNote`                                                                                       | `note`          | `{slug, content}`                                              |
+| GraphQL `PracticeReplayUploadEvents`                                                                       | `replay`        | its `events` text, split along the array past 60 KB            |
+| localStorage `QD_TIMER_STATE`, read every 2 s on change                                                    | `timer`         | `{state, heartbeat}`                                           |
+
+A run or submit LeetCode never judges is sent after two minutes with `result: {pending: true}`. GraphQL `syncedCode` (the saved code on load) only supplies the `questionId`; `questionDetail` only feeds Start.
+
+**Statuses** (`lambdas/src/index.ts` → `ingestFailureStatus`): 200 sent; **409, 429, 5xx and an unreachable server retry** with backoff (5 s, 30 s, 1, 2, then every 5 min), in order — a waiting batch holds the ones behind it; **401 pauses** everything until Save in Options; **413** splits the batch in two (a lone event the server still refuses fails); **any other 400 is kept as failed** and shown — in the badge and in Options, never dropped silently.
 
 ## How it works
 
-LeetCode's own network calls are observed and mirrored; nothing is blocked or altered. Why the extension
-is passive, and why metadata comes from the DOM: `docs/areas/recruiting/index.md` → _Design decisions_.
+Three contexts, as Rahul's forgery rules require (`docs/areas/recruiting/index.md` → _Design decisions_): the page's world can be spoofed by any script on leetcode.com, so it is only ever a source of evidence.
 
-- **Submit** — `POST https://leetcode.com/problems/<slug>/submit/`, body `{lang, question_id, typed_code}`, response `{submission_id}`. The interceptor remembers `submission_id -> {slug, lang, question_id}`.
-- **Result poll** — `GET https://leetcode.com/submissions/detail/<submission_id>/v2/check/` (note `/v2/`), polled repeatedly. On the **first** response with `state === "SUCCESS"`, the extension fires **once** for that submission.
-- **Metadata** — read straight from the **rendered page** at capture time (no network call): `title` from `document.title`, `difficulty` from the header Easy/Medium/Hard pill (link-nested similar-questions rows are skipped), `topicTags` from the `a[href^="/tag/"]` anchors (LeetCode server-renders these — see the design doc above). Best-effort: `title` degrades to a slug-derived string and `difficulty`/`topicTags` to `null` if not found (e.g. LeetCode is hiding topics behind a "Show Topics" toggle).
+```
+leetcode.com page (MAIN world)          extension side of the page (ISOLATED)        background
+lib/tag.js, lib/wire.js,                 lib/*, debug.js, overlay.js, content.js       lib/outbox.js, background.js
+inject-main.js
+  watches fetch + XHR ──tagged msgs──▶   relay checks → events, 3 s batches ──msg──▶  outbox → POST to Aperture
+  (passive; receives nothing)            overlay, Start's clicks, binding    ◀─reply─  Start answered directly
+```
 
-### MAIN vs ISOLATED worlds
+- **`src/inject-main.js`** (MAIN, `document_start`) patches `window.fetch` and `XMLHttpRequest` to _observe_ LeetCode's own traffic — it never blocks or alters a request, makes none of its own, and nothing ever flows back to it. `lib/wire.js` says what each request means; the libs are removed from the page's globals once read, and the originals (`dispatchEvent`, `crypto.subtle`) are bound before any LeetCode script exists.
+- **The relay.** At `document_start` the page world mints a 32-byte nonce and hands it to the isolated world in a hello; the isolated world acks in the same tick, after which the page world never repeats it, so no LeetCode script can hear it. Each message is `{body, tag}`: `tag` is HMAC-SHA256(nonce, body) and `body` carries a sequence number. `lib/relay.js` accepts a message only if its tag verifies, its sequence is new, it names the problem on screen (from the isolated world's own `location`), and the extension itself opened a sitting for that problem — anything else is dropped (counted in the debug log). The page has no message that Starts anything: only the overlay, in the isolated world, can. **Accepted residual:** a hostile script on leetcode.com that drives the real editor makes real traffic, which is captured like yours.
+- **`src/content.js`** (ISOLATED) runs the overlay's state machine (`lib/overlay-state.js`, painted by `overlay.js` in open shadow roots on `<html>`, outside React's `#__next`), Start's steps, the binding, the timer read, and the hand-off: events batch for 3 s, a run or submit goes at once, and `pagehide` flushes.
+- **`src/background.js`** owns the device token and every POST. Start is answered directly; events go through the outbox (`lib/outbox.js`, persisted as `storage.local.outbox`, capped at 2,000 batches / 5 MB — over it, the oldest snapshot-only batches go first, never a run or submit). It re-arms itself with a timer and an alarm, so a retry survives the background being unloaded. It writes `status` (the outbox) and `sync:<slug>` (the sitting's last reply) for the badge and Options, and answers only messages from the extension itself.
 
-Two content scripts run at `document_start`, both matching `*://leetcode.com/*`:
+**Storage keys** — `local`: `apiOrigin`, `deviceToken`, `selectors`, `debug`, `debugLog`, `outbox`, `status`, `sitting:<slug>`, `sync:<slug>`; `session`: `dismissed:<slug>`.
 
-- **`src/inject-main.js`** runs in the page's **MAIN** world so it can monkey-patch `window.fetch` and `XMLHttpRequest` (the two transports LeetCode may use). MAIN-world code can read page globals but has **no** access to `browser.*` / `chrome.*`. When it has a payload it `window.dispatchEvent`s a `CustomEvent("aperture-leetcode-attempt", { detail })`.
-- **`src/content-relay.js`** runs in the default **ISOLATED** world, listens for that event, and forwards the payload to the background via `runtime.sendMessage`. This bridge is necessary precisely because MAIN world can't call the extension APIs.
-- **`src/background.js`** reads `{apiOrigin, deviceToken}` from `storage.local`, stamps `tzOffsetMinutes`, dedupes recently-sent submission IDs in memory (belt-and-suspenders; the server is authoritative), and performs the POST. Missing config or fetch errors are logged and dropped, never thrown.
+## Debug mode
 
-All patched code is defensive: JSON parsing is wrapped in try/catch, the original request/response is always returned untouched, and nothing throws into the page.
+For finding LeetCode's controls (the selectors above). Options → **Debug mode** on, then reload the LeetCode tab. It records, in `storage.local.debugLog` (last 2,000 entries): what you click (tag, text, `data-*`/`aria-*` attributes, a short HTML excerpt, a CSS path), every dialog that opens and its buttons, changes to `QD_TIMER_STATE`, `QD_TIMER_HEARTBEAT`, `global_lang` and `qd_solve_session:*`, the clocks on screen every 2 s, `__NEXT_DATA__`'s query keys, the handshake, every relay drop and overlay step — and, when a Start step fails, every editor and labelled button on the page. Never code, request bodies or tokens: the wire entries are sizes, and credential-looking storage keys are redacted.
+
+The session (≈5 minutes, on a problem you've solved): Just looking; hover each icon in the editor toolbar, click the reset, then its confirm; open the timer, start it, wait, pause, resume, reset; switch to the stopwatch and do the same; type a line; Run once; Next problem and back. Then Options → **Export debug log** (or **Copy JSON** — Safari may open a download in a tab), and the selectors come from it.
+
+## Tests
+
+- **Unit and jsdom** — `pnpm --filter @aperture/extension test` (in the gate): the pure libs against the shared package's own normalizers; `test/replay.test.ts` runs the real page-world script in jsdom over both transports; `test/overlay.test.ts` runs both worlds' scripts over the fake LeetCode page (`test/fixtures/`); `test/background.test.ts` runs the real background in a vm.
+- **E2E** — `scripts/src/lc-e2e/extension.test.ts` (in `pnpm --filter @aperture/scripts test`; skipped where `~/pw` has no Playwright, as on CI): the real extension in headless Chromium (a copy with a service-worker background, `chrome-build.ts` — Chrome's MV3 refuses `background.scripts`), on the fake page, against A1's real BFF run locally as the test user.
+- **What none of them prove:** Safari, and LeetCode's real DOM. Those are the `lc-extension` dev-check scenario's _Needs you_ rows: the debug session, and one real sitting.
 
 ## Notes
 
-- LeetCode field shapes were verified against a real DevTools capture on **2026-08-09**.
+- LeetCode shapes were verified against the 2026-11-08 captures (the table above; the capture notes are archived with the branch, `docs/areas/recruiting/index.md` → intro).
 - Icons are the Aperture mark rendered from `app/public/favicon.svg`; `icons/dev/` swaps the teal-green ground for brick red. Regenerate from the repo root with `rsvg-convert` (`librsvg2-bin`):
 
   ```sh
   for s in 48 96 128 256 512; do rsvg-convert -w $s -h $s app/public/favicon.svg -o extension/icons/icon-$s.png; sed 's/#33453f/#a8402c/g' app/public/favicon.svg | rsvg-convert -w $s -h $s -o extension/icons/dev/icon-$s.png; done
   ```
 
-- No npm dependencies, no bundler, no build step. Plain JS, MV3, `browser.*` with a `chrome` fallback.
+- No npm runtime dependencies, no bundler, no build step: plain JS classic scripts, MV3, `browser.*` with a `chrome` fallback. The libs are UMD so the tests can require them; `package.json` exists for the tests only.
