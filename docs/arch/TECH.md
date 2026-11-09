@@ -143,7 +143,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
 4. Never hard-delete — `deletedAt` tombstones everywhere. Both tables have TTL on `expiresAt`, and `toEntity` strips it:
    - **Dev expires tombstones:** `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance and a removed push device never; AWS deletes some time after a row is due).
-   - **Prod's one exception (2026-11, lc-redesign):** a LeetCode sitting's raw bulk — snapshot and submit-detail events, replay chunks — is stamped at write to expire 14 days past the sitting's 24 h ingest window (`sittingRawExpiresAt`). What a sitting keeps forever (head, live row with the final code and facts, every run and submit) is never stamped, and prod tombstones never are. [recruiting](../areas/recruiting/index.md) → _Storage_.
+   - **Prod's one exception (2026-11, lc-redesign):** a LeetCode sitting's raw bulk — snapshot and submit-detail events, replay chunks — is stamped at write to expire 14 days past the sitting's 24 h ingest window (`sittingRawExpiresAt`). What a sitting keeps forever (head, live row with the final code and facts, every run and submit) is never stamped; prod tombstones aren't stamped either — a deleted raw row just keeps the `expiresAt` it had. [recruiting](../areas/recruiting/index.md) → _Storage_.
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
@@ -161,8 +161,10 @@ SK (type-prefixed range keys):
   lc#<day>#<ulid>               LeetCode attempts — retired: the legacy ingest still writes, nothing reads
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
-  lcs#<id>#ev#<epoch13>#<ulid>  a sitting's events by time (snapshots/submitDetails carry expiresAt)
-  lcs#<id>#rp#<epoch13>#<ulid>  a sitting's replay chunks, raw (expiresAt)
+  lcs#<id>#budget               a sitting's capture budget (reserved before every events write; internal)
+  lcs#<id>#hd#<ulid>            a sitting's head events: runs, submits, notes, timer reads (the summary's source)
+  lcs#<id>#ev#<ulid>            a sitting's raw bulk events: snapshots, submit details (expiresAt)
+  lcs#<id>#rp#<ulid>            a sitting's replay chunks, raw (expiresAt)
   lcq#<slug>                    LeetCode's questionDetail for a problem, raw, one per slug
   flux#<day>#<ulid>             Flux sets, day-bucketed; the client mints the ulid (idempotent put-if-absent; soft-delete tombstones)
   fluxnote#<weekStart>          Flux's weekly note cache (direct get, consistent): {text, fingerprint, generatedAt} — derived from the sets, rebuilt when they change, so no userId/ulid/updatedAt

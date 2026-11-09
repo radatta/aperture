@@ -152,6 +152,7 @@ describe('createApiClient', () => {
       'setDayCapacity',
       'setDayIntent',
       'setReminderSettings',
+      'setSittingPrepTarget',
       'setTaskActual',
       'setTaskDue',
       'startSession',

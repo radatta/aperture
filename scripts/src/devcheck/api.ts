@@ -747,29 +747,40 @@ export function createApiClient({
       return call<DevSettings>('updateSettings', [{ leetcodeRollId: rollId }]);
     },
     // A Start as the extension sends it — through the JWT (the device token writes into another user's
-    // partition: DEV-CHECK.md). A new sitting records its spawned rep, then itself; a resume records nothing.
+    // partition: DEV-CHECK.md). The sitting's id IS the input's clientSittingId, so it's recorded before the
+    // call (a crash mid-call still leaves it for the sweep); the rep it spawned is recorded from the answer —
+    // or, when the answer is lost, from reading the sitting back.
     async lcSittingStart(
       input: DevSittingStart,
     ): Promise<{ sitting: DevSitting; resumed: boolean }> {
-      const res = await call<{ sitting: DevSitting; resumed: boolean }>('lcSittingStart', [input]);
-      if (!res.resumed && !ledger.has(res.sitting.id)) {
-        const title = `rep ${input.problemSlug}`;
-        ledger.append({
-          run,
-          op: 'created',
-          id: res.sitting.repTaskId,
-          via: SITTING_REP_VIA,
-          title,
-        });
-        ledger.append({
-          run,
-          op: 'created',
-          id: res.sitting.id,
-          via: SITTING_VIA,
-          title: input.problemSlug,
-        });
+      const id = input.clientSittingId;
+      if (!ledger.has(id))
+        ledger.append({ run, op: 'created', id, via: SITTING_VIA, title: input.problemSlug });
+      const recordRep = (s: DevSitting) => {
+        if (!ledger.has(s.repTaskId))
+          ledger.append({
+            run,
+            op: 'created',
+            id: s.repTaskId,
+            via: SITTING_REP_VIA,
+            title: `rep ${input.problemSlug}`,
+          });
+      };
+      try {
+        const res = await call<{ sitting: DevSitting; resumed: boolean }>('lcSittingStart', [
+          input,
+        ]);
+        if (res.sitting.id === id) recordRep(res.sitting); // a resume of another sitting isn't this run's
+        return res;
+      } catch (err) {
+        const made = (await reads.listSittings().catch(() => [])).find((x) => x.id === id);
+        if (made) recordRep(made);
+        throw err;
       }
-      return res;
+    },
+    async setSittingPrepTarget(id: string, prepTarget: string): Promise<DevSitting> {
+      assertLedger(id, 'sitting');
+      return call<DevSitting>('setSittingPrepTarget', [id, prepTarget]);
     },
     async lcSittingEvents(sittingId: string, events: DevSittingEvent[]) {
       assertLedger(sittingId, 'sitting');

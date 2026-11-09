@@ -187,11 +187,35 @@ export const lcSittings: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'A double-fired Start makes one sitting and one rep',
+    },
+    {
+      id: 'prep-target',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A sitting’s prep target saves trimmed, and blank goes back to General',
+    },
+    {
+      id: 'delete-sitting',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Deleting a sitting removes it and its reads, and leaves its rep',
+    },
+    {
+      id: 'cap',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A sitting past 3,000 events — any type, repeats included — refuses more with nothing written',
       offDev: {
-        file: 'lambdas/src/backend.sittings.test.ts',
-        test: 'a double-fired Start makes one sitting and one rep',
-        why: 'dev can’t time two concurrent requests to collide; start-resume (proven on dev) runs the same path in sequence',
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'reserves a call in the budget, refusing one that would pass a cap',
+        why: 'dev can’t take it: 3,000 writes would run into dev’s write cap; the contract suite drives the same guard with submit details alone',
       },
+    },
+    {
+      id: 'mcp-legacy-gone',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'MCP no longer offers list_leetcode_attempts',
     },
     {
       id: 'window',
@@ -200,7 +224,7 @@ export const lcSittings: Scenario = {
       what: 'Events a day after Start are refused',
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
-        test: 'refuses an ended sitting, one past its window, and one over a cap',
+        test: 'refuses an ended sitting, one past its window, and an event off its clock',
         why: 'dev can’t wait a day: the guard is pure, and the contract suite runs it with an advanced clock',
       },
     },
@@ -378,7 +402,7 @@ export const lcSittings: Scenario = {
       title: 'Recruiting pins sitting A as in progress; the Stories tab opens beside it',
       async run(ctx) {
         await ctx.ui.goto('/recruiting');
-        const open = ctx.page.getByRole('region', { name: 'Open sitting' });
+        const open = ctx.page.getByRole('region', { name: 'Now' });
         await open.getByText(titleOf(ctx, 'a')).waitFor({ timeout: 15_000 });
         await open.getByText(/In progress/).waitFor({ timeout: 5_000 });
         await ctx.shot('sittings-open');
@@ -413,6 +437,51 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'double-start',
+      entry: 'api',
+      proves: ['double-start', 'prep-target', 'delete-sitting'],
+      title:
+        'Start C twice at once (one sitting, one rep); tag it; delete it — its rep stays, then drops',
+      async run(ctx) {
+        const input = start(ctx, 'c');
+        const [x, y] = await Promise.all([
+          ctx.api.writes.lcSittingStart(input),
+          ctx.api.writes.lcSittingStart({ ...input }),
+        ]);
+        if (x.sitting.id !== y.sitting.id || [x.resumed, y.resumed].filter(Boolean).length !== 1)
+          throw new Error(`two answers: ${JSON.stringify([x.resumed, y.resumed])}`);
+        const reps = (await ctx.api.reads.listTasks()).filter(
+          (t) => t.title === `LeetCode · ${titleOf(ctx, 'c')}`,
+        );
+        if (reps.length !== 1) throw new Error(`${reps.length} reps for C`);
+        const id = x.sitting.id;
+        const tagged = await ctx.api.writes.setSittingPrepTarget(id, '  devcheck-target ');
+        const blank = await ctx.api.writes.setSittingPrepTarget(id, '   ');
+        if (
+          (tagged as { prepTarget?: string }).prepTarget !== 'devcheck-target' ||
+          (blank as { prepTarget?: string }).prepTarget !== 'General'
+        )
+          throw new Error('the prep target didn’t normalize');
+        await ctx.api.writes.deleteSitting(id);
+        if ((await ctx.api.reads.listSittings()).some((s) => s.id === id))
+          throw new Error('the deleted sitting is still listed');
+        await refused('read after delete', ctx.api.reads.getSitting(id), /Not found/);
+        const rep = await ctx.api.reads.getTask(x.sitting.repTaskId);
+        if (!rep) throw new Error('deleting the sitting took its rep');
+        await ctx.api.writes.finishTask(rep.id, 'cancelled'); // free the roll for the steps after
+      },
+    },
+    {
+      id: 'mcp-legacy-gone',
+      entry: 'mcp',
+      proves: ['mcp-legacy-gone'],
+      title: 'MCP’s tool list has no list_leetcode_attempts',
+      async run(ctx) {
+        if ((await ctx.mcp.reads.toolsList()).includes('list_leetcode_attempts'))
+          throw new Error('list_leetcode_attempts is still offered');
+      },
+    },
+    {
       id: 'ui-ended',
       entry: 'ui',
       cost: 'slow',
@@ -430,7 +499,7 @@ export const lcSittings: Scenario = {
           .getByText(titleOf(ctx, 'b'))
           .locator('xpath=ancestor::div[contains(@class,"justify-between")][1]');
         await rowB.getByText(/dropped/).waitFor({ timeout: 5_000 });
-        if (await ctx.page.getByRole('region', { name: 'Open sitting' }).count())
+        if (await ctx.page.getByRole('region', { name: 'Now' }).count())
           throw new Error('an ended sitting is still pinned as open');
         await ctx.shot('sittings-ended');
         await ctx.ui.goto('/settings#leetcode');

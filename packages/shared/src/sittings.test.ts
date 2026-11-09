@@ -8,17 +8,22 @@ import {
   lcTimerState,
   normalizeSittingEvents,
   normalizeSittingStart,
+  planSittingStart,
+  reserveBudget,
+  SITTING_ACTIVE_ERROR,
   SITTING_CAP_ERROR,
   SITTING_ENDED_ERROR,
+  SITTING_EVENT_TIME_ERROR,
   SITTING_INGEST_WINDOW_MS,
   SITTING_MAX_EVENTS,
   SITTING_RAW_KEEP_MS,
   sittingElapsedMs,
   sittingIngestError,
   sittingRawExpiresAt,
+  summarizeHeadEvents,
 } from './sittings';
 import type { NormalizedSittingEvent, SittingStartInput } from './sittings';
-import type { Sitting } from './types';
+import type { Sitting, Task } from './types';
 import { ulid } from './ulid';
 
 const start = (over: Partial<SittingStartInput> = {}): SittingStartInput => ({
@@ -97,9 +102,32 @@ describe('folds', () => {
       false,
     );
   });
-  it('an unreadable result keeps the previous verdict but still counts', () => {
+  it('an unreadable result counts as other and holds its place as the first submit', () => {
     const s = foldSummary(emptySummary(), ev('submit', 5, { result: null }));
-    expect(s).toMatchObject({ submits: 1, lastSubmit: null, firstSubmit: null, events: 1 });
+    const next = foldSummary(s, ev('submit', 6, { result: { status_code: 10 } }));
+    expect(next.firstSubmit).toMatchObject({ verdict: 'other', at: 5 });
+    expect(next).toMatchObject({ submits: 2, firstAcceptedAt: 6, submitsBeforeAccepted: 1 });
+  });
+  it('the summary recomputes from the head events whatever order they arrive in', () => {
+    const wa = {
+      id: 'b',
+      type: 'submit' as const,
+      at: 2,
+      payload: { result: { status_code: 11 } },
+    };
+    const ac = {
+      id: 'c',
+      type: 'submit' as const,
+      at: 3,
+      payload: { result: { status_code: 10 } },
+    };
+    const run = { id: 'a', type: 'run' as const, at: 1, payload: {} };
+    expect(summarizeHeadEvents([ac, run, wa])).toEqual(summarizeHeadEvents([run, wa, ac]));
+    expect(summarizeHeadEvents([ac, run, wa])).toMatchObject({
+      runsBeforeFirstSubmit: 1,
+      firstSubmit: { verdict: 'wrong_answer' },
+      submitsBeforeAccepted: 1,
+    });
   });
   it('counts a restart as a rewrite, once', () => {
     const long = 'x'.repeat(400);
@@ -138,18 +166,24 @@ describe('lcTimerState', () => {
 });
 
 describe('ingest guards', () => {
-  const sitting = { status: 'active', startedAt: 0, summary: emptySummary() } as unknown as Sitting;
-  it('refuses an ended sitting, one past its window, and one over a cap', () => {
-    const none = { count: 1, bytes: 1 };
-    expect(sittingIngestError({ ...sitting, status: 'done' }, null, none, 1)).toBe(
-      SITTING_ENDED_ERROR,
+  const sitting = { status: 'active', startedAt: 0, clientStartedAt: 0 } as Sitting;
+  it('refuses an ended sitting, one past its window, and an event off its clock', () => {
+    expect(sittingIngestError({ ...sitting, status: 'done' }, [], 1)).toBe(SITTING_ENDED_ERROR);
+    expect(sittingIngestError(sitting, [], SITTING_INGEST_WINDOW_MS + 1)).toBe(SITTING_ENDED_ERROR);
+    expect(sittingIngestError(sitting, [{ at: 1e21 }], 1)).toBe(SITTING_EVENT_TIME_ERROR);
+    expect(sittingIngestError(sitting, [{ at: -2 * SITTING_INGEST_WINDOW_MS }], 1)).toBe(
+      SITTING_EVENT_TIME_ERROR,
     );
-    expect(sittingIngestError(sitting, null, none, SITTING_INGEST_WINDOW_MS + 1)).toBe(
-      SITTING_ENDED_ERROR,
-    );
-    const live = { snapshots: SITTING_MAX_EVENTS, replayChunks: 0, bytes: 0 };
-    expect(sittingIngestError(sitting, live, none, 1)).toBe(SITTING_CAP_ERROR);
-    expect(sittingIngestError(sitting, null, none, 1)).toBeNull();
+    expect(sittingIngestError(sitting, [{ at: 5 }], 1)).toBeNull();
+  });
+  it('reserves a call in the budget, refusing one that would pass a cap', () => {
+    expect(reserveBudget({ events: 1, bytes: 10 }, { count: 2, bytes: 5 })).toEqual({
+      events: 3,
+      bytes: 15,
+    });
+    expect(() =>
+      reserveBudget({ events: SITTING_MAX_EVENTS, bytes: 0 }, { count: 1, bytes: 1 }),
+    ).toThrow(SITTING_CAP_ERROR);
   });
   it('the raw bulk expires the keep past the ingest window, in epoch seconds', () => {
     expect(sittingRawExpiresAt({ startedAt: 0 })).toBe(
@@ -159,5 +193,42 @@ describe('ingest guards', () => {
   it('elapsed runs to now while open and stops at the end', () => {
     expect(sittingElapsedMs({ startedAt: 100, endedAt: null }, 600)).toBe(500);
     expect(sittingElapsedMs({ startedAt: 100, endedAt: 300 }, 600)).toBe(200);
+  });
+});
+
+describe('planSittingStart', () => {
+  const H = 3600_000;
+  const rep = (id: string, status: Task['status']) =>
+    ({ id, status, rollId: 'r', deletedAt: null }) as Task;
+  const open = (over: Partial<Sitting>): Sitting =>
+    ({
+      id: 's1',
+      clientSittingId: 'c1',
+      status: 'active',
+      problemSlug: 'a',
+      repTaskId: 't1',
+      startedAt: 0,
+      day: 'd',
+      ...over,
+    }) as Sitting;
+  const plan = (sittings: Sitting[], tasks: Task[], slug = 'b', now = H) =>
+    planSittingStart({ clientSittingId: 'new', problemSlug: slug }, 'd', sittings, tasks, 'r', now);
+
+  it('refuses another problem while one is open on a live rep', () => {
+    expect(() => plan([open({})], [rep('t1', 'in_progress')])).toThrow(SITTING_ACTIVE_ERROR);
+  });
+  it('ends an open sitting whose rep finished, then plans as if it were gone', () => {
+    const p = plan([open({})], [rep('t1', 'done')]);
+    expect(p.ends).toEqual([{ sitting: expect.objectContaining({ id: 's1' }), to: 'done' }]);
+    expect(p.kind).toBe('spawn');
+  });
+  it('abandons one past its window and reuses its still-open rep', () => {
+    const p = plan([open({})], [rep('t1', 'in_progress')], 'a', SITTING_INGEST_WINDOW_MS + 1);
+    expect(p.ends.map((e) => e.to)).toEqual(['abandoned']);
+    expect(p).toMatchObject({ kind: 'attach', rep: { id: 't1' } });
+  });
+  it('abandons a half-made Start on another problem, but resumes it on its own', () => {
+    expect(plan([open({})], [], 'b').ends.map((e) => e.to)).toEqual(['abandoned']);
+    expect(plan([open({})], [], 'a')).toMatchObject({ kind: 'resume', ends: [] });
   });
 });

@@ -75,6 +75,44 @@ describe('sittings on the table', () => {
     expect(head?.expiresAt).toBeUndefined();
   });
 
+  // A Start that claimed its head and died before shaping the rep (a timeout, a throttle): its retry finishes
+  // it, and a Start on another problem doesn't stay blocked behind it.
+  it('a half-made Start finishes on its retry, and never blocks another problem', async () => {
+    const { backend, doc } = setup();
+    await linked(backend);
+    const repo = new Repo(doc, liveWrites(doc, 'prod'), 'u1');
+    const half = (await backend.lcSittingStart(start())).sitting;
+    await backend.deleteTask(half.repTaskId); // takes the sitting with it — re-make the half-made state:
+    const id = ulid();
+    await repo.putSittingIfAbsent({
+      ...half,
+      id,
+      clientSittingId: id,
+      repTaskId: ulid(),
+      deletedAt: null,
+    });
+    const retry = await backend.lcSittingStart({ ...start(id) });
+    expect(retry.resumed).toBe(true);
+    expect(await backend.getTask(retry.sitting.repTaskId)).toMatchObject({ status: 'in_progress' });
+    // Half-made again, then a Start on another problem: the half-made one is abandoned, the new one opens.
+    const id2 = ulid();
+    await backend.deleteTask(retry.sitting.repTaskId);
+    await repo.putSittingIfAbsent({
+      ...half,
+      id: id2,
+      clientSittingId: id2,
+      repTaskId: ulid(),
+      deletedAt: null,
+    });
+    const other = await backend.lcSittingStart({
+      ...start(),
+      problemSlug: 'three-sum',
+      problemTitle: '3Sum',
+    });
+    expect(other.resumed).toBe(false);
+    expect((await backend.getSitting(id2)).sitting.status).toBe('abandoned');
+  });
+
   it('a double-fired Start makes one sitting and one rep', async () => {
     const { backend } = setup();
     await linked(backend);

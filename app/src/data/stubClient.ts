@@ -122,13 +122,14 @@ import {
   emptySummary,
   endedSitting,
   foldLive,
-  foldSummary,
   isHeadEvent,
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
   normalizeSittingEvents,
   normalizeSittingStart,
   planSittingStart,
+  reserveBudget,
+  summarizeHeadEvents,
   PREP_TARGET_DEFAULT,
   sittingIngestError,
   sittingProblemUrl,
@@ -215,6 +216,7 @@ import type {
   NormalizedSittingStart,
   Sitting,
   SittingDetail,
+  SittingBudget,
   SittingEvent,
   SittingEventsInput,
   SittingEventsResult,
@@ -296,6 +298,7 @@ export interface Store {
   sittingLive: SittingLive[];
   sittingEvents: SittingEvent[];
   sittingReplay: SittingReplayChunk[];
+  sittingBudgets: SittingBudget[]; // capture budgets: internal, never exported
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   attachments: Attachment[];
@@ -332,6 +335,7 @@ export function emptyStore(): Store {
     sittingLive: [],
     sittingEvents: [],
     sittingReplay: [],
+    sittingBudgets: [],
     leetcodeProblems: [],
     stories: [],
     attachments: [],
@@ -493,6 +497,12 @@ class StubClient implements ApiClient {
       coll.push(item);
       this.persist();
       return item;
+    },
+    // Many rows, one persist — an ingest call's events (persisting the whole store per row is quadratic).
+    insertMany: <T extends BaseEntity>(coll: T[], items: NoInfer<T>[]): T[] => {
+      coll.push(...items);
+      this.persist();
+      return items;
     },
     put: <T extends BaseEntity>(coll: T[], next: NoInfer<T>): T => {
       const idx = coll.findIndex((x) => x.id === next.id);
@@ -733,33 +743,25 @@ class StubClient implements ApiClient {
   // --- LeetCode sittings (sittings.ts) --------------------------------------
   async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
     const n = normalizeSittingStart(input);
-    const rollId = this.ensureSettings().leetcodeRollId ?? null;
-    const roll = rollId ? this.find(this.store.rolls, rollId) : undefined;
-    if (!roll) throw new Error(LC_ROLL_UNLINKED_ERROR);
+    const linked = this.ensureSettings().leetcodeRollId ?? null;
+    const roll = linked ? this.find(this.store.rolls, linked) : undefined;
+    if (!roll?.active) throw new Error(LC_ROLL_UNLINKED_ERROR); // archived reads as unlinked
     const now = this.now();
     const day = dayKeyForOffset(now, n.tzOffsetMinutes, this.dayStartHour());
-    const tasks = this.alive(this.store.tasks);
-    const plan = planSittingStart(n, day, this.alive(this.store.sittings), tasks, roll.id);
-    if (plan.kind === 'resume') return { sitting: plan.sitting, resumed: true };
-    let repId: string;
-    if (plan.kind === 'attach') repId = plan.rep.id;
-    else {
-      const rep = this.writes.insert(this.store.tasks, { ...this.base(), ...rollRepFields(roll) });
-      this.writes.insert(this.store.plans, {
-        ...this.base(),
-        taskId: rep.id,
-        day,
-        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
-        order: this.alive(this.store.plans).filter((p) => p.day === day).length,
-      });
-      repId = rep.id;
+    const plan = planSittingStart(
+      n,
+      day,
+      this.alive(this.store.sittings),
+      this.alive(this.store.tasks),
+      roll.id,
+      now,
+    );
+    for (const e of plan.ends) this.endSitting(e.sitting.id, e.to);
+    if (plan.kind === 'resume') {
+      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, n);
+      return { sitting: plan.sitting, resumed: true };
     }
-    await this.setTaskTitle(repId, sittingRepTitle(n.problemTitle));
-    if (!this.mustFind(this.store.tasks, repId).notes)
-      this.writes.patch(this.store.tasks, repId, { notes: sittingProblemUrl(n.problemSlug) });
-    if (this.mustFind(this.store.tasks, repId).status !== 'in_progress')
-      await this.transitionTask(repId, 'in_progress');
-    if (n.problem !== null) this.upsertProblem(n);
+    // The head first, then the rep — the backend's order (its claim is what makes a retry safe).
     const sitting = this.writes.insert(this.store.sittings, {
       ...this.base(),
       id: n.clientSittingId, // the head's id IS the Start's idempotency key (backend parity)
@@ -776,13 +778,44 @@ class StubClient implements ApiClient {
       difficulty: n.difficulty,
       topicTags: n.topicTags,
       lang: n.lang,
-      repTaskId: repId,
+      repTaskId: plan.kind === 'attach' ? plan.rep.id : this.ulid(),
       rollId: roll.id,
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
       summary: emptySummary(),
     });
+    await this.shapeRep(sitting, roll, n);
+    if (n.problem !== null) this.upsertProblem(n);
     return { sitting, resumed: false };
+  }
+  // Mirrors the backend's shapeRep: idempotent, through the normal task paths.
+  private async shapeRep(s: Sitting, roll: Roll, n: NormalizedSittingStart): Promise<void> {
+    const title = sittingRepTitle(n.problemTitle);
+    let rep = this.find(this.store.tasks, s.repTaskId);
+    if (!rep)
+      rep = this.writes.insert(this.store.tasks, {
+        ...this.base(),
+        ...rollRepFields(roll),
+        id: s.repTaskId,
+        title,
+        notes: sittingProblemUrl(n.problemSlug),
+      });
+    if (rep.status === 'done' || rep.status === 'cancelled') return;
+    if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
+    if (!rep.notes)
+      rep = this.writes.patch(this.store.tasks, rep.id, {
+        notes: sittingProblemUrl(n.problemSlug),
+      });
+    const dayPlans = this.alive(this.store.plans).filter((p) => p.day === s.day);
+    if (!dayPlans.some((p) => p.taskId === rep.id))
+      this.writes.insert(this.store.plans, {
+        ...this.base(),
+        taskId: rep.id,
+        day: s.day,
+        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+        order: dayPlans.length,
+      });
+    if (rep.status !== 'in_progress') await this.transitionTask(rep.id, 'in_progress');
   }
   private upsertProblem(n: NormalizedSittingStart): void {
     const fields = {
@@ -805,43 +838,71 @@ class StubClient implements ApiClient {
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
     const { sittingId, events } = normalizeSittingEvents(input);
     const sitting = this.mustFind(this.store.sittings, sittingId);
-    const live = this.sittingLiveOf(sittingId);
+    const now = this.now();
+    const err = sittingIngestError(sitting, events, now);
+    if (err) throw new Error(err);
+    // The budget reserves every incoming event, repeats included (backend parity), before anything is written.
+    const bytes = events.reduce((n, e) => n + e.bytes, 0);
+    const had = this.store.sittingBudgets.find((x) => x.id === sittingId);
+    const budget = reserveBudget(
+      had ?? { ...this.base(), id: sittingId, sittingId, events: 0, bytes: 0 },
+      {
+        count: events.length,
+        bytes,
+      },
+    );
+    this.writes.put(this.store.sittingBudgets, { ...budget, updatedAt: now });
     const seen = new Set(
       [...this.store.sittingEvents, ...this.store.sittingReplay]
         .filter((x) => x.sittingId === sittingId)
         .map((x) => x.id),
     );
     const fresh = events.filter((e) => !seen.has(e.id));
-    const now = this.now();
-    const bytes = fresh.reduce((n, e) => n + e.bytes, 0);
-    const err = sittingIngestError(sitting, live, { count: fresh.length, bytes }, now);
-    if (err) throw new Error(err);
-    let summary = sitting.summary;
-    let next: SittingLive = live ?? {
+    const row = (e: { id: string; at: number }) => ({
       ...this.base(),
-      id: sittingId,
-      ...emptyLiveFields(sittingId),
-    };
-    for (const e of fresh) {
-      const row = { ...this.base(), id: e.id, sittingId, at: e.at, receivedAt: now };
-      if (e.type === 'replay')
-        this.writes.insert(this.store.sittingReplay, {
-          ...row,
-          clientSessionId: e.clientSessionId,
-          events: e.events,
-        });
-      else
-        this.writes.insert(this.store.sittingEvents, { ...row, type: e.type, payload: e.payload });
-      if (isHeadEvent(e.type)) summary = foldSummary(summary, e);
-      else next = foldLive(next, e, now);
+      id: e.id,
+      sittingId,
+      at: e.at,
+      receivedAt: now,
+    });
+    this.writes.insertMany(
+      this.store.sittingReplay,
+      fresh.flatMap((e) =>
+        e.type === 'replay'
+          ? [{ ...row(e), clientSessionId: e.clientSessionId, events: e.events }]
+          : [],
+      ),
+    );
+    this.writes.insertMany(
+      this.store.sittingEvents,
+      fresh.flatMap((e) =>
+        e.type === 'replay' ? [] : [{ ...row(e), type: e.type, payload: e.payload }],
+      ),
+    );
+    if (events.some((e) => isHeadEvent(e.type))) {
+      const head = this.alive(this.store.sittingEvents).filter(
+        (x) => x.sittingId === sittingId && isHeadEvent(x.type),
+      );
+      this.writes.patch(this.store.sittings, sittingId, { summary: summarizeHeadEvents(head) });
     }
-    if (summary !== sitting.summary) this.writes.patch(this.store.sittings, sittingId, { summary });
-    if (next !== live) this.writes.put(this.store.sittingLive, { ...next, updatedAt: now });
+    const bulk = fresh.filter((e) => !isHeadEvent(e.type));
+    let live = this.sittingLiveOf(sittingId);
+    if (bulk.length) {
+      const base: SittingLive = live ?? {
+        ...this.base(),
+        id: sittingId,
+        ...emptyLiveFields(sittingId),
+      };
+      live = this.writes.put(this.store.sittingLive, {
+        ...bulk.reduce((l, e) => foldLive(l, e, now), base),
+        updatedAt: now,
+      });
+    }
     return {
       accepted: fresh.length,
       duplicates: events.length - fresh.length,
-      version: next.version,
-      status: sitting.status,
+      version: live?.version ?? 0,
+      status: this.mustFind(this.store.sittings, sittingId).status,
     };
   }
   async listSittings(range?: DateRange): Promise<Sitting[]> {
@@ -879,17 +940,23 @@ class StubClient implements ApiClient {
       ))
         this.writes.softDelete(coll as (SittingEvent | SittingReplayChunk)[], row.id);
     this.writes.softDelete(this.store.sittingLive, id);
+    const { problemSlug } = this.mustFind(this.store.sittings, id);
     this.writes.softDelete(this.store.sittings, id);
+    const problem = this.alive(this.store.leetcodeProblems).find((x) => x.slug === problemSlug);
+    if (problem && !this.alive(this.store.sittings).some((x) => x.problemSlug === problemSlug))
+      this.writes.softDelete(this.store.leetcodeProblems, problem.id);
   }
   // A rep's finish ends its open sitting (Done → done, else abandoned); its delete removes it.
-  private endSittingsFor(taskId: string, to: TaskStatus): void {
-    if (to !== 'done' && to !== 'cancelled') return;
+  private endSittingsFor(task: Task, to: TaskStatus): void {
+    if (!task.rollId || (to !== 'done' && to !== 'cancelled')) return;
     for (const x of this.alive(this.store.sittings))
-      if (x.repTaskId === taskId && x.status === 'active')
-        this.writes.put(
-          this.store.sittings,
-          endedSitting(x, to === 'done' ? 'done' : 'abandoned', this.now()),
-        );
+      if (x.repTaskId === task.id && x.status === 'active')
+        this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned');
+  }
+  private endSitting(id: string, to: 'done' | 'abandoned'): void {
+    const x = this.mustFind(this.store.sittings, id);
+    if (x.status === 'active')
+      this.writes.put(this.store.sittings, endedSitting(x, to, this.now()));
   }
 
   // --- Flux sets -------------------------------------------------------------
@@ -1176,7 +1243,7 @@ class StubClient implements ApiClient {
     const parts = partsOf(this.alive(this.store.tasks), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
-    this.endSittingsFor(id, to);
+    this.endSittingsFor(task, to);
     // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
     const firstStart =
       task.startedAt === null &&
@@ -1322,8 +1389,9 @@ class StubClient implements ApiClient {
       forgetStubBlob(a.id);
       this.writes.softDelete(this.store.attachments, a.id);
     }
-    for (const x of this.alive(this.store.sittings).filter((x) => x.repTaskId === id))
-      await this.deleteSitting(x.id);
+    if (task.rollId)
+      for (const x of this.alive(this.store.sittings).filter((x) => x.repTaskId === id))
+        await this.deleteSitting(x.id);
     this.writes.softDelete(this.store.tasks, id); // task last
     if (release) this.releaseParentState(task.parentId);
   }
@@ -2500,7 +2568,8 @@ class StubClient implements ApiClient {
       places: this.alive(this.store.places),
       sittings: this.alive(this.store.sittings),
       sittingLive: this.alive(this.store.sittingLive),
-      sittingEvents: this.alive(this.store.sittingEvents),
+      // Head events only (runs, submits, notes, timer reads) — the raw bulk stays out, as on the backend.
+      sittingEvents: this.alive(this.store.sittingEvents).filter((e) => isHeadEvent(e.type)),
       leetcodeProblems: this.alive(this.store.leetcodeProblems),
       stories: this.alive(this.store.stories),
       fluxSets: this.alive(this.store.fluxSets),
@@ -2521,7 +2590,7 @@ class StubClient implements ApiClient {
     // The Store keys left out on purpose: the place token and push subscriptions are credentials, the
     // poller's heartbeat is stage health, not your data, and the week-note cache is derived from the sets
     // (rebuilt on the next read). The retired LeetCode attempts are no longer exported, and a sitting's
-    // replay stays out like attachment bytes (bulk, and it expires).
+    // replay stays out like attachment bytes (bulk, and it expires); its capture budget is internal.
     return bundle satisfies Record<
       Exclude<
         keyof Store,
@@ -2531,6 +2600,7 @@ class StubClient implements ApiClient {
         | 'fluxNotes'
         | 'leetcodeAttempts'
         | 'sittingReplay'
+        | 'sittingBudgets'
       >,
       unknown
     >;

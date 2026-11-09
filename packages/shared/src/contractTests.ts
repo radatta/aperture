@@ -37,7 +37,10 @@ import {
   LC_ROLL_UNLINKED_ERROR,
   SITTING_ACTIVE_ERROR,
   SITTING_ENDED_ERROR,
+  SITTING_CAP_ERROR,
+  SITTING_EVENTS_PER_CALL,
   SITTING_INGEST_WINDOW_MS,
+  SITTING_MAX_EVENTS,
   sittingMetrics,
 } from './sittings';
 import type { SittingEventInput, SittingStartInput } from './sittings';
@@ -2107,6 +2110,10 @@ export function runApiContract(
     it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
       const { sitting } = await startSitting(api, { problem: { titleSlug: 'two-sum' } });
+      await api.lcSittingEvents({
+        sittingId: sitting.id,
+        events: [lcSnap('a', LC_T0 + 1), lcJudged('submit', 10, 'Accepted', LC_T0 + 2, 1, 1)],
+      });
       const story = await api.createStory({ title: 'exportable story' });
       const flux = await api.recordFluxSet(fluxSet());
       const { attachment } = await api.createAttachmentUploadUrl({
@@ -2152,6 +2159,9 @@ export function runApiContract(
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
       expect(data.sittings.map((x) => x.id)).toContain(sitting.id);
       expect(data.leetcodeProblems.map((x) => x.slug)).toContain('two-sum');
+      // Runs and submits are kept; the raw bulk (snapshots) and the replay stay out.
+      expect(data.sittingEvents.map((e) => e.type)).toEqual(['submit']);
+      expect(data.sittingLive.map((l) => l.sittingId)).toEqual([sitting.id]);
       expect(data.stories.map((x) => x.id)).toContain(story.id);
       expect(data.fluxSets.map((x) => x.id)).toContain(flux.id);
       expect(data.attachments.map((x) => x.id)).toContain(attachment.id); // ready rows only
@@ -3292,6 +3302,48 @@ export function runApiContract(
         expect(
           (await api.listSittings({ from: '2023-11-14', to: '2023-11-14' })).map((x) => x.id),
         ).toEqual([sitting.id]);
+      });
+
+      it('the capture budget counts every event type, repeats included, and refuses past the cap', async () => {
+        const { sitting } = await startSitting(api);
+        const details = () =>
+          Array.from({ length: SITTING_EVENTS_PER_CALL }, (_, i) => ({
+            id: ulid(),
+            type: 'submitDetails' as const,
+            at: LC_T0 + i,
+            payload: { d: 1 },
+          }));
+        const calls = SITTING_MAX_EVENTS / SITTING_EVENTS_PER_CALL - 1;
+        const last = details();
+        for (let i = 0; i < calls; i++)
+          await api.lcSittingEvents({ sittingId: sitting.id, events: details() });
+        await api.lcSittingEvents({ sittingId: sitting.id, events: last }); // exactly at the cap
+        // A repeat of the last call is all duplicates — and still refused: the budget reserves before it looks.
+        await expect(api.lcSittingEvents({ sittingId: sitting.id, events: last })).rejects.toThrow(
+          SITTING_CAP_ERROR,
+        );
+        await expect(
+          api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0)] }),
+        ).rejects.toThrow(SITTING_CAP_ERROR);
+        expect((await api.getSitting(sitting.id)).live?.version).toBe(0); // the refused snapshot never landed
+      });
+
+      it('a sitting left open past its window ends at the next Start, which reuses its rep', async () => {
+        const { sitting } = await startSitting(api);
+        advance(SITTING_INGEST_WINDOW_MS + 1);
+        const next = await api.lcSittingStart(sittingStart());
+        expect(next.resumed).toBe(false);
+        expect(next.sitting.repTaskId).toBe(sitting.repTaskId);
+        expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ status: 'abandoned' });
+        expect(await api.getTask(sitting.repTaskId)).toMatchObject({ status: 'in_progress' });
+      });
+
+      it('an archived roll reads as unlinked', async () => {
+        const { roll } = await startSitting(api);
+        await api.upsertRoll({ ...roll, active: false });
+        await expect(
+          api.lcSittingStart(sittingStart({ problemSlug: 'three-sum', problemTitle: '3Sum' })),
+        ).rejects.toThrow(LC_ROLL_UNLINKED_ERROR);
       });
 
       it('deleting the rep removes the sitting; deleteSitting is idempotent', async () => {

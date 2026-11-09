@@ -12,6 +12,7 @@ import type {
   BaseEntity,
   LcTimerState,
   Sitting,
+  SittingBudget,
   SittingEventType,
   SittingFacts,
   SittingLive,
@@ -54,6 +55,7 @@ export const SITTING_ACTIVE_ERROR = 'Another sitting is still open — end it in
 export const SITTING_ENDED_ERROR = 'This sitting has ended — start a new one.';
 export const SITTING_CAP_ERROR = 'This sitting is over its capture limit.';
 export const SITTING_START_CAP_ERROR = 'Too many sittings started today.';
+export const SITTING_EVENT_TIME_ERROR = 'An event’s time is off the sitting’s clock.';
 
 // --- Inputs ---
 export interface SittingStartInput {
@@ -272,8 +274,6 @@ export const emptySummary = (): SittingSummary => ({
   runsBeforeFirstSubmit: 0,
   lcTimer: null,
   lastEventAt: null,
-  events: 0,
-  bytes: 0,
 });
 export const emptyFacts = (): SittingFacts => ({
   firstEditAt: null,
@@ -302,29 +302,40 @@ export const emptyLiveFields = (sittingId: string) => ({
 export const isHeadEvent = (type: SittingEventType | 'replay') =>
   type === 'run' || type === 'submit' || type === 'note' || type === 'timer';
 
-export function foldSummary(s: SittingSummary, e: NormalizedSittingEvent): SittingSummary {
-  const next: SittingSummary = {
-    ...s,
-    events: s.events + 1,
-    bytes: s.bytes + e.bytes,
-    lastEventAt: Math.max(s.lastEventAt ?? 0, e.at),
-  };
+// An unreadable judge result still counts — as 'other' — so it holds its place in the order.
+const verdictOrOther = (payload: unknown, at: number): SittingVerdict =>
+  verdictOf(payload, at) ?? { verdict: 'other', statusMsg: null, passed: null, total: null, at };
+export function foldSummary(
+  s: SittingSummary,
+  e: { type: SittingEventType | 'replay'; at: number; payload?: unknown },
+): SittingSummary {
+  const next: SittingSummary = { ...s, lastEventAt: Math.max(s.lastEventAt ?? 0, e.at) };
   if (e.type === 'run') {
     next.runs = s.runs + 1;
-    if (!s.firstSubmit) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
-    next.lastRun = verdictOf(e.payload, e.at) ?? s.lastRun;
+    if (s.submits === 0) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
+    next.lastRun = verdictOrOther(e.payload, e.at);
   } else if (e.type === 'submit') {
-    const v = verdictOf(e.payload, e.at);
+    const v = verdictOrOther(e.payload, e.at);
     next.submits = s.submits + 1;
-    next.lastSubmit = v ?? s.lastSubmit;
-    if (!s.firstSubmit) next.firstSubmit = v;
-    if (v?.verdict === 'accepted' && s.firstAcceptedAt === null) {
+    next.lastSubmit = v;
+    if (s.submits === 0) next.firstSubmit = v;
+    if (v.verdict === 'accepted' && s.firstAcceptedAt === null) {
       next.firstAcceptedAt = e.at;
       next.submitsBeforeAccepted = s.submits; // failed submits before this one
     }
   } else if (e.type === 'note') next.notes = s.notes + 1;
   else if (e.type === 'timer') next.lcTimer = lcTimerState(e.payload, e.at) ?? s.lcTimer;
   return next;
+}
+// The head's summary, recomputed from every stored head event (runs, submits, notes, timer reads) in time
+// order — never an increment, so a retry or a lost write can't skew it: the next call carrying any head
+// event, fresh or a repeat, rebuilds it.
+export function summarizeHeadEvents(
+  events: readonly { id: string; type: SittingEventType; at: number; payload: unknown }[],
+): SittingSummary {
+  return [...events]
+    .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1))
+    .reduce(foldSummary, emptySummary());
 }
 
 // LeetCode's replay events (type 7 = an editor change, 3 = a [val] toggle) fold into the facts.
@@ -397,19 +408,29 @@ export const sittingRawExpiresAt = (s: Pick<Sitting, 'startedAt'>): number =>
 export const isRawEventType = (type: SittingEventType | 'replay') =>
   type === 'snapshot' || type === 'submitDetails' || type === 'replay';
 
-// Why an events call is refused before anything is written, or null.
+// Why an events call is refused before anything is written, or null: the sitting has ended or is past its
+// window, or an event's time is off the sitting's clock (the extension's — bounds keep junk out of the
+// metrics and the sort).
 export function sittingIngestError(
-  s: Sitting,
-  live: Pick<SittingLive, 'snapshots' | 'replayChunks' | 'bytes'> | null,
-  incoming: { count: number; bytes: number },
+  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt'>,
+  events: readonly { at: number }[],
   now: number,
 ): string | null {
   if (s.status !== 'active' || now - s.startedAt > SITTING_INGEST_WINDOW_MS)
     return SITTING_ENDED_ERROR;
-  const events =
-    s.summary.events + (live ? live.snapshots + live.replayChunks : 0) + incoming.count;
-  const bytes = s.summary.bytes + (live?.bytes ?? 0) + incoming.bytes;
-  return events > SITTING_MAX_EVENTS || bytes > SITTING_MAX_BYTES ? SITTING_CAP_ERROR : null;
+  const lo = s.clientStartedAt - 24 * 3600_000;
+  const hi = s.clientStartedAt + 2 * SITTING_INGEST_WINDOW_MS;
+  return events.some((e) => e.at < lo || e.at > hi) ? SITTING_EVENT_TIME_ERROR : null;
+}
+// The budget after reserving a call's events, or SITTING_CAP_ERROR when it would pass a cap.
+export function reserveBudget<B extends Pick<SittingBudget, 'events' | 'bytes'>>(
+  b: B,
+  incoming: { count: number; bytes: number },
+): B {
+  const next = { ...b, events: b.events + incoming.count, bytes: b.bytes + incoming.bytes };
+  if (next.events > SITTING_MAX_EVENTS || next.bytes > SITTING_MAX_BYTES)
+    throw new Error(SITTING_CAP_ERROR);
+  return next;
 }
 
 // --- Metrics (derived, never stored) ---
@@ -421,39 +442,65 @@ export interface SittingMetrics {
   submitsBeforeAccepted: number | null;
   timeToFirstSubmitMs: number | null;
 }
-export function sittingMetrics(s: Pick<Sitting, 'startedAt' | 'summary'>): SittingMetrics {
+// Event times are the extension's clock, so time-to-first-submit runs from the click on the same clock.
+export function sittingMetrics(s: Pick<Sitting, 'clientStartedAt' | 'summary'>): SittingMetrics {
   const first = s.summary.firstSubmit;
   return {
     firstSubmitAccepted: first ? first.verdict === 'accepted' : null,
     submitsBeforeAccepted: s.summary.submitsBeforeAccepted,
-    timeToFirstSubmitMs: first ? Math.max(0, first.at - s.startedAt) : null,
+    timeToFirstSubmitMs: first ? Math.max(0, first.at - s.clientStartedAt) : null,
   };
 }
 
 // --- Start: which rep, and whether to refuse (one open rep per roll — rolls.md D6) ---
-export type SittingStartPlan =
-  { kind: 'resume'; sitting: Sitting } | { kind: 'attach'; rep: Task } | { kind: 'spawn' };
-// `sittings` and `tasks` are the alive rows. A repeat Start (same clientSittingId), or any Start on the
-// problem a still-open sitting is on, resumes it; a Start on another problem while one is open is refused;
-// otherwise the roll's open rep is attached when no sitting holds it, else a fresh rep is spawned.
+export type SittingStartPlan = (
+  { kind: 'resume'; sitting: Sitting } | { kind: 'attach'; rep: Task } | { kind: 'spawn' }
+) & {
+  // Open sittings to end first: past their window, or their rep finished (Done → done, else abandoned),
+  // or — for a Start on another problem — a half-made one whose rep was never created.
+  ends: { sitting: Sitting; to: 'done' | 'abandoned' }[];
+};
+// `sittings` and `tasks` are the alive rows. Stale open sittings end first (they'd otherwise block every
+// Start). Then a repeat Start (same clientSittingId), or one on the problem a still-open sitting is on,
+// resumes it; a Start on another problem while one is open is refused; otherwise the roll's open rep is
+// attached when no open sitting holds it, else a fresh rep is spawned.
 export function planSittingStart(
   input: Pick<NormalizedSittingStart, 'clientSittingId' | 'problemSlug'>,
   day: string,
   sittings: readonly Sitting[],
   tasks: Task[],
   rollId: string,
+  now: number,
 ): SittingStartPlan {
+  const ends: SittingStartPlan['ends'] = [];
+  const repOf = (x: Sitting) => tasks.find((t) => t.id === x.repTaskId);
+  for (const x of sittings) {
+    if (x.status !== 'active') continue;
+    const rep = repOf(x);
+    if (rep?.status === 'done') ends.push({ sitting: x, to: 'done' });
+    else if (rep?.status === 'cancelled' || now - x.startedAt > SITTING_INGEST_WINDOW_MS)
+      ends.push({ sitting: x, to: 'abandoned' });
+  }
+  const ended = new Set(ends.map((e) => e.sitting.id));
+  const open = sittings.filter((x) => x.status === 'active' && !ended.has(x.id));
+  const finish = (x: Sitting) => ends.find((e) => e.sitting.id === x.id);
   const same = sittings.find((x) => x.clientSittingId === input.clientSittingId);
-  if (same) return { kind: 'resume', sitting: same };
-  const open = sittings.filter((x) => x.status === 'active');
+  if (same) {
+    const e = finish(same);
+    return { kind: 'resume', sitting: e ? endedSitting(same, e.to, now) : same, ends };
+  }
   const onThis = open.find((x) => x.problemSlug === input.problemSlug);
-  if (onThis) return { kind: 'resume', sitting: onThis };
-  if (open.length) throw new Error(SITTING_ACTIVE_ERROR);
+  if (onThis) return { kind: 'resume', sitting: onThis, ends };
+  for (const x of open)
+    if (repOf(x)) throw new Error(SITTING_ACTIVE_ERROR);
+    else ends.push({ sitting: x, to: 'abandoned' }); // a Start that never made its rep
   if (sittings.filter((x) => x.day === day).length >= SITTING_STARTS_PER_DAY)
     throw new Error(SITTING_START_CAP_ERROR);
+  // No sitting is open past this point, so the roll's open rep is free — one left by a sitting that ran out
+  // its window is reused (one open rep per roll).
   const rep = findOpenRollTask(tasks, rollId);
-  if (rep && !sittings.some((x) => x.repTaskId === rep.id)) return { kind: 'attach', rep };
-  return { kind: 'spawn' };
+  if (rep) return { kind: 'attach', rep, ends };
+  return { kind: 'spawn', ends };
 }
 export const sittingProblemUrl = (slug: string) => `https://leetcode.com/problems/${slug}/`;
 // A tag of at most 40 characters; blank is the default target.

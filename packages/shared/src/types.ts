@@ -396,7 +396,14 @@ export interface SittingSummary {
   runsBeforeFirstSubmit: number;
   lcTimer: LcTimerState | null;
   lastEventAt: number | null;
-  events: number; // head-side events stored (cap accounting)
+}
+
+// A sitting's capture budget: every event the extension sends is reserved here (a CAS increment) before
+// anything is written, duplicates included, so the per-sitting caps hold under retries and parallel calls.
+// Internal — never exported or returned.
+export interface SittingBudget extends BaseEntity {
+  sittingId: string;
+  events: number;
   bytes: number;
 }
 

@@ -1,7 +1,8 @@
-import { fmtDuration, fmtMonthDayYear, sittingElapsedMs } from '@aperture/shared';
+import { fmtDayHeading, fmtDuration, sittingElapsedMs, todayKey } from '@aperture/shared';
 import type { Sitting } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
+import { useSettings } from '../../data/hooks/useSettings';
 import { useSittings } from '../../data/hooks/useSittings';
 import { useNow } from '../../lib/useNow';
 import { groupSittings, sittingOutcome, summarizeSittings } from './recruitingHelpers';
@@ -12,6 +13,8 @@ import { groupSittings, sittingOutcome, summarizeSittings } from './recruitingHe
 export function SittingsSection() {
   const { data: sittings = [], isPending, isError, refetch } = useSittings();
   const now = useNow();
+  const { data: settings } = useSettings();
+  const today = todayKey(settings?.dayStartHour ?? 4, now);
   const { open, days } = groupSittings(sittings);
   const s = summarizeSittings(sittings);
 
@@ -37,22 +40,21 @@ export function SittingsSection() {
         {s.problems === 1 ? 'problem' : 'problems'} · {s.firstTry} first-submit accepted
       </Text>
       {open.length > 0 && (
-        <section aria-label="Open sitting" className="flex flex-col divide-y divide-line">
-          {open.map((x) => (
-            <SittingRow key={x.id} sitting={x} now={now} />
-          ))}
+        <section aria-labelledby="sittings-now" className="flex flex-col gap-1">
+          <Text as="h2" id="sittings-now" size="sm" weight="semibold" tone="muted">
+            Now
+          </Text>
+          <div className="flex flex-col divide-y divide-line">
+            {open.map((x) => (
+              <SittingRow key={x.id} sitting={x} now={now} />
+            ))}
+          </div>
         </section>
       )}
       {days.map(([day, rows]) => (
-        <section key={day} aria-label={fmtMonthDayYear(day)} className="flex flex-col gap-1">
-          <Text
-            as="h2"
-            size="xs"
-            tone="subtle"
-            weight="medium"
-            className="uppercase tracking-wider"
-          >
-            {fmtMonthDayYear(day)}
+        <section key={day} aria-labelledby={`sittings-${day}`} className="flex flex-col gap-1">
+          <Text as="h2" id={`sittings-${day}`} size="sm" weight="semibold" tone="muted">
+            {day === today ? 'Today' : fmtDayHeading(day)}
           </Text>
           <div className="flex flex-col divide-y divide-line">
             {rows.map((x) => (

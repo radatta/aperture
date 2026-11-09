@@ -29,7 +29,7 @@ describe('Recruiting page', () => {
     expect(screen.getByText(/1 run/)).toBeTruthy();
     // The summary renders only once there are rows; pin the counts so hiding it can't go unnoticed.
     expect(screen.getByText(/3 sittings · 3 problems · 1 first-submit accepted/)).toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Open sitting' })).toBeNull(); // none open in the seed
+    expect(screen.queryByRole('region', { name: 'Now' })).toBeNull(); // none open in the seed
   });
 
   it('pins an open sitting above the days with its running clock', async () => {
@@ -46,7 +46,7 @@ describe('Recruiting page', () => {
       tzOffsetMinutes: new Date().getTimezoneOffset(),
     });
     renderApp({ api, path: '/recruiting' });
-    const open = await screen.findByRole('region', { name: 'Open sitting' });
+    const open = await screen.findByRole('region', { name: 'Now' });
     expect(within(open).getByText('Rotting Oranges')).toBeTruthy();
     expect(within(open).getByText(/In progress/)).toBeTruthy();
     expect(within(open).getByText('no submit yet')).toBeTruthy();

@@ -83,9 +83,10 @@ import {
   emptySummary,
   endedSitting,
   foldLive,
-  foldSummary,
   isHeadEvent,
   isRawEventType,
+  reserveBudget,
+  summarizeHeadEvents,
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
   normalizeSittingEvents,
@@ -179,6 +180,7 @@ import type {
   SittingReplayChunk,
   SittingStartInput,
   SittingStartResult,
+  NormalizedSittingStart,
 } from '@aperture/shared';
 import {
   FLUX_NOTE_MIN_SETS,
@@ -669,14 +671,17 @@ export class BackendClient implements ApiClient {
     });
   }
   // --- LeetCode sittings (sittings.ts; docs/areas/recruiting) ---
-  // Device token or JWT (index.ts → LC_INGEST_METHODS). The extension's Start: decide resume / attach / spawn
-  // (planSittingStart), claim the head (its key is the Start's id, so a double-fire can't make two), then
-  // shape the rep through the normal task paths — title, notes, start — so its reminder and calendar rows
-  // stay right.
+  // Device token or JWT (index.ts → LC_INGEST_METHODS). The extension's Start: end stale open sittings, decide
+  // resume / attach / spawn (planSittingStart), claim the head (its key is the Start's id, so a double-fire
+  // can't make two), then shape the rep. Shaping is idempotent and also runs on resuming an open sitting, so
+  // a Start that died half-way finishes on its retry.
   async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
     const n = normalizeSittingStart(input);
     const settings = await this.ensureSettings();
-    const roll = settings.leetcodeRollId ? await this.repo.getRoll(settings.leetcodeRollId) : null;
+    const linked = settings.leetcodeRollId
+      ? await this.repo.getRoll(settings.leetcodeRollId)
+      : null;
+    const roll = linked?.active ? linked : null; // an archived roll reads as unlinked, as Settings shows it
     if (!roll) throw new Error(LC_ROLL_UNLINKED_ERROR);
     const now = this.now();
     const day = dayKeyForOffset(now, n.tzOffsetMinutes, settings.dayStartHour);
@@ -686,9 +691,13 @@ export class BackendClient implements ApiClient {
       await this.repo.listSittings({ consistent: true }),
       await this.repo.listTasks({ consistent: true }),
       roll.id,
+      now,
     );
-    if (plan.kind === 'resume') return { sitting: plan.sitting, resumed: true };
-    const repId = plan.kind === 'attach' ? plan.rep.id : this.ulid();
+    for (const e of plan.ends) await this.endSitting(e.sitting.id, e.to, now);
+    if (plan.kind === 'resume') {
+      if (plan.sitting.status === 'active') await this.shapeRep(plan.sitting, roll, n);
+      return { sitting: plan.sitting, resumed: true };
+    }
     const sitting: Sitting = {
       ...this.baseAt(now),
       id: n.clientSittingId,
@@ -705,7 +714,7 @@ export class BackendClient implements ApiClient {
       difficulty: n.difficulty,
       topicTags: n.topicTags,
       lang: n.lang,
-      repTaskId: repId,
+      repTaskId: plan.kind === 'attach' ? plan.rep.id : this.ulid(),
       rollId: roll.id,
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
@@ -713,31 +722,11 @@ export class BackendClient implements ApiClient {
     };
     if (!(await this.repo.putSittingIfAbsent(sitting))) {
       const won = await this.repo.getSitting(n.clientSittingId, { consistent: true });
-      if (won) return { sitting: won, resumed: true };
-      throw new Error(`Not found: ${n.clientSittingId}`); // a deleted sitting's id, reused
+      if (!won) throw new Error(`Not found: ${n.clientSittingId}`); // a deleted sitting's id, reused
+      if (won.status === 'active') await this.shapeRep(won, roll, n);
+      return { sitting: won, resumed: true };
     }
-    if (plan.kind === 'spawn') {
-      await this.repo.putTask({
-        ...this.baseAt(now),
-        ...rollRepFields(roll),
-        id: repId,
-        title: sittingRepTitle(n.problemTitle),
-        notes: sittingProblemUrl(n.problemSlug),
-      });
-      const dayPlans = await this.repo.listPlans(day, { consistent: true });
-      await this.repo.putPlan({
-        ...this.base(),
-        taskId: repId,
-        day,
-        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
-        order: dayPlans.length,
-      });
-    } else {
-      await this.setTaskTitle(repId, sittingRepTitle(n.problemTitle));
-      if (!plan.rep.notes) await this.setTaskNotes(repId, sittingProblemUrl(n.problemSlug));
-    }
-    const rep = await this.mustTask(repId);
-    if (rep.status !== 'in_progress') await this.transitionTask(repId, 'in_progress');
+    await this.shapeRep(sitting, roll, n);
     if (n.problem !== null) {
       const had = await this.repo.getLeetcodeProblem(n.problemSlug);
       await this.repo.putLeetcodeProblem({
@@ -761,18 +750,60 @@ export class BackendClient implements ApiClient {
     );
     return { sitting, resumed: false };
   }
-  // Each event is written only if absent (its id is the idempotency key), then the fresh ones fold: runs,
-  // submits, notes and timer reads into the head, snapshots and replay into the live row — each a CAS.
-  // Refused with nothing written once the sitting has ended or is over a cap (sittingIngestError).
+  // The rep as a sitting needs it — through the normal task and plan paths, so its reminder and calendar rows
+  // stay right (a linked event is renamed with it). Idempotent: a missing rep is created under the sitting's
+  // fixed id, a rep is titled after the problem, given its URL when it has no notes, put on the sitting's day,
+  // and started.
+  private async shapeRep(s: Sitting, roll: Roll, n: NormalizedSittingStart): Promise<void> {
+    const title = sittingRepTitle(n.problemTitle);
+    let rep = await this.repo.getTask(s.repTaskId, { consistent: true });
+    if (!rep)
+      rep = await this.repo.putTask({
+        ...this.base(),
+        ...rollRepFields(roll),
+        id: s.repTaskId,
+        title,
+        notes: sittingProblemUrl(n.problemSlug),
+      });
+    if (rep.status === 'done' || rep.status === 'cancelled') return;
+    if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
+    if (!rep.notes) rep = await this.setTaskNotes(rep.id, sittingProblemUrl(n.problemSlug));
+    const dayPlans = await this.repo.listPlans(s.day, { consistent: true });
+    if (!dayPlans.some((p) => p.taskId === rep.id))
+      await this.repo.putPlan({
+        ...this.base(),
+        taskId: rep.id,
+        day: s.day,
+        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+        order: dayPlans.length,
+      });
+    if (rep.status !== 'in_progress') await this.transitionTask(rep.id, 'in_progress');
+  }
+  // 1. guards; 2. reserve the call in the budget (a CAS — over a cap, or losing the race, refuses with nothing
+  // written); 3. write each event put-if-absent; 4. any head event in the call, fresh or a repeat → recompute the
+  // summary from all of them; 5. fold fresh snapshots and replay into the live row.
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
     const { sittingId, events } = normalizeSittingEvents(input);
     const sitting = await this.repo.getSitting(sittingId, { consistent: true });
     if (!sitting) throw new Error(`Not found: ${sittingId}`);
-    const live = await this.repo.getSittingLive(sittingId, { consistent: true });
     const now = this.now();
-    const bytes = events.reduce((n, e) => n + e.bytes, 0);
-    const err = sittingIngestError(sitting, live, { count: events.length, bytes }, now);
+    const err = sittingIngestError(sitting, events, now);
     if (err) throw new Error(err);
+    const bytes = events.reduce((n, e) => n + e.bytes, 0);
+    await this.repo.casUpdate(
+      this.repo.sittingBudgetShape(sittingId),
+      sittingId,
+      (b) => reserveBudget(b, { count: events.length, bytes }),
+      now,
+      {
+        consistent: true,
+        create: () =>
+          reserveBudget(
+            { ...this.baseAt(now), id: sittingId, sittingId, events: 0, bytes: 0 },
+            { count: events.length, bytes },
+          ),
+      },
+    );
     const expiresAt = sittingRawExpiresAt(sitting);
     const fresh: typeof events = [];
     for (const e of events) {
@@ -789,26 +820,27 @@ export class BackendClient implements ApiClient {
             );
       if (written) fresh.push(e);
     }
-    const head = fresh.filter((e) => isHeadEvent(e.type));
+    let status = sitting.status;
+    if (events.some((e) => isHeadEvent(e.type))) {
+      const summary = summarizeHeadEvents(await this.repo.listSittingHeadEvents(sittingId));
+      const head = await this.repo.casUpdate(
+        this.repo.sittingShape(sittingId),
+        sittingId,
+        (cur) => ({ ...cur, summary }),
+        now,
+        { consistent: true },
+      );
+      status = head.status;
+    }
     const bulk = fresh.filter((e) => !isHeadEvent(e.type));
-    const folded = head.length
-      ? await this.repo.casUpdate(
-          this.repo.sittingShape(sittingId),
-          sittingId,
-          (cur) => ({
-            ...cur,
-            summary: head.reduce(foldSummary, cur.summary),
-          }),
-          now,
-        )
-      : sitting;
-    const nextLive = bulk.length
+    const live = bulk.length
       ? await this.repo.casUpdate(
           this.repo.sittingLiveShape(sittingId),
           sittingId,
           (cur) => bulk.reduce((l, e) => foldLive(l, e, now), cur),
           now,
           {
+            consistent: true,
             create: () =>
               bulk.reduce((l, e) => foldLive(l, e, now), {
                 ...this.baseAt(now),
@@ -817,22 +849,12 @@ export class BackendClient implements ApiClient {
               }),
           },
         )
-      : live;
+      : await this.repo.getSittingLive(sittingId, { consistent: true });
+    const duplicates = events.length - fresh.length;
     console.log(
-      JSON.stringify({
-        event: 'lc_ingest',
-        sittingId,
-        accepted: fresh.length,
-        duplicates: events.length - fresh.length,
-        bytes,
-      }),
+      JSON.stringify({ event: 'lc_ingest', sittingId, accepted: fresh.length, duplicates, bytes }),
     );
-    return {
-      accepted: fresh.length,
-      duplicates: events.length - fresh.length,
-      version: nextLive?.version ?? 0,
-      status: folded.status,
-    };
+    return { accepted: fresh.length, duplicates, version: live?.version ?? 0, status };
   }
   async listSittings(range?: DateRange): Promise<Sitting[]> {
     return (await this.repo.listSittings())
@@ -872,24 +894,34 @@ export class BackendClient implements ApiClient {
     );
   }
   async deleteSitting(id: string): Promise<void> {
-    if (!(await this.repo.getSitting(id, { consistent: true }))) return; // idempotent
-    await this.repo.tombstoneSitting(id, this.now());
+    const s = await this.repo.getSitting(id, { consistent: true });
+    if (!s) return; // idempotent
+    await this.removeSitting(s, this.now());
   }
-  // A rep's finish ends its open sitting: Done → done, Drop → abandoned. Only a Roll rep can have one.
+  // The sitting and its rows, and its problem doc once no other sitting is on that problem.
+  private async removeSitting(s: Sitting, now: number): Promise<void> {
+    await this.repo.tombstoneSitting(s.id, now);
+    const others = await this.repo.listSittings({ consistent: true });
+    if (!others.some((x) => x.problemSlug === s.problemSlug))
+      await this.repo.tombstoneLeetcodeProblem(s.problemSlug, now);
+  }
+  // A rep's finish ends its open sitting: Done → done, Drop → abandoned. Only a Roll rep can have one; any
+  // other path that finishes a rep is caught at the next Start (planSittingStart's stale ends).
   private async endSittingsFor(task: Task, to: TaskStatus): Promise<void> {
     if (!task.rollId || (to !== 'done' && to !== 'cancelled')) return;
     const now = this.now();
     for (const x of await this.repo.listSittings({ consistent: true }))
       if (x.repTaskId === task.id && x.status === 'active')
-        await this.repo.casUpdate(
-          this.repo.sittingShape(x.id),
-          x.id,
-          (cur) =>
-            cur.status === 'active'
-              ? endedSitting(cur, to === 'done' ? 'done' : 'abandoned', now)
-              : null,
-          now,
-        );
+        await this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned', now);
+  }
+  private async endSitting(id: string, to: 'done' | 'abandoned', now: number): Promise<void> {
+    await this.repo.casUpdate(
+      this.repo.sittingShape(id),
+      id,
+      (cur) => (cur.status === 'active' ? endedSitting(cur, to, now) : null),
+      now,
+      { consistent: true },
+    );
   }
 
   // --- Flux sets (D47) ---
@@ -1462,7 +1494,7 @@ export class BackendClient implements ApiClient {
       await this.removeAttachment(a, now);
     if (task.rollId)
       for (const x of await this.repo.listSittings({ consistent: true }))
-        if (x.repTaskId === id) await this.repo.tombstoneSitting(x.id, now);
+        if (x.repTaskId === id) await this.removeSitting(x, now);
     await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
     if (release) await this.releaseParentState(task.parentId);
   }
@@ -2410,6 +2442,18 @@ export class BackendClient implements ApiClient {
       .sort((a, b) => a.day.localeCompare(b.day));
   }
 
+  // Alive sittings with their live rows and head events — a child whose head is gone (a delete that raced an
+  // ingest) stays out.
+  private async sittingExport() {
+    const sittings = await this.repo.listSittings();
+    const ids = new Set(sittings.map((x) => x.id));
+    const { live, events } = await this.repo.listAllSittingChildren();
+    return {
+      sittings,
+      sittingLive: live.filter((l) => ids.has(l.sittingId)),
+      sittingEvents: events.filter((e) => ids.has(e.sittingId)),
+    };
+  }
   async exportData(): Promise<ExportBundle> {
     return {
       exportedAt: this.now(),
@@ -2426,11 +2470,7 @@ export class BackendClient implements ApiClient {
       days: await this.repo.listAllDays(),
       categories: await this.repo.listCategories(),
       places: await this.listPlaces(), // never the token pointer or its lookup row (a credential)
-      ...(await this.repo.listAllSittingChildren().then(({ live, events }) => ({
-        sittingLive: live,
-        sittingEvents: events,
-      }))),
-      sittings: await this.repo.listSittings(),
+      ...(await this.sittingExport()),
       leetcodeProblems: await this.repo.listLeetcodeProblems(),
       stories: await this.repo.listStories(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),

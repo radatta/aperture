@@ -26,16 +26,21 @@ extension Start ──► lcSittingStart ──► a rep of settings.leetcodeRol
 LeetCode traffic ─► lcSittingEvents ─► events stored raw; runs/submits/notes/timer fold into the head,
                                        snapshots/replay into the live row
 Done on the rep ─────────────────────► sitting done          Drop ─► abandoned          delete ─► gone with it
+(stale: past 24 h, or its rep finished elsewhere ─► ended by the next Start)
 ```
 
-- **One sitting = one problem = one Roll rep.** Start resumes a sitting already open on the same problem (or
-  a repeat of the same Start), refuses another problem while one is open (`SITTING_ACTIVE_ERROR` — one
-  open rep per roll), attaches the roll's open rep when no sitting holds it, and otherwise spawns a fresh
-  rep on the sitting's day plan. The rep is shaped through the normal task paths (title, notes = the problem
-  URL, start), so its calendar and reminder rows stay right. Unlinked roll → `LC_ROLL_UNLINKED_ERROR`
-  (Settings → LeetCode).
-- **A sitting ends only through its rep** (`transitionTask` / `deleteTask` hooks, only for tasks with a
-  `rollId`). An Accepted submit never ends it — you may keep going.
+- **One sitting = one problem = one Roll rep.** Start first ends stale open sittings — past their 24 h window
+  (abandoned; its still-open rep is reused), rep finished some other way (done/abandoned), or a half-made
+  Start on another problem. Then it resumes a sitting already open on the same problem (or a repeat of the
+  same Start), refuses another problem while one is open (`SITTING_ACTIVE_ERROR` — one open rep per roll),
+  attaches the roll's open rep, and otherwise spawns a fresh one. Unlinked or archived roll →
+  `LC_ROLL_UNLINKED_ERROR` (Settings → LeetCode).
+- **The rep is shaped through the normal task paths** (title `LeetCode · <problem>`, notes = the problem URL
+  when empty, a plan row on the sitting's day, start), so its reminder rows stay right — and a linked calendar
+  event is renamed with it, so a device-token Start can reach Google Calendar through that one rename.
+  Shaping is idempotent and runs on resuming an open sitting too: a Start that died half-way finishes on retry.
+- **A sitting ends through its rep** (`transitionTask` / `deleteTask` hooks, for tasks with a `rollId`; any
+  other finish is caught at the next Start). An Accepted submit never ends it — you may keep going.
 - **The head's id is the Start's `clientSittingId`**, claimed put-if-absent before any rep write, so a
   double-fired Start makes one sitting and one rep.
 - `startedAt` is the server's clock at Start (the sitting clock); the click's own time is kept as
@@ -48,13 +53,17 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 
 - **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI) and the
   `summary` fold — runs, submits, first/last verdicts, `submitsBeforeAccepted`, runs before the first
-  submit, LeetCode's timer state. The fold is a cache of a pure function over the events; if its CAS loses
-  four times running, the events stay stored but unfolded (rebuildable later).
+  submit, LeetCode's timer state. **Recomputed, never incremented:** any events call carrying a head event —
+  fresh or a repeat — rebuilds it from every stored head event (`summarizeHeadEvents`), so a lost write or a
+  retry can't skew the headline.
 - **Live row** (`lcs#<id>#live`): the newest code (the final code once ended), the snapshot `version` live
   reads report, and **facts** folded from the replay at ingest — first/last edit, edits, longest stall,
   rewrites, LeetCode's type-3 toggles raw (`focus`; meaning unconfirmed). Folded at ingest so they outlive
-  the raw replay.
-- **Events** (`lcs#<id>#ev#…`), payloads verbatim; **replay chunks** (`lcs#<id>#rp#…`), raw, never in
+  the raw replay. Incremental and best-effort: the code is always the newest snapshot, but a lost fold can
+  leave `version` and the facts a little short.
+- **Events**, payloads verbatim and keyed by their client ULID: head events (runs, submits, notes, timer reads)
+  under `lcs#<id>#hd#`, raw bulk (snapshots, submit details) under `lcs#<id>#ev#`; **replay chunks**
+  (`lcs#<id>#rp#…`), raw, never in
   `getSitting` (read with `listSittingReplay`); **problem doc** (`lcq#<slug>`): LeetCode's
   `questionDetail`, upserted per slug.
 - **Derived, never stored:** `sittingMetrics` — first submit accepted (headline), submits before accepted,
@@ -65,8 +74,11 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 Kept forever: the head, the live row, every run, submit, note and timer event, the problem doc. The **raw
 bulk** — snapshot and submit-detail events, replay chunks — is stamped `expiresAt` at write: 14 days past the
 sitting's 24 h ingest window, deleted by DynamoDB's TTL (free). This is prod's one TTL'd row kind (TECH §2.3
-rule 4), chosen so storage doesn't grow with keystrokes: kept data is ~25 KB a sitting. Export carries
-heads, live rows, events and problems; the replay stays out like attachment bytes.
+rule 4), chosen so storage doesn't grow with keystrokes: kept data is ~25 KB a sitting. Tombstones (a
+deleted sitting's rows) carry only keys and `deletedAt`, keeping a raw row's `expiresAt`. Export carries
+alive sittings' heads, live rows, head events and problems; the raw bulk and the replay stay out (they
+expire, and the export is one Lambda response — whose 6 MB limit the whole export will meet eventually, a
+follow-up beyond this module).
 
 ### Ingest: the device token and the caps
 
@@ -74,10 +86,13 @@ heads, live rows, events and problems; the replay stays out like attachment byte
 user's JWT (the dev check drives them as the test user); every other method — every read — is JWT only, so a
 device token anywhere else 401s. Ingest bodies over 300 KB are refused before parsing (413). Per call ≤ 50
 events / 256 KB; per event type a size cap (snapshot ≤ 64 KB, run/submit ≤ 96 KB …); per sitting ≤ 3,000
-events / 16 MB; ≤ 20 Starts a day; events refused once the sitting ended or 24 h after Start. Each event is
-idempotent on its id. The server recomputes everything it decides on (`userId`, `day`, `startedAt`,
-verdicts, counters); payloads are opaque. A leaked device token can make junk sittings (visible reps) and
-write within those caps; it can't read, delete, end a sitting, or reach any other partition.
+events / 16 MB, any type, held by a **budget row** (`lcs#<id>#budget`) that every call reserves in — a CAS,
+duplicates included — before writing anything, so parallel calls and retries can't pass it; ≤ 20 Starts a day;
+events refused once the sitting ended or 24 h after Start, or with a time off the sitting's clock. Each event
+is idempotent on its id. The server recomputes everything it decides on (`userId`, `day`, `startedAt`, verdicts,
+counters); payloads are opaque. A leaked device token can make junk sittings (visible reps, and the one
+calendar rename above) and write within those caps; it can't read anything but the open sitting a repeated
+Start returns, delete, end a sitting, or reach any other partition.
 
 ### The page
 
@@ -176,7 +191,7 @@ second write returns the existing row with its **original** verdict, never an ov
 
 **Attempt count is derived, never stored.** A stored counter is a second source of truth that drifts.
 
-**The device token is scoped to exactly one method.** It's a static, long-lived key sitting in browser
+**The device token is scoped to the ingest methods** (`LC_INGEST_METHODS` — _Ingest_ above). It's a static, long-lived key sitting in browser
 storage — a different risk class from a JWT. A device token sent to any other method falls through to
 `resolveUserId`, isn't a valid JWT, and 401s. Comparison is `timingSafeEqual`.
 

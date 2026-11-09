@@ -873,8 +873,9 @@ function LeetcodeSection() {
           </LoadError>
         )}
         <Text size="xs" tone="muted">
-          The extension&apos;s Start opens a sitting as this Roll&apos;s rep and starts it; Done on
-          the rep ends the sitting.
+          {active.some((r) => r.id === linked)
+            ? 'The extension’s Start opens a sitting as this Roll’s rep and starts it; Done on the rep ends the sitting.'
+            : 'With no Roll, the extension’s Start is refused — pick the one a sitting is a rep of.'}
           {active.length === 0 && !rollsFailed && ' Add a Roll on the Rolls page first.'}
         </Text>
         {update.isError && (

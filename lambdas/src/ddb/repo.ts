@@ -15,6 +15,7 @@ import type {
   LeetcodeAttempt,
   LeetcodeProblem,
   Sitting,
+  SittingBudget,
   SittingEvent,
   SittingLive,
   SittingReplayChunk,
@@ -31,6 +32,7 @@ import type {
   TaskSeries,
   FluxWeekNoteRow,
 } from '@aperture/shared';
+import { isHeadEvent } from '@aperture/shared';
 import { ConditionFailedError, SK_END } from './DocClient';
 import type { DocClient, Item, QueryOpts } from './DocClient';
 import type { Writes } from './writes';
@@ -220,13 +222,23 @@ export class Repo {
       toItem: (l) => entityItem(this.userId, sk.sittingLive(id), l),
     };
   }
-  // An event or replay chunk, written only if absent (idempotent per id). `expiresAt` (epoch s) marks the
-  // raw bulk for DynamoDB's TTL — the one row kind stamped on prod (writes.ts).
+  sittingBudgetShape(id: string): CasShape<SittingBudget> {
+    return {
+      sk: sk.sittingBudget(id),
+      read: (i) => toEntity<SittingBudget>(i),
+      toItem: (x) => entityItem(this.userId, sk.sittingBudget(id), x),
+    };
+  }
+  // An event or replay chunk, written only if absent (idempotent per id). Head types (isHeadEvent) go under
+  // `hd#`; `expiresAt` (epoch s) marks the raw bulk for DynamoDB's TTL — the one row kind stamped on prod.
   async putSittingEventIfAbsent(e: SittingEvent, expiresAt: number | null): Promise<boolean> {
-    return this.putChildIfAbsent(sk.sittingEvent(e.sittingId, e.at, e.id), e, expiresAt);
+    const key = isHeadEvent(e.type)
+      ? sk.sittingHeadEvent(e.sittingId, e.id)
+      : sk.sittingEvent(e.sittingId, e.id);
+    return this.putChildIfAbsent(key, e, expiresAt);
   }
   async putSittingReplayIfAbsent(c: SittingReplayChunk, expiresAt: number): Promise<boolean> {
-    return this.putChildIfAbsent(sk.sittingReplay(c.sittingId, c.at, c.id), c, expiresAt);
+    return this.putChildIfAbsent(sk.sittingReplay(c.sittingId, c.id), c, expiresAt);
   }
   private async putChildIfAbsent(
     skStr: string,
@@ -242,12 +254,22 @@ export class Repo {
       throw err;
     }
   }
-  async listSittingEvents(id: string): Promise<SittingEvent[]> {
+  // A sitting's head events (what its summary is recomputed from), strongly consistent: the call that just
+  // wrote one must see it.
+  async listSittingHeadEvents(id: string): Promise<SittingEvent[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.sittingEventPrefix(id), { consistent: true })).map((i) =>
-        toEntity<SittingEvent>(i),
+      (await this.doc.query(this.p(), sk.sittingHeadEventPrefix(id), { consistent: true })).map(
+        (i) => toEntity<SittingEvent>(i),
       ),
     );
+  }
+  // Every event of a sitting — head and raw bulk — for its detail read.
+  async listSittingEvents(id: string): Promise<SittingEvent[]> {
+    const [head, bulk] = await Promise.all([
+      this.listSittingHeadEvents(id),
+      this.doc.query(this.p(), sk.sittingEventPrefix(id), { consistent: true }),
+    ]);
+    return [...head, ...alive(bulk.map((i) => toEntity<SittingEvent>(i)))];
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
     return alive(
@@ -256,17 +278,20 @@ export class Repo {
       ),
     );
   }
-  // Every live row and event across sittings (export), told apart by their SKs; replay stays out.
+  // What the export carries of every sitting: live rows and head events (runs, submits, notes, timer reads).
+  // The raw bulk and the replay stay out (they expire; the export is one Lambda response).
   async listAllSittingChildren(): Promise<{ live: SittingLive[]; events: SittingEvent[] }> {
     const rows = await this.doc.query(this.p(), sk.sittingChildAllPrefix());
     const of = <T extends { deletedAt: number | null }>(pred: (skStr: string) => boolean) =>
       alive(rows.filter((r) => pred(r.SK)).map((r) => toEntity<T>(r)));
     return {
       live: of<SittingLive>((x) => x.endsWith('#live')),
-      events: of<SittingEvent>((x) => x.includes('#ev#')),
+      events: of<SittingEvent>((x) => x.includes('#hd#')),
     };
   }
-  // Tombstones a sitting and every child row in one batch (deleteSitting; deleteTask's cascade).
+  // Tombstones a sitting and every child row in one batch (deleteSitting; deleteTask's cascade). A tombstone
+  // keeps only what a reader needs to skip it — not a payload rewritten just to stamp deletedAt — and keeps a
+  // raw row's expiresAt, so it still expires.
   async tombstoneSitting(id: string, now: number): Promise<void> {
     const rows = [
       ...(await this.doc.query(this.p(), sk.sittingChildPrefix(id), { consistent: true })),
@@ -276,11 +301,24 @@ export class Repo {
     ].filter((r) => r.deletedAt === null);
     await this.writes.batchPut(
       rows.map((r) => ({
-        ...r,
+        PK: r.PK,
+        SK: r.SK,
+        id: r.id,
+        sittingId: r.sittingId ?? id,
         deletedAt: now,
         updatedAt: Math.max(now, (r.updatedAt as number) + 1),
+        ...(r.expiresAt !== undefined ? { expiresAt: r.expiresAt } : {}),
       })),
     );
+  }
+  async tombstoneLeetcodeProblem(slug: string, now: number): Promise<void> {
+    const p = await this.getLeetcodeProblem(slug);
+    if (p)
+      await this.putLeetcodeProblem({
+        ...p,
+        deletedAt: now,
+        updatedAt: Math.max(now, p.updatedAt + 1),
+      });
   }
   async getLeetcodeProblem(slug: string): Promise<LeetcodeProblem | null> {
     const it = await this.doc.get(this.p(), sk.lcProblem(slug));

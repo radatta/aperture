@@ -38,19 +38,22 @@ export const sk = {
   lcAllPrefix: () => `lc#`,
 
   // LeetCode sittings (docs/areas/recruiting). The head is `lcsit#<id>` (id = the Start's clientSittingId,
-  // so a double-fired Start can't make two); its children sit under `lcs#<id>#` — the live row, events by
-  // time (`ev#`) and replay chunks (`rp#`), each its own begins_with. `lcs#` never matches `lcsit#`, and
-  // neither matches the legacy `lc#`. The problem doc is one row per slug, shared by its sittings.
+  // so a double-fired Start can't make two); its children sit under `lcs#<id>#` — the live row, the capture
+  // budget, head events (`hd#`: runs, submits, notes, timer reads — the summary is recomputed from them), raw
+  // bulk events (`ev#`: snapshots, submit details) and replay chunks (`rp#`), each its own begins_with and each
+  // keyed by its client-minted ULID, so a repeat is a repeat whatever its time. `lcs#` never matches `lcsit#`,
+  // and neither matches the legacy `lc#`. The problem doc is one row per slug, shared by its sittings.
   sitting: (id: string) => `lcsit#${id}`,
   sittingPrefix: () => `lcsit#`,
   sittingChildPrefix: (id: string) => `lcs#${id}#`,
   sittingChildAllPrefix: () => `lcs#`,
   sittingLive: (id: string) => `lcs#${id}#live`,
-  sittingEvent: (id: string, at: number, eventId: string) =>
-    `lcs#${id}#ev#${padEpoch(at)}#${eventId}`,
+  sittingBudget: (id: string) => `lcs#${id}#budget`,
+  sittingHeadEvent: (id: string, eventId: string) => `lcs#${id}#hd#${eventId}`,
+  sittingHeadEventPrefix: (id: string) => `lcs#${id}#hd#`,
+  sittingEvent: (id: string, eventId: string) => `lcs#${id}#ev#${eventId}`,
   sittingEventPrefix: (id: string) => `lcs#${id}#ev#`,
-  sittingReplay: (id: string, at: number, chunkId: string) =>
-    `lcs#${id}#rp#${padEpoch(at)}#${chunkId}`,
+  sittingReplay: (id: string, chunkId: string) => `lcs#${id}#rp#${chunkId}`,
   sittingReplayPrefix: (id: string) => `lcs#${id}#rp#`,
   lcProblem: (slug: string) => `lcq#${slug}`,
   lcProblemPrefix: () => `lcq#`,

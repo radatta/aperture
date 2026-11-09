@@ -351,6 +351,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       deleteSitting: async () => {
         throw new Error('unused');
       },
+      setSittingPrepTarget: async () => {
+        throw new Error('unused');
+      },
       upsertHabit: async () => {
         throw new Error('unused');
       },

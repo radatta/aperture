@@ -195,7 +195,13 @@ describe('handler device-token ingest branch', () => {
       expect(
         (await rpc('lcSittingEvents', { 'x-aperture-authorization': 'Bearer nope' })).statusCode,
       ).toBe(401);
-      for (const m of ['listSittings', 'getSitting', 'listSittingReplay', 'deleteSitting'])
+      for (const m of [
+        'listSittings',
+        'getSitting',
+        'listSittingReplay',
+        'setSittingPrepTarget',
+        'deleteSitting',
+      ])
         expect(
           (await rpc(m, { 'x-aperture-authorization': 'Bearer right-token' }, [])).statusCode,
         ).toBe(401);
