@@ -22,10 +22,15 @@ if (!app?.AppUrl || !app?.FunctionUrl)
 const appUrl = app.AppUrl.replace(/\/$/, '');
 const fnUrl = app.FunctionUrl.replace(/\/$/, '');
 
-// No custom domain yet (a new stage's first deploy, before its cert: CI-BOT.md → Dev slots): AppUrl is the CloudFront
-// default, and the MCP OAuth façade runs only with APP_URL (app-stack.ts), so its checks are skipped — out loud, and
-// only those; every other check, the /mcp token path included, still runs.
+// No custom domain: AppUrl is the CloudFront default, and the MCP OAuth façade runs only with APP_URL (app-stack.ts).
+// Only devb's first create is expected there (before its cert: CI-BOT.md → Dev slots); then the façade's checks are
+// skipped — out loud, and only those; every other check, the /mcp token path included, still runs. Any other stage
+// without its domain lost its CERT_ARN var (domains.ts drops the alias without one): that fails here, before any check.
 const onDefaultDomain = new URL(appUrl).hostname.endsWith('.cloudfront.net');
+if (onDefaultDomain && stage !== 'devb')
+  throw new Error(
+    `${stage} serves on ${appUrl}, not its custom domain — is its CERT_ARN variable set?`,
+  );
 const NO_DOMAIN = 'no custom domain yet, and the MCP OAuth façade needs one (APP_URL)';
 
 let failures = 0;

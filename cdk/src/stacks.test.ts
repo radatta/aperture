@@ -961,7 +961,12 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
 
 describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   // deviceUserId: CI sets it on dev (the schedule, its group and role exist there) and leaves it unset on devb.
-  const build = (stage: string, lane: Lane = '', deviceUserId: string | undefined = 'u') => {
+  const build = (
+    stage: string,
+    lane: Lane = '',
+    deviceUserId: string | undefined = 'u',
+    domain = true,
+  ) => {
     const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
     const synth = () => (lane ? { synthesizer: synthesizerFor(lane) } : {});
@@ -983,8 +988,12 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       deviceToken: 'd',
       agentToken: 'a',
       deviceUserId,
-      domainName: `${stage}.example.com`,
-      certificateArn: 'arn:aws:acm:us-east-1:111111111111:certificate/test',
+      ...(domain
+        ? {
+            domainName: `${stage}.example.com`,
+            certificateArn: 'arn:aws:acm:us-east-1:111111111111:certificate/test',
+          }
+        : {}),
     });
     const assembly = app.synth();
     return {
@@ -994,7 +1003,9 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   };
   const dev = build('dev');
   const devb = build('devb', '', undefined);
-  const devSlots = () => [...dev.templates, ...devb.templates]; // both dev slots, for the SCP mirrors
+  const devbFirst = build('devb', '', undefined, false); // devb's first create: no cert yet, so no domain
+  // both dev slots — and devb as first created — for the SCP mirrors
+  const devSlots = () => [...dev.templates, ...devb.templates, ...devbFirst.templates];
   const prod = build('prod');
   const resources = (ts: Template[]) =>
     ts.flatMap((t) =>
@@ -1007,7 +1018,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     );
 
   it("deploys both stages through their own account's stock bootstrap", () => {
-    for (const a of [...dev.artifacts, ...prod.artifacts]) {
+    for (const a of [...dev.artifacts, ...devb.artifacts, ...prod.artifacts]) {
       expect(a.assumeRoleArn).toContain('role/cdk-hnb659fds-deploy-role-');
       expect(a.bootstrapStackVersionSsmParameter).toBe('/cdk-bootstrap/hnb659fds/version');
     }
