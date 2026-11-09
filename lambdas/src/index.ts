@@ -6,6 +6,7 @@
 import {
   APERTURE,
   AUTH_HEADER,
+  isLcIngestMethod,
   ORIGIN_SECRET_HEADER,
   PLACE_READ_TEXT,
   placeLensPath,
@@ -134,8 +135,41 @@ const CORS: Record<string, string> = {
 // the writes-object no-ops, so a smoke run touches no real data even against prod.
 const SMOKE_USER = 'smoke-test';
 
-// The one method the browser extension calls, authenticated by a device token instead of a Cognito JWT.
-const INGEST_METHOD = 'recordLeetcodeAttempt';
+// The browser extension's methods (LC_INGEST_METHODS) take its device token — or the user's JWT, which is
+// already the whole user (the dev check drives them that way). Their bodies are capped before parsing:
+// a leaked device token can't make the Lambda chew on megabytes (sittings.ts caps a call at 256 KB).
+const INGEST_BODY_MAX = 300 * 1024;
+// The extension's outbox retries 409, 429 and 5xx and keeps anything else as failed (extension/README.md), so an
+// ingest call says which it was: a lost CAS race is a 409; DynamoDB pushing back a 429; any other AWS or
+// internal fault a 500; a refusal of the input itself (the normalizers, guards and caps) a 400.
+function ingestFailureStatus(err: unknown): number {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  if (e?.name === 'ConflictError') return 409;
+  const throttles = [
+    'ProvisionedThroughputExceededException',
+    'ThrottlingException',
+    'RequestLimitExceeded',
+  ];
+  if (throttles.includes(e?.name ?? '')) return 429;
+  // An AWS error: its own status says whether retrying can help (a ValidationException never will).
+  if (e?.$metadata !== undefined) return (e.$metadata.httpStatusCode ?? 500) >= 500 ? 500 : 400;
+  // Our own refusals are plain Errors; a TypeError or RangeError is a fault in our code — retry, never drop.
+  return err instanceof Error && err.constructor === Error ? 400 : 500;
+}
+async function ingestUserId(
+  authHeader: string | undefined,
+  verifier: Verifier | null,
+): Promise<string> {
+  const expected = process.env.DEVICE_TOKEN;
+  if (expected) {
+    try {
+      return resolveDeviceUserId(authHeader, expected, process.env.DEVICE_USER_ID);
+    } catch {
+      // not the device token — it may be a JWT
+    }
+  }
+  return resolveUserId(authHeader, verifier);
+}
 
 export const createBffHandler =
   (d: BffDeps) =>
@@ -211,6 +245,9 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   // to JWT. The body (and testMode) is ignored.
   if (path.startsWith('/api/places/')) return placeRead(event, path, d.doc);
 
+  const ingest = isLcIngestMethod(method);
+  if (ingest && (event.body?.length ?? 0) > INGEST_BODY_MAX)
+    return { statusCode: 413, headers: CORS, body: JSON.stringify({ error: 'Too large' }) };
   const body = event.body
     ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
     : {};
@@ -219,12 +256,12 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;
 
   try {
-    // Device-token branch is scoped to the ingest method ONLY; every other method takes the untouched
-    // JWT path. A device token sent to any other method hits resolveUserId → 401 (not a valid JWT).
+    // The device token opens the ingest methods ONLY; every other method takes the untouched JWT path, so a
+    // device token sent anywhere else hits resolveUserId → 401 (not a valid JWT).
     const userId = body.testMode
       ? SMOKE_USER
-      : method === INGEST_METHOD
-        ? resolveDeviceUserId(authHeader, process.env.DEVICE_TOKEN, process.env.DEVICE_USER_ID)
+      : ingest
+        ? await ingestUserId(authHeader, d.verifier)
         : await resolveUserId(authHeader, d.verifier); // JWT `sub`, or dev user locally
     const result = await handleRpc(
       d.doc,
@@ -252,7 +289,9 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
       ? 401
       : message.startsWith('Unknown method')
         ? 404
-        : 400;
+        : ingest
+          ? ingestFailureStatus(err)
+          : 400;
     return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
   }
 }

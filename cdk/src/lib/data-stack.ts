@@ -49,8 +49,11 @@ export class ApertureDataStack extends Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
       ...devThroughput,
-      // Dev expires tombstones (TECH §2.3): the Lambda stamps `expiresAt` on dev only. Prod has no TTL.
-      ...(stage === 'dev' ? { timeToLiveAttribute: 'expiresAt' } : {}),
+      // TTL on `expiresAt`, both stages (TECH §2.3). Dev's Lambda stamps it on tombstones; on prod the only
+      // rows that ever carry it are a LeetCode sitting's raw bulk — snapshots, replay, submit details —
+      // 14 days past the sitting's ingest window (docs/areas/recruiting). Enabling TTL is free, and so are
+      // its deletes.
+      timeToLiveAttribute: 'expiresAt',
     });
     // GSI1 — done tasks by completion time (calibration window read). GSI1SK is numeric epoch-ms.
     this.table.addGlobalSecondaryIndex({

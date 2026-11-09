@@ -228,6 +228,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listCategories: async () => [...categories.values()],
       listPlansForDay: async () => [],
       listHabits: async () => [],
+      listRolls: async () => [],
+      listSittings: async () => [],
+      getSitting: async () => {
+        throw new Error('unused');
+      },
+      listSittingReplay: async () => [],
       listHabitChecks: async () => [],
       getDay: async () => {
         throw new Error('unused');
@@ -319,6 +325,39 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       transitionTask: async () => {
+        throw new Error('unused');
+      },
+      upsertRoll: async () => {
+        throw new Error('unused');
+      },
+      archiveRoll: async () => {
+        throw new Error('unused');
+      },
+      linkLeetcodeRoll: async () => {
+        throw new Error('unused');
+      },
+      lcSittingStart: async () => {
+        throw new Error('unused');
+      },
+      lcSittingEvents: async () => {
+        throw new Error('unused');
+      },
+      lcSittingEventsToUnknown: async () => {
+        throw new Error('unused');
+      },
+      finishTask: async () => {
+        throw new Error('unused');
+      },
+      deleteSitting: async () => {
+        throw new Error('unused');
+      },
+      setSittingPrepTarget: async () => {
+        throw new Error('unused');
+      },
+      removeSitting: async () => {
+        throw new Error('unused');
+      },
+      setRollActive: async () => {
         throw new Error('unused');
       },
       upsertHabit: async () => {

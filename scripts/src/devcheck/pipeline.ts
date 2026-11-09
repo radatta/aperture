@@ -501,6 +501,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.listCategories()).some((c) => c.id === id);
       case 'habit': // archived reads as gone: the API has no habit delete (api.ts HABIT_VIA)
         return (await client.reads.listHabits()).some((h) => h.id === id && h.active);
+      case 'roll': // archived reads as gone, like a habit (api.ts ROLL_VIA)
+        return (await client.reads.listRolls()).some((r) => r.id === id && r.active);
+      case 'sitting':
+        return (await client.reads.listSittings()).some((x) => x.id === id);
+      case 'lcRollLink':
+        return (await client.reads.getSettings()).leetcodeRollId != null;
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
@@ -534,6 +540,15 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'habit':
         await client.writes.archiveHabit(id);
+        return true;
+      case 'roll':
+        await client.writes.archiveRoll(id);
+        return true;
+      case 'sitting':
+        await client.writes.removeSitting(id); // its rep too, when the ledger never heard of it
+        return true;
+      case 'lcRollLink':
+        await client.writes.linkLeetcodeRoll(null);
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

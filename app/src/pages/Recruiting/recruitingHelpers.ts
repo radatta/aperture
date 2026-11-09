@@ -1,6 +1,7 @@
-import type { LeetcodeAttempt, LeetcodeVerdict } from '@aperture/shared';
+import { sittingMetrics } from '@aperture/shared';
+import type { LeetcodeVerdict, Sitting } from '@aperture/shared';
 
-// Pure view helpers for the Recruiting page. attempt-count is DERIVED here (never stored), and verdict
+// Pure view helpers for the Recruiting page. Everything here is DERIVED from the sitting's fold, and verdict
 // presentation stays non-punitive — accepted reads positive, everything else reads "attention", never a
 // red/guilt signal (the app's anti-guilt rule).
 
@@ -23,38 +24,48 @@ export function verdictTone(v: LeetcodeVerdict): 'teal' | 'gold' {
   return v === 'accepted' ? 'teal' : 'gold';
 }
 
-export interface AttemptRow {
-  attempt: LeetcodeAttempt;
-  attemptNo: number; // 1-based ordinal among this problem's attempts, chronological
-  problemAttempts: number; // total attempts for this problem
+// A sitting's one-line outcome, the headline being whether the FIRST submit was accepted. Accepted reads
+// teal; anything else gold or muted — attention, never a red "you failed" (the anti-guilt rule).
+export interface SittingOutcome {
+  label: string;
+  tone: 'teal' | 'gold' | 'muted';
+}
+export function sittingOutcome(s: Sitting): SittingOutcome {
+  const m = sittingMetrics(s);
+  const submits = s.summary.submits;
+  if (m.firstSubmitAccepted === null) return { label: 'no submit yet', tone: 'muted' };
+  if (m.firstSubmitAccepted) return { label: 'first submit accepted', tone: 'teal' };
+  if (m.submitsBeforeAccepted !== null)
+    return { label: `accepted on submit ${m.submitsBeforeAccepted + 1}`, tone: 'gold' };
+  return {
+    label: `not accepted · ${submits} ${submits === 1 ? 'submit' : 'submits'}`,
+    tone: 'gold',
+  };
 }
 
-// Assign each attempt its per-problem chronological ordinal, then return newest-first for display.
-export function withAttemptOrdinals(attempts: LeetcodeAttempt[]): AttemptRow[] {
-  const asc = [...attempts].sort((a, b) => a.submittedAt - b.submittedAt);
-  const totals = new Map<string, number>();
-  for (const a of asc) totals.set(a.problemSlug, (totals.get(a.problemSlug) ?? 0) + 1);
-  const seen = new Map<string, number>();
-  const rows = asc.map((attempt): AttemptRow => {
-    const n = (seen.get(attempt.problemSlug) ?? 0) + 1;
-    seen.set(attempt.problemSlug, n);
-    return { attempt, attemptNo: n, problemAttempts: totals.get(attempt.problemSlug)! };
-  });
-  return rows.reverse();
+export interface SittingsSummary {
+  sittings: number;
+  problems: number; // distinct problems sat
+  firstTry: number; // sittings whose first submit was accepted
+}
+export function summarizeSittings(sittings: Sitting[]): SittingsSummary {
+  return {
+    sittings: sittings.length,
+    problems: new Set(sittings.map((s) => s.problemSlug)).size,
+    firstTry: sittings.filter((s) => sittingMetrics(s).firstSubmitAccepted === true).length,
+  };
 }
 
-export interface RecruitingSummary {
-  problems: number; // distinct problems attempted
-  attempts: number; // total submissions
-  solved: number; // distinct problems with ≥1 accepted
-}
-
-export function summarize(attempts: LeetcodeAttempt[]): RecruitingSummary {
-  const slugs = new Set<string>();
-  const solved = new Set<string>();
-  for (const a of attempts) {
-    slugs.add(a.problemSlug);
-    if (a.verdict === 'accepted') solved.add(a.problemSlug);
+// Newest day first, the open sitting pulled out to sit above them all.
+export function groupSittings(sittings: Sitting[]): {
+  open: Sitting[];
+  days: [string, Sitting[]][];
+} {
+  const open = sittings.filter((s) => s.status === 'active');
+  const byDay = new Map<string, Sitting[]>();
+  for (const s of [...sittings].sort((a, b) => b.startedAt - a.startedAt)) {
+    if (s.status === 'active') continue;
+    byDay.set(s.day, [...(byDay.get(s.day) ?? []), s]);
   }
-  return { problems: slugs.size, attempts: attempts.length, solved: solved.size };
+  return { open, days: [...byDay].sort(([a], [b]) => (a < b ? 1 : -1)) };
 }

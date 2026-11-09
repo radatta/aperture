@@ -696,26 +696,6 @@ export const TOOLS: Tool[] = [
     },
   },
   {
-    name: 'list_leetcode_attempts',
-    description:
-      'LeetCode attempts captured by the browser extension, reverse-chron. Optional from/to ISO date range (pass BOTH or NEITHER). Use it to spot weak topics and queue drills.',
-    inputSchema: {
-      type: 'object',
-      properties: { from: { type: 'string' }, to: { type: 'string' } },
-      additionalProperties: false,
-    },
-    run(args, ctx) {
-      const from = optStr(args, 'from');
-      const to = optStr(args, 'to');
-      if ((from === undefined) !== (to === undefined)) {
-        throw new RpcParamError('pass both "from" and "to", or neither');
-      }
-      const range =
-        from !== undefined ? [{ from: reqDay(args, 'from'), to: reqDay(args, 'to') }] : [];
-      return ctx.dispatch('listLeetcodeAttempts', range);
-    },
-  },
-  {
     name: 'list_calendars',
     description:
       'Connected Google accounts and their calendars, plus the write-default target. Call this first to pick accountSub + calendarId for create_calendar_event. reconnectRequired means the account needs re-connecting in the app (only the browser can do that).',

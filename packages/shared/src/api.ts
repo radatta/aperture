@@ -19,6 +19,7 @@ import type {
   Idea,
   IdeaStatus,
   LeetcodeAttempt,
+  LeetcodeProblem,
   LogEntry,
   Place,
   PomodoroSession,
@@ -26,6 +27,11 @@ import type {
   Roll,
   SessionKind,
   Settings,
+  Sitting,
+  SittingEvent,
+  SittingHeadRow,
+  SittingLive,
+  SittingReplayChunk,
   Story,
   Task,
   TaskPlan,
@@ -38,6 +44,12 @@ import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 import type { ParseTaskResult } from './quickParse';
+import type {
+  SittingEventsInput,
+  SittingEventsResult,
+  SittingStartInput,
+  SittingStartResult,
+} from './sittings';
 import type { PlaceDigest, PlaceTokenStatus, UpsertPlaceInput } from './places';
 import type { PushDevice, PushStatus, SubscribePushInput } from './reminders';
 import type {
@@ -181,6 +193,14 @@ export interface CreateAttachmentInput {
 // The browser extension ships raw signals; the server owns verdict normalization + day bucketing.
 // tzOffsetMinutes = the client's getTimezoneOffset() — the server owns dayStartHour, so a foreign
 // client can't compute the final day-key itself (why this isn't the createLogEntry(day) shape).
+// getSitting: the head plus everything but the replay (events at asc; the problem doc when captured).
+export interface SittingDetail {
+  sitting: Sitting;
+  live: SittingLive | null;
+  events: SittingEvent[];
+  problem: LeetcodeProblem | null;
+}
+
 export interface RecordLeetcodeAttemptInput {
   leetcodeSubmissionId: string; // idempotent dedup key
   problemSlug: string;
@@ -250,7 +270,12 @@ export interface ExportBundle {
   days: Day[];
   categories: Category[];
   places: Place[]; // the place token (pointer + lookup row) is a credential and is never exported
-  leetcodeAttempts: LeetcodeAttempt[];
+  // LeetCode sittings: heads, live rows, head rows and problems. The raw payloads and the replay are left out
+  // (bulk; the export is one Lambda response) — like attachment bytes. The legacy leetcodeAttempts are retired and no longer exported.
+  sittings: Sitting[];
+  sittingLive: SittingLive[];
+  sittingHeadRows: SittingHeadRow[]; // runs/submits/notes/timer as verdicts — their raw payloads stay in the table
+  leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
   fluxSets: FluxSet[];
@@ -281,6 +306,7 @@ export type SettingsPatch = Partial<
     | 'financeBudgetCents'
     | 'financePaymentDay'
     | 'fluxRollId'
+    | 'leetcodeRollId'
     | 'fluxDisclaimerAckAt'
     | 'fluxSets'
     | 'remindTimed'
@@ -530,10 +556,27 @@ export interface ApiClient {
   // Calibration (derived, read-only)
   getCalibration(range: DateRange): Promise<CalibrationPoint[]>;
 
-  // Recruiting (LeetCode) — attempts captured by the browser extension (device-token auth on the write).
-  // Idempotent on leetcodeSubmissionId; listLeetcodeAttempts is derived/read-only, reverse-chron.
+  // Recruiting (LeetCode) — the legacy per-submission ingest. Retired: the old extension build still
+  // posts here until the prod rebuild, and the rows it writes are read by nothing (removed in PR D).
   recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt>;
-  listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]>;
+
+  // LeetCode sittings (sittings.ts; docs/areas/recruiting). The two ingest methods take the device token
+  // or the user's JWT (LC_INGEST_METHODS); everything else is JWT only.
+  // Start opens a sitting as a rep of settings.leetcodeRollId (LC_ROLL_UNLINKED_ERROR when unset): it
+  // attaches the open rep when no sitting holds it, else spawns a fresh one, refusing while another
+  // sitting is still open (SITTING_ACTIVE_ERROR); the rep goes in_progress and is titled after the
+  // problem. Idempotent on clientSittingId (resumed: true — also for an ended sitting, returned as ended: the
+  // extension mints a new id). Events are idempotent per event id, refused with nothing written once the
+  // sitting has ended or is over a cap. A sitting ends through its rep — Done → done, Drop → abandoned — or as
+  // stale at a later Start; deleting the rep deletes it.
+  lcSittingStart(input: SittingStartInput): Promise<SittingStartResult>;
+  lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult>;
+  listSittings(range?: DateRange): Promise<Sitting[]>; // heads, startedAt desc, by `day`
+  getSitting(id: string): Promise<SittingDetail>; // never the replay — that's listSittingReplay
+  listSittingReplay(id: string): Promise<SittingReplayChunk[]>; // at asc; empty once the raw bulk expired
+  setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting>;
+  // Tombstones the sitting and every child row. No UI: the dev check's cleanup, and deleteTask's cascade.
+  deleteSitting(id: string): Promise<void>;
 
   // Flux — one row per finished set (D47). record is idempotent on the client's id (a retry returns the
   // stored row) and refuses per fluxSetError; list is alive, completedAt desc, from/to both or neither;

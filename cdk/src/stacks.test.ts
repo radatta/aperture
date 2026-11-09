@@ -1024,13 +1024,16 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     expect(JSON.stringify(resources(prod.templates))).not.toContain('OnDemandThroughput');
   });
 
-  it("expires tombstones on dev's table only", () => {
-    const [devTable] = resources(dev.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
-    expect(devTable?.Properties?.TimeToLiveSpecification).toEqual({
-      AttributeName: 'expiresAt',
-      Enabled: true,
-    });
-    expect(JSON.stringify(resources(prod.templates))).not.toContain('TimeToLiveSpecification');
+  // Both stages expire on `expiresAt`: dev's tombstones, and (prod's only stamped rows) a LeetCode
+  // sitting's raw bulk. Which rows carry it is the Lambda's rule (writes.ts, backend lcSittingEvents).
+  it('expires on expiresAt on both stages', () => {
+    for (const stage of [dev, prod]) {
+      const [table] = resources(stage.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
+      expect(table?.Properties?.TimeToLiveSpecification).toEqual({
+        AttributeName: 'expiresAt',
+        Enabled: true,
+      });
+    }
   });
 
   // The guardrails SCP denies reserved/provisioned concurrency, event-source mappings and destinations to the dev

@@ -32,3 +32,13 @@ export function normalizeVerdict(
   }
   return 'other';
 }
+
+// The methods the browser extension calls. The handler accepts the device token for exactly these (and the
+// user's JWT too); every other method takes the JWT alone. recordLeetcodeAttempt leaves in PR D.
+export const LC_INGEST_METHODS = [
+  'recordLeetcodeAttempt',
+  'lcSittingStart',
+  'lcSittingEvents',
+] as const;
+export const isLcIngestMethod = (m: string): boolean =>
+  (LC_INGEST_METHODS as readonly string[]).includes(m);

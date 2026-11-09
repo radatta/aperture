@@ -229,7 +229,7 @@ export class ApertureAppStack extends Stack {
         MCP_CLIENT_ID: claudeClient.userPoolClientId, // D14: the BFF verifier DENIES tokens from this client
         STAGE: stage,
         ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
-        DEVICE_TOKEN: deviceToken, // extension ingest auth (resolveDeviceUserId), scoped to recordLeetcodeAttempt
+        DEVICE_TOKEN: deviceToken, // extension ingest auth (resolveDeviceUserId), scoped to LC_INGEST_METHODS
         ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}),
         PLAID_ENV: plaidEnv,
         FINANCE_SYNC_FN: financeSync.fn.functionName, // async-invoked after Refresh / connect / reconnect
