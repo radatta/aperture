@@ -1,4 +1,4 @@
-// The real page-world script (lib/tag.js + lib/wire.js + inject-main.js, as the manifest loads them) in a
+// The real page-world script (page/tag.js + page/wire.js + inject-main.js, as the manifest loads them) in a
 // jsdom page, fed LeetCode's traffic over both transports; this test plays the isolated world's part of the
 // handshake and checks every message with the real relay.
 import { afterEach, describe, expect, it } from 'vitest';

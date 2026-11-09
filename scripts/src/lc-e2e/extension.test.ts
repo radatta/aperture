@@ -91,7 +91,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     });
     worker = context.serviceWorkers!()[0] ?? (await context.waitForEvent!('serviceworker', { timeout: 10_000 }));
     await worker.evaluate(
-      `chrome.storage.local.set(${JSON.stringify({ apiOrigin: origin, deviceToken, selectors: SELECTORS, debug: true })})`,
+      `chrome.storage.local.set(${JSON.stringify({ apiOrigin: origin, deviceToken, selectors: SELECTORS })})`,
     );
 
     const lc = createRequire(import.meta.url)(join(fixtures, 'fake-leetcode-server.js')).createServer();
@@ -130,22 +130,11 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     await page.locator('[data-e2e-locator=console-submit-button]').click();
     await page.locator('[data-e2e-locator=console-run-button]').click();
 
-    await new Promise((r) => setTimeout(r, 8000));
-    {
-      const s = await rpc<Sitting[]>('listSittings');
-      const d = s[0] ? await rpc<{ live: unknown; events: Array<{ type: string }> }>('getSitting', s[0].id) : null;
-      const st = await worker.evaluate<unknown>('chrome.storage.local.get(["status","outbox"]).then((g) => JSON.stringify({status: g.status, n: g.outbox && g.outbox.entries.length, e: g.outbox && g.outbox.entries.map((x) => [x.state, x.lastStatus, x.lastError, x.events.map((v) => v.type)])}))');
-      console.log('DBG', JSON.stringify(s.map((x) => x.summary)), JSON.stringify(d && d.events.map((e) => e.type)), st);
-      console.log('LOG', await worker.evaluate<string>('chrome.storage.local.get("debugLog").then((g) => JSON.stringify((g.debugLog || []).filter((e) => !["click","storage","sample","dom.dialog","controls"].includes(e.type))))'));
-    }
     const [head] = await until(async () => {
       const s = await rpc<Sitting[]>('listSittings');
       return s.length && s[0]!.summary.submits === 1 && s[0]!.summary.runs === 1 ? s : null;
     }, 20_000);
     expect(head).toMatchObject({ problemSlug: 'two-sum', status: 'active', summary: { firstSubmit: { verdict: 'accepted' } } });
-    await new Promise((r) => setTimeout(r, 6000));
-    const dbg = await rpc<{ live: unknown; problem: unknown; events: Array<{ type: string }> }>('getSitting', head!.id);
-    console.log('DBG', JSON.stringify({ live: dbg.live, problem: !!dbg.problem, events: dbg.events.map((e) => e.type) }));
     const detail = await until(async () => {
       const d = await rpc<{ live: { code: string } | null; problem: unknown }>('getSitting', head!.id);
       return d.live?.code?.includes('return [0, 1]') && d.problem ? d : null;

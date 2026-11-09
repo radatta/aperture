@@ -1,0 +1,260 @@
+// What LeetCode's own traffic means — pure, no DOM, no extension APIs. inject-main.js (the page world) feeds
+// it every request it sees and dispatches what comes out; content.js turns those items into the sitting
+// events A1 takes (packages/shared/src/sittings.ts). Shapes verified against the 2026-11-08 captures
+// (extension/README.md → Wire contract): Runs poll /check/ with no /v2/; Submits poll /v2/check/.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else (root.ApertureLC = root.ApertureLC || {}).wire = api;
+})(globalThis, function () {
+  'use strict';
+
+  const GRAPHQL_RE = /^\/graphql\/?$/;
+  const SUBMIT_RE = /^\/problems\/([^/]+)\/submit\/?$/;
+  const RUN_RE = /^\/problems\/([^/]+)\/interpret_solution\/?$/;
+  const CHECK_RE = /^\/submissions\/detail\/([^/]+)\/(?:v2\/)?check\/?$/;
+  // A run or submit LeetCode never reports SUCCESS for is still sent, unjudged, after this long.
+  const PAIR_TIMEOUT_MS = 120_000;
+  const REPLAY_PART_BYTES = 60 * 1024;
+  // GraphQL operations whose response matters; the others are read from the request alone.
+  const RESPONSE_OPS = ['questionDetail', 'submissionDetails'];
+  const REQUEST_OPS = [
+    'updateSyncedCode',
+    'syncedCode',
+    'updateNote',
+    'PracticeReplayUploadEvents',
+  ];
+
+  const encoder = new TextEncoder();
+  const bytes = (s) => encoder.encode(s).length;
+  const parse = (text) => {
+    if (typeof text !== 'string' || !text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+  const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
+  const idStr = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
+
+  // LeetCode's own paths only — a request to any other host is never ours to read.
+  function pathOf(url) {
+    try {
+      const u = new URL(String(url), 'https://leetcode.com');
+      return /(^|\.)leetcode\.com$/.test(u.hostname) ? u.pathname : null;
+    } catch {
+      return null;
+    }
+  }
+  const route = (url) => {
+    const p = pathOf(url);
+    if (p === null) return null;
+    if (GRAPHQL_RE.test(p)) return { type: 'graphql' };
+    let m = p.match(SUBMIT_RE);
+    if (m) return { type: 'submit', slug: m[1] };
+    m = p.match(RUN_RE);
+    if (m) return { type: 'run', slug: m[1] };
+    m = p.match(CHECK_RE);
+    if (m) return { type: 'check', id: m[1] };
+    return null;
+  };
+  const ops = (body) => (Array.isArray(body) ? body : body ? [body] : []).map(obj).filter(Boolean);
+
+  // Whether a request is one we read at all (its URL), and whether its response body is needed too.
+  const interesting = (url) => route(url) !== null;
+  function wantsResponse(url, reqText) {
+    const r = route(url);
+    if (!r) return false;
+    if (r.type !== 'graphql') return true;
+    return ops(parse(reqText)).some((o) => RESPONSE_OPS.includes(o.operationName));
+  }
+  function wantsRequestOnly(url, reqText) {
+    const r = route(url);
+    return (
+      !!r &&
+      r.type === 'graphql' &&
+      ops(parse(reqText)).some((o) => REQUEST_OPS.includes(o.operationName))
+    );
+  }
+
+  function graphqlItems(reqText, resText, reqAt, resAt) {
+    const reqs = ops(parse(reqText));
+    const res = parse(resText);
+    const out = [];
+    reqs.forEach((o, i) => {
+      const v = obj(o.variables) || {};
+      const data = obj((Array.isArray(res) ? obj(res[i]) : obj(res))?.data);
+      switch (o.operationName) {
+        case 'updateSyncedCode':
+          if (typeof v.code !== 'string') return;
+          out.push({
+            kind: 'snapshot',
+            slug: null,
+            questionId: idStr(v.questionId),
+            at: reqAt,
+            payload: { code: v.code, questionId: idStr(v.questionId), lang: idStr(v.lang) },
+          });
+          return;
+        case 'syncedCode':
+          if (idStr(v.questionId))
+            out.push({
+              kind: 'hint',
+              slug: null,
+              questionId: idStr(v.questionId),
+              at: reqAt,
+              payload: null,
+            });
+          return;
+        case 'updateNote':
+          if (typeof v.titleSlug !== 'string' || typeof v.content !== 'string') return;
+          out.push({
+            kind: 'note',
+            slug: v.titleSlug,
+            questionId: null,
+            at: reqAt,
+            payload: { slug: v.titleSlug, content: v.content },
+          });
+          return;
+        case 'PracticeReplayUploadEvents': {
+          const events =
+            typeof v.events === 'string'
+              ? v.events
+              : v.events != null
+                ? JSON.stringify(v.events)
+                : null;
+          if (!events) return;
+          out.push({
+            kind: 'replay',
+            slug: typeof v.questionSlug === 'string' ? v.questionSlug : null,
+            questionId: null,
+            at: reqAt,
+            clientSessionId: typeof v.clientSessionId === 'string' ? v.clientSessionId : null,
+            events,
+          });
+          return;
+        }
+        case 'questionDetail': {
+          const q = obj(data?.question);
+          if (!q || typeof q.titleSlug !== 'string') return;
+          out.push({
+            kind: 'problem',
+            slug: q.titleSlug,
+            questionId: idStr(q.questionId),
+            at: resAt,
+            payload: q,
+          });
+          return;
+        }
+        case 'submissionDetails': {
+          const d = obj(data?.submissionDetails);
+          if (!d) return;
+          out.push({
+            kind: 'submitDetails',
+            slug: typeof obj(d.question)?.titleSlug === 'string' ? d.question.titleSlug : null,
+            questionId: null,
+            at: resAt,
+            payload: { submissionId: idStr(v.submissionId), details: d },
+          });
+          return;
+        }
+      }
+    });
+    return out;
+  }
+
+  // One per page load: pairs each /submit/ or /interpret_solution/ with its final /check/, once.
+  function createCapture() {
+    const pending = new Map(); // submission or interpret id -> {kind, slug, request, at}
+    const fired = new Set();
+    const markFired = (id) => {
+      fired.add(id);
+      if (fired.size > 500) fired.delete(fired.values().next().value);
+    };
+    const judged = (id, p, result, at) => {
+      markFired(id);
+      pending.delete(id);
+      const kind = p ? p.kind : id.startsWith('runcode_') ? 'run' : 'submit';
+      const slug = p ? p.slug : null;
+      const payload =
+        kind === 'run'
+          ? { interpretId: id, slug, request: p ? p.request : null, result }
+          : { submissionId: id, slug, request: p ? p.request : null, result };
+      return { kind, slug, questionId: null, at: p ? p.at : at, payload };
+    };
+
+    // A finished request: its URL, method, request text, response text (null when unread or failed), times.
+    function observe({ url, reqText, resText, reqAt, resAt }) {
+      const r = route(url);
+      if (!r) return [];
+      if (r.type === 'graphql') return graphqlItems(reqText, resText, reqAt, resAt);
+      const res = obj(parse(resText));
+      if (r.type === 'submit' || r.type === 'run') {
+        const id = idStr(r.type === 'submit' ? res?.submission_id : res?.interpret_id);
+        if (!id || fired.has(id)) return [];
+        pending.set(id, { kind: r.type, slug: r.slug, request: obj(parse(reqText)), at: reqAt });
+        return [];
+      }
+      // check: only the final SUCCESS counts; RUNNING_TESTS / STARTED / PENDING are polls.
+      if (!res || res.state !== 'SUCCESS' || fired.has(r.id)) return [];
+      return [judged(r.id, pending.get(r.id), res, resAt)];
+    }
+    function sweep(now) {
+      const out = [];
+      for (const [id, p] of pending)
+        if (now - p.at > PAIR_TIMEOUT_MS) out.push(judged(id, p, { pending: true }, now));
+      return out;
+    }
+    return { observe, sweep };
+  }
+
+  // A captured item → the sitting events A1 takes ({id, type, at, payload} or a replay chunk). A replay over
+  // 60 KB is split along its JSON array; one that can't be split is dropped (A1 would refuse it).
+  function toEventInputs(item, mintId) {
+    if (item.kind === 'replay') {
+      return splitReplay(item.events).map((events) => ({
+        id: mintId(),
+        type: 'replay',
+        at: item.at,
+        clientSessionId: item.clientSessionId || null,
+        events,
+      }));
+    }
+    return [{ id: mintId(), type: item.kind, at: item.at, payload: item.payload }];
+  }
+  function splitReplay(events, max = REPLAY_PART_BYTES) {
+    if (bytes(events) <= max) return [events];
+    const arr = parse(events);
+    if (!Array.isArray(arr)) return [];
+    const parts = [];
+    let cur = [];
+    for (const e of arr) {
+      const one = JSON.stringify(e);
+      if (bytes(one) + 2 > max) continue; // a single event over the cap: skipped
+      if (cur.length && bytes(JSON.stringify([...cur, e])) > max) {
+        parts.push(JSON.stringify(cur));
+        cur = [];
+      }
+      cur.push(e);
+    }
+    if (cur.length) parts.push(JSON.stringify(cur));
+    return parts;
+  }
+
+  const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
+  const KINDS = [...SENDABLE, 'hint', 'problem'];
+
+  return {
+    interesting,
+    wantsResponse,
+    wantsRequestOnly,
+    createCapture,
+    toEventInputs,
+    splitReplay,
+    pathOf,
+    bytes,
+    SENDABLE,
+    KINDS,
+    PAIR_TIMEOUT_MS,
+  };
+});

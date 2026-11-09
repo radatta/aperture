@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "sync-page": "cp src/lib/tag.js src/lib/wire.js src/page/"
   },
   "devDependencies": {
     "@aperture/shared": "workspace:*",

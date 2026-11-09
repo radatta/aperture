@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isUlid as sharedIsUlid, lcTimerState } from '@aperture/shared';
-import { lib } from './load';
+import { ISOLATED_JS, MAIN_JS, lib, src } from './load';
 import { TIMER_PAUSED } from './fixtures/traffic';
 
 const ulid = lib('ulid');
@@ -39,5 +39,15 @@ describe('selectors', () => {
     expect(m).toMatchObject({ editorReset: '#r', timerClicks: ['#a', '#b'], dialog: selectors.DEFAULTS.dialog });
     expect(m).not.toHaveProperty('bogus');
     expect(selectors.merge('{bad json')).toEqual({ ...selectors.DEFAULTS });
+  });
+});
+
+// Chrome runs a file listed in both worlds once, in the first (seen 2026-11-08): the isolated world then had
+// no tag or wire, and every handshake threw. So the page world loads its own copies.
+describe('the manifest', () => {
+  it('lists no file in both worlds, and the page world’s copies match lib/', () => {
+    expect(MAIN_JS.filter((f) => ISOLATED_JS.includes(f))).toEqual([]);
+    for (const f of MAIN_JS.filter((f) => f.startsWith('src/page/')))
+      expect(src(f), `${f} drifted — pnpm -F @aperture/extension sync-page`).toBe(src(f.replace('src/page/', 'src/lib/')));
   });
 });

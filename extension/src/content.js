@@ -65,13 +65,11 @@
   // ---- the handshake (README → How it works) ----
   window.addEventListener('aperture-lc-hello', (e) => {
     const ok = relay.hello(e.detail);
-    debug.log('hello.recv', { type: typeof e.detail, len: String(e.detail).length, accepted: !!ok });
     if (!ok) return;
     window.dispatchEvent(new CustomEvent('aperture-lc-ack')); // same tick: no page script can get between
     ok.then((good) => debug.log('handshake', { ok: good }));
   });
   window.dispatchEvent(new CustomEvent('aperture-lc-ready'));
-  debug.log('ready.sent', {});
 
   // ---- page messages, one at a time ----
   let chain = Promise.resolve();

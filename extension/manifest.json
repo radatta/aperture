@@ -18,7 +18,7 @@
       "matches": ["*://leetcode.com/*"],
       "run_at": "document_start",
       "world": "MAIN",
-      "js": ["src/lib/tag.js", "src/lib/wire.js", "src/inject-main.js"]
+      "js": ["src/page/tag.js", "src/page/wire.js", "src/inject-main.js"]
     },
     {
       "matches": ["*://leetcode.com/*"],

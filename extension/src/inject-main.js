@@ -1,6 +1,6 @@
 // Aperture's LeetCode capture, page side — the MAIN world (manifest: world "MAIN", document_start), loaded
-// after lib/tag.js and lib/wire.js. It watches LeetCode's own fetch/XHR traffic and passes what it means to
-// the isolated world (content.js) as tagged messages. It is purely passive: it never blocks or alters a
+// after page/tag.js and page/wire.js (copies of lib/'s: README → How it works). It watches LeetCode's own
+// fetch/XHR traffic and passes what it means to the isolated world (content.js) as tagged messages. It is purely passive: it never blocks or alters a
 // request, issues none of its own, reads no extension API, and nothing ever flows back into it — no server
 // reply reaches the page (forgery rule 2). Why the tags: README → How it works → The relay.
 (() => {
