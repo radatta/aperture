@@ -14,7 +14,7 @@ import type { IosOp } from './sim.ts';
 export const PLANS_PATH = `${TOOLS_DIR}bench/plans.json`;
 export const BENCH_NONCE = 'simbench';
 export const PRELUDE_TIMEOUT_SEC = 600;
-// Sign-in apart from the timed runs, ending off so run 1 boots cold like a devcheck's first sim job.
+// Sign-in apart from the timed runs, ending off: every run then starts from a shut-down sim, as relaunch (the last job) leaves it.
 export const PRELUDE: IosOp[] = [
   { op: 'launch' },
   { op: 'signIn' },

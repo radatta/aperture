@@ -60,7 +60,7 @@ describe('sim bench', () => {
         steps: PRELUDE,
       }),
     ).toBeNull();
-    // the prelude signs in and leaves the sim off, so run 1 boots cold as a devcheck's first job does
+    // the prelude signs in and leaves the sim off, as relaunch leaves it at the end of every run
     expect(PRELUDE.at(-1)).toEqual({ op: 'shutdown' });
   });
 
@@ -82,7 +82,7 @@ describe('sim bench', () => {
       expect(c, name).not.toMatch(
         /\beval\b|\bsh -c\b|declare -A|mapfile|readarray|\$\{[a-zA-Z_]+,,\}|\$EPOCH/,
       );
-      expect(c, name).not.toMatch(/pkill (?!-P )|killall/); // by parent PID only
+      expect(c, name).not.toMatch(/pkill|killall/); // by PID or process group only
       expect(c, name).not.toMatch(/\.secrets/);
     }
     // the plist's PATH: native Homebrew, never Intel /usr/local (the M1 has both)
@@ -100,6 +100,7 @@ describe('sim bench', () => {
     expect(c).toContain('bash "$RUNNER" "$HJ" "$ST"');
     expect(c).toContain('RUNNER="$MR/runner.sh"');
     // the benched sim.sh is recorded by its hash in every result (machine.json → summary.json)
-    expect(c).toMatch(/SIM_SH_SHA="\$\(sha256 <"\$MR\/jobs\/sim\.sh"\)"/);
+    // (the one beside the runner, which is what runner.sh sources)
+    expect(c).toContain('SIM_SH_SHA="$(sha256 <"$(dirname "$RUNNER")/jobs/sim.sh")"');
   });
 });

@@ -1,7 +1,8 @@
 #!/bin/bash
 # The sim bench's summary (docs/ops/SIM-BENCH.md): reads a bench results dir — runs.jsonl, every
 # hostjobs/results/<id>/{result.json,plan.json}, samples.jsonl, machine.json, plans.json — and writes summary.json and
-# summary.md beside them. Per job: wall time, run 1 (cold) apart from runs 2..N. Per op: p50/p95/max of sim.sh's own
+# summary.md beside them. Per job: wall time, run 1 apart from runs 2..N (each run starts from a shut-down sim: relaunch,
+# the last job, ends with shutdown, as consecutive devchecks do). Per op: p50/p95/max of sim.sh's own
 # `ms` (passing steps only). The signals sim.sh writes in step notes (re-taps, retypes, extra deletes, drops), fails by
 # reason, and the sampler's memory, swap, load and per-process peaks, overall and per job. --against another bench's
 # summary.json adds ratio columns (this / that). Bash 3.2 + jq; runs on either Mac and in the container.
@@ -58,15 +59,19 @@ def signal_counts($note):
    keyboardSecondTap: ([$note | match("keyboard dismissed on the second tap"; "g")] | length),
    settingsAgain: ([$note | match("went to Settings again"; "g")] | length),
    retype: ([$note | match("retyped (once|twice)"; "g") | if .captures[0].string == "twice" then 2 else 1 end] | add // 0),
-   extraDelete: ([$note | match("deleted ([0-9]+) more|deleted more twice"; "g")] | length),
+   extraDelete: ([$note | match("deleted [0-9]+ more|deleted more (twice)"; "g") | if .captures[0].string == "twice" then 2 else 1 end] | add // 0),
+   switcherRetry: ([$note | match("; (the switcher didn.t open|no Aperture card at |still running after the swipe)"; "g")] | length),
    keyboardLate: ([$note | match("the keyboard came up late"; "g")] | length),
    inputDrops: ([$note | match("drops ([0-9]+)"; "g") | .captures[0].string | tonumber] | add // 0),
    leftoverDraft: ([$note | match("deleted a leftover draft"; "g")] | length),
    resumedMidTyping: ([$note | match("resumed mid-typing"; "g")] | length),
    expectBuildRelaunch: ([$note | match("first launch ran "; "g")] | length)};
 def addobj: reduce .[] as $o ({}; reduce ($o | to_entries[]) as $e (.; .[$e.key] = ((.[$e.key] // 0) + $e.value)));
+# A job that failed because iOS dropped an input. SWITCHER_FAILED counts only for its "iOS dropped the input" case, not
+# "no Aperture card … was the app running?" (sim.sh, op_kill).
 def dropfail: (.detail // "") as $d | ($d | IN("ICON_TAP_DROPPED", "HOME_PRESS_DROPPED", "TAP_DROPPED", "TYPED", "ERASED"))
-  or ($d == "SWITCHER_FAILED" and .status == "fail");
+  or ($d == "SWITCHER_FAILED" and .status == "fail"
+    and ([.steps[]? | select(.status == "fail") | .note // "" | test("dropped the input")] | any));
 
 $machine[0] as $m
 | ($plans[0] // {}) as $pl
@@ -85,18 +90,18 @@ $machine[0] as $m
        pass: ([$rs[] | select(.status == "pass")] | length),
        fail: ([$rs[] | select(.status == "fail")] | length),
        error: ([$rs[] | select(.status != "pass" and .status != "fail")] | length),
-       coldMs: ([$rs[] | select(.run == 1 or .run == 0) | .durationMs] | first),
-       warm: ([$t[] | select(.run >= 2) | .durationMs] | stats),
+       run1Ms: ([$rs[] | select(.run == 1 or .run == 0) | .durationMs] | first),
+       runs2toN: ([$t[] | select(.run >= 2) | .durationMs] | stats),
        all: ([$t[] | .durationMs] | if length == 0 then [$rs[] | .durationMs] else . end | stats),
        failsBy: ([$rs[] | select(.status != "pass") | "\(.reason // "-")/\(.detail // "-")"] | group_by(.) | map({key: .[0], value: length}) | from_entries),
        booted: ([$rs[] | .booted // "?"] | group_by(.) | map({key: .[0], value: length}) | from_entries),
        minFreePct: ([$w[][] | .freePct | select(. != null)] | min),
        peakLoad1: ([$w[][] | .load[0]? | select(. != null)] | max),
-       swapoutsDelta: ([$rs[] | window(.) | delta(.; "swapouts")] | map(select(. != null)) | add),
+       swapoutsDelta: ([$t[] | window(.) | delta(.; "swapouts")] | map(select(. != null)) | add),
        skippedSetup: ([$pl.jobs[]? | select(.name == $name) | .skippedSetup // empty] | first)}] as $jobs
 | [$timed[] as $r | $r.steps[] | select(.status == "pass") | . + {job: $r.job, run: $r.run, key: ($r.plan[.i] // {op: .op} | opkey)}] as $passed
 | [$passed | group_by([.job, .i])[] | . as $g
-    | {job: $g[0].job, i: $g[0].i, key: $g[0].key, coldMs: ([$g[] | select(.run == 1) | .ms] | first)} + ([$g[].ms] | stats)]
+    | {job: $g[0].job, i: $g[0].i, key: $g[0].key, run1Ms: ([$g[] | select(.run == 1) | .ms] | first)} + ([$g[].ms] | stats)]
   | sort_by(.job as $j | (($order | index($j)) // 99), .i) as $ops
 | [$passed | group_by(.op)[] | {op: .[0].op} + ([.[].ms] | stats)] | sort_by(-.p50) as $kinds
 | [$R[] | select(.status != "pass") | . as $r
@@ -140,7 +145,7 @@ $machine[0] as $m
     | ($o.jobs // [] | map({key: .name, value: .}) | from_entries) as $oj
     | ($o.ops // [] | map({key: "\(.job)|\(.i)|\(.key)", value: .}) | from_entries) as $oo
     | .against = {tag: $o.tag, model: $o.machine.model, simShSha256: $o.simShSha256}
-    | .jobs |= map(. + {against: ($oj[.name] // null | if . then {warmP50: .warm.p50, allP50: .all.p50, coldMs: .coldMs} else null end)})
+    | .jobs |= map(. + {against: ($oj[.name] // null | if . then {p50: .runs2toN.p50, allP50: .all.p50, run1Ms: .run1Ms} else null end)})
     | .ops |= map(. + {againstP50: ($oo["\(.job)|\(.i)|\(.key)"].p50 // null)})
   else . end' >"$RD/summary.json" || { echo "summarize: the jq summary failed" >&2; exit 1; }
 rm -f -- "$J"
@@ -164,11 +169,11 @@ def ratio($a; $b): if $a == null or $b == null or $b == 0 then "—" else "×" +
   "",
   "## Jobs (wall, s)",
   "",
-  (if $vs then "| Job | Runs | Run 1 (cold) | p50 runs 2–N | p95 | max | min–max (all) | vs p50 | ratio | pass/fail/error | min free % | peak load | fails |"
-   else "| Job | Runs | Run 1 (cold) | p50 runs 2–N | p95 | max | min–max (all) | pass/fail/error | min free % | peak load | fails |" end),
+  (if $vs then "| Job | Runs | Run 1 | p50 runs 2–N | p95 | max | min–max (all) | vs p50 | ratio | pass/fail/error | min free % | peak load | fails |"
+   else "| Job | Runs | Run 1 | p50 runs 2–N | p95 | max | min–max (all) | pass/fail/error | min free % | peak load | fails |" end),
   (if $vs then "|---|---|---|---|---|---|---|---|---|---|---|---|---|" else "|---|---|---|---|---|---|---|---|---|---|---|" end),
-  (.jobs[] | "| \(.name)\(if .skippedSetup then " (no \(.skippedSetup | join(", ")))" else "" end) | \(.runs) | \(.coldMs | s) | \(.warm.p50 | s) | \(.warm.p95 | s) | \(.warm.max | s) | \(.all.min | s)–\(.all.max | s) | "
-     + (if $vs then "\(.against.warmP50 // null | s) | \(ratio(.warm.p50; .against.warmP50)) | " else "" end)
+  (.jobs[] | "| \(.name)\(if .skippedSetup then " (no \(.skippedSetup | join(", ")))" else "" end) | \(.runs) | \(.run1Ms | s) | \(.runs2toN.p50 | s) | \(.runs2toN.p95 | s) | \(.runs2toN.max | s) | \(.all.min | s)–\(.all.max | s) | "
+     + (if $vs then "\(.against.p50 // null | s) | \(ratio(.runs2toN.p50; .against.p50)) | " else "" end)
      + "\(.pass)/\(.fail)/\(.error) | \(.minFreePct | n) | \(.peakLoad1 | n) | \(.failsBy | to_entries | map("\(.key) ×\(.value)") | join(", ") | if . == "" then "—" else . end) |"),
   "",
   "## Inputs that needed a second go, and failures",
@@ -196,7 +201,7 @@ def ratio($a; $b): if $a == null or $b == null or $b == 0 then "—" else "×" +
   "",
   (if $vs then "| Job | # | Op | n | Run 1 | p50 | p95 | max | vs p50 | ratio |" else "| Job | # | Op | n | Run 1 | p50 | p95 | max |" end),
   (if $vs then "|---|---|---|---|---|---|---|---|---|---|" else "|---|---|---|---|---|---|---|---|" end),
-  (.ops | sort_by(-.p50) | .[0:20][] | "| \(.job) | \(.i) | \(.key | gsub("\\|"; "/")) | \(.n) | \(.coldMs | s) | \(.p50 | s) | \(.p95 | s) | \(.max | s) |"
+  (.ops | sort_by(-.p50) | .[0:20][] | "| \(.job) | \(.i) | \(.key | gsub("\\|"; "/")) | \(.n) | \(.run1Ms | s) | \(.p50 | s) | \(.p95 | s) | \(.max | s) |"
      + (if $vs then " \(.againstP50 | s) | \(ratio(.p50; .againstP50)) |" else "" end)),
   "",
   "## By op kind (s)",
@@ -205,6 +210,6 @@ def ratio($a; $b): if $a == null or $b == null or $b == 0 then "—" else "×" +
   "|---|---|---|---|---|",
   (.opKinds[] | "| \(.op) | \(.n) | \(.p50 | s) | \(.p95 | s) | \(.max | s) |"),
   "",
-  "Every op of every job is in summary.json (`ops`). Not measured: \(.gaps | join("; "))."
+  "Run 1 is the first timed run after the sign-in prelude; every run starts from a shut-down sim (relaunch ends with shutdown). Every op of every job is in summary.json (`ops`). Signals `inputDrops`, `leftoverDraft` and `resumedMidTyping` read notes from sim.sh changes not yet on main (axe-input-gap, sim-speedups-be): 0 until a benched sim.sh writes them. Not measured: \(.gaps | join("; "))."
 ' "$RD/summary.json" >"$RD/summary.md" || { echo "summarize: the md render failed" >&2; exit 1; }
 echo "summarize: $RD/summary.md"

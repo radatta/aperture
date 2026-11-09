@@ -25,6 +25,7 @@ describe('sim-bench seed', () => {
   let held: 'none' | 'ours' | 'other';
   let n: number;
   let failCreate: boolean;
+  let runBusy: boolean;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'seed-'));
@@ -34,6 +35,7 @@ describe('sim-bench seed', () => {
     held = 'none';
     n = 0;
     failCreate = false;
+    runBusy = false;
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -41,8 +43,8 @@ describe('sim-bench seed', () => {
     pick: async () => {
       if (held === 'other') throw new DevcheckError('NO_LOCK', 'another-lane is testing on dev');
       return held === 'ours'
-        ? { slot: 'dev', why: 'm1-sim-bench holds the dev lock' }
-        : { slot: 'dev', why: 'm1-sim-bench holds no dev lock — dev (slot A), free' };
+        ? { slot: 'dev', held: true, why: 'm1-sim-bench holds the dev lock' }
+        : { slot: 'dev', held: false, why: 'm1-sim-bench holds no dev lock — dev (slot A), free' };
     },
     acquire: async () => {
       calls.push('acquire');
@@ -54,6 +56,7 @@ describe('sim-bench seed', () => {
       held = 'none';
     },
     runLock: () => {
+      if (runBusy) throw new Error('another dev check (pid 42) holds run.lock — wait for it');
       calls.push('runLock');
       return () => calls.push('runUnlock');
     },
@@ -86,7 +89,7 @@ describe('sim-bench seed', () => {
     const r = await seed(deps());
     expect(r).toEqual({ id: 't1', expiresAt: '2026-11-09T16:45:00.000Z', reused: false });
     expect(tasks.get('t1')).toEqual({ id: 't1', title: SEED.title, status: 'in_progress' });
-    expect(calls).toEqual(['acquire', 'runLock', 'signIn', 'close', 'runUnlock']);
+    expect(calls).toEqual(['runLock', 'acquire', 'signIn', 'close', 'runUnlock']);
     expect(held).toBe('ours'); // held through the bench, until --clean
     expect(pendingSeeds(ledger)).toEqual(['t1']);
     expect(
@@ -108,8 +111,15 @@ describe('sim-bench seed', () => {
   it('refuses while another branch tests on dev, before any lock or write', async () => {
     held = 'other';
     await expect(seed(deps())).rejects.toThrow('another-lane is testing on dev');
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['runLock', 'runUnlock']);
     expect(tasks.size).toBe(0);
+  });
+
+  it('refuses while a devcheck runs, before taking the dev lock (none leaks)', async () => {
+    runBusy = true;
+    await expect(seed(deps())).rejects.toThrow('holds run.lock');
+    expect(calls).toEqual([]);
+    expect(held).toBe('none');
   });
 
   it('a failed seed frees the dev lock it took', async () => {

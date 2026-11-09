@@ -16,6 +16,7 @@ export interface SlotDeps {
 
 export interface SlotPick {
   slot: Slot;
+  held: boolean; // this branch holds the slot's lock (live or not) — the sim bench's seed keeps a lock it didn't take
   why: string;
 }
 
@@ -41,7 +42,7 @@ export async function pickSlot(branch: string, deps: SlotDeps): Promise<SlotPick
   for (const slot of SLOTS) {
     const tag = refs.get(`refs/locks/${slot}`);
     const h = tag ? holderOf(await deps.tagMessage(tag)) : {};
-    if (h.branch === branch) return { slot, why: `${branch} holds the ${slot} lock` };
+    if (h.branch === branch) return { slot, held: true, why: `${branch} holds the ${slot} lock` };
     holders.set(slot, h);
   }
   const a = holders.get('dev');
@@ -50,5 +51,9 @@ export async function pickSlot(branch: string, deps: SlotDeps): Promise<SlotPick
       'NO_LOCK',
       `${branch || 'this branch'} holds no dev lock and ${a.branch} is testing on dev until ${a.expiresAt} — \`pnpm bot deploy-dev\` takes a slot first`,
     );
-  return { slot: 'dev', why: `${branch} holds no dev lock — dev (slot A), free, as before slot B` };
+  return {
+    slot: 'dev',
+    held: false,
+    why: `${branch} holds no dev lock — dev (slot A), free, as before slot B`,
+  };
 }

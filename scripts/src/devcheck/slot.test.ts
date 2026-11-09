@@ -24,9 +24,11 @@ describe('pickSlot (the lock is the only thing that picks a slot)', () => {
   it('targets the slot whose lock this branch holds', async () => {
     expect(await pickSlot('ci-bot', deps({ dev: 'flux', devb: 'ci-bot' }))).toMatchObject({
       slot: 'devb',
+      held: true,
     });
     expect(await pickSlot('ci-bot', deps({ dev: 'ci-bot', devb: 'flux' }))).toMatchObject({
       slot: 'dev',
+      held: true,
     });
   });
 
@@ -34,6 +36,7 @@ describe('pickSlot (the lock is the only thing that picks a slot)', () => {
     const pick = await pickSlot('ci-bot', deps({ devb: 'lc' }));
     expect(pick).toEqual({
       slot: 'dev',
+      held: false,
       why: 'ci-bot holds no dev lock — dev (slot A), free, as before slot B',
     });
     expect((await pickSlot('ci-bot', deps({}))).slot).toBe('dev');

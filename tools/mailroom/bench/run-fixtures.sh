@@ -14,7 +14,8 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 MR="$(cd "$HERE/.." && pwd -P)"
 FX="$HERE/fixtures"
 BENCH="$HERE/sim-bench.sh"
-export SIM_BENCH_FIXTURE=1 SIM_BENCH_POLL=0.05 LC_ALL=C FX # FX: the stubs read their answers from it
+# FX: the stubs read their answers from it. ALLOW_SHARE: this checkout sits in the container's share (case 11 drops it).
+export SIM_BENCH_FIXTURE=1 SIM_BENCH_POLL=0.05 LC_ALL=C FX SIM_BENCH_FX_ALLOW_SHARE=1
 pass=0
 failed=0
 cases=0
@@ -60,7 +61,8 @@ xcodebuild() { printf 'Xcode 27.2\nBuild version 27C88\n'; }
 axe() { [ "$1" = --version ] && echo 1.8.0; }
 xcrun() {
   case "$*" in
-    "simctl list runtimes -j") echo '{"runtimes":[{"name":"iOS 27.2","version":"27.2","buildversion":"24B8117","isAvailable":true},{"name":"watchOS 12","version":"12.0","buildversion":"x","isAvailable":true}]}' ;;
+    # real output runs to many KB (supportedDeviceTypes per runtime): padded past any truncation
+    "simctl list runtimes -j") printf '{"runtimes":[{"name":"iOS 27.2","version":"27.2","buildversion":"24B8117","isAvailable":true,"supportedDeviceTypes":["%s"]},{"name":"watchOS 12","version":"12.0","buildversion":"x","isAvailable":true}]}\n' "$(printf 'x%.0s' $(seq 3000))" ;;
     "simctl list devices -j") echo '{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-2":[{"name":"aperture-devcheck","udid":"0D6D7F2A-1111-2222-3333-444455556666","state":"Booted","isAvailable":true,"deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max"}]}}' ;;
   esac
 }
@@ -79,7 +81,9 @@ TAPE="$(mktemp)"
 trap 'rm -f -- "$TAPE"' EXIT
 jq -n --argjson d "$DONE_I" '{
   "capture@r1": {ms: 3000}, "capture@r2": {ms: 2000, steps: {"3": {note: "focused; tapped again (still there after the first)"}, "5": {note: "typed; retyped once (first read zq)"}}},
-  "capture@r3": {ms: 1000},
+  "capture@r3": {ms: 1000, steps: {"4": {note: "erased; deleted more twice, 2 (first read zz)"}}},
+  "relaunch@r2": {steps: {"3": {note: "; the switcher didn'"'"'t open (SpringBoard, Page 1 of 2); web: gone"}}},
+  "relaunch@r3": {status: "fail", reason: "ASSERT", detail: "SWITCHER_FAILED", steps: {"3": {status: "fail", note: "no Aperture card in the app switcher in two tries; no Aperture card at 220,500 (AXGroup): was the app running? Rerun from a launch"}}},
   "done-form@r1": {status: "fail", reason: "ASSERT", detail: "MISS", steps: {"\($d)": {status: "fail", note: "no Done near 395"}}},
   "launch@r3": {status: "error", reason: "SIM_UNAVAILABLE", detail: "AX_TIMEOUT", steps: {"0": {status: "error", note: "describe-ui timed out eight times; icon tapped 3 times"}}}
 }' >"$TAPE"
@@ -127,19 +131,22 @@ S="$ORCH/summary.json"
 why=""
 [ -f "$ORCH/summary.md" ] || why="no summary.md"
 [ -n "$why" ] || jqe '[.jobs[].name] == ["prelude", "launch", "capture", "done-form", "capture-long", "relaunch"]' "$S" || why="jobs $(jq -c '[.jobs[].name]' "$S")"
-# capture: 18 ops × 3000 / 2000 / 1000 ms → cold 54 s; runs 2..3 [36, 18] → p50 18, p95 36
-[ -n "$why" ] || jqe '.jobs[] | select(.name == "capture") | .coldMs == 54000 and .warm.p50 == 18000 and .warm.p95 == 36000 and .warm.max == 36000
+# capture: 18 ops × 3000 / 2000 / 1000 ms → run 1 54 s; runs 2..3 [36, 18] → p50 18, p95 36
+[ -n "$why" ] || jqe '.jobs[] | select(.name == "capture") | .run1Ms == 54000 and .runs2toN.p50 == 18000 and .runs2toN.p95 == 36000 and .runs2toN.max == 36000
   and .all.min == 18000 and .all.max == 54000 and .runs == 3 and .pass == 3' "$S" || why="capture $(jq -c '.jobs[] | select(.name == "capture")' "$S")"
 # an op over runs 1..3 [3000, 2000, 1000]: nearest-rank p50 2000, p95 3000
-[ -n "$why" ] || jqe '.ops[] | select(.job == "capture" and .i == 0) | .n == 3 and .p50 == 2000 and .p95 == 3000 and .max == 3000 and .min == 1000 and .coldMs == 3000' "$S" || why="capture op 0"
-[ -n "$why" ] || jqe '.signals.retap == 1 and .signals.retype == 1 and .signals.iconRetap == 2' "$S" || why="signals $(jq -c .signals "$S")"
-[ -n "$why" ] || jqe '.fails.axTimeout == 1 and .fails.seedMissing == 1 and .fails.byReason == {"ASSERT/MISS": 1, "SIM_UNAVAILABLE/AX_TIMEOUT": 1}' "$S" || why="fails $(jq -c .fails "$S")"
+[ -n "$why" ] || jqe '.ops[] | select(.job == "capture" and .i == 0) | .n == 3 and .p50 == 2000 and .p95 == 3000 and .max == 3000 and .min == 1000 and .run1Ms == 3000' "$S" || why="capture op 0"
+[ -n "$why" ] || jqe '.signals.retap == 1 and .signals.retype == 1 and .signals.iconRetap == 2 and .signals.extraDelete == 2
+  and .signals.switcherRetry == 2' "$S" || why="signals $(jq -c .signals "$S")"
+# relaunch r3's SWITCHER_FAILED is "no Aperture card … was the app running?": a fail, not a dropped input
+[ -n "$why" ] || jqe '.fails.axTimeout == 1 and .fails.seedMissing == 1 and .fails.dropFails == 0
+  and .fails.byReason == {"ASSERT/MISS": 1, "ASSERT/SWITCHER_FAILED": 1, "SIM_UNAVAILABLE/AX_TIMEOUT": 1}' "$S" || why="fails $(jq -c .fails "$S")"
 [ -n "$why" ] || jqe '.jobs[] | select(.name == "done-form") | .fail == 1 and .failsBy == {"ASSERT/MISS": 1}' "$S" || why="done-form fails"
 [ -n "$why" ] || jqe '.jobs[] | select(.name == "capture-long") | .skippedSetup == ["16 createTask", "16 upsertPlan"]' "$S" || why="capture-long's skipped setup"
 [ -n "$why" ] || jqe '.devBuildChanged == true and (.devBuilds | length) == 2' "$S" || why="dev builds"
 [ -n "$why" ] || grep -q 'Done form task missing' "$ORCH/summary.md" || why="summary.md doesn't name the missing seed"
 [ -n "$why" ] || grep -q '^| capture | 3 | 54 | 18 | 36 | 36 | 18–54 | 3/0/0 |' "$ORCH/summary.md" || why="summary.md's capture row: $(grep '^| capture |' "$ORCH/summary.md")"
-check "summary: per-job cold/warm wall, per-op percentiles, signals, fails by reason, a missing seed named" "$why" "$ORCH/summary.md"
+check "summary: per-job run 1 vs runs 2–N wall, per-op percentiles, signals, fails by reason, a missing seed named" "$why" "$ORCH/summary.md"
 
 # --- 3. machine load from planted samples: overall and inside one job's window -----------------------------------------
 why=""
@@ -158,9 +165,9 @@ check "summary: memory, swap deltas, compressor, load and per-process peaks; a j
 
 # --- 4. --against: ratio columns ------------------------------------------------------------------------------------
 why=""
-jq '.tag = "m3" | .jobs |= map(.warm.p50 = (if .warm.p50 then .warm.p50 / 2 else null end)) | .ops |= map(.p50 = .p50 / 2)' "$S" >"$ORCH_T/m3.json"
+jq '.tag = "m3" | .jobs |= map(.runs2toN.p50 = (if .runs2toN.p50 then .runs2toN.p50 / 2 else null end)) | .ops |= map(.p50 = .p50 / 2)' "$S" >"$ORCH_T/m3.json"
 /bin/bash "$HERE/summarize.sh" "$ORCH" --against "$ORCH_T/m3.json" >"$ORCH_T/sum.log" 2>&1 || why="summarize exited $?"
-[ -n "$why" ] || jqe '.against.tag == "m3" and (.jobs[] | select(.name == "capture") | .against.warmP50 == 9000)' "$S" || why="against $(jq -c .against "$S")"
+[ -n "$why" ] || jqe '.against.tag == "m3" and (.jobs[] | select(.name == "capture") | .against.p50 == 9000)' "$S" || why="against $(jq -c .against "$S")"
 [ -n "$why" ] || grep -q '^| capture | 3 | 54 | 18 | 36 | 36 | 18–54 | 9 | ×2 |' "$ORCH/summary.md" || why="md: $(grep '^| capture |' "$ORCH/summary.md")"
 [ -n "$why" ] || grep -q '| ×2 |$' "$ORCH/summary.md" || why="no op ratio"
 check "summary --against: this / that per job and per op" "$why" "$ORCH/summary.md"
@@ -302,7 +309,9 @@ why=""
 [ "$rc" = 0 ] || why="exit $rc"
 [ -n "$why" ] || jqe -s 'length == 2 and all(.reason == "NO_RESULT" and .status == "error")' "$R/runs.jsonl" || why="runs $(cat "$R/runs.jsonl")"
 [ -n "$why" ] || grep -q 'stopping the runner' "$T/log" || why="no stop line"
-check "a hung runner is stopped by PID, recorded NO_RESULT, and the next job runs" "$why" "$T/log"
+[ -n "$why" ] || [ -s "$T/out/hang.pid" ] || why="the fake runner never started its child"
+[ -n "$why" ] || ! kill -0 "$(cat "$T/out/hang.pid")" 2>/dev/null || why="the runner's child outlived the stop"
+check "a hung runner is stopped with its process group, recorded NO_RESULT, and the next job runs" "$why" "$T/log"
 rm -r -f -- "$T"
 
 # --- 10. a result.json that isn't JSON is recorded BAD_RESULT, never dropped ------------------------------------------
@@ -314,6 +323,25 @@ why=""
 [ "$rc" = 0 ] || why="exit $rc"
 [ -n "$why" ] || jqe -s 'length == 2 and .[0].reason == "BAD_RESULT" and .[1].status == "pass"' "$R/runs.jsonl" || why="runs $(cat "$R/runs.jsonl")"
 check "an unreadable result.json is recorded BAD_RESULT and the bench goes on" "$why" "$T/log"
+rm -r -f -- "$T"
+
+# --- 11. never from, or into, a checkout the mailroom shares with the container -----------------------------------------
+share_case() { # NAME GREP BENCH-ROOT OUT
+  local rc why=""
+  (unset SIM_BENCH_FX_ALLOW_SHARE; /bin/bash "$3/tools/mailroom/bench/sim-bench.sh" --out "$4" --tag fx --runner "$FX/fake-runner.sh" \
+    --runs 1 --jobs launch --no-prelude --no-sampler) >"$T/log" 2>&1
+  rc=$?
+  [ "$rc" = 75 ] || why="exit $rc, want 75"
+  [ -n "$why" ] || grep -q -- "$2" "$T/log" || why="no \"$2\" in the output"
+  [ -n "$why" ] || [ -z "$(find "$4" -name result.json 2>/dev/null)" ] || why="a job ran"
+  check "$1" "$why" "$T/log"
+}
+new_dir
+mkdir -p "$T/share/.hostjobs" "$T/share/tools" "$T/own/tools"
+cp -R "$MR" "$T/share/tools/mailroom"
+cp -R "$MR" "$T/own/tools/mailroom"
+share_case "refuses to run from a checkout with a .hostjobs (the container can write it)" "shares with the container" "$T/share" "$T/out"
+share_case "refuses to write results inside the shared checkout" "inside the shared checkout" "$T/own" "$T/share/localNotes/sim-bench"
 rm -r -f -- "$T"
 
 echo "# $pass passed, $failed failed, of $cases cases"

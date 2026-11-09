@@ -46,24 +46,34 @@ KEYCHAIN="aperture-devcheck-dev"
 
 say() { printf '%s\n' "$*"; }
 die() { say "sim-bench: $*" >&2; exit "${2:-75}"; }
+need() { [ $# -ge 2 ] || die "$1 needs a value"; }
+# Inside a checkout the mailroom watches (a .hostjobs beside it): the container can write there (MAILROOM.md → trust).
+in_share() {
+  local d="$1"
+  while [ -n "$d" ] && [ "$d" != / ] && [ "$d" != . ]; do
+    [ ! -d "$d/.hostjobs" ] || return 0
+    d="$(dirname "$d")"
+  done
+  return 1
+}
 sha256() { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --runs) RUNS="${2:-}"; shift 2 ;;
-    --tag) TAG="${2:-}"; shift 2 ;;
-    --out) OUT="${2:-}"; shift 2 ;;
-    --sha) SHA="${2:-}"; shift 2 ;;
-    --jobs) JOBS="${2:-}"; shift 2 ;;
-    --timeout) TIMEOUT="${2:-}"; shift 2 ;;
-    --interval) INTERVAL="${2:-}"; shift 2 ;;
+    --runs) need "$@"; RUNS="$2"; shift 2 ;;
+    --tag) need "$@"; TAG="$2"; shift 2 ;;
+    --out) need "$@"; OUT="$2"; shift 2 ;;
+    --sha) need "$@"; SHA="$2"; shift 2 ;;
+    --jobs) need "$@"; JOBS="$2"; shift 2 ;;
+    --timeout) need "$@"; TIMEOUT="$2"; shift 2 ;;
+    --interval) need "$@"; INTERVAL="$2"; shift 2 ;;
     --no-prelude) PRELUDE=0; shift ;;
     --no-sampler) SAMPLER=0; shift ;;
     --allow-mailroom) ALLOW_MAILROOM=1; shift ;;
-    --against) AGAINST="${2:-}"; shift 2 ;;
-    --runner) RUNNER="${2:-}"; shift 2 ;;
-    --plans) PLANS="${2:-}"; shift 2 ;;
-    -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --against) need "$@"; AGAINST="$2"; shift 2 ;;
+    --runner) need "$@"; RUNNER="$2"; shift 2 ;;
+    --plans) need "$@"; PLANS="$2"; shift 2 ;;
+    -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (--help)" ;;
   esac
 done
@@ -76,6 +86,7 @@ done
 [[ "$TAG" =~ ^[a-z0-9-]{0,20}$ ]] || die "--tag takes up to 20 of a-z 0-9 -"
 [ -f "$PLANS" ] && jq -e '.jobs | length > 0' "$PLANS" >/dev/null 2>&1 || die "no plans at $PLANS (pnpm sim-bench:plans)"
 [ -f "$RUNNER" ] || die "no runner at $RUNNER"
+[ -f "$(dirname "$RUNNER")/jobs/sim.sh" ] || die "no jobs/sim.sh beside $RUNNER (the runner sources it from there)"
 [ -z "$AGAINST" ] || [ -f "$AGAINST" ] || die "no summary at $AGAINST"
 [ -n "$TIMEOUT" ] || TIMEOUT="$(jq -r '.timeoutSec' "$PLANS")"
 ALL_JOBS="$(jq -r '[.jobs[].name] | join(",")' "$PLANS")"
@@ -87,6 +98,13 @@ done
 [ -n "$TAG" ] || TAG=mac
 
 # --- preflight: refuse (75) before anything runs ------------------------------------------------------------------
+# Never run code, or keep the job inbox, where the container can write: on the main Mac that's the shared checkout.
+# The bench runs from a tarball at a reviewed commit in a Mac-only dir, and writes results there (SIM-BENCH.md → Setup).
+if [ "${SIM_BENCH_FX_ALLOW_SHARE:-}" != 1 ]; then
+  ! in_share "$MR" || die "$MR is inside a checkout the mailroom shares with the container — run the bench from a tarball in a Mac-only dir (docs/ops/SIM-BENCH.md → Setup)"
+  ! in_share "$(mkdir -p "$OUT" 2>/dev/null; cd "$OUT" 2>/dev/null && pwd -P || echo "$OUT")" \
+    || die "--out $OUT is inside the shared checkout — write results to a Mac-only dir, then move them (docs/ops/SIM-BENCH.md → Results)"
+fi
 if [ "$(uname)" != Darwin ] && [ "${SIM_BENCH_FIXTURE:-}" != 1 ]; then
   die "the bench drives the iOS Simulator: run it on a Mac (SIM_BENCH_FIXTURE=1 is the container's fixture mode)"
 fi
@@ -130,7 +148,20 @@ cp -- "$PLANS" "$RD/plans.json" # what was replayed, beside what it measured
 
 # machine.json: what ran where. A command this Mac lacks reads null, never an abort.
 q() { "$@" 2>/dev/null | head -c 2000 || true; }
-SIM_SH_SHA="$(sha256 <"$MR/jobs/sim.sh")"
+# simctl's JSON runs to many KB: filtered whole through jq, never truncated
+runtimes_j() {
+  local o
+  o="$(xcrun simctl list runtimes -j 2>/dev/null | jq -c '[.runtimes[]? | select((.name // "") | startswith("iOS")) | {name, version, buildversion, isAvailable}]' 2>/dev/null)"
+  [ -n "$o" ] && echo "$o" || echo '[]'
+}
+device_j() {
+  local o
+  o="$(xcrun simctl list devices -j 2>/dev/null | jq -c --arg n aperture-devcheck '[(.devices // {}) | to_entries[] | .key as $rt | .value[]
+    | select(.name == $n) | {udid, state, deviceTypeIdentifier, runtime: ($rt | sub(".*SimRuntime\\."; ""))}] | first' 2>/dev/null)"
+  [ -n "$o" ] && echo "$o" || echo null
+}
+# The sim.sh that runs is the one beside the runner (runner.sh sources $(dirname runner)/jobs/*.sh).
+SIM_SH_SHA="$(sha256 <"$(dirname "$RUNNER")/jobs/sim.sh")"
 RUNNER_SHA="$(sha256 <"$RUNNER")"
 REPO_SHA="$(git -C "$MR" rev-parse HEAD 2>/dev/null || echo unknown)"
 REPO_DIRTY="$(git -C "$MR" status --porcelain -- . 2>/dev/null | head -1)"
@@ -138,22 +169,18 @@ jq -n --arg tag "$TAG" --arg stamp "$STAMP" --arg host "$(q hostname -s)" \
   --arg macos "$(q sw_vers -productVersion)" --arg macbuild "$(q sw_vers -buildVersion)" \
   --arg model "$(q sysctl -n hw.model)" --arg mem "$(q sysctl -n hw.memsize)" --arg cpu "$(q sysctl -n machdep.cpu.brand_string)" \
   --arg ncpu "$(q sysctl -n hw.ncpu)" --arg xcode "$(q xcodebuild -version | tr '\n' ' ')" --arg axe "$(q axe --version)" \
-  --arg runtimes "$(q xcrun simctl list runtimes -j)" --arg devices "$(q xcrun simctl list devices -j)" \
+  --argjson runtimes "$(runtimes_j)" --argjson device "$(device_j)" \
   --arg simsh "$SIM_SH_SHA" --arg runner "$RUNNER_SHA" --arg repo "$REPO_SHA" --arg dirty "$REPO_DIRTY" \
   --arg plans "$(sha256 <"$PLANS")" --arg origin "$ORIGIN" --arg sha "$SHA" \
   --argjson runs "$RUNS" --arg jobs "$JOBS" --argjson timeout "$TIMEOUT" --arg interval "$INTERVAL" \
-  --argjson prelude "$PRELUDE" --argjson sampler "$SAMPLER" --arg sim "aperture-devcheck" '
+  --argjson prelude "$PRELUDE" --argjson sampler "$SAMPLER" '
   def nz: if . == "" then null else . end;
-  def j: (try fromjson catch null);
   {tag: $tag, startedAt: ($stamp | strptime("%Y%m%dT%H%M%SZ") | todate), host: ($host | nz),
    macos: ($macos | nz), macosBuild: ($macbuild | nz), model: ($model | nz),
    memGB: (if $mem == "" then null else (($mem | tonumber) / 1073741824 | . * 10 | round / 10) end),
    cpu: ($cpu | nz), ncpu: (if $ncpu == "" then null else ($ncpu | tonumber) end),
    xcode: ($xcode | sub(" +$"; "") | nz), axe: ($axe | sub("\n$"; "") | nz),
-   runtimes: ([($runtimes | j | .runtimes // [])[] | select((.name // "") | startswith("iOS"))
-     | {name, version, buildversion, isAvailable}]),
-   device: ([($devices | j | .devices // {}) | to_entries[] | .key as $rt | .value[] | select(.name == $sim)
-     | {udid, state, deviceTypeIdentifier, runtime: ($rt | sub(".*SimRuntime\\."; ""))}] | first),
+   runtimes: $runtimes, device: $device,
    simShSha256: $simsh, runnerSha256: $runner, plansSha256: $plans, repoSha: $repo, repoDirty: ($dirty != ""),
    origin: $origin,
    args: {runs: $runs, jobs: ($jobs | split(",")), timeoutSec: $timeout, interval: ($interval | tonumber),
@@ -163,8 +190,10 @@ jq -n --arg tag "$TAG" --arg stamp "$STAMP" --arg host "$(q hostname -s)" \
 
 SPID=""
 RPID=""
+# The runner runs in its own process group (set -m below), so a stop takes its axe/simctl grandchildren too.
+stop_runner() { kill -TERM -- "-$1" 2>/dev/null || kill -TERM "$1" 2>/dev/null || true; }
 cleanup() {
-  [ -z "$RPID" ] || kill "$RPID" 2>/dev/null || true
+  [ -z "$RPID" ] || stop_runner "$RPID"
   [ -z "$SPID" ] || kill "$SPID" 2>/dev/null || true
   rm -f -- "$RD/sampler.pid"
 }
@@ -205,14 +234,15 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
   mv -- "$f" "$HJ/inbox/$id.json"
   t0="$(date +%s)"
   kill_after="${SIM_BENCH_KILL_AFTER:-$((tmo + 120))}" # sim.sh stops itself at the budget; this is the backstop
+  set -m # a process group of its own, led by the runner's PID
   bash "$RUNNER" "$HJ" "$ST" >>"$LOG" 2>&1 &
   RPID=$!
+  set +m
   while kill -0 "$RPID" 2>/dev/null; do
     now="$(date +%s)"
     if [ $((now - t0)) -gt "$kill_after" ]; then
-      say "  $name: no result $kill_after s in — stopping the runner (pid $RPID)"
-      pkill -P "$RPID" 2>/dev/null || true # its children first (by parent PID): once it's gone they're reparented
-      kill "$RPID" 2>/dev/null || true
+      say "  $name: no result $kill_after s in — stopping the runner (process group $RPID)"
+      stop_runner "$RPID"
       break
     fi
     line="$(jq -r '"op \(.i + 1)/\(.of) \(.op)"' "$HJ/results/$id/progress.json" 2>/dev/null || true)"
@@ -224,6 +254,10 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
   done
   wait "$RPID" 2>/dev/null
   RPID=""
+  # Both dirs are the bench's own: a job the runner never drained must not run inside the next job's budget, and a
+  # stopped runner's lock must not turn the next 15 minutes of runners away.
+  rm -f -- "$HJ"/inbox/*.json
+  rmdir "$ST/lock" 2>/dev/null || true
   res="$HJ/results/$id/result.json"
   line=""
   [ ! -f "$res" ] || line="$(jq -ce --argjson run "$run" --arg job "$name" --arg sha "$CUR_SHA" \

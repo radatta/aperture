@@ -35,9 +35,9 @@ const VIA = 'api:createTask';
 
 // The slice of the devcheck API client the seed uses.
 export interface SeedApi {
-  reads: { getTask(id: string): Promise<{ id: string; status: string; title: string } | null> };
+  reads: { getTask(id: string): Promise<{ id: string; status?: string; title: string } | null> };
   writes: {
-    createTask(input: { title: string; estimateMin?: number | null }): Promise<{ id: string }>;
+    createTask(input: { title: string; estimateMin?: number }): Promise<{ id: string }>;
     transitionTask(id: string, status: 'in_progress'): Promise<unknown>;
     deleteTask(id: string): Promise<void>;
   };
@@ -75,20 +75,23 @@ async function slotA(d: SeedDeps): Promise<{ heldBefore: boolean }> {
       'NO_LOCK',
       `this branch holds the ${pick.slot} lock; the sim is slot A's — \`pnpm bot lock release\` first`,
     );
-  return { heldBefore: pick.why.includes('holds the dev lock') };
+  return { heldBefore: pick.held };
 }
 
 export async function seed(
   d: SeedDeps,
 ): Promise<{ id: string; expiresAt: string; reused: boolean }> {
-  const { heldBefore } = await slotA(d);
-  const expiresAt = await d.acquire();
-  d.log(
-    `dev lock held until ${expiresAt} — the bench must finish (or \`pnpm bot lock renew\`) before then`,
-  );
+  // The run lock first: a devcheck running now (on either slot, until PER_SLOT_RUNS) refuses the seed before dev is locked.
   const unlock = d.runLock();
   let session: Awaited<ReturnType<SeedDeps['signIn']>> | undefined;
+  let took = false;
   try {
+    const { heldBefore } = await slotA(d);
+    const expiresAt = await d.acquire();
+    took = !heldBefore;
+    d.log(
+      `dev lock held until ${expiresAt} — the bench must finish (or \`pnpm bot lock renew\`) before then`,
+    );
     const run = runId(d);
     session = await d.signIn(run);
     const { api } = session;
@@ -100,7 +103,10 @@ export async function seed(
       }
     }
     d.ledger.append({ run, op: 'run-start' });
-    const t = await api.writes.createTask({ title: d.seed.title, estimateMin: d.seed.estimateMin });
+    const t = await api.writes.createTask({
+      title: d.seed.title,
+      ...(d.seed.estimateMin === null ? {} : { estimateMin: d.seed.estimateMin }),
+    });
     await api.writes.transitionTask(t.id, 'in_progress');
     d.log(
       `seeded ${t.id} "${d.seed.title}" (in progress) — \`pnpm sim-bench:seed --clean\` deletes it and frees dev`,
@@ -108,7 +114,7 @@ export async function seed(
     return { id: t.id, expiresAt, reused: false };
   } catch (err) {
     // Nothing to protect: free dev again, unless this branch held it before the seed (its own dev test).
-    if (!heldBefore)
+    if (took)
       await d
         .release()
         .catch((e: unknown) => d.log(`  couldn't release the dev lock: ${String(e)}`));
@@ -122,13 +128,13 @@ export async function seed(
 export async function clean(
   d: SeedDeps,
 ): Promise<{ deleted: string[]; gone: string[]; failed: string[] }> {
-  await slotA(d);
   const out = { deleted: [] as string[], gone: [] as string[], failed: [] as string[] };
-  const ids = pendingSeeds(d.ledger);
-  if (ids.length) {
-    const unlock = d.runLock();
-    let session: Awaited<ReturnType<SeedDeps['signIn']>> | undefined;
-    try {
+  const unlock = d.runLock();
+  let session: Awaited<ReturnType<SeedDeps['signIn']>> | undefined;
+  try {
+    await slotA(d);
+    const ids = pendingSeeds(d.ledger);
+    if (ids.length) {
       const run = runId(d);
       session = await d.signIn(run);
       for (const id of ids) {
@@ -148,10 +154,10 @@ export async function clean(
           );
         }
       }
-    } finally {
-      await session?.close().catch(() => {});
-      unlock();
     }
+  } finally {
+    await session?.close().catch(() => {});
+    unlock();
   }
   await d.release();
   d.log(
@@ -229,7 +235,7 @@ async function main(): Promise<number> {
           ledger,
           run,
         });
-        return { api: api as unknown as SeedApi, close: () => browser.close() };
+        return { api, close: () => browser.close() };
       } catch (err) {
         await browser.close().catch(() => {});
         throw err;

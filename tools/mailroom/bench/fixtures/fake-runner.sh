@@ -7,7 +7,12 @@
 set -uo pipefail
 HJ="$1"
 TAPE="${SIM_BENCH_FAKE_TAPE:-/dev/null}"
-if [ "${SIM_BENCH_FAKE_HANG:-}" = 1 ]; then command sleep 30; exit 0; fi
+if [ "${SIM_BENCH_FAKE_HANG:-}" = 1 ]; then
+  command sleep 30 &
+  echo $! >"$HJ/../../hang.pid" # the results dir's parent: case 9 checks the stop took this child too
+  wait
+  exit 0
+fi
 for f in "$HJ"/inbox/*.json; do
   [ -e "$f" ] || continue
   id="$(basename "$f" .json)"
