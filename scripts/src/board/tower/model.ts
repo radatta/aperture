@@ -67,7 +67,7 @@ export type Gauges = {
 
 export type FeedItem = {
   t: number;
-  kind: 'job' | 'lock' | 'run' | 'merge' | 'lease';
+  kind: 'job' | 'lock' | 'run' | 'merge' | 'pr' | 'lease';
   text: string;
   tone: Tone;
 };

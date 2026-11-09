@@ -2,10 +2,12 @@
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
 import { clean, parseTime } from './fmt.ts';
 
-export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building'] as const;
+export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building', 'ready', 'needs-you'] as const;
 export const WAVE_STATES = ['merged', 'open', 'in-flight', 'not-started'] as const;
 export type LaneState = (typeof LANE_STATES)[number];
 export type WaveState = (typeof WAVE_STATES)[number];
+export const PLAN_KINDS = ['dev', 'merge', 'rahul', 'ci'] as const;
+export type PlanKind = (typeof PLAN_KINDS)[number];
 
 export type Lane = {
   branch: string;
@@ -25,12 +27,16 @@ export type WaveItem = {
   title: string | null;
 };
 
+// dispatch's timeline: the one source for "next merge" (the tower's PLAN panel and the statusline)
+export type PlanItem = { at: number | null; what: string; kind: PlanKind; who: string | null };
+
 export type QueueData = {
   updatedAt: number;
   devQueue: Lane[];
   rahul: Todo[];
   wave: { name: string; items: WaveItem[] } | null;
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
+  plan: PlanItem[]; // by `at`, the `at`-less last in file order
 };
 
 // `data` is the last good parse (kept through a bad write); `problems` say what's wrong with the current file.
@@ -124,9 +130,24 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       };
   }
 
+  const plan: PlanItem[] = [];
+  arr(raw.plan).forEach((x, i) => {
+    const p = x as Record<string, unknown>;
+    const what = str(p?.what);
+    const kind = p?.kind as PlanKind;
+    if (!what) return void problems.push(`plan[${i}]: no what`);
+    if (!PLAN_KINDS.includes(kind))
+      return void problems.push(`plan[${i}]: kind ${JSON.stringify(p.kind)}`);
+    const at = parseTime(p.at);
+    if (at === null && p.at != null) problems.push(`plan[${i}]: at is not an ISO time`); // kept, unscheduled
+    plan.push({ at, what, kind, who: str(p.who) });
+  });
+  // stable sort: equal times and the `at`-less keep their file order
+  plan.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || 0); // ∞ − ∞ is NaN → 0
+
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, rahul, wave, deadRows },
+    data: { updatedAt, devQueue, rahul, wave, deadRows, plan },
     problems,
   };
 }

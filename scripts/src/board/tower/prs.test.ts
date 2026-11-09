@@ -9,6 +9,7 @@ const json = JSON.stringify([
     headRefName: 'b',
     state: 'MERGED',
     mergedAt: '2026-11-08T03:00:00Z',
+    createdAt: '2026-11-07T20:00:00Z',
   },
   { title: 'no number' },
 ]);
@@ -16,13 +17,21 @@ const json = JSON.stringify([
 describe('prs', () => {
   it('parses gh pr list', () => {
     expect(parsePrs(json)).toEqual([
-      { number: 41, title: 'Open one?', branch: 'a', state: 'OPEN', mergedAt: null },
+      {
+        number: 41,
+        title: 'Open one?',
+        branch: 'a',
+        state: 'OPEN',
+        mergedAt: null,
+        createdAt: null,
+      },
       {
         number: 40,
         title: 'Merged one',
         branch: 'b',
         state: 'MERGED',
         mergedAt: Date.parse('2026-11-08T03:00:00Z'),
+        createdAt: Date.parse('2026-11-07T20:00:00Z'),
       },
     ]);
     expect(() => parsePrs('{}')).toThrow(/not an array/);

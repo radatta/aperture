@@ -4,7 +4,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { strip, width } from './ansi.ts';
 import { build, parseArgs } from './main.ts';
 import type { TowerState } from './model.ts';
-import { compose, feedItems, since, waveItems, type Ui } from './panels.ts';
+import { HISTORY_H, layout } from './layout.ts';
+import { compose, feedItems, since, waveItems, wants, type Ui } from './panels.ts';
 
 const NOW = '2026-11-08T06:10:00Z';
 // glyphs width() would mis-measure: controls, CJK, emoji (the fixtures carry all three)
@@ -59,7 +60,7 @@ describe('frame', () => {
     expect(f).toContain('1. Merge PR 41 after its dev run');
     expect(f).toContain('1/5 merged');
     expect(f).toContain('open charlie-branch PR 41  Charlie: the open change');
-    expect(f).toContain('done alpha-branch');
+    expect(f).not.toContain('done alpha-branch'); // merged items: counted, not listed
     expect(f).toContain('2 working · 5 idle');
     expect(f).toContain(
       'live 22:09 · cpu 6.7 · mem 9.0G · pids 737 · heavy 2 · working 2: alpha, bravo',
@@ -73,6 +74,7 @@ describe('frame', () => {
       'DEV QUEUE',
       'WAITING ON RAHUL',
       'WAVE 2',
+      'PLAN',
       'MACHINE',
       'SESSIONS',
       'TEST FAILURES',
@@ -115,22 +117,67 @@ describe('panels', () => {
     expect(f).toMatch(/gh +0s ago · 1 open/);
   });
 
-  it('the feed is newest first and mixes jobs, runs, merges and leases', () => {
+  it('the feed is newest first and keeps only what changed', () => {
     const items = feedItems(state);
+    const texts = items.map((i) => i.text);
     expect(items.map((i) => i.t)).toEqual([...items.map((i) => i.t)].sort((a, b) => b - a));
-    expect(new Set(items.map((i) => i.kind))).toEqual(new Set(['job', 'run', 'merge', 'lease']));
-    expect(items.find((i) => i.kind === 'job' && i.text.includes('exit 137'))!.tone).toBe('bad');
-    expect(items.find((i) => i.kind === 'job' && i.text.includes('exit 143'))!.tone).toBe('normal');
+    expect(new Set(items.map((i) => i.kind))).toEqual(
+      new Set(['job', 'run', 'merge', 'pr', 'lease']),
+    );
+    // jobs: failures only (exit 1, 137), never a pass, a 143 (killed by us), lint/typecheck or the dev server
+    const jobs = items.filter((i) => i.kind === 'job');
+    expect(jobs.map((j) => j.text.match(/exit \d+/)![0]).sort()).toEqual([
+      'exit 1',
+      'exit 1',
+      'exit 137',
+    ]);
+    expect(jobs.every((j) => j.tone === 'bad')).toBe(true);
+    expect(texts.some((t) => /exit 0|exit 143|lint|typecheck|charlie {2}dev/.test(t))).toBe(false);
+    expect(texts).toContain('merged PR 40  Alpha: an earlier change');
+    expect(texts).toContain('PR 41 opened  Charlie: the open change ? ??');
+    expect(texts.some((t) => t.startsWith('PR 40 opened'))).toBe(false); // opened over 24 h ago
+    expect(texts).toContain('devcheck full PASS  10m00s');
+    // a run's start shows only while it is still in flight
+    expect(texts.filter((t) => t.endsWith('started'))).toEqual(['devcheck full started']);
+    expect(items.find((i) => i.text.endsWith('started'))!.t).toBe(
+      Date.parse('2026-11-08T06:02:00Z'),
+    );
+    // leases: gave up or denied only, not a wait
+    expect(items.filter((i) => i.kind === 'lease').map((i) => i.text)).toEqual([
+      'heavy gaveUp  foxtrot test',
+    ]);
+  });
+
+  it('the feed keeps the dev lock taken (a deploy-dev) and drops it freed', () => {
+    const t = Date.parse(NOW) - 60000;
+    const items = feedItems({
+      ...state,
+      lockFeed: [
+        { t, kind: 'lock', text: 'lock: x-branch (x) until 22:50', tone: 'warn' },
+        { t: t + 1, kind: 'lock', text: 'lock: free (was w-branch)', tone: 'good' },
+      ],
+    });
+    expect(items.filter((i) => i.kind === 'lock').map((i) => i.text)).toEqual([
+      'lock: x-branch (x) until 22:50',
+    ]);
   });
 
   it('gh upgrades a wave item to merged by its named PR only, and never downgrades', () => {
-    const merged = { number: 50, title: 'x', branch: 'delta-branch', state: 'MERGED', mergedAt: 1 };
+    const merged = {
+      number: 50,
+      title: 'x',
+      branch: 'delta-branch',
+      state: 'MERGED',
+      mergedAt: 1,
+      createdAt: null,
+    };
     const reopened = {
       number: 51,
       title: 'reopened',
       branch: 'delta-branch',
       state: 'OPEN',
       mergedAt: null,
+      createdAt: null,
     };
     const withPr = (pr: number | null): TowerState => ({
       ...state,
@@ -158,7 +205,16 @@ describe('panels', () => {
       ...state,
       prs: {
         ...state.prs,
-        list: [{ number: 40, title: 'x', branch: 'alpha-branch', state: 'OPEN', mergedAt: null }],
+        list: [
+          {
+            number: 40,
+            title: 'x',
+            branch: 'alpha-branch',
+            state: 'OPEN',
+            mergedAt: null,
+            createdAt: null,
+          },
+        ],
       },
     };
     expect(waveItems(open).find((i) => i.branch === 'alpha-branch')!.state).toBe('merged');
@@ -213,10 +269,82 @@ describe('panels', () => {
 
   it("a to-do's age", () => {
     const now = Date.parse(NOW); // 22:10 on 2026-11-07, local
-    expect([since('2026-11-07', now), since('2026-11-05', now), since('soon', now)]).toEqual([
-      'today',
-      '2d',
-      'soon',
+    expect(
+      ['2026-11-08', '2026-11-07', '2026-11-06', '2026-11-05', 'soon'].map((x) => since(x, now)),
+    ).toEqual(['', '', '1d', '2d', 'soon']);
+  });
+});
+
+describe('tower v2', () => {
+  const row = (f: string, re: RegExp) => f.split('\n').find((l) => re.test(l)) ?? '';
+
+  it('lane badges for ready and needs-you', () => {
+    const f = text(compose(state, live, 210, 55));
+    expect(f).toContain('READY  hotel-branch PR 42 hotel');
+    expect(f).toContain('RAHUL  india-branch india  on Rahul: admit to dev');
+  });
+
+  it("Rahul's to-dos show an age only past a day", () => {
+    const f = text(compose(state, live, 210, 55));
+    expect(f).not.toContain('today');
+    expect(row(f, /1\. Merge PR 41/)).toMatch(/1\. Merge PR 41 after its dev run +││/);
+    expect(row(f, /2\. Open the dev freeze/)).toMatch(/delta-branch +1d ││/);
+  });
+
+  it('SESSIONS lists the working and the branched, then one idle line', () => {
+    const f = text(compose(state, live, 210, 55));
+    expect(f).toContain('idle: echo, foxtrot, golf');
+    expect(f).toMatch(/│ charlie +idle +charlie-branch/);
+    expect(f).not.toMatch(/│ echo +idle/);
+    expect(wants(state).sessions).toBe(4 + 2);
+  });
+
+  it("the middle band is MACHINE's full height, every series drawn", () => {
+    expect(layout(210, 55, wants(state)).rects.history!.h).toBe(HISTORY_H);
+    const f = text(compose(state, live, 210, 55));
+    for (const lab of ['cpu ', 'mem ', 'pids ', 'heavy ', 'working ', 'events', 'live 22:09'])
+      expect(f).toContain(lab);
+    expect(f).not.toMatch(/\+\d+ more/);
+  });
+
+  it('PLAN: by time, the past due dimmed with ?, the unscheduled last, next merge in the title', () => {
+    const f = text(compose(state, live, 210, 55));
+    const r = layout(210, 55, wants(state)).rects.plan!;
+    const lines = f
+      .split('\n')
+      .slice(r.y + 1, r.y + r.h - 1)
+      .map((l) => [...l].slice(r.x, r.x + r.w).join(''))
+      .filter((l) => !/^│ +│$/.test(l));
+    expect(lines.map((l) => l.slice(0, 22))).toEqual([
+      '│ 21:30     ? dev   br',
+      '│ 22:25   15m rahul Op',
+      '│ 22:40   30m merge me',
+      '│ --:--       ci    PR',
     ]);
+    expect(f).toMatch(/PLAN ─+ next merge ~22:40 ╮/);
+    expect(f).not.toContain('a stale golf run'); // over 2 h past due
+  });
+
+  it('PLAN without a plan, and without a merge', () => {
+    const withPlan = (plan: NonNullable<TowerState['queue']['data']>['plan']): string =>
+      text(
+        compose(
+          { ...state, queue: { ...state.queue, data: { ...state.queue.data!, plan } } },
+          live,
+          210,
+          55,
+        ),
+      );
+    expect(withPlan([])).toContain('no plan in queue.json (dispatch writes it)');
+    const at = Date.parse(NOW);
+    const f = withPlan([
+      { at: at + 600000, what: 'a dev run', kind: 'dev', who: null },
+      { at: null, what: 'a check', kind: 'ci', who: null },
+    ]);
+    expect(f).toMatch(/PLAN ─+ 2 planned ╮/);
+    // a merge already past due keeps the title, marked ?
+    expect(withPlan([{ at: at - 60000, what: 'm', kind: 'merge', who: null }])).toMatch(
+      /next merge \?22:09/,
+    );
   });
 });

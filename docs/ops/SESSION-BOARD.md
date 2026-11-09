@@ -324,22 +324,33 @@ What it means:
 
 **Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`; gauges for anon
 memory and pids (soft / hard marks from `limits.json`) and CPU against the cores. _Dev queue_, _Waiting on
-Rahul_ and the wave (a merged / open / in-flight / not-started bar, then the unmerged items, merged ones on one
-`done` line) come from `queue.json` (below). _Sessions_: the latest sample's sessions, working first. _Machine_:
+Rahul_ (an age only past a day: `1d`), the wave (a merged / open / in-flight / not-started bar, then the
+unmerged items; merged ones are counted in the bar, legend and title, not listed) and _Plan_ come from
+`queue.json` (below). _Plan_: dispatch's timeline, `HH:MM  countdown  kind  what (who)` by time, the
+unscheduled last (`--:--`); merges and Rahul's items bright, an item past due dimmed with `?` and dropped 2 h
+after; its title is `next merge ~HH:MM` (the first `merge` with a time, `?` once past) or `n planned`.
+_Sessions_: a row for each working session and each holding a branch, working first, then one `idle: a, b, c`
+line (cut with `…`; the title counts both). _Machine_:
 CPU, memory, pids, heavy jobs and working sessions on one time axis, each bucket's peak, a sampler gap blank;
 under it the event ticks, one per column by precedence — `✗` a failed suite, a red `◆` a devcheck run that ended
 other than PASS, `▲` a merge, a green `◆` a PASS, `·` a passed suite — and a readout of the exact values at the
 readout column. _Test failures_: the last 7 days of suites (`class: test`, not load tests) by how many other
 slot-class jobs (`test ui typecheck lint build dev`) overlapped each one at any point, with the failure rate
-and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are the operator). _Activity_: the
-last 24 h of jobs, devcheck runs (`localNotes/devcheck/ledger.dev.jsonl`), merges, heavy-lease events, and the
-lock changes this tower saw (kept in memory: a viewer writes no history). _Status_: the dead-row TTL proof
+and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are the operator). _Activity_: what
+changed in the last 24 h, not what ran — failed jobs (local only: CI checks need an API the container's token
+can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl`; a start only while in flight),
+merges, PRs opened (gh `createdAt`), heavy leases that gave up or were denied, and the dev lock taken (a
+`pnpm bot deploy-dev`) as this tower saw it (kept in memory: a viewer writes no history). Passing jobs, the Vite
+dev server, waits and the lock freed stay out: _Machine_ and _Status_ count them. _Status_: the dead-row TTL proof
 (full runs that ended PASS since `proofs.deadRows.since`, minus `excludedRuns`), the overnight vitest bench
 when `localNotes/bench-vitest/results.tsv` exists, `queue.json`'s age, gh, the sampler's last tick, suites in
 24 h, heavy jobs now.
 
-**Sizes.** Wide at ≥ 160 × 40 (three panels across the top; history beside sessions), narrow at ≥ 95 × 24
-(one column, pairs side by side); below that, the header and a size hint. Panels shrink to their minimums
+**Sizes.** Wide at ≥ 160 × 40: queue, Rahul and wave across the top in thirds; history beside sessions, the
+band as tall as history's full 15 rows and up to 20 for a long session list; then plan (`max(44, 26 %)` cols) |
+activity | failures over status (52). Narrow at ≥ 95 × 24: one column, pairs side by side, plan beside the
+wave; below that, the header and a size hint. `Ctrl-a t` opens it as a borderless full-size tmux popup
+(`tools/coi/tmux.conf`). Panels shrink to their minimums
 before _Activity_ drops under 4 rows; a cut list ends `+n more`. Resizing redraws (SIGWINCH).
 
 **Reads, and what it costs.** The board's files, never `board.sh status` (which scans `/proc` and peeks at
@@ -368,10 +379,10 @@ the wave grouped by state (in flight, open, not started, then merged) and in fil
     {
       "branch": "",
       "session": "",
-      "state": "on-dev | next | waiting | building",
+      "state": "on-dev | next | waiting | building | ready | needs-you",
       "pr": 41,
       "eta": "<ISO, on-dev>",
-      "waitingOn": "<waiting>",
+      "waitingOn": "<waiting, needs-you>",
       "note": ""
     }
   ],
@@ -388,12 +399,20 @@ the wave grouped by state (in flight, open, not started, then merged) and in fil
       }
     ]
   },
-  "proofs": { "deadRows": { "since": "<ISO>", "target": 12, "excludedRuns": ["<run id>"] } }
+  "proofs": { "deadRows": { "since": "<ISO>", "target": 12, "excludedRuns": ["<run id>"] } },
+  "plan": [{ "at": "<ISO, optional>", "what": "", "kind": "dev | merge | rahul | ci", "who": "" }]
 }
 ```
 
+Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
+is blocked on a Rahul step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
+read check status. `plan` is the one source for the next merge — the PLAN panel's title and the statusline
+(`localNotes/board/next-merge.sh`) both take the first `kind: merge` item with an `at` — and the hub rewrites
+it at every event; a `plan` item without `what` or with an unknown `kind` is dropped and named, one with a bad
+`at` kept unscheduled and named. No `plan` is an empty plan, not a problem.
+
 A wave item's named `pr` fills a missing title from gh, and gh's `MERGED` for it upgrades the item to merged
-(marked `(gh)`) but never downgrades one; an item with no `pr` takes the number and title of an open PR on its
+but never downgrades one; an item with no `pr` takes the number and title of an open PR on its
 branch, never a merged one (a reused branch name would carry an old PR). The age shows amber past 30 min, red past 2 h. A malformed
 file keeps the last good parse on screen and names the problem; a missing one prints the seed's `cp` line.
 `excludedRuns` is for full runs that don't count toward the TTL proof (a purge, a cap hit) — the ledger can't
