@@ -29,11 +29,12 @@ sim-bench.sh ── prelude (sign in, shut down) ─▶ run 1..N × [launch, cap
 
 `pnpm sim-bench:seed` runs from a pushed branch's worktree, since the dev lock is held by a branch name. It:
 
-1. checks slot A is free or already this branch's. If another branch is testing on dev, it refuses with `NO_LOCK` before any lock or write.
-2. takes the dev lock: `pnpm bot lock acquire --slot dev`, the same lock `deploy-dev` takes.
-3. signs in as the test user through the devcheck's own sign-in and API client (cached Hosted UI state).
-4. creates `plans.json`'s seed, `devcheck-ios simben`, and moves it to **in progress**. The id is ledgered in `localNotes/devcheck/ledger.dev.jsonl` under a `sim-bench-seed-…` run, so cleanup is by id.
-5. prints the id and the lock's expiry. A seed already in place is reused.
+1. takes the devcheck's run lock. A devcheck running now refuses the seed before any dev lock is taken.
+2. checks slot A is free or already this branch's. If another branch is testing on dev, it refuses with `NO_LOCK` before any lock or write.
+3. takes the dev lock: `pnpm bot lock acquire --slot dev`, the same lock `deploy-dev` takes.
+4. signs in as the test user through the devcheck's own sign-in and API client (cached Hosted UI state).
+5. creates `plans.json`'s seed, `devcheck-ios simben`, and moves it to **in progress**. The id is ledgered in `localNotes/devcheck/ledger.dev.jsonl` under a `sim-bench-seed-…` run, so cleanup is by id.
+6. prints the id and the lock's expiry, and releases the run lock. A seed already in place is reused.
 
 If it fails after taking the lock, it frees dev again (unless the branch held dev before).
 
@@ -41,6 +42,7 @@ If it fails after taking the lock, it frees dev again (unless the branch held de
 
 - Other lanes' slot-A devchecks and deploys wait through `pnpm bot lock wait`. Slot B is unaffected; until `PER_SLOT_RUNS` flips, its devchecks wait only for the seed step itself, which shares the run lock.
 - The lock's TTL is 45 minutes. The session that seeded renews it (`pnpm bot lock renew`) before each expiry, and a 5-run M1 bench needs several renewals.
+- **The lock doesn't stop a merge.** A merge to `main` redeploys dev whatever the lock says (CLAUDE.md → _Git workflow_), and the summary then shows `devBuildChanged`. So the M1 window is also one where dispatch holds merges.
 
 `pnpm sim-bench:seed --clean` deletes the seed by ledger id, recording it in the ledger, then releases the lock. A seed it can't delete stays pending in the ledger, and the next devcheck's sweep takes it.
 
@@ -51,24 +53,18 @@ Two failure modes, both visible in the summary:
 
 ## Setup (each Mac, once per bench version)
 
-**The bench never runs from the shared checkout.** On the main Mac the container can write that folder, and the mailroom's rule is that nothing from it runs on the Mac (MAILROOM.md → _Trust boundary_). It refuses with 75 when its own files, or `--out`, sit under a directory holding `.hostjobs`. So each Mac runs it from a **tarball** of `tools/mailroom` at a commit fetched from GitHub, unpacked into a Mac-only dir, `~/aperture-bench`.
+**The bench never runs from the shared checkout.** On the main Mac the container can write that folder, and the mailroom's rule is that nothing from it runs on the Mac (MAILROOM.md → _Trust boundary_). It refuses with 75 when its own files, its `--runner` or `--plans`, or `--out` sit under a directory holding `.hostjobs`. So each Mac runs it from **GitHub's tarball** of a branch, unpacked into a Mac-only dir, `~/aperture-bench`.
 
-Making the tarball is safe even from the shared checkout:
+The tarball comes straight from GitHub, fetched with the mailroom's own token, the way the mailroom's install line fetches `install.sh` (MAILROOM.md → _Install, update, remove_). Nothing in it passes through the shared checkout or its `.git`, which the container can write. The repo is private and the M1 has no node or token, so the main Mac downloads it and AirDrops it over, rather than the M1 cloning.
 
-- `git fetch` sets `origin/main` from GitHub;
-- `git archive` runs no repo code and reads objects by hash;
-- `.git/config`, `.git/hooks` and `.git/info/attributes` are read-only to the container (CLAUDE.md → COI).
+**Before the merge, `m1-sim-bench` is branch code you haven't reviewed.** On the M1 that's a small blast radius, since its Keychain holds only the dev test password. On the main Mac, wait for the merge: its Keychain holds the mailroom's PR token.
 
-The repo is private and the M1 has no node, which is a second reason for a tarball rather than a clone.
-
-**Before the merge, `origin/m1-sim-bench` is branch code you haven't reviewed.** On the M1 that's a small blast radius, since its Keychain holds only the dev test password. On the main Mac, wait for the merge: its Keychain holds the mailroom's PR token.
-
-| Piece             | How                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Check                                                                    |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| the bench files   | On the main Mac: `cd /Users/rahuldatta/Coding/Personal/aperture && git fetch -q origin && git archive --format=tar.gz --prefix=aperture-bench/ -o ~/Desktop/aperture-bench.tgz origin/main tools/mailroom` (before the merge, M1 only: `origin/m1-sim-bench`). Unpack: on the main Mac `cd ~ && tar xzf ~/Desktop/aperture-bench.tgz`; on the M1, AirDrop it over, then `cd ~ && tar xzf ~/Downloads/aperture-bench.tgz`. An update overwrites the files. | `ls ~/aperture-bench/tools/mailroom/bench/sim-bench.sh`                  |
-| AXe 1.8.0         | Already at `/opt/homebrew/bin/axe`. The bench pins the mailroom plist's PATH (`/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin`), so it never uses the Intel Homebrew in `/usr/local`, and it refuses a tool that resolves there. `jq` is macOS's own `/usr/bin/jq`.                                                                                                                                                                                      | `/opt/homebrew/bin/axe --version`                                        |
-| the sim           | `aperture-devcheck` (iPhone 18 Pro Max, else `PROFILE_MISMATCH`), with dev on its Home Screen **page 2** (else `WEBCLIP_MISSING`); IOS-CHECK.md → _Setup_. It doesn't need to be signed in: the prelude does that.                                                                                                                                                                                                                                        | `xcrun simctl list devices available \| grep -c aperture-devcheck` → `1` |
-| the password (M1) | `security add-generic-password -a rahul3datta+devcheck@gmail.com -s aperture-devcheck-dev -T /usr/bin/security -U -w` prompts for the password twice. Read it on the main Mac with `security find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com -w`, and type it. Universal Clipboard (`… -w \| pbcopy`, then paste) needs both Macs on one Apple ID; clear it afterwards with `pbcopy </dev/null`.                         | the bench's preflight                                                    |
+| Piece             | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Check                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| the bench files   | Download on the main Mac: `curl -sSfL -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -o ~/Desktop/aperture-bench.tgz https://api.github.com/repos/radatta/aperture/tarball/main` (before the merge, for the M1 only: `tarball/m1-sim-bench`). Unpack it clean, so no file of an older version stays behind: on the main Mac `rm -r -f ~/aperture-bench && mkdir ~/aperture-bench && tar xzf ~/Desktop/aperture-bench.tgz -C ~/aperture-bench --strip-components=1`; on the M1, AirDrop it over, then the same with `~/Downloads/aperture-bench.tgz` (the M1 line under _Run it_ does both). | `ls ~/aperture-bench/tools/mailroom/bench/sim-bench.sh`                  |
+| AXe 1.8.0         | Already at `/opt/homebrew/bin/axe`. The bench pins the mailroom plist's PATH (`/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin`), so it never uses the Intel Homebrew in `/usr/local`, and it refuses a tool that resolves there. `jq` is macOS's own `/usr/bin/jq`.                                                                                                                                                                                                                                                                                                                                                                                   | `/opt/homebrew/bin/axe --version`                                        |
+| the sim           | `aperture-devcheck` (iPhone 18 Pro Max, else `PROFILE_MISMATCH`), with dev on its Home Screen **page 2** (else `WEBCLIP_MISSING`); IOS-CHECK.md → _Setup_. It doesn't need to be signed in: the prelude does that.                                                                                                                                                                                                                                                                                                                                                                                                                                     | `xcrun simctl list devices available \| grep -c aperture-devcheck` → `1` |
+| the password (M1) | `security add-generic-password -a rahul3datta+devcheck@gmail.com -s aperture-devcheck-dev -T /usr/bin/security -U -w` prompts for the password twice. Read it on the main Mac with `security find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com -w`, and type it. Universal Clipboard (`… -w \| pbcopy`, then paste) needs both Macs on one Apple ID; clear it afterwards with `pbcopy </dev/null`.                                                                                                                                                                                                                      | the bench's preflight                                                    |
 
 The tarball has no git metadata, so `repoSha` reads `unknown`. What identifies the run is in every result: `simShSha256` (the sha256 of the `jobs/sim.sh` beside the runner that ran), plus `runnerSha256` and `plansSha256`. **Main's `sim.sh` changes when sim-speedups-be merges.** Compare runs by `simShSha256`, never by date.
 
@@ -82,9 +78,13 @@ The tarball has no git metadata, so `repoSha` reads `unknown`. What identifies t
 
 Run it in Terminal **in the Mac's GUI session**, not over SSH: there the login Keychain is locked, and the prelude ends `PASSWORD_MISSING`.
 
+On the M1, with the tarball AirDropped into `~/Downloads` (_Setup_), one paste unpacks it clean and runs:
+
 ```bash
-cd ~/aperture-bench && /bin/bash tools/mailroom/bench/sim-bench.sh --tag m1
+rm -r -f ~/aperture-bench && mkdir ~/aperture-bench && tar xzf ~/Downloads/aperture-bench.tgz -C ~/aperture-bench --strip-components=1 && cd ~/aperture-bench && /bin/bash tools/mailroom/bench/sim-bench.sh --tag m1
 ```
+
+A rerun from the same unpack is `cd ~/aperture-bench && /bin/bash tools/mailroom/bench/sim-bench.sh --tag m1`.
 
 The console shows each job's op progress, then one line per job (`r2 capture pass 61.3 s`). Results go to `~/aperture-sim-bench/<UTC stamp>-<tag>/`.
 
@@ -121,7 +121,7 @@ A job whose runner doesn't answer within its timeout plus 120 s is stopped with 
 
 The M3's mailroom agent drives the same sim, `aperture-devcheck`, and a container devcheck arriving mid-bench would interleave jobs with it. So the bench refuses while the agent is loaded. Booting the agent out takes the M3's sim and `open-pr` away from every lane, so **ask dispatch for the M3 window**. It must be quiet: before auto-6's BEFORE runs or after its AFTER runs, never between them. The M1 run has no such restriction.
 
-After the merge, with `~/aperture-bench` unpacked from `origin/main` (_Setup_):
+After the merge, with `~/aperture-bench` unpacked from main's tarball (_Setup_):
 
 ```bash
 cd ~/aperture-bench && launchctl bootout gui/$(id -u)/dev.rahuldatta.aperture.mailroom && /bin/bash tools/mailroom/bench/sim-bench.sh --tag m3; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.rahuldatta.aperture.mailroom.plist
@@ -231,9 +231,10 @@ It writes `tools/mailroom/bench/plans.json`, along with the prelude (`launch`, `
    - bad flags;
    - not on a Mac.
 8. **Aborts:** no password, no device, or a failed sign-in prelude.
-9. **A hung runner** is stopped with its process group (its children too) and recorded `NO_RESULT`. After every job, the bench's private inbox and runner lock are cleared, so a stopped job can't run inside the next one or lock it out.
+9. **A hung runner** is stopped with its process group (its children too) and recorded `NO_RESULT`, and the next job runs.
 10. **An unreadable `result.json`** is recorded `BAD_RESULT`.
-11. **The shared checkout:** the bench refuses to run from, or write results into, a directory under one holding `.hostjobs`.
+11. **A runner that dies mid-drain**, leaving its envelope and lock behind: after every job the bench clears its private inbox and runner lock, so the stranded job never runs inside the next one or locks it out.
+12. **The shared checkout:** the bench refuses to run from, or write results into, a directory under one holding `.hostjobs`, and refuses a `--runner` there. Only fixture mode off a Mac (`SIM_BENCH_FX_ALLOW_SHARE=1`) skips the check, since the suite itself runs inside the shared checkout.
 
 The plans' drift, validity (`validateSimParams`), order and seed are checked in `sim-bench.test.ts`, and the seed's lock and ledger handling in `sim-bench-seed.test.ts`. Static checks cover the scripts:
 
