@@ -72,7 +72,15 @@ export async function fetchLogs(
   // No --groups: the slot this branch holds a lock on (slot B's groups carry `-devb`), else slot A's.
   let groups = args.groups;
   if (groups === undefined) {
-    const slot = label === 'logs' ? null : await heldSlot(api, label).catch(() => null);
+    const slot =
+      label === 'logs'
+        ? null
+        : await heldSlot(api, label).catch((err: unknown) => {
+            log(
+              `couldn't read the dev locks (${(err as Error).message}) — reading slot A's groups; --groups to choose`,
+            );
+            return null;
+          });
     groups = slot === 'devb' ? 'bff-devb,mcp-devb' : 'bff,mcp';
     if (slot === 'devb')
       log(`${label} holds the devb lock — reading devb's groups (--groups to choose)`);

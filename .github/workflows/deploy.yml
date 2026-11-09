@@ -60,7 +60,7 @@ jobs:
         run: |
           node --version
           mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot dev)
-          # Slot B: full only on a shape change since its last main deploy (cdk/ or the lockfile), else none.
+          # Slot B: full only on a shape change since its last main deploy (cdk/, the lockfile, or shared's stage.ts), else none.
           mode_devb=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot devb)
           mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")
           for mode in "$mode_dev" "$mode_devb" "$mode_prod"; do

@@ -136,7 +136,7 @@ async function listRuns(): Promise<DeployRun[]> {
       '--workflow',
       'deploy-dev.yml',
       '--limit',
-      '10',
+      '20', // both slots' dispatches share this list
       '--json',
       RUN_FIELDS,
     ]);

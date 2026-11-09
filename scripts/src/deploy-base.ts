@@ -15,10 +15,11 @@
 //   list exhausted, API error, a shape we can't read → unknown
 // Unknown → full, always: a wrong `full` costs CI minutes, a wrong skip leaves a stage stale.
 //
-// Both dev slots record in `dev-main` (one GitHub environment, INFRA §2), told apart by job name: deploy.yml's
-// `deploy-devb` is slot B's, every other job slot A's (older records predate slot B). `--slot` walks one slot's records
+// Both dev slots record in `dev-main` (one GitHub environment, INFRA §2), told apart by job name, exactly (slotOfJob):
+// deploy.yml's `deploy-dev / …` is slot A's — every older record carries it — and `deploy-devb / …` slot B's; any other
+// name is unknown to both walks (→ full), never guessed. `--slot` walks one slot's records
 // only, so a devb deploy is never read as dev's base or the other way round. Slot B's main lane deploys only a shape
-// change (cdk/ or the lockfile, shapeModeFor): its code moves with every dispatch, but the freeze refuses a branch whose
+// change (cdk/, the lockfile or shared's stage.ts — shapeModeFor): its code moves with every dispatch, but the freeze refuses a branch whose
 // shape devb doesn't already run (docs/ops/CI-BOT.md → Dev slots).
 //
 // Run: `node scripts/src/deploy-base.ts <environment> <head sha> [--slot dev|devb]` prints the tier on stdout, the reasoning on stderr,
@@ -148,9 +149,13 @@ export function modeFor(
   }
 }
 
-// Slot B's main lane: full only when the shape moved since devb's last full deploy (a cdk/ change, or the lockfile —
-// an aws-cdk-lib bump), else none. Unknown or a failed diff → full, as everywhere.
-export const SHAPE_PATHS = (p: string) => p.startsWith('cdk/') || p === 'pnpm-lock.yaml';
+// Slot B's main lane: full only when the shape moved since devb's last full deploy (a cdk/ change, the lockfile —
+// an aws-cdk-lib bump — or the one shared file whose change reaches a frozen shape: DEV_SLOTS / isDevSlot set devb's
+// table settings), else none. Unknown or a failed diff → full, as everywhere. cdk's other shared import is rpc.ts's
+// header names, which reach only CloudFront policies the freeze doesn't hold, so the next dispatch carries them; the
+// test pins that list, so a new cdk import from shared makes someone choose.
+export const SHAPE_PATHS = (p: string) =>
+  p.startsWith('cdk/') || p === 'pnpm-lock.yaml' || p === 'packages/shared/src/stage.ts';
 export function shapeModeFor(
   base: Base,
   head: string,

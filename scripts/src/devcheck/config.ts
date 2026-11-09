@@ -13,7 +13,7 @@ export const DEVB_ORIGIN = 'https://devb.aperture.rahuldatta.dev';
 // Each slot's three addresses: its origin, its Files bucket (the CDK name of stack ApertureData-<slot>, construct
 // Files — never another bucket, prod's included) and its pool's Hosted UI (the CDK prefix carries the account id).
 export type Slot = 'dev' | 'devb';
-export const SLOTS: readonly Slot[] = ['dev', 'devb']; // = @aperture/shared DEV_SLOTS (config.test pins it)
+export const SLOTS: readonly Slot[] = ['dev', 'devb']; // = @aperture/shared DEV_SLOTS (config.slots.test pins it)
 interface SlotTarget {
   origin: string;
   filesHost: RegExp;

@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +22,7 @@ import {
   run,
   servedBy,
   shapeModeFor,
+  SHAPE_PATHS,
   slotOfJob,
   SLOTS,
   withTimeout,
@@ -301,6 +310,34 @@ describe('shapeModeFor (devb on a main merge)', () => {
     expect(shapeModeFor({ infra: 'f', front: 'f' }, 'c1', diff)).toBe('full');
     expect(shapeModeFor({ infra: 'c1', front: 'c1' }, 'p1', diff)).toBe('full');
     expect(shapeModeFor({ infra: 'p1', front: 'p1' }, 'p1', diff)).toBe('none');
+  });
+  it('counts shared stage.ts as shape, and pins what else cdk takes from shared', () => {
+    expect(SHAPE_PATHS('packages/shared/src/stage.ts')).toBe(true);
+    expect(SHAPE_PATHS('packages/shared/src/rpc.ts')).toBe(false);
+    const root = fileURLToPath(new URL('../../cdk/src/', import.meta.url));
+    const names = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name))
+          for (const m of readFileSync(p, 'utf8').matchAll(
+            /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@aperture\/shared'/g,
+          ))
+            for (const n of m[1]!.split(',')) if (n.trim()) names.add(n.trim());
+      }
+    };
+    walk(root);
+    // stage.ts (shape) and rpc.ts's headers (not frozen). A new name: is its file shape? then SHAPE_PATHS takes it.
+    expect([...names].sort()).toEqual(
+      [
+        'AGENT_TOKEN_HEADER',
+        'AUTH_HEADER',
+        'DEV_SLOTS',
+        'ORIGIN_SECRET_HEADER',
+        'isDevSlot',
+      ].sort(),
+    );
   });
   it('is full when unknown or when the diff fails', () => {
     expect(shapeModeFor('unknown', 'h', diff)).toBe('full');

@@ -77,6 +77,8 @@ export async function currentBase(api: Api, slot: Slot = 'dev'): Promise<string>
       // `dev` pushes: the path was retired at dev-cutover, but the admin bypass can still recreate the branch and every
       // older commit's deploy.yml deploys it. Whatever branch that was, its diff is unknown here — so a dev push
       // newer than both others means a full deploy.
+      // Its prefix has no ' /' (the old jobs were `deploy-dev` and `deploy-dev-fast`); `deploy-devb / …` can't show up here,
+      // since only a commit with slot B's deploy.yml has that job, and that file deploys main alone.
       slot === 'dev'
         ? lastDevJob(api, 'deploy.yml', 'event=push&branch=dev', 'deploy-dev', () => true)
         : undefined,

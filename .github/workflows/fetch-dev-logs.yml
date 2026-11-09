@@ -3,7 +3,8 @@ name: Fetch dev logs
 # Dev CloudWatch logs for Claude, which has no AWS access in the container (docs/ops/CI-BOT.md). The bot
 # (`pnpm bot logs`) dispatches this on `ref: main` and downloads the artifact. Dev only, by construction:
 # the `dev-logs` environment is main-only, its role (aperture-github-logs-dev, cicd-stack.ts) can read only
-# the three dev Lambda groups, and the script maps a fixed allowlist to `-dev` group names.
+# the dev slots' Lambda groups (bff, mcp, finance-sync, push-dispatch on dev and devb), and the script maps a fixed
+# allowlist (scripts/src/bot/logs-spec.ts) to `-dev` / `-devb` group names.
 # The run-name is how the bot finds its run: `dev-logs <key>`.
 run-name: dev-logs ${{ inputs.key }}
 
@@ -19,7 +20,7 @@ on:
         required: true
         type: string
       groups:
-        description: Comma list of bff, mcp, finance-sync
+        description: Comma list of bff, mcp, finance-sync, push-dispatch (slot B's with -devb, e.g. bff-devb)
         required: false
         type: string
         default: bff,mcp

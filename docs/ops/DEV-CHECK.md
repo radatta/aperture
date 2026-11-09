@@ -56,7 +56,7 @@ The dev account has two stacks, `dev` (slot A) and `devb` (slot B, CI-BOT.md →
 its branch's dev lock is on** — read at start from `refs/locks/dev` / `refs/locks/devb` with the container's read-only
 token (`slot.ts`), never from a flag. No lock of its own → `dev`, as every run was before slot B (a check of main's
 deploy holds none) — unless another branch holds `dev` live: then the run stops (`NO_LOCK`) rather than sweep and
-write into that branch's test. So a run never lands on a stack another branch holds. A lock read that fails stops the
+write into that branch's test. So a run never lands on a stack another branch holds live. A lock read that fails stops the
 run too (`SLOT_UNKNOWN`). The report's header names the target (`· on devb (https://…)`). Everything a run keeps is
 per slot: the env file
 (`.secrets/devcheck.<slot>.env`), the signed-in state (`devcheck.<slot>.state.json`), the ledger
