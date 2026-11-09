@@ -1068,8 +1068,8 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.sittings, id, { prepTarget: tag });
   }
   async setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting> {
+    const r = normalizeSittingReview(review); // validates first, as the Lambda does
     this.mustFind(this.store.sittings, id);
-    const r = normalizeSittingReview(review);
     return this.writes.patch(this.store.sittings, id, {
       review: r && { ...r, updatedAt: this.now() },
     });

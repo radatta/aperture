@@ -391,6 +391,7 @@ describe('Right now — a LeetCode sitting', () => {
       startedAt: Date.now() + shift,
       tzOffsetMinutes: new Date().getTimezoneOffset(),
     });
+    await api.setTaskEstimate(sitting.repTaskId, null, null); // a rep that lost its estimate
     shift = 0;
     renderApp({ api, path: '/' });
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
@@ -398,6 +399,8 @@ describe('Right now — a LeetCode sitting', () => {
     expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('37');
+    // A rep with no estimate of its own takes the Roll's, as End sitting does.
+    expect(screen.getByLabelText<HTMLInputElement>('Estimate in hindsight').value).toBe('45');
   });
 
   it('an ordinary task in progress has no link, and Done keeps its own prefill', async () => {

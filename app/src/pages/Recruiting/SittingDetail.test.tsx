@@ -163,7 +163,7 @@ describe('the review', () => {
     await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
     expect(await screen.findByText(/it took too long/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
-    expect(await screen.findByText(/check your connection/)).toBeTruthy();
+    expect(await screen.findByText(/the request failed/)).toBeTruthy();
     expect(screen.getByLabelText<HTMLInputElement>('Mistake 1').value).toBe('mine');
     await user.click(screen.getByRole('button', { name: 'Save review' }));
     expect(await screen.findByText('Saved.')).toBeTruthy();
@@ -185,6 +185,54 @@ describe('the review', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  it('a tag left in the box is saved as a chip, and the next Save keeps it', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const save = vi.spyOn(api, 'setSittingReview');
+    await open(api);
+    await user.type(await screen.findByLabelText('Tags'), 'Sliding Window');
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect(
+      within(screen.getByRole('list', { name: 'Your tags' })).getByText('sliding window'),
+    ).toBeTruthy();
+    await user.type(screen.getByLabelText('One-liner'), 'later');
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]![1].tags).toEqual(['sliding window']);
+  });
+
+  it('Add a mistake focuses its field; removing a tag keeps focus in the tags', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    await open(api);
+    await user.click(await screen.findByRole('button', { name: 'Add a mistake' }));
+    expect(document.activeElement).toBe(screen.getByLabelText('Mistake 1'));
+    const box = screen.getByLabelText('Tags');
+    await user.type(box, 'a{Enter}b{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Remove tag a' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove tag b' })),
+    );
+    await user.click(screen.getByRole('button', { name: 'Remove tag b' }));
+    await waitFor(() => expect(document.activeElement).toBe(box));
+  });
+
+  it('a review that saved with a prep target that didn’t says which', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    vi.spyOn(api, 'setSittingPrepTarget').mockRejectedValueOnce(new Error('offline'));
+    await open(api);
+    const prep = await screen.findByLabelText('Prep target');
+    await user.clear(prep);
+    await user.type(prep, 'Stripe');
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /review saved, but the prep target didn’t/,
+    );
+    expect(screen.getByLabelText<HTMLInputElement>('Prep target').value).toBe('Stripe');
+  });
+
   it('a draft with nothing judged yet says there’s nothing to draft', async () => {
     const user = userEvent.setup();
     const { api, sitting } = await withOpenSitting();
@@ -203,7 +251,11 @@ describe('End sitting', () => {
     expect(await screen.findByText(/In progress/)).toBeTruthy();
     await user.click(await screen.findByRole('button', { name: 'End sitting' }));
     expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('1');
+    // Focus moves into the form (not Actual — no phone keyboard), and Cancel hands it back.
+    expect(document.activeElement?.contains(screen.getByLabelText('Actual (min)'))).toBe(true);
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Actual (min)'));
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'End sitting' }));
     expect((await api.getSitting(sitting.id)).sitting.status).toBe('active');
 
     await user.click(screen.getByRole('button', { name: 'End sitting' }));

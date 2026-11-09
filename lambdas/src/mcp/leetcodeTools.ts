@@ -232,7 +232,7 @@ function sittingRead(d: SittingDetail, now: number) {
             rewrites: f.rewrites,
           }
         : null,
-    review: s.review ?? null,
+    review: s.review ? { ...s.review, updatedAt: iso(s.review.updatedAt) } : null,
     note: 'Snapshots between submits are kept 14 days, so an older sitting may have no "codeChanged" markers. `review` is his own words.',
   };
 }
@@ -338,6 +338,8 @@ export const LEETCODE_TOOLS: Tool[] = [
       ] as const)
         if (v !== undefined && (typeof v !== 'string' || !isDayKey(v)))
           throw new RpcParamError(`"${k}" must be an ISO date (YYYY-MM-DD)`);
+      if (typeof from === 'string' && typeof to === 'string' && from > to)
+        throw new RpcParamError('"from" must not be after "to"');
       if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
         throw new RpcParamError('"limit" must be a whole number from 1 to 100');
       const now = ctx.now?.() ?? Date.now();

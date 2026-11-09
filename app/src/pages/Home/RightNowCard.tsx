@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { Link } from 'react-router';
 import {
   deadlineOf,
@@ -9,6 +9,7 @@ import {
   needsEstimate,
   parentOf,
   placedByTime,
+  ROLL_PLAN_FALLBACK_MIN,
   sittingMinutes,
   todayKey,
 } from '@aperture/shared';
@@ -22,6 +23,7 @@ import { useNow } from '../../lib/useNow';
 import { useRowAction } from '../../lib/useRowAction';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useOpenSittingFor } from '../../data/hooks/useSittings';
+import { useRolls } from '../../data/hooks/useRolls';
 import { urgencyClass, urgencyLabel } from '../../modules/tasks/dueStyle';
 import { useUpsertPlan } from '../../data/hooks/usePlans';
 import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
@@ -256,14 +258,22 @@ export function RightNowCard() {
               </Button>
             </div>
             {heroSitting && <SittingLink id={heroSitting.id} />}
-            {doneOpen?.taskId === hero.id && (
-              <DoneForm
-                task={hero}
-                initialActualMin={doneOpen.initialMin}
-                actualRef={focusActual}
-                onDone={() => setDoneOpen(null)}
-              />
-            )}
+            {doneOpen?.taskId === hero.id &&
+              (heroSitting ? (
+                <RepDoneForm
+                  task={hero}
+                  initialActualMin={doneOpen.initialMin}
+                  actualRef={focusActual}
+                  onDone={() => setDoneOpen(null)}
+                />
+              ) : (
+                <DoneForm
+                  task={hero}
+                  initialActualMin={doneOpen.initialMin}
+                  actualRef={focusActual}
+                  onDone={() => setDoneOpen(null)}
+                />
+              ))}
           </Hero>
         ) : (
           rn.nextPrompt && <Text tone="muted">{PROMPT_COPY[rn.nextPrompt]}</Text>
@@ -424,6 +434,22 @@ function SittingLink({ id }: { id: string }) {
     </Link>
   );
 }
+// A sitting's rep that lost its estimate takes its Roll's, as End sitting and Flux's tie do. Its own
+// component, so Home reads the Rolls only while that form is open.
+function RepDoneForm(props: {
+  task: Task;
+  initialActualMin: number;
+  actualRef: Ref<HTMLInputElement>;
+  onDone: () => void;
+}) {
+  const roll = useRolls().data?.find((r) => r.id === props.task.rollId);
+  return (
+    <DoneForm
+      {...props}
+      initialEstimateMin={Math.max(1, Math.round(roll?.estimateMin ?? ROLL_PLAN_FALLBACK_MIN))}
+    />
+  );
+}
 function RowSittingLink({ task }: { task: Task }) {
   const open = useOpenSittingFor(task, useNow());
   return open ? <SittingLink id={open.id} /> : null;
@@ -444,42 +470,45 @@ function AlsoRow({
   const canFocus = row.plan != null && (t.status === 'backlog' || t.status === 'planned');
   const u = useUrgency(t);
   return (
-    <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <RowText
-        task={t}
-        title={
-          <Text
-            size="sm"
-            tone="muted"
-            className={cx('min-w-0 max-w-full truncate', t.status === 'done' && 'line-through')}
-          >
-            {t.title}
-          </Text>
-        }
-      >
-        <PartCategory task={t} />
-        <PartOf task={t} />
-        <RollTag rollId={t.rollId} />
-        <DueTime task={t} />
-        {row.unplanned && (
-          <Text size="xs" tone="subtle">
-            not planned today
-          </Text>
-        )}
-        {t.status === 'in_progress' && <RowSittingLink task={t} />}
-      </RowText>
-      <div className="flex shrink-0 items-center gap-2">
-        {t.status === 'in_progress' && (
-          <Text size="xs" tone="muted" tabular>
-            {fmtDuration(t.actualAccruedMin)} in
-          </Text>
-        )}
-        {canFocus && (
-          <Button variant="quiet" size="sm" disabled={busy} onClick={() => onFocus(t.id)}>
-            Focus this
-          </Button>
-        )}
+    <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
+      <div className="flex items-center justify-between gap-3">
+        <RowText
+          task={t}
+          title={
+            <Text
+              size="sm"
+              tone="muted"
+              className={cx('min-w-0 max-w-full truncate', t.status === 'done' && 'line-through')}
+            >
+              {t.title}
+            </Text>
+          }
+        >
+          <PartCategory task={t} />
+          <PartOf task={t} />
+          <RollTag rollId={t.rollId} />
+          <DueTime task={t} />
+          {row.unplanned && (
+            <Text size="xs" tone="subtle">
+              not planned today
+            </Text>
+          )}
+        </RowText>
+        <div className="flex shrink-0 items-center gap-2">
+          {t.status === 'in_progress' && (
+            <Text size="xs" tone="muted" tabular>
+              {fmtDuration(t.actualAccruedMin)} in
+            </Text>
+          )}
+          {canFocus && (
+            <Button variant="quiet" size="sm" disabled={busy} onClick={() => onFocus(t.id)}>
+              Focus this
+            </Button>
+          )}
+        </div>
       </div>
+      {/* Its own line, as in a Big-3 row: inside RowText it wrapped and took the row's "·" at phone width. */}
+      {t.status === 'in_progress' && <RowSittingLink task={t} />}
     </div>
   );
 }

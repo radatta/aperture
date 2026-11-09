@@ -1,4 +1,4 @@
-import { timelineOf } from '@aperture/shared';
+import { msToMin, timelineOf } from '@aperture/shared';
 import type { JudgeDetail, Sitting, SittingEvent } from '@aperture/shared';
 import { Text } from '../../components/Text';
 import { verdictLabel, verdictTone } from './recruitingHelpers';
@@ -29,7 +29,7 @@ export function SittingTimeline({ sitting, events }: { sitting: Sitting; events:
                 {e.type === 'run' ? 'Run' : 'Submit'} {e.n}
                 <Text size="sm" tone="muted" tabular>
                   {' '}
-                  · +{Math.round(e.offsetMs / 60_000)}m
+                  · +{msToMin(e.offsetMs)}m
                 </Text>
               </Text>
               <Text size="sm" weight="medium" tone={verdictTone(e.verdict.verdict)} tabular>

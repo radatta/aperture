@@ -2,6 +2,7 @@ import {
   DRAFT_CODE_MAX,
   DRAFT_LINES_MAX,
   firstSubmitCode,
+  msToMin,
   REVIEW_LINE_MAX,
   timelineOf,
 } from '@aperture/shared';
@@ -49,7 +50,7 @@ export function sittingDraftData(
           {
             type: x.type,
             n: x.n,
-            minute: Math.round(x.offsetMs / 60_000),
+            minute: msToMin(x.offsetMs),
             verdict: x.verdict.statusMsg ?? x.verdict.verdict,
             passed: x.verdict.passed,
             total: x.verdict.total,

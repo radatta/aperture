@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import {
   normalizePrepTarget,
   normalizeSittingReview,
@@ -20,6 +20,7 @@ import {
   useSetSittingReview,
 } from '../../data/hooks/useSittings';
 import { NotesField } from '../../modules/tasks/notes/NotesField';
+import { Textarea } from '../../components/Textarea';
 
 const HELP: { value: HelpLevel; label: string }[] = [
   { value: 'none', label: 'No help' },
@@ -36,6 +37,8 @@ const DRAFT_FAILED: Record<DraftFailReason, string> = {
   'bad-shape': 'Couldn’t draft — the answer broke the rules. Write your own.',
 };
 type DraftLine = { text: string; ticked: boolean };
+const folded = (s: string) => s.replace(/\s+/g, ' ').trim(); // as the server counts it
+const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 
 // The sitting's review (docs/areas/recruiting → Review): his one-liner, how much help it took, the mistakes,
 // how it went, his own pattern tags and the prep target — one Save for all of it. "Draft with Claude" only
@@ -60,10 +63,14 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const drafting = useDraftSittingReview();
   const [draftNote, setDraftNote] = useState<string | null>(null);
   const id = useId();
+  const chips = useRef<HTMLUListElement>(null);
+  const tagBox = useRef<HTMLInputElement>(null);
+  const [focusMistake, setFocusMistake] = useState<number | null>(null); // the line Add a mistake made
 
   const ticked = draft.filter((d) => d.ticked && d.text.trim());
-  const insightOver = insight.trim().length > REVIEW_INSIGHT_MAX;
-  const howOver = howItWent.trim().length > REVIEW_HOW_MAX;
+  const insightLen = folded(insight).length;
+  const insightOver = insightLen > REVIEW_INSIGHT_MAX;
+  const howOver = folded(howItWent).length > REVIEW_HOW_MAX;
 
   function addTag(raw: string) {
     const t = raw.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -75,6 +82,17 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
     setError(null);
   }
 
+  // Focus stays in the chips (the next one, else the box) rather than dropping to the page.
+  function removeTag(t: string) {
+    const at = tags.indexOf(t);
+    const rest = tags.filter((x) => x !== t);
+    setTags(rest);
+    requestAnimationFrame(() => {
+      const next = chips.current?.querySelectorAll('button')[Math.min(at, rest.length - 1)];
+      (next ?? tagBox.current)?.focus();
+    });
+  }
+
   async function draftIt() {
     setDraftNote(null);
     try {
@@ -83,7 +101,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       if (!out.mistakes.length) return setDraftNote('Claude found nothing to add.');
       setDraft(out.mistakes.map((text) => ({ text, ticked: false })));
     } catch {
-      setDraftNote(DRAFT_FAILED.network);
+      setDraftNote('Couldn’t draft — the request failed. Write your own.');
     }
   }
 
@@ -101,24 +119,33 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       draftUsed: usedDraft,
     };
     let prepTag: string;
+    let normal: ReturnType<typeof normalizeSittingReview>;
     try {
-      normalizeSittingReview(input); // refuse here what the server would, keeping every field
+      normal = normalizeSittingReview(input); // refuse here what the server would, keeping every field
       prepTag = normalizePrepTarget(prep);
     } catch (e) {
       setError(`${(e as Error).message}.`);
       return;
     }
     setBusy(true);
+    let step: 'review' | 'prep' = 'review';
     try {
       await setReview.mutateAsync({ id: sitting.id, review: input });
+      step = 'prep';
       if (prepTag !== sitting.prepTarget)
         await setPrepTarget.mutateAsync({ id: sitting.id, prepTarget: prepTag });
-      setMistakes(all.map((m) => m.replace(/\s+/g, ' ').trim()).filter(Boolean));
+      // The form now shows what was saved — a tag still in the box becomes a chip, so the next Save keeps it.
+      setMistakes(normal?.mistakes ?? []);
+      setTags(normal?.tags ?? []);
       setDraft([]);
       setTagText('');
       setStatus('Saved.');
     } catch {
-      setError('Couldn’t save the review — check your connection and try again. Nothing was lost.');
+      setError(
+        step === 'review'
+          ? 'Couldn’t save the review — try again. Your text is still here.'
+          : 'The review saved, but the prep target didn’t — try Save again.',
+      );
     } finally {
       setBusy(false);
     }
@@ -137,9 +164,9 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
           onChange={(e) => setInsight(e.target.value)}
           aria-invalid={insightOver || undefined}
         />
-        {insight.trim().length > REVIEW_INSIGHT_MAX - 40 && (
+        {insightLen > REVIEW_INSIGHT_MAX - 40 && (
           <Text size="xs" tabular tone={insightOver ? 'danger' : 'muted'} className="self-end">
-            {insight.trim().length} / {REVIEW_INSIGHT_MAX}
+            {insightLen} / {REVIEW_INSIGHT_MAX}
             {insightOver && ' · too long to save'}
           </Text>
         )}
@@ -149,9 +176,14 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
         <Text size="sm" tone="muted" id={`${id}-help`}>
           Help
         </Text>
-        <div aria-labelledby={`${id}-help`} role="group">
-          <ModeToggle options={HELP} value={help} onChange={setHelp} size="sm" />
-        </div>
+        <ModeToggle
+          options={HELP}
+          value={help}
+          onChange={setHelp}
+          size="sm"
+          aria-labelledby={`${id}-help`}
+          className="self-start"
+        />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -159,10 +191,13 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
           Mistakes
         </Text>
         {mistakes.map((m, i) => (
-          <div key={i} className="flex items-center gap-2">
+          <div key={i} className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
-              <Field
+              <Textarea
                 aria-label={`Mistake ${i + 1}`}
+                rows={1}
+                autogrow
+                ref={i === focusMistake ? focusOnMount : undefined}
                 value={m}
                 onChange={(e) =>
                   setMistakes(mistakes.map((x, j) => (j === i ? e.target.value : x)))
@@ -173,7 +208,10 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
               variant="quiet"
               size="sm"
               aria-label={`Remove mistake ${i + 1}`}
-              onClick={() => setMistakes(mistakes.filter((_, j) => j !== i))}
+              onClick={() => {
+                setFocusMistake(null);
+                setMistakes(mistakes.filter((_, j) => j !== i));
+              }}
             >
               Remove
             </Button>
@@ -184,7 +222,11 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
             variant="ghost"
             size="sm"
             aria-disabled={mistakes.length >= REVIEW_MISTAKES_MAX || undefined}
-            onClick={() => mistakes.length < REVIEW_MISTAKES_MAX && setMistakes([...mistakes, ''])}
+            onClick={() => {
+              if (mistakes.length >= REVIEW_MISTAKES_MAX) return;
+              setFocusMistake(mistakes.length);
+              setMistakes([...mistakes, '']);
+            }}
           >
             Add a mistake
           </Button>
@@ -207,21 +249,23 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
             className="flex flex-col gap-2 rounded-xl border border-dashed border-line p-3"
           >
             <div className="flex items-center justify-between gap-2">
-              <Text size="sm" tone="muted">
+              <Text size="sm" tone="muted" className="min-w-0">
                 Claude’s draft — tick the lines to keep
               </Text>
               <Button
                 variant="quiet"
                 size="sm"
+                className="shrink-0 whitespace-nowrap"
                 onClick={() => setDraft(draft.map((d) => ({ ...d, ticked: true })))}
               >
                 Use all
               </Button>
             </div>
             {draft.map((d, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex items-start gap-2">
                 <input
                   type="checkbox"
+                  className="mt-3.5 shrink-0"
                   aria-label={`Keep draft line ${i + 1}`}
                   checked={d.ticked}
                   onChange={(e) =>
@@ -231,8 +275,10 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
                   }
                 />
                 <div className="min-w-0 flex-1">
-                  <Field
+                  <Textarea
                     aria-label={`Draft line ${i + 1}`}
+                    rows={1}
+                    autogrow
                     value={d.text}
                     onChange={(e) =>
                       setDraft(draft.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))
@@ -263,6 +309,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
 
       <div className="flex flex-col gap-2">
         <Field
+          ref={tagBox}
           label="Tags"
           placeholder="Your own pattern tags — Enter adds"
           value={tagText}
@@ -283,7 +330,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
           Up to {REVIEW_TAGS_MAX}.
         </Text>
         {tags.length > 0 && (
-          <ul aria-label="Your tags" className="flex flex-wrap gap-1.5">
+          <ul ref={chips} aria-label="Your tags" className="flex flex-wrap gap-1.5">
             {tags.map((t) => (
               <li
                 key={t}
@@ -293,7 +340,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
                 <button
                   type="button"
                   aria-label={`Remove tag ${t}`}
-                  onClick={() => setTags(tags.filter((x) => x !== t))}
+                  onClick={() => removeTag(t)}
                   className="rounded-full px-1.5 text-sm text-ink-muted hover:bg-panel-2 hover:text-ink"
                 >
                   ×

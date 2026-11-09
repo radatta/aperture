@@ -330,6 +330,7 @@ describe('get_sitting and list_sittings', () => {
       code: { final: 'v2', version: 2 },
       review: { insight: 'two pointers', help: 'hint', tags: ['two-pointers'] },
     });
+    expect(out.review.updatedAt).toMatch(/^\d{4}-\d\d-\d\dT/); // ISO, like every other time
     expect(out.timeline[1].detail.input).toHaveLength(300);
     expect(JSON.stringify(doc.snapshot())).toBe(before);
     expect(await call('get_sitting', { id: s.id })).toMatchObject({ sitting: { id: s.id } });
@@ -377,6 +378,7 @@ describe('get_sitting and list_sittings', () => {
       { limit: 101 },
       { from: 'yesterday', to: '2026-11-09' },
       { from: '2026-11-09' },
+      { from: '2026-11-10', to: '2026-11-09' },
     ])
       await expect(call('list_sittings', bad)).rejects.toBeInstanceOf(RpcParamError);
   });

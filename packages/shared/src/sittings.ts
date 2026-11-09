@@ -5,6 +5,7 @@
 // The extension only ever observes LeetCode's own traffic; everything it sends is kept raw under
 // `payload`. The server trusts those payloads as opaque bytes and recomputes everything it decides on.
 
+import { msToMin } from './dates';
 import { normalizeVerdict } from './leetcode';
 import { findOpenRollTask } from './rolls';
 import { isUlid } from './ulid';
@@ -522,7 +523,7 @@ export function sittingElapsedMs(s: Pick<Sitting, 'startedAt' | 'endedAt'>, now:
 }
 // Whole minutes for display, at least 1.
 export const sittingMinutes = (s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number =>
-  Math.max(1, Math.round(sittingElapsedMs(s, now) / 60_000));
+  Math.max(1, msToMin(sittingElapsedMs(s, now)));
 export interface SittingMetrics {
   firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
   submitsBeforeAccepted: number | null;

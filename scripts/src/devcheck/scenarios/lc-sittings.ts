@@ -530,7 +530,7 @@ export const lcSittings: Scenario = {
       id: 'list-bad',
       entry: 'mcp',
       kind: 'edge',
-      what: 'list_sittings refuses limit "5", limit 0, from without to, and a non-date',
+      what: 'list_sittings refuses limit "5", limit 0, from without to, from after to, and a non-date',
     },
     {
       id: 'end-ui',
@@ -561,11 +561,6 @@ export const lcSittings: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Home’s Done on a LeetCode rep with an open sitting starts on the sitting’s minutes',
-      offDev: {
-        file: 'app/src/pages/Home/RightNow.test.tsx',
-        test: 'links to the open sitting and prefills Done with its minutes',
-        why: 'which task Home makes the hero depends on what else the shared test user has in progress; its two halves — the open-sitting lookup and the sitting’s minutes into the Done form — are proven on dev by home-link and end-ui',
-      },
     },
   ],
   steps: [
@@ -1076,20 +1071,23 @@ export const lcSittings: Scenario = {
         await hint.waitFor({ timeout: 15_000 });
         if ((await hint.getAttribute('aria-pressed')) !== 'true')
           throw new Error('help doesn’t start on a hint after a failed submit');
-        await form.getByLabel('How it went').waitFor({ timeout: 5_000 });
+        await form.getByLabel('How it went', { exact: true }).waitFor({ timeout: 5_000 });
         const sizes = await fieldSizes(ctx, 'section[aria-labelledby]');
         if (!sizes.length || sizes.some((px) => px < 16))
           throw new Error(`review field sizes ${JSON.stringify(sizes)} — under 16px zooms iOS`);
         await ctx.shot('review-empty');
-        await form.getByLabel('One-liner').fill('devcheck one-liner');
+        await form.getByLabel('One-liner', { exact: true }).fill('devcheck one-liner');
         await form.getByRole('button', { name: 'Add a mistake' }).click();
-        await form.getByLabel('Mistake 1').fill('devcheck own mistake');
+        await form.getByLabel('Mistake 1', { exact: true }).fill('devcheck own mistake');
         // A failed draft: said inline, the typed mistake kept.
         const fail = await ctx.intercept('draftSittingReview', { status: 500, times: 1 });
         await form.getByRole('button', { name: 'Draft with Claude' }).click();
         await form.getByText(/Couldn’t draft/).waitFor({ timeout: 10_000 });
         await fail.release();
-        if ((await form.getByLabel('Mistake 1').inputValue()) !== 'devcheck own mistake')
+        if (
+          (await form.getByLabel('Mistake 1', { exact: true }).inputValue()) !==
+          'devcheck own mistake'
+        )
           throw new Error('the failed draft lost the typed mistake');
         // A canned draft: the model can't be told what to say, so the reply is the harness's.
         const canned = await ctx.intercept('draftSittingReview', {
@@ -1099,17 +1097,17 @@ export const lcSittings: Scenario = {
         });
         await form.getByRole('button', { name: 'Draft with Claude' }).click();
         const draft = form.getByRole('group', { name: 'Claude’s draft' });
-        await draft.getByLabel('Draft line 2').waitFor({ timeout: 10_000 });
+        await draft.getByLabel('Draft line 2', { exact: true }).waitFor({ timeout: 10_000 });
         await canned.release();
         const boxes = draft.getByRole('checkbox');
         for (let i = 0; i < (await boxes.count()); i++)
           if (await boxes.nth(i).isChecked()) throw new Error('a draft line arrived ticked');
         await ctx.shot('review-draft');
-        await draft.getByLabel('Draft line 2').fill('devcheck draft two, edited');
-        await draft.getByLabel('Keep draft line 2').click();
-        await form.getByLabel('Tags').fill('Devcheck-Tag');
-        await form.getByLabel('Tags').press('Enter');
-        await form.getByLabel('How it went').fill('devcheck how it went');
+        await draft.getByLabel('Draft line 2', { exact: true }).fill('devcheck draft two, edited');
+        await draft.getByLabel('Keep draft line 2', { exact: true }).click();
+        await form.getByLabel('Tags', { exact: true }).fill('Devcheck-Tag');
+        await form.getByLabel('Tags', { exact: true }).press('Enter');
+        await form.getByLabel('How it went', { exact: true }).fill('devcheck how it went');
         await form.getByRole('button', { name: 'Save review' }).click();
         await form.getByText('Saved.').waitFor({ timeout: 15_000 });
         const r = (await sittingA(ctx)).sitting.review;
@@ -1124,10 +1122,16 @@ export const lcSittings: Scenario = {
         )
           throw new Error(`saved review: ${JSON.stringify(r)}`);
         await ctx.page.reload();
-        await form.getByLabel('One-liner').waitFor({ timeout: 15_000 });
-        if ((await form.getByLabel('One-liner').inputValue()) !== 'devcheck one-liner')
+        await form.getByLabel('One-liner', { exact: true }).waitFor({ timeout: 15_000 });
+        if (
+          (await form.getByLabel('One-liner', { exact: true }).inputValue()) !==
+          'devcheck one-liner'
+        )
           throw new Error('the one-liner didn’t read back');
-        if ((await form.getByLabel('Mistake 2').inputValue()) !== 'devcheck draft two, edited')
+        if (
+          (await form.getByLabel('Mistake 2', { exact: true }).inputValue()) !==
+          'devcheck draft two, edited'
+        )
           throw new Error('the ticked draft line didn’t read back');
         await form.getByText('devcheck how it went').waitFor({ timeout: 5_000 });
         await ctx.shot('review-saved');
@@ -1199,6 +1203,11 @@ export const lcSittings: Scenario = {
         'get_sitting with no id is C; with A’s id, A’s timeline, code and review; list_sittings by today, limit, a past month, bad arguments',
       async run(ctx) {
         const r = ctx.mcp.reads;
+        // Its own review on A: this step is cheap, so it can't lean on the slow ui-review's.
+        await ctx.api.writes.setSittingReview(
+          state.a,
+          review({ insight: 'devcheck mcp one-liner', tags: ['devcheck-mcp'] }),
+        );
         const latest = await r.getSitting();
         if (latest.sitting?.id !== state.c || latest.review !== null || latest.timeline?.length)
           throw new Error(`latest: ${JSON.stringify(latest).slice(0, 400)}`);
@@ -1212,7 +1221,7 @@ export const lcSittings: Scenario = {
           wrong.detail.input !== '[3,3]\n6' ||
           wrong.detail.expected !== '[0,1]' ||
           !a.code?.final ||
-          a.review?.insight !== 'devcheck one-liner'
+          a.review?.insight !== 'devcheck mcp one-liner'
         )
           throw new Error(
             `get A: ${JSON.stringify({ ...a, code: a.code?.version }).slice(0, 600)}`,
@@ -1230,7 +1239,7 @@ export const lcSittings: Scenario = {
         const ic = ids.indexOf(state.c);
         if (ia < 0 || ic < 0 || ic > ia) throw new Error(`list: ${JSON.stringify(ids)}`);
         const rowA = listed.sittings[ia]!;
-        if (!rowA.reviewed || JSON.stringify(rowA.tags) !== JSON.stringify(['devcheck-tag']))
+        if (!rowA.reviewed || JSON.stringify(rowA.tags) !== JSON.stringify(['devcheck-mcp']))
           throw new Error(`row A: ${JSON.stringify(rowA)}`);
         const one = await r.listSittings({ limit: 1 });
         if (one.sittings.length !== 1 || !one.more)
@@ -1241,6 +1250,7 @@ export const lcSittings: Scenario = {
           ['limit "5"', () => r.listSittings({ limit: '5' })],
           ['limit 0', () => r.listSittings({ limit: 0 })],
           ['from alone', () => r.listSittings({ from: day })],
+          ['from after to', () => r.listSittings({ from: '2020-01-02', to: '2020-01-01' })],
           ['from "yesterday"', () => r.listSittings({ from: 'yesterday', to: day })],
           ['id "x"', () => r.getSitting({ id: 'x' })],
         ];
@@ -1258,19 +1268,40 @@ export const lcSittings: Scenario = {
       id: 'ui-end',
       entry: 'ui',
       cost: 'slow',
-      proves: ['home-link', 'home-neighbour', 'end-cancel', 'end-ui'],
+      proves: ['home-prefill', 'home-link', 'home-neighbour', 'end-cancel', 'end-ui'],
       title:
-        'Start D: Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
+        'Start D: as Home’s hero its Done starts on D’s minutes; Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
       async run(ctx) {
         const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
         state.d = sitting.id;
         state.dRep = sitting.repTaskId;
         await ctx.api.writes.lcSittingEvents(state.d, [snap('print("d")', Date.now())]);
+        const dMinutes = () => Math.max(1, Math.round((Date.now() - sitting.startedAt) / 60_000));
+        // D's rep alone in progress, so it is Home's hero: its Done prefills from the sitting.
+        await ctx.ui.goto('/');
+        await ctx.page.getByRole('button', { name: 'Daytime' }).click();
+        const link = ctx.page.getByRole('link', { name: 'End the LeetCode sitting →' });
+        await link.first().waitFor({ timeout: 15_000 });
+        const heroDone = link
+          .first()
+          .locator('xpath=..')
+          .getByRole('button', { name: 'Done', exact: true });
+        if ((await heroDone.count()) !== 1)
+          throw new Error(
+            'D’s rep isn’t Home’s hero — is another task in progress for the test user?',
+          );
+        await heroDone.click();
+        const heroShown = Number(await ctx.page.getByLabel('Actual (min)').inputValue());
+        if (Math.abs(heroShown - dMinutes()) > 1)
+          throw new Error(`Home's Done prefilled ${heroShown}, D's ${dMinutes()}`);
+        await ctx.shot('home-done-prefill');
+        await ctx.page.getByRole('button', { name: 'Cancel' }).click();
+        if ((await ctx.api.reads.getSitting(state.d)).sitting.status !== 'active')
+          throw new Error('Cancel on Home ended D');
         const other = await ctx.api.writes.createTask({ title: titleOf(ctx, 'neighbour') });
         await ctx.api.writes.transitionTask(other.id, 'in_progress');
         await ctx.ui.goto('/');
         await ctx.page.getByRole('button', { name: 'Daytime' }).click();
-        const link = ctx.page.getByRole('link', { name: 'End the LeetCode sitting →' });
         await link.first().waitFor({ timeout: 15_000 });
         const hrefs: (string | null)[] = [];
         for (let i = 0; i < (await link.count()); i++)
@@ -1285,7 +1316,7 @@ export const lcSittings: Scenario = {
         const end = ctx.page.getByRole('button', { name: 'End sitting' });
         await end.click({ timeout: 15_000 });
         const shown = Number(await ctx.page.getByLabel('Actual (min)').inputValue());
-        const want = Math.max(1, Math.round((Date.now() - sitting.startedAt) / 60_000));
+        const want = dMinutes();
         if (Math.abs(shown - want) > 1) throw new Error(`Actual prefilled ${shown}, D's ${want}`);
         await ctx.shot('end-sitting');
         await ctx.page.getByRole('button', { name: 'Cancel' }).click();

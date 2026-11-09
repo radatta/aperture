@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import {
   isSittingOpen,
+  msToMin,
   problemCompanies,
   ROLL_PLAN_FALLBACK_MIN,
   sittingMetrics,
@@ -90,7 +91,7 @@ function Loaded({ detail }: { detail: Detail }) {
         <Metric label="First submit">
           {m.timeToFirstSubmitMs === null
             ? '—'
-            : `after ${fmtDuration(Math.max(1, Math.round(m.timeToFirstSubmitMs / 60_000)))}`}
+            : `after ${fmtDuration(Math.max(1, msToMin(m.timeToFirstSubmitMs)))}`}
         </Metric>
         <Metric label={open ? 'So far' : 'Took'}>
           {fmtDuration(sittingMinutes(sitting, now))}
@@ -160,6 +161,8 @@ function Metric({ label, children }: { label: string; children: React.ReactNode 
 
 // Done on the rep ends the sitting (the server's hook); the form starts on the sitting's own minutes, and the
 // Roll's estimate when the rep lost one — RepTie's call.
+const focusOnMount = (el: HTMLElement | null) => el?.focus();
+
 function EndSitting({
   repTaskId,
   rollId,
@@ -170,6 +173,7 @@ function EndSitting({
   minutes: number;
 }) {
   const [ending, setEnding] = useState(false);
+  const back = useRef(false); // Cancel hands focus back to End sitting
   const { data: tasks } = useAllTasks();
   const { data: rolls } = useRolls();
   const rep = tasks?.find((t) => t.id === repTaskId);
@@ -177,12 +181,20 @@ function EndSitting({
   const roll = rolls?.find((r) => r.id === rollId);
   if (!ending)
     return (
-      <Button className="self-start" onClick={() => setEnding(true)}>
+      <Button
+        className="self-start"
+        ref={(el) => {
+          if (el && back.current) el.focus();
+          back.current = false;
+        }}
+        onClick={() => setEnding(true)}
+      >
         End sitting
       </Button>
     );
+  // Focus lands on the form, not its Actual field — no keyboard springs up on a phone.
   return (
-    <div>
+    <div ref={focusOnMount} tabIndex={-1} className="outline-none">
       <Text size="sm" weight="medium">
         End the sitting — mark its rep done
       </Text>
@@ -191,7 +203,10 @@ function EndSitting({
         initialActualMin={minutes}
         initialEstimateMin={Math.max(1, Math.round(roll?.estimateMin ?? ROLL_PLAN_FALLBACK_MIN))}
         onDone={() => setEnding(false)}
-        onCancel={() => setEnding(false)}
+        onCancel={() => {
+          back.current = true;
+          setEnding(false);
+        }}
       />
     </div>
   );
