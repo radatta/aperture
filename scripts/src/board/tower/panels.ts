@@ -232,7 +232,7 @@ const WAVE_BADGE: Record<WaveState, string> = {
 };
 
 // queue.json's items, upgraded to merged when gh says their PR merged (never downgraded: the hub may know better)
-export function waveItems(s: TowerState): (WaveItem & { gh: boolean })[] {
+export function waveItems(s: TowerState): WaveItem[] {
   const items = s.queue.data?.wave?.items ?? [];
   return items.map((it) => {
     // only a named PR can mark an item merged: a reused branch name may carry an old merged PR. By branch,
@@ -247,7 +247,6 @@ export function waveItems(s: TowerState): (WaveItem & { gh: boolean })[] {
       state: merged ? 'merged' : it.state,
       pr: it.pr ?? pr?.number ?? null,
       title: it.title ?? pr?.title ?? null,
-      gh: merged,
     };
   });
 }
@@ -541,16 +540,17 @@ export function failures(s: TowerState, r: Rect): string[] {
 
 // ---- activity ------------------------------------------------------------------------------------
 
-// What changed, not what ran: failed jobs, devcheck runs (their end; the start while in flight), merges, PRs opened, the dev lock taken (a
-// `pnpm bot deploy-dev`) and leases that gave up or were denied. Passing jobs stay in MACHINE and STATUS.
+// What changed, not what ran: failed jobs (not the Vite dev server's), devcheck runs (their end; the start
+// while in flight), merges, PRs opened, the dev lock taken (a `pnpm bot deploy-dev`) and leases that gave up
+// or were denied. Passing jobs stay in MACHINE and STATUS.
 export function feedItems(s: TowerState): FeedItem[] {
   const since = s.now - DAY;
   const out: FeedItem[] = [];
   for (const j of s.jobs) {
-    if (j.t < since || j.excluded || j.cls === 'other' || j.cls === 'test-file' || !failed(j))
-      continue;
+    if (j.t < since || j.excluded || !failed(j)) continue;
+    if (j.cls === 'other' || j.cls === 'test-file' || j.cls === 'dev') continue;
     const who = j.name ?? '?';
-    const ex = j.exit === null ? (j.signal ?? '?') : `exit ${j.exit}`;
+    const ex = `exit ${j.exit}`; // failed() means an exit code
     out.push({
       t: j.t,
       kind: 'job',
@@ -625,16 +625,18 @@ const PLAN_KIND: Record<PlanKind, string> = {
   ci: c(NORD.frost, 'ci   '),
 };
 
-// the first merge with a time: the PLAN title and the statusline (localNotes/board/next-merge.sh) agree
+// The first merge with a time, among items not dropped as stale: the PLAN title. The statusline
+// (localNotes/board/next-merge.sh) takes the same item.
 export function nextMerge(plan: PlanItem[]): PlanItem | null {
   return plan.find((p) => p.kind === 'merge' && p.at !== null) ?? null;
 }
 
+export const livePlan = (plan: PlanItem[], now: number) =>
+  plan.filter((p) => p.at === null || p.at >= now - PLAN_STALE);
+
 export function plan(s: TowerState, r: Rect): string[] {
   const trouble = queueTrouble(s);
-  const items = (s.queue.data?.plan ?? []).filter(
-    (p) => p.at === null || p.at >= s.now - PLAN_STALE,
-  );
+  const items = livePlan(s.queue.data?.plan ?? [], s.now);
   if (trouble || !items.length)
     return box(r, 'PLAN', trouble ?? [c(NORD.dim, 'no plan in queue.json (dispatch writes it)')]);
   const body = items.map((p) => {
@@ -642,12 +644,12 @@ export function plan(s: TowerState, r: Rect): string[] {
     const when = p.at === null ? '--:--' : hhmm(p.at);
     const cd = p.at === null ? '' : past ? '?' : countdown(p.at, s.now);
     const who = p.who ? ` (${p.who})` : '';
-    if (past) return c(NORD.dim, `${when} ${cd.padStart(5)} ${p.kind.padEnd(5)} ${p.what}${who}`);
+    if (past) return c(NORD.dim, `${when} ${cd.padStart(6)} ${p.kind.padEnd(5)} ${p.what}${who}`);
     const hot = p.kind === 'merge' || p.kind === 'rahul';
     return (
       c(NORD.fg, when) +
       ' ' +
-      c(hot ? NORD.bright : NORD.dim, cd.padStart(5)) +
+      c(hot ? NORD.bright : NORD.dim, cd.padStart(6)) + // 10h05m
       ' ' +
       PLAN_KIND[p.kind] +
       ' ' +

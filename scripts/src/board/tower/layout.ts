@@ -49,7 +49,7 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
     });
     const side = Math.max(52, Math.round(cols * 0.32));
     bands.push({
-      h: clamp(Math.max(HISTORY_H, want.sessions + 2), 11, 20),
+      h: Math.min(20, Math.max(HISTORY_H, want.sessions + 2)), // shrinks to `min` only when rows run short
       min: 11,
       cells: [
         { id: 'history', w: cols - side },

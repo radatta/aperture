@@ -49,6 +49,7 @@ describe('parseQueue', () => {
           { at: '2026-11-08T07:00:00Z', what: 'second', kind: 'dev', who: 'auto-1' },
           { what: 'rahul later', kind: 'rahul' },
           { at: '2026-11-08T06:30:00Z', what: 'first', kind: 'merge' },
+          { at: '2026-11-08T07:00:00-00:00', what: 'tied, later in file', kind: 'ci' },
         ],
       }),
     );
@@ -56,6 +57,12 @@ describe('parseQueue', () => {
     expect(q.data!.plan).toEqual([
       { at: Date.parse('2026-11-08T06:30:00Z'), what: 'first', kind: 'merge', who: null },
       { at: Date.parse('2026-11-08T07:00:00Z'), what: 'second', kind: 'dev', who: 'auto-1' },
+      {
+        at: Date.parse('2026-11-08T07:00:00Z'),
+        what: 'tied, later in file',
+        kind: 'ci',
+        who: null,
+      },
       { at: null, what: 'ci later', kind: 'ci', who: null },
       { at: null, what: 'rahul later', kind: 'rahul', who: null },
     ]);

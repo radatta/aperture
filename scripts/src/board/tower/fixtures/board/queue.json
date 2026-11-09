@@ -93,7 +93,7 @@
     },
     {
       "at": "2026-11-08T06:40:00Z",
-      "what": "merge charlie-branch PR 41",
+      "what": "charlie-branch PR 41",
       "kind": "merge",
       "who": "Rahul"
     },

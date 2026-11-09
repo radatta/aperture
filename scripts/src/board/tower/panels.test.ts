@@ -1,7 +1,7 @@
 process.env.TZ = 'America/Los_Angeles'; // the frames read local time, like board.sh
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { strip, width } from './ansi.ts';
+import { NORD, fgc, strip, width } from './ansi.ts';
 import { build, parseArgs } from './main.ts';
 import type { TowerState } from './model.ts';
 import { HISTORY_H, layout } from './layout.ts';
@@ -148,6 +148,25 @@ describe('panels', () => {
     ]);
   });
 
+  it('the feed leaves out the Vite dev server, even when it fails', () => {
+    const t = Date.parse(NOW) - 60000;
+    const job = (cls: string, exit: number) => ({
+      ...state.jobs[0]!,
+      t,
+      start: t - 5000,
+      cls,
+      label: cls,
+      name: 'kilo',
+      exit,
+      wallSec: 5,
+      verdict: null,
+    });
+    const items = feedItems({ ...state, jobs: [job('dev', 1), job('build', 1)] });
+    expect(items.filter((i) => i.kind === 'job').map((i) => i.text)).toEqual([
+      'kilo  build  5.0s  exit 1',
+    ]);
+  });
+
   it('the feed keeps the dev lock taken (a deploy-dev) and drops it freed', () => {
     const t = Date.parse(NOW) - 60000;
     const items = feedItems({
@@ -193,11 +212,10 @@ describe('panels', () => {
       },
       prs: { ...state.prs, list: [merged, reopened] },
     });
-    expect(waveItems(withPr(50))[0]).toMatchObject({ state: 'merged', gh: true, pr: 50 });
+    expect(waveItems(withPr(50))[0]).toMatchObject({ state: 'merged', pr: 50 });
     // no PR named: an old merged PR on a reused branch name doesn't count; an open one lends number and title
     expect(waveItems(withPr(null))[0]).toMatchObject({
       state: 'in-flight',
-      gh: false,
       pr: 51,
       title: 'reopened',
     });
@@ -315,12 +333,18 @@ describe('tower v2', () => {
       .slice(r.y + 1, r.y + r.h - 1)
       .map((l) => [...l].slice(r.x, r.x + r.w).join(''))
       .filter((l) => !/^│ +│$/.test(l));
-    expect(lines.map((l) => l.slice(0, 22))).toEqual([
-      '│ 21:30     ? dev   br',
-      '│ 22:25   15m rahul Op',
-      '│ 22:40   30m merge me',
-      '│ --:--       ci    PR',
+    expect(lines.map((l) => l.slice(0, 23))).toEqual([
+      '│ 21:30      ? dev   br',
+      '│ 22:25    15m rahul Op',
+      '│ 22:40    30m merge ch',
+      '│ --:--        ci    PR',
     ]);
+    // the past-due row is one dim run; a live merge row is bright
+    const raw = compose(state, live, 210, 55);
+    const at = (needle: string) => raw.find((l) => strip(l).includes(needle))!;
+    expect(at('bravo-branch final devcheck')).toContain(fgc(NORD.dim) + '21:30      ? dev');
+    expect(at('22:40    30m')).toContain(fgc(NORD.bright));
+    expect(at('22:40    30m')).not.toContain(fgc(NORD.dim) + '22:40');
     expect(f).toMatch(/PLAN ─+ next merge ~22:40 ╮/);
     expect(f).not.toContain('a stale golf run'); // over 2 h past due
   });
@@ -342,6 +366,11 @@ describe('tower v2', () => {
       { at: null, what: 'a check', kind: 'ci', who: null },
     ]);
     expect(f).toMatch(/PLAN ─+ 2 planned ╮/);
+    // a countdown past 10 h keeps the columns: kind and what start where they always do
+    const far = withPlan([
+      { at: at + (10 * 60 + 5) * 60000, what: 'overnight', kind: 'dev', who: null },
+    ]);
+    expect(far).toContain('│ 08:15 10h05m dev   overnight');
     // a merge already past due keeps the title, marked ?
     expect(withPlan([{ at: at - 60000, what: 'm', kind: 'merge', who: null }])).toMatch(
       /next merge \?22:09/,

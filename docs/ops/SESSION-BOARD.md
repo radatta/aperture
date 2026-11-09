@@ -329,7 +329,7 @@ unmerged items; merged ones are counted in the bar, legend and title, not listed
 `queue.json` (below). _Plan_: dispatch's timeline, `HH:MM  countdown  kind  what (who)` by time, the
 unscheduled last (`--:--`); merges and Rahul's items bright, an item past due dimmed with `?` and dropped 2 h
 after; its title is `next merge ~HH:MM` (the first `merge` with a time, `?` once past) or `n planned`.
-_Sessions_: a row for each working session and each holding a branch, working first, then one `idle: a, b, c`
+_Sessions_: the latest sample's sessions, a row for each working one and each holding a branch, working first, then one `idle: a, b, c`
 line (cut with `…`; the title counts both). _Machine_:
 CPU, memory, pids, heavy jobs and working sessions on one time axis, each bucket's peak, a sampler gap blank;
 under it the event ticks, one per column by precedence — `✗` a failed suite, a red `◆` a devcheck run that ended
@@ -369,7 +369,7 @@ per tick, RSS ~100–120 MiB. `tower.sh --measure` logs each tick to stderr.
 **`queue.json`** (`/workspace/localNotes/board/queue.json`, schema v1). The hub owns and writes it
 (`docs/ops/HUB.md` → _The hub's duties_), tmp file + rename; `scripts/board/queue.example.json` is the seed.
 Only `v` and `updatedAt` are required; unknown keys are ignored; the dev queue and to-dos show in file order,
-the wave grouped by state (in flight, open, not started, then merged) and in file order within each.
+the wave grouped by state (in flight, open, not started; merged only counted) and in file order within each.
 
 ```json
 {
@@ -406,9 +406,10 @@ the wave grouped by state (in flight, open, not started, then merged) and in fil
 
 Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
 is blocked on a Rahul step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
-read check status. `plan` is the one source for the next merge — the PLAN panel's title and the statusline
-(`localNotes/board/next-merge.sh`) both take the first `kind: merge` item with an `at` — and the hub rewrites
-it at every event; a `plan` item without `what` or with an unknown `kind` is dropped and named, one with a bad
+read check status, and the tower on a `main` without them drops such lanes as a bad write. `plan` is the one
+source for the next merge — the PLAN panel's title and the statusline (`localNotes/board/next-merge.sh`) both
+take the earliest `kind: merge` item with an `at` no more than 2 h past (the statusline also marks `?` once
+`queue.json` is 30 min old) — and the hub rewrites it at every event; a `plan` item without `what` or with an unknown `kind` is dropped and named, one with a bad
 `at` kept unscheduled and named. No `plan` is an empty plan, not a problem.
 
 A wave item's named `pr` fills a missing title from gh, and gh's `MERGED` for it upgrades the item to merged
