@@ -50,6 +50,9 @@ export const sk = {
   sittingChildAllPrefix: () => `lcs#`,
   sittingLive: (id: string) => `lcs#${id}#live`,
   sittingBudget: (id: string) => `lcs#${id}#budget`,
+  // How many times Claude pulled the sitting live (live_sitting) — its own row, bumped by an atomic add, because
+  // the head is rewritten whole on every refold and would drop a concurrent add.
+  sittingReads: (id: string) => `lcs#${id}#reads`,
   sittingHeadRow: (id: string, eventId: string) => `lcs#${id}#hd#${eventId}`,
   sittingHeadRowPrefix: (id: string) => `lcs#${id}#hd#`,
   sittingJudged: (id: string, eventId: string) => `lcs#${id}#jd#${eventId}`,

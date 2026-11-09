@@ -198,6 +198,7 @@ describe('handler device-token ingest branch', () => {
       for (const m of [
         'listSittings',
         'getSitting',
+        'pullLiveSitting',
         'listSittingReplay',
         'setSittingPrepTarget',
         'deleteSitting',

@@ -276,10 +276,35 @@ export class Repo {
   // Every stored event of a sitting with its payload — runs, submits, notes, and the raw bulk — for its detail read.
   async listSittingEvents(id: string): Promise<SittingEvent[]> {
     const [judged, bulk] = await Promise.all([
-      this.doc.query(this.p(), sk.sittingJudgedPrefix(id), { consistent: true }),
+      this.listSittingJudged(id, { consistent: true }),
       this.doc.query(this.p(), sk.sittingEventPrefix(id), { consistent: true }),
     ]);
-    return alive([...judged, ...bulk].map((i) => toEntity<SittingEvent>(i)));
+    return [...judged, ...alive(bulk.map((i) => toEntity<SittingEvent>(i)))];
+  }
+  // Only the judged events' payloads (`jd#`: runs, submits, notes) — the live pull's newest run and submit.
+  async listSittingJudged(id: string, opts?: { consistent?: boolean }): Promise<SittingEvent[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.sittingJudgedPrefix(id), opts)).map((i) =>
+        toEntity<SittingEvent>(i),
+      ),
+    );
+  }
+  // Claude's live pulls of a sitting (keys.ts → sittingReads): an atomic add, so a pull never contends with
+  // ingest's head writes. Returns the count after this pull; under noopWrites, the stored count.
+  async bumpSittingReads(id: string, now: number): Promise<number> {
+    const n = await this.writes.add(this.p(), sk.sittingReads(id), 'count', 1, {
+      id,
+      sittingId: id,
+      userId: this.userId,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+    return n ?? (await this.getSittingReads(id));
+  }
+  async getSittingReads(id: string, opts?: { consistent?: boolean }): Promise<number> {
+    const it = await this.doc.get(this.p(), sk.sittingReads(id), opts);
+    return it && it.deletedAt === null && typeof it.count === 'number' ? it.count : 0;
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
     return alive(
@@ -342,6 +367,11 @@ export class Repo {
       if (err instanceof ConditionFailedError) return false;
       throw err;
     }
+  }
+  // The Start gate, read only: which sitting is open, for the live pull.
+  async getLcStart(opts?: { consistent?: boolean }): Promise<LcStartGate | null> {
+    const it = await this.doc.get(this.p(), sk.lcStart(), opts);
+    return it ? toEntity<LcStartGate>(it) : null;
   }
   lcStartShape(): CasShape<LcStartGate> {
     return {

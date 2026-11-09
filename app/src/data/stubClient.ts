@@ -140,6 +140,8 @@ import {
   SITTING_START_TIME_ERROR,
   PREP_TARGET_DEFAULT,
   sittingIngestError,
+  isSittingOpen,
+  newestOfType,
   sittingProblemUrl,
   sittingRepTitle,
 } from '@aperture/shared';
@@ -224,6 +226,7 @@ import type {
   NormalizedSittingStart,
   Sitting,
   SittingDetail,
+  LiveSittingPull,
   SittingBudget,
   SittingHeadRow,
   LcStartGate,
@@ -309,6 +312,7 @@ export interface Store {
   sittingEvents: SittingEvent[];
   sittingReplay: SittingReplayChunk[];
   sittingBudgets: SittingBudget[]; // capture budgets: internal, never exported
+  sittingReads: SittingReads[]; // Claude's live pulls per sitting (id = the sitting's): internal, never exported
   sittingHeadRows: (SittingHeadRow & BaseEntity)[];
   lcStartGate: LcStartGate | null; // the Start gate: internal, never exported
   leetcodeProblems: LeetcodeProblem[];
@@ -324,6 +328,8 @@ export interface Store {
   gcalSyncStates: GcalSyncState[];
   settings: Settings | null;
 }
+
+type SittingReads = BaseEntity & { sittingId: string; count: number };
 
 export function emptyStore(): Store {
   return {
@@ -348,6 +354,7 @@ export function emptyStore(): Store {
     sittingEvents: [],
     sittingReplay: [],
     sittingBudgets: [],
+    sittingReads: [],
     sittingHeadRows: [],
     lcStartGate: null,
     leetcodeProblems: [],
@@ -1003,6 +1010,44 @@ class StubClient implements ApiClient {
         .sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)),
       problem:
         this.alive(this.store.leetcodeProblems).find((x) => x.slug === sitting.problemSlug) ?? null,
+      liveReads: this.sittingReadsOf(id),
+    };
+  }
+  private sittingReadsOf(id: string): number {
+    return this.find(this.store.sittingReads, id)?.count ?? 0;
+  }
+  // Backend parity (pullLiveSitting): the gate's open sitting, counted only while it's open.
+  async pullLiveSitting(): Promise<LiveSittingPull> {
+    const now = this.now();
+    const id = this.store.lcStartGate?.openSittingId ?? null;
+    const head = id ? this.find(this.store.sittings, id) : undefined;
+    if (head && isSittingOpen(head, now)) {
+      const had = this.find(this.store.sittingReads, head.id);
+      const liveReads = (had?.count ?? 0) + 1;
+      this.writes.put(this.store.sittingReads, {
+        ...(had ?? { ...this.baseAt(now), sittingId: head.id }),
+        id: head.id,
+        count: liveReads,
+        updatedAt: now,
+      });
+      const judged = this.alive(this.store.sittingEvents).filter((e) => e.sittingId === head.id);
+      return {
+        sitting: head,
+        live: this.sittingLiveOf(head.id),
+        lastRun: newestOfType(judged, 'run'),
+        lastSubmit: newestOfType(judged, 'submit'),
+        liveReads,
+        lastSitting: null,
+      };
+    }
+    const last = (await this.listSittings())[0] ?? null;
+    return {
+      sitting: null,
+      live: null,
+      lastRun: null,
+      lastSubmit: null,
+      liveReads: last ? this.sittingReadsOf(last.id) : 0,
+      lastSitting: last,
     };
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
@@ -1025,6 +1070,7 @@ class StubClient implements ApiClient {
     for (const r of this.alive(this.store.sittingHeadRows).filter((r) => r.sittingId === id))
       this.writes.softDelete(this.store.sittingHeadRows, r.id);
     this.writes.softDelete(this.store.sittingLive, id);
+    this.writes.softDelete(this.store.sittingReads, id);
     this.releaseStartGate(id);
     const { problemSlug } = this.mustFind(this.store.sittings, id);
     this.writes.softDelete(this.store.sittings, id);
@@ -2695,7 +2741,7 @@ class StubClient implements ApiClient {
     // The Store keys left out on purpose: the place token and push subscriptions are credentials, the
     // poller's heartbeat is stage health, not your data, and the week-note cache is derived from the sets
     // (rebuilt on the next read). The retired LeetCode attempts are no longer exported, and a sitting's
-    // replay stays out like attachment bytes (bulk, and it expires); its capture budget and Start gate are internal, and its events' payloads stay out (the head rows carry
+    // replay stays out like attachment bytes (bulk, and it expires); its capture budget, live-pull count and Start gate are internal, and its events' payloads stay out (the head rows carry
     // their verdicts).
     return bundle satisfies Record<
       Exclude<
@@ -2707,6 +2753,7 @@ class StubClient implements ApiClient {
         | 'leetcodeAttempts'
         | 'sittingReplay'
         | 'sittingBudgets'
+        | 'sittingReads'
         | 'sittingEvents'
         | 'lcStartGate'
       >,

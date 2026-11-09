@@ -81,6 +81,7 @@ export const API_METHODS = [
   'lcSittingEvents',
   'listSittings',
   'getSitting',
+  'pullLiveSitting',
   'listSittingReplay',
   'setSittingPrepTarget',
   'deleteSitting',

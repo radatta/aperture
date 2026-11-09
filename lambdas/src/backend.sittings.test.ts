@@ -8,7 +8,7 @@ import {
 } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
-import { liveWrites } from './ddb/writes';
+import { liveWrites, noopWrites } from './ddb/writes';
 import { pk, sk } from './ddb/keys';
 import { BackendClient } from './backend';
 
@@ -201,5 +201,125 @@ describe('sittings on the table', () => {
           if (e.message === LC_START_ATTEMPT_CAP_ERROR) refusedFor = e.message;
         });
     expect(refusedFor).toBe(LC_START_ATTEMPT_CAP_ERROR);
+  });
+});
+
+// Claude's live pull (live_sitting): the count is its own row, bumped by an atomic add — never the head, which
+// ingest's refold rewrites whole and would drop a concurrent bump.
+describe('live pulls on the table', () => {
+  const headOf = (doc: InMemoryDoc, id: string) => doc.get(pk('u1'), sk.sitting(id));
+  const judged = (type: 'run' | 'submit', at: number, status = 11) => ({
+    id: ulid(),
+    type,
+    at,
+    payload: {
+      result: {
+        status_code: status,
+        status_msg: 'Wrong Answer',
+        last_testcase: '[1]',
+        code_output: '0',
+      },
+    },
+  });
+
+  it('a pull writes only its count row, and pulls racing a submit all count while the submit folds', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const head = await headOf(doc, sitting.id);
+    await backend.pullLiveSitting();
+    expect(await headOf(doc, sitting.id)).toEqual(head);
+    const reads = await doc.get(pk('u1'), sk.sittingReads(sitting.id));
+    expect(reads).toMatchObject({ count: 1, sittingId: sitting.id, deletedAt: null });
+    expect(reads?.expiresAt).toBeUndefined(); // kept as long as its sitting, on prod
+
+    const pulls = Array.from({ length: 6 }, () => backend.pullLiveSitting());
+    const ingest = backend.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [judged('submit', T0 + 60_000)] as never,
+    });
+    await Promise.all([...pulls, ingest]);
+    const detail = await backend.getSitting(sitting.id);
+    expect(detail.liveReads).toBe(7);
+    expect(detail.sitting.summary.submits).toBe(1);
+  });
+
+  it('the newest Run and Submit come from the judged payloads, by time then id', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const late = judged('submit', T0 + 9_000);
+    await backend.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        late,
+        judged('submit', T0 + 5_000),
+        judged('run', T0 + 7_000, 15),
+        {
+          id: ulid(),
+          type: 'snapshot',
+          at: T0 + 10_000,
+          payload: { code: 'x' },
+        },
+      ] as never,
+    });
+    const pull = await backend.pullLiveSitting();
+    expect(pull.lastSubmit?.id).toBe(late.id);
+    expect(pull.lastRun?.at).toBe(T0 + 7_000);
+  });
+
+  it('nothing open — none ever, the gate on an ended one, or past the window — writes nothing', async () => {
+    const { doc, backend, now } = setup();
+    await linked(backend);
+    let rows = doc.snapshot();
+    expect((await backend.pullLiveSitting()).lastSitting).toBeNull();
+    expect(doc.snapshot()).toEqual(rows);
+
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.setTaskActual(sitting.repTaskId, 30);
+    await backend.transitionTask(sitting.repTaskId, 'done');
+    rows = doc.snapshot();
+    expect(await backend.pullLiveSitting()).toMatchObject({
+      sitting: null,
+      lastSitting: { id: sitting.id, status: 'done' },
+    });
+    expect(doc.snapshot()).toEqual(rows);
+
+    now.t += 60_000;
+    const next = await backend.lcSittingStart({
+      ...start(),
+      problemSlug: 'three-sum',
+      startedAt: now.t,
+    });
+    now.t += SITTING_INGEST_WINDOW_MS + 1;
+    rows = doc.snapshot();
+    expect(await backend.pullLiveSitting()).toMatchObject({
+      sitting: null,
+      lastSitting: { id: next.sitting.id, status: 'active' },
+    });
+    expect(doc.snapshot()).toEqual(rows);
+  });
+
+  it('a smoke run (noopWrites) reads the stored count and writes nothing', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    await backend.lcSittingStart(start());
+    await backend.pullLiveSitting();
+    const smoke = new BackendClient(new Repo(doc, noopWrites(), 'u1'), {
+      userId: 'u1',
+      now: () => T0,
+    });
+    const rows = doc.snapshot();
+    expect((await smoke.pullLiveSitting()).liveReads).toBe(1);
+    expect(doc.snapshot()).toEqual(rows);
+  });
+
+  it('deleting the sitting tombstones its count row too', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.pullLiveSitting();
+    await backend.deleteSitting(sitting.id);
+    expect((await doc.get(pk('u1'), sk.sittingReads(sitting.id)))?.deletedAt).not.toBeNull();
   });
 });

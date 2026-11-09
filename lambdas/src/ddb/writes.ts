@@ -11,6 +11,14 @@ export interface Writes {
   delete(pk: string, sk: string): Promise<void>;
   deleteIf(pk: string, sk: string, expectedUpdatedAt: number): Promise<void>; // see DocClient.deleteIf
   batchPut(items: Item[]): Promise<void>;
+  // See DocClient.add; null when nothing was written (noopWrites).
+  add(
+    pk: string,
+    sk: string,
+    field: string,
+    by: number,
+    init: Record<string, unknown>,
+  ): Promise<number | null>;
 }
 
 // Dev's table expires tombstones (TECH §2.3): dev checks leave dead rows, and
@@ -41,6 +49,7 @@ export function liveWrites(doc: DocClient, stage = process.env.STAGE): Writes {
     delete: (pk, sk) => doc.delete(pk, sk),
     deleteIf: (pk, sk, expected) => doc.deleteIf(pk, sk, expected),
     batchPut: (items) => doc.batchPut(items.map(out)),
+    add: (pk, sk, field, by, init) => doc.add(pk, sk, field, by, init),
   };
 }
 
@@ -51,5 +60,6 @@ export function noopWrites(): Writes {
     delete: async () => {},
     deleteIf: async () => {},
     batchPut: async () => {},
+    add: async () => null,
   };
 }

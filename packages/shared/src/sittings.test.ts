@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isSittingOpen,
+  newestOfType,
+  judgeDetail,
+  JUDGE_ERROR_MAX,
+  JUDGE_TEXT_MAX,
   emptyLiveFields,
   emptySummary,
   foldLive,
@@ -314,5 +319,55 @@ describe('the Start gate', () => {
   it('caps Starts a day', () => {
     const g = { ...emptyGate('d'), starts: SITTING_STARTS_PER_DAY };
     expect(() => claimStart(g, 'd', 'X', [], new Set(), T)).toThrow(SITTING_START_CAP_ERROR);
+  });
+});
+
+describe('the live pull’s helpers', () => {
+  it('a sitting is open only while active and inside its window', () => {
+    const s = { status: 'active' as const, startedAt: 0 };
+    expect(isSittingOpen(s, SITTING_INGEST_WINDOW_MS)).toBe(true);
+    expect(isSittingOpen(s, SITTING_INGEST_WINDOW_MS + 1)).toBe(false);
+    expect(isSittingOpen({ ...s, status: 'done' }, 1)).toBe(false);
+  });
+
+  it('the newest of a type goes by time, then the later id on a tie', () => {
+    const e = (id: string, type: string, at: number) => ({ id, type, at });
+    const events = [
+      e('01B', 'submit', 5),
+      e('01A', 'submit', 5),
+      e('01C', 'run', 9),
+      e('01D', 'submit', 2),
+    ];
+    expect(newestOfType(events, 'submit')?.id).toBe('01B');
+    expect(newestOfType(events, 'note')).toBeNull();
+  });
+
+  it('judgeDetail reads a submit’s failing case and a run’s input, joins arrays, caps, and never throws', () => {
+    expect(
+      judgeDetail({
+        result: { last_testcase: '[3,2,4]\n6', expected_output: '[1,2]', code_output: '[0,0]' },
+      }),
+    ).toEqual({ input: '[3,2,4]\n6', expected: '[1,2]', output: '[0,0]', error: null });
+    expect(
+      judgeDetail({
+        request: { data_input: '[2,7]\n9' },
+        result: {
+          code_answer: ['[0,1]', '[1,2]'],
+          expected_code_answer: ['[0,1]', '[0,2]'],
+          full_runtime_error: 'E'.repeat(5000),
+        },
+      }),
+    ).toEqual({
+      input: '[2,7]\n9',
+      expected: '[0,1]\n[0,2]',
+      output: '[0,1]\n[1,2]',
+      error: `${'E'.repeat(JUDGE_ERROR_MAX - 1)}…`,
+    });
+    expect(judgeDetail({ result: { last_testcase: 'x'.repeat(5000) } }).input).toHaveLength(
+      JUDGE_TEXT_MAX,
+    );
+    const none = { input: null, expected: null, output: null, error: null };
+    for (const junk of [null, 'x', 7, [], { result: 3 }, { result: { code_answer: [1, 2] } }])
+      expect(judgeDetail(junk)).toEqual(none);
   });
 });

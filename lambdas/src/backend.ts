@@ -88,6 +88,8 @@ import {
   reserveBudget,
   summarizeHeadRows,
   newerSummary,
+  isSittingOpen,
+  newestOfType,
   claimStart,
   countStartAttempt,
   emptyGate,
@@ -182,6 +184,7 @@ import type {
   UpsertSeriesInput,
   Sitting,
   SittingDetail,
+  LiveSittingPull,
   SittingEventsInput,
   SittingEventsResult,
   SittingReplayChunk,
@@ -931,16 +934,59 @@ export class BackendClient implements ApiClient {
   }
   async getSitting(id: string): Promise<SittingDetail> {
     const sitting = await this.mustSitting(id);
-    const [live, events, problem] = await Promise.all([
+    const [live, events, problem, liveReads] = await Promise.all([
       this.repo.getSittingLive(id, { consistent: true }),
       this.repo.listSittingEvents(id),
       this.repo.getLeetcodeProblem(sitting.problemSlug),
+      this.repo.getSittingReads(id, { consistent: true }),
     ]);
     return {
       sitting,
       live,
       events: events.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)),
       problem,
+      liveReads,
+    };
+  }
+  // Claude's live read (live_sitting): the Start gate names the open sitting and its head confirms it's open;
+  // only then is the pull counted — on its own row by an atomic add, never on the head, which a refold rewrites
+  // whole. Strongly consistent throughout, so a pull right after a Start, snapshot or submit sees it. With
+  // nothing open: the newest sitting of any status, nothing written. The log line never carries code.
+  async pullLiveSitting(): Promise<LiveSittingPull> {
+    const now = this.now();
+    const id = (await this.repo.getLcStart({ consistent: true }))?.openSittingId ?? null;
+    const head = id ? await this.repo.getSitting(id, { consistent: true }) : null;
+    if (head && isSittingOpen(head, now)) {
+      const [liveReads, live, judged] = await Promise.all([
+        this.repo.bumpSittingReads(head.id, now),
+        this.repo.getSittingLive(head.id, { consistent: true }),
+        this.repo.listSittingJudged(head.id, { consistent: true }),
+      ]);
+      console.log(
+        JSON.stringify({
+          event: 'lc_live_read',
+          sittingId: head.id,
+          version: live?.version ?? 0,
+          liveReads,
+        }),
+      );
+      return {
+        sitting: head,
+        live,
+        lastRun: newestOfType(judged, 'run'),
+        lastSubmit: newestOfType(judged, 'submit'),
+        liveReads,
+        lastSitting: null,
+      };
+    }
+    const last = (await this.listSittings())[0] ?? null;
+    return {
+      sitting: null,
+      live: null,
+      lastRun: null,
+      lastSubmit: null,
+      liveReads: last ? await this.repo.getSittingReads(last.id) : 0,
+      lastSitting: last,
     };
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {

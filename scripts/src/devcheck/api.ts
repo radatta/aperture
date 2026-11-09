@@ -274,6 +274,7 @@ export interface DevSittingDetail {
   } | null;
   events: { id: string; type: string; at: number }[];
   problem: { slug: string } | null;
+  liveReads: number; // live_sitting pulls (PR B)
 }
 export interface DevSittingStart {
   clientSittingId: string;

@@ -115,6 +115,24 @@ export function createLiveDoc(tableName: string): DocClient {
         throw err;
       }
     },
+    async add(pk, sk, field, by, init) {
+      const names: Record<string, string> = { '#f': field };
+      const values: Record<string, unknown> = { ':by': by };
+      const sets = Object.entries(init).map(([k, v], i) => {
+        names[`#i${i}`] = k;
+        values[`:i${i}`] = v;
+        return `#i${i} = if_not_exists(#i${i}, :i${i})`;
+      });
+      const res = await doc.update({
+        TableName: tableName,
+        Key: { PK: pk, SK: sk },
+        UpdateExpression: `ADD #f :by${sets.length ? ` SET ${sets.join(', ')}` : ''}`,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+        ReturnValues: 'UPDATED_NEW',
+      });
+      return Number(res.Attributes?.[field]);
+    },
     async batchPut(items) {
       for (let i = 0; i < items.length; i += 25) {
         // BatchWriteItem is best-effort per item: under throttling it returns the rejected writes in

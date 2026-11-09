@@ -496,8 +496,7 @@ export function sittingIngestError(
   events: readonly { at: number }[],
   now: number,
 ): string | null {
-  if (s.status !== 'active' || now - s.startedAt > SITTING_INGEST_WINDOW_MS)
-    return SITTING_ENDED_ERROR;
+  if (!isSittingOpen(s, now)) return SITTING_ENDED_ERROR;
   const lo = s.clientStartedAt - 24 * 3600_000;
   const hi = s.clientStartedAt + 2 * SITTING_INGEST_WINDOW_MS;
   return events.some((e) => e.at < lo || e.at > hi) ? SITTING_EVENT_TIME_ERROR : null;
@@ -650,3 +649,68 @@ export function claimStart<G extends GateFields>(
 }
 export const releaseStart = <G extends GateFields>(g: G, id: string): G | null =>
   g.openSittingId === id ? { ...g, openSittingId: null, openClaimedAt: null } : null;
+
+// --- Claude's live pull (live_sitting; docs/areas/recruiting) ---
+// Open = still taking events: active and inside its window. One left active past it reads closed here without
+// a write; the next Start ends it (planSittingStart).
+export const isSittingOpen = (s: Pick<Sitting, 'status' | 'startedAt'>, now: number): boolean =>
+  s.status === 'active' && now - s.startedAt <= SITTING_INGEST_WINDOW_MS;
+
+// The newest event of a type by (at, id): ids are ULIDs, so a tie on `at` goes to the later one.
+export function newestOfType<E extends { type: string; at: number; id: string }>(
+  events: readonly E[],
+  type: E['type'],
+): E | null {
+  let best: E | null = null;
+  for (const e of events)
+    if (e.type === type && (!best || e.at > best.at || (e.at === best.at && e.id > best.id)))
+      best = e;
+  return best;
+}
+
+// What a judged Run or Submit says beyond its verdict: the failing input, expected vs output, the error head.
+// Field names are LeetCode's /check/ response as captured 2026-11-08 (a submit's last_testcase /
+// expected_output / code_output, a run's code_answer / expected_code_answer with its input on the request's
+// data_input); the error fields are inferred from LeetCode's names, not yet captured. An unknown shape is all
+// null, never a throw. Capped, so a huge case can't flood a reader.
+export interface JudgeDetail {
+  input: string | null;
+  expected: string | null;
+  output: string | null;
+  error: string | null;
+}
+export const JUDGE_TEXT_MAX = 1024;
+export const JUDGE_ERROR_MAX = 600;
+const capText = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+function judgeText(v: unknown, max: number): string | null {
+  const s =
+    typeof v === 'string'
+      ? v
+      : Array.isArray(v) && v.every((x) => typeof x === 'string')
+        ? v.join('\n')
+        : null;
+  return s ? capText(s, max) : null;
+}
+const firstText = (r: Record<string, unknown> | null, keys: string[], max: number) => {
+  for (const k of keys) {
+    const t = judgeText(r?.[k], max);
+    if (t !== null) return t;
+  }
+  return null;
+};
+export function judgeDetail(payload: unknown): JudgeDetail {
+  const p = obj(payload);
+  const r = obj(p?.result);
+  return {
+    input:
+      firstText(r, ['last_testcase', 'input_formatted', 'input'], JUDGE_TEXT_MAX) ??
+      firstText(obj(p?.request), ['data_input'], JUDGE_TEXT_MAX),
+    expected: firstText(r, ['expected_output', 'expected_code_answer'], JUDGE_TEXT_MAX),
+    output: firstText(r, ['code_output', 'code_answer'], JUDGE_TEXT_MAX),
+    error: firstText(
+      r,
+      ['full_runtime_error', 'runtime_error', 'full_compile_error', 'compile_error'],
+      JUDGE_ERROR_MAX,
+    ),
+  };
+}

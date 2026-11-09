@@ -5,6 +5,7 @@
 // Slugs and titles carry the run's nonce; every row this scenario makes is ledgered from a response.
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import type { DevSittingEvent, DevSittingStart } from '../api';
+import { McpRpcError, PARAM_ERROR } from '../mcp';
 import { devUlid } from './flux-history';
 
 const tag = (ctx: Ctx) => ctx.nonce.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -74,8 +75,93 @@ export const lcSittings: Scenario = {
     'app/src/pages/Settings/index.tsx',
     'packages/shared/src/sittings.ts',
     'scripts/src/devcheck/scenarios/lc-sittings.ts',
+    'lambdas/src/mcp/leetcodeTools.ts',
   ],
   rows: [
+    // PR B: Claude watches live (live_sitting, lambdas/src/mcp/leetcodeTools.ts).
+    {
+      id: 'live-listed',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'MCP offers live_sitting',
+    },
+    {
+      id: 'live-idle',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'With nothing open, live_sitting says so',
+    },
+    {
+      id: 'live-active',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'During a sitting, live_sitting returns its newest code in full, the snapshot version, the problem, the newest Submit’s verdict and the counts',
+    },
+    {
+      id: 'live-counted',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'The sitting read shows the pull counted (Claude watched live)',
+    },
+    {
+      id: 'live-repeat',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A second pull with sinceVersion at the current version says the code is unchanged, and counts again',
+    },
+    {
+      id: 'live-bad-arg',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A sinceVersion that isn’t a whole number is a param error, and nothing is counted',
+    },
+    {
+      id: 'live-after-done',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'After Done on the rep, live_sitting is inactive and names that sitting as the last one, done',
+    },
+    {
+      id: 'live-stale',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A sitting left open past its window reads inactive, with nothing written',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'nothing open — none ever, the gate on an ended one, or past the window — writes nothing',
+        why: 'dev can’t wait a day; the same pull path is proven on dev by live-active and live-after-done',
+      },
+    },
+    {
+      id: 'live-big-code',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'Code at the 64 KB snapshot cap comes back whole',
+      offDev: {
+        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
+        test: 'returns the full code at the snapshot cap',
+        why: 'the same path as live-active (proven on dev); only the size differs',
+      },
+    },
+    {
+      id: 'live-race',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'Pulls racing a submit’s ingest all count, and the submit still folds',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'a pull writes only its count row, and pulls racing a submit all count while the submit folds',
+        why: 'dev can’t make the two interleave on purpose; the in-memory table runs them together',
+      },
+    },
+    {
+      id: 'live-real',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'In a real sitting on prod, Claude (the Aperture project) answers “what am I working on?” from live_sitting',
+      needsYou:
+        'needs the Safari extension (PR A2) on prod and the claude.ai connector reconnected — your first real sitting after both',
+    },
     {
       id: 'start-unlinked',
       entry: 'api',
@@ -288,6 +374,20 @@ export const lcSittings: Scenario = {
   ],
   steps: [
     {
+      id: 'live-idle',
+      entry: 'mcp',
+      proves: ['live-listed', 'live-idle'],
+      title: 'MCP lists live_sitting; with nothing open it says inactive',
+      async run(ctx) {
+        if (!(await ctx.mcp.reads.toolsList()).includes('live_sitting'))
+          throw new Error('live_sitting isn’t listed');
+        const out = await ctx.mcp.reads.liveSitting();
+        if (out.active) throw new Error(`active with nothing open: ${JSON.stringify(out.sitting)}`);
+        if (out.lastSitting?.id.includes(tag(ctx)))
+          throw new Error('lastSitting is one of this run’s, before any Start');
+      },
+    },
+    {
       id: 'unlinked',
       entry: 'api',
       proves: ['start-unlinked'],
@@ -395,6 +495,61 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'live-active',
+      entry: 'mcp',
+      proves: ['live-active'],
+      title:
+        'live_sitting during A: its newest code, version 3, the problem, the accepted submit, the counts',
+      async run(ctx) {
+        const out = await ctx.mcp.reads.liveSitting();
+        if (
+          !out.active ||
+          out.sitting?.id !== state.a ||
+          out.sitting.problem.slug !== slugOf(ctx, 'a') ||
+          out.sitting.liveReads !== 1 ||
+          out.code?.version !== 3 ||
+          out.code.text !== 'class Solution:\n    def solve(self): ...' ||
+          out.runCount !== 1 ||
+          out.submitCount !== 2 ||
+          out.lastSubmit?.verdict !== 'accepted' ||
+          'unchangedSinceVersion' in out
+        )
+          throw new Error(`live: ${JSON.stringify({ ...out, code: out.code?.version })}`);
+      },
+    },
+    {
+      id: 'live-counted',
+      entry: 'api',
+      proves: ['live-counted'],
+      title: 'The sitting read shows the one pull',
+      async run(ctx) {
+        const { liveReads } = await sittingA(ctx);
+        if (liveReads !== 1) throw new Error(`liveReads ${liveReads}, not 1`);
+      },
+    },
+    {
+      id: 'live-repeat',
+      entry: 'mcp',
+      proves: ['live-repeat', 'live-bad-arg'],
+      title:
+        'A pull with sinceVersion 3 says unchanged and counts; sinceVersion "3" is refused, uncounted',
+      async run(ctx) {
+        const out = await ctx.mcp.reads.liveSitting({ sinceVersion: 3 });
+        if (out.unchangedSinceVersion !== true || out.sitting?.liveReads !== 2)
+          throw new Error(
+            `repeat: ${JSON.stringify({ u: out.unchangedSinceVersion, n: out.sitting?.liveReads })}`,
+          );
+        try {
+          await ctx.mcp.reads.liveSitting({ sinceVersion: '3' });
+          throw new Error('sinceVersion "3" was taken');
+        } catch (err) {
+          if (!(err instanceof McpRpcError) || err.code !== PARAM_ERROR) throw err;
+        }
+        const { liveReads } = await sittingA(ctx);
+        if (liveReads !== 2) throw new Error(`the refused pull counted: liveReads ${liveReads}`);
+      },
+    },
+    {
       id: 'invalid',
       entry: 'api',
       proves: ['events-invalid', 'event-clock'],
@@ -499,6 +654,19 @@ export const lcSittings: Scenario = {
           ctx.api.writes.lcSittingEvents(state.a, [snap('late', Date.now())]),
           /ended/,
         );
+      },
+    },
+    {
+      id: 'live-after-done',
+      entry: 'mcp',
+      proves: ['live-after-done'],
+      title: 'After Done, live_sitting is inactive and names A as the last sitting, done',
+      async run(ctx) {
+        const out = await ctx.mcp.reads.liveSitting();
+        if (out.active || out.lastSitting?.id !== state.a || out.lastSitting.status !== 'done')
+          throw new Error(`after Done: ${JSON.stringify(out)}`);
+        if (out.lastSitting.liveReads !== 2)
+          throw new Error(`an inactive pull counted: ${out.lastSitting.liveReads}`);
       },
     },
     {

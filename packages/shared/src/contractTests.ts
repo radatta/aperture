@@ -3432,6 +3432,73 @@ export function runApiContract(
         expect(await api.listSittings()).toEqual([]);
         expect(await api.getTask(other.sitting.repTaskId)).toMatchObject({ status: 'in_progress' }); // rep stays
       });
+
+      it('a live pull returns the open sitting’s code and newest Run and Submit, and counts itself', async () => {
+        const { sitting } = await startSitting(api);
+        const before = await api.pullLiveSitting(); // nothing captured yet: still the open one
+        expect(before).toMatchObject({ sitting: { id: sitting.id }, live: null, lastRun: null });
+        const wa = lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 4 * 60_000, 1, 3);
+        const ac = lcJudged('submit', 10, 'Accepted', LC_T0 + 6 * 60_000, 3, 3);
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            lcSnap('a', LC_T0 + 60_000),
+            lcSnap('ab', LC_T0 + 2 * 60_000),
+            lcJudged('run', 15, 'Runtime Error', LC_T0 + 3 * 60_000, 0, 1),
+            ac, // out of order: the newest is by time, not arrival
+            wa,
+            lcSnap('abc', LC_T0 + 5 * 60_000),
+          ],
+        });
+        const pull = await api.pullLiveSitting();
+        expect(pull.sitting?.id).toBe(sitting.id);
+        expect(pull.live).toMatchObject({ version: 3, code: 'abc' });
+        expect(pull.lastSubmit?.id).toBe(ac.id);
+        expect(pull.lastRun?.type).toBe('run');
+        expect(pull.liveReads).toBe(2);
+        expect(pull.lastSitting).toBeNull();
+        // The count lives beside the head, so a refold (another submit) can't drop it.
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [lcJudged('submit', 10, 'Accepted', LC_T0 + 7 * 60_000, 3, 3)],
+        });
+        expect((await api.pullLiveSitting()).liveReads).toBe(3);
+        expect((await api.getSitting(sitting.id)).liveReads).toBe(3);
+      });
+
+      it('a live pull with nothing open names the last sitting and writes nothing', async () => {
+        expect(await api.pullLiveSitting()).toEqual({
+          sitting: null,
+          live: null,
+          lastRun: null,
+          lastSubmit: null,
+          liveReads: 0,
+          lastSitting: null,
+        });
+        const { sitting } = await startSitting(api);
+        await api.pullLiveSitting();
+        await api.setTaskActual(sitting.repTaskId, 40);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        const after = await api.pullLiveSitting();
+        expect(after).toMatchObject({
+          sitting: null,
+          liveReads: 1,
+          lastSitting: { id: sitting.id, status: 'done' },
+        });
+        expect((await api.getSitting(sitting.id)).liveReads).toBe(1);
+        // Open past its window: read as closed, and not counted (the next Start ends it).
+        advance(60_000);
+        const next = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'three-sum', problemTitle: '3Sum', startedAt: clock }),
+        );
+        advance(SITTING_INGEST_WINDOW_MS + 1);
+        expect(await api.pullLiveSitting()).toMatchObject({
+          sitting: null,
+          lastSitting: { id: next.sitting.id, status: 'active' },
+          liveReads: 0,
+        });
+        expect((await api.getSitting(next.sitting.id)).liveReads).toBe(0);
+      });
     });
 
     describe('flux week note', () => {

@@ -18,6 +18,27 @@ import {
   type LedgerKind,
 } from './api';
 import { assertDevOrigin, targetOrigin } from './config';
+
+// What live_sitting answers (lambdas/src/mcp/leetcodeTools.ts) — the fields the scenario reads.
+export interface DevJudged {
+  verdict: string | null;
+  detail: { input: string | null; expected: string | null; output: string | null } | null;
+}
+export interface DevLiveSitting {
+  active: boolean;
+  sitting?: {
+    id: string;
+    problem: { slug: string };
+    elapsedMin: number;
+    liveReads: number;
+  };
+  code?: { version: number; text: string | null };
+  unchangedSinceVersion?: boolean;
+  runCount?: number;
+  submitCount?: number;
+  lastSubmit?: DevJudged | null;
+  lastSitting?: { id: string; status: string; liveReads: number } | null;
+}
 import { DevcheckError } from './errors';
 import type { Ledger } from './ledger';
 
@@ -132,6 +153,9 @@ export function createMcpClient({
         'list_place_tasks',
         { place },
       ),
+    // live_sitting (lambdas/src/mcp/leetcodeTools.ts): the one read that counts itself — on the open sitting
+    // only, which in the dev check is always the scenario's own; its cleanup tombstones that count with it.
+    liveSitting: (args: Record<string, unknown> = {}) => data<DevLiveSitting>('live_sitting', args),
   };
 
   const writes = {

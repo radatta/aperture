@@ -81,13 +81,34 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 - **Raw bulk** (`lcs#<id>#ev#<ulid>`: snapshots, submit details) and **replay chunks** (`lcs#<id>#rp#<ulid>`,
   never in `getSitting`, read with `listSittingReplay`), keyed by their client ULID; **problem doc**
   (`lcq#<slug>`): LeetCode's `questionDetail`, upserted by a new sitting, filled in by a resume when missing.
+- **Live-pull count** (`lcs#<id>#reads`): how many times Claude pulled the sitting live (_Claude watches live_,
+  below), `liveReads` on `getSitting`.
 - **Derived, never stored:** `sittingMetrics` — first submit accepted (headline), submits before accepted,
   time to first submit — and the elapsed time.
 
+### Claude watches live
+
+The MCP tool `live_sitting` (`lambdas/src/mcp/leetcodeTools.ts`, over the `pullLiveSitting` RPC) is how Claude
+sees a sitting while it happens: the problem, minutes since Start, the newest code in full, the newest Run and
+Submit with the failing case, expected vs output and the error head (`judgeDetail`, from the `jd#` payloads),
+counts, LeetCode's timer, editing facts. The Start gate names the open sitting; a sitting is open while
+`active` and inside its 24 h window (`isSittingOpen`). One past it reads closed with nothing written, and the
+next Start ends it. With nothing open, the tool names the most recent sitting instead.
+
+- **Freshness.** Code is at most ~30 s behind: the extension sends one snapshot per 30 s (the latest code)
+  and the pending one right before each Run or Submit. A Run or Submit judged after Rahul leaves the page
+  still lands in its sitting (PR A2), so a pull a minute later may show more.
+- **A pull counts.** Each pull of an open sitting adds one to its count row, by an atomic add on a row of its own.
+  It isn't on the head, because a refold rewrites the head whole and would drop a concurrent add; and a
+  conditional write would make ingest retry. A pull with nothing open writes nothing. The app never calls
+  `pullLiveSitting`: a pull is Claude watching. Reads are strongly consistent, so a pull right after a
+  snapshot or submit sees it. Cost: ~10 read units and 1 write unit a pull, ≈ $0.02 a month at 60 pulls
+  a sitting; no fixed part.
+
 ### Storage and expiry
 
-Kept forever: the head, the live row, the head rows and the runs', submits' and notes' payloads, the problem
-doc. The **raw bulk** — snapshot and submit-detail events, replay chunks — is stamped `expiresAt` at write: 14
+Kept forever: the head, the live row, the live-pull count, the head rows and the runs', submits' and notes'
+payloads, the problem doc. The **raw bulk** — snapshot and submit-detail events, replay chunks — is stamped `expiresAt` at write: 14
 days past the sitting's 24 h ingest window, deleted by DynamoDB's TTL (free). This is prod's one TTL'd row kind
 (TECH §2.3 rule 4), chosen so storage doesn't grow with keystrokes: kept data is ~25 KB a sitting. Every item
 builder strips table attributes from the entity it writes, so no patched-in `expiresAt` (or `PK`) can ride a
@@ -250,7 +271,8 @@ storage — a different risk class from a JWT. A device token sent to any other 
 | `app/src/pages/Settings/index.tsx`                       | `LeetcodeSection` — the roll a sitting is a rep of                                                                                                                                                                                             |
 | `lambdas/src/index.ts`                                   | the ingest gate: device token or JWT for `LC_INGEST_METHODS`, the 300 KB pre-parse cap                                                                                                                                                         |
 | `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                                                                          |
-| `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks; `recordLeetcodeAttempt` (legacy)                                                                                                                                                                     |
+| `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks, `pullLiveSitting`; `recordLeetcodeAttempt` (legacy)                                                                                                                                                  |
+| `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_                                                                                                                                                                                                         |
 | `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#<day>#<id>` (legacy)                                                                                                                                                                                |
 | `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                                                                               |
 | `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                                                                              |
