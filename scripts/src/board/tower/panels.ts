@@ -568,7 +568,7 @@ export function feedItems(s: TowerState): FeedItem[] {
     });
   }
   for (const r of s.runs) {
-    const tier = r.run.replace(/^.*-/, '');
+    const tier = r.run.replace(/^.*-/, '') + (r.slot === 'dev' ? '' : ` on ${r.slot}`); // slot A unmarked
     if (r.end === null && r.start !== null && r.start >= since)
       // started shows only while in flight
       out.push({ t: r.start, kind: 'run', text: `devcheck ${tier} started`, tone: 'dim' });

@@ -30,6 +30,7 @@ function setup() {
       boardDir: board,
       limits: join(dir, 'none.json'),
       ledger: join(dir, 'ledger.jsonl'),
+      ledgerB: join(dir, 'ledger.devb.jsonl'),
       bench: join(dir, 'bench'),
       cores: 9,
     },
@@ -132,6 +133,25 @@ describe('Source', () => {
     expect(s.runs.map((r) => r.run)).toEqual([
       '2026-10-28T01-00-00-full',
       '2026-11-07T01-00-00-full',
+    ]);
+  });
+
+  it("folds slot B's ledger in, each run tagged with its slot", () => {
+    const { src } = setup();
+    const rec = (run: string, op: string, t: string, status?: string) =>
+      JSON.stringify({ t, run, op, status }) + '\n';
+    writeFileSync(
+      join(dir, 'ledger.jsonl'),
+      rec('2026-11-08T01-00-00-full', 'run-end', '2026-11-08T01:10:00Z', 'PASS'),
+    );
+    writeFileSync(
+      join(dir, 'ledger.devb.jsonl'),
+      rec('2026-11-08T02-00-00-full', 'run-start', '2026-11-08T02:00:00Z'),
+    );
+    const s = src.refresh(Date.parse('2026-11-08T06:00:00Z'));
+    expect(s.runs.map((r) => [r.run, r.slot])).toEqual([
+      ['2026-11-08T01-00-00-full', 'dev'],
+      ['2026-11-08T02-00-00-full', 'devb'],
     ]);
   });
 });

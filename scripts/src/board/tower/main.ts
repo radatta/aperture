@@ -1,5 +1,5 @@
 // The control tower (docs/ops/SESSION-BOARD.md → Control tower): `scripts/board/tower.sh [flags]`.
-//   --fixtures <dir>   read <dir>/board, <dir>/ledger.dev.jsonl, <dir>/bench, <dir>/prs.json (proof captures)
+//   --fixtures <dir>   read <dir>/board, <dir>/ledger.{dev,devb}.jsonl, <dir>/bench, <dir>/prs.json (proof captures)
 //   --now <iso>        a fixed clock          --no-gh       no `gh pr list`
 //   --once <cols>x<rows>  print one frame and exit (no terminal needed)
 //   --measure          per-tick cost on stderr
@@ -53,6 +53,7 @@ export function fixturePaths(dir: string): Paths {
     boardDir: join(dir, 'board'),
     limits: join(REPO, 'scripts/board/limits.json'),
     ledger: join(dir, 'ledger.dev.jsonl'),
+    ledgerB: join(dir, 'ledger.devb.jsonl'),
     bench: join(dir, 'bench'),
     cores: 9, // recorded on the 9-core container: the frame must not depend on the host (CI has 2)
   };
@@ -104,8 +105,9 @@ function run(a: Args) {
       .then(() => (state = { ...state, prs: { list: prs.list, at: prs.at, error: prs.error } }));
     if (!a.fixtures && now - devlockAt >= DEVLOCK_MS) {
       devlockAt = now;
-      // the board's own lock peek, which rewrites the devlock.json cache; 50, not 60: the cache is stamped after
-      // the peek, so a minute later it is ~59 s old and a 60 s max-age would skip every other minute
+      // the board's own lock peek, which rewrites both slots' caches (devlock.json, devlock.devb.json); 50, not
+      // 60: the cache is stamped after the peek, so a minute later it is ~59 s old and a 60 s max-age would skip
+      // every other minute
       execFile(
         'bash',
         [join(REPO, 'scripts/board/devlock.sh'), 'refresh', '--max-age', '50'],

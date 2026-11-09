@@ -303,13 +303,17 @@ describe('shapeModeFor (devb on a main merge)', () => {
     ['l1', ['lambdas/z.ts', 'app/x.tsx', 'scripts/y.ts']],
     ['c1', ['cdk/src/lib/app-stack.ts']],
     ['p1', ['pnpm-lock.yaml']],
+    ['s1', ['packages/shared/src/stage.ts']],
+    ['r1', ['packages/shared/src/rpc.ts', 'packages/shared/src/index.ts']],
   ];
   const diff = diffOf(order);
-  it('deploys only a shape change: cdk/ or the lockfile', () => {
+  it("deploys only a shape change: cdk/, the lockfile or shared's stage.ts", () => {
     expect(shapeModeFor({ infra: 'f', front: 'f' }, 'l1', diff)).toBe('none');
     expect(shapeModeFor({ infra: 'f', front: 'f' }, 'c1', diff)).toBe('full');
     expect(shapeModeFor({ infra: 'c1', front: 'c1' }, 'p1', diff)).toBe('full');
     expect(shapeModeFor({ infra: 'p1', front: 'p1' }, 'p1', diff)).toBe('none');
+    expect(shapeModeFor({ infra: 'p1', front: 'p1' }, 's1', diff)).toBe('full');
+    expect(shapeModeFor({ infra: 's1', front: 's1' }, 'r1', diff)).toBe('none'); // the rest of shared isn't shape
   });
   it('counts shared stage.ts as shape, and pins what else cdk takes from shared', () => {
     expect(SHAPE_PATHS('packages/shared/src/stage.ts')).toBe(true);
@@ -322,7 +326,7 @@ describe('shapeModeFor (devb on a main merge)', () => {
         if (e.isDirectory()) walk(p);
         else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name))
           for (const m of readFileSync(p, 'utf8').matchAll(
-            /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@aperture\/shared'/g,
+            /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@aperture\/shared'/g, // the bare package; subpaths: below
           ))
             for (const n of m[1]!.split(',')) if (n.trim()) names.add(n.trim());
       }
@@ -338,6 +342,30 @@ describe('shapeModeFor (devb on a main merge)', () => {
         'isDevSlot',
       ].sort(),
     );
+    // ...and each is defined where this test says: a move to another file (a re-export) must fail here too
+    const shared = (f: string) =>
+      readFileSync(
+        fileURLToPath(new URL(`../../packages/shared/src/${f}`, import.meta.url)),
+        'utf8',
+      );
+    const defines = (src: string, n: string) => new RegExp(`export const ${n}\\b`).test(src);
+    for (const n of ['DEV_SLOTS', 'isDevSlot']) expect(defines(shared('stage.ts'), n)).toBe(true);
+    for (const n of ['AGENT_TOKEN_HEADER', 'AUTH_HEADER', 'ORIGIN_SECRET_HEADER'])
+      expect(defines(shared('rpc.ts'), n)).toBe(true);
+    expect(shared('stage.ts')).not.toMatch(/^\s*import\s/m); // a leaf: its values can't come from an unpinned file
+    // and no cdk file reaches shared another static way: a namespace import, a re-export, a subpath (./contract, ./flux)
+    const other = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? other(join(dir, e.name))
+          : /(?<!\.test)\.ts$/.test(e.name) &&
+              /(?:import\s*(?:type\s*)?\*|export\s[^;]*from)\s*[^;]*'@aperture\/shared[/']|'@aperture\/shared\//.test(
+                readFileSync(join(dir, e.name), 'utf8'),
+              )
+            ? [e.name]
+            : [],
+      );
+    expect(other(root)).toEqual([]);
   });
   it('is full when unknown or when the diff fails', () => {
     expect(shapeModeFor('unknown', 'h', diff)).toBe('full');

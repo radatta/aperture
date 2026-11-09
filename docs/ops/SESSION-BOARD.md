@@ -178,7 +178,7 @@ slot A as before, then ` · devb: free` / `· devb: <branch> (<session>) until H
 status line's `dev:` and `board.sh json` still read slot A only. Two writers, each for both files:
 
 - **`scripts/board/devlock.sh refresh`** peeks read-only with the container's own credential —
-  `git ls-remote origin refs/locks/dev`, then `gh api …/git/tags/<sha>` for the holder — each call under
+  one `git ls-remote origin refs/locks/dev refs/locks/devb` for both slots, then `gh api …/git/tags/<sha>` for each held slot's holder — each call under
   `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
   the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
   `failedAt`, and the next peek waits a minute after it; a peek that finds the bot wrote while it was asking keeps
@@ -341,12 +341,12 @@ readout column. _Test failures_: the last 7 days of suites (`class: test`, not l
 slot-class jobs (`test ui typecheck lint build dev`) overlapped each one at any point, with the failure rate
 and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are the operator). _Activity_: what
 changed in the last 24 h, not what ran — failed jobs (local only: CI checks need an API the container's token
-can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl`; a start only while in flight),
+can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl` and slot B's `ledger.devb.jsonl`, whose runs read `on devb`; a start only while in flight),
 merges, PRs opened (gh `createdAt`), heavy leases that gave up or were denied, and the dev lock taken (a
 `pnpm bot deploy-dev`) as this tower saw it (kept in memory: a viewer writes no history). Passing jobs, the Vite dev server, waits and the lock freed
 stay out (_Machine_ and _Status_ count the suites); `other` and `test-file` jobs take no heavy slot and show
 nowhere in the tower. _Status_: the dead-row TTL proof
-(full runs that ended PASS since `proofs.deadRows.since`, minus `excludedRuns`), the overnight vitest bench
+(slot A's full runs that ended PASS since `proofs.deadRows.since`, minus `excludedRuns`; devb's rows are another table), the overnight vitest bench
 when `localNotes/bench-vitest/results.tsv` exists, `queue.json`'s age, gh, the sampler's last tick, suites in
 24 h, heavy jobs now.
 
@@ -359,12 +359,12 @@ before _Activity_ drops under 4 rows; a cut list ends `+n more`. Resizing redraw
 
 **Reads, and what it costs.** The board's files, never `board.sh status` (which scans `/proc` and peeks at
 GitHub each call): incremental tails of `history/samples-<UTC day>.jsonl` (24 h, two files across UTC
-midnight; each tick compacted to a few numbers) and `events-*.jsonl` (7 days), `devlock.json`, `limits.json`,
-`queue.json`, the devcheck ledger and the bench files, each re-read only when its size or mtime changes. Text
+midnight; each tick compacted to a few numbers) and `events-*.jsonl` (7 days), `devlock.json` and `devlock.devb.json`, `limits.json`,
+`queue.json`, both slots' devcheck ledgers and the bench files, each re-read only when its size or mtime changes. Text
 from them (and from gh) is cleaned to one column per glyph: control characters dropped, tabs as spaces,
 double-width glyphs (CJK, emoji) as `?`. A `cpuCores` over 2 × the cores is a bad tick (_History_) and shows
 as unknown. `gh pr list` at most once a minute, a failure keeping the last list; `devlock.sh refresh --max-age 50`
-once a minute (50: the cache is stamped after its peek), which rewrites the `devlock.json` cache — the tower's
+once a minute (50: the cache is stamped after its peek), which rewrites both slots' lock caches — the tower's
 only write, and fewer GitHub calls than a `watch` on `status`, which refreshes at 30 s. It redraws every 5 s, writing
 only changed rows (no clear, no flicker), on the alternate screen; exit, Ctrl-C, TERM, HUP and a crash restore
 the terminal. Measured (2026-11-07, live board, 210 × 55): first tick 18 ms, then ~6 ms wall / 4–8 ms CPU

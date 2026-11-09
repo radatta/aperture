@@ -170,6 +170,22 @@ describe('panels', () => {
     ]);
   });
 
+  it('a devcheck run on devb says so in the feed; slot A stays unmarked', () => {
+    const t = Date.parse(NOW) - 60000;
+    const r = { start: t - 60000, end: t, status: 'PASS', full: true };
+    const items = feedItems({
+      ...state,
+      runs: [
+        { ...r, run: 'x-full', slot: 'dev' },
+        { ...r, run: 'y-full', slot: 'devb' },
+      ],
+    }).filter((i) => i.kind === 'run');
+    expect(items.map((i) => i.text)).toEqual([
+      'devcheck full PASS  60s',
+      'devcheck full on devb PASS  60s',
+    ]);
+  });
+
   it('the feed keeps the dev lock taken (a deploy-dev) and drops it freed', () => {
     const t = Date.parse(NOW) - 60000;
     const items = feedItems({

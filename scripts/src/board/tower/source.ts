@@ -16,6 +16,7 @@ export type Paths = {
   boardDir: string; // devlock.json, queue.json, history/
   limits: string; // scripts/board/limits.json
   ledger: string; // localNotes/devcheck/ledger.dev.jsonl
+  ledgerB?: string; // slot B's, ledger.devb.jsonl (absent: slot A's runs only)
   bench: string; // localNotes/bench-vitest/
   cores?: number; // the CPU-guard's core count; default the host's (fixtures pin theirs)
 };
@@ -113,7 +114,7 @@ export class Source {
   private jobs: Job[] = [];
   private leaseFeed: FeedItem[] = [];
   private lastRaw: Record<string, unknown> | null = null;
-  private ledgerTail: Tail;
+  private ledgerTails: [Run['slot'], Tail][];
   private runs = new Map<string, Run>();
   private lockFiles: Record<LockSlot, Watched<LockFile | null>>;
   private limits: Watched<Limits>;
@@ -135,7 +136,8 @@ export class Source {
     this.samples = new DayFiles(hist, 'samples');
     this.events = new DayFiles(hist, 'events');
     // The ledger is mostly created/deleted rows (~2 MB): read it once, then only what's appended.
-    this.ledgerTail = tail(paths.ledger);
+    this.ledgerTails = [['dev', tail(paths.ledger)]];
+    if (paths.ledgerB) this.ledgerTails.push(['devb', tail(paths.ledgerB)]);
     const lockFile = (name: string) =>
       new Watched<LockFile | null>(join(paths.boardDir, name), null, (t) => {
         try {
@@ -176,7 +178,7 @@ export class Source {
     this.leaseFeed = this.leaseFeed.filter((f) => f.t >= now - DAY);
     this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
-    foldRuns(this.runs, parseLines(readNew(this.ledgerTail)));
+    for (const [slot, t] of this.ledgerTails) foldRuns(this.runs, parseLines(readNew(t)), slot);
     // full runs stay: the TTL proof counts them from queue.json's `since`, however old (a handful a day)
     for (const [id, r] of this.runs)
       if (!r.full && (r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);
@@ -307,6 +309,7 @@ export function defaultPaths(repo: string): Paths {
     boardDir: board,
     limits: join(repo, 'scripts/board/limits.json'),
     ledger: join(notes, 'devcheck/ledger.dev.jsonl'),
+    ledgerB: join(notes, 'devcheck/ledger.devb.jsonl'),
     bench: join(notes, 'bench-vitest'),
   };
 }

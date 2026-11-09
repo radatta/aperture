@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LOG_GROUPS, parseLogsRequest } from './logs-spec.ts';
-import { checkLoopGuard, parseSince } from './logs.ts';
+import { checkLoopGuard, defaultGroups, parseSince } from './logs.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
 const req = (over: Partial<{ start: string; end: string; groups: string; key: string }> = {}) =>
@@ -91,5 +91,36 @@ describe('logs loop guard', () => {
 
   it('starts empty without a ledger', () => {
     expect(() => checkLoopGuard(join(tmpdir(), 'no-ledger-here.jsonl'), NOW)).not.toThrow();
+  });
+});
+
+describe('default groups (no --groups)', () => {
+  const run = async (branch: string | null, held: () => Promise<'dev' | 'devb' | null>) => {
+    const lines: string[] = [];
+    const groups = await defaultGroups(branch, held, (l) => lines.push(l));
+    return { groups, lines };
+  };
+  it("reads the held slot's groups: devb's with -devb, and says so", async () => {
+    expect(await run('b', async () => 'devb')).toEqual({
+      groups: 'bff-devb,mcp-devb',
+      lines: ["b holds the devb lock — reading devb's groups (--groups to choose)"],
+    });
+    expect(await run('a', async () => 'dev')).toEqual({ groups: 'bff,mcp', lines: [] });
+    expect(await run('n', async () => null)).toEqual({ groups: 'bff,mcp', lines: [] });
+  });
+  it('a failed lock read says so, then reads slot A', async () => {
+    const r = await run('b', () => Promise.reject(new Error('HTTP 502')));
+    expect(r.groups).toBe('bff,mcp');
+    expect(r.lines).toEqual([
+      "couldn't read the dev locks (HTTP 502) — reading slot A's groups; --groups to choose",
+    ]);
+  });
+  it('a detached checkout reads no lock', async () => {
+    let asked = false;
+    expect(await run(null, async () => ((asked = true), 'devb'))).toEqual({
+      groups: 'bff,mcp',
+      lines: [],
+    });
+    expect(asked).toBe(false);
   });
 });

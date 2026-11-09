@@ -22,6 +22,7 @@ describe('foldRuns', () => {
         end: Date.parse('2026-11-08T05:10:00Z'),
         status: 'PASS',
         full: true,
+        slot: 'dev',
       },
       {
         run: 'b-delta',
@@ -29,7 +30,18 @@ describe('foldRuns', () => {
         end: null,
         status: null,
         full: false,
+        slot: 'dev',
       },
+    ]);
+  });
+
+  it("keeps each slot's runs apart, even under one id", () => {
+    const m = new Map<string, Run>();
+    foldRuns(m, [rec('run-end', 'x-full', '2026-11-08T05:10:00Z', 'PASS')]);
+    foldRuns(m, [rec('run-end', 'x-full', '2026-11-08T05:11:00Z', 'FAIL')], 'devb');
+    expect([...m.values()].map((r) => [r.slot, r.status])).toEqual([
+      ['dev', 'PASS'],
+      ['devb', 'FAIL'],
     ]);
   });
 });
@@ -42,6 +54,7 @@ describe('ttlProof', () => {
     end: at(h),
     status,
     full,
+    slot: 'dev',
   });
   it('counts full PASS runs since the window opened, minus the hub exclusions', () => {
     const runs = [
@@ -59,5 +72,9 @@ describe('ttlProof', () => {
       target: 12,
       since: at(0),
     });
+  });
+  it("counts slot A's runs only: devb's rows are in another table", () => {
+    const runs = [run('a', 1, 'PASS'), { ...run('b', 2, 'PASS'), slot: 'devb' as const }];
+    expect(ttlProof(runs, { since: at(0), target: 12, excludedRuns: [] }).passed).toBe(1);
   });
 });

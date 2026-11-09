@@ -140,7 +140,7 @@ export const devSlotB: Scenario = {
       'main-shape',
       'A main merge redeploys devb only when its shape changed (cdk/, the lockfile, or shared’s stage.ts)',
       'scripts/src/deploy-base.test.ts',
-      'deploys only a shape change: cdk/ or the lockfile',
+      "deploys only a shape change: cdk/, the lockfile or shared's stage.ts",
       'main’s lane runs only on a merge to main, after this PR',
       'nominal',
     ),
