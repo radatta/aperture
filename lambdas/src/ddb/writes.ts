@@ -18,6 +18,7 @@ export interface Writes {
     field: string,
     by: number,
     init: Record<string, unknown>,
+    set: Record<string, unknown>,
   ): Promise<number | null>;
 }
 
@@ -49,7 +50,7 @@ export function liveWrites(doc: DocClient, stage = process.env.STAGE): Writes {
     delete: (pk, sk) => doc.delete(pk, sk),
     deleteIf: (pk, sk, expected) => doc.deleteIf(pk, sk, expected),
     batchPut: (items) => doc.batchPut(items.map(out)),
-    add: (pk, sk, field, by, init) => doc.add(pk, sk, field, by, init),
+    add: (pk, sk, field, by, init, set) => doc.add(pk, sk, field, by, init, set),
   };
 }
 

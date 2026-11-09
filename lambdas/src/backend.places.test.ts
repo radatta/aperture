@@ -45,9 +45,9 @@ function countingWrites(doc: InMemoryDoc) {
       items.forEach((i: Item) => log.push({ kind: 'batchPut', pk: i.PK, sk: i.SK })),
       live.batchPut(items)
     ),
-    add: (p, s, f, by, init) => (
+    add: (p, s, f, by, init, set) => (
       log.push({ kind: 'add', pk: p, sk: s }),
-      live.add(p, s, f, by, init)
+      live.add(p, s, f, by, init, set)
     ),
   };
   return { writes, log, failDeleteOnce };

@@ -75,7 +75,6 @@ export const lcSittings: Scenario = {
     'app/src/pages/Settings/index.tsx',
     'packages/shared/src/sittings.ts',
     'scripts/src/devcheck/scenarios/lc-sittings.ts',
-    'lambdas/src/mcp/leetcodeTools.ts',
   ],
   rows: [
     // PR B: Claude watches live (live_sitting, lambdas/src/mcp/leetcodeTools.ts).
@@ -383,7 +382,7 @@ export const lcSittings: Scenario = {
           throw new Error('live_sitting isn’t listed');
         const out = await ctx.mcp.reads.liveSitting();
         if (out.active) throw new Error(`active with nothing open: ${JSON.stringify(out.sitting)}`);
-        if (out.lastSitting?.id.includes(tag(ctx)))
+        if (out.lastSitting?.problem.slug.includes(tag(ctx)))
           throw new Error('lastSitting is one of this run’s, before any Start');
       },
     },

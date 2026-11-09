@@ -45,14 +45,16 @@ export interface DocClient {
   deleteIf(pk: string, sk: string, expectedUpdatedAt: number): Promise<void>;
   batchPut(items: Item[]): Promise<void>;
   // Atomically adds `by` to the number `field` (absent → 0) and returns the new value. `init` is written only
-  // where absent, so the row a first add creates is a whole one. No condition and no read: concurrent adds all
-  // count — a counter beside a row that is rewritten whole (a sitting's head) can't live on that row.
+  // where absent, so the row a first add creates is a whole one; `set` is written on every add (updatedAt). No
+  // condition and no read: concurrent adds all count — a counter beside a row that is rewritten whole (a
+  // sitting's head) can't live on that row.
   add(
     pk: string,
     sk: string,
     field: string,
     by: number,
     init: Record<string, unknown>,
+    set: Record<string, unknown>,
   ): Promise<number>;
 }
 
@@ -214,11 +216,12 @@ export class InMemoryDoc implements DocClient {
     field: string,
     by: number,
     init: Record<string, unknown>,
+    set: Record<string, unknown>,
   ): Promise<number> {
     const key = keyOf(pk, sk);
     const cur: Item = this.items.get(key) ?? { PK: pk, SK: sk };
     const was = typeof cur[field] === 'number' ? (cur[field] as number) : 0;
-    const next: Item = { ...init, ...cur, PK: pk, SK: sk, [field]: was + by };
+    const next: Item = { ...init, ...cur, ...set, PK: pk, SK: sk, [field]: was + by };
     assertMarshallable(next);
     this.items.set(key, clone(next));
     return was + by;

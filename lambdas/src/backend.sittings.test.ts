@@ -207,7 +207,6 @@ describe('sittings on the table', () => {
 // Claude's live pull (live_sitting): the count is its own row, bumped by an atomic add — never the head, which
 // ingest's refold rewrites whole and would drop a concurrent bump.
 describe('live pulls on the table', () => {
-  const headOf = (doc: InMemoryDoc, id: string) => doc.get(pk('u1'), sk.sitting(id));
   const judged = (type: 'run' | 'submit', at: number, status = 11) => ({
     id: ulid(),
     type,
@@ -226,10 +225,11 @@ describe('live pulls on the table', () => {
     const { doc, backend } = setup();
     await linked(backend);
     const { sitting } = await backend.lcSittingStart(start());
-    const head = await headOf(doc, sitting.id);
+    const before = doc.snapshot();
     await backend.pullLiveSitting();
-    expect(await headOf(doc, sitting.id)).toEqual(head);
-    const reads = await doc.get(pk('u1'), sk.sittingReads(sitting.id));
+    const readsKey = sk.sittingReads(sitting.id);
+    expect(doc.snapshot().filter((r) => r.SK !== readsKey)).toEqual(before); // the head untouched too
+    const reads = await doc.get(pk('u1'), readsKey);
     expect(reads).toMatchObject({ count: 1, sittingId: sitting.id, deletedAt: null });
     expect(reads?.expiresAt).toBeUndefined(); // kept as long as its sitting, on prod
 
@@ -278,6 +278,9 @@ describe('live pulls on the table', () => {
     const { sitting } = await backend.lcSittingStart(start());
     await backend.setTaskActual(sitting.repTaskId, 30);
     await backend.transitionTask(sitting.repTaskId, 'done');
+    // The gate's release is best-effort after the head ends: a gate still naming the ended sitting.
+    const gate = await doc.get(pk('u1'), sk.lcStart());
+    await doc.put({ ...gate!, openSittingId: sitting.id });
     rows = doc.snapshot();
     expect(await backend.pullLiveSitting()).toMatchObject({
       sitting: null,

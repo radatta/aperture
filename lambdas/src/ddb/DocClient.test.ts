@@ -106,18 +106,27 @@ describe('InMemoryDoc', () => {
     expect((await db.query('u#1', 'cat#')).length).toBe(2);
   });
 
-  it('add counts from 0, writes init only where absent, and every concurrent add counts', async () => {
+  it('add counts from 0, writes init only where absent and set every time, and never revives a tombstone', async () => {
     const init = { id: 's', deletedAt: null, createdAt: 1 };
-    expect(await db.add('u#1', 'lcs#s#reads', 'count', 1, init)).toBe(1);
-    expect(await db.add('u#1', 'lcs#s#reads', 'count', 1, { ...init, createdAt: 2 })).toBe(2);
-    expect(await db.get('u#1', 'lcs#s#reads')).toMatchObject({ count: 2, createdAt: 1, id: 's' });
+    expect(await db.add('u#1', 'lcs#s#reads', 'count', 1, init, { updatedAt: 5 })).toBe(1);
+    expect(
+      await db.add('u#1', 'lcs#s#reads', 'count', 1, { ...init, createdAt: 2 }, { updatedAt: 6 }),
+    ).toBe(2);
+    expect(await db.get('u#1', 'lcs#s#reads')).toMatchObject({
+      count: 2,
+      createdAt: 1,
+      updatedAt: 6,
+      id: 's',
+    });
     await Promise.all(
-      Array.from({ length: 5 }, () => db.add('u#1', 'lcs#s#reads', 'count', 1, init)),
+      Array.from({ length: 5 }, () =>
+        db.add('u#1', 'lcs#s#reads', 'count', 1, init, { updatedAt: 5 }),
+      ),
     );
     expect((await db.get('u#1', 'lcs#s#reads'))?.count).toBe(7);
     // A tombstone keeps its deletedAt: init never revives it.
     await db.put(item({ PK: 'u#1', SK: 'lcs#t#reads', deletedAt: 9, count: 3 }));
-    expect(await db.add('u#1', 'lcs#t#reads', 'count', 1, init)).toBe(4);
+    expect(await db.add('u#1', 'lcs#t#reads', 'count', 1, init, { updatedAt: 7 })).toBe(4);
     expect((await db.get('u#1', 'lcs#t#reads'))?.deletedAt).toBe(9);
   });
 

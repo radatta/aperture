@@ -18,6 +18,8 @@ import {
   type LedgerKind,
 } from './api';
 import { assertDevOrigin, targetOrigin } from './config';
+import { DevcheckError } from './errors';
+import type { Ledger } from './ledger';
 
 // What live_sitting answers (lambdas/src/mcp/leetcodeTools.ts) — the fields the scenario reads.
 export interface DevJudged {
@@ -37,10 +39,13 @@ export interface DevLiveSitting {
   runCount?: number;
   submitCount?: number;
   lastSubmit?: DevJudged | null;
-  lastSitting?: { id: string; status: string; liveReads: number } | null;
+  lastSitting?: {
+    id: string;
+    status: string;
+    liveReads: number;
+    problem: { slug: string };
+  } | null;
 }
-import { DevcheckError } from './errors';
-import type { Ledger } from './ledger';
 
 export const MCP_CREATE_VIA = 'mcp:create_task';
 const mcpUrl = () => `${targetOrigin()}/mcp`;

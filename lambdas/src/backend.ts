@@ -979,13 +979,14 @@ export class BackendClient implements ApiClient {
         lastSitting: null,
       };
     }
-    const last = (await this.listSittings())[0] ?? null;
+    const heads = await this.repo.listSittings({ consistent: true });
+    const last = heads.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     return {
       sitting: null,
       live: null,
       lastRun: null,
       lastSubmit: null,
-      liveReads: last ? await this.repo.getSittingReads(last.id) : 0,
+      liveReads: last ? await this.repo.getSittingReads(last.id, { consistent: true }) : 0,
       lastSitting: last,
     };
   }

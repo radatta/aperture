@@ -15,12 +15,14 @@ const T0 = Date.parse('2026-11-09T18:00:00Z');
 let t = T0;
 const now = () => t;
 let backend: BackendClient;
+let repo: Repo;
 let ctx: ToolContext;
 
 beforeEach(() => {
   t = T0;
   const doc = new InMemoryDoc();
-  backend = new BackendClient(new Repo(doc, liveWrites(doc), U), { userId: U, now });
+  repo = new Repo(doc, liveWrites(doc), U);
+  backend = new BackendClient(repo, { userId: U, now });
   ctx = {
     dispatch: (method: ApiMethod, args: unknown[]) =>
       handleRpc(doc, { userId: U, method, args, now }),
@@ -133,6 +135,39 @@ describe('live_sitting', () => {
     });
     expect(out.note).toMatch(/30 s/);
     expect(out).not.toHaveProperty('unchangedSinceVersion');
+  });
+
+  it('a Submit whose refold lost its race shows its own verdict beside its own failing case', async () => {
+    const s = await open();
+    const submit = (status: number, msg: string, at: number, input: string) => ({
+      id: ulid(),
+      type: 'submit',
+      at,
+      payload: { result: { status_code: status, status_msg: msg, last_testcase: input } },
+    });
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [submit(10, 'Accepted', T0 + 60_000, 'old')] as never,
+    });
+    // The next submit's rows land, but its refold doesn't (a lost CAS, healed only by a retry).
+    const late = submit(11, 'Wrong Answer', T0 + 90_000, '[9]');
+    await repo.putSittingEventIfAbsent(
+      {
+        ...late,
+        sittingId: s.id,
+        receivedAt: T0,
+        userId: U,
+        createdAt: T0,
+        updatedAt: T0,
+        deletedAt: null,
+      } as never,
+      null,
+    );
+    expect((await run()).lastSubmit).toMatchObject({
+      verdict: 'wrong_answer',
+      statusMsg: 'Wrong Answer',
+      detail: { input: '[9]' },
+    });
   });
 
   it('sinceVersion says whether the code moved, and every pull counts', async () => {

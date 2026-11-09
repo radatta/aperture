@@ -115,14 +115,21 @@ export function createLiveDoc(tableName: string): DocClient {
         throw err;
       }
     },
-    async add(pk, sk, field, by, init) {
+    async add(pk, sk, field, by, init, set) {
       const names: Record<string, string> = { '#f': field };
       const values: Record<string, unknown> = { ':by': by };
-      const sets = Object.entries(init).map(([k, v], i) => {
-        names[`#i${i}`] = k;
-        values[`:i${i}`] = v;
-        return `#i${i} = if_not_exists(#i${i}, :i${i})`;
-      });
+      const sets = [
+        ...Object.entries(init).map(([k, v], i) => {
+          names[`#i${i}`] = k;
+          values[`:i${i}`] = v;
+          return `#i${i} = if_not_exists(#i${i}, :i${i})`;
+        }),
+        ...Object.entries(set).map(([k, v], i) => {
+          names[`#s${i}`] = k;
+          values[`:s${i}`] = v;
+          return `#s${i} = :s${i}`;
+        }),
+      ];
       const res = await doc.update({
         TableName: tableName,
         Key: { PK: pk, SK: sk },
@@ -131,7 +138,9 @@ export function createLiveDoc(tableName: string): DocClient {
         ExpressionAttributeValues: values,
         ReturnValues: 'UPDATED_NEW',
       });
-      return Number(res.Attributes?.[field]);
+      const n = res.Attributes?.[field];
+      if (typeof n !== 'number') throw new Error(`add: no number came back for ${field}`);
+      return n;
     },
     async batchPut(items) {
       for (let i = 0; i < items.length; i += 25) {

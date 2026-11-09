@@ -1,4 +1,10 @@
-import { judgeDetail, sittingMetrics, sittingMinutes, sittingProblemUrl } from '@aperture/shared';
+import {
+  judgeDetail,
+  sittingMetrics,
+  sittingMinutes,
+  sittingProblemUrl,
+  verdictOf,
+} from '@aperture/shared';
 import type { LiveSittingPull, Sitting, SittingEvent, SittingVerdict } from '@aperture/shared';
 import { RpcParamError } from './types';
 import type { Tool } from './types';
@@ -33,17 +39,20 @@ const outcomeOf = (s: Sitting) => {
   };
 };
 
-// A judged Run or Submit: the summary's verdict, plus what its payload says beyond it (failing case, expected
-// vs output, the error head). The verdict comes from the head (the event may still await its check).
+// A judged Run or Submit: its verdict and what its payload says beyond it (failing case, expected vs output, the
+// error head), both from the one newest payload — so they always belong to the same event, even while the head's
+// summary lags a refold. The summary's verdict stands in only when no payload was read.
 function judged(v: SittingVerdict | null, e: SittingEvent | null, now: number) {
-  if (!v && !e) return null;
+  const verdict = e ? verdictOf(e.payload, e.at) : v;
+  if (!verdict && !e) return null;
+  const at = verdict?.at ?? e?.at ?? null;
   return {
-    verdict: v?.verdict ?? null,
-    statusMsg: v?.statusMsg ?? null,
-    passed: v?.passed ?? null,
-    total: v?.total ?? null,
-    at: iso(v?.at ?? e?.at ?? null),
-    agoSec: agoSec(v?.at ?? e?.at ?? null, now),
+    verdict: verdict?.verdict ?? null,
+    statusMsg: verdict?.statusMsg ?? null,
+    passed: verdict?.passed ?? null,
+    total: verdict?.total ?? null,
+    at: iso(at),
+    agoSec: agoSec(at, now),
     detail: e ? judgeDetail(e.payload) : null,
   };
 }

@@ -292,14 +292,14 @@ export class Repo {
   // Claude's live pulls of a sitting (keys.ts → sittingReads): an atomic add, so a pull never contends with
   // ingest's head writes. Returns the count after this pull; under noopWrites, the stored count.
   async bumpSittingReads(id: string, now: number): Promise<number> {
-    const n = await this.writes.add(this.p(), sk.sittingReads(id), 'count', 1, {
-      id,
-      sittingId: id,
-      userId: this.userId,
-      createdAt: now,
-      updatedAt: now,
-      deletedAt: null,
-    });
+    const n = await this.writes.add(
+      this.p(),
+      sk.sittingReads(id),
+      'count',
+      1,
+      { id, sittingId: id, userId: this.userId, createdAt: now, deletedAt: null },
+      { updatedAt: now },
+    );
     return n ?? (await this.getSittingReads(id));
   }
   async getSittingReads(id: string, opts?: { consistent?: boolean }): Promise<number> {
