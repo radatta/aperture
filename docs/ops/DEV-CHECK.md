@@ -198,8 +198,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 ## Throttles (429)
 
-The app keeps a page's burst under the dev account's Lambda concurrency quota of 10 ([CI-BOT.md](CI-BOT.md) →
-_Dev deploy blast radius_ → Compute): at most 8 `/api` calls in flight (`app/src/data/httpClient.ts` →
+The app keeps a page's burst under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
+_Dev deploy blast radius_ → Compute; the account quota of 10 before 2026-11): at most 8 `/api` calls in flight (`app/src/data/httpClient.ts` →
 `MAX_IN_FLIGHT`), leaving two for the harness's own calls, so Home's ~10 RPCs on a cold BFF no longer get HTTP 429
 (`inflight-cap`, 2026-11; before it, a dated _Known 429s_ rule here let a run count as green with them). A 429 means
 Lambda never started the function, so that attempt was never tested — the app's retry (`app/src/data/retry.ts`) may
@@ -209,7 +209,10 @@ or not, so one fails the run like any other console error, and the report's _Thr
 harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run's console saw (one
 inside an injected-failure window is dropped from the console and shows under _Throttled (429)_ (and _Failed loads_) — read that
 section too). The same scenario counts Home's `/api` requests on the wire and fails past 8. Failures a scenario injects on
-purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here.
+purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
+own `/api` and `/mcp` clients back off a Lambda 429 and retry, so no console sees it and a call that succeeds may
+still have been throttled; `ctx.api.throttles()` and `ctx.mcp.throttles()` count those, for a step that must prove
+none happened (`dev-concurrency-caps`).
 
 The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
 

@@ -465,6 +465,7 @@ describe('createApiClient', () => {
       });
       expect((await capped.reads.placeDigestRaw('s', SECRET)).status).toBe(429);
       expect(cap).toHaveBeenCalledTimes(1);
+      expect(capped.throttles()).toBe(0); // the BFF's own cap isn't a Lambda throttle
       let n = 0;
       const throttled = vi.fn<FetchLike>(async () =>
         ++n < 2 ? reply(429, { Message: 'Rate Exceeded.' }) : reply(200, { count: 1 }),
@@ -481,6 +482,7 @@ describe('createApiClient', () => {
         body: { count: 1 },
       });
       expect(throttled).toHaveBeenCalledTimes(2);
+      expect(api.throttles()).toBe(1);
     });
 
     it('ledgers a place create (intent, then the server id); an edit or delete must name a recorded place', async () => {

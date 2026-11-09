@@ -1,5 +1,5 @@
-// The app caps /api calls in flight at 8 (app/src/data/httpClient.ts → MAX_IN_FLIGHT), under dev's Lambda
-// concurrency quota of 10 (CI-BOT.md → Compute), so a page-load burst no longer gets 429s. Dev proves what only
+// The app caps /api calls in flight at 8 (app/src/data/httpClient.ts → MAX_IN_FLIGHT), under the BFF's reserved
+// concurrency on dev (CI-BOT.md → Compute), so a page-load burst no longer gets 429s. Dev proves what only
 // dev can: a real quota against the BFF cold right after the deploy (smoke's Home load, whose console this run
 // still holds — consoleErrors is cumulative) got no 429, and the deployed bundle really holds Home's burst at 8,
 // counted from the page's own requests. The slot itself — freed on a throw, held by nothing during a 429's
@@ -31,14 +31,14 @@ async function until(what: string, ok: () => boolean, timeoutMs: number) {
 
 export const inflightCap: Scenario = {
   id: 'inflight-cap',
-  title: 'In-flight cap keeps a page-load burst under dev’s quota',
+  title: 'In-flight cap keeps a page-load burst under the BFF’s reservation',
   tiers: ['full'],
   rows: [
     {
       id: 'cold-burst',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Home’s cold-start burst gets no 429 under dev’s quota of 10',
+      what: 'Home’s cold-start burst gets no 429 under the BFF’s reservation',
     },
     {
       id: 'cap-holds',

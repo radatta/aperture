@@ -15,6 +15,11 @@ const cfg = {
   devRegion: 'us-west-1',
   breakGlassRoleArn: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
   urlFunctions: ['aperture-bff-dev', 'aperture-mcp-dev'],
+  reservations: {
+    'aperture-bff-dev': 18,
+    'aperture-mcp-dev': 10,
+    'aperture-finance-sync-dev': 1,
+  } as Record<string, number>,
 };
 
 interface Fail {
@@ -128,7 +133,7 @@ describe('kill', () => {
 });
 
 describe('restore', () => {
-  it('reverses the throttle, the URL lock and the distributions — but never touches the SCP', async () => {
+  it('puts each function’s own reservation back, unlocks the URLs and the distributions — never the SCP', async () => {
     const { gw, calls } = fakeGateways(
       {},
       { functions: ['aperture-bff-dev', 'aperture-finance-sync-dev'] },
@@ -136,13 +141,34 @@ describe('restore', () => {
     await restore(cfg, gw, () => {});
     expect(calls).toEqual([
       'list',
-      'concurrency aperture-bff-dev null',
-      'concurrency aperture-mcp-dev null',
-      'concurrency aperture-finance-sync-dev null',
+      'concurrency aperture-bff-dev 18',
+      'concurrency aperture-mcp-dev 10',
+      'concurrency aperture-finance-sync-dev 1',
       'url aperture-bff-dev NONE',
       'url aperture-mcp-dev NONE',
       'distributions true',
     ]);
+  });
+});
+
+describe('restore with a function off the record', () => {
+  it('leaves it at 0 and names it, and still restores everything else', async () => {
+    const { gw, calls } = fakeGateways({}, { functions: ['aperture-bff-dev', 'aperture-new-dev'] });
+    const lines: string[] = [];
+    await expect(restore(cfg, gw, (l) => lines.push(l))).rejects.toThrow(
+      /unthrottle aperture-new-dev: .*no reservation on record, left at 0/,
+    );
+    expect(calls.filter((c) => c.startsWith('concurrency aperture-new-dev'))).toEqual([]);
+    expect(calls).toContain('concurrency aperture-bff-dev 18');
+    expect(calls).toContain('concurrency aperture-mcp-dev 10');
+    expect(calls).toContain('url aperture-mcp-dev NONE');
+    expect(calls).toContain('distributions true');
+  });
+
+  it('never removes a reservation: every concurrency call is a number', async () => {
+    const { gw, calls } = fakeGateways();
+    await restore(cfg, gw, () => {}).catch(() => {}); // the LogRetention provider has no entry
+    for (const c of calls.filter((c) => c.startsWith('concurrency '))) expect(c).toMatch(/ \d+$/);
   });
 });
 
@@ -181,6 +207,7 @@ describe('killConfigFrom', () => {
     DEV_REGION: 'us-west-1',
     BREAK_GLASS_ROLE_ARN: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
     URL_FUNCTIONS: 'a-dev, b-dev,',
+    RESERVED_CONCURRENCY: 'a-dev=18, b-dev=10,c-dev=1,',
   };
 
   it('reads the policy, the account, the region, the break-glass role and the URL functions', () => {
@@ -190,7 +217,24 @@ describe('killConfigFrom', () => {
       devRegion: 'us-west-1',
       breakGlassRoleArn: 'arn:aws:iam::222222222222:role/OrganizationAccountAccessRole',
       urlFunctions: ['a-dev', 'b-dev'],
+      reservations: { 'a-dev': 18, 'b-dev': 10, 'c-dev': 1 },
     });
+  });
+
+  it('fails closed on a reservation that is not a positive whole number, or a URL function without one', () => {
+    for (const bad of [
+      'a-dev=18,b-dev=0',
+      'a-dev=18,b-dev=1.5',
+      'a-dev=18,b-dev=',
+      'a-dev=18,=3',
+      'a-dev=18,b-dev',
+    ])
+      expect(() => killConfigFrom({ ...env, RESERVED_CONCURRENCY: bad })).toThrow(
+        /RESERVED_CONCURRENCY entry/,
+      );
+    expect(() => killConfigFrom({ ...env, RESERVED_CONCURRENCY: 'a-dev=18' })).toThrow(
+      /RESERVED_CONCURRENCY has no entry for b-dev/,
+    );
   });
 
   it('fails closed on any missing variable', () => {

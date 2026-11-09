@@ -242,8 +242,10 @@ describe('createMcpClient', () => {
   it('retries a 429, then gives up with the status in the error', async () => {
     let n = 0;
     const flaky = vi.fn<FetchLike>(async () => (n++ < 2 ? http(429, '') : json([])));
-    expect(await client(flaky).reads.listTasks()).toEqual([]);
+    const c = client(flaky);
+    expect(await c.reads.listTasks()).toEqual([]);
     expect(flaky).toHaveBeenCalledTimes(3);
+    expect(c.throttles()).toBe(2); // a success can still have been throttled: the counter says so
     const throttled = vi.fn<FetchLike>(async () => http(429, 'Rate exceeded'));
     await expect(client(throttled).reads.listTasks()).rejects.toThrow(/HTTP 429: Rate exceeded/);
     expect(throttled).toHaveBeenCalledTimes(6);

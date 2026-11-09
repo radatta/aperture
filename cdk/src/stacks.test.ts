@@ -7,7 +7,12 @@ import { ApertureAppStack } from './lib/app-stack';
 import { ApertureBillingStack } from './lib/billing-stack';
 import { DEV_MAX_READ_UNITS, DEV_MAX_WRITE_UNITS } from './lib/data-stack';
 import { allowlistPolicy, guardrailsPolicy } from './lib/org-stack';
-import { DEV_URL_FUNCTIONS } from './config/devAccount';
+import {
+  DEV_CONCURRENCY_CEILING,
+  DEV_RESERVED_CONCURRENCY,
+  DEV_URL_FUNCTIONS,
+  reservedConcurrency,
+} from './config/devAccount';
 import { laneFor, synthesizerFor } from './config/lane';
 import type { Lane } from './config/lane';
 
@@ -568,7 +573,7 @@ describe('ApertureAppStack finance sync', () => {
       MemorySize: 512,
     });
     app.resourceCountIs('AWS::Lambda::Url', 2); // BFF + MCP only
-    expect(syncFn().props.ReservedConcurrentExecutions).toBeUndefined();
+    expect(syncFn().props.ReservedConcurrentExecutions).toBe(1); // dev's cost cap; the CAS lock serialises anyway
   });
 
   it('gets only the table, stage and Plaid env — no auth secrets', () => {
@@ -846,9 +851,9 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
     expect(poller.props.Timeout as number).toBeLessThan(60);
   });
 
-  it('reserves one concurrent tick on prod only — dev asks for none (its SCP and quota forbid it)', () => {
+  it('reserves one concurrent tick on prod and on dev; prod reserves nothing else', () => {
     expect(fnOf(prod, 'aperture-push-dispatch-prod').props.ReservedConcurrentExecutions).toBe(1);
-    expect(poller.props.ReservedConcurrentExecutions).toBeUndefined();
+    expect(poller.props.ReservedConcurrentExecutions).toBe(1);
     for (const name of ['aperture-bff-prod', 'aperture-mcp-prod', 'aperture-finance-sync-prod'])
       expect(fnOf(prod, name).props.ReservedConcurrentExecutions).toBeUndefined();
   });
@@ -1086,13 +1091,34 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     expect(names(devb.templates)).toEqual(devNames.map((n) => n.replace(/-dev$/, '-devb')));
   });
 
-  // The guardrails SCP denies reserved/provisioned concurrency, event-source mappings and destinations to the dev
-  // account; a template that sets one fails to deploy there.
+  // Dev's compute cap is the sum of its functions' reservations, not the account quota (CI-BOT.md → What's capped):
+  // it holds only if every dev function has one. A new function with no entry fails synth (reservedConcurrency);
+  // this pins the deployed values, and that the kill's restore map (the same table) names only real functions.
+  it("reserves each dev function's own share, summing to the slot's ceiling", () => {
+    const fns = resources(dev.templates).filter((x) => x.Type === 'AWS::Lambda::Function');
+    const deployed = Object.fromEntries(
+      fns.map((r) => [
+        r.Properties?.FunctionName as string,
+        r.Properties?.ReservedConcurrentExecutions,
+      ]),
+    );
+    expect(deployed).toEqual(DEV_RESERVED_CONCURRENCY);
+    expect(Object.values(DEV_RESERVED_CONCURRENCY).reduce((a, b) => a + b, 0)).toBe(
+      DEV_CONCURRENCY_CEILING,
+    );
+    for (const fn of DEV_URL_FUNCTIONS) expect(DEV_RESERVED_CONCURRENCY[fn]).toBeGreaterThan(0);
+  });
+
+  it('fails synth for a dev function with no reservation on record', () => {
+    expect(() => reservedConcurrency('dev', 'aperture-new-dev')).toThrow(/no reserved concurrency/);
+    expect(reservedConcurrency('prod', 'aperture-bff-prod')).toEqual({});
+  });
+
+  // The guardrails SCP denies provisioned concurrency (an Alias or Version's), event-source mappings and destinations
+  // to the dev account; a template that sets one fails to deploy there.
   // The SCP mirrors below read both dev slots' templates: a resource only devb carries must fail here, not at its deploy.
-  it('asks for no concurrency, event-source mapping or destination — the guardrails SCP denies them', () => {
+  it('asks for no provisioned concurrency, event-source mapping or destination — the guardrails SCP denies them', () => {
     const all = resources(devSlots());
-    for (const r of all.filter((x) => x.Type === 'AWS::Lambda::Function'))
-      expect(r.Properties?.ReservedConcurrentExecutions).toBeUndefined();
     const types = all.map((r) => r.Type);
     for (const t of [
       'AWS::Lambda::EventSourceMapping',

@@ -10,9 +10,9 @@ export type FetchLike = (
   init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
-// At most this many /api calls on the wire at once, FIFO. Dev's account has a Lambda concurrency quota of
-// 10 (docs/ops/CI-BOT.md → Compute) and Home mounts ~10 RPCs on a cold BFF, so an uncapped burst gets 429s; 8
-// leaves two for the dev check's own calls. Prod has headroom and pays ~100 ms for Home's second wave.
+// At most this many /api calls on the wire at once, FIFO. Set when dev's Lambda quota was 10 and Home's ~10 RPCs
+// on a cold BFF got 429s; dev's BFF now reserves 18 (docs/ops/CI-BOT.md → Compute), and 8 still leaves room for
+// the dev check's own calls. Prod has headroom and pays ~100 ms for Home's second wave.
 // Mirrored by scripts/src/devcheck/scenarios/inflight-cap.ts → CAP, which counts it on dev.
 export const MAX_IN_FLIGHT = 8;
 // A slot is held at most this long. The BFF's Lambda times out at 15 s (CI-BOT.md → Compute; a cold start's init

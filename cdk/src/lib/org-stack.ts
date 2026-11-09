@@ -16,6 +16,7 @@ import type { Construct } from 'constructs';
 import {
   DEV_MAIN_GITHUB_ROLE,
   DEV_REGION,
+  DEV_RESERVED_CONCURRENCY,
   DEV_URL_FUNCTIONS,
   DEVMAIN_QUALIFIER,
   GITHUB_ROLE_PREFIX,
@@ -147,7 +148,8 @@ export const guardrailsPolicy = () =>
       Resource: '*',
       Condition: { ...exempt, StringNotEquals: { 'aws:RequestedRegion': DEV_REGION } },
     },
-    // The Lambda concurrency quota is dev's hard compute cap — nothing in dev may ask for more, or leave.
+    // Nothing in dev may ask for more quota or support, or leave. Dev's compute cap is its functions' reservations
+    // (config/devAccount.ts): only main's lane, break-glass and the kill may change them (the freeze, below).
     deny('NoQuotaOrAccountChanges', [
       'servicequotas:Request*',
       'servicequotas:Put*',
@@ -161,10 +163,9 @@ export const guardrailsPolicy = () =>
       'account:CloseAccount',
       'organizations:LeaveOrganization',
     ]),
-    // Capacity outside the concurrency quota, and the ways to re-trigger a function without a caller.
+    // Capacity outside the reservations, and the ways to re-trigger a function without a caller. Reservations
+    // themselves are a frozen shape instead (FrozenFunctionShape): main's devmain lane must apply them on a merge.
     deny('NoLambdaCapacity', [
-      'lambda:PutFunctionConcurrency',
-      'lambda:DeleteFunctionConcurrency',
       'lambda:PutProvisionedConcurrencyConfig',
       'lambda:DeleteProvisionedConcurrencyConfig',
       'lambda:PutFunctionRecursionConfig',
@@ -336,6 +337,9 @@ export const freezePolicy = () =>
       'lambda:RemovePermission',
       'lambda:PutFunctionEventInvokeConfig',
       'lambda:UpdateFunctionEventInvokeConfig',
+      // A reservation is dev's compute cap: a dispatch can't lift or remove it (main's lane and the kill can).
+      'lambda:PutFunctionConcurrency',
+      'lambda:DeleteFunctionConcurrency',
     ]),
     freeze('FrozenTable', [
       'dynamodb:CreateTable',
@@ -469,6 +473,10 @@ export class ApertureOrgStack extends Stack {
         DEV_REGION,
         BREAK_GLASS_ROLE_ARN: `arn:aws:iam::${devAccountId}:role/${BREAK_GLASS_ROLE}`,
         URL_FUNCTIONS: DEV_URL_FUNCTIONS.join(','),
+        // What restore puts back: each dev function's own reservation (a kill sets every one to 0).
+        RESERVED_CONCURRENCY: Object.entries(DEV_RESERVED_CONCURRENCY)
+          .map(([fn, n]) => `${fn}=${n}`)
+          .join(','),
       },
       onFailure: new destinations.SnsDestination(alerts),
       retryAttempts: 2,

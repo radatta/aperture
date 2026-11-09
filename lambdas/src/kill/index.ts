@@ -6,7 +6,6 @@ import {
 } from '@aws-sdk/client-cloudfront';
 import type { DistributionConfig } from '@aws-sdk/client-cloudfront';
 import {
-  DeleteFunctionConcurrencyCommand,
   LambdaClient,
   ListFunctionsCommand,
   PutFunctionConcurrencyCommand,
@@ -75,11 +74,9 @@ function liveGateways(cfg: KillConfig): KillGateways {
     },
     async setConcurrency(FunctionName, value) {
       const { lambda } = await devClients();
-      if (value === null) await lambda.send(new DeleteFunctionConcurrencyCommand({ FunctionName }));
-      else
-        await lambda.send(
-          new PutFunctionConcurrencyCommand({ FunctionName, ReservedConcurrentExecutions: value }),
-        );
+      await lambda.send(
+        new PutFunctionConcurrencyCommand({ FunctionName, ReservedConcurrentExecutions: value }),
+      );
     },
     async setUrlAuth(FunctionName, AuthType) {
       const { lambda } = await devClients();

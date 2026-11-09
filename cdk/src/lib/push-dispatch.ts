@@ -7,6 +7,7 @@ import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Construct } from 'constructs';
+import { reservedConcurrency } from '../config/devAccount';
 
 const DISPATCH_ENTRY = fileURLToPath(
   new URL('../../../lambdas/src/pushDispatch.ts', import.meta.url),
@@ -61,9 +62,8 @@ export class PushDispatch extends Construct {
       timeout: PUSH_DISPATCH_TIMEOUT,
       memorySize: 256,
       logGroup,
-      // Prod: one tick at a time, whatever happens. Dev can't reserve any (its quota leaves no room, and the
-      // guardrails SCP denies it — org-stack.ts); there timeout < rate is the cap.
-      ...(stage === 'prod' ? { reservedConcurrentExecutions: 1 } : {}),
+      // One tick at a time, whatever happens: 1 on prod and on dev (config/devAccount.ts).
+      ...reservedConcurrency(stage, `aperture-push-dispatch-${stage}`),
       environment: { TABLE_NAME: table.tableName, STAGE: stage, APP_URL: appUrl },
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] },
     });

@@ -19,3 +19,36 @@ export const STOCK_QUALIFIER = 'hnb659fds';
 export const DEVMAIN_QUALIFIER = 'devmain';
 export const GITHUB_ROLE_PREFIX = 'aperture-github-';
 export const DEV_MAIN_GITHUB_ROLE = `${GITHUB_ROLE_PREFIX}dev-main`;
+// Each dev function's reserved concurrency (CI-BOT.md → What's capped → Compute). Their sum, not the account quota,
+// is dev's real ceiling, so the worst case holds whatever the quota. A slot is one dev stack's functions; Rahul's
+// call (2026-11-08) is this ceiling per slot. Keyed by full name like DEV_URL_FUNCTIONS: the kill's restore puts
+// these back (org-stack.ts → RESERVED_CONCURRENCY), so a change here needs an ApertureOrg redeploy too.
+export const DEV_CONCURRENCY_CEILING = 30;
+export const DEV_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
+  'aperture-bff-dev': 18, // a page keeps ≤ 8 /api in flight, the harness ~2: room for a phone beside a devcheck
+  'aperture-mcp-dev': 10, // a devcheck's /mcp steps beside a live connector session
+  'aperture-finance-sync-dev': 1, // the per-item lock serialises anyway; a throttled async event is retried
+  'aperture-push-dispatch-dev': 1, // one tick at a time, as on prod
+};
+// Prod's only reservation: push-dispatch's one-tick-at-a-time rule (D3). Prod's other functions stay unreserved.
+const PROD_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
+  'aperture-push-dispatch-prod': 1,
+};
+
+// The function's reservedConcurrentExecutions prop. A dev function with no entry fails synth, so a new one can't
+// reach dev uncapped.
+export function reservedConcurrency(
+  stage: string,
+  functionName: string,
+): { reservedConcurrentExecutions?: number } {
+  if (stage === 'dev') {
+    const n = DEV_RESERVED_CONCURRENCY[functionName];
+    if (n === undefined)
+      throw new Error(
+        `${functionName} has no reserved concurrency (DEV_RESERVED_CONCURRENCY in config/devAccount.ts)`,
+      );
+    return { reservedConcurrentExecutions: n };
+  }
+  const n = stage === 'prod' ? PROD_RESERVED_CONCURRENCY[functionName] : undefined;
+  return n === undefined ? {} : { reservedConcurrentExecutions: n };
+}

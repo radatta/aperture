@@ -10,7 +10,8 @@
 //   4. disable dev's CloudFront distributions — CloudFront serves its cache and reads S3 as a service principal,
 //      out of an SCP's reach, so egress would otherwise keep billing after the kill.
 // Any failure throws, so Lambda's async retries and the failure destination (an email) take over.
-// `restore` reverses 2–4 for the unkill; detaching the SCP stays a human step.
+// `restore` reverses 2–4 for the unkill, putting each function's own reservation back (dev's compute cap, which a
+// later deploy wouldn't repair: the template still says N); detaching the SCP stays a human step.
 
 export interface KillConfig {
   policyId: string; // the aperture-dev-kill SCP
@@ -18,12 +19,13 @@ export interface KillConfig {
   devRegion: string;
   breakGlassRoleArn: string; // the dev account's OrganizationAccountAccessRole
   urlFunctions: string[]; // dev functions with a public Function URL
+  reservations: Record<string, number>; // each dev function's reserved concurrency, which restore puts back
 }
 
 export interface KillGateways {
   attachPolicy(policyId: string, targetId: string): Promise<'attached' | 'already'>;
   listFunctions(): Promise<string[]>;
-  setConcurrency(functionName: string, value: 0 | null): Promise<void>; // null → remove the reservation
+  setConcurrency(functionName: string, value: number): Promise<void>;
   setUrlAuth(functionName: string, auth: 'AWS_IAM' | 'NONE'): Promise<void>;
   setDistributionsEnabled(enabled: boolean): Promise<string[]>; // ids changed
 }
@@ -70,8 +72,12 @@ export async function restore(cfg: KillConfig, gw: KillGateways, log: Log): Prom
   const failures: string[] = [];
   for (const fn of await functionsToCover(cfg, gw, failures))
     await each(failures, `unthrottle ${fn}`, async () => {
-      await gw.setConcurrency(fn, null);
-      log(`${fn} → reservation removed`);
+      // A function with no reservation on record stays at 0: removing it would lift the cap to the account quota.
+      // The hand fix is a break-glass put-function-concurrency (CI-BOT.md → Unkill).
+      const n = cfg.reservations[fn];
+      if (n === undefined) throw new Error('no reservation on record, left at 0');
+      await gw.setConcurrency(fn, n);
+      log(`${fn} → concurrency ${n}`);
     });
   for (const fn of cfg.urlFunctions)
     await each(failures, `unlock ${fn}`, async () => {
@@ -125,12 +131,28 @@ export function killConfigFrom(env: Record<string, string | undefined>): KillCon
     .map((s) => s.trim())
     .filter(Boolean);
   if (!urlFunctions.length) throw new Error('kill: URL_FUNCTIONS names no function');
+  const reservations: Record<string, number> = {};
+  for (const pair of need('RESERVED_CONCURRENCY')
+    .split(',')
+    .filter((p) => p.trim())) {
+    const [fn, raw] = pair.split('=').map((s) => s.trim());
+    const n = Number(raw);
+    if (!fn || !raw || !Number.isInteger(n) || n < 1)
+      throw new Error(
+        `kill: RESERVED_CONCURRENCY entry "${pair}" is not <function>=<positive integer>`,
+      );
+    reservations[fn] = n;
+  }
+  const missing = urlFunctions.filter((fn) => reservations[fn] === undefined);
+  if (missing.length)
+    throw new Error(`kill: RESERVED_CONCURRENCY has no entry for ${missing.join(', ')}`);
   return {
     policyId: need('KILL_POLICY_ID'),
     devAccountId: need('DEV_ACCOUNT_ID'),
     devRegion: need('DEV_REGION'),
     breakGlassRoleArn: need('BREAK_GLASS_ROLE_ARN'),
     urlFunctions,
+    reservations,
   };
 }
 
