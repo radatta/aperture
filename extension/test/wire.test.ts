@@ -187,6 +187,11 @@ describe('wire: what LeetCode traffic means', () => {
       'a',
       'b',
     ]);
+    // The page writes these: anything not shaped as a GraphQL name is left out.
+    const named = (n: unknown) => JSON.stringify({ operationName: n });
+    for (const bad of ['<img src=x>', 'a b', '9lives', 'x'.repeat(41), 7])
+      expect(wire.opNames(named(bad))).toEqual([]);
+    expect(wire.opNames(named('_ok_9'))).toEqual(['_ok_9']);
     expect(wire.opNames(T.submit.reqText)).toEqual([]);
     expect(wire.opNames(null)).toEqual([]);
   });

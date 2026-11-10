@@ -1095,9 +1095,14 @@ class StubClient implements ApiClient {
       .map((x) => {
         const what = `${x.type === 'run' ? 'Run' : 'Submit'} ${x.n} (${x.verdict.statusMsg ?? x.verdict.verdict})`;
         const d = x.detail;
+        const got = `expected ${d.expected}, got ${d.output}`;
         const why =
           d.error ??
-          (d.input ? `${d.input} → expected ${d.expected}, got ${d.output}` : 'no case captured');
+          (d.input
+            ? `${d.input} → ${got}`
+            : d.expected !== null || d.output !== null
+              ? got
+              : 'no case captured');
         return `${what}: ${why}`;
       });
     return { ok: true, mistakes: draftMistakes(lines) ?? [] }; // the backend's own fit: cut to 160, first 5

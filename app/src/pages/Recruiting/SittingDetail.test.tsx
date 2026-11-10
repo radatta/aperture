@@ -129,8 +129,8 @@ describe('the review', () => {
     // The stub's deterministic draft: one line per judged run or submit that wasn't accepted — the Run counts,
     // LeetCode's "Accepted" with correct_answer false.
     expect(within(draft).getAllByRole('checkbox')).toHaveLength(2);
-    expect(within(draft).getByLabelText<HTMLInputElement>('Draft line 1').value).toMatch(
-      /^Run 1 \(Wrong Answer\)/,
+    expect(within(draft).getByLabelText<HTMLInputElement>('Draft line 1').value).toBe(
+      'Run 1 (Wrong Answer): "abba" → expected 2, got 3', // the Run's own case, from its data_input
     );
     for (const box of within(draft).getAllByRole('checkbox'))
       expect(box).toHaveProperty('checked', false);
@@ -317,5 +317,43 @@ describe('End sitting', () => {
       expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Review' })),
     );
     expect(screen.getByText('No runs or submits.')).toBeTruthy(); // ended: no "yet"
+  });
+});
+
+describe('the stub’s sittings', () => {
+  it('its draft names a Run’s expected and output when no input was captured', async () => {
+    const { api, sitting } = await withOpenSitting();
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: '01HZZZZZZZZZZZZZZZZZZZZZZY',
+          type: 'run',
+          at: sitting.clientStartedAt + 60_000,
+          payload: {
+            result: {
+              status_code: 10,
+              status_msg: 'Accepted',
+              correct_answer: false,
+              code_answer: ['3'],
+              expected_code_answer: ['2'],
+            },
+          },
+        },
+      ],
+    });
+    expect(await api.draftSittingReview(sitting.id)).toEqual({
+      ok: true,
+      mistakes: ['Run 1 (Wrong Answer): expected 2, got 3'],
+    });
+  });
+
+  it('every seeded sitting ends no earlier than its last run or submit', async () => {
+    const api = seeded();
+    for (const s of await api.listSittings()) {
+      const { sitting, events } = await api.getSitting(s.id);
+      const last = Math.max(...events.filter((e) => e.type !== 'snapshot').map((e) => e.at));
+      expect(sitting.endedAt, sitting.problemSlug).toBeGreaterThanOrEqual(last);
+    }
   });
 });

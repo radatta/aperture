@@ -618,6 +618,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     ok: number,
     all: number,
     detail?: Record<string, unknown>, // more of LeetCode's /check/ fields: the failing case, the error
+    input?: string, // a Run's own case, on its request (data_input) as LeetCode sends it
   ];
   const sit = (
     task: Task,
@@ -641,12 +642,16 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
           at: startedAt + m * 60_000,
           payload: { code, lang: 11 },
         })),
-        ...judged.map(([type, status, msg, min, ok, all, detail]) => ({
+        ...judged.map(([type, status, msg, min, ok, all, detail, input]) => ({
           id: ulid(),
           type,
           at: startedAt + min * 60_000,
           payload: {
-            request: { lang: 'python3', typed_code: code },
+            request: {
+              lang: 'python3',
+              typed_code: code,
+              ...(input !== undefined ? { data_input: input } : {}),
+            },
             result: {
               status_code: status,
               status_msg: msg,
@@ -663,7 +668,11 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       day: dayKey(startedAt, START_HOUR),
       startedAt,
       clientStartedAt: startedAt,
-      endedAt: task.completedAt,
+      // The rep's minutes are the seed's random factors; the sitting ends no earlier than its last judged event.
+      endedAt: Math.max(
+        task.completedAt ?? 0,
+        startedAt + (Math.max(0, ...judged.map((j) => j[3])) + 1) * 60_000,
+      ),
       status: 'done' as const,
       clientSittingId: ulid(),
       problemSlug: slug,
@@ -793,6 +802,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         2,
         3,
         { correct_answer: false, code_answer: ['3'], expected_code_answer: ['2'] },
+        '"abba"',
       ],
       [
         'submit',

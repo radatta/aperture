@@ -220,11 +220,33 @@ export const lcSittings: Scenario = {
       id: 'run-right',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A Run with correct_answer true stays Accepted; one with no flag is wrong only when fewer passed than ran; an errored Run and a Submit stay as LeetCode judged them',
+      what: 'A Run with correct_answer true stays Accepted (and false is Wrong Answer, said so)',
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
         test: 'correct_answer false is a wrong answer, said so; true stays accepted',
-        why: 'same path as run-wrong (proven on dev): only verdictOf’s pure decision differs, run entirely in the named test and its neighbours',
+        why: 'same path as run-wrong (proven on dev): only verdictOf’s pure decision differs, run entirely in the named test',
+      },
+    },
+    {
+      id: 'run-no-flag',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A Run LeetCode calls Accepted with no correct_answer is Wrong Answer when fewer passed than ran, else Accepted',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'with no flag, fewer passed than run is wrong and all passed is accepted',
+        why: 'same path as run-wrong (proven on dev): only verdictOf’s pure decision differs, run entirely in the named test',
+      },
+    },
+    {
+      id: 'run-errored-submit',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'An errored Run (correct_answer false) stays a Runtime Error, and a Submit with correct_answer false stays Accepted',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'an errored Run and a Submit are left as LeetCode judged them',
+        why: 'same path as run-wrong (proven on dev): only verdictOf’s pure decision differs, run entirely in the named test',
       },
     },
     {
@@ -248,11 +270,22 @@ export const lcSittings: Scenario = {
       id: 'code-lang-unknown',
       entry: 'mcp',
       kind: 'edge',
-      what: 'An id LeetCode’s list doesn’t name falls back to the sitting’s own language; text that isn’t an id passes through',
+      what: 'An id LeetCode’s list doesn’t name falls back to the sitting’s own language',
       offDev: {
         file: 'lambdas/src/mcp/leetcodeTools.test.ts',
         test: 'names the code’s language from LeetCode’s id, else the sitting’s',
         why: 'same path as code-lang (proven on dev): only lcLangName’s pure lookup differs',
+      },
+    },
+    {
+      id: 'code-lang-text',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A language that is text, not an id, passes through as it came',
+      offDev: {
+        file: 'packages/shared/src/leetcode.test.ts',
+        test: 'names LeetCode’s numeric language ids, passes text through, and has no name for an unknown id',
+        why: 'same path as code-lang (proven on dev): only lcLangName’s pure lookup differs, run entirely in the named test',
       },
     },
     {

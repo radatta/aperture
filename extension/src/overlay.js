@@ -15,7 +15,7 @@
     confirm: 'Confirming the reset…',
     timer: 'Starting LeetCode’s timer…',
   };
-  const CSS = `
+  const STYLE = `
     :host { all: initial; }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
     .scrim { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -52,7 +52,7 @@
     el.setAttribute('style', styleOf(false, false));
     const shadow = el.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
-    style.textContent = CSS;
+    style.textContent = STYLE;
     shadow.appendChild(style);
     const body = document.createElement('div');
     shadow.appendChild(body);

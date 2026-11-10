@@ -9,7 +9,7 @@
     globalThis.browser && globalThis.browser.runtime ? globalThis.browser : globalThis.chrome;
   const NS = globalThis.ApertureLC;
   const { relay: relayLib, overlayState, selectors: selLib, timer, wire, outbox, batch } = NS;
-  const debug = NS.debug || { log() {}, dumpControls() {} };
+  const debug = NS.debug || { log() {}, dumpControls() {}, wants: () => false };
   const mintId = NS.ulid.ulid;
   // packages/shared/src/sittings.ts SITTING_ACTIVE_ERROR (background.test.ts checks the copy).
   const ACTIVE_ERROR = 'Another sitting is still open — end it in Aperture first.';
@@ -112,14 +112,16 @@
     const raw = r.raw;
     const near = (at) => (Math.abs(at - Date.now()) < 3600_000 ? at : Date.now());
     const items = capture.observe({ ...raw, reqAt: near(raw.reqAt), resAt: near(raw.resAt) });
-    debug.log('wire', {
-      items: items.map((i) => i.kind),
-      bytes: (raw.reqText || '').length + (raw.resText || '').length,
-      ops: wire.opNames(raw.reqText),
-      req: raw.reqText == null ? null : raw.reqText.length,
-      res: raw.resText == null ? null : raw.resText.length,
-      how: raw.how, // why a body is missing, as the page world saw it (inject-main.js)
-    });
+    // The request is parsed again for its operation names only when the log would keep them.
+    if (debug.wants())
+      debug.log('wire', {
+        items: items.map((i) => i.kind),
+        bytes: (raw.reqText || '').length + (raw.resText || '').length,
+        ops: wire.opNames(raw.reqText),
+        req: raw.reqText == null ? null : raw.reqText.length,
+        res: raw.resText == null ? null : raw.resText.length,
+        how: raw.how, // why a body is missing, as the page world saw it (inject-main.js)
+      });
     items.forEach(onItem);
   }
   function onItem(m) {
@@ -336,14 +338,14 @@
     try {
       text = document.getElementById('__NEXT_DATA__')?.textContent || null;
     } catch {}
-    const bytes = text ? text.length : 0;
-    const doc = text && bytes <= PAGE_DATA_MAX ? wire.pageProblem(text) : null;
+    const chars = text ? text.length : 0;
+    const doc = text && chars <= PAGE_DATA_MAX ? wire.pageProblem(text) : null;
     const match = !!doc && !!loadSlug && doc.titleSlug === loadSlug;
     const fit = match ? wire.fitProblem(doc, PROBLEM_MAX) : null;
     debug.log('pageDoc', {
       when,
       readyState: document.readyState,
-      bytes,
+      chars,
       found: !!doc,
       match,
       fields: doc ? Object.keys(doc).length : 0,
@@ -378,7 +380,9 @@
     }).catch(() => null);
     filling = false;
     debug.log('fill', { ok: !!r && r.status === 200, http: r ? r.status : null });
-    if (r && r.status === 200 && binding === b) await saveBinding({ ...b, problemSent: true });
+    // The binding may have been rewritten meanwhile (learnQuestionId): mark the one still on this sitting.
+    if (r && r.status === 200 && binding && binding.sittingId === b.sittingId)
+      await saveBinding({ ...binding, problemSent: true });
   }
   if (document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', () => readPageDoc('load'), { once: true });

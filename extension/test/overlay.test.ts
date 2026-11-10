@@ -121,7 +121,12 @@ afterEach(() => {
 function open(
   path: string,
   ext: ReturnType<typeof fakeExtension>,
-  opts: { nextData?: unknown; loading?: boolean } = {},
+  opts: {
+    nextData?: unknown;
+    loading?: boolean;
+    css?: { supports(p: string, v: string): boolean };
+    lateHint?: boolean; // LeetCode names the question only on fake().sendHint()
+  } = {},
 ) {
   const tag =
     opts.nextData === undefined
@@ -156,6 +161,8 @@ function open(
     });
   };
   const rootOf = shadowRoots(dom);
+  if (opts.css) (w as Record<string, unknown>).CSS = opts.css; // the browser's CSS namespace, as the page's scripts see it
+  if (opts.lateHint) w.__fakeOpts = { lateHint: true };
   run(dom, MAIN_JS, { fetch: fetchFake });
   run(dom, ISOLATED_JS, { chrome: ext.api });
   run(dom, ['test/fixtures/fake-leetcode.js']);
@@ -183,6 +190,7 @@ function open(
       slowNext: boolean;
       finishNext: () => void;
       fetchDoc: () => void;
+      sendHint: () => void;
       setTimer: (s: Record<string, unknown>) => void;
     };
   const style = () => root()?.querySelector('style')?.textContent ?? '';
@@ -856,6 +864,7 @@ describe('the problem doc from the page', () => {
     // The probe: sizes and shape only.
     expect(await logged(ext, 'pageDoc')).toMatchObject({
       when: 'load',
+      chars: expect.any(Number), // the tag's length in characters, not bytes
       found: true,
       match: true,
       fit: 'whole',
@@ -958,6 +967,31 @@ describe('the problem doc from the page', () => {
     expect(bg.sittings).toHaveLength(1);
   }, 20_000);
 
+  it('a fill whose binding learns the question id meanwhile still marks the doc sent', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext, {
+      nextData: nextData(SSR),
+      loading: true,
+      lateHint: true,
+    });
+    await until(() => p.phase() === 'prompt');
+    p.tap('start'); // before the page's doc is parsed, and before LeetCode names the question
+    await until(() => p.phase() === 'active', 8000);
+    const bound = () =>
+      ext.local.data['sitting:two-sum'] as { questionId?: string | null; problemSent?: boolean };
+    expect(bound()).toMatchObject({ questionId: null, problemSent: false });
+    let release = () => {};
+    bg.hold = new Promise<void>((res) => (release = res));
+    p.loaded(); // the page's doc → the fill, held
+    await until(() => messages(ext, 'start').length === 2);
+    p.fake().sendHint(); // LeetCode names the question mid-fill: the binding is rewritten
+    await until(() => bound().questionId === '1');
+    release();
+    await until(() => bound().problemSent === true);
+    expect(bound().questionId).toBe('1');
+  }, 20_000);
+
   it('a doc that comes while Start is still going is sent once the sitting is active', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
@@ -982,15 +1016,61 @@ describe('the scrim', () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     await ext.local.set({ debug: true });
-    const p = open('/problems/two-sum/', ext);
+    const asked: string[] = [];
+    const css = { supports: (prop: string, v: string) => (asked.push(`${prop}: ${v}`), true) };
+    const p = open('/problems/two-sum/', ext, { css });
     await until(() => p.phase() === 'prompt');
     const scrim = p.style().match(/\.scrim \{[^}]*\}/)?.[0] ?? '';
     expect(scrim).toContain('background: rgba(12, 14, 18, 0.94)');
     expect(scrim).toContain('-webkit-backdrop-filter: blur(20px)');
     expect(scrim).toMatch(/[^-]backdrop-filter: blur\(20px\)/);
     expect(await logged(ext, 'scrim')).toMatchObject({
-      supports: expect.any(Object),
+      supports: { std: true, webkit: true },
       computed: expect.any(Object),
     });
+    expect(asked).toEqual(['backdrop-filter: blur(20px)', '-webkit-backdrop-filter: blur(20px)']);
   });
+});
+
+describe('the debug log’s wire probe', () => {
+  // Counts the isolated world's calls to wire.opNames (the parse only the probe needs).
+  const counting = (p: ReturnType<typeof open>) => {
+    const wire = (p.w as unknown as { ApertureLC: { wire: { opNames: (t: unknown) => string[] } } })
+      .ApertureLC.wire;
+    const real = wire.opNames;
+    const calls = { n: 0 };
+    wire.opNames = (t) => (calls.n++, real(t));
+    return calls;
+  };
+  const traffic = async (p: ReturnType<typeof open>) => {
+    p.fake().fetchDoc();
+    await new Promise((res) => setTimeout(res, 300));
+  };
+
+  it('parses a request’s operation names only with Debug mode on, and logs them', async () => {
+    const off = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    const p = open('/problems/two-sum/', off);
+    await until(() => p.phase() === 'prompt');
+    const calls = counting(p);
+    await traffic(p);
+    expect(calls.n).toBe(0);
+
+    const on = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await on.local.set({ debug: true });
+    const q = open('/problems/two-sum/', on);
+    await until(() => q.phase() === 'prompt');
+    const seen = counting(q);
+    await traffic(q);
+    expect(seen.n).toBeGreaterThan(0);
+    const entry = await until(() =>
+      (on.local.data.debugLog as DebugEntry[] | undefined)?.find(
+        (e) => e.type === 'wire' && JSON.stringify(e.ops) === '["questionDetail"]',
+      ),
+    );
+    expect(entry).toMatchObject({
+      how: 'fetch:ok',
+      req: expect.any(Number),
+      res: expect.any(Number),
+    });
+  }, 20_000);
 });

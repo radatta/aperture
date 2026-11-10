@@ -103,6 +103,46 @@ describe('draftSittingReview', () => {
     expect(JSON.stringify(data)).not.toContain(sitting.id);
   });
 
+  it('a Run LeetCode calls Accepted with correct_answer false reaches the model as Wrong Answer, its answer as the output', async () => {
+    const { anthropic, b, sitting } = await setup();
+    await b.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: ulid(),
+          type: 'run',
+          at: T0 + 2 * 60_000,
+          payload: {
+            request: { data_input: '"abba"' },
+            result: {
+              status_code: 10,
+              status_msg: 'Accepted',
+              correct_answer: false,
+              total_correct: 0,
+              total_testcases: 2,
+              code_answer: ['3'],
+              code_output: ['debug print'],
+              expected_code_answer: ['2'],
+            },
+          },
+        } as SittingEventInput,
+      ],
+    });
+    anthropic.nextDraft = { ok: true, fields: { mistakes: [] } };
+    await b.draftSittingReview(sitting.id);
+    expect(anthropic.draftCalls[0]!.data.judged).toEqual([
+      expect.objectContaining({
+        type: 'run',
+        verdict: 'Wrong Answer',
+        passed: 0,
+        total: 2,
+        input: '"abba"',
+        expected: '2',
+        output: '3',
+      }),
+    ]);
+  });
+
   it('too many or too long lines are cut to fit, not refused', async () => {
     const { anthropic, b, doc, sitting } = await setup();
     await b.lcSittingEvents({

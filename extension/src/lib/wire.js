@@ -288,13 +288,14 @@
     for (const k of PROBLEM_FIELDS) if (k in d) slim[k] = d[k];
     return bytes(JSON.stringify(slim)) <= max ? slim : null;
   }
-  // A request's GraphQL operation names, for the debug log (names only, never variables).
+  // A request's GraphQL operation names, for the debug log: only text shaped as a GraphQL name (the page
+  // writes it), never variables.
+  const OP_NAME = /^[_A-Za-z][_0-9A-Za-z]{0,39}$/;
   const opNames = (reqText) =>
     ops(parse(reqText))
       .map((o) => o.operationName)
-      .filter((n) => typeof n === 'string')
-      .slice(0, 5)
-      .map((n) => n.slice(0, 40));
+      .filter((n) => typeof n === 'string' && OP_NAME.test(n))
+      .slice(0, 5);
 
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const KINDS = [...SENDABLE, 'hint', 'problem'];

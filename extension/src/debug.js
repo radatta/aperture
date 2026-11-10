@@ -171,5 +171,7 @@
     if (area === 'local' && changes.debug) set(changes.debug.newValue);
   });
 
-  (root.ApertureLC = root.ApertureLC || {}).debug = { log, dumpControls, describe };
+  // Whether a log() now would be kept: on, or not yet known (held until the setting is read).
+  const wants = () => !known || enabled;
+  (root.ApertureLC = root.ApertureLC || {}).debug = { log, dumpControls, describe, wants };
 })(globalThis);
