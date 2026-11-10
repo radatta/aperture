@@ -247,7 +247,7 @@ aperture/
                        #   push/ (service.ts: reminder devices + Send test; the poller's sender),
                        #   ddb/ (keys, repo, writes, mapping, DocClient), google/, mcp/, s3/
   cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
-  extension/           # MV3 web extension (Safari daily, Firefox) — LeetCode sittings. No runtime deps,
+  extension/           # MV3 web extension (Safari) — LeetCode sittings. No runtime deps,
                        #   bundler or build step; a workspace member for its tests only (vitest, jsdom)
   packages/shared/     # shared TS types + contract across app + lambda (also ulid, dates, machines, contractTests)
   scripts/             # dev + CI utilities

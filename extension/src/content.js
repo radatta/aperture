@@ -403,11 +403,12 @@
       .trim()
       .replace(/[\s-]+/g, '-');
   // The problem's name: LeetCode's own doc, else the tab title only once it names this problem (after a
-  // move to the next problem it still names the last one for a moment), else the slug.
+  // move to the next problem it still names the last one for a moment), else the slug — humanized, or as is
+  // when that leaves only spaces (`/problems/-/`): A1 refuses a blank title.
   function titleFor(slug, dom = readDom()) {
     const doc = docFor(slug);
     const tab = dom.title && slugify(dom.title) === slug ? dom.title : null;
-    return clip(doc && doc.title, 200) || tab || humanize(slug);
+    return clip(doc && doc.title, 200) || tab || clip(humanize(slug), 200) || slug;
   }
   function readDom() {
     const title = clip((document.title || '').replace(/\s*-\s*LeetCode\s*$/i, ''), 200);
@@ -424,7 +425,7 @@
     try {
       for (const a of document.querySelectorAll('a[href*="/tag/"]')) {
         const m = (a.getAttribute('href') || '').match(/\/tag\/([^/?#]+)/);
-        const t = clip(a.textContent, 40) || (m ? humanize(m[1]).slice(0, 40) : null);
+        const t = clip(a.textContent, 40) || (m ? clip(humanize(m[1]), 40) : null); // never blank
         if (t && !tags.includes(t)) tags.push(t);
       }
     } catch {}
@@ -438,7 +439,7 @@
   function solveSession(slug) {
     try {
       const s = JSON.parse(localStorage.getItem(`qd_solve_session:${slug}`) || 'null');
-      return s && s.id != null ? String(s.id).slice(0, 80) : null;
+      return s && s.id != null ? clip(String(s.id), 80) : null; // blank → none, as A1 requires
     } catch {
       return null;
     }

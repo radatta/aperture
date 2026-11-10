@@ -929,6 +929,33 @@ describe('the problem doc from the page', () => {
     expect(await logged(ext, 'pageDoc')).toMatchObject({ fit: 'whole', cleaned: 3 });
   }, 20_000);
 
+  it('blank page values never block the Start: a blank solve session, blank tag links, a blank slug name', async () => {
+    // The fake background runs A1’s normalizeSittingStart, which refuses a blank required text.
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext); // no doc: the tags come from the page's links
+    await until(() => p.phase() === 'prompt');
+    p.w.localStorage.setItem('qd_solve_session:two-sum', '{"id":"   "}');
+    p.w.document.body.insertAdjacentHTML(
+      'beforeend',
+      '<a href="/tag/-"></a><a href="/tag/ "> </a>',
+    );
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext)).toMatchObject({
+      lcSolveSessionId: null,
+      topicTags: ['Array', 'Hash Table'],
+    });
+    // A slug that humanizes to nothing, with no doc and a tab title for another problem: named by the slug.
+    const bg2 = fakeBackground();
+    const ext2 = fakeExtension({ onMessage: (m) => bg2.handle(m as Msg) });
+    const q = open('/problems/-/', ext2);
+    await until(() => q.phase() === 'prompt');
+    q.tap('start');
+    await until(() => q.phase() === 'active', 8000);
+    expect(startOf(ext2)).toMatchObject({ problemSlug: '-', problemTitle: '-' });
+  }, 30_000);
+
   it('a page doc for another problem is ignored, even once the address names it', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });

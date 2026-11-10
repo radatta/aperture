@@ -472,6 +472,16 @@ describe('the live pull’s helpers', () => {
     expect(judgeDetail({ result: { last_testcase: 'x'.repeat(5000) } }).input).toHaveLength(
       JUDGE_TEXT_MAX,
     );
+    // An errored Run's answer is [] (captured 2026-11-08): no output, never its prints; a submit has no
+    // code_answer, so its code_output is the output.
+    expect(
+      judgeDetail({
+        result: { status_code: 15, code_answer: [], code_output: ['debug'], runtime_error: 'E' },
+      }).output,
+    ).toBeNull();
+    expect(judgeDetail({ result: { code_answer: null, code_output: '[0,0]' } }).output).toBe(
+      '[0,0]',
+    );
     // A Run's code_output is its prints (captured 2026-11-08): the answer is what's shown.
     expect(
       judgeDetail({ result: { code_answer: ['4', '-1'], code_output: ['a', 'a'] } }).output,

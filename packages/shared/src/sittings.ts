@@ -753,7 +753,11 @@ export function judgeDetail(payload: unknown): JudgeDetail {
       firstText(r, ['last_testcase', 'input_formatted', 'input'], JUDGE_TEXT_MAX) ??
       firstText(obj(p?.request), ['data_input'], JUDGE_TEXT_MAX),
     expected: firstText(r, ['expected_output', 'expected_code_answer'], JUDGE_TEXT_MAX),
-    output: firstText(r, ['code_answer', 'code_output'], JUDGE_TEXT_MAX),
+    // A run's answer whenever it has one, even empty (an errored Run's []); a submit has none, so its output.
+    output:
+      r?.code_answer != null
+        ? judgeText(r.code_answer, JUDGE_TEXT_MAX)
+        : firstText(r, ['code_output'], JUDGE_TEXT_MAX),
     error: firstText(
       r,
       ['full_runtime_error', 'runtime_error', 'full_compile_error', 'compile_error'],

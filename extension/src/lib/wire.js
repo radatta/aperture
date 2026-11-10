@@ -282,8 +282,9 @@
   // What A1 can store, as packages/shared/src/sittings.ts payloadError rules it (the doc itself at depth 0):
   // nothing nested deeper than 20, no number that isn't finite, past MAX_SAFE_INTEGER, or nonzero under 1e-130
   // in magnitude. Those values are dropped (left out of objects, filtered out of arrays), everything else kept,
-  // so a doc can never make A1 refuse the Start. `dropped` counts them; payloadError is run over the output in
-  // the tests, so the two can't drift.
+  // so a doc can never make A1 refuse the Start. One more is dropped though A1 would take it: an own
+  // `__proto__` key (JSON.parse makes one), which assigned here would set the copy's prototype instead.
+  // `dropped` counts them all; the tests run payloadError over the output, so the two can't drift.
   const MAX_DEPTH = 20;
   const storableNumber = (n) =>
     Number.isFinite(n) &&
@@ -301,6 +302,10 @@
       if (v && typeof v === 'object') {
         const out = {};
         for (const [k, x] of Object.entries(v)) {
+          if (k === '__proto__') {
+            dropped++;
+            continue;
+          }
           const c = walk(x, depth + 1);
           if (c !== DROP) out[k] = c;
         }

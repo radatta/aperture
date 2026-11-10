@@ -268,6 +268,15 @@ describe('wire: what LeetCode traffic means', () => {
       expect(wire.cleanProblem(doc)).toEqual({ doc, dropped: 0 });
       expect(wire.fitProblem(doc, 64 * 1024)).toEqual(doc);
     });
+    it('drops an own __proto__ key rather than let it set the copy’s prototype', () => {
+      const doc = JSON.parse('{"__proto__":{"title":"x"},"a":1,"b":{"__proto__":{"y":2}}}');
+      const { doc: clean, dropped } = wire.cleanProblem(doc);
+      expect(dropped).toBe(2);
+      expect(JSON.stringify(clean)).toBe('{"a":1,"b":{}}');
+      expect(clean.title).toBeUndefined();
+      expect(clean.b.y).toBeUndefined();
+      expect(Object.getPrototypeOf(clean)).toBe(Object.getPrototypeOf({}));
+    });
     it('fitProblem cleans before it fits; junk is still no doc', () => {
       expect(wire.fitProblem({ title: 'x', likes: 2 ** 53 }, 64 * 1024)).toEqual({ title: 'x' });
       expect(wire.fitProblemDetail({ title: 'x', likes: 2 ** 53 }, 64 * 1024)).toMatchObject({
@@ -292,7 +301,10 @@ describe('wire: what LeetCode traffic means', () => {
         -1e-200,
         5e-324,
       ];
-      const OK = [0, 1, -7, 34.5, 1e-130, Number.MAX_SAFE_INTEGER, 'x', '', null, true, false];
+      const OK = [
+        ...[0, 1, -1, -7, 34.5, 1e-130, -1e-130, Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER],
+        ...['x', '', null, true, false],
+      ];
       const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)]!;
       // A small random tree (at most ~40 nodes), set at a random depth from 1 to 30.
       let budget = 0;
@@ -315,8 +327,19 @@ describe('wire: what LeetCode traffic means', () => {
         ...Array.from({ length: 200 }, () => ({ titleSlug: 'two-sum', extra: fuzz() })),
       ];
       let wereBad = 0;
-      for (const doc of hostile) {
+      // And the other way: a doc A1 already takes comes through untouched — its edges included.
+      const edges = [
+        deep(20),
+        { ...deep(20, -1e-130), n: -Number.MAX_SAFE_INTEGER, m: -1 },
+        { ...deep(19, [1e-130, -1e-130]), z: [0, -0] },
+      ];
+      let wereGood = 0;
+      for (const doc of [...edges, ...hostile]) {
         if (payloadError(doc)) wereBad++;
+        else {
+          wereGood++;
+          expect(wire.cleanProblem(doc)).toEqual({ doc, dropped: 0 });
+        }
         const clean = wire.cleanProblem(doc).doc;
         expect(payloadError(clean)).toBeNull();
         const fit = wire.fitProblem(doc, 64 * 1024);
@@ -333,6 +356,7 @@ describe('wire: what LeetCode traffic means', () => {
         ).not.toThrow();
       }
       expect(wereBad).toBeGreaterThan(100); // the fuzz really is hostile, not a pass by luck
+      expect(wereGood).toBeGreaterThan(20); // … and the reverse check really ran
     });
   });
 });

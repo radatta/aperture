@@ -346,6 +346,64 @@ describe('the stub’s sittings', () => {
       ok: true,
       mistakes: ['Run 1 (Wrong Answer): expected 2, got 3'],
     });
+    // Only one half captured: that half alone, never "expected null".
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: '01HZZZZZZZZZZZZZZZZZZZZZZX',
+          type: 'run',
+          at: sitting.clientStartedAt + 120_000,
+          payload: {
+            result: {
+              status_code: 10,
+              status_msg: 'Accepted',
+              correct_answer: false,
+              code_answer: ['[0,0]'],
+            },
+          },
+        },
+      ],
+    });
+    expect(await api.draftSittingReview(sitting.id)).toMatchObject({
+      mistakes: ['Run 1 (Wrong Answer): expected 2, got 3', 'Run 2 (Wrong Answer): got [0,0]'],
+    });
+  });
+
+  it('names an accepted Run’s fold-out “Case”, a wrong one’s “Failing case”', async () => {
+    const { api, sitting } = await withOpenSitting();
+    const run = (id: string, at: number, correct: boolean) => ({
+      id,
+      type: 'run' as const,
+      at: sitting.clientStartedAt + at,
+      payload: {
+        request: { data_input: '[2,7]\n9' },
+        result: {
+          status_code: 10,
+          status_msg: 'Accepted',
+          correct_answer: correct,
+          total_correct: correct ? 3 : 0,
+          total_testcases: 3,
+          code_answer: ['[0,1]'],
+          expected_code_answer: ['[0,1]'],
+        },
+      },
+    });
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        run('01HZZZZZZZZZZZZZZZZZZZZZZW', 60_000, true),
+        run('01HZZZZZZZZZZZZZZZZZZZZZZV', 120_000, false),
+      ],
+    });
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    const timeline = await screen.findByRole('list', { name: 'Runs and submits' });
+    const item = (text: string) => within(timeline).getByText(text).closest('li') as HTMLElement;
+    await within(timeline).findByText('Accepted · 3/3');
+    expect(within(item('Accepted · 3/3')).getByText('Case', { selector: 'summary' })).toBeTruthy();
+    expect(
+      within(item('Wrong Answer · 0/3')).getByText('Failing case', { selector: 'summary' }),
+    ).toBeTruthy();
   });
 
   it('every seeded sitting ends no earlier than its last run or submit', async () => {

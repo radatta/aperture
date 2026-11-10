@@ -485,7 +485,7 @@ things.
 
 ### Why not two permanent installs (one per stage)
 
-**Firefox:** two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
+**Firefox** (the reasoning while it ran; retired 2026-11-10): two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
 the ID _is_ the add-on's identity. That's two manifests, two names, two AMO submissions, and two signing
 rounds on every change, forever. And what it buys is two live capture paths, which is the opposite of
 what you want: real practice should land in exactly one stage. A separate profile gets the same
@@ -507,7 +507,7 @@ third one is ongoing work, and only for these events:
 | Cognito pool replaced                                                                | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never                                            |
 | Origin changes                                                                       | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08                             |
 | New browser / profile / machine                                                      | paste the token there — `storage.local` is per-profile                                                                                  |
-| Browser restart (temporary extension only)                                           | re-add it. The installed apps / signed add-on are unaffected                                                                            |
+| Browser restart (temporary extension only)                                           | re-add it. The installed apps are unaffected                                                                                            |
 | Free Apple certificate expiry (2027-09-28)                                           | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData                                                   |
 | Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |
 | Extension code change                                                                | rebuild per README → _Build it for Safari_ (prod: re-copy files first; both: redo step 4)                                               |
@@ -526,9 +526,9 @@ the ID unchanged. Worth confirming on the first signed install rather than assum
 ### The Chrome alternative (no signing)
 
 Chrome **persists unpacked extensions across restarts** (`chrome://extensions` → Developer mode → Load
-unpacked) — the one property Firefox temporary add-ons lack. It nags with a bubble but stays loaded.
+unpacked) — the one property Safari's temporary extensions lack (layer 3). It nags with a bubble but stays loaded.
 Chrome has supported `world: "MAIN"` since 111, and the code already does `browser.*` with a `chrome`
-fallback. But the Chrome path is **untested** (see Open items), so this trades one AMO upload for an
+fallback. But the Chrome path is **untested** (see Open items), so this trades the free Xcode build for an
 unknown amount of debugging. Only worth it if you already live in Chrome.
 
 ## Testing: what each surface proves
