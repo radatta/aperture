@@ -267,4 +267,6 @@
     gql('questionDetail', { titleSlug: 'add-two-numbers' });
   });
   window.__fake.finishNext = () => gql('questionDetail', { titleSlug: 'add-two-numbers' });
+  // LeetCode fetching this problem's doc on its own (it does after a submit or a nav), for a test to time.
+  window.__fake.fetchDoc = () => gql('questionDetail', { titleSlug: slug });
 })();

@@ -784,7 +784,16 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     'Medium',
     SW,
     [
-      ['run', 11, 'Wrong Answer', 20, 2, 3],
+      // LeetCode calls a Run that ran "Accepted"; correct_answer says it didn't match (verdictOf).
+      [
+        'run',
+        10,
+        'Accepted',
+        20,
+        2,
+        3,
+        { correct_answer: false, code_answer: ['3'], expected_code_answer: ['2'] },
+      ],
       [
         'submit',
         11,

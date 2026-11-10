@@ -6,6 +6,7 @@ import {
   problemStatementText,
   timelineOf,
   judgeDetail,
+  lcLangName,
   sittingMetrics,
   sittingMinutes,
   sittingProblemUrl,
@@ -54,11 +55,17 @@ const outcomeOf = (s: Sitting) => {
   };
 };
 
-// A judged Run or Submit: its verdict (the summary the pull folded from the same head rows that named this
-// event as newest) and what its payload says beyond it — failing case, expected vs output, the error head. A
-// payload that never landed leaves `detail` null rather than borrowing an older one's.
-function judged(v: SittingVerdict | null, e: SittingEvent | null, now: number) {
-  const verdict = v ?? (e ? verdictOf(e.payload, e.at) : null);
+// A judged Run or Submit: its verdict and what its payload says beyond it — failing case, expected vs output,
+// the error head. The verdict is read from the payload when it's in hand, so a summary folded under an older
+// rule is never shown over it; else the summary the pull folded from the same head rows that named this event
+// as newest. A payload that never landed leaves `detail` null rather than borrowing an older one's.
+function judged(
+  v: SittingVerdict | null,
+  e: SittingEvent | null,
+  type: 'run' | 'submit',
+  now: number,
+) {
+  const verdict = (e ? verdictOf(e.payload, e.at, type) : null) ?? v;
   if (!verdict && !e) return null;
   const at = verdict?.at ?? e?.at ?? null;
   return {
@@ -92,7 +99,7 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
     code: {
       version,
       text: live?.code ?? null,
-      lang: live?.lang ?? s.lang,
+      lang: lcLangName(live?.lang) ?? s.lang,
       at: iso(live?.codeAt ?? null),
       ageSec: agoSec(live?.codeAt ?? null, now),
     },
@@ -100,8 +107,8 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
     runCount: s.summary.runs,
     submitCount: s.summary.submits,
     outcome: outcomeOf(s),
-    lastRun: judged(s.summary.lastRun, pull.lastRun, now),
-    lastSubmit: judged(s.summary.lastSubmit, pull.lastSubmit, now),
+    lastRun: judged(s.summary.lastRun, pull.lastRun, 'run', now),
+    lastSubmit: judged(s.summary.lastSubmit, pull.lastSubmit, 'submit', now),
     lcTimer: t
       ? {
           mode: t.mode,
@@ -224,7 +231,11 @@ function sittingRead(d: SittingDetail, now: number) {
             },
           },
     ),
-    code: { final: live?.code ?? null, version: live?.version ?? 0, lang: live?.lang ?? s.lang },
+    code: {
+      final: live?.code ?? null,
+      version: live?.version ?? 0,
+      lang: lcLangName(live?.lang) ?? s.lang,
+    },
     editing:
       f && f.edits > 0
         ? {

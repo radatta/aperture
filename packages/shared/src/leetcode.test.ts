@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeVerdict } from './leetcode';
+import { lcLangName, normalizeVerdict } from './leetcode';
 
 describe('normalizeVerdict', () => {
   it('maps status_code as the primary signal', () => {
@@ -21,5 +21,18 @@ describe('normalizeVerdict', () => {
     expect(normalizeVerdict(999)).toBe('other');
     expect(normalizeVerdict(null, 'Some New Verdict')).toBe('other');
     expect(normalizeVerdict()).toBe('other');
+  });
+});
+
+describe('lcLangName', () => {
+  it('names LeetCode’s numeric language ids, passes text through, and has no name for an unknown id', () => {
+    expect(lcLangName('11')).toBe('Python3');
+    expect(lcLangName('0')).toBe('C++');
+    expect(lcLangName('27')).toBe('Vanilla JS');
+    expect(lcLangName('python3')).toBe('python3');
+    expect(lcLangName('999')).toBeNull();
+    expect(lcLangName('')).toBeNull();
+    expect(lcLangName(null)).toBeNull();
+    expect(lcLangName(undefined)).toBeNull();
   });
 });

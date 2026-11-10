@@ -33,6 +33,45 @@ export function normalizeVerdict(
   return 'other';
 }
 
+// LeetCode's language ids → their display names, from its submittableLanguageList (captured 2026-11-08). A
+// snapshot's lang is updateSyncedCode's numeric id — that it's this id space is an inference, seen for 11
+// (Python3) only. Text that isn't an id passes through; an unknown id is null, so the caller falls back to the
+// sitting's own lang.
+const LANG_BY_ID: Record<number, string> = {
+  0: 'C++',
+  1: 'Java',
+  2: 'Python',
+  3: 'MySQL',
+  4: 'C',
+  5: 'C#',
+  6: 'JavaScript',
+  7: 'Ruby',
+  8: 'Bash',
+  9: 'Swift',
+  10: 'Go',
+  11: 'Python3',
+  12: 'Scala',
+  13: 'Kotlin',
+  14: 'MS SQL Server',
+  15: 'Oracle',
+  18: 'Rust',
+  19: 'PHP',
+  20: 'TypeScript',
+  21: 'Racket',
+  22: 'Erlang',
+  23: 'Elixir',
+  24: 'Dart',
+  25: 'Pandas',
+  26: 'React',
+  27: 'Vanilla JS',
+  28: 'PostgreSQL',
+  29: 'Cangjie',
+};
+export function lcLangName(v: string | null | undefined): string | null {
+  if (v == null || v === '') return null;
+  return /^\d+$/.test(v) ? (LANG_BY_ID[Number(v)] ?? null) : v;
+}
+
 // The methods the browser extension calls. The handler accepts the device token for exactly these (and the
 // user's JWT too); every other method takes the JWT alone.
 export const LC_INGEST_METHODS = ['lcSittingStart', 'lcSittingEvents'] as const;

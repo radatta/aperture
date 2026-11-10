@@ -17,6 +17,7 @@
   const PENDING_MAX = 500; // page messages waiting for the relay; past it a flood is dropped
   const bootState = document.readyState; // Safari may run document_start late — the debug log says
   const PROBLEM_MAX = 64 * 1024;
+  const PAGE_DATA_MAX = 1024 * 1024; // a longer __NEXT_DATA__ isn't parsed
   const START_RETRY_MS = 60_000;
 
   const local = api.storage.local;
@@ -51,6 +52,8 @@
   let pendingStart = null; // {slug, clientSittingId, startedAt} for the Start in progress
   let lastStartRetryable = false;
   const problems = new Map(); // slug → LeetCode's questionDetail.question, this page load
+  const pageDocs = new Map(); // slug → the same doc as rendered into this load's __NEXT_DATA__ (readPageDoc)
+  const loadSlug = relayLib.slugOf(location.pathname); // the problem this document was loaded for
   const questionIds = new Map(); // slug → questionId (from syncedCode)
   const batcher = batch.createBatcher();
   const capture = wire.createCapture(); // LeetCode's raw traffic → items, parsed here, never in the page
@@ -112,6 +115,10 @@
     debug.log('wire', {
       items: items.map((i) => i.kind),
       bytes: (raw.reqText || '').length + (raw.resText || '').length,
+      ops: wire.opNames(raw.reqText),
+      req: raw.reqText == null ? null : raw.reqText.length,
+      res: raw.resText == null ? null : raw.resText.length,
+      how: raw.how, // why a body is missing, as the page world saw it (inject-main.js)
     });
     items.forEach(onItem);
   }
@@ -313,13 +320,52 @@
       saveBinding({ ...binding, questionId: String(questionId) }).catch(() => {});
   }
   function onProblem(slug, doc, questionId) {
-    if (!doc || wire.bytes(JSON.stringify(doc)) > PROBLEM_MAX) return;
-    problems.set(slug, doc);
+    const fit = wire.fitProblem(doc, PROBLEM_MAX);
+    if (!fit) return;
+    problems.set(slug, fit);
     if (questionId) learnQuestionId(slug, questionId);
     if (slug === screenSlug && state.phase !== 'hidden') paint();
-    // A1 fills in a sitting's problem doc on a repeat Start: LeetCode only sends it after a submit or a nav.
-    if (binding && binding.slug === slug && !binding.problemSent && state.phase === 'active')
-      lateFill();
+    maybeFill();
+  }
+  // The doc LeetCode rendered into a fresh load's __NEXT_DATA__ (README → step 8), kept only when it names
+  // the problem this document was loaded for — after an SPA nav the tag still holds the first problem's. It's
+  // names and text only: never a question id (the hint check, learnQuestionId, the binding's id), and a
+  // fetched doc wins over it (docFor).
+  function readPageDoc(when) {
+    let text = null;
+    try {
+      text = document.getElementById('__NEXT_DATA__')?.textContent || null;
+    } catch {}
+    const bytes = text ? text.length : 0;
+    const doc = text && bytes <= PAGE_DATA_MAX ? wire.pageProblem(text) : null;
+    const match = !!doc && !!loadSlug && doc.titleSlug === loadSlug;
+    const fit = match ? wire.fitProblem(doc, PROBLEM_MAX) : null;
+    debug.log('pageDoc', {
+      when,
+      readyState: document.readyState,
+      bytes,
+      found: !!doc,
+      match,
+      fields: doc ? Object.keys(doc).length : 0,
+      fit: fit ? (fit === doc ? 'whole' : 'trimmed') : null,
+    });
+    if (!fit) return;
+    pageDocs.set(loadSlug, fit);
+    if (loadSlug === screenSlug && state.phase !== 'hidden') paint();
+    maybeFill();
+  }
+  const docFor = (slug) => problems.get(slug) || pageDocs.get(slug) || null;
+  // A1 fills in a sitting's problem doc on a repeat Start: one that came after the Start went (LeetCode
+  // fetches it only after a submit or a nav; the page's own may be read after Start) goes once the sitting is
+  // active — when the doc arrives, or when the phase gets there. The phase's try is once per sitting per page
+  // load, as a resume is: a page flipping its path must not turn each return into a Start call.
+  const filledOnActive = new Set();
+  function maybeFill(onActive = false) {
+    if (!binding || binding.slug !== screenSlug || binding.problemSent) return;
+    if (state.phase !== 'active' || !docFor(screenSlug)) return;
+    if (onActive && filledOnActive.has(binding.sittingId)) return;
+    if (onActive) filledOnActive.add(binding.sittingId);
+    lateFill();
   }
   let filling = false;
   async function lateFill() {
@@ -331,8 +377,12 @@
       body: startBody(b.clientSittingId, b.clientStartedAt),
     }).catch(() => null);
     filling = false;
+    debug.log('fill', { ok: !!r && r.status === 200, http: r ? r.status : null });
     if (r && r.status === 200 && binding === b) await saveBinding({ ...b, problemSent: true });
   }
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', () => readPageDoc('load'), { once: true });
+  else readPageDoc('load');
 
   const humanize = (slug) =>
     slug
@@ -349,7 +399,7 @@
   // The problem's name: LeetCode's own doc, else the tab title only once it names this problem (after a
   // move to the next problem it still names the last one for a moment), else the slug.
   function titleFor(slug, dom = readDom()) {
-    const doc = problems.get(slug);
+    const doc = docFor(slug);
     const tab = dom.title && slugify(dom.title) === slug ? dom.title : null;
     return clip(doc && doc.title, 200) || tab || humanize(slug);
   }
@@ -388,7 +438,8 @@
     }
   }
   function startBody(clientSittingId, startedAt, slug = screenSlug) {
-    const doc = problems.get(slug) || null;
+    const fetched = problems.get(slug) || null; // the ids come from LeetCode's fetched doc only
+    const doc = docFor(slug);
     const dom = readDom();
     const docTags =
       doc && Array.isArray(doc.topicTags)
@@ -400,15 +451,15 @@
       clientSittingId,
       problemSlug: slug,
       problemTitle: titleFor(slug, dom),
-      questionId: idOf((doc && doc.questionId) ?? questionIds.get(slug)),
-      frontendId: idOf(doc && doc.questionFrontendId),
+      questionId: idOf((fetched && fetched.questionId) ?? questionIds.get(slug)),
+      frontendId: idOf(fetched && fetched.questionFrontendId),
       difficulty: clip(doc && doc.difficulty, 20) || (domFresh ? dom.difficulty : null),
       topicTags: docTags && docTags.length ? docTags.slice(0, 20) : domFresh ? dom.topicTags : null,
       lang: dom.lang || 'python3',
       startedAt,
       tzOffsetMinutes: new Date().getTimezoneOffset(),
       lcSolveSessionId: solveSession(slug),
-      problem: doc,
+      problem: wire.fitProblem(doc, PROBLEM_MAX),
     };
   }
 
@@ -537,6 +588,7 @@
     const slug = start.slug;
     const stale = () => screenSlug !== slug || pendingStart !== start;
     await chain; // what LeetCode already sent (the question id, its problem doc) is read before the body
+    if (!docFor(slug)) readPageDoc('start');
     const deadline = Date.now() + START_RETRY_MS;
     for (let tries = 0; ; tries++) {
       if (stale()) return;
@@ -611,10 +663,8 @@
     const b = binding;
     if (resumed.has(b.sittingId)) return act({ type: 'resumed', active: true });
     resumed.add(b.sittingId);
-    const r = await send({
-      type: 'start',
-      body: startBody(b.clientSittingId, b.clientStartedAt),
-    }).catch(() => ({ status: 0 }));
+    const body = startBody(b.clientSittingId, b.clientStartedAt);
+    const r = await send({ type: 'start', body }).catch(() => ({ status: 0 }));
     if (binding !== b) return;
     const s = r.status === 200 && r.json && r.json.sitting;
     if (s) {
@@ -623,7 +673,7 @@
         await saveBinding({
           ...b,
           sittingId: s.id,
-          problemSent: b.problemSent || !!problems.get(screenSlug),
+          problemSent: b.problemSent || !!body.problem,
         });
       debug.log('resume', { active });
       return act({ type: 'resumed', active });
@@ -685,6 +735,7 @@
     if (from !== state.phase || action.type !== 'retrying')
       debug.log('overlay', { action: action.type, from, to: state.phase, step: state.step });
     paint();
+    if (from !== 'active' && state.phase === 'active') maybeFill(true);
     for (const e of r.effects) {
       if (e.do === 'step') runStep(e.step);
       else if (e.do === 'resume') resume();

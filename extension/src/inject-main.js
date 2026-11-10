@@ -136,9 +136,12 @@
       pump();
     },
   ]);
-  function emit(url, reqBody, resBody, reqAt, page) {
+  // `how`: why a response went with or without its body, a few fixed words for the debug log's probe (the
+  // GraphQL bodies Safari never delivered, 2026-11-10: README → Safari behaviour) — never content.
+  function emit(url, reqBody, resBody, reqAt, page, how) {
     if (typeof url !== 'string' || url.length > URL_MAX) return;
     if (typeof page !== 'string' || page.length > URL_MAX) return;
+    const big = typeof resBody === 'string' && resBody.length > RAW_MAX;
     const body = stringify({
       __proto__: null,
       v: 3,
@@ -149,6 +152,7 @@
       resText: textOr(resBody),
       reqAt,
       resAt: now(),
+      how: big ? how + ':big' : how,
     });
     const node = { __proto__: null, body, next: null };
     if (tail) tail.next = node;
@@ -231,8 +235,19 @@
         const resP = copy ? safe(resText, copy, []) : null;
         when(bodyLater, (later) => {
           const reqBody = bodyLater ? later : bodyNow;
-          if (!resP || !wantsRes(real, reqBody)) return emit(real, reqBody, null, reqAt, page);
-          when(resP, (text) => emit(real, reqBody, text, reqAt, page));
+          if (!wantsRes(real, reqBody)) return emit(real, reqBody, null, reqAt, page, 'fetch:skip');
+          if (!resP)
+            return emit(
+              real,
+              reqBody,
+              null,
+              reqAt,
+              page,
+              copy ? 'fetch:no-text' : 'fetch:no-clone',
+            );
+          when(resP, (text) =>
+            emit(real, reqBody, text, reqAt, page, text === null ? 'fetch:read-fail' : 'fetch:ok'),
+          );
         });
       });
       return p;
@@ -269,14 +284,16 @@
             const type = safe(xhrType, this, []);
             // LeetCode's XHRs are text (captured 2026-11-08); a 'json' one would need a page-patchable
             // serialization, so it goes without its response.
-            if (
-              wantsRes(url, reqBody) &&
-              status >= 200 &&
-              status < 300 &&
-              (type === '' || type === 'text')
-            )
+            let how;
+            if (!wantsRes(url, reqBody)) how = 'xhr:skip';
+            else if (!(status >= 200 && status < 300)) how = 'xhr:status-' + Str(status);
+            else if (type !== '' && type !== 'text')
+              how = 'xhr:type-' + Str(type); // the browser's enum
+            else {
               text = safe(xhrText, this, []);
-            emit(real, reqBody, text, reqAt, page);
+              how = text === null ? 'xhr:no-text' : 'xhr:ok';
+            }
+            emit(real, reqBody, text, reqAt, page, how);
           },
         ]);
       }

@@ -75,6 +75,12 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 - **Head rows** (`lcs#<id>#hd#<ulid>`): a run's, submit's, note's or timer read's compact verdict (`headRowOf`),
   ~200 B, so the recompute stays cheap however large the payloads. The run's, submit's or note's **full
   payload** sits beside it under `lcs#<id>#jd#<ulid>`, kept forever.
+- **A Run's verdict** (`verdictOf`): LeetCode's "Accepted" (10) on a Run only says the code ran; its
+  `correct_answer: false` makes it `wrong_answer`, "Wrong Answer" in our words (with no flag, fewer passed than
+  run — an inference). An errored Run and every Submit stay as judged, so the outcome (submits only) is
+  untouched. Every read — the timeline, `get_sitting`, `live_sitting`, the draft — judges from the payload, so
+  sittings stored before the rule (2026-11-10) read right with no backfill. A Run's shown output is its answer
+  (`code_answer`), not its prints (`code_output`).
 - **Live row** (`lcs#<id>#live`): the newest code (the final code once ended — a late snapshot may still move
   it for the ten-minute grace, _Ingest_ below), the snapshot `version` live
   reads report, and **facts** folded from the replay at ingest — first/last edit, edits, longest stall,
@@ -280,11 +286,14 @@ observes calls LeetCode already made. No scraping, no polling, no automation. (I
 request of its own: the `POST` to our own backend.) That's the best ToS posture available and the reason
 this exists as an extension rather than a scheduled scraper.
 
-**The problem doc is LeetCode's own `questionDetail`, the DOM the fallback.** LeetCode doesn't fetch it on
-a fresh page load (the header is server-rendered) — only after a submit and on a navigation (2026-11-08
-capture). So Start reads title, difficulty and topic tags off the page (degrading to a slug-derived title
-and `null`s), and when a `questionDetail` for the problem arrives, a repeat Start fills the doc in. Don't
-add a fetch of our own for it: the extension stays passive.
+**The problem doc is LeetCode's own `questionDetail`, the DOM the fallback.** A fresh load carries it
+server-rendered in `__NEXT_DATA__`, and LeetCode fetches it only after a submit or on a navigation (2026-11-08
+capture; 2026-11-10 debug log). So the extension reads the page's copy, for the problem the document was
+loaded for only, as names and text — never a question id — and a fetched doc wins over it; without either,
+Start reads title, difficulty and tags off the page (degrading to a slug-derived title and `null`s). A doc
+that comes after the Start goes in a repeat Start that fills it in. How, and the 64 KB fit:
+`extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the
+extension stays passive.
 
 **The page's world is evidence, never authority** (Rahul, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
@@ -428,8 +437,8 @@ like a failed patch (`window.fetch` stays `[native code]`).
 ### Loading a temporary extension (layer 3)
 
 Safari: Develop → **Add Temporary Extension…** → this repo's `extension/` folder (Safari 18.4+; the
-Develop menu needs Settings → Advanced → _Show features for web developers_). Firefox: steps and the
-128+ requirement in `extension/README.md` → _Load it in Firefox_. Options: README → _Configure_.
+Develop menu needs Settings → Advanced → _Show features for web developers_). Options: README →
+_Configure_.
 Temporary extensions don't survive a restart; re-add each time — acceptable for iteration, not for the
 daily driver.
 

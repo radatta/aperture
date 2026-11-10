@@ -253,6 +253,49 @@
     return parts;
   }
 
+  // The problem doc LeetCode renders into a fresh load's __NEXT_DATA__ (debug log 8, 2026-11-10): the
+  // dehydrated questionDetail query whose question is the slug its key names; null for any other shape.
+  function pageProblem(text) {
+    const queries = obj(obj(obj(obj(parse(text))?.props)?.pageProps)?.dehydratedState)?.queries;
+    if (!Array.isArray(queries)) return null;
+    for (const entry of queries) {
+      const key = obj(entry)?.queryKey;
+      if (!Array.isArray(key) || key[0] !== 'questionDetail') continue;
+      const slug = obj(key[1])?.titleSlug;
+      const q = obj(obj(obj(entry.state)?.data)?.question);
+      if (q && typeof slug === 'string' && q.titleSlug === slug) return q;
+    }
+    return null;
+  }
+  // The fields A1 and the sitting read (content.js startBody; packages/shared/src/sittings.ts
+  // problemStatementText, problemCompanies).
+  const PROBLEM_FIELDS = [
+    'title',
+    'titleSlug',
+    'questionId',
+    'questionFrontendId',
+    'difficulty',
+    'topicTags',
+    'content',
+    'companyTagStatsV2',
+  ];
+  // A doc as the Start may carry it: whole when it fits `max` bytes, else only PROBLEM_FIELDS, else null.
+  function fitProblem(doc, max) {
+    const d = obj(doc);
+    if (!d) return null;
+    if (bytes(JSON.stringify(d)) <= max) return d;
+    const slim = {};
+    for (const k of PROBLEM_FIELDS) if (k in d) slim[k] = d[k];
+    return bytes(JSON.stringify(slim)) <= max ? slim : null;
+  }
+  // A request's GraphQL operation names, for the debug log (names only, never variables).
+  const opNames = (reqText) =>
+    ops(parse(reqText))
+      .map((o) => o.operationName)
+      .filter((n) => typeof n === 'string')
+      .slice(0, 5)
+      .map((n) => n.slice(0, 40));
+
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const KINDS = [...SENDABLE, 'hint', 'problem'];
 
@@ -263,6 +306,10 @@
     createCapture,
     toEventInputs,
     splitReplay,
+    pageProblem,
+    fitProblem,
+    opNames,
+    PROBLEM_FIELDS,
     pathOf,
     bytes,
     SENDABLE,

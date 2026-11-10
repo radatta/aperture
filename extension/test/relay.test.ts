@@ -11,6 +11,7 @@ const raw = {
   resText: null,
   reqAt: 1,
   resAt: 2,
+  how: 'fetch:skip',
 };
 async function handshake() {
   const nonce = tag.newNonce();
@@ -57,6 +58,12 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
       { page: 7 },
     ])
       expect(await relay.accept(await msg(bad))).toEqual({ ok: false, reason: 'raw-shape' });
+    // The page world's `how` is a few fixed words for the debug log: anything else is dropped, never kept.
+    for (const how of ['fetch: <b>hi</b>', 'x'.repeat(41), 7, undefined])
+      expect(await relay.accept(await msg({ how }))).toEqual({
+        ok: true,
+        raw: { ...raw, how: null },
+      });
     expect(await relay.accept({ not: 'a string' })).toEqual({ ok: false, reason: 'not-string' });
     expect(await relay.accept('x'.repeat(7 * 1024 * 1024))).toEqual({
       ok: false,

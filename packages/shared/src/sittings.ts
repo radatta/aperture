@@ -285,18 +285,29 @@ export function snapshotCode(payload: unknown): string | null {
   const code = obj(payload)?.code;
   return typeof code === 'string' ? code : null;
 }
-// A run's or submit's judged result: `payload.result` is the final /check/ response.
-export function verdictOf(payload: unknown, at: number): SittingVerdict | null {
+// A run's or submit's judged result: `payload.result` is the final /check/ response. A Run's "Accepted" (10)
+// only says the code ran; whether its answers matched is `correct_answer` (captured 2026-11-08), so a false one
+// is a wrong answer, said in our words. With no flag, fewer passed than run reads as wrong — an inference.
+export function verdictOf(
+  payload: unknown,
+  at: number,
+  type: 'run' | 'submit',
+): SittingVerdict | null {
   const r = obj(obj(payload)?.result);
   if (!r) return null;
   const statusMsg = typeof r.status_msg === 'string' ? r.status_msg.slice(0, 200) : null; // it's on the head
-  return {
+  const v: SittingVerdict = {
     verdict: normalizeVerdict(num(r.status_code), statusMsg),
     statusMsg,
     passed: num(r.total_correct),
     total: num(r.total_testcases),
     at,
   };
+  if (type !== 'run' || v.verdict !== 'accepted') return v;
+  const wrong =
+    r.correct_answer === false ||
+    (r.correct_answer !== true && v.passed !== null && v.total !== null && v.passed < v.total);
+  return wrong ? { ...v, verdict: 'wrong_answer', statusMsg: 'Wrong Answer' } : v;
 }
 // QD_TIMER_STATE (one capture, 2026-11-08): {mode:'reverse', startTimestamp, pauseMs, endMs, status}. The
 // bar read 19:07 while endMs − pauseMs ≈ 19:06, so pauseMs is read as elapsed-at-pause and a running
@@ -360,8 +371,14 @@ export const isHeadEvent = (type: SittingEventType | 'replay') =>
   type === 'run' || type === 'submit' || type === 'note' || type === 'timer';
 
 // An unreadable judge result still counts — as 'other' — so it holds its place in the order.
-const verdictOrOther = (payload: unknown, at: number): SittingVerdict =>
-  verdictOf(payload, at) ?? { verdict: 'other', statusMsg: null, passed: null, total: null, at };
+const verdictOrOther = (payload: unknown, at: number, type: 'run' | 'submit'): SittingVerdict =>
+  verdictOf(payload, at, type) ?? {
+    verdict: 'other',
+    statusMsg: null,
+    passed: null,
+    total: null,
+    at,
+  };
 export type HeadEventType = SittingHeadRow['type'];
 const timerWithoutRaw = (t: LcTimerState | null): LcTimerState | null =>
   t ? { ...t, raw: null } : null;
@@ -370,13 +387,13 @@ export function headRowOf(
   sittingId: string,
   e: { id: string; type: HeadEventType; at: number; payload: unknown },
 ): SittingHeadRow {
-  const judged = e.type === 'run' || e.type === 'submit';
   return {
     id: e.id,
     sittingId,
     type: e.type,
     at: e.at,
-    verdict: judged ? verdictOrOther(e.payload, e.at) : null,
+    verdict:
+      e.type === 'run' || e.type === 'submit' ? verdictOrOther(e.payload, e.at, e.type) : null,
     // The timer's state without its raw value: a head row stays ~200 B, whatever the payload carried.
     timer: e.type === 'timer' ? timerWithoutRaw(lcTimerState(e.payload, e.at)) : null,
     deletedAt: null,
@@ -700,8 +717,9 @@ export function newestOfType<E extends { type: string; at: number; id: string }>
 // What a judged Run or Submit says beyond its verdict: the failing input, expected vs output, the error head.
 // Field names are LeetCode's /check/ response as captured 2026-11-08 (a submit's last_testcase /
 // expected_output / code_output, a run's code_answer / expected_code_answer with its input on the request's
-// data_input); the error fields are inferred from LeetCode's names, not yet captured. An unknown shape is all
-// null, never a throw. Capped, so a huge case can't flood a reader.
+// data_input — a run's code_output is its prints, so its answer is read first); the error fields are inferred
+// from LeetCode's names, not yet captured. An unknown shape is all null, never a throw. Capped, so a huge case
+// can't flood a reader.
 export interface JudgeDetail {
   input: string | null;
   expected: string | null;
@@ -735,7 +753,7 @@ export function judgeDetail(payload: unknown): JudgeDetail {
       firstText(r, ['last_testcase', 'input_formatted', 'input'], JUDGE_TEXT_MAX) ??
       firstText(obj(p?.request), ['data_input'], JUDGE_TEXT_MAX),
     expected: firstText(r, ['expected_output', 'expected_code_answer'], JUDGE_TEXT_MAX),
-    output: firstText(r, ['code_output', 'code_answer'], JUDGE_TEXT_MAX),
+    output: firstText(r, ['code_answer', 'code_output'], JUDGE_TEXT_MAX),
     error: firstText(
       r,
       ['full_runtime_error', 'runtime_error', 'full_compile_error', 'compile_error'],
@@ -867,7 +885,7 @@ export function timelineOf(
       n: ++n[e.type],
       at: e.at,
       offsetMs: Math.max(0, e.at - s.clientStartedAt),
-      verdict: verdictOrOther(e.payload, e.at),
+      verdict: verdictOrOther(e.payload, e.at, e.type),
       detail: judgeDetail(e.payload),
     });
   }

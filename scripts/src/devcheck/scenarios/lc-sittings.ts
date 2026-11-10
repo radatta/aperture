@@ -22,7 +22,13 @@ const start = (ctx: Ctx, which: string, over: Partial<DevSittingStart> = {}): De
   lang: 'python3',
   startedAt: Date.now(),
   tzOffsetMinutes: 480, // the test user's day is LA's
-  problem: { titleSlug: slugOf(ctx, which), difficulty: 'Medium' },
+  // The fields a real questionDetail doc carries that get_sitting reads (synthetic values).
+  problem: {
+    titleSlug: slugOf(ctx, which),
+    difficulty: 'Medium',
+    content: '<p>devcheck <code>statement</code></p>',
+    companyTagStatsV2: '{"three_months":[{"name":"Acme","timesEncountered":3}]}',
+  },
   ...over,
 });
 const snap = (code: string, at: number): DevSittingEvent => ({
@@ -189,6 +195,71 @@ export const lcSittings: Scenario = {
       entry: 'mcp',
       kind: 'edge',
       what: 'Pulls racing a run’s ingest all count, the run still folds, and its failing case comes back',
+    },
+    // lc-polish: a Run's verdict from correct_answer, its answer over its prints, the code's language by name,
+    // and the problem statement read back.
+    {
+      id: 'run-wrong',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'A Run LeetCode calls Accepted (it ran) with correct_answer false reads as Wrong Answer in live_sitting and get_sitting, with its answer as the output, not its prints',
+    },
+    {
+      id: 'run-wrong-ui',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The sitting’s page shows that Run as “Wrong Answer · 0/2”, never “Accepted”',
+    },
+    {
+      id: 'run-outcome',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A wrong Run leaves the outcome (submits only) as it was',
+    },
+    {
+      id: 'run-right',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A Run with correct_answer true stays Accepted; one with no flag is wrong only when fewer passed than ran; an errored Run and a Submit stay as LeetCode judged them',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'correct_answer false is a wrong answer, said so; true stays accepted',
+        why: 'same path as run-wrong (proven on dev): only verdictOf’s pure decision differs, run entirely in the named test and its neighbours',
+      },
+    },
+    {
+      id: 'run-old-row',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A Run stored before the rule (its head row folded as Accepted) reads as Wrong Answer in live_sitting: the payload in hand decides',
+      offDev: {
+        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
+        test: 'a head row folded under the old rule is read past: the payload in hand decides',
+        why: 'dev folds every new head row under the new rule, so it can’t make an old one; the test writes one over the real handler path',
+      },
+    },
+    {
+      id: 'code-lang',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'The code’s language reads by name (Python3), not LeetCode’s id 11, in live_sitting and get_sitting',
+    },
+    {
+      id: 'code-lang-unknown',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'An id LeetCode’s list doesn’t name falls back to the sitting’s own language; text that isn’t an id passes through',
+      offDev: {
+        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
+        test: 'names the code’s language from LeetCode’s id, else the sitting’s',
+        why: 'same path as code-lang (proven on dev): only lcLangName’s pure lookup differs',
+      },
+    },
+    {
+      id: 'get-statement',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'get_sitting carries the problem statement as text and the companies from the Start’s problem doc',
     },
     {
       id: 'live-real',
@@ -822,9 +893,9 @@ export const lcSittings: Scenario = {
     {
       id: 'live-active',
       entry: 'mcp',
-      proves: ['live-active'],
+      proves: ['live-active', 'code-lang'],
       title:
-        'live_sitting during A: its newest code, version 3, the problem, the accepted submit, the counts',
+        'live_sitting during A: its newest code, version 3, in Python3, the problem, the accepted submit, the counts',
       async run(ctx) {
         const out = await ctx.mcp.reads.liveSitting();
         if (
@@ -834,6 +905,7 @@ export const lcSittings: Scenario = {
           out.sitting.liveReads !== 1 ||
           out.code?.version !== 3 ||
           out.code.text !== 'class Solution:\n    def solve(self): ...' ||
+          out.code.lang !== 'Python3' ||
           out.runCount !== 1 ||
           out.submitCount !== 2 ||
           out.lastSubmit?.verdict !== 'accepted' ||
@@ -928,9 +1000,9 @@ export const lcSittings: Scenario = {
     {
       id: 'live-race',
       entry: 'mcp',
-      proves: ['live-race'],
+      proves: ['live-race', 'run-wrong', 'run-outcome'],
       title:
-        'Five pulls at once with a run’s ingest: all five count, the run folds, its case comes back',
+        'Five pulls at once with a run’s ingest: all five count, the run folds as Wrong Answer (LeetCode’s Accepted, correct_answer false), its case and answer come back, the outcome holds',
       async run(ctx) {
         const run: DevSittingEvent = {
           id: devUlid(),
@@ -938,12 +1010,15 @@ export const lcSittings: Scenario = {
           at: nextAt(),
           payload: {
             request: { lang: 'python3', typed_code: 'print("devcheck")', data_input: '[2,7]\n9' },
+            // A Run's /check/ as captured 2026-11-08: "Accepted" means it ran; code_output is its prints.
             result: {
-              status_code: 11,
-              status_msg: 'Wrong Answer',
+              status_code: 10,
+              status_msg: 'Accepted',
+              correct_answer: false,
               total_correct: 0,
-              total_testcases: 1,
+              total_testcases: 2,
               code_answer: ['[0,0]'],
+              code_output: ['devcheck print'],
               expected_code_answer: ['[0,1]'],
             },
           },
@@ -958,12 +1033,17 @@ export const lcSittings: Scenario = {
           out.sitting?.liveReads !== 9 ||
           out.runCount !== 2 ||
           out.lastRun?.verdict !== 'wrong_answer' ||
+          out.lastRun.statusMsg !== 'Wrong Answer' ||
+          out.lastRun.passed !== 0 ||
+          out.lastRun.total !== 2 ||
           d?.input !== '[2,7]\n9' ||
           d.expected !== '[0,1]' ||
-          d.output !== '[0,0]'
+          d.output !== '[0,0]' ||
+          out.outcome?.firstSubmitAccepted !== false ||
+          out.outcome.submitsBeforeAccepted !== 1
         )
           throw new Error(
-            `race: ${JSON.stringify({ n: out.sitting?.liveReads, runs: out.runCount, last: out.lastRun })}`,
+            `race: ${JSON.stringify({ n: out.sitting?.liveReads, runs: out.runCount, last: out.lastRun, outcome: out.outcome })}`,
           );
       },
     },
@@ -1192,9 +1272,9 @@ export const lcSittings: Scenario = {
       id: 'ui-detail',
       entry: 'ui',
       cost: 'slow',
-      proves: ['det-timeline', 'det-metrics', 'det-unknown'],
+      proves: ['det-timeline', 'det-metrics', 'det-unknown', 'run-wrong-ui'],
       title:
-        'A’s page from its row: the runs and submits, the wrong submit’s case, a code marker, the outcome and the pulls; again after a reload; an unknown id',
+        'A’s page from its row: the runs and submits (the wrong Run LeetCode called Accepted too), the wrong submit’s case, a code marker, the outcome and the pulls; again after a reload; an unknown id',
       async run(ctx) {
         await ctx.ui.goto('/recruiting');
         await sittingLink(ctx, 'a').click({ timeout: 15_000 });
@@ -1206,6 +1286,9 @@ export const lcSittings: Scenario = {
           await timeline.getByText('Wrong Answer · 88/307').waitFor({ timeout: 15_000 });
           await timeline.getByText('Accepted · 307/307').waitFor({ timeout: 5_000 });
           await timeline.getByText('Runtime Error · 0/3').waitFor({ timeout: 5_000 });
+          await timeline.getByText('Wrong Answer · 0/2').waitFor({ timeout: 5_000 });
+          if (await timeline.getByText('Accepted · 0/2').count())
+            throw new Error('the wrong Run reads as Accepted');
           await timeline
             .getByText(/code changed ×\d+/)
             .first()
@@ -1400,9 +1483,19 @@ export const lcSittings: Scenario = {
     {
       id: 'mcp-read',
       entry: 'mcp',
-      proves: ['get-latest', 'get-id', 'get-unknown', 'list-range', 'list-empty', 'list-bad'],
+      proves: [
+        'get-latest',
+        'get-id',
+        'get-unknown',
+        'list-range',
+        'list-empty',
+        'list-bad',
+        'run-wrong',
+        'code-lang',
+        'get-statement',
+      ],
       title:
-        'get_sitting with no id is C; with A’s id, A’s timeline, code and review; list_sittings by today, limit, a past month, bad arguments',
+        'get_sitting with no id is C; with A’s id, A’s statement and companies, timeline (the wrong Run as one), code in Python3 and review; list_sittings by today, limit, a past month, bad arguments',
       async run(ctx) {
         const r = ctx.mcp.reads;
         // Its own review on A: this step is cheap, so it can't lean on the slow ui-review's.
@@ -1417,12 +1510,22 @@ export const lcSittings: Scenario = {
         const wrong = a.timeline?.find(
           (e) => e.kind === 'judged' && e.type === 'submit' && e.verdict === 'wrong_answer',
         );
+        const run = a.timeline?.find(
+          (e) => e.kind === 'judged' && e.type === 'run' && e.total === 2,
+        );
         if (
           a.sitting?.id !== state.a ||
           wrong?.kind !== 'judged' ||
           wrong.detail.input !== '[3,3]\n6' ||
           wrong.detail.expected !== '[0,1]' ||
+          run?.kind !== 'judged' ||
+          run.verdict !== 'wrong_answer' ||
+          run.statusMsg !== 'Wrong Answer' ||
+          run.detail.output !== '[0,0]' ||
+          a.problem?.statement !== 'devcheck statement' ||
+          JSON.stringify(a.problem.companies) !== JSON.stringify(['Acme']) ||
           !a.code?.final ||
+          a.code.lang !== 'Python3' ||
           a.review?.insight !== 'devcheck mcp one-liner'
         )
           throw new Error(

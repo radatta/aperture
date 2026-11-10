@@ -126,8 +126,12 @@ describe('the review', () => {
     await open(api, 'longest-substring-without-repeating-characters');
     await user.click(await screen.findByRole('button', { name: 'Draft with Claude' }));
     const draft = await screen.findByRole('group', { name: 'Claude’s draft' });
-    // The stub's deterministic draft: one line per judged run or submit that wasn't accepted.
+    // The stub's deterministic draft: one line per judged run or submit that wasn't accepted — the Run counts,
+    // LeetCode's "Accepted" with correct_answer false.
     expect(within(draft).getAllByRole('checkbox')).toHaveLength(2);
+    expect(within(draft).getByLabelText<HTMLInputElement>('Draft line 1').value).toMatch(
+      /^Run 1 \(Wrong Answer\)/,
+    );
     for (const box of within(draft).getAllByRole('checkbox'))
       expect(box).toHaveProperty('checked', false);
     const line2 = within(draft).getByLabelText<HTMLInputElement>('Draft line 2');

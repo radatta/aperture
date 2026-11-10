@@ -33,7 +33,7 @@ export const T = {
             { name: 'Array', slug: 'array' },
             { name: 'Hash Table', slug: 'hash-table' },
           ],
-          companyTagStatsV2: '{"threeMonths":[{"name":"Acme","timesEncountered":3}]}',
+          companyTagStatsV2: '{"three_months":[{"name":"Acme","timesEncountered":3}]}',
         },
       },
     }),

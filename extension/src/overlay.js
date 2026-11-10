@@ -8,6 +8,7 @@
 // element in the browser's top layer, painted over the overlay but letting clicks through) is residual.
 (function (root) {
   'use strict';
+  const debug = (root.ApertureLC && root.ApertureLC.debug) || null;
   const STEP_TEXT = {
     send: 'Opening the sitting in Aperture…',
     reset: 'Resetting the editor…',
@@ -18,7 +19,8 @@
     :host { all: initial; }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
     .scrim { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-      background: rgba(12, 14, 18, 0.62); backdrop-filter: blur(3px); padding: 16px; }
+      background: rgba(12, 14, 18, 0.94); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+      padding: 16px; }
     .card { width: min(420px, 100%); border-radius: 14px; padding: 22px 22px 18px; background: #fbfaf7; color: #1c1d21;
       box-shadow: 0 18px 50px rgba(0,0,0,.35); }
     .kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #6a6c75; margin: 0 0 6px; }
@@ -171,7 +173,35 @@
             ),
           );
       }
-      overlay.body.append(node('div', { class: 'scrim' }, card));
+      const scrim = node('div', { class: 'scrim' }, card);
+      overlay.body.append(scrim);
+      probeScrim(scrim);
+    }
+    // Once a page load: whether Safari takes the scrim's blur under either name, and what it computed (a
+    // closed shadow root on a fixed host — README → Safari behaviour).
+    let probed = false;
+    function probeScrim(el) {
+      if (probed || !debug) return;
+      probed = true;
+      const sup = (prop) => {
+        try {
+          return CSS.supports(prop, 'blur(20px)');
+        } catch {
+          return null;
+        }
+      };
+      let cs = null;
+      try {
+        cs = getComputedStyle(el);
+      } catch {}
+      debug.log('scrim', {
+        supports: { std: sup('backdrop-filter'), webkit: sup('-webkit-backdrop-filter') },
+        computed: {
+          std: (cs && cs.backdropFilter) || null,
+          webkit: (cs && cs.webkitBackdropFilter) || null,
+          background: (cs && cs.backgroundColor) || null,
+        },
+      });
     }
 
     // text null hides it; tone: '' | 'warn' | 'bad'

@@ -180,6 +180,49 @@ describe('folds', () => {
       submitsBeforeAccepted: 1,
     });
   });
+  describe('a Run’s verdict', () => {
+    // A Run's /check/ as captured 2026-11-08: status 10 "Accepted" means it ran; correct_answer says if it matched.
+    const ran = (extra: Record<string, unknown>) => ({
+      result: { status_code: 10, status_msg: 'Accepted', ...extra },
+    });
+    const row = (type: 'run' | 'submit', payload: unknown) =>
+      headRowOf('s', { id: 'a', type, at: 1, payload });
+    it('correct_answer false is a wrong answer, said so; true stays accepted', () => {
+      expect(
+        row('run', ran({ correct_answer: false, total_correct: 0, total_testcases: 3 })).verdict,
+      ).toEqual({ verdict: 'wrong_answer', statusMsg: 'Wrong Answer', passed: 0, total: 3, at: 1 });
+      expect(
+        row('run', ran({ correct_answer: true, total_correct: 3, total_testcases: 3 })).verdict,
+      ).toMatchObject({ verdict: 'accepted', statusMsg: 'Accepted' });
+    });
+    it('with no flag, fewer passed than run is wrong and all passed is accepted', () => {
+      expect(row('run', ran({ total_correct: 1, total_testcases: 3 })).verdict).toMatchObject({
+        verdict: 'wrong_answer',
+        statusMsg: 'Wrong Answer',
+      });
+      expect(row('run', ran({ total_correct: 3, total_testcases: 3 })).verdict?.verdict).toBe(
+        'accepted',
+      );
+      expect(row('run', ran({})).verdict?.verdict).toBe('accepted');
+    });
+    it('an errored Run and a Submit are left as LeetCode judged them', () => {
+      expect(
+        row('run', {
+          result: { status_code: 15, status_msg: 'Runtime Error', correct_answer: false },
+        }).verdict,
+      ).toMatchObject({ verdict: 'runtime_error', statusMsg: 'Runtime Error' });
+      expect(
+        row('submit', ran({ correct_answer: false, total_correct: 0, total_testcases: 3 })).verdict,
+      ).toMatchObject({ verdict: 'accepted', statusMsg: 'Accepted' });
+    });
+    it('folds into lastRun without touching the outcome', () => {
+      const s = summarizeHeadRows([
+        row('run', ran({ correct_answer: false, total_correct: 0, total_testcases: 3 })),
+      ]);
+      expect(s.lastRun).toMatchObject({ verdict: 'wrong_answer', passed: 0, total: 3 });
+      expect(s).toMatchObject({ firstAcceptedAt: null, submits: 0 });
+    });
+  });
   it('trims a status message before it reaches the head', () => {
     const r = headRowOf('s', {
       id: 'a',
@@ -429,6 +472,10 @@ describe('the live pull’s helpers', () => {
     expect(judgeDetail({ result: { last_testcase: 'x'.repeat(5000) } }).input).toHaveLength(
       JUDGE_TEXT_MAX,
     );
+    // A Run's code_output is its prints (captured 2026-11-08): the answer is what's shown.
+    expect(
+      judgeDetail({ result: { code_answer: ['4', '-1'], code_output: ['a', 'a'] } }).output,
+    ).toBe('4\n-1');
     const none = { input: null, expected: null, output: null, error: null };
     for (const junk of [null, 'x', 7, [], { result: 3 }, { result: { code_answer: [1, 2] } }])
       expect(judgeDetail(junk)).toEqual(none);
@@ -552,6 +599,20 @@ describe('reading a sitting back', () => {
       verdict: { verdict: 'other' },
     });
     expect(timelineOf({ clientStartedAt: 0 }, [])).toEqual([]);
+  });
+  it('timelineOf reads a wrong Run from its payload, so an older sitting reads right too', () => {
+    const run = {
+      result: {
+        status_code: 10,
+        status_msg: 'Accepted',
+        correct_answer: false,
+        total_correct: 0,
+        total_testcases: 3,
+      },
+    };
+    expect(timelineOf({ clientStartedAt: 0 }, [e('01A', 'run', 1, run)])[0]).toMatchObject({
+      verdict: { verdict: 'wrong_answer', statusMsg: 'Wrong Answer', passed: 0, total: 3 },
+    });
   });
 
   it('firstSubmitCode is the first submit’s typed code', () => {

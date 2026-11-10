@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUlid, normalizeSittingEvents } from '@aperture/shared';
+import { isUlid, normalizeSittingEvents, problemCompanies } from '@aperture/shared';
 import { lib } from './load';
 import { CODE, QID, SLUG, T } from './fixtures/traffic';
 
@@ -49,7 +49,7 @@ describe('wire: what LeetCode traffic means', () => {
     expect(typeof replay!.events).toBe('string');
     const [problem] = seen(c, T.questionDetail) as Array<Record<string, unknown>>;
     expect(problem).toMatchObject({ kind: 'problem', slug: SLUG, questionId: QID, at: 1050 });
-    expect((problem!.payload as { companyTagStatsV2: string }).companyTagStatsV2).toContain('Acme');
+    expect(problemCompanies({ raw: problem!.payload })).toEqual(['Acme']); // read as the server reads it
     expect(seen(c, T.submissionDetails)).toMatchObject([
       { kind: 'submitDetails', slug: SLUG, payload: { submissionId: '900001' } },
     ]);
@@ -130,5 +130,64 @@ describe('wire: what LeetCode traffic means', () => {
     expect(parts.every((p: string) => wire.bytes(p) <= 60 * 1024)).toBe(true);
     expect(parts.flatMap((p: string) => JSON.parse(p))).toHaveLength(2000);
     expect(wire.splitReplay('x'.repeat(70 * 1024))).toEqual([]);
+  });
+
+  // __NEXT_DATA__ as a fresh load carries it (debug log 8, 2026-11-10; values synthetic).
+  const nextData = (question: unknown, keySlug = SLUG) =>
+    JSON.stringify({
+      props: {
+        pageProps: {
+          dehydratedState: {
+            queries: [
+              { queryKey: ['globalData', {}], state: { data: { userStatus: {} } } },
+              {
+                queryKey: ['questionDetail', { titleSlug: keySlug }],
+                state: { data: { question } },
+              },
+            ],
+          },
+        },
+      },
+    });
+  const question = { title: 'Two Sum', titleSlug: SLUG, questionId: QID, content: '<p>x</p>' };
+
+  it('finds the problem doc a page renders into __NEXT_DATA__, only when its key names it', () => {
+    expect(wire.pageProblem(nextData(question))).toEqual(question);
+    expect(wire.pageProblem(nextData(question, 'add-two-numbers'))).toBeNull();
+    expect(wire.pageProblem(nextData({ ...question, titleSlug: 7 }))).toBeNull();
+    for (const junk of [null, '', '{not json', '[]', '{"props":{}}', nextData(null), nextData([1])])
+      expect(wire.pageProblem(junk)).toBeNull();
+  });
+
+  it('fits a doc to the cap: whole when it fits, else the fields A1 reads, else nothing', () => {
+    const doc = {
+      ...question,
+      questionFrontendId: '1',
+      difficulty: 'Easy',
+      topicTags: [{ name: 'Array', slug: 'array' }],
+      companyTagStatsV2: '{}',
+      codeSnippets: [{ lang: 'Python3', code: 'x'.repeat(70 * 1024) }],
+    };
+    const small = { ...doc, codeSnippets: [] };
+    expect(wire.fitProblem(small, 64 * 1024)).toBe(small);
+    const slim = wire.fitProblem(doc, 64 * 1024);
+    expect(Object.keys(slim).sort()).toEqual(
+      ['title', 'titleSlug', 'questionId', 'questionFrontendId', 'difficulty', 'topicTags']
+        .concat(['content', 'companyTagStatsV2'])
+        .sort(),
+    );
+    expect(wire.fitProblem({ ...doc, content: 'x'.repeat(70 * 1024) }, 64 * 1024)).toBeNull();
+    expect(wire.fitProblem(null, 64 * 1024)).toBeNull();
+    expect(wire.fitProblem([doc], 64 * 1024)).toBeNull();
+  });
+
+  it('names a request’s GraphQL operations for the debug log, and nothing else', () => {
+    expect(wire.opNames(T.questionDetail.reqText)).toEqual(['questionDetail']);
+    expect(wire.opNames(JSON.stringify([{ operationName: 'a' }, { operationName: 'b' }]))).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(wire.opNames(T.submit.reqText)).toEqual([]);
+    expect(wire.opNames(null)).toEqual([]);
   });
 });

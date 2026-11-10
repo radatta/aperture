@@ -20,6 +20,7 @@
   const DETAIL_MAX = 6 * 1024 * 1024; // two raw texts at RAW_MAX, JSON-escaped twice over
   const RAW_MAX = 1024 * 1024; // one request's or response's text (inject-main.js skips anything longer)
   const URL_MAX = 2048;
+  const HOW = /^[a-z0-9:-]{1,40}$/;
 
   const SLUG_PATH = /^\/problems\/([a-z0-9-]{1,128})(?:\/|$)/;
   // The problem on screen, from the isolated world's own location — never from a page message.
@@ -77,7 +78,9 @@
       )
         return { ok: false, reason: 'raw-shape' };
       const { url, page, reqText, resText, reqAt, resAt } = msg;
-      return { ok: true, raw: { url, page, reqText, resText, reqAt, resAt } };
+      // The page world's word on how it read the response (inject-main.js emit): a debug-log probe only.
+      const how = typeof msg.how === 'string' && HOW.test(msg.how) ? msg.how : null;
+      return { ok: true, raw: { url, page, reqText, resText, reqAt, resAt, how } };
     }
     return { hello, accept };
   }

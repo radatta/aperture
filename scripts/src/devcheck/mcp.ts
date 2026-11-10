@@ -24,6 +24,9 @@ import type { Ledger } from './ledger';
 // What live_sitting answers (lambdas/src/mcp/leetcodeTools.ts) — the fields the scenario reads.
 export interface DevJudged {
   verdict: string | null;
+  statusMsg: string | null;
+  passed: number | null;
+  total: number | null;
   detail: { input: string | null; expected: string | null; output: string | null } | null;
 }
 export interface DevLiveSitting {
@@ -34,12 +37,13 @@ export interface DevLiveSitting {
     elapsedMin: number;
     liveReads: number;
   };
-  code?: { version: number; text: string | null };
+  code?: { version: number; text: string | null; lang: string | null };
   unchangedSinceVersion?: boolean;
   runCount?: number;
   submitCount?: number;
   lastRun?: DevJudged | null;
   lastSubmit?: DevJudged | null;
+  outcome?: { firstSubmitAccepted: boolean | null; submitsBeforeAccepted: number | null };
   lastSitting?: {
     id: string;
     status: string;
@@ -93,7 +97,7 @@ export interface DevDayView {
 // What get_sitting and list_sittings answer (PR C) — the fields the scenario reads.
 export interface DevSittingRead {
   sitting: { id: string; status: string; submitCount: number; liveReads: number } | null;
-  problem?: { statement: string | null };
+  problem?: { statement: string | null; companies: string[] };
   timeline?: (
     | { kind: 'codeChanged'; count: number }
     | {
@@ -101,10 +105,13 @@ export interface DevSittingRead {
         type: string;
         n: number;
         verdict: string;
+        statusMsg: string | null;
+        passed: number | null;
+        total: number | null;
         detail: { input: string | null; expected: string | null; output: string | null };
       }
   )[];
-  code?: { final: string | null; version: number };
+  code?: { final: string | null; version: number; lang: string | null };
   review?: { insight: string | null; tags: string[] } | null;
 }
 export interface DevSittingRow {
