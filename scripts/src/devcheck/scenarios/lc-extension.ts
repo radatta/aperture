@@ -338,7 +338,7 @@ export const lcExtension: Scenario = {
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'coming back to the tab re-sends LeetCode’s timer reading, so the badge learns of a Done marked in Aperture',
-        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom; the reply-to-ended half is background.test.ts’s`,
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom; the reply-to-ended half is background.test.ts’s (a 200 whose status says ended, inside the grace, and a 400 past it)`,
       },
     },
     {

@@ -141,6 +141,24 @@ describe('background', () => {
     expect((ext.local.data.status as Record<string, unknown>).failed).toBe(0);
   });
 
+  // Inside the server's ten-minute grace after Done, a late batch answers 200 with the ended status (its after-Done
+  // events skipped): that reply, not the 400, is how the badge learns the end then.
+  it('marks the sitting ended from a 200 reply whose status says so, and counts the batch sent', async () => {
+    const { ext, send } = setup(() => ({
+      status: 200,
+      body: { accepted: 0, duplicates: 0, skipped: 1, version: 3, status: 'done' },
+    }));
+    await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
+    await send({ type: 'enqueue', sittingId: 'SIT', slug: 'two-sum', events: events(1) });
+    const sync = await until(() => {
+      const s = ext.local.data['sync:two-sum'] as Record<string, unknown> | undefined;
+      return s?.status === 'done' ? s : undefined;
+    });
+    expect(sync).toMatchObject({ status: 'done', http: 200 });
+    await until(() => (ext.local.data.outbox as { entries: unknown[] }).entries.length === 0);
+    expect((ext.local.data.status as Record<string, unknown>).failed).toBe(0);
+  });
+
   it('never counts a 200 that isn’t Aperture’s answer as sent (CloudFront’s index.html for an /api 404)', async () => {
     const ext = fakeExtension();
     const fetch = async () => new Response('<!doctype html><html></html>', { status: 200 });

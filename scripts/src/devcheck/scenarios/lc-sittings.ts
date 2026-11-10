@@ -96,8 +96,10 @@ const state = {
   aBeforeDone: 0, // a stamp taken just before Done on A
   aDoneAt: 0, // this machine's clock when Done on A returned
   c: '',
+  cBeforeDrop: 0, // a stamp taken just before C's drop
   d: '',
   dRep: '',
+  dStartedAt: 0,
 };
 // A time after everything already sent on A. The events step stamps its batch up to 6 s ahead of the clock, so on a
 // fast run (the local check) a plain Date.now() is still behind it, and live and `last` — the newest by `at` —
@@ -291,11 +293,11 @@ export const lcSittings: Scenario = {
       id: 'late-budget',
       entry: 'api',
       kind: 'edge',
-      what: 'A late call reserves only its kept events in the sitting’s capture budget',
+      what: 'A late call reserves only its kept events in the sitting’s capture budget, and leaves the open neighbour’s gate',
       offDev: {
         file: 'lambdas/src/backend.sittings.test.ts',
         test: 'late events write only the ended sitting’s rows',
-        why: 'the budget row isn’t readable through the API',
+        why: 'the budget row isn’t readable through the API, and the gate only through a live pull, which writes a count',
       },
     },
     {
@@ -313,12 +315,7 @@ export const lcSittings: Scenario = {
       id: 'late-neighbour',
       entry: 'api',
       kind: 'edge',
-      what: 'A late call to an ended sitting writes no row outside that sitting (no neighbour’s head, live row, budget or gate)',
-      offDev: {
-        file: 'lambdas/src/backend.sittings.test.ts',
-        test: 'late events write only the ended sitting’s rows',
-        why: 'the write set isn’t readable through the API; a late note’s own effects are proven on dev by late-before',
-      },
+      what: 'A late call to an ended sitting leaves an open neighbour’s head and live row as they were',
     },
     {
       id: 'ui-open',
@@ -1357,7 +1354,7 @@ export const lcSittings: Scenario = {
         const blank = await ctx.api.writes.setSittingPrepTarget(id, '   ');
         if (tagged.prepTarget !== 'devcheck-target' || blank.prepTarget !== 'General')
           throw new Error('the prep target didn’t normalize');
-        const beforeDrop = Date.now();
+        const beforeDrop = (state.cBeforeDrop = Date.now());
         await ctx.api.writes.finishTask(reps[0]!.id, 'cancelled');
         const after = (await ctx.api.reads.getSitting(id)).sitting;
         if (after.status !== 'abandoned') throw new Error(`C after Drop: ${after.status}`);
@@ -1367,6 +1364,9 @@ export const lcSittings: Scenario = {
         ]);
         if (late.accepted !== 1 || late.skipped !== 0 || late.status !== 'abandoned')
           throw new Error(`a note from before the drop: ${JSON.stringify(late)}`);
+        const c1 = (await ctx.api.reads.getSitting(id)).sitting;
+        if (c1.summary.notes !== after.summary.notes + 1 || c1.status !== 'abandoned')
+          throw new Error(`C after a late note: ${JSON.stringify(c1)}`);
       },
     },
     {
@@ -1449,6 +1449,36 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'late-neighbour',
+      entry: 'api',
+      cost: 'slow', // it starts D, which only ui-end (slow) uses and ends
+      proves: ['late-neighbour'],
+      title:
+        'Start D; a note stamped before C’s drop, sent now, lands on C and leaves D’s head and live row as they were',
+      async run(ctx) {
+        if (!state.cBeforeDrop) throw new Error('no drop of C — the double-start step failed');
+        const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
+        state.d = sitting.id;
+        state.dRep = sitting.repTaskId;
+        state.dStartedAt = sitting.startedAt;
+        await ctx.api.writes.lcSittingEvents(state.d, [snap('print("d")', Date.now())]);
+        await ctx.api.writes.setTaskEstimate(state.dRep, null, null); // the Roll's 45 fills it in hindsight
+        const d0 = JSON.stringify(await ctx.api.reads.getSitting(state.d));
+        const late = await ctx.api.writes.lcSittingEvents(state.c, [
+          {
+            id: devUlid(),
+            type: 'note',
+            at: state.cBeforeDrop,
+            payload: { text: 'devcheck late note' },
+          },
+        ]);
+        if (late.accepted !== 1 || late.status !== 'abandoned')
+          throw new Error(`a note to C beside open D: ${JSON.stringify(late)}`);
+        if (JSON.stringify(await ctx.api.reads.getSitting(state.d)) !== d0)
+          throw new Error('a late note to C moved D');
+      },
+    },
+    {
       id: 'ui-end',
       entry: 'ui',
       cost: 'slow',
@@ -1462,20 +1492,16 @@ export const lcSittings: Scenario = {
         'end-ui',
       ],
       title:
-        'Start D: as Home’s hero it shows and its Done starts on D’s minutes, and as a row under a planned neighbour it shows them too; Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
+        'D as Home’s hero shows D’s minutes and its Done starts on them, and as a row under a planned neighbour it shows them too; Home links its rep (and only it) to D’s page; End sitting → Cancel keeps it open; End → Mark done ends it',
       async run(ctx) {
-        const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
-        state.d = sitting.id;
-        state.dRep = sitting.repTaskId;
-        await ctx.api.writes.lcSittingEvents(state.d, [snap('print("d")', Date.now())]);
-        await ctx.api.writes.setTaskEstimate(state.dRep, null, null); // the Roll's 45 fills it in hindsight
+        if (!state.d) throw new Error('no sitting D — the late-neighbour step failed');
         const link = ctx.page.getByRole('link', { name: 'End the LeetCode sitting →' });
         const hindsight = async (where: string) => {
           const shown = await ctx.page.getByLabel('Estimate in hindsight').inputValue();
           if (shown !== '45')
             throw new Error(`${where}: estimate in hindsight “${shown}”, not the Roll’s 45`);
         };
-        const dMinutes = () => Math.max(1, Math.round((Date.now() - sitting.startedAt) / 60_000));
+        const dMinutes = () => Math.max(1, Math.round((Date.now() - state.dStartedAt) / 60_000));
         // The minutes D's rep shows on Home, as the hero ("Nm of ~45m" / "Nm logged") or a row ("Nm in"): the
         // sitting's, never below 1 — the rep's own reads 0m, as no timer ran.
         const homeMinutes = async (where: string) => {
@@ -1623,7 +1649,7 @@ export const lcSittings: Scenario = {
       title: 'Ten minutes after Done on A, an event stamped before Done is refused',
       async run(ctx) {
         if (!state.aDoneAt) throw new Error('no Done on A — the end step failed');
-        // SITTING_END_GRACE_MS (scripts can't import shared), and 5 s for this clock against the server's.
+        // SITTING_END_GRACE_MS (scripts can't import shared), plus 5 s for request latency: the wait is on this clock alone.
         const wait = state.aDoneAt + 10 * 60_000 + 5_000 - Date.now();
         if (wait > 0) {
           ctx.log(`waiting ${Math.ceil(wait / 1000)} s for A's grace to run out`);
