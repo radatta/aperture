@@ -175,7 +175,9 @@ sitting's clock. **The grace:** for 10 minutes after its end (`SITTING_END_GRACE
 Start — never past the 24 h window, so a sitting ended for staleness gets none) a sitting still takes the events
 stamped before the end on the extension's clock, plus 60 s for the Start's latency (`SITTING_END_SKEW_MS`) —
 the outbox's retries land after Done. The rest of the call is skipped, not refused, and the budget reserves
-only the kept events. Past the grace every call is refused. Each event is idempotent on its id. The server recomputes everything
+only the kept events. Past the grace every call is refused. A known risk, accepted as unlikely: a late call
+racing a delete (`tombstoneSitting` queries the children, then tombstones them) can leave a late raw or judged row
+under a deleted sitting — possible only in the 10 minutes after a Drop followed by a delete. Each event is idempotent on its id. The server recomputes everything
 it decides on (`userId`, `day`, `startedAt`, verdicts, counters); payloads are opaque.
 
 **Statuses** (the extension's outbox retries 409, 429 and 5xx; anything else it keeps as failed): 200

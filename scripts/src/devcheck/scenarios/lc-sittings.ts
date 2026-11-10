@@ -288,6 +288,17 @@ export const lcSittings: Scenario = {
       what: 'A dropped sitting takes the events stamped before the drop the same',
     },
     {
+      id: 'late-budget',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A late call reserves only its kept events in the sitting’s capture budget',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'late events write only the ended sitting’s rows',
+        why: 'the budget row isn’t readable through the API',
+      },
+    },
+    {
       id: 'late-window',
       entry: 'api',
       kind: 'edge',
@@ -302,11 +313,11 @@ export const lcSittings: Scenario = {
       id: 'late-neighbour',
       entry: 'api',
       kind: 'edge',
-      what: 'An open sitting is untouched by another’s late events',
+      what: 'A late call to an ended sitting writes no row outside that sitting (no neighbour’s head, live row, budget or gate)',
       offDev: {
         file: 'lambdas/src/backend.sittings.test.ts',
         test: 'late events write only the ended sitting’s rows',
-        why: 'dev can’t see the write set, only reads',
+        why: 'the write set isn’t readable through the API; a late note’s own effects are proven on dev by late-before',
       },
     },
     {

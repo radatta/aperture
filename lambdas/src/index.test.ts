@@ -262,8 +262,12 @@ describe('handler device-token ingest branch', () => {
       const t0 = 1_700_000_000_000;
       vi.setSystemTime(t0);
       try {
-        const headers = { 'x-aperture-authorization': 'Bearer good-jwt' };
-        const b = new BackendClient(new Repo(h.doc, liveWrites(h.doc), 'u1'), { userId: 'u1' });
+        process.env.DEVICE_TOKEN = 'right-token';
+        process.env.DEVICE_USER_ID = 'u-dev';
+        const headers = { 'x-aperture-authorization': 'Bearer right-token' };
+        const b = new BackendClient(new Repo(h.doc, liveWrites(h.doc), 'u-dev'), {
+          userId: 'u-dev',
+        });
         const roll = await b.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
         await b.updateSettings({ leetcodeRollId: roll.id });
         const { sitting } = await b.lcSittingStart({ ...start, startedAt: t0 });
