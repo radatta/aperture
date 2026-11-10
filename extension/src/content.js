@@ -201,6 +201,7 @@
   const HANDOFF_WAIT_MS = 15_000;
   const STUCK_RETRY_MS = 30_000;
   const stuck = []; // hand-offs every try refused, oldest first
+  let unstuck = 0; // of those, taken out to try again and not yet landed — the badge still counts them
   const extensionGone = () => {
     try {
       return !api.runtime || !api.runtime.id;
@@ -209,21 +210,30 @@
     }
   };
   function retryStuck() {
-    if (stuck.length && !extensionGone()) stuck.splice(0).forEach((m) => handOff(m));
+    if (!stuck.length || extensionGone()) return;
+    for (const m of stuck.splice(0)) {
+      unstuck++;
+      handOff(m, false, true);
+    }
+    paintBadge();
   }
   setInterval(retryStuck, STUCK_RETRY_MS);
   let handOffs = Promise.resolve();
   let inFlight = 0;
+  // Landed only when the background says so: {ok: true}. Its {ok: false} (a storage write failed) and an
+  // empty reply count as refused, as does a send that throws outright.
   const tryOnce = (msg) =>
     Promise.race([
-      send(msg),
+      new Promise((resolve) => resolve(send(msg))).then((rep) => {
+        if (!rep || rep.ok !== true) throw new Error((rep && rep.error) || 'no acknowledgement');
+      }),
       sleep(HANDOFF_WAIT_MS).then(() => {
         throw new Error('no answer in 15 s');
       }),
     ]);
   // `leaving` (pagehide, or the tab hidden): the first try starts now, ahead of any wait in the chain, while
   // the page can still send.
-  function handOff(msg, leaving = false) {
+  function handOff(msg, leaving = false, again = false) {
     const first = inFlight === 0 || leaving ? tryOnce(msg) : null;
     first?.catch(() => {}); // awaited below; never an unhandled rejection meanwhile
     inFlight++;
@@ -232,6 +242,8 @@
       .catch(() => {})
       .then(() => {
         inFlight--;
+        if (again) unstuck--;
+        paintBadge();
       });
   }
   async function deliver(msg, first) {
@@ -249,13 +261,9 @@
       }
       if (ok) {
         if (i) debug.log('enqueue.retried', { tries: i + 1 });
-        retryStuck();
-        return paintBadge();
+        return retryStuck();
       }
-      if (i >= HANDOFF_RETRY_MS.length) {
-        stuck.push(msg);
-        return paintBadge();
-      }
+      if (i >= HANDOFF_RETRY_MS.length) return stuck.push(msg);
       await sleep(HANDOFF_RETRY_MS[i]);
     }
   }
@@ -533,9 +541,11 @@
     for (let tries = 0; ; tries++) {
       if (stale()) return;
       const body = startBody(start.clientSittingId, start.startedAt, slug);
-      const r = await send({ type: 'start', body }).catch(() => ({
+      const r = await send({ type: 'start', body }).catch((err) => ({
         status: 0,
-        error: 'the extension was reloaded — reload this page',
+        error: extensionGone()
+          ? 'the extension was reloaded — reload this page'
+          : String((err && err.message) || err),
       }));
       const s = r.status === 200 && r.json && r.json.sitting;
       if (s && s.status === 'active' && s.problemSlug === slug) {
@@ -628,16 +638,20 @@
   }
 
   // Done is marked in Aperture, away from this tab, and an end otherwise arrives only with the next send:
-  // coming back sends LeetCode's timer reading (at most every 15 s; its state null if LeetCode has none), and
+  // coming back sends LeetCode's timer reading (at most every 15 s; nothing when LeetCode has none), and
   // Aperture's answer to that send says whether the sitting is still open. Not a repeat Start: those count
   // against the day's Start attempts. Coming back also tries any stuck hand-offs again.
   const RECHECK_MS = 15_000;
   let lastRecheck = 0;
   function recheck() {
     retryStuck();
+    if (rereading()) rereadSync().then(paintBadge, () => {});
     if (!timing() || Date.now() - lastRecheck < RECHECK_MS) return;
+    const raw = timerRaw();
+    const e = raw && timerEvent(raw);
+    if (!e || !e.payload.state) return; // no reading to send: the next send learns of an end instead
     lastRecheck = Date.now();
-    queue([timerEvent(timerRaw())]);
+    queue([e]);
     flushNow();
   }
   window.addEventListener('focus', (e) => e.isTrusted && recheck());
@@ -695,9 +709,10 @@
   const ago = (ms) =>
     ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s ago` : `${Math.round(ms / 60_000)}m ago`;
   function paintBadge() {
-    if (stuck.length && extensionGone())
+    const waiting = stuck.length + unstuck > 0;
+    if (waiting && extensionGone())
       return setBadge('Aperture · the extension was reloaded — reload this page', 'bad');
-    if (stuck.length)
+    if (waiting)
       return setBadge(
         'Aperture · events waiting to reach the extension — retrying, keep this tab open',
         'bad',
@@ -721,8 +736,14 @@
     const last = sync && sync.sittingId === binding.sittingId && sync.lastSyncAt;
     setBadge(`${head} · ${last ? `synced ${ago(now - last)}` : 'waiting for the first sync'}`, '');
   }
+  // The repaint never waits on the read: a reloaded extension's storage may never answer.
   setInterval(() => {
     if (state.phase === 'active') paintBadge();
+    if (!rereading() || extensionGone()) return;
+    rereadSync().then(
+      () => state.phase === 'active' && paintBadge(),
+      () => {},
+    );
   }, 5000);
 
   // ---- navigation (LeetCode is a single-page app): this world's own location, never a page message ----
@@ -776,22 +797,57 @@
   });
 
   // ---- what the background and Options change ----
+  // The background's word on the sitting (sync:<slug>) and the outbox (status).
+  function learnSync(next) {
+    sync = next || null;
+    if (
+      binding &&
+      bindingStatus() !== 'active' &&
+      (state.phase === 'active' || state.phase === 'resuming' || state.open)
+    )
+      act({ type: 'ended' });
+  }
+  // A probe for the next Safari session: which change events this page gets at all (its own debug-log writes
+  // are only counted — logging them would loop), and whether it was restored from the back/forward cache.
+  const pageId = mintId().slice(-6);
+  let ownLogChanges = 0;
+  debug.log('oc.reg', { pageId, readyState: document.readyState });
   api.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local') return;
+    const keys = Object.keys(changes || {}).filter((k) => k !== 'debugLog');
+    if (!keys.length) return void ownLogChanges++;
+    debug.log('oc', { pageId, area: String(area), keys: keys.slice(0, 8), ownLogChanges });
+  });
+  window.addEventListener('pageshow', (e) =>
+    debug.log('pageshow', { pageId, persisted: e.persisted }),
+  );
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area && area !== 'local') return; // Safari has passed no area name (WebKit bug 281644)
     if (changes.selectors) sel = selLib.merge(changes.selectors.newValue);
     if (changes.status) status = changes.status.newValue || null;
     const k = screenSlug && `sync:${screenSlug}`;
-    if (k && changes[k]) {
-      sync = changes[k].newValue || null;
-      if (
-        binding &&
-        bindingStatus() !== 'active' &&
-        (state.phase === 'active' || state.phase === 'resuming' || state.open)
-      )
-        act({ type: 'ended' });
-    }
+    if (k && changes[k]) learnSync(changes[k].newValue);
     if (state.phase === 'active') paintBadge();
   });
+  // Safari evidently doesn't always tell this page about the background's writes (2026-11-10: the server took
+  // the events, yet the badge stayed on "waiting for the first sync" and never said the sitting ended), so
+  // while a sitting is open the page also reads them itself, every 5 s. The debug log says when a read finds
+  // what no change event brought (`sync.reread`).
+  function rereading() {
+    return state.phase === 'active' || state.phase === 'resuming' || state.open;
+  }
+  async function rereadSync() {
+    const slug = screenSlug;
+    const k = `sync:${slug}`;
+    const got = await Promise.resolve()
+      .then(() => local.get([k, 'status']))
+      .catch(() => null);
+    if (!got || screenSlug !== slug || !rereading()) return;
+    status = got.status || null;
+    const next = got[k] || null;
+    if (JSON.stringify(next) === JSON.stringify(sync)) return;
+    debug.log('sync.reread', { status: next && next.status, synced: !!(next && next.lastSyncAt) });
+    learnSync(next);
+  }
 
   local.get(['selectors', 'status']).then(
     (got) => {

@@ -338,7 +338,7 @@ export const lcExtension: Scenario = {
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'coming back to the tab re-sends LeetCode’s timer reading, so the badge learns of a Done marked in Aperture',
-        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom; the reply-to-ended half is background.test.ts’s`,
       },
     },
     {
@@ -350,6 +350,17 @@ export const lcExtension: Scenario = {
         file: 'extension/test/overlay.test.ts',
         test: 'retries a hand-off Safari refuses (Tab not found), in order, and every refused event lands once',
         why: `${noStep}; Safari’s refusal can’t be produced on purpose — the test throws its exact error`,
+      },
+    },
+    {
+      id: 'ext-badge-reread',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The badge reads the background’s word itself while a sitting is open, so “synced” and “Sitting ended” show even when Safari doesn’t pass storage changes on (seen: events landed, the badge stayed on “waiting for the first sync”)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'reads the background’s word itself when Safari doesn’t pass its storage changes on: synced, then ended',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
     {

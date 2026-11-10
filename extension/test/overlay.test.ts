@@ -667,6 +667,22 @@ describe('the overlay on a LeetCode problem', () => {
     expect(p.badge()).toBe('Aperture · Sitting ended in Aperture');
   }, 30_000);
 
+  it('reads the background’s word itself when Safari doesn’t pass its storage changes on: synced, then ended', async () => {
+    const { p, ext } = await startOn(RUNNING_STOPWATCH());
+    expect(p.phase()).toBe('active');
+    const b = ext.local.data['sitting:two-sum'] as { sittingId: string };
+    // Written behind the page's back: no onChanged reaches it, as in Safari.
+    ext.local.data['sync:two-sum'] = {
+      sittingId: b.sittingId,
+      status: 'active',
+      lastSyncAt: Date.now(),
+    };
+    await until(() => p.badge()?.includes('synced'), 8000);
+    ext.local.data['sync:two-sum'] = { sittingId: b.sittingId, status: 'ended' };
+    await until(() => p.phase() === 'ended', 8000);
+    expect(p.badge()).toBe('Aperture · Sitting ended in Aperture');
+  }, 30_000);
+
   const TAB_NOT_FOUND = 'Invalid call to runtime.sendMessage(). Tab not found.';
   const submitClick = (p: ReturnType<typeof open>) =>
     (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
@@ -684,7 +700,9 @@ describe('the overlay on a LeetCode problem', () => {
         if (hasSubmit && refusals > 0) {
           refusals--;
           refused.push(msg);
-          throw new Error(TAB_NOT_FOUND);
+          // Safari's refusal, then a reply that isn't the background's {ok: true} (its storage write failed).
+          if (refusals === 1) throw new Error(TAB_NOT_FOUND);
+          return { ok: false, error: 'QuotaExceededError' };
         }
         if (msg.type === 'enqueue') delivered.push(msg);
         return bg.handle(msg);
@@ -695,8 +713,8 @@ describe('the overlay on a LeetCode problem', () => {
     p.tap('start');
     await until(() => p.phase() === 'active', 8000);
     submitClick(p);
-    await until(() => delivered.some((m) => m.events!.some((e) => e.type === 'submit')), 8000);
-    // A second submit, handed over while nothing waits, lands after the first.
+    await until(() => refused.length === 1, 8000);
+    // A second submit while the first is still being retried: it waits its turn and lands after it.
     submitClick(p);
     await until(
       () => delivered.flatMap((m) => m.events!).filter((e) => e.type === 'submit').length === 2,
@@ -738,6 +756,10 @@ describe('the overlay on a LeetCode problem', () => {
     runtime.id = undefined;
     await until(() => p.badge()?.includes('the extension was reloaded — reload this page'), 7000);
     runtime.id = 'ext-id';
+    // Taken out to try again, still refused: the badge keeps saying so through the retry waits.
+    trustedFocus(p.w);
+    await new Promise((res) => setTimeout(res, 1000));
+    expect(p.badge()).toContain('events waiting');
     refuse = false;
     trustedFocus(p.w);
     // Behind any later batch still in its retry wait (at most 10 s), in order.

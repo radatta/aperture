@@ -70,7 +70,10 @@ describe('background', () => {
       apiOrigin: 'https://aperture.test/',
       deviceToken: 'test-token-not-a-secret',
     });
-    await send({ type: 'enqueue', sittingId: 'SIT', slug: 'two-sum', events: events(60) });
+    // The content script counts a hand-off as landed only on exactly this reply.
+    expect(
+      await send({ type: 'enqueue', sittingId: 'SIT', slug: 'two-sum', events: events(60) }),
+    ).toEqual({ ok: true });
     await until(() => calls.length === 2);
     expect(calls[0]!.url).toBe('https://aperture.test/api/lcSittingEvents');
     expect(calls[0]!.headers[AUTH_HEADER]).toBe('Bearer test-token-not-a-secret');
@@ -195,6 +198,18 @@ describe('background', () => {
     expect(await send({ type: 'dismissed?', slug: 'two-sum' })).toEqual({ dismissed: true });
     expect(ext.session.data['dismissed:two-sum']).toBe(true);
     expect(ext.local.data['dismissed:two-sum']).toBeUndefined();
+  });
+
+  it('answers an enqueue it couldn’t store with {ok: false} and the error, so the content script retries it', async () => {
+    const { ext, send } = setup(() => ok);
+    const set = ext.local.set.bind(ext.local);
+    ext.local.set = async (items: Record<string, unknown>) => {
+      if ('outbox' in items) throw new Error('QuotaExceededError');
+      return set(items);
+    };
+    expect(
+      await send({ type: 'enqueue', sittingId: 'SIT', slug: 'two-sum', events: events(1) }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining('QuotaExceededError') });
   });
 
   it('ignores messages from anything but the extension itself', async () => {
