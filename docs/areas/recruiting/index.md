@@ -520,8 +520,9 @@ Lambda is the only place to recover it. Run on the Mac (the container has no AWS
 aws lambda get-function-configuration --function-name aperture-bff-<stage> --region us-west-1 --query 'Environment.Variables.DEVICE_TOKEN' --output text
 ```
 
-Storage is keyed by extension ID, so the saved token should survive a temporary→signed transition with
-the ID unchanged. Worth confirming on the first signed install rather than assuming.
+While Firefox ran (retired 2026-11-10), storage was keyed by extension ID, so the token was expected to
+survive the temporary→signed move with the ID unchanged. In Safari a Temporary Extension and the Xcode
+app are separate extensions, so each one needs the token entered in its own Options.
 
 ### The Chrome alternative (no signing)
 

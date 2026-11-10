@@ -142,11 +142,11 @@
       // A hint (syncedCode) names no slug, so it may be a late answer for the last problem: it's taken only
       // when no id is known yet and the problem doc, if any, agrees.
       const doc = problems.get(screenSlug);
-      const docId = doc && doc.questionId != null ? String(doc.questionId) : null;
+      const docId = doc ? scalar(doc.questionId) : null;
       if (
         m.questionId &&
         !questionIds.has(screenSlug) &&
-        (!docId || docId === String(m.questionId))
+        (!docId || docId === scalar(m.questionId))
       )
         learnQuestionId(screenSlug, m.questionId);
       return;
@@ -396,6 +396,8 @@
       .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
       .join(' ');
   const clip = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
+  // A page-supplied id as text: only a string or number, so an object whose toString throws can't stall a Start.
+  const scalar = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
   const slugify = (t) =>
     t
       .toLowerCase()
@@ -439,7 +441,7 @@
   function solveSession(slug) {
     try {
       const s = JSON.parse(localStorage.getItem(`qd_solve_session:${slug}`) || 'null');
-      return s && s.id != null ? clip(String(s.id), 80) : null; // blank → none, as A1 requires
+      return s ? clip(scalar(s.id), 80) : null; // blank → none, as A1 requires
     } catch {
       return null;
     }
@@ -452,7 +454,7 @@
       doc && Array.isArray(doc.topicTags)
         ? doc.topicTags.map((t) => clip(t && t.name, 40)).filter(Boolean)
         : null;
-    const idOf = (v) => (v == null ? null : clip(String(v), 20));
+    const idOf = (v) => clip(scalar(v), 20);
     // The number LeetCode shows, for display only: the page's doc may supply it, digits only.
     const shown =
       (fetched && fetched.questionFrontendId) ?? (pageDocs.get(slug) || {}).questionFrontendId;
@@ -462,7 +464,7 @@
       problemSlug: slug,
       problemTitle: titleFor(slug, dom),
       questionId: idOf((fetched && fetched.questionId) ?? questionIds.get(slug)),
-      frontendId: shown != null && /^\d{1,6}$/.test(String(shown)) ? String(shown) : null,
+      frontendId: /^\d{1,6}$/.test(scalar(shown) ?? '') ? scalar(shown) : null,
       difficulty: clip(doc && doc.difficulty, 20) || (domFresh ? dom.difficulty : null),
       topicTags: docTags && docTags.length ? docTags.slice(0, 20) : domFresh ? dom.topicTags : null,
       lang: dom.lang || 'python3',

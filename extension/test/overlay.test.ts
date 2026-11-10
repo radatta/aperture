@@ -906,6 +906,20 @@ describe('the problem doc from the page', () => {
     }
   }, 30_000);
 
+  it('an id the page made unprintable never stalls the Start', async () => {
+    // The page's JSON parses to an own `toString: 0`, so String() of it throws inside startBody.
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext, {
+      nextData: nextData({ ...SSR, questionFrontendId: { toString: 0 } }),
+    });
+    await until(() => p.phase() === 'prompt');
+    p.w.localStorage.setItem('qd_solve_session:two-sum', '{"id":{"toString":0}}');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext)).toMatchObject({ frontendId: null, lcSolveSessionId: null });
+  }, 20_000);
+
   it('a page doc A1 couldn’t store never blocks the Start: it goes cleaned, everything storable kept', async () => {
     const bg = fakeBackground(); // its Start runs A1’s normalizeSittingStart, which refuses an unstorable doc
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
