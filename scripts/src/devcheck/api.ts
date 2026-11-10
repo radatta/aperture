@@ -254,10 +254,13 @@ export interface DevSitting {
   problemSlug: string;
   problemTitle: string;
   prepTarget: string;
+  startedAt: number;
   endedAt: number | null;
+  review?: DevSittingReview | null; // PR C — absent on heads from before reviews
   summary: {
     runs: number;
     submits: number;
+    notes: number;
     firstSubmit: DevVerdict | null;
     lastSubmit: DevVerdict | null;
     lastRun: DevVerdict | null;
@@ -265,6 +268,15 @@ export interface DevSitting {
     runsBeforeFirstSubmit: number;
   };
 }
+export interface DevSittingReview {
+  insight: string | null;
+  help: 'none' | 'hint' | 'solution';
+  mistakes: string[];
+  howItWent: string | null;
+  tags: string[];
+  draftUsed: boolean;
+}
+export type DevReviewDraft = { ok: true; mistakes: string[] } | { ok: false; reason: string };
 export interface DevSittingDetail {
   sitting: DevSitting;
   live: {
@@ -274,6 +286,7 @@ export interface DevSittingDetail {
   } | null;
   events: { id: string; type: string; at: number }[];
   problem: { slug: string } | null;
+  liveReads: number; // live_sitting pulls (PR B)
 }
 export interface DevSittingStart {
   clientSittingId: string;
@@ -542,6 +555,8 @@ export function createApiClient({
     listRolls: () => call<DevRoll[]>('listRolls', []),
     listSittings: () => call<DevSitting[]>('listSittings', []),
     getSitting: (id: string) => call<DevSittingDetail>('getSitting', [id]),
+    // The Haiku draft (PR C): a model call that writes nothing — a read here, one real call per use.
+    draftSittingReview: (id: string) => call<DevReviewDraft>('draftSittingReview', [id]),
     listSittingReplay: (id: string) =>
       call<{ id: string; events: string }[]>('listSittingReplay', [id]),
     listHabitChecks: (range: { from: string; to: string }) =>
@@ -668,6 +683,14 @@ export function createApiClient({
         reflection === undefined ? [id, actualMin] : [id, actualMin, reflection],
       );
     },
+    async setTaskEstimate(
+      id: string,
+      estimateMin: number | null,
+      bufferMin: number | null,
+    ): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>('setTaskEstimate', [id, estimateMin, bufferMin]);
+    },
     async deleteTask(id: string): Promise<void> {
       assertLedgerTask(id);
       await call<null>('deleteTask', [id]);
@@ -786,17 +809,27 @@ export function createApiClient({
       assertLedger(id, 'sitting');
       return call<DevSitting>('setSittingPrepTarget', [id, prepTarget]);
     },
+    async setSittingReview(id: string, review: DevSittingReview): Promise<DevSitting> {
+      assertLedger(id, 'sitting');
+      return call<DevSitting>('setSittingReview', [id, review]);
+    },
     async lcSittingEvents(sittingId: string, events: DevSittingEvent[]) {
       assertLedger(sittingId, 'sitting');
-      return call<{ accepted: number; duplicates: number; version: number; status: string }>(
-        'lcSittingEvents',
-        [{ sittingId, events }],
-      );
+      return call<{
+        accepted: number;
+        duplicates: number;
+        skipped: number;
+        version: number;
+        status: string;
+      }>('lcSittingEvents', [{ sittingId, events }]);
     },
     // Events for an id no sitting has (a ULID minted by the caller) — the server must refuse them. No row
     // can exist under it, so the ledger guard has nothing to protect.
     lcSittingEventsToUnknown: (unknownId: string, events: DevSittingEvent[]) =>
       call<unknown>('lcSittingEvents', [{ sittingId: unknownId, events }]),
+    // The same for a review: aimed at an id that isn't the user's, so it must be refused (rev-ownership).
+    setSittingReviewToUnknown: (unknownId: string, review: DevSittingReview) =>
+      call<unknown>('setSittingReview', [unknownId, review]),
     // A rep's finish, which ends its sitting (Done needs the actual first: setTaskActual).
     async finishTask(id: string, to: 'done' | 'cancelled'): Promise<DevTask> {
       assertLedgerTask(id);

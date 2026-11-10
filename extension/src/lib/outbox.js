@@ -2,8 +2,9 @@
 // send in flight, first in first out: an entry waiting to retry holds those behind it (events are idempotent
 // per id on the server, so a resent batch is harmless). Statuses per lambdas/src/index.ts ingestFailureStatus:
 // 409, 429 and 5xx (and a network failure) retry; 401 pauses everything until the token changes; 413 and a
-// 400 split until the refused event is alone; a refusal because the sitting ended drops the entry (that is how
-// a sitting ends); any other refusal is kept as failed and shown -- never dropped silently.
+// 400 split until the refused event is alone; a refusal because the sitting ended drops the entry (past the
+// server's ten-minute grace after Done; inside it, a 200's status says ended); any other refusal is kept as
+// failed and shown -- never dropped silently.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;

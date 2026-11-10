@@ -88,6 +88,8 @@ import {
   reserveBudget,
   summarizeHeadRows,
   newerSummary,
+  isSittingOpen,
+  newestOfType,
   claimStart,
   countStartAttempt,
   emptyGate,
@@ -96,11 +98,14 @@ import {
   SITTING_START_TIME_ERROR,
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
+  normalizeSittingReview,
+  draftMistakes,
   normalizeSittingEvents,
   normalizeSittingStart,
   planSittingStart,
   PREP_TARGET_DEFAULT,
   sittingIngestError,
+  eventsBeforeEnd,
   sittingProblemUrl,
   sittingRawExpiresAt,
   sittingRepTitle,
@@ -182,11 +187,14 @@ import type {
   UpsertSeriesInput,
   Sitting,
   SittingDetail,
+  LiveSittingPull,
   SittingEventsInput,
   SittingEventsResult,
   SittingReplayChunk,
   SittingStartInput,
   SittingStartResult,
+  ReviewDraft,
+  SittingReviewInput,
   NormalizedSittingStart,
   SittingLive,
 } from '@aperture/shared';
@@ -230,6 +238,7 @@ import type { Presigner } from './s3/presigner';
 import type { ObjectStore } from './s3/objects';
 import { noopAnthropic } from './anthropic/gateway';
 import type { AnthropicGateway } from './anthropic/gateway';
+import { SITTING_DRAFT_TIMEOUT_MS, sittingDraftData } from './anthropic/sittingReviewPrompt';
 
 export interface BackendOptions {
   userId?: string;
@@ -848,17 +857,44 @@ export class BackendClient implements ApiClient {
         throw err;
     }
   }
-  // 1. guards; 2. reserve the call in the budget (a CAS — over a cap, or losing the race, refuses with nothing
-  // written); 3. write each event put-if-absent; 4. any head event in the call, fresh or a repeat → recompute the
-  // summary from every head row, written only when it folds more rows than the stored one; 5. fold the call's
-  // snapshots and replay into the live row (a repeat counts nothing but can still land the newest code).
+  // 1. guards; 2. inside an ended sitting's grace, keep only the events stamped before its end — none kept writes
+  // nothing; 3. reserve the kept events in the budget (a CAS — over a cap, or losing the race, refuses with
+  // nothing written); 4. write each event put-if-absent; 5. any head event kept, fresh or a repeat → recompute
+  // the summary from every head row, written only when it folds more rows than the stored one; 6. fold the
+  // kept snapshots and replay into the live row (a repeat counts nothing but can still land the newest code).
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
-    const { sittingId, events } = normalizeSittingEvents(input);
+    const { sittingId, events: all } = normalizeSittingEvents(input);
     const sitting = await this.repo.getSitting(sittingId, { consistent: true });
     if (!sitting) throw new Error(`Not found: ${sittingId}`);
     const now = this.now();
-    const err = sittingIngestError(sitting, events, now);
+    const err = sittingIngestError(sitting, all, now);
     if (err) throw new Error(err);
+    const events = eventsBeforeEnd(sitting, all);
+    const skipped = all.length - events.length;
+    const late = sitting.status !== 'active';
+    const logIngest = (accepted: number, duplicates: number, bytes: number) =>
+      console.log(
+        JSON.stringify({
+          event: 'lc_ingest',
+          sittingId,
+          accepted,
+          duplicates,
+          skipped,
+          late,
+          bytes,
+        }),
+      );
+    if (!events.length) {
+      const live = await this.repo.getSittingLive(sittingId, { consistent: true });
+      logIngest(0, 0, 0);
+      return {
+        accepted: 0,
+        duplicates: 0,
+        skipped,
+        version: live?.version ?? 0,
+        status: sitting.status,
+      };
+    }
     const bytes = events.reduce((n, e) => n + e.bytes, 0);
     await this.repo.casUpdate(
       this.repo.sittingBudgetShape(sittingId),
@@ -902,10 +938,8 @@ export class BackendClient implements ApiClient {
         })
       : await this.repo.getSittingLive(sittingId, { consistent: true });
     const duplicates = events.length - fresh.size;
-    console.log(
-      JSON.stringify({ event: 'lc_ingest', sittingId, accepted: fresh.size, duplicates, bytes }),
-    );
-    return { accepted: fresh.size, duplicates, version: live?.version ?? 0, status };
+    logIngest(fresh.size, duplicates, bytes);
+    return { accepted: fresh.size, duplicates, skipped, version: live?.version ?? 0, status };
   }
   // The summary from every head row, strongly consistent after this call's own writes, so a later call's set
   // contains an earlier one's; written only when it folds more rows than the stored one (never rolled back).
@@ -931,16 +965,82 @@ export class BackendClient implements ApiClient {
   }
   async getSitting(id: string): Promise<SittingDetail> {
     const sitting = await this.mustSitting(id);
-    const [live, events, problem] = await Promise.all([
+    const [live, events, problem, liveReads] = await Promise.all([
       this.repo.getSittingLive(id, { consistent: true }),
       this.repo.listSittingEvents(id),
       this.repo.getLeetcodeProblem(sitting.problemSlug),
+      this.repo.getSittingReads(id, { consistent: true }),
     ]);
     return {
       sitting,
       live,
       events: events.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)),
       problem,
+      liveReads,
+    };
+  }
+  // Claude's live read (live_sitting): the Start gate names the open sitting and its head confirms it's open;
+  // only then is the pull counted — on its own row by an atomic add, never on the head, which a refold rewrites
+  // whole. Strongly consistent throughout, so a pull right after a Start, snapshot or submit sees it. With
+  // nothing open: the newest sitting of any status, nothing written. The log line never carries code.
+  async pullLiveSitting(): Promise<LiveSittingPull> {
+    const now = this.now();
+    const id = (await this.repo.getLcStart({ consistent: true }))?.openSittingId ?? null;
+    const head = id ? await this.repo.getSitting(id, { consistent: true }) : null;
+    if (head && isSittingOpen(head, now)) {
+      // The head rows (compact) give the counts and which Run and Submit are newest, so those always agree;
+      // only those two payloads are read in full.
+      const [rows, live] = await Promise.all([
+        this.repo.listSittingHeadRows(head.id),
+        this.repo.getSittingLive(head.id, { consistent: true }),
+      ]);
+      const run = newestOfType(rows, 'run');
+      const submit = newestOfType(rows, 'submit');
+      const [lastRun, lastSubmit] = await Promise.all([
+        run ? this.repo.getSittingJudged(head.id, run.id) : null,
+        submit ? this.repo.getSittingJudged(head.id, submit.id) : null,
+      ]);
+      // Counted only once the reads are in hand, and never at the cost of the view: a failed count reads
+      // the stored one instead.
+      let liveReads: number;
+      try {
+        liveReads = await this.repo.bumpSittingReads(head.id, now);
+      } catch (err) {
+        console.log(
+          JSON.stringify({
+            event: 'lc_live_read_count_failed',
+            sittingId: head.id,
+            err: String(err),
+          }),
+        );
+        liveReads = await this.repo.getSittingReads(head.id, { consistent: true });
+      }
+      console.log(
+        JSON.stringify({
+          event: 'lc_live_read',
+          sittingId: head.id,
+          version: live?.version ?? 0,
+          liveReads,
+        }),
+      );
+      return {
+        sitting: { ...head, summary: summarizeHeadRows(rows) },
+        live,
+        lastRun,
+        lastSubmit,
+        liveReads,
+        lastSitting: null,
+      };
+    }
+    const heads = await this.repo.listSittings({ consistent: true });
+    const last = heads.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+    return {
+      sitting: null,
+      live: null,
+      lastRun: null,
+      lastSubmit: null,
+      liveReads: last ? await this.repo.getSittingReads(last.id, { consistent: true }) : 0,
+      lastSitting: last,
     };
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
@@ -955,6 +1055,39 @@ export class BackendClient implements ApiClient {
       (cur) => ({ ...cur, prepTarget: tag }),
       this.now(),
     );
+  }
+  // His review, on the head by the same CAS as the prep target; a refold spreads the head, so it keeps it.
+  async setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting> {
+    const r = normalizeSittingReview(review);
+    const now = this.now();
+    return this.repo.casUpdate(
+      this.repo.sittingShape(id),
+      id,
+      (cur) => ({ ...cur, review: r && { ...r, updatedAt: now } }),
+      now,
+    );
+  }
+  // Claude's draft of mistake lines: one model call over the judged runs and submits and the two codes, its
+  // answer made fit (draftMistakes: first 5, each cut to 160; not a list of text → bad-shape). Writes nothing; nothing judged yet → no call at all.
+  async draftSittingReview(id: string): Promise<ReviewDraft> {
+    const sitting = await this.mustSitting(id);
+    const [events, live] = await Promise.all([
+      this.repo.listSittingEvents(id),
+      this.repo.getSittingLive(id, { consistent: true }),
+    ]);
+    if (!events.some((e) => e.type === 'run' || e.type === 'submit'))
+      return { ok: false, reason: 'nothing-to-draft' };
+    const out = await this.anthropic.sittingReviewDraft({
+      data: sittingDraftData(sitting, events, live?.code ?? null),
+      timeoutMs: SITTING_DRAFT_TIMEOUT_MS,
+    });
+    if (!out.ok) return { ok: false, reason: out.reason };
+    const mistakes = draftMistakes((out.fields as { mistakes?: unknown }).mistakes);
+    if (!mistakes) {
+      console.log(JSON.stringify({ event: 'lc_review_draft_rejected', sittingId: id }));
+      return { ok: false, reason: 'bad-shape' };
+    }
+    return { ok: true, mistakes };
   }
   async deleteSitting(id: string): Promise<void> {
     const s = await this.repo.getSitting(id, { consistent: true });

@@ -1,8 +1,9 @@
 import type { ModelOutcome, ParseCategory } from '@aperture/shared';
 import type { FluxWeekSummary } from '@aperture/shared/flux';
+import type { SittingDraftData } from './sittingReviewPrompt';
 
-// The gated seam for the Claude API — quick add's parse (docs/areas/tasks/quick-add.md) and Flux's weekly
-// note (docs/areas/flux D62). Like Google and Plaid, READS ARE GATED: the call carries a secret and a
+// The gated seam for the Claude API — quick add's parse (docs/areas/tasks/quick-add.md), Flux's weekly
+// note (docs/areas/flux D62) and a LeetCode sitting's review draft (docs/areas/recruiting → Review). Like Google and Plaid, READS ARE GATED: the call carries a secret and a
 // cost, so a testMode/smoke request gets `noopAnthropic` (no SSM read, no fetch), tests get
 // `FakeAnthropic`, and `createLiveAnthropic` (fetch + SSM) is wired only in the two Lambda entrypoints.
 // It writes nothing, so it isn't a `writes` entry. It never throws: every failure is an outcome, and
@@ -21,16 +22,28 @@ export interface FluxNoteRequest {
   timeoutMs: number;
 }
 
+export interface SittingDraftRequest {
+  data: SittingDraftData; // sittingDraftData: the problem, the judged runs and submits, the two codes
+  timeoutMs: number;
+}
+
 export interface AnthropicGateway {
   parseTask(req: ParseRequest): Promise<ModelOutcome>;
   // `fields` is `{ note }` on success; the backend validates it (fluxNoteText) before storing anything.
   fluxWeekNote(req: FluxNoteRequest): Promise<ModelOutcome>;
+  // `fields` is `{ mistakes }` on success; the backend makes it fit (draftMistakes) and stores nothing.
+  sittingReviewDraft(req: SittingDraftRequest): Promise<ModelOutcome>;
 }
 
 export function noopAnthropic(): AnthropicGateway {
   return {
     parseTask: async () => ({ ok: false, reason: 'unavailable', detail: 'parsing is off here' }),
     fluxWeekNote: async () => ({
+      ok: false,
+      reason: 'unavailable',
+      detail: 'the model is off here',
+    }),
+    sittingReviewDraft: async () => ({
       ok: false,
       reason: 'unavailable',
       detail: 'the model is off here',
@@ -60,5 +73,16 @@ export class FakeAnthropic implements AnthropicGateway {
   async fluxWeekNote(req: FluxNoteRequest): Promise<ModelOutcome> {
     this.noteCalls.push(req);
     return typeof this.nextNote === 'function' ? this.nextNote(req) : this.nextNote;
+  }
+
+  draftCalls: SittingDraftRequest[] = [];
+  nextDraft: ModelOutcome | ((req: SittingDraftRequest) => ModelOutcome) = {
+    ok: false,
+    reason: 'unavailable',
+    detail: 'FakeAnthropic: no draft set',
+  };
+  async sittingReviewDraft(req: SittingDraftRequest): Promise<ModelOutcome> {
+    this.draftCalls.push(req);
+    return typeof this.nextDraft === 'function' ? this.nextDraft(req) : this.nextDraft;
   }
 }

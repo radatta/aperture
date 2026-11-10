@@ -45,8 +45,10 @@ import type { CalendarBusy } from './calendar';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 import type { ParseTaskResult } from './quickParse';
 import type {
+  ReviewDraft,
   SittingEventsInput,
   SittingEventsResult,
+  SittingReviewInput,
   SittingStartInput,
   SittingStartResult,
 } from './sittings';
@@ -209,6 +211,19 @@ export interface SittingDetail {
   live: SittingLive | null;
   events: SittingEvent[];
   problem: LeetcodeProblem | null;
+  liveReads: number; // how many times Claude pulled it live (pullLiveSitting)
+}
+
+// pullLiveSitting: the sitting open right now with its live row and newest Run and Submit (full payloads), or —
+// with nothing open — the most recent sitting. `liveReads` counts this pull. The one read that writes (the
+// count); the app never calls it — a pull is Claude watching (live_sitting).
+export interface LiveSittingPull {
+  sitting: Sitting | null; // open: active and inside its window
+  live: SittingLive | null;
+  lastRun: SittingEvent | null;
+  lastSubmit: SittingEvent | null;
+  liveReads: number; // the open sitting's after this pull; else lastSitting's
+  lastSitting: Sitting | null; // when nothing is open: the newest by startedAt, any status
 }
 
 export interface RecordLeetcodeAttemptInput {
@@ -583,8 +598,14 @@ export interface ApiClient {
   lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult>;
   listSittings(range?: DateRange): Promise<Sitting[]>; // heads, startedAt desc, by `day`
   getSitting(id: string): Promise<SittingDetail>; // never the replay — that's listSittingReplay
+  pullLiveSitting(): Promise<LiveSittingPull>; // Claude's live read (live_sitting) — counts itself
   listSittingReplay(id: string): Promise<SittingReplayChunk[]>; // at asc; empty once the raw bulk expired
   setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting>;
+  // His review, whole-replaced (normalizeSittingReview; all-empty clears it to null). On the head, at any status.
+  setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting>;
+  // Claude's draft of mistake lines from the sitting's runs, submits and code (one Haiku call). Never automatic —
+  // the form's button — and it writes nothing: only the lines he ticks reach the review, through setSittingReview.
+  draftSittingReview(id: string): Promise<ReviewDraft>;
   // Tombstones the sitting and every child row. No UI: the dev check's cleanup, and deleteTask's cascade.
   deleteSitting(id: string): Promise<void>;
 

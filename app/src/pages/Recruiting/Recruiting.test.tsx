@@ -30,6 +30,10 @@ describe('Recruiting page', () => {
     // The summary renders only once there are rows; pin the counts so hiding it can't go unnoticed.
     expect(screen.getByText(/3 sittings · 3 problems · 1 first-submit accepted/)).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Now' })).toBeNull(); // none open in the seed
+    // Each row is a link to its sitting; the reviewed one carries the dot.
+    const reviewed = screen.getByRole('link', { name: /Add Two Numbers/ });
+    expect(within(reviewed).getByRole('img', { name: 'reviewed' })).toBeTruthy();
+    expect(within(screen.getByRole('link', { name: /Two Sum/ })).queryByRole('img')).toBeNull();
   });
 
   it('pins an open sitting above the days with its running clock', async () => {

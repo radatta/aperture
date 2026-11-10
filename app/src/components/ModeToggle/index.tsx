@@ -13,6 +13,7 @@ export interface ModeToggleProps<T extends string> {
   onChange: (value: T) => void;
   size?: 'sm' | 'md';
   className?: string;
+  'aria-labelledby'?: string; // names the group when a visible label sits outside it
 }
 
 // Segmented control — the active segment uses the seafoam highlight from the reference. Backs the
@@ -23,10 +24,12 @@ export function ModeToggle<T extends string>({
   onChange,
   size = 'md',
   className,
+  'aria-labelledby': labelledBy,
 }: ModeToggleProps<T>) {
   return (
     <div
       role="group"
+      aria-labelledby={labelledBy}
       className={cx(
         'inline-flex shrink-0 gap-0.5 rounded-xl border border-line bg-surface p-0.5',
         className,

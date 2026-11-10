@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
+import { Link } from 'react-router';
 import {
   deadlineOf,
   dueUrgency,
@@ -8,6 +9,8 @@ import {
   needsEstimate,
   parentOf,
   placedByTime,
+  ROLL_PLAN_FALLBACK_MIN,
+  sittingMinutes,
   todayKey,
 } from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
@@ -19,6 +22,8 @@ import { fmtDuration, fmtTime } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
 import { useRowAction } from '../../lib/useRowAction';
 import { useSettings } from '../../data/hooks/useSettings';
+import { useOpenSittingFor } from '../../data/hooks/useSittings';
+import { useRolls } from '../../data/hooks/useRolls';
 import { urgencyClass, urgencyLabel } from '../../modules/tasks/dueStyle';
 import { useUpsertPlan } from '../../data/hooks/usePlans';
 import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
@@ -149,7 +154,12 @@ export function RightNowCard() {
   const focusAction = useRowAction(alsoRef);
   // The hero the Done form is open for: if another task takes the hero, the form goes with its own, so typed
   // minutes never land on the wrong task.
-  const [doneOpen, setDoneOpen] = useState<{ taskId: string; initialMin: number } | null>(null);
+  // `rep`: the form opened for a sitting's rep — fixed then, so a refetch can't swap the form (and lose typing).
+  const [doneOpen, setDoneOpen] = useState<{
+    taskId: string;
+    initialMin: number;
+    rep: boolean;
+  } | null>(null);
   // Done opens the form with Actual focused, as the task modal's finish intent does — you tapped Done to
   // enter the number. Stable, so it focuses once on mount, not on every render.
   const focusActual = useCallback((el: HTMLInputElement | null) => el?.focus(), []);
@@ -157,6 +167,11 @@ export function RightNowCard() {
   const rn = rightNow(rows, allTasks);
   const hero = rn.hero;
   const heroElapsed = hero ? liveElapsedMin(hero, timers) : 0;
+  // A LeetCode rep with its sitting open shows, and Done starts on, the sitting's minutes, Start to now — what
+  // the sitting's own End offers — not the focus timer's.
+  const now = useNow();
+  const heroSitting = useOpenSittingFor(hero, now);
+  const heroMin = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
   const heroTimer = hero
     ? timers.find((t) => t.session.kind === 'work' && t.session.taskId === hero.id)
     : undefined;
@@ -208,7 +223,7 @@ export function RightNowCard() {
               {/* Count-UP vs the estimate, flat — no bar, no colour flip past 100%, no countdown. */}
               <DueTime task={hero} />
               <Text size="sm" tone="muted" tabular>
-                {fmtDuration(heroElapsed)}
+                {fmtDuration(heroMin)}
                 {estimateOf(hero) != null ? ` of ~${fmtDuration(estimateOf(hero)!)}` : ' logged'}
               </Text>
               {hero.startedAt != null && (
@@ -229,8 +244,11 @@ export function RightNowCard() {
               )}
               <Button
                 size="sm"
+                // A LeetCode rep's open sitting not read yet: wait, or Done would start on the wrong minutes.
+                aria-disabled={heroSitting === undefined || undefined}
                 onClick={async () => {
-                  const elapsed = heroElapsed; // capture before the timer stops
+                  if (heroSitting === undefined) return;
+                  const elapsed = heroMin; // captured before the timer stops
                   // A stop that didn't land keeps the timer; its row in the bar below says so, and the
                   // Actual form waits until the time is really saved.
                   if (
@@ -241,20 +259,29 @@ export function RightNowCard() {
                     ))
                   )
                     return;
-                  setDoneOpen({ taskId: hero.id, initialMin: elapsed });
+                  setDoneOpen({ taskId: hero.id, initialMin: elapsed, rep: !!heroSitting });
                 }}
               >
                 Done
               </Button>
             </div>
-            {doneOpen?.taskId === hero.id && (
-              <DoneForm
-                task={hero}
-                initialActualMin={doneOpen.initialMin}
-                actualRef={focusActual}
-                onDone={() => setDoneOpen(null)}
-              />
-            )}
+            {heroSitting && <SittingLink id={heroSitting.id} />}
+            {doneOpen?.taskId === hero.id &&
+              (doneOpen.rep ? (
+                <RepDoneForm
+                  task={hero}
+                  initialActualMin={doneOpen.initialMin}
+                  actualRef={focusActual}
+                  onDone={() => setDoneOpen(null)}
+                />
+              ) : (
+                <DoneForm
+                  task={hero}
+                  initialActualMin={doneOpen.initialMin}
+                  actualRef={focusActual}
+                  onDone={() => setDoneOpen(null)}
+                />
+              ))}
           </Hero>
         ) : (
           rn.nextPrompt && <Text tone="muted">{PROMPT_COPY[rn.nextPrompt]}</Text>
@@ -339,6 +366,7 @@ function FocusRow({
   const [asking, setAsking] = useState(false); // Start on an unscoped task: EstimateChips is open
   const startRef = useRef<HTMLButtonElement>(null);
   const open = t.status === 'backlog' || t.status === 'planned';
+  const rep = useRepSitting(t);
   return (
     <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
       <div className="flex items-center justify-between gap-3">
@@ -374,7 +402,7 @@ function FocusRow({
             </Text>
           ) : t.status === 'in_progress' ? (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(t.actualAccruedMin)} in
+              {fmtDuration(rep.min)} in
             </Text>
           ) : (
             <>
@@ -399,8 +427,48 @@ function FocusRow({
       {asking && open && (
         <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
       )}
+      {rep.sitting && <SittingLink id={rep.sitting.id} />}
     </div>
   );
+}
+
+// To the open sitting's page, where End sitting is — on a LeetCode rep whose sitting is still open.
+function SittingLink({ id }: { id: string }) {
+  return (
+    <Link
+      to={`/recruiting/sittings/${id}`}
+      className="-my-1 self-start py-1 text-sm text-teal underline underline-offset-2"
+    >
+      End the LeetCode sitting →
+    </Link>
+  );
+}
+// A sitting's rep that lost its estimate takes its Roll's, as End sitting and Flux's tie do. Its own
+// component, so Home reads the Rolls only while that form is open.
+function RepDoneForm(props: {
+  task: Task;
+  initialActualMin: number;
+  actualRef: Ref<HTMLInputElement>;
+  onDone: () => void;
+}) {
+  const rolls = useRolls();
+  // DoneForm copies its estimate once: wait for the Rolls (daytime Home hasn't read them), so it's the Roll's.
+  if (rolls.isPending) return null;
+  const roll = rolls.data?.find((r) => r.id === props.task.rollId);
+  return (
+    <DoneForm
+      {...props}
+      initialEstimateMin={Math.max(1, Math.round(roll?.estimateMin ?? ROLL_PLAN_FALLBACK_MIN))}
+    />
+  );
+}
+// A row's open sitting, if it's a LeetCode rep in progress, and the minutes it shows: the sitting's, Start to
+// now, as the hero and End sitting count them — not the task's own (0 while no timer ran). Until the sittings
+// are read, the task's own.
+function useRepSitting(t: Task) {
+  const now = useNow();
+  const sitting = useOpenSittingFor(t, now) ?? null;
+  return { sitting, min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin };
 }
 
 // A lighter "also today" row — the plan's tail + any off-plan in-progress task. "Focus this" is the
@@ -417,42 +485,47 @@ function AlsoRow({
   const t = row.task;
   const canFocus = row.plan != null && (t.status === 'backlog' || t.status === 'planned');
   const u = useUrgency(t);
+  const rep = useRepSitting(t);
   return (
-    <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <RowText
-        task={t}
-        title={
-          <Text
-            size="sm"
-            tone="muted"
-            className={cx('min-w-0 max-w-full truncate', t.status === 'done' && 'line-through')}
-          >
-            {t.title}
-          </Text>
-        }
-      >
-        <PartCategory task={t} />
-        <PartOf task={t} />
-        <RollTag rollId={t.rollId} />
-        <DueTime task={t} />
-        {row.unplanned && (
-          <Text size="xs" tone="subtle">
-            not planned today
-          </Text>
-        )}
-      </RowText>
-      <div className="flex shrink-0 items-center gap-2">
-        {t.status === 'in_progress' && (
-          <Text size="xs" tone="muted" tabular>
-            {fmtDuration(t.actualAccruedMin)} in
-          </Text>
-        )}
-        {canFocus && (
-          <Button variant="quiet" size="sm" disabled={busy} onClick={() => onFocus(t.id)}>
-            Focus this
-          </Button>
-        )}
+    <div className={cx('flex flex-col gap-2', ROW, urgencyClass(u))}>
+      <div className="flex items-center justify-between gap-3">
+        <RowText
+          task={t}
+          title={
+            <Text
+              size="sm"
+              tone="muted"
+              className={cx('min-w-0 max-w-full truncate', t.status === 'done' && 'line-through')}
+            >
+              {t.title}
+            </Text>
+          }
+        >
+          <PartCategory task={t} />
+          <PartOf task={t} />
+          <RollTag rollId={t.rollId} />
+          <DueTime task={t} />
+          {row.unplanned && (
+            <Text size="xs" tone="subtle">
+              not planned today
+            </Text>
+          )}
+        </RowText>
+        <div className="flex shrink-0 items-center gap-2">
+          {t.status === 'in_progress' && (
+            <Text size="xs" tone="muted" tabular>
+              {fmtDuration(rep.min)} in
+            </Text>
+          )}
+          {canFocus && (
+            <Button variant="quiet" size="sm" disabled={busy} onClick={() => onFocus(t.id)}>
+              Focus this
+            </Button>
+          )}
+        </div>
       </div>
+      {/* Its own line, as in a Big-3 row: inside RowText it wrapped and took the row's "·" at phone width. */}
+      {rep.sitting && <SittingLink id={rep.sitting.id} />}
     </div>
   );
 }

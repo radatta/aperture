@@ -162,6 +162,8 @@ SK (type-prefixed range keys):
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
   lcs#<id>#budget               a sitting's capture budget (reserved before every events write; internal)
+  lcs#<id>#reads                Claude's live pulls of a sitting — a counter bumped by UpdateItem ADD (Writes.add), the one
+                                write that isn't a whole-item put: beside the head, which refolds rewrite whole
   lcs#<id>#hd#<ulid>            a sitting's head rows: a run's/submit's/note's/timer read's compact verdict (the summary's source)
   lcs#<id>#jd#<ulid>            a run's, submit's or note's full payload (kept forever)
   lcs#<id>#ev#<ulid>            a sitting's raw bulk events: snapshots, submit details (expiresAt)

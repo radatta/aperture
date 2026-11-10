@@ -38,6 +38,7 @@ import type {
 } from '@aperture/shared';
 import { FINANCE_TOOLS } from './financeTools';
 import { FLUX_TOOLS } from './fluxTools';
+import { LEETCODE_TOOLS } from './leetcodeTools';
 import { PLACE_ARG_DESC, PLACE_TOOLS, placeArg } from './placeTools';
 import { SERIES_TOOLS } from './seriesTools';
 import { RpcParamError } from './types';
@@ -995,6 +996,7 @@ export const TOOLS: Tool[] = [
   },
   ...FINANCE_TOOLS,
   ...FLUX_TOOLS,
+  ...LEETCODE_TOOLS,
   ...PLACE_TOOLS,
   ...SERIES_TOOLS,
 ];

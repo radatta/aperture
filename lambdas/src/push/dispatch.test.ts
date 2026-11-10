@@ -617,6 +617,7 @@ describe('push dispatch — the tick', () => {
       delete: inner.delete.bind(inner),
       deleteIf: inner.deleteIf.bind(inner),
       batchPut: inner.batchPut.bind(inner),
+      add: inner.add.bind(inner),
       queryIndex: inner.queryIndex.bind(inner),
       query: async (p, prefix, opts) => {
         if (p === pk('bad'))

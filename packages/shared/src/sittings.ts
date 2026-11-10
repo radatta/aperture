@@ -5,19 +5,24 @@
 // The extension only ever observes LeetCode's own traffic; everything it sends is kept raw under
 // `payload`. The server trusts those payloads as opaque bytes and recomputes everything it decides on.
 
+import { msToMin } from './dates';
 import { normalizeVerdict } from './leetcode';
 import { findOpenRollTask } from './rolls';
 import { isUlid } from './ulid';
 import type {
   BaseEntity,
+  HelpLevel,
   LcStartGate,
+  LeetcodeProblem,
   LcTimerState,
   Sitting,
   SittingBudget,
+  SittingEvent,
   SittingEventType,
   SittingFacts,
   SittingHeadRow,
   SittingLive,
+  SittingReview,
   SittingSummary,
   SittingVerdict,
   Task,
@@ -37,6 +42,11 @@ export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
 export const SITTING_STARTS_PER_DAY = 100;
 // Events are refused this long after Start: a sitting left open forever stops taking writes.
 export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
+// After its end a sitting still takes, this long, the events stamped before the end (the outbox's retries
+// land after Done) — inside its window only. Stamps are the extension's clock, shifted onto the server's
+// by the Start's offset, which runs late by the Start's latency: the skew allowance covers one failed try.
+export const SITTING_END_GRACE_MS = 10 * 60_000;
+export const SITTING_END_SKEW_MS = 60_000;
 // Raw bulk (snapshots, replay, submitDetails) is kept this long past the ingest window, then DynamoDB's TTL
 // deletes it. What's kept forever is the head, the live row (final code + facts) and every run/submit.
 export const SITTING_RAW_KEEP_MS = 14 * 24 * 3600_000;
@@ -91,6 +101,7 @@ export interface SittingEventsInput {
 export interface SittingEventsResult {
   accepted: number;
   duplicates: number;
+  skipped: number; // stamped after the end of an ended sitting, never stored
   version: number; // the live row's snapshot version after this call
   status: Sitting['status'];
 }
@@ -488,16 +499,33 @@ export const sittingRawExpiresAt = (s: Pick<Sitting, 'startedAt'>): number =>
 export const isRawEventType = (type: SittingEventType | 'replay') =>
   type === 'snapshot' || type === 'submitDetails' || type === 'replay';
 
-// Why an events call is refused before anything is written, or null: the sitting has ended or is past its
-// window, or an event's time is off the sitting's clock (the extension's — bounds keep junk out of the
-// metrics and the sort).
+// 'open' takes everything; 'grace' only events stamped before the end; 'closed' refuses.
+export function sittingIngestPhase(
+  s: Pick<Sitting, 'status' | 'startedAt' | 'endedAt'>,
+  now: number,
+): 'open' | 'grace' | 'closed' {
+  if (now - s.startedAt > SITTING_INGEST_WINDOW_MS) return 'closed'; // the window stays a hard ceiling
+  if (s.status === 'active') return 'open';
+  return s.endedAt !== null && now - s.endedAt <= SITTING_END_GRACE_MS ? 'grace' : 'closed';
+}
+// The events a call may store: all while active; after the end, those stamped before it on the extension's clock.
+export function eventsBeforeEnd<E extends { at: number }>(
+  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
+  events: readonly E[],
+): E[] {
+  if (s.status === 'active' || s.endedAt === null) return [...events];
+  const cutoff = s.endedAt - (s.startedAt - s.clientStartedAt) + SITTING_END_SKEW_MS;
+  return events.filter((e) => e.at <= cutoff);
+}
+// Why an events call is refused before anything is written, or null: the sitting is past its grace or its
+// window, or an event's time — skipped ones included — is off the sitting's clock (the extension's — bounds
+// keep junk out of the metrics and the sort).
 export function sittingIngestError(
-  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt'>,
+  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
   events: readonly { at: number }[],
   now: number,
 ): string | null {
-  if (s.status !== 'active' || now - s.startedAt > SITTING_INGEST_WINDOW_MS)
-    return SITTING_ENDED_ERROR;
+  if (sittingIngestPhase(s, now) === 'closed') return SITTING_ENDED_ERROR;
   const lo = s.clientStartedAt - 24 * 3600_000;
   const hi = s.clientStartedAt + 2 * SITTING_INGEST_WINDOW_MS;
   return events.some((e) => e.at < lo || e.at > hi) ? SITTING_EVENT_TIME_ERROR : null;
@@ -519,7 +547,7 @@ export function sittingElapsedMs(s: Pick<Sitting, 'startedAt' | 'endedAt'>, now:
 }
 // Whole minutes for display, at least 1.
 export const sittingMinutes = (s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number =>
-  Math.max(1, Math.round(sittingElapsedMs(s, now) / 60_000));
+  Math.max(1, msToMin(sittingElapsedMs(s, now)));
 export interface SittingMetrics {
   firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
   submitsBeforeAccepted: number | null;
@@ -650,3 +678,258 @@ export function claimStart<G extends GateFields>(
 }
 export const releaseStart = <G extends GateFields>(g: G, id: string): G | null =>
   g.openSittingId === id ? { ...g, openSittingId: null, openClaimedAt: null } : null;
+
+// --- Claude's live pull (live_sitting; docs/areas/recruiting) ---
+// Open = still taking events: active and inside its window. One left active past it reads closed here without
+// a write; the next Start ends it (planSittingStart).
+export const isSittingOpen = (s: Pick<Sitting, 'status' | 'startedAt'>, now: number): boolean =>
+  s.status === 'active' && now - s.startedAt <= SITTING_INGEST_WINDOW_MS;
+
+// The newest event of a type by (at, id): ids are ULIDs, so a tie on `at` goes to the later one.
+export function newestOfType<E extends { type: string; at: number; id: string }>(
+  events: readonly E[],
+  type: E['type'],
+): E | null {
+  let best: E | null = null;
+  for (const e of events)
+    if (e.type === type && (!best || e.at > best.at || (e.at === best.at && e.id > best.id)))
+      best = e;
+  return best;
+}
+
+// What a judged Run or Submit says beyond its verdict: the failing input, expected vs output, the error head.
+// Field names are LeetCode's /check/ response as captured 2026-11-08 (a submit's last_testcase /
+// expected_output / code_output, a run's code_answer / expected_code_answer with its input on the request's
+// data_input); the error fields are inferred from LeetCode's names, not yet captured. An unknown shape is all
+// null, never a throw. Capped, so a huge case can't flood a reader.
+export interface JudgeDetail {
+  input: string | null;
+  expected: string | null;
+  output: string | null;
+  error: string | null;
+}
+export const JUDGE_TEXT_MAX = 1024;
+export const JUDGE_ERROR_MAX = 600;
+const capText = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+function judgeText(v: unknown, max: number): string | null {
+  const s =
+    typeof v === 'string'
+      ? v
+      : Array.isArray(v) && v.every((x) => typeof x === 'string')
+        ? v.join('\n')
+        : null;
+  return s ? capText(s, max) : null;
+}
+const firstText = (r: Record<string, unknown> | null, keys: string[], max: number) => {
+  for (const k of keys) {
+    const t = judgeText(r?.[k], max);
+    if (t !== null) return t;
+  }
+  return null;
+};
+export function judgeDetail(payload: unknown): JudgeDetail {
+  const p = obj(payload);
+  const r = obj(p?.result);
+  return {
+    input:
+      firstText(r, ['last_testcase', 'input_formatted', 'input'], JUDGE_TEXT_MAX) ??
+      firstText(obj(p?.request), ['data_input'], JUDGE_TEXT_MAX),
+    expected: firstText(r, ['expected_output', 'expected_code_answer'], JUDGE_TEXT_MAX),
+    output: firstText(r, ['code_output', 'code_answer'], JUDGE_TEXT_MAX),
+    error: firstText(
+      r,
+      ['full_runtime_error', 'runtime_error', 'full_compile_error', 'compile_error'],
+      JUDGE_ERROR_MAX,
+    ),
+  };
+}
+
+// --- The review (setSittingReview; docs/areas/recruiting → Review) ---
+export const REVIEW_INSIGHT_MAX = 200;
+export const REVIEW_MISTAKES_MAX = 8;
+export const REVIEW_LINE_MAX = 160; // a mistake line, and a draft line
+export const REVIEW_HOW_MAX = 1000;
+export const REVIEW_TAGS_MAX = 10;
+export const REVIEW_TAG_MAX = 40;
+export const HELP_LEVELS: readonly HelpLevel[] = ['none', 'hint', 'solution'];
+export type SittingReviewInput = Omit<SittingReview, 'updatedAt'>;
+
+const fold = (s: string) => s.replace(/\s+/g, ' ').trim();
+const reviewText = (v: unknown, label: string, max: number, oneLine: boolean): string | null => {
+  if (v == null) return null;
+  if (typeof v !== 'string') throw new Error(`${label} must be text`);
+  const t = oneLine ? fold(v) : v.replace(/\r\n?/g, '\n').trim();
+  if (t.length > max) throw new Error(`${label} is limited to ${max} characters`);
+  return t || null;
+};
+const reviewList = (v: unknown, label: string): string[] => {
+  if (v == null) return [];
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string'))
+    throw new Error(`${label} must be a list of text`);
+  return (v as string[]).map(fold).filter(Boolean);
+};
+// The one normalizer every review write runs: whitespace folded, empties dropped, tags lowercased and deduped
+// (order kept); over a cap throws naming the field, with nothing written. Nothing said → null (no review).
+export function normalizeSittingReview(input: unknown): SittingReviewInput | null {
+  const r = obj(input);
+  if (!r) throw new Error('Review must be an object');
+  if (!HELP_LEVELS.includes(r.help as HelpLevel))
+    throw new Error('Help must be none, hint or solution');
+  const help = r.help as HelpLevel;
+  const insight = reviewText(r.insight, 'One-liner', REVIEW_INSIGHT_MAX, true);
+  const howItWent = reviewText(r.howItWent, 'How it went', REVIEW_HOW_MAX, false);
+  const mistakes = reviewList(r.mistakes, 'Mistakes');
+  if (mistakes.length > REVIEW_MISTAKES_MAX)
+    throw new Error(`Mistakes are limited to ${REVIEW_MISTAKES_MAX}`);
+  if (mistakes.some((m) => m.length > REVIEW_LINE_MAX))
+    throw new Error(`A mistake is limited to ${REVIEW_LINE_MAX} characters`);
+  const tags = [...new Set(reviewList(r.tags, 'Tags').map((t) => t.toLowerCase()))];
+  if (tags.length > REVIEW_TAGS_MAX) throw new Error(`Tags are limited to ${REVIEW_TAGS_MAX}`);
+  if (tags.some((t) => t.length > REVIEW_TAG_MAX))
+    throw new Error(`A tag is limited to ${REVIEW_TAG_MAX} characters`);
+  if (!insight && !howItWent && !mistakes.length && !tags.length && help === 'none') return null;
+  return {
+    insight,
+    help,
+    mistakes,
+    howItWent,
+    tags,
+    draftUsed: r.draftUsed === true && mistakes.length > 0,
+  };
+}
+// The help the form starts on when there's no review yet: a hint once a submit failed before the accepted one.
+export const suggestedHelp = (s: Pick<Sitting, 'summary'>): HelpLevel =>
+  (s.summary.submitsBeforeAccepted ?? 0) > 0 ? 'hint' : 'none';
+
+// --- The Claude draft (draftSittingReview): mistake lines only — the one-liner and how it went are his words ---
+export const DRAFT_LINES_MAX = 5;
+export const DRAFT_CODE_MAX = 4096; // each of the first-submit and the final code, in the prompt
+export type DraftFailReason =
+  | 'unavailable'
+  | 'timeout'
+  | 'network'
+  | 'api'
+  | 'bad-json'
+  | 'bad-shape' // the model's answer wasn't a list of text (draftMistakes)
+  | 'nothing-to-draft'; // no Run or Submit judged yet — no model call
+export type ReviewDraft = { ok: true; mistakes: string[] } | { ok: false; reason: DraftFailReason };
+// The model's `mistakes`, made fit: folded, empties dropped, a line over 160 characters cut to 160 ending "…",
+// deduped, the first five kept. Only a non-list, or a list with a non-text item, is null (bad-shape); an empty
+// list is a fair answer.
+const clip = (l: string) => {
+  if (l.length <= REVIEW_LINE_MAX) return l;
+  const end = REVIEW_LINE_MAX - 1;
+  const lead = l.charCodeAt(end - 1); // never split a surrogate pair (an emoji) at the cut
+  return `${l.slice(0, lead >= 0xd800 && lead <= 0xdbff ? end - 1 : end).trimEnd()}…`;
+};
+export function draftMistakes(v: unknown): string[] | null {
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) return null;
+  return [...new Set((v as string[]).map(fold).filter(Boolean).map(clip))].slice(
+    0,
+    DRAFT_LINES_MAX,
+  );
+}
+
+// --- Reading a sitting back (the detail page, get_sitting, the draft's input) ---
+// The judged Runs and Submits in time order, each with its verdict and failing case, and between them how many
+// snapshots landed ("code changed ×N"). Snapshots are raw bulk that expires after SITTING_RAW_KEEP_MS, so an
+// older sitting's markers are missing, never wrong.
+export type TimelineEntry =
+  | {
+      kind: 'judged';
+      id: string;
+      type: 'run' | 'submit';
+      n: number; // 1-based among its type
+      at: number;
+      offsetMs: number; // from the Start click, on the extension's clock
+      verdict: SittingVerdict;
+      detail: JudgeDetail;
+    }
+  | { kind: 'codeChanged'; count: number };
+const byTime = <E extends { at: number; id: string }>(a: E, b: E) =>
+  a.at - b.at || (a.id < b.id ? -1 : 1);
+export function timelineOf(
+  s: Pick<Sitting, 'clientStartedAt'>,
+  events: readonly SittingEvent[],
+): TimelineEntry[] {
+  const out: TimelineEntry[] = [];
+  const n = { run: 0, submit: 0 };
+  let changed = 0;
+  for (const e of [...events].sort(byTime)) {
+    if (e.type === 'snapshot') changed++;
+    if (e.type !== 'run' && e.type !== 'submit') continue;
+    if (changed) out.push({ kind: 'codeChanged', count: changed });
+    changed = 0;
+    out.push({
+      kind: 'judged',
+      id: e.id,
+      type: e.type,
+      n: ++n[e.type],
+      at: e.at,
+      offsetMs: Math.max(0, e.at - s.clientStartedAt),
+      verdict: verdictOrOther(e.payload, e.at),
+      detail: judgeDetail(e.payload),
+    });
+  }
+  if (changed) out.push({ kind: 'codeChanged', count: changed });
+  return out;
+}
+// The code as first submitted: the first Submit's request body (LeetCode's typed_code), or null.
+export function firstSubmitCode(events: readonly SittingEvent[]): string | null {
+  const first = [...events].sort(byTime).find((e) => e.type === 'submit');
+  const code = obj(obj(first?.payload)?.request)?.typed_code;
+  return typeof code === 'string' ? code : null;
+}
+
+// The problem statement as plain text, from questionDetail's `content` HTML (captured 2026-11-08): tags out,
+// entities decoded, capped. An unknown shape → null.
+export const PROBLEM_STATEMENT_MAX = 3072;
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+export function problemStatementText(problem: Pick<LeetcodeProblem, 'raw'> | null): string | null {
+  const html = obj(problem?.raw)?.content;
+  if (typeof html !== 'string') return null;
+  const text = html
+    .replace(/<sup>/gi, '^')
+    .replace(/<li[^>]*>/gi, '\n- ')
+    .replace(/<\/p>|<br\s*\/?>|<\/pre>|<\/li>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+      if (e[0] !== '#') return ENTITIES[e.toLowerCase()] ?? m;
+      const code =
+        e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+    })
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text ? capText(text, PROBLEM_STATEMENT_MAX) : null;
+}
+// The companies that asked it most lately: questionDetail's companyTagStatsV2 is a JSON string of
+// {three_months, six_months, more_than_six_months: [{name, timesEncountered}]} (captured 2026-11-08). The
+// most recent non-empty window, top three by count, names only. Unknown → [].
+export function problemCompanies(problem: Pick<LeetcodeProblem, 'raw'> | null): string[] {
+  const v = obj(problem?.raw)?.companyTagStatsV2;
+  let stats: Record<string, unknown> | null;
+  try {
+    stats = obj(typeof v === 'string' ? JSON.parse(v) : v);
+  } catch {
+    return [];
+  }
+  for (const w of ['three_months', 'six_months', 'more_than_six_months']) {
+    const list = stats && Array.isArray(stats[w]) ? (stats[w] as unknown[]) : [];
+    const named = list
+      .map(obj)
+      .filter((c): c is Record<string, unknown> => !!c && typeof c.name === 'string' && !!c.name)
+      .sort((a, b) => (num(b.timesEncountered) ?? 0) - (num(a.timesEncountered) ?? 0))
+      .map((c) => capText(c.name as string, 60));
+    if (named.length) return named.slice(0, 3);
+  }
+  return [];
+}

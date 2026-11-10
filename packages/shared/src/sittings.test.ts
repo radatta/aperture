@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  draftMistakes,
+  firstSubmitCode,
+  normalizeSittingReview,
+  problemCompanies,
+  problemStatementText,
+  PROBLEM_STATEMENT_MAX,
+  REVIEW_LINE_MAX,
+  suggestedHelp,
+  timelineOf,
+  isSittingOpen,
+  newestOfType,
+  judgeDetail,
+  JUDGE_ERROR_MAX,
+  JUDGE_TEXT_MAX,
   emptyLiveFields,
   emptySummary,
   foldLive,
@@ -27,6 +41,10 @@ import {
   SITTING_RAW_KEEP_MS,
   sittingElapsedMs,
   sittingIngestError,
+  sittingIngestPhase,
+  eventsBeforeEnd,
+  SITTING_END_GRACE_MS,
+  SITTING_END_SKEW_MS,
   sittingRawExpiresAt,
   headRowOf,
   payloadError,
@@ -34,7 +52,7 @@ import {
   utf8Bytes,
 } from './sittings';
 import type { NormalizedSittingEvent, SittingStartInput } from './sittings';
-import type { Sitting, Task } from './types';
+import type { Sitting, SittingEvent, Task } from './types';
 import { ulid } from './ulid';
 
 const start = (over: Partial<SittingStartInput> = {}): SittingStartInput => ({
@@ -213,15 +231,65 @@ describe('lcTimerState', () => {
 });
 
 describe('ingest guards', () => {
-  const sitting = { status: 'active', startedAt: 0, clientStartedAt: 0 } as Sitting;
-  it('refuses an ended sitting, one past its window, and an event off its clock', () => {
-    expect(sittingIngestError({ ...sitting, status: 'done' }, [], 1)).toBe(SITTING_ENDED_ERROR);
+  const sitting = { status: 'active', startedAt: 0, clientStartedAt: 0, endedAt: null } as Sitting;
+  const done = { ...sitting, status: 'done', endedAt: 0 } as Sitting;
+  it('refuses a sitting past its grace or its window, and an event off its clock', () => {
+    expect(sittingIngestError(done, [], SITTING_END_GRACE_MS + 1)).toBe(SITTING_ENDED_ERROR);
+    expect(sittingIngestError(done, [{ at: 5 }], SITTING_END_GRACE_MS)).toBeNull();
     expect(sittingIngestError(sitting, [], SITTING_INGEST_WINDOW_MS + 1)).toBe(SITTING_ENDED_ERROR);
     expect(sittingIngestError(sitting, [{ at: 1e21 }], 1)).toBe(SITTING_EVENT_TIME_ERROR);
     expect(sittingIngestError(sitting, [{ at: -2 * SITTING_INGEST_WINDOW_MS }], 1)).toBe(
       SITTING_EVENT_TIME_ERROR,
     );
+    // Inside the grace the bounds still cover every event, the ones that will be skipped too.
+    expect(sittingIngestError(done, [{ at: 5 }, { at: 1e21 }], 1)).toBe(SITTING_EVENT_TIME_ERROR);
     expect(sittingIngestError(sitting, [{ at: 5 }], 1)).toBeNull();
+  });
+  it('after its end a sitting takes events for ten minutes, inside its window only', () => {
+    expect(SITTING_END_GRACE_MS).toBe(10 * 60_000);
+    const ended = { ...done, endedAt: 3600_000 };
+    expect(sittingIngestPhase(sitting, 1)).toBe('open');
+    expect(sittingIngestPhase(ended, 3600_000)).toBe('grace');
+    expect(sittingIngestPhase(ended, 3600_000 + SITTING_END_GRACE_MS)).toBe('grace');
+    expect(sittingIngestPhase(ended, 3600_000 + SITTING_END_GRACE_MS + 1)).toBe('closed');
+    expect(sittingIngestPhase({ ...ended, status: 'abandoned' }, 3600_000 + 1)).toBe('grace');
+    // Ended by a Start past its window (endedAt = that Start's now): no grace — the window is the ceiling.
+    const stale = {
+      ...done,
+      status: 'abandoned',
+      endedAt: SITTING_INGEST_WINDOW_MS + 1,
+    } as Sitting;
+    expect(sittingIngestPhase(stale, SITTING_INGEST_WINDOW_MS + 2)).toBe('closed');
+    // The grace reaching past the window is cut at the window.
+    const late = { ...done, endedAt: SITTING_INGEST_WINDOW_MS - 1 };
+    expect(sittingIngestPhase(late, SITTING_INGEST_WINDOW_MS)).toBe('grace');
+    expect(sittingIngestPhase(late, SITTING_INGEST_WINDOW_MS + 1)).toBe('closed');
+    expect(sittingIngestPhase({ ...done, endedAt: null }, 1)).toBe('closed');
+  });
+  it('keeps the events stamped before the end, on the extension’s clock', () => {
+    expect(SITTING_END_SKEW_MS).toBe(60_000);
+    const ev = (at: number, id: string) => ({ at, id });
+    // The server's Start at 10 h; ended at 11 h; the extension's clock 3 h behind, then 3 h ahead.
+    const H = 3600_000;
+    const behind = { ...done, startedAt: 10 * H, clientStartedAt: 7 * H, endedAt: 11 * H };
+    const cutBehind = 8 * H + SITTING_END_SKEW_MS;
+    expect(
+      eventsBeforeEnd(behind, [
+        ev(cutBehind, 'a'),
+        ev(cutBehind + 1, 'b'),
+        ev(7 * H + 1, 'c'),
+        ev(10.5 * H, 'd'), // before the end on the server's clock, 2.5 h after it on the extension's
+      ]).map((e) => e.id),
+    ).toEqual(['a', 'c']);
+    const ahead = { ...behind, clientStartedAt: 13 * H };
+    const cutAhead = 14 * H + SITTING_END_SKEW_MS;
+    expect(
+      eventsBeforeEnd(ahead, [ev(13.5 * H, 'x'), ev(cutAhead + 1, 'y'), ev(cutAhead, 'z')]).map(
+        (e) => e.id,
+      ),
+    ).toEqual(['x', 'z']);
+    const all = [ev(1e15, 'p'), ev(0, 'q')];
+    expect(eventsBeforeEnd({ ...behind, status: 'active', endedAt: null }, all)).toEqual(all);
   });
   it('reserves a call in the budget, refusing one that would pass a cap', () => {
     expect(reserveBudget({ events: 1, bytes: 10 }, { count: 2, bytes: 5 })).toEqual({
@@ -314,5 +382,226 @@ describe('the Start gate', () => {
   it('caps Starts a day', () => {
     const g = { ...emptyGate('d'), starts: SITTING_STARTS_PER_DAY };
     expect(() => claimStart(g, 'd', 'X', [], new Set(), T)).toThrow(SITTING_START_CAP_ERROR);
+  });
+});
+
+describe('the live pull’s helpers', () => {
+  it('a sitting is open only while active and inside its window', () => {
+    const s = { status: 'active' as const, startedAt: 0 };
+    expect(isSittingOpen(s, SITTING_INGEST_WINDOW_MS)).toBe(true);
+    expect(isSittingOpen(s, SITTING_INGEST_WINDOW_MS + 1)).toBe(false);
+    expect(isSittingOpen({ ...s, status: 'done' }, 1)).toBe(false);
+  });
+
+  it('the newest of a type goes by time, then the later id on a tie', () => {
+    const e = (id: string, type: string, at: number) => ({ id, type, at });
+    const events = [
+      e('01B', 'submit', 5),
+      e('01A', 'submit', 5),
+      e('01C', 'run', 9),
+      e('01D', 'submit', 2),
+    ];
+    expect(newestOfType(events, 'submit')?.id).toBe('01B');
+    expect(newestOfType(events, 'note')).toBeNull();
+  });
+
+  it('judgeDetail reads a submit’s failing case and a run’s input, joins arrays, caps, and never throws', () => {
+    expect(
+      judgeDetail({
+        result: { last_testcase: '[3,2,4]\n6', expected_output: '[1,2]', code_output: '[0,0]' },
+      }),
+    ).toEqual({ input: '[3,2,4]\n6', expected: '[1,2]', output: '[0,0]', error: null });
+    expect(
+      judgeDetail({
+        request: { data_input: '[2,7]\n9' },
+        result: {
+          code_answer: ['[0,1]', '[1,2]'],
+          expected_code_answer: ['[0,1]', '[0,2]'],
+          full_runtime_error: 'E'.repeat(5000),
+        },
+      }),
+    ).toEqual({
+      input: '[2,7]\n9',
+      expected: '[0,1]\n[0,2]',
+      output: '[0,1]\n[1,2]',
+      error: `${'E'.repeat(JUDGE_ERROR_MAX - 1)}…`,
+    });
+    expect(judgeDetail({ result: { last_testcase: 'x'.repeat(5000) } }).input).toHaveLength(
+      JUDGE_TEXT_MAX,
+    );
+    const none = { input: null, expected: null, output: null, error: null };
+    for (const junk of [null, 'x', 7, [], { result: 3 }, { result: { code_answer: [1, 2] } }])
+      expect(judgeDetail(junk)).toEqual(none);
+  });
+});
+
+describe('the review', () => {
+  const blank = {
+    insight: null,
+    help: 'none',
+    mistakes: [],
+    howItWent: null,
+    tags: [],
+    draftUsed: false,
+  };
+
+  it('folds whitespace, drops empties, lowercases and dedupes tags in order, keeps how-it-went’s lines', () => {
+    expect(
+      normalizeSittingReview({
+        insight: '  two   pointers\n',
+        help: 'hint',
+        mistakes: [' off  by one ', '', '  '],
+        howItWent: '  slow start\r\nthen fine  ',
+        tags: ['Two-Pointers', ' sliding window ', 'two-pointers', ''],
+        draftUsed: true,
+      }),
+    ).toEqual({
+      insight: 'two pointers',
+      help: 'hint',
+      mistakes: ['off by one'],
+      howItWent: 'slow start\nthen fine',
+      tags: ['two-pointers', 'sliding window'],
+      draftUsed: true,
+    });
+  });
+
+  it('saying nothing is no review, and draftUsed needs a mistake', () => {
+    expect(normalizeSittingReview(blank)).toBeNull();
+    expect(normalizeSittingReview({ ...blank, mistakes: ['  '], draftUsed: true })).toBeNull();
+    expect(normalizeSittingReview({ ...blank, help: 'solution' })).toMatchObject({
+      help: 'solution',
+    });
+    expect(normalizeSittingReview({ ...blank, insight: 'x', draftUsed: true })?.draftUsed).toBe(
+      false,
+    );
+  });
+
+  it('refuses, naming the field, anything over a cap or of the wrong kind', () => {
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{ help: 'cheat' }, /Help/],
+      [{ insight: 'x'.repeat(201) }, /One-liner/],
+      [{ insight: 3 }, /One-liner/],
+      [{ mistakes: Array(9).fill('m') }, /Mistakes are limited to 8/],
+      [{ mistakes: ['m'.repeat(REVIEW_LINE_MAX + 1)] }, /A mistake/],
+      [{ mistakes: 'm' }, /Mistakes must be a list/],
+      [{ howItWent: 'h'.repeat(1001) }, /How it went/],
+      [{ tags: Array.from({ length: 11 }, (_, i) => `t${i}`) }, /Tags are limited/],
+      [{ tags: ['t'.repeat(41)] }, /A tag/],
+    ];
+    for (const [over, msg] of bad)
+      expect(() => normalizeSittingReview({ ...blank, ...over })).toThrow(msg);
+    expect(() => normalizeSittingReview(null)).toThrow(/object/);
+  });
+
+  it('suggests a hint once a submit failed before the accepted one', () => {
+    const s = (n: number | null) => ({ summary: { ...emptySummary(), submitsBeforeAccepted: n } });
+    expect(suggestedHelp(s(null))).toBe('none');
+    expect(suggestedHelp(s(0))).toBe('none');
+    expect(suggestedHelp(s(2))).toBe('hint');
+  });
+
+  it('draftMistakes folds and dedupes, cuts a long line to 160 with "…", keeps the first five', () => {
+    expect(draftMistakes([' a  b ', '', 'a b', 'c'])).toEqual(['a b', 'c']);
+    expect(draftMistakes([])).toEqual([]);
+    expect(draftMistakes(['x'.repeat(160)])).toEqual(['x'.repeat(160)]);
+    const [cut] = draftMistakes(['y'.repeat(158) + ' zzzz'])!;
+    expect(cut).toBe(`${'y'.repeat(158)}…`); // the space before the cut is dropped
+    expect(draftMistakes(['w'.repeat(200)])).toEqual([`${'w'.repeat(159)}…`]);
+    // an emoji straddling the cut goes whole, never half a surrogate pair
+    expect(draftMistakes([`${'e'.repeat(158)}😀tail`])).toEqual([`${'e'.repeat(158)}…`]);
+    // two lines that differ only past the cut are one line
+    expect(draftMistakes(['q'.repeat(170), `${'q'.repeat(165)}r`])).toEqual([
+      `${'q'.repeat(159)}…`,
+    ]);
+    const seven = Array.from({ length: 7 }, (_, i) => `l${i}`);
+    expect(draftMistakes(seven)).toEqual(seven.slice(0, 5));
+  });
+
+  it('draftMistakes refuses only a non-list or a list with a non-text item', () => {
+    for (const junk of ['x', null, undefined, {}, [1], ['a', null]])
+      expect(draftMistakes(junk)).toBeNull();
+  });
+});
+
+describe('reading a sitting back', () => {
+  const e = (id: string, type: SittingEvent['type'], at: number, payload: unknown = {}) =>
+    ({ id, type, at, payload }) as SittingEvent;
+  const wa = {
+    request: { typed_code: 'v1' },
+    result: { status_code: 11, status_msg: 'Wrong Answer', last_testcase: '[1]' },
+  };
+  const ac = { request: { typed_code: 'v2' }, result: { status_code: 10, status_msg: 'Accepted' } };
+
+  it('timelineOf numbers runs and submits in time order, with the snapshots between as code-changed markers', () => {
+    const events = [
+      e('01E', 'submit', 500, ac),
+      e('01A', 'snapshot', 100),
+      e('01B', 'run', 200, { result: { status_code: 15 } }),
+      e('01C', 'snapshot', 300),
+      e('01D', 'snapshot', 350),
+      e('01F', 'submit', 400, wa),
+      e('01G', 'snapshot', 600),
+      e('01H', 'timer', 650),
+    ];
+    const t = timelineOf({ clientStartedAt: 50 }, events);
+    expect(
+      t.map((x) => (x.kind === 'judged' ? `${x.type}${x.n}:${x.verdict.verdict}` : `×${x.count}`)),
+    ).toEqual(['×1', 'run1:runtime_error', '×2', 'submit1:wrong_answer', 'submit2:accepted', '×1']);
+    expect(t[3]).toMatchObject({ offsetMs: 350, detail: { input: '[1]' } });
+    expect(timelineOf({ clientStartedAt: 0 }, [e('01A', 'submit', 1, {})])[0]).toMatchObject({
+      verdict: { verdict: 'other' },
+    });
+    expect(timelineOf({ clientStartedAt: 0 }, [])).toEqual([]);
+  });
+
+  it('firstSubmitCode is the first submit’s typed code', () => {
+    expect(firstSubmitCode([e('01B', 'submit', 9, ac), e('01A', 'submit', 5, wa)])).toBe('v1');
+    expect(firstSubmitCode([e('01A', 'run', 5, wa)])).toBeNull();
+    expect(firstSubmitCode([e('01A', 'submit', 5, { request: { typed_code: 3 } })])).toBeNull();
+  });
+
+  it('problemStatementText turns questionDetail’s HTML into text, capped; unknown → null', () => {
+    const raw = {
+      content:
+        '<p>Given <code>nums</code> &amp; <code>target</code>, 10<sup>4</sup> &lt; n &#39;x&#39; &#x41;&nbsp;b</p>\n\n<ul>\n\t<li>one</li>\n\t<li>two</li>\n</ul>',
+    };
+    expect(problemStatementText({ raw })).toBe(
+      "Given nums & target, 10^4 < n 'x' A b\n\n- one\n\n- two",
+    );
+    expect(problemStatementText({ raw: { content: `<p>${'w '.repeat(5000)}</p>` } })).toHaveLength(
+      PROBLEM_STATEMENT_MAX,
+    );
+    for (const junk of [
+      null,
+      { raw: null },
+      { raw: { content: 3 } },
+      { raw: { content: '<p></p>' } },
+    ])
+      expect(problemStatementText(junk)).toBeNull();
+  });
+
+  it('problemCompanies names the top three of the most recent non-empty window', () => {
+    const stats = {
+      three_months: [],
+      six_months: [
+        { name: 'B', timesEncountered: 3 },
+        { name: 'A', timesEncountered: 16 },
+        { name: 'C', timesEncountered: 2 },
+        { name: 'D', timesEncountered: 1 },
+        { slug: 'nameless' },
+      ],
+    };
+    expect(problemCompanies({ raw: { companyTagStatsV2: JSON.stringify(stats) } })).toEqual([
+      'A',
+      'B',
+      'C',
+    ]);
+    for (const junk of [
+      null,
+      { raw: {} },
+      { raw: { companyTagStatsV2: '{bad' } },
+      { raw: { companyTagStatsV2: '[]' } },
+    ])
+      expect(problemCompanies(junk)).toEqual([]);
   });
 });

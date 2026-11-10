@@ -109,6 +109,9 @@ export function localDayTime(epochMs: number): { day: string; hhmm: string } {
   return { day: keyOf(new Date(epochMs)), hhmm: hhmmOfEpoch(epochMs) };
 }
 
+// A span in whole minutes, rounded.
+export const msToMin = (ms: number): number => Math.round(ms / 60_000);
+
 // Durations read as "45m" / "1h 18m" / "2h".
 export function fmtDuration(min: number): string {
   const m = Math.round(min);

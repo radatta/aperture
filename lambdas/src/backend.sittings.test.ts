@@ -1,14 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
+  SITTING_END_SKEW_MS,
   SITTING_INGEST_WINDOW_MS,
   SITTING_RAW_KEEP_MS,
   ulid,
 } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
-import { liveWrites } from './ddb/writes';
+import { liveWrites, noopWrites } from './ddb/writes';
 import { pk, sk } from './ddb/keys';
 import { BackendClient } from './backend';
 
@@ -201,5 +202,307 @@ describe('sittings on the table', () => {
           if (e.message === LC_START_ATTEMPT_CAP_ERROR) refusedFor = e.message;
         });
     expect(refusedFor).toBe(LC_START_ATTEMPT_CAP_ERROR);
+  });
+});
+
+// Late events (the outbox's retries after Done): kept ones write only the ended sitting's own rows, under its
+// budget and its raw TTL; a call of nothing but after-end events writes nothing at all.
+describe('late events on the table', () => {
+  const snap = (code: string, at: number) => ({
+    id: ulid(),
+    type: 'snapshot',
+    at,
+    payload: { code },
+  });
+  const submit = (at: number) => ({
+    id: ulid(),
+    type: 'submit',
+    at,
+    payload: { result: { status_code: 10 } },
+  });
+  async function endedA(b: BackendClient, now: { t: number }) {
+    await linked(b);
+    const a = (await b.lcSittingStart(start())).sitting;
+    await b.lcSittingEvents({ sittingId: a.id, events: [snap('a', T0 + 1000)] as never });
+    now.t += 5 * 60_000;
+    await b.setTaskActual(a.repTaskId, 5);
+    await b.transitionTask(a.repTaskId, 'done');
+    return (await b.getSitting(a.id)).sitting;
+  }
+
+  it('late events write only the ended sitting’s rows', async () => {
+    const { doc, backend, now } = setup();
+    const a = await endedA(backend, now);
+    now.t += 60_000;
+    const b = (
+      await backend.lcSittingStart({
+        ...start(),
+        problemSlug: 'three-sum',
+        problemTitle: '3Sum',
+        startedAt: now.t,
+      })
+    ).sitting;
+    await backend.lcSittingEvents({
+      sittingId: b.id,
+      events: [snap('b', now.t + 1000), submit(now.t + 2000)] as never,
+    });
+    const before = doc.snapshot();
+    const kept = snap('late', T0 + 4 * 60_000);
+    const skipped = snap('after', a.endedAt! + SITTING_END_SKEW_MS + 1);
+    const r = await backend.lcSittingEvents({
+      sittingId: a.id,
+      events: [kept, submit(T0 + 4 * 60_000 + 1), skipped] as never,
+    });
+    expect(r).toMatchObject({ accepted: 2, duplicates: 0, skipped: 1, status: 'done' });
+    const after = doc.snapshot();
+    const ofA = (row: { SK: unknown }) =>
+      row.SK === sk.sitting(a.id) || String(row.SK).startsWith(sk.sittingChildPrefix(a.id));
+    // The gate, the rep, and B's head, live row and events: all as they were.
+    expect(after.filter((row) => !ofA(row))).toEqual(before.filter((row) => !ofA(row)));
+    expect(after.some((row) => String(row.SK).includes(skipped.id))).toBe(false);
+    expect(await doc.get(pk('u1'), sk.sittingBudget(a.id))).toMatchObject({ events: 3 }); // 1 + the 2 kept
+    expect((await doc.get(pk('u1'), sk.sittingEvent(a.id, kept.id)))?.expiresAt).toBe(
+      Math.floor((T0 + SITTING_INGEST_WINDOW_MS + SITTING_RAW_KEEP_MS) / 1000),
+    );
+    expect((await backend.getSitting(a.id)).sitting).toMatchObject({
+      status: 'done',
+      endedAt: a.endedAt,
+      summary: { submits: 1 },
+    });
+    expect((await backend.pullLiveSitting()).sitting?.id).toBe(b.id);
+  });
+
+  it('a call of only after-end events writes nothing', async () => {
+    const { doc, backend, now } = setup();
+    const a = await endedA(backend, now);
+    now.t += 60_000;
+    const rows = doc.snapshot();
+    const g0 = doc.gets.length;
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => void logs.push(String(line)));
+    const r = await backend.lcSittingEvents({
+      sittingId: a.id,
+      events: [snap('x', a.endedAt! + SITTING_END_SKEW_MS + 1), submit(now.t + 1)] as never,
+    });
+    vi.restoreAllMocks();
+    expect(r).toEqual({ accepted: 0, duplicates: 0, skipped: 2, version: 1, status: 'done' });
+    expect(doc.snapshot()).toEqual(rows);
+    expect(doc.gets.slice(g0).every((g) => g.consistent)).toBe(true);
+    expect(logs.map((l) => JSON.parse(l))).toContainEqual(
+      expect.objectContaining({ event: 'lc_ingest', accepted: 0, skipped: 2, late: true }),
+    );
+  });
+});
+
+// Claude's live pull (live_sitting): the count is its own row, bumped by an atomic add — never the head, which
+// ingest's refold rewrites whole and would drop a concurrent bump.
+describe('live pulls on the table', () => {
+  const judged = (type: 'run' | 'submit', at: number, status = 11) => ({
+    id: ulid(),
+    type,
+    at,
+    payload: {
+      result: {
+        status_code: status,
+        status_msg: 'Wrong Answer',
+        last_testcase: '[1]',
+        code_output: '0',
+      },
+    },
+  });
+
+  it('a pull writes only its count row, and pulls racing a submit all count while the submit folds', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const before = doc.snapshot();
+    const [g0, q0] = [doc.gets.length, doc.queries.length];
+    await backend.pullLiveSitting();
+    // Every read the pull made is strongly consistent: a pull right after a write must see it.
+    expect(doc.gets.slice(g0).every((g) => g.consistent)).toBe(true);
+    expect(doc.queries.slice(q0).every((q) => q.consistent)).toBe(true);
+    const readsKey = sk.sittingReads(sitting.id);
+    expect(doc.snapshot().filter((r) => r.SK !== readsKey)).toEqual(before); // the head untouched too
+    const reads = await doc.get(pk('u1'), readsKey);
+    expect(reads).toMatchObject({
+      count: 1,
+      sittingId: sitting.id,
+      deletedAt: null,
+      updatedAt: T0,
+    });
+    expect(reads?.expiresAt).toBeUndefined(); // kept as long as its sitting, on prod
+
+    const pulls = Array.from({ length: 6 }, () => backend.pullLiveSitting());
+    const ingest = backend.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [judged('submit', T0 + 60_000)] as never,
+    });
+    await Promise.all([...pulls, ingest]);
+    const detail = await backend.getSitting(sitting.id);
+    expect(detail.liveReads).toBe(7);
+    expect(detail.sitting.summary.submits).toBe(1);
+  });
+
+  it('the newest Run and Submit come from the judged payloads, by time then id', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const late = judged('submit', T0 + 9_000);
+    await backend.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        late,
+        judged('submit', T0 + 5_000),
+        judged('run', T0 + 7_000, 15),
+        {
+          id: ulid(),
+          type: 'snapshot',
+          at: T0 + 10_000,
+          payload: { code: 'x' },
+        },
+      ] as never,
+    });
+    const pull = await backend.pullLiveSitting();
+    expect(pull.lastSubmit?.id).toBe(late.id);
+    expect(pull.lastRun?.at).toBe(T0 + 7_000);
+  });
+
+  it('nothing open — none ever, the gate on an ended one, or past the window — writes nothing', async () => {
+    const { doc, backend, now } = setup();
+    await linked(backend);
+    let rows = doc.snapshot();
+    expect((await backend.pullLiveSitting()).lastSitting).toBeNull();
+    expect(doc.snapshot()).toEqual(rows);
+
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.setTaskActual(sitting.repTaskId, 30);
+    await backend.transitionTask(sitting.repTaskId, 'done');
+    // The gate's release is best-effort after the head ends: a gate still naming the ended sitting.
+    const gate = await doc.get(pk('u1'), sk.lcStart());
+    await doc.put({ ...gate!, openSittingId: sitting.id });
+    rows = doc.snapshot();
+    expect(await backend.pullLiveSitting()).toMatchObject({
+      sitting: null,
+      lastSitting: { id: sitting.id, status: 'done' },
+    });
+    expect(doc.snapshot()).toEqual(rows);
+
+    now.t += 60_000;
+    const next = await backend.lcSittingStart({
+      ...start(),
+      problemSlug: 'three-sum',
+      startedAt: now.t,
+    });
+    now.t += SITTING_INGEST_WINDOW_MS + 1;
+    rows = doc.snapshot();
+    expect(await backend.pullLiveSitting()).toMatchObject({
+      sitting: null,
+      lastSitting: { id: next.sitting.id, status: 'active' },
+    });
+    expect(doc.snapshot()).toEqual(rows);
+  });
+
+  it('a smoke run (noopWrites) reads the stored count and writes nothing', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    await backend.lcSittingStart(start());
+    await backend.pullLiveSitting();
+    const smoke = new BackendClient(new Repo(doc, noopWrites(), 'u1'), {
+      userId: 'u1',
+      now: () => T0,
+    });
+    const rows = doc.snapshot();
+    expect((await smoke.pullLiveSitting()).liveReads).toBe(1);
+    expect(doc.snapshot()).toEqual(rows);
+  });
+
+  it('deleting the sitting tombstones its count row too', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.pullLiveSitting();
+    await backend.deleteSitting(sitting.id);
+    expect((await doc.get(pk('u1'), sk.sittingReads(sitting.id)))?.deletedAt).not.toBeNull();
+  });
+
+  it('a pull whose reads fail counts nothing; a count that fails still answers, with the stored count', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const query = vi.spyOn(doc, 'query').mockRejectedValueOnce(new Error('throttled'));
+    await expect(backend.pullLiveSitting()).rejects.toThrow('throttled');
+    expect(await doc.get(pk('u1'), sk.sittingReads(sitting.id))).toBeNull();
+    query.mockRestore();
+    vi.spyOn(doc, 'add').mockRejectedValueOnce(new Error('throttled'));
+    expect(await backend.pullLiveSitting()).toMatchObject({
+      sitting: { id: sitting.id },
+      liveReads: 0,
+    });
+    expect((await backend.pullLiveSitting()).liveReads).toBe(1);
+  });
+
+  it('inactive pulls read consistently too: right after Done, the last sitting reads done', async () => {
+    const { doc, backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.setTaskActual(sitting.repTaskId, 30);
+    await backend.transitionTask(sitting.repTaskId, 'done');
+    const [g0, q0] = [doc.gets.length, doc.queries.length];
+    expect((await backend.pullLiveSitting()).lastSitting?.status).toBe('done');
+    expect(doc.gets.slice(g0).every((g) => g.consistent)).toBe(true);
+    expect(doc.queries.slice(q0).every((q) => q.consistent)).toBe(true);
+  });
+});
+
+// The review rides the head (setSittingReview); ingest's refold rewrites the head too. Both are CAS writes that
+// spread the current head, so neither drops the other however they interleave.
+describe('the review on the head', () => {
+  const judged = (type: 'run' | 'submit', at: number) => ({
+    id: ulid(),
+    type,
+    at,
+    payload: { result: { status_code: 11, status_msg: 'Wrong Answer' } },
+  });
+  it('a review saved while a submit is ingested: both land', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    const review = {
+      insight: 'kept',
+      help: 'hint' as const,
+      mistakes: ['m'],
+      howItWent: null,
+      tags: ['dp'],
+      draftUsed: false,
+    };
+    await Promise.all([
+      backend.setSittingReview(sitting.id, review),
+      backend.lcSittingEvents({
+        sittingId: sitting.id,
+        events: [judged('submit', T0 + 60_000)] as never,
+      }),
+      backend.setSittingPrepTarget(sitting.id, 'Google'),
+    ]);
+    const head = (await backend.getSitting(sitting.id)).sitting;
+    expect(head.summary.submits).toBe(1);
+    expect(head.review).toMatchObject({ ...review, updatedAt: T0 });
+    expect(head.prepTarget).toBe('Google');
+  });
+
+  it('deleting the sitting takes its review with the head', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const { sitting } = await backend.lcSittingStart(start());
+    await backend.setSittingReview(sitting.id, {
+      insight: 'x',
+      help: 'none',
+      mistakes: [],
+      howItWent: null,
+      tags: [],
+      draftUsed: false,
+    });
+    await backend.deleteSitting(sitting.id);
+    await expect(backend.getSitting(sitting.id)).rejects.toThrow(/Not found/);
+    expect(await backend.listSittings()).toEqual([]);
   });
 });

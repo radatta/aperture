@@ -454,6 +454,22 @@ export interface Sitting extends BaseEntity {
   // shapes it fully — a Start that died after making the rep still finishes; after, a resume only starts it.
   shapedAt: number | null;
   summary: SittingSummary;
+  // His review (setSittingReview), on the head so the list and list_sittings read it free; a refold spreads the
+  // head, so it survives ingest. Absent on heads written before reviews existed — read it as `review ?? null`.
+  review?: SittingReview | null;
+}
+
+// How much help a sitting took: none, a hint (a nudge, a topic), or the solution read.
+export type HelpLevel = 'none' | 'hint' | 'solution';
+// A sitting's review — his words; a Claude draft only ever proposes mistake lines he ticks (draftUsed).
+export interface SittingReview {
+  insight: string | null; // the one-liner
+  help: HelpLevel;
+  mistakes: string[];
+  howItWent: string | null;
+  tags: string[]; // his own pattern tags: lowercased, deduped, order kept
+  draftUsed: boolean; // a Claude draft line was ticked into `mistakes` (kept while any mistake remains)
+  updatedAt: number;
 }
 
 // What the extension's replay stream says about how the sitting went, folded at ingest so it outlives the

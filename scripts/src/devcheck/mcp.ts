@@ -21,6 +21,57 @@ import { assertDevOrigin, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import type { Ledger } from './ledger';
 
+// What live_sitting answers (lambdas/src/mcp/leetcodeTools.ts) — the fields the scenario reads.
+export interface DevJudged {
+  verdict: string | null;
+  detail: { input: string | null; expected: string | null; output: string | null } | null;
+}
+export interface DevLiveSitting {
+  active: boolean;
+  sitting?: {
+    id: string;
+    problem: { slug: string };
+    elapsedMin: number;
+    liveReads: number;
+  };
+  code?: { version: number; text: string | null };
+  unchangedSinceVersion?: boolean;
+  runCount?: number;
+  submitCount?: number;
+  lastRun?: DevJudged | null;
+  lastSubmit?: DevJudged | null;
+  lastSitting?: {
+    id: string;
+    status: string;
+    liveReads: number;
+    problem: { slug: string };
+  } | null;
+}
+
+// What get_sitting and list_sittings answer (PR C) — the fields the scenario reads.
+export interface DevSittingRead {
+  sitting: { id: string; status: string; submitCount: number; liveReads: number } | null;
+  problem?: { statement: string | null };
+  timeline?: (
+    | { kind: 'codeChanged'; count: number }
+    | {
+        kind: 'judged';
+        type: string;
+        n: number;
+        verdict: string;
+        detail: { input: string | null; expected: string | null; output: string | null };
+      }
+  )[];
+  code?: { final: string | null; version: number };
+  review?: { insight: string | null; tags: string[] } | null;
+}
+export interface DevSittingRow {
+  id: string;
+  status: string;
+  reviewed: boolean;
+  tags: string[];
+}
+
 export const MCP_CREATE_VIA = 'mcp:create_task';
 const mcpUrl = () => `${targetOrigin()}/mcp`;
 const THROTTLE_BACKOFF_MS = [500, 1000, 2000, 4000, 8000]; // as api.ts: a 429 never ran the call
@@ -132,6 +183,13 @@ export function createMcpClient({
         'list_place_tasks',
         { place },
       ),
+    // live_sitting (lambdas/src/mcp/leetcodeTools.ts): the one read that counts itself — on the open sitting
+    // only, which in the dev check is always the scenario's own; its cleanup tombstones that count with it.
+    liveSitting: (args: Record<string, unknown> = {}) => data<DevLiveSitting>('live_sitting', args),
+    // get_sitting / list_sittings (PR C): pure reads.
+    getSitting: (args: Record<string, unknown> = {}) => data<DevSittingRead>('get_sitting', args),
+    listSittings: (args: Record<string, unknown> = {}) =>
+      data<{ sittings: DevSittingRow[]; more: boolean }>('list_sittings', args),
   };
 
   const writes = {

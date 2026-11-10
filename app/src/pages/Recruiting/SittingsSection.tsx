@@ -1,5 +1,6 @@
 import { fmtDayHeading, fmtDuration, sittingMinutes, todayKey } from '@aperture/shared';
 import type { Sitting } from '@aperture/shared';
+import { Link } from 'react-router';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -8,8 +9,8 @@ import { useNow } from '../../lib/useNow';
 import { groupSittings, sittingOutcome, summarizeSittings } from './recruitingHelpers';
 
 // The Sittings tab: every go at a LeetCode problem, captured by the extension (docs/areas/recruiting).
-// The open sitting sits on top with its running clock; the rest are grouped by day. No authoring here —
-// a sitting starts from the extension's overlay and ends with Done on its rep.
+// The open sitting sits on top with its running clock; the rest are grouped by day. Each row opens the
+// sitting's page (its timeline, review, and End sitting); a sitting starts from the extension's overlay.
 export function SittingsSection() {
   const { data: sittings = [], isPending, isError, refetch } = useSittings();
   const now = useNow();
@@ -68,16 +69,27 @@ export function SittingsSection() {
 }
 
 function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
-  const outcome = sittingOutcome(sitting);
+  const outcome = sittingOutcome(sitting, now);
   const open = sitting.status === 'active';
   const minutes = sittingMinutes(sitting, now);
   return (
-    <div className="flex items-start justify-between gap-4 py-3">
+    <Link
+      to={`/recruiting/sittings/${sitting.id}`}
+      className="-mx-2 flex items-start justify-between gap-4 rounded-lg px-2 py-3 transition hover:bg-panel"
+    >
       <div className="flex min-w-0 flex-col gap-0.5">
         <div className="flex items-center gap-2">
           <Text weight="medium" className="truncate">
             {sitting.problemTitle}
           </Text>
+          {sitting.review && (
+            <span
+              role="img"
+              aria-label="reviewed"
+              title="Reviewed"
+              className="size-1.5 shrink-0 rounded-full bg-teal"
+            />
+          )}
           {sitting.difficulty && (
             <Text size="xs" tone="subtle">
               {sitting.difficulty}
@@ -97,6 +109,6 @@ function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
       <Text size="sm" weight="medium" tone={outcome.tone} className="shrink-0 text-right">
         {outcome.label}
       </Text>
-    </div>
+    </Link>
   );
 }

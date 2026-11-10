@@ -1,6 +1,6 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { ModelOutcome } from '@aperture/shared';
-import type { AnthropicGateway, FluxNoteRequest } from './gateway';
+import type { AnthropicGateway, FluxNoteRequest, SittingDraftRequest } from './gateway';
 import { PARSE_MODEL, parseOutputSchema, parseSystemPrompt } from './parsePrompt';
 import {
   fluxNoteOutputSchema,
@@ -8,6 +8,12 @@ import {
   fluxNoteUserContent,
   NOTE_MODEL,
 } from './fluxNotePrompt';
+import {
+  DRAFT_MODEL,
+  sittingDraftOutputSchema,
+  sittingDraftSystemPrompt,
+  sittingDraftUserContent,
+} from './sittingReviewPrompt';
 
 // The live Claude API gateway: one raw fetch to /v1/messages (no SDK — a single fixed POST is neither
 // substantial logic nor subtle correctness, and matches the hand-rolled Google/Plaid gateways) plus the
@@ -192,6 +198,32 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
           stop_reason: meta?.stop,
           ms: Date.now() - started,
           sets: req.summary.totalSets,
+          input_tokens: meta?.usage?.input_tokens,
+          output_tokens: meta?.usage?.output_tokens,
+        }),
+      );
+      return out;
+    },
+    // His code goes to the API (decided, recruiting doc); the log line carries counts only, never the code.
+    async sittingReviewDraft(req: SittingDraftRequest) {
+      const started = Date.now();
+      const { meta, ...out } = await call({
+        model: DRAFT_MODEL,
+        system: sittingDraftSystemPrompt(),
+        user: sittingDraftUserContent(req.data),
+        schema: sittingDraftOutputSchema(),
+        maxTokens: 512,
+        timeoutMs: req.timeoutMs,
+      });
+      log(
+        JSON.stringify({
+          event: 'lc_review_draft',
+          ok: out.ok,
+          reason: out.ok ? undefined : out.reason,
+          status: meta?.status,
+          stop_reason: meta?.stop,
+          ms: Date.now() - started,
+          judged: req.data.judged.length,
           input_tokens: meta?.usage?.input_tokens,
           output_tokens: meta?.usage?.output_tokens,
         }),

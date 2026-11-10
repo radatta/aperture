@@ -230,6 +230,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listHabits: async () => [],
       listRolls: async () => [],
       listSittings: async () => [],
+      draftSittingReview: async () => {
+        throw new Error('unused');
+      },
       getSitting: async () => {
         throw new Error('unused');
       },
@@ -301,6 +304,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setTaskActual: async () => {
         throw new Error('unused');
       },
+      setTaskEstimate: async () => {
+        throw new Error('unused');
+      },
       recordPlaceTokenMint: () => {
         throw new Error('unused');
       },
@@ -352,6 +358,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       setSittingPrepTarget: async () => {
+        throw new Error('unused');
+      },
+      setSittingReview: async () => {
+        throw new Error('unused');
+      },
+      setSittingReviewToUnknown: async () => {
         throw new Error('unused');
       },
       removeSitting: async () => {

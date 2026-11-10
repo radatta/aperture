@@ -75,11 +75,12 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | places          | `list_places`, `list_place_tasks {place}` (the Shortcut's digest + `tasks[]` ids, no heartbeat — [tasks/places](../tasks/places.md))                                                                                                                                                                                          |
 | series          | `list_series {includeStopped?}`, `create_series {title, rule, categoryId?, defaultEstimateMin?, dueOffsetDays?, until?}` (anchored on the user's today; an `until` before it is refused), `stop_series {id}` — the templates; occurrences are `list_tasks` rows with `seriesId` ([tasks/recurring](../tasks/recurring.md) D5) |
 | categories      | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                                                                                                                                                                                                |
-| calibration     | `get_calibration {from,to}` (`list_leetcode_attempts` was retired with the legacy attempts, 2026-11; the sittings' tools follow — [recruiting](../recruiting/index.md))                                                                                                                                                       |
+| calibration     | `get_calibration {from,to}` (`list_leetcode_attempts` was retired with the legacy attempts, 2026-11)                                                                                                                                                                                                                          |
 | calendar        | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                                                                                                                                                                                            |
 | attachments     | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`                                                                                                                                                                                      |
 | finances (read) | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`                                                                                                                                                                                      |
 | flux (read)     | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                                                                                                                                                                                               |
+| leetcode        | `live_sitting {sinceVersion?}` — the open sitting, live; counts the pull. `get_sitting {id?}`, `list_sittings {from?,to?,limit?}` — read-only ([recruiting](../recruiting/index.md) → _Claude watches live_, _Reading a sitting back_)                                                                                        |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -201,12 +202,22 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   (the night line's sentence, `summarizeSets`) when the window is one day (`from = to`, any day). Every result carries the
   honesty `note`: angles are relative to each session's own neutral, a trend and not a clinical
   measurement. `list_flux_exercises` gives the ids, sides and prescriptions.
+- **LeetCode: three tools, and a live pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
+  the sitting open right now: its code in full, the newest Run and Submit with the failing case, counts,
+  LeetCode's timer, editing facts — or, with nothing open, `lastSitting`. Code is at most ~30 s behind (one
+  snapshot per 30 s, plus one right before each Run or Submit), and a Run or Submit judged after Rahul leaves
+  the page still lands in its sitting. Its one write is the pull's own count on that sitting ("Claude watched
+  live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
+  `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final
+  code, his review — and `list_sittings` lists heads with `reviewed` and his tags; both only read. No MCP write
+  for reviews: they're his words, typed in the app.
 
 ## Claude Code's standing approvals and the dev ledger
 
-Every write still needs the user's in-the-moment approval (CLAUDE.md → _Aperture MCP connector_), with two
+Every write still needs the user's in-the-moment approval (CLAUDE.md → _Aperture MCP connector_), with three
 narrow exceptions: on prod, the one `CC blocked` / `CC done` task a session keeps (by its recorded id); on
-`aperture-dev`, deleting tasks Claude created through the MCP (any session's — the ledger is shared). The second is enforced, not trusted:
+`aperture-dev`, deleting tasks Claude created through the MCP (any session's — the ledger is shared); and on
+either, the count a `live_sitting` pull writes on the open sitting (nothing else about it). The second is enforced, not trusted:
 `.claude/hooks/mcp-dev-ledger.sh` records every id `create_task`, `create_tasks` and `split_task` return
 (a split's follow-up, and its parent only when the split task was recorded and standalone), and denies an
 `aperture-dev` `delete_task` for any id it never recorded. Deleting a parent deletes its parts server-side, so
@@ -218,7 +229,8 @@ invisible to the hook: don't attach your own dev tasks under one Claude created.
 **A session's tool list is fixed when it connects.** After a deploy adds or changes a tool, a running Claude
 Code session still sees the old list. A `/mcp` reconnect usually picks up the new one, but a schema has been
 seen to stay stale even after one — check the live list with `tools/list` on the server before concluding a
-parameter is missing.
+parameter is missing. A claude.ai connector is the same: after a tool is added, Settings → Connectors →
+Disconnect, then Connect again, before the new tool shows.
 
 ## Dependency note — the MCP protocol is hand-rolled (no SDK)
 
@@ -241,6 +253,8 @@ transport. See `lambdas/src/mcp/protocol.ts`.
   (`packages/shared/src/dates.ts`).
 - `lambdas/src/mcp/fluxTools.ts` — the read-only Flux tools, over `setMetric` / `sideLabel` /
   `summarizeSets` (`packages/shared/src/flux/history.ts`, shared with the History tab).
+- `lambdas/src/mcp/leetcodeTools.ts` — `live_sitting`, over the `pullLiveSitting` RPC and `judgeDetail`; `get_sitting` and `list_sittings` over `getSitting` / `listSittings` and `timelineOf`
+  (`packages/shared/src/sittings.ts`).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
   become `isError` results the model self-corrects from).
 - `lambdas/src/mcp/index.ts` — the AWS/HTTP + auth edge (origin gate, well-known routes, credential fork,
@@ -410,6 +424,9 @@ the model as the only UI — so:
 - **Flux by voice is a question too:** "how's my neck rehab going this week?" → `list_flux_sets {from, to}`
   and its `summary`; "did I do my neck exercises today?" → the same with `from = to = today` and its
   `daySummary` line.
+- **LeetCode by voice:** "what am I working on?" / "why is my submit failing?" → `live_sitting`, pulled at most
+  once per turn; "how did that sitting go?" → `get_sitting` with no id; "what did I do this week?" →
+  `list_sittings`.
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
 timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation
