@@ -1,4 +1,4 @@
-// Aperture's LeetCode capture, background — the only part that talks to Aperture. content.js asks it to
+// Aperture's LeetCode capture, background -- the only part that talks to Aperture. content.js asks it to
 // Start a sitting (answered directly) and hands it events, which go through the outbox (lib/outbox.js): one
 // POST in flight, in order, retried with backoff, persisted in storage.local so a browser restart loses
 // nothing. Every outcome lands in storage.local (`status`, `sync:<slug>`) for the badge and the options page.
@@ -8,12 +8,13 @@
   const api =
     globalThis.browser && globalThis.browser.runtime ? globalThis.browser : globalThis.chrome;
   const { outbox } = globalThis.ApertureLC;
-  // packages/shared/src/rpc.ts AUTH_HEADER — kept in sync by hand (background.test.ts checks it).
+  // packages/shared/src/rpc.ts AUTH_HEADER -- kept in sync by hand (background.test.ts checks it).
   const AUTH_HEADER = 'x-aperture-authorization';
   const SEND_TIMEOUT_MS = 30_000;
   const NOT_API =
-    'Aperture answered with something that isn’t its API — check the origin in the extension’s options.';
-  const NOT_CONFIGURED = 'Set the Aperture origin and device token in the extension’s options.';
+    'Aperture answered with something that isn\u2019t its API \u2014 check the origin in the extension\u2019s options.';
+  const NOT_CONFIGURED =
+    'Set the Aperture origin and device token in the extension\u2019s options.';
   const local = api.storage.local;
   const session = api.storage.session || null; // Safari before 16.4 has none: then "just looking" lasts
   // as long as this background page does
@@ -204,7 +205,7 @@
     if (dropped || shed)
       await setStatus({
         detail:
-          `${dropped ? `${dropped} oversized event(s) dropped. ` : ''}${shed ? `${shed} old snapshot or replay batch(es) shed — the queue was full.` : ''}`.trim(),
+          `${dropped ? `${dropped} oversized event(s) dropped. ` : ''}${shed ? `${shed} old snapshot or replay batch(es) shed \u2014 the queue was full.` : ''}`.trim(),
       });
     flush();
   }

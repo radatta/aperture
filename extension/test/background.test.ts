@@ -39,6 +39,21 @@ const events = (n: number, from = 0) =>
 const ok = { status: 200, body: { accepted: 1, duplicates: 0, version: 3, status: 'active' } };
 
 describe('background', () => {
+  // Safari builds the background page itself from manifest background.scripts, and it was seen (2026-11-10)
+  // not to read them as UTF-8: the outbox's "ended" string, with its em dash, stopped matching Aperture's, and
+  // every event after a Done landed as failed ("refused: see Options"). So those files stay pure ASCII, any
+  // other character written as a \u escape.
+  it('loads only pure-ASCII scripts in the background page, whatever encoding Safari reads them in', () => {
+    const manifest = JSON.parse(src('manifest.json')) as { background: { scripts: string[] } };
+    for (const f of manifest.background.scripts) {
+      const bad = src(f)
+        .split('\n')
+        .map((line, i) => ({ line: i + 1, text: line }))
+        .filter((l) => [...l.text].some((c) => c.charCodeAt(0) > 0x7f));
+      expect(bad, `${f} has non-ASCII text`).toEqual([]);
+    }
+  });
+
   it('keeps its copies of the shared strings in step with packages/shared', () => {
     expect(src('src/background.js')).toContain(`const AUTH_HEADER = '${AUTH_HEADER}'`);
     expect(src('src/content.js')).toContain(`const ACTIVE_ERROR = '${SITTING_ACTIVE_ERROR}'`);

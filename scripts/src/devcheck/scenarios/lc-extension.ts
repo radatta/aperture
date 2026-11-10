@@ -254,6 +254,61 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-timer-confirm-missing',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'LeetCode’s timer never asks to confirm its reset: named (timerResetConfirm); a Retry after our overlay dismissed its pop-up clicks Reset again, never the closing one',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'says LeetCode’s timer didn’t ask to confirm its reset; Retry after our overlay dismissed its pop-up clicks Reset again, not the closing one',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-timer-still-asking',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A Retry that finds LeetCode’s timer pop-up still open and asking confirms it without clicking Reset again',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a Retry that finds LeetCode’s pop-up still open and asking confirms it, without clicking Reset again',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-timer-no-reset',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'LeetCode’s timer reset never lands: “didn’t reset”, and no Start is clicked',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'says LeetCode’s timer didn’t reset when its Reset never lands, and clicks no Start',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-timer-off',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A timer key set to null in Options: “isn’t configured”, none of its controls clicked, Continue goes active',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a timer key turned off in Options says the timer isn’t configured and clicks none of its controls',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-background-ascii',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The background page’s scripts are pure ASCII, so Safari’s reading of them can’t break the “sitting ended” match (seen: events after a Done landed as failed)',
+      offDev: {
+        file: 'extension/test/background.test.ts',
+        test: 'loads only pure-ASCII scripts in the background page, whatever encoding Safari reads them in',
+        why: `${noStep}; a static check over the manifest’s background scripts`,
+      },
+    },
+    {
       id: 'ext-selector-paste',
       entry: 'extension',
       kind: 'edge',
@@ -270,7 +325,7 @@ export const lcExtension: Scenario = {
       kind: 'nominal',
       what: 'The shipped selectors find LeetCode’s real reset, its confirm and its timer’s controls, from a running timer and from an idle one',
       needsYou:
-        'part 2 in Safari on leetcode.com (report → Morning steps): only LeetCode’s real page has them — the debug session (2026-11-10) found them, part 2 proves them',
+        'real Safari sittings on leetcode.com — from a running countdown, an idle one, a never-opened problem and a narrow pane, with the debug log exported (extension/README.md → LeetCode’s controls): only LeetCode’s real page has them',
     },
     {
       id: 'ext-start-safari',

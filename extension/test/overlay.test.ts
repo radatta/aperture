@@ -138,6 +138,8 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
       syncs: number;
       resetCloses: boolean;
       resetInert: boolean;
+      stickyPopup: boolean;
+      timerResetClicks: number;
       setTimer: (s: Record<string, unknown>) => void;
     };
   return { w, phase, text, button, tap, badge, fake };
@@ -437,6 +439,12 @@ describe('the overlay on a LeetCode problem', () => {
   }, 30_000);
 
   it('opens an idle timer under either name', async () => {
+    const forward = await startOn({ ...RUNNING_STOPWATCH(), status: 'idle', startTimestamp: null });
+    expect(
+      forward.p.w.document.querySelector('[data-fake=opener]')?.getAttribute('aria-label'),
+    ).toBe('Stopwatch');
+    expect(forward.p.fake()).toMatchObject({ timerOpens: 1, timerStarts: 1, timerResets: 0 });
+    expect(timerState(forward.p)).toMatchObject({ mode: 'forward', status: 'running' });
     const { p } = await startOn({
       ...PAUSED_COUNTDOWN(),
       status: 'idle',
@@ -444,6 +452,9 @@ describe('the overlay on a LeetCode problem', () => {
       isUserPaused: false,
     });
     expect(p.phase()).toBe('active');
+    expect(p.w.document.querySelector('[data-fake=opener]')?.getAttribute('aria-label')).toBe(
+      'Timer',
+    );
     expect(p.fake()).toMatchObject({ timerOpens: 1, timerStarts: 1, timerResets: 0 });
     expect(timerState(p)).toMatchObject({ mode: 'reverse', status: 'running' });
   });
@@ -537,8 +548,32 @@ describe('the overlay on a LeetCode problem', () => {
     await new Promise((res) => setTimeout(res, 100));
     p.tap('retry'); // the click on our overlay dismisses it: closing, still in the DOM, inert
     await until(() => p.phase() === 'active', 8000);
-    expect(p.fake()).toMatchObject({ timerResets: 1, timerStarts: 1, strays: 0 });
+    // LeetCode's Reset was clicked again (twice in all), and the pop-up's Reset once — in the open one.
+    expect(p.fake()).toMatchObject({
+      timerResetClicks: 2,
+      timerResets: 1,
+      timerStarts: 1,
+      strays: 0,
+    });
     expect(timerState(p)).toMatchObject({ mode: 'reverse', status: 'running' });
+  }, 20_000);
+
+  it('a Retry that finds LeetCode’s pop-up still open and asking confirms it, without clicking Reset again', async () => {
+    const { p, ext } = await startOn(PAUSED_COUNTDOWN(), {
+      selectors: { timerResetConfirm: '#gone' },
+    });
+    expect(p.phase()).toBe('failed');
+    p.fake().stickyPopup = true; // this time the pop-up stays put through the click on our overlay
+    await ext.local.remove('selectors');
+    await new Promise((res) => setTimeout(res, 100));
+    p.tap('retry');
+    await until(() => p.phase() === 'active', 8000);
+    expect(p.fake()).toMatchObject({
+      timerResetClicks: 1,
+      timerResets: 1,
+      timerStarts: 1,
+      strays: 0,
+    });
   }, 20_000);
 
   it('says LeetCode’s timer didn’t reset when its Reset never lands, and clicks no Start', async () => {

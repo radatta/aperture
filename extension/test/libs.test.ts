@@ -110,7 +110,7 @@ describe('selectors', () => {
       timerClicks: ['#a'],
       bogus: 'x',
       dialog: 7,
-      lang: '  ',
+      lang: null, // not a step: a null is ignored
     });
     expect(m).toMatchObject({
       editorReset: '#r',

@@ -334,7 +334,7 @@
   const STEP = {
     async reset() {
       if (!sel.editorReset)
-        return 'LeetCode’s reset button isn’t configured yet (Options → Selectors).';
+        return 'LeetCode’s reset button isn’t configured (Options → Selectors).';
       const b = q(sel.editorReset);
       if (!b) return 'Couldn’t find LeetCode’s reset button (editorReset).';
       b.click();
@@ -344,7 +344,7 @@
     },
     async confirm() {
       if (!sel.resetConfirm)
-        return 'The reset’s confirm button isn’t configured yet (Options → Selectors).';
+        return 'The reset’s confirm button isn’t configured (Options → Selectors).';
       const b = await waitFor(() => q(sel.resetConfirm), 1500);
       if (!b) return 'Couldn’t find the reset’s confirm button (resetConfirm).';
       b.click();

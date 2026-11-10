@@ -464,8 +464,8 @@ was found: the interceptor was watching for a `questionData` call that LeetCode 
 scripts — the page-world capture in jsdom over both transports, both worlds over a fake LeetCode page, the
 background in a vm — and `scripts/src/lc-e2e/` runs the real extension in headless Chromium on that fake
 page (served at `leetcode.com` by a route) against A1's BFF locally, as the test user. None of them prove
-Safari or LeetCode's real DOM: the debug session and one real sitting in Safari do (the `lc-extension`
-scenario's _Needs you_ rows).
+Safari or LeetCode's real DOM: real Safari sittings do — proving the shipped selectors (the debug session
+found them) and one sitting against dev (the `lc-extension` scenario's _Needs you_ rows).
 
 **Only a deployed stage** can prove the ingest half — no test covers any of it:
 
@@ -500,8 +500,8 @@ largest line item in this project.
 ## Open items
 
 - **LeetCode's controls are set from Rahul's debug session (2026-11-10)** (`extension/README.md` →
-  _LeetCode's controls_). Still unproven until a Safari sitting: the timer opener's name in countdown mode,
-  its Reset pressed while running, and an expired countdown's state.
+  _LeetCode's controls_), and proven in Safari the same day: from a running countdown, a paused one and an idle
+  one (the opener reads "Timer"). Still unproven: an expired countdown's state.
 - **One real Safari sitting on dev** through the temporary extension is A2's last proof.
 - **One manifest for both browsers.** The shipped manifest keeps `background.scripts` (Safari's shape); the
   E2E patches a copy for Chrome. A manifest with both `scripts` and `service_worker` may suit both — verify

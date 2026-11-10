@@ -29,8 +29,18 @@
     lang: '[data-e2e-locator="lang-selector-button"]',
   });
   const KEYS = Object.keys(DEFAULTS);
+  // The keys whose step `null` turns off; `dialog` and `lang` aren't steps, so a null there is ignored.
+  const CLICKS = [
+    'editorReset',
+    'resetConfirm',
+    'timerOpen',
+    'timerStart',
+    'timerReset',
+    'timerResetConfirm',
+  ];
 
-  // Overrides from storage (an object, or its JSON text) over the defaults: each key a non-empty string or null.
+  // Overrides from storage (an object, or its JSON text) over the defaults: each key a non-empty string, or null
+  // on a click key.
   // Unknown keys (a retired `timerClicks` too) and wrong types are ignored, so a bad paste can't break the overlay.
   function merge(overrides) {
     let o = overrides;
@@ -45,7 +55,7 @@
     if (!o || typeof o !== 'object' || Array.isArray(o)) return out;
     for (const k of KEYS) {
       const v = o[k];
-      if (v === null || (typeof v === 'string' && v.trim())) out[k] = v;
+      if ((v === null && CLICKS.includes(k)) || (typeof v === 'string' && v.trim())) out[k] = v;
     }
     return out;
   }

@@ -17,6 +17,8 @@
     syncs: 0,
     resetCloses: false, // a test's switch: the timer pop-up closes after its reset instead of staying open
     resetInert: false, // a test's switch: the pop-up's Reset does nothing (LeetCode never goes idle)
+    stickyPopup: false, // a test's switch: an outside click doesn't dismiss the pop-up
+    timerResetClicks: 0, // clicks on the widget's own Reset control (the one that opens the pop-up)
   });
   const gql = (operationName, variables) => {
     if (operationName === 'updateSyncedCode') fake.syncs++;
@@ -91,6 +93,7 @@
   document.addEventListener(
     'click',
     (e) => {
+      if (fake.stickyPopup) return;
       if (popup && !popup.contains(e.target) && !timerBox.contains(e.target)) closePopup();
     },
     true,
@@ -150,9 +153,10 @@
       `<div role="button" aria-label="${status === 'pause' ? 'Resume' : 'Pause'}" data-fake="toggle">${Math.round(elapsed / 1000)}s</div>` +
       '<div role="button" aria-label="Reset" data-fake="timer-reset">↺</div>';
     timerBox.append(layer);
-    layer
-      .querySelector('[data-fake=timer-reset]')
-      .addEventListener('click', () => openPopup('reset'));
+    layer.querySelector('[data-fake=timer-reset]').addEventListener('click', () => {
+      fake.timerResetClicks++;
+      openPopup('reset');
+    });
     layer.querySelector('[data-fake=toggle]').addEventListener('click', () => {
       const cur = readTimer();
       if (!cur || cur.status === 'idle') return;

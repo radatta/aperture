@@ -1,9 +1,9 @@
-// The background's outbox — pure queue operations over plain data (persisted in storage.local.outbox). One
+// The background's outbox -- pure queue operations over plain data (persisted in storage.local.outbox). One
 // send in flight, first in first out: an entry waiting to retry holds those behind it (events are idempotent
 // per id on the server, so a resent batch is harmless). Statuses per lambdas/src/index.ts ingestFailureStatus:
 // 409, 429 and 5xx (and a network failure) retry; 401 pauses everything until the token changes; 413 and a
 // 400 split until the refused event is alone; a refusal because the sitting ended drops the entry (that is how
-// a sitting ends); any other refusal is kept as failed and shown — never dropped silently.
+// a sitting ends); any other refusal is kept as failed and shown -- never dropped silently.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -14,7 +14,7 @@
   // the two errors (outbox.test.ts checks every copy against the shared package).
   const MAX_EVENTS = 50;
   const MAX_CALL_BYTES = 256 * 1024;
-  const ENDED_ERROR = 'This sitting has ended — start a new one.';
+  const ENDED_ERROR = 'This sitting has ended \u2014 start a new one.';
   const CAP_ERROR = 'This sitting is over its capture limit.';
   const EVENT_MAX = {
     snapshot: 64 * 1024,
@@ -53,7 +53,7 @@
     return eventBytes(small) <= EVENT_MAX[e.type] ? small : null;
   }
 
-  // Events → batches the server takes in one call.
+  // Events -> batches the server takes in one call.
   function splitBatch(events) {
     const batches = [];
     let cur = [];
@@ -121,7 +121,7 @@
   }
 
   const retryable = (status) => status === 0 || status === 409 || status === 429 || status >= 500;
-  // A send's outcome → the new queue and what happened ('sent' | 'retry' | 'paused' | 'split' | 'failed').
+  // A send's outcome -> the new queue and what happened ('sent' | 'retry' | 'paused' | 'split' | 'failed').
   function applyResult(queue, id, { status, error }, now) {
     const i = queue.entries.findIndex((e) => e.id === id);
     if (i < 0) return { queue, outcome: 'missing' };
@@ -164,7 +164,7 @@
     return { queue: { ...queue, entries }, outcome: 'failed' };
   }
 
-  // Options → Retry now: failed entries go back in line and every wait ends; a token change unpauses.
+  // Options -> Retry now: failed entries go back in line and every wait ends; a token change unpauses.
   const retryNow = (queue, now) => ({
     paused: null,
     entries: queue.entries.map((e) => ({
