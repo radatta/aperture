@@ -559,6 +559,22 @@ export function createApiClient({
     draftSittingReview: (id: string) => call<DevReviewDraft>('draftSittingReview', [id]),
     listSittingReplay: (id: string) =>
       call<{ id: string; events: string }[]>('listSittingReplay', [id]),
+    // PR D's probe: the removed legacy write, posted with no input — a server that still had the method fails
+    // on the missing input instead of writing a row. Returns the raw answer (call() throws on a non-200).
+    legacyWriteProbe: (bearer: 'jwt' | 'bogus-device') => {
+      const url = `${targetOrigin()}/api/recordLeetcodeAttempt`;
+      assertDevOrigin(url);
+      return backoff(() =>
+        fetch(url, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            [AUTH_HEADER]: `Bearer ${bearer === 'jwt' ? token() : 'devcheck-not-a-device-token'}`,
+          },
+          body: JSON.stringify({ args: [] }),
+        }),
+      );
+    },
     listHabitChecks: (range: { from: string; to: string }) =>
       call<DevHabitCheck[]>('listHabitChecks', [range]),
     // The app's own day read (it materializes due series and sweeps the day) — today only, as the app.

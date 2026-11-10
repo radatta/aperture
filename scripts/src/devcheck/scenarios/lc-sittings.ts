@@ -662,6 +662,24 @@ export const lcSittings: Scenario = {
       kind: 'edge',
       what: 'A rep that lost its estimate: Home’s Done and End sitting both offer the Roll’s 45 as the estimate in hindsight',
     },
+    // PR D: the legacy per-submission write (recordLeetcodeAttempt) is gone.
+    {
+      id: 'legacy-refused',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The removed recordLeetcodeAttempt gives the signed-in user no API answer, twice alike, and a non-JWT bearer still 401s (the probe sends no input, so nothing can be written)',
+    },
+    {
+      id: 'legacy-jwt-404',
+      entry: 'api',
+      kind: 'edge',
+      what: 'On recordLeetcodeAttempt the real device token 401s and the user’s JWT 404s “Unknown method”; neither touches the table',
+      offDev: {
+        file: 'lambdas/src/index.test.ts',
+        test: 'refuses recordLeetcodeAttempt: 401 with the device token, 404 with a JWT, the table untouched',
+        why: 'dev can’t produce it: the dev check holds no device token (it writes into its own user’s partition), and CloudFront serves an origin 404 as index.html with a 200',
+      },
+    },
   ],
   steps: [
     {
@@ -1724,6 +1742,28 @@ export const lcSittings: Scenario = {
           /LeetCode roll/,
         );
         await ctx.api.writes.linkLeetcodeRoll(null);
+      },
+    },
+    // PR D. The probe posts no input, so even a server that still had the method could not write a row.
+    {
+      id: 'legacy-refused',
+      entry: 'api',
+      proves: ['legacy-refused'],
+      title: 'recordLeetcodeAttempt, twice: the JWT gets no API answer, a non-JWT bearer 401s',
+      async run(ctx) {
+        for (const round of [1, 2]) {
+          const device = await ctx.api.reads.legacyWriteProbe('bogus-device');
+          if (device.status !== 401)
+            throw new Error(
+              `round ${round}: device bearer → ${device.status} ${device.text.slice(0, 120)}`,
+            );
+          // CloudFront (and the local edge, lambdas/src/local/edge.ts) serves an origin 404 as index.html, a 200.
+          const jwt = await ctx.api.reads.legacyWriteProbe('jwt');
+          if (jwt.status !== 200 || !/^\s*<!doctype html/i.test(jwt.text))
+            throw new Error(
+              `round ${round}: JWT → ${jwt.status} ${jwt.text.slice(0, 120)} — the method still answers`,
+            );
+        }
       },
     },
     noConsoleErrors,

@@ -12,11 +12,11 @@ Rows are written by a **browser extension**, not by the app. There is no authori
 
 **Redesign in progress (lc-redesign, 2026-11).** A1 — sittings: contract, server, list page — is the section
 below; A2 — the extension rebuilt around sittings — is _The shape_. The old per-submission capture is gone
-from the extension, but the installed prod Safari build still runs it until it's rebuilt, so its rows
-(`leetcodeAttempts`) are **retired**: still written, read by nothing, not exported, and the old ingest method
-goes after that rebuild (PR D). The redesign's evidence (what LeetCode exposes, from a HAR capture on
-2026-11-08) is archived with the branch's notes (`/workspace/localNotes/archive/lc-redesign/lc-capture/`);
-durable decisions are recorded here.
+from the extension, and its rows (`leetcodeAttempts`, SK `lc#<day>#<id>`) lie dormant: PR D (2026-11) removed the
+method that wrote them (`recordLeetcodeAttempt`: a device token now gets a 401, a JWT a 404 at the origin, which
+CloudFront serves as `index.html`), nothing reads them, the export leaves them out, and nothing migrates or deletes
+them. The redesign's evidence (what LeetCode exposes, from a HAR capture on 2026-11-08) is archived with the branch's
+notes (`/workspace/localNotes/archive/lc-redesign/lc-capture/`); durable decisions are recorded here.
 
 ## Sittings
 
@@ -271,7 +271,7 @@ recruitingHelpers.sittingOutcome()   ← "first submit accepted" … derived at 
 ```
 
 The legacy attempts' read path (`listLeetcodeAttempts`, the Attempts tab, `list_leetcode_attempts`) was
-removed at A1.
+removed at A1, and their write path (`recordLeetcodeAttempt`, its dedup scan, the `sk.lc*` keys) at PR D.
 
 ## Design decisions worth not re-litigating
 
@@ -319,30 +319,30 @@ storage — a different risk class from a JWT. A device token sent to any other 
 
 ## Files
 
-| Path                                                     | What                                                                                                                                                                                                                                           |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `extension/`                                             | MV3 web extension — Safari daily (wrapped in an Xcode app), Firefox AMO-signed. No runtime deps, no bundler, no build step. `README.md` there is the wire contract, how it works and the Safari build steps; `test/` its unit and jsdom tests. |
-| `scripts/src/lc-e2e/`                                    | the extension's E2E: headless Chromium, a fake LeetCode page, A1's BFF run locally                                                                                                                                                             |
-| `packages/shared/src/types.ts`                           | `Sitting`, `SittingLive`, `SittingEvent`, `SittingReplayChunk`, `LeetcodeProblem`; `LeetcodeAttempt` (retired), `LeetcodeVerdict`                                                                                                              |
-| `packages/shared/src/sittings.ts`                        | the sittings' rules: normalizers, caps, `planSittingStart`, folds, `sittingMetrics`, the raw expiry; the review's normalizer, the draft's validator, `timelineOf`, the problem doc's text                                                      |
-| `packages/shared/src/api.ts`                             | the sitting methods, `SittingDetail`, `RecordLeetcodeAttemptInput` (legacy)                                                                                                                                                                    |
-| `packages/shared/src/leetcode.ts`                        | `normalizeVerdict` — status_code first, status_msg fallback; `LC_INGEST_METHODS`                                                                                                                                                               |
-| `packages/shared/src/dates.ts`                           | `dayKeyForOffset` — bucket by the client's tz + `dayStartHour`                                                                                                                                                                                 |
-| `packages/shared/src/contractTests.ts`                   | one suite, run 3× — stub, backend direct, backend via handleRpc (`lc sittings`)                                                                                                                                                                |
-| `app/src/pages/Recruiting/`                              | `SittingsSection.tsx` + `recruitingHelpers.ts` (outcome, summary, grouping, verdict tone); `SittingDetail.tsx`, `SittingTimeline.tsx`, `ReviewForm.tsx` — the sitting's page                                                                   |
-| `app/src/data/hooks/useSittings.ts`                      | the list and one sitting, the review save, the draft (a mutation), `useOpenSittingFor` (Home)                                                                                                                                                  |
-| `app/src/pages/Home/RightNowCard.tsx`                    | the rep's link to its open sitting, and Done's prefill from it                                                                                                                                                                                 |
-| `lambdas/src/anthropic/sittingReviewPrompt.ts`           | the draft's prompt, data and output schema (`gateway.ts` / `liveAnthropic.ts` carry the call)                                                                                                                                                  |
-| `app/src/pages/Settings/index.tsx`                       | `LeetcodeSection` — the roll a sitting is a rep of                                                                                                                                                                                             |
-| `lambdas/src/index.ts`                                   | the ingest gate: device token or JWT for `LC_INGEST_METHODS`, the 300 KB pre-parse cap                                                                                                                                                         |
-| `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                                                                          |
-| `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks, `pullLiveSitting`; `recordLeetcodeAttempt` (legacy)                                                                                                                                                  |
-| `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_; `get_sitting`, `list_sittings` — _Reading a sitting back_                                                                                                                                              |
-| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#<day>#<id>` (legacy)                                                                                                                                                                                |
-| `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                                                                               |
-| `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                                                                              |
-| `scripts/src/devcheck/scenarios/lc-extension.ts`         | the dev check's rows for the extension (all off dev or Needs you)                                                                                                                                                                              |
-| `cdk/src/config/ciSecrets.ts`, `cdk/src/bin/aperture.ts` | `stageSecret('DEVICE_TOKEN', stage)` / `deviceUserIdFor`                                                                                                                                                                                       |
+| Path                                                     | What                                                                                                                                                                                                                                                     |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extension/`                                             | MV3 web extension — Safari (wrapped in an Xcode app); the Firefox AMO install is retired. No runtime deps, no bundler, no build step. `README.md` there is the wire contract, how it works and the Safari build steps; `test/` its unit and jsdom tests. |
+| `scripts/src/lc-e2e/`                                    | the extension's E2E: headless Chromium, a fake LeetCode page, A1's BFF run locally                                                                                                                                                                       |
+| `packages/shared/src/types.ts`                           | `Sitting`, `SittingLive`, `SittingEvent`, `SittingReplayChunk`, `LeetcodeProblem`, `LeetcodeVerdict`                                                                                                                                                     |
+| `packages/shared/src/sittings.ts`                        | the sittings' rules: normalizers, caps, `planSittingStart`, folds, `sittingMetrics`, the raw expiry; the review's normalizer, the draft's validator, `timelineOf`, the problem doc's text                                                                |
+| `packages/shared/src/api.ts`                             | the sitting methods, `SittingDetail`                                                                                                                                                                                                                     |
+| `packages/shared/src/leetcode.ts`                        | `normalizeVerdict` — status_code first, status_msg fallback; `LC_INGEST_METHODS`                                                                                                                                                                         |
+| `packages/shared/src/dates.ts`                           | `dayKeyForOffset` — bucket by the client's tz + `dayStartHour`                                                                                                                                                                                           |
+| `packages/shared/src/contractTests.ts`                   | one suite, run 3× — stub, backend direct, backend via handleRpc (`lc sittings`)                                                                                                                                                                          |
+| `app/src/pages/Recruiting/`                              | `SittingsSection.tsx` + `recruitingHelpers.ts` (outcome, summary, grouping, verdict tone); `SittingDetail.tsx`, `SittingTimeline.tsx`, `ReviewForm.tsx` — the sitting's page                                                                             |
+| `app/src/data/hooks/useSittings.ts`                      | the list and one sitting, the review save, the draft (a mutation), `useOpenSittingFor` (Home)                                                                                                                                                            |
+| `app/src/pages/Home/RightNowCard.tsx`                    | the rep's link to its open sitting, and Done's prefill from it                                                                                                                                                                                           |
+| `lambdas/src/anthropic/sittingReviewPrompt.ts`           | the draft's prompt, data and output schema (`gateway.ts` / `liveAnthropic.ts` carry the call)                                                                                                                                                            |
+| `app/src/pages/Settings/index.tsx`                       | `LeetcodeSection` — the roll a sitting is a rep of                                                                                                                                                                                                       |
+| `lambdas/src/index.ts`                                   | the ingest gate: device token or JWT for `LC_INGEST_METHODS`, the 300 KB pre-parse cap                                                                                                                                                                   |
+| `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                                                                                    |
+| `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks, `pullLiveSitting`                                                                                                                                                                                              |
+| `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_; `get_sitting`, `list_sittings` — _Reading a sitting back_                                                                                                                                                        |
+| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#` stays reserved for the dormant legacy rows                                                                                                                                                                  |
+| `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                                                                                         |
+| `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                                                                                        |
+| `scripts/src/devcheck/scenarios/lc-extension.ts`         | the dev check's rows for the extension (all off dev or Needs you)                                                                                                                                                                                        |
+| `cdk/src/config/ciSecrets.ts`, `cdk/src/bin/aperture.ts` | `stageSecret('DEVICE_TOKEN', stage)` / `deviceUserIdFor`                                                                                                                                                                                                 |
 
 ## Operator setup
 
@@ -390,7 +390,8 @@ nothing on the other end. "Dev" here always means the deployed AWS stage, never 
 
 ### Three layers, each matched to its job
 
-Safari has been the daily browser since 2026-10-04; the Firefox install below is retained, not in use.
+Safari has been the daily browser since 2026-10-04. The Firefox install below is **retired and removed**
+(2026-11-10): it ran v1, whose write PR D removed; the AMO notes stay as the record of how it was signed.
 
 **1. Daily driver — the Safari prod app, prod origin, your personal Safari profile.**
 This is the only one that needs to be permanent, and it genuinely does: a temporary extension you forgot
@@ -432,7 +433,7 @@ Develop menu needs Settings → Advanced → _Show features for web developers_)
 Temporary extensions don't survive a restart; re-add each time — acceptable for iteration, not for the
 daily driver.
 
-### Firefox: signing via AMO (2026-09-08, retained)
+### Firefox: signing via AMO (2026-09-08; retired and removed 2026-11-10)
 
 Firefox's layer 2 was a temporary add-on in a **separate Firefox profile** (`about:profiles` → create a
 profile → load it from `about:debugging`): separate profiles have separate extension storage, so there's
@@ -579,10 +580,11 @@ Since a submission is a real write to real data, dev is where you do this — no
 
 Sittings log `{"event":"lc_sitting_start","sittingId":…,"attach":bool}` per Start and
 `{"event":"lc_ingest","sittingId":…,"accepted":n,"duplicates":n,"skipped":n,"late":bool,"bytes":n}` per events
-call (`late`: the sitting had ended; `skipped` is what the grace dropped) — never code or payloads. The legacy ingest logs one line: `{"event":"leetcode_ingest","problemSlug":…,"metaCaptured":true|false}`.
-`metaCaptured` is the DOM-scrape hit rate — a run of `false` means the scrape broke. It's a CloudWatch
-Logs Insights query, deliberately **not** a custom metric: at $0.30/month a metric would be the single
-largest line item in this project.
+call (`late`: the sitting had ended; `skipped` is what the grace dropped) — never code or payloads. The legacy
+ingest's `{"event":"leetcode_ingest",…}` line went with it at PR D, so one appearing in a log predates that deploy.
+Watching is a CloudWatch Logs Insights query, deliberately **not** a custom metric: at $0.30/month a metric would be
+the single largest line item in this project. A refused legacy call (a stray v1 build) logs nothing server-side —
+it's only a Lambda invocation and a 401 in that browser's extension console.
 
 ## Open items
 
@@ -606,9 +608,6 @@ largest line item in this project.
 - **The summary line is hidden until there's data.** `0 solved · 0 problems · 0 attempts` sits outside
   `EmptyState`'s reach, so it would have kept asserting a total while the query was still loading or had
   failed. Revisit if a zero-state summary ever earns its place.
-- **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
-  same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale)` in `repo.ts`. A
-  `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
 - ~~Not signed yet.~~ **Done 2026-09-08** (_Firefox: signing via AMO_ → Status). Superseded as the
   daily driver by Safari on 2026-10-04 (_Safari: free signing_).
 - ~~Is the free build really permanent past 7 days?~~ **No 7-day clock (2026-10-04).** Free Personal Team

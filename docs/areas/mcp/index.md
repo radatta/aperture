@@ -35,7 +35,7 @@ kept **distinct** from the device token so the two revoke independently.
 The token is **unscoped by method** (`*`) — it's a full app session — so the edge disambiguates by
 **credential, not method**: the agent header present → validate it, never fall through; else a Cognito
 bearer (claude.ai — see the OAuth façade below); else 401. This is the reverse of the recruiting seam
-(which keys on the single ingest method name), and the reason is the same `*` decision that keeps
+(which keys on the ingest method names, `LC_INGEST_METHODS`), and the reason is the same `*` decision that keeps
 tool-adds free: a new tool never touches auth.
 
 ### The agent token is a full app session — with a bounded ceiling
@@ -476,7 +476,7 @@ parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is q
 ## Deferred
 
 - A **create-only token** for Raycast (scoped to `parse_task` + `create_task`, like the recruiting
-  device token's single method) — the Mac's Keychain holds the full agent token until then.
+  device token's `LC_INGEST_METHODS`) — the Mac's Keychain holds the full agent token until then.
 - **`create_task` doesn't check that `categoryId` exists.** A category deleted between Raycast's
   `parse_task` and its `create_task` (seconds, since 2026-10-12; a day while the script cached
   categories) can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix

@@ -76,7 +76,6 @@ export const API_METHODS = [
   'getPushStatus',
   'sendTestPush',
   'getCalibration',
-  'recordLeetcodeAttempt',
   'lcSittingStart',
   'lcSittingEvents',
   'listSittings',

@@ -329,9 +329,8 @@ export interface CalibrationPoint {
   parts: number;
 }
 
-// --- Recruiting: LeetCode attempts -----------------------------------------
-// One row per submission, captured by the browser extension. Accepted AND wrong verdicts.
-// attempt-count is DERIVED at read time (count per problemSlug) — never a stored counter.
+// --- Recruiting: LeetCode verdicts -----------------------------------------
+// A judged Run or Submit's outcome, normalized server-side from LeetCode's raw status (normalizeVerdict).
 export type LeetcodeVerdict =
   | 'accepted'
   | 'wrong_answer'
@@ -341,26 +340,10 @@ export type LeetcodeVerdict =
   | 'memory_limit'
   | 'other';
 
-export interface LeetcodeAttempt extends BaseEntity {
-  day: string; // YYYY-MM-DD, bucketed via dayStartHour + the client's reported tz offset
-  problemSlug: string;
-  problemTitle: string;
-  verdict: LeetcodeVerdict;
-  submittedAt: number; // epoch ms from LeetCode (task_finish_time)
-  lang: string;
-  runtimeMs: number | null;
-  memory: number | null; // bytes
-  leetcodeSubmissionId: string; // idempotent dedup key
-  frontendId: string | null;
-  difficulty: string | null; // 'Easy' | 'Medium' | 'Hard' | null
-  topicTags: string[] | null;
-}
-
 // --- Recruiting: LeetCode sittings ------------------------------------------
 // A sitting is one go at one problem (docs/areas/recruiting): the extension's Start opens it, Done on its
 // rep task ends it. Everything it captures is LeetCode's own traffic, kept raw; the counts and metrics
-// are folds over it (sittings.ts) so the stub and the Lambda can't drift. The legacy LeetcodeAttempt
-// rows above are retired: still written by the old extension build, read by nothing.
+// are folds over it (sittings.ts) so the stub and the Lambda can't drift.
 export type SittingStatus = 'active' | 'done' | 'abandoned';
 
 // A judged Run or Submit, as the fold keeps it (the raw response stays on the event).

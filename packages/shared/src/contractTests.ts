@@ -163,51 +163,6 @@ export function runApiContract(
       expect(updated.text).toBe('shipped it, finally');
     });
 
-    it('leetcode: record normalizes verdict, buckets by client tz, and is idempotent on submission id', async () => {
-      const base = {
-        problemSlug: 'two-sum',
-        problemTitle: 'Two Sum',
-        submittedAt: 1_700_000_000_000, // 2023-11-14T22:13:20Z
-        tzOffsetMinutes: 300, // UTC-5
-        lang: 'python3',
-      };
-      const wrong = await api.recordLeetcodeAttempt({
-        ...base,
-        leetcodeSubmissionId: 'sub-1',
-        statusCode: 11,
-        statusMsg: 'Wrong Answer',
-        difficulty: 'Easy',
-        topicTags: ['array', 'hash-table'],
-      });
-      expect(wrong.verdict).toBe('wrong_answer');
-      expect(wrong.difficulty).toBe('Easy');
-      expect(wrong.topicTags).toEqual(['array', 'hash-table']);
-      // day = submittedAt shifted by tz offset + dayStartHour(4), via UTC getters → runner-TZ-independent
-      expect(wrong.day).toBe('2023-11-14');
-
-      // Same submission id re-fires → same row, original verdict preserved (no overwrite).
-      const dup = await api.recordLeetcodeAttempt({
-        ...base,
-        leetcodeSubmissionId: 'sub-1',
-        statusCode: 10,
-        statusMsg: 'Accepted',
-      });
-      expect(dup.id).toBe(wrong.id);
-      expect(dup.verdict).toBe('wrong_answer');
-
-      const ac = await api.recordLeetcodeAttempt({
-        ...base,
-        leetcodeSubmissionId: 'sub-2',
-        statusCode: 10,
-        statusMsg: 'Accepted',
-        submittedAt: base.submittedAt + 60_000,
-      });
-      // Retired legacy ingest (read by nothing): it still records, a new submission is its own row.
-      expect(ac.id).not.toBe(wrong.id);
-      expect(ac.difficulty).toBeNull(); // unset → null, not undefined
-      expect(ac.verdict).toBe('accepted');
-    });
-
     it('stories: create defaults empty S/A/R, lists updatedAt-desc, patches, and soft-deletes', async () => {
       const a = await api.createStory({
         title: 'Led the migration',

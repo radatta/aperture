@@ -112,14 +112,12 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **sittings** — one go at one LeetCode problem, written by the browser extension through the ingest methods; the model, its folds and its caps live in [recruiting](../areas/recruiting/index.md) → _Sittings_ (`packages/shared/src/sittings.ts`).
 
-**leetcodeAttempts** — **retired** (lc-redesign, 2026-11): the old extension build still posts one row per submission until the prod rebuild, and nothing reads them; not exported. As built: one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.
+**leetcodeAttempts** — **dormant** (lc-redesign, 2026-11): no reader since A1, no writer since PR D (2026-11) removed `recordLeetcodeAttempt`. The rows stay in both tables as data at rest — no migration, no delete, not exported, SK prefix `lc#` reserved (`keys.ts`). As written: one row per LeetCode submission, accepted **and** wrong, by the v1 browser extension (device token), never by the app.
 
 - `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
-- `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`. **Normalized server-side** from LeetCode's raw `status_code`/`status_msg` — the dep-free extension forwards raw signals only.
-- `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
-- **Idempotent on `leetcodeSubmissionId`** — a re-fire returns the existing row, original verdict intact.
-- **Attempt count per problem is DERIVED at read time**, never a stored counter.
-- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[recruiting/](../areas/recruiting/index.md)**.
+- `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`, normalized server-side from LeetCode's raw `status_code`/`status_msg` (`normalizeVerdict`, which the sittings still use).
+- `day` was bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (`dayKeyForOffset`, likewise still used).
+- Writes were idempotent on `leetcodeSubmissionId` (a re-fire returned the existing row, original verdict intact); attempt counts were derived at read time, never stored.
 
 **stories** — behavioral-interview STAR stories, authored in-app (the one place structured-at-entry is right — a story is a slowly-tightened artifact, not a capture).
 
@@ -158,7 +156,7 @@ SK (type-prefixed range keys):
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
-  lc#<day>#<ulid>               LeetCode attempts — retired: the legacy ingest still writes, nothing reads
+  lc#<day>#<ulid>               legacy LeetCode attempts — dormant since PR D (2026-11): no reader, no writer; prefix reserved
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
   lcs#<id>#budget               a sitting's capture budget (reserved before every events write; internal)
