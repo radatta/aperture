@@ -103,20 +103,20 @@ describe('selectors', () => {
       expect(typeof v, k).toBe('string');
       expect(() => doc.querySelector(v), k).not.toThrow(); // valid CSS, every one
     }
-    expect(selectors.KEYS).not.toContain('timerClicks');
+    for (const gone of ['timerClicks', 'run', 'submit']) expect(selectors.KEYS).not.toContain(gone);
     const m = selectors.merge({
       editorReset: '#r',
       timerStart: null,
       timerClicks: ['#a'],
       bogus: 'x',
       dialog: 7,
-      run: '  ',
+      lang: '  ',
     });
     expect(m).toMatchObject({
       editorReset: '#r',
       timerStart: null,
       dialog: selectors.DEFAULTS.dialog,
-      run: selectors.DEFAULTS.run,
+      lang: selectors.DEFAULTS.lang,
     });
     expect(m).not.toHaveProperty('bogus');
     expect(m).not.toHaveProperty('timerClicks');

@@ -16,6 +16,7 @@
     runs: 0,
     syncs: 0,
     resetCloses: false, // a test's switch: the timer pop-up closes after its reset instead of staying open
+    resetInert: false, // a test's switch: the pop-up's Reset does nothing (LeetCode never goes idle)
   });
   const gql = (operationName, variables) => {
     if (operationName === 'updateSyncedCode') fake.syncs++;
@@ -78,10 +79,22 @@
   };
   const timerBox = $('[data-fake=timer]');
   let popup = null;
+  // Closing animates out, as Radix's does: `data-state="closed"` and inert for a moment, then gone.
   const closePopup = () => {
-    if (popup) popup.remove();
+    if (!popup) return;
+    const gone = popup;
     popup = null;
+    gone.setAttribute('data-state', 'closed');
+    setTimeout(() => gone.remove(), 150);
   };
+  // A press outside the pop-up and its widget dismisses it (Radix's default) — a click on our overlay too.
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (popup && !popup.contains(e.target) && !timerBox.contains(e.target)) closePopup();
+    },
+    true,
+  );
   // The pop-up's one action button: Start in the tab LeetCode last used, or (asked by Reset) its Reset.
   function popupButton(kind) {
     const st = readTimer() || idle('forward');
@@ -94,12 +107,14 @@
         : 'relative font-medium bg-sd-secondary';
     b.textContent = `${kind === 'start' ? 'Start' : 'Reset'} ${name}`;
     b.addEventListener('click', () => {
+      if (b.closest('[data-state="closed"]')) return; // a closing pop-up's buttons do nothing
       if (kind === 'start') {
         fake.timerStarts++;
         writeTimer({ ...idle(st.mode), startTimestamp: Date.now(), status: 'running' });
         closePopup();
       } else {
         fake.timerResets++;
+        if (fake.resetInert) return;
         writeTimer(idle(st.mode));
         if (fake.resetCloses) return closePopup();
         // It stays open and swaps its Reset for Start, both present for a moment.
@@ -157,18 +172,18 @@
           pauseMs: Date.now() - cur.startTimestamp,
         });
     });
-    if (status === 'idle') {
-      const opener = document.createElement('div');
-      opener.setAttribute('role', 'button');
-      opener.setAttribute('aria-label', st && st.mode === 'reverse' ? 'Timer' : 'Stopwatch');
-      opener.setAttribute('data-fake', 'opener');
-      opener.addEventListener('click', () => {
-        fake.timerOpens++;
-        if (popup) closePopup();
-        else openPopup('start');
-      });
-      timerBox.append(opener);
-    }
+    // The opener's layer is mounted in every state, as logged (only shown while idle); on a clock that is going
+    // it opens the pop-up on its Reset — a guess, never logged.
+    const opener = document.createElement('div');
+    opener.setAttribute('role', 'button');
+    opener.setAttribute('aria-label', st && st.mode === 'reverse' ? 'Timer' : 'Stopwatch');
+    opener.setAttribute('data-fake', 'opener');
+    opener.addEventListener('click', () => {
+      fake.timerOpens++;
+      if (popup) closePopup();
+      else openPopup(status === 'idle' ? 'start' : 'reset');
+    });
+    timerBox.append(opener);
   }
   fake.setTimer = (st) => writeTimer(st);
   render();

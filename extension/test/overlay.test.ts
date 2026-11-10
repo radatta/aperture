@@ -137,6 +137,7 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
       strays: number;
       syncs: number;
       resetCloses: boolean;
+      resetInert: boolean;
       setTimer: (s: Record<string, unknown>) => void;
     };
   return { w, phase, text, button, tap, badge, fake };
@@ -465,6 +466,14 @@ describe('the overlay on a LeetCode problem', () => {
       return l?.find((e) => e.type === 'controls');
     }, 6000);
     expect(log!.roleButtons!.map((b) => b.attrs['aria-label'])).toContain('Stopwatch');
+    // The way the failed step took is logged too: opened the idle timer, never started it.
+    const path = await until(() =>
+      (
+        ext.local.data.debugLog as Array<{ type: string; opened?: boolean; started?: boolean }>
+      )?.find((e) => e.type === 'timer'),
+    );
+    expect(path).toMatchObject({ status: null, opened: true }); // no timer state: never used
+    expect(path).not.toHaveProperty('started');
     await ext.local.remove('selectors'); // the fix, pasted in Options: back to the defaults
     await new Promise((res) => setTimeout(res, 100));
     p.tap('retry');
@@ -515,4 +524,42 @@ describe('the overlay on a LeetCode problem', () => {
     expect(again2).toBe(1);
     expect(again.p.fake()).toMatchObject({ resets: 1, strays: 0 });
   }, 30_000);
+  it('says LeetCode’s timer didn’t ask to confirm its reset; Retry after our overlay dismissed its pop-up clicks Reset again, not the closing one', async () => {
+    const { p, ext } = await startOn(PAUSED_COUNTDOWN(), {
+      selectors: { timerResetConfirm: '#gone' },
+    });
+    expect(p.phase()).toBe('failed');
+    expect(p.text()).toContain('didn’t ask to confirm its reset (timerResetConfirm)');
+    expect(p.text()).toContain('Continue without the timer');
+    const open = () => p.w.document.querySelector('#radix-_r_c_[data-state="open"] button');
+    expect(open()?.textContent).toMatch(/^Reset /); // LeetCode's pop-up is still asking
+    await ext.local.remove('selectors');
+    await new Promise((res) => setTimeout(res, 100));
+    p.tap('retry'); // the click on our overlay dismisses it: closing, still in the DOM, inert
+    await until(() => p.phase() === 'active', 8000);
+    expect(p.fake()).toMatchObject({ timerResets: 1, timerStarts: 1, strays: 0 });
+    expect(timerState(p)).toMatchObject({ mode: 'reverse', status: 'running' });
+  }, 20_000);
+
+  it('says LeetCode’s timer didn’t reset when its Reset never lands, and clicks no Start', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    p.fake().setTimer(PAUSED_COUNTDOWN());
+    p.fake().resetInert = true;
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'failed', 8000);
+    expect(p.text()).toContain('LeetCode’s timer didn’t reset.');
+    expect(p.fake()).toMatchObject({ timerResets: 1, timerStarts: 0, strays: 0 });
+  });
+
+  it('a timer key turned off in Options says the timer isn’t configured and clicks none of its controls', async () => {
+    const { p } = await startOn(RUNNING_STOPWATCH(), { selectors: { timerOpen: null } });
+    expect(p.phase()).toBe('failed');
+    expect(p.text()).toContain('LeetCode’s timer isn’t configured');
+    expect(p.fake()).toMatchObject({ resets: 1, timerResets: 0, timerOpens: 0, timerStarts: 0 });
+    p.tap('continue');
+    await until(() => p.phase() === 'active');
+  });
 });

@@ -1,7 +1,8 @@
 // Where LeetCode's own controls are. Run, Submit and the language come from the 2026-11-08 page dump; the editor
 // reset, its confirm and the timer's controls from Rahul's debug session (2026-11-10, localNotes/debug-log.json).
 // Options → Selectors overrides any of them without a rebuild (LeetCode moves its DOM; a prod Xcode rebuild is the
-// slow path), and `null` turns a step off: the overlay says "not configured" and Continue still keeps the sitting.
+// slow path). `null` on a click key (editorReset, resetConfirm, timer*) turns that step off: the overlay says "not
+// configured" and Continue still keeps the sitting. `dialog` and `lang` aren't steps — leave them set.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -20,13 +21,12 @@
     resetConfirm: '#editor [role="dialog"][aria-modal="true"] button.bg-green-s',
     // The idle timer's opener — "Stopwatch" as logged in forward mode; "Timer" is a guess for countdown.
     timerOpen: '[role="button"][aria-label="Stopwatch"],[role="button"][aria-label="Timer"]',
-    // The pop-up's Start Stopwatch / Start Timer, and its Reset Stopwatch / Reset Timer.
-    timerStart: '[role="dialog"][id^="radix-"] button.bg-sd-primary',
+    // The pop-up's Start Stopwatch / Start Timer, and its Reset Stopwatch / Reset Timer — in an OPEN pop-up only:
+    // a click on our overlay dismisses it (Radix), and while it animates out it is still there, `data-state="closed"`.
+    timerStart: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-primary',
     timerReset: '[role="button"][aria-label="Reset"]',
-    timerResetConfirm: '[role="dialog"][id^="radix-"] button.bg-sd-secondary',
+    timerResetConfirm: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-secondary',
     lang: '[data-e2e-locator="lang-selector-button"]',
-    run: '[data-e2e-locator="console-run-button"]',
-    submit: '[data-e2e-locator="console-submit-button"]',
   });
   const KEYS = Object.keys(DEFAULTS);
 
