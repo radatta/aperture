@@ -61,7 +61,6 @@ import {
   normalizeContentType,
   normalizeNotes,
   normalizeReflection,
-  normalizeVerdict,
   resolveStaleSession,
   resumeSession,
   ROLL_PLAN_FALLBACK_MIN,
@@ -192,7 +191,6 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
-  LeetcodeAttempt,
   FluxSet,
   FluxSetFilter,
   RecordFluxSetInput,
@@ -206,7 +204,6 @@ import type {
   PushStatus,
   PushSub,
   SubscribePushInput,
-  RecordLeetcodeAttemptInput,
   Roll,
   Settings,
   SettingsPatch,
@@ -312,7 +309,6 @@ export interface Store {
   placeToken: StubPlaceToken | null; // a credential: never exported
   pushSubs: PushSub[]; // credentials (endpoint + keys): never exported
   pushHealth: PushPollerHealth; // the poller's heartbeat, which only Send test moves here: not user data
-  leetcodeAttempts: LeetcodeAttempt[]; // retired: the legacy ingest still writes, nothing reads
   sittings: Sitting[];
   sittingLive: SittingLive[];
   sittingEvents: SittingEvent[];
@@ -354,7 +350,6 @@ export function emptyStore(): Store {
     placeToken: null,
     pushSubs: [],
     pushHealth: NO_POLLER_RUN,
-    leetcodeAttempts: [],
     sittings: [],
     sittingLive: [],
     sittingEvents: [],
@@ -473,7 +468,7 @@ class StubClient implements ApiClient {
     try {
       const raw = globalThis.localStorage?.getItem(this.key);
       // Coalesce over emptyStore() so a pre-existing persisted store gains new collections (e.g.
-      // leetcodeAttempts) without a wipe or an undefined.push crash.
+      // sittings) without a wipe or an undefined.push crash.
       if (!raw) return null;
       const store = { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) };
       // Settings gain fields over time; a persisted row from before them reads the defaults.
@@ -745,28 +740,6 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.logEntries, id, { text });
   }
 
-  // --- Recruiting (LeetCode) -----------------------------------------------
-  async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
-    const dup = this.alive(this.store.leetcodeAttempts).find(
-      (a) => a.leetcodeSubmissionId === input.leetcodeSubmissionId,
-    );
-    if (dup) return dup; // idempotent — mirrors backend
-    return this.writes.insert(this.store.leetcodeAttempts, {
-      ...this.base(),
-      day: dayKeyForOffset(input.submittedAt, input.tzOffsetMinutes, this.dayStartHour()),
-      problemSlug: input.problemSlug,
-      problemTitle: input.problemTitle,
-      verdict: normalizeVerdict(input.statusCode, input.statusMsg),
-      submittedAt: input.submittedAt,
-      lang: input.lang,
-      runtimeMs: input.runtimeMs ?? null,
-      memory: input.memory ?? null,
-      leetcodeSubmissionId: input.leetcodeSubmissionId,
-      frontendId: input.frontendId ?? null,
-      difficulty: input.difficulty ?? null,
-      topicTags: input.topicTags ?? null,
-    });
-  }
   // --- LeetCode sittings (sittings.ts) --------------------------------------
   async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
     const n = normalizeSittingStart(input);
@@ -2793,7 +2766,6 @@ class StubClient implements ApiClient {
         | 'pushSubs'
         | 'pushHealth'
         | 'fluxNotes'
-        | 'leetcodeAttempts'
         | 'sittingReplay'
         | 'sittingBudgets'
         | 'sittingReads'

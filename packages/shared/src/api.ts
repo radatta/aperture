@@ -18,7 +18,6 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
-  LeetcodeAttempt,
   LeetcodeProblem,
   LogEntry,
   Place,
@@ -226,22 +225,6 @@ export interface LiveSittingPull {
   lastSitting: Sitting | null; // when nothing is open: the newest by startedAt, any status
 }
 
-export interface RecordLeetcodeAttemptInput {
-  leetcodeSubmissionId: string; // idempotent dedup key
-  problemSlug: string;
-  problemTitle: string;
-  statusCode?: number | null; // raw LeetCode status_code (primary verdict signal)
-  statusMsg?: string | null; // raw status_msg (fallback)
-  submittedAt: number; // epoch ms (LeetCode task_finish_time)
-  tzOffsetMinutes: number;
-  lang: string;
-  runtimeMs?: number | null;
-  memory?: number | null; // bytes
-  frontendId?: string | null;
-  difficulty?: string | null;
-  topicTags?: string[] | null;
-}
-
 // A finished Flux set, as the stage hands it over (FluxSetDraft plus the three keys). The id and day
 // are the client's (D47): the id is the idempotency key, so an outbox retry returns the stored row.
 export interface RecordFluxSetInput {
@@ -296,7 +279,7 @@ export interface ExportBundle {
   categories: Category[];
   places: Place[]; // the place token (pointer + lookup row) is a credential and is never exported
   // LeetCode sittings: heads, live rows, head rows and problems. The raw payloads and the replay are left out
-  // (bulk; the export is one Lambda response) — like attachment bytes. The legacy leetcodeAttempts are retired and no longer exported.
+  // (bulk; the export is one Lambda response) — like attachment bytes.
   sittings: Sitting[];
   sittingLive: SittingLive[];
   sittingHeadRows: SittingHeadRow[]; // runs/submits/notes/timer as verdicts — their raw payloads stay in the table
@@ -580,10 +563,6 @@ export interface ApiClient {
 
   // Calibration (derived, read-only)
   getCalibration(range: DateRange): Promise<CalibrationPoint[]>;
-
-  // Recruiting (LeetCode) — the legacy per-submission ingest. Retired: the old extension build still
-  // posts here until the prod rebuild, and the rows it writes are read by nothing (removed in PR D).
-  recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt>;
 
   // LeetCode sittings (sittings.ts; docs/areas/recruiting). The two ingest methods take the device token
   // or the user's JWT (LC_INGEST_METHODS); everything else is JWT only.

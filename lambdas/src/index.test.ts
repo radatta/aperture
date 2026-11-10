@@ -111,18 +111,18 @@ describe('handler edge', () => {
   });
 });
 
-// Device-token ingest branch — only the auth-FAILURE paths, which return before any DynamoDB access
-// (the write path itself is proven by the shared contract suite via handleRpc). No external calls.
+// Device-token ingest branch: the auth-failure paths here return before any DynamoDB access; the
+// sittings block below drives the accepted ones. No external calls.
 describe('handler device-token ingest branch', () => {
   afterEach(() => {
     delete process.env.DEVICE_TOKEN;
     delete process.env.DEVICE_USER_ID;
   });
 
-  const ingest = (headers: Record<string, string | undefined>) =>
+  const ingest = (headers: Record<string, string | undefined>, method = 'lcSittingEvents') =>
     handler({
-      rawPath: '/api/recordLeetcodeAttempt',
-      requestContext: { http: { method: 'POST', path: '/api/recordLeetcodeAttempt' } },
+      rawPath: `/api/${method}`,
+      requestContext: { http: { method: 'POST', path: `/api/${method}` } },
       headers,
       body: JSON.stringify({ args: [{}] }),
     });
@@ -137,6 +137,39 @@ describe('handler device-token ingest branch', () => {
     process.env.DEVICE_TOKEN = 'right-token';
     const res = await ingest({});
     expect(res.statusCode).toBe(401);
+  });
+
+  // The legacy per-submission write is gone (PR D): a stray v1 build's device token falls to the JWT
+  // path and 401s, a JWT reaches handleRpc and 404s, and neither reads or writes a row — twice over.
+  it('refuses recordLeetcodeAttempt: 401 with the device token, 404 with a JWT, the table untouched', async () => {
+    process.env.DEVICE_TOKEN = 'right-token';
+    process.env.DEVICE_USER_ID = 'u-dev';
+    const real = new InMemoryDoc();
+    const touched: string[] = [];
+    h.doc = new Proxy(real, {
+      get: (t, k) => {
+        const v = Reflect.get(t, k) as unknown;
+        if (typeof v !== 'function') return v;
+        return (...a: unknown[]) => (
+          touched.push(String(k)),
+          (v as (...x: unknown[]) => unknown).apply(t, a)
+        );
+      },
+    });
+    for (let i = 0; i < 2; i++) {
+      const device = await ingest(
+        { 'x-aperture-authorization': 'Bearer right-token' },
+        'recordLeetcodeAttempt',
+      );
+      expect(device.statusCode).toBe(401);
+      const jwt = await ingest(
+        { 'x-aperture-authorization': 'Bearer good-jwt' },
+        'recordLeetcodeAttempt',
+      );
+      expect(jwt.statusCode).toBe(404);
+      expect(JSON.parse(jwt.body).error).toBe('Unknown method: recordLeetcodeAttempt');
+    }
+    expect(touched).toEqual([]);
   });
 
   // The sittings' ingest set: the device token or the user's JWT, nothing else; a body over the cap is

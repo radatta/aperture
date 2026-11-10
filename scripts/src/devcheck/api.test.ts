@@ -97,6 +97,7 @@ describe('createApiClient', () => {
       'getSettings',
       'getSitting',
       'getTask',
+      'legacyWrite',
       'listAttachments',
       'listBacklog',
       'listCategories',
@@ -607,6 +608,32 @@ describe('createApiClient', () => {
     });
     await expect(api.reads.listTasks()).rejects.toThrow(/HTTP 429.*Rate Exceeded/);
     expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  it('probes the removed legacy write with no input, as the JWT or a bogus device token, and returns the raw answer', async () => {
+    const fetch = vi.fn<FetchLike>(async () => ({
+      status: 200,
+      text: async () => '<!doctype html>',
+    }));
+    const api = createApiClient({ fetch, token: () => 'tok', ledger: memLedger(), run: 'r1' });
+    expect(await api.reads.legacyWrite('jwt')).toEqual({ status: 200, text: '<!doctype html>' });
+    await api.reads.legacyWrite('bogus-device');
+    const sent = fetch.mock.calls.map(([url, init]) => [url, init.headers, init.body]);
+    expect(sent).toEqual([
+      [
+        `${DEV_ORIGIN}/api/recordLeetcodeAttempt`,
+        { 'content-type': 'application/json', 'x-aperture-authorization': 'Bearer tok' },
+        '{"args":[]}',
+      ],
+      [
+        `${DEV_ORIGIN}/api/recordLeetcodeAttempt`,
+        {
+          'content-type': 'application/json',
+          'x-aperture-authorization': 'Bearer devcheck-not-a-device-token',
+        },
+        '{"args":[]}',
+      ],
+    ]);
   });
 
   it('throws on a non-200 with the status and body', async () => {

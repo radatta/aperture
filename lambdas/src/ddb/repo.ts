@@ -12,7 +12,6 @@ import type {
   Habit,
   HabitCheck,
   Idea,
-  LeetcodeAttempt,
   LeetcodeProblem,
   Sitting,
   SittingBudget,
@@ -162,25 +161,6 @@ export class Repo {
   async putLog(e: LogEntry): Promise<LogEntry> {
     await this.writes.put(entityItem(this.userId, sk.log(e.day, e.id), e));
     return e;
-  }
-
-  // --- LeetCode attempts ---
-  async listLeetcodeAttempts(): Promise<LeetcodeAttempt[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.lcAllPrefix())).map((i) => toEntity<LeetcodeAttempt>(i)),
-    );
-  }
-  // TODO(scale): prefix scan for dedup — matches findLog/findPlan single-user tolerance.
-  // Before a high-volume deploy, add a `lcsub#<id>` pointer item so this is a direct read.
-  async findLeetcodeBySubmissionId(submissionId: string): Promise<LeetcodeAttempt | null> {
-    return (
-      (await this.listLeetcodeAttempts()).find((a) => a.leetcodeSubmissionId === submissionId) ??
-      null
-    );
-  }
-  async putLeetcodeAttempt(a: LeetcodeAttempt): Promise<LeetcodeAttempt> {
-    await this.writes.put(entityItem(this.userId, sk.lc(a.day, a.id), a));
-    return a;
   }
 
   // --- LeetCode sittings (keys.ts → sitting*) ---

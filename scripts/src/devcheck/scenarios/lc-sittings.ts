@@ -662,6 +662,32 @@ export const lcSittings: Scenario = {
       kind: 'edge',
       what: 'A rep that lost its estimate: Home’s Done and End sitting both offer the Roll’s 45 as the estimate in hindsight',
     },
+    // PR D: the legacy per-submission write (recordLeetcodeAttempt) is gone.
+    {
+      id: 'legacy-refused',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The removed recordLeetcodeAttempt is refused, twice alike: a device-token bearer 401s, the signed-in user gets no API answer, nothing written',
+    },
+    {
+      id: 'legacy-jwt-404',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The signed-in user’s recordLeetcodeAttempt is a 404 “Unknown method” that never touches the table',
+      offDev: {
+        file: 'lambdas/src/index.test.ts',
+        test: 'refuses recordLeetcodeAttempt: 401 with the device token, 404 with a JWT, the table untouched',
+        why: 'dev can’t show the status: CloudFront answers an origin 404 with index.html as a 200; legacy-refused proves the same call on dev gets no API answer',
+      },
+    },
+    {
+      id: 'legacy-v1-gone',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'On prod, Safari runs the 2.0.0 build and lands a sitting, and no v1 build posts the legacy write (zero leetcode_ingest, the newest lc# row unchanged)',
+      needsYou:
+        'prod only, and before D merges: the operator gate (rebuild from v2, one prod sitting, then the logs and the lc# query)',
+    },
   ],
   steps: [
     {
@@ -1724,6 +1750,39 @@ export const lcSittings: Scenario = {
           /LeetCode roll/,
         );
         await ctx.api.writes.linkLeetcodeRoll(null);
+      },
+    },
+    // PR D. The probe posts no input, so even a server that still had the method could not write a row.
+    {
+      id: 'legacy-refused',
+      entry: 'api',
+      proves: ['legacy-refused'],
+      title: 'recordLeetcodeAttempt, twice: a device-token bearer 401s, the JWT gets no API answer',
+      async run(ctx) {
+        const isJson = (t: string) => {
+          try {
+            JSON.parse(t);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        for (const round of [1, 2]) {
+          const device = await ctx.api.reads.legacyWrite('bogus-device');
+          if (device.status !== 401)
+            throw new Error(
+              `round ${round}: device bearer → ${device.status} ${device.text.slice(0, 120)}`,
+            );
+          // Through CloudFront an origin 404 is index.html as a 200; the local check sees the Lambda's own 404.
+          const jwt = await ctx.api.reads.legacyWrite('jwt');
+          const gone =
+            (jwt.status === 200 && !isJson(jwt.text)) ||
+            (jwt.status === 404 && /Unknown method: recordLeetcodeAttempt/.test(jwt.text));
+          if (!gone)
+            throw new Error(
+              `round ${round}: JWT → ${jwt.status} ${jwt.text.slice(0, 120)} — the method still answers`,
+            );
+        }
       },
     },
     noConsoleErrors,

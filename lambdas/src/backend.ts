@@ -22,7 +22,6 @@ import {
   normalizeDue,
   normalizeNotes,
   normalizeReflection,
-  normalizeVerdict,
   ROLL_PLAN_FALLBACK_MIN,
   rollRepFields,
   sanitizeFilename,
@@ -148,7 +147,6 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
-  LeetcodeAttempt,
   FluxSet,
   FluxWeekNote,
   FluxSetFilter,
@@ -161,7 +159,6 @@ import type {
   PushDevice,
   PushStatus,
   ReminderSettingKey,
-  RecordLeetcodeAttemptInput,
   Roll,
   Settings,
   SettingsPatch,
@@ -658,35 +655,6 @@ export class BackendClient implements ApiClient {
     return this.repo.putLog({ ...e, text, updatedAt: this.now() });
   }
 
-  // --- Recruiting (LeetCode) ---
-  async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
-    // Extension is passive; metadata is DOM-scraped client-side (docs/areas/recruiting/index.md → Design
-    // decisions). Log `metaCaptured` per ingest for the Logs Insights hit-rate query — deliberately no
-    // custom metric (same doc → Watching an ingest).
-    const metaCaptured =
-      input.difficulty != null || (Array.isArray(input.topicTags) && input.topicTags.length > 0);
-    console.log(
-      JSON.stringify({ event: 'leetcode_ingest', problemSlug: input.problemSlug, metaCaptured }),
-    );
-    const dup = await this.repo.findLeetcodeBySubmissionId(input.leetcodeSubmissionId);
-    if (dup) return dup; // idempotent — the extension may fire twice for one submission
-    const start = (await this.ensureSettings()).dayStartHour;
-    return this.repo.putLeetcodeAttempt({
-      ...this.base(),
-      day: dayKeyForOffset(input.submittedAt, input.tzOffsetMinutes, start),
-      problemSlug: input.problemSlug,
-      problemTitle: input.problemTitle,
-      verdict: normalizeVerdict(input.statusCode, input.statusMsg),
-      submittedAt: input.submittedAt,
-      lang: input.lang,
-      runtimeMs: input.runtimeMs ?? null,
-      memory: input.memory ?? null,
-      leetcodeSubmissionId: input.leetcodeSubmissionId,
-      frontendId: input.frontendId ?? null,
-      difficulty: input.difficulty ?? null,
-      topicTags: input.topicTags ?? null,
-    });
-  }
   // --- LeetCode sittings (sittings.ts; docs/areas/recruiting) ---
   // Device token or JWT (index.ts → LC_INGEST_METHODS). The extension's Start:
   // 1. count the attempt on the user's Start gate (a CAS, capped a day) before reading anything;

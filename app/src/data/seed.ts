@@ -607,7 +607,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
 
   // LeetCode sittings on three of the done reps, folded with the SAME shared folds the server runs, so the
   // page can't drift from what ingest writes: a wrong→accepted arc, a first-submit accept, and one with a
-  // run first. The legacy attempt rows are retired (read by nothing), so the seed writes none.
+  // run first.
   store.settings!.leetcodeRollId = leetcode.id;
   type Judged = [
     type: 'run' | 'submit',
