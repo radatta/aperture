@@ -5,6 +5,7 @@
     { "path": "./app" },
     { "path": "./lambdas" },
     { "path": "./cdk" },
-    { "path": "./scripts" }
+    { "path": "./scripts" },
+    { "path": "./extension" }
   ]
 }

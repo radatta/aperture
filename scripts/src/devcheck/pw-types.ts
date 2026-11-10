@@ -67,6 +67,8 @@ export interface PwPage {
   setViewportSize(size: { width: number; height: number }): Promise<void>;
   url(): string;
   setViewportSize(size: { width: number; height: number }): Promise<void>;
+  // A real (trusted) click at viewport coordinates — the lc-e2e clicks inside closed shadow roots.
+  mouse?: { click(x: number, y: number): Promise<void> };
   locator(selector: string): PwLocator;
   getByRole(
     role: string,
@@ -118,6 +120,19 @@ export interface PwContext {
   newPage(): Promise<PwPage>;
   storageState(): Promise<unknown>;
   close(): Promise<void>;
+  // A persistent context with an extension loaded (scripts/src/lc-e2e): its background service worker, and
+  // routes that see every page's requests.
+  serviceWorkers?(): PwWorker[];
+  waitForEvent?(event: 'serviceworker', opts?: { timeout?: number }): Promise<PwWorker>;
+  route?(
+    url: string | RegExp | ((u: URL) => boolean),
+    handler: (route: PwRoute) => Promise<void> | void,
+  ): Promise<void>;
+}
+
+export interface PwWorker {
+  url(): string;
+  evaluate<T>(expression: string): Promise<T>;
 }
 
 export interface PwBrowser {
@@ -126,5 +141,11 @@ export interface PwBrowser {
 }
 
 export interface PwModule {
-  chromium: { launch(opts: Record<string, unknown>): Promise<PwBrowser> };
+  chromium: {
+    launch(opts: Record<string, unknown>): Promise<PwBrowser>;
+    launchPersistentContext?(
+      userDataDir: string,
+      opts: Record<string, unknown>,
+    ): Promise<PwContext>;
+  };
 }

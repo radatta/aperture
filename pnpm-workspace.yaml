@@ -4,6 +4,7 @@ packages:
   - cdk
   - packages/*
   - scripts
+  - extension
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Aperture LeetCode Capture",
-  "version": "1.0.0",
-  "description": "Captures your own LeetCode submissions (accepted and wrong) as they happen and POSTs them to the Aperture backend, authenticated with a personal device token.",
+  "name": "Aperture LeetCode",
+  "version": "2.0.0",
+  "description": "Opens a sitting in Aperture when you Start a LeetCode problem, and sends what LeetCode itself sends \u2014 your code, runs, submits and timer \u2014 with a personal device token.",
   "icons": {
     "48": "icons/icon-48.png",
     "96": "icons/icon-96.png",
@@ -10,7 +10,7 @@
     "256": "icons/icon-256.png",
     "512": "icons/icon-512.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "alarms"],
   "host_permissions": ["*://leetcode.com/*"],
   "optional_host_permissions": ["*://*/*"],
   "content_scripts": [
@@ -18,16 +18,29 @@
       "matches": ["*://leetcode.com/*"],
       "run_at": "document_start",
       "world": "MAIN",
-      "js": ["src/inject-main.js"]
+      "js": ["src/page/tag.js", "src/inject-main.js"]
     },
     {
       "matches": ["*://leetcode.com/*"],
       "run_at": "document_start",
-      "js": ["src/content-relay.js"]
+      "js": [
+        "src/lib/tag.js",
+        "src/lib/wire.js",
+        "src/lib/ulid.js",
+        "src/lib/relay.js",
+        "src/lib/timer.js",
+        "src/lib/overlay-state.js",
+        "src/lib/selectors.js",
+        "src/lib/outbox.js",
+        "src/lib/batch.js",
+        "src/debug.js",
+        "src/overlay.js",
+        "src/content.js"
+      ]
     }
   ],
   "background": {
-    "scripts": ["src/background.js"]
+    "scripts": ["src/lib/outbox.js", "src/background.js"]
   },
   "options_ui": {
     "page": "options.html",

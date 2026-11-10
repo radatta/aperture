@@ -20,6 +20,7 @@ import { fluxPerf } from './flux-perf';
 import { devConcurrencyCaps } from './dev-concurrency-caps';
 import { inflightCap } from './inflight-cap';
 import { iosStandalone } from './ios-standalone';
+import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
@@ -61,6 +62,7 @@ export const SCENARIOS: Scenario[] = [
   cognitoRefresh,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   devConcurrencyCaps,
+  lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

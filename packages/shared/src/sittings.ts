@@ -41,7 +41,7 @@ export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
 // deletes it. What's kept forever is the head, the live row (final code + facts) and every run/submit.
 export const SITTING_RAW_KEEP_MS = 14 * 24 * 3600_000;
 export const SITTING_FOCUS_MAX = 300;
-const PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = {
+export const SITTING_PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = {
   snapshot: 64 * 1024,
   run: 96 * 1024,
   submit: 96 * 1024,
@@ -50,7 +50,7 @@ const PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = {
   timer: 1024,
   replay: 64 * 1024,
 };
-const PROBLEM_MAX = 64 * 1024;
+export const SITTING_PROBLEM_MAX = 64 * 1024;
 const SLUG_RE = /^[a-z0-9-]{1,128}$/;
 
 export const LC_ROLL_UNLINKED_ERROR =
@@ -169,7 +169,7 @@ export function normalizeSittingStart(input: SittingStartInput): NormalizedSitti
     tags = input.topicTags.map((t) => str(t, 'Topic tag', 40));
   }
   const problem = input.problem ?? null;
-  if (jsonSize(problem) > PROBLEM_MAX) throw new Error('Problem detail is too large');
+  if (jsonSize(problem) > SITTING_PROBLEM_MAX) throw new Error('Problem detail is too large');
   const problemErr = payloadError(problem);
   if (problemErr) throw new Error(problemErr);
   const tz = finite(input.tzOffsetMinutes, 'tzOffsetMinutes');
@@ -230,7 +230,7 @@ export function normalizeSittingEvents(input: SittingEventsInput): {
     if (e.type === 'replay') {
       if (typeof e.events !== 'string') throw new Error('Replay events must be text');
       const bytes = utf8Bytes(e.events);
-      if (bytes > PAYLOAD_MAX.replay) throw new Error('A replay chunk is too large');
+      if (bytes > SITTING_PAYLOAD_MAX.replay) throw new Error('A replay chunk is too large');
       total += bytes;
       return {
         id: e.id,
@@ -245,7 +245,7 @@ export function normalizeSittingEvents(input: SittingEventsInput): {
     const bytes = jsonSize(payload);
     const shapeErr = payloadError(payload);
     if (shapeErr) throw new Error(shapeErr);
-    if (bytes > PAYLOAD_MAX[e.type]) throw new Error(`A ${e.type} event is too large`);
+    if (bytes > SITTING_PAYLOAD_MAX[e.type]) throw new Error(`A ${e.type} event is too large`);
     if (e.type === 'snapshot' && snapshotCode(payload) === null)
       throw new Error('A snapshot needs its code');
     total += bytes;

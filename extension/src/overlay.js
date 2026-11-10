@@ -1,0 +1,203 @@
+// The overlay and the badge — painting only (the decisions are lib/overlay-state.js, the actions content.js).
+// Both live in closed shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
+// hydration never touches them, and no page script can read their state, their text or Aperture's words —
+// whether the overlay shows is all the page can see. Their styles are inline in the root, so neither side's
+// CSS leaks into the other. A button acts only on a real click (isTrusted) on an overlay that is really
+// showing: the host the last child of <html>, its style ours, nothing on it or <html> fading or moving it —
+// checked at the click, and the host is put back and kept last on every poll. What that can't see (a page
+// element in the browser's top layer, painted over the overlay but letting clicks through) is residual.
+(function (root) {
+  'use strict';
+  const STEP_TEXT = {
+    send: 'Opening the sitting in Aperture…',
+    reset: 'Resetting the editor…',
+    confirm: 'Confirming the reset…',
+    timer: 'Starting LeetCode’s timer…',
+  };
+  const CSS = `
+    :host { all: initial; }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .scrim { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(12, 14, 18, 0.62); backdrop-filter: blur(3px); padding: 16px; }
+    .card { width: min(420px, 100%); border-radius: 14px; padding: 22px 22px 18px; background: #fbfaf7; color: #1c1d21;
+      box-shadow: 0 18px 50px rgba(0,0,0,.35); }
+    .kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #6a6c75; margin: 0 0 6px; }
+    h1 { font-size: 20px; line-height: 1.25; margin: 0 0 6px; font-weight: 650; }
+    .meta { font-size: 13px; color: #6a6c75; margin: 0 0 16px; }
+    .msg { font-size: 14px; line-height: 1.4; margin: 0 0 16px; }
+    .err { color: #b3261e; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { font-size: 15px; border-radius: 10px; padding: 10px 16px; border: 1px solid transparent; cursor: pointer; }
+    .primary { background: #1f6f4a; color: #fff; font-weight: 600; flex: 1 1 auto; }
+    .secondary { background: transparent; color: #1c1d21; border-color: #c9cad0; }
+    .hint { font-size: 12px; color: #6a6c75; margin: 12px 0 0; }
+    .badge { position: fixed; right: 12px; bottom: 12px; font-size: 12px; padding: 6px 10px; border-radius: 999px;
+      background: rgba(28,29,33,.88); color: #f4f4f6; box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: min(460px, calc(100vw - 24px)); }
+    .badge.warn { background: #8a5a00; } .badge.bad { background: #b3261e; }
+    @media (prefers-color-scheme: dark) {
+      .card { background: #1d1f24; color: #ececf0; } .kicker, .meta, .hint { color: #a3a5ae; }
+      .secondary { color: #ececf0; border-color: #4a4c55; } .err { color: #ff8a80; } .primary { background: #2f8f62; }
+    }`;
+
+  const HOST_STYLE =
+    'all: initial !important; position: fixed !important; z-index: 2147483647 !important; ' +
+    'opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; ' +
+    'filter: none !important; transform: none !important; clip-path: none !important;';
+  const styleOf = (shown, full) =>
+    `${HOST_STYLE} inset: ${full ? '0' : 'auto'} !important; display: ${shown ? 'block' : 'none'} !important;`;
+  function host(tag) {
+    const el = document.createElement(tag);
+    el.setAttribute('style', styleOf(false, false));
+    const shadow = el.attachShadow({ mode: 'closed' });
+    const style = document.createElement('style');
+    style.textContent = CSS;
+    shadow.appendChild(style);
+    const body = document.createElement('div');
+    shadow.appendChild(body);
+    return { el, body };
+  }
+  // Last among <html>'s children, in this order, so nothing the page appends later stacks above them.
+  function keepLast(els) {
+    const parent = document.documentElement;
+    if (!parent) return;
+    let n = parent.lastElementChild;
+    for (let i = els.length - 1; i >= 0; i--, n = n && n.previousElementSibling)
+      if (n !== els[i]) return els.forEach((el) => parent.appendChild(el));
+  }
+  // At the click: is the overlay what the user sees? (getComputedStyle here is the isolated world's own.)
+  function genuine(el, expected) {
+    const html = document.documentElement;
+    // Last among <html>'s children too: a later sibling at the same z-index would paint over it.
+    if (!html || html.lastElementChild !== el || el.getAttribute('style') !== expected)
+      return false;
+    const bad = (cs, keys) => keys.some(([k, ok]) => cs[k] !== '' && cs[k] !== ok);
+    return (
+      !bad(getComputedStyle(el), [
+        ['opacity', '1'],
+        ['visibility', 'visible'],
+        ['display', 'block'],
+      ]) &&
+      !bad(getComputedStyle(html), [
+        ['opacity', '1'],
+        ['filter', 'none'],
+        ['transform', 'none'],
+        ['visibility', 'visible'],
+      ])
+    );
+  }
+  function node(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+    for (const k of kids) el.append(k);
+    return el;
+  }
+
+  function create(on) {
+    const overlay = host('aperture-lc-overlay');
+    const badge = host('aperture-lc-badge');
+    let overlayShown = false;
+    let badgeShown = false;
+    const btn = (cls, ap, text, fn) => {
+      const b = node('button', { class: cls, 'data-ap': ap, type: 'button' }, text);
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.isTrusted && genuine(overlay.el, styleOf(true, true))) fn();
+      });
+      return b;
+    };
+
+    function render(state, info) {
+      overlay.body.replaceChildren();
+      const show =
+        state.phase === 'prompt' || state.phase === 'starting' || state.phase === 'failed';
+      overlayShown = show;
+      overlay.el.setAttribute('style', styleOf(show, show));
+      overlay.body.setAttribute('data-phase', state.phase); // inside the closed root: for tests, not the page
+      order();
+      if (!show) return;
+      const title = (info && info.title) || 'This problem';
+      const meta = info && info.lang ? `Language: ${info.lang}` : '';
+      const card = node('div', { class: 'card', role: 'dialog', 'aria-label': 'Aperture sitting' });
+      card.append(node('p', { class: 'kicker' }, 'Aperture · LeetCode'), node('h1', {}, title));
+      if (meta) card.append(node('p', { class: 'meta' }, meta));
+      if (state.phase === 'prompt') {
+        card.append(
+          node(
+            'div',
+            { class: 'row' },
+            btn('primary', 'start', 'Start', on.start),
+            btn('secondary', 'look', 'Just looking', on.dismiss),
+          ),
+          node(
+            'p',
+            { class: 'hint' },
+            'Start opens a sitting in Aperture, then resets the editor and starts LeetCode’s timer.',
+          ),
+        );
+      } else if (state.phase === 'starting') {
+        card.append(
+          node('p', { class: 'msg', 'data-ap': 'step' }, STEP_TEXT[state.step] || 'Starting…'),
+        );
+        if (state.retrying)
+          card.append(node('p', { class: 'hint' }, `Retrying — ${state.retrying}`));
+      } else {
+        card.append(
+          node('p', { class: 'msg err', 'data-ap': 'reason' }, state.reason || 'Start failed.'),
+        );
+        const row = node('div', { class: 'row' }, btn('primary', 'retry', 'Retry', on.retry));
+        // Open: a click step failed after Aperture said yes — Continue keeps the sitting, uncleared.
+        // Not open: Aperture refused, and nothing was touched.
+        // Past the reset and its confirm, only LeetCode's timer is missing: the editor was cleared.
+        const cleared = state.step === 'timer';
+        if (state.open)
+          row.append(
+            btn(
+              'secondary',
+              'continue',
+              cleared ? 'Continue without the timer' : 'Continue without a clear',
+              on.continue,
+            ),
+          );
+        else row.append(btn('secondary', 'look', 'Just looking', on.dismiss));
+        card.append(row);
+        if (state.open)
+          card.append(
+            node(
+              'p',
+              { class: 'hint' },
+              cleared
+                ? 'The sitting is open in Aperture and the editor was cleared; LeetCode’s timer didn’t start.'
+                : 'The sitting is open in Aperture; the editor wasn’t cleared.',
+            ),
+          );
+      }
+      overlay.body.append(node('div', { class: 'scrim' }, card));
+    }
+
+    // text null hides it; tone: '' | 'warn' | 'bad'
+    function setBadge(text, tone) {
+      badge.body.replaceChildren();
+      badgeShown = !!text;
+      badge.el.setAttribute('style', styleOf(badgeShown, false));
+      order();
+      if (!text) return;
+      badge.body.append(
+        node('div', { class: `badge ${tone || ''}`, 'data-ap': 'badge', role: 'status' }, text),
+      );
+    }
+    // LeetCode may rebuild <html>'s children; the content script's poll calls this to put them back.
+    // The shown one last (the overlay over the badge), as soon as either changes and on every poll.
+    function order() {
+      if (!badgeShown) keepLast([overlay.el]);
+      else keepLast(overlayShown ? [badge.el, overlay.el] : [overlay.el, badge.el]);
+    }
+    const ensureAttached = () => {
+      overlay.el.setAttribute('style', styleOf(overlayShown, overlayShown));
+      badge.el.setAttribute('style', styleOf(badgeShown, false));
+      order();
+    };
+    return { render, setBadge, ensureAttached };
+  }
+
+  (root.ApertureLC = root.ApertureLC || {}).overlay = { create, STEP_TEXT };
+})(globalThis);

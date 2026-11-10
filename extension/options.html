@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -7,16 +7,25 @@
     <style>
       :root {
         color-scheme: light dark;
-        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-family:
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
       }
       body {
         margin: 0;
         padding: 1.5rem;
-        max-width: 34rem;
+        max-width: 38rem;
       }
       h1 {
         font-size: 1.25rem;
         margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 2rem 0 0.25rem;
       }
       p.sub {
         margin: 0 0 1.25rem;
@@ -29,60 +38,85 @@
         margin: 1rem 0 0.35rem;
         font-size: 0.9rem;
       }
-      input {
+      label.inline {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        font-weight: 500;
+      }
+      input[type='text'],
+      input[type='password'],
+      textarea {
         width: 100%;
         box-sizing: border-box;
         padding: 0.55rem 0.6rem;
-        font-size: 0.95rem;
+        font-size: 16px;
         border: 1px solid rgba(128, 128, 128, 0.5);
         border-radius: 6px;
         background: transparent;
         color: inherit;
+      }
+      textarea {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 13px;
+        min-height: 9rem;
       }
       .hint {
         font-size: 0.8rem;
         opacity: 0.65;
         margin: 0.3rem 0 0;
       }
+      .row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-top: 0.75rem;
+      }
       button {
-        margin-top: 1.5rem;
-        padding: 0.6rem 1.2rem;
+        padding: 0.55rem 1.1rem;
         font-size: 0.95rem;
         font-weight: 600;
-        border: none;
+        border: 1px solid transparent;
         border-radius: 6px;
-        background: #3b82f6;
+        background: #1f6f4a;
         color: #fff;
         cursor: pointer;
       }
-      button:hover {
-        background: #2563eb;
+      button.secondary {
+        background: transparent;
+        color: inherit;
+        border-color: rgba(128, 128, 128, 0.5);
       }
-      #status {
-        margin-top: 1rem;
+      .status {
+        margin-top: 0.75rem;
         font-size: 0.9rem;
         min-height: 1.2rem;
       }
-      #status.ok {
+      .ok {
         color: #16a34a;
       }
-      #status.err {
+      .err {
         color: #dc2626;
+      }
+      #lastSend {
+        font-size: 0.9rem;
+        line-height: 1.5;
       }
     </style>
   </head>
   <body>
-    <h1>Aperture LeetCode Capture</h1>
+    <h1>Aperture LeetCode</h1>
     <p class="sub">
-      Your submissions on leetcode.com are recorded to your Aperture backend using the device token
-      below. Your LeetCode credentials are never sent anywhere.
+      On a LeetCode problem, Start opens a sitting in Aperture and this extension sends what
+      LeetCode itself sends — your code as you type, every Run and Submit with its result, your
+      notes, LeetCode's timer and its replay — using the device token below. Your LeetCode
+      credentials are never sent.
     </p>
 
     <form id="options-form">
       <label for="apiOrigin">API origin</label>
       <input
         id="apiOrigin"
-        name="apiOrigin"
         type="text"
         inputmode="url"
         placeholder="https://aperture.example.com"
@@ -90,15 +124,13 @@
         spellcheck="false"
       />
       <p class="hint">
-        Scheme + host (no trailing path). Attempts are POSTed to
-        <code>&lt;origin&gt;/api/recordLeetcodeAttempt</code>. Saving requests permission to reach
-        this origin.
+        Scheme + host. Sittings go to <code>&lt;origin&gt;/api/lcSittingStart</code> and
+        <code>lcSittingEvents</code>. Saving asks for permission to reach this origin.
       </p>
 
       <label for="deviceToken">Device token</label>
       <input
         id="deviceToken"
-        name="deviceToken"
         type="password"
         placeholder="paste your Aperture device token"
         autocomplete="off"
@@ -106,10 +138,47 @@
       />
       <p class="hint">Sent as <code>Bearer &lt;token&gt;</code> in the Aperture auth header.</p>
 
-      <button type="submit">Save</button>
-      <div id="status" aria-live="polite"></div>
+      <div class="row"><button type="submit">Save</button></div>
+      <div id="saveStatus" class="status" aria-live="polite"></div>
     </form>
 
+    <h2>Last send</h2>
+    <div id="lastSend" aria-live="polite">Nothing sent yet.</div>
+    <div class="row">
+      <button type="button" class="secondary" id="retryNow">Retry now</button>
+      <button type="button" class="secondary" id="clearFailed">Clear failed</button>
+    </div>
+
+    <h2>Debug mode</h2>
+    <label class="inline"><input type="checkbox" id="debug" /> Record LeetCode's controls</label>
+    <p class="hint">
+      Records what you click on LeetCode, the dialogs it opens and its timer's state — never your
+      code or tokens. Reload the LeetCode tab after turning it on.
+    </p>
+    <div class="row">
+      <button type="button" class="secondary" id="exportLog">Export debug log</button>
+      <button type="button" class="secondary" id="copyLog">Copy JSON</button>
+      <button type="button" class="secondary" id="clearLog">Clear log</button>
+    </div>
+    <div id="debugStatus" class="status" aria-live="polite"></div>
+
+    <h2>Selectors</h2>
+    <p class="hint">
+      Where LeetCode's reset, its confirm and its timer controls are, as JSON over the built-in
+      defaults (keys: <code>editorReset</code>, <code>resetConfirm</code>, <code>dialog</code>,
+      <code>timerOpen</code>, <code>timerStart</code>, <code>timerReset</code>,
+      <code>timerResetConfirm</code>, <code>lang</code>), each a CSS selector. <code>null</code> on
+      a click key (the reset, its confirm, the four timer keys) turns that step off. Empty means the
+      defaults.
+    </p>
+    <textarea id="selectors" spellcheck="false" placeholder="{}"></textarea>
+    <div class="row">
+      <button type="button" id="saveSelectors">Save selectors</button>
+      <button type="button" class="secondary" id="resetSelectors">Use the defaults</button>
+    </div>
+    <div id="selectorStatus" class="status" aria-live="polite"></div>
+
+    <script src="src/lib/selectors.js"></script>
     <script src="src/options.js"></script>
   </body>
 </html>
