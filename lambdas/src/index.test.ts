@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, afterAll, beforeEach, vi } from 'vitest';
 import {
+  API_METHODS,
   dayKey,
   PLACE_READ_DAILY_CAP,
   PLACE_READ_TEXT,
@@ -170,6 +171,20 @@ describe('handler device-token ingest branch', () => {
       expect(JSON.parse(jwt.body).error).toBe('Unknown method: recordLeetcodeAttempt');
     }
     expect(touched).toEqual([]);
+  });
+
+  // The device token's whole scope, pinned as a set: every other method, today's or a future one, 401s.
+  it('the device token opens exactly lcSittingStart and lcSittingEvents', async () => {
+    process.env.DEVICE_TOKEN = 'right-token';
+    process.env.DEVICE_USER_ID = 'u-dev';
+    h.doc = new InMemoryDoc();
+    const opened: string[] = [];
+    for (const m of API_METHODS)
+      if (
+        (await ingest({ 'x-aperture-authorization': 'Bearer right-token' }, m)).statusCode !== 401
+      )
+        opened.push(m);
+    expect(opened).toEqual(['lcSittingStart', 'lcSittingEvents']);
   });
 
   // The sittings' ingest set: the device token or the user's JWT, nothing else; a body over the cap is

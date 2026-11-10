@@ -112,7 +112,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **sittings** — one go at one LeetCode problem, written by the browser extension through the ingest methods; the model, its folds and its caps live in [recruiting](../areas/recruiting/index.md) → _Sittings_ (`packages/shared/src/sittings.ts`).
 
-**leetcodeAttempts** — **dormant** (lc-redesign, 2026-11): no reader since A1, no writer since PR D removed `recordLeetcodeAttempt`. The rows stay in both tables as data at rest — no migration, no delete, not exported, SK prefix `lc#` reserved (`keys.ts`). As written: one row per LeetCode submission, accepted **and** wrong, by the v1 browser extension (device token), never by the app.
+**leetcodeAttempts** — **dormant** (lc-redesign, 2026-11): no reader since A1, no writer since PR D (2026-11) removed `recordLeetcodeAttempt`. The rows stay in both tables as data at rest — no migration, no delete, not exported, SK prefix `lc#` reserved (`keys.ts`). As written: one row per LeetCode submission, accepted **and** wrong, by the v1 browser extension (device token), never by the app.
 
 - `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
 - `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`, normalized server-side from LeetCode's raw `status_code`/`status_msg` (`normalizeVerdict`, which the sittings still use).
@@ -156,7 +156,7 @@ SK (type-prefixed range keys):
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
-  lc#<day>#<ulid>               legacy LeetCode attempts — dormant since PR D: no reader, no writer; prefix reserved
+  lc#<day>#<ulid>               legacy LeetCode attempts — dormant since PR D (2026-11): no reader, no writer; prefix reserved
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
   lcs#<id>#budget               a sitting's capture budget (reserved before every events write; internal)

@@ -680,14 +680,6 @@ export const lcSittings: Scenario = {
         why: 'dev can’t produce it: the dev check holds no device token (it writes into its own user’s partition), and CloudFront serves an origin 404 as index.html with a 200',
       },
     },
-    {
-      id: 'legacy-v1-gone',
-      entry: 'extension',
-      kind: 'nominal',
-      what: 'On prod, Safari runs the 2.0.0 build and lands a sitting, and no v1 build posts the legacy write (zero leetcode_ingest, the newest lc# row unchanged)',
-      needsYou:
-        'prod only, and before D merges: the operator gate (rebuild from v2, one prod sitting, then the logs and the lc# query)',
-    },
   ],
   steps: [
     {
@@ -1765,12 +1757,9 @@ export const lcSittings: Scenario = {
             throw new Error(
               `round ${round}: device bearer → ${device.status} ${device.text.slice(0, 120)}`,
             );
-          // Through CloudFront an origin 404 is index.html as a 200; the local check sees the Lambda's own 404.
+          // CloudFront (and the local edge, lambdas/src/local/edge.ts) serves an origin 404 as index.html, a 200.
           const jwt = await ctx.api.reads.legacyWriteProbe('jwt');
-          const gone =
-            (jwt.status === 200 && /^\s*<!doctype html/i.test(jwt.text)) ||
-            (jwt.status === 404 && /Unknown method: recordLeetcodeAttempt/.test(jwt.text));
-          if (!gone)
+          if (jwt.status !== 200 || !/^\s*<!doctype html/i.test(jwt.text))
             throw new Error(
               `round ${round}: JWT → ${jwt.status} ${jwt.text.slice(0, 120)} — the method still answers`,
             );

@@ -31,7 +31,7 @@ export const sk = {
   logPrefix: (day: string) => `log#${day}#`,
   logAllPrefix: () => `log#`,
 
-  // `lc#<day>#<id>` is taken: the legacy LeetCode attempts lie there, dormant (no reader or writer since PR D).
+  // `lc#<day>#<id>` is taken: the legacy LeetCode attempts lie there, dormant (no reader or writer since PR D, 2026-11).
   // Never reuse the prefix.
 
   // LeetCode sittings (docs/areas/recruiting). The head is `lcsit#<id>` (id = the Start's clientSittingId,
