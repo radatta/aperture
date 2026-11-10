@@ -158,7 +158,7 @@
     debug.log('late', { kind: m.kind, ok: a.ok, reason: a.ok ? null : a.reason });
     if (!a.ok) return;
     const events = wire.toEventInputs(m, mintId);
-    send({ type: 'enqueue', sittingId: b.sittingId, slug, events }).catch(() => {});
+    handOff({ type: 'enqueue', sittingId: b.sittingId, slug, events });
   }
   // A run or submit LeetCode never judged goes out unjudged after two minutes.
   setInterval(() => capture.sweep(Date.now()).forEach(onItem), 15_000);
@@ -182,47 +182,118 @@
       Math.max(0, due - Date.now()),
     );
   }
-  function flushNow() {
+  function flushNow(leaving = false) {
     clearTimeout(flushTimer);
     flushTimer = null;
-    ship(batcher.flush());
+    ship(batcher.flush(), leaving);
   }
-  function ship(events) {
+  function ship(events, leaving = false) {
     if (!events.length || !binding) return;
-    send({ type: 'enqueue', sittingId: binding.sittingId, slug: binding.slug, events }).catch(
-      (err) => {
-        debug.log('enqueue.fail', { error: String(err && err.message) });
-        setBadge('Aperture · the extension was reloaded — reload this page', 'bad');
-      },
-    );
+    handOff({ type: 'enqueue', sittingId: binding.sittingId, slug: binding.slug, events }, leaving);
   }
-  window.addEventListener('pagehide', flushNow);
-  document.addEventListener(
-    'visibilitychange',
-    () => document.visibilityState === 'hidden' && flushNow(),
-  );
+  // Safari sometimes refuses a hand-off ("Tab not found") with nothing reloaded: try again, in order (each
+  // waits for the one before), a try with no answer in 15 s counting as refused. After the last try the
+  // events are kept in this page — a reload would lose them — and tried again every 30 s, on coming back to
+  // the tab and after any hand-off that lands; the badge says to keep the tab open. Only when the extension
+  // itself is gone (reloaded or updated, so this page can never reach it) does it say to reload. A batch handed over twice is safe: the server writes each event id once. The debug log records
+  // every refusal and whether a retry got through.
+  const HANDOFF_RETRY_MS = [250, 1000, 3000, 10_000];
+  const HANDOFF_WAIT_MS = 15_000;
+  const STUCK_RETRY_MS = 30_000;
+  const stuck = []; // hand-offs every try refused, oldest first
+  const extensionGone = () => {
+    try {
+      return !api.runtime || !api.runtime.id;
+    } catch {
+      return true;
+    }
+  };
+  function retryStuck() {
+    if (stuck.length && !extensionGone()) stuck.splice(0).forEach((m) => handOff(m));
+  }
+  setInterval(retryStuck, STUCK_RETRY_MS);
+  let handOffs = Promise.resolve();
+  let inFlight = 0;
+  const tryOnce = (msg) =>
+    Promise.race([
+      send(msg),
+      sleep(HANDOFF_WAIT_MS).then(() => {
+        throw new Error('no answer in 15 s');
+      }),
+    ]);
+  // `leaving` (pagehide, or the tab hidden): the first try starts now, ahead of any wait in the chain, while
+  // the page can still send.
+  function handOff(msg, leaving = false) {
+    const first = inFlight === 0 || leaving ? tryOnce(msg) : null;
+    first?.catch(() => {}); // awaited below; never an unhandled rejection meanwhile
+    inFlight++;
+    handOffs = handOffs
+      .then(() => deliver(msg, first))
+      .catch(() => {})
+      .then(() => {
+        inFlight--;
+      });
+  }
+  async function deliver(msg, first) {
+    for (let i = 0; ; i++) {
+      let ok = false;
+      try {
+        await (i === 0 && first ? first : tryOnce(msg));
+        ok = true;
+      } catch (err) {
+        debug.log('enqueue.fail', {
+          error: String(err && err.message),
+          try: i + 1,
+          visibility: document.visibilityState,
+        });
+      }
+      if (ok) {
+        if (i) debug.log('enqueue.retried', { tries: i + 1 });
+        retryStuck();
+        return paintBadge();
+      }
+      if (i >= HANDOFF_RETRY_MS.length) {
+        stuck.push(msg);
+        return paintBadge();
+      }
+      await sleep(HANDOFF_RETRY_MS[i]);
+    }
+  }
+  window.addEventListener('pagehide', () => flushNow(true));
+  document.addEventListener('visibilitychange', (e) => {
+    if (document.visibilityState === 'hidden') flushNow(true);
+    else if (e.isTrusted) recheck();
+  });
 
   // LeetCode's timer, read from its own localStorage (shared with this world) every 2 s while a sitting is
   // active — not while Start is still clicking, when it would still hold the last solve's state.
-  setInterval(() => {
-    if (state.phase !== 'active' || !liveBinding() || bindingStatus() !== 'active') return;
-    let raw = null;
+  function timerEvent(raw) {
+    let parsed = null;
     try {
-      raw = localStorage.getItem(timer.KEY);
+      parsed = raw ? JSON.parse(raw) : null;
     } catch {}
-    if (!raw || raw === lastTimerRaw || raw.length > 900) return;
-    lastTimerRaw = raw;
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return;
-    }
     let heartbeat = null;
     try {
       heartbeat = String(localStorage.getItem(timer.HEARTBEAT_KEY) || '').slice(0, 64) || null;
     } catch {}
-    queue([{ id: mintId(), type: 'timer', at: Date.now(), payload: { state: parsed, heartbeat } }]);
+    return { id: mintId(), type: 'timer', at: Date.now(), payload: { state: parsed, heartbeat } };
+  }
+  const timerRaw = () => {
+    try {
+      const raw = localStorage.getItem(timer.KEY);
+      return raw && raw.length <= 900 ? raw : null;
+    } catch {
+      return null;
+    }
+  };
+  const timing = () => state.phase === 'active' && liveBinding() && bindingStatus() === 'active';
+  setInterval(() => {
+    if (!timing()) return;
+    const raw = timerRaw();
+    if (!raw || raw === lastTimerRaw) return;
+    lastTimerRaw = raw;
+    const e = timerEvent(raw);
+    if (e.payload.state) queue([e]);
   }, 2000);
 
   // ---- the problem ----
@@ -237,6 +308,7 @@
     if (!doc || wire.bytes(JSON.stringify(doc)) > PROBLEM_MAX) return;
     problems.set(slug, doc);
     if (questionId) learnQuestionId(slug, questionId);
+    if (slug === screenSlug && state.phase !== 'hidden') paint();
     // A1 fills in a sitting's problem doc on a repeat Start: LeetCode only sends it after a submit or a nav.
     if (binding && binding.slug === slug && !binding.problemSent && state.phase === 'active')
       lateFill();
@@ -260,6 +332,19 @@
       .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
       .join(' ');
   const clip = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
+  const slugify = (t) =>
+    t
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/[\s-]+/g, '-');
+  // The problem's name: LeetCode's own doc, else the tab title only once it names this problem (after a
+  // move to the next problem it still names the last one for a moment), else the slug.
+  function titleFor(slug, dom = readDom()) {
+    const doc = problems.get(slug);
+    const tab = dom.title && slugify(dom.title) === slug ? dom.title : null;
+    return clip(doc && doc.title, 200) || tab || humanize(slug);
+  }
   function readDom() {
     const title = clip((document.title || '').replace(/\s*-\s*LeetCode\s*$/i, ''), 200);
     let difficulty = null;
@@ -302,14 +387,15 @@
         ? doc.topicTags.map((t) => clip(t && t.name, 40)).filter(Boolean)
         : null;
     const idOf = (v) => (v == null ? null : clip(String(v), 20));
+    const domFresh = !!dom.title && slugify(dom.title) === slug; // the page shows this problem, not the last
     return {
       clientSittingId,
       problemSlug: slug,
-      problemTitle: clip(doc && doc.title, 200) || dom.title || humanize(slug),
+      problemTitle: titleFor(slug, dom),
       questionId: idOf((doc && doc.questionId) ?? questionIds.get(slug)),
       frontendId: idOf(doc && doc.questionFrontendId),
-      difficulty: clip(doc && doc.difficulty, 20) || dom.difficulty,
-      topicTags: docTags && docTags.length ? docTags.slice(0, 20) : dom.topicTags,
+      difficulty: clip(doc && doc.difficulty, 20) || (domFresh ? dom.difficulty : null),
+      topicTags: docTags && docTags.length ? docTags.slice(0, 20) : domFresh ? dom.topicTags : null,
       lang: dom.lang || 'python3',
       startedAt,
       tzOffsetMinutes: new Date().getTimezoneOffset(),
@@ -541,6 +627,21 @@
     act({ type: 'resumed', active: !over });
   }
 
+  // Done is marked in Aperture, away from this tab, and an end otherwise arrives only with the next send:
+  // coming back sends LeetCode's timer reading (at most every 15 s; its state null if LeetCode has none), and
+  // Aperture's answer to that send says whether the sitting is still open. Not a repeat Start: those count
+  // against the day's Start attempts. Coming back also tries any stuck hand-offs again.
+  const RECHECK_MS = 15_000;
+  let lastRecheck = 0;
+  function recheck() {
+    retryStuck();
+    if (!timing() || Date.now() - lastRecheck < RECHECK_MS) return;
+    lastRecheck = Date.now();
+    queue([timerEvent(timerRaw())]);
+    flushNow();
+  }
+  window.addEventListener('focus', (e) => e.isTrusted && recheck());
+
   // ---- the overlay ----
   const view = NS.overlay.create({
     start: () => begin('start'),
@@ -581,7 +682,7 @@
   function paint() {
     const dom = readDom();
     view.render(state, {
-      title: (problems.get(screenSlug) || {}).title || dom.title,
+      title: screenSlug ? titleFor(screenSlug, dom) : dom.title,
       lang: dom.lang,
     });
     paintBadge();
@@ -594,6 +695,13 @@
   const ago = (ms) =>
     ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s ago` : `${Math.round(ms / 60_000)}m ago`;
   function paintBadge() {
+    if (stuck.length && extensionGone())
+      return setBadge('Aperture · the extension was reloaded — reload this page', 'bad');
+    if (stuck.length)
+      return setBadge(
+        'Aperture · events waiting to reach the extension — retrying, keep this tab open',
+        'bad',
+      );
     if (state.phase === 'ended') return setBadge('Aperture · Sitting ended in Aperture', '');
     if (state.phase !== 'active' || !binding) return setBadge(null);
     const now = Date.now();
@@ -649,11 +757,16 @@
     act({ type: 'nav', slug, binding: binding && { status: 'active' }, dismissed });
   }
   let lastPath = null;
+  let lastTitle = null;
   setInterval(() => {
     view.ensureAttached();
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;
       onNav();
+    }
+    if (document.title !== lastTitle) {
+      lastTitle = document.title;
+      if (state.phase !== 'hidden') paint();
     }
   }, 500);
   window.addEventListener('popstate', (e) => {

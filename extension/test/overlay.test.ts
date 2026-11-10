@@ -24,10 +24,17 @@ import {
 } from './load';
 
 const { createServer } = createRequire(import.meta.url)('./fixtures/fake-leetcode-server.js');
+const idl = createRequire(import.meta.url)('jsdom/lib/generated/idl/utils.js');
+// A trusted window event (the browser's own focus), as content.js only acts on those.
+function trustedFocus(w: Window & typeof globalThis) {
+  const ev = idl.implForWrapper(new w.Event('focus'));
+  ev.isTrusted = true;
+  idl.implForWrapper(w)._dispatch(ev);
+}
 type Msg = {
   type: string;
   body?: Record<string, unknown>;
-  events?: Array<{ type: string; payload?: unknown }>;
+  events?: Array<{ id?: string; type: string; payload?: unknown }>;
   slug?: string;
 };
 
@@ -140,6 +147,8 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
       resetInert: boolean;
       stickyPopup: boolean;
       timerResetClicks: number;
+      slowNext: boolean;
+      finishNext: () => void;
       setTimer: (s: Record<string, unknown>) => void;
     };
   return { w, phase, text, button, tap, badge, fake };
@@ -597,4 +606,142 @@ describe('the overlay on a LeetCode problem', () => {
     p.tap('continue');
     await until(() => p.phase() === 'active');
   });
+
+  it('names the new problem after Next, not the one the tab title still names, and Starts it under that name', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt' && p.text().includes('Two Sum'));
+    p.fake().slowNext = true;
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    // The tab title still names Two Sum and no doc has come: the slug's name, never the last problem's.
+    await until(() => p.text().includes('Add Two Numbers'));
+    expect(p.w.document.title).toBe('Two Sum - LeetCode');
+    expect(p.text()).not.toContain('Two Sum');
+    // The tab title catches up: the overlay repaints with it.
+    p.w.document.title = 'add two numbers - LeetCode';
+    await until(() => p.text().includes('add two numbers'), 3000);
+    // LeetCode's doc arrives: its name wins, and the overlay repaints again.
+    p.fake().finishNext();
+    await until(() => p.text().includes('Add Two Numbers'), 3000);
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(messages(ext, 'start').at(-1)!.body).toMatchObject({
+      problemSlug: 'add-two-numbers',
+      problemTitle: 'Add Two Numbers',
+    });
+  }, 20_000);
+
+  it('Starts with no difficulty or tags rather than the last problem’s, while the page still shows it', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.fake().slowNext = true;
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => p.text().includes('Add Two Numbers'));
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(messages(ext, 'start').at(-1)!.body).toMatchObject({
+      problemSlug: 'add-two-numbers',
+      problemTitle: 'Add Two Numbers',
+      difficulty: null,
+      topicTags: null,
+    });
+  }, 20_000);
+
+  it('coming back to the tab re-sends LeetCode’s timer reading, so the badge learns of a Done marked in Aperture', async () => {
+    const { p, ext } = await startOn(RUNNING_STOPWATCH());
+    expect(p.phase()).toBe('active');
+    const timers = () => sentEvents(ext).filter((e) => e.type === 'timer').length;
+    await until(() => timers() >= 1, 8000);
+    const before = timers();
+    await new Promise((res) => setTimeout(res, 2500)); // the timer's reading is unchanged: nothing new goes
+    expect(timers()).toBe(before);
+    trustedFocus(p.w);
+    await until(() => timers() > before, 8000);
+    // Aperture's answer to that send ended the sitting (the background writes sync:<slug>): the badge says so.
+    const b = ext.local.data['sitting:two-sum'] as { sittingId: string };
+    await ext.local.set({ 'sync:two-sum': { sittingId: b.sittingId, status: 'ended' } });
+    await until(() => p.phase() === 'ended');
+    expect(p.badge()).toBe('Aperture · Sitting ended in Aperture');
+  }, 30_000);
+
+  const TAB_NOT_FOUND = 'Invalid call to runtime.sendMessage(). Tab not found.';
+  const submitClick = (p: ReturnType<typeof open>) =>
+    (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
+  const ids = (ms: Msg[]) => ms.flatMap((m) => m.events!.map((e) => String(e.id)));
+
+  it('retries a hand-off Safari refuses (Tab not found), in order, and every refused event lands once', async () => {
+    const bg = fakeBackground();
+    let refusals = 2;
+    const refused: Msg[] = [];
+    const delivered: Msg[] = [];
+    const ext = fakeExtension({
+      onMessage: (m) => {
+        const msg = m as Msg;
+        const hasSubmit = msg.type === 'enqueue' && msg.events!.some((e) => e.type === 'submit');
+        if (hasSubmit && refusals > 0) {
+          refusals--;
+          refused.push(msg);
+          throw new Error(TAB_NOT_FOUND);
+        }
+        if (msg.type === 'enqueue') delivered.push(msg);
+        return bg.handle(msg);
+      },
+    });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    submitClick(p);
+    await until(() => delivered.some((m) => m.events!.some((e) => e.type === 'submit')), 8000);
+    // A second submit, handed over while nothing waits, lands after the first.
+    submitClick(p);
+    await until(
+      () => delivered.flatMap((m) => m.events!).filter((e) => e.type === 'submit').length === 2,
+      8000,
+    );
+    expect(refused).toHaveLength(2);
+    const got = ids(delivered);
+    for (const id of ids(refused)) expect(got.filter((x) => x === id)).toHaveLength(1);
+    const submits = delivered.flatMap((m) => m.events!).filter((e) => e.type === 'submit');
+    expect(got.indexOf(String(submits[0]!.id))).toBeLessThan(got.indexOf(String(submits[1]!.id)));
+    expect(p.badge()).not.toContain('reload this page');
+  }, 30_000);
+
+  it('keeps a hand-off every try refused, says to keep the tab open (not reload) until it lands, and sends it again on coming back', async () => {
+    const bg = fakeBackground();
+    let refuse = true;
+    const delivered: Msg[] = [];
+    const ext = fakeExtension({
+      onMessage: (m) => {
+        const msg = m as Msg;
+        if (msg.type === 'enqueue' && refuse) throw new Error(TAB_NOT_FOUND);
+        if (msg.type === 'enqueue') delivered.push(msg);
+        return bg.handle(msg);
+      },
+    });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    submitClick(p);
+    await until(() => p.badge()?.includes('events waiting'), 20_000);
+    await new Promise((res) => setTimeout(res, 5500)); // past the badge's 5 s repaint: still says so
+    // Not "reload": a reload would lose the kept events.
+    expect(p.badge()).toBe(
+      'Aperture · events waiting to reach the extension — retrying, keep this tab open',
+    );
+    // The extension itself gone (reloaded or updated): only then is a reload the way out.
+    const runtime = ext.api.runtime as { id?: string };
+    runtime.id = undefined;
+    await until(() => p.badge()?.includes('the extension was reloaded — reload this page'), 7000);
+    runtime.id = 'ext-id';
+    refuse = false;
+    trustedFocus(p.w);
+    // Behind any later batch still in its retry wait (at most 10 s), in order.
+    await until(() => delivered.some((m) => m.events!.some((e) => e.type === 'submit')), 20_000);
+    await until(() => !p.badge()?.includes('events waiting'), 3000);
+  }, 75_000);
 });

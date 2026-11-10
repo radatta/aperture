@@ -261,6 +261,10 @@
   $('[data-fake=next]').addEventListener('click', (e) => {
     e.preventDefault();
     history.pushState({}, '', '/problems/add-two-numbers/');
+    // slowNext: as LeetCode often does, the tab title still names the last problem for a moment, and the
+    // new problem's doc comes later (or not at all).
+    if (window.__fake.slowNext) return;
     gql('questionDetail', { titleSlug: 'add-two-numbers' });
   });
+  window.__fake.finishNext = () => gql('questionDetail', { titleSlug: 'add-two-numbers' });
 })();

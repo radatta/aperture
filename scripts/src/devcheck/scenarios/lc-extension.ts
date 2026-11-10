@@ -309,6 +309,61 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-next-title',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'After Next, the overlay and the Start name the new problem, not the one the tab title still names (seen in Safari)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'names the new problem after Next, not the one the tab title still names, and Starts it under that name',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-next-stale-meta',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A Start right after Next sends no difficulty or tags rather than the last problem’s, while the page still shows it',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'Starts with no difficulty or tags rather than the last problem’s, while the page still shows it',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-done-elsewhere',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Coming back to the tab after a Done marked in Aperture: the badge learns the sitting ended (seen: it stayed on “waiting for the first sync”)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'coming back to the tab re-sends LeetCode’s timer reading, so the badge learns of a Done marked in Aperture',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-handoff-retry',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A hand-off Safari refuses (“Tab not found”) is retried in order, and its events land once (seen: a Run lost)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'retries a hand-off Safari refuses (Tab not found), in order, and every refused event lands once',
+        why: `${noStep}; Safari’s refusal can’t be produced on purpose — the test throws its exact error`,
+      },
+    },
+    {
+      id: 'ext-handoff-stuck',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A hand-off every try refused is kept, the badge says to keep the tab open (a reload would lose it; reload only when the extension itself is gone), and it lands on coming back',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'keeps a hand-off every try refused, says to keep the tab open (not reload) until it lands, and sends it again on coming back',
+        why: `${noStep}; Safari’s refusal can’t be produced on purpose — the test throws its exact error`,
+      },
+    },
+    {
       id: 'ext-selector-paste',
       entry: 'extension',
       kind: 'edge',
