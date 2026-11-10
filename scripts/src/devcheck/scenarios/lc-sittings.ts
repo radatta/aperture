@@ -93,6 +93,8 @@ const state = {
   aClient: '',
   aStartedAt: 0,
   aNewestAt: 0, // the latest `at` sent on A: live and `last` are the newest by `at` (see nextAt)
+  aBeforeDone: 0, // a stamp taken just before Done on A
+  aDoneAt: 0, // this machine's clock when Done on A returned
   c: '',
   d: '',
   dRep: '',
@@ -246,13 +248,66 @@ export const lcSittings: Scenario = {
       id: 'end-done',
       entry: 'api',
       kind: 'nominal',
-      what: 'Done on the rep ends the sitting; events after it are refused',
+      what: 'Done on the rep ends the sitting',
     },
     {
       id: 'end-drop',
       entry: 'api',
       kind: 'edge',
       what: 'Dropping a rep abandons its sitting',
+    },
+    // The grace: what the extension stamped before Done still lands for ten minutes after it.
+    {
+      id: 'late-before',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'An event stamped before Done, sent after it, lands; its resend is a duplicate',
+    },
+    {
+      id: 'late-after',
+      entry: 'api',
+      kind: 'edge',
+      what: 'An event stamped after Done is skipped, with nothing written',
+    },
+    {
+      id: 'late-mixed',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A batch of both keeps the ones stamped before Done',
+    },
+    {
+      id: 'grace-over',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Ten minutes after Done, even an event stamped before it is refused',
+    },
+    {
+      id: 'late-drop',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A dropped sitting takes the events stamped before the drop the same',
+    },
+    {
+      id: 'late-window',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A sitting ended by a Start past its window takes no late events',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'after its end a sitting takes events for ten minutes, inside its window only',
+        why: 'dev can’t wait a day',
+      },
+    },
+    {
+      id: 'late-neighbour',
+      entry: 'api',
+      kind: 'edge',
+      what: 'An open sitting is untouched by another’s late events',
+      offDev: {
+        file: 'lambdas/src/backend.sittings.test.ts',
+        test: 'late events write only the ended sitting’s rows',
+        why: 'dev can’t see the write set, only reads',
+      },
     },
     {
       id: 'ui-open',
@@ -399,7 +454,7 @@ export const lcSittings: Scenario = {
       what: 'Events a day after Start are refused',
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
-        test: 'refuses an ended sitting, one past its window, and an event off its clock',
+        test: 'refuses a sitting past its grace or its window, and an event off its clock',
         why: 'dev can’t wait a day: the guard is pure, and the contract suite runs it with an advanced clock',
       },
     },
@@ -1031,18 +1086,67 @@ export const lcSittings: Scenario = {
       id: 'end',
       entry: 'api',
       proves: ['end-done'],
-      title: 'Done on A’s rep ends it, and events after it are refused',
+      title: 'Done on A’s rep ends it',
       async run(ctx) {
         await ctx.api.writes.setTaskActual(state.aRep, 40);
+        state.aBeforeDone = nextAt();
         await ctx.api.writes.finishTask(state.aRep, 'done');
+        state.aDoneAt = Date.now();
         const a = (await sittingA(ctx)).sitting;
         if (a.status !== 'done' || a.endedAt === null)
           throw new Error(`A after Done: ${JSON.stringify(a)}`);
-        await refused(
-          'events after Done',
-          ctx.api.writes.lcSittingEvents(state.a, [snap('late', Date.now())]),
-          /ended/,
-        );
+      },
+    },
+    {
+      id: 'late',
+      entry: 'api',
+      proves: ['late-before', 'late-after', 'late-mixed'],
+      title:
+        'After Done, a note stamped before it lands on A (its resend a duplicate); one stamped after is skipped, alone or beside one from before',
+      async run(ctx) {
+        if (!state.aBeforeDone) throw new Error('no Done on A — the end step failed');
+        const w = ctx.api.writes;
+        // A note: it moves only the note count, so A's timeline, final code and outcome stay as later steps expect.
+        const note = (): DevSittingEvent => ({
+          id: devUlid(),
+          type: 'note',
+          at: state.aBeforeDone,
+          payload: { text: 'devcheck late note' },
+        });
+        // Past the server's 60 s skew allowance (SITTING_END_SKEW_MS — scripts can't import shared).
+        const after = () => snap('devcheck after Done', Date.now() + 3 * 60_000);
+        const a0 = await sittingA(ctx);
+        const rep0 = JSON.stringify(await ctx.api.reads.getTask(state.aRep));
+        const kept = note();
+        const r1 = await w.lcSittingEvents(state.a, [kept]);
+        if (r1.accepted !== 1 || r1.skipped !== 0 || r1.status !== 'done')
+          throw new Error(`a note from before Done: ${JSON.stringify(r1)}`);
+        const a1 = (await sittingA(ctx)).sitting;
+        if (
+          a1.summary.notes !== a0.sitting.summary.notes + 1 ||
+          a1.status !== 'done' ||
+          a1.endedAt !== a0.sitting.endedAt ||
+          a1.repTaskId !== state.aRep
+        )
+          throw new Error(`A after a late note: ${JSON.stringify(a1)}`);
+        if (JSON.stringify(await ctx.api.reads.getTask(state.aRep)) !== rep0)
+          throw new Error('a late note moved A’s rep');
+        const r2 = await w.lcSittingEvents(state.a, [kept]);
+        if (r2.accepted !== 0 || r2.duplicates !== 1)
+          throw new Error(`the resend: ${JSON.stringify(r2)}`);
+        const before = await sittingA(ctx);
+        const r3 = await w.lcSittingEvents(state.a, [after()]);
+        if (r3.accepted !== 0 || r3.skipped !== 1 || r3.status !== 'done')
+          throw new Error(`a snapshot from after Done: ${JSON.stringify(r3)}`);
+        if (r3.version !== (before.live?.version ?? 0))
+          throw new Error(
+            `the skip answered v${r3.version}, A's live row is v${before.live?.version}`,
+          );
+        if (JSON.stringify(await sittingA(ctx)) !== JSON.stringify(before))
+          throw new Error('a skipped event wrote');
+        const r4 = await w.lcSittingEvents(state.a, [note(), after()]);
+        if (r4.accepted !== 1 || r4.skipped !== 1 || r4.status !== 'done')
+          throw new Error(`a mixed batch: ${JSON.stringify(r4)}`);
       },
     },
     {
@@ -1217,9 +1321,9 @@ export const lcSittings: Scenario = {
     {
       id: 'double-start',
       entry: 'api',
-      proves: ['double-start', 'prep-target', 'end-drop'],
+      proves: ['double-start', 'prep-target', 'end-drop', 'late-drop'],
       title:
-        'Start C twice at once (one sitting, one rep, one plan row); tag it; dropping its rep abandons it',
+        'Start C twice at once (one sitting, one rep, one plan row); tag it; dropping its rep abandons it, and a note stamped before the drop still lands',
       async run(ctx) {
         const input = start(ctx, 'c');
         const [x, y] = await Promise.all([
@@ -1242,9 +1346,16 @@ export const lcSittings: Scenario = {
         const blank = await ctx.api.writes.setSittingPrepTarget(id, '   ');
         if (tagged.prepTarget !== 'devcheck-target' || blank.prepTarget !== 'General')
           throw new Error('the prep target didn’t normalize');
+        const beforeDrop = Date.now();
         await ctx.api.writes.finishTask(reps[0]!.id, 'cancelled');
         const after = (await ctx.api.reads.getSitting(id)).sitting;
         if (after.status !== 'abandoned') throw new Error(`C after Drop: ${after.status}`);
+        // A note, so C's timeline stays empty for mcp-read (the timeline is runs, submits and snapshots only).
+        const late = await ctx.api.writes.lcSittingEvents(id, [
+          { id: devUlid(), type: 'note', at: beforeDrop, payload: { text: 'devcheck late note' } },
+        ]);
+        if (late.accepted !== 1 || late.skipped !== 0 || late.status !== 'abandoned')
+          throw new Error(`a note from before the drop: ${JSON.stringify(late)}`);
       },
     },
     {
@@ -1491,6 +1602,33 @@ export const lcSittings: Scenario = {
         await ctx.shot('settings-leetcode-none');
         await select.selectOption({ label: titleOf(ctx, 'roll') });
         await until(state.rollId);
+      },
+    },
+    {
+      id: 'grace-over',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['grace-over'],
+      title: 'Ten minutes after Done on A, an event stamped before Done is refused',
+      async run(ctx) {
+        if (!state.aDoneAt) throw new Error('no Done on A — the end step failed');
+        // SITTING_END_GRACE_MS (scripts can't import shared), and 5 s for this clock against the server's.
+        const wait = state.aDoneAt + 10 * 60_000 + 5_000 - Date.now();
+        if (wait > 0) {
+          ctx.log(`waiting ${Math.ceil(wait / 1000)} s for A's grace to run out`);
+          await new Promise((r) => setTimeout(r, wait));
+        }
+        const note: DevSittingEvent = {
+          id: devUlid(),
+          type: 'note',
+          at: state.aBeforeDone,
+          payload: { text: 'devcheck past the grace' },
+        };
+        await refused(
+          'events past the grace',
+          ctx.api.writes.lcSittingEvents(state.a, [note]),
+          /ended/,
+        );
       },
     },
     {

@@ -28,6 +28,7 @@ LeetCode traffic ─► lcSittingEvents ─► events stored raw; runs/submits/n
                                        snapshots/replay into the live row
 Done on the rep ─────────────────────► sitting done          Drop ─► abandoned          delete ─► gone with it
 (stale: past 24 h, or its rep finished elsewhere ─► ended by the next Start)
+(ended: for 10 min still takes the events stamped before its end, inside its 24 h window)
 ```
 
 - **One sitting = one problem = one Roll rep.** Start first ends stale open sittings — past their 24 h window
@@ -56,7 +57,8 @@ Done on the rep ─────────────────────�
   Start only after those same two minutes, so a parallel Start can't end one still being written. So parallel Starts open one sitting, and a double-fired Start makes
   one sitting, one rep, one plan row. Days are the user's (LA) day, never the client's tz.
 - `startedAt` is the server's clock at Start (the sitting clock); the click's own time is `clientStartedAt`,
-  which must be within a day of it — the clock event times and time-to-first-submit are measured on.
+  which must be within a day of it — the clock event times and time-to-first-submit are measured on. The end
+  (`endedAt`, server clock) is compared on that clock too, shifted by `startedAt − clientStartedAt`.
   LeetCode's `solve_elapsed_ms` counts from the first time a problem was ever opened, so it's context only.
   `day` buckets `startedAt` by the client's tz offset and `dayStartHour`.
 
@@ -73,7 +75,8 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 - **Head rows** (`lcs#<id>#hd#<ulid>`): a run's, submit's, note's or timer read's compact verdict (`headRowOf`),
   ~200 B, so the recompute stays cheap however large the payloads. The run's, submit's or note's **full
   payload** sits beside it under `lcs#<id>#jd#<ulid>`, kept forever.
-- **Live row** (`lcs#<id>#live`): the newest code (the final code once ended), the snapshot `version` live
+- **Live row** (`lcs#<id>#live`): the newest code (the final code once ended — a late snapshot may still move
+  it for the ten-minute grace, _Ingest_ below), the snapshot `version` live
   reads report, and **facts** folded from the replay at ingest — first/last edit, edits, longest stall,
   rewrites, LeetCode's type-3 toggles raw (`focus`; meaning unconfirmed). Folded at ingest so they outlive the
   raw replay. Incremental: a repeated snapshot counts nothing but still lands its code if it's the newest (so a
@@ -167,12 +170,18 @@ parsing (413). Sizes are UTF-8 bytes. Per call ≤ 50 events / 256 KB; per event
 64 KB, run/submit ≤ 96 KB …); payloads nested ≤ 20 deep with exact numbers (what DynamoDB stores as given);
 per sitting ≤ 3,000 events / 16 MB, any type, held by a **budget row** (`lcs#<id>#budget`) that every call
 reserves in — a CAS, duplicates included — before writing anything, so parallel calls and retries can't pass
-it; the Start gate's ≤ 100 Starts and ≤ 400 attempts a day; events refused once the sitting ended or 24 h after
-Start, or timed off the sitting's clock. Each event is idempotent on its id. The server recomputes everything
+it; the Start gate's ≤ 100 Starts and ≤ 400 attempts a day; events refused 24 h after Start, or timed off the
+sitting's clock. **The grace:** for 10 minutes after its end (`SITTING_END_GRACE_MS`; Done, Drop or a later
+Start — never past the 24 h window, so a sitting ended for staleness gets none) a sitting still takes the events
+stamped before the end on the extension's clock, plus 60 s for the Start's latency (`SITTING_END_SKEW_MS`) —
+the outbox's retries land after Done. The rest of the call is skipped, not refused, and the budget reserves
+only the kept events. Past the grace every call is refused. Each event is idempotent on its id. The server recomputes everything
 it decides on (`userId`, `day`, `startedAt`, verdicts, counters); payloads are opaque.
 
-**Statuses** (the extension's outbox retries 409, 429 and 5xx; anything else it keeps as failed): 400 a refused
-input (our own refusals, and an AWS error with a 4xx status such as `ValidationException`), 401 a bad token,
+**Statuses** (the extension's outbox retries 409, 429 and 5xx; anything else it keeps as failed): 200
+`{accepted, duplicates, skipped, version, status}` — inside the grace `status` is `done` or `abandoned` (the
+extension learns the end from it) and `skipped` counts the after-end events, even when all were; 400 a refused
+input (`SITTING_ENDED_ERROR` past the grace) (our own refusals, and an AWS error with a 4xx status such as `ValidationException`), 401 a bad token,
 409 a lost race (`ConflictError`), 413 over the body cap, 429 DynamoDB pushing back (incl.
 `RequestLimitExceeded`), 500 any other AWS fault or a bug in our code (a `TypeError` is retried, never dropped).
 
@@ -567,8 +576,8 @@ Since a submission is a real write to real data, dev is where you do this — no
 ### Watching an ingest
 
 Sittings log `{"event":"lc_sitting_start","sittingId":…,"attach":bool}` per Start and
-`{"event":"lc_ingest","sittingId":…,"accepted":n,"duplicates":n,"bytes":n}` per events call — never code or
-payloads. The legacy ingest logs one line: `{"event":"leetcode_ingest","problemSlug":…,"metaCaptured":true|false}`.
+`{"event":"lc_ingest","sittingId":…,"accepted":n,"duplicates":n,"skipped":n,"late":bool,"bytes":n}` per events
+call (`late`: the sitting had ended; `skipped` is what the grace dropped) — never code or payloads. The legacy ingest logs one line: `{"event":"leetcode_ingest","problemSlug":…,"metaCaptured":true|false}`.
 `metaCaptured` is the DOM-scrape hit rate — a run of `false` means the scrape broke. It's a CloudWatch
 Logs Insights query, deliberately **not** a custom metric: at $0.30/month a metric would be the single
 largest line item in this project.

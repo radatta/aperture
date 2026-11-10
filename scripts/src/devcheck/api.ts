@@ -260,6 +260,7 @@ export interface DevSitting {
   summary: {
     runs: number;
     submits: number;
+    notes: number;
     firstSubmit: DevVerdict | null;
     lastSubmit: DevVerdict | null;
     lastRun: DevVerdict | null;
@@ -814,10 +815,13 @@ export function createApiClient({
     },
     async lcSittingEvents(sittingId: string, events: DevSittingEvent[]) {
       assertLedger(sittingId, 'sitting');
-      return call<{ accepted: number; duplicates: number; version: number; status: string }>(
-        'lcSittingEvents',
-        [{ sittingId, events }],
-      );
+      return call<{
+        accepted: number;
+        duplicates: number;
+        skipped: number;
+        version: number;
+        status: string;
+      }>('lcSittingEvents', [{ sittingId, events }]);
     },
     // Events for an id no sitting has (a ULID minted by the caller) — the server must refuse them. No row
     // can exist under it, so the ledger guard has nothing to protect.

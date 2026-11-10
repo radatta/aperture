@@ -41,6 +41,10 @@ import {
   SITTING_RAW_KEEP_MS,
   sittingElapsedMs,
   sittingIngestError,
+  sittingIngestPhase,
+  eventsBeforeEnd,
+  SITTING_END_GRACE_MS,
+  SITTING_END_SKEW_MS,
   sittingRawExpiresAt,
   headRowOf,
   payloadError,
@@ -227,15 +231,65 @@ describe('lcTimerState', () => {
 });
 
 describe('ingest guards', () => {
-  const sitting = { status: 'active', startedAt: 0, clientStartedAt: 0 } as Sitting;
-  it('refuses an ended sitting, one past its window, and an event off its clock', () => {
-    expect(sittingIngestError({ ...sitting, status: 'done' }, [], 1)).toBe(SITTING_ENDED_ERROR);
+  const sitting = { status: 'active', startedAt: 0, clientStartedAt: 0, endedAt: null } as Sitting;
+  const done = { ...sitting, status: 'done', endedAt: 0 } as Sitting;
+  it('refuses a sitting past its grace or its window, and an event off its clock', () => {
+    expect(sittingIngestError(done, [], SITTING_END_GRACE_MS + 1)).toBe(SITTING_ENDED_ERROR);
+    expect(sittingIngestError(done, [{ at: 5 }], SITTING_END_GRACE_MS)).toBeNull();
     expect(sittingIngestError(sitting, [], SITTING_INGEST_WINDOW_MS + 1)).toBe(SITTING_ENDED_ERROR);
     expect(sittingIngestError(sitting, [{ at: 1e21 }], 1)).toBe(SITTING_EVENT_TIME_ERROR);
     expect(sittingIngestError(sitting, [{ at: -2 * SITTING_INGEST_WINDOW_MS }], 1)).toBe(
       SITTING_EVENT_TIME_ERROR,
     );
+    // Inside the grace the bounds still cover every event, the ones that will be skipped too.
+    expect(sittingIngestError(done, [{ at: 5 }, { at: 1e21 }], 1)).toBe(SITTING_EVENT_TIME_ERROR);
     expect(sittingIngestError(sitting, [{ at: 5 }], 1)).toBeNull();
+  });
+  it('after its end a sitting takes events for ten minutes, inside its window only', () => {
+    expect(SITTING_END_GRACE_MS).toBe(10 * 60_000);
+    const ended = { ...done, endedAt: 3600_000 };
+    expect(sittingIngestPhase(sitting, 1)).toBe('open');
+    expect(sittingIngestPhase(ended, 3600_000)).toBe('grace');
+    expect(sittingIngestPhase(ended, 3600_000 + SITTING_END_GRACE_MS)).toBe('grace');
+    expect(sittingIngestPhase(ended, 3600_000 + SITTING_END_GRACE_MS + 1)).toBe('closed');
+    expect(sittingIngestPhase({ ...ended, status: 'abandoned' }, 3600_000 + 1)).toBe('grace');
+    // Ended by a Start past its window (endedAt = that Start's now): no grace — the window is the ceiling.
+    const stale = {
+      ...done,
+      status: 'abandoned',
+      endedAt: SITTING_INGEST_WINDOW_MS + 1,
+    } as Sitting;
+    expect(sittingIngestPhase(stale, SITTING_INGEST_WINDOW_MS + 2)).toBe('closed');
+    // The grace reaching past the window is cut at the window.
+    const late = { ...done, endedAt: SITTING_INGEST_WINDOW_MS - 1 };
+    expect(sittingIngestPhase(late, SITTING_INGEST_WINDOW_MS)).toBe('grace');
+    expect(sittingIngestPhase(late, SITTING_INGEST_WINDOW_MS + 1)).toBe('closed');
+    expect(sittingIngestPhase({ ...done, endedAt: null }, 1)).toBe('closed');
+  });
+  it('keeps the events stamped before the end, on the extension’s clock', () => {
+    expect(SITTING_END_SKEW_MS).toBe(60_000);
+    const ev = (at: number, id: string) => ({ at, id });
+    // The server's Start at 10 h; ended at 11 h; the extension's clock 3 h behind, then 3 h ahead.
+    const H = 3600_000;
+    const behind = { ...done, startedAt: 10 * H, clientStartedAt: 7 * H, endedAt: 11 * H };
+    const cutBehind = 8 * H + SITTING_END_SKEW_MS;
+    expect(
+      eventsBeforeEnd(behind, [
+        ev(cutBehind, 'a'),
+        ev(cutBehind + 1, 'b'),
+        ev(7 * H + 1, 'c'),
+        ev(10.5 * H, 'd'), // before the end on the server's clock, 2.5 h after it on the extension's
+      ]).map((e) => e.id),
+    ).toEqual(['a', 'c']);
+    const ahead = { ...behind, clientStartedAt: 13 * H };
+    const cutAhead = 14 * H + SITTING_END_SKEW_MS;
+    expect(
+      eventsBeforeEnd(ahead, [ev(13.5 * H, 'x'), ev(cutAhead + 1, 'y'), ev(cutAhead, 'z')]).map(
+        (e) => e.id,
+      ),
+    ).toEqual(['x', 'z']);
+    const all = [ev(1e15, 'p'), ev(0, 'q')];
+    expect(eventsBeforeEnd({ ...behind, status: 'active', endedAt: null }, all)).toEqual(all);
   });
   it('reserves a call in the budget, refusing one that would pass a cap', () => {
     expect(reserveBudget({ events: 1, bytes: 10 }, { count: 2, bytes: 5 })).toEqual({

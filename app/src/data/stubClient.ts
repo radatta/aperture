@@ -143,6 +143,7 @@ import {
   SITTING_START_TIME_ERROR,
   PREP_TARGET_DEFAULT,
   sittingIngestError,
+  eventsBeforeEnd,
   isSittingOpen,
   newestOfType,
   sittingProblemUrl,
@@ -906,12 +907,23 @@ class StubClient implements ApiClient {
     return this.store.sittingLive.find((l) => l.id === id && l.deletedAt === null) ?? null;
   }
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
-    const { sittingId, events } = normalizeSittingEvents(input);
+    const { sittingId, events: all } = normalizeSittingEvents(input);
     const sitting = this.mustFind(this.store.sittings, sittingId);
     const now = this.now();
-    const err = sittingIngestError(sitting, events, now);
+    const err = sittingIngestError(sitting, all, now);
     if (err) throw new Error(err);
-    // The budget reserves every incoming event, repeats included (backend parity), before anything is written.
+    // Inside an ended sitting's grace only the events stamped before its end are kept; none kept writes nothing.
+    const events = eventsBeforeEnd(sitting, all);
+    const skipped = all.length - events.length;
+    if (!events.length)
+      return {
+        accepted: 0,
+        duplicates: 0,
+        skipped,
+        version: this.sittingLiveOf(sittingId)?.version ?? 0,
+        status: sitting.status,
+      };
+    // The budget reserves every kept event, repeats included (backend parity), before anything is written.
     const bytes = events.reduce((n, e) => n + e.bytes, 0);
     const had = this.store.sittingBudgets.find((x) => x.id === sittingId);
     const budget = reserveBudget(
@@ -989,6 +1001,7 @@ class StubClient implements ApiClient {
     return {
       accepted: fresh.length,
       duplicates: events.length - fresh.length,
+      skipped,
       version: live?.version ?? 0,
       status: this.mustFind(this.store.sittings, sittingId).status,
     };

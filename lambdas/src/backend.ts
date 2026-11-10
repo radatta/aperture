@@ -105,6 +105,7 @@ import {
   planSittingStart,
   PREP_TARGET_DEFAULT,
   sittingIngestError,
+  eventsBeforeEnd,
   sittingProblemUrl,
   sittingRawExpiresAt,
   sittingRepTitle,
@@ -856,17 +857,44 @@ export class BackendClient implements ApiClient {
         throw err;
     }
   }
-  // 1. guards; 2. reserve the call in the budget (a CAS — over a cap, or losing the race, refuses with nothing
-  // written); 3. write each event put-if-absent; 4. any head event in the call, fresh or a repeat → recompute the
-  // summary from every head row, written only when it folds more rows than the stored one; 5. fold the call's
-  // snapshots and replay into the live row (a repeat counts nothing but can still land the newest code).
+  // 1. guards; 2. inside an ended sitting's grace, keep only the events stamped before its end — none kept writes
+  // nothing; 3. reserve the kept events in the budget (a CAS — over a cap, or losing the race, refuses with
+  // nothing written); 4. write each event put-if-absent; 5. any head event kept, fresh or a repeat → recompute
+  // the summary from every head row, written only when it folds more rows than the stored one; 6. fold the
+  // kept snapshots and replay into the live row (a repeat counts nothing but can still land the newest code).
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
-    const { sittingId, events } = normalizeSittingEvents(input);
+    const { sittingId, events: all } = normalizeSittingEvents(input);
     const sitting = await this.repo.getSitting(sittingId, { consistent: true });
     if (!sitting) throw new Error(`Not found: ${sittingId}`);
     const now = this.now();
-    const err = sittingIngestError(sitting, events, now);
+    const err = sittingIngestError(sitting, all, now);
     if (err) throw new Error(err);
+    const events = eventsBeforeEnd(sitting, all);
+    const skipped = all.length - events.length;
+    const late = sitting.status !== 'active';
+    const logIngest = (accepted: number, duplicates: number, bytes: number) =>
+      console.log(
+        JSON.stringify({
+          event: 'lc_ingest',
+          sittingId,
+          accepted,
+          duplicates,
+          skipped,
+          late,
+          bytes,
+        }),
+      );
+    if (!events.length) {
+      const live = await this.repo.getSittingLive(sittingId, { consistent: true });
+      logIngest(0, 0, 0);
+      return {
+        accepted: 0,
+        duplicates: 0,
+        skipped,
+        version: live?.version ?? 0,
+        status: sitting.status,
+      };
+    }
     const bytes = events.reduce((n, e) => n + e.bytes, 0);
     await this.repo.casUpdate(
       this.repo.sittingBudgetShape(sittingId),
@@ -910,10 +938,8 @@ export class BackendClient implements ApiClient {
         })
       : await this.repo.getSittingLive(sittingId, { consistent: true });
     const duplicates = events.length - fresh.size;
-    console.log(
-      JSON.stringify({ event: 'lc_ingest', sittingId, accepted: fresh.size, duplicates, bytes }),
-    );
-    return { accepted: fresh.size, duplicates, version: live?.version ?? 0, status };
+    logIngest(fresh.size, duplicates, bytes);
+    return { accepted: fresh.size, duplicates, skipped, version: live?.version ?? 0, status };
   }
   // The summary from every head row, strongly consistent after this call's own writes, so a later call's set
   // contains an earlier one's; written only when it folds more rows than the stored one (never rolled back).

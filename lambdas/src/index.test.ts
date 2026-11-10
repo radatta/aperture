@@ -258,6 +258,50 @@ describe('handler device-token ingest branch', () => {
       ).toBe(400);
     });
 
+    it('events inside the grace answer 200 with the status and the skipped count; past it a 400', async () => {
+      const t0 = 1_700_000_000_000;
+      vi.setSystemTime(t0);
+      try {
+        const headers = { 'x-aperture-authorization': 'Bearer good-jwt' };
+        const b = new BackendClient(new Repo(h.doc, liveWrites(h.doc), 'u1'), { userId: 'u1' });
+        const roll = await b.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+        await b.updateSettings({ leetcodeRollId: roll.id });
+        const { sitting } = await b.lcSittingStart({ ...start, startedAt: t0 });
+        vi.setSystemTime(t0 + 5 * 60_000);
+        await b.setTaskActual(sitting.repTaskId, 5);
+        await b.transitionTask(sitting.repTaskId, 'done');
+        vi.setSystemTime(t0 + 7 * 60_000);
+        const note = (id: string, at: number) => ({ id, type: 'note', at, payload: {} });
+        const events = (...e: unknown[]) => [{ sittingId: sitting.id, events: e }];
+        const late = await rpc(
+          'lcSittingEvents',
+          headers,
+          events(
+            note('01JC0000000000000000000001', t0 + 60_000),
+            note('01JC0000000000000000000002', t0 + 7 * 60_000),
+          ),
+        );
+        expect(late.statusCode).toBe(200);
+        expect(JSON.parse(late.body)).toEqual({
+          accepted: 1,
+          duplicates: 0,
+          skipped: 1,
+          version: 0,
+          status: 'done',
+        });
+        vi.setSystemTime(t0 + 16 * 60_000);
+        const gone = await rpc(
+          'lcSittingEvents',
+          headers,
+          events(note('01JC0000000000000000000003', t0 + 60_000)),
+        );
+        expect(gone.statusCode).toBe(400);
+        expect(JSON.parse(gone.body).error).toMatch(/ended/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('413s an ingest body over the cap before parsing it', async () => {
       process.env.DEVICE_TOKEN = 'right-token';
       const res = await rpc(

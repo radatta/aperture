@@ -38,6 +38,8 @@ import {
   SITTING_ACTIVE_ERROR,
   SITTING_ENDED_ERROR,
   SITTING_CAP_ERROR,
+  SITTING_END_GRACE_MS,
+  SITTING_END_SKEW_MS,
   SITTING_EVENTS_PER_CALL,
   SITTING_INGEST_WINDOW_MS,
   SITTING_MAX_EVENTS,
@@ -3201,7 +3203,13 @@ export function runApiContract(
         const b = lcSnap('class Solution:\n    def twoSum(self): ...', LC_T0 + 120_000);
         const older = lcSnap('stale', LC_T0 + 90_000);
         const r1 = await api.lcSittingEvents({ sittingId: sitting.id, events: [a, b] });
-        expect(r1).toEqual({ accepted: 2, duplicates: 0, version: 2, status: 'active' });
+        expect(r1).toEqual({
+          accepted: 2,
+          duplicates: 0,
+          skipped: 0,
+          version: 2,
+          status: 'active',
+        });
         const r2 = await api.lcSittingEvents({ sittingId: sitting.id, events: [a, older] });
         expect(r2).toMatchObject({ accepted: 1, duplicates: 1, version: 3 });
         const { live, events } = await api.getSitting(sitting.id);
@@ -3315,6 +3323,7 @@ export function runApiContract(
         expect((await api.getSitting(sitting.id)).live).toBeNull();
         await api.transitionTask(sitting.repTaskId, 'cancelled');
         expect((await api.getSitting(sitting.id)).sitting.status).toBe('abandoned');
+        advance(SITTING_END_GRACE_MS + 1);
         await expect(
           api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0)] }),
         ).rejects.toThrow(SITTING_ENDED_ERROR);
@@ -3325,6 +3334,123 @@ export function runApiContract(
         advance(SITTING_INGEST_WINDOW_MS + 1);
         await expect(
           api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0)] }),
+        ).rejects.toThrow(SITTING_ENDED_ERROR);
+      });
+
+      // The outbox's retries land after Done: what was stamped before the end still counts, for a while.
+      it('an event stamped before the end still lands for ten minutes; one stamped after is skipped', async () => {
+        const { sitting } = await startSitting(api);
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [lcSnap('first', LC_T0 + 1000)],
+        });
+        advance(5 * 60_000);
+        await api.setTaskActual(sitting.repTaskId, 5);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        const endedAt = (await api.getSitting(sitting.id)).sitting.endedAt!;
+        const rep = await api.getTask(sitting.repTaskId);
+        advance(2 * 60_000);
+        const before = [
+          lcSnap('final', LC_T0 + 4 * 60_000),
+          lcJudged('submit', 10, 'Accepted', LC_T0 + 4 * 60_000 + 1, 3, 3),
+        ];
+        const after = lcSnap('after', endedAt + SITTING_END_SKEW_MS + 1);
+        const call = (events: SittingEventInput[]) =>
+          api.lcSittingEvents({ sittingId: sitting.id, events });
+        expect(await call([...before, after])).toEqual({
+          accepted: 2,
+          duplicates: 0,
+          skipped: 1,
+          version: 2,
+          status: 'done',
+        });
+        const got = await api.getSitting(sitting.id);
+        expect(got.sitting).toMatchObject({
+          status: 'done',
+          endedAt,
+          summary: { submits: 1, lastSubmit: { verdict: 'accepted' } },
+        });
+        expect(got.live).toMatchObject({ code: 'final', version: 2 });
+        expect(got.events.map((e) => e.id)).not.toContain(after.id);
+        expect(await api.getTask(sitting.repTaskId)).toEqual(rep);
+        expect(await call([...before, after])).toEqual({
+          accepted: 0,
+          duplicates: 2,
+          skipped: 1,
+          version: 2,
+          status: 'done',
+        });
+        const settled = await api.getSitting(sitting.id);
+        expect(await call([lcSnap('later', endedAt + 2 * 60_000)])).toMatchObject({
+          accepted: 0,
+          skipped: 1,
+          version: 2,
+        });
+        expect(await api.getSitting(sitting.id)).toEqual(settled); // nothing written
+        advance(SITTING_END_GRACE_MS - 2 * 60_000); // the grace's last moment
+        const note = {
+          id: ulid(),
+          type: 'note' as const,
+          at: LC_T0 + 2000,
+          payload: { text: 'n' },
+        };
+        expect(await call([note])).toMatchObject({ accepted: 1, status: 'done' });
+        advance(1);
+        await expect(call([lcSnap('gone', LC_T0 + 3000)])).rejects.toThrow(SITTING_ENDED_ERROR);
+      });
+
+      it('the grace is measured on the extension’s clock', async () => {
+        const H = 3600_000;
+        const { sitting } = await startSitting(api, { startedAt: LC_T0 - 3 * H }); // the laptop 3 h behind
+        advance(10 * 60_000);
+        await api.setTaskActual(sitting.repTaskId, 10);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        const r = await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            lcSnap('before', LC_T0 - 3 * H + 9 * 60_000),
+            lcSnap('after', LC_T0 - 3 * H + 10 * 60_000 + SITTING_END_SKEW_MS + 1),
+            lcSnap('server', LC_T0 + 5 * 60_000), // before the end on the server's clock only
+          ],
+        });
+        expect(r).toMatchObject({ accepted: 1, skipped: 2, status: 'done' });
+        expect((await api.getSitting(sitting.id)).live?.code).toBe('before');
+      });
+
+      it('a dropped sitting takes late events the same', async () => {
+        const { sitting } = await startSitting(api);
+        advance(5 * 60_000);
+        await api.transitionTask(sitting.repTaskId, 'cancelled');
+        const { endedAt } = (await api.getSitting(sitting.id)).sitting;
+        const r = await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            lcJudged('run', 15, 'Runtime Error', LC_T0 + 60_000, 0, 3),
+            lcSnap('after', endedAt! + SITTING_END_SKEW_MS + 1),
+          ],
+        });
+        expect(r).toEqual({
+          accepted: 1,
+          duplicates: 0,
+          skipped: 1,
+          version: 0,
+          status: 'abandoned',
+        });
+        const got = await api.getSitting(sitting.id);
+        expect(got.sitting).toMatchObject({ status: 'abandoned', endedAt, summary: { runs: 1 } });
+        expect(got.live).toBeNull();
+      });
+
+      it('a sitting ended past its window takes no late events', async () => {
+        const { sitting } = await startSitting(api);
+        advance(SITTING_INGEST_WINDOW_MS + 1);
+        await api.lcSittingStart(sittingStart({ startedAt: LC_T0 + SITTING_INGEST_WINDOW_MS + 1 }));
+        expect((await api.getSitting(sitting.id)).sitting).toMatchObject({
+          status: 'abandoned',
+          endedAt: LC_T0 + SITTING_INGEST_WINDOW_MS + 1,
+        });
+        await expect(
+          api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0 + 1000)] }),
         ).rejects.toThrow(SITTING_ENDED_ERROR);
       });
 

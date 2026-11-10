@@ -42,6 +42,11 @@ export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
 export const SITTING_STARTS_PER_DAY = 100;
 // Events are refused this long after Start: a sitting left open forever stops taking writes.
 export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
+// After its end a sitting still takes, this long, the events stamped before the end (the outbox's retries
+// land after Done) — inside its window only. Stamps are the extension's clock, shifted onto the server's
+// by the Start's offset, which runs late by the Start's latency: the skew allowance covers one failed try.
+export const SITTING_END_GRACE_MS = 10 * 60_000;
+export const SITTING_END_SKEW_MS = 60_000;
 // Raw bulk (snapshots, replay, submitDetails) is kept this long past the ingest window, then DynamoDB's TTL
 // deletes it. What's kept forever is the head, the live row (final code + facts) and every run/submit.
 export const SITTING_RAW_KEEP_MS = 14 * 24 * 3600_000;
@@ -96,6 +101,7 @@ export interface SittingEventsInput {
 export interface SittingEventsResult {
   accepted: number;
   duplicates: number;
+  skipped: number; // stamped after the end of an ended sitting, never stored
   version: number; // the live row's snapshot version after this call
   status: Sitting['status'];
 }
@@ -493,15 +499,33 @@ export const sittingRawExpiresAt = (s: Pick<Sitting, 'startedAt'>): number =>
 export const isRawEventType = (type: SittingEventType | 'replay') =>
   type === 'snapshot' || type === 'submitDetails' || type === 'replay';
 
-// Why an events call is refused before anything is written, or null: the sitting has ended or is past its
-// window, or an event's time is off the sitting's clock (the extension's — bounds keep junk out of the
-// metrics and the sort).
+// 'open' takes everything; 'grace' only events stamped before the end; 'closed' refuses.
+export function sittingIngestPhase(
+  s: Pick<Sitting, 'status' | 'startedAt' | 'endedAt'>,
+  now: number,
+): 'open' | 'grace' | 'closed' {
+  if (now - s.startedAt > SITTING_INGEST_WINDOW_MS) return 'closed'; // the window stays a hard ceiling
+  if (s.status === 'active') return 'open';
+  return s.endedAt !== null && now - s.endedAt <= SITTING_END_GRACE_MS ? 'grace' : 'closed';
+}
+// The events a call may store: all while active; after the end, those stamped before it on the extension's clock.
+export function eventsBeforeEnd<E extends { at: number }>(
+  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
+  events: readonly E[],
+): E[] {
+  if (s.status === 'active' || s.endedAt === null) return [...events];
+  const cutoff = s.endedAt - (s.startedAt - s.clientStartedAt) + SITTING_END_SKEW_MS;
+  return events.filter((e) => e.at <= cutoff);
+}
+// Why an events call is refused before anything is written, or null: the sitting is past its grace or its
+// window, or an event's time — skipped ones included — is off the sitting's clock (the extension's — bounds
+// keep junk out of the metrics and the sort).
 export function sittingIngestError(
-  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt'>,
+  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
   events: readonly { at: number }[],
   now: number,
 ): string | null {
-  if (!isSittingOpen(s, now)) return SITTING_ENDED_ERROR;
+  if (sittingIngestPhase(s, now) === 'closed') return SITTING_ENDED_ERROR;
   const lo = s.clientStartedAt - 24 * 3600_000;
   const hi = s.clientStartedAt + 2 * SITTING_INGEST_WINDOW_MS;
   return events.some((e) => e.at < lo || e.at > hi) ? SITTING_EVENT_TIME_ERROR : null;

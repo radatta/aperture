@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
+  SITTING_END_SKEW_MS,
   SITTING_INGEST_WINDOW_MS,
   SITTING_RAW_KEEP_MS,
   ulid,
@@ -201,6 +202,95 @@ describe('sittings on the table', () => {
           if (e.message === LC_START_ATTEMPT_CAP_ERROR) refusedFor = e.message;
         });
     expect(refusedFor).toBe(LC_START_ATTEMPT_CAP_ERROR);
+  });
+});
+
+// Late events (the outbox's retries after Done): kept ones write only the ended sitting's own rows, under its
+// budget and its raw TTL; a call of nothing but after-end events writes nothing at all.
+describe('late events on the table', () => {
+  const snap = (code: string, at: number) => ({
+    id: ulid(),
+    type: 'snapshot',
+    at,
+    payload: { code },
+  });
+  const submit = (at: number) => ({
+    id: ulid(),
+    type: 'submit',
+    at,
+    payload: { result: { status_code: 10 } },
+  });
+  async function endedA(b: BackendClient, now: { t: number }) {
+    await linked(b);
+    const a = (await b.lcSittingStart(start())).sitting;
+    await b.lcSittingEvents({ sittingId: a.id, events: [snap('a', T0 + 1000)] as never });
+    now.t += 5 * 60_000;
+    await b.setTaskActual(a.repTaskId, 5);
+    await b.transitionTask(a.repTaskId, 'done');
+    return (await b.getSitting(a.id)).sitting;
+  }
+
+  it('late events write only the ended sitting’s rows', async () => {
+    const { doc, backend, now } = setup();
+    const a = await endedA(backend, now);
+    now.t += 60_000;
+    const b = (
+      await backend.lcSittingStart({
+        ...start(),
+        problemSlug: 'three-sum',
+        problemTitle: '3Sum',
+        startedAt: now.t,
+      })
+    ).sitting;
+    await backend.lcSittingEvents({
+      sittingId: b.id,
+      events: [snap('b', now.t + 1000), submit(now.t + 2000)] as never,
+    });
+    const before = doc.snapshot();
+    const kept = snap('late', T0 + 4 * 60_000);
+    const skipped = snap('after', a.endedAt! + SITTING_END_SKEW_MS + 1);
+    const r = await backend.lcSittingEvents({
+      sittingId: a.id,
+      events: [kept, submit(T0 + 4 * 60_000 + 1), skipped] as never,
+    });
+    expect(r).toMatchObject({ accepted: 2, duplicates: 0, skipped: 1, status: 'done' });
+    const after = doc.snapshot();
+    const ofA = (row: { SK: unknown }) =>
+      row.SK === sk.sitting(a.id) || String(row.SK).startsWith(sk.sittingChildPrefix(a.id));
+    // The gate, the rep, and B's head, live row and events: all as they were.
+    expect(after.filter((row) => !ofA(row))).toEqual(before.filter((row) => !ofA(row)));
+    expect(after.some((row) => String(row.SK).includes(skipped.id))).toBe(false);
+    expect(await doc.get(pk('u1'), sk.sittingBudget(a.id))).toMatchObject({ events: 3 }); // 1 + the 2 kept
+    expect((await doc.get(pk('u1'), sk.sittingEvent(a.id, kept.id)))?.expiresAt).toBe(
+      Math.floor((T0 + SITTING_INGEST_WINDOW_MS + SITTING_RAW_KEEP_MS) / 1000),
+    );
+    expect((await backend.getSitting(a.id)).sitting).toMatchObject({
+      status: 'done',
+      endedAt: a.endedAt,
+      summary: { submits: 1 },
+    });
+    expect((await backend.pullLiveSitting()).sitting?.id).toBe(b.id);
+  });
+
+  it('a call of only after-end events writes nothing', async () => {
+    const { doc, backend, now } = setup();
+    const a = await endedA(backend, now);
+    now.t += 60_000;
+    const rows = doc.snapshot();
+    const g0 = doc.gets.length;
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => void logs.push(String(line)));
+    const r = await backend.lcSittingEvents({
+      sittingId: a.id,
+      events: [snap('x', a.endedAt! + SITTING_END_SKEW_MS + 1), submit(now.t + 1)] as never,
+    });
+    vi.restoreAllMocks();
+    expect(r).toEqual({ accepted: 0, duplicates: 0, skipped: 2, version: 1, status: 'done' });
+    expect(doc.snapshot()).toEqual(rows);
+    expect(doc.gets.slice(g0).every((g) => g.consistent)).toBe(true);
+    expect(logs.map((l) => JSON.parse(l))).toContainEqual(
+      expect.objectContaining({ event: 'lc_ingest', accepted: 0, skipped: 2, late: true }),
+    );
   });
 });
 
