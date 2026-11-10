@@ -17,7 +17,9 @@ Safari needs the extension wrapped in a macOS app, signed with a **free Apple ID
 4. **⌘R**, then copy the built app to `/Applications`, open that copy once, and delete the project's DerivedData folder (`~/Library/Developer/Xcode/DerivedData/Aperture_LeetCode-*` — spaces become underscores; `…Dev-*` for dev) — otherwise Safari lists the extension twice. **Every rebuild ends with this step**: the installed copy is frozen at the moment it was copied.
 5. Safari → Settings → Extensions: enable it **only in its own profile** (prod in your personal profile, dev in an "Aperture Dev" one), and allow `leetcode.com` and the API origin.
 
-After changing anything here: the prod project (made with `--copy-resources`) holds a **copy** of this folder, so re-copy the files into its `Shared (Extension)/Resources/` first; the dev project reads it live. Then rebuild and redo step 4.
+After changing anything here: the prod project (made with `--copy-resources`) holds a **copy** of this folder, so re-copy the files into its extension target's `Resources/` first (on the 2026-10 prod project: `Aperture LeetCode/Aperture LeetCode Extension/Resources/`; find it with `find <project dir> -name manifest.json`, and check it holds `manifest.json` before an `rsync --delete` into it); the dev project reads it live. Its `src` and `icons` are folder references, so new files under them are built in. Then rebuild and redo step 4.
+
+**If Safari then says "Unable to find … in the extension's resources" for every file** (seen 2026-11-10): it still points at the build in DerivedData that step 4 deleted. Quit Safari, open the `/Applications` copy once, and register its extension: `pluginkit -a "/Applications/Aperture LeetCode.app/Contents/PlugIns/Aperture LeetCode Extension.appex"`. `pluginkit -mAvvv -p com.apple.Safari.web-extension` lists what macOS knows and from which path.
 
 **Dev icon.** Both builds read the same `manifest.json` (prod icons). The dev project swaps in `icons/dev/` with a **Run Script** phase on its Extension target, after Copy Bundle Resources, "Based on dependency analysis" unticked, and the target's `ENABLE_USER_SCRIPT_SANDBOXING = NO`:
 
