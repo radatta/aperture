@@ -6,7 +6,17 @@
   const TEMPLATE = 'class Solution:\n    def twoSum(self, nums, target):\n        ';
   const slug = (location.pathname.match(/^\/problems\/([^/]+)/) || [])[1] || 'two-sum';
   const qid = slug === 'two-sum' ? 1 : 2;
-  const fake = (window.__fake = { resets: 0, timerStarts: 0, submits: 0, runs: 0, syncs: 0 });
+  const fake = (window.__fake = {
+    resets: 0,
+    timerStarts: 0,
+    timerResets: 0,
+    timerOpens: 0,
+    strays: 0, // clicks on anything Start must never touch: the other toolbar icons, the streaks pop-over
+    submits: 0,
+    runs: 0,
+    syncs: 0,
+    resetCloses: false, // a test's switch: the timer pop-up closes after its reset instead of staying open
+  });
   const gql = (operationName, variables) => {
     if (operationName === 'updateSyncedCode') fake.syncs++;
     return fetch('/graphql/', {
@@ -21,43 +31,147 @@
 
   gql('syncedCode', { lang: 11, questionId: qid });
 
-  // The editor reset asks first, in a modal.
+  // The editor reset asks first, in a modal LeetCode renders inside the toolbar's group (#editor), as logged.
+  const toolbar = $('[data-fake=toolbar]');
+  for (const b of toolbar.querySelectorAll('button')) {
+    if (b.getAttribute('data-fake') !== 'reset') b.addEventListener('click', () => fake.strays++);
+  }
+  $('[data-fake=streaks]').addEventListener('click', () => fake.strays++);
   $('[data-fake=reset]').addEventListener('click', () => {
-    const dialog = document.createElement('div');
-    dialog.setAttribute('role', 'dialog');
-    dialog.innerHTML =
-      '<p>Are you sure? Your current code will be discarded.</p><button type="button" data-fake="cancel">Cancel</button><button type="button" data-fake="confirm">Confirm</button>';
-    document.body.append(dialog);
-    dialog.querySelector('[data-fake=confirm]').addEventListener('click', () => {
-      dialog.remove();
+    const modal = document.createElement('div');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.className = 'fixed overflow-y-auto z-modal inset-0';
+    modal.innerHTML =
+      '<p>Are you sure? Your current code will be discarded.</p><div class="mt-8 flex justify-end"><div><div class="flex flex-wrap"><div><button type="button" class="px-3 bg-fill-3" data-fake="cancel">Cancel</button></div><div><button type="button" class="px-3 text-label-r bg-green-s" data-fake="confirm">Confirm</button></div></div></div></div>';
+    toolbar.append(modal);
+    modal.querySelector('[data-fake=confirm]').addEventListener('click', () => {
       fake.resets++;
       code.value = TEMPLATE;
       gql('updateSyncedCode', { code: code.value, lang: 11, questionId: qid });
+      setTimeout(() => modal.remove(), 100); // it lingers while it animates out
     });
-    dialog.querySelector('[data-fake=cancel]').addEventListener('click', () => dialog.remove());
+    modal.querySelector('[data-fake=cancel]').addEventListener('click', () => modal.remove());
   });
 
-  // The timer keeps its state in localStorage, as LeetCode's does.
-  const writeTimer = (s) => localStorage.setItem('QD_TIMER_STATE', JSON.stringify(s));
-  $('[data-fake=timer-reset]').addEventListener('click', () =>
-    writeTimer({
-      mode: 'stopwatch',
-      startTimestamp: null,
-      pauseMs: 0,
-      endMs: 3600000,
-      status: 'pause',
-    }),
-  );
-  $('[data-fake=timer-start]').addEventListener('click', () => {
-    fake.timerStarts++;
-    writeTimer({
-      mode: 'stopwatch',
-      startTimestamp: Date.now(),
-      pauseMs: 0,
-      endMs: 3600000,
-      status: 'running',
-    });
+  // The timer keeps its state in localStorage, as LeetCode's does (the logged shape), and the widget follows it.
+  const KEY = 'QD_TIMER_STATE';
+  const readTimer = () => {
+    try {
+      return JSON.parse(localStorage.getItem(KEY)) || null;
+    } catch {
+      return null;
+    }
+  };
+  const base = { lastUsedEndMs: 3600000, isUserPaused: false, alertMinute: 10 };
+  const idle = (mode) => ({
+    ...base,
+    mode,
+    startTimestamp: null,
+    pauseMs: null,
+    endMs: mode === 'reverse' ? 3600000 : null,
+    status: 'idle',
   });
+  const writeTimer = (st) => {
+    localStorage.setItem(KEY, JSON.stringify(st));
+    render();
+  };
+  const timerBox = $('[data-fake=timer]');
+  let popup = null;
+  const closePopup = () => {
+    if (popup) popup.remove();
+    popup = null;
+  };
+  // The pop-up's one action button: Start in the tab LeetCode last used, or (asked by Reset) its Reset.
+  function popupButton(kind) {
+    const st = readTimer() || idle('forward');
+    const name = st.mode === 'reverse' ? 'Timer' : 'Stopwatch';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className =
+      kind === 'start'
+        ? 'relative font-medium bg-sd-primary'
+        : 'relative font-medium bg-sd-secondary';
+    b.textContent = `${kind === 'start' ? 'Start' : 'Reset'} ${name}`;
+    b.addEventListener('click', () => {
+      if (kind === 'start') {
+        fake.timerStarts++;
+        writeTimer({ ...idle(st.mode), startTimestamp: Date.now(), status: 'running' });
+        closePopup();
+      } else {
+        fake.timerResets++;
+        writeTimer(idle(st.mode));
+        if (fake.resetCloses) return closePopup();
+        // It stays open and swaps its Reset for Start, both present for a moment.
+        const s = popupButton('start');
+        b.after(s);
+        setTimeout(() => b.remove(), 30);
+      }
+    });
+    return b;
+  }
+  function openPopup(kind) {
+    closePopup();
+    popup = document.createElement('div');
+    popup.setAttribute('role', 'dialog');
+    popup.id = 'radix-_r_c_';
+    popup.setAttribute('data-state', 'open');
+    popup.innerHTML =
+      '<div class="tabs"><div>Stopwatch</div><div>Timer</div></div><div class="h-8 w-full"><div class="absolute"></div></div>';
+    popup.querySelector('.absolute').append(popupButton(kind));
+    document.body.append(popup);
+  }
+  function render() {
+    const st = readTimer();
+    const status = (st && st.status) || 'idle';
+    const elapsed = st
+      ? (st.pauseMs || 0) + (st.startTimestamp ? Date.now() - st.startTimestamp : 0)
+      : 0;
+    timerBox.innerHTML = '';
+    // The controls layer, always mounted (pointer-events off while idle on LeetCode; reachable by querySelector).
+    const layer = document.createElement('div');
+    layer.innerHTML =
+      '<div role="button" aria-label="Hide">⌃</div>' +
+      `<div role="button" aria-label="${status === 'pause' ? 'Resume' : 'Pause'}" data-fake="toggle">${Math.round(elapsed / 1000)}s</div>` +
+      '<div role="button" aria-label="Reset" data-fake="timer-reset">↺</div>';
+    timerBox.append(layer);
+    layer
+      .querySelector('[data-fake=timer-reset]')
+      .addEventListener('click', () => openPopup('reset'));
+    layer.querySelector('[data-fake=toggle]').addEventListener('click', () => {
+      const cur = readTimer();
+      if (!cur || cur.status === 'idle') return;
+      if (cur.status === 'pause')
+        writeTimer({
+          ...cur,
+          status: 'running',
+          pauseMs: null,
+          startTimestamp: Date.now() - (cur.pauseMs || 0),
+        });
+      else
+        writeTimer({
+          ...cur,
+          status: 'pause',
+          isUserPaused: true,
+          startTimestamp: null,
+          pauseMs: Date.now() - cur.startTimestamp,
+        });
+    });
+    if (status === 'idle') {
+      const opener = document.createElement('div');
+      opener.setAttribute('role', 'button');
+      opener.setAttribute('aria-label', st && st.mode === 'reverse' ? 'Timer' : 'Stopwatch');
+      opener.setAttribute('data-fake', 'opener');
+      opener.addEventListener('click', () => {
+        fake.timerOpens++;
+        if (popup) closePopup();
+        else openPopup('start');
+      });
+      timerBox.append(opener);
+    }
+  }
+  fake.setTimer = (st) => writeTimer(st);
+  render();
 
   // Typing syncs the full code, debounced, as updateSyncedCode does.
   let typing = null;

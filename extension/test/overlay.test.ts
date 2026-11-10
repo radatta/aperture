@@ -24,11 +24,6 @@ import {
 } from './load';
 
 const { createServer } = createRequire(import.meta.url)('./fixtures/fake-leetcode-server.js');
-const SELECTORS = {
-  editorReset: '[data-fake=reset]',
-  resetConfirm: '[data-fake=confirm]',
-  timerClicks: ['[data-fake=timer-reset]', '[data-fake=timer-start]'],
-};
 type Msg = {
   type: string;
   body?: Record<string, unknown>;
@@ -133,7 +128,17 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
     rootOf(w.document.querySelector('aperture-lc-badge'))?.querySelector('[data-ap=badge]')
       ?.textContent;
   const tap = (ap: string) => trustedClick(button(ap)!);
-  const fake = () => w.__fake as { resets: number; timerStarts: number; syncs: number };
+  const fake = () =>
+    w.__fake as {
+      resets: number;
+      timerStarts: number;
+      timerResets: number;
+      timerOpens: number;
+      strays: number;
+      syncs: number;
+      resetCloses: boolean;
+      setTimer: (s: Record<string, unknown>) => void;
+    };
   return { w, phase, text, button, tap, badge, fake };
 }
 const messages = (ext: ReturnType<typeof fakeExtension>, type: string) =>
@@ -145,13 +150,19 @@ describe('the overlay on a LeetCode problem', () => {
   it('Start resets the editor, starts the timer and opens a sitting; capture flows; a reload resumes; a second problem is refused', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ selectors: SELECTORS });
 
     const p = open('/problems/two-sum/description/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
     await until(() => p.phase() === 'active', 8000);
-    expect(p.fake()).toMatchObject({ resets: 1, timerStarts: 1 });
+    // On the shipped selectors (no override), a timer never used: LeetCode's reset, then the opener and Start.
+    expect(p.fake()).toMatchObject({
+      resets: 1,
+      timerStarts: 1,
+      timerResets: 0,
+      timerOpens: 1,
+      strays: 0,
+    });
     const [start] = messages(ext, 'start');
     expect(isUlid(String(start!.body!.clientSittingId))).toBe(true);
     expect(start!.body).toMatchObject({
@@ -203,7 +214,7 @@ describe('the overlay on a LeetCode problem', () => {
     // A reload mid-sitting: no overlay, no reset, the same sitting.
     const r = open('/problems/two-sum/description/', ext);
     await until(() => r.phase() === 'active', 6000);
-    expect(r.fake().resets).toBe(0);
+    expect(r.fake()).toMatchObject({ resets: 0, timerStarts: 0, timerResets: 0, timerOpens: 0 });
     expect(bg.sittings).toHaveLength(1);
 
     // "Next problem" (an SPA nav) re-prompts; its Start is refused while two-sum is open.
@@ -217,6 +228,7 @@ describe('the overlay on a LeetCode problem', () => {
   it('opens the sitting first, says LeetCode’s reset isn’t configured, and Continue without a clear goes active', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ selectors: { editorReset: null } }); // a step turned off in Options
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
@@ -233,7 +245,6 @@ describe('the overlay on a LeetCode problem', () => {
   it('ignores a page script’s click on Start, and clicks nothing on LeetCode for a Start Aperture refuses', async () => {
     const bg = fakeBackground({ configured: false });
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ selectors: SELECTORS });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.button('start')!.click(); // what a LeetCode script can do: an untrusted click
@@ -245,7 +256,13 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => p.phase() === 'failed');
     expect(p.text()).toContain('extension’s options');
     expect(messages(ext, 'start')).toHaveLength(1); // asked, refused — and nothing on LeetCode was clicked
-    expect(p.fake()).toMatchObject({ resets: 0, timerStarts: 0 });
+    expect(p.fake()).toMatchObject({
+      resets: 0,
+      timerStarts: 0,
+      timerResets: 0,
+      timerOpens: 0,
+      strays: 0,
+    });
     // Nor can the page read what the overlay says: its root is closed and its host carries no state.
     const host = p.w.document.querySelector('aperture-lc-overlay')!;
     expect(host.shadowRoot).toBeNull();
@@ -255,7 +272,6 @@ describe('the overlay on a LeetCode problem', () => {
   it('keeps the sitting when a reload’s resume is refused for any reason but its end', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ selectors: SELECTORS });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
@@ -273,7 +289,6 @@ describe('the overlay on a LeetCode problem', () => {
   it('sends a submit judged after moving to the next problem to its own problem’s sitting', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ selectors: SELECTORS });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
@@ -296,7 +311,6 @@ describe('the overlay on a LeetCode problem', () => {
   it('sends a submit judged after leaving for the problem list to its problem’s sitting', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ selectors: SELECTORS });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
@@ -316,7 +330,6 @@ describe('the overlay on a LeetCode problem', () => {
   it('hands the pending snapshot over when the page is hidden', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ selectors: SELECTORS });
     const p = open('/problems/two-sum/', ext);
     await until(() => p.phase() === 'prompt');
     p.tap('start');
@@ -350,7 +363,12 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => messages(ext, 'dismissed?').length === 2);
     await new Promise((res) => setTimeout(res, 300));
     expect(again.phase()).toBe('hidden');
-    expect(again.fake().resets).toBe(0);
+    expect(again.fake()).toMatchObject({
+      resets: 0,
+      timerStarts: 0,
+      timerResets: 0,
+      timerOpens: 0,
+    });
     // Nothing is captured for a problem with no sitting.
     const code = again.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
     code.dispatchEvent(new again.w.Event('input'));
@@ -358,4 +376,143 @@ describe('the overlay on a LeetCode problem', () => {
     expect(messages(ext, 'enqueue')).toEqual([]);
     expect(messages(ext, 'start')).toEqual([]);
   });
+  // LeetCode's timer as the debug log recorded it: a countdown left paused, a stopwatch left running, idle.
+  const NOW = () => Date.now();
+  const PAUSED_COUNTDOWN = () => ({
+    mode: 'reverse',
+    startTimestamp: null,
+    pauseMs: 6550,
+    endMs: 3600000,
+    lastUsedEndMs: 3600000,
+    status: 'pause',
+    isUserPaused: true,
+    alertMinute: 10,
+  });
+  const RUNNING_STOPWATCH = () => ({
+    mode: 'forward',
+    startTimestamp: NOW() - 90_000,
+    pauseMs: null,
+    endMs: null,
+    lastUsedEndMs: 3600000,
+    status: 'running',
+    isUserPaused: false,
+    alertMinute: 10,
+  });
+  const timerState = (p: ReturnType<typeof open>) =>
+    JSON.parse(p.w.localStorage.getItem('QD_TIMER_STATE') ?? 'null') as {
+      mode: string;
+      status: string;
+      startTimestamp: number | null;
+    } | null;
+  async function startOn(
+    seed: Record<string, unknown> | null,
+    opts: { selectors?: Record<string, unknown>; resetCloses?: boolean; debug?: boolean } = {},
+  ) {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    if (opts.selectors) await ext.local.set({ selectors: opts.selectors });
+    if (opts.debug) await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    if (seed) p.fake().setTimer(seed);
+    if (opts.resetCloses) p.fake().resetCloses = true;
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active' || p.phase() === 'failed', 8000);
+    return { p, ext, bg };
+  }
+
+  it('restarts a timer left running or paused: LeetCode’s reset first, then Start from the pop-up that stays open', async () => {
+    for (const [seed, mode] of [
+      [PAUSED_COUNTDOWN(), 'reverse'],
+      [RUNNING_STOPWATCH(), 'forward'],
+    ] as const) {
+      const { p } = await startOn(seed);
+      expect(p.phase()).toBe('active');
+      expect(p.fake()).toMatchObject({ timerResets: 1, timerStarts: 1, timerOpens: 0, strays: 0 });
+      const t = timerState(p)!;
+      expect(t).toMatchObject({ mode, status: 'running' }); // the mode LeetCode last used, kept
+      expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not resumed
+    }
+  }, 30_000);
+
+  it('opens an idle timer under either name', async () => {
+    const { p } = await startOn({
+      ...PAUSED_COUNTDOWN(),
+      status: 'idle',
+      pauseMs: null,
+      isUserPaused: false,
+    });
+    expect(p.phase()).toBe('active');
+    expect(p.fake()).toMatchObject({ timerOpens: 1, timerStarts: 1, timerResets: 0 });
+    expect(timerState(p)).toMatchObject({ mode: 'reverse', status: 'running' });
+  });
+
+  it('still starts when LeetCode’s pop-up closes after its reset', async () => {
+    const { p } = await startOn(PAUSED_COUNTDOWN(), { resetCloses: true });
+    expect(p.phase()).toBe('active');
+    expect(p.fake()).toMatchObject({ timerResets: 1, timerOpens: 1, timerStarts: 1 });
+  }, 15_000);
+
+  it('names the control it couldn’t find, clicks nothing else, and a fixed selector works on Retry; debug mode records the timer’s controls', async () => {
+    const { p, ext } = await startOn(null, { selectors: { timerStart: 'button[' }, debug: true });
+    expect(p.phase()).toBe('failed');
+    expect(p.text()).toContain('Start button (timerStart)');
+    expect(p.text()).toContain('Continue without the timer');
+    expect(p.fake()).toMatchObject({ resets: 1, timerStarts: 0, strays: 0 });
+    const log = await until(() => {
+      const l = ext.local.data.debugLog as
+        Array<{ type: string; roleButtons?: Array<{ attrs: Record<string, string> }> }> | undefined;
+      return l?.find((e) => e.type === 'controls');
+    }, 6000);
+    expect(log!.roleButtons!.map((b) => b.attrs['aria-label'])).toContain('Stopwatch');
+    await ext.local.remove('selectors'); // the fix, pasted in Options: back to the defaults
+    await new Promise((res) => setTimeout(res, 100));
+    p.tap('retry');
+    await until(() => p.phase() === 'active', 8000);
+    expect(p.fake()).toMatchObject({ resets: 1, timerStarts: 1, strays: 0 });
+  }, 20_000);
+
+  it('finds no reset button when the toolbar gains an icon, rather than clicking a neighbour', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    const extra = p.w.document.createElement('button');
+    extra.addEventListener('click', () => p.fake().strays++);
+    p.w.document.querySelector('[data-fake=toolbar]')!.prepend(extra);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'failed', 8000);
+    expect(p.text()).toContain('Couldn’t find LeetCode’s reset button (editorReset)');
+    expect(p.fake()).toMatchObject({ resets: 0, strays: 0 });
+  });
+
+  it('Retry after a failed confirm goes back to the reset once LeetCode’s dialog has gone, and repeats the confirm while it is open', async () => {
+    const { p, ext } = await startOn(null, { selectors: { resetConfirm: '#gone' } });
+    expect(p.phase()).toBe('failed');
+    expect(p.text()).toContain('confirm button (resetConfirm)');
+    const modal = () => p.w.document.querySelector('#editor [role="dialog"][aria-modal="true"]');
+    expect(modal()).not.toBeNull(); // LeetCode's dialog is still asking; the streaks pop-over is beside it
+    let resetClicks = 0;
+    p.w.document.querySelector('[data-fake=reset]')!.addEventListener('click', () => resetClicks++);
+    await ext.local.remove('selectors');
+    await new Promise((res) => setTimeout(res, 100));
+    p.tap('retry'); // the dialog is open: repeat the confirm, no second reset
+    await until(() => p.phase() === 'active', 8000);
+    expect(resetClicks).toBe(0);
+    expect(p.fake().resets).toBe(1);
+
+    // Again, with his own Cancel on LeetCode's dialog in between: Retry clicks the reset again.
+    const again = await startOn(null, { selectors: { resetConfirm: '#gone' } });
+    (again.p.w.document.querySelector('[data-fake=cancel]') as HTMLElement).click();
+    let again2 = 0;
+    again.p.w.document
+      .querySelector('[data-fake=reset]')!
+      .addEventListener('click', () => again2++);
+    await again.ext.local.remove('selectors');
+    await new Promise((res) => setTimeout(res, 100));
+    again.p.tap('retry');
+    await until(() => again.p.phase() === 'active', 8000);
+    expect(again2).toBe(1);
+    expect(again.p.fake()).toMatchObject({ resets: 1, strays: 0 });
+  }, 30_000);
 });

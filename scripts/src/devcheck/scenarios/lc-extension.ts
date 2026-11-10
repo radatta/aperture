@@ -15,7 +15,7 @@ export const lcExtension: Scenario = {
       id: 'ext-start',
       entry: 'extension',
       kind: 'nominal',
-      what: 'Start opens a sitting, then clicks LeetCode’s reset, confirms it and starts its timer; a Submit lands in it with its verdict',
+      what: 'Start opens a sitting, then, on the shipped selectors, clicks LeetCode’s reset, confirms it, resets a timer left paused and starts it; a Submit lands in it with its verdict',
       offDev: {
         file: 'scripts/src/lc-e2e/extension.test.ts',
         test: 'Start resets the editor, starts the timer and opens a sitting; a submit lands with its verdict',
@@ -48,7 +48,7 @@ export const lcExtension: Scenario = {
       id: 'ext-reset-missing',
       entry: 'extension',
       kind: 'edge',
-      what: 'Start opens the sitting first; LeetCode’s reset isn’t configured (the shipped default) → the overlay says so, and Continue without a clear goes active',
+      what: 'Start opens the sitting first; LeetCode’s reset turned off in Options (null) → the overlay says it isn’t configured, and Continue without a clear goes active',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'opens the sitting first, says LeetCode’s reset isn’t configured, and Continue without a clear goes active',
@@ -188,12 +188,89 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-timer-restart',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A timer left running or paused is reset first, then started in the mode LeetCode last used',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'restarts a timer left running or paused: LeetCode’s reset first, then Start from the pop-up that stays open',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-timer-name',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'An idle timer is opened under either name (Stopwatch, or Timer in countdown mode) and started',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'opens an idle timer under either name',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-timer-popup-closed',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'LeetCode’s pop-up closing after its reset still ends in a start (through the opener)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'still starts when LeetCode’s pop-up closes after its reset',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-control-moved',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A control that moved is named with its key, nothing else is clicked, Continue is offered, and a fix in Options works on Retry; debug mode records the timer’s controls',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'names the control it couldn’t find, clicks nothing else, and a fixed selector works on Retry; debug mode records the timer’s controls',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-toolbar-shift',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'An editor toolbar with one more icon: the reset reads as not found, and no neighbouring icon is clicked',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'finds no reset button when the toolbar gains an icon, rather than clicking a neighbour',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-retry-dialog',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Retry after a failed confirm repeats the confirm while LeetCode’s dialog is open and clicks the reset again once it was cancelled; the streaks pop-over never counts as that dialog',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'Retry after a failed confirm goes back to the reset once LeetCode’s dialog has gone, and repeats the confirm while it is open',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-selector-paste',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Every shipped selector is valid CSS; an override (null turns a step off) merges; a bad paste or the retired timerClicks falls back to the defaults',
+      offDev: {
+        file: 'extension/test/libs.test.ts',
+        test: 'ships LeetCode’s controls from the debug log; null turns a step off; a bad paste and the retired timerClicks fall back',
+        why: `${noStep}; merge() is a pure function`,
+      },
+    },
+    {
       id: 'ext-selectors',
       entry: 'extension',
       kind: 'nominal',
-      what: 'LeetCode’s real reset, its confirm and its timer start are found by the configured selectors',
+      what: 'The shipped selectors find LeetCode’s real reset, its confirm and its timer’s controls, from a running timer and from an idle one',
       needsYou:
-        'the ~5-minute debug session in Safari on leetcode.com (README → Debug mode): only LeetCode’s real page has them',
+        'part 2 in Safari on leetcode.com (report → Morning steps): only LeetCode’s real page has them — the debug session (2026-11-10) found them, part 2 proves them',
     },
     {
       id: 'ext-start-safari',

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
 import { isUlid as sharedIsUlid, lcTimerState } from '@aperture/shared';
 import { ISOLATED_JS, MAIN_JS, lib, src } from './load';
 import { TIMER_PAUSED } from './fixtures/traffic';
@@ -43,25 +44,84 @@ describe('timer', () => {
     expect(timer.startedFresh(timer.parseTimerState(TIMER_PAUSED, now))).toBe(false);
     expect(timer.parseTimerState('nope', now)).toBeNull();
   });
+
+  // The states the 2026-11-10 debug log recorded, verbatim but for the clock.
+  it('reads every state the debug log recorded, and knows which need a reset before Start', () => {
+    const now = 1_794_329_436_000;
+    const at = (o: Record<string, unknown>) =>
+      JSON.stringify({ lastUsedEndMs: 3600000, alertMinute: 10, isUserPaused: false, ...o });
+    const idle = at({
+      mode: 'forward',
+      startTimestamp: null,
+      pauseMs: null,
+      endMs: null,
+      status: 'idle',
+    });
+    const running = at({
+      mode: 'reverse',
+      startTimestamp: now - 2000,
+      pauseMs: null,
+      endMs: 3600000,
+      status: 'running',
+    });
+    const paused = at({
+      mode: 'forward',
+      startTimestamp: null,
+      pauseMs: 5758,
+      endMs: null,
+      status: 'pause',
+      isUserPaused: true,
+    });
+    const resumed = at({
+      mode: 'forward',
+      startTimestamp: now - 5400,
+      pauseMs: null,
+      endMs: null,
+      status: 'running',
+    });
+    const read = (j: string) => timer.parseTimerState(j, now);
+    expect(timer.needsReset(read(idle))).toBe(false);
+    expect(timer.needsReset(null)).toBe(false); // a timer never used
+    expect(timer.needsReset(read(running))).toBe(true);
+    expect(timer.needsReset(read(paused))).toBe(true);
+    expect(timer.needsReset(read(at({ status: 'finished' })))).toBe(true); // a state never seen: reset first
+    expect(timer.startedFresh(read(running))).toBe(true);
+    expect(timer.startedFresh(read(idle))).toBe(false);
+    expect(read(paused)).toMatchObject({ running: false, elapsedMs: 5758 });
+    // A resume backdates the start by the paused time: elapsed reads on, as A1's reader agrees.
+    for (const j of [running, paused, resumed])
+      expect(read(j)!.elapsedMs).toBe(lcTimerState(JSON.parse(j), now)!.elapsedMs);
+    expect(read(resumed)!.elapsedMs).toBe(5400);
+  });
 });
 
 describe('selectors', () => {
-  it('ships the unknown controls unconfigured, and takes overrides without breaking on a bad paste', () => {
-    expect(selectors.DEFAULTS.editorReset).toBeNull();
-    expect(selectors.DEFAULTS.timerClicks).toEqual([]);
+  it('ships LeetCode’s controls from the debug log; null turns a step off; a bad paste and the retired timerClicks fall back', () => {
+    const doc = new JSDOM('<!doctype html><body></body>').window.document;
+    for (const k of selectors.KEYS) {
+      const v = selectors.DEFAULTS[k];
+      expect(typeof v, k).toBe('string');
+      expect(() => doc.querySelector(v), k).not.toThrow(); // valid CSS, every one
+    }
+    expect(selectors.KEYS).not.toContain('timerClicks');
     const m = selectors.merge({
       editorReset: '#r',
-      timerClicks: ['#a', '#b'],
+      timerStart: null,
+      timerClicks: ['#a'],
       bogus: 'x',
       dialog: 7,
+      run: '  ',
     });
     expect(m).toMatchObject({
       editorReset: '#r',
-      timerClicks: ['#a', '#b'],
+      timerStart: null,
       dialog: selectors.DEFAULTS.dialog,
+      run: selectors.DEFAULTS.run,
     });
     expect(m).not.toHaveProperty('bogus');
+    expect(m).not.toHaveProperty('timerClicks');
     expect(selectors.merge('{bad json')).toEqual({ ...selectors.DEFAULTS });
+    expect(selectors.merge([])).toEqual({ ...selectors.DEFAULTS });
   });
 });
 

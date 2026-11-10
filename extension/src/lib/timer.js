@@ -1,7 +1,7 @@
-// LeetCode's own timer, read from localStorage QD_TIMER_STATE — {mode:'reverse', startTimestamp, pauseMs,
-// endMs, status, …} (2026-11-08 capture). Read the same way as A1's lcTimerState (packages/shared/src/
-// sittings.ts): pauseMs is elapsed-at-pause; a running timer adds now − startTimestamp. That reading is an
-// inference until the debug session's log confirms it.
+// LeetCode's own timer, read from localStorage QD_TIMER_STATE — {mode:'forward'|'reverse' (stopwatch|countdown),
+// startTimestamp, pauseMs, endMs, lastUsedEndMs, status:'idle'|'running'|'pause', isUserPaused}. Read the same
+// way as A1's lcTimerState (packages/shared/src/sittings.ts), confirmed by the 2026-11-10 debug log: pauseMs is
+// elapsed-at-pause; a resume clears it and backdates startTimestamp by it, so running elapsed is now − start.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -36,5 +36,9 @@
   const startedFresh = (state, withinMs = 10_000) =>
     !!state && state.running && state.elapsedMs <= withinMs;
 
-  return { KEY, HEARTBEAT_KEY, parseTimerState, startedFresh };
+  // Whether Start has to reset LeetCode's timer before starting it: any state but idle (running, paused, or one
+  // never seen, like a countdown that ran out). No state at all is a timer never used: idle.
+  const needsReset = (state) => !!state && state.status !== 'idle';
+
+  return { KEY, HEARTBEAT_KEY, parseTimerState, startedFresh, needsReset };
 });

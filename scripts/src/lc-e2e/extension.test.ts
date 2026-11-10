@@ -25,11 +25,6 @@ const worktree = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const fixtures = join(worktree, 'extension', 'test', 'fixtures');
 const playwrightAvailable = existsSync(join(homedir(), 'pw', 'node_modules', 'playwright'));
 const AUTH_HEADER = 'x-aperture-authorization';
-const SELECTORS = {
-  editorReset: '[data-fake=reset]',
-  resetConfirm: '[data-fake=confirm]',
-  timerClicks: ['[data-fake=timer-reset]', '[data-fake=timer-start]'],
-};
 
 type Sitting = {
   id: string;
@@ -140,7 +135,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
       context.serviceWorkers!()[0] ??
       (await context.waitForEvent!('serviceworker', { timeout: 10_000 }));
     await worker.evaluate(
-      `chrome.storage.local.set(${JSON.stringify({ apiOrigin: origin, deviceToken, selectors: SELECTORS })})`,
+      `chrome.storage.local.set(${JSON.stringify({ apiOrigin: origin, deviceToken })})`,
     );
 
     const lc = createRequire(import.meta.url)(
@@ -188,15 +183,28 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
 
   it('Start resets the editor, starts the timer and opens a sitting; a submit lands with its verdict', async () => {
     await page.goto('https://leetcode.com/problems/two-sum/description/');
+    // A countdown left paused, as the debug log recorded one: Start resets it, then starts it again.
+    await page.evaluate(
+      `window.__fake.setTimer(${JSON.stringify({ mode: 'reverse', startTimestamp: null, pauseMs: 6550, endMs: 3600000, lastUsedEndMs: 3600000, status: 'pause', isUserPaused: true, alertMinute: 10 })})`,
+    );
     tabId = await worker.evaluate<number>(
       "chrome.tabs.query({ url: 'https://leetcode.com/*' }).then((t) => t[0].id)",
     );
     await until(async () => (await phase()) === 'prompt');
     await click('start');
     await until(async () => (await phase()) === 'active');
+    // On the shipped selectors, in Chrome's own CSS engine.
+    expect(await page.evaluate<Record<string, number>>('window.__fake')).toMatchObject({
+      resets: 1,
+      timerResets: 1,
+      timerStarts: 1,
+      strays: 0,
+    });
     expect(
-      await page.evaluate<{ resets: number; timerStarts: number }>('window.__fake'),
-    ).toMatchObject({ resets: 1, timerStarts: 1 });
+      await page.evaluate<{ mode: string; status: string }>(
+        "JSON.parse(localStorage.getItem('QD_TIMER_STATE'))",
+      ),
+    ).toMatchObject({ mode: 'reverse', status: 'running' });
 
     await page
       .locator('[data-fake=code]')
@@ -237,7 +245,12 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     const before = await rpc<Sitting[]>('listSittings');
     await page.reload();
     await until(async () => (await phase()) === 'active');
-    expect(await page.evaluate<{ resets: number }>('window.__fake')).toMatchObject({ resets: 0 });
+    expect(await page.evaluate<Record<string, number>>('window.__fake')).toMatchObject({
+      resets: 0,
+      timerResets: 0,
+      timerStarts: 0,
+      timerOpens: 0,
+    });
     const after = await rpc<Sitting[]>('listSittings');
     expect(after.map((s) => s.id)).toEqual(before.map((s) => s.id));
 

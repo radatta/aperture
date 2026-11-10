@@ -58,10 +58,18 @@
     for (const a of el.attributes || [])
       if (/^(data-|aria-|id$|class$|title$|role$|type$)/.test(a.name))
         attrs[a.name] = clip(a.value, 120);
+    // An icon button's own text is empty and its <svg> falls past the outerHTML cut: name the icon.
+    const svg = el.querySelector && el.querySelector('svg');
     return {
       tag: el.tagName.toLowerCase(),
       text: clip((el.textContent || '').trim(), 60),
       attrs,
+      icon: svg
+        ? {
+            dataIcon: clip(svg.getAttribute('data-icon'), 60),
+            class: clip(svg.getAttribute('class'), 120),
+          }
+        : null,
       html: clip(el.outerHTML, 400),
       path: cssPath(el),
     };
@@ -72,6 +80,8 @@
     log('controls', {
       editor: pick('#editor button'),
       labelled: pick('button[aria-label]'),
+      // LeetCode's timer controls are div[role=button], not buttons.
+      roleButtons: pick('[role="button"][aria-label]'),
       dialogs: pick('[role="dialog"] button, [role="alertdialog"] button'),
     });
   }

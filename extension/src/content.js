@@ -336,7 +336,7 @@
       if (!sel.editorReset)
         return 'LeetCode’s reset button isn’t configured yet (Options → Selectors).';
       const b = q(sel.editorReset);
-      if (!b) return 'Couldn’t find LeetCode’s reset button.';
+      if (!b) return 'Couldn’t find LeetCode’s reset button (editorReset).';
       b.click();
       return (await waitFor(() => q(sel.dialog), 1500))
         ? true
@@ -346,30 +346,61 @@
       if (!sel.resetConfirm)
         return 'The reset’s confirm button isn’t configured yet (Options → Selectors).';
       const b = await waitFor(() => q(sel.resetConfirm), 1500);
-      if (!b) return 'Couldn’t find the reset’s confirm button.';
+      if (!b) return 'Couldn’t find the reset’s confirm button (resetConfirm).';
       b.click();
       return (await waitFor(() => !q(sel.dialog), 1500))
         ? true
         : 'LeetCode didn’t confirm the reset.';
     },
+    // LeetCode's controls differ by its timer's state, so the step reads the state, not a fixed click list:
+    // running or paused → its Reset, then the pop-up's Reset; then the pop-up's Start (still showing after a
+    // reset, else the idle opener first) in whichever mode LeetCode last used. At most four clicks, no loop on
+    // page state, and a Retry picks up from wherever a half-done try left it.
     async timer() {
-      if (!sel.timerClicks.length)
-        return 'LeetCode’s timer start isn’t configured yet (Options → Selectors).';
-      for (const s of sel.timerClicks) {
-        const b = await waitFor(() => q(s), 1500);
-        if (!b) return 'Couldn’t find LeetCode’s timer control.';
-        b.click();
-        await sleep(150);
-      }
-      const fresh = () => {
+      const { timerOpen, timerStart, timerReset, timerResetConfirm } = sel;
+      if (!timerOpen || !timerStart || !timerReset || !timerResetConfirm)
+        return 'LeetCode’s timer isn’t configured (Options → Selectors).';
+      const read = () => {
         try {
-          return timer.startedFresh(
-            timer.parseTimerState(localStorage.getItem(timer.KEY), Date.now()),
-          );
+          return timer.parseTimerState(localStorage.getItem(timer.KEY), Date.now());
         } catch {
-          return false;
+          return null;
         }
       };
+      const before = read();
+      const path = {
+        status: clip(before && before.status, 20),
+        mode: clip(before && before.mode, 20),
+      };
+      let settle = 0;
+      if (timer.needsReset(before)) {
+        let confirm = q(timerResetConfirm); // a Retry may find LeetCode's pop-up still asking
+        if (!confirm) {
+          const r = q(timerReset);
+          if (!r) return 'Couldn’t find LeetCode’s timer reset (timerReset).';
+          r.click();
+          confirm = await waitFor(() => q(timerResetConfirm), 1500);
+          if (!confirm)
+            return 'LeetCode’s timer didn’t ask to confirm its reset (timerResetConfirm).';
+        }
+        confirm.click();
+        if (!(await waitFor(() => !timer.needsReset(read()), 1500)))
+          return 'LeetCode’s timer didn’t reset.';
+        path.reset = true;
+        settle = 1000; // the pop-up swaps its Reset for Start
+      }
+      let start = await waitFor(() => q(timerStart), settle);
+      if (!start) {
+        const open = q(timerOpen);
+        if (!open) return 'Couldn’t find LeetCode’s timer (timerOpen).';
+        open.click();
+        path.opened = true;
+        start = await waitFor(() => q(timerStart), 1500);
+        if (!start) return 'Couldn’t find the timer’s Start button (timerStart).';
+      }
+      start.click();
+      debug.log('timer', path);
+      const fresh = () => timer.startedFresh(read());
       return (await waitFor(fresh, 1500)) ? true : 'LeetCode’s timer didn’t start.';
     },
   };

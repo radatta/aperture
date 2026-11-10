@@ -499,9 +499,9 @@ largest line item in this project.
 
 ## Open items
 
-- **LeetCode's reset, its confirm and its timer start aren't known yet** (A2 ships them unconfigured; Start
-  anyway still opens a sitting). Rahul's debug session (`extension/README.md` → _Debug mode_) finds them;
-  they go into `src/lib/selectors.js`, or Options → Selectors without a rebuild.
+- **LeetCode's controls are set from Rahul's debug session (2026-11-10)** (`extension/README.md` →
+  _LeetCode's controls_). Still unproven until a Safari sitting: the timer opener's name in countdown mode,
+  its Reset pressed while running, and an expired countdown's state.
 - **One real Safari sitting on dev** through the temporary extension is A2's last proof.
 - **One manifest for both browsers.** The shipped manifest keeps `background.scripts` (Safari's shape); the
   E2E patches a copy for Chrome. A manifest with both `scripts` and `service_worker` may suit both — verify
