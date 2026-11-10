@@ -97,7 +97,7 @@ describe('createApiClient', () => {
       'getSettings',
       'getSitting',
       'getTask',
-      'legacyWrite',
+      'legacyWriteProbe',
       'listAttachments',
       'listBacklog',
       'listCategories',
@@ -616,8 +616,11 @@ describe('createApiClient', () => {
       text: async () => '<!doctype html>',
     }));
     const api = createApiClient({ fetch, token: () => 'tok', ledger: memLedger(), run: 'r1' });
-    expect(await api.reads.legacyWrite('jwt')).toEqual({ status: 200, text: '<!doctype html>' });
-    await api.reads.legacyWrite('bogus-device');
+    expect(await api.reads.legacyWriteProbe('jwt')).toEqual({
+      status: 200,
+      text: '<!doctype html>',
+    });
+    await api.reads.legacyWriteProbe('bogus-device');
     const sent = fetch.mock.calls.map(([url, init]) => [url, init.headers, init.body]);
     expect(sent).toEqual([
       [

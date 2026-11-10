@@ -561,7 +561,7 @@ export function createApiClient({
       call<{ id: string; events: string }[]>('listSittingReplay', [id]),
     // PR D's probe: the removed legacy write, posted with no input — a server that still had the method fails
     // on the missing input instead of writing a row. Returns the raw answer (call() throws on a non-200).
-    legacyWrite: (bearer: 'jwt' | 'bogus-device') => {
+    legacyWriteProbe: (bearer: 'jwt' | 'bogus-device') => {
       const url = `${targetOrigin()}/api/recordLeetcodeAttempt`;
       assertDevOrigin(url);
       return backoff(() =>

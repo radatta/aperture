@@ -35,7 +35,7 @@ kept **distinct** from the device token so the two revoke independently.
 The token is **unscoped by method** (`*`) — it's a full app session — so the edge disambiguates by
 **credential, not method**: the agent header present → validate it, never fall through; else a Cognito
 bearer (claude.ai — see the OAuth façade below); else 401. This is the reverse of the recruiting seam
-(which keys on the single ingest method name), and the reason is the same `*` decision that keeps
+(which keys on the ingest method names, `LC_INGEST_METHODS`), and the reason is the same `*` decision that keeps
 tool-adds free: a new tool never touches auth.
 
 ### The agent token is a full app session — with a bounded ceiling

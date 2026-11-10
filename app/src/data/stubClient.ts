@@ -2756,7 +2756,7 @@ class StubClient implements ApiClient {
     // stops compiling, which forces it into ExportBundle, which in turn breaks the backend's literal.
     // The Store keys left out on purpose: the place token and push subscriptions are credentials, the
     // poller's heartbeat is stage health, not your data, and the week-note cache is derived from the sets
-    // (rebuilt on the next read). The retired LeetCode attempts are no longer exported, and a sitting's
+    // (rebuilt on the next read). A sitting's
     // replay stays out like attachment bytes (bulk, and it expires); its capture budget, live-pull count and Start gate are internal, and its events' payloads stay out (the head rows carry
     // their verdicts).
     return bundle satisfies Record<

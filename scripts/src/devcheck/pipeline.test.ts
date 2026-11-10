@@ -237,7 +237,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       listSittingReplay: async () => [],
-      legacyWrite: async () => {
+      legacyWriteProbe: async () => {
         throw new Error('unused');
       },
       listHabitChecks: async () => [],

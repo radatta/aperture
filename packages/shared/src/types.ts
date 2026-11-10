@@ -329,9 +329,8 @@ export interface CalibrationPoint {
   parts: number;
 }
 
-// --- Recruiting: LeetCode attempts -----------------------------------------
-// One row per submission, captured by the browser extension. Accepted AND wrong verdicts.
-// attempt-count is DERIVED at read time (count per problemSlug) — never a stored counter.
+// --- Recruiting: LeetCode verdicts -----------------------------------------
+// A judged Run or Submit's outcome, normalized server-side from LeetCode's raw status (normalizeVerdict).
 export type LeetcodeVerdict =
   | 'accepted'
   | 'wrong_answer'
