@@ -279,15 +279,51 @@
     'content',
     'companyTagStatsV2',
   ];
-  // A doc as the Start may carry it: whole when it fits `max` bytes, else only PROBLEM_FIELDS, else null.
-  function fitProblem(doc, max) {
+  // What A1 can store, as packages/shared/src/sittings.ts payloadError rules it (the doc itself at depth 0):
+  // nothing nested deeper than 20, no number that isn't finite, past MAX_SAFE_INTEGER, or nonzero under 1e-130
+  // in magnitude. Those values are dropped (left out of objects, filtered out of arrays), everything else kept,
+  // so a doc can never make A1 refuse the Start. `dropped` counts them; payloadError is run over the output in
+  // the tests, so the two can't drift.
+  const MAX_DEPTH = 20;
+  const storableNumber = (n) =>
+    Number.isFinite(n) &&
+    Math.abs(n) <= Number.MAX_SAFE_INTEGER &&
+    (n === 0 || Math.abs(n) >= 1e-130);
+  function cleanProblem(doc) {
+    let dropped = 0;
+    const DROP = {};
+    const walk = (v, depth) => {
+      if (depth > MAX_DEPTH || (typeof v === 'number' && !storableNumber(v))) {
+        dropped++;
+        return DROP;
+      }
+      if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1)).filter((x) => x !== DROP);
+      if (v && typeof v === 'object') {
+        const out = {};
+        for (const [k, x] of Object.entries(v)) {
+          const c = walk(x, depth + 1);
+          if (c !== DROP) out[k] = c;
+        }
+        return out;
+      }
+      return v;
+    };
     const d = obj(doc);
-    if (!d) return null;
-    if (bytes(JSON.stringify(d)) <= max) return d;
+    return { doc: d ? walk(d, 0) : null, dropped };
+  }
+  // A doc as the Start may carry it, cleaned to what A1 stores: whole when it fits `max` bytes, else only
+  // PROBLEM_FIELDS, else null. → {doc, fit: 'whole' | 'trimmed' | null, cleaned (values dropped)}
+  function fitProblemDetail(doc, max) {
+    const { doc: d, dropped } = cleanProblem(doc);
+    if (!d) return { doc: null, fit: null, cleaned: dropped };
+    if (bytes(JSON.stringify(d)) <= max) return { doc: d, fit: 'whole', cleaned: dropped };
     const slim = {};
     for (const k of PROBLEM_FIELDS) if (k in d) slim[k] = d[k];
-    return bytes(JSON.stringify(slim)) <= max ? slim : null;
+    return bytes(JSON.stringify(slim)) <= max
+      ? { doc: slim, fit: 'trimmed', cleaned: dropped }
+      : { doc: null, fit: null, cleaned: dropped };
   }
+  const fitProblem = (doc, max) => fitProblemDetail(doc, max).doc;
   // A request's GraphQL operation names, for the debug log: only text shaped as a GraphQL name (the page
   // writes it), never variables.
   const OP_NAME = /^[_A-Za-z][_0-9A-Za-z]{0,39}$/;
@@ -309,6 +345,8 @@
     splitReplay,
     pageProblem,
     fitProblem,
+    fitProblemDetail,
+    cleanProblem,
     opNames,
     PROBLEM_FIELDS,
     pathOf,

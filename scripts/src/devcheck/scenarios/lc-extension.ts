@@ -497,6 +497,39 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-page-doc-clean',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Any doc, however deep or odd its numbers, is cleaned to what A1’s payloadError accepts — the extension’s copy of the rule can’t drift from the server’s',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'always yields what A1’s payloadError and normalizeSittingStart accept, however hostile the doc',
+        why: `${noStep}; cleanProblem is a pure function, run against A1’s own payloadError`,
+      },
+    },
+    {
+      id: 'ext-page-doc-unstorable',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A page doc A1 couldn’t store as given never blocks the Start: it goes cleaned, every storable field kept',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a page doc A1 couldn’t store never blocks the Start: it goes cleaned, everything storable kept',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, its Start through A1’s normalizer`,
+      },
+    },
+    {
+      id: 'ext-frontend-id',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The page doc may give the display number (frontendId), digits only and up to six, never the question id',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'takes the page’s display number only as up to six digits',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
       id: 'ext-statement-safari',
       entry: 'extension',
       kind: 'nominal',

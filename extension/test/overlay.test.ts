@@ -858,6 +858,7 @@ describe('the problem doc from the page', () => {
     await until(() => p.phase() === 'active', 8000);
     const raw = startOf(ext).problem;
     expect(raw).toEqual(SSR); // whole: it fits the cap
+    expect(startOf(ext)).toMatchObject({ frontendId: '1' }); // the page's, for display: no doc was fetched
     expect(problemStatementText({ raw })).toBe('Find two numbers.');
     expect(problemCompanies({ raw })).toEqual(['Acme']);
     expect(ext.local.data['sitting:two-sum']).toMatchObject({ problemSent: true });
@@ -868,6 +869,7 @@ describe('the problem doc from the page', () => {
       found: true,
       match: true,
       fit: 'whole',
+      cleaned: 0,
     });
   }, 20_000);
 
@@ -888,6 +890,43 @@ describe('the problem doc from the page', () => {
       readyState: 'interactive',
       found: true,
     });
+  }, 20_000);
+
+  it('takes the page’s display number only as up to six digits', async () => {
+    for (const questionFrontendId of ['abc', '1234567', 12.5]) {
+      const bg = fakeBackground();
+      const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+      const p = open('/problems/two-sum/', ext, {
+        nextData: nextData({ ...SSR, questionFrontendId }),
+      });
+      await until(() => p.phase() === 'prompt');
+      p.tap('start');
+      await until(() => p.phase() === 'active', 8000);
+      expect(startOf(ext).frontendId, String(questionFrontendId)).toBeNull();
+    }
+  }, 30_000);
+
+  it('a page doc A1 couldn’t store never blocks the Start: it goes cleaned, everything storable kept', async () => {
+    const bg = fakeBackground(); // its Start runs A1’s normalizeSittingStart, which refuses an unstorable doc
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    let nested: unknown = 'too deep';
+    for (let i = 0; i < 25; i++) nested = [nested];
+    const odd = { ...SSR, likes: 2 ** 53, acRate: 1e-200, envInfo: { nested }, hints: ['h'] };
+    const p = open('/problems/two-sum/', ext, { nextData: nextData(odd) });
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    // Through JSON: the body was built in the page's realm, whose Array isn't this one's.
+    const raw = JSON.parse(JSON.stringify(startOf(ext).problem)) as Record<string, unknown>;
+    expect(raw).toMatchObject({
+      content: SSR.content,
+      hints: ['h'],
+      envInfo: { nested: expect.any(Array) },
+    });
+    expect(raw).not.toHaveProperty('likes');
+    expect(raw).not.toHaveProperty('acRate');
+    expect(await logged(ext, 'pageDoc')).toMatchObject({ fit: 'whole', cleaned: 3 });
   }, 20_000);
 
   it('a page doc for another problem is ignored, even once the address names it', async () => {
@@ -918,14 +957,18 @@ describe('the problem doc from the page', () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     const p = open('/problems/two-sum/', ext, {
-      nextData: nextData({ ...SSR, title: 'Two Sum (page)' }),
+      nextData: nextData({ ...SSR, title: 'Two Sum (page)', questionFrontendId: '77' }),
     });
     await until(() => p.phase() === 'prompt' && p.text().includes('Two Sum (page)'));
     p.fake().fetchDoc();
     await until(() => !p.text().includes('(page)'));
     p.tap('start');
     await until(() => p.phase() === 'active', 8000);
-    expect(startOf(ext)).toMatchObject({ problemTitle: 'Two Sum', problem: { title: 'Two Sum' } });
+    expect(startOf(ext)).toMatchObject({
+      problemTitle: 'Two Sum',
+      frontendId: '1', // the fetched doc's, over the page's 77
+      problem: { title: 'Two Sum' },
+    });
     expect(startOf(ext).problem).not.toHaveProperty('content'); // the fake server's doc has none
   }, 20_000);
 
@@ -937,7 +980,8 @@ describe('the problem doc from the page', () => {
     await until(() => p.phase() === 'prompt');
     p.tap('start');
     await until(() => p.phase() === 'active', 8000);
-    expect(startOf(ext)).toMatchObject({ frontendId: null, problem: { questionId: '999' } });
+    // The page's number is shown (display only); its question id is never taken.
+    expect(startOf(ext)).toMatchObject({ frontendId: '999', problem: { questionId: '999' } });
     expect([null, '1']).toContain(startOf(ext).questionId);
     await until(
       () => (ext.local.data['sitting:two-sum'] as { questionId?: string }).questionId === '1',

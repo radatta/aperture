@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isUlid, normalizeSittingEvents, problemCompanies } from '@aperture/shared';
+import {
+  isUlid,
+  normalizeSittingEvents,
+  normalizeSittingStart,
+  payloadError,
+  problemCompanies,
+} from '@aperture/shared';
 import { lib } from './load';
 import { CODE, QID, SLUG, T } from './fixtures/traffic';
 
@@ -169,7 +175,7 @@ describe('wire: what LeetCode traffic means', () => {
       codeSnippets: [{ lang: 'Python3', code: 'x'.repeat(70 * 1024) }],
     };
     const small = { ...doc, codeSnippets: [] };
-    expect(wire.fitProblem(small, 64 * 1024)).toBe(small);
+    expect(wire.fitProblem(small, 64 * 1024)).toEqual(small); // a cleaned copy
     const slim = wire.fitProblem(doc, 64 * 1024);
     expect(Object.keys(slim).sort()).toEqual(
       ['title', 'titleSlug', 'questionId', 'questionFrontendId', 'difficulty', 'topicTags']
@@ -194,5 +200,139 @@ describe('wire: what LeetCode traffic means', () => {
     expect(wire.opNames(named('_ok_9'))).toEqual(['_ok_9']);
     expect(wire.opNames(T.submit.reqText)).toEqual([]);
     expect(wire.opNames(null)).toEqual([]);
+  });
+
+  describe('cleanProblem: a doc made storable by A1’s own rule (payloadError)', () => {
+    // A leaf at `depth` from the doc (the doc itself is depth 0): { k: [[…['x']…]] }.
+    const deep = (depth: number, leaf: unknown = 'x') => {
+      let v: unknown = leaf;
+      for (let i = 1; i < depth; i++) v = [v];
+      return { k: v };
+    };
+    it('keeps a value at depth 20 and drops one at 21, from arrays and objects alike', () => {
+      expect(wire.cleanProblem(deep(20))).toEqual({ doc: deep(20), dropped: 0 });
+      expect(wire.cleanProblem(deep(21))).toEqual({ doc: deep(20, []), dropped: 1 });
+      // An object at depth 20 keeps its place, emptied of what sits at 21.
+      let o: Record<string, unknown> = { leaf: 1 };
+      for (let i = 1; i < 20; i++) o = { o };
+      const { doc } = wire.cleanProblem({ o });
+      let at = doc as Record<string, unknown>;
+      for (let i = 0; i < 20; i++) at = at.o as Record<string, unknown>;
+      expect(at).toEqual({});
+    });
+    it('drops each kind of number A1 can’t store, and keeps zero and the rest', () => {
+      const doc = {
+        inf: 1e308 * 10,
+        negInf: -1e308 * 10,
+        nan: Number.NaN,
+        big: 2 ** 53,
+        tiny: 1e-200,
+        negTiny: -1e-200,
+        zero: 0,
+        max: Number.MAX_SAFE_INTEGER,
+        small: 1e-130,
+        frac: 34.5,
+        list: [1, 2 ** 53, 0, 1e-200, -3, { n: 1e-200, ok: 'y' }],
+      };
+      expect(wire.cleanProblem(doc)).toEqual({
+        doc: {
+          zero: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          small: 1e-130,
+          frac: 34.5,
+          list: [1, 0, -3, { ok: 'y' }],
+        },
+        dropped: 9,
+      });
+    });
+    it('passes a real-shaped doc through unchanged, every extra field kept', () => {
+      const doc = {
+        questionId: '15',
+        questionFrontendId: '15',
+        title: '3Sum',
+        titleSlug: '3sum',
+        content: '<p>Given an integer array…</p>',
+        difficulty: 'Medium',
+        likes: 33012,
+        isPaidOnly: false,
+        hints: ['So, we essentially need to find three numbers x, y, and z…'],
+        similarQuestionList: [{ title: 'Two Sum', titleSlug: 'two-sum', difficulty: 'Easy' }],
+        topicTags: [{ name: 'Array', slug: 'array' }],
+        codeSnippets: [{ lang: 'Python3', langSlug: 'python3', code: 'class Solution:' }],
+        exampleTestcaseList: ['[-1,0,1,2,-1,-4]', '[0,1,1]'],
+        stats: '{"totalAccepted": "4.4M", "acRate": "37.1%"}',
+        envInfo: '{"python3": ["Python3", "<p>Python 3.11</p>"]}',
+        companyTagStatsV2: '{"three_months":[]}',
+        status: null,
+      };
+      expect(wire.cleanProblem(doc)).toEqual({ doc, dropped: 0 });
+      expect(wire.fitProblem(doc, 64 * 1024)).toEqual(doc);
+    });
+    it('fitProblem cleans before it fits; junk is still no doc', () => {
+      expect(wire.fitProblem({ title: 'x', likes: 2 ** 53 }, 64 * 1024)).toEqual({ title: 'x' });
+      expect(wire.fitProblemDetail({ title: 'x', likes: 2 ** 53 }, 64 * 1024)).toMatchObject({
+        fit: 'whole',
+        cleaned: 1,
+      });
+      for (const junk of [null, 7, 'x', [1]]) expect(wire.cleanProblem(junk).doc).toBeNull();
+    });
+
+    // The key one: whatever comes in, the cleaned doc passes A1’s real payloadError and its Start
+    // normalizer — so the extension’s copy of the rule can’t drift from the server’s.
+    it('always yields what A1’s payloadError and normalizeSittingStart accept, however hostile the doc', () => {
+      let seed = 42;
+      const rnd = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+      const BAD = [
+        1e308 * 10,
+        -1e308 * 10,
+        Number.NaN,
+        2 ** 53,
+        -(2 ** 60),
+        1e-200,
+        -1e-200,
+        5e-324,
+      ];
+      const OK = [0, 1, -7, 34.5, 1e-130, Number.MAX_SAFE_INTEGER, 'x', '', null, true, false];
+      const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)]!;
+      // A small random tree (at most ~40 nodes), set at a random depth from 1 to 30.
+      let budget = 0;
+      const gen = (): unknown => {
+        const r = rnd();
+        if (--budget <= 0 || r < 0.3) return rnd() < 0.5 ? pick(BAD) : pick(OK);
+        const n = 1 + Math.floor(rnd() * 3);
+        if (r < 0.65) return Array.from({ length: n }, gen);
+        return Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, gen()]));
+      };
+      const fuzz = () => {
+        budget = 40;
+        return deep(1 + Math.floor(rnd() * 30), gen());
+      };
+      const hostile = [
+        { ...deep(21), title: 'deep' },
+        { ...deep(40, 1e-200), content: '<p>x</p>' },
+        { stats: { n: [1, [2, [3, { v: 2 ** 53 }]]] }, likes: Number.NaN },
+        { ...deep(20, 1e308 * 10), ok: [0, 0, 0] },
+        ...Array.from({ length: 200 }, () => ({ titleSlug: 'two-sum', extra: fuzz() })),
+      ];
+      let wereBad = 0;
+      for (const doc of hostile) {
+        if (payloadError(doc)) wereBad++;
+        const clean = wire.cleanProblem(doc).doc;
+        expect(payloadError(clean)).toBeNull();
+        const fit = wire.fitProblem(doc, 64 * 1024);
+        expect(() =>
+          normalizeSittingStart({
+            clientSittingId: ulid.ulid(),
+            problemSlug: 'two-sum',
+            problemTitle: 'Two Sum',
+            lang: 'python3',
+            startedAt: Date.now(),
+            tzOffsetMinutes: 480,
+            problem: fit,
+          }),
+        ).not.toThrow();
+      }
+      expect(wereBad).toBeGreaterThan(100); // the fuzz really is hostile, not a pass by luck
+    });
   });
 });

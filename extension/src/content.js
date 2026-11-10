@@ -331,8 +331,8 @@
   }
   // The doc LeetCode rendered into a fresh load's __NEXT_DATA__ (README → step 8), kept only when it names
   // the problem this document was loaded for — after an SPA nav the tag still holds the first problem's. It's
-  // names and text only: never a question id (the hint check, learnQuestionId, the binding's id), and a
-  // fetched doc wins over it (docFor).
+  // names and text only: never a question id (the hint check, learnQuestionId, the binding's id) — the one id
+  // it may supply is the display-only frontendId (startBody) — and a fetched doc wins over it (docFor).
   function readPageDoc(when) {
     let text = null;
     try {
@@ -341,7 +341,8 @@
     const chars = text ? text.length : 0;
     const doc = text && chars <= PAGE_DATA_MAX ? wire.pageProblem(text) : null;
     const match = !!doc && !!loadSlug && doc.titleSlug === loadSlug;
-    const fit = match ? wire.fitProblem(doc, PROBLEM_MAX) : null;
+    const detail = match ? wire.fitProblemDetail(doc, PROBLEM_MAX) : null;
+    const fit = detail && detail.doc;
     debug.log('pageDoc', {
       when,
       readyState: document.readyState,
@@ -349,7 +350,8 @@
       found: !!doc,
       match,
       fields: doc ? Object.keys(doc).length : 0,
-      fit: fit ? (fit === doc ? 'whole' : 'trimmed') : null,
+      fit: detail && detail.fit,
+      cleaned: detail ? detail.cleaned : 0, // values A1 couldn't store, dropped (wire.cleanProblem)
     });
     if (!fit) return;
     pageDocs.set(loadSlug, fit);
@@ -450,13 +452,16 @@
         ? doc.topicTags.map((t) => clip(t && t.name, 40)).filter(Boolean)
         : null;
     const idOf = (v) => (v == null ? null : clip(String(v), 20));
+    // The number LeetCode shows, for display only: the page's doc may supply it, digits only.
+    const shown =
+      (fetched && fetched.questionFrontendId) ?? (pageDocs.get(slug) || {}).questionFrontendId;
     const domFresh = !!dom.title && slugify(dom.title) === slug; // the page shows this problem, not the last
     return {
       clientSittingId,
       problemSlug: slug,
       problemTitle: titleFor(slug, dom),
       questionId: idOf((fetched && fetched.questionId) ?? questionIds.get(slug)),
-      frontendId: idOf(fetched && fetched.questionFrontendId),
+      frontendId: shown != null && /^\d{1,6}$/.test(String(shown)) ? String(shown) : null,
       difficulty: clip(doc && doc.difficulty, 20) || (domFresh ? dom.difficulty : null),
       topicTags: docTags && docTags.length ? docTags.slice(0, 20) : domFresh ? dom.topicTags : null,
       lang: dom.lang || 'python3',
