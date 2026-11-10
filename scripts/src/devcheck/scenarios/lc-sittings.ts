@@ -86,7 +86,21 @@ async function refused(what: string, p: Promise<unknown>, match: RegExp): Promis
 }
 
 // What later steps build on, set by the steps that make it.
-const state = { rollId: '', a: '', aRep: '', aClient: '', aStartedAt: 0, c: '', d: '', dRep: '' };
+const state = {
+  rollId: '',
+  a: '',
+  aRep: '',
+  aClient: '',
+  aStartedAt: 0,
+  aNewestAt: 0, // the latest `at` sent on A: live and `last` are the newest by `at` (see nextAt)
+  c: '',
+  d: '',
+  dRep: '',
+};
+// A time after everything already sent on A. The events step stamps its batch up to 6 s ahead of the clock, so on a
+// fast run (the local check) a plain Date.now() is still behind it, and live and `last` — the newest by `at` —
+// would rightly keep the older event. Dev's round trips hid that.
+const nextAt = () => (state.aNewestAt = Math.max(Date.now(), state.aNewestAt + 1));
 async function sittingA(ctx: Ctx) {
   if (!state.a) throw new Error('no sitting A — the start step failed');
   return ctx.api.reads.getSitting(state.a);
@@ -688,6 +702,7 @@ export const lcSittings: Scenario = {
         'Two snapshots and an older one, a run, a wrong submit, an accepted one; then all again',
       async run(ctx) {
         const t = Date.now();
+        state.aNewestAt = t + 6000; // this batch runs up to 6 s ahead of the clock
         const batch = [
           snap('class Solution: pass', t + 1000),
           snap('class Solution:\n    def solve(self): ...', t + 3000),
@@ -821,7 +836,7 @@ export const lcSittings: Scenario = {
       title: 'A snapshot near the 64 KB cap comes back whole from live_sitting',
       async run(ctx) {
         const big = `# devcheck\n${'x'.repeat(63 * 1024)}`;
-        await ctx.api.writes.lcSittingEvents(state.a, [snap(big, Date.now())]);
+        await ctx.api.writes.lcSittingEvents(state.a, [snap(big, nextAt())]);
         const out = await ctx.mcp.reads.liveSitting();
         if (out.code?.text !== big || out.code.version !== 4 || out.sitting?.liveReads !== 3)
           throw new Error(
@@ -839,7 +854,7 @@ export const lcSittings: Scenario = {
         const run: DevSittingEvent = {
           id: devUlid(),
           type: 'run',
-          at: Date.now(),
+          at: nextAt(),
           payload: {
             request: { lang: 'python3', typed_code: 'print("devcheck")', data_input: '[2,7]\n9' },
             result: {
@@ -948,7 +963,7 @@ export const lcSittings: Scenario = {
         if (pick((await sittingA(ctx)).sitting.review) !== want)
           throw new Error('a refused review changed the head');
         const runs = (await sittingA(ctx)).sitting.summary.runs;
-        await w.lcSittingEvents(state.a, [judged('run', 11, 'Wrong Answer', Date.now(), 0, 1)]);
+        await w.lcSittingEvents(state.a, [judged('run', 11, 'Wrong Answer', nextAt(), 0, 1)]);
         const after = (await sittingA(ctx)).sitting;
         if (after.summary.runs !== runs + 1 || pick(after.review) !== want)
           throw new Error(`refold: ${after.summary.runs} runs, review ${pick(after.review)}`);
@@ -1075,8 +1090,26 @@ export const lcSittings: Scenario = {
         await ctx.shot('sitting-detail');
         await ctx.page.reload();
         await check();
-        await ctx.ui.goto(`/recruiting/sittings/${devUlid()}`);
+        // An unknown id: the real server's answer, replayed to the page once. Asked live first, so its Not found is
+        // proven; the page then gets exactly that 400 through an intercept, because a real failed load lands in
+        // the console and fails noConsoleErrors (the intercept's window is left out of it, DEV-CHECK.md).
+        const unknown = devUlid();
+        const said = await ctx.api.reads.getSitting(unknown).then(
+          () => 'a sitting',
+          (e: unknown) => String((e as Error)?.message ?? e),
+        );
+        const body = /HTTP 400: (\{.*\})/.exec(said)?.[1];
+        if (!body || !/Not found/.test(body))
+          throw new Error(`getSitting(unknown) answered ${said}`);
+        const notFound = await ctx.intercept('getSitting', {
+          status: 400,
+          body: JSON.parse(body),
+          times: 1,
+        });
+        await ctx.ui.goto(`/recruiting/sittings/${unknown}`);
         await ctx.page.getByText('No such sitting.').waitFor({ timeout: 15_000 });
+        if (notFound.hits() !== 1) throw new Error(`the unknown id read ${notFound.hits()} times`);
+        await notFound.release();
         await ctx.page.getByRole('link', { name: 'Back to sittings' }).waitFor({ timeout: 5_000 });
       },
     },
