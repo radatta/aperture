@@ -201,38 +201,40 @@ async function main(): Promise<number> {
       now: Date.now,
       log,
     });
-    // The iOS probe check (IOS-CHECK.md → Probe check): every iOS plan against the stub app, its own Vite.
-    const probePort = await freePort();
-    await startVite({
-      worktree,
-      track,
-      port: probePort,
-      env: {},
-      logPath: join(out, 'vite-probe.log'),
-    });
-    const probes = await runProbes({
-      origin: `http://127.0.0.1:${probePort}`,
-      shotsDir,
-      log: (m) => log(`ios-probe ${m}`),
-    });
     const md = toLocalReport(renderReport(result)).replace(
       /^(Run `.*)$/m,
       `$1\nTarget: local (HEAD \`${head.slice(0, 7)}\` served by vite dev${dirty ? ', working tree dirty' : ''}) — dev remains the proof`,
     );
-    writeFileSync(
-      join(out, 'report.md'),
-      `${md}\n## iOS probe check\n\n\`\`\`\n${probes.text}\n\`\`\`\n`,
-    );
-    writeFileSync(
-      join(out, 'report.json'),
-      JSON.stringify(
-        { ...result, target: 'local', iosProbe: { ok: probes.ok, results: probes.results } },
-        null,
-        2,
-      ) + '\n',
-    );
+    const write = (probe?: { ok: boolean; text: string; results: unknown[] }) => {
+      writeFileSync(
+        join(out, 'report.md'),
+        probe ? `${md}\n## iOS probe check\n\n\`\`\`\n${probe.text}\n\`\`\`\n` : md,
+      );
+      const iosProbe = probe ? { iosProbe: { ok: probe.ok, results: probe.results } } : {};
+      writeFileSync(
+        join(out, 'report.json'),
+        JSON.stringify({ ...result, target: 'local', ...iosProbe }, null, 2) + '\n',
+      );
+    };
+    write();
+    // Then the iOS probe check (IOS-CHECK.md → Probe check) on its own stub Vite. The scenarios' report is written
+    // first, so a probe crash can't lose it; the crash is the probe's failure, reported as one.
+    const probes = await (async () => {
+      const port = await freePort();
+      await startVite({ worktree, track, port, env: {}, logPath: join(out, 'vite-probe.log') });
+      return runProbes({
+        origin: `http://127.0.0.1:${port}`,
+        shotsDir,
+        log: (m) => log(`ios-probe ${m}`),
+      });
+    })().catch((err: unknown) => ({
+      ok: false,
+      text: `iOS probe check: FAIL — it couldn't run: ${err instanceof Error ? err.message : String(err)}`,
+      results: [],
+    }));
+    write(probes);
     console.log(
-      `\nLOCAL ${statusLine(result)}\n${probes.text.split('\n')[0]}\nreport: ${join(out, 'report.md')}`,
+      `\nLOCAL ${statusLine(result)}${probes.ok ? '' : ' — iOS PROBES FAILED'}\n${probes.text.split('\n')[0]}\nreport: ${join(out, 'report.md')}`,
     );
     return Math.max(exitCode(result), probes.ok ? 0 : 1);
   } finally {

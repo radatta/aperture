@@ -1,11 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { IosOp } from '../mailroom/sim';
 import type { AxEl, Frame } from './ax';
-import { checkJob, DEV_DATA, SKIP, staleDevData, type ProbePage } from './check';
+import { checkJob, DEV_DATA, NAV_XS, NAV_Y, SKIP, staleDevData, type ProbePage } from './check';
 import type { Pt } from './points';
 
 // A static page: elements by frame, the last one listed on top. Typing goes into the field last clicked.
-function fakePage(els: (Omit<AxEl, 'enabled'> & { enabled?: boolean })[]) {
+function fakePage(els: (Omit<AxEl, 'enabled'> & { enabled?: boolean })[], fixedLayer = true) {
   const layout = els.map((e) => ({ enabled: true, ...e }));
   let focus: (typeof layout)[number] | null = null;
   const inside = (f: Frame, p: Pt) =>
@@ -29,7 +30,7 @@ function fakePage(els: (Omit<AxEl, 'enabled'> & { enabled?: boolean })[]) {
     blur: async () => void (focus = null),
     scrollTop: async () => {},
     scroll: async () => {},
-    focusInFixedLayer: async () => true,
+    focusInFixedLayer: async () => fixedLayer,
     keyboard: async (up) => void page.calls.push(`keyboard ${up}`),
     settle: async () => {},
     shot: async (path) => void page.calls.push(`shot ${path}`),
@@ -108,7 +109,7 @@ describe('checkJob', () => {
     expect(page.calls).toContain('shot /tmp/demo-job-0.png');
   });
 
-  it('warns FRAGILE when a match lies only within the calibration error of a point, and stops there', async () => {
+  it('warns FRAGILE when a match lies only within the calibration error of a point, and carries on from it', async () => {
     const r = await checkJob(
       DOCK(),
       job([
@@ -117,8 +118,8 @@ describe('checkJob', () => {
       ]),
     );
     expect(r.ops[1]).toMatchObject({ status: 'warn' });
-    expect(r.ops[1]!.note).toMatch(/^FRAGILE: Save log \(AXButton\) only 8 pt off \(395,480\)/);
-    expect(r.ops[2]).toMatchObject({ status: 'skip', note: 'after the fragile probe above' });
+    expect(r.ops[1]!.note).toContain("FRAGILE: only 8 pt off the runner's point (395,480)");
+    expect(r.ops[2]).toMatchObject({ status: 'pass', note: 'send as expected' });
     expect(r.ok).toBe(true);
   });
 
@@ -201,5 +202,118 @@ describe('staleDevData', () => {
       ]),
     ).toEqual([]);
     expect(staleDevData([])).toEqual([`${d.scenario}: "${d.label}"`]);
+  });
+});
+
+// The runner's own semantics (tools/mailroom/jobs/sim.sh), where the check must neither pass nor fail differently.
+describe('checkJob mirrors sim.sh', () => {
+  const tapBar: IosOp = { op: 'tap', label: 'Capture', near: { x: 200, y: 500 }, radius: 10 };
+  const bar300 = findBar(300);
+
+  it('keys … in needs the field to hold exactly the typed text (sim_typed_read)', async () => {
+    const page = DOCK();
+    const ok = await checkJob(page, job([tapBar, bar300, { op: 'keys', text: 'zz', in: 'bar' }]));
+    expect(ok.ok).toBe(true);
+    const twice = await checkJob(
+      DOCK(),
+      job([
+        tapBar,
+        bar300,
+        { op: 'keys', text: 'zz', in: 'bar' },
+        { op: 'keys', text: 'zz', in: 'bar' },
+      ]),
+    );
+    expect(twice.ops.at(-1)).toMatchObject({ status: 'fail' });
+    expect(twice.ops.at(-1)!.note).toMatch(/^TYPED: /);
+  });
+
+  it('refuses to tap a write button the match landed on (DENIED)', async () => {
+    const r = await checkJob(
+      DOCK(),
+      job([{ op: 'tap', label: 'Sav', near: { x: 395, y: 505 }, radius: 10 }]),
+    );
+    expect(r.ops[1]).toMatchObject({ status: 'fail' });
+    expect(r.ops[1]!.note).toMatch(/^DENIED: /);
+  });
+
+  it('fails a tap whose target centre is off the screen (OFF_SCREEN)', async () => {
+    const page = fakePage([
+      { role: 'AXButton', label: 'Edge', value: '', frame: { x: 400, y: 940, w: 100, h: 40 } },
+    ]);
+    const r = await checkJob(
+      page,
+      job([{ op: 'tap', label: 'Edge', near: { x: 420, y: 950 }, radius: 10 }]),
+    );
+    expect(r.ops[1]!.note).toMatch(/^OFF_SCREEN: target centre 450,960/);
+  });
+
+  it('fails a closes tap when anything matching the op is still at the spot (prefix, as sim_tap_gone)', async () => {
+    const page = fakePage([
+      {
+        role: 'AXButton',
+        label: 'Cancel edit',
+        value: '',
+        frame: { x: 100, y: 100, w: 80, h: 40 },
+      },
+    ]);
+    const r = await checkJob(
+      page,
+      job([{ op: 'tap', label: 'Cancel', near: { x: 140, y: 120 }, radius: 10, closes: true }]),
+    );
+    expect(r.ops[1]!.note).toMatch(/^STILL_THERE: /);
+  });
+
+  it('reads an empty spot as enabled, and compares labelIs exactly (sim_op_expect)', async () => {
+    const page = DOCK();
+    const r = await checkJob(
+      page,
+      job([
+        { op: 'find', label: 'Thursday', near: { x: 60, y: 310 }, radius: 10, as: 't' },
+        { op: 'blur' },
+        { op: 'expect', as: 't', labelIs: '' },
+      ]),
+    );
+    expect(r.ok).toBe(true);
+    const caseDiffers = await checkJob(
+      DOCK(),
+      job([findBar(300), { op: 'expect', as: 'bar', labelIs: 'capture log' }]),
+    );
+    expect(caseDiffers.ops.at(-1)!.note).toMatch(/^LABEL: /);
+  });
+
+  it("skips an absent while a page field's keyboard is up, rather than passing on an unmodelled layout", async () => {
+    const page = DOCK();
+    const pageField = fakePage(
+      [
+        {
+          role: 'AXTextField',
+          label: 'Search tasks',
+          value: 'Search…',
+          frame: { x: 20, y: 308, w: 400, h: 42 },
+        },
+      ],
+      false,
+    );
+    const ops: IosOp[] = [
+      { op: 'tap', label: 'Search tasks', near: { x: 200, y: 330 }, radius: 10 },
+      { op: 'absent', label: 'Capture log', near: { x: 200, y: 480 }, radius: 40 },
+    ];
+    expect((await checkJob(pageField, job(ops))).ops[2]).toMatchObject({
+      status: 'skip',
+      note: SKIP.pageKeyboard,
+    });
+    expect(page.calls).toEqual([]);
+  });
+
+  it("uses the runner's nav row points (SIM_XS_NAV, SIM_Y_NAV), and fails a swiped tab as unmodelled", async () => {
+    const sh = readFileSync(
+      new URL('../../../tools/mailroom/jobs/sim.sh', import.meta.url),
+      'utf8',
+    );
+    const xs = /^SIM_XS_NAV="([^"]+)"/m.exec(sh)![1]!.split(' ').map(Number);
+    expect(xs.slice(0, NAV_XS.length)).toEqual(NAV_XS);
+    expect(Number(/^SIM_Y_NAV=(\d+)/m.exec(sh)![1])).toBe(NAV_Y);
+    const r = await checkJob(DOCK(), job([{ op: 'nav', tab: 'Settings' }]));
+    expect(r.ops[1]!.note).toBe("UNMODELLED: Settings needs the nav row's swipe");
   });
 });

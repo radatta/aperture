@@ -41,42 +41,76 @@ export async function runProbes(o: {
   const blocks: string[] = [];
   try {
     for (const j of jobs) {
-      const page = await engine.page(o.origin);
-      try {
-        const r = await checkJob(page, j, {
-          shot: o.shotsDir ? (n) => join(o.shotsDir!, `${n}.png`) : undefined,
-        });
-        results.push(r);
-        blocks.push(
-          formatJob(r, `${engine.name}, 440×956, keyboard model 440×${KEYBOARD_VIEWPORT_H}`),
-        );
-        o.log?.(`${r.ok ? 'pass' : 'FAIL'} ${j.scenario}/${j.name}`);
-      } finally {
-        await page.close();
-      }
+      // One job's crash (Home's landmark gone, a page that won't load) is that job's FAIL, not the run's end.
+      const r = await checkJobSafely(engine, o.origin, j, o.shotsDir).catch(
+        (err: unknown): JobResult => ({
+          scenario: j.scenario,
+          name: j.name,
+          ok: false,
+          ops: [
+            {
+              i: -1,
+              op: 'job',
+              status: 'fail',
+              note: `CRASH: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+        }),
+      );
+      results.push(r);
+      blocks.push(
+        formatJob(r, `${engine.name}, 440×956, keyboard model 440×${KEYBOARD_VIEWPORT_H}`),
+      );
+      o.log?.(`${r.ok ? 'pass' : 'FAIL'} ${j.scenario}/${j.name}`);
     }
   } finally {
     await engine.close();
   }
+  if (!jobs.length) blocks.push('FAIL no iOS plans recorded: nothing was checked');
   if (stale.length) blocks.push(`FAIL stale dev-data skips (no op matches): ${stale.join(', ')}`);
-  const ok = !stale.length && results.every((r) => r.ok);
+  const ok = jobs.length > 0 && !stale.length && results.every((r) => r.ok);
   const head = `iOS probe check: ${ok ? 'PASS' : 'FAIL'} — ${results.filter((r) => r.ok).length}/${results.length} jobs (a first filter: the Simulator stays the proof, IOS-CHECK.md → Probe check)`;
   return { ok, text: [head, '', ...blocks].join('\n\n'), results };
 }
 
-// A stub-mode Vite for the check, stopped by its PID.
+async function checkJobSafely(
+  engine: Awaited<ReturnType<typeof openEngine>>,
+  origin: string,
+  j: RecordedJob,
+  shotsDir?: string,
+): Promise<JobResult> {
+  const page = await engine.page(origin);
+  try {
+    return await checkJob(page, j, {
+      shot: shotsDir ? (n) => join(shotsDir, `${n}.png`) : undefined,
+    });
+  } finally {
+    await page.close();
+  }
+}
+
+// A stub-mode Vite for the check, stopped by its PID — on a signal or a crash too (the container is shared).
 export async function withStubApp<T>(
   worktree: string,
   logPath: string,
   f: (origin: string) => Promise<T>,
 ): Promise<T> {
   const procs: Proc[] = [];
+  const stopAll = async () => {
+    for (const p of procs) await p.stop().catch(() => undefined);
+  };
+  for (const [sig, code] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)
+    process.once(sig, () => void stopAll().then(() => process.exit(code)));
+  process.once('exit', () => procs.forEach((p) => p.killNow()));
   const port = await freePort();
   try {
     await startVite({ worktree, track: (p) => void procs.push(p), port, env: {}, logPath });
     return await f(`http://127.0.0.1:${port}`);
   } finally {
-    for (const p of procs) await p.stop().catch(() => undefined);
+    await stopAll();
   }
 }
 

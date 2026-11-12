@@ -91,7 +91,7 @@
           "label": "Capture log",
           "scan": {
             "x": 300,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "role": "AXTextArea",
@@ -112,7 +112,7 @@
           "label": "Log",
           "scan": {
             "x": 49,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "role": "AXCheckBox",
@@ -137,7 +137,7 @@
           "label": "zzqx",
           "scan": {
             "x": 60,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "as": "typed"
@@ -147,7 +147,7 @@
           "label": "Save log",
           "scan": {
             "x": 395,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "role": "AXButton",

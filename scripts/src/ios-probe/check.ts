@@ -2,7 +2,7 @@
 // a UI change that moves a probed element off its point — or puts another control on it — fails before a Simulator
 // run. It mirrors the runner's reads (points.ts, ax.ts); what only an iPhone does is skipped with a reason, never
 // silently. A first filter: the Simulator stays the proof.
-import type { IosOp } from '../mailroom/sim';
+import { SIM_H, SIM_W, TAP_DENY, type IosOp } from '../mailroom/sim';
 import { isControl, matches, seenAs, type AxEl } from './ax';
 import { neighbours, simPoints, type Pt, type Where } from './points';
 
@@ -32,6 +32,7 @@ export const SKIP = {
   wait: 'a wait is a settle here: nothing animates in from the network',
   shot: "screenshots are the Simulator's",
   devData: 'needs dev data the stub lacks',
+  pageKeyboard: "a page field's keyboard isn't modelled (iOS scrolls the field)",
 } as const;
 export type SkipReason = keyof typeof SKIP;
 
@@ -51,6 +52,15 @@ export const DEV_DATA: { scenario: string; label: string; why: string }[] = [
 export const VIEWPORT = { w: 440, h: 956 };
 export const KEYBOARD_VIEWPORT_H = 550;
 export const SAFE = { top: 59, bottom: 34 };
+// sim.sh's SIM_XS_NAV / SIM_Y_NAV: the nav row's tab centres, unscrolled (check.test.ts reads them out of sim.sh).
+export const NAV_XS = [38, 88, 136, 205, 276, 332, 380];
+export const NAV_Y = 168;
+const SWIPED_TABS = ['Finances', 'Inbox', 'Settings'];
+// sim.sh's write-button guard on the matched element (sim_op_tap → DENIED), as sim.ts validates the op's label.
+const denied = (label: string) => {
+  const l = label.toLowerCase().replace(/^ +/, '').replace(/ +$/, '');
+  return TAP_DENY.some((d) => l === d || l.startsWith(`${d} `));
+};
 
 // The calibration's largest error was 7 pt (the Done form's Reflection, keyboard up): a match only this close to a
 // probe point is a warning that the probe is fragile — neither a pass the Simulator might not repeat nor a fail.
@@ -83,7 +93,6 @@ export interface JobResult {
 interface Found {
   el: AxEl;
   at: Pt;
-  readAt: number;
 }
 
 const describe = (o: IosOp): string => {
@@ -112,8 +121,8 @@ export async function checkJob(
   const devData = (label?: string) =>
     DEV_DATA.find((d) => d.scenario === job.scenario && d.label === label);
   let kbUp = false;
+  let pageKeyboard = false; // a page field has focus: its keyboard and iOS's scroll aren't modelled
   let failed = false;
-  let skipRest = '';
 
   const add = (i: number, op: IosOp, status: Status, note: string) =>
     ops.push({ i, op: describe(op), status, note });
@@ -133,7 +142,8 @@ export async function checkJob(
     const seen: string[] = [];
     for (let k = 0; k < pts.length; k++) {
       const el = await page.read(pts[k]!);
-      if (matches(el, w.label, w.role)) return { ok: true as const, el: el!, at: pts[k]!, pts, k };
+      if (matches(el, w.label, w.role))
+        return { ok: true as const, el: el!, at: pts[k]!, pts, k, fragile: '' };
       const s = seenAs(el);
       if (!seen.includes(s)) seen.push(s);
     }
@@ -143,14 +153,16 @@ export async function checkJob(
         const el = await page.read({ x: p.x + dx, y: p.y + dy });
         if (matches(el, w.label, w.role))
           return {
-            ok: false as const,
-            fragile: `${seenAs(el)} only ${Math.abs(dx || dy)} pt off (${p.x},${p.y})`,
-            miss: '',
+            ok: true as const,
+            el: el!,
+            at: { x: p.x + dx, y: p.y + dy },
+            pts,
+            k: pts.indexOf(p),
+            fragile: `only ${Math.abs(dx || dy)} pt off the runner's point (${p.x},${p.y})`,
           };
       }
     return {
       ok: false as const,
-      fragile: '',
       miss: `no "${w.label}" found (saw: ${seen.slice(0, 3).join(', ')})`,
     };
   };
@@ -170,8 +182,8 @@ export async function checkJob(
   };
 
   for (const [i, op] of job.steps.entries()) {
-    if (failed || skipRest) {
-      add(i, op, 'skip', skipRest || 'after the failure above');
+    if (failed) {
+      add(i, op, 'skip', 'after the failure above');
       continue;
     }
     const fail = async (note: string) => {
@@ -183,7 +195,7 @@ export async function checkJob(
     switch (op.op) {
       case 'launch':
         await page.open();
-        kbUp = false;
+        kbUp = pageKeyboard = false;
         add(i, op, 'pass', "a fresh Home (the Home Screen and the icon are the Simulator's)");
         break;
       case 'signIn':
@@ -203,14 +215,22 @@ export async function checkJob(
         add(i, op, 'skip', SKIP.wait);
         break;
       case 'nav': {
+        // sim_op_nav: to the top, then the tab centres on the nav row, an AXLink whose label is the tab.
         await page.scrollTop();
         let hit: AxEl | null = null;
-        for (let x = 10; x <= 430 && !hit; x += 15) {
-          const el = await page.read({ x, y: 168 });
-          if (el?.role === 'AXLink' && matches(el, op.tab)) hit = el;
+        for (const x of NAV_XS) {
+          const el = await page.read({ x, y: NAV_Y });
+          if (el?.role === 'AXLink' && el.label.toLowerCase() === op.tab.toLowerCase()) {
+            hit = el;
+            break;
+          }
         }
         if (!hit) {
-          await fail(`no ${op.tab} link on the nav row (y 168)`);
+          await fail(
+            SWIPED_TABS.includes(op.tab)
+              ? `UNMODELLED: ${op.tab} needs the nav row's swipe`
+              : `MISS: no ${op.tab} tab in the nav row`,
+          );
           break;
         }
         await page.click({ x: hit.frame.x + hit.frame.w / 2, y: hit.frame.y + hit.frame.h / 2 });
@@ -231,23 +251,21 @@ export async function checkJob(
           add(i, op, 'skip', `${SKIP.devData}: ${d.why}`);
           break;
         }
-        const r = await find(op);
-        if (op.op === 'absent') {
-          if (r.ok) await fail(`PRESENT: ${seenAs(r.el)} at (${r.at.x},${r.at.y})`);
-          else if (r.fragile)
-            add(i, op, 'warn', `FRAGILE: ${r.fragile} — the Simulator might see it`);
-          else add(i, op, 'pass', 'nothing matching there');
+        if (op.op === 'absent' && pageKeyboard) {
+          add(i, op, 'skip', SKIP.pageKeyboard);
           break;
         }
-        if (!r.ok && r.fragile) {
-          // The runner would hit or miss on a few points of layout; later ops build on the hit, so stop here.
-          add(
-            i,
-            op,
-            'warn',
-            `FRAGILE: ${r.fragile} — widen the probe or aim it at the element's middle`,
-          );
-          skipRest = 'after the fragile probe above';
+        const r = await find(op);
+        if (op.op === 'absent') {
+          if (r.ok && !r.fragile) await fail(`PRESENT: ${seenAs(r.el)} at (${r.at.x},${r.at.y})`);
+          else if (r.ok)
+            add(
+              i,
+              op,
+              'warn',
+              `FRAGILE: ${seenAs(r.el)} ${r.fragile} — the Simulator might see it`,
+            );
+          else add(i, op, 'pass', 'nothing matching there');
           break;
         }
         if (!r.ok) {
@@ -257,7 +275,10 @@ export async function checkJob(
         const { el, at, pts, k } = r;
         const f = el.frame;
         const where = `${el.role} at ${f.x},${f.y} ${f.w}x${f.h} (read at ${at.x},${at.y})`;
-        let warn = '';
+        // Fragile: the runner might hit or miss it on a few points of layout. Carried on from where it lies.
+        let warn = r.fragile
+          ? ` · FRAGILE: ${r.fragile} — aim the probe at the element's middle`
+          : '';
         if (op.as) {
           const s = await strays(op, pts, k);
           if (s.length && readBack.has(op.as)) {
@@ -266,21 +287,32 @@ export async function checkJob(
             );
             break;
           }
-          if (s.length) warn = ` · near: ${s.join('; ')}`;
-          found.set(op.as, { el, at, readAt: i });
+          if (s.length) warn += ` · near: ${s.join('; ')}`;
+          found.set(op.as, { el, at });
         }
         if (op.op === 'tap') {
+          if (denied(el.label)) {
+            await fail(`DENIED: the match is a write button ("${el.label}"); not tapped`);
+            break;
+          }
           const c = { x: Math.floor(f.x + f.w / 2), y: Math.floor(f.y + f.h / 2) };
+          if (f.w <= 0 || f.h <= 0 || c.x < 0 || c.x > SIM_W || c.y < 0 || c.y > SIM_H) {
+            await fail(
+              `OFF_SCREEN: target centre ${c.x},${c.y} is off the ${SIM_W}x${SIM_H} screen`,
+            );
+            break;
+          }
           await page.click(c);
           await page.settle();
           if (el.role === 'AXTextArea' || el.role === 'AXTextField') {
             kbUp = await page.focusInFixedLayer();
+            pageKeyboard = !kbUp;
             await page.keyboard(kbUp);
             await page.settle();
           }
           if (op.closes) {
             const after = await page.read(c);
-            if (after && after.role === el.role && after.label === el.label) {
+            if (matches(after, op.label, op.role)) {
               await fail(`STILL_THERE: ${seenAs(after)} at the tapped spot`);
               break;
             }
@@ -317,11 +349,12 @@ export async function checkJob(
           await fail(`UNMODELLED: "${op.as}" was never found`);
           break;
         }
+        // sim_op_expect: re-read at the found point; an empty read is enabled, with no label or value (sim_point).
         const now = await page.read(rec.at);
-        const got = now ?? { role: '', label: '', value: '', enabled: false, frame: rec.el.frame };
+        const got = now ?? { role: '', label: '', value: '', enabled: true, frame: rec.el.frame };
         if ('valueIs' in op && got.value !== op.valueIs)
           await fail(`VALUE: ${op.as} reads "${got.value}", expected "${op.valueIs}"`);
-        else if ('labelIs' in op && got.label.toLowerCase() !== op.labelIs.toLowerCase())
+        else if ('labelIs' in op && got.label !== op.labelIs)
           await fail(`LABEL: ${op.as} reads "${got.label}", expected "${op.labelIs}"`);
         else if ('enabled' in op && got.enabled !== op.enabled)
           await fail(`ENABLED: ${op.as} enabled ${got.enabled}, expected ${op.enabled}`);
@@ -337,14 +370,20 @@ export async function checkJob(
           add(i, op, 'pass', op.op === 'keys' ? `typed ${op.text.length} keys` : `erased ${op.n}`);
           break;
         }
+        // sim_typed_read / sim_erased_read: at the found point, then a second look at the frame's centre.
         const rec = found.get(op.in)!;
-        const now = await page.read(rec.at);
-        const same = !!now && now.role === rec.el.role && now.label === rec.el.label;
-        const ok =
+        const fr = rec.el.frame;
+        const centre = { x: Math.floor(fr.x + fr.w / 2), y: Math.floor(fr.y + fr.h / 2) };
+        const holds = (e: AxEl | null) =>
           op.op === 'keys'
-            ? same && now.value.toLowerCase().includes(op.text)
-            : same && (now.value === '' || now.value === rec.el.value);
-        if (ok) add(i, op, 'pass', `${op.in} read back at (${rec.at.x},${rec.at.y})`);
+            ? !!e && e.value.toLowerCase() === op.text
+            : !!e &&
+              e.role === rec.el.role &&
+              (!rec.el.label || e.label.toLowerCase() === rec.el.label.toLowerCase()) &&
+              (e.value === '' || e.value === rec.el.value);
+        let now = await page.read(rec.at);
+        if (!holds(now)) now = await page.read(centre);
+        if (holds(now)) add(i, op, 'pass', `${op.in} read back at (${rec.at.x},${rec.at.y})`);
         else
           await fail(
             `${op.op === 'keys' ? 'TYPED' : 'ERASED'}: ${op.in} read back at (${rec.at.x},${rec.at.y}) is ${seenAs(now)}${now ? ` "${now.value}"` : ''}`,
@@ -353,7 +392,7 @@ export async function checkJob(
       }
       case 'blur':
         await page.blur();
-        kbUp = false;
+        kbUp = pageKeyboard = false;
         await page.keyboard(false);
         await page.settle();
         add(i, op, 'pass', 'keyboard model down');
