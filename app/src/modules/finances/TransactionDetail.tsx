@@ -77,7 +77,9 @@ export function TransactionDetail({
   const linkable = refundSideError(txn, acct, view.moves) === null;
   const linkableIncome = isIncome && linkable;
   // Focus follows a link/unlink/mark (the clicked button unmounts) — but never on first open, where
-  // a focused Link button would make a stray Enter link the refund.
+  // a focused Link button would make a stray Enter link the refund. The cache updates before the
+  // server answers, so the next button mounts busy: busy is aria-disabled with no click handler, never
+  // disabled — a disabled button can't take autoFocus, and focus would fall to <body>.
   const [acted, setActed] = useState(false);
   // An Unlink, specifically: the one action after which the suggestions may have nothing to focus.
   const [unlinked, setUnlinked] = useState(false);
@@ -91,6 +93,9 @@ export function TransactionDetail({
     mark.mutate({ id: txn.id, marked });
   };
   const incomeLink = useDisclosure();
+  // The Bucket group is where the detail opens. Without one (linked, money in, a payment), it opens on
+  // the dialog itself: the first button would be Unlink or a mark, and a stray Enter would press it.
+  const sortable = (kind === 'expense' || isRefund) && !txn.refundOfId;
   // After an Unlink that leaves nothing to focus (a card credit with no suggestions), focus goes to the
   // Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone keyboard.
   // Only after an Unlink: a period mark in flight would otherwise hop there for a frame.
@@ -115,6 +120,7 @@ export function TransactionDetail({
       onClose={close}
       label={`${KIND_LABEL[kind]}: ${txn.merchantName ?? txn.name}`}
       closeOnBackdrop
+      initialFocus={sortable ? 'content' : 'dialog'}
     >
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-0.5">
@@ -154,8 +160,8 @@ export function TransactionDetail({
             <Button
               size="sm"
               variant="ghost"
-              disabled={link.isPending}
-              onClick={() => setLink(null)}
+              aria-disabled={link.isPending || undefined}
+              onClick={link.isPending ? undefined : () => setLink(null)}
             >
               Unlink
             </Button>
@@ -195,6 +201,8 @@ export function TransactionDetail({
                 size="sm"
                 variant="ghost"
                 className="self-start"
+                // Mounts after an action only when an Unlink brings it back: the focus target then.
+                autoFocus={acted}
                 onClick={incomeLink.onOpen}
               >
                 Link as a refund
@@ -213,7 +221,7 @@ export function TransactionDetail({
           />
         )}
 
-        {(kind === 'expense' || isRefund) && !txn.refundOfId && (
+        {sortable && (
           <>
             <Segmented
               ref={bucketRef}
@@ -239,8 +247,8 @@ export function TransactionDetail({
             size="sm"
             variant="quiet"
             className="self-start"
-            disabled={mark.isPending}
-            onClick={() => setMark(true)}
+            aria-disabled={mark.isPending || undefined}
+            onClick={mark.isPending ? undefined : () => setMark(true)}
           >
             It&apos;s a card payment — start the period here
           </Button>
@@ -315,7 +323,13 @@ function LinkedRefund({
           </Text>{' '}
           · {fmtMonthShortDay(charge.date)} · {fmtMoney(view.amount(charge))}
         </Text>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink} autoFocus={focus}>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-disabled={busy || undefined}
+          onClick={busy ? undefined : onUnlink}
+          autoFocus={focus}
+        >
           Unlink
         </Button>
       </div>
@@ -435,9 +449,9 @@ function RefundSuggestions({
         <Button
           size="sm"
           variant={opts.primary ? 'primary' : 'ghost'}
-          disabled={busy}
+          aria-disabled={busy || undefined}
           autoFocus={opts.focus}
-          onClick={() => onLink(c.id)}
+          onClick={busy ? undefined : () => onLink(c.id)}
           aria-label={`Link to ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
         >
           Link
@@ -557,9 +571,9 @@ function PeriodMark({
       <Button
         size="sm"
         variant={marked ? 'ghost' : 'primary'}
-        disabled={busy}
+        aria-disabled={busy || undefined}
         autoFocus={focus}
-        onClick={() => onMark(!marked)}
+        onClick={busy ? undefined : () => onMark(!marked)}
       >
         {marked ? 'Unmark' : 'Start the period here'}
       </Button>

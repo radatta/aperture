@@ -114,7 +114,10 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - A row in either list keeps the merchant (on a same-merchant suggestion, the bucket) on one line and puts the
   bucket and "$X already refunded" on an xs line under it, so a phone cuts neither. After an **Unlink** that
   leaves nothing else to focus (a card credit with no suggestions), focus goes to the Bucket group's checked
-  option — never the search box, which would raise the iPhone keyboard. Every app field is 16px or more
+  option — never the search box, which would raise the iPhone keyboard. The detail opens on the Bucket group
+  when it has one; otherwise (linked, money in, a payment) on the dialog itself, so a stray Enter can't Unlink
+  or mark. After a Link, Unlink or mark, focus moves to the button that replaced the one pressed, even while
+  that button is busy: busy is `aria-disabled`, never `disabled`. Every app field is 16px or more
   (`app/src/styles/fieldSize.test.ts` scans for one that isn't); the dev check proves the finance rows against
   the fixture bank (`docs/ops/DEV-CHECK.md` → _One-time setup_ 3).
 
