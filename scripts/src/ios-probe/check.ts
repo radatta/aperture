@@ -3,7 +3,7 @@
 // run. It mirrors the runner's reads (points.ts, ax.ts); what only an iPhone does is skipped with a reason, never
 // silently. A first filter: the Simulator stays the proof.
 import { SIM_H, SIM_W, TAP_DENY, type IosOp } from '../mailroom/sim';
-import { isControl, matches, seenAs, type AxEl } from './ax';
+import { isControl, matches, seenAs, type AxEl, type Frame } from './ax';
 import { neighbours, simPoints, type Pt, type Where } from './points';
 
 // The engine seam: everything the check asks of a browser. engine.ts implements it on Playwright.
@@ -89,11 +89,14 @@ export interface JobResult {
   name: string;
   ops: OpResult[];
   ok: boolean;
+  // What each `as` resolved to, for the calibration (calibrate.ts); `modelled` false under a page field's keyboard.
+  found?: Record<string, { role: string; frame: Frame; modelled: boolean }>;
 }
 
 interface Found {
   el: AxEl;
   at: Pt;
+  modelled?: boolean;
 }
 
 const describe = (o: IosOp): string => {
@@ -298,7 +301,7 @@ export async function checkJob(
             break;
           }
           if (s.length) warn += ` · near: ${s.join('; ')}`;
-          found.set(op.as, { el, at });
+          found.set(op.as, { el, at, modelled: !pageKeyboard });
         }
         if (op.op === 'tap') {
           if (denied(el.label)) {
@@ -375,7 +378,7 @@ export async function checkJob(
         else if ('enabled' in op && got.enabled !== op.enabled)
           await fail(`ENABLED: ${op.as} enabled ${got.enabled}, expected ${op.enabled}`);
         else add(i, op, 'pass', `${op.as} as expected`);
-        found.set(op.as, { el: got, at: rec.at }); // sim_op_expect stores the re-read under the same name
+        found.set(op.as, { el: got, at: rec.at, modelled: rec.modelled }); // sim_op_expect stores the re-read under the same name
         break;
       }
       case 'keys':
@@ -422,7 +425,18 @@ export async function checkJob(
         await fail(`UNMODELLED: no model for op "${(op as { op: string }).op}"`);
     }
   }
-  return { scenario: job.scenario, name: job.name, ops, ok: !failed };
+  return {
+    scenario: job.scenario,
+    name: job.name,
+    ops,
+    ok: !failed,
+    found: Object.fromEntries(
+      [...found].map(([k, v]) => [
+        k,
+        { role: v.el.role, frame: v.el.frame, modelled: v.modelled !== false },
+      ]),
+    ),
+  };
 }
 
 // Entries of DEV_DATA that no recorded op matches — a declaration that outlived its op.

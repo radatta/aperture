@@ -1,14 +1,16 @@
 // The probe check — IOS-CHECK.md → Probe check. Every iOS plan the scenarios send, replayed against the stub app:
-//   pnpm ios-probe [--scenario a,b] [--engine chromium|webkit] [--shots <dir>]
+//   pnpm ios-probe [--scenario a,b] [--engine chromium|webkit] [--shots <dir>] [--calibrate [--results <dir>]]
 // Also a step of `pnpm devcheck:local` (runProbes). Exit 0 all pass, 1 a probe failed, 2 the check couldn't run.
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { recordIosPlans, type RecordedJob } from '../devcheck/ios-plans';
 import { SCENARIOS } from '../devcheck/scenarios/index';
 import type { Scenario } from '../devcheck/scenario';
 import { freePort, startVite, type Proc } from '../devcheck/local/server';
 import { checkJob, formatJob, KEYBOARD_VIEWPORT_H, staleDevData, type JobResult } from './check';
+import { compareJob, formatCalibration, newestGreen, type SimResultFile } from './calibrate';
 import { ENGINES, openEngine, type EngineName } from './engine';
 
 // The nonce the plans are recorded with: ios-standalone's search marker becomes "rewrit", which finds the stub seed's
@@ -118,16 +120,57 @@ export async function withStubApp<T>(
 }
 
 function parseArgs(argv: string[]) {
-  const a = { scenarios: [] as string[], engine: 'chromium' as EngineName, shots: '' };
-  for (let i = 0; i < argv.length; i += 2) {
+  const a = {
+    scenarios: [] as string[],
+    engine: 'chromium' as EngineName,
+    shots: '',
+    calibrate: false,
+    results: '',
+  };
+  for (let i = 0; i < argv.length; i++) {
     const [k, v = ''] = [argv[i], argv[i + 1]];
+    if (k === '--calibrate') {
+      a.calibrate = true;
+      continue;
+    }
+    i++;
     if (k === '--scenario') a.scenarios = v.split(',').filter(Boolean);
     else if (k === '--shots') a.shots = v;
+    else if (k === '--results') a.results = v;
     else if (k === '--engine' && ENGINES.includes(v as EngineName)) a.engine = v as EngineName;
     else if (k === '--engine') throw new Error(`--engine is one of ${ENGINES.join(', ')}`);
     else throw new Error(`unknown argument ${k}`);
   }
   return a;
+}
+
+// The Simulator's results live in the main checkout's .hostjobs (the mailroom's shared folder), not a worktree's.
+function resultsRoot(worktree: string): string {
+  const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd: worktree,
+  })
+    .toString()
+    .trim();
+  return join(dirname(common), '.hostjobs', 'results');
+}
+
+function calibrate(run: ProbeRun, root: string): { ok: boolean; text: string } {
+  const ids = existsSync(root) ? readdirSync(root) : [];
+  const read = (id: string): SimResultFile | null => {
+    try {
+      return JSON.parse(readFileSync(join(root, id, 'result.json'), 'utf8')) as SimResultFile;
+    } catch {
+      return null;
+    }
+  };
+  const sources: string[] = [];
+  const rows = run.results.flatMap((r) => {
+    const id = newestGreen(ids, r.scenario, r.name, read);
+    if (!id) return [];
+    sources.push(id);
+    return compareJob(r, read(id)!);
+  });
+  return formatCalibration(rows, sources);
 }
 
 async function main(): Promise<number> {
@@ -152,7 +195,10 @@ async function main(): Promise<number> {
     }),
   );
   console.log(`\n${run.text}`);
-  return run.ok ? 0 : 1;
+  if (!a.calibrate) return run.ok ? 0 : 1;
+  const cal = calibrate(run, a.results || resultsRoot(worktree));
+  console.log(`\n${cal.text}`);
+  return cal.ok ? 0 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
