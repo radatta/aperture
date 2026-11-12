@@ -42,9 +42,12 @@ describe('touchesFixtureInputs', () => {
 // (type-only ones are erased) and the tools dir it executes, and require each to be an input.
 describe('FIXTURE_INPUTS covers the suite', () => {
   const runtimeImports = (file: string): string[] =>
-    [...readFileSync(file, 'utf8').matchAll(/^import (?!type\b)[^;]*?from '(\.[^']+)'/gm)].map(
-      (m) => resolve(dirname(file), m[1]!),
-    );
+    [
+      ...readFileSync(file, 'utf8').matchAll(
+        // import/export … from, a side-effect import, a dynamic import; an inline `{ type X }` over-counts, safely
+        /^(?:import|export) (?!type\b)[^;]*?from '(\.[^']+)'|^import '(\.[^']+)'|import\('(\.[^']+)'\)/gm,
+      ),
+    ].map((m) => resolve(dirname(file), (m[1] ?? m[2] ?? m[3])!));
 
   it('every module the suite loads at runtime is an input', () => {
     const seen = new Set<string>();
@@ -88,7 +91,7 @@ describe('ci.yml wiring', () => {
 
   it('the rule runs on PRs only, against the merge commit’s first parent', () => {
     expect(ci).toMatch(/id: fixtures\n {8}if: \$\{\{ github\.event_name == 'pull_request' \}\}/);
-    expect(ci).toContain('git diff --name-only HEAD^1 HEAD');
+    expect(ci).toContain('git diff --name-only --no-renames HEAD^1 HEAD');
     expect(ci).toContain('node scripts/src/fixture-inputs.ts');
     expect(ci).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 2/);
   });

@@ -46,14 +46,15 @@ jobs:
       # are scripts/src/fixture-inputs.ts, tested, not inline shell (classify-changes.ts' lesson). A main push
       # always runs it, and `check` gates the deploy, so a break the PR's paths can't show (a dependency bump,
       # the runner image) stops there instead (INFRA §9). The diff against HEAD^1 on the PR's merge commit is
-      # exactly the PR; a failed diff is empty, and empty runs it. It goes first, so no failing step can skip
+      # exactly the PR (--no-renames: a file moved out of the inputs counts by its old path too); a failed diff is empty, and empty runs it. It goes first, so no failing step can skip
       # it, and the suite with it.
       - name: Mailroom fixture inputs
         id: fixtures
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          files=$(git diff --name-only HEAD^1 HEAD) || files=''
-          run=$(printf '%s\n' "$files" | node scripts/src/fixture-inputs.ts 2>"$RUNNER_TEMP/fixtures.txt")
+          files=$(git diff --name-only --no-renames HEAD^1 HEAD) || files=''
+          run=$(printf '%s\n' "$files" | node scripts/src/fixture-inputs.ts 2>"$RUNNER_TEMP/fixtures.txt") ||
+            { cat "$RUNNER_TEMP/fixtures.txt"; exit 1; }
           cat "$RUNNER_TEMP/fixtures.txt" # stdout, so a skip's ::notice:: becomes an annotation on the run
           echo "run=$run" >> "$GITHUB_OUTPUT"
       - run: pnpm lint
