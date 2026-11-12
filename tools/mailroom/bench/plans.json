@@ -496,7 +496,7 @@
           "label": "Review before saving",
           "scan": {
             "x": 355,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "hint": {

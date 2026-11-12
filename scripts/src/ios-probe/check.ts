@@ -150,7 +150,7 @@ export async function checkJob(
         const edge = Math.min(p.y - el!.frame.y, el!.frame.y + el!.frame.h - p.y);
         const fragile =
           edge >= 0 && edge < NEAR_MISS_PT ? `only ${edge} pt inside the element's edge` : '';
-        return { ok: true as const, el: el!, at: p, pts, k, fragile };
+        return { ok: true as const, el: el!, at: p, pts, k, fragile, nudged: false };
       }
       const s = seenAs(el);
       if (!seen.includes(s)) seen.push(s);
@@ -167,6 +167,7 @@ export async function checkJob(
             pts,
             k: pts.indexOf(p),
             fragile: `only ${Math.abs(dx || dy)} pt off the runner's point (${p.x},${p.y})`,
+            nudged: true,
           };
       }
     return {
@@ -265,7 +266,8 @@ export async function checkJob(
         }
         const r = await find(op);
         if (op.op === 'absent') {
-          if (r.ok && !r.fragile) await fail(`PRESENT: ${seenAs(r.el)} at (${r.at.x},${r.at.y})`);
+          // Only a near miss softens an absent: a hit on the runner's own point is what the Simulator reads too.
+          if (r.ok && !r.nudged) await fail(`PRESENT: ${seenAs(r.el)} at (${r.at.x},${r.at.y})`);
           else if (r.ok)
             add(
               i,
@@ -359,7 +361,13 @@ export async function checkJob(
         }
         // sim_op_expect: re-read at the found point; an empty read is enabled, with no label or value (sim_point).
         const now = await page.read(rec.at);
-        const got = now ?? { role: '', label: '', value: '', enabled: true, frame: rec.el.frame };
+        const got = now ?? {
+          role: '',
+          label: '',
+          value: '',
+          enabled: true,
+          frame: { x: 0, y: 0, w: 0, h: 0 },
+        };
         if ('valueIs' in op && got.value !== op.valueIs)
           await fail(`VALUE: ${op.as} reads "${got.value}", expected "${op.valueIs}"`);
         else if ('labelIs' in op && got.label !== op.labelIs)

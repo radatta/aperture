@@ -18,11 +18,11 @@ function fakePage(els: (Omit<AxEl, 'enabled'> & { enabled?: boolean })[], fixedL
   } = {
     calls: [],
     move: (label, dy) => layout.filter((x) => x.label === label).forEach((x) => (x.frame.y += dy)),
-    drop: (label) =>
-      void layout.splice(
-        layout.findIndex((x) => x.label === label),
-        1,
-      ),
+    drop: (label) => {
+      const at = layout.findIndex((x) => x.label === label);
+      if (at < 0) throw new Error(`no ${label} to drop`);
+      layout.splice(at, 1);
+    },
     open: async () => void page.calls.push('open'),
     read: async (p) => {
       const e = layout.findLast((x) => inside(x.frame, p));
@@ -310,7 +310,7 @@ describe('checkJob mirrors sim.sh', () => {
     const moved = DOCK();
     const settle = moved.settle;
     let n = 0;
-    moved.settle = async () => (++n === 3 && moved.move('Capture log', 10), settle()); // after the wait: 6 pt above the point
+    moved.settle = async () => (++n === 3 && moved.move('Capture log', 10), settle()); // after the wait: the frame starts 4 pt below the point
     const again = await checkJob(
       moved,
       job([
@@ -405,5 +405,29 @@ describe('checkJob mirrors sim.sh', () => {
     expect(Number(/^SIM_Y_NAV=(\d+)/m.exec(sh)![1])).toBe(NAV_Y);
     const r = await checkJob(DOCK(), job([{ op: 'nav', tab: 'Settings' }]));
     expect(r.ops[1]!.note).toBe("UNMODELLED: Settings needs the nav row's swipe");
+  });
+
+  it('fails an absent that hits on its own point even near the edge (only a near miss softens it)', async () => {
+    const r = await checkJob(
+      DOCK(),
+      job([{ op: 'absent', label: 'Capture log', near: { x: 200, y: 493 }, radius: 10 }]),
+    );
+    expect(r.ops[1]!.note).toMatch(/^PRESENT: Capture log \(AXTextArea\) at \(200,493\)/);
+  });
+
+  it('stores what an expect re-read, as sim_op_expect does (an empty read: no label, enabled)', async () => {
+    const page = DOCK();
+    const blur = page.blur;
+    page.blur = async () => (page.drop('Save log'), blur());
+    const r = await checkJob(
+      page,
+      job([
+        { op: 'find', label: 'Save log', near: { x: 395, y: 505 }, radius: 10, as: 'send' },
+        { op: 'blur' },
+        { op: 'expect', as: 'send', labelIs: '' },
+        { op: 'expect', as: 'send', enabled: true },
+      ]),
+    );
+    expect(r.ops.slice(-2).map((o) => o.status)).toEqual(['pass', 'pass']);
   });
 });
