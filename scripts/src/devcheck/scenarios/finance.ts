@@ -173,6 +173,28 @@ export const finance: Scenario = {
       },
     },
     {
+      id: 'mark-fail-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A Mark that fails puts the credit back with focus on Bucket, and says so',
+      offDev: {
+        file: 'app/src/pages/Finances/Finances.test.tsx',
+        test: 'a Mark that fails puts the credit back with focus on Bucket, and says so',
+        why: 'dev can’t fail a Mark on demand — the harness has no fault injection for it',
+      },
+    },
+    {
+      id: 'late-return-keeps-note',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A credit that comes back late after a failed Mark never pulls focus out of the Note field',
+      offDev: {
+        file: 'app/src/pages/Finances/Finances.test.tsx',
+        test: 'a credit that comes back late, after a failed Mark, never pulls focus out of the Note field',
+        why: 'dev can’t fail a Mark or hold reads offline — the stub fails both and refetches on window focus',
+      },
+    },
+    {
       id: 'mark-no-hop',
       entry: 'ui',
       kind: 'edge',

@@ -1037,14 +1037,33 @@ describe('Refund link search', () => {
     await user.type(note, 'split');
     // Back online; the next window focus refetches and the refund returns, with nothing to suggest.
     offline = false;
-    act(() => {
-      focusManager.setFocused(false);
-      focusManager.setFocused(true);
-    });
-    await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
-    focusManager.setFocused(undefined);
+    try {
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    } finally {
+      focusManager.setFocused(undefined);
+    }
     await new Promise((r) => setTimeout(r, 50)); // past the hand-off's effect
     expect(document.activeElement).toBe(note);
+  });
+
+  // Safari's path: a marked credit opens on the dialog, and a tap focuses nothing, so the dialog still holds
+  // focus when Unmark goes. fireEvent.click moves no focus, unlike userEvent.
+  it('an Unmark that never took focus (a Safari tap) still hands off to Bucket', async () => {
+    const api = await noSuggestionsCredit();
+    await api.setFinancePeriodStart('fx-refund-1', true);
+    renderApp({ api, path: '/finances/all' });
+    fireEvent.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Payment: Amazon/ });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unmark' }));
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
+    );
   });
 
   // Pins the guard: it passes without this branch's fix too, and fails against an ungated hand-off — a
