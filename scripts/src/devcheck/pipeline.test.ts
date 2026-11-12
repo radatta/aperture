@@ -252,6 +252,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       },
       listFluxSets: async () => [...fluxSets.values()],
       getFluxSet: async (id) => fluxSets.get(id) ?? null,
+      exportLogEntries: async () => [...logEntries.values()],
       listLogEntries: async (day) => [...logEntries.values()].filter((e) => e.day === day),
       listLogRange: async () => [...logEntries.values()],
       listAttachments: async () => [],
@@ -337,6 +338,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       deleteLogEntry: async (id) => {
         logDeleted.push(id);
         logEntries.delete(id);
+      },
+      setLogEntryPrivate: async () => {
+        throw new Error('unused');
+      },
+      updateLogEntry: async () => {
+        throw new Error('unused');
       },
       deleteTask: async (id) => {
         deleted.push(id);

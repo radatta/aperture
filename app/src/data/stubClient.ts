@@ -729,11 +729,14 @@ class StubClient implements ApiClient {
       .filter((e) => e.day === day)
       .sort((a, b) => a.createdAt - b.createdAt);
   }
-  async createLogEntry(text: string, day: string): Promise<LogEntry> {
+  async createLogEntry(text: string, day: string, opts?: { private?: boolean }): Promise<LogEntry> {
+    if (opts?.private !== undefined && typeof opts.private !== 'boolean')
+      throw new Error('private must be true or false');
     return this.writes.insert(this.store.logEntries, {
       ...this.base(),
       day,
       text,
+      private: opts?.private === true,
     });
   }
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {
@@ -757,6 +760,10 @@ class StubClient implements ApiClient {
   async deleteLogEntry(id: string): Promise<void> {
     if (this.store.logEntries.some((e) => e.id === id && e.deletedAt === null))
       this.writes.softDelete(this.store.logEntries, id);
+  }
+  async setLogEntryPrivate(id: string, isPrivate: boolean): Promise<LogEntry> {
+    if (typeof isPrivate !== 'boolean') throw new Error('private must be true or false');
+    return this.writes.patch(this.store.logEntries, id, { private: isPrivate });
   }
 
   // --- LeetCode sittings (sittings.ts) --------------------------------------

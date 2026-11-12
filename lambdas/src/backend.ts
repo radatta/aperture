@@ -647,14 +647,19 @@ export class BackendClient implements ApiClient {
 
   // --- Log ---
   async listLogEntries(day: string): Promise<LogEntry[]> {
-    return (await this.repo.listLog(day)).sort((a, b) => a.createdAt - b.createdAt);
+    // Consistent: a lock just set must read so — the app's refetch after a toggle, and get_day, which would
+    // otherwise hand MCP the text of an entry locked a moment before. One day of one user's log.
+    return (await this.repo.listLog(day, { consistent: true })).sort(
+      (a, b) => a.createdAt - b.createdAt,
+    );
   }
-  async createLogEntry(text: string, day: string): Promise<LogEntry> {
-    return this.repo.putLog({ ...this.base(), day, text });
+  async createLogEntry(text: string, day: string, opts?: { private?: boolean }): Promise<LogEntry> {
+    if (opts?.private !== undefined && typeof opts.private !== 'boolean')
+      throw new Error('private must be true or false');
+    return this.repo.putLog({ ...this.base(), day, text, private: opts?.private === true });
   }
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {
-    const e = await this.repo.findLog(id, { consistent: true });
-    if (!e) throw new Error(`Not found: ${id}`);
+    const e = await this.mustLog(id);
     return this.repo.putLog({ ...e, text, updatedAt: this.now() });
   }
   async listLogRange(range: { from?: string; to?: string }): Promise<LogEntry[]> {
@@ -671,6 +676,17 @@ export class BackendClient implements ApiClient {
     const e = await this.repo.findLog(id, { consistent: true });
     if (e && e.deletedAt === null)
       await this.repo.putLog({ ...e, deletedAt: this.now(), updatedAt: this.now() });
+  }
+  async setLogEntryPrivate(id: string, isPrivate: boolean): Promise<LogEntry> {
+    if (typeof isPrivate !== 'boolean') throw new Error('private must be true or false');
+    const e = await this.mustLog(id);
+    return this.repo.putLog({ ...e, private: isPrivate, updatedAt: this.now() });
+  }
+  // A tombstone reads gone, as the stub's patch does.
+  private async mustLog(id: string): Promise<LogEntry> {
+    const e = await this.repo.findLog(id, { consistent: true });
+    if (!e || e.deletedAt !== null) throw new Error(`Not found: ${id}`);
+    return e;
   }
 
   // --- LeetCode sittings (sittings.ts; docs/areas/recruiting) ---

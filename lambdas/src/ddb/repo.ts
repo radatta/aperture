@@ -144,9 +144,9 @@ export class Repo {
   }
 
   // --- Log ---
-  async listLog(day: string): Promise<LogEntry[]> {
+  async listLog(day: string, opts?: { consistent?: boolean }): Promise<LogEntry[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.logPrefix(day))).map((i) => toEntity<LogEntry>(i)),
+      (await this.doc.query(this.p(), sk.logPrefix(day), opts)).map((i) => toEntity<LogEntry>(i)),
     );
   }
   async listAllLog(): Promise<LogEntry[]> {

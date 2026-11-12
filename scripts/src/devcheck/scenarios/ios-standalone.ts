@@ -47,11 +47,16 @@ const CAPTURE: IosOp[] = [
     as: 'bar0',
   },
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
-  { op: 'wait', s: 2 },
+  // 4 s, not 2: on 2026-11-12 the dock was still settling at 2 s — found ~30 pt high (at y 450), it then sat lower,
+  // and `keys … in` read the mode row back instead of the field (2 of 5 runs).
+  { op: 'wait', s: 4 },
   {
     op: 'find',
     label: 'Capture log',
-    near: { x: 200, y: 480 },
+    // x 300, not the middle: since private-log (2026-11-12) Log mode's `private` pill spans ~x 179–249 of the
+    // mode row, and `keys … in` reads back at the point the field was found — a dock still settling put that
+    // point on the pill (read "AXCheckBox 0"). x 300 is the gap before Focus, and inside the field in every mode.
+    near: { x: 300, y: 480 },
     radius: 40,
     role: 'AXTextArea',
     as: 'bar',

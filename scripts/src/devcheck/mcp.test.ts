@@ -78,6 +78,7 @@ describe('createMcpClient', () => {
       'listTasks',
       'liveSitting',
       'searchLog',
+      'toolSchemas',
       'toolsList',
     ]);
     expect(Object.keys(c.writes).sort()).toEqual([

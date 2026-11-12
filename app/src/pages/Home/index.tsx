@@ -30,6 +30,7 @@ import { FinanceGlance } from './FinanceGlance';
 import { FluxGlance } from './FluxGlance';
 import { PushSyncNotice } from '../../modules/push/PushSyncNotice';
 import { API_MODE } from '../../shared/env';
+import { LockIcon } from '../../components/icons';
 
 // The glanceable home. Auto morning/day/night (HomeModeProvider), ≤5 elements per mode — the global
 // capture bar is element 1 everywhere, so each mode adds ~3 cards. Phase 5 lit up the plan / tasks /
@@ -305,22 +306,29 @@ function ReviewCard({ today }: { today: string }) {
           </Text>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {recent.map((e) => (
-              <div key={e.id} className="flex gap-3">
-                {/* fixed, non-wrapping — "10:46 PM" was breaking across two lines on a phone */}
-                <Text
-                  size="xs"
-                  tone="subtle"
-                  tabular
-                  className="w-[4.5rem] shrink-0 whitespace-nowrap pt-0.5"
-                >
-                  {fmtTime(e.createdAt)}
-                </Text>
-                <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">
-                  {e.text}
-                </Text>
-              </div>
-            ))}
+            <div role="list" className="flex flex-col gap-1.5">
+              {recent.map((e) => (
+                <div key={e.id} role="listitem" className="flex gap-3">
+                  {/* fixed, non-wrapping — "10:46 PM" was breaking across two lines on a phone */}
+                  <Text
+                    size="xs"
+                    tone="subtle"
+                    tabular
+                    className="w-[4.5rem] shrink-0 whitespace-nowrap pt-0.5"
+                  >
+                    {fmtTime(e.createdAt)}
+                  </Text>
+                  {e.private && (
+                    <span role="img" aria-label="Private" className="mt-0.5 shrink-0 text-teal">
+                      <LockIcon size={12} />
+                    </span>
+                  )}
+                  <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">
+                    {e.text}
+                  </Text>
+                </div>
+              ))}
+            </div>
             <Text size="xs" tone="subtle">
               {entries.length} {entries.length === 1 ? 'entry' : 'entries'} today
             </Text>

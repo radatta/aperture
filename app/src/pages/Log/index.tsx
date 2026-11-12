@@ -4,7 +4,7 @@ import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { ChevronLeftIcon, ChevronRightIcon } from '../../components/icons';
-import { useLog, useUpdateLogEntry } from '../../data/hooks/useLog';
+import { useLog, useSetLogEntryPrivate, useUpdateLogEntry } from '../../data/hooks/useLog';
 import { useSettings } from '../../data/hooks/useSettings';
 import { LogEntryRow } from '../../modules/log/LogEntryRow';
 import { dayLabel } from '../../modules/log/dayLabel';
@@ -19,6 +19,10 @@ export function LogPage() {
 
   const { data: entries = [], isPending, isError, refetch } = useLog(day);
   const update = useUpdateLogEntry(day);
+  const setPrivate = useSetLogEntryPrivate(day);
+  // Per call, not the hook's isError: that tracks only the latest toggle, so a failure queued ahead of
+  // another would go unsaid. Keyed by day — a failure belongs to the day it happened on.
+  const [toggleFailedOn, setToggleFailedOn] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -55,9 +59,17 @@ export function LogPage() {
         </div>
       </header>
 
-      <div className="flex flex-col divide-y divide-line">
+      {/* A failed toggle rolls the lock back — said out loud, since it's a privacy control. */}
+      {toggleFailedOn === day && (
+        <div role="alert">
+          <Text as="p" size="sm" tone="danger">
+            Couldn&apos;t change that entry&apos;s lock — it&apos;s back as it was. Try again.
+          </Text>
+        </div>
+      )}
+      <ul className="flex flex-col divide-y divide-line">
         {entries.length === 0 ? (
-          <div className="py-8">
+          <li className="py-8">
             <EmptyState
               pending={isPending}
               error={isError}
@@ -68,17 +80,23 @@ export function LogPage() {
                 ? 'The bar below is already in Log mode — plain text, no fields, straight into today.'
                 : 'Entries land on the day they were captured; there is no backdating.'}
             </EmptyState>
-          </div>
+          </li>
         ) : (
           entries.map((entry) => (
             <LogEntryRow
               key={entry.id}
               entry={entry}
               onSave={(text) => update.mutate({ id: entry.id, text })}
+              onTogglePrivate={() => {
+                setToggleFailedOn(null);
+                setPrivate
+                  .mutateAsync({ id: entry.id, isPrivate: entry.private !== true })
+                  .catch(() => setToggleFailedOn(day));
+              }}
             />
           ))
         )}
-      </div>
+      </ul>
     </div>
   );
 }

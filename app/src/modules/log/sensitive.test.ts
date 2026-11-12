@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest';
+import { looksSensitive } from './sensitive';
+
+const SENSITIVE = [
+  'disk password is hunter2',
+  'Password: x',
+  'wifi pw: abc',
+  'pwd=abc',
+  'PIN 4821',
+  'pin: 1234',
+  'bank pin is 0000',
+  'the api key is abc',
+  'ssh key rotated',
+  'verification code 882190',
+  'garage code 1234',
+  'SSN ends 1234',
+  'new passcode',
+  'passwords changed',
+  'backup codes saved',
+  'seed phrase in the safe',
+  'card number on file',
+  'github token rotated',
+  'creds for the nas',
+  '2FA reset',
+  'bank PINs: 1234 and 5678',
+  'door code: 4821',
+  'code: 482190',
+  'pwd: hunter2',
+  'API_KEY=abc',
+  'secret_key in 1password',
+  'token: abc',
+  'PIN codes changed',
+];
+
+const LOOK_ALIKES = [
+  'pinned the PR',
+  'new keyboard',
+  'leetcode after lunch',
+  'code review done',
+  'key insight from standup',
+  'passed the exam',
+  'spinning up the VM',
+  'compass app',
+  'pwned list article',
+  'shipped it',
+  'pin this for later',
+  'keynote prep',
+  'token ring trivia',
+  'secret santa',
+  'opinion piece',
+  'refactored the auth code',
+  'paid the credit card',
+  'mnemonic for DP patterns',
+  'ran pwd in the repo',
+  'MFA program info session',
+  'fixed access token refresh',
+  'leetcode 1234',
+  'Advent of Code 2025',
+  'exit code 1337',
+  'zip code 94110',
+  '',
+];
+
+describe('looksSensitive', () => {
+  it('matches the sensitive terms and none of the look-alikes', () => {
+    for (const text of SENSITIVE) expect(looksSensitive(text), text).toBe(true);
+    for (const text of LOOK_ALIKES) expect(looksSensitive(text), text).toBe(false);
+  });
+});

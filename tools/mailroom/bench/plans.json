@@ -84,13 +84,13 @@
         },
         {
           "op": "wait",
-          "s": 2
+          "s": 4
         },
         {
           "op": "find",
           "label": "Capture log",
           "near": {
-            "x": 200,
+            "x": 300,
             "y": 480
           },
           "radius": 40,

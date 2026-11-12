@@ -9,6 +9,7 @@ export const API_METHODS = [
   'updateLogEntry',
   'listLogRange',
   'deleteLogEntry',
+  'setLogEntryPrivate',
   'listBacklog',
   'listTasks',
   'getTask',

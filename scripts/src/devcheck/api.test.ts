@@ -89,6 +89,7 @@ describe('createApiClient', () => {
     });
     expect(Object.keys(api.reads).sort()).toEqual([
       'draftSittingReview',
+      'exportLogEntries',
       'getAttachmentDownloadUrl',
       'getCalibration',
       'getDay',
@@ -162,6 +163,7 @@ describe('createApiClient', () => {
       'setCategoryArea',
       'setDayCapacity',
       'setDayIntent',
+      'setLogEntryPrivate',
       'setReminderSettings',
       'setRollActive',
       'setSittingPrepTarget',
@@ -181,6 +183,7 @@ describe('createApiClient', () => {
       'unmarkFinancePeriodStart',
       'unsetFinanceBucket',
       'unsubscribePush',
+      'updateLogEntry',
       'updateSettings',
       'upsertCategory',
       'upsertFinanceRule',

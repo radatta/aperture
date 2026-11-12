@@ -29,6 +29,7 @@ export interface Parked {
   text: string;
   mode: CaptureMode;
   toToday: boolean;
+  isPrivate?: boolean; // a private log's lock comes back with it on Put back
   why: 'failed' | 'restored' | 'set-aside';
 }
 

@@ -22,6 +22,9 @@ export interface BaseEntity {
 export interface LogEntry extends BaseEntity {
   day: string; // YYYY-MM-DD, bucketed via the day-start offset
   text: string;
+  // Kept out of every MCP read (docs/areas/log). Rows written before the field read back undefined = public.
+  // A reserved word as an identifier — never destructure it; locals use `isPrivate`.
+  private?: boolean;
 }
 
 // --- Tasks -----------------------------------------------------------------

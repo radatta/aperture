@@ -55,7 +55,7 @@ export function InboxPage() {
                     variant="ghost"
                     size="sm"
                     onClick={async () => {
-                      await createLog.mutateAsync(idea.text);
+                      await createLog.mutateAsync({ text: idea.text });
                       triage.mutate({ id: idea.id, status: 'triaged' });
                     }}
                   >

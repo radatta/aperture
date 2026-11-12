@@ -50,7 +50,14 @@ export interface DevLiveSitting {
 
 // What search_log / list_log answer (lambdas/src/mcp/logTools.ts) — the fields the scenario reads.
 export interface DevLogPage {
-  entries: { id: string; day: string; text: string; createdAt: string; localTime: string }[];
+  entries: {
+    id: string;
+    day: string;
+    text: string;
+    createdAt: string;
+    localTime: string;
+    private?: boolean;
+  }[];
   more: boolean;
   nextCursor: string | null;
   totalMatches?: number;
@@ -62,7 +69,10 @@ export interface DevDayView {
   today: string;
   window: { start: string; end: string };
   dayPlan: { intent: string | null } | null;
-  log: { count: number; entries: { id: string; text: string }[] };
+  log: {
+    count: number;
+    entries: { id: string; text: string; localTime?: string; private?: boolean }[];
+  };
   tasks: {
     done: {
       id: string;
@@ -198,6 +208,9 @@ export function createMcpClient({
   const reads = {
     toolsList: async () =>
       (await rpc<{ tools: { name: string }[] }>('tools/list', {})).tools.map((t) => t.name),
+    // The tools as claude.ai sees them, schemas included.
+    toolSchemas: async () =>
+      (await rpc<{ tools: { name: string; inputSchema: unknown }[] }>('tools/list', {})).tools,
     listTasks: () => data<DevTask[]>('list_tasks'),
     listBacklog: () => data<DevTask[]>('list_backlog'),
     getCalibration: (range: { from: string; to: string }) =>

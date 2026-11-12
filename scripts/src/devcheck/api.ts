@@ -192,6 +192,7 @@ export interface DevLogEntry {
   day: string;
   text: string;
   createdAt: number;
+  private?: boolean; // docs/areas/log
 }
 
 export interface DevFluxSet {
@@ -603,6 +604,9 @@ export function createApiClient({
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
     listLogEntries: (day: string) => call<DevLogEntry[]>('listLogEntries', [day]),
+    // The user's own download (Settings → Export) — read only for its log entries.
+    exportLogEntries: async () =>
+      (await call<{ logEntries: DevLogEntry[] }>('exportData', [])).logEntries,
     // Alive entries, oldest first; {} is the whole log (the test user's is small).
     listLogRange: (range: { from?: string; to?: string }) =>
       call<DevLogEntry[]>('listLogRange', [range]),
@@ -690,15 +694,31 @@ export function createApiClient({
         ledger.append({ run, op: 'created', id: input.id, via: FLUX_SET_VIA, title });
       return call<DevFluxSet>('recordFluxSet', [input]);
     },
-    async createLogEntry(text: string, day: string): Promise<DevLogEntry> {
+    async createLogEntry(
+      text: string,
+      day: string,
+      opts?: { private?: boolean },
+    ): Promise<DevLogEntry> {
       ledger.append({ run, op: 'intent', via: LOG_VIA, title: text });
-      const entry = await call<DevLogEntry>('createLogEntry', [text, day]);
+      const entry = await call<DevLogEntry>(
+        'createLogEntry',
+        opts ? [text, day, opts] : [text, day],
+      );
       ledger.append({ run, op: 'created', id: entry.id, via: LOG_VIA, title: text });
       return entry;
     },
     async deleteLogEntry(id: string): Promise<void> {
       assertLedger(id, 'log');
       await call<null>('deleteLogEntry', [id]);
+    },
+    // Raw args: the private-log scenario sends a non-boolean on purpose to prove it's refused.
+    async setLogEntryPrivate(id: string, isPrivate: unknown): Promise<DevLogEntry> {
+      assertLedger(id, 'log');
+      return call<DevLogEntry>('setLogEntryPrivate', [id, isPrivate]);
+    },
+    async updateLogEntry(id: string, text: string): Promise<DevLogEntry> {
+      assertLedger(id, 'log');
+      return call<DevLogEntry>('updateLogEntry', [id, text]);
     },
     async deleteFluxSet(id: string): Promise<void> {
       const recorded = ledger

@@ -200,6 +200,40 @@ export function runApiContract(
       await expect(api.peekDay('nope')).rejects.toThrow('Invalid day');
     });
 
+    it('logs: create takes a private flag, a text edit keeps it, and the toggle flips it both ways', async () => {
+      const e = await api.createLogEntry('disk pw', '2026-08-04', { private: true });
+      expect(e.private).toBe(true);
+      expect((await api.listLogEntries(e.day)).find((x) => x.id === e.id)?.private).toBe(true);
+      expect((await api.updateLogEntry(e.id, 'disk pw, rotated')).private).toBe(true);
+      expect((await api.setLogEntryPrivate(e.id, false)).private).toBe(false);
+      expect((await api.setLogEntryPrivate(e.id, true)).private).toBe(true);
+      expect((await api.listLogEntries(e.day)).find((x) => x.id === e.id)).toMatchObject({
+        private: true,
+        text: 'disk pw, rotated',
+      });
+      // The export is the user's own download: a private entry keeps its text and flag there.
+      expect((await api.exportData()).logEntries.find((x) => x.id === e.id)).toMatchObject({
+        private: true,
+        text: 'disk pw, rotated',
+      });
+      expect((await api.createLogEntry('plain', '2026-08-04')).private).toBe(false);
+    });
+
+    it('logs: a non-boolean private flag or an unknown id is refused and changes nothing', async () => {
+      const e = await api.createLogEntry('plain', '2026-08-04');
+      await expect(api.setLogEntryPrivate(e.id, 'yes' as never)).rejects.toThrow();
+      await expect(
+        api.createLogEntry('x', '2026-08-04', { private: 'true' as never }),
+      ).rejects.toThrow();
+      expect((await api.listLogEntries(e.day)).map((x) => x.text)).not.toContain('x');
+      await expect(api.setLogEntryPrivate('01NOPE', true)).rejects.toThrow(/Not found/);
+      const gone = await api.createLogEntry('deleted', '2026-08-04');
+      await api.deleteLogEntry(gone.id);
+      await expect(api.setLogEntryPrivate(gone.id, true)).rejects.toThrow(/Not found/);
+      await expect(api.updateLogEntry(gone.id, 'back?')).rejects.toThrow(/Not found/);
+      expect((await api.listLogEntries(e.day)).find((x) => x.id === e.id)?.private).toBe(false);
+    });
+
     it('stories: create defaults empty S/A/R, lists updatedAt-desc, patches, and soft-deletes', async () => {
       const a = await api.createStory({
         title: 'Led the migration',

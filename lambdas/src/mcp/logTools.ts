@@ -44,13 +44,17 @@ const hhmm = (ms: number) => zonedDayTime(ms, USER_TIME_ZONE).hhmm;
 const hour = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
 // THE choke point for log text leaving through MCP — every tool maps entries through here, so a
-// redaction (e.g. a private flag) has one place to live. A redaction MASKS the text, never drops the
-// entry: counts and totals are taken over the entries this maps, one in, one out.
+// redaction (a private flag) has one place to live. It MASKS the text, never drops the entry: list_log's
+// total and get_day's count include private entries. Search is the exception — see logEntryMatches.
+// A private entry (docs/areas/log) keeps its id, day and times; its text never leaves.
+export const PRIVATE_TEXT = '🔒 private entry';
 export function toMcpLogEntry(e: LogEntry) {
+  const isPrivate = e.private === true;
   return {
     id: e.id,
     day: e.day,
-    text: e.text,
+    text: isPrivate ? PRIVATE_TEXT : e.text,
+    private: isPrivate,
     createdAt: iso(e.createdAt),
     localTime: hhmm(e.createdAt), // the time the night card shows
     updatedAt: iso(e.updatedAt),
@@ -58,9 +62,10 @@ export function toMcpLogEntry(e: LogEntry) {
 }
 
 // THE one place search matches: a contiguous, case-insensitive substring of the text. `needle` is
-// already lowercased.
+// already lowercased. A private entry never matches — not even as a masked hit, which would still confirm
+// what the query found in its text.
 export const logEntryMatches = (e: LogEntry, needle: string): boolean =>
-  e.text.toLowerCase().includes(needle);
+  e.private !== true && e.text.toLowerCase().includes(needle);
 
 const cursorOf = (e: LogEntry) => `${e.day}#${e.id}`;
 
@@ -122,7 +127,7 @@ function queryArg(args: Record<string, unknown>): string {
 const PAGING =
   'Newest first. When `more` is true, call again with `cursor` set to `nextCursor`, unchanged, to read the next page.';
 const PRIVACY =
-  "Entries are the user's own words and can hold secrets (a password they logged); quote only what the user asked for.";
+  "Entries are the user's own words and can hold secrets (a password they logged); quote only what the user asked for. An entry the user marked private reads '🔒 private entry' (private: true) with its day and time; its text is never available here, search never matches it, and no tool can unlock it — only the user, in the app.";
 
 // --- get_day ---
 const finished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
