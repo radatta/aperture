@@ -139,6 +139,12 @@ export const finance: Scenario = {
       },
     },
     {
+      id: 'open-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Money in opens on the dialog itself, never on a button a stray Enter would press',
+    },
+    {
       id: 'busy-click',
       entry: 'ui',
       kind: 'edge',
@@ -279,13 +285,16 @@ export const finance: Scenario = {
     {
       id: 'money-in',
       entry: 'ui',
-      proves: ['money-in-unlink'],
+      proves: ['money-in-unlink', 'open-focus'],
       title:
         'Payback → Link as a refund → Link → Unlink focused → Unlink keeps focus on a Link row → Esc closes',
       async run(ctx) {
         const { find } = await fixtureRows(ctx);
         const payback = find(PAYBACK)!;
         const dialog = await openRow(ctx, PAYBACK, /^Money in: /);
+        await wait(300);
+        const opened = await focusedText(ctx);
+        if (!/^Money in: /.test(opened)) throw new Error(`on open, focus is on "${opened}"`);
         await dialog.getByRole('button', { name: 'Link as a refund' }).click();
         ctx.api.writes.recordFinanceLink(payback.id);
         const link = dialog.getByRole('button', { name: /^Link to .*devcheck dinner/i }).first();
