@@ -118,7 +118,7 @@ export async function startVite(o: {
   worktree: string;
   track: (p: Proc) => void;
   port: number;
-  edgePort: number;
+  edgePort?: number; // none: the stub app (in-memory data, no auth) — the iOS probe check's
   env: Record<string, string>;
   logPath: string;
 }): Promise<Proc> {
@@ -138,7 +138,9 @@ export async function startVite(o: {
     ],
     {
       cwd: app,
-      env: { ...process.env, ...o.env, APERTURE_LOCAL_EDGE: `http://127.0.0.1:${o.edgePort}` },
+      env: o.edgePort
+        ? { ...process.env, ...o.env, APERTURE_LOCAL_EDGE: `http://127.0.0.1:${o.edgePort}` }
+        : { ...withoutApiMode(process.env), ...o.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
@@ -177,4 +179,11 @@ export async function startVite(o: {
     }
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+// Stub mode is the app's default: drop an inherited VITE_API_MODE so the shell can't switch it to http.
+function withoutApiMode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const rest = { ...env };
+  delete rest.VITE_API_MODE;
+  return rest;
 }

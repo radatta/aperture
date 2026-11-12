@@ -22,6 +22,7 @@ import { renderReport, statusLine, type RunResult } from '../report';
 import { parseArgs, shasFor } from '../run';
 import { SCENARIOS, selectFeature, selectScenarios, slowScenarios } from '../scenarios/index';
 import { DevcheckError } from '../errors';
+import { runProbes } from '../../ios-probe/run';
 import { freePort, startLocalServer, startVite, type Proc } from './server';
 import { localSkip } from './skips';
 import {
@@ -200,17 +201,40 @@ async function main(): Promise<number> {
       now: Date.now,
       log,
     });
+    // The iOS probe check (IOS-CHECK.md → Probe check): every iOS plan against the stub app, its own Vite.
+    const probePort = await freePort();
+    await startVite({
+      worktree,
+      track,
+      port: probePort,
+      env: {},
+      logPath: join(out, 'vite-probe.log'),
+    });
+    const probes = await runProbes({
+      origin: `http://127.0.0.1:${probePort}`,
+      shotsDir,
+      log: (m) => log(`ios-probe ${m}`),
+    });
     const md = toLocalReport(renderReport(result)).replace(
       /^(Run `.*)$/m,
       `$1\nTarget: local (HEAD \`${head.slice(0, 7)}\` served by vite dev${dirty ? ', working tree dirty' : ''}) — dev remains the proof`,
     );
-    writeFileSync(join(out, 'report.md'), md);
+    writeFileSync(
+      join(out, 'report.md'),
+      `${md}\n## iOS probe check\n\n\`\`\`\n${probes.text}\n\`\`\`\n`,
+    );
     writeFileSync(
       join(out, 'report.json'),
-      JSON.stringify({ ...result, target: 'local' }, null, 2) + '\n',
+      JSON.stringify(
+        { ...result, target: 'local', iosProbe: { ok: probes.ok, results: probes.results } },
+        null,
+        2,
+      ) + '\n',
     );
-    console.log(`\nLOCAL ${statusLine(result)}\nreport: ${join(out, 'report.md')}`);
-    return exitCode(result);
+    console.log(
+      `\nLOCAL ${statusLine(result)}\n${probes.text.split('\n')[0]}\nreport: ${join(out, 'report.md')}`,
+    );
+    return Math.max(exitCode(result), probes.ok ? 0 : 1);
   } finally {
     await stopAll();
   }

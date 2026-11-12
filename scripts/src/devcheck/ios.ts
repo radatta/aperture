@@ -20,6 +20,9 @@ import { needsYou } from './scenario';
 
 export const IOS_NOTE = 'iOS this run';
 export const DEFAULT_TIMEOUT_SEC = 480;
+// A scan down the band the keyboard-up dock settles in, wherever that is: dock probes are scans, never a `near`
+// (IOS-CHECK.md → Probe check).
+export const DOCK = (x: number) => ({ x, from: 300, to: 650 });
 
 export interface IosClient {
   run(name: string, steps: IosOp[], opts?: { timeoutSec?: number }): Promise<SimResult>;
