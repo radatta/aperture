@@ -59,7 +59,7 @@ const STEP_TITLES: Record<string, string> = {
   capture: 'The capture bar and its mode row, keyboard up: found where the plan reads them',
   'done-form': 'Tasks search, the Done form and its Reflection box: found, tapped, cancelled',
   'capture-long':
-    'Tasks page scrolled, the capture bar in Task mode: found where the plan reads it',
+    'Tasks scrolled (filtered to the probe’s task), the capture bar in Task mode: found where the plan reads it',
   'review-chip': 'The capture bar switched to Task and back',
 };
 

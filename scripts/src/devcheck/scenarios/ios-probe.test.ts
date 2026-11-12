@@ -66,28 +66,28 @@ describe('the probe job’s plans', () => {
   });
 });
 
-describe('the probe job’s failures', () => {
-  // A step's ctx whose sim answers the way ios.ts throws: an IosAssert wrapped as the step's error.
-  const failing = (detail: string, o: { signedIn?: string; note?: string } = {}) => {
-    const result = {
-      status: 'fail',
-      reason: 'ASSERT',
-      detail,
-      signedIn: o.signedIn ?? 'already',
-      steps: [{ i: 3, op: 'find', status: 'fail', ms: 1, note: o.note }],
-    };
-    const err = new Error('iOS: failed', { cause: new IosAssert('failed', result as never) });
-    const ctx = {
-      nonce: NONCE,
-      ios: {
-        run: async () => {
-          throw err;
-        },
-      },
-    } as unknown as Ctx;
-    return { err, ctx };
+// A step's ctx whose sim answers the way ios.ts throws: an IosAssert wrapped as the step's error.
+const failing = (detail: string, o: { signedIn?: string; note?: string } = {}) => {
+  const result = {
+    status: 'fail',
+    reason: 'ASSERT',
+    detail,
+    signedIn: o.signedIn ?? 'already',
+    steps: [{ i: 3, op: 'find', status: 'fail', ms: 1, note: o.note }],
   };
+  const err = new Error('iOS: failed', { cause: new IosAssert('failed', result as never) });
+  const ctx = {
+    nonce: NONCE,
+    ios: {
+      run: async () => {
+        throw err;
+      },
+    },
+  } as unknown as Ctx;
+  return { err, ctx };
+};
 
+describe('the probe job’s failures', () => {
   it('a miss stays a failure', async () => {
     const { err, ctx } = failing('MISS', { note: 'Capture log' });
     await expect(step('capture').run(ctx)).rejects.toBe(err);
@@ -139,9 +139,16 @@ describe('the probe job’s task', () => {
       api: { reads: { getTask: async () => ({ status: 'in_progress' }) } },
       ios: { run: async () => ({}) },
     } as unknown as Ctx;
+    const broken = failing('MISS', { note: 'Reflection' });
     await step('setup').run(ctx);
+    await expect(step('verify').run(ctx)).rejects.toBeInstanceOf(NeedsYou);
+    await expect(step('done-form').run({ ...ctx, ios: broken.ctx.ios } as Ctx)).rejects.toBe(
+      broken.err,
+    );
     await expect(step('verify').run(ctx)).rejects.toBeInstanceOf(NeedsYou);
     await step('done-form').run(ctx);
     await expect(step('verify').run(ctx)).resolves.toBeUndefined();
+    await step('setup').run(ctx); // a new run starts over
+    await expect(step('verify').run(ctx)).rejects.toBeInstanceOf(NeedsYou);
   });
 });
