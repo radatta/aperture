@@ -210,7 +210,8 @@ or not, so one fails the run like any other console error, and the report's _Thr
 (`/api/<method>`), which Chromium's line doesn't. Treat one as a bug — a burst wider than the cap, a refetch storm, the
 harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run's console saw (one
 inside an injected-failure window is dropped from the console and shows under _Throttled (429)_ (and _Failed loads_) — read that
-section too). The same scenario counts Home's `/api` requests on the wire and fails past 8. Failures a scenario injects on
+section too). The same scenario holds every `/api` response while Home and three nav taps want more than 8 calls,
+then releases them: it fails unless exactly 8 were on the wire and the rest went out after. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
 own `/api` and `/mcp` clients back off a Lambda 429 and retry, so no console sees it and a call that succeeds may
 still have been throttled; `ctx.api.throttles()` and `ctx.mcp.throttles()` count those, for a step that must prove
