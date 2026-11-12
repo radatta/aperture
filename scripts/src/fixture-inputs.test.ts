@@ -78,20 +78,26 @@ describe('ci.yml wiring', () => {
   const suite = FIXTURE_SUITE.replace('scripts/', '');
 
   it('the non-app step excludes the suite, once', () => {
-    expect(ci.match(new RegExp(`test --exclude ${suite}$`, 'gm'))).toHaveLength(1);
+    expect(ci.split('\n').filter((l) => l.endsWith(`test --exclude ${suite}`))).toHaveLength(1);
     expect(ci).toMatch(/^ {6}- run: pnpm -r --filter '!@aperture\/app' test --exclude /m);
   });
 
-  it('the suite step runs it on a main push and when the rule says so', () => {
+  it('the suite step runs it on a main push and unless the rule says no — one step, never allowed to fail', () => {
     expect(ci).toContain(
-      "if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run == 'true') }}",
+      [
+        '      - name: Mailroom fixture suite',
+        "        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run != 'false') }}",
+        `        run: pnpm --filter @aperture/scripts test ${suite}\n`,
+      ].join('\n'),
     );
-    expect(ci).toContain(`run: pnpm --filter @aperture/scripts test ${suite}\n`);
+    expect(ci).not.toContain('continue-on-error');
   });
 
   it('the rule runs on PRs only, against the merge commit’s first parent', () => {
     expect(ci).toMatch(/id: fixtures\n {8}if: \$\{\{ github\.event_name == 'pull_request' \}\}/);
-    expect(ci).toContain('git diff --name-only --no-renames HEAD^1 HEAD');
+    expect(ci).toContain(
+      'git rev-parse -q --verify HEAD^2 >/dev/null && files=$(git diff --name-only --no-renames HEAD^1 HEAD)',
+    );
     expect(ci).toContain('node scripts/src/fixture-inputs.ts');
     expect(ci).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 2/);
   });
