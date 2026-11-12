@@ -662,7 +662,9 @@ export class BackendClient implements ApiClient {
     if ((from !== undefined && !isDayKey(from)) || (to !== undefined && !isDayKey(to)))
       throw new Error('Invalid day');
     if (from !== undefined && to !== undefined && from > to) throw new Error('Invalid range');
-    return (await this.repo.listLogRange(from, to)).sort(byLogKey);
+    // Consistent: an entry just written or tombstoned must read so (the dev check's read-back), and a
+    // search straight after a capture must find it. One user's log — the doubled read is small.
+    return (await this.repo.listLogRange(from, to, { consistent: true })).sort(byLogKey);
   }
   // A tombstone, like deleteFluxSet: deleting a deleted entry changes nothing.
   async deleteLogEntry(id: string): Promise<void> {
@@ -1917,7 +1919,7 @@ export class BackendClient implements ApiClient {
   // The stored row as it is — no recurrence, no sweep, no create: the read-only twin of getDay (MCP get_day).
   async peekDay(day: string): Promise<Day | null> {
     if (!isDayKey(day)) throw new Error('Invalid day');
-    return this.repo.getDayRow(day);
+    return this.repo.getDayRow(day, { consistent: true }); // a row the app's open just wrote reads back
   }
   // `consistent` for the setters below, whose copy is written back: a capacity then an intent typed
   // straight after must both land. The app's load read stays eventual.

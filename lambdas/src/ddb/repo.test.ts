@@ -228,6 +228,8 @@ describe('Repo persistence', () => {
     // No bounds → the whole log prefix, still one query on the user's partition.
     expect((await r.listLogRange()).map((e) => e.id)).toEqual(['l1', 'l2', 'l4']);
     expect(doc.queries.at(-1)).toMatchObject({ prefix: 'log#', from: undefined, to: undefined });
+    await r.listLogRange(undefined, undefined, { consistent: true });
+    expect(doc.queries.at(-1)).toMatchObject({ consistent: true });
   });
 });
 

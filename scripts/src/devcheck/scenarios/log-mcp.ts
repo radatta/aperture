@@ -18,7 +18,7 @@ const appDays = async (ctx: Ctx) => {
 };
 
 // What this run seeded, shared across steps (a scenario's steps run in order, one run at a time).
-const seeded = { secret: '', lower: '', past: '', typed: '', done: '', planned: '', gone: '' };
+const seeded = { secret: '', lower: '', past: '', typed: '', done: '', planned: '' };
 
 const expectParamError = async (what: string, call: () => Promise<unknown>) => {
   try {
@@ -270,12 +270,15 @@ export const logMcp: Scenario = {
       entry: 'mcp',
       proves: ['search-paging'],
       async run(ctx) {
+        const { yesterday } = await appDays(ctx);
         const mine = [seeded.secret, seeded.lower, seeded.past, seeded.typed];
         const seen: string[] = [];
         let cursor: string | null = null;
         for (let i = 0; i < 10; i++) {
+          // From yesterday: the nonce has no date, so an old run's leftover at the same second stays out.
           const p = await ctx.mcp.reads.searchLog({
             query: ctx.nonce,
+            from: yesterday,
             limit: 1,
             ...(cursor ? { cursor } : {}),
           });
@@ -352,7 +355,8 @@ export const logMcp: Scenario = {
           order: 9999,
         });
 
-        await ctx.api.reads.getDay(today); // the app's open: the day row exists, as on any used day
+        // The app's own open (it may write: the day row, a due series, the stale sweep), so the row exists.
+        await ctx.api.reads.getDay(today);
         const d = await ctx.mcp.reads.getDay({ day: today });
         if (d.day !== today || d.today !== today) fail(`day/today: ${d.day}/${d.today}`);
         if (!d.dayPlan || !('intent' in d.dayPlan))
@@ -407,7 +411,6 @@ export const logMcp: Scenario = {
       async run(ctx) {
         const { today } = await appDays(ctx);
         const e = await ctx.api.writes.createLogEntry(`devcheck ${ctx.nonce} to delete`, today);
-        seeded.gone = e.id;
         await ctx.api.writes.deleteLogEntry(e.id);
         if (
           (await ctx.api.reads.listLogRange({ from: today, to: today })).some((x) => x.id === e.id)
