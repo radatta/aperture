@@ -47,7 +47,9 @@ const CAPTURE: IosOp[] = [
     as: 'bar0',
   },
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
-  { op: 'wait', s: 2 },
+  // 4 s, not 2: on 2026-11-12 the dock was still settling at 2 s — found ~30 pt high (at y 450), it then sat lower,
+  // and `keys … in` read the mode row back instead of the field (2 of 5 runs).
+  { op: 'wait', s: 4 },
   {
     op: 'find',
     label: 'Capture log',
