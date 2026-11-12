@@ -51,7 +51,10 @@ const CAPTURE: IosOp[] = [
   {
     op: 'find',
     label: 'Capture log',
-    near: { x: 200, y: 480 },
+    // x 300, not the middle: since private-log (2026-11-12) Log mode's `private` pill spans ~x 179–249 of the
+    // mode row, and `keys … in` reads back at the point the field was found — a dock still settling put that
+    // point on the pill (read "AXCheckBox 0"). x 300 is the gap before Focus, and inside the field in every mode.
+    near: { x: 300, y: 480 },
     radius: 40,
     role: 'AXTextArea',
     as: 'bar',
