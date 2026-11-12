@@ -53,6 +53,16 @@ describe('recorder', () => {
     expect(isCreateRequest('unsubscribePush', JSON.stringify({ args: ['d1'] }))).toBe(false);
   });
 
+  it('records a log entry the capture bar created, by the id the server answered with', () => {
+    expect(isCreateRequest('createLogEntry', JSON.stringify({ args: ['x', '2026-11-05'] }))).toBe(
+      true,
+    );
+    expect(idsFromCreateResponse('createLogEntry', { id: 'L1', day: '2026-11-05' })).toEqual([
+      'L1',
+    ]);
+    expect(isCreateRequest('updateLogEntry', JSON.stringify({ args: ['L1', 'y'] }))).toBe(false);
+  });
+
   it('ignores other methods and malformed bodies', () => {
     expect(idsFromCreateResponse('listTasks', [{ id: 'a' }])).toEqual([]);
     expect(idsFromCreateResponse('createTask', null)).toEqual([]);

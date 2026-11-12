@@ -158,6 +158,10 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   the step's `finally`.
   One more a run leaves behind: `getFluxWeekNote` stores the week's note row (`fluxnote#<weekStart>`) in the
   test user's partition — derived from the sets, overwritten when they change, never listed as a leftover.
+- **A log entry is one more kind** (`scenarios/log-mcp.ts`): recorded from the create's id (`via: api:createLogEntry`; a
+  capture-bar line from the POST's response, `ui:createLogEntry`), read back over the whole test-user log
+  (`listLogRange({})`, so a crashed run's leftover is found too) and tombstoned with `deleteLogEntry` — an RPC that exists
+  for this cleanup only (no UI, no MCP tool).
 - **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
   deleted with `deleteCategory(id, null)`. Cleanup runs newest-first and the category is made after the run's tasks, so it goes
   before them — a run task on a run category would make the delete refuse, so no scenario puts one there. The same scenario sets the

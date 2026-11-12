@@ -8,6 +8,8 @@ import {
   MCP_CATEGORY_VIA,
   PLACE_TOKEN_VIA,
   HABIT_VIA,
+  LOG_VIA,
+  UI_LOG_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
   PUSH_SUB_VIA,
@@ -107,6 +109,8 @@ describe('createApiClient', () => {
       'listFluxSets',
       'listHabitChecks',
       'listHabits',
+      'listLogEntries',
+      'listLogRange',
       'listPlaceTasks',
       'listPlaces',
       'listPlansForDay',
@@ -125,12 +129,14 @@ describe('createApiClient', () => {
       'archiveRoll',
       'checkHabit',
       'createAttachment',
+      'createLogEntry',
       'createSeries',
       'createTask',
       'deleteAttachment',
       'deleteCategory',
       'deleteFinanceRule',
       'deleteFluxSet',
+      'deleteLogEntry',
       'deletePlace',
       'deleteSeries',
       'deleteSitting',
@@ -400,6 +406,8 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'H', via: HABIT_VIA },
         { run: 'r', op: 'created' as const, id: 'C2', via: UI_CATEGORY_VIA },
         { run: 'r', op: 'created' as const, id: 'C3', via: MCP_CATEGORY_VIA },
+        { run: 'r', op: 'created' as const, id: 'L', via: LOG_VIA },
+        { run: 'r', op: 'created' as const, id: 'L2', via: UI_LOG_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -419,6 +427,8 @@ describe('createApiClient', () => {
           'H',
           'C2',
           'C3',
+          'L',
+          'L2',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -438,6 +448,8 @@ describe('createApiClient', () => {
         'habit',
         'category',
         'category',
+        'log',
+        'log',
         'task',
       ]);
     });

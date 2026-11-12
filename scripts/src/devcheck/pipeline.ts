@@ -497,6 +497,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
         return (await client.reads.getFluxSet(id)) !== null;
+      case 'log': // the whole test-user log: a leftover from weeks ago is found too
+        return (await client.reads.listLogRange({})).some((e) => e.id === id);
       case 'place':
         return (await client.reads.listPlaces()).some((p) => p.id === id);
       case 'category':
@@ -535,6 +537,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
         await client.writes.deleteFluxSet(id);
+        return true;
+      case 'log':
+        await client.writes.deleteLogEntry(id);
         return true;
       case 'place':
         await client.writes.deletePlace(id, null); // any task still on it just leaves the list

@@ -48,6 +48,38 @@ export interface DevLiveSitting {
   } | null;
 }
 
+// What search_log / list_log answer (lambdas/src/mcp/logTools.ts) — the fields the scenario reads.
+export interface DevLogPage {
+  entries: { id: string; day: string; text: string; createdAt: string; localTime: string }[];
+  more: boolean;
+  nextCursor: string | null;
+  totalMatches?: number;
+  total?: number;
+}
+// What get_day answers — the fields the scenario reads.
+export interface DevDayView {
+  day: string;
+  today: string;
+  window: { start: string; end: string };
+  dayPlan: { intent: string | null } | null;
+  log: { count: number; entries: { id: string; text: string }[] };
+  tasks: {
+    done: {
+      id: string;
+      estimateLockedMin: number | null;
+      actualMin: number;
+      deltaMin: number | null;
+      isCalibrationPoint: boolean;
+    }[];
+    planned: { id: string; byTime: boolean; plannedMinutes: number | null }[];
+    stillOpen: { id: string }[];
+    due: { id: string }[];
+  };
+  calendar: { reason?: string; window?: { start: string; end: string } };
+  flux: { sets: unknown[]; daySummary: string };
+  leetcode: unknown[];
+}
+
 // What get_sitting and list_sittings answer (PR C) — the fields the scenario reads.
 export interface DevSittingRead {
   sitting: { id: string; status: string; submitCount: number; liveReads: number } | null;
@@ -190,6 +222,11 @@ export function createMcpClient({
     getSitting: (args: Record<string, unknown> = {}) => data<DevSittingRead>('get_sitting', args),
     listSittings: (args: Record<string, unknown> = {}) =>
       data<{ sittings: DevSittingRow[]; more: boolean }>('list_sittings', args),
+    // The Log tools (lambdas/src/mcp/logTools.ts): pure reads. Args go as given — the param-error rows
+    // send bad ones on purpose.
+    searchLog: (args: Record<string, unknown>) => data<DevLogPage>('search_log', args),
+    listLog: (args: Record<string, unknown>) => data<DevLogPage>('list_log', args),
+    getDay: (args: Record<string, unknown>) => data<DevDayView>('get_day', args),
   };
 
   const writes = {

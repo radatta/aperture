@@ -187,6 +187,13 @@ export interface DevFluxSetInput {
   stoppedEarly: boolean;
   planned: number | null;
 }
+export interface DevLogEntry {
+  id: string;
+  day: string;
+  text: string;
+  createdAt: number;
+}
+
 export interface DevFluxSet {
   id: string;
   day: string;
@@ -327,6 +334,9 @@ export interface DevSession {
 
 // The ledger's `via` for a Flux set — cleanup reads it to delete the right kind of row.
 export const FLUX_SET_VIA = 'api:recordFluxSet';
+// A log entry this harness created (through the API, or the capture bar's createLogEntry — recorder.ts).
+export const LOG_VIA = 'api:createLogEntry';
+export const UI_LOG_VIA = 'ui:createLogEntry';
 // A place this harness created (through the API, or the browser's upsertPlace create — recorder.ts).
 export const PLACE_VIA = 'api:upsertPlace';
 export const UI_PLACE_VIA = 'ui:upsertPlace';
@@ -404,6 +414,7 @@ export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':')
 export type LedgerKind =
   | 'task'
   | 'flux'
+  | 'log'
   | 'place'
   | 'placeToken'
   | 'category'
@@ -421,6 +432,7 @@ export type LedgerKind =
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
+  if (via === LOG_VIA || via === UI_LOG_VIA) return 'log';
   if (via !== undefined && SERIES_VIAS.includes(via)) return 'series';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
   if (via === CATEGORY_VIA || via === UI_CATEGORY_VIA || via === MCP_CATEGORY_VIA)
@@ -590,6 +602,10 @@ export function createApiClient({
     listRunningSessions: () => call<DevSession[]>('listRunningSessions', []),
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
+    listLogEntries: (day: string) => call<DevLogEntry[]>('listLogEntries', [day]),
+    // Alive entries, oldest first; {} is the whole log (the test user's is small).
+    listLogRange: (range: { from?: string; to?: string }) =>
+      call<DevLogEntry[]>('listLogRange', [range]),
     // The weekly note (D62): a read that may write the cached row — the app's own read, not a scenario write.
     getFluxWeekNote: () =>
       call<{ weekStart: string; text: string; generatedAt: number } | null>('getFluxWeekNote', []),
@@ -673,6 +689,16 @@ export function createApiClient({
       if (!pendingIds(ledger.read()).includes(input.id))
         ledger.append({ run, op: 'created', id: input.id, via: FLUX_SET_VIA, title });
       return call<DevFluxSet>('recordFluxSet', [input]);
+    },
+    async createLogEntry(text: string, day: string): Promise<DevLogEntry> {
+      ledger.append({ run, op: 'intent', via: LOG_VIA, title: text });
+      const entry = await call<DevLogEntry>('createLogEntry', [text, day]);
+      ledger.append({ run, op: 'created', id: entry.id, via: LOG_VIA, title: text });
+      return entry;
+    },
+    async deleteLogEntry(id: string): Promise<void> {
+      assertLedger(id, 'log');
+      await call<null>('deleteLogEntry', [id]);
     },
     async deleteFluxSet(id: string): Promise<void> {
       const recorded = ledger

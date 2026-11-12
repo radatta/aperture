@@ -5,6 +5,7 @@ import {
   FINANCE_MARK_VIA,
   FINANCE_RULE_VIA,
   FLUX_SET_VIA,
+  LOG_VIA,
   CATEGORY_VIA,
   PLACE_TOKEN_VIA,
   PUSH_SUB_VIA,
@@ -14,6 +15,7 @@ import {
   type DevFinanceRule,
   type DevFinanceTransaction,
   type DevFluxSet,
+  type DevLogEntry,
   type DevPlace,
   type DevTask,
 } from './api';
@@ -62,6 +64,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const deleted: string[] = [];
   const fluxSets = new Map<string, DevFluxSet>();
   const fluxDeleted: string[] = [];
+  const logEntries = new Map<string, DevLogEntry>();
+  const logDeleted: string[] = [];
   const places = new Map<string, DevPlace>();
   const placesDeleted: string[] = [];
   const categories = new Map<string, DevCategory>();
@@ -248,6 +252,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       },
       listFluxSets: async () => [...fluxSets.values()],
       getFluxSet: async (id) => fluxSets.get(id) ?? null,
+      listLogEntries: async (day) => [...logEntries.values()].filter((e) => e.day === day),
+      listLogRange: async () => [...logEntries.values()],
       listAttachments: async () => [],
       getAttachmentDownloadUrl: async () => {
         throw new Error('unused');
@@ -324,6 +330,13 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       deleteFluxSet: async (id) => {
         fluxDeleted.push(id);
         fluxSets.delete(id);
+      },
+      createLogEntry: async () => {
+        throw new Error('unused');
+      },
+      deleteLogEntry: async (id) => {
+        logDeleted.push(id);
+        logEntries.delete(id);
       },
       deleteTask: async (id) => {
         deleted.push(id);
@@ -521,6 +534,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     categories,
     categoriesDeleted,
     fluxDeleted,
+    logEntries,
+    logDeleted,
     places,
     placesDeleted,
     placeToken,
@@ -1033,6 +1048,23 @@ describe('runPipeline', () => {
     expect(r.created).toEqual([
       { id: 'fx-new', via: FLUX_SET_VIA, title: undefined, final: 'deleted' },
     ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a log entry is read back and tombstoned as a log entry, never as a task — a crashed run’s too', async () => {
+    const w = world();
+    const entry = (id: string): DevLogEntry => ({ id, day: '2026-11-05', text: id, createdAt: 0 });
+    w.logEntries.set('lg-old', entry('lg-old'));
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'lg-old', via: LOG_VIA }]);
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'lg-new', via: LOG_VIA });
+      x.logEntries.set('lg-new', entry('lg-new'));
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.logDeleted).toEqual(['lg-old', 'lg-new']);
+    expect(w.deleted).toEqual([]);
+    expect(r.swept).toEqual(['lg-old']);
+    expect(r.created).toEqual([{ id: 'lg-new', via: LOG_VIA, title: undefined, final: 'deleted' }]);
     expect(r.status).toBe('PASS');
   });
 

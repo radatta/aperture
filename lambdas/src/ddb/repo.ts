@@ -154,6 +154,20 @@ export class Repo {
       (await this.doc.query(this.p(), sk.logAllPrefix())).map((i) => toEntity<LogEntry>(i)),
     );
   }
+  // One range read (the SK sorts by day): `log#<from>#` … the end of `log#<to>#`; an open bound reads to
+  // that end of the log. The MCP search and list tools' input — a personal log, never a scan.
+  async listLogRange(
+    from?: string,
+    to?: string,
+    opts?: { consistent?: boolean },
+  ): Promise<LogEntry[]> {
+    const rows = await this.doc.query(this.p(), sk.logAllPrefix(), {
+      ...opts,
+      from: from === undefined ? undefined : sk.logPrefix(from),
+      to: to === undefined ? undefined : sk.logPrefix(to) + SK_END,
+    });
+    return alive(rows.map((i) => toEntity<LogEntry>(i)));
+  }
   async findLog(id: string, opts?: { consistent?: boolean }): Promise<LogEntry | null> {
     const it = await this.scanById(sk.logAllPrefix(), id, opts);
     return it ? toEntity<LogEntry>(it) : null;

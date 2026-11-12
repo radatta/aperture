@@ -13,6 +13,7 @@ export const CREATE_METHODS = [
   'upsertSeries',
   'upsertCategory',
   'subscribePush',
+  'createLogEntry',
 ] as const;
 const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries', 'upsertCategory'];
 type CreateMethod = (typeof CREATE_METHODS)[number];
@@ -53,7 +54,12 @@ export function idsFromCreateResponse(
   ownsSplitParent: (original: string, parent: string) => boolean = () => false,
 ): string[] {
   if (!isCreate(method)) return [];
-  if (method === 'createTask' || method === 'subscribePush' || UPSERTS.includes(method))
+  if (
+    method === 'createTask' ||
+    method === 'subscribePush' ||
+    method === 'createLogEntry' ||
+    UPSERTS.includes(method)
+  )
     return [idOf(json)].filter((x): x is string => !!x);
   if (method === 'createTasks')
     return Array.isArray(json) ? json.map(idOf).filter((x): x is string => !!x) : [];

@@ -312,6 +312,9 @@ function knownPlace(slug: unknown, places: ReadonlySet<string>): string | null {
   return slug;
 }
 const byAdded = (a: Place, b: Place) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1);
+// Oldest first: by day, then capture time (the log's SK order — a ULID id sorts by time within a day).
+const byLogKey = (a: LogEntry, b: LogEntry) =>
+  a.day !== b.day ? (a.day < b.day ? -1 : 1) : a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1);
 const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
 // A part's place is its parent's: none given takes it, a different slug is refused. Not a part → as given.
 function partPlace(given: string | null, parent: Task | undefined): string | null {
@@ -653,6 +656,21 @@ export class BackendClient implements ApiClient {
     const e = await this.repo.findLog(id, { consistent: true });
     if (!e) throw new Error(`Not found: ${id}`);
     return this.repo.putLog({ ...e, text, updatedAt: this.now() });
+  }
+  async listLogRange(range: { from?: string; to?: string }): Promise<LogEntry[]> {
+    const { from, to } = range;
+    if ((from !== undefined && !isDayKey(from)) || (to !== undefined && !isDayKey(to)))
+      throw new Error('Invalid day');
+    if (from !== undefined && to !== undefined && from > to) throw new Error('Invalid range');
+    // Consistent: an entry just written or tombstoned must read so (the dev check's read-back), and a
+    // search straight after a capture must find it. One user's log — the doubled read is small.
+    return (await this.repo.listLogRange(from, to, { consistent: true })).sort(byLogKey);
+  }
+  // A tombstone, like deleteFluxSet: deleting a deleted entry changes nothing.
+  async deleteLogEntry(id: string): Promise<void> {
+    const e = await this.repo.findLog(id, { consistent: true });
+    if (e && e.deletedAt === null)
+      await this.repo.putLog({ ...e, deletedAt: this.now(), updatedAt: this.now() });
   }
 
   // --- LeetCode sittings (sittings.ts; docs/areas/recruiting) ---
@@ -1898,6 +1916,11 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Day (lazy recurrence + stale sweep on read) ---
+  // The stored row as it is — no recurrence, no sweep, no create: the read-only twin of getDay (MCP get_day).
+  async peekDay(day: string): Promise<Day | null> {
+    if (!isDayKey(day)) throw new Error('Invalid day');
+    return this.repo.getDayRow(day, { consistent: true }); // a row the app's open just wrote reads back
+  }
   // `consistent` for the setters below, whose copy is written back: a capacity then an intent typed
   // straight after must both land. The app's load read stays eventual.
   async getDay(day: string, opts?: { consistent?: boolean }): Promise<Day> {

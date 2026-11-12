@@ -80,6 +80,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | attachments     | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`                                                                                                                                                                                      |
 | finances (read) | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`                                                                                                                                                                                      |
 | flux (read)     | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                                                                                                                                                                                               |
+| log (read)      | `search_log {query,from?,to?,limit?,cursor?}`, `list_log {from,to,limit?,cursor?}`, `get_day {day}` — read-only                                                                                                                                                                                                               |
 | leetcode        | `live_sitting {sinceVersion?}` — the open sitting, live; counts the pull. `get_sitting {id?}`, `list_sittings {from?,to?,limit?}` — read-only ([recruiting](../recruiting/index.md) → _Claude watches live_, _Reading a sitting back_)                                                                                        |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
@@ -143,7 +144,8 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   the app's pickers hide it, existing tasks keep the label — and `active:true` restores it (the same as
   Settings → Retire / Restore). `isWork` here is forward-only; the app's `setCategoryWork` (backfill past sessions) stays unexposed, as does
   `deleteCategory` (reassign-everything).
-- **Stale planned tasks lag.** The stale-planned sweep runs inside `getDay`, which no tool calls — so
+- **Stale planned tasks lag.** The stale-planned sweep runs inside `getDay`, which no tool calls (`get_day` reads the
+  stored row through `peekDay`, on purpose) — so
   `list_tasks status=planned` / `list_backlog` still show yesterday's leftovers as planned until the app is
   opened that day ([TECH §taskPlans](../../arch/TECH.md)). A timed task is never planned (it's on Today on
   its day, by its time): `update_task status=planned` on one is moved back to backlog by that same sweep.
@@ -192,6 +194,23 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   travelling. (The finance sync's schedule is the other place Pacific time is fixed — cdk
   `finance-sync.ts`.) The overview omits the Plaid environment (the MCP's gateway is inert, so it would
   always read "sandbox"). Data is as fresh as the last bank sync; voice can't trigger one.
+- **The Log is read-only** (`lambdas/src/mcp/logTools.ts`). `search_log` matches `query` (1–200 chars, trimmed) as one
+  contiguous case-insensitive substring of the text — no tokens, no regex; `from`/`to` (each optional, inclusive)
+  narrow it, and no bounds searches the whole log. `list_log` needs both. Both read one bounded range of the user's
+  partition (`listLogRange` → `log#<from>#`…`log#<to>#`, no GSI, no search service), filter in the Lambda, and page
+  over the fully-read list newest first: `nextCursor` is `"<day>#<id>"` of the last entry returned, so a sparse
+  filter never yields a short page and a new entry never shifts later ones (limits: search 1–100, default 50; list
+  1–200, default 100). `get_day {day}` is the Log page and the night review as data: `dayPlan` (the stored day row
+  via `peekDay` — null if the app never opened that day), that day's `log`, `tasks.done` (finished that app day,
+  `estimateLockedMin` vs `actualMin`, `deltaMin` for a calibration point — `getCalibration`'s rows),
+  `tasks.planned` (timed tasks by deadline instant, then the plan rows — the app's `todayRows` rule on the server
+  clock) with `stillOpen`, `tasks.due`, `calendar` (busy + `computeDayShape` over `dayFocusStart`..`dayEndHour`,
+  or a reason when no calendar is chosen), `flux` and `leetcode` (heads; `get_sitting` reads one). Every day is
+  the app day — `dayKeyInZone` at the user's `dayStartHour` (4am), Pacific. It never calls `getDay`, so it spawns
+  no recurrence and sweeps no plan, and it answers for any day, future included. **Privacy:** log text — the very
+  secrets the search is for (a disk password) — enters the conversation and its history. Every entry leaving MCP
+  goes through `toMcpLogEntry`, and matching through `logEntryMatches`, so a redaction has one place to live
+  (private-log, the 🔒 follow-up).
 - **Flux is read-only** (`lambdas/src/mcp/fluxTools.ts`, [flux](../flux/index.md) D52). Sets are
   recorded by the app's stage only; deleting one is the History tab's. `from`/`to` are both or neither
   (one alone is a param error, like the RPC's `fluxFilterError`). Every label is resolved server-side from
@@ -253,6 +272,9 @@ transport. See `lambdas/src/mcp/protocol.ts`.
   (`packages/shared/src/dates.ts`).
 - `lambdas/src/mcp/fluxTools.ts` — the read-only Flux tools, over `setMetric` / `sideLabel` /
   `summarizeSets` (`packages/shared/src/flux/history.ts`, shared with the History tab).
+- `lambdas/src/mcp/logTools.ts` — `search_log` / `list_log` over the `listLogRange` RPC, `get_day` over `peekDay`,
+  `listLogEntries`, `listTasks`, `getCalibration`, `listPlansForDay`, `getCalendarBusy`, `listFluxSets`,
+  `listSittings` (`setRow` from `fluxTools.ts`); the `toMcpLogEntry` / `logEntryMatches` choke points.
 - `lambdas/src/mcp/leetcodeTools.ts` — `live_sitting`, over the `pullLiveSitting` RPC and `judgeDetail`; `get_sitting` and `list_sittings` over `getSitting` / `listSittings` and `timelineOf`
   (`packages/shared/src/sittings.ts`).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
@@ -417,6 +439,8 @@ the model as the only UI — so:
   "ask" for those. A new destructive tool inherits this concern.
 - **Logic that only runs when the app opens doesn't run for voice** (the stale-planned lag above is the
   existing case).
+- **The Log by voice is questions:** "what did I log about the disk?" → `search_log`; "how did today go?" →
+  `get_day`. Nothing writes a log entry from MCP yet.
 - **Finances by voice are questions, not edits:** "how much budget is left?" → `get_finance_overview` with
   no arguments; "what did I spend at Amazon?" → `list_finance_transactions {merchant: "amazon"}` and its
   `totalUsd`. Nothing finance-related is

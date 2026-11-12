@@ -65,16 +65,19 @@ describe('createMcpClient', () => {
     expect(Object.keys(c.reads).sort()).toEqual([
       'getAttachmentDownloadUrl',
       'getCalibration',
+      'getDay',
       'getSitting',
       'listAttachments',
       'listBacklog',
       'listCategories',
+      'listLog',
       'listPlaceTasks',
       'listPlaces',
       'listSeries',
       'listSittings',
       'listTasks',
       'liveSitting',
+      'searchLog',
       'toolsList',
     ]);
     expect(Object.keys(c.writes).sort()).toEqual([
