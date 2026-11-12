@@ -40,10 +40,15 @@ export function useCreateLogEntry(day: string) {
   });
 }
 
+// A text edit and a lock toggle each put the whole entry, so two in flight could undo each other (an
+// edit's blur and a lock tap land in the same tick). One scope runs log writes in order.
+const LOG_WRITE_SCOPE = { id: 'log-write' };
+
 export function useUpdateLogEntry(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
+    scope: LOG_WRITE_SCOPE,
     mutationFn: (vars: { id: string; text: string }) => api.updateLogEntry(vars.id, vars.text),
     onSettled: () => qc.invalidateQueries({ queryKey: qk.log(day) }),
   });
@@ -54,6 +59,7 @@ export function useSetLogEntryPrivate(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
+    scope: LOG_WRITE_SCOPE,
     mutationFn: (vars: { id: string; isPrivate: boolean }) =>
       api.setLogEntryPrivate(vars.id, vars.isPrivate),
     onMutate: async ({ id, isPrivate }) => {

@@ -56,6 +56,14 @@ export function LogPage() {
         </div>
       </header>
 
+      {/* A failed toggle rolls the lock back — said out loud, since it's a privacy control. */}
+      {setPrivate.isError && (
+        <div role="alert">
+          <Text as="p" size="sm" tone="danger">
+            Couldn&apos;t change that entry&apos;s lock — it&apos;s back as it was. Try again.
+          </Text>
+        </div>
+      )}
       <ul className="flex flex-col divide-y divide-line">
         {entries.length === 0 ? (
           <li className="py-8">

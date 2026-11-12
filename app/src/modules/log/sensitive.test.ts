@@ -23,6 +23,10 @@ describe('looksSensitive', () => {
     'github token rotated',
     'creds for the nas',
     '2FA reset',
+    'bank PINs: 1234 and 5678',
+    'door code: 4821',
+    'code 482190',
+    'pwd: hunter2',
   ])('flags %j', (text) => expect(looksSensitive(text)).toBe(true));
 
   it.each([
@@ -41,6 +45,13 @@ describe('looksSensitive', () => {
     'token ring trivia',
     'secret santa',
     'opinion piece',
+    'refactored the auth code',
+    'paid the credit card',
+    'mnemonic for DP patterns',
+    'ran pwd in the repo',
+    'MFA program info session',
+    'fixed access token refresh',
+    'leetcode 1234',
     '',
   ])('leaves %j alone', (text) => expect(looksSensitive(text)).toBe(false));
 });

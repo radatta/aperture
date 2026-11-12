@@ -1734,6 +1734,19 @@ describe('CaptureBar private log', () => {
     api.createLogEntry = real;
   });
 
+  it('a sensitive draft whose save failed retries on one Enter', async () => {
+    const { api, user, saved } = logBar('nudge-retry');
+    const real = api.createLogEntry.bind(api);
+    api.createLogEntry = () => Promise.reject(new Error('offline'));
+    await user.type(field(), 'disk password is hunter2');
+    await user.keyboard('{Enter}{Enter}');
+    expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+    await waitFor(() => expect(field().value).toBe('disk password is hunter2'));
+    api.createLogEntry = real;
+    await user.keyboard('{Enter}');
+    expect((await saved('disk password is hunter2')).private).toBe(false);
+  });
+
   it('a failed private save parked behind a newer draft puts back private', async () => {
     let fail!: (e: Error) => void;
     const { api, user, pill } = logBar('park');

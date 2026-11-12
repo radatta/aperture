@@ -367,6 +367,7 @@ export function CaptureBar({
       return;
     }
     setHeldAck(null);
+    const nudgeAtSubmit = nudge;
     setNudge({ dismissed: false, held: false });
     const goesToday = submitted === 'task' && toToday;
     const goesPrivate = submitted === 'log' && privateNext;
@@ -399,6 +400,8 @@ export function CaptureBar({
       changeMode(submitted);
       setToToday(goesToday); // the retry goes where the first attempt was headed, and nowhere else
       setPrivateNext(goesPrivate); // and stays as private as it was
+      // The nudge already had its say on this draft: the retry is one Enter, and a × stays dismissed.
+      setNudge({ dismissed: nudgeAtSubmit.dismissed, held: true });
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
       if (reviewedPreview?.tookSuggestion) quick.reinstate(reviewedPreview);
     };

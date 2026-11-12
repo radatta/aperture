@@ -222,6 +222,10 @@ export function runApiContract(
     it('logs: a non-boolean private flag or an unknown id is refused and changes nothing', async () => {
       const e = await api.createLogEntry('plain', '2026-08-04');
       await expect(api.setLogEntryPrivate(e.id, 'yes' as never)).rejects.toThrow();
+      await expect(
+        api.createLogEntry('x', '2026-08-04', { private: 'true' as never }),
+      ).rejects.toThrow();
+      expect((await api.listLogEntries(e.day)).map((x) => x.text)).not.toContain('x');
       await expect(api.setLogEntryPrivate('01NOPE', true)).rejects.toThrow(/Not found/);
       expect((await api.listLogEntries(e.day)).find((x) => x.id === e.id)?.private).toBe(false);
     });

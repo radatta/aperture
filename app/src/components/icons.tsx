@@ -119,10 +119,10 @@ export function PencilIcon(p: IconProps) {
 }
 
 // Private log entry — kept out of every MCP read.
-export function LockIcon(p: IconProps) {
+export function LockIcon({ filled, ...p }: IconProps & { filled?: boolean }) {
   return (
     <Svg {...p}>
-      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <rect x="5" y="11" width="14" height="10" rx="2" fill={filled ? 'currentColor' : 'none'} />
       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
     </Svg>
   );

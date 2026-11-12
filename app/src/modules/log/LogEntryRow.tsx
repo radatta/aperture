@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { LogEntry } from '@aperture/shared';
+import { cx } from '../../lib/cx';
 import { fmtTime } from '../../lib/format';
 import { LockIcon, PencilIcon } from '../../components/icons';
 import { Text } from '../../components/Text';
@@ -24,6 +25,9 @@ export function LogEntryRow({
   onTogglePrivate: () => void;
 }) {
   const isPrivate = entry.private === true;
+  // An optimistic row (just captured, not yet saved) has no server id to toggle.
+  const saving = entry.id.startsWith('tmp-');
+  const textId = useId();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -75,7 +79,9 @@ export function LogEntryRow({
           title="Edit this entry"
           className="-mx-2 flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2 py-0.5 text-left transition hover:bg-panel"
         >
-          <Text className="min-w-0 flex-1 whitespace-pre-wrap break-words">{entry.text}</Text>
+          <Text id={textId} className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            {entry.text}
+          </Text>
           {/* focus-within too, or the affordance never shows for anyone arriving by keyboard */}
           <PencilIcon
             size={13}
@@ -86,20 +92,25 @@ export function LogEntryRow({
       <button
         type="button"
         onClick={onTogglePrivate}
+        disabled={saving}
         aria-pressed={isPrivate}
         aria-label="Private entry"
+        // the row's text tells a rotor full of identical "Private entry" buttons apart
+        aria-describedby={editing ? undefined : textId}
         title={
           isPrivate
             ? 'Private — hidden from Claude. Tap to make it public'
             : 'Make private — hidden from Claude'
         }
-        className={`-my-1 flex min-h-8 min-w-8 shrink-0 items-center justify-center rounded-lg transition hover:bg-panel ${
+        className={cx(
+          '-my-1 flex min-h-8 min-w-8 shrink-0 items-center justify-center rounded-lg transition hover:bg-panel disabled:opacity-20',
           isPrivate
             ? 'text-teal'
-            : 'text-ink-subtle opacity-40 hover:opacity-100 focus-visible:opacity-100'
-        }`}
+            : 'text-ink-subtle opacity-60 hover:opacity-100 focus-visible:opacity-100',
+        )}
       >
-        <LockIcon size={14} />
+        {/* filled when private: colour alone barely tells the two apart in dark mode */}
+        <LockIcon size={14} filled={isPrivate} />
       </button>
     </li>
   );

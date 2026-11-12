@@ -650,6 +650,8 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listLog(day)).sort((a, b) => a.createdAt - b.createdAt);
   }
   async createLogEntry(text: string, day: string, opts?: { private?: boolean }): Promise<LogEntry> {
+    if (opts?.private !== undefined && typeof opts.private !== 'boolean')
+      throw new Error('private must be true or false');
     return this.repo.putLog({ ...this.base(), day, text, private: opts?.private === true });
   }
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {

@@ -1273,6 +1273,16 @@ describe('backend private log entries', () => {
     expect(await bob.listLogEntries(e.day)).toEqual([]);
   });
 
+  it('a tombstoned entry is Not found to the toggle and edit', async () => {
+    const doc = new InMemoryDoc();
+    const backend = make(doc, 'local');
+    const e = await backend.createLogEntry('gone', '2026-08-04');
+    const raw = await doc.get('u#local', sk.log(e.day, e.id));
+    await doc.put({ ...raw!, deletedAt: 1_700_000_000_000 });
+    await expect(backend.setLogEntryPrivate(e.id, true)).rejects.toThrow(/Not found/);
+    await expect(backend.updateLogEntry(e.id, 'back?')).rejects.toThrow(/Not found/);
+  });
+
   it('persists nothing under noopWrites (testMode safety)', async () => {
     const doc = new InMemoryDoc();
     const live = make(doc, 'local');

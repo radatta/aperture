@@ -730,6 +730,8 @@ class StubClient implements ApiClient {
       .sort((a, b) => a.createdAt - b.createdAt);
   }
   async createLogEntry(text: string, day: string, opts?: { private?: boolean }): Promise<LogEntry> {
+    if (opts?.private !== undefined && typeof opts.private !== 'boolean')
+      throw new Error('private must be true or false');
     return this.writes.insert(this.store.logEntries, {
       ...this.base(),
       day,
