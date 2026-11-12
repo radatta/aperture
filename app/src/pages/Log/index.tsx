@@ -20,6 +20,9 @@ export function LogPage() {
   const { data: entries = [], isPending, isError, refetch } = useLog(day);
   const update = useUpdateLogEntry(day);
   const setPrivate = useSetLogEntryPrivate(day);
+  // Per call, not the hook's isError: that tracks only the latest toggle, so a failure queued ahead of
+  // another would go unsaid. Keyed by day — a failure belongs to the day it happened on.
+  const [toggleFailedOn, setToggleFailedOn] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -57,7 +60,7 @@ export function LogPage() {
       </header>
 
       {/* A failed toggle rolls the lock back — said out loud, since it's a privacy control. */}
-      {setPrivate.isError && (
+      {toggleFailedOn === day && (
         <div role="alert">
           <Text as="p" size="sm" tone="danger">
             Couldn&apos;t change that entry&apos;s lock — it&apos;s back as it was. Try again.
@@ -84,9 +87,12 @@ export function LogPage() {
               key={entry.id}
               entry={entry}
               onSave={(text) => update.mutate({ id: entry.id, text })}
-              onTogglePrivate={() =>
-                setPrivate.mutate({ id: entry.id, isPrivate: entry.private !== true })
-              }
+              onTogglePrivate={() => {
+                setToggleFailedOn(null);
+                setPrivate
+                  .mutateAsync({ id: entry.id, isPrivate: entry.private !== true })
+                  .catch(() => setToggleFailedOn(day));
+              }}
             />
           ))
         )}

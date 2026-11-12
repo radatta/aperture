@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { LogEntry } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
@@ -42,15 +42,23 @@ export function useCreateLogEntry(day: string) {
 
 // A text edit and a lock toggle each put the whole entry, so two in flight could undo each other (an
 // edit's blur and a lock tap land in the same tick). One scope runs log writes in order.
+// Each refreshes the day only once the last queued log write settles: a refresh between two would read
+// the server before the second lands and snap its row back.
 const LOG_WRITE_SCOPE = { id: 'log-write' };
+const LOG_WRITE_KEY = ['log-write'];
+const settleLogWrite = (qc: QueryClient, day: string) =>
+  qc.isMutating({ mutationKey: LOG_WRITE_KEY }) <= 1
+    ? qc.invalidateQueries({ queryKey: qk.log(day) })
+    : undefined;
 
 export function useUpdateLogEntry(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     scope: LOG_WRITE_SCOPE,
+    mutationKey: LOG_WRITE_KEY,
     mutationFn: (vars: { id: string; text: string }) => api.updateLogEntry(vars.id, vars.text),
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.log(day) }),
+    onSettled: () => settleLogWrite(qc, day),
   });
 }
 
@@ -60,20 +68,20 @@ export function useSetLogEntryPrivate(day: string) {
   const qc = useQueryClient();
   return useMutation({
     scope: LOG_WRITE_SCOPE,
+    mutationKey: LOG_WRITE_KEY,
     mutationFn: (vars: { id: string; isPrivate: boolean }) =>
       api.setLogEntryPrivate(vars.id, vars.isPrivate),
     onMutate: async ({ id, isPrivate }) => {
       await qc.cancelQueries({ queryKey: qk.log(day) });
-      const prev = qc.getQueryData<LogEntry[]>(qk.log(day));
-      qc.setQueryData<LogEntry[]>(
-        qk.log(day),
-        prev?.map((e) => (e.id === id ? { ...e, private: isPrivate } : e)),
-      );
-      return { prev };
+      const flip = (to: boolean) =>
+        qc.setQueryData<LogEntry[]>(qk.log(day), (list) =>
+          list?.map((e) => (e.id === id ? { ...e, private: to } : e)),
+        );
+      flip(isPrivate);
+      return { undo: () => flip(!isPrivate) };
     },
-    onError: (_e, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(qk.log(day), ctx.prev);
-    },
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.log(day) }),
+    // Only this row goes back: a whole-list snapshot would also undo a later toggle still queued.
+    onError: (_e, _vars, ctx) => ctx?.undo(),
+    onSettled: () => settleLogWrite(qc, day),
   });
 }

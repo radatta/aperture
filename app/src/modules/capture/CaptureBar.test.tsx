@@ -1762,4 +1762,20 @@ describe('CaptureBar private log', () => {
     expect(field().value).toBe('locked one');
     expect(pill().getAttribute('aria-pressed')).toBe('true');
   });
+
+  it('a sensitive draft put back after a failed save retries on one Enter', async () => {
+    let fail!: (e: Error) => void;
+    const { api, user, saved } = logBar('park-nudge');
+    const real = api.createLogEntry.bind(api);
+    api.createLogEntry = () => new Promise((_, rej) => (fail = rej));
+    await user.type(field(), 'disk password is hunter2');
+    await user.keyboard('{Enter}{Enter}');
+    await user.type(field(), 'newer');
+    await act(async () => fail(new Error('offline')));
+    api.createLogEntry = real;
+    await user.clear(field());
+    await user.click(await screen.findByRole('button', { name: 'Put back' }));
+    await user.keyboard('{Enter}');
+    expect((await saved('disk password is hunter2')).private).toBe(false);
+  });
 });

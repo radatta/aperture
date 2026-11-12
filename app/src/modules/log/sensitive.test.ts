@@ -25,8 +25,12 @@ describe('looksSensitive', () => {
     '2FA reset',
     'bank PINs: 1234 and 5678',
     'door code: 4821',
-    'code 482190',
+    'code: 482190',
     'pwd: hunter2',
+    'API_KEY=abc',
+    'secret_key in 1password',
+    'token: abc',
+    'PIN codes changed',
   ])('flags %j', (text) => expect(looksSensitive(text)).toBe(true));
 
   it.each([
@@ -52,6 +56,9 @@ describe('looksSensitive', () => {
     'MFA program info session',
     'fixed access token refresh',
     'leetcode 1234',
+    'Advent of Code 2025',
+    'exit code 1337',
+    'zip code 94110',
     '',
   ])('leaves %j alone', (text) => expect(looksSensitive(text)).toBe(false));
 });

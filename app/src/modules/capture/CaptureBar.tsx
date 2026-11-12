@@ -530,6 +530,8 @@ export function CaptureBar({
     changeMode(p.mode);
     setToToday(p.toToday);
     setPrivateNext(p.mode === 'log' && p.isPrivate === true);
+    // A failed save already had the nudge's say, as restore() keeps it: one Enter retries.
+    if (p.why === 'failed') setNudge({ dismissed: false, held: true });
     // The field holds other text now: a refusal of what it held goes with it.
     setReceipt((r) => (r?.blocked ? null : r));
     inputRef.current?.focus();
