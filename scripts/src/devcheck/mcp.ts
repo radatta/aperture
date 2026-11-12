@@ -208,6 +208,9 @@ export function createMcpClient({
   const reads = {
     toolsList: async () =>
       (await rpc<{ tools: { name: string }[] }>('tools/list', {})).tools.map((t) => t.name),
+    // The tools as claude.ai sees them, schemas included.
+    toolSchemas: async () =>
+      (await rpc<{ tools: { name: string; inputSchema: unknown }[] }>('tools/list', {})).tools,
     listTasks: () => data<DevTask[]>('list_tasks'),
     listBacklog: () => data<DevTask[]>('list_backlog'),
     getCalibration: (range: { from: string; to: string }) =>

@@ -252,6 +252,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       },
       listFluxSets: async () => [...fluxSets.values()],
       getFluxSet: async (id) => fluxSets.get(id) ?? null,
+      exportLogEntries: async () => [...logEntries.values()],
       listLogEntries: async (day) => [...logEntries.values()].filter((e) => e.day === day),
       listLogRange: async () => [...logEntries.values()],
       listAttachments: async () => [],

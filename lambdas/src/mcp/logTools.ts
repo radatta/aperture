@@ -44,8 +44,8 @@ const hhmm = (ms: number) => zonedDayTime(ms, USER_TIME_ZONE).hhmm;
 const hour = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
 // THE choke point for log text leaving through MCP — every tool maps entries through here, so a
-// redaction (e.g. a private flag) has one place to live. A redaction MASKS the text, never drops the
-// entry: counts and totals are taken over the entries this maps, one in, one out.
+// redaction (a private flag) has one place to live. It MASKS the text, never drops the entry: list_log's
+// total and get_day's count include private entries. Search is the exception — see logEntryMatches.
 // A private entry (docs/areas/log) keeps its id, day and times; its text never leaves.
 export const PRIVATE_TEXT = '🔒 private entry';
 export function toMcpLogEntry(e: LogEntry) {

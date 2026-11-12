@@ -604,6 +604,9 @@ export function createApiClient({
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
     listLogEntries: (day: string) => call<DevLogEntry[]>('listLogEntries', [day]),
+    // The user's own download (Settings → Export) — read only for its log entries.
+    exportLogEntries: async () =>
+      (await call<{ logEntries: DevLogEntry[] }>('exportData', [])).logEntries,
     // Alive entries, oldest first; {} is the whole log (the test user's is small).
     listLogRange: (range: { from?: string; to?: string }) =>
       call<DevLogEntry[]>('listLogRange', [range]),

@@ -647,7 +647,11 @@ export class BackendClient implements ApiClient {
 
   // --- Log ---
   async listLogEntries(day: string): Promise<LogEntry[]> {
-    return (await this.repo.listLog(day)).sort((a, b) => a.createdAt - b.createdAt);
+    // Consistent: a lock just set must read so — the app's refetch after a toggle, and get_day, which would
+    // otherwise hand MCP the text of an entry locked a moment before. One day of one user's log.
+    return (await this.repo.listLog(day, { consistent: true })).sort(
+      (a, b) => a.createdAt - b.createdAt,
+    );
   }
   async createLogEntry(text: string, day: string, opts?: { private?: boolean }): Promise<LogEntry> {
     if (opts?.private !== undefined && typeof opts.private !== 'boolean')

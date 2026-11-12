@@ -89,6 +89,7 @@ describe('createApiClient', () => {
     });
     expect(Object.keys(api.reads).sort()).toEqual([
       'draftSittingReview',
+      'exportLogEntries',
       'getAttachmentDownloadUrl',
       'getCalibration',
       'getDay',

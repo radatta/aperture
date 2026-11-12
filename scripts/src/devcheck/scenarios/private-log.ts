@@ -32,10 +32,12 @@ async function entryByText(ctx: Ctx, text: string) {
   return (await ctx.api.reads.listLogEntries(today)).find((e) => e.text === text);
 }
 async function savedAs(ctx: Ctx, text: string, isPrivate: boolean): Promise<string> {
+  // The recorder ledgers the create from the browser's response, a beat after the server has it.
   let e: Awaited<ReturnType<typeof entryByText>>;
-  for (let i = 0; i < 20 && !e; i++) {
+  for (let i = 0; i < 30; i++) {
     e = await entryByText(ctx, text);
-    if (!e) await nap(500);
+    if (e && ctx.createdIds().includes(e.id)) break;
+    await nap(500);
   }
   if (!e) return fail(`"${text}" never reached the server`);
   if (!ctx.createdIds().includes(e.id)) fail(`the capture's id ${e.id} wasn't ledgered`);
@@ -127,18 +129,24 @@ export const privateLog: Scenario = {
       offDev: {
         file: 'app/src/modules/log/sensitive.test.ts',
         test: 'matches the sensitive terms and none of the look-alikes',
-        why: 'a pure local decision, nothing sent; nudge-shown and nudge-false-positive run the same matcher on dev',
+        why: 'same path as nudge-shown (proven on dev): one local matcher decides every line; the table is its unit test',
       },
     },
     {
       id: 'nudge-retry',
       entry: 'ui',
       kind: 'edge',
-      what: 'A sensitive line whose save failed (restored or put back) retries on one Enter',
+      what: 'A sensitive line whose save failed comes back in the field and retries on one Enter',
+    },
+    {
+      id: 'nudge-retry-parked',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The same line parked behind a newer draft, then put back, retries on one Enter',
       offDev: {
         file: 'app/src/modules/capture/CaptureBar.test.tsx',
-        test: 'a sensitive draft whose save failed retries on one Enter',
-        why: 'nudge-holds-once proves the hold on dev; the failed-save path needs a create to fail mid-capture, which the stub sets up exactly',
+        test: 'a sensitive draft put back after a failed save retries on one Enter',
+        why: 'same path as nudge-retry (proven on dev): Put back restores the nudge as the field restore does; parking needs a create held open while a second draft is typed, which an intercept can only fail, not hold',
       },
     },
     {
@@ -222,11 +230,6 @@ export const privateLog: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'The export (the user’s own download) keeps a private entry’s text and flag',
-      offDev: {
-        file: 'lambdas/src/backend.test.ts',
-        test: "the export keeps a private entry's text and flag",
-        why: 'the export is a full-table read with no path of its own in this scenario; the contract suite also asserts it on both impls',
-      },
     },
     {
       id: 'mcp-list-redacts',
@@ -256,12 +259,7 @@ export const privateLog: Scenario = {
       id: 'mcp-no-write-tool',
       entry: 'mcp',
       kind: 'edge',
-      what: 'No MCP tool can set or clear the flag',
-      offDev: {
-        file: 'lambdas/src/mcp/logTools.test.ts',
-        test: 'no MCP tool can set or clear the flag',
-        why: 'tools/list here returns names only; the schemas are checked where they are defined',
-      },
+      what: 'No MCP tool’s schema can set or clear the flag (tools/list as claude.ai sees it)',
     },
     {
       id: 'iphone-keyboard',
@@ -283,23 +281,29 @@ export const privateLog: Scenario = {
       id: 'api-roundtrip',
       title: 'The API flag: create private, edit keeps it, toggle both ways, refusals',
       entry: 'api',
-      proves: ['api-roundtrip', 'api-invalid', 'api-deleted'],
+      proves: ['api-roundtrip', 'api-invalid', 'api-deleted', 'export-keeps'],
       async run(ctx) {
         const today = await appToday(ctx);
         const w = ctx.api.writes;
         const e = await w.createLogEntry(line(ctx, 'api secret'), today, { private: true });
         if (e.private !== true) fail(`created private=${e.private}`);
-        const back = await entryByText(ctx, e.text);
+        const back = (await ctx.api.reads.listLogEntries(today)).find((x) => x.id === e.id);
         if (back?.private !== true) fail('listLogEntries reads it public');
         if ((await w.updateLogEntry(e.id, line(ctx, 'api secret edited'))).private !== true)
           fail('an edit dropped the flag');
         if ((await w.setLogEntryPrivate(e.id, false)).private !== false) fail('toggle off');
         if ((await w.setLogEntryPrivate(e.id, true)).private !== true) fail('toggle on again');
         let refused = false;
-        await w.setLogEntryPrivate(e.id, 'yes').catch(() => (refused = true));
-        if (!refused) fail('a non-boolean flag was accepted');
-        if ((await entryByText(ctx, line(ctx, 'api secret edited')))?.private !== true)
-          fail('a refused toggle changed the entry');
+        await w.setLogEntryPrivate(e.id, 'yes').catch((err: unknown) => {
+          refused = /private must be/.test(String(err));
+        });
+        if (!refused) fail('a non-boolean flag was not refused as such');
+        const after = (await ctx.api.reads.listLogEntries(today)).find((x) => x.id === e.id);
+        if (after?.private !== true || after.text !== line(ctx, 'api secret edited'))
+          fail(`a refused toggle changed the entry: ${JSON.stringify(after)}`);
+        const exported = (await ctx.api.reads.exportLogEntries()).find((x) => x.id === e.id);
+        if (exported?.private !== true || exported.text !== after!.text)
+          fail(`the export lost the private entry: ${JSON.stringify(exported)}`);
         const gone = await w.createLogEntry(line(ctx, 'api deleted'), today);
         await w.deleteLogEntry(gone.id);
         refused = false;
@@ -350,6 +354,7 @@ export const privateLog: Scenario = {
         'nudge-holds-once',
         'nudge-make-private',
         'nudge-dismiss',
+        'nudge-retry',
         'nudge-false-positive',
       ],
       async run(ctx) {
@@ -384,6 +389,22 @@ export const privateLog: Scenario = {
         if (await ctx.page.getByText(NUDGE).count()) fail('× left the nudge up');
         await field.press('Enter');
         await savedAs(ctx, dis, false);
+
+        // A sensitive line whose save fails comes back held already: one Enter retries.
+        const retry = line(ctx, 'vault passcode 9911');
+        await field.fill(retry);
+        await ctx.ui.expectText(NUDGE);
+        const cut = await ctx.intercept('createLogEntry', { status: 500, times: 1 });
+        try {
+          await field.press('Enter');
+          await field.press('Enter');
+          await ctx.ui.expectText(/Couldn.t save/, 15_000);
+          if ((await field.inputValue()) !== retry) fail('the failed line did not come back');
+        } finally {
+          await cut.release();
+        }
+        await field.press('Enter');
+        await savedAs(ctx, retry, false);
 
         const fp = line(ctx, 'pinned the keyboard PR, leetcode later');
         await field.fill(fp);
@@ -471,9 +492,8 @@ export const privateLog: Scenario = {
         await ctx.ui.expectText('Today in review', 15_000);
         await ctx.ui.expectText(n.text);
         const glyph = ctx.page
-          .locator('div')
+          .getByRole('listitem')
           .filter({ hasText: n.text })
-          .last()
           .getByRole('img', { name: 'Private' });
         if ((await glyph.count()) !== 1) fail('no lock glyph beside the private line');
         await ctx.shot('night-review-lock');
@@ -517,10 +537,21 @@ export const privateLog: Scenario = {
       id: 'mcp',
       title: 'MCP: list_log and get_day mask private text; search never matches it; unlock reveals',
       entry: 'mcp',
-      proves: ['mcp-list-redacts', 'mcp-get-day-redacts', 'mcp-search-miss', 'mcp-unlock-reveals'],
+      proves: [
+        'mcp-list-redacts',
+        'mcp-get-day-redacts',
+        'mcp-search-miss',
+        'mcp-unlock-reveals',
+        'mcp-no-write-tool',
+      ],
       async run(ctx) {
         const today = await appToday(ctx);
         const r = ctx.mcp.reads;
+        const writable = (await r.toolSchemas()).filter((t) =>
+          /private/i.test(JSON.stringify(t.inputSchema)),
+        );
+        if (writable.length)
+          fail(`a tool's schema touches private: ${writable.map((t) => t.name).join(', ')}`);
         const list = await r.listLog({ from: today, to: today, limit: 200 });
         const byId = new Map(list.entries.map((e) => [e.id, e]));
         for (const id of [made.pill, made.makePrivate, made.night]) {
@@ -543,7 +574,7 @@ export const privateLog: Scenario = {
 
         for (const q of [
           `${tag(ctx)} lunch`,
-          'wifi pw: tango',
+          `${tag(ctx)} wifi pw: tango`,
           `${tag(ctx)} night secret`,
           'private entry',
         ]) {
@@ -556,7 +587,7 @@ export const privateLog: Scenario = {
           fail('search_log missed the public line');
 
         await ctx.api.writes.setLogEntryPrivate(made.makePrivate, false);
-        const after = await r.searchLog({ query: 'wifi pw: tango', from: today });
+        const after = await r.searchLog({ query: `${tag(ctx)} wifi pw: tango`, from: today });
         if (!after.entries.some((e) => e.id === made.makePrivate && e.text.includes('tango')))
           fail('unlocked, the text still doesn’t read over MCP');
       },
