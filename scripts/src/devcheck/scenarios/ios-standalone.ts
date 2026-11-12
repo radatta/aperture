@@ -9,6 +9,7 @@
 // read the step's screenshot.
 import { datesFor, needsYou, type Ctx, type Scenario } from '../scenario';
 import { IosAssert, type IosOp, type SimResult } from '../../mailroom/sim';
+import { DOCK, MODE_ROW } from '../ios';
 
 // One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters. Six: the run's time of day
 // (the nonce's tail is the tier), and each typed key is a tap that can drop.
@@ -56,23 +57,22 @@ const CAPTURE: IosOp[] = [
     // x 300, not the middle: since private-log (2026-11-12) Log mode's `private` pill spans ~x 179–249 of the
     // mode row, and `keys … in` reads back at the point the field was found — a dock still settling put that
     // point on the pill (read "AXCheckBox 0"). x 300 is the gap before Focus, and inside the field in every mode.
-    near: { x: 300, y: 480 },
-    radius: 40,
+    // Dock probes are scans: the dock's height follows the keyboard, so a scan finds it wherever it settled.
+    scan: DOCK(300),
     role: 'AXTextArea',
     as: 'bar',
   },
   { op: 'expect', as: 'bar', aboveKeyboard: true },
   { op: 'expect', as: 'bar', sameWidthAs: 'bar0' },
-  { op: 'find', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox', as: 'mode' },
+  { op: 'find', label: 'Log', scan: DOCK(49, MODE_ROW), role: 'AXCheckBox', as: 'mode' },
   { op: 'expect', as: 'mode', aboveKeyboard: true },
   { op: 'shot', name: 'capture-keyboard' },
   { op: 'keys', text: 'zzqx', in: 'bar' },
-  { op: 'find', label: 'zzqx', near: { x: 60, y: 480 }, radius: 40, as: 'typed' },
+  { op: 'find', label: 'zzqx', scan: DOCK(60), as: 'typed' },
   {
     op: 'find',
     label: 'Save log',
-    near: { x: 395, y: 480 },
-    radius: 40,
+    scan: DOCK(395),
     role: 'AXButton',
     as: 'send',
   },
@@ -107,8 +107,8 @@ const CAPTURE_LONG: IosOp[] = [
   {
     op: 'find',
     label: 'Capture log',
-    scan: { x: 200, from: 300, to: 650 },
-    hint: { x: 200, y: 507 },
+    scan: DOCK(300), // x 300: clear of the mode row's pills (private, → today), as CAPTURE
+    hint: { x: 300, y: 507 },
     role: 'AXTextArea',
     as: 'long-bar',
   },
@@ -117,15 +117,15 @@ const CAPTURE_LONG: IosOp[] = [
   {
     op: 'tap',
     label: 'Task',
-    scan: { x: 110, from: 300, to: 650 },
+    scan: DOCK(110, MODE_ROW),
     hint: { x: 96, y: 464 },
     role: 'AXCheckBox',
   },
   {
     op: 'find',
     label: 'Capture task',
-    scan: { x: 200, from: 300, to: 650 },
-    hint: { x: 200, y: 507 },
+    scan: DOCK(300),
+    hint: { x: 300, y: 507 },
     role: 'AXTextArea',
     as: 'long-bar-task',
   },
@@ -134,7 +134,7 @@ const CAPTURE_LONG: IosOp[] = [
   {
     op: 'tap',
     label: 'Review before saving',
-    scan: { x: 355, from: 300, to: 650 },
+    scan: DOCK(355),
     hint: { x: 353, y: 505 },
     role: 'AXButton',
   },
@@ -142,11 +142,12 @@ const CAPTURE_LONG: IosOp[] = [
   // A filled field reads as its value; scanned down, the field comes before the preview's copy below it.
   { op: 'find', label: LONG_LINE, scan: { x: 40, from: 300, to: 650 }, as: 'long-field' },
   { op: 'expect', as: 'long-field', aboveKeyboard: true },
-  // Scanned up from the keyboard: the preview's copy of the line sits below the field's.
+  // Scanned up from the keyboard: the preview's copy of the line sits below the field's. From 629, so a point lands
+  // mid-line on the 17-pt text (y 502–517 settled; the probe check flagged 650's lattice as missing it by 2 pt).
   {
     op: 'find',
     label: LONG_LINE,
-    scan: { x: 40, from: 650, to: 300 },
+    scan: { x: 40, from: 629, to: 300 },
     role: 'AXStaticText',
     as: 'long-preview',
   },
@@ -158,7 +159,7 @@ const CAPTURE_LONG: IosOp[] = [
   {
     op: 'find',
     label: 'Capture task',
-    scan: { x: 200, from: 300, to: 650 },
+    scan: DOCK(300),
     role: 'AXTextArea',
     as: 'long-erased',
   },
@@ -166,7 +167,7 @@ const CAPTURE_LONG: IosOp[] = [
   {
     op: 'tap',
     label: 'Log',
-    scan: { x: 49, from: 300, to: 650 },
+    scan: DOCK(49, MODE_ROW),
     hint: { x: 49, y: 500 },
     role: 'AXCheckBox',
   },

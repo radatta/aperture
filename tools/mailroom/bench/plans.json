@@ -441,7 +441,7 @@
             "to": 650
           },
           "hint": {
-            "x": 200,
+            "x": 300,
             "y": 507
           },
           "role": "AXTextArea",
@@ -475,7 +475,7 @@
             "to": 650
           },
           "hint": {
-            "x": 200,
+            "x": 300,
             "y": 507
           },
           "role": "AXTextArea",
@@ -552,8 +552,8 @@
           "op": "find",
           "label": "Capture task",
           "scan": {
-            "x": 200,
-            "from": 300,
+            "x": 300,
+            "from": 390,
             "to": 650
           },
           "role": "AXTextArea",

@@ -44,3 +44,16 @@ describe('neighbours', () => {
     expect(flat(neighbours(w, pts, 0))).toBe('40 330');
   });
 });
+
+describe('a scan hint (PR 152)', () => {
+  const w = { scan: { x: 300, from: 390, to: 480 }, hint: { x: 300, y: 507 } };
+  it('is read first, then the scan as before', () => {
+    expect(flat(simPoints(w))).toBe('300 507 300 390 300 420 300 450 300 480');
+  });
+  it("has its own column as neighbours when it's the hit, and never neighbours the scan", () => {
+    const pts = simPoints(w);
+    expect(flat(neighbours(w, pts, 0))).toBe('300 477 300 537');
+    expect(flat(neighbours(w, pts, 1))).toBe('300 420');
+    expect(flat(neighbours(w, pts, 3))).toBe('300 420 300 480');
+  });
+});
