@@ -209,8 +209,10 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   the app day — `dayKeyInZone` at the user's `dayStartHour` (4am), Pacific. It never calls `getDay`, so it spawns
   no recurrence and sweeps no plan, and it answers for any day, future included. **Privacy:** log text — the very
   secrets the search is for (a disk password) — enters the conversation and its history. Every entry leaving MCP
-  goes through `toMcpLogEntry`, and matching through `logEntryMatches`, so a redaction has one place to live
-  (private-log, the 🔒 follow-up).
+  goes through `toMcpLogEntry`, and matching through `logEntryMatches`, so a redaction has one place to live.
+  A **private entry** ([log](../log/index.md)) reads `text: "🔒 private entry"`, `private: true`, with its id, day
+  and times; `logEntryMatches` never matches it (a masked hit would still confirm the query), and no tool sets or
+  clears the flag.
 - **Flux is read-only** (`lambdas/src/mcp/fluxTools.ts`, [flux](../flux/index.md) D52). Sets are
   recorded by the app's stage only; deleting one is the History tab's. `from`/`to` are both or neither
   (one alone is a param error, like the RPC's `fluxFilterError`). Every label is resolved server-side from

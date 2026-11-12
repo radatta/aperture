@@ -338,6 +338,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         logDeleted.push(id);
         logEntries.delete(id);
       },
+      setLogEntryPrivate: async () => {
+        throw new Error('unused');
+      },
+      updateLogEntry: async () => {
+        throw new Error('unused');
+      },
       deleteTask: async (id) => {
         deleted.push(id);
         tasks.delete(id);

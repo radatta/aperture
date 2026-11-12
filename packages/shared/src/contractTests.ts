@@ -227,6 +227,10 @@ export function runApiContract(
       ).rejects.toThrow();
       expect((await api.listLogEntries(e.day)).map((x) => x.text)).not.toContain('x');
       await expect(api.setLogEntryPrivate('01NOPE', true)).rejects.toThrow(/Not found/);
+      const gone = await api.createLogEntry('deleted', '2026-08-04');
+      await api.deleteLogEntry(gone.id);
+      await expect(api.setLogEntryPrivate(gone.id, true)).rejects.toThrow(/Not found/);
+      await expect(api.updateLogEntry(gone.id, 'back?')).rejects.toThrow(/Not found/);
       expect((await api.listLogEntries(e.day)).find((x) => x.id === e.id)?.private).toBe(false);
     });
 

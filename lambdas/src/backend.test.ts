@@ -1283,6 +1283,15 @@ describe('backend private log entries', () => {
     await expect(backend.updateLogEntry(e.id, 'back?')).rejects.toThrow(/Not found/);
   });
 
+  it("the export keeps a private entry's text and flag", async () => {
+    const backend = make(new InMemoryDoc(), 'local');
+    const e = await backend.createLogEntry('disk pw', '2026-08-04', { private: true });
+    expect((await backend.exportData()).logEntries.find((x) => x.id === e.id)).toMatchObject({
+      text: 'disk pw',
+      private: true,
+    });
+  });
+
   it('persists nothing under noopWrites (testMode safety)', async () => {
     const doc = new InMemoryDoc();
     const live = make(doc, 'local');

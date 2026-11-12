@@ -6,7 +6,7 @@ The interstitial log (`/log`, capture's Log mode) is append-only text, one day p
 
 - `LogEntry.private?: boolean` (`packages/shared/src/types.ts`). Rows written before the field read back `undefined` = public. The attribute rides the `log#<day>#<id>` item through `entityItem`'s spread, so there's no repo or key change.
 - **In the app, a private entry reads normally.** It shows a lock on its `/log` row and a small lock glyph in Home's night "Today in review". Nothing is hidden from the user, and the export (`exportData`, the user's own download) keeps the text and the flag.
-- **Over MCP, the text never leaves.** Every MCP log read shows the text as `🔒 private entry`, keeping the day and time, and search never matches against private text: a redacted _hit_ would still confirm what the query matched. Both happen at the log tools' single choke point. No MCP tool sets or clears the flag; it's an app-only control.
+- **Over MCP, the text never leaves** (`lambdas/src/mcp/logTools.ts`, [mcp](../mcp/index.md)). Every MCP log read shows the text as `🔒 private entry`, keeping the day and time, and search never matches against private text: a redacted _hit_ would still confirm what the query matched. Both happen at the log tools' single choke point. No MCP tool sets or clears the flag; it's an app-only control.
 - This is a reach control, not encryption. The text sits in DynamoDB like any other entry.
 
 ## Setting it
@@ -36,3 +36,7 @@ Logged in the branch's `localNotes/decisions.md`; the ones that shape behaviour:
 - Hold the first Enter once per draft (above). To undo it, delete the `nudge.held` branch in `CaptureBar.submit()`.
 - Field name `private` on the entity and JSON (the user's word). Identifiers use `isPrivate`, because `private` is reserved in strict mode and must never be destructured.
 - Not now: the nudge in Task/Idea modes or on Inbox's "To log", and a persisted "never ask" dismissal. These are follow-ups if daily use asks for them.
+
+## Dev check
+
+`scripts/src/devcheck/scenarios/private-log.ts` encodes the matrix: the pill, the nudge, the row lock (including a failed toggle, injected with `ctx.intercept`), the night glyph, a 390 light/dark pass, the API flag, and MCP redaction. Entries are tagged with the run's nonce with its letters dropped, so a nonce can't spell a sensitive term. They're ledgered by id and tombstoned through `deleteLogEntry`.

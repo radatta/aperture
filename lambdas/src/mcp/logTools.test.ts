@@ -311,3 +311,62 @@ describe('get_day', () => {
     await expect(run('get_day', { day: '2026-11-5' })).rejects.toThrow(RpcParamError);
   });
 });
+
+// docs/areas/log: a private entry's text never leaves through MCP.
+describe('private log entries', () => {
+  const secret = async (text: string, day: string) => {
+    const e = await log(text, day);
+    return backend.setLogEntryPrivate(e.id, true);
+  };
+
+  it('list_log and get_day read a private entry as 🔒 private entry, keeping its id, day and time', async () => {
+    const p = await secret('disk password hunter2', '2026-11-05');
+    const pub = await log('groceries', '2026-11-05');
+    const listed = (await run('list_log', { from: '2026-11-05', to: '2026-11-05' })) as Page;
+    expect(listed.total).toBe(2);
+    expect(listed.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: p.id,
+          day: '2026-11-05',
+          text: '🔒 private entry',
+          private: true,
+          createdAt: new Date(p.createdAt).toISOString(),
+        }),
+        expect.objectContaining({ id: pub.id, text: 'groceries', private: false }),
+      ]),
+    );
+    const day = (await run('get_day', { day: '2026-11-05' })) as {
+      log: { count: number; entries: { id: string; text: string; localTime: string }[] };
+    };
+    expect(day.log.count).toBe(2);
+    const row = day.log.entries.find((x) => x.id === p.id);
+    expect(row).toMatchObject({ text: '🔒 private entry' });
+    expect(row?.localTime).toMatch(/^\d\d:\d\d$/);
+    expect(JSON.stringify([listed, day])).not.toContain('hunter2');
+  });
+
+  it('search_log never matches a private entry, even on an exact word or the mask itself', async () => {
+    await secret('disk password hunter2', '2026-11-05');
+    const pub = await log('hunter2 is also a meme', '2026-11-05');
+    const hit = (await run('search_log', { query: 'hunter2' })) as Page;
+    expect(hit.totalMatches).toBe(1);
+    expect(hit.entries.map((e) => e.id)).toEqual([pub.id]);
+    expect(((await run('search_log', { query: 'disk password' })) as Page).totalMatches).toBe(0);
+    expect(((await run('search_log', { query: 'private entry' })) as Page).totalMatches).toBe(0);
+  });
+
+  it('unlocked in the app, the text reads and matches again', async () => {
+    const p = await secret('disk password hunter2', '2026-11-05');
+    await backend.setLogEntryPrivate(p.id, false);
+    const hit = (await run('search_log', { query: 'hunter2' })) as Page;
+    expect(hit.entries).toEqual([
+      expect.objectContaining({ id: p.id, text: 'disk password hunter2' }),
+    ]);
+  });
+
+  it('no MCP tool can set or clear the flag', () => {
+    const touches = TOOLS.filter((t) => /private/i.test(JSON.stringify(t.inputSchema)));
+    expect(touches.map((t) => t.name)).toEqual([]);
+  });
+});
