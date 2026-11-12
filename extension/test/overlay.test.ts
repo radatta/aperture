@@ -25,22 +25,27 @@ import {
 } from './load';
 
 // Fake timers: every wait the scripts pay (retry ladders, intervals, Start's step timeouts, the debug flush) runs
-// on a fake clock, and `until`/`settle` advance it. One real turn per step (`io`) lets the relay's webcrypto HMAC,
-// which completes on node's threadpool rather than as a microtask, land before the next check. Budgets are fake
-// milliseconds, so each `until` bound is exact; the 10 ms step matches load.ts's real-time poll.
+// on a fake clock, and `until`/`settle` advance it in 10 ms steps (load.ts's real-time poll). Each step first
+// gives one real turn (`io`), so the relay's webcrypto sign and verify, which finish on node's threadpool rather
+// than as microtasks, land as they would in real time; a "nothing within N ms" check is then as strong as before.
+// Budgets are fake milliseconds, so each `until` bound is exact.
 const realSetTimeout = setTimeout;
 const io = () => new Promise<void>((r) => realSetTimeout(r, 0));
-async function until<T>(fn: () => T | null | undefined | false, ms = 3000, step = 10): Promise<T> {
-  for (let t = 0; ; t += step) {
+const STEP = 10;
+async function until<T>(fn: () => T | null | undefined | false, ms = 3000): Promise<T> {
+  for (let t = 0; ; t += STEP) {
     await io();
     const v = fn();
     if (v) return v;
     if (t >= ms) throw new Error('until: timed out');
-    await vi.advanceTimersByTimeAsync(step);
+    await vi.advanceTimersByTimeAsync(STEP);
   }
 }
 const settle = async (ms: number) => {
-  await vi.advanceTimersByTimeAsync(ms);
+  for (let t = 0; t < ms; t += STEP) {
+    await io();
+    await vi.advanceTimersByTimeAsync(STEP);
+  }
   await io();
 };
 
