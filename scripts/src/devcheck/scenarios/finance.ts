@@ -142,7 +142,7 @@ export const finance: Scenario = {
       id: 'open-focus',
       entry: 'ui',
       kind: 'edge',
-      what: 'Money in opens on the dialog itself, never on a button a stray Enter would press',
+      what: 'Money in opens on the dialog itself — linked too, never on Unlink a stray Enter would press; Unlink then focuses “Link as a refund”',
     },
     {
       id: 'busy-click',
@@ -287,7 +287,7 @@ export const finance: Scenario = {
       entry: 'ui',
       proves: ['money-in-unlink', 'open-focus'],
       title:
-        'Payback → Link as a refund → Link → Unlink focused → Unlink keeps focus on a Link row → Esc closes',
+        'Payback → Link → Unlink focused → Unlink keeps focus on a Link row → relink → reopen on the dialog → Unlink → “Link as a refund”',
       async run(ctx) {
         const { find } = await fixtureRows(ctx);
         const payback = find(PAYBACK)!;
@@ -311,6 +311,24 @@ export const finance: Scenario = {
         const focused = await focusedText(ctx);
         if (!/^Link to /.test(focused)) throw new Error(`after Unlink, focus is on "${focused}"`);
         await ctx.shot('money-in-unlink');
+        // Relinked and reopened: it opens on the dialog, not on Unlink — the stray-Enter case.
+        await link.click();
+        await dialog.getByText(/it follows the charge/).waitFor({ timeout: 10_000 });
+        await afterActionFocus(ctx, 'Unlink');
+        await closeDetail(ctx);
+        const linked = await openRow(ctx, PAYBACK, /^Money in: /);
+        const unlink = linked.getByRole('button', { name: 'Unlink' });
+        await unlink.waitFor({ timeout: 10_000 });
+        await wait(300);
+        const reopened = await focusedText(ctx);
+        if (!/^Money in: /.test(reopened))
+          throw new Error(`reopened linked, focus is on "${reopened}"`);
+        await ctx.shot('money-in-reopen');
+        await unlink.click();
+        await linked.getByRole('button', { name: 'Link as a refund' }).waitFor({ timeout: 10_000 });
+        await wait(300);
+        const back = await focusedText(ctx);
+        if (back !== 'Link as a refund') throw new Error(`after Unlink, focus is on "${back}"`);
         await closeDetail(ctx);
       },
     },

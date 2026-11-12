@@ -24,7 +24,7 @@ export interface ModalProps {
   closeOnBackdrop?: boolean;
   // Where focus starts. 'content' (default): the browser's first focusable element, or a
   // `data-autofocus` child. 'dialog': the dialog itself, for a surface opened to read — a focused
-  // field raises the on-screen keyboard on iOS.
+  // field raises the on-screen keyboard on iOS — or whose first control acts on a stray Enter.
   initialFocus?: 'content' | 'dialog';
   // Names what the open dialog shows. A change (the task modal switching task) is a new thing in the
   // same dialog: back to the top, and focus placed as on open.
