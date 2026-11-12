@@ -52,8 +52,9 @@ export const DEV_DATA: { scenario: string; label: string; why: string }[] = [
 export const VIEWPORT = { w: 440, h: 956 };
 export const KEYBOARD_VIEWPORT_H = 550;
 export const SAFE = { top: 59, bottom: 34 };
-// sim.sh's SIM_XS_NAV / SIM_Y_NAV: the nav row's tab centres, unscrolled (check.test.ts reads them out of sim.sh).
-export const NAV_XS = [38, 88, 136, 205, 276, 332, 380];
+// sim.sh's SIM_XS_NAV / SIM_Y_NAV: the points sim_nav_probe reads before any swipe (check.test.ts reads them out of
+// sim.sh).
+export const NAV_XS = [38, 88, 136, 205, 276, 332, 380, 268, 395];
 export const NAV_Y = 168;
 const SWIPED_TABS = ['Finances', 'Inbox', 'Settings'];
 // sim.sh's write-button guard on the matched element (sim_op_tap → DENIED), as sim.ts validates the op's label.
@@ -142,8 +143,15 @@ export async function checkJob(
     const seen: string[] = [];
     for (let k = 0; k < pts.length; k++) {
       const el = await page.read(pts[k]!);
-      if (matches(el, w.label, w.role))
-        return { ok: true as const, el: el!, at: pts[k]!, pts, k, fragile: '' };
+      if (matches(el, w.label, w.role)) {
+        // A hit within the calibration's error of the frame's top or bottom is as fragile as a near miss. (A point
+        // outside the frame hit it through its <label>, whose own edges the read doesn't report.)
+        const p = pts[k]!;
+        const edge = Math.min(p.y - el!.frame.y, el!.frame.y + el!.frame.h - p.y);
+        const fragile =
+          edge >= 0 && edge < NEAR_MISS_PT ? `only ${edge} pt inside the element's edge` : '';
+        return { ok: true as const, el: el!, at: p, pts, k, fragile };
+      }
       const s = seenAs(el);
       if (!seen.includes(s)) seen.push(s);
     }
@@ -359,6 +367,7 @@ export async function checkJob(
         else if ('enabled' in op && got.enabled !== op.enabled)
           await fail(`ENABLED: ${op.as} enabled ${got.enabled}, expected ${op.enabled}`);
         else add(i, op, 'pass', `${op.as} as expected`);
+        found.set(op.as, { el: got, at: rec.at }); // sim_op_expect stores the re-read under the same name
         break;
       }
       case 'keys':
@@ -374,19 +383,23 @@ export async function checkJob(
         const rec = found.get(op.in)!;
         const fr = rec.el.frame;
         const centre = { x: Math.floor(fr.x + fr.w / 2), y: Math.floor(fr.y + fr.h / 2) };
+        const isField = (e: AxEl | null): e is AxEl =>
+          !!e &&
+          e.role === rec.el.role &&
+          (!rec.el.label || e.label.toLowerCase() === rec.el.label.toLowerCase());
         const holds = (e: AxEl | null) =>
           op.op === 'keys'
             ? !!e && e.value.toLowerCase() === op.text
-            : !!e &&
-              e.role === rec.el.role &&
-              (!rec.el.label || e.label.toLowerCase() === rec.el.label.toLowerCase()) &&
-              (e.value === '' || e.value === rec.el.value);
-        let now = await page.read(rec.at);
-        if (!holds(now)) now = await page.read(centre);
-        if (holds(now)) add(i, op, 'pass', `${op.in} read back at (${rec.at.x},${rec.at.y})`);
+            : isField(e) && (e.value === '' || e.value === rec.el.value);
+        const first = await page.read(rec.at);
+        const now = holds(first) ? first : await page.read(centre);
+        const where = `${op.in} read back at (${rec.at.x},${rec.at.y})`;
+        if (holds(now)) add(i, op, 'pass', where);
+        else if (op.op === 'erase' && !isField(first) && !isField(now))
+          await fail(`MISS: ${op.in} is at neither its point nor its frame's centre (it moved)`);
         else
           await fail(
-            `${op.op === 'keys' ? 'TYPED' : 'ERASED'}: ${op.in} read back at (${rec.at.x},${rec.at.y}) is ${seenAs(now)}${now ? ` "${now.value}"` : ''}`,
+            `${op.op === 'keys' ? 'TYPED' : 'ERASED'}: ${where} is ${seenAs(now)}${now ? ` "${now.value}"` : ''}`,
           );
         break;
       }

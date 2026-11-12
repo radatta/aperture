@@ -21,9 +21,11 @@ import { needsYou } from './scenario';
 export const IOS_NOTE = 'iOS this run';
 export const DEFAULT_TIMEOUT_SEC = 480;
 // A scan down the band the keyboard-up dock settles in, wherever that is: dock probes are scans, never a `near`
-// (IOS-CHECK.md → Probe check).
-// From 390: below Home's page content (a habit row is a toggle too), above the mode row even with the dock ~30 pt high.
-export const DOCK = (x: number) => ({ x, from: 390, to: 650 });
+// (IOS-CHECK.md → Probe check). From 390: the mode row stays below it with the dock ~30 pt high, and a scan from
+// higher reads more page content (a habit row is a toggle too). The mode row's toggles are 28 pt tall: MODE_ROW's
+// points (…435, 465, 495, 525) land 7–15 pt inside them settled (y 450), settling (~−30) and low (~+56).
+export const DOCK = (x: number, from = 390) => ({ x, from, to: 650 });
+export const MODE_ROW = 405;
 
 export interface IosClient {
   run(name: string, steps: IosOp[], opts?: { timeoutSec?: number }): Promise<SimResult>;

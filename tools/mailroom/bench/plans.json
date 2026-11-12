@@ -112,7 +112,7 @@
           "label": "Log",
           "scan": {
             "x": 49,
-            "from": 390,
+            "from": 405,
             "to": 650
           },
           "role": "AXCheckBox",
@@ -437,7 +437,7 @@
           "label": "Capture log",
           "scan": {
             "x": 300,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "hint": {
@@ -457,7 +457,7 @@
           "label": "Task",
           "scan": {
             "x": 110,
-            "from": 300,
+            "from": 405,
             "to": 650
           },
           "hint": {
@@ -471,7 +471,7 @@
           "label": "Capture task",
           "scan": {
             "x": 300,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "hint": {
@@ -569,7 +569,7 @@
           "label": "Log",
           "scan": {
             "x": 49,
-            "from": 300,
+            "from": 405,
             "to": 650
           },
           "hint": {

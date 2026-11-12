@@ -35,6 +35,8 @@ export async function runProbes(o: {
   log?: (m: string) => void;
 }): Promise<ProbeRun> {
   const jobs = await recordAll(o.scenarios);
+  if (o.scenarios && !jobs.length)
+    throw new Error(`no iOS plans in ${o.scenarios.map((x) => x.id).join(', ')}`);
   const stale = o.scenarios ? [] : staleDevData(jobs);
   const engine = await openEngine(o.engine ?? 'chromium');
   const results: JobResult[] = [];
@@ -67,9 +69,10 @@ export async function runProbes(o: {
     await engine.close();
   }
   if (!jobs.length) blocks.push('FAIL no iOS plans recorded: nothing was checked');
+  const fragile = results.flatMap((r) => r.ops).filter((x) => x.note.includes('FRAGILE')).length;
   if (stale.length) blocks.push(`FAIL stale dev-data skips (no op matches): ${stale.join(', ')}`);
   const ok = jobs.length > 0 && !stale.length && results.every((r) => r.ok);
-  const head = `iOS probe check: ${ok ? 'PASS' : 'FAIL'} — ${results.filter((r) => r.ok).length}/${results.length} jobs (a first filter: the Simulator stays the proof, IOS-CHECK.md → Probe check)`;
+  const head = `iOS probe check: ${ok ? 'PASS' : 'FAIL'} — ${results.filter((r) => r.ok).length}/${results.length} jobs${fragile ? `, ${fragile} FRAGILE` : ''} (a first filter: the Simulator stays the proof, IOS-CHECK.md → Probe check)`;
   return { ok, text: [head, '', ...blocks].join('\n\n'), results };
 }
 

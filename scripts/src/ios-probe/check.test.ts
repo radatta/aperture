@@ -11,8 +11,18 @@ function fakePage(els: (Omit<AxEl, 'enabled'> & { enabled?: boolean })[], fixedL
   let focus: (typeof layout)[number] | null = null;
   const inside = (f: Frame, p: Pt) =>
     p.x >= f.x && p.x < f.x + f.w && p.y >= f.y && p.y < f.y + f.h;
-  const page: ProbePage & { calls: string[] } = {
+  const page: ProbePage & {
+    calls: string[];
+    move: (label: string, dy: number) => void;
+    drop: (label: string) => void;
+  } = {
     calls: [],
+    move: (label, dy) => layout.filter((x) => x.label === label).forEach((x) => (x.frame.y += dy)),
+    drop: (label) =>
+      void layout.splice(
+        layout.findIndex((x) => x.label === label),
+        1,
+      ),
     open: async () => void page.calls.push('open'),
     read: async (p) => {
       const e = layout.findLast((x) => inside(x.frame, p));
@@ -263,17 +273,21 @@ describe('checkJob mirrors sim.sh', () => {
     expect(r.ops[1]!.note).toMatch(/^STILL_THERE: /);
   });
 
-  it('reads an empty spot as enabled, and compares labelIs exactly (sim_op_expect)', async () => {
+  it('reads an empty spot as enabled with no label, and compares labelIs exactly (sim_op_expect)', async () => {
     const page = DOCK();
-    const r = await checkJob(
-      page,
-      job([
-        { op: 'find', label: 'Thursday', near: { x: 60, y: 310 }, radius: 10, as: 't' },
-        { op: 'blur' },
-        { op: 'expect', as: 't', labelIs: '' },
-      ]),
-    );
-    expect(r.ok).toBe(true);
+    const send: IosOp = {
+      op: 'find',
+      label: 'Save log',
+      near: { x: 395, y: 505 },
+      radius: 10,
+      as: 'send',
+    };
+    const ops = (page2: typeof page) =>
+      checkJob(page2, job([send, { op: 'blur' }, { op: 'expect', as: 'send', enabled: true }]));
+    // blur is where the fake drops it: a read-back over nothing
+    const blur = page.blur;
+    page.blur = async () => (page.drop('Save log'), blur());
+    expect((await ops(page)).ops.at(-1)).toMatchObject({ status: 'pass' });
     const caseDiffers = await checkJob(
       DOCK(),
       job([findBar(300), { op: 'expect', as: 'bar', labelIs: 'capture log' }]),
@@ -281,8 +295,85 @@ describe('checkJob mirrors sim.sh', () => {
     expect(caseDiffers.ops.at(-1)!.note).toMatch(/^LABEL: /);
   });
 
-  it("skips an absent while a page field's keyboard is up, rather than passing on an unmodelled layout", async () => {
+  it("reads a field back at its frame's centre when its point misses (the second look)", async () => {
     const page = DOCK();
+    const r = await checkJob(
+      page,
+      job([
+        tapBar,
+        { ...bar300, near: { x: 300, y: 495 }, radius: 10 } as IosOp,
+        { op: 'wait', s: 1 },
+        { op: 'keys', text: 'zz', in: 'bar' },
+      ]),
+    );
+    expect(r.ok).toBe(true);
+    const moved = DOCK();
+    const settle = moved.settle;
+    let n = 0;
+    moved.settle = async () => (++n === 3 && moved.move('Capture log', 10), settle()); // after the wait: 6 pt above the point
+    const again = await checkJob(
+      moved,
+      job([
+        tapBar,
+        { ...bar300, near: { x: 300, y: 495 }, radius: 10 } as IosOp,
+        { op: 'wait', s: 1 },
+        { op: 'keys', text: 'zz', in: 'bar' },
+      ]),
+    );
+    expect(again.ops.at(-1)).toMatchObject({ status: 'pass' });
+  });
+
+  it('fails an erase that leaves text (ERASED), and one whose field moved off both looks (MISS)', async () => {
+    const left = await checkJob(
+      DOCK(),
+      job([
+        tapBar,
+        bar300,
+        { op: 'keys', text: 'zz', in: 'bar' },
+        { op: 'erase', n: 1, in: 'bar' },
+      ]),
+    );
+    expect(left.ops.at(-1)!.note).toMatch(
+      /^ERASED: bar read back at \(300,510\) is Capture log \(AXTextArea\) "z"/,
+    );
+    const page = DOCK();
+    const settle = page.settle;
+    let n = 0;
+    page.settle = async () => (++n === 3 && page.move('Capture log', 200), settle());
+    const gone = await checkJob(page, job([tapBar, bar300, { op: 'erase', n: 1, in: 'bar' }]));
+    expect(gone.ops.at(-1)!.note).toMatch(/^MISS: bar is at neither/);
+  });
+
+  it('warns FRAGILE on a hit within the calibration error of the frame edge', async () => {
+    const page = fakePage([
+      { role: 'AXCheckBox', label: 'Log', value: '1', frame: { x: 28, y: 446, w: 42, h: 28 } },
+    ]);
+    const r = await checkJob(
+      page,
+      job([{ op: 'find', label: 'Log', scan: { x: 49, from: 390, to: 480 }, as: 'mode' }]),
+    );
+    expect(r.ops[1]).toMatchObject({ status: 'warn' });
+    expect(r.ops[1]!.note).toContain("FRAGILE: only 4 pt inside the element's edge");
+  });
+
+  it("navigates by the runner's tab points and exact label", async () => {
+    const page = fakePage([
+      { role: 'AXLink', label: 'tasks', value: '', frame: { x: 110, y: 155, w: 50, h: 26 } },
+      { role: 'AXLink', label: 'Tasksmith', value: '', frame: { x: 180, y: 155, w: 60, h: 26 } },
+    ]);
+    expect((await checkJob(page, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]).toMatchObject({
+      status: 'pass',
+      note: 'on Tasks',
+    });
+    const only = fakePage([
+      { role: 'AXLink', label: 'Tasksmith', value: '', frame: { x: 180, y: 155, w: 60, h: 26 } },
+    ]);
+    expect((await checkJob(only, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]!.note).toBe(
+      'MISS: no Tasks tab in the nav row',
+    );
+  });
+
+  it("skips an absent while a page field's keyboard is up, rather than passing on an unmodelled layout", async () => {
     const pageField = fakePage(
       [
         {
@@ -302,7 +393,6 @@ describe('checkJob mirrors sim.sh', () => {
       status: 'skip',
       note: SKIP.pageKeyboard,
     });
-    expect(page.calls).toEqual([]);
   });
 
   it("uses the runner's nav row points (SIM_XS_NAV, SIM_Y_NAV), and fails a swiped tab as unmodelled", async () => {
@@ -311,7 +401,7 @@ describe('checkJob mirrors sim.sh', () => {
       'utf8',
     );
     const xs = /^SIM_XS_NAV="([^"]+)"/m.exec(sh)![1]!.split(' ').map(Number);
-    expect(xs.slice(0, NAV_XS.length)).toEqual(NAV_XS);
+    expect(xs).toEqual(NAV_XS);
     expect(Number(/^SIM_Y_NAV=(\d+)/m.exec(sh)![1])).toBe(NAV_Y);
     const r = await checkJob(DOCK(), job([{ op: 'nav', tab: 'Settings' }]));
     expect(r.ops[1]!.note).toBe("UNMODELLED: Settings needs the nav row's swipe");
