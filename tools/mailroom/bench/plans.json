@@ -112,7 +112,7 @@
           "label": "Log",
           "scan": {
             "x": 49,
-            "from": 405,
+            "from": 315,
             "to": 650
           },
           "role": "AXCheckBox",
@@ -457,7 +457,7 @@
           "label": "Task",
           "scan": {
             "x": 110,
-            "from": 405,
+            "from": 315,
             "to": 650
           },
           "hint": {
@@ -569,7 +569,7 @@
           "label": "Log",
           "scan": {
             "x": 49,
-            "from": 405,
+            "from": 315,
             "to": 650
           },
           "hint": {
