@@ -16,6 +16,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # a PR's merge commit and both parents: HEAD^1 is main, for the fixture-inputs diff
       - uses: ./.github/actions/setup
       # Incremental caches: tsc -b's .tsbuildinfo (TS re-hashes any input newer than its buildinfo, and a
       # checkout stamps every file newer than the restored cache) plus shared's emitted d.ts they vouch
@@ -39,15 +41,34 @@ jobs:
             node_modules/.cache/eslint
           key: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'app/package.json', 'cdk/package.json', 'lambdas/package.json', 'scripts/package.json', 'packages/*/package.json') }}-${{ github.sha }}
           restore-keys: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'app/package.json', 'cdk/package.json', 'lambdas/package.json', 'scripts/package.json', 'packages/*/package.json') }}-
+      # The mailroom fixture suite is most of the non-app step (~210 s of ~300) and reads only tools/mailroom/
+      # and scripts/src/mailroom/. On a PR it runs only when one of its inputs changed — the rule and its list
+      # are scripts/src/fixture-inputs.ts, tested, not inline shell (classify-changes.ts' lesson). A main push
+      # always runs it, and `check` gates the deploy, so a break the PR's paths can't show (a dependency bump,
+      # the runner image) stops there instead (INFRA §9). The diff against HEAD^1 on the PR's merge commit is
+      # exactly the PR; a failed diff is empty, and empty runs it. It goes first, so no failing step can skip
+      # it, and the suite with it.
+      - name: Mailroom fixture inputs
+        id: fixtures
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          files=$(git diff --name-only HEAD^1 HEAD) || files=''
+          run=$(printf '%s\n' "$files" | node scripts/src/fixture-inputs.ts 2>"$RUNNER_TEMP/fixtures.txt")
+          cat "$RUNNER_TEMP/fixtures.txt" # stdout, so a skip's ::notice:: becomes an annotation on the run
+          echo "run=$run" >> "$GITHUB_OUTPUT"
       - run: pnpm lint
       # !cancelled() so a lint failure doesn't mask whether typecheck/test would pass — the job still
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
       - run: pnpm typecheck
         if: ${{ !cancelled() }}
-      # Everything but app, which runs in the test-app shards. The root `pnpm test` (pnpm -r test) is
-      # unchanged for local use; the split lives here only.
-      - run: pnpm -r --filter '!@aperture/app' test
+      # Everything but app, which runs in the test-app shards, and the fixture suite, which runs next. The root
+      # `pnpm test` (pnpm -r test) is unchanged for local use; the split lives here only. --exclude reaches every
+      # package's vitest and matches only in scripts.
+      - run: pnpm -r --filter '!@aperture/app' test --exclude src/mailroom/runner-fixtures.test.ts
         if: ${{ !cancelled() }}
+      - name: Mailroom fixture suite
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run == 'true') }}
+        run: pnpm --filter @aperture/scripts test src/mailroom/runner-fixtures.test.ts
 
   test-app:
     name: test-app-${{ matrix.shard }} # the check name; without it GitHub renders `test-app (1)`
