@@ -363,6 +363,28 @@ describe('Finances page', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('a linked deposit or a payment opens on the dialog, never on a button a stray Enter would press', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
+    const link = hold(api, 'linkFinanceRefund');
+    const mark = hold(api, 'setFinancePeriodStart');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Family/))[0]!);
+    let dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    expect(within(dialog).getByRole('button', { name: 'Unlink' })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    await user.keyboard('{Enter}');
+    expect(link.calls()).toBe(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await user.click((await findRows(/\+\$745\.18/))[0]!);
+    dialog = await screen.findByRole('dialog', { name: /^Payment: / });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    await user.keyboard('{Enter}');
+    expect(mark.calls()).toBe(0);
+  });
+
   it('with no mark, uses the payment day and offers the last card payment as a one-click start', async () => {
     const user = userEvent.setup();
     const api = await linkedBare();

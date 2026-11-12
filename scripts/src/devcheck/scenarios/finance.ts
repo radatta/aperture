@@ -1,5 +1,5 @@
 // Finances on dev, against the fixture bank (DEV-CHECK.md → One-time setup): a Plaid Sandbox `user_custom`
-// login the user linked once as the test user, with fixed `DEVCHECK …` rows. The steps sort and link those
+// login the user linked once as the test user, with fixed `DEVCHECK …` rows. The steps sort, link and mark those
 // rows through the UI and record each change before the click (ctx.api.writes.recordFinance…), so cleanup
 // clears it by id; nothing here creates a row. Until the bank is linked — or once its rows have aged past
 // the two periods the All tab lists (they shift once, at link) — the fixture step says needs-you and the
@@ -209,7 +209,9 @@ export const finance: Scenario = {
           if (!find(re)) needsYou(`fixture row ${re.source} is missing: re${FIXTURE_HELP}`);
         // A run's own mark is swept by id before any step; one made by hand isn't the harness's to clear.
         if (find(REBATE)!.startsPeriod)
-          needsYou('the devcheck rebate is marked as a period start by hand: unmark it in the app');
+          needsYou(
+            'the devcheck rebate is marked as a period start (by hand, or a run’s leftover the sweep couldn’t clear): unmark it in the app',
+          );
         // On screen too: the All tab lists this period and last, and the rows stand still after the link.
         await allTab(ctx, 'devcheck rebate');
         const row = ctx.page.getByRole('button', { name: REBATE }).first();

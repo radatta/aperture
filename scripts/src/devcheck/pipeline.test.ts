@@ -1837,7 +1837,9 @@ describe('runPipeline', () => {
     w.finance.rows.set('tx1', row('tx1', { bucket: 'budget' }));
     w.finance.rows.set('tx2', row('tx2', { refundOfId: 'c' }));
     w.finance.rows.set('tx3', row('tx3', { bucket: 'i_pay' }));
-    w.finance.rows.set('tx4', row('tx4', { startsPeriod: true }));
+    // A mark on the server wipes the row's bucket and link too (lambdas finance service): an earlier
+    // entry of the run on the same row then reads gone — a clean final, not left.
+    w.finance.rows.set('tx4', row('tx4', { bucket: 'budget' }));
     w.finance.rules.set('R1', { id: 'R1', pattern: 'devcheck', bucket: 'budget' });
     const ledger = memLedger([
       { run: 'run0', op: 'created', id: 'finance-bucket:run0:tx3', via: FINANCE_BUCKET_VIA },
@@ -1855,6 +1857,13 @@ describe('runPipeline', () => {
         id: 'finance-link:run1:tx2',
         via: FINANCE_LINK_VIA,
       });
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-bucket:run1:tx4',
+        via: FINANCE_BUCKET_VIA,
+      });
+      Object.assign(w.finance.rows.get('tx4')!, { startsPeriod: true, bucket: null }); // the mark
       ledger.append({
         run: 'run1',
         op: 'created',
@@ -1880,6 +1889,7 @@ describe('runPipeline', () => {
     expect(r.created.map((c) => [c.id, c.final])).toEqual([
       ['finance-bucket:run1:tx1', 'deleted'],
       ['finance-link:run1:tx2', 'deleted'],
+      ['finance-bucket:run1:tx4', 'gone'], // the mark wiped it
       ['finance-mark:run1:tx4', 'deleted'],
       ['R1', 'deleted'],
     ]);

@@ -93,6 +93,9 @@ export function TransactionDetail({
     mark.mutate({ id: txn.id, marked });
   };
   const incomeLink = useDisclosure();
+  // The Bucket group is where the detail opens. Without one (linked, money in, a payment), it opens on
+  // the dialog itself: the first button would be Unlink or a mark, and a stray Enter would press it.
+  const sortable = (kind === 'expense' || isRefund) && !txn.refundOfId;
   // After an Unlink that leaves nothing to focus (a card credit with no suggestions), focus goes to the
   // Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone keyboard.
   // Only after an Unlink: a period mark in flight would otherwise hop there for a frame.
@@ -117,6 +120,7 @@ export function TransactionDetail({
       onClose={close}
       label={`${KIND_LABEL[kind]}: ${txn.merchantName ?? txn.name}`}
       closeOnBackdrop
+      initialFocus={sortable ? 'content' : 'dialog'}
     >
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-0.5">
@@ -217,7 +221,7 @@ export function TransactionDetail({
           />
         )}
 
-        {(kind === 'expense' || isRefund) && !txn.refundOfId && (
+        {sortable && (
           <>
             <Segmented
               ref={bucketRef}
