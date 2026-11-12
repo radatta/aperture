@@ -81,6 +81,7 @@ describe('mailroom runner', () => {
       "SIM_COGNITO_RE='^aperture-dev-618015769091\\.auth\\.us-west-1\\.amazoncognito\\.com$'",
       `SIM_W=${SIM_W}`, // the validators' bounds (sim.ts) follow the device profile
       `SIM_H=${SIM_H}`,
+      'SIM_AX_CAP=8 ax describe-ui --point', // a point read's cap: a hung one costs 8 s, not ax's 30
     ])
       expect(sim).toContain(pin);
     const secretsDir = ['.sec', 'rets'].join(''); // spelled apart: the repo's hooks guard the literal

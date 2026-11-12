@@ -69,13 +69,16 @@ interface Where {
   radius?: number;
   role?: Role;
 }
+// With scan only, on its line (x within 20, y in its range): read first, then the scan as before (find/tap).
+type Hint = { x: number; y: number };
 export type IosOp =
-  | { op: 'launch' | 'signIn' | 'blur' | 'readBuild' | 'shutdown' }
+  | { op: 'launch' | 'signIn' | 'blur' | 'shutdown' }
+  | { op: 'readBuild'; stay?: true } // stay: end on Settings, no trip back Home
   | { op: 'kill'; method: 'terminate' | 'switcher' | 'reboot' }
   | { op: 'nav'; tab: Tab }
-  | ({ op: 'find'; label: string; as: string } & Where)
+  | ({ op: 'find'; label: string; as: string; hint?: Hint } & Where)
   | ({ op: 'absent'; label: string } & Where) // passes only when that find would miss
-  | ({ op: 'tap'; label: string; as?: string; closes?: true } & Where) // closes: the element must be gone after the tap
+  | ({ op: 'tap'; label: string; as?: string; closes?: true; hint?: Hint } & Where) // closes: the element must be gone after the tap
   | { op: 'expect'; signedIn: true }
   | { op: 'expect'; as: string; valueIs: string }
   | { op: 'expect'; as: string; labelIs: string }
@@ -185,6 +188,11 @@ const AS_RE = /^[a-z][a-z0-9-]{0,23}$/;
 const lbl = (x: unknown) => whole(x, LABEL_RE);
 const asName = (x: unknown) => whole(x, AS_RE);
 
+const scanEnds = (o: Obj) => {
+  const s = o.scan as { from: number; to: number };
+  return [s.from, s.to];
+};
+
 function where(o: Obj): boolean {
   if ('near' in o === 'scan' in o) return false;
   if ('near' in o) {
@@ -204,6 +212,20 @@ function where(o: Obj): boolean {
       return false;
   }
   if ('radius' in o && !('near' in o && int(o.radius, 10, 80))) return false;
+  if ('hint' in o) {
+    const h = o.hint;
+    if (
+      !('scan' in o) ||
+      !isObj(h) ||
+      !keysOk(h, ['x', 'y'], []) ||
+      !int(h.x, 0, SIM_W) ||
+      !int(h.y, 0, SIM_H) ||
+      Math.abs((h.x as number) - (o.scan as { x: number }).x) > 20 ||
+      (h.y as number) < Math.min(...scanEnds(o)) ||
+      (h.y as number) > Math.max(...scanEnds(o))
+    )
+      return false;
+  }
   if ('role' in o && !(ROLES as readonly unknown[]).includes(o.role)) return false;
   return true;
 }
@@ -214,9 +236,10 @@ function opOk(o: unknown): boolean {
     case 'launch':
     case 'signIn':
     case 'blur':
-    case 'readBuild':
     case 'shutdown':
       return keysOk(o, ['op'], []);
+    case 'readBuild':
+      return keysOk(o, ['op'], ['stay']) && (!('stay' in o) || o.stay === true);
     case 'kill':
       return (
         keysOk(o, ['op', 'method'], []) &&
@@ -230,7 +253,7 @@ function opOk(o: unknown): boolean {
       );
     case 'find':
       return (
-        keysOk(o, ['op', 'label', 'as'], ['near', 'scan', 'radius', 'role']) &&
+        keysOk(o, ['op', 'label', 'as'], ['near', 'scan', 'hint', 'radius', 'role']) &&
         lbl(o.label) &&
         asName(o.as) &&
         where(o)
@@ -241,7 +264,7 @@ function opOk(o: unknown): boolean {
       );
     case 'tap':
       return (
-        keysOk(o, ['op', 'label'], ['near', 'scan', 'radius', 'role', 'as', 'closes']) &&
+        keysOk(o, ['op', 'label'], ['near', 'scan', 'hint', 'radius', 'role', 'as', 'closes']) &&
         lbl(o.label) &&
         (!('as' in o) || asName(o.as)) &&
         (!('closes' in o) || o.closes === true) &&

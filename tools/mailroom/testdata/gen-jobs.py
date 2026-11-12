@@ -596,7 +596,8 @@ spass('sim: icon taps that keep dropping are tapped again at polls 3, 6 and 10',
 sfail('sim: still the Home Screen after four icon taps is ICON_TAP_DROPPED, not LANDMARK', 'ICON_TAP_DROPPED', [L],
       tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4}, files=['shots/01-fail.png'])
 sfail('sim: the app in front without its landmark stays LANDMARK, its icon never tapped again', 'LANDMARK', [L],
-      tape=[pt(220, 895, {}), dtree(tree(), 3), dtree(APPFRONT)], simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1})
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(APPFRONT)],  # keyboard down: no mid-typing relaunch
+      simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1, 'simctl terminate': 0, 'tap -x 409 -y 800': 0})
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
 serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
      tape=SIGNED_OUT + FORMP[:-1] + [{**FORMP[-1], 'n': 1}, HANG('--point 220,454')], pwTyped=1, simCount={'tap -x 201 -y 453': 1})
@@ -685,6 +686,114 @@ spass('sim: a bare shutdown of a sim already off does nothing more', [{'op': 'sh
 spass('sim: a bare shutdown resolves the device first', [{'op': 'shutdown'}], expect={'booted': 'off'},
       simIncludes=['simctl list devices -j', 'simctl shutdown ' + U], simExcludes=['describe-ui', 'bootstatus'])
 sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)
+
+# --- speed-ups (B–E): every fast path has its miss, and the miss is today's path ---
+NAVTOP = 'swipe --start-x 220 --start-y 250 --end-x 220 --end-y 882'  # sim_to_top's swipe, 8 a time
+NT = [L, {'op': 'nav', 'tab': 'Tasks'}]
+spass('sim: nav reads the tab where it sits and taps it, no swipes (fast)', NT, notes={'1': 'on Tasks (fast)'},
+      simCount={NAVTOP: 0, '--point 136,168': 1, 'tap -x 136 -y 168': 1})
+spass('sim: a tab off the row\'s y (the page scrolled) is the full path', NT, tape=[pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 190, 36, 20), n=1)],
+      simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1, 'tap -x 136 -y 200': 0})
+spass('sim: another tab at the spot (the row swiped) is the full path', [L, {'op': 'nav', 'tab': 'Home'}],
+      tape=[pt(38, 168, el('AXLink', 'Log', 'Log', 20, 158, 37, 20), n=1)], simCount={NAVTOP: 8, 'tap -x 38 -y 168': 1})
+spass('sim: the tab\'s label on something not a link is the full path', NT, tape=[pt(136, 168, el('AXStaticText', 'Tasks', 'Tasks', 118, 158, 36, 20), n=1)],
+      simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1})
+spass('sim: a hung fast read falls through to the full path, not AX_TIMEOUT', NT, tape=[{'m': '--point 136,168', 'rc': 124, 'n': 1}],
+      notes={'1': 'on Tasks'}, simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1})
+sfail('sim: a hung fast read, then a full path that reads and misses, is MISS', 'MISS', NT, tape=[{'m': '--point 136,168', 'rc': 124, 'n': 1}, pt(136, 168, {})],
+      simCount={NAVTOP: 8})
+sfail('sim: a fast miss and a full miss is still MISS', 'MISS', NT, tape=[pt(136, 168, {})], simCount={NAVTOP: 8}, simExcludes=['tap -x 136'])
+spass('sim: Settings has no fast read (past the row\'s edge until swiped)', [L, {'op': 'nav', 'tab': 'Settings'}], simCount={NAVTOP: 8, '--point 395,168': 1})
+STAMP = lambda b: el('AXStaticText', '', f'Build {b}', 20, 852, 71, 17)
+spass('sim: readBuild goes back Home by default', [L, {'op': 'readBuild'}], simCount={'tap -x 395 -y 168': 1, 'tap -x 38 -y 168': 1})
+spass('sim: readBuild with stay ends on Settings', [L, {'op': 'readBuild', 'stay': True}], notes={'1': 'running aaaaaaa; stayed on Settings'},
+      simCount={'tap -x 395 -y 168': 1, 'tap -x 38 -y 168': 0})
+spass('sim: expectBuild\'s relaunch keeps readBuild\'s stay', [L, {'op': 'readBuild', 'stay': True}, {'op': 'expectBuild'}],
+      tape=[pt(57, 935, STAMP('bbbbbbb'), n=1)], expect={'buildsSeen': ['bbbbbbb', 'aaaaaaa']}, simCount={'tap -x 395 -y 168': 2, 'tap -x 38 -y 168': 0})
+spass('sim: readBuild reads the stamp first where it was last found', [L, {'op': 'readBuild'}, {'op': 'readBuild'}],
+      tape=[pt(57, 935, {}), pt(57, 920, {}), pt(57, 905, STAMP('aaaaaaa'))], simCount={'--point 57,935': 1, '--point 57,920': 1, '--point 57,905': 2})
+spass('sim: a stamp moved from its last y is found by the full scan', [L, {'op': 'readBuild'}], setup='build-y=905',
+      tape=[pt(57, 905, {}), pt(57, 935, {}), pt(57, 920, STAMP('aaaaaaa'))], simIncludes=['--point 57,905', '--point 57,935', '--point 57,920'],
+      simCount={'--point 57,905': 1}, expect={'buildsSeen': ['aaaaaaa']})
+spass('sim: a stored y that isn\'t one of the stamp\'s is ignored', [L, {'op': 'readBuild'}], setup='build-y=999', simExcludes=['--point 57,999'],
+      simCount={'--point 57,935': 1})
+sfail('sim: a stored y and no stamp anywhere is still MISS after two visits', 'MISS', [L, {'op': 'readBuild'}], setup='build-y=905',
+      tape=[{'m': '--point 57,', 'out': {}}], simCount={'tap -x 395 -y 168': 2, '--point 57,905': 2})
+REFL = el('AXTextArea', 'Reflection', '', 53, 283, 334, 67)
+HF = {'op': 'find', 'label': 'Reflection', 'scan': {'x': 200, 'from': 150, 'to': 720}, 'hint': {'x': 200, 'y': 316}, 'as': 'box'}
+spass('sim: a scan\'s hint is read first, and a hit there ends it', [L, HF], tape=[pt(200, 316, REFL)], simCount={'--point 200,316': 1, '--point 200,150': 0})
+spass('sim: a hint that misses scans as before', [L, HF], tape=[pt(200, 316, {}), pt(200, 240, {**REFL, 'frame': {'x': 53, 'y': 210, 'width': 334, 'height': 67}})],
+      simIncludes=['--point 200,316', '--point 200,150', '--point 200,180', '--point 200,210', '--point 200,240'], simExcludes=['--point 200,270'])
+sfail('sim: a hint miss and a scan miss is still MISS', 'MISS', [L, HF], simCount={'--point 200,316': 1, '--point 200,720': 1})
+spass('sim: a tap with a hint taps what the hint found', [L, {'op': 'tap', 'label': 'Cancel', 'scan': {'x': 190, 'from': 150, 'to': 720}, 'hint': {'x': 190, 'y': 378}, 'role': 'AXButton'}],
+      tape=[pt(190, 378, el('AXButton', 'Cancel', '', 160, 360, 60, 36))], simIncludes=['tap -x 190 -y 378'], simCount={'--point 190,150': 0})
+sfail('sim: a hung hint read, then a scan that reads and misses, is MISS', 'MISS', [L, HF], tape=[{'m': '--point 200,316', 'rc': 124, 'n': 1}])
+serr('sim: a hung scan read after a hint miss is still AX_TIMEOUT', 'AX_TIMEOUT', [L, HF], tape=[pt(200, 316, {}), HANG('--point 200,240')])
+spass('sim: a hint read with the label but the wrong role scans on', [L, {**HF, 'role': 'AXTextArea'}],
+      tape=[pt(200, 316, {**REFL, 'role': 'AXStaticText'}), pt(200, 240, {**REFL, 'frame': {'x': 53, 'y': 210, 'width': 334, 'height': 67}})],
+      simIncludes=['--point 200,316', '--point 200,150', '--point 200,240'])
+spass('sim: a stored y of two of the stamp\'s ys is ignored', [L, {'op': 'readBuild'}], setup='build-y=935 920',
+      tape=[pt(57, 935, {}), pt(57, 920, {}), pt(57, 905, STAMP('aaaaaaa'))], simCount={'--point 57,935': 1, '--point 57,920': 1})
+spass('sim: a stored y that isn\'t a number is ignored', [L, {'op': 'readBuild'}], setup='build-y=abc', simCount={'--point 57,935': 1})
+spass('sim: stay after a second Settings visit says both', [L, {'op': 'readBuild', 'stay': True}], tape=[{'m': '--point 57,', 'out': {}, 'n': 21}],
+      notes={'1': 'running aaaaaaa; went to Settings again (no stamp the first time); stayed on Settings'}, simCount={'tap -x 38 -y 168': 0})
+spass('sim: a fast nav read with no frame is the full path', NT, tape=[pt(136, 168, {'role': 'AXLink', 'AXLabel': 'Tasks', 'AXValue': 'Tasks'}, n=1)],
+      simCount={NAVTOP: 8, 'tap -x 136 -y 168': 1})
+srej('sim: a hint off its scan\'s line is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 230, 'y': 316}}])
+srej('sim: a hint past its scan\'s range is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 721}}])
+srej('sim: a hint beside near is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'hint': {'x': 200, 'y': 200}}])
+srej('sim: a hint on absent is BAD_OP', 'BAD_OP', [L, {'op': 'absent', 'label': 'Home', 'scan': {'x': 200, 'from': 100, 'to': 200}, 'hint': {'x': 200, 'y': 150}}])
+srej('sim: a hint off the screen is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 957}}])
+srej('sim: a hint with an extra key is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200, 'y': 316, 'r': 10}}])
+srej('sim: a hint that isn\'t whole is BAD_OP', 'BAD_OP', [L, {**HF, 'hint': {'x': 200.5, 'y': 316}}])
+srej('sim: readBuild stay false is BAD_OP', 'BAD_OP', [L, {'op': 'readBuild', 'stay': False}])
+srej('sim: readBuild with another key is BAD_OP', 'BAD_OP', [L, {'op': 'readBuild', 'home': True}])
+
+# --- launch onto an app left mid-typing by an aborted job (…043422Z…-trial-idle-2; the next five failed LANDMARK) ---
+TERM = 'simctl terminate ' + U
+spass('sim: launch onto an app left mid-typing (keyboard up, no landmark) relaunches it once', [L],
+      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'},
+      simCount={TERM: 1}, simIncludes=[TERM, 'Web.app/Web', 'batch --step button home', 'tap -x 371 -y 247'])
+spass('sim: a keyboard first seen at poll 6 relaunches then, and the polls start again', [L],
+      tape=[pt(220, 895, {}, n=7), pt(220, 530, {}, n=6), pt(221, 856, {}, n=1), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}],  # 7: poll 3 also looks for a draft
+      notes={'0': 'relaunched'}, simCount={TERM: 1, '--point 220,895': 8})
+serr('sim: a relaunch whose terminate fails says it was launch\'s relaunch', 'TERMINATE', [L],
+     tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}, {'m': 'simctl terminate', 'rc': 1}],
+     notes={'0': "simctl terminate failed (in launch's relaunch of an app left mid-typing)"})
+sfail('sim: still no landmark after the relaunch is LANDMARK, relaunched once only', 'LANDMARK', [L],
+      tape=[pt(220, 895, {}), pt(220, 530, {}), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], simCount={TERM: 1})
+sfail('sim: no landmark and no keyboard is LANDMARK as before, no relaunch', 'LANDMARK', [L],
+      tape=[pt(220, 895, {}), pt(220, 530, {}), pt(221, 856, {})], simCount={TERM: 0})
+spass('sim: a relaunch onto a web app already gone skips the terminate (simctl refuses one)', [L],
+      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3)], notes={'0': 'keyboard up; no web process though the tree showed the app, so not terminated)'}, simCount={TERM: 0, 'tap -x 371 -y 247': 2})
+serr('sim: a web app that survives the relaunch\'s terminate is TERMINATE', 'TERMINATE', [L],
+     tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0}], simCount={TERM: 1})
+
+# --- launch onto a bar holding a leftover draft (…060606Z…-idle5-1; reads: empty label, the draft as value) ---
+DRAFT = el('AXStaticText', '', 'wkbpxa', 25, 884, 346, 22)  # spans 100 and 220: the peek jobs saw it at both
+DEL = 'tap -x 409 -y 800'
+KB_DRAFT = [pt(221, 856, {}, n=1), pt(221, 856, SPACE, n=1), pt(221, 856, {})]  # down at poll 3, up after the tap, down after Done
+spass('sim: launch onto a leftover draft deletes it, and Home\'s bar is the read-back', [L],
+      tape=[pt(220, 895, DRAFT, n=4)] + KB_DRAFT, notes={'0': 'deleted a leftover draft in the bar (8 deletes)'},
+      simCount={DEL: 8, 'simctl terminate': 0}, simIncludes=['tap -x 198 -y 895', DEL, 'tap -x 395 -y 575'])
+sfail('sim: a leftover draft that stays after its deletes is LANDMARK, deleted once only', 'LANDMARK', [L],
+      tape=[pt(220, 895, DRAFT)] + KB_DRAFT, notes={'0': "8 deletes didn't bring Home's bar back"}, simCount={DEL: 8})
+serr('sim: a hung keyboard read after tapping the draft is AX_TIMEOUT, not LANDMARK', 'AX_TIMEOUT', [L],
+     tape=[pt(220, 895, DRAFT), pt(221, 856, {}, n=1), HANG('--point 221,856')], simCount={DEL: 0})
+sfail('sim: the keyboard still up after the draft\'s deletes is BLUR', 'BLUR', [L],
+      tape=[pt(220, 895, DRAFT, n=4), pt(221, 856, {}, n=1)], simCount={DEL: 8})
+sfail('sim: a button holding text on the bar\'s row is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXButton', '', 'wkbpxa', 25, 884, 346, 22)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 198 -y 895'])
+sfail('sim: text on the bar\'s row not under the probe is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXStaticText', '', 'wkbpxa', 25, 884, 60, 22)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 55 -y 895'])
+sfail('sim: a blur that finds no Done while the keyboard stays up is BLUR, not a pass', 'BLUR', [L],
+      tape=[pt(220, 895, DRAFT, n=4), pt(221, 856, {}, n=1), {'m': '--point 395,', 'out': {}}], simCount={DEL: 8})
+sfail('sim: a labelled element at the bar\'s spot is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXButton', 'Undo', 'wkbpxa', 180, 880, 80, 30)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 220 -y 895'])
+sfail('sim: unlabelled text off the bar\'s row is never taken for a draft', 'LANDMARK', [L],
+      tape=[pt(220, 895, el('AXStaticText', '', 'wkbpxa', 20, 600, 400, 300)), pt(221, 856, {})], simCount={DEL: 0}, simExcludes=['tap -x 220 -y 750'])
+sfail('sim: no keyboard after tapping the draft deletes nothing and stays LANDMARK', 'LANDMARK', [L],
+      tape=[pt(220, 895, DRAFT), pt(221, 856, {})], simCount={DEL: 0}, notes={'0': 'tapping it brought no keyboard, so nothing was deleted'})
 
 with open(out, 'w') as f:
     f.write(json.dumps({'base': base, 'simBase': simbase}) + '\n')

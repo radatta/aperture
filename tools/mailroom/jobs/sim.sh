@@ -57,15 +57,18 @@ SIM_JQ='
          else (.scan | type == "object" and keysok(["x","from","to"]; []) and (.x | int(0; $w)) and (.from | int(0; $h))
            and (.to | int(0; $h)) and ((((.to - .from) | fabs) / 30 | floor) + 1 <= 20)) end)
     and (if has("radius") then (has("near") and (.radius | int(10; 80))) else true end)
+    and (if has("hint") then (has("scan") and (.scan as $s | .hint | type == "object" and keysok(["x","y"]; []) and (.x | int(0; $w)) and (.y | int(0; $h))
+      and ((.x - $s.x) | fabs) <= 20 and .y >= ([$s.from, $s.to] | min) and .y <= ([$s.from, $s.to] | max))) else true end)
     and (if has("role") then (.role | role) else true end);
   def opok:
     . as $o | type == "object" and (.op | type) == "string" and
-    if (["launch","signIn","blur","readBuild","shutdown"] | index($o.op)) != null then keysok(["op"]; [])
+    if (["launch","signIn","blur","shutdown"] | index($o.op)) != null then keysok(["op"]; [])
+    elif .op == "readBuild" then keysok(["op"]; ["stay"]) and (if has("stay") then .stay == true else true end)
     elif .op == "kill" then keysok(["op","method"]; []) and (.method == "terminate" or .method == "switcher" or .method == "reboot")
     elif .op == "nav" then keysok(["op","tab"]; []) and (.tab | type == "string") and ($tabs | index($o.tab)) != null
-    elif .op == "find" then keysok(["op","label","as"]; ["near","scan","radius","role"]) and (.label | lbl) and (.as | asname) and where
+    elif .op == "find" then keysok(["op","label","as"]; ["near","scan","hint","radius","role"]) and (.label | lbl) and (.as | asname) and where
     elif .op == "absent" then keysok(["op","label"]; ["near","scan","radius","role"]) and (.label | lbl) and where
-    elif .op == "tap" then keysok(["op","label"]; ["near","scan","radius","role","as","closes"]) and (.label | lbl)
+    elif .op == "tap" then keysok(["op","label"]; ["near","scan","hint","radius","role","as","closes"]) and (.label | lbl)
       and (if has("as") then (.as | asname) else true end) and (if has("closes") then .closes == true else true end) and where
     elif .op == "expect" then
       if has("signedIn") then keysok(["op","signedIn"]; []) and .signedIn == true
@@ -124,13 +127,14 @@ validate_sim() {
 
 # --- plumbing ---------------------------------------------------------------------------------------------------
 # sim_cap SECS CMD… — run CMD, kill it after SECS (macOS has no `timeout`); 124 when it was killed. Stdin passes
-# through (a background command would otherwise read /dev/null).
+# through (a background command would otherwise read /dev/null). The watchdog is always the real sleep: the fixtures'
+# stub skips short sleeps, and a point read's cap is 8 s.
 sim_cap() {
   local cap="$1" pid wd rc
   shift
   "$@" <&0 &
   pid=$!
-  (sleep "$cap" && kill -TERM "$pid" 2>/dev/null) >/dev/null 2>&1 &
+  (command sleep "$cap" && kill -TERM "$pid" 2>/dev/null) >/dev/null 2>&1 &
   wd=$!
   wait "$pid"
   rc=$?
@@ -150,7 +154,7 @@ sim_late() {
 }
 sim_tick() { touch "${STATE:-.}/lock" 2>/dev/null || true; }
 ax() {
-  local cap=30 left
+  local cap="${SIM_AX_CAP:-30}" left
   sim_tick
   if sim_late; then return 124; fi
   if [ -n "${SIM_DEADLINE:-}" ]; then
@@ -208,7 +212,8 @@ sim_probe_budget() {
 sim_point() {
   local raw rc=0
   sim_probe_budget || return 1
-  raw="$(ax describe-ui --point "$1,$2" 2>"$SIM_P.axerr")" || rc=$?
+  # 8 s, not ax's 30: a read takes 0.4-0.7 s, ~2 s under load, and a hung one costs its whole cap (job …211837Z…-0239)
+  raw="$(SIM_AX_CAP=8 ax describe-ui --point "$1,$2" 2>"$SIM_P.axerr")" || rc=$?
   if [ "$rc" != 0 ]; then # an empty spot errors too ("No translation object"); a hung or lost session is no answer at all
     raw=""
     if [ "$rc" = 124 ] || grep -q -i -e 'timed out' -e 'remote automation' "$SIM_P.axerr" 2>/dev/null; then : >"$SIM_P.unread"; fi
@@ -268,9 +273,10 @@ sim_tap_el() {
   ax tap -x "$cx" -y "$cy" --tap-style physical ${2:+--pre-delay "$2"} >/dev/null 2>&1 || sim_err SIM_UNAVAILABLE AXE_FAILED "tap failed"
 }
 
-# Probe points for a find/tap op, nearest first: a 30-pt grid within `radius` of `near`, or a straight `scan`.
+# Probe points for a find/tap op, nearest first: a 30-pt grid within `radius` of `near`, or a straight `scan` — after
+# its `hint`, where a passing run found the element: a hit there saves the scan, a miss costs one read and scans as ever.
 sim_points() {
-  jq -r --argjson w "$SIM_W" --argjson h "$SIM_H" 'if has("near") then ((.radius // 40) / 30 | floor) as $k | [range(-$k; $k + 1) * 30] as $o | .near as $n
+  jq -r --argjson w "$SIM_W" --argjson h "$SIM_H" '(if has("hint") then "\(.hint.x | floor) \(.hint.y | floor)" else empty end), if has("near") then ((.radius // 40) / 30 | floor) as $k | [range(-$k; $k + 1) * 30] as $o | .near as $n
       | [$o[] as $dx | $o[] as $dy | {d: ($dx * $dx + $dy * $dy), x: ($n.x + $dx), y: ($n.y + $dy)}] | sort_by(.d) | .[]
       | select(.x >= 0 and .x <= $w and .y >= 0 and .y <= $h) | "\(.x | floor) \(.y | floor)"
     else .scan as $s | (if $s.to >= $s.from then range($s.from; $s.to + 1; 30) else range($s.from; $s.to - 1; -30) end)
@@ -279,8 +285,9 @@ sim_points() {
 
 # SIM_HIT ← the first element matching the op's label (and role); a miss names what it saw instead.
 sim_find() {
-  local op="$1" label role x y e seen=""
+  local op="$1" label role x y e seen="" hint
   label="$(jq -r .label <<<"$op")"
+  hint="$(jq -r 'has("hint")' <<<"$op")"
   role="$(jq -r '.role // ""' <<<"$op")"
   sim_in_app || return 1
   rm -f "$SIM_P.unread"
@@ -294,6 +301,8 @@ sim_find() {
     seen="$seen$(jq -r '(if (.label // "") != "" then .label else (.value // "") end) | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:24]' <<<"$e")"
     if [ -n "$role" ] && sim_match "$e" "$label" ""; then seen="$seen ($(jq -r '.role' <<<"$e"))"; fi
     seen="$seen|"
+    # a hung hint read is no evidence either way (the scan covers its spot), so only the scan's own reads decide AX_TIMEOUT
+    if [ "$hint" = true ]; then hint=false; rm -f "$SIM_P.unread"; fi
   done < <(sim_points "$op")
   sim_hung_err "looking for \"$label\"" && return 1
   seen="$(printf '%s' "$seen" | tr '|' '\n' | awk 'NF && !s[$0]++' | head -3 | paste -sd ',' -)"
@@ -495,8 +504,53 @@ sim_find_icon() {
 }
 
 # --- ops ----------------------------------------------------------------------------------------------------------
+# An aborted job can leave the app mid-typing (job …043422Z…-trial-idle-2: a hung read in `keys` left the bar focused,
+# the keyboard up and an edit menu over it), and launch resumes that state, so neither landmark ever shows (the next
+# five jobs failed LANDMARK). Terminate it, read back that it's gone, and open it again from the icon; once.
+# simctl refuses to terminate an app that isn't running (mac-sim's idle4 round), so only a running one is terminated.
+sim_launch_again() {
+  if sim_web_alive; then
+    sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; }
+    ! sim_web_alive || sleep 1 # the process takes a moment to exit (as after the switcher's swipe)
+    if sim_web_alive; then sim_err SIM_UNAVAILABLE TERMINATE "the web app still runs after terminate"; return 1; fi
+  else
+    SIM_AGAIN_DEAD="; no web process though the tree showed the app, so not terminated"
+  fi
+  ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+  sim_find_icon || return 1
+  sim_tap_el "$SIM_ICON"
+}
+
+# A leftover draft (job …060606Z…-idle5-1 stopped mid-keys and never erased) changes how the bar reads: empty label, the
+# draft as its value (peek jobs …062810Z… and …062816Z…), never "Capture log", so neither landmark shows (idle5-2..4
+# failed LANDMARK). Is element $1 that: no label, some text, on the bar's row?
+sim_draft_el() {
+  jq -e --argjson x "$SIM_X" '(.label // "") == "" and (.value // "") != "" and ((.role // "") | IN("AXButton", "AXLink") | not)
+    and (.frame.y // 0) >= 850 and (.frame.y // 0) <= 930 and (.frame.x // 0) <= $x and ((.frame.x // 0) + (.frame.w // 0)) >= $x' <<<"$1" >/dev/null 2>&1
+}
+# Focus it, delete it (its length plus two), put the keyboard down. No read-back here: the landmark loop is it — the bar
+# reads "Capture log" again only once it's empty. No keyboard after the tap leaves the draft for the polls to fail on.
+sim_clear_draft() {
+  local n i=0
+  n="$(jq -r '(.value // "") | length + 2 | if . > 24 then 24 else . end' <<<"$1")"
+  sim_tap_el "$1" || return 1
+  sleep 1
+  if ! sim_kb_up; then
+    sim_hung_err "looking for the keyboard after tapping a leftover draft" && return 1
+    SIM_DRAFT_TRY=" (a leftover draft in the bar; tapping it brought no keyboard, so nothing was deleted)"
+    return 0
+  fi
+  while [ "$i" -lt "$n" ]; do sim_key delete || return 1; i=$((i + 1)); done
+  sim_op_blur || return 1
+  if sim_kb_up; then sim_fail BLUR "the keyboard stayed up after deleting a leftover draft"; return 1; fi
+  sim_hung_err "checking the keyboard went down after deleting a leftover draft" && return 1
+  SIM_DRAFT_DEL="$n"
+  SIM_DRAFT_TRY=" (a leftover draft in the bar; $n deletes didn't bring Home's bar back)"
+}
+
 sim_op_launch() {
-  local i s t clean="" taps=1
+  local i s t e clean="" taps=1 again="" cleared=""
+  SIM_AGAIN_DEAD="" SIM_DRAFT_DEL="" SIM_DRAFT_TRY=""
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
@@ -512,6 +566,8 @@ sim_op_launch() {
       [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
       [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
       [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; pinned the keyboard prefs ($SIM_KB_SET off)"
+      [ -z "$again" ] || SIM_NOTE="$SIM_NOTE; relaunched (it resumed mid-typing, keyboard up$SIM_AGAIN_DEAD)"
+      [ -z "$SIM_DRAFT_DEL" ] || SIM_NOTE="$SIM_NOTE; deleted a leftover draft in the bar ($SIM_DRAFT_DEL deletes)"
       return 0
     fi
     i=$((i + 1))
@@ -525,7 +581,7 @@ sim_op_launch() {
         sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
         return 1
       fi
-      sim_fail LANDMARK "neither Home nor the sign-in card after launch"
+      sim_fail LANDMARK "neither Home nor the sign-in card after launch$SIM_DRAFT_TRY"
       return 1
     fi
     case "$i" in
@@ -537,6 +593,19 @@ sim_op_launch() {
         if [ -n "$t" ] && sim_tree_home "$t"; then
           sim_tap_el "$SIM_ICON" || return 1
           taps=$((taps + 1))
+        elif [ -z "$again" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
+          && sim_kb_up; then
+          sim_launch_again || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's relaunch of an app left mid-typing)"; return 1; }
+          again=1 i=0 clean="" taps=1
+          sleep 2
+          continue
+        elif [ -z "$cleared" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
+          && e="$(sim_point "$SIM_X" "$SIM_Y_HOME")" && sim_draft_el "$e"; then
+          cleared=1
+          sim_clear_draft "$e" || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's delete of a leftover draft)"; return 1; }
+          i=0 clean=""
+          sleep 2
+          continue
         elif [ "$i" = 10 ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1; then
           ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
           ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
@@ -845,13 +914,39 @@ sim_nav_probe() {
   return 2
 }
 
+# Hit-first: one read where the tab sits with the page at its top and the row not swiped (the first seven of SIM_XS_NAV;
+# a swiped row puts another tab there, or this one, which the label decides).
+# The row scrolls with the page (AppNav is in the flow, not sticky), so the tab's centre within 4 pt of SIM_Y_NAV means
+# the page is at its top, as the swipes would leave it. Anything else (the page scrolled, the row swiped sideways,
+# relaunch's shifted AX geometry, a hung read) is 2: today's full path. 1 is the probe budget.
+sim_nav_fast() {
+  local x e
+  x="$(jq -nr --arg t "$1" --argjson tabs "$SIM_TABS" --arg xs "$SIM_XS_NAV" '($tabs | index($t)) as $i | ($xs | split(" ")) as $x
+    | if $i != null and $i < 7 then $x[$i] else empty end')"
+  [ -n "$x" ] || return 2
+  e="$(sim_point "$x" "$SIM_Y_NAV")" || return 1
+  if [ "$(jq -r .role <<<"$e")" = AXLink ] && sim_label_is "$e" "$1" \
+    && jq -e --argjson y "$SIM_Y_NAV" '(((.frame.y // 0) + (.frame.h // 0) / 2) - $y | fabs) <= 4' <<<"$e" >/dev/null 2>&1; then
+    SIM_HIT="$e"
+    return 0
+  fi
+  return 2
+}
+
 sim_op_nav() {
-  local tab rc
+  local tab rc how=""
   tab="$(jq -r .tab <<<"$1")"
   sim_in_app || return 1
-  sim_to_top
   rm -f "$SIM_P.unread"
-  sim_nav_probe "$tab"; rc=$?
+  sim_nav_fast "$tab"; rc=$?
+  [ "$rc" != 1 ] || return 1
+  if [ "$rc" = 0 ]; then
+    how=" (fast)"
+  else
+    sim_to_top
+    rm -f "$SIM_P.unread"
+    sim_nav_probe "$tab"; rc=$?
+  fi
   if [ "$rc" = 2 ]; then
     ax swipe --start-x $((SIM_W - 42)) --start-y "$SIM_Y_NAV" --end-x 40 --end-y "$SIM_Y_NAV" --duration 0.4 >/dev/null 2>&1 || true
     sim_nav_probe "$tab"; rc=$?
@@ -869,7 +964,7 @@ sim_op_nav() {
   fi
   sim_tap_el "$SIM_HIT" || return 1
   sleep 2
-  SIM_NOTE="on $tab"
+  SIM_NOTE="on $tab$how"
 }
 
 sim_op_find() {
@@ -1211,15 +1306,24 @@ sim_op_scroll() {
 
 # nav can't confirm the tab switched (no active-tab signal), so a stamp that isn't there gets one more visit: a dropped
 # Settings tap leaves the page where it was (job …065125Z…-launch-4810 stayed on Home), and the note says so.
+# The stamp's y is read first where the last readBuild on this Mac found it (the runner's state dir, kept only when it is
+# one of SIM_YS_BUILD), then the rest of SIM_YS_BUILD as before. `stay` skips the trip back Home (relaunch: nothing
+# after it needs Home); expectBuild's relaunch keeps the op's choice.
 sim_op_readBuild() {
-  local i y e b try
+  local i y e b try last ys
   SIM_RB_AGAIN="" # expectBuild's relaunch note keeps it too
+  SIM_RB_STAY=false
+  if [ -n "${1:-}" ] && [ "$(jq -r '.stay // false' <<<"$1" 2>/dev/null)" = true ]; then SIM_RB_STAY=true; fi
+  last="$(head -c 8 "${STATE:-/nonexistent}/sim-build-y" 2>/dev/null | tr -d '\n')"
+  case " $SIM_YS_BUILD " in *" $last "*) [[ "$last" =~ ^[0-9]+$ ]] || last="" ;; *) last="" ;; esac
+  ys="$last"
+  for y in $SIM_YS_BUILD; do [ "$y" = "$last" ] || ys="$ys $y"; done
   for try in 1 2; do
     sim_op_nav '{"op":"nav","tab":"Settings"}' || return 1
     for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x $((SIM_W - 12)) --start-y 700 --end-x $((SIM_W - 12)) --end-y 150 --duration 0.15 >/dev/null 2>&1 || true; done
     b=""
     rm -f "$SIM_P.unread"
-    for y in $SIM_YS_BUILD; do
+    for y in $ys; do
       e="$(sim_point "$SIM_X_BUILD" "$y")" || return 1
       b="$(jq -r '(.value // "") | select(test("^Build [0-9a-f]{7}$")) | .[6:]' <<<"$e")"
       [ -z "$b" ] || break
@@ -1233,6 +1337,11 @@ sim_op_readBuild() {
     return 1
   fi
   echo "$b" >>"$SIM_P.builds"
+  if [ -n "${STATE:-}" ] && [ "$y" != "$last" ]; then { printf '%s\n' "$y" >"$STATE/sim-build-y.tmp" && mv -f "$STATE/sim-build-y.tmp" "$STATE/sim-build-y"; } 2>/dev/null || true; fi
+  if [ "$SIM_RB_STAY" = true ]; then
+    SIM_NOTE="running $b$SIM_RB_AGAIN; stayed on Settings"
+    return 0
+  fi
   sim_op_nav '{"op":"nav","tab":"Home"}' || return 1
   SIM_NOTE="running $b$SIM_RB_AGAIN"
 }
@@ -1245,7 +1354,7 @@ sim_op_expectBuild() {
   if [ "$got" = "$want" ]; then SIM_NOTE="current at first launch ($got)"; return 0; fi
   if [ "$(jq -r '.relaunches // 1 | floor' <<<"$1")" = 1 ]; then
     first="$got"
-    sim_op_kill '{"op":"kill","method":"terminate"}' && sim_op_launch && sim_op_readBuild || return 1
+    sim_op_kill '{"op":"kill","method":"terminate"}' && sim_op_launch && sim_op_readBuild "{\"stay\":${SIM_RB_STAY:-false}}" || return 1
     got="$(tail -1 "$SIM_P.builds")"
     if [ "$got" = "$want" ]; then SIM_NOTE="first launch ran $first, second $got$SIM_RB_AGAIN"; return 0; fi
   fi
@@ -1283,7 +1392,7 @@ run_sim() {
   SIM_RD="$3"
   sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
-  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN=""
+  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN="" SIM_RB_STAY=false
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0 SIM_KB_WROTE="" SIM_KB_SET=""
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"

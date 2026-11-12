@@ -98,6 +98,7 @@ const FIELD_OVER_PREVIEW = 60;
 // tap that can drop, and a retype's deletes each cost a point read (job …211837Z…-0239 timed out retyping 20). One
 // word, so the parse's preview title starts with it (the probe matches that prefix).
 const LONG_LINE = 'vacuum';
+const TASK_PLACEHOLDER = 'New task…'; // the empty Task field's value (app capture/mode.ts → placeholderFor)
 const CAPTURE_LONG: IosOp[] = [
   { op: 'nav', tab: 'Tasks' },
   { op: 'scroll', dir: 'down', pt: 400 },
@@ -107,16 +108,24 @@ const CAPTURE_LONG: IosOp[] = [
     op: 'find',
     label: 'Capture log',
     scan: { x: 200, from: 300, to: 650 },
+    hint: { x: 200, y: 507 },
     role: 'AXTextArea',
     as: 'long-bar',
   },
   // At focus, before any typing: the low dock shows here already.
   { op: 'expect', as: 'long-bar', aboveKeyboard: true },
-  { op: 'tap', label: 'Task', scan: { x: 110, from: 300, to: 650 }, role: 'AXCheckBox' },
+  {
+    op: 'tap',
+    label: 'Task',
+    scan: { x: 110, from: 300, to: 650 },
+    hint: { x: 96, y: 464 },
+    role: 'AXCheckBox',
+  },
   {
     op: 'find',
     label: 'Capture task',
     scan: { x: 200, from: 300, to: 650 },
+    hint: { x: 200, y: 507 },
     role: 'AXTextArea',
     as: 'long-bar-task',
   },
@@ -126,6 +135,7 @@ const CAPTURE_LONG: IosOp[] = [
     op: 'tap',
     label: 'Review before saving',
     scan: { x: 355, from: 300, to: 650 },
+    hint: { x: 353, y: 505 },
     role: 'AXButton',
   },
   { op: 'wait', s: 6 },
@@ -143,7 +153,23 @@ const CAPTURE_LONG: IosOp[] = [
   { op: 'expect', as: 'long-preview', aboveKeyboard: true },
   { op: 'shot', name: 'capture-long' },
   { op: 'erase', n: LONG_LINE.length + 2 },
-  { op: 'tap', label: 'Log', scan: { x: 49, from: 300, to: 650 }, role: 'AXCheckBox' },
+  // …and the field is empty again. Re-found, not `erase … in`: the dock isn't back where long-bar-task was recorded
+  // (job …025123Z…-ce09 found the mode row 36 pt lower after the deletes), so a read there would miss the field.
+  {
+    op: 'find',
+    label: 'Capture task',
+    scan: { x: 200, from: 300, to: 650 },
+    role: 'AXTextArea',
+    as: 'long-erased',
+  },
+  { op: 'expect', as: 'long-erased', valueIs: TASK_PLACEHOLDER },
+  {
+    op: 'tap',
+    label: 'Log',
+    scan: { x: 49, from: 300, to: 650 },
+    hint: { x: 49, y: 500 },
+    role: 'AXCheckBox',
+  },
   { op: 'blur' },
 ];
 
@@ -177,6 +203,12 @@ function clearanceOf(note: string | undefined): { bottom: number; top: number } 
   return m ? { bottom: Number(m[1]), top: Number(m[2]) } : null;
 }
 
+// A scan's hint is where a passing run found the element (job …024838Z…-done-form-7d2b; capture-long's …025123Z…-ce09):
+// one read there, then the scan as before on a miss. Only for a label nothing else on the screen starts with — a hint
+// could find the other one first (long-field and long-preview are both the typed line, told apart by the scan's order).
+const REFLECTION = { scan: { x: 200, from: 150, to: 720 }, hint: { x: 200, y: 316 } };
+const REFLECTION_KB = { scan: { x: 200, from: 120, to: 690 }, hint: { x: 200, y: 281 } }; // keyboard up: the modal ~35 pt higher
+
 const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'nav', tab: 'Tasks' },
   { op: 'tap', label: 'Search tasks', near: { x: 200, y: 332 }, radius: 40, role: 'AXTextField' },
@@ -186,6 +218,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
     op: 'find',
     label: 'Search tasks',
     scan: { x: 200, from: 120, to: 540 },
+    hint: { x: 200, y: 284 },
     role: 'AXTextField',
     as: 'search',
   },
@@ -195,19 +228,25 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'keys', text: marker(ctx), in: 'search' },
   { op: 'blur' },
   // The row's Done opens the modal with the Done form on top, as on the phone. Opening only: the form's own button submits.
-  { op: 'tap', label: 'Done', scan: { x: 395, from: 390, to: 840 }, role: 'AXButton' },
+  {
+    op: 'tap',
+    label: 'Done',
+    scan: { x: 395, from: 390, to: 840 },
+    hint: { x: 395, y: 601 },
+    role: 'AXButton',
+  },
   { op: 'wait', s: 2 },
-  { op: 'find', label: 'Reflection', scan: { x: 200, from: 150, to: 720 }, as: 'box0' },
-  { op: 'tap', label: 'Reflection', scan: { x: 200, from: 150, to: 720 } },
+  { op: 'find', label: 'Reflection', ...REFLECTION, as: 'box0' },
+  { op: 'tap', label: 'Reflection', ...REFLECTION },
   { op: 'wait', s: 2 },
-  { op: 'find', label: 'Reflection', scan: { x: 200, from: 120, to: 690 }, as: 'box' },
+  { op: 'find', label: 'Reflection', ...REFLECTION_KB, as: 'box' },
   { op: 'expect', as: 'box', aboveKeyboard: true },
   { op: 'expect', as: 'box', sameWidthAs: 'box0' },
   { op: 'shot', name: 'done-form-keyboard' },
   { op: 'blur' },
-  { op: 'tap', label: 'Reflection', scan: { x: 200, from: 150, to: 720 } },
+  { op: 'tap', label: 'Reflection', ...REFLECTION },
   { op: 'wait', s: 2 },
-  { op: 'find', label: 'Reflection', scan: { x: 200, from: 120, to: 690 }, as: 'again' },
+  { op: 'find', label: 'Reflection', ...REFLECTION_KB, as: 'again' },
   { op: 'expect', as: 'again', aboveKeyboard: true },
   { op: 'keys', text: 'zzqx', in: 'again' },
   { op: 'erase', n: ERASE, in: 'again' },
@@ -217,6 +256,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
     op: 'tap',
     label: 'Cancel',
     scan: { x: 190, from: 150, to: 720 },
+    hint: { x: 187, y: 378 },
     role: 'AXButton',
     closes: true,
   },
@@ -243,7 +283,7 @@ const RELAUNCH: IosOp[] = [
   { op: 'kill', method: 'reboot' },
   { op: 'launch' },
   { op: 'expect', signedIn: true },
-  { op: 'readBuild' },
+  { op: 'readBuild', stay: true }, // shutdown is next: no trip back Home
   { op: 'expectBuild' },
   { op: 'shot', name: 'relaunch' },
   { op: 'shutdown' }, // the run's last sim job: nothing else needs it, and it's the heaviest thing on the Mac

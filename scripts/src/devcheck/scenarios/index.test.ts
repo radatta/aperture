@@ -148,6 +148,26 @@ describe('the slow tier', () => {
           .filter((o) => o.op === 'keys'),
       ).toHaveLength(3);
       expect(sent.relaunch!.at(-1)).toEqual({ op: 'shutdown' });
+      // only the run's last job skips readBuild's trip back Home (launch's next job starts on Home)
+      const reads = Object.entries(sent).flatMap(([n, p]) =>
+        p.filter((o) => o.op === 'readBuild').map((o) => [n, o]),
+      );
+      expect(reads).toEqual([
+        ['launch', { op: 'readBuild' }],
+        ['relaunch', { op: 'readBuild', stay: true }],
+      ]);
+      // no hint on a label the plan itself uses for two roles (long-field/long-preview): the scan's order tells those
+      // apart. A plan-level check only: it can't see the screen, so a hinted label must also be unique there (by hand)
+      for (const [name, plan] of Object.entries(sent))
+        for (const o of plan) {
+          if ((o.op !== 'find' && o.op !== 'tap') || !('hint' in o)) continue;
+          const roles = new Set(
+            plan
+              .filter((p) => 'label' in p && p.label === o.label)
+              .map((p) => ('role' in p ? p.role : '')),
+          );
+          expect(roles.size, `${name} ${o.label}`).toBe(1);
+        }
     });
 
     it('capture-long pads Tasks, asks for clearance above the accessory bar, and deletes the padding either way', async () => {
@@ -243,6 +263,18 @@ describe('the slow tier', () => {
       expect(opAs('find', 'long-bar')(plan)).toBeLessThan(opAs('expect', 'long-bar')(plan));
       expect(opAs('expect', 'long-bar')(plan)).toBeLessThan(keys);
       expect(opAs('expect', 'long-field')(plan)).toBeLessThan(opAs('find', 'long-preview')(plan));
+      // the cleanup's deletes are read back: the Task field re-found (the dock moves after them) and empty
+      const erase = plan.findIndex((o) => o.op === 'erase');
+      expect(plan.slice(erase + 1, erase + 3)).toEqual([
+        expect.objectContaining({
+          op: 'find',
+          label: 'Capture task',
+          role: 'AXTextArea',
+          as: 'long-erased',
+        }),
+        { op: 'expect', as: 'long-erased', valueIs: 'New task…' },
+      ]);
+      expect(plan[erase + 1]).not.toHaveProperty('hint');
       expect(made).toHaveLength(16);
       // planned for one day, every one: backlog-only padding isn't on Tasks' Today list (run 19-19-51's short page)
       expect(planned.map((p) => p.taskId)).toEqual(made.map((_, i) => `t${i + 1}`));
@@ -302,6 +334,17 @@ describe('the slow tier', () => {
             'TYPED',
             (ops) => ops.findIndex((o) => o.op === 'keys'),
             'long-bar-task reads "vac"',
+          ),
+        ),
+      ).rejects.toThrow('iOS: failed');
+      deletedAll();
+      // a delete that dropped in the cleanup is a failure, never the known low dock
+      await expect(
+        step('capture-long').run(
+          failing(
+            'VALUE',
+            opAs('expect', 'long-erased'),
+            'long-erased value is "va", want "New task…"',
           ),
         ),
       ).rejects.toThrow('iOS: failed');
