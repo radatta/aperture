@@ -164,13 +164,17 @@ function calibrate(run: ProbeRun, root: string): { ok: boolean; text: string } {
     }
   };
   const sources: string[] = [];
+  const noGreen: string[] = [];
   const rows = run.results.flatMap((r) => {
     const id = newestGreen(ids, r.scenario, r.name, read);
-    if (!id) return [];
+    if (!id) {
+      noGreen.push(`${r.scenario}/${r.name}`);
+      return [];
+    }
     sources.push(id);
     return compareJob(r, read(id)!);
   });
-  return formatCalibration(rows, sources);
+  return formatCalibration(rows, sources, noGreen);
 }
 
 async function main(): Promise<number> {
@@ -198,7 +202,7 @@ async function main(): Promise<number> {
   if (!a.calibrate) return run.ok ? 0 : 1;
   const cal = calibrate(run, a.results || resultsRoot(worktree));
   console.log(`\n${cal.text}`);
-  return cal.ok ? 0 : 1;
+  return run.ok && cal.ok ? 0 : 1; // a failing probe check is never calibrated
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

@@ -90,13 +90,14 @@ export interface JobResult {
   ops: OpResult[];
   ok: boolean;
   // What each `as` resolved to, for the calibration (calibrate.ts); `modelled` false under a page field's keyboard.
-  found?: Record<string, { role: string; frame: Frame; modelled: boolean }>;
+  found?: Record<string, { role: string; frame: Frame; modelled: boolean; kbUp: boolean }>;
 }
 
 interface Found {
   el: AxEl;
   at: Pt;
   modelled?: boolean;
+  kbUp?: boolean;
 }
 
 const describe = (o: IosOp): string => {
@@ -301,7 +302,7 @@ export async function checkJob(
             break;
           }
           if (s.length) warn += ` · near: ${s.join('; ')}`;
-          found.set(op.as, { el, at, modelled: !pageKeyboard });
+          found.set(op.as, { el, at, modelled: !pageKeyboard, kbUp });
         }
         if (op.op === 'tap') {
           if (denied(el.label)) {
@@ -378,7 +379,12 @@ export async function checkJob(
         else if ('enabled' in op && got.enabled !== op.enabled)
           await fail(`ENABLED: ${op.as} enabled ${got.enabled}, expected ${op.enabled}`);
         else add(i, op, 'pass', `${op.as} as expected`);
-        found.set(op.as, { el: got, at: rec.at, modelled: rec.modelled }); // sim_op_expect stores the re-read under the same name
+        found.set(op.as, {
+          el: got,
+          at: rec.at,
+          modelled: rec.modelled !== false && !pageKeyboard,
+          kbUp,
+        }); // sim_op_expect stores the re-read under the same name
         break;
       }
       case 'keys':
@@ -433,7 +439,7 @@ export async function checkJob(
     found: Object.fromEntries(
       [...found].map(([k, v]) => [
         k,
-        { role: v.el.role, frame: v.el.frame, modelled: v.modelled !== false },
+        { role: v.el.role, frame: v.el.frame, modelled: v.modelled !== false, kbUp: !!v.kbUp },
       ]),
     ),
   };
