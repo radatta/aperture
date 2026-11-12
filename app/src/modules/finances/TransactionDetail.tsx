@@ -81,24 +81,26 @@ export function TransactionDetail({
   // server answers, so the next button mounts busy: busy is aria-disabled with no click handler, never
   // disabled — a disabled button can't take autoFocus, and focus would fall to <body>.
   const [acted, setActed] = useState(false);
-  // An Unlink, specifically: the one action after which the suggestions may have nothing to focus.
-  const [unlinked, setUnlinked] = useState(false);
+  // The last action was an Unlink or an Unmark: the ones after which the suggestions mount with nothing
+  // to focus. Never a Mark — while one is in flight the suggestions are still mounted asking for focus.
+  const [undid, setUndid] = useState(false);
   const setLink = (chargeId: string | null) => {
     setActed(true);
-    setUnlinked(chargeId === null);
+    setUndid(chargeId === null);
     link.mutate({ refundId: txn.id, chargeId });
   };
   const setMark = (marked: boolean) => {
     setActed(true);
+    setUndid(!marked);
     mark.mutate({ id: txn.id, marked });
   };
   const incomeLink = useDisclosure();
   // The Bucket group is where the detail opens. Without one (linked, money in, a payment), it opens on
   // the dialog itself: the first button would be Unlink or a mark, and a stray Enter would press it.
   const sortable = (kind === 'expense' || isRefund) && !txn.refundOfId;
-  // After an Unlink that leaves nothing to focus (a card credit with no suggestions), focus goes to the
-  // Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone keyboard.
-  // Only after an Unlink: a period mark in flight would otherwise hop there for a frame.
+  // After an Unlink or Unmark that leaves nothing to focus (a card credit with no suggestions), focus goes
+  // to the Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone
+  // keyboard. Never after a Mark (`undid`): one in flight would otherwise hop there before Unmark mounts.
   const bucketRef = useRef<SegmentedHandle>(null);
   // null until you type: an untouched field tracks the server's note, so closing never writes it.
   const [draft, setDraft] = useState<string | null>(null);
@@ -175,7 +177,7 @@ export function TransactionDetail({
             focus={acted}
             fallback="No likely charge found — search for it above, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
-            onNothingToFocus={unlinked ? () => bucketRef.current?.focus() : undefined}
+            onNothingToFocus={undid ? () => bucketRef.current?.focus() : undefined}
           />
         )}
         {linkableIncome &&

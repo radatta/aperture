@@ -112,7 +112,7 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
   loaded range reads as unlinked. Two refunds on one charge are fine; the cap applies across them.
 - A row in either list keeps the merchant (on a same-merchant suggestion, the bucket) on one line and puts the
-  bucket and "$X already refunded" on an xs line under it, so a phone cuts neither. After an **Unlink** that
+  bucket and "$X already refunded" on an xs line under it, so a phone cuts neither. After an **Unlink** or **Unmark** that
   leaves nothing else to focus (a card credit with no suggestions), focus goes to the Bucket group's checked
   option — never the search box, which would raise the iPhone keyboard. The detail opens on the Bucket group
   when it has one; otherwise (linked, money in, a payment) on the dialog itself, so a stray Enter can't Unlink

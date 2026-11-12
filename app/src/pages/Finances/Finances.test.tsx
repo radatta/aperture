@@ -952,6 +952,66 @@ describe('Refund link search', () => {
     );
   });
 
+  // The Amazon card credit seen as −$5,000: nothing has that much left, so no suggestion of either kind.
+  async function noSuggestionsCredit() {
+    const api = await linked();
+    const list = api.listFinanceTransactions.bind(api);
+    api.listFinanceTransactions = async (range) =>
+      (await list(range)).map((t) =>
+        t.id === 'fx-refund-1' ? { ...t, rawAmountCents: -500_000 } : t,
+      );
+    return api;
+  }
+
+  it('Unmark on a card credit with no suggestions focuses Bucket', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    const mark = hold(api, 'setFinancePeriodStart');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+    await mark.land();
+    await waitFor(() => expect(unmark.getAttribute('aria-disabled')).toBeNull());
+    await user.click(unmark);
+    // A refund again, with no Link row and no Cancel: focus lands on the checked option, not <body>.
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    expect(within(dialog).getByText(/No likely charge found/)).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
+    );
+    await mark.land();
+    expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' }));
+  });
+
+  // Pins the guard: it passes without this branch's fix too, and fails against an ungated hand-off — a
+  // Mark's suggestions stay mounted asking for focus until the cache patch lands.
+  it('a Mark in flight never hops to Bucket', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    const mark = hold(api, 'setFinancePeriodStart');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    const seen: Element[] = [];
+    const onFocus = (e: FocusEvent) => seen.push(e.target as Element);
+    document.addEventListener('focus', onFocus, true);
+    try {
+      await user.click(
+        within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+      );
+      const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+      await waitFor(() => expect(document.activeElement).toBe(unmark));
+      await mark.land();
+      expect(seen.some((el) => el.getAttribute('role') === 'radio')).toBe(false);
+    } finally {
+      document.removeEventListener('focus', onFocus, true);
+    }
+  });
+
   it('a search row keeps the merchant on one line and the bucket on its own', async () => {
     const user = userEvent.setup();
     const api = await linked();
