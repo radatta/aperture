@@ -63,8 +63,8 @@ export interface PipelineDeps {
   // absent: every slow step runs. The rest are deferred — reported, never failed (DEV-CHECK.md → Slow tier).
   slow?: string[];
   ios?: Ios; // the Mac's iOS Simulator (ios.ts); absent, an iOS step says needs you
-  // The local check only (local/run-local.ts): a step this returns a reason for is deferred with it — a row
-  // that only dev can prove ('local: … runs on dev') — and the end of the run asserts no timer was left running.
+  // A step this returns a reason for is deferred with it: the local check's rows only dev can prove ('local: … runs
+  // on dev', local/run-local.ts), or on dev the probe job when ios-standalone runs in full (scenarios → probeSkip).
   skip?: (scenario: string, step: { id: string; entry: string }) => string | null;
   checkSessions?: boolean;
 }

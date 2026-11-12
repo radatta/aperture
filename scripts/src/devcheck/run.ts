@@ -48,6 +48,7 @@ import {
   SCENARIOS,
   selectFeature,
   selectScenarios,
+  probeSkip,
   slowScenarios,
   type RunTier,
 } from './scenarios/index';
@@ -254,6 +255,7 @@ async function main(): Promise<number> {
       ledger,
       shotsDir,
       slow,
+      skip: probeSkip(slow),
       ios: createIos({
         fs: nodeFs,
         clock,
