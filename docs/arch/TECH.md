@@ -151,6 +151,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 PK = u#<userId>            (one partition per user — fine at single-user volume)
 SK (type-prefixed range keys):
   log#<day>#<ulid>              day's log entries          (begins_with log#<day>)
+                                across days for the MCP log tools (BETWEEN log#<from>#..log#<to>#\uffff)
   task#<ulid>                   task by id
   (any tombstone on dev; a sitting's raw bulk on both)  expiresAt: DynamoDB TTL attribute, epoch seconds (§2.3 rule 4)
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)

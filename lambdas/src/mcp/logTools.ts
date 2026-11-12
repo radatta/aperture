@@ -1,5 +1,7 @@
 import {
   addDays,
+  isTimed,
+  isUlid,
   computeDayShape,
   dayKeyInZone,
   isDayKey,
@@ -31,15 +33,19 @@ import type { Tool, ToolContext } from './types';
 const QUERY_MAX = 200;
 const SEARCH_LIMIT = { def: 50, max: 100 };
 const LIST_LIMIT = { def: 100, max: 200 };
-// The SK without `log#`: "<day>#<ULID>". A ULID sorts by time within a day, so this orders entries.
-const CURSOR_RE = /^\d{4}-\d{2}-\d{2}#[0-9A-HJKMNP-TV-Z]{26}$/;
+// A cursor is the SK without `log#`: "<day>#<ULID>". A ULID sorts by time within a day, so this orders entries.
+const isCursor = (v: string) => {
+  const [day, id, ...rest] = v.split('#');
+  return rest.length === 0 && !!day && !!id && isDayKey(day) && isUlid(id);
+};
 
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
 const hhmm = (ms: number) => zonedDayTime(ms, USER_TIME_ZONE).hhmm;
 const hour = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
 // THE choke point for log text leaving through MCP — every tool maps entries through here, so a
-// redaction (e.g. a private flag) has one place to live.
+// redaction (e.g. a private flag) has one place to live. A redaction MASKS the text, never drops the
+// entry: counts and totals are taken over the entries this maps, one in, one out.
 export function toMcpLogEntry(e: LogEntry) {
   return {
     id: e.id,
@@ -100,7 +106,7 @@ function limitArg(args: Record<string, unknown>, l: { def: number; max: number }
 function cursorArg(args: Record<string, unknown>): string | undefined {
   const v = args.cursor;
   if (v === undefined || v === null) return undefined;
-  if (typeof v !== 'string' || !CURSOR_RE.test(v))
+  if (typeof v !== 'string' || !isCursor(v))
     throw new RpcParamError('"cursor" must be a nextCursor from a previous call, unchanged');
   return v;
 }
@@ -211,11 +217,15 @@ async function composeDay(day: string, ctx: ToolContext) {
   const planned = [
     ...tasks
       .filter(timedOnDay)
-      .sort((a, b) => userDueEpoch(a.dueDay!, a.dueTime!) - userDueEpoch(b.dueDay!, b.dueTime!))
+      .sort(
+        (a, b) =>
+          userDueEpoch(a.dueDay!, a.dueTime!) - userDueEpoch(b.dueDay!, b.dueTime!) ||
+          a.createdAt - b.createdAt,
+      )
       .map((t) => plannedRow(t, null, true)),
     ...plans.flatMap((p) => {
       const t = byId.get(p.taskId);
-      return t && !(t.dueDay && t.dueTime) ? [plannedRow(t, p.plannedMinutes, false)] : [];
+      return t && !isTimed(t) ? [plannedRow(t, p.plannedMinutes, false)] : [];
     }),
   ];
 
@@ -328,7 +338,7 @@ export const LOG_TOOLS: Tool[] = [
   },
   {
     name: 'get_day',
-    description: `One day as data — the Log page and the night review in one call. day is an ISO date (an app day: it runs from the user's day-start hour, 4am by default, to the next, Pacific time — see window). Returns: dayPlan (intent, capacity, reflection — null if the app never opened that day); log (that day's entries, in capture order); tasks.done (finished that day: estimateLockedMin vs actualMin, deltaMin for a calibration point; a parent's parts are points of their own, so don't total a parent with its parts); tasks.planned (timed tasks whose deadline falls on the day, byTime, then the day's plan rows) and stillOpen; tasks.due (due that day); calendar (busy time and the day's shape over the focus window, or a reason); flux (sets and a summary); leetcode (sittings started that day — get_sitting reads one in full). Read-only: it never spawns recurring tasks or moves stale plans (the app does that when opened). ${PRIVACY}`,
+    description: `One day as data — the Log page and the night review in one call. day is an ISO date (an app day: it runs from the user's day-start hour, 4am by default, to the next, Pacific time — see window). Returns: dayPlan (intent, capacity, reflection — null if the app never opened that day); log (that day's entries, in capture order); tasks.done (finished that day: estimateLockedMin vs actualMin, deltaMin for a calibration point; a parent's parts are points of their own, so don't total a parent with its parts); tasks.planned (timed tasks whose deadline falls on the day, byTime, then the day's plan rows) and stillOpen; tasks.due (dueDay is this date — by date, so a 00:30 deadline tomorrow is due tomorrow yet planned tonight); calendar (busy time and the day's shape over the focus window, or a reason; an account whose Google sign-in lapsed reads as free — list_calendars shows reconnectRequired); flux (sets and a summary); leetcode (sittings started that day — get_sitting reads one in full). Read-only: it never spawns recurring tasks or moves stale plans (the app does that when opened). ${PRIVACY}`,
     inputSchema: {
       type: 'object',
       properties: { day: { type: 'string', description: 'YYYY-MM-DD' } },

@@ -18,7 +18,7 @@ const appDays = async (ctx: Ctx) => {
 };
 
 // What this run seeded, shared across steps (a scenario's steps run in order, one run at a time).
-const seeded = { secret: '', lower: '', past: '', typed: '', done: '', planned: '' };
+const seeded = { secret: '', lower: '', past: '', typed: '', done: '', planned: '', gone: '' };
 
 const expectParamError = async (what: string, call: () => Promise<unknown>) => {
   try {
@@ -49,6 +49,12 @@ export const logMcp: Scenario = {
       entry: 'api',
       kind: 'nominal',
       what: 'createLogEntry on yesterday and today reads back under each day',
+    },
+    {
+      id: 'delete',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'deleteLogEntry tombstones a seeded entry: gone from listLogRange and search_log; a second delete is a no-op',
     },
     {
       id: 'tools-listed',
@@ -102,7 +108,7 @@ export const logMcp: Scenario = {
       id: 'get-day',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'get_day today has the day’s log, a task done with estimate vs actual, a planned task still open, the window from the day start',
+      what: 'get_day today has the stored day row (peekDay), the day’s log, a task done with estimate vs actual, a planned task still open, the window from the day start',
     },
     {
       id: 'get-day-yesterday',
@@ -197,7 +203,7 @@ export const logMcp: Scenario = {
         const line = `devcheck ${ctx.nonce} typed`;
         await ctx.ui.goto('/log');
         await ctx.page.getByRole('button', { name: 'Log', exact: true }).click();
-        const field = ctx.page.locator('textarea[aria-label="Capture log"]');
+        const field = ctx.page.getByLabel('Capture log', { exact: true });
         await field.fill(line);
         await field.press('Enter');
         await ctx.ui.expectText(/Logged/, 15_000);
@@ -256,7 +262,6 @@ export const logMcp: Scenario = {
         const ids = past.entries.map((x) => x.id);
         if (!ids.includes(seeded.past) || ids.includes(seeded.secret))
           fail(`from=to=${yesterday}: ${ids.join(', ')}`);
-        await ctx.shot('search-log');
       },
     },
     {
@@ -347,8 +352,11 @@ export const logMcp: Scenario = {
           order: 9999,
         });
 
+        await ctx.api.reads.getDay(today); // the app's open: the day row exists, as on any used day
         const d = await ctx.mcp.reads.getDay({ day: today });
         if (d.day !== today || d.today !== today) fail(`day/today: ${d.day}/${d.today}`);
+        if (!d.dayPlan || !('intent' in d.dayPlan))
+          fail(`dayPlan is ${JSON.stringify(d.dayPlan)} though the app opened today`);
         const startHour = new Date(d.window.start).toLocaleString('en-US', {
           timeZone: 'America/Los_Angeles',
           hour: 'numeric',
@@ -389,6 +397,25 @@ export const logMcp: Scenario = {
         const t = await ctx.mcp.reads.getDay({ day: tomorrow });
         if (t.day !== tomorrow || t.log.count !== 0)
           fail(`get_day ${tomorrow}: ${JSON.stringify(t.log)}`);
+      },
+    },
+    {
+      id: 'delete',
+      title: 'deleteLogEntry tombstones a seeded entry by id',
+      entry: 'api',
+      proves: ['delete'],
+      async run(ctx) {
+        const { today } = await appDays(ctx);
+        const e = await ctx.api.writes.createLogEntry(`devcheck ${ctx.nonce} to delete`, today);
+        seeded.gone = e.id;
+        await ctx.api.writes.deleteLogEntry(e.id);
+        if (
+          (await ctx.api.reads.listLogRange({ from: today, to: today })).some((x) => x.id === e.id)
+        )
+          fail('a deleted entry still lists');
+        const hit = await ctx.mcp.reads.searchLog({ query: `${ctx.nonce} to delete` });
+        if (hit.entries.length !== 0) fail('search_log still finds a deleted entry');
+        await ctx.api.writes.deleteLogEntry(e.id); // again: a no-op, not an error
       },
     },
     noConsoleErrors,

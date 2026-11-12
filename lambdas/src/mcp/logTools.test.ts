@@ -191,6 +191,8 @@ describe('the log tools only read', () => {
       rule: { kind: 'daily' },
       anchorDate: '2026-11-01',
     });
+    const stale = await backend.createTask({ title: 'Left over', estimateMin: 15 });
+    await backend.upsertPlan({ taskId: stale.id, day: '2026-11-04', plannedMinutes: 15, order: 1 });
     await backend.getSettings(); // a real user's settings row exists; the first read creates it
     const before = doc.snapshot();
     await run('search_log', { query: 'note' });
@@ -199,6 +201,10 @@ describe('the log tools only read', () => {
     await run('get_day', { day: '2026-11-06' });
     expect(doc.snapshot()).toEqual(before);
     expect(dispatched).not.toContain('getDay');
+    // The fixture is live: the app's getDay does write here (spawns the series, sweeps the stale plan).
+    await backend.getDay('2026-11-05');
+    expect(doc.snapshot()).not.toEqual(before);
+    expect((await backend.getTask(stale.id))?.status).toBe('backlog');
   });
 });
 
