@@ -33,21 +33,28 @@ const NAV: [string, RegExp][] = [
   ['Inbox', /\/inbox$/],
   ['Habits', /\/habits$/],
 ];
+// Reads only those taps make — Home never asks for them, not even after its data lands — so one of them going
+// out after the release was waiting behind the cap, not set off by a released answer (getDay's refetch, say).
+const QUEUED_PROOF = ['listStories', 'listIdeas'];
 const isApi = (url: string) => new URL(url).pathname.startsWith('/api/');
+const methodOf = (url: string) => new URL(url).pathname.slice('/api/'.length);
 
 // Counts /api requests by identity while the step holds them, and judges the burst: the cap must be reached
-// (the UI wanted more), never passed, and the calls behind it must go out once slots free.
-export function createBurstMeter(cap: number) {
+// (the UI wanted more), never passed, and a call that was waiting behind it (one of `queuedProof`) must go out
+// once slots free.
+export function createBurstMeter(cap: number, queuedProof: readonly string[]) {
   const live = new Set<object>();
   let total = 0;
   let peak = 0;
   let released = false;
   let afterRelease = 0;
+  const proofs = new Set<string>();
   return {
-    started(r: object) {
+    started(r: object, method: string) {
       live.add(r);
       total++;
       if (released) afterRelease++;
+      if (released && queuedProof.includes(method)) proofs.add(method);
       peak = Math.max(peak, live.size);
     },
     ended: (r: object) => live.delete(r),
@@ -55,14 +62,14 @@ export function createBurstMeter(cap: number) {
       released = true;
     },
     live: () => live.size,
-    counts: () => ({ total, peak, afterRelease }),
+    counts: () => ({ total, peak, afterRelease, proofs: [...proofs] }),
     verdict(): string | null {
       if (peak > cap) return `${peak} /api calls on the wire at once — the cap is ${cap}`;
       if (peak < cap)
         return `the UI wanted only ${peak} /api calls at once, under the cap of ${cap} — this step proves nothing now`;
       if (!released) return 'the held calls were never released';
-      if (!afterRelease)
-        return `nothing queued behind the cap: ${total} calls, none sent after the release`;
+      if (!proofs.size)
+        return `nothing proven queued behind the cap: none of ${queuedProof.join(', ')} went out after the release (${afterRelease} other calls did)`;
       return null;
     },
   };
@@ -124,11 +131,11 @@ export const inflightCap: Scenario = {
       proves: ['cap-holds', 'queue-drains'],
       async run(ctx) {
         const page = ctx.page;
-        const meter = createBurstMeter(CAP);
+        const meter = createBurstMeter(CAP, QUEUED_PROOF);
         let last = Date.now();
         const started = (r: PwRequest) => {
           if (!isApi(r.url())) return;
-          meter.started(r);
+          meter.started(r, methodOf(r.url()));
           last = Date.now();
         };
         // Paired by request identity: the last scenario's reads, aborted by this navigation, end here without
@@ -148,10 +155,12 @@ export const inflightCap: Scenario = {
           if (!held.length) firstHeldAt = Date.now();
           held.push(route);
         };
-        // Release before unroute: unroute alone would continue the held ones too, but after the release mark.
+        // Release before unroute: unroute alone would leave the held ones paused.
+        let heldMs = 0;
         const release = async () => {
           if (releasing) return;
           releasing = true;
+          if (firstHeldAt) heldMs = Date.now() - firstHeldAt;
           meter.release();
           await Promise.all(held.splice(0).map((r) => r.fallback().catch(() => undefined)));
           await page.unroute(match, hold).catch(() => undefined);
@@ -159,8 +168,8 @@ export const inflightCap: Scenario = {
         page.on('request', started);
         page.on('response', responded);
         page.on('requestfailed', ended);
-        await page.route(match, hold);
         try {
+          await page.route(match, hold);
           await ctx.ui.goto('/');
           // Client-side taps, so Home's held reads stay on the wire; each page adds keys Home doesn't load.
           for (const [name, path] of NAV) {
@@ -183,6 +192,11 @@ export const inflightCap: Scenario = {
             () => meter.live() === 0 && Date.now() - last > 1_000,
             20_000,
           );
+        } catch (e) {
+          // A breach outranks the timeout or tap failure it may have caused.
+          if (meter.counts().peak > CAP)
+            throw new Error(meter.verdict() ?? String(e), { cause: e });
+          throw e;
         } finally {
           await release();
           page.off('request', started);
@@ -191,7 +205,7 @@ export const inflightCap: Scenario = {
         }
         const m = meter.counts();
         ctx.log(
-          `${m.total} /api calls, at most ${m.peak} on the wire at once; ${m.afterRelease} went out only after the release`,
+          `${m.total} /api calls, at most ${m.peak} on the wire at once, held ${heldMs} ms; ${m.afterRelease} went out only after the release (${m.proofs.join(', ') || 'none of the tap-only reads'})`,
         );
         const failed = meter.verdict();
         if (failed) throw new Error(failed);
