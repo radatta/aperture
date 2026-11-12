@@ -3,6 +3,7 @@ import {
   CATEGORY_VIA,
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
+  FINANCE_MARK_VIA,
   FINANCE_RULE_VIA,
   MCP_CATEGORY_VIA,
   PLACE_TOKEN_VIA,
@@ -141,6 +142,7 @@ describe('createApiClient', () => {
       'linkLeetcodeRoll',
       'recordFinanceBucket',
       'recordFinanceLink',
+      'recordFinanceMark',
       'recordFluxSet',
       'recordPlaceTokenMint',
       'recordReminderToggles',
@@ -170,6 +172,7 @@ describe('createApiClient', () => {
       'transitionTask',
       'uncheckHabit',
       'unlinkFinanceRefund',
+      'unmarkFinancePeriodStart',
       'unsetFinanceBucket',
       'unsubscribePush',
       'updateSettings',
@@ -388,6 +391,7 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'place-token:r', via: PLACE_TOKEN_VIA },
         { run: 'r', op: 'created' as const, id: 'finance-bucket:r:tx1', via: FINANCE_BUCKET_VIA },
         { run: 'r', op: 'created' as const, id: 'finance-link:r:tx2', via: FINANCE_LINK_VIA },
+        { run: 'r', op: 'created' as const, id: 'finance-mark:r:tx3', via: FINANCE_MARK_VIA },
         { run: 'r', op: 'created' as const, id: 'R', via: FINANCE_RULE_VIA },
         { run: 'r', op: 'created' as const, id: 'C', via: CATEGORY_VIA },
         { run: 'r', op: 'created' as const, id: 'S', via: SERIES_VIA },
@@ -406,6 +410,7 @@ describe('createApiClient', () => {
           'place-token:r',
           'finance-bucket:r:tx1',
           'finance-link:r:tx2',
+          'finance-mark:r:tx3',
           'R',
           'C',
           'S',
@@ -424,6 +429,7 @@ describe('createApiClient', () => {
         'placeToken',
         'financeBucket',
         'financeLink',
+        'financeMark',
         'financeRule',
         'category',
         'series',
@@ -646,13 +652,15 @@ describe('createApiClient', () => {
   });
 
   describe('finance (the fixture bank’s rows)', () => {
-    it('records a bucket set / a link as finance-<kind>:<run>:<row> once a run, with no request', () => {
+    it('records a bucket set / a link / a mark as finance-<kind>:<run>:<row> once a run, with no request', () => {
       const ledger = memLedger();
       const fetch = vi.fn<FetchLike>();
       const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
       api.writes.recordFinanceBucket('tx1');
       api.writes.recordFinanceBucket('tx1');
       api.writes.recordFinanceLink('tx1');
+      api.writes.recordFinanceMark('tx1');
+      api.writes.recordFinanceMark('tx1');
       expect(fetch).not.toHaveBeenCalled();
       expect(ledger.entries).toEqual([
         {
@@ -669,12 +677,19 @@ describe('createApiClient', () => {
           via: FINANCE_LINK_VIA,
           title: 'link on tx1',
         },
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'finance-mark:r1:tx1',
+          via: FINANCE_MARK_VIA,
+          title: 'mark on tx1',
+        },
       ]);
       expect(financeRowOf('finance-bucket:r1:tx1')).toBe('tx1');
       expect(financeRowOf('finance-link:r1:01HZZ')).toBe('01HZZ');
     });
 
-    it('clears only a recorded bucket / link, by the row the id names, through the row’s own method', async () => {
+    it('clears only a recorded bucket / link / mark, by the row the id names, through the row’s own method', async () => {
       const ledger = memLedger();
       const fetch = vi.fn<FetchLike>(async () => reply(200, []));
       const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
@@ -684,8 +699,15 @@ describe('createApiClient', () => {
       await expect(api.writes.unlinkFinanceRefund('finance-link:r1:tx1')).rejects.toThrow(
         /LEDGER_GUARD/,
       );
+      await expect(api.writes.unmarkFinancePeriodStart('finance-mark:r1:tx3')).rejects.toThrow(
+        /LEDGER_GUARD/,
+      );
       api.writes.recordFinanceBucket('tx1');
       api.writes.recordFinanceLink('tx2');
+      api.writes.recordFinanceMark('tx3');
+      await expect(api.writes.unmarkFinancePeriodStart('finance-link:r1:tx2')).rejects.toThrow(
+        /LEDGER_GUARD/,
+      ); // a link isn't a mark
       await expect(api.writes.unsetFinanceBucket('finance-link:r1:tx2')).rejects.toThrow(
         /LEDGER_GUARD/,
       ); // a link isn't a bucket
@@ -700,6 +722,11 @@ describe('createApiClient', () => {
       expect(fetch).toHaveBeenLastCalledWith(
         `${DEV_ORIGIN}/api/linkFinanceRefund`,
         expect.objectContaining({ body: '{"args":["tx2",null]}' }),
+      );
+      await api.writes.unmarkFinancePeriodStart('finance-mark:r1:tx3');
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/setFinancePeriodStart`,
+        expect.objectContaining({ body: '{"args":["tx3",false]}' }),
       );
     });
 

@@ -197,6 +197,8 @@ export function TransactionDetail({
                 size="sm"
                 variant="ghost"
                 className="self-start"
+                // Mounts after an action only when an Unlink brings it back: the focus target then.
+                autoFocus={acted}
                 onClick={incomeLink.onOpen}
               >
                 Link as a refund

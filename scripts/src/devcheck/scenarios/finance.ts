@@ -51,11 +51,12 @@ const focusedText = (ctx: Ctx) =>
     '(document.activeElement && document.activeElement !== document.body) ? (document.activeElement.getAttribute("aria-label") || document.activeElement.textContent || document.activeElement.tagName) : "<body>"',
   );
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-// Linked on screen before the server answers, so Unlink mounts busy — it must take focus anyway.
-const afterLinkFocus = async (ctx: Ctx) => {
+// Linked / marked on screen before the server answers, so the next button mounts busy — it must take
+// focus anyway.
+const afterActionFocus = async (ctx: Ctx, expected: 'Unlink' | 'Unmark') => {
   await wait(300);
   const focused = await focusedText(ctx);
-  if (focused !== 'Unlink') throw new Error(`after Link, focus is on "${focused}"`);
+  if (focused !== expected) throw new Error(`before ${expected}, focus is on "${focused}"`);
 };
 // The computed font-size of the one element a CSS selector names, in px.
 const fontSizeOf = (ctx: Ctx, selector: string) =>
@@ -145,19 +146,14 @@ export const finance: Scenario = {
       offDev: {
         file: 'app/src/pages/Finances/Finances.test.tsx',
         test: 'under latency, Link and Unlink hand focus to the next button while it’s busy, and a busy click does nothing',
-        why: 'dev can’t hold a request open on demand: the busy window is one round trip, so a click inside it is a race; the stub holds it',
+        why: 'the harness has no way to hold a request open; a click in the one-round-trip window is a race — the stub holds it',
       },
     },
     {
       id: 'mark-focus',
       entry: 'ui',
       kind: 'edge',
-      what: 'Marking a card credit as the period start: Unmark takes focus though busy; a Payment’s Unmark stays focusable while busy',
-      offDev: {
-        file: 'app/src/pages/Finances/Finances.test.tsx',
-        test: 'a card credit can be marked as the period start from its detail, and unmarked',
-        why: 'a mark moves the shared dev user’s billing period, which the fixture rows’ two-period window rides on, and devcheck has no period-start cleanup; same busy-button fix as unlink-focus (proven on dev)',
-      },
+      what: 'A card credit marked as the period start: Unmark takes focus though busy; Unmark makes it a refund again',
     },
     {
       id: 'fixture-aged',
@@ -211,6 +207,9 @@ export const finance: Scenario = {
           needsYou(`no fixture bank: ${FIXTURE_HELP}`);
         for (const re of [REBATE, BOOKS_CHARGE, GROCER, DINNER, PAYBACK])
           if (!find(re)) needsYou(`fixture row ${re.source} is missing: re${FIXTURE_HELP}`);
+        // A run's own mark is swept by id before any step; one made by hand isn't the harness's to clear.
+        if (find(REBATE)!.startsPeriod)
+          needsYou('the devcheck rebate is marked as a period start by hand: unmark it in the app');
         // On screen too: the All tab lists this period and last, and the rows stand still after the link.
         await allTab(ctx, 'devcheck rebate');
         const row = ctx.page.getByRole('button', { name: REBATE }).first();
@@ -245,7 +244,7 @@ export const finance: Scenario = {
           .first()
           .click();
         await dialog.getByText(/it follows the charge/).waitFor({ timeout: 10_000 });
-        await afterLinkFocus(ctx);
+        await afterActionFocus(ctx, 'Unlink');
         ctx.api.writes.recordFinanceBucket(rebate.id); // the ArrowRight below sorts it
         await dialog.getByRole('button', { name: 'Unlink' }).click();
         const unsorted = dialog
@@ -291,7 +290,7 @@ export const finance: Scenario = {
         await link.waitFor({ timeout: 10_000 });
         await link.click();
         await dialog.getByText(/it follows the charge/).waitFor({ timeout: 10_000 });
-        await afterLinkFocus(ctx);
+        await afterActionFocus(ctx, 'Unlink');
         await dialog.getByRole('button', { name: 'Unlink' }).click();
         await dialog
           .getByRole('button', { name: /^Link to /i })
@@ -329,6 +328,39 @@ export const finance: Scenario = {
           throw new Error(`the bucket sits beside the merchant (y ${bucket.y} vs ${merchant.y})`);
         if (button.x + button.width > width + 1) throw new Error('Link is off the right edge');
         await ctx.shot('row-layout');
+        await closeDetail(ctx);
+      },
+    },
+    {
+      id: 'mark-focus',
+      entry: 'ui',
+      proves: ['mark-focus'],
+      title:
+        'Rebate → “It’s a card payment — start the period here” → Unmark focused → Unmark → a Refund again',
+      // After every step that opens the rebate as a Refund: a mark makes it a Payment (no refund controls,
+      // the dialog retitled) and clears its bucket, so unlink-focus's finance-bucket entry reads gone.
+      async run(ctx) {
+        const { find } = await fixtureRows(ctx);
+        const rebate = find(REBATE)!;
+        const refund = await openRow(ctx, REBATE, /^Refund: /);
+        const markButton = refund.getByRole('button', {
+          name: /card payment — start the period here/,
+        });
+        ctx.api.writes.recordFinanceMark(rebate.id); // before the click: cleanup unmarks by id
+        await markButton.click();
+        const payment = ctx.page.getByRole('dialog', { name: /^Payment: / }); // the title follows the kind
+        const unmark = payment.getByRole('button', { name: 'Unmark' });
+        await unmark.waitFor({ timeout: 10_000 });
+        await afterActionFocus(ctx, 'Unmark');
+        await ctx.shot('mark-focus');
+        await unmark.click();
+        await markButton.waitFor({ timeout: 10_000 });
+        for (let i = 0; ; i++) {
+          const t = await ctx.api.reads.getFinanceTransaction(rebate.id);
+          if (t && !t.startsPeriod) break;
+          if (i >= 40) throw new Error('Unmark never landed on the server');
+          await wait(250);
+        }
         await closeDetail(ctx);
       },
     },

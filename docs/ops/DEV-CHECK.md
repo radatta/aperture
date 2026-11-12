@@ -100,8 +100,9 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
    (a Plaid Sandbox `user_custom` config: a card and a checking account with fixed `DEVCHECK …` rows,
    `roll_dates_forward` so the newest row lands on the link day) → tick both accounts → Continue. The rows
    then stand still; the All tab lists this period and last, so they age off it in about six weeks — the
-   scenario says needs-you (`relink`) rather than fail: remove the bank in the app and link it again. Nothing
-   in the harness drives Plaid Link.
+   scenario says needs-you (`relink`) rather than fail: remove the bank in the app and link it again. The rows
+   must carry no period mark of your own: a hand-marked `DEVCHECK REBATE` reads needs-you (the harness
+   unmarks only a mark it recorded). Nothing in the harness drives Plaid Link.
 
 ## What it guarantees
 
@@ -232,8 +233,9 @@ reported as a possible leak; `refused` is a param error the server raised before
 line's `via` names what cleanup reads back and removes (`api.ts` `ledgerKind`): a task, a Flux set, a place, the
 place token (`place-token:<run>`), a finance rule, a recurring series (deleted with the occurrences `getDay`
 spawned for it — the series id is their record, [tasks/recurring](../areas/tasks/recurring.md) §6), and on the fixture bank's rows a bucket set
-(`finance-bucket:<run>:<row>`) or a refund link (`finance-link:<run>:<row>`) — recorded before the click that
-makes it, cleared (unsorted / unlinked) at cleanup; the row itself is the fixture's and stays. The MCP hook
+(`finance-bucket:<run>:<row>`), a refund link (`finance-link:<run>:<row>`) or a period mark
+(`finance-mark:<run>:<row>`) — recorded before the click that makes it, cleared (unsorted / unlinked / unmarked)
+at cleanup; the row itself is the fixture's and stays. The MCP hook
 writes `{t, op, id, parent?, via, session}`, `op` one of `created`, `reparented`, `tainted` (the id has a part
 the hook never recorded — it never clears, so that parent stays undeletable), `deleted`. It denies an `aperture-dev` `delete_task` unless the id has a `created`
 line and no `tainted` one, and records the parts a parent's delete took with it (CLAUDE.md → _Aperture MCP

@@ -42,7 +42,10 @@ function hold(api: ApiClient, method: 'linkFinanceRefund' | 'setFinancePeriodSta
   (api as unknown as Record<string, unknown>)[method] = (...a: unknown[]) => {
     held.calls++;
     return new Promise((r) => {
-      held.land = () => r(real(...a));
+      held.land = () => {
+        held.land = () => {}; // once: a second land() must not repeat the write
+        r(real(...a));
+      };
     });
   };
   return { calls: () => held.calls, land: () => act(async () => held.land()) };
@@ -302,6 +305,7 @@ describe('Finances page', () => {
     expect(unlink.getAttribute('aria-disabled')).toBe('true');
     await waitFor(() => expect(document.activeElement).toBe(unlink));
     await user.click(unlink);
+    await user.keyboard('{Enter}'); // the stray Enter on the focused busy button
     expect(link.calls()).toBe(1);
     expect(within(dialog).getByText(/it follows the charge/)).toBeTruthy();
     await link.land();
@@ -341,6 +345,22 @@ describe('Finances page', () => {
     await link.land();
     await waitFor(() => expect(row.getAttribute('aria-disabled')).toBeNull());
     expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Link to /);
+  });
+
+  it('Unlink on a deposit opened already linked hands focus to "Link as a refund"', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
+    const link = hold(api, 'linkFinanceRefund');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Family/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    // The collapsed disclosure comes back in place of the link: it takes focus, not <body>.
+    const trigger = await within(dialog).findByRole('button', { name: 'Link as a refund' });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await link.land();
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('with no mark, uses the payment day and offers the last card payment as a one-click start', async () => {

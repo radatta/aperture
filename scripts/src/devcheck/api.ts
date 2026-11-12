@@ -205,6 +205,7 @@ export interface DevFinanceTransaction {
   rawAmountCents: number; // Plaid's sign: positive = money out
   bucket: string | null;
   refundOfId: string | null;
+  startsPeriod: boolean;
 }
 export interface DevFinanceRule {
   id: string;
@@ -383,17 +384,20 @@ export const REMINDER_TOGGLES_VIA = 'api:setReminderSettings';
 export const reminderTogglesId = (run: string): string => `reminder-toggles:${run}`;
 export const REMINDERS_ON = { remindTimed: true, remindDueDay: true, remindPlanned: true } as const;
 
-// A bucket set or a refund link on a fixture bank row. Neither has an id of its own, so, like the token, a run
-// records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` — before the click that sets it (the
-// browser does the write), run-scoped so two runs on the same row never resolve each other's entry. Cleanup
-// clears the bucket / the link; the row itself is the fixture's and stays. A rule the run adds is its own
+// A bucket set, a refund link or a period mark on a fixture bank row. None has an id of its own, so, like the
+// token, a run records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` / `finance-mark:<run>:<row>`
+// — before the click that sets it (the browser does the write), run-scoped so two runs on the same row never
+// resolve each other's entry. Cleanup clears the bucket / the link / the mark; the row itself is the
+// fixture's and stays. A rule the run adds is its own
 // row with an id, recorded from the create response like a place.
 export const FINANCE_BUCKET_VIA = 'ui:setFinanceBucket';
 export const FINANCE_LINK_VIA = 'ui:linkFinanceRefund';
+export const FINANCE_MARK_VIA = 'ui:setFinancePeriodStart';
 export const FINANCE_RULE_VIA = 'api:upsertFinanceRule';
 export const financeBucketId = (run: string, row: string): string => `finance-bucket:${run}:${row}`;
 export const financeLinkId = (run: string, row: string): string => `finance-link:${run}:${row}`;
-// The row a finance-bucket / finance-link ledger id names — after the last colon (a ULID has none).
+export const financeMarkId = (run: string, row: string): string => `finance-mark:${run}:${row}`;
+// The row a finance-bucket / -link / -mark ledger id names — after the last colon (a ULID has none).
 export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':') + 1);
 
 // What a ledger id names, by the `via` it was created with — each kind is read and deleted its own way.
@@ -406,6 +410,7 @@ export type LedgerKind =
   | 'habit'
   | 'financeBucket'
   | 'financeLink'
+  | 'financeMark'
   | 'financeRule'
   | 'pushsub'
   | 'reminderToggles'
@@ -426,6 +431,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === LC_ROLL_LINK_VIA) return 'lcRollLink';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
+  if (via === FINANCE_MARK_VIA) return 'financeMark';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
   if (via === PUSH_SUB_VIA || via === UI_PUSH_SUB_VIA) return 'pushsub';
   if (via === REMINDER_TOGGLES_VIA) return 'reminderToggles';
@@ -1021,6 +1027,11 @@ export function createApiClient({
       if (!pendingIds(ledger.read()).includes(id))
         ledger.append({ run, op: 'created', id, via: FINANCE_LINK_VIA, title: `link on ${row}` });
     },
+    recordFinanceMark(row: string): void {
+      const id = financeMarkId(run, row);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: FINANCE_MARK_VIA, title: `mark on ${row}` });
+    },
     // Cleanup's halves: clear what a recorded entry set — never a row the ledger doesn't name.
     async unsetFinanceBucket(id: string): Promise<void> {
       assertLedger(id, 'financeBucket');
@@ -1029,6 +1040,10 @@ export function createApiClient({
     async unlinkFinanceRefund(id: string): Promise<void> {
       assertLedger(id, 'financeLink');
       await call<unknown>('linkFinanceRefund', [financeRowOf(id), null]);
+    },
+    async unmarkFinancePeriodStart(id: string): Promise<void> {
+      assertLedger(id, 'financeMark');
+      await call<unknown>('setFinancePeriodStart', [financeRowOf(id), false]);
     },
     // A rule, recorded from the create response like a place; deleted only when recorded.
     async upsertFinanceRule(input: { pattern: string; bucket: string }): Promise<DevFinanceRule> {

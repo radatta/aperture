@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
+  FINANCE_MARK_VIA,
   FINANCE_RULE_VIA,
   FLUX_SET_VIA,
   CATEGORY_VIA,
@@ -66,12 +67,13 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const categories = new Map<string, DevCategory>();
   const categoriesDeleted: string[] = [];
   const placeToken = { active: false, revokes: 0 };
-  // The fixture bank's rows and the run's rules: cleanup clears a bucket / a link, deletes a rule.
+  // The fixture bank's rows and the run's rules: cleanup clears a bucket / a link / a mark, deletes a rule.
   const finance = {
     rows: new Map<string, DevFinanceTransaction>(),
     rules: new Map<string, DevFinanceRule>(),
     unset: [] as string[],
     unlinked: [] as string[],
+    unmarked: [] as string[],
     rulesDeleted: [] as string[],
   };
   const pushDevices = new Set<string>();
@@ -419,6 +421,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       recordFinanceLink: () => {
         throw new Error('unused');
       },
+      recordFinanceMark: () => {
+        throw new Error('unused');
+      },
       unsetFinanceBucket: async (id) => {
         finance.unset.push(id);
         const row = finance.rows.get(id.split(':')[2]!);
@@ -428,6 +433,11 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         finance.unlinked.push(id);
         const row = finance.rows.get(id.split(':')[2]!);
         if (row) row.refundOfId = null;
+      },
+      unmarkFinancePeriodStart: async (id) => {
+        finance.unmarked.push(id);
+        const row = finance.rows.get(id.split(':')[2]!);
+        if (row) row.startsPeriod = false;
       },
       upsertFinanceRule: async () => {
         throw new Error('unused');
@@ -1810,7 +1820,7 @@ describe('runPipeline', () => {
     });
   });
 
-  it('a bucket, a link and a rule in the ledger are cleared their own way, and an earlier run’s swept', async () => {
+  it('a bucket, a link, a mark and a rule in the ledger are cleared their own way, and an earlier run’s swept', async () => {
     const w = world();
     const row = (id: string, over: Partial<DevFinanceTransaction>): DevFinanceTransaction => ({
       id,
@@ -1821,11 +1831,13 @@ describe('runPipeline', () => {
       rawAmountCents: 100,
       bucket: null,
       refundOfId: null,
+      startsPeriod: false,
       ...over,
     });
     w.finance.rows.set('tx1', row('tx1', { bucket: 'budget' }));
     w.finance.rows.set('tx2', row('tx2', { refundOfId: 'c' }));
     w.finance.rows.set('tx3', row('tx3', { bucket: 'i_pay' }));
+    w.finance.rows.set('tx4', row('tx4', { startsPeriod: true }));
     w.finance.rules.set('R1', { id: 'R1', pattern: 'devcheck', bucket: 'budget' });
     const ledger = memLedger([
       { run: 'run0', op: 'created', id: 'finance-bucket:run0:tx3', via: FINANCE_BUCKET_VIA },
@@ -1843,21 +1855,32 @@ describe('runPipeline', () => {
         id: 'finance-link:run1:tx2',
         via: FINANCE_LINK_VIA,
       });
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-mark:run1:tx4',
+        via: FINANCE_MARK_VIA,
+      });
       ledger.append({ run: 'run1', op: 'created', id: 'R1', via: FINANCE_RULE_VIA });
     })(w);
     const r = await runPipeline(deps(w, [sc], ledger));
     expect(r.swept).toEqual(['finance-bucket:run0:tx3']);
     expect(w.finance.unset).toEqual(['finance-bucket:run0:tx3', 'finance-bucket:run1:tx1']);
     expect(w.finance.unlinked).toEqual(['finance-link:run1:tx2']);
+    expect(w.finance.unmarked).toEqual(['finance-mark:run1:tx4']);
     expect(w.finance.rulesDeleted).toEqual(['R1']);
-    expect([...w.finance.rows.values()].map((t) => [t.bucket, t.refundOfId])).toEqual([
-      [null, null],
-      [null, null],
-      [null, null],
+    expect(
+      [...w.finance.rows.values()].map((t) => [t.bucket, t.refundOfId, t.startsPeriod]),
+    ).toEqual([
+      [null, null, false],
+      [null, null, false],
+      [null, null, false],
+      [null, null, false],
     ]);
     expect(r.created.map((c) => [c.id, c.final])).toEqual([
       ['finance-bucket:run1:tx1', 'deleted'],
       ['finance-link:run1:tx2', 'deleted'],
+      ['finance-mark:run1:tx4', 'deleted'],
       ['R1', 'deleted'],
     ]);
     expect(r.status).toBe('PASS');

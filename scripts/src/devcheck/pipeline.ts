@@ -488,7 +488,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // through its own method, so a Flux set or a place is never "verified gone" by a task lookup. The place
   // token has no id of its own: `place-token:<run>` stands for "a run minted the test user's token", which
   // exists while the status reads active and is removed by a revoke.
-  // A finance bucket or link names a row the fixture bank owns (api.ts financeRowOf): it "exists" while
+  // A finance bucket, link or mark names a row the fixture bank owns (api.ts financeRowOf): it "exists" while
   // the row still carries what the run set, and removing it clears that, never the row.
   // A push device exists while it's among the status's alive devices (a removed one is a keyless
   // tombstone; one the poller dropped is gone).
@@ -515,6 +515,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.bucket != null;
       case 'financeLink':
         return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.refundOfId != null;
+      case 'financeMark':
+        return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.startsPeriod === true;
       case 'financeRule':
         return (await client.reads.listFinanceRules()).some((x) => x.id === id);
       case 'series':
@@ -560,6 +562,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'financeLink':
         await client.writes.unlinkFinanceRefund(id);
+        return true;
+      case 'financeMark':
+        await client.writes.unmarkFinancePeriodStart(id);
         return true;
       case 'financeRule':
         await client.writes.deleteFinanceRule(id);
