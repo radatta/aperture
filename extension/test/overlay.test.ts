@@ -2,7 +2,7 @@
 // extension API whose background answers like A1's server: the overlay's Start clicks LeetCode's own reset,
 // confirm and timer; the binding resumes a reload; SPA navigation re-prompts.
 import { createRequire } from 'node:module';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JSDOM } from 'jsdom';
 import {
   SITTING_ACTIVE_ERROR,
@@ -22,8 +22,27 @@ import {
   shadowRoots,
   src,
   trustedClick,
-  until,
 } from './load';
+
+// Fake timers: every wait the scripts pay (retry ladders, intervals, Start's step timeouts, the debug flush) runs
+// on a fake clock, and `until`/`settle` advance it. One real turn per step (`io`) lets the relay's webcrypto HMAC,
+// which completes on node's threadpool rather than as a microtask, land before the next check. Budgets are fake
+// milliseconds, so each `until` bound is exact; the 10 ms step matches load.ts's real-time poll.
+const realSetTimeout = setTimeout;
+const io = () => new Promise<void>((r) => realSetTimeout(r, 0));
+async function until<T>(fn: () => T | null | undefined | false, ms = 3000, step = 10): Promise<T> {
+  for (let t = 0; ; t += step) {
+    await io();
+    const v = fn();
+    if (v) return v;
+    if (t >= ms) throw new Error('until: timed out');
+    await vi.advanceTimersByTimeAsync(step);
+  }
+}
+const settle = async (ms: number) => {
+  await vi.advanceTimersByTimeAsync(ms);
+  await io();
+};
 
 const { createServer } = createRequire(import.meta.url)('./fixtures/fake-leetcode-server.js');
 const idl = createRequire(import.meta.url)('jsdom/lib/generated/idl/utils.js');
@@ -111,8 +130,14 @@ function fakeBackground(opts: { configured?: boolean } = {}) {
 }
 
 const pages: JSDOM[] = [];
+beforeEach(() => {
+  vi.useFakeTimers({
+    toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+  });
+});
 afterEach(() => {
-  pages.splice(0).forEach((d) => d.window.close());
+  pages.splice(0).forEach((d) => d.window.close()); // first: jsdom's close clears its timers on the fake clock
+  vi.useRealTimers();
 });
 
 // `nextData`: the __NEXT_DATA__ a fresh load of LeetCode carries (it server-renders the problem doc there).
@@ -163,6 +188,9 @@ function open(
   const rootOf = shadowRoots(dom);
   if (opts.css) (w as Record<string, unknown>).CSS = opts.css; // the browser's CSS namespace, as the page's scripts see it
   if (opts.lateHint) w.__fakeOpts = { lateHint: true };
+  // The page's own Date is the realm's, which fake timers don't reach: give it the fake one, so the scripts'
+  // deadlines (waitFor, the batcher, the badge minutes) run on the same clock as their timers.
+  Object.defineProperty(w, 'Date', { value: Date, configurable: true, writable: true });
   run(dom, MAIN_JS, { fetch: fetchFake });
   run(dom, ISOLATED_JS, { chrome: ext.api });
   run(dom, ['test/fixtures/fake-leetcode.js']);
@@ -244,7 +272,7 @@ describe('the overlay on a LeetCode problem', () => {
     code.value += 'return [0, 1]\n';
     code.dispatchEvent(new p.w.Event('input'));
     await until(() => p.fake().syncs > syncs, 3000); // LeetCode's autosave went
-    await new Promise((res) => setTimeout(res, 100)); // and the relay has it
+    await settle(100); // and the relay has it
     expect(sentEvents(ext).some((e) => e.type === 'snapshot')).toBe(false);
     (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
     await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
@@ -304,7 +332,7 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => p.phase() === 'prompt');
     p.button('start')!.click(); // what a LeetCode script can do: an untrusted click
     p.button('look')!.click();
-    await new Promise((res) => setTimeout(res, 300));
+    await settle(300);
     expect(p.phase()).toBe('prompt');
     expect(messages(ext, 'start')).toEqual([]);
     p.tap('start');
@@ -394,7 +422,7 @@ describe('the overlay on a LeetCode problem', () => {
     code.value += 'return []\n';
     code.dispatchEvent(new p.w.Event('input'));
     await until(() => p.fake().syncs > syncs, 3000);
-    await new Promise((res) => setTimeout(res, 100));
+    await settle(100);
     expect(
       sentEvents(ext).some((e) => (e.payload as { code?: string })?.code?.includes('return []')),
     ).toBe(false);
@@ -416,7 +444,7 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => messages(ext, 'dismiss').length === 1);
     const again = open('/problems/two-sum/', ext);
     await until(() => messages(ext, 'dismissed?').length === 2);
-    await new Promise((res) => setTimeout(res, 300));
+    await settle(300);
     expect(again.phase()).toBe('hidden');
     expect(again.fake()).toMatchObject({
       resets: 0,
@@ -427,7 +455,7 @@ describe('the overlay on a LeetCode problem', () => {
     // Nothing is captured for a problem with no sitting.
     const code = again.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
     code.dispatchEvent(new again.w.Event('input'));
-    await new Promise((res) => setTimeout(res, 800));
+    await settle(800);
     expect(messages(ext, 'enqueue')).toEqual([]);
     expect(messages(ext, 'start')).toEqual([]);
   });
@@ -538,7 +566,7 @@ describe('the overlay on a LeetCode problem', () => {
     expect(path).toMatchObject({ status: null, opened: true }); // no timer state: never used
     expect(path).not.toHaveProperty('started');
     await ext.local.remove('selectors'); // the fix, pasted in Options: back to the defaults
-    await new Promise((res) => setTimeout(res, 100));
+    await settle(100);
     p.tap('retry');
     await until(() => p.phase() === 'active', 8000);
     expect(p.fake()).toMatchObject({ resets: 1, timerStarts: 1, strays: 0 });
@@ -567,7 +595,7 @@ describe('the overlay on a LeetCode problem', () => {
     let resetClicks = 0;
     p.w.document.querySelector('[data-fake=reset]')!.addEventListener('click', () => resetClicks++);
     await ext.local.remove('selectors');
-    await new Promise((res) => setTimeout(res, 100));
+    await settle(100);
     p.tap('retry'); // the dialog is open: repeat the confirm, no second reset
     await until(() => p.phase() === 'active', 8000);
     expect(resetClicks).toBe(0);
@@ -581,7 +609,7 @@ describe('the overlay on a LeetCode problem', () => {
       .querySelector('[data-fake=reset]')!
       .addEventListener('click', () => again2++);
     await again.ext.local.remove('selectors');
-    await new Promise((res) => setTimeout(res, 100));
+    await settle(100);
     again.p.tap('retry');
     await until(() => again.p.phase() === 'active', 8000);
     expect(again2).toBe(1);
@@ -597,7 +625,7 @@ describe('the overlay on a LeetCode problem', () => {
     const open = () => p.w.document.querySelector('#radix-_r_c_[data-state="open"] button');
     expect(open()?.textContent).toMatch(/^Reset /); // LeetCode's pop-up is still asking
     await ext.local.remove('selectors');
-    await new Promise((res) => setTimeout(res, 100));
+    await settle(100);
     p.tap('retry'); // the click on our overlay dismisses it: closing, still in the DOM, inert
     await until(() => p.phase() === 'active', 8000);
     // LeetCode's Reset was clicked again (twice in all), and the pop-up's Reset once — in the open one.
@@ -617,7 +645,7 @@ describe('the overlay on a LeetCode problem', () => {
     expect(p.phase()).toBe('failed');
     p.fake().stickyPopup = true; // this time the pop-up stays put through the click on our overlay
     await ext.local.remove('selectors');
-    await new Promise((res) => setTimeout(res, 100));
+    await settle(100);
     p.tap('retry');
     await until(() => p.phase() === 'active', 8000);
     expect(p.fake()).toMatchObject({
@@ -699,7 +727,7 @@ describe('the overlay on a LeetCode problem', () => {
     const timers = () => sentEvents(ext).filter((e) => e.type === 'timer').length;
     await until(() => timers() >= 1, 8000);
     const before = timers();
-    await new Promise((res) => setTimeout(res, 2500)); // the timer's reading is unchanged: nothing new goes
+    await settle(2500); // the timer's reading is unchanged: nothing new goes
     expect(timers()).toBe(before);
     trustedFocus(p.w);
     await until(() => timers() > before, 8000);
@@ -789,7 +817,7 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => p.phase() === 'active', 8000);
     submitClick(p);
     await until(() => p.badge()?.includes('events waiting'), 20_000);
-    await new Promise((res) => setTimeout(res, 5500)); // past the badge's 5 s repaint: still says so
+    await settle(5500); // past the badge's 5 s repaint: still says so
     // Not "reload": a reload would lose the kept events.
     expect(p.badge()).toBe(
       'Aperture · events waiting to reach the extension — retrying, keep this tab open',
@@ -801,7 +829,7 @@ describe('the overlay on a LeetCode problem', () => {
     runtime.id = 'ext-id';
     // Taken out to try again, still refused: the badge keeps saying so through the retry waits.
     trustedFocus(p.w);
-    await new Promise((res) => setTimeout(res, 1000));
+    await settle(1000);
     expect(p.badge()).toContain('events waiting');
     refuse = false;
     trustedFocus(p.w);
@@ -1087,7 +1115,7 @@ describe('the problem doc from the page', () => {
     p.tap('start');
     await until(() => messages(ext, 'start').length === 1); // its body went without a doc
     p.fake().fetchDoc(); // LeetCode's doc lands while Aperture is still answering
-    await new Promise((res) => setTimeout(res, 300));
+    await settle(300);
     release();
     await until(() => p.phase() === 'active', 8000);
     expect(startOf(ext).problem).toBeNull();
@@ -1129,7 +1157,7 @@ describe('the debug log’s wire probe', () => {
   };
   const traffic = async (p: ReturnType<typeof open>) => {
     p.fake().fetchDoc();
-    await new Promise((res) => setTimeout(res, 300));
+    await settle(300);
   };
 
   it('parses a request’s operation names only with Debug mode on, and logs them', async () => {
