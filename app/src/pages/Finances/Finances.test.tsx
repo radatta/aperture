@@ -34,6 +34,20 @@ async function linked(): Promise<ApiClient> {
   return api;
 }
 
+// The server's latency, with the test owning the timing: every call to `method` waits for land(), which
+// answers the latest one. The cache updates on the click (onMutate), so what mounts next mounts busy.
+function hold(api: ApiClient, method: 'linkFinanceRefund' | 'setFinancePeriodStart') {
+  const real = (api[method] as (...a: unknown[]) => Promise<unknown>).bind(api);
+  const held = { calls: 0, land: () => {} };
+  (api as unknown as Record<string, unknown>)[method] = (...a: unknown[]) => {
+    held.calls++;
+    return new Promise((r) => {
+      held.land = () => r(real(...a));
+    });
+  };
+  return { calls: () => held.calls, land: () => act(async () => held.land()) };
+}
+
 const group = async (name: RegExp) => (await screen.findAllByRole('group', { name }))[0]!;
 
 // screen.findAllByRole('button', { name }) narrowed to list rows: the same role + name + visibility check,
@@ -275,9 +289,64 @@ describe('Finances page', () => {
     expect(await screen.findByText('$565 left')).toBeTruthy();
   });
 
+  it('under latency, Link and Unlink hand focus to the next button while it’s busy, and a busy click does nothing', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    const link = hold(api, 'linkFinanceRefund');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click(within(dialog).getAllByRole('button', { name: /Link to Amazon/ })[0]!);
+    // Linked on screen, the server yet to answer: Unlink is busy, and holds focus anyway.
+    const unlink = await within(dialog).findByRole('button', { name: 'Unlink' });
+    expect(unlink.getAttribute('aria-disabled')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(unlink));
+    await user.click(unlink);
+    expect(link.calls()).toBe(1);
+    expect(within(dialog).getByText(/it follows the charge/)).toBeTruthy();
+    await link.land();
+    await waitFor(() => expect(unlink.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement).toBe(unlink);
+
+    await user.click(unlink);
+    const best = (await within(dialog).findAllByRole('button', { name: /Link to Amazon/ }))[0]!;
+    expect(best.getAttribute('aria-disabled')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(best));
+    await user.click(best);
+    expect(link.calls()).toBe(2);
+    expect(within(dialog).queryByText(/it follows the charge/)).toBeNull();
+    await link.land();
+    await waitFor(() => expect(best.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement).toBe(
+      within(dialog).getAllByRole('button', { name: /Link to Amazon/ })[0],
+    );
+  });
+
+  it('under latency, money in keeps focus through Link → Unlink → a Link row', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    const link = hold(api, 'linkFinanceRefund');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Family/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    await user.click(within(dialog).getAllByRole('button', { name: /^Link to Roommate/ })[0]!);
+    const unlink = await within(dialog).findByRole('button', { name: 'Unlink' });
+    await waitFor(() => expect(document.activeElement).toBe(unlink));
+    await link.land();
+    await user.click(unlink);
+    const row = (await within(dialog).findAllByRole('button', { name: /^Link to / }))[0]!;
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    expect(document.activeElement).not.toBe(document.body);
+    await link.land();
+    await waitFor(() => expect(row.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Link to /);
+  });
+
   it('with no mark, uses the payment day and offers the last card payment as a one-click start', async () => {
     const user = userEvent.setup();
-    renderApp({ api: await linkedBare(), path: '/finances/all' });
+    const api = await linkedBare();
+    renderApp({ api, path: '/finances/all' });
     expect(await screen.findByText(/using your payment day \(the 20th\)/)).toBeTruthy();
     expect(
       await screen.findByText(/Looks like you paid the card on .* \(\+\$745\.18\)/),
@@ -291,10 +360,17 @@ describe('Finances page', () => {
     await user.click(payment);
     const dialog = await screen.findByRole('dialog', { name: /^Payment: / });
     expect(within(dialog).getByText(/This payment starts a period/)).toBeTruthy();
-    await user.click(within(dialog).getByRole('button', { name: 'Unmark' }));
-    expect(
-      await within(dialog).findByRole('button', { name: 'Start the period here' }),
-    ).toBeTruthy();
+    const mark = hold(api, 'setFinancePeriodStart');
+    const button = within(dialog).getByRole('button', { name: 'Unmark' });
+    await user.click(button);
+    // The same button, busy: aria-disabled, never disabled — a disabled button drops the focus it holds
+    // (Chromium; jsdom keeps it, so focus can't be the check here).
+    expect(await within(dialog).findByRole('button', { name: 'Start the period here' })).toBe(
+      button,
+    );
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    await mark.land();
     expect(await screen.findByText(/using your payment day/)).toBeTruthy();
   });
 
@@ -333,14 +409,23 @@ describe('Finances page', () => {
 
   it('a card credit can be marked as the period start from its detail, and unmarked', async () => {
     const user = userEvent.setup();
-    renderApp({ api: await linked(), path: '/finances/all' });
+    const api = await linked();
+    const mark = hold(api, 'setFinancePeriodStart');
+    renderApp({ api, path: '/finances/all' });
     await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
     await user.click(
       within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
     );
+    // Marked on screen before the server answers: Unmark mounts busy and still takes focus.
     const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+    expect(unmark.getAttribute('aria-disabled')).toBe('true');
     await waitFor(() => expect(document.activeElement).toBe(unmark));
+    await user.click(unmark);
+    expect(mark.calls()).toBe(1);
+    await mark.land();
+    await waitFor(() => expect(unmark.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement).toBe(unmark);
     expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
     expect(await screen.findByText(/since your .* payment/)).toBeTruthy();
     await user.click(unmark);
@@ -806,12 +891,16 @@ describe('Refund link search', () => {
     renderApp({ api, path: '/finances/all' });
     await user.click((await findRows(/Target.*\+\$5,000/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Refund: Target/ });
+    // Under latency too — the hand-off doesn't wait on the server (a check, not this test's fix).
+    const link = hold(api, 'linkFinanceRefund');
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
     expect(within(dialog).getByText(/No likely charge found/)).toBeTruthy();
     // No Link row and no Cancel: focus lands on the checked option, not <body> and not the search box.
     const unsorted = within(bucket).getByRole('radio', { name: 'Unsorted' });
     await waitFor(() => expect(document.activeElement).toBe(unsorted));
+    await link.land();
+    expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' }));
     await user.keyboard('{ArrowRight}'); // wraps to the first bucket — the next thing you'd do
     await waitFor(async () =>
       expect(

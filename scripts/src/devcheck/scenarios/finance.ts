@@ -51,6 +51,12 @@ const focusedText = (ctx: Ctx) =>
     '(document.activeElement && document.activeElement !== document.body) ? (document.activeElement.getAttribute("aria-label") || document.activeElement.textContent || document.activeElement.tagName) : "<body>"',
   );
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Linked on screen before the server answers, so Unlink mounts busy — it must take focus anyway.
+const afterLinkFocus = async (ctx: Ctx) => {
+  await wait(300);
+  const focused = await focusedText(ctx);
+  if (focused !== 'Unlink') throw new Error(`after Link, focus is on "${focused}"`);
+};
 // The computed font-size of the one element a CSS selector names, in px.
 const fontSizeOf = (ctx: Ctx, selector: string) =>
   ctx.page.evaluate<number>(
@@ -76,13 +82,13 @@ export const finance: Scenario = {
       id: 'unlink-focus',
       entry: 'ui',
       kind: 'nominal',
-      what: 'A card credit with no suggestions: link by search, Unlink → focus on the checked Bucket option, a key sorts it, survives reload',
+      what: 'A card credit with no suggestions: link by search → Unlink takes focus though busy; Unlink → focus on the checked Bucket option, a key sorts it, survives reload',
     },
     {
       id: 'money-in-unlink',
       entry: 'ui',
       kind: 'edge',
-      what: 'Money in: link, Unlink still focuses a Link row (neighbour unaffected); Esc closes the detail',
+      what: 'Money in: link → Unlink takes focus though busy; Unlink still focuses a Link row (neighbour unaffected); Esc closes the detail',
     },
     {
       id: 'row-layout',
@@ -129,6 +135,28 @@ export const finance: Scenario = {
         file: 'app/src/pages/Finances/Finances.test.tsx',
         test: 'Unlink on a card credit with no suggestions focuses Bucket',
         why: 'same path as unlink-focus (proven on dev): the same RefundSuggestions → Segmented hand-off, on a stub row sized past every charge',
+      },
+    },
+    {
+      id: 'busy-click',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A click on a Link or Unlink still busy with the last one fires nothing; focus stays put when it lands',
+      offDev: {
+        file: 'app/src/pages/Finances/Finances.test.tsx',
+        test: 'under latency, Link and Unlink hand focus to the next button while it’s busy, and a busy click does nothing',
+        why: 'dev can’t hold a request open on demand: the busy window is one round trip, so a click inside it is a race; the stub holds it',
+      },
+    },
+    {
+      id: 'mark-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Marking a card credit as the period start: Unmark takes focus though busy; a Payment’s Unmark stays focusable while busy',
+      offDev: {
+        file: 'app/src/pages/Finances/Finances.test.tsx',
+        test: 'a card credit can be marked as the period start from its detail, and unmarked',
+        why: 'a mark moves the shared dev user’s billing period, which the fixture rows’ two-period window rides on, and devcheck has no period-start cleanup; same busy-button fix as unlink-focus (proven on dev)',
       },
     },
     {
@@ -202,7 +230,7 @@ export const finance: Scenario = {
       entry: 'ui',
       proves: ['unlink-focus'],
       title:
-        'Rebate → search “devcheck books” → Link → Unlink → Bucket focused → ArrowRight sorts → reload',
+        'Rebate → search “devcheck books” → Link → Unlink focused → Unlink → Bucket focused → ArrowRight sorts → reload',
       async run(ctx) {
         const { find } = await fixtureRows(ctx);
         const rebate = find(REBATE)!;
@@ -217,6 +245,7 @@ export const finance: Scenario = {
           .first()
           .click();
         await dialog.getByText(/it follows the charge/).waitFor({ timeout: 10_000 });
+        await afterLinkFocus(ctx);
         ctx.api.writes.recordFinanceBucket(rebate.id); // the ArrowRight below sorts it
         await dialog.getByRole('button', { name: 'Unlink' }).click();
         const unsorted = dialog
@@ -250,7 +279,8 @@ export const finance: Scenario = {
       id: 'money-in',
       entry: 'ui',
       proves: ['money-in-unlink'],
-      title: 'Payback → Link as a refund → Link → Unlink keeps focus on a Link row → Esc closes',
+      title:
+        'Payback → Link as a refund → Link → Unlink focused → Unlink keeps focus on a Link row → Esc closes',
       async run(ctx) {
         const { find } = await fixtureRows(ctx);
         const payback = find(PAYBACK)!;
@@ -261,6 +291,7 @@ export const finance: Scenario = {
         await link.waitFor({ timeout: 10_000 });
         await link.click();
         await dialog.getByText(/it follows the charge/).waitFor({ timeout: 10_000 });
+        await afterLinkFocus(ctx);
         await dialog.getByRole('button', { name: 'Unlink' }).click();
         await dialog
           .getByRole('button', { name: /^Link to /i })
