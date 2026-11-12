@@ -203,6 +203,32 @@ describe('Repo persistence', () => {
       to: 'hcheck#2026-08-07#\uffff',
     });
   });
+
+  it('listLogRange bounds the sort key to log#<from>#..log#<to># (one range read)', async () => {
+    const { doc, repo: r } = repo();
+    const entry = (id: string, day: string) => ({
+      id,
+      userId: U,
+      createdAt: 0,
+      updatedAt: 0,
+      deletedAt: null,
+      day,
+      text: id,
+    });
+    await r.putLog(entry('l1', '2026-08-01'));
+    await r.putLog(entry('l2', '2026-08-04'));
+    await r.putLog({ ...entry('l3', '2026-08-04'), deletedAt: 9 });
+    await r.putLog(entry('l4', '2026-08-09'));
+    expect((await r.listLogRange('2026-08-02', '2026-08-04')).map((e) => e.id)).toEqual(['l2']);
+    expect(doc.queries.at(-1)).toMatchObject({
+      prefix: 'log#',
+      from: 'log#2026-08-02#',
+      to: 'log#2026-08-04#\uffff',
+    });
+    // No bounds → the whole log prefix, still one query on the user's partition.
+    expect((await r.listLogRange()).map((e) => e.id)).toEqual(['l1', 'l2', 'l4']);
+    expect(doc.queries.at(-1)).toMatchObject({ prefix: 'log#', from: undefined, to: undefined });
+  });
 });
 
 describe('Repo reminders (the remind index + push rows)', () => {

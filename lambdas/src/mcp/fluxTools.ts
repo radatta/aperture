@@ -23,7 +23,7 @@ const HONESTY =
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
-function setRow(s: FluxSet) {
+export function setRow(s: FluxSet) {
   const def = isExerciseId(s.exerciseId) ? getExercise(s.exerciseId) : null;
   const metric = def ? setMetric(def, s) : null;
   return {

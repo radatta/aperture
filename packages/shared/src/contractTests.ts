@@ -163,6 +163,43 @@ export function runApiContract(
       expect(updated.text).toBe('shipped it, finally');
     });
 
+    it('logs: a range read returns the days between, oldest first, and refuses a reversed range', async () => {
+      const a = await api.createLogEntry('first', '2026-08-03');
+      advance(1000);
+      const b = await api.createLogEntry('second', '2026-08-04');
+      advance(1000);
+      const c = await api.createLogEntry('third', '2026-08-04');
+      await api.createLogEntry('outside', '2026-08-06');
+      const ids = (r: Parameters<ApiClient['listLogRange']>[0]) =>
+        api.listLogRange(r).then((l) => l.map((e) => e.id));
+      expect(await ids({ from: '2026-08-03', to: '2026-08-05' })).toEqual([a.id, b.id, c.id]);
+      expect(await ids({ from: '2026-08-04', to: '2026-08-04' })).toEqual([b.id, c.id]);
+      expect(await ids({ to: '2026-08-03' })).toEqual([a.id]); // an open bound reads to that end
+      expect((await ids({})).length).toBe(4);
+      await expect(api.listLogRange({ from: '2026-08-05', to: '2026-08-04' })).rejects.toThrow(
+        'Invalid range',
+      );
+      await expect(api.listLogRange({ from: '2026-8-5' })).rejects.toThrow('Invalid day');
+    });
+
+    it('logs: deleteLogEntry tombstones an entry (listed no more; a second delete is a no-op)', async () => {
+      const e = await api.createLogEntry('seeded', '2026-08-04');
+      await api.deleteLogEntry(e.id);
+      expect(await api.listLogEntries('2026-08-04')).toEqual([]);
+      expect(await api.listLogRange({})).toEqual([]);
+      await expect(api.deleteLogEntry(e.id)).resolves.toBeUndefined();
+      await expect(api.deleteLogEntry('missing')).resolves.toBeUndefined();
+    });
+
+    it('day: peekDay reads the stored row and writes nothing (null before getDay creates it)', async () => {
+      at('2026-08-04');
+      expect(await api.peekDay('2026-08-04')).toBeNull();
+      expect(await api.peekDay('2026-08-05')).toBeNull(); // a future day is a plain read, never refused
+      await api.setDayIntent('2026-08-04', 'ship it');
+      expect((await api.peekDay('2026-08-04'))?.intent).toBe('ship it');
+      await expect(api.peekDay('nope')).rejects.toThrow('Invalid day');
+    });
+
     it('stories: create defaults empty S/A/R, lists updatedAt-desc, patches, and soft-deletes', async () => {
       const a = await api.createStory({
         title: 'Led the migration',

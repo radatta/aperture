@@ -377,6 +377,11 @@ export interface ApiClient {
   // day = client's local day-key; the server is UTC and must bucket by the value the client reads back with.
   createLogEntry(text: string, day: string): Promise<LogEntry>;
   updateLogEntry(id: string, text: string): Promise<LogEntry>;
+  // Alive entries with from <= day <= to (either bound optional), oldest first; one bounded read — the
+  // MCP log tools' input. A malformed day is 'Invalid day'; from > to is 'Invalid range'.
+  listLogRange(range: Partial<DateRange>): Promise<LogEntry[]>;
+  // A tombstone; a second delete is a no-op. No UI and no MCP tool: the dev check cleans its seeds by id.
+  deleteLogEntry(id: string): Promise<void>;
 
   // Tasks
   listBacklog(): Promise<Task[]>;
@@ -490,6 +495,8 @@ export interface ApiClient {
   // relative to it. A day after the user's app day is refused (`FUTURE_DAY_ERROR`; a malformed key is
   // 'Invalid day'); read another day's plan with listPlansForDay. Past days are allowed.
   getDay(day: string): Promise<Day>;
+  // The stored row, untouched — no recurrence, sweep or create (null when the day has no row). Any day.
+  peekDay(day: string): Promise<Day | null>;
   setDayCapacity(day: string, capacityHours: number | null): Promise<Day>;
   setDayIntent(day: string, intent: string): Promise<Day>;
   setDayReflection(day: string, prompt: string, text: string): Promise<Day>;

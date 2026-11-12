@@ -739,6 +739,25 @@ class StubClient implements ApiClient {
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {
     return this.writes.patch(this.store.logEntries, id, { text });
   }
+  async listLogRange(range: Partial<DateRange>): Promise<LogEntry[]> {
+    const { from, to } = range;
+    if ((from !== undefined && !isDayKey(from)) || (to !== undefined && !isDayKey(to)))
+      throw new Error('Invalid day');
+    if (from !== undefined && to !== undefined && from > to) throw new Error('Invalid range');
+    return this.alive(this.store.logEntries)
+      .filter((e) => (from === undefined || e.day >= from) && (to === undefined || e.day <= to))
+      .sort((a, b) =>
+        a.day !== b.day
+          ? a.day < b.day
+            ? -1
+            : 1
+          : a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
+      );
+  }
+  async deleteLogEntry(id: string): Promise<void> {
+    if (this.store.logEntries.some((e) => e.id === id && e.deletedAt === null))
+      this.writes.softDelete(this.store.logEntries, id);
+  }
 
   // --- LeetCode sittings (sittings.ts) --------------------------------------
   async lcSittingStart(input: SittingStartInput): Promise<SittingStartResult> {
@@ -1796,6 +1815,10 @@ class StubClient implements ApiClient {
   }
 
   // --- Day (lazy recurrence + stale sweep on read) --------------------------
+  async peekDay(day: string): Promise<Day | null> {
+    if (!isDayKey(day)) throw new Error('Invalid day');
+    return this.alive(this.store.days).find((d) => d.date === day) ?? null;
+  }
   async getDay(day: string): Promise<Day> {
     // Lambda parity: a day after the client's app day is refused (its sweep would clear today's plan).
     if (!isDayKey(day)) throw new Error('Invalid day');
