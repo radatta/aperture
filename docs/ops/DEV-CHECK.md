@@ -380,7 +380,8 @@ with the reason (they never ran because of it), the rows its steps prove likewis
 report's _Needs you_ list names it. The exception is `needsYou(reason, {stepOnly: true})`, for a cause that is
 that step's alone and that later steps don't build on (the sim's soft keyboard): only that step reads `needs
 you`, and the rest of the scenario runs. It never counts among the run's own failures, and it is never for a bug: a
-real throw still fails the step. An `ios` step whose sim couldn't run reads `iOS this run: <reason>`; when any
+real throw still fails the step. A failed `ios` row is never called unrelated or a flake before a rerun with the
+Simulator up (IOS-CHECK.md → _Failures_). An `ios` step whose sim couldn't run reads `iOS this run: <reason>`; when any
 does, the status line says `PASS — iOS NOT RUN (<reason>): <n> iPhone rows untested` and the PR's first line
 repeats it (IOS-CHECK.md → Results).
 
