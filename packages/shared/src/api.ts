@@ -375,13 +375,14 @@ export interface ApiClient {
   // Log
   listLogEntries(day: string): Promise<LogEntry[]>;
   // day = client's local day-key; the server is UTC and must bucket by the value the client reads back with.
-  createLogEntry(text: string, day: string): Promise<LogEntry>;
-  updateLogEntry(id: string, text: string): Promise<LogEntry>;
+  createLogEntry(text: string, day: string, opts?: { private?: boolean }): Promise<LogEntry>;
+  updateLogEntry(id: string, text: string): Promise<LogEntry>; // keeps `private`
   // Alive entries with from <= day <= to (either bound optional), oldest first; one bounded read — the
   // MCP log tools' input. A malformed day is 'Invalid day'; from > to is 'Invalid range'.
   listLogRange(range: Partial<DateRange>): Promise<LogEntry[]>;
   // A tombstone; a second delete is a no-op. No UI and no MCP tool: the dev check cleans its seeds by id.
   deleteLogEntry(id: string): Promise<void>;
+  setLogEntryPrivate(id: string, isPrivate: boolean): Promise<LogEntry>;
 
   // Tasks
   listBacklog(): Promise<Task[]>;

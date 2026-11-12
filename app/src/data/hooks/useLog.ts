@@ -14,8 +14,9 @@ export function useCreateLogEntry(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (text: string) => api.createLogEntry(text, day),
-    onMutate: async (text) => {
+    mutationFn: ({ text, isPrivate }: { text: string; isPrivate?: boolean }) =>
+      api.createLogEntry(text, day, { private: isPrivate === true }),
+    onMutate: async ({ text, isPrivate }) => {
       await qc.cancelQueries({ queryKey: qk.log(day) });
       const prev = qc.getQueryData<LogEntry[]>(qk.log(day));
       const now = Date.now();
@@ -27,11 +28,12 @@ export function useCreateLogEntry(day: string) {
         deletedAt: null,
         day,
         text,
+        private: isPrivate === true,
       };
       qc.setQueryData<LogEntry[]>(qk.log(day), [...(prev ?? []), optimistic]);
       return { prev };
     },
-    onError: (_e, _text, ctx) => {
+    onError: (_e, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(qk.log(day), ctx.prev);
     },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.log(day) }),
@@ -43,6 +45,29 @@ export function useUpdateLogEntry(day: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { id: string; text: string }) => api.updateLogEntry(vars.id, vars.text),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.log(day) }),
+  });
+}
+
+// Optimistic: the lock flips on tap, rolls back if the write fails.
+export function useSetLogEntryPrivate(day: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; isPrivate: boolean }) =>
+      api.setLogEntryPrivate(vars.id, vars.isPrivate),
+    onMutate: async ({ id, isPrivate }) => {
+      await qc.cancelQueries({ queryKey: qk.log(day) });
+      const prev = qc.getQueryData<LogEntry[]>(qk.log(day));
+      qc.setQueryData<LogEntry[]>(
+        qk.log(day),
+        prev?.map((e) => (e.id === id ? { ...e, private: isPrivate } : e)),
+      );
+      return { prev };
+    },
+    onError: (_e, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(qk.log(day), ctx.prev);
+    },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.log(day) }),
   });
 }

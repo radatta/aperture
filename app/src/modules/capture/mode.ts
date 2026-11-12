@@ -31,10 +31,14 @@ export interface CaptureDest {
   timedOn?: string;
   placeName?: string;
 }
-export function receiptFor(mode: CaptureMode, dest?: CaptureDest): { text: string; label: string } {
+export function receiptFor(
+  mode: CaptureMode,
+  dest?: CaptureDest,
+  opts?: { isPrivate?: boolean },
+): { text: string; label: string } {
   switch (mode) {
     case 'log':
-      return { text: 'Logged', label: 'today' };
+      return { text: opts?.isPrivate ? 'Logged privately' : 'Logged', label: 'today' };
     case 'task': {
       if (dest?.timedOn) return { text: 'Task added', label: `${dest.timedOn}, by its time` };
       const waiting = dest?.placeName ?? 'backlog';

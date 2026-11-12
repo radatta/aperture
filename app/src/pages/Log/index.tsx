@@ -4,7 +4,7 @@ import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { ChevronLeftIcon, ChevronRightIcon } from '../../components/icons';
-import { useLog, useUpdateLogEntry } from '../../data/hooks/useLog';
+import { useLog, useSetLogEntryPrivate, useUpdateLogEntry } from '../../data/hooks/useLog';
 import { useSettings } from '../../data/hooks/useSettings';
 import { LogEntryRow } from '../../modules/log/LogEntryRow';
 import { dayLabel } from '../../modules/log/dayLabel';
@@ -19,6 +19,7 @@ export function LogPage() {
 
   const { data: entries = [], isPending, isError, refetch } = useLog(day);
   const update = useUpdateLogEntry(day);
+  const setPrivate = useSetLogEntryPrivate(day);
 
   return (
     <div className="flex flex-col gap-4">
@@ -55,9 +56,9 @@ export function LogPage() {
         </div>
       </header>
 
-      <div className="flex flex-col divide-y divide-line">
+      <ul className="flex flex-col divide-y divide-line">
         {entries.length === 0 ? (
-          <div className="py-8">
+          <li className="py-8">
             <EmptyState
               pending={isPending}
               error={isError}
@@ -68,17 +69,20 @@ export function LogPage() {
                 ? 'The bar below is already in Log mode — plain text, no fields, straight into today.'
                 : 'Entries land on the day they were captured; there is no backdating.'}
             </EmptyState>
-          </div>
+          </li>
         ) : (
           entries.map((entry) => (
             <LogEntryRow
               key={entry.id}
               entry={entry}
               onSave={(text) => update.mutate({ id: entry.id, text })}
+              onTogglePrivate={() =>
+                setPrivate.mutate({ id: entry.id, isPrivate: entry.private !== true })
+              }
             />
           ))
         )}
-      </div>
+      </ul>
     </div>
   );
 }

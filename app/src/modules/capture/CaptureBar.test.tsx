@@ -1624,3 +1624,129 @@ describe('CaptureBar — places', () => {
     expect(screen.getByText(/Task added → Corner Shop/)).toBeTruthy();
   });
 });
+
+describe('CaptureBar private log', () => {
+  function logBar(key: string) {
+    const api = createStubClient({ seed: false, storageKey: `cap-priv-${key}` });
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+    const pill = () => screen.getByRole('button', { name: 'private' });
+    const saved = async (text: string) => {
+      let found: { private?: boolean } | undefined;
+      await waitFor(async () => {
+        found = (await api.listLogEntries(todayKey(4))).find((e) => e.text === text);
+        expect(found).toBeTruthy();
+      });
+      return found!;
+    };
+    return { api, user, pill, saved };
+  }
+
+  it('the private pill logs the next entry private, then resets', async () => {
+    const { user, pill, saved } = logBar('pill');
+    await user.click(pill());
+    expect(pill().getAttribute('aria-pressed')).toBe('true');
+    await user.type(field(), 'first');
+    await user.keyboard('{Enter}');
+    expect((await saved('first')).private).toBe(true);
+    expect(await screen.findByText(/Logged privately/)).toBeTruthy();
+    expect(pill().getAttribute('aria-pressed')).toBe('false');
+    await user.type(field(), 'second');
+    await user.keyboard('{Enter}');
+    expect((await saved('second')).private).toBe(false);
+  });
+
+  it('tapping the pill twice saves public', async () => {
+    const { user, pill, saved } = logBar('twice');
+    await user.click(pill());
+    await user.click(pill());
+    await user.type(field(), 'plain');
+    await user.keyboard('{Enter}');
+    expect((await saved('plain')).private).toBe(false);
+  });
+
+  it('the pill shows only in Log mode, and a mode change drops it', async () => {
+    const { user, pill } = logBar('mode');
+    await user.click(pill());
+    await user.click(screen.getByRole('button', { name: 'Idea' }));
+    expect(screen.queryByRole('button', { name: 'private' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Log' }));
+    expect(pill().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('a sensitive line shows the nudge and holds the first Enter; the second saves it public', async () => {
+    const { api, user, saved } = logBar('hold');
+    await user.type(field(), 'disk password is hunter2');
+    expect(screen.getByText('Looks sensitive — make it private?')).toBeTruthy();
+    expect(field().getAttribute('aria-describedby')).toBeTruthy();
+    await user.keyboard('{Enter}');
+    expect(field().value).toBe('disk password is hunter2');
+    expect(screen.getByText('Looks sensitive — Enter again saves it as is')).toBeTruthy();
+    expect(await api.listLogEntries(todayKey(4))).toHaveLength(0);
+    await user.keyboard('{Enter}');
+    expect((await saved('disk password is hunter2')).private).toBe(false);
+    expect(screen.queryByText(/Looks sensitive/)).toBeNull();
+  });
+
+  it('Make private on the nudge arms the pill without saving, and Enter saves private', async () => {
+    const { api, user, pill, saved } = logBar('make');
+    await user.type(field(), 'wifi pw: abc');
+    await user.click(screen.getByRole('button', { name: 'Make private' }));
+    expect(pill().getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByText(/Looks sensitive/)).toBeNull();
+    expect(await api.listLogEntries(todayKey(4))).toHaveLength(0);
+    await user.keyboard('{Enter}');
+    expect((await saved('wifi pw: abc')).private).toBe(true);
+  });
+
+  it('Not this one dismisses the nudge for the draft, and Enter saves at once', async () => {
+    const { user, saved } = logBar('dismiss');
+    await user.type(field(), 'garage code 1234');
+    await user.click(screen.getByRole('button', { name: 'Not this one' }));
+    expect(screen.queryByText(/Looks sensitive/)).toBeNull();
+    await user.type(field(), ', and the pin 5678');
+    expect(screen.queryByText(/Looks sensitive/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect((await saved('garage code 1234, and the pin 5678')).private).toBe(false);
+    // the next draft gets its own nudge
+    await user.type(field(), 'new password');
+    expect(screen.getByText('Looks sensitive — make it private?')).toBeTruthy();
+  });
+
+  it('a line like "pinned the keyboard PR" gets no nudge and saves on the first Enter', async () => {
+    const { user, saved } = logBar('fp');
+    await user.type(field(), 'pinned the keyboard PR, leetcode later');
+    expect(screen.queryByText(/Looks sensitive/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect((await saved('pinned the keyboard PR, leetcode later')).private).toBe(false);
+  });
+
+  it('a failed private save comes back still private', async () => {
+    const { api, user, pill } = logBar('fail');
+    const real = api.createLogEntry.bind(api);
+    api.createLogEntry = () => Promise.reject(new Error('offline'));
+    await user.click(pill());
+    await user.type(field(), 'secret thing');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+    await waitFor(() => expect(field().value).toBe('secret thing'));
+    expect(pill().getAttribute('aria-pressed')).toBe('true');
+    api.createLogEntry = real;
+  });
+
+  it('a failed private save parked behind a newer draft puts back private', async () => {
+    let fail!: (e: Error) => void;
+    const { api, user, pill } = logBar('park');
+    const real = api.createLogEntry.bind(api);
+    api.createLogEntry = () => new Promise((_, rej) => (fail = rej));
+    await user.click(pill());
+    await user.type(field(), 'locked one');
+    await user.keyboard('{Enter}');
+    await user.type(field(), 'newer');
+    await act(async () => fail(new Error('offline')));
+    api.createLogEntry = real;
+    await user.click(await screen.findByRole('button', { name: 'Put back' }));
+    expect(field().value).toBe('locked one');
+    expect(pill().getAttribute('aria-pressed')).toBe('true');
+  });
+});

@@ -28,6 +28,8 @@ describe('→ today', () => {
   });
   it('says where the task landed, including when planning failed', () => {
     expect(receiptFor('task')).toEqual({ text: 'Task added', label: 'backlog' });
+    expect(receiptFor('log')).toEqual({ text: 'Logged', label: 'today' });
+    expect(receiptFor('log', undefined, { isPrivate: true }).text).toBe('Logged privately');
     expect(receiptFor('task', { today: true, planned: true }).label).toBe('today');
     expect(receiptFor('task', { today: true, planned: false }).label).toBe(
       'backlog (couldn’t plan it)',

@@ -30,6 +30,7 @@ import { FinanceGlance } from './FinanceGlance';
 import { FluxGlance } from './FluxGlance';
 import { PushSyncNotice } from '../../modules/push/PushSyncNotice';
 import { API_MODE } from '../../shared/env';
+import { LockIcon } from '../../components/icons';
 
 // The glanceable home. Auto morning/day/night (HomeModeProvider), ≤5 elements per mode — the global
 // capture bar is element 1 everywhere, so each mode adds ~3 cards. Phase 5 lit up the plan / tasks /
@@ -316,6 +317,11 @@ function ReviewCard({ today }: { today: string }) {
                 >
                   {fmtTime(e.createdAt)}
                 </Text>
+                {e.private && (
+                  <span role="img" aria-label="Private" className="mt-0.5 shrink-0 text-teal">
+                    <LockIcon size={12} />
+                  </span>
+                )}
                 <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">
                   {e.text}
                 </Text>

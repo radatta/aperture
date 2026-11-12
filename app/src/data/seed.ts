@@ -135,6 +135,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         ...mk(t - 4 * HOUR),
         day,
         text: snippets[(d + 2) % snippets.length]!,
+        private: d % 6 === 0, // the lock shows in the stub
       });
     }
 

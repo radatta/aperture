@@ -46,6 +46,8 @@ import {
   type Parked,
 } from './captureOutbox';
 import { previewLine, savedSummary } from './parsePreview';
+import { looksSensitive } from '../log/sensitive';
+import { LockIcon } from '../../components/icons';
 import { PreviewCategory } from './PreviewCategory';
 
 const RECEIPT_MS = 1800;
@@ -73,6 +75,8 @@ const UNKNOWN_CATEGORY = "no category '";
 // 'held': a warning the typing rule was still holding back — the first press shows it, the next saves.
 type Blocked = 'invalid' | 'categories' | 'categories-failed' | 'places' | 'places-failed' | 'held';
 const HELD_AGAIN = 'Enter or Save again to save without it';
+const NUDGE_ASK = 'Looks sensitive — make it private?';
+const NUDGE_HELD = 'Looks sensitive — Enter again saves it as is';
 
 // The global capture bar — PRODUCT's #1 mechanic. Always present, bottom-docked for thumb reach.
 // Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
@@ -113,6 +117,12 @@ export function CaptureBar({
   // One-shot: "→ today" applies to the next task only, then resets — so it can never silently keep
   // filling today's plan after the moment you meant it for.
   const [toToday, setToToday] = useState(false);
+  // One-shot too: "private" applies to the next log entry only (docs/areas/log). Sticky, it would quietly
+  // keep hiding entries from Claude long after the one you meant.
+  const [privateNext, setPrivateNext] = useState(false);
+  // The "Make private?" nudge, per draft: × dismisses it, and a sensitive line's first Enter is held once
+  // (the nudge says so) — the second saves it as typed. It never marks anything private on its own.
+  const [nudge, setNudge] = useState({ dismissed: false, held: false });
   // `at` is a nonce: two captures in a row in the same mode would otherwise set an identical value,
   // React would bail out of the re-render, the dismiss effect would never re-run, and the second
   // confirmation would vanish after the FIRST timer's remainder.
@@ -125,6 +135,8 @@ export function CaptureBar({
     restored?: boolean; // an unsent capture from a closed session was parked
     parsed?: string; // a quick add's readback (savedSummary)
     unparsed?: string; // why a quick add saved as typed (parseFailText)
+    isPrivate?: boolean; // a log saved private
+    nudged?: boolean; // a sensitive log's first Enter, held by the nudge
     at: number;
   } | null>(null);
   // A 'held' refusal's promise — the next press saves — kept apart from the receipt, which a late one (an
@@ -135,6 +147,8 @@ export function CaptureBar({
   const changeMode = (m: CaptureMode | ((m: CaptureMode) => CaptureMode)) => {
     setMode(m);
     setHeldAck(null);
+    setPrivateNext(false);
+    setNudge({ dismissed: false, held: false });
     clearPreview(); // a preview belongs to the mode it was made in
   };
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -249,6 +263,8 @@ export function CaptureBar({
     heldAck.text === text &&
     !!line?.warnings.includes(heldAck.warning) &&
     !block;
+  const nudgeShown = mode === 'log' && !privateNext && !nudge.dismissed && looksSensitive(text);
+  const nudgeId = useId();
   const shown =
     receipt?.blocked && !block && !(receipt.blocked === 'held' && acked) ? null : receipt;
   // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
@@ -345,8 +361,16 @@ export function CaptureBar({
       setReceipt({ mode: submitted, blocked: 'held', at: Date.now() });
       return;
     }
+    if (nudgeShown && !nudge.held) {
+      setNudge((n) => ({ ...n, held: true }));
+      setReceipt({ mode: submitted, nudged: true, at: Date.now() });
+      return;
+    }
     setHeldAck(null);
+    setNudge({ dismissed: false, held: false });
     const goesToday = submitted === 'task' && toToday;
+    const goesPrivate = submitted === 'log' && privateNext;
+    setPrivateNext(false);
     // The field clears optimistically so capture stays instant — which means a failed write would
     // otherwise destroy the thought outright: the creates roll back, the entry disappears from the
     // list, and the text is already gone from the field. Capture is the #1 mechanic and the whole
@@ -359,7 +383,13 @@ export function CaptureBar({
     const reviewedPreview = submitted === 'task' && !line ? livePreview(value) : null;
     const restore = () => {
       if (textRef.current.trim()) {
-        park({ text: value, mode: submitted, toToday: goesToday, why: 'failed' });
+        park({
+          text: value,
+          mode: submitted,
+          toToday: goesToday,
+          isPrivate: goesPrivate,
+          why: 'failed',
+        });
         setReceipt({ mode: submitted, failed: true, parked: true, at: Date.now() });
         return;
       }
@@ -368,6 +398,7 @@ export function CaptureBar({
       setCaret(value.length);
       changeMode(submitted);
       setToToday(goesToday); // the retry goes where the first attempt was headed, and nowhere else
+      setPrivateNext(goesPrivate); // and stays as private as it was
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
       if (reviewedPreview?.tookSuggestion) quick.reinstate(reviewedPreview);
     };
@@ -405,7 +436,13 @@ export function CaptureBar({
           settled();
           restore();
         });
-    } else if (submitted === 'log') void createLog.mutateAsync(value).then(done, restore);
+    } else if (submitted === 'log')
+      void createLog
+        .mutateAsync({ text: value, isPrivate: goesPrivate })
+        .then(
+          () => setReceipt({ mode: submitted, isPrivate: goesPrivate, at: Date.now() }),
+          restore,
+        );
     else void createIdea.mutateAsync(value).then(done, restore);
     quick.clear();
     setText('');
@@ -472,7 +509,16 @@ export function CaptureBar({
     setParked((list) => [
       ...list.filter((x) => x.id !== p.id),
       ...(current
-        ? [{ id: newCaptureId(Date.now()), text, mode, toToday, why: 'set-aside' as const }]
+        ? [
+            {
+              id: newCaptureId(Date.now()),
+              text,
+              mode,
+              toToday,
+              isPrivate: mode === 'log' && privateNext,
+              why: 'set-aside' as const,
+            },
+          ]
         : []),
     ]);
     textRef.current = p.text;
@@ -480,6 +526,7 @@ export function CaptureBar({
     setCaret(p.text.length);
     changeMode(p.mode);
     setToToday(p.toToday);
+    setPrivateNext(p.mode === 'log' && p.isPrivate === true);
     // The field holds other text now: a refusal of what it held goes with it.
     setReceipt((r) => (r?.blocked ? null : r));
     inputRef.current?.focus();
@@ -505,6 +552,7 @@ export function CaptureBar({
   function update(value: string) {
     setText(value);
     setHeldAck(null);
+    if (!value.trim()) setNudge({ dismissed: false, held: false }); // a new draft gets its own nudge
     if (receipt?.blocked) setReceipt(null);
   }
 
@@ -592,6 +640,23 @@ export function CaptureBar({
               <span aria-hidden>→ </span>today
             </button>
           )}
+          {mode === 'log' && (
+            <button
+              type="button"
+              aria-pressed={privateNext}
+              title="Keep this entry out of Claude's reach — the next log entry only"
+              onClick={() => setPrivateNext((v) => !v)}
+              className={cx(
+                'flex items-center gap-1 whitespace-nowrap rounded-lg border px-2 py-1 text-xs transition',
+                privateNext
+                  ? 'border-teal bg-teal-soft text-ink'
+                  : 'border-line text-ink-muted hover:text-ink',
+              )}
+            >
+              <LockIcon size={12} />
+              private
+            </button>
+          )}
         </div>
         {/* Live region wraps the receipt ONLY. With the hint inside it, the hint re-entered the
             region when the receipt expired and every capture ended with the keyboard hint being
@@ -640,7 +705,7 @@ export function CaptureBar({
           enterKeyHint="send"
           placeholder={placeholderFor(mode, toToday)}
           aria-label={`Capture ${mode}`}
-          aria-describedby={line ? previewId : preview ? parseId : undefined}
+          aria-describedby={line ? previewId : preview ? parseId : nudgeShown ? nudgeId : undefined}
           aria-invalid={invalid || undefined}
           className={cx(
             'min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-ink outline-none',
@@ -765,6 +830,32 @@ export function CaptureBar({
           {shown.parsed ?? `Saved as typed — couldn’t parse (${shown.unparsed})`}
         </Text>
       )}
+      {/* Not a live region either: the field points here, and a held Enter announces through the receipt. */}
+      {nudgeShown && (
+        <div className="flex flex-wrap items-center gap-1 pl-2 pt-1">
+          <LockIcon size={12} className="shrink-0 text-gold" />
+          <Text id={nudgeId} size="xs" tone="gold" className="min-w-0 flex-1 break-words py-1.5">
+            {nudge.held ? NUDGE_HELD : NUDGE_ASK}
+          </Text>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setPrivateNext(true)}
+            className="min-h-8 shrink-0 rounded-md px-2 text-xs text-teal hover:underline"
+          >
+            Make private
+          </button>
+          <button
+            type="button"
+            aria-label="Not this one"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setNudge((n) => ({ ...n, dismissed: true }))}
+            className="min-h-8 min-w-8 shrink-0 rounded-md text-sm text-ink-muted hover:text-ink"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Each row's text describes its two buttons, so with several parked a screen reader can tell
           their "Put back"s apart. Buttons are padded toward a thumb-sized target. */}
       {parked.map((p) => (
@@ -869,6 +960,8 @@ function Receipt({
     restored?: boolean;
     parsed?: string;
     unparsed?: string;
+    isPrivate?: boolean;
+    nudged?: boolean;
   };
 }) {
   if (receipt.blocked)
@@ -895,7 +988,13 @@ function Receipt({
         Couldn&apos;t save — your text is back in the box.
       </Text>
     );
-  const r = receiptFor(receipt.mode, receipt.dest);
+  if (receipt.nudged)
+    return (
+      <Text size="xs" tone="gold" className="block truncate pr-1">
+        Not saved yet<span className="sr-only">: {NUDGE_HELD}</span>
+      </Text>
+    );
+  const r = receiptFor(receipt.mode, receipt.dest, { isPrivate: receipt.isPrivate });
   // On a phone the row leaves the receipt ~115px, so a long one ("due tomorrow 4pm, by its time",
   // "backlog (couldn’t plan it)") takes a second line there, never losing the part that says where.
   const wrap = 'block truncate pr-1 max-sm:line-clamp-2 max-sm:whitespace-normal';

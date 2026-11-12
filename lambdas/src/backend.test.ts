@@ -1238,3 +1238,46 @@ describe('stopSession over RPC onto a finished task', () => {
     expect((await rpc('getTask', [t.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
   });
 });
+
+// Private log entries (docs/areas/log): the flag rides the log# item through entityItem's spread.
+describe('backend private log entries', () => {
+  const make = (doc: InMemoryDoc, userId: string, writes = liveWrites(doc)) =>
+    new BackendClient(new Repo(doc, writes, userId), { userId, now: () => 1_700_000_000_000 });
+
+  it('a log row stored without the private attribute reads public and can be made private', async () => {
+    const doc = new InMemoryDoc();
+    const backend = make(doc, 'local');
+    const e = await backend.createLogEntry('from before the lock', '2026-08-04');
+    const raw = await doc.get('u#local', sk.log(e.day, e.id));
+    const legacy = { ...raw! };
+    delete legacy.private;
+    await doc.put(legacy);
+
+    expect((await backend.listLogEntries(e.day))[0]?.private).toBeUndefined();
+    expect((await backend.setLogEntryPrivate(e.id, true)).private).toBe(true);
+    expect((await doc.get('u#local', sk.log(e.day, e.id)))?.private).toBe(true);
+    expect((await backend.listLogEntries(e.day))[0]?.text).toBe('from before the lock');
+  });
+
+  it("another user's entry is Not found to the toggle and edit, and nothing changes", async () => {
+    const doc = new InMemoryDoc();
+    const alice = make(doc, 'alice');
+    const bob = make(doc, 'bob');
+    const e = await alice.createLogEntry('alice only', '2026-08-04');
+    await expect(bob.setLogEntryPrivate(e.id, true)).rejects.toThrow(/Not found/);
+    await expect(bob.updateLogEntry(e.id, 'bob was here')).rejects.toThrow(/Not found/);
+    expect((await alice.listLogEntries(e.day))[0]).toMatchObject({
+      text: 'alice only',
+      private: false,
+    });
+    expect(await bob.listLogEntries(e.day)).toEqual([]);
+  });
+
+  it('persists nothing under noopWrites (testMode safety)', async () => {
+    const doc = new InMemoryDoc();
+    const live = make(doc, 'local');
+    const e = await live.createLogEntry('stays public', '2026-08-04');
+    await make(doc, 'local', noopWrites()).setLogEntryPrivate(e.id, true);
+    expect((await live.listLogEntries(e.day))[0]?.private).toBe(false);
+  });
+});
