@@ -408,7 +408,7 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 
 - **Roles and labels, never CSS** (`getByRole`, `getByLabel`, `getByText`), and **assert behaviour** — what the
   server holds, what the user sees — not DOM shape. A class or layout change shouldn't break a scenario.
-- **You change the UI, you update its scenario**, in the same PR.
+- **You change the UI, you update its scenario**, in the same PR — its iOS probe points too (`pnpm ios-probe`, IOS-CHECK.md → _Probe check_).
 - **An old scenario failing on an unrelated PR** (with `--feature`, under _Other scenarios (regression)_ → _Not proven_) is
   still a bug (phase 9) — read its code path first. To show it
   isn't this branch, the fallback is the fails-on-main baseline: the last green full run's report (the archived
