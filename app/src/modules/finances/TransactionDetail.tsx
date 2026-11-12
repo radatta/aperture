@@ -103,6 +103,12 @@ export function TransactionDetail({
   // to the Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone
   // keyboard. Never after a Mark (`undid`): one in flight would otherwise hop there before Unmark mounts.
   const bucketRef = useRef<SegmentedHandle>(null);
+  // Only focus that was lost (the pressed button unmounted): the list can come back late — a failed Mark
+  // offline returns on reconnect — and must never pull you out of the Note field.
+  const focusBucketIfLost = () => {
+    const at = document.activeElement;
+    if (!at || at === document.body || at.tagName === 'DIALOG') bucketRef.current?.focus();
+  };
   // null until you type: an untouched field tracks the server's note, so closing never writes it.
   const [draft, setDraft] = useState<string | null>(null);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
@@ -178,7 +184,7 @@ export function TransactionDetail({
             focus={acted}
             fallback="No likely charge found — search for it above, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
-            onNothingToFocus={undid ? () => bucketRef.current?.focus() : undefined}
+            onNothingToFocus={undid ? focusBucketIfLost : undefined}
           />
         )}
         {linkableIncome &&

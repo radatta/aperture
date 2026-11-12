@@ -990,19 +990,61 @@ describe('Refund link search', () => {
   it('a Mark that fails puts the credit back with focus on Bucket, and says so', async () => {
     const user = userEvent.setup();
     const api = await noSuggestionsCredit();
-    vi.spyOn(api, 'setFinancePeriodStart').mockRejectedValueOnce(new Error('offline'));
+    // Fails slowly: Unmark mounts and takes focus first, then goes with the Payment it belonged to.
+    let fail = () => {};
+    vi.spyOn(api, 'setFinancePeriodStart').mockImplementationOnce(
+      () => new Promise((_, reject) => (fail = () => reject(new Error('offline')))),
+    );
     renderApp({ api, path: '/finances/all' });
     await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
     await user.click(
       within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
     );
+    const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+    await waitFor(() => expect(document.activeElement).toBe(unmark));
+    await act(async () => fail());
     expect(await within(dialog).findByText(/Couldn.t change the period: offline/)).toBeTruthy();
     // Back to a refund once the refetch lands, still with nothing to suggest: Bucket, not <body>.
     const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
     await waitFor(() =>
       expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
     );
+  });
+
+  it('a credit that comes back late, after a failed Mark, never pulls focus out of the Note field', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    vi.spyOn(api, 'setFinancePeriodStart').mockRejectedValueOnce(new Error('offline'));
+    // Offline: the refetch after the failure fails too, so the Payment stays on screen until a later read.
+    let offline = false;
+    const list = api.listFinanceTransactions.bind(api);
+    api.listFinanceTransactions = async (range) => {
+      if (offline) throw new Error('offline');
+      return list(range);
+    };
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    offline = true;
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    expect(await within(dialog).findByText(/Couldn.t change the period: offline/)).toBeTruthy();
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
+    const note = within(dialog).getByRole('textbox', { name: 'Note' });
+    await user.click(note);
+    await user.type(note, 'split');
+    // Back online; the next window focus refetches and the refund returns, with nothing to suggest.
+    offline = false;
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    focusManager.setFocused(undefined);
+    await new Promise((r) => setTimeout(r, 50)); // past the hand-off's effect
+    expect(document.activeElement).toBe(note);
   });
 
   // Pins the guard: it passes without this branch's fix too, and fails against an ungated hand-off — a
