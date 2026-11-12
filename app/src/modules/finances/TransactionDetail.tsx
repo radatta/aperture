@@ -92,7 +92,8 @@ export function TransactionDetail({
   const setMark = (marked: boolean) => {
     setActed(true);
     setUndid(!marked);
-    mark.mutate({ id: txn.id, marked });
+    // A failed Mark puts the refund back once the refetch lands: it may have nothing to focus either.
+    mark.mutate({ id: txn.id, marked }, { onError: () => setUndid(true) });
   };
   const incomeLink = useDisclosure();
   // The Bucket group is where the detail opens. Without one (linked, money in, a payment), it opens on
@@ -416,9 +417,14 @@ function RefundSuggestions({
   const nothingToFocus = autoFocus && matches.length === 0 && !onCancel;
   const nothingRef = useRef(onNothingToFocus);
   nothingRef.current = onNothingToFocus;
+  const handedOff = useRef(false); // once a mount: a refetch that empties the list never re-steals it
+  // Also when the target arrives late: a failed Mark's onError lands after the refetch remounts this.
+  const canHandOff = onNothingToFocus !== undefined;
   useEffect(() => {
-    if (nothingToFocus) nothingRef.current?.();
-  }, [nothingToFocus]);
+    if (!nothingToFocus || !canHandOff || handedOff.current) return;
+    handedOff.current = true;
+    nothingRef.current?.();
+  }, [nothingToFocus, canHandOff]);
 
   const row = (
     c: FinanceTransaction,
@@ -612,7 +618,7 @@ export interface SegmentedHandle {
 
 // A radiogroup per the WAI-ARIA pattern: one tab stop (the checked option, else the first), arrow keys
 // move AND select, Home/End jump. `autoFocus` makes the dialog open on the checked option; `ref` lets the
-// detail send focus there later (after an Unlink that leaves nothing else to focus).
+// detail send focus there later (after an Unlink or Unmark that leaves nothing else to focus).
 function Segmented<T extends string | null>({
   ref,
   label,

@@ -177,11 +177,6 @@ export const finance: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'A Mark in flight never hops focus to the Bucket group before Unmark mounts',
-      offDev: {
-        file: 'app/src/pages/Finances/Finances.test.tsx',
-        test: 'a Mark in flight never hops to Bucket',
-        why: 'the harness has no way to hold a request open; the stub holds it and a focus listener sees every hop',
-      },
     },
     {
       id: 'fixture-aged',
@@ -385,7 +380,7 @@ export const finance: Scenario = {
     {
       id: 'mark-focus',
       entry: 'ui',
-      proves: ['mark-focus'],
+      proves: ['mark-focus', 'mark-no-hop'],
       title:
         'Rebate → “It’s a card payment — start the period here” → Unmark focused → Unmark → a Refund again → Bucket focused',
       // After every step that opens the rebate as a Refund: a mark makes it a Payment (no refund controls,
@@ -398,11 +393,19 @@ export const finance: Scenario = {
           name: /card payment — start the period here/,
         });
         ctx.api.writes.recordFinanceMark(rebate.id); // before the click: cleanup unmarks by id
+        // Every Mark has a render where the suggestions still ask for focus before the cache patch lands
+        // (no latency needed): count any Bucket radio that takes focus in it. After the open, which
+        // rightly focuses one.
+        await ctx.page.evaluate(
+          'window.__radioHops = 0; document.addEventListener("focus", (e) => { if (e.target instanceof Element && e.target.getAttribute("role") === "radio") window.__radioHops++; }, true)',
+        );
         await markButton.click();
         const payment = ctx.page.getByRole('dialog', { name: /^Payment: / }); // the title follows the kind
         const unmark = payment.getByRole('button', { name: 'Unmark' });
         await unmark.waitFor({ timeout: 10_000 });
         await afterActionFocus(ctx, 'Unmark');
+        const hops = await ctx.page.evaluate<number>('window.__radioHops');
+        if (hops) throw new Error(`a Mark in flight hopped focus to Bucket ${hops} time(s)`);
         await ctx.shot('mark-focus');
         await unmark.click();
         await markButton.waitFor({ timeout: 10_000 });
@@ -411,8 +414,11 @@ export const finance: Scenario = {
           .getByRole('radiogroup', { name: 'Bucket' })
           .getByRole('radio', { name: 'Unsorted' });
         await unsorted.waitFor({ timeout: 10_000 });
-        await wait(300); // the hand-off runs after the suggestions mount
-        const focused = await focusedText(ctx);
+        let focused = '';
+        for (let i = 0; i < 20 && focused !== 'Unsorted'; i++) {
+          await wait(150); // the hand-off runs after the suggestions mount
+          focused = await focusedText(ctx);
+        }
         if (focused !== 'Unsorted') throw new Error(`after Unmark, focus is on "${focused}"`);
         await ctx.shot('unmark-focus');
         for (let i = 0; ; i++) {

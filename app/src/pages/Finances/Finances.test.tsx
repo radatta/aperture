@@ -987,6 +987,24 @@ describe('Refund link search', () => {
     expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' }));
   });
 
+  it('a Mark that fails puts the credit back with focus on Bucket, and says so', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    vi.spyOn(api, 'setFinancePeriodStart').mockRejectedValueOnce(new Error('offline'));
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    expect(await within(dialog).findByText(/Couldn.t change the period: offline/)).toBeTruthy();
+    // Back to a refund once the refetch lands, still with nothing to suggest: Bucket, not <body>.
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
+    );
+  });
+
   // Pins the guard: it passes without this branch's fix too, and fails against an ungated hand-off — a
   // Mark's suggestions stay mounted asking for focus until the cache patch lands.
   it('a Mark in flight never hops to Bucket', async () => {
