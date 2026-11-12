@@ -952,6 +952,145 @@ describe('Refund link search', () => {
     );
   });
 
+  // The Amazon card credit seen as −$5,000: nothing has that much left, so no suggestion of either kind.
+  async function noSuggestionsCredit() {
+    const api = await linked();
+    const list = api.listFinanceTransactions.bind(api);
+    api.listFinanceTransactions = async (range) =>
+      (await list(range)).map((t) =>
+        t.id === 'fx-refund-1' ? { ...t, rawAmountCents: -500_000 } : t,
+      );
+    return api;
+  }
+
+  it('Unmark on a card credit with no suggestions focuses Bucket', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    const mark = hold(api, 'setFinancePeriodStart');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+    await mark.land();
+    await waitFor(() => expect(unmark.getAttribute('aria-disabled')).toBeNull());
+    await user.click(unmark);
+    // A refund again, with no Link row and no Cancel: focus lands on the checked option, not <body>.
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    expect(within(dialog).getByText(/No likely charge found/)).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
+    );
+    await mark.land();
+    expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' }));
+  });
+
+  it('a Mark that fails puts the credit back with focus on Bucket, and says so', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    // Fails slowly: Unmark mounts and takes focus first, then goes with the Payment it belonged to.
+    let fail = () => {};
+    vi.spyOn(api, 'setFinancePeriodStart').mockImplementationOnce(
+      () => new Promise((_, reject) => (fail = () => reject(new Error('offline')))),
+    );
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+    await waitFor(() => expect(document.activeElement).toBe(unmark));
+    await act(async () => fail());
+    expect(await within(dialog).findByText(/Couldn.t change the period: offline/)).toBeTruthy();
+    // Back to a refund once the refetch lands, still with nothing to suggest: Bucket, not <body>.
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
+    );
+  });
+
+  it('a credit that comes back late, after a failed Mark, never pulls focus out of the Note field', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    vi.spyOn(api, 'setFinancePeriodStart').mockRejectedValueOnce(new Error('offline'));
+    // Offline: the refetch after the failure fails too, so the Payment stays on screen until a later read.
+    let offline = false;
+    const list = api.listFinanceTransactions.bind(api);
+    api.listFinanceTransactions = async (range) => {
+      if (offline) throw new Error('offline');
+      return list(range);
+    };
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    offline = true;
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    expect(await within(dialog).findByText(/Couldn.t change the period: offline/)).toBeTruthy();
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
+    const note = within(dialog).getByRole('textbox', { name: 'Note' });
+    await user.click(note);
+    await user.type(note, 'split');
+    // Back online; the next window focus refetches and the refund returns, with nothing to suggest.
+    offline = false;
+    try {
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    } finally {
+      focusManager.setFocused(undefined);
+    }
+    await new Promise((r) => setTimeout(r, 50)); // past the hand-off's effect
+    expect(document.activeElement).toBe(note);
+  });
+
+  // Safari's path: a marked credit opens on the dialog, and a tap focuses nothing, so the dialog still holds
+  // focus when Unmark goes. fireEvent.click moves no focus, unlike userEvent.
+  it('an Unmark that never took focus (a Safari tap) still hands off to Bucket', async () => {
+    const api = await noSuggestionsCredit();
+    await api.setFinancePeriodStart('fx-refund-1', true);
+    renderApp({ api, path: '/finances/all' });
+    fireEvent.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Payment: Amazon/ });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unmark' }));
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(bucket).getByRole('radio', { name: 'Unsorted' })),
+    );
+  });
+
+  // Pins the guard: it passes without this branch's fix too, and fails against an ungated hand-off — a
+  // Mark's suggestions stay mounted asking for focus until the cache patch lands.
+  it('a Mark in flight never hops to Bucket', async () => {
+    const user = userEvent.setup();
+    const api = await noSuggestionsCredit();
+    const mark = hold(api, 'setFinancePeriodStart');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    const seen: Element[] = [];
+    const onFocus = (e: FocusEvent) => seen.push(e.target as Element);
+    document.addEventListener('focus', onFocus, true);
+    try {
+      await user.click(
+        within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+      );
+      const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+      await waitFor(() => expect(document.activeElement).toBe(unmark));
+      await mark.land();
+      expect(seen.some((el) => el.getAttribute('role') === 'radio')).toBe(false);
+    } finally {
+      document.removeEventListener('focus', onFocus, true);
+    }
+  });
+
   it('a search row keeps the merchant on one line and the bucket on its own', async () => {
     const user = userEvent.setup();
     const api = await linked();

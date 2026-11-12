@@ -81,25 +81,34 @@ export function TransactionDetail({
   // server answers, so the next button mounts busy: busy is aria-disabled with no click handler, never
   // disabled — a disabled button can't take autoFocus, and focus would fall to <body>.
   const [acted, setActed] = useState(false);
-  // An Unlink, specifically: the one action after which the suggestions may have nothing to focus.
-  const [unlinked, setUnlinked] = useState(false);
+  // The last action was an Unlink or an Unmark: the ones after which the suggestions mount with nothing
+  // to focus. Never a Mark — while one is in flight the suggestions are still mounted asking for focus.
+  const [undid, setUndid] = useState(false);
   const setLink = (chargeId: string | null) => {
     setActed(true);
-    setUnlinked(chargeId === null);
+    setUndid(chargeId === null);
     link.mutate({ refundId: txn.id, chargeId });
   };
   const setMark = (marked: boolean) => {
     setActed(true);
-    mark.mutate({ id: txn.id, marked });
+    setUndid(!marked);
+    // A failed Mark puts the refund back once the refetch lands: it may have nothing to focus either.
+    mark.mutate({ id: txn.id, marked }, { onError: () => setUndid(true) });
   };
   const incomeLink = useDisclosure();
   // The Bucket group is where the detail opens. Without one (linked, money in, a payment), it opens on
   // the dialog itself: the first button would be Unlink or a mark, and a stray Enter would press it.
   const sortable = (kind === 'expense' || isRefund) && !txn.refundOfId;
-  // After an Unlink that leaves nothing to focus (a card credit with no suggestions), focus goes to the
-  // Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone keyboard.
-  // Only after an Unlink: a period mark in flight would otherwise hop there for a frame.
+  // After an Unlink or Unmark that leaves nothing to focus (a card credit with no suggestions), focus goes
+  // to the Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone
+  // keyboard. Never after a Mark (`undid`): one in flight would otherwise hop there before Unmark mounts.
   const bucketRef = useRef<SegmentedHandle>(null);
+  // Only focus that was lost (the pressed button unmounted): the list can come back late — a failed Mark
+  // offline returns on reconnect — and must never pull you out of the Note field.
+  const focusBucketIfLost = () => {
+    const at = document.activeElement;
+    if (!at || at === document.body || at.tagName === 'DIALOG') bucketRef.current?.focus();
+  };
   // null until you type: an untouched field tracks the server's note, so closing never writes it.
   const [draft, setDraft] = useState<string | null>(null);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
@@ -175,7 +184,7 @@ export function TransactionDetail({
             focus={acted}
             fallback="No likely charge found — search for it above, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
-            onNothingToFocus={unlinked ? () => bucketRef.current?.focus() : undefined}
+            onNothingToFocus={undid ? focusBucketIfLost : undefined}
           />
         )}
         {linkableIncome &&
@@ -414,9 +423,14 @@ function RefundSuggestions({
   const nothingToFocus = autoFocus && matches.length === 0 && !onCancel;
   const nothingRef = useRef(onNothingToFocus);
   nothingRef.current = onNothingToFocus;
+  const handedOff = useRef(false); // once a mount: a refetch that empties the list never re-steals it
+  // Also when the target arrives late: a failed Mark's onError lands after the refetch remounts this.
+  const canHandOff = onNothingToFocus !== undefined;
   useEffect(() => {
-    if (nothingToFocus) nothingRef.current?.();
-  }, [nothingToFocus]);
+    if (!nothingToFocus || !canHandOff || handedOff.current) return;
+    handedOff.current = true;
+    nothingRef.current?.();
+  }, [nothingToFocus, canHandOff]);
 
   const row = (
     c: FinanceTransaction,
@@ -610,7 +624,7 @@ export interface SegmentedHandle {
 
 // A radiogroup per the WAI-ARIA pattern: one tab stop (the checked option, else the first), arrow keys
 // move AND select, Home/End jump. `autoFocus` makes the dialog open on the checked option; `ref` lets the
-// detail send focus there later (after an Unlink that leaves nothing else to focus).
+// detail send focus there later (after an Unlink or Unmark that leaves nothing else to focus).
 function Segmented<T extends string | null>({
   ref,
   label,
