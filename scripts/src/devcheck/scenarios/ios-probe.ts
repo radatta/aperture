@@ -1,14 +1,15 @@
 // The probe job (docs/ops/IOS-CHECK.md → Probe job): every iOS plan ios-standalone and category-suggest send, cut
-// to their probes (probe-only.ts) and sent to the Mac's Simulator as ordinary sim jobs — no typing, kills, relaunch
-// or sign-in, ~2 min of Mac time against the full scenario's ~6. It proves the plans' points still land on the
-// deployed build; the full scenario stays the proof of what typing, kills and relaunches do. Opt-in: it runs on
+// to their probes (probe-only.ts) and sent to the Mac's Simulator as ordinary sim jobs — no drafts, kills, relaunch
+// or sign-in, ~2 min of Mac time against the full scenario's ~6 (the one typed line is done-form's search filter). It
+// proves the plans' points still land on the deployed build; the full scenario stays the proof of what typing, kills
+// and relaunches do. Opt-in: it runs on
 // `--feature ios-probe` / `--scenario ios-probe`, or a change to its own files, and is deferred whenever
 // ios-standalone runs in full (scenarios/index.ts → probeSkip). `pnpm ios-probe` is the headless check before it.
 import { IosAssert, type SimResult } from '../../mailroom/sim';
 import { IOS_NOTE } from '../ios';
 import { recordIosPlans } from '../ios-plans';
 import { probeJobs, type Plan } from '../probe-only';
-import { datesFor, needsYou, type Ctx, type Scenario } from '../scenario';
+import { needsYou, type Ctx, type Scenario } from '../scenario';
 import { categorySuggest } from './category-suggest';
 import { iosStandalone, LOW_DOCK_KNOWN } from './ios-standalone';
 
@@ -20,10 +21,11 @@ const TIMEOUT_SEC = 240;
 
 export const SIGNED_OUT = `${IOS_NOTE}: SIGNED_OUT — the Simulator's app is on the sign-in card; the probe job never signs in. Run ios-standalone (its launch signs in from the Mac Keychain), then rerun`;
 
-const title = (ctx: Ctx) => `devcheck-ios-probe ${ctx.nonce}`;
 let taskId = '';
 let drove = false;
-let jobs: Plan[] | null = null;
+let cut: { nonce: string; jobs: Plan[] } | null = null;
+const jobsFor = async (nonce: string) =>
+  cut?.nonce === nonce ? cut.jobs : (cut = { nonce, jobs: await cutPlans(nonce) }).jobs;
 
 export async function cutPlans(nonce: string): Promise<Plan[]> {
   const recorded = [];
@@ -45,8 +47,7 @@ export function notOurs(err: unknown): string | null {
 }
 
 async function probe(ctx: Ctx, name: string): Promise<void> {
-  jobs ??= await cutPlans(ctx.nonce);
-  const job = jobs.find((j) => j.name === name);
+  const job = (await jobsFor(ctx.nonce)).find((j) => j.name === name);
   if (!job) throw new Error(`no probe job ${name} — the recorded plans changed (ios-probe.test)`);
   try {
     await ctx.ios.run(name, job.steps, { timeoutSec: TIMEOUT_SEC });
@@ -70,12 +71,9 @@ const STEP_TITLES: Record<string, string> = {
 
 export const iosProbe: Scenario = {
   id: 'ios-probe',
-  title: 'iOS probe job: every sim plan’s probe points, on the Simulator, without typing',
+  title: 'iOS probe job: every sim plan’s probe points, on the Simulator, without drafts',
   tiers: ['full'],
-  slowPaths: [
-    'scripts/src/devcheck/probe-only.ts',
-    'scripts/src/devcheck/scenarios/ios-probe.ts',
-  ],
+  slowPaths: ['scripts/src/devcheck/probe-only.ts', 'scripts/src/devcheck/scenarios/ios-probe.ts'],
   rows: [
     {
       id: 'probe-launch',
@@ -87,7 +85,7 @@ export const iosProbe: Scenario = {
       id: 'probe-points',
       entry: 'ios',
       kind: 'nominal',
-      what: 'Every find, tap and absent of ios-standalone’s and category-suggest’s plans lands on the deployed build, typing left out',
+      what: 'Every find, tap and absent of ios-standalone’s and category-suggest’s plans lands on the deployed build, drafts left out',
     },
     {
       id: 'probe-closes',
@@ -116,7 +114,7 @@ export const iosProbe: Scenario = {
       id: 'probe-signed-out',
       entry: 'ios',
       kind: 'edge',
-      what: 'A signed-out Simulator is needs-you (SIGNED_OUT) for every probe step, never a sign-in',
+      what: 'A signed-out Simulator is needs-you (SIGNED_OUT) for the rest of the scenario, never a sign-in',
       offDev: {
         file: 'scripts/src/devcheck/scenarios/ios-probe.test.ts',
         test: 'a signed-out sim is needs-you for the rest of the scenario',
@@ -146,19 +144,22 @@ export const iosProbe: Scenario = {
   steps: [
     {
       id: 'setup',
-      title: 'An in-progress task planned first today, for the Done form (MCP and API)',
+      title: 'An in-progress task for the Done form, titled to match its search (MCP)',
       entry: 'mcp',
       cost: 'slow',
       async run(ctx) {
         drove = false;
-        jobs = null;
-        const t = await ctx.mcp.writes.createTask({ title: title(ctx), estimateMin: 15 });
+        // The Done form's job searches Tasks for ios-standalone's marker: the task carries what it types.
+        const search = (await jobsFor(ctx.nonce))
+          .find((j) => j.name === 'done-form')
+          ?.steps.find((s) => s.op === 'keys');
+        if (search?.op !== 'keys') throw new Error('done-form types no search — the plan changed');
+        const t = await ctx.mcp.writes.createTask({
+          title: `devcheck-ios-probe ${search.text}`,
+          estimateMin: 15,
+        });
         taskId = t.id;
         await ctx.mcp.writes.updateTask(t.id, { status: 'in_progress' });
-        // Not searched for (the probe job types nothing): planned first today, so its row's Done is Tasks' first.
-        const { dayStartHour } = await ctx.api.reads.getSettings();
-        const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
-        await ctx.api.writes.upsertPlan({ taskId: t.id, day: today, plannedMinutes: 15, order: 0 });
       },
     },
     ...PROBE_STEPS.map((name) => ({

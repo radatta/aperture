@@ -1,7 +1,8 @@
 // The probe job (IOS-CHECK.md → Probe job): every iOS plan the scenarios send, cut to the reads that check the
-// plan's probe points still land — launch once, then nav, find, tap, absent and the expects that need no typing.
-// No typing, kills, relaunches or sign-in: those are the full scenario's (~6 min); this runs in ~2. Pure, on the
-// recorded plans (ios-plans.ts), so it can't drift from what ios-standalone and category-suggest send.
+// plan's probe points still land — launch once, then nav, find, tap, absent and the expects that need no draft. No
+// drafts, kills, relaunches or sign-in: those are the full scenario's (~6 min); this runs in ~2. A filter stays (a keys
+// nothing erases: done-form's search), since the tap after it depends on what it filtered. Pure, on the recorded
+// plans (ios-plans.ts), so it can't drift from what ios-standalone and category-suggest send.
 import type { IosOp } from '../mailroom/sim';
 
 export interface Plan {
@@ -12,7 +13,7 @@ export interface Plan {
 // Recorded jobs with nothing left to probe once cut: the kills and relaunches are the whole job.
 export const NOT_PROBED = ['relaunch'];
 
-const DROPPED = new Set(['signIn', 'kill', 'keys', 'erase', 'launch', 'shutdown']);
+const DROPPED = new Set(['signIn', 'kill', 'erase', 'launch', 'shutdown']);
 const PROBES = new Set(['nav', 'find', 'tap', 'absent', 'readBuild']);
 const inOf = (o: IosOp) => ('in' in o ? o.in : undefined);
 
@@ -20,15 +21,16 @@ const inOf = (o: IosOp) => ('in' in o ? o.in : undefined);
 export function probeOnly(steps: IosOp[], o: { first: boolean }): IosOp[] {
   const drop = new Set<number>();
   const typed = new Set<string>();
-  // A typed window: keys … the erase that empties that field (same `in`, or none). What's between reads the draft.
-  // A keys no erase empties (a search) drops alone.
+  // A draft: keys … the erase that empties that field (same `in`, or none); what's between reads the draft. A keys
+  // no erase empties is a filter (a search) and stays.
   for (const [i, s] of steps.entries()) {
     if (s.op !== 'keys' || drop.has(i)) continue;
-    typed.add(s.text);
     const j = steps.findIndex(
       (e, k) => k > i && e.op === 'erase' && (inOf(e) === undefined || inOf(e) === s.in),
     );
-    for (let k = i; k <= (j < 0 ? i : j); k++) drop.add(k);
+    if (j < 0) continue;
+    typed.add(s.text);
+    for (let k = i; k <= j; k++) drop.add(k);
   }
   const out: IosOp[] = o.first ? [{ op: 'launch' }] : [];
   const defs = new Set<string>();
@@ -40,6 +42,7 @@ export function probeOnly(steps: IosOp[], o: { first: boolean }): IosOp[] {
       if ('signedIn' in s ? !out.some((x) => x.op === 'launch') : !defs.has(s.as)) continue;
       if ('sameWidthAs' in s && !defs.has(s.sameWidthAs)) continue;
     }
+    if (s.op === 'keys' && s.in !== undefined && !defs.has(s.in)) continue;
     if ((s.op === 'find' || s.op === 'tap') && s.as) defs.add(s.as);
     out.push(s);
   }

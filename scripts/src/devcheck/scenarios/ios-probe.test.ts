@@ -13,13 +13,16 @@ const step = (id: string) => iosProbe.steps.find((s) => s.id === id)!;
 const ops = (steps: IosOp[]) => steps.map((s) => s.op);
 
 describe('the probe job’s plans', () => {
-  it('every cut job is a valid plan with no typing, kills, relaunch or sign-in', async () => {
+  it('every cut job is a valid plan with no drafts, kills, relaunch or sign-in', async () => {
     const jobs = await cutPlans(NONCE);
+    // The one typed line: done-form's search, read back where it was found, so the Done tap is the task's.
+    expect(jobs.flatMap((j) => j.steps.filter((s) => s.op === 'keys'))).toEqual([
+      { op: 'keys', text: expect.stringMatching(/^[a-z]{6}$/), in: 'search' },
+    ]);
     for (const j of jobs) {
       expect(
         validateSimParams({ sha: SHA, timeoutSec: 240, shutdown: false, steps: j.steps }),
       ).toBeNull();
-      expect(ops(j.steps)).not.toContain('keys');
       expect(ops(j.steps)).not.toContain('erase');
       expect(ops(j.steps)).not.toContain('kill');
       expect(ops(j.steps)).not.toContain('signIn');

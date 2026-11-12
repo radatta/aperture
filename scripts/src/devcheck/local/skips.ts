@@ -4,7 +4,8 @@
 export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> = {
   'ios-standalone': { reason: 'local: the iOS Simulator is the Mac’s — runs on dev' },
   'ios-probe': {
-    reason: 'local: the iOS Simulator is the Mac’s — runs on dev (pnpm ios-probe is the headless check)',
+    reason:
+      'local: the iOS Simulator is the Mac’s (pnpm ios-probe is the headless check) — runs on dev',
   },
   'flux-perf': {
     reason:

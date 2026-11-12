@@ -35,15 +35,25 @@ describe('probeOnly', () => {
     expect(probeOnly(steps, { first: false }).at(-1)).toEqual(steps[6]);
   });
 
-  it('drops a keys no erase empties alone, and any read of its text', () => {
+  it('keeps a filter: a keys no erase empties, and the reads after it', () => {
     const steps: IosOp[] = [
       { op: 'tap', label: 'Search tasks', near: { x: 1, y: 1 }, as: 'search' },
       { op: 'keys', text: 'abcdef', in: 'search' },
       { op: 'blur' },
-      { op: 'find', label: 'abcdef', near: { x: 1, y: 1 }, as: 'hit' },
       { op: 'tap', label: 'Done', near: { x: 1, y: 1 } },
+      { op: 'keys', text: 'zz', in: 'box' },
     ];
-    expect(ops(probeOnly(steps, { first: false }))).toEqual(['tap', 'blur', 'tap']);
+    expect(probeOnly(steps, { first: false })).toEqual(steps.slice(0, 4));
+  });
+
+  it('drops any read of a draft’s text outside its window', () => {
+    const steps: IosOp[] = [
+      { op: 'keys', text: 'zzqx' },
+      { op: 'erase', n: 6 },
+      { op: 'find', label: 'zzqx', near: { x: 1, y: 1 }, as: 'left' },
+      { op: 'nav', tab: 'Home' },
+    ];
+    expect(probeOnly(steps, { first: false })).toEqual([{ op: 'nav', tab: 'Home' }]);
   });
 
   it('opens the first job with a launch and keeps its build guard; drops sign-in, kills and relaunches', () => {
