@@ -21,15 +21,18 @@ const inOf = (o: IosOp) => ('in' in o ? o.in : undefined);
 export function probeOnly(steps: IosOp[], o: { first: boolean }): IosOp[] {
   const drop = new Set<number>();
   const typed = new Set<string>();
-  // A draft: keys … the erase that empties that field (same `in`, or none); what's between reads the draft. A keys
-  // no erase empties is a filter (a search) and stays.
-  for (const [i, s] of steps.entries()) {
-    if (s.op !== 'keys' || drop.has(i)) continue;
-    const j = steps.findIndex(
-      (e, k) => k > i && e.op === 'erase' && (inOf(e) === undefined || inOf(e) === s.in),
-    );
-    if (j < 0) continue;
-    typed.add(s.text);
+  // A draft: keys … the erase that empties it; what's between reads the draft. An erase with `in` empties the latest
+  // open keys into that field; one without, the latest open keys of all (what has focus). A keys no erase empties
+  // is a filter (a search) and stays.
+  const open: number[] = [];
+  for (const [j, e] of steps.entries()) {
+    if (e.op === 'keys') open.push(j);
+    if (e.op !== 'erase') continue;
+    const at = open.findLastIndex((i) => inOf(e) === undefined || inOf(steps[i]!) === inOf(e));
+    if (at < 0) continue;
+    const i = open.splice(at, 1)[0]!;
+    const keys = steps[i]!;
+    if (keys.op === 'keys') typed.add(keys.text);
     for (let k = i; k <= j; k++) drop.add(k);
   }
   const out: IosOp[] = o.first ? [{ op: 'launch' }] : [];

@@ -66,7 +66,7 @@ export interface PipelineDeps {
   // A step this returns a reason for is deferred with it: the local check's rows only dev can prove ('local: … runs
   // on dev', local/run-local.ts), or on dev the probe job when ios-standalone runs in full (scenarios → probeSkip).
   skip?: (scenario: string, step: { id: string; entry: string }) => string | null;
-  checkSessions?: boolean;
+  checkSessions?: boolean; // the local check: the end of the run asserts no timer was left running
 }
 
 export const DEFER_NOTE = 'slow tier: the branch touches none of its paths — run --tier all';

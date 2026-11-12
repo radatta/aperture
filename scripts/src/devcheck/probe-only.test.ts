@@ -46,6 +46,19 @@ describe('probeOnly', () => {
     expect(probeOnly(steps, { first: false })).toEqual(steps.slice(0, 4));
   });
 
+  it('an erase with no field empties the latest open keys, never an earlier filter', () => {
+    const steps: IosOp[] = [
+      { op: 'tap', label: 'Search tasks', near: { x: 1, y: 1 }, as: 'search' },
+      { op: 'keys', text: 'abcdef', in: 'search' },
+      { op: 'tap', label: 'Done', near: { x: 1, y: 1 } },
+      { op: 'keys', text: 'zz' },
+      { op: 'find', label: 'Save', near: { x: 1, y: 1 }, as: 'send' },
+      { op: 'erase', n: 4 },
+      { op: 'blur' },
+    ];
+    expect(probeOnly(steps, { first: false })).toEqual([...steps.slice(0, 3), steps[6]]);
+  });
+
   it('drops any read of a draft’s text outside its window', () => {
     const steps: IosOp[] = [
       { op: 'keys', text: 'zzqx' },

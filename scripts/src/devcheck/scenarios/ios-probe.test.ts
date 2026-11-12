@@ -5,7 +5,6 @@ import { NOT_PROBED } from '../probe-only';
 import { NeedsYou, type Ctx } from '../scenario';
 import { SCENARIOS } from './index';
 import { cutPlans, iosProbe, PROBE_STEPS, SIGNED_OUT, SOURCES } from './ios-probe';
-import { LOW_DOCK_KNOWN } from './ios-standalone';
 
 const NONCE = '2026-11-12t20-00-00-full';
 const SHA = 'a'.repeat(40);
@@ -101,12 +100,48 @@ describe('the probe job’s failures', () => {
     );
   });
 
-  it('the known low dock on a long page is this step’s needs-you; a low dock elsewhere fails', async () => {
-    const long = failing('BELOW_KEYBOARD', { note: 'long-bar bottom 600 vs keyboard top 590' });
-    await expect(step('capture-long').run(long.ctx)).rejects.toSatisfy(
-      (e) => e instanceof NeedsYou && e.reason.startsWith(LOW_DOCK_KNOWN) && e.stepOnly,
-    );
-    const bar = failing('BELOW_KEYBOARD', { note: 'bar bottom 600 vs keyboard top 590' });
-    await expect(step('capture').run(bar.ctx)).rejects.toBe(bar.err);
+  it('a LANDMARK without the sign-in card, and a low dock, stay failures', async () => {
+    const lost = failing('LANDMARK', { signedIn: '' });
+    await expect(step('launch').run(lost.ctx)).rejects.toBe(lost.err);
+    const low = failing('BELOW_KEYBOARD', { note: 'long-bar bottom 600 vs keyboard top 590' });
+    await expect(step('capture-long').run(low.ctx)).rejects.toBe(low.err);
+  });
+});
+
+describe('the probe job’s task', () => {
+  it('setup titles the in-progress task with done-form’s search text, so the Done tap is its', async () => {
+    const writes: [string, unknown[]][] = [];
+    const rec =
+      (name: string) =>
+      async (...a: unknown[]) => (writes.push([name, a]), { id: 't1' });
+    const ctx = {
+      nonce: NONCE,
+      mcp: { writes: { createTask: rec('createTask'), updateTask: rec('updateTask') } },
+    } as unknown as Ctx;
+    await step('setup').run(ctx);
+    const search = (await cutPlans(NONCE))
+      .find((j) => j.name === 'done-form')!
+      .steps.find((s) => s.op === 'keys');
+    expect(search).toBeDefined();
+    expect(writes).toEqual([
+      [
+        'createTask',
+        [{ title: `devcheck-ios-probe ${(search as { text: string }).text}`, estimateMin: 15 }],
+      ],
+      ['updateTask', ['t1', { status: 'in_progress' }]],
+    ]);
+  });
+
+  it('verify says needs you, not pass, until the Done form job has completed', async () => {
+    const ctx = {
+      nonce: NONCE,
+      mcp: { writes: { createTask: async () => ({ id: 't1' }), updateTask: async () => ({}) } },
+      api: { reads: { getTask: async () => ({ status: 'in_progress' }) } },
+      ios: { run: async () => ({}) },
+    } as unknown as Ctx;
+    await step('setup').run(ctx);
+    await expect(step('verify').run(ctx)).rejects.toBeInstanceOf(NeedsYou);
+    await step('done-form').run(ctx);
+    await expect(step('verify').run(ctx)).resolves.toBeUndefined();
   });
 });

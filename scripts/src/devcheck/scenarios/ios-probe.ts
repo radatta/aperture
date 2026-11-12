@@ -2,16 +2,16 @@
 // to their probes (probe-only.ts) and sent to the Mac's Simulator as ordinary sim jobs — no drafts, kills, relaunch
 // or sign-in, ~2 min of Mac time against the full scenario's ~6 (the one typed line is done-form's search filter). It
 // proves the plans' points still land on the deployed build; the full scenario stays the proof of what typing, kills
-// and relaunches do. Opt-in: it runs on
-// `--feature ios-probe` / `--scenario ios-probe`, or a change to its own files, and is deferred whenever
-// ios-standalone runs in full (scenarios/index.ts → probeSkip). `pnpm ios-probe` is the headless check before it.
+// and relaunches do. Opt-in: it runs on `--feature ios-probe` / `--scenario ios-probe`, or a change to its own files,
+// and is deferred whenever ios-standalone runs in full (scenarios/index.ts → probeSkip). `pnpm ios-probe` is the
+// headless check before it.
 import { IosAssert, type SimResult } from '../../mailroom/sim';
 import { IOS_NOTE } from '../ios';
 import { recordIosPlans } from '../ios-plans';
 import { probeJobs, type Plan } from '../probe-only';
 import { needsYou, type Ctx, type Scenario } from '../scenario';
 import { categorySuggest } from './category-suggest';
-import { iosStandalone, LOW_DOCK_KNOWN } from './ios-standalone';
+import { iosStandalone } from './ios-standalone';
 
 // The scenarios whose plans are cut, in the order a full run sends them (index.test pins: every scenario that
 // sends a sim job).
@@ -33,17 +33,12 @@ export async function cutPlans(nonce: string): Promise<Plan[]> {
   return probeJobs(recorded);
 }
 
-// A failed job's reason, for the two cases that aren't this branch's: the app signed out (it never signs in), or the
-// known low dock on a long page (ios-standalone's rule). Anything else stays a failure.
-export function notOurs(err: unknown): string | null {
+// The app on the sign-in card: the probe job never signs in, so that's needs-you, not a failure. Anything else —
+// a low dock included: ios-standalone's known one needs its padded long page, which this job doesn't build — fails.
+export function signedOut(err: unknown): boolean {
   const r: SimResult | null =
     err instanceof Error && err.cause instanceof IosAssert ? err.cause.result : null;
-  if (!r) return null;
-  if (r.detail === 'LANDMARK' && r.signedIn === 'false') return SIGNED_OUT;
-  const failed = r.steps?.find((x) => x.status === 'fail');
-  if (r.detail === 'BELOW_KEYBOARD' && failed?.note?.startsWith('long-'))
-    return `${LOW_DOCK_KNOWN} (${failed.note})`;
-  return null;
+  return r?.detail === 'LANDMARK' && r.signedIn === 'false';
 }
 
 async function probe(ctx: Ctx, name: string): Promise<void> {
@@ -52,9 +47,7 @@ async function probe(ctx: Ctx, name: string): Promise<void> {
   try {
     await ctx.ios.run(name, job.steps, { timeoutSec: TIMEOUT_SEC });
   } catch (err) {
-    // Signed out: the rest of the scenario reads needs-you too (pipeline); the low dock is this step's alone.
-    const why = notOurs(err);
-    if (why) needsYou(why, { stepOnly: why !== SIGNED_OUT });
+    if (signedOut(err)) needsYou(SIGNED_OUT); // the rest of the scenario reads needs-you too (pipeline)
     throw err;
   }
 }
@@ -65,7 +58,8 @@ const STEP_TITLES: Record<string, string> = {
   launch: 'Launch from the Home Screen on the deployed build (no sign-in)',
   capture: 'The capture bar and its mode row, keyboard up: found where the plan reads them',
   'done-form': 'Tasks search, the Done form and its Reflection box: found, tapped, cancelled',
-  'capture-long': 'Tasks scrolled, the capture bar in Task mode: found where the plan reads it',
+  'capture-long':
+    'Tasks page scrolled, the capture bar in Task mode: found where the plan reads it',
   'review-chip': 'The capture bar switched to Task and back',
 };
 
@@ -85,7 +79,7 @@ export const iosProbe: Scenario = {
       id: 'probe-points',
       entry: 'ios',
       kind: 'nominal',
-      what: 'Every find, tap and absent of ios-standalone’s and category-suggest’s plans lands on the deployed build, drafts left out',
+      what: 'Every find, tap and absent of ios-standalone’s and category-suggest’s plans lands on the deployed build (the reads outside drafts)',
     },
     {
       id: 'probe-closes',
@@ -131,14 +125,6 @@ export const iosProbe: Scenario = {
         test: 'probeSkip defers the probe job only when ios-standalone runs in full',
         why: 'the dev run for this feature runs the probe job alone',
       },
-    },
-    {
-      id: 'probe-modal-left-open',
-      entry: 'ios',
-      kind: 'edge',
-      what: 'A Done form a dropped Cancel left open is caught by the next job, not passed over',
-      needsYou:
-        'the next job’s nav fails with the runner’s reason (the modal covers the tabs); rerun — it can’t be forced on dev',
     },
   ],
   steps: [

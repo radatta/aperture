@@ -46,9 +46,9 @@ import { renderReport, statusLine } from './report';
 import { pickSlot } from './slot';
 import {
   SCENARIOS,
+  probeSkip,
   selectFeature,
   selectScenarios,
-  probeSkip,
   slowScenarios,
   type RunTier,
 } from './scenarios/index';
