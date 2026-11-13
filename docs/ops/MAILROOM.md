@@ -307,7 +307,7 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
 
   The cases are generated: edit `testdata/gen-jobs.py`, then run `python3 tools/mailroom/testdata/gen-jobs.py tools/mailroom/testdata/jobs.jsonl`. A test fails if the committed JSONL drifts from the generator.
 
-- **`scripts/src/mailroom/runner-fixtures.test.ts`** runs that suite inside `pnpm test` and CI. It also statically checks:
+- **`scripts/src/mailroom/runner-fixtures.test.ts`** runs that suite inside `pnpm test` and CI — on a PR only when one of its inputs changed, on every main push ([INFRA.md](../arch/INFRA.md) §9). It also statically checks:
   - the one token source;
   - the five fixed calls;
   - no `gh`, `git`, `eval` or `sh -c`;
