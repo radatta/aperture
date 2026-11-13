@@ -1,6 +1,6 @@
 // The probe job (IOS-CHECK.md → Probe job): every iOS plan the scenarios send, cut to the reads that check the
 // plan's probe points still land — launch once, then nav, find, tap, absent and the expects that need no draft. No
-// drafts, kills, relaunches or sign-in: those are the full scenario's (~6 min); this runs in ~2. A filter stays (a keys
+// drafts, kills, relaunches or sign-in: those are the full scenario's (~6 min); this takes ~4–5 (2026-11-12, mostly launch's build guard). A filter stays (a keys
 // nothing erases: done-form's search), since the tap after it depends on what it filtered. Pure, on the recorded
 // plans (ios-plans.ts), so it can't drift from what ios-standalone and category-suggest send.
 import type { IosOp } from '../mailroom/sim';

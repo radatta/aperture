@@ -1,6 +1,6 @@
 // The probe job (docs/ops/IOS-CHECK.md → Probe job): every iOS plan ios-standalone and category-suggest send, cut
 // to their probes (probe-only.ts) and sent to the Mac's Simulator as ordinary sim jobs — no drafts, kills, relaunch
-// or sign-in, ~2 min of Mac time against the full scenario's ~6 (the one typed line is done-form's search filter). It
+// or sign-in, ~4–5 min of Mac time against the full scenario's ~6+ (the one typed line is done-form's search filter). It
 // proves the plans' points still land on the deployed build; the full scenario stays the proof of what typing, kills
 // and relaunches do. Opt-in: it runs on `--feature ios-probe` / `--scenario ios-probe`, or a change to its own files,
 // and is deferred whenever ios-standalone runs in full (scenarios/index.ts → probeSkip). `pnpm ios-probe` is the

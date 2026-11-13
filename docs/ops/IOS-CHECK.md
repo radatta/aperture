@@ -85,7 +85,7 @@ The probe check's points on the real Simulator, without the full scenario's ~6 m
 
 It never signs in: an app on the sign-in card reads `needs you: SIGNED_OUT` for the rest of the scenario — run ios-standalone (its launch signs in from the Keychain), then rerun. A `MISS` or any other assert fails the step, as in the full scenario (_Failures_); a low dock fails too — ios-standalone's known one needs its padded long page, which this job doesn't build. Each job has a 240 s timeout.
 
-**Opt-in**: it runs on `--feature ios-probe` / `--scenario ios-probe`, or a change to its own two files, and is deferred (`ios-standalone runs in full this run`) whenever ios-standalone's slow steps run, since those read the same points (`probeSkip`, DEV-CHECK.md → _Slow tier_). Locally it is skipped: `pnpm ios-probe` is the local half. Mac time: ~2 min against the full scenario's ~6 (ESTIMATE — replaced by the dev run's measured figure).
+**Opt-in**: it runs on `--feature ios-probe` / `--scenario ios-probe`, or a change to its own two files, and is deferred (`ios-standalone runs in full this run`) whenever ios-standalone's slow steps run, since those read the same points (`probeSkip`, DEV-CHECK.md → _Slow tier_). Locally it is skipped: `pnpm ios-probe` is the local half. Mac time, measured on dev 2026-11-12 (sim step times): launch 64–220 s (a cold boot and the build guard's `readBuild`/`expectBuild` are most of it), capture 30–40 s, done-form 88–116 s (its search 17 s), review-chip ~35 s — about 4–5 min a run against the full scenario's ~6+.
 
 ## Keyboard
 
