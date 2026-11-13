@@ -380,7 +380,8 @@ with the reason (they never ran because of it), the rows its steps prove likewis
 report's _Needs you_ list names it. The exception is `needsYou(reason, {stepOnly: true})`, for a cause that is
 that step's alone and that later steps don't build on (the sim's soft keyboard): only that step reads `needs
 you`, and the rest of the scenario runs. It never counts among the run's own failures, and it is never for a bug: a
-real throw still fails the step. An `ios` step whose sim couldn't run reads `iOS this run: <reason>`; when any
+real throw still fails the step. A failed `ios` row is never called unrelated or a flake before a rerun with the
+Simulator up (IOS-CHECK.md → _Failures_). An `ios` step whose sim couldn't run reads `iOS this run: <reason>`; when any
 does, the status line says `PASS — iOS NOT RUN (<reason>): <n> iPhone rows untested` and the PR's first line
 repeats it (IOS-CHECK.md → Results).
 
@@ -407,7 +408,7 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 
 - **Roles and labels, never CSS** (`getByRole`, `getByLabel`, `getByText`), and **assert behaviour** — what the
   server holds, what the user sees — not DOM shape. A class or layout change shouldn't break a scenario.
-- **You change the UI, you update its scenario**, in the same PR.
+- **You change the UI, you update its scenario**, in the same PR — its iOS probe points too (`pnpm ios-probe`, IOS-CHECK.md → _Probe check_).
 - **An old scenario failing on an unrelated PR** (with `--feature`, under _Other scenarios (regression)_ → _Not proven_) is
   still a bug (phase 9) — read its code path first. To show it
   isn't this branch, the fallback is the fails-on-main baseline: the last green full run's report (the archived

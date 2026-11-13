@@ -12,6 +12,7 @@
 import type { IosOp } from '../../mailroom/sim.ts';
 import type { PwLocator } from '../pw-types';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { DOCK, MODE_ROW } from '../ios';
 
 const GARDEN = [
   'water the tomato beds',
@@ -247,9 +248,9 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'nav', tab: 'Home' },
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
   { op: 'wait', s: 2 },
-  { op: 'tap', label: 'Task', near: { x: 110, y: 437 }, radius: 40, role: 'AXCheckBox' },
+  { op: 'tap', label: 'Task', scan: DOCK(110, MODE_ROW), role: 'AXCheckBox' },
   { op: 'keys', text: R_SIM_CHIP },
-  { op: 'tap', label: 'Review before saving', near: { x: 355, y: 480 }, radius: 60 },
+  { op: 'tap', label: 'Review before saving', scan: DOCK(355) },
   { op: 'wait', s: 6 },
   { op: 'shot', name: 'review-chip' },
   {
@@ -285,7 +286,7 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'absent', label: 'Use suggested category', scan: { x: 195, from: 300, to: 600 } },
   { op: 'shot', name: 'review-chip-taken' },
   { op: 'erase', n: R_SIM_CHIP.length },
-  { op: 'tap', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox' },
+  { op: 'tap', label: 'Log', scan: DOCK(49, MODE_ROW), role: 'AXCheckBox' },
   { op: 'blur' },
 ];
 

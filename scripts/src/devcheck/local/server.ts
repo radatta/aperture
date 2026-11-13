@@ -118,7 +118,7 @@ export async function startVite(o: {
   worktree: string;
   track: (p: Proc) => void;
   port: number;
-  edgePort: number;
+  edgePort?: number; // none: the stub app (in-memory data, no auth) — the iOS probe check's
   env: Record<string, string>;
   logPath: string;
 }): Promise<Proc> {
@@ -138,7 +138,9 @@ export async function startVite(o: {
     ],
     {
       cwd: app,
-      env: { ...process.env, ...o.env, APERTURE_LOCAL_EDGE: `http://127.0.0.1:${o.edgePort}` },
+      env: o.edgePort
+        ? { ...process.env, ...o.env, APERTURE_LOCAL_EDGE: `http://127.0.0.1:${o.edgePort}` }
+        : { ...process.env, VITE_API_MODE: 'stub', ...o.env }, // over any app/.env.local
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

@@ -9,6 +9,7 @@
     "smoke": "tsx src/smoke.ts",
     "devcheck": "tsx src/devcheck/run.ts",
     "devcheck:local": "tsx src/devcheck/local/run-local.ts",
+    "ios-probe": "tsx src/ios-probe/run.ts",
     "sim-bench:plans": "tsx src/mailroom/sim-bench-plans.ts",
     "sim-bench:seed": "tsx src/mailroom/sim-bench-seed.ts"
   },

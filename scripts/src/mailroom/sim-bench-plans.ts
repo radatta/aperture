@@ -1,11 +1,10 @@
-// The sim bench's plans (docs/ops/SIM-BENCH.md): ios-standalone's own steps, driven in order against a recording ctx,
-// so the bench on a Mac replays exactly the jobs a devcheck sends — never a hand-copied op list. Every `ctx.ios.run`
-// is recorded and stopped there (a sentinel), a step's API writes before it are counted as setup the bench skips, and
+// The sim bench's plans (docs/ops/SIM-BENCH.md): ios-standalone's own jobs, recorded by devcheck/ios-plans.ts, so the
+// bench on a Mac replays exactly the jobs a devcheck sends. A step's API writes before its job are setup the bench skips, and
 // the MCP writes (the Done form's in-progress task) become the seed `pnpm sim-bench:seed` creates. Writes
 // tools/mailroom/bench/plans.json; sim-bench-plans.test.ts fails when the committed file drifts from this.
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import type { Ctx } from '../devcheck/scenario';
+import { recordIosPlans } from '../devcheck/ios-plans';
 import { iosStandalone } from '../devcheck/scenarios/ios-standalone';
 import { DEFAULT_TIMEOUT_SEC } from '../devcheck/ios';
 import { TOOLS_DIR } from './fixtures.ts';
@@ -43,74 +42,49 @@ export interface BenchPlans {
   jobs: BenchJob[];
 }
 
-class Recorded extends Error {}
-
 export async function exportPlans(): Promise<BenchPlans> {
-  const jobs: BenchJob[] = [];
   const seeds: BenchSeed[] = [];
-  let writes: string[] = [];
-  let sent = 0;
-  const count = (what: string) => (writes = [...writes, what]);
-  const fakeId = (n: number) => `bench-fake-${n}`;
-  let ids = 0;
-  const ctx = {
+  const recorded = await recordIosPlans(iosStandalone, {
     nonce: BENCH_NONCE,
-    log: () => {},
-    ios: {
-      run: async (name: string, steps: IosOp[]) => {
-        sent++;
-        jobs.push({
-          name,
-          step: '',
-          steps,
-          ...(writes.length ? { skippedSetup: summarize(writes) } : {}),
-        });
-        throw new Recorded(name);
-      },
-    },
-    api: {
-      reads: {
-        getSettings: async () => ({ dayStartHour: 4 }),
-        getTask: async () => ({ status: 'in_progress' }),
-      },
-      writes: {
-        createTask: async () => (count('createTask'), { id: fakeId(++ids) }),
-        upsertPlan: async () => (count('upsertPlan'), {}),
-        transitionTask: async () => (count('transitionTask'), {}),
-        deleteTask: async () => {}, // the step's own cleanup of what it created
-      },
-    },
-    mcp: {
-      writes: {
-        createTask: async (input: { title: string; estimateMin?: number }) => {
-          seeds.push({
-            title: input.title,
-            estimateMin: input.estimateMin ?? null,
-            status: 'backlog',
-          });
-          return { id: fakeId(++ids) };
+    steps: 'all',
+    fakes: ({ count, fakeId }) => ({
+      api: {
+        reads: {
+          getSettings: async () => ({ dayStartHour: 4 }),
+          getTask: async () => ({ status: 'in_progress' }),
         },
-        updateTask: async (_id: string, patch: { status?: string }) => {
-          const s = seeds.at(-1);
-          if (s && patch.status) s.status = patch.status;
-          return {};
+        writes: {
+          createTask: async () => (count('createTask'), { id: fakeId() }),
+          upsertPlan: async () => (count('upsertPlan'), {}),
+          transitionTask: async () => (count('transitionTask'), {}),
+          deleteTask: async () => {}, // the step's own cleanup of what it created
         },
       },
-    },
-  } as unknown as Ctx;
-
-  for (const step of iosStandalone.steps) {
-    writes = [];
-    const before = sent;
-    try {
-      await step.run(ctx);
-    } catch (err) {
-      if (!(err instanceof Recorded) && step.entry === 'ios') throw err;
-    }
-    if (step.entry === 'ios' && sent !== before + 1)
-      throw new Error(`step ${step.id} sent ${sent - before} sim jobs, the bench expects one`);
-    if (sent > before) jobs.at(-1)!.step = step.id;
-  }
+      mcp: {
+        writes: {
+          createTask: async (input: { title: string; estimateMin?: number }) => {
+            seeds.push({
+              title: input.title,
+              estimateMin: input.estimateMin ?? null,
+              status: 'backlog',
+            });
+            return { id: fakeId() };
+          },
+          updateTask: async (_id: string, patch: { status?: string }) => {
+            const s = seeds.at(-1);
+            if (s && patch.status) s.status = patch.status;
+            return {};
+          },
+        },
+      },
+    }),
+  });
+  const jobs: BenchJob[] = recorded.map((j) => ({
+    name: j.name,
+    step: j.step,
+    steps: j.steps,
+    ...(j.setupWrites.length ? { skippedSetup: summarize(j.setupWrites) } : {}),
+  }));
   if (seeds.length !== 1)
     throw new Error(`the scenario set up ${seeds.length} tasks, the bench seeds one`);
   return {

@@ -49,6 +49,9 @@ Never caught locally — dev's alone: DynamoDB eventual reads and timing races (
 consistent), Lambda concurrency and 429s, real Haiku output (parse is off: raw save; Flux's week note is its deterministic line), Google, Plaid, S3, Web Push, the
 deployed shell and service worker, the Simulator.
 
+After the scenarios it runs the **iOS probe check** on its own stub-mode Vite (IOS-CHECK.md → _Probe check_, ~35 s,
+one more Chromium): its result is the report's last section, and a failed probe makes the run exit 1.
+
 Beyond dev's checks, the end of a local run fails `LEFTOVERS` on any **running timer** — the table is fresh, so one
 left running is this run's leak (the class that broke phone-nits and timer-credit on dev, 2026-11-06).
 

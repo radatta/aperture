@@ -89,11 +89,11 @@
         {
           "op": "find",
           "label": "Capture log",
-          "near": {
+          "scan": {
             "x": 300,
-            "y": 480
+            "from": 390,
+            "to": 650
           },
-          "radius": 40,
           "role": "AXTextArea",
           "as": "bar"
         },
@@ -110,11 +110,11 @@
         {
           "op": "find",
           "label": "Log",
-          "near": {
+          "scan": {
             "x": 49,
-            "y": 437
+            "from": 315,
+            "to": 650
           },
-          "radius": 40,
           "role": "AXCheckBox",
           "as": "mode"
         },
@@ -135,21 +135,21 @@
         {
           "op": "find",
           "label": "zzqx",
-          "near": {
+          "scan": {
             "x": 60,
-            "y": 480
+            "from": 390,
+            "to": 650
           },
-          "radius": 40,
           "as": "typed"
         },
         {
           "op": "find",
           "label": "Save log",
-          "near": {
+          "scan": {
             "x": 395,
-            "y": 480
+            "from": 390,
+            "to": 650
           },
-          "radius": 40,
           "role": "AXButton",
           "as": "send"
         },
@@ -436,12 +436,12 @@
           "op": "find",
           "label": "Capture log",
           "scan": {
-            "x": 200,
-            "from": 300,
+            "x": 300,
+            "from": 390,
             "to": 650
           },
           "hint": {
-            "x": 200,
+            "x": 300,
             "y": 507
           },
           "role": "AXTextArea",
@@ -457,7 +457,7 @@
           "label": "Task",
           "scan": {
             "x": 110,
-            "from": 300,
+            "from": 315,
             "to": 650
           },
           "hint": {
@@ -470,12 +470,12 @@
           "op": "find",
           "label": "Capture task",
           "scan": {
-            "x": 200,
-            "from": 300,
+            "x": 300,
+            "from": 390,
             "to": 650
           },
           "hint": {
-            "x": 200,
+            "x": 300,
             "y": 507
           },
           "role": "AXTextArea",
@@ -496,7 +496,7 @@
           "label": "Review before saving",
           "scan": {
             "x": 355,
-            "from": 300,
+            "from": 390,
             "to": 650
           },
           "hint": {
@@ -529,7 +529,7 @@
           "label": "vacuum",
           "scan": {
             "x": 40,
-            "from": 650,
+            "from": 629,
             "to": 300
           },
           "role": "AXStaticText",
@@ -552,8 +552,8 @@
           "op": "find",
           "label": "Capture task",
           "scan": {
-            "x": 200,
-            "from": 300,
+            "x": 300,
+            "from": 390,
             "to": 650
           },
           "role": "AXTextArea",
@@ -569,7 +569,7 @@
           "label": "Log",
           "scan": {
             "x": 49,
-            "from": 300,
+            "from": 315,
             "to": 650
           },
           "hint": {
