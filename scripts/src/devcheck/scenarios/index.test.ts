@@ -3,7 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { IosAssert, validateSimParams, type IosOp } from '../../mailroom/sim.ts';
 import { MATRIX_EXEMPT, matrixProblems } from '../matrix';
-import { SCENARIOS, globMatch, selectScenarios, slowScenarios } from './index';
+import {
+  PROBE_COVERED,
+  SCENARIOS,
+  globMatch,
+  probeSkip,
+  selectScenarios,
+  slowScenarios,
+} from './index';
 import { NeedsYou, type Ctx, type Scenario } from '../scenario';
 
 // The gate's half of MATRIX_GAP: a scenario whose rows don't hold fails CI before any devcheck runs.
@@ -361,6 +368,22 @@ describe('the slow tier', () => {
         };
       await expect(step('capture-long').run(lapsed)).resolves.toBeUndefined();
     });
+  });
+
+  it('probeSkip defers the probe job only when ios-standalone runs in full', () => {
+    expect(probeSkip(['ios-standalone', 'ios-probe'])('ios-probe')).toBe(PROBE_COVERED);
+    expect(probeSkip(['ios-standalone', 'ios-probe'])('ios-standalone')).toBeNull();
+    expect(probeSkip(['ios-probe'])('ios-probe')).toBeNull();
+    expect(probeSkip(['ios-standalone'])('ios-probe')).toBeNull();
+  });
+
+  it('the probe job is opt-in: an app change selects ios-standalone at most, never the probe job', () => {
+    const slow = (changed: string[], feature: string[] = []) =>
+      slowScenarios('full', feature, SCENARIOS, changed).filter((id) => id.startsWith('ios-'));
+    expect(slow(['app/src/pages/Home/index.tsx'])).toEqual([]);
+    expect(slow(['app/src/modules/capture/CaptureBar.tsx'])).toEqual(['ios-standalone']);
+    expect(slow(['docs/x.md'], ['ios-probe'])).toEqual(['ios-probe']);
+    expect(slow(['scripts/src/devcheck/probe-only.ts'])).toEqual(['ios-probe']);
   });
 
   it('every ios-standalone slow path exists: a rename would silently stop the sim running', () => {

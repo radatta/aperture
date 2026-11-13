@@ -46,6 +46,7 @@ import { renderReport, statusLine } from './report';
 import { pickSlot } from './slot';
 import {
   SCENARIOS,
+  probeSkip,
   selectFeature,
   selectScenarios,
   slowScenarios,
@@ -254,6 +255,7 @@ async function main(): Promise<number> {
       ledger,
       shotsDir,
       slow,
+      skip: probeSkip(slow),
       ios: createIos({
         fs: nodeFs,
         clock,

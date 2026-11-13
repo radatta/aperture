@@ -19,6 +19,7 @@ import { fluxHistory } from './flux-history';
 import { fluxPerf } from './flux-perf';
 import { devConcurrencyCaps } from './dev-concurrency-caps';
 import { inflightCap } from './inflight-cap';
+import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
@@ -40,6 +41,7 @@ export const SCENARIOS: Scenario[] = [
   smoke,
   devSlotB, // early and cheap: proves the run is on the slot its lock names before the long scenarios
   iosStandalone, // early: an asleep Mac is known (and short-circuits) before the long browser scenarios
+  iosProbe, // opt-in (--feature/--scenario ios-probe); deferred whenever ios-standalone runs in full
   captureTask,
   captureDock,
   partsV2,
@@ -143,4 +145,12 @@ export function slowScenarios(
         changed.some((f) => (s.slowPaths ?? []).some((g) => globMatch(g, f))),
     )
     .map((s) => s.id);
+}
+
+// The probe job (ios-probe) reads the points ios-standalone's own jobs read: when those run in full, it is deferred
+// with this note, never sent as well (IOS-CHECK.md → Probe job). run.ts passes this as the pipeline's `skip`.
+export const PROBE_COVERED = 'ios-standalone runs in full this run: its probes are read there';
+export function probeSkip(slow: string[]): (scenario: string) => string | null {
+  const covered = slow.includes('ios-standalone') && slow.includes('ios-probe');
+  return (scenario) => (covered && scenario === 'ios-probe' ? PROBE_COVERED : null);
 }

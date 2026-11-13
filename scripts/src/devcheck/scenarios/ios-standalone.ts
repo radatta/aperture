@@ -103,7 +103,10 @@ const CAPTURE_LONG: IosOp[] = [
   { op: 'nav', tab: 'Tasks' },
   { op: 'scroll', dir: 'down', pt: 400 },
   { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
-  { op: 'wait', s: 2 },
+  // 4 s, not 2: since the mode-row scan starts at MODE_ROW (315) it can read the Task toggle mid-settle (y 374/402 on
+  // 2026-11-12, against 464 settled), and a tap there misses the moving dock and blurs the field (jobs …011648Z…-8c62,
+  // …010744Z…-6102). CAPTURE waits 4 for the same settle.
+  { op: 'wait', s: 4 },
   {
     op: 'find',
     label: 'Capture log',
