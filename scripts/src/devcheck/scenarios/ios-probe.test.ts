@@ -104,7 +104,7 @@ describe('the probe job’s failures', () => {
     const lost = failing('LANDMARK', { signedIn: '' });
     await expect(step('launch').run(lost.ctx)).rejects.toBe(lost.err);
     const low = failing('BELOW_KEYBOARD', { note: 'long-bar bottom 600 vs keyboard top 590' });
-    await expect(step('capture-long').run(low.ctx)).rejects.toBe(low.err);
+    await expect(step('capture').run(low.ctx)).rejects.toBe(low.err);
   });
 });
 

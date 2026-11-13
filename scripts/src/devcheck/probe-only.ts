@@ -10,8 +10,12 @@ export interface Plan {
   steps: IosOp[];
 }
 
-// Recorded jobs with nothing left to probe once cut: the kills and relaunches are the whole job.
-export const NOT_PROBED = ['relaunch'];
+// Recorded jobs the probe job doesn't send. relaunch: once cut, nothing is left (its kills are the whole job).
+// capture-long: its points hold only after the full plan's kill, relaunch and 16 padding tasks (a long Tasks page);
+// cut, it ran on a short page still filtered by done-form's search, and its Task tap failed there on both dev runs that
+// reached it (2026-11-12) while the full scenario's passes — a state its plan doesn't vouch for. ios-standalone and the
+// headless check keep its points.
+export const NOT_PROBED = ['relaunch', 'capture-long'];
 
 const DROPPED = new Set(['signIn', 'kill', 'erase', 'launch', 'shutdown']);
 const PROBES = new Set(['nav', 'find', 'tap', 'absent', 'readBuild']);
@@ -55,6 +59,7 @@ export function probeOnly(steps: IosOp[], o: { first: boolean }): IosOp[] {
 // Every job cut, those with nothing to probe gone, the sim shut down after the last.
 export function probeJobs(plans: Plan[]): Plan[] {
   const cut = plans
+    .filter((p) => !NOT_PROBED.includes(p.name))
     .map((p, i) => ({ name: p.name, steps: probeOnly(p.steps, { first: i === 0 }) }))
     .filter((p) => p.steps.some((s) => PROBES.has(s.op)));
   cut.at(-1)?.steps.push({ op: 'shutdown' });

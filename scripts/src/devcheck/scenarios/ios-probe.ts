@@ -52,14 +52,12 @@ async function probe(ctx: Ctx, name: string): Promise<void> {
   }
 }
 
-// The cut jobs, one step each; a job the cut drops entirely is in probe-only.ts → NOT_PROBED.
-export const PROBE_STEPS = ['launch', 'capture', 'done-form', 'capture-long', 'review-chip'];
+// The cut jobs, one step each; a recorded job it doesn't send is in probe-only.ts → NOT_PROBED, with why.
+export const PROBE_STEPS = ['launch', 'capture', 'done-form', 'review-chip'];
 const STEP_TITLES: Record<string, string> = {
   launch: 'Launch from the Home Screen on the deployed build (no sign-in)',
   capture: 'The capture bar and its mode row, keyboard up: found where the plan reads them',
   'done-form': 'Tasks search, the Done form and its Reflection box: found, tapped, cancelled',
-  'capture-long':
-    'Tasks scrolled (filtered to the probe’s task), the capture bar in Task mode: found where the plan reads it',
   'review-chip': 'The capture bar switched to Task and back',
 };
 
