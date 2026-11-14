@@ -54,12 +54,21 @@ describe('mailroom runner', () => {
     }
   });
 
-  // The Mac runs these under bash 3.2, which garbles a $( ) holding parens inside a case arm (the MIXED_TEXT result
-  // came out as no JSON, 2026-11-13); this suite runs bash 5, so the shape is pinned out instead.
-  it('no case arm holds a $( ) with parens inside (bash 3.2 misparses it)', () => {
-    const src = [code(), readFileSync(`${TOOLS_DIR}install.sh`, 'utf8')].join('\n');
-    const arms = src.split('\n').filter((l) => /^\s*[^#]*[\w*|-]+\)\s.*\$\([^)]*\(/.test(l));
-    expect(arms).toEqual([]);
+  // The Mac runs these under bash 3.2, which brace-expands a {a,b} or {a..b} inside a double-quoted $( ) once a nested
+  // " appears in it (the MIXED_TEXT result came out as no JSON, 2026-11-13); this suite runs bash 5, so the shape is
+  // pinned out instead. A bare v="$(…)" is safe (no brace expansion in assignments); `local v="$(…)"` is not.
+  // One line at a time: a multi-line $( ) is out of its reach.
+  it('no brace pattern inside a quoted $( ) with a nested quote (bash 3.2 expands it)', () => {
+    const src = [
+      runnerText(),
+      readFileSync(`${TOOLS_DIR}install.sh`, 'utf8'),
+      readFileSync(`${TOOLS_DIR}run-fixtures.sh`, 'utf8'),
+    ].join('\n');
+    const re = /"[^"]*\$\([^"]*"(?:[^"]*"[^"]*")*[^"]*\{[^{}\s"]*(,|\.\.)[^{}"]*\}/; // an odd count of " before it
+    const bad = src
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l) && re.test(l) && !/^\s*[A-Za-z_]\w*="\$\(/.test(l));
+    expect(bad).toEqual([]);
   });
 
   it('reads each secret only from its Keychain item, never a file or the environment', () => {

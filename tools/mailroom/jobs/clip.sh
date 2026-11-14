@@ -94,9 +94,9 @@ clip_rd() {
   ) 2>/dev/null
 }
 
-# The MIXED_TEXT result's {types}: the JXA report's type names, anchored. A function, not an inline $(jq …) in
-# run_clip's case arm: the Mac's bash 3.2 misparses a $( ) with parens inside a case arm (it ran the echo twice
-# and lost the types), so the result was not JSON and no result.json was written.
+# The MIXED_TEXT result's {types}: the JXA report's type names, anchored. A function, not an inline "… $(jq …)":
+# the Mac's bash 3.2 brace-expands {1,80} inside a double-quoted $( ) that holds a nested " (the word came out
+# twice with empty types), so the result was not JSON and no result.json was written.
 clip_types() { jq -c '{types: [.types[]? | strings | select(test("^[A-Za-z0-9._-]{1,80}$"))][:12]}' 2>/dev/null || echo '{}'; }
 
 # Mac-private state ($STATE/clip.json): {serves: [epoch s in the last minute], cc, n: serves of that cc}.
