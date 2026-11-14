@@ -16,7 +16,7 @@ import {
 } from './mcp-login';
 import type { PwContext, PwPage, PwRequest } from './pw-types';
 
-const HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com';
+const HOST = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
 const env: DevcheckEnv = {
   DEVCHECK_EMAIL: TEST_USER_EMAIL,
   DEVCHECK_PASSWORD: 'pw',

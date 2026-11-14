@@ -13,7 +13,12 @@ if [ "$(uname)" = Darwin ]; then
   [ "${BASH_VERSINFO[0]}" -le 3 ] || exec /bin/bash "$0" "$@"
 fi
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
-CASES="$HERE/testdata/jobs.jsonl"
+# The cases say @DEV_ACCOUNT@ where the dev Cognito host carries the account id (it stays out of tracked files,
+# docs/ops/IDENTIFIERS.md): filled here from sim.sh's own pin, so a case's host always matches the runner it tests.
+DEV_ACCOUNT="$(sed -n "s/^SIM_COGNITO_RE='^aperture-dev-\([0-9]*\).*/\1/p" "$HERE/jobs/sim.sh")"
+[ -n "$DEV_ACCOUNT" ] || { echo "run-fixtures: no SIM_COGNITO_RE pin in jobs/sim.sh" >&2; exit 2; }
+CASES="$(mktemp)"
+sed "s/@DEV_ACCOUNT@/$DEV_ACCOUNT/g" "$HERE/testdata/jobs.jsonl" >"$CASES"
 export MAILROOM_FIXTURE_TOKEN="fixture-token-5f3a9c"
 export MAILROOM_FIXTURE_PW="FIXTUREPW-9d41"
 pass=0
@@ -58,10 +63,10 @@ security() {
     "find-generic-password -s aperture-mailroom-gh -w")
       [ -z "${MAILROOM_FIXTURE_NO_TOKEN:-}" ] || return 44
       printf '%s\n' "$MAILROOM_FIXTURE_TOKEN" ;;
-    "find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com")
+    "find-generic-password -s aperture-devcheck-dev -a devcheck@dev.aperture.rahuldatta.dev")
       [ -z "${MAILROOM_FIXTURE_NO_SIMPW:-}" ] || return 44
       printf 'keychain: item attributes\n' ;;
-    "find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com -w")
+    "find-generic-password -s aperture-devcheck-dev -a devcheck@dev.aperture.rahuldatta.dev -w")
       [ -z "${MAILROOM_FIXTURE_NO_SIMPW:-}" ] || return 44
       [ -z "${MAILROOM_FIXTURE_NO_SIMPW_READ:-}" ] || return 44
       printf 'read\n' >>"$MAILROOM_FIXTURE_SIMCALLS.pw"
@@ -337,7 +342,7 @@ if [ -z "${MAILROOM_FIXTURE_JOBS:-}" ]; then
   [ "$MAILROOM_FIXTURE_JOBS" -le 4 ] 2>/dev/null || MAILROOM_FIXTURE_JOBS=4
 fi
 OUTD="$(mktemp -d)"
-trap 'rm -r -f -- "$OUTD"' EXIT
+trap 'rm -r -f -- "$OUTD" "$CASES"' EXIT
 s=0
 while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do
   run_shard "$s" >"$OUTD/$s" 2>&1 &

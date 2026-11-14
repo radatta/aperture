@@ -2,9 +2,7 @@ import { CfnOutput, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as budgets from 'aws-cdk-lib/aws-budgets';
 import type { Construct } from 'constructs';
-
-// Where cost alerts land. Personal email by design — this is a personal project.
-const ALERT_EMAIL = 'rahul3datta@gmail.com';
+import { ALERT_EMAIL } from '../config/identifiers';
 
 // Cost guardrails — deployed ONCE BY HAND, never by the pipeline:
 //   cdk deploy ApertureBilling -c billing=true

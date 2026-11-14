@@ -4,7 +4,7 @@
 
 // What these rows can see: the keyboard's lift and the fields it covers, zoom, the shell and its insets, staying signed
 // in, the service worker's second launch. `app/**` would rerun the sim on every app change, ~6 min a run for most of them
-// nothing iOS can see (Rahul, 2026-11-05). Elsewhere an iOS-only bug waits for --tier all or naming the scenario.
+// nothing iOS can see (the maintainer, 2026-11-05). Elsewhere an iOS-only bug waits for --tier all or naming the scenario.
 const APP = [
   'app/index.html',
   'app/vite.config.ts',

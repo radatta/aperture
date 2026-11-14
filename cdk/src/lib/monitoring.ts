@@ -6,9 +6,7 @@ import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
-
-// Where prod alarms land. Personal email by design — this is a personal project.
-const ALERT_EMAIL = 'rahul3datta@gmail.com';
+import { ALERT_EMAIL } from '../config/identifiers';
 
 export interface MonitoredFunction {
   id: string; // alarm-id prefix; '' for the BFF keeps its original id (DurationNearTimeout)

@@ -1,7 +1,7 @@
 // The LeetCode extension (extension/, PR A2): the overlay's Start, capture, the outbox, the relay's forgery rules.
 // No dev step can drive a browser extension (`extension` isn't a step entry), and the server half it calls is
 // lc-sittings' — proven on dev as the test user there. So every row here is proven off dev — the Chrome E2E
-// runs the real extension against a fake LeetCode page and A1's real BFF locally — or needs Rahul in Safari.
+// runs the real extension against a fake LeetCode page and A1's real BFF locally — or needs the maintainer in Safari.
 import { noConsoleErrors, type Scenario } from '../scenario';
 
 const noStep = 'no dev step can drive the browser extension (`extension` is not a step entry)';

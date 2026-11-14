@@ -155,8 +155,8 @@ const LANE_BADGE: Record<Lane['state'], string> = {
   next: c(NORD.accent, 'NEXT  ', true),
   waiting: c(NORD.amber, 'WAIT  ', true),
   building: c(NORD.frost, 'BUILD ', true),
-  ready: c(NORD.green, 'READY ', true), // PR check green, Rahul's merge
-  'needs-you': c(NORD.amber, 'RAHUL ', true), // blocked on a Rahul step
+  ready: c(NORD.green, 'READY ', true), // PR check green, the maintainer's merge
+  'needs-you': c(NORD.amber, 'YOU   ', true), // blocked on a step only the maintainer can take
 };
 
 function queueTrouble(s: TowerState): string[] | null {
@@ -212,10 +212,10 @@ export function since(x: string, now: number): string {
   return d <= 0 ? '' : `${d}d`;
 }
 
-export function rahul(s: TowerState, r: Rect): string[] {
+export function maintainer(s: TowerState, r: Rect): string[] {
   const body = queueTrouble(s)
     ? []
-    : (s.queue.data?.rahul ?? []).map((t, i) =>
+    : (s.queue.data?.maintainer ?? []).map((t, i) =>
         spread(
           `${c(NORD.amber, `${i + 1}.`)} ${t.text}`,
           t.since ? c(NORD.dim, since(t.since, s.now)) : '',
@@ -223,7 +223,7 @@ export function rahul(s: TowerState, r: Rect): string[] {
         ),
       );
   if (!queueTrouble(s) && !body.length) body.push(c(NORD.green, 'nothing waiting on you'));
-  return box(r, 'WAITING ON RAHUL', body);
+  return box(r, 'WAITING ON YOU', body);
 }
 
 const WAVE_ORDER: WaveState[] = ['in-flight', 'open', 'not-started', 'merged'];
@@ -630,7 +630,7 @@ const PLAN_STALE = 2 * 3600000; // past due longer than this drops off
 const PLAN_KIND: Record<PlanKind, string> = {
   dev: c(NORD.accent, 'dev  '),
   merge: c(NORD.green, 'merge', true),
-  rahul: c(NORD.amber, 'rahul', true),
+  maintainer: c(NORD.amber, 'you  ', true),
   ci: c(NORD.frost, 'ci   '),
 };
 
@@ -653,8 +653,12 @@ export function plan(s: TowerState, r: Rect): string[] {
     const when = p.at === null ? '--:--' : hhmm(p.at);
     const cd = p.at === null ? '' : past ? '?' : countdown(p.at, s.now);
     const who = p.who ? ` (${p.who})` : '';
-    if (past) return c(NORD.dim, `${when} ${cd.padStart(6)} ${p.kind.padEnd(5)} ${p.what}${who}`);
-    const hot = p.kind === 'merge' || p.kind === 'rahul';
+    if (past)
+      return c(
+        NORD.dim,
+        `${when} ${cd.padStart(6)} ${(p.kind === 'maintainer' ? 'you' : p.kind).padEnd(5)} ${p.what}${who}`,
+      );
+    const hot = p.kind === 'merge' || p.kind === 'maintainer';
     return (
       c(NORD.fg, when) +
       ' ' +
@@ -757,7 +761,7 @@ export function wants(s: TowerState): Wants {
   const q = s.queue.data;
   return {
     queue: q ? Math.max(1, q.devQueue.length) : 3,
-    rahul: q ? Math.max(1, q.rahul.length) : 3,
+    maintainer: q ? Math.max(1, q.maintainer.length) : 3,
     wave: q?.wave ? q.wave.items.filter((i) => i.state !== 'merged').length + 2 : 1,
     plan: Math.max(1, livePlan(q?.plan ?? [], s.now).length),
     sessions: sessionSplit(s)[0].length + 2, // + the column header and the idle line
@@ -781,7 +785,7 @@ export function compose(s: TowerState, ui: Ui, cols: number, rows: number): stri
   } else {
     const draw: [PanelId, () => string[]][] = [
       ['queue', () => devQueue(s, R.queue!)],
-      ['rahul', () => rahul(s, R.rahul!)],
+      ['maintainer', () => maintainer(s, R.maintainer!)],
       ['wave', () => wave(s, R.wave!)],
       ['plan', () => plan(s, R.plan!)],
       ['history', () => history(s, ui, R.history!)],

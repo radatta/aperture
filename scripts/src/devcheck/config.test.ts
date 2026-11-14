@@ -93,7 +93,7 @@ describe('loadEnv', () => {
 });
 
 describe('MCP sign-in guards', () => {
-  const HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com';
+  const HOST = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
 
   it('parseEnv names DEVCHECK_CLAUDE_CLIENT_ID among the missing keys', () => {
     expect(ENV_KEYS).toContain('DEVCHECK_CLAUDE_CLIENT_ID');

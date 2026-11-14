@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { liveTests, MAC_INSTALL, parseArgs, sparkBuckets } from './main.ts';
+import { MAC_PLACEHOLDER } from '../../../mac-root.ts';
+import { liveTests, macInstallLine, parseArgs, sparkBuckets } from './main.ts';
 import { createHandler, serve } from './server.ts';
 
 let server: Server;
@@ -183,7 +184,7 @@ describe('sparkBuckets', () => {
 describe('round 4', () => {
   it("the page's Mac install line is TOWER.md's, word for word", () => {
     const doc = readFileSync(join(import.meta.dirname, '../../../../../docs/ops/TOWER.md'), 'utf8');
-    expect(doc).toContain(MAC_INSTALL);
+    expect(doc).toContain(macInstallLine(MAC_PLACEHOLDER)); // the doc says <mac-repo>; the page, .local/mac-root's
   });
   it('the CSP forbids framing', async () => {
     const r = await fetch(`${base}/`);

@@ -55,10 +55,10 @@ What the docs settle (2026-11-01, [fine-grained PAT permissions](https://docs.gi
 
 **Worst case if the runner has a bug:** the token opens or edits a PR on this repo, or reads the repo. Nothing more. The repo is private.
 
-**Renew yearly.** GitHub emails before expiry. Every result carries `tokenExpiresAt`, and the CLI prints `TOKEN_EXPIRING` when fewer than 14 days remain. To renew, regenerate the token on GitHub with the same permissions, then run:
+**Renew yearly.** GitHub emails before expiry. Every result carries `tokenExpiresAt`, and the CLI prints `TOKEN_EXPIRING` when fewer than 14 days remain. To renew, regenerate the token on GitHub with the same permissions, then run (`<mac-repo>` is the Mac repo path, from the gitignored `.local/mac-root`: main checkout; shown in the SessionStart context):
 
 ```sh
-cd /Users/rahuldatta/Coding/Personal/aperture && security add-generic-password -a "$USER" -s aperture-mailroom-gh -T /usr/bin/security -U -w
+cd <mac-repo> && security add-generic-password -a "$USER" -s aperture-mailroom-gh -T /usr/bin/security -U -w
 ```
 
 The first add is the same command without `-U`. With no value after `-w`, `security` prompts for the token, so it never lands in shell history. `-T` pre-trusts `security`, so launchd's reads don't raise a Keychain dialog.
@@ -68,7 +68,7 @@ The first add is the same command without `-U`. With no value after `-w`, `secur
 The installed runner is the **trust boundary**. launchd only ever runs `~/Library/Application Support/aperture-mailroom/bin/`, never the repo's copy, which the container can write. `install.sh` fills that folder **from GitHub, at one commit**: by default `main`'s head, which is code the user approved and merged. It fetches `runner.sh`, `jobs/*.sh` and the plist template with the mailroom token (Contents: read). It never copies a local file. `install.sh` itself is fetched the same way, so nothing from the shared folder is trusted. Run it on the Mac, from the main checkout:
 
 ```sh
-cd /Users/rahuldatta/Coding/Personal/aperture && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/mailroom/install.sh?ref=main')
+cd <mac-repo> && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/mailroom/install.sh?ref=main')
 ```
 
 This line is also what the CLI prints when the installed runner is out of date (`INSTALL_LINE` in `open-pr.ts`). It needs only what macOS 15+ ships: `/bin/bash` 3.2, `jq`, `curl`, `security`, `launchctl`, `plutil` and `shasum`. In order, it:

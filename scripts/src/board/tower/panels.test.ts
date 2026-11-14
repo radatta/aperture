@@ -62,7 +62,7 @@ describe('frame', () => {
     expect(f).toContain('ON DEV juliet-branch@devb  35m');
     expect(f).toMatch(/mem ━+.*9\.0G\/18G/);
     expect(f).toContain('ON DEV bravo-branch bravo  27m');
-    expect(f).toContain('WAIT   delta-branch delta  on Rahul: merge PR 41');
+    expect(f).toContain('WAIT   delta-branch delta  on you: merge PR 41');
     expect(f).toContain('1. Merge PR 41 after its dev run');
     expect(f).toContain('1/5 merged');
     expect(f).toContain('open charlie-branch PR 41  Charlie: the open change');
@@ -78,7 +78,7 @@ describe('frame', () => {
     const f = text(compose(state, live, 100, 50));
     for (const t of [
       'DEV QUEUE',
-      'WAITING ON RAHUL',
+      'WAITING ON YOU',
       'WAVE 2',
       'PLAN',
       'MACHINE',
@@ -336,10 +336,10 @@ describe('tower v2', () => {
   it('lane badges for ready and needs-you', () => {
     const f = text(compose(state, live, 210, 55));
     expect(f).toContain('READY  hotel-branch PR 42 hotel');
-    expect(f).toContain('RAHUL  india-branch india  on Rahul: admit to dev');
+    expect(f).toContain('YOU    india-branch india  on you: admit to dev');
   });
 
-  it("Rahul's to-dos show an age only past a day", () => {
+  it("the maintainer's to-dos show an age only past a day", () => {
     const f = text(compose(state, live, 210, 55));
     expect(f).not.toContain('today');
     expect(row(f, /1\. Merge PR 41/)).toMatch(/1\. Merge PR 41 after its dev run +││/);
@@ -390,7 +390,7 @@ describe('tower v2', () => {
       .filter((l) => !/^│ +│$/.test(l));
     expect(lines.map((l) => l.slice(0, 23))).toEqual([
       '│ 21:30      ? dev   br',
-      '│ 22:25    15m rahul Op',
+      '│ 22:25    15m you   Op',
       '│ 22:40    30m merge ch',
       '│ --:--        ci    PR',
     ]);

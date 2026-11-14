@@ -415,7 +415,7 @@ sudo sh -c 'cat /var/log/incus/<container>/*.log'
 
 ```
 20:10:49  ERROR  Failed stop validation for device  device=workspace
-                 err="Missing source path \"/Users/…/psi-omega-website\" for disk \"workspace\""
+                 err="Missing source path \"~/<other-project>\" for disk \"workspace\""
           …same for .git/hooks, .git/config, and for EVERY other container (incl. aperture)…
 20:10:49  dnsmasq: error binding DHCP socket to device incusbr0
 20:10:49  systemd: Stopping incus.service
@@ -430,7 +430,7 @@ sudo sh -c 'cat /var/log/incus/<container>/*.log'
 <!-- prettier-ignore -->
 ```yaml
 mounts:
-  - location: "~/Coding/Personal/WebDev/psi-omega-website"
+  - location: "~/<other-project>"
     writable: true
 ```
 
@@ -588,7 +588,7 @@ followed it is **Incident E** below.
 <!-- prettier-ignore -->
 ```yaml
 mounts:
-- location: "/Users/<you>/Coding/Personal/aperture"
+- location: "<mac-repo>"
 - writable: true      # <-- this dash makes it a SECOND list item
 ```
 
@@ -605,7 +605,7 @@ The dash turns `writable: true` into `mounts[1]` — a map with no `location`, w
 <!-- prettier-ignore -->
 ```yaml
 mounts:
-- location: "/Users/<you>/Coding/Personal/aperture"
+- location: "<mac-repo>"
   writable: true
 ```
 

@@ -85,8 +85,8 @@ describe('live_sitting', () => {
   it('says the freshness rules and the etiquette in its description', () => {
     const d = TOOLS.find((x) => x.name === 'live_sitting')!.description;
     expect(d).toMatch(/30 s/);
-    expect(d).toMatch(/never paste his code back/);
-    expect(d).toMatch(/after he leaves the page/);
+    expect(d).toMatch(/never paste their code back/);
+    expect(d).toMatch(/after they leave the page/);
   });
 
   it('with nothing ever open: inactive, no last sitting', async () => {

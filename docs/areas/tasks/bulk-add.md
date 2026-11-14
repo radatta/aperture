@@ -5,7 +5,7 @@ line optionally carrying inline tokens (`~estimate #category due:date notes:"…
 type — red errors gate submit, gold warnings don't. All lines commit in one batch as `backlog` tasks.
 The same grammar, one line at a time, also works in the capture bar's Task mode (§2, 2026-09-28).
 
-**The operator is Claude, not thumbs.** Rahul asks Claude to generate the paste; he does not hand-type
+**The operator is Claude, not thumbs.** The maintainer asks Claude to generate the paste; they do not hand-type
 it. That single fact drives the whole design: the grammar is strict and concrete (no natural-language
 dates, no silent rewrites), verbose is fine, ambiguity is not. The [operator reference](#operator-reference)
 below is the load-bearing part of this doc — Claude reads it before generating a paste.

@@ -2,14 +2,17 @@
   # PreToolUse hook on Bash — gates `git commit`:
   #   1. Blocks a commit on a protected/deploy branch (main/master/dev) — branch first.
   #   2. Hard-blocks if the staged diff contains obvious credential patterns.
-  #   3. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
-  #   4. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 3 and 4.
+  #   3. Hard-blocks a personal identifier in an added line, a new path or the message (docs/ops/IDENTIFIERS.md).
+  #   4. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
+  #   5. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 4 and 5.
   # set -euo pipefail; only acts on `git commit`, passes through otherwise.
 
   set -euo pipefail
   INPUT=$(cat)
   COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-  [[ "$COMMAND" != *"git commit"* ]] && exit 0
+  # `git commit`, also behind git's own -C <dir> / -c <k=v> (which used to slip past every check here). A here-string,
+  # not a pipe: under pipefail a long command's printf can take SIGPIPE from grep -q and read as "no match".
+  grep -Eq 'git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+commit' <<<"$COMMAND" || exit 0
 
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
   COMMIT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")  # also works on an unborn branch
@@ -25,13 +28,45 @@
   # One line on purpose: from #4 until the fixtures caught it, a hard wrap inside this regex made grep error
   # out on every commit and the `if` read that as "no match" — the scan never fired. The fixtures pin it now.
   SECRET_PATTERNS='(sk-[a-zA-Z0-9]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|AKIA[0-9A-Z]{16}|aws_secret_access_key[[:space:]]*=[[:space:]]*["'\'']?[A-Za-z0-9/+=]{20,}|BEGIN[[:space:]]+(RSA[[:space:]]+)?PRIVATE[[:space:]]+KEY|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})'
-  if echo "$DIFF" | grep -qE "$SECRET_PATTERNS"; then
+  # A here-string, not a pipe: under pipefail grep -q exiting on an early match SIGPIPEs the writer, and a diff
+  # over 64 KiB with a key in it read as clean.
+  if grep -qE "$SECRET_PATTERNS" <<<"$DIFF"; then
     jq -n '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
       "permissionDecisionReason":"Staged diff appears to contain a credential or private key. Secrets belong in env / Secrets Manager, not the repo. Unstage the file (git restore --staged <file>), remove the credential, and try again."}}'
     exit 0
   fi
 
-  if echo "$COMMAND" | grep -q 'WIP'; then exit 0; fi
+  # Personal identifiers (docs/ops/IDENTIFIERS.md): the repo is public, so no added line and no commit message may
+  # carry the maintainer's name, personal mailbox, a Mac home path, the projects folder or an AWS account id —
+  # identifiers.json alone holds them. WIP commits too. One rule set, scripts/src/identifiers.ts, run under plain
+  # node from this checkout; fails open when the checkout predates it, node is missing, or the scan fails (exit 2).
+  # The hook runs before the command, so a `git add … && git commit` or `commit -a` hasn't staged yet: with either
+  # in the command, the unstaged and untracked changes are scanned too. `pnpm bot push` scans every commit again.
+  TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  SCAN="$TOP/scripts/src/identifiers-scan.ts"
+  if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$SCAN" ] && command -v node >/dev/null; then
+    gd() { git -c core.quotePath=false diff -U0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$@" 2>/dev/null || true; }
+    ids_diff() {
+      gd --cached
+      # A `git add`/`stage` in the command, or a commit that takes the working tree (-a, --all, -i, -o); a commit
+      # naming paths takes them too and isn't detected here — the push scan is the backstop (IDENTIFIERS.md).
+      if grep -Eq '(^|[[:space:];&|(])git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]]|$)' <<<"$COMMAND"; then
+        gd
+        git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null |
+          while IFS= read -r -d '' f; do gd --no-index -- /dev/null "$f"; done
+      fi
+      true
+    }
+    IDS_RC=0
+    IDS_HITS=$(ids_diff | HOOK_CMD="$COMMAND" node "$SCAN" 2>/dev/null) || IDS_RC=$?
+    if [ "$IDS_RC" = 1 ] && [ -n "$IDS_HITS" ]; then
+      jq -n --arg h "$IDS_HITS" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+        "permissionDecisionReason":("This commit adds a personal identifier (docs/ops/IDENTIFIERS.md: the name, the personal mailbox, a Mac home path, the projects folder or an AWS account id belong only in identifiers.json; docs say \"the maintainer\" and <mac-repo>). Where:\n" + $h + "\nReword those lines (or the message) and commit again.")}}'
+      exit 0
+    fi
+  fi
+
+  if grep -q 'WIP' <<<"$COMMAND"; then exit 0; fi
 
   # Commit-message rule (CLAUDE.md → Git workflow). Enforced here because prose alone never held: a "few
   # words" rule with an 8-word example produced 8-11-word messages across sessions, and the harness asks

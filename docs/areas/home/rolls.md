@@ -20,7 +20,7 @@ disagree, fix whichever is wrong and say so here.
 
 Some of the things you most want to keep doing have **no deadline** — LeetCode daily, studying systems
 design, working on Aperture. Nothing forces them, so they're the first to slip, and a plain task or a
-"someday" checkbox has no pull. In Rahul's words: _"I will do things with an actual deadline; LC I will
+"someday" checkbox has no pull. In the maintainer's words: _"I will do things with an actual deadline; LC I will
 keep putting off."_
 
 Streaks are the usual fix, and they _do_ motivate — but a resetting streak is a guilt machine: one missed
@@ -75,14 +75,14 @@ collapse into one (see §6).
 
 - **D1 — A rep is a done task tagged with the roll; momentum is DERIVED, never a stored counter.** A
   counter is a second source of truth = the streak object we're avoiding, and it drifts. Rejected: a
-  "log a rep" quick path with no task (would reintroduce the counter). Confirmed with Rahul (B4 =
+  "log a rep" quick path with no task (would reintroduce the counter). Confirmed with the maintainer (B4 =
   derive-only).
 - **D2 — Forgiving contact sheet, all-time count, no ring / red / streak / score / %.** The sheet only
   fills; a gap is a fainter dot (`bg-line`), never the Habits grid's hollow "please check" square and
   never red. The count is **all-time** — it can't decrease as days scroll past the window (a windowed
   count would be a decaying score). This is the whole no-scold payoff.
 - **D3 — Rolls and Habits stay distinct** (see §2). Rejected: merging now — it would relitigate D1 and
-  PRODUCT §4b inside the new-entity PR. Confirmed with Rahul (keep both, reassess after use).
+  PRODUCT §4b inside the new-entity PR. Confirmed with the maintainer (keep both, reassess after use).
 - **D4 — A Roll is NOT a `TaskSeries`.** A series auto-materializes an occurrence every due day; a roll is
   open-ended and the _act of picking_ is the value. Auto-materializing would make LeetCode appear on the
   plan every day unbidden — "another checkbox in the pile," the exact failure the epic names. A rep task
@@ -102,7 +102,7 @@ collapse into one (see §6).
   D13) rather than spawning a second rep, and the picker shows the message: re-timing the rep to today
   puts it on Today by its time; clearing its time makes it pickable again.
 - **D7 — Two reps a day are allowed.** Once a rep is done, picking again spawns a fresh task; the cell
-  counts 2. Two problems in a day is honest, not a bug. Confirmed with Rahul.
+  counts 2. Two problems in a day is honest, not a bug. Confirmed with the maintainer.
 - **D8 — Rolls carry an estimate; the rep inherits it.** Calibration accrues on ongoing effort too. The
   type is nullable (series parity) but the form requires it; a null estimate falls back to
   `ROLL_PLAN_FALLBACK_MIN` (30) for the plan row — a named constant, not a magic number.

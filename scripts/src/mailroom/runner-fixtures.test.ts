@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { IDS, simCognitoPin } from '../identifiers.ts';
 import { TOOLS_DIR } from './fixtures.ts';
 import { SIM_H, SIM_W } from './sim.ts';
 
@@ -94,8 +95,8 @@ describe('mailroom runner', () => {
       'SIM_NAME="aperture-devcheck"',
       'SIM_AXE_VERSION="1.8.0"',
       'SIM_TERMINATE_ID="com.apple.webapp"',
-      'SIM_EMAIL="rahul3datta+devcheck@gmail.com"',
-      "SIM_COGNITO_RE='^aperture-dev-618015769091\\.auth\\.us-west-1\\.amazoncognito\\.com$'",
+      `SIM_EMAIL="${IDS.email.devTestUser}"`,
+      simCognitoPin(), // the one line the dev account id may stay a literal (tracked-identifiers.test.ts)
       `SIM_W=${SIM_W}`, // the validators' bounds (sim.ts) follow the device profile
       `SIM_H=${SIM_H}`,
       'SIM_AX_CAP=8 ax describe-ui --point', // a point read's cap: a hung one costs 8 s, not ax's 30

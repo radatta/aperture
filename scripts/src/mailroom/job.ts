@@ -2,6 +2,7 @@
 // the same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh; a `sim` job's plan: sim.ts; a `clip` job: clip.ts). The runner is the authority; this is
 // the early, fixable copy, and tools/mailroom/testdata/jobs.jsonl drives both (job.test.ts). docs/ops/MAILROOM.md.
 import { createHash } from 'node:crypto';
+import { REPO_SLUG } from '../identifiers.ts';
 import { validateClipParams } from './clip.ts';
 import { isoSeconds, makeId } from './ids.ts';
 import { SIM_REASON_HINT, validateSimParams } from './sim.ts';
@@ -25,8 +26,9 @@ const FENCE_RE = /(^|\n)(?<f>`{3,})[^`\n]*\n[\s\S]*?\n\k<f>`*[ \t]*(?=\n|$)/g;
 const SPAN_RE = /(?<![`\\])(?<t>`+)[^`\n]+\k<t>(?!`)/g;
 const MENTION_RE = /(^|[^A-Za-z0-9_])@[A-Za-z0-9]/;
 const HASH_REF_RE = /#[0-9]|(^|[^A-Za-z0-9_])GH-[0-9]/;
-const XREF_RE =
-  /[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]\/(?!radatta\/aperture\/)[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(issues|pull|discussions)\/[0-9]/;
+const XREF_RE = new RegExp(
+  `[Gg][Ii][Tt][Hh][Uu][Bb]\\.[Cc][Oo][Mm]/(?!${REPO_SLUG.replace(/[.]/g, '\\.')}/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull|discussions)/[0-9]`,
+);
 
 export type Reason =
   | 'BAD_JSON'

@@ -2,11 +2,11 @@
 // (gitignored, dir 700, files 600 — docs/ops/CI-BOT.md). Read in-process only; nothing here is ever printed.
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { REPO_SLUG as SLUG } from '../identifiers.ts';
 import { run } from './sh.ts';
 
-export const OWNER = 'radatta';
-export const REPO = 'aperture';
-export const REPO_SLUG = `${OWNER}/${REPO}`;
+export const REPO_SLUG = SLUG; // identifiers.json → repo
+export const [OWNER, REPO] = REPO_SLUG.split('/') as [string, string];
 export const REPO_URL = `https://github.com/${REPO_SLUG}.git`;
 export const PROTECTED = new Set(['main', 'master', 'dev']);
 

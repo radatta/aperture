@@ -41,7 +41,7 @@ ORIGIN="https://dev.aperture.rahuldatta.dev" # slot A: the sim's Home Screen app
 LABEL="dev.rahuldatta.aperture.mailroom"
 MAILROOM_STATE="${SIM_BENCH_MAILROOM_STATE:-$HOME/Library/Application Support/aperture-mailroom/state}"
 POLL="${SIM_BENCH_POLL:-5}"
-EMAIL="rahul3datta+devcheck@gmail.com"
+EMAIL="devcheck@dev.aperture.rahuldatta.dev"
 KEYCHAIN="aperture-devcheck-dev"
 
 say() { printf '%s\n' "$*"; }

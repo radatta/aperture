@@ -21,6 +21,7 @@ import { fluxPerf } from './flux-perf';
 import { devConcurrencyCaps } from './dev-concurrency-caps';
 import { bffHardening } from './bff-hardening';
 import { bffShapes } from './bff-shapes';
+import { identifierCleanup } from './identifier-cleanup';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcExtension } from './lc-extension';
@@ -74,6 +75,7 @@ export const SCENARIOS: Scenario[] = [
   bffHardening,
   bffShapes,
   perSlotRuns,
+  identifierCleanup,
   lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

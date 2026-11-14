@@ -5,7 +5,7 @@
 export type PanelId =
   | 'header'
   | 'queue'
-  | 'rahul'
+  | 'maintainer'
   | 'wave'
   | 'plan'
   | 'history'
@@ -17,7 +17,13 @@ export type Rect = { x: number; y: number; w: number; h: number };
 export type Layout = { mode: 'wide' | 'narrow' | 'small'; rects: Partial<Record<PanelId, Rect>> };
 
 // Content lines each list panel would like (the panel adds its 2 border rows).
-export type Wants = { queue: number; rahul: number; wave: number; plan: number; sessions: number };
+export type Wants = {
+  queue: number;
+  maintainer: number;
+  wave: number;
+  plan: number;
+  sessions: number;
+};
 
 export const WIDE_COLS = 160;
 export const NARROW_COLS = 95;
@@ -37,13 +43,13 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
   const wide = cols >= WIDE_COLS && rows >= 40;
   const bands: Band[] = [];
   if (wide) {
-    const top = clamp(Math.max(want.queue, want.rahul, want.wave) + 2, 5, 16);
+    const top = clamp(Math.max(want.queue, want.maintainer, want.wave) + 2, 5, 16);
     bands.push({
       h: top,
       min: 5,
       cells: [
         { id: 'queue', w: Math.round(cols / 3) },
-        { id: 'rahul', w: Math.round(cols / 3) },
+        { id: 'maintainer', w: Math.round(cols / 3) },
         { id: 'wave', w: 'rest' },
       ],
     });
@@ -57,20 +63,20 @@ export function layout(cols: number, rows: number, want: Wants): Layout {
       ],
     });
   } else {
-    const top = clamp(Math.max(want.queue, want.rahul) + 2, 4, 8);
+    const top = clamp(Math.max(want.queue, want.maintainer) + 2, 4, 8);
     bands.push({
       h: top,
       min: 4,
       cells: [
         { id: 'queue', w: Math.round(cols * 0.56) },
-        { id: 'rahul', w: 'rest' },
+        { id: 'maintainer', w: 'rest' },
       ],
     });
     bands.push({
       h: clamp(Math.max(want.wave, want.plan) + 2, 3, 14),
       min: 3,
       cells: [
-        { id: 'wave', w: Math.round(cols * 0.56) }, // under the queue; plan under rahul
+        { id: 'wave', w: Math.round(cols * 0.56) }, // under the queue; plan under maintainer
         { id: 'plan', w: 'rest' },
       ],
     });

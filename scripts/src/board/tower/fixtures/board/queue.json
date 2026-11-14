@@ -25,7 +25,7 @@
       "branch": "delta-branch",
       "session": "delta",
       "state": "waiting",
-      "waitingOn": "Rahul: merge PR 41"
+      "waitingOn": "you: merge PR 41"
     },
     {
       "branch": "echo-branch",
@@ -43,10 +43,10 @@
       "branch": "india-branch",
       "session": "india",
       "state": "needs-you",
-      "waitingOn": "Rahul: admit to dev"
+      "waitingOn": "you: admit to dev"
     }
   ],
-  "rahul": [
+  "maintainer": [
     {
       "text": "Merge PR 41 after its dev run",
       "since": "2026-11-08"
@@ -101,7 +101,7 @@
       "at": "2026-11-08T06:40:00Z",
       "what": "charlie-branch PR 41",
       "kind": "merge",
-      "who": "Rahul"
+      "who": "you"
     },
     {
       "at": "2026-11-08T05:30:00Z",
@@ -117,7 +117,7 @@
     {
       "at": "2026-11-08T06:25:00Z",
       "what": "Open the dev freeze for delta-branch",
-      "kind": "rahul"
+      "kind": "maintainer"
     }
   ],
   "followups": [

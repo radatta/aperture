@@ -507,7 +507,7 @@ export class ApertureAppStack extends Stack {
     new CfnOutput(this, 'McpClientId', { value: claudeClient.userPoolClientId }); // paste into claude.ai's connector OAuth Client ID
 
     // Runtime watch on the Lambdas, prod only (see monitoring.ts). The push dispatch has no alarm of its own (no
-    // fixed monthly cost — Rahul, 2026-11-04): the account-wide Errors alarm covers it, and a stuck tick's 20 s
+    // fixed monthly cost — the maintainer, 2026-11-04): the account-wide Errors alarm covers it, and a stuck tick's 20 s
     // timeout lands in Errors. Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
     // worth it, and the synthetic check already proves the edge wiring at deploy time).

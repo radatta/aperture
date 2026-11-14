@@ -2,7 +2,9 @@ import { mkdtempSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readCosts, readMacStats, sumCosts } from './health.ts';
+import { createHash } from 'node:crypto';
+import { IDS } from '../../identifiers.ts';
+import { accountKind, readCosts, readMacStats, sumCosts } from './health.ts';
 
 const T = Date.parse('2026-11-13T20:00:00Z');
 const stats = (t: number, over: object = {}) =>
@@ -74,15 +76,29 @@ const ce = (days: [string, string, string][]) =>
   });
 
 describe('AWS costs (costs-daily.json)', () => {
+  it('labels dev by its id and prod by its id’s hash, anything else other', () => {
+    const fake = '444455556666';
+    const ids = {
+      ...IDS,
+      aws: { ...IDS.aws, prodAccountSha256: createHash('sha256').update(fake).digest('hex') },
+    };
+    expect([
+      accountKind(IDS.aws.devAccountId, ids),
+      accountKind(fake, ids),
+      accountKind('111111111111', ids),
+    ]).toEqual(['dev', 'prod', 'other']);
+  });
+
   it('sums this month only, split dev / prod / other, with the last day it covers', () => {
     const c = sumCosts(
       ce([
-        ['2026-10-31', '618015769091', '5'],
-        ['2026-11-01', '618015769091', '0.25'],
-        ['2026-11-02', '594060113104', '0.10'],
-        ['2026-11-12', '111111111111', '0.05'],
+        ['2026-10-31', '111111111111', '5'],
+        ['2026-11-01', '111111111111', '0.25'],
+        ['2026-11-02', '222222222222', '0.10'],
+        ['2026-11-12', '333333333333', '0.05'],
       ]),
       '2026-11',
+      (id) => ({ '111111111111': 'dev', '222222222222': 'prod' })[id] ?? 'other',
     );
     expect(c.total).toBeCloseTo(0.4);
     expect(c.byAccount).toEqual({ dev: 0.25, prod: 0.1, other: 0.05 });
@@ -91,7 +107,7 @@ describe('AWS costs (costs-daily.json)', () => {
   it('reads a BOM-prefixed file; dates "as of" by mtime and goes stale past 3 days', () => {
     const d = mkdtempSync(join(tmpdir(), 'costs-'));
     const p = join(d, 'costs-daily.json');
-    writeFileSync(p, '﻿' + ce([['2026-11-01', '618015769091', '1']]));
+    writeFileSync(p, '﻿' + ce([['2026-11-01', '111111111111', '1']]));
     utimesSync(p, (T - 3600e3) / 1000, (T - 3600e3) / 1000);
     expect(readCosts(p, T, '2026-11')).toMatchObject({ state: 'ok', at: T - 3600e3, total: 1 });
     utimesSync(p, (T - 4 * 86400e3) / 1000, (T - 4 * 86400e3) / 1000);
@@ -117,7 +133,7 @@ describe('round 1 health fixes', () => {
   it('a pull with no rows for this month is stale with a reason, not $0.00 ok', () => {
     const d = mkdtempSync(join(tmpdir(), 'costs-'));
     const p = join(d, 'costs-daily.json');
-    writeFileSync(p, ce([['2026-10-31', '618015769091', '5']]));
+    writeFileSync(p, ce([['2026-10-31', '111111111111', '5']]));
     expect(readCosts(p, Date.now(), '2026-11')).toMatchObject({
       state: 'stale',
       total: 0,

@@ -164,6 +164,6 @@ Everything else uses the existing `aws-cdk-lib` (`aws-cloudwatch`, `aws-cloudwat
 
 ## Open items
 
-- **Operator manual steps** (blocking full activation): confirm the **one** SNS email subscription to `rahul3datta@gmail.com` — the prod alarm topic, which fires its confirmation on the first prod deploy. The budget subscriber is direct `EMAIL` (not SNS) → no confirmation. Flip the AWS root billing-access toggle, then `cdk deploy ApertureBilling -c billing=true`. **(All done as of 2026-08-10 — merged to main, prod deployed, alarm sub confirmed, ntfy verified on dev+prod.)**
+- **Operator manual steps** (blocking full activation): confirm the **one** SNS email subscription to the maintainer's email (`identifiers.json` → `email.alerts`) — the prod alarm topic, which fires its confirmation on the first prod deploy. The budget subscriber is direct `EMAIL` (not SNS) → no confirmation. Flip the AWS root billing-access toggle, then `cdk deploy ApertureBilling -c billing=true`. **(All done as of 2026-08-10 — merged to main, prod deployed, alarm sub confirmed, ntfy verified on dev+prod.)**
 - **cdk-nag #2359 watch:** when the upstream granular-acknowledge bug is fixed, replace the `addMetadata` workaround in `app-stack.ts` with the normal `Validations.of(fn).acknowledge(...)`.
-- Email address is now filled (`rahul3datta@gmail.com`, personal) in `monitoring.ts` + `billing-stack.ts` — not a work address.
+- Email address is now filled (the maintainer's email, `identifiers.json` → `email.alerts`, personal) in `monitoring.ts` + `billing-stack.ts` — not a work address.

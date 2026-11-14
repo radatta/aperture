@@ -71,6 +71,9 @@ touching a guard. A guard can fail **silently** — `precommit-guard`'s secret s
 added (#4, 2026-08-09) until the fixtures caught it: a hard-wrapped regex made `grep` error out, and the
 `if` read that as "no match" — so a guard change isn't done until a fixture proves both its deny and its
 allow.
+`precommit-guard`'s personal-identifier block runs the checkout's own `scripts/src/identifiers-scan.ts`; its
+fixtures (`"ids": true`) copy the real `identifiers.json` and the scanner into the throwaway repo and spell every
+identifier as a placeholder (`docs/ops/IDENTIFIERS.md`).
 
 ## Board hooks
 

@@ -23,11 +23,11 @@ stable. `incus list` prints it if you doubt that.
 ### 1. I want to use Claude
 
 ```bash
-# ── on the Mac ──
-cd ~/Coding/Personal/aperture
+# ── on the Mac ──  (<mac-repo>: the Mac repo path, in the gitignored .local/mac-root of the main checkout)
+cd <mac-repo>
 limactl shell incus                       # → you are now in the Lima VM
 
-# ── in the VM ──  (prompt: rahuldatta@lima-incus:...)
+# ── in the VM ──  (prompt: <you>@lima-incus:...)
 incus list                                # is the container still there and Running?
 
 #   Running  → reattach. Claude is still alive in tmux; nothing restarts.
@@ -77,8 +77,8 @@ disk, which quietly costs you sessions on the next VM rebuild.
 > the Mac** (`.git/config` is a read-only mount inside the container):
 >
 > ```bash
-> git config --local user.name  "Rahul Datta"
-> git config --local user.email "rahul3datta@gmail.com"
+> git config --local user.name  "<your-name>"
+> git config --local user.email "<your-email>"
 > ```
 >
 > `.git/config` lives on Mac disk and is mounted into every container, so there is nothing to
@@ -108,7 +108,7 @@ disk, which quietly costs you sessions on the next VM rebuild.
 Container won't start, ports are wrong, `~/.coi/` looks off, a session didn't come back:
 
 ```bash
-cd ~/Coding/Personal/aperture && limactl shell incus
+cd <mac-repo> && limactl shell incus
 
 incus list                                # is the container there, and Running/Frozen/gone?
 coi list
@@ -390,7 +390,7 @@ To relaunch Claude this way instead of `bash`, add the token env var — see _Op
 #    Then, inside, `claude --resume` from /workspace for each session.
 coi container stop coi-88cded0c-1
 incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB limits.processes=N   # only if [limits] changed
-cd ~/Coding/Personal/aperture && coi shell
+cd <mac-repo> && coi shell
 
 # ── in the VM ──  ONLY when you actually want the container GONE — reclaiming disk, a broken box.
 # 4. coi shutdown — exports nothing itself; run it only after step 2.
@@ -449,9 +449,9 @@ no M-series VM caveat.
 
 ```bash
 # in the Lima VM — `coi` does not exist on the Mac or in the container (see *Start here*)
-cd ~/Coding/Personal/aperture && coi attach            # container Running — the normal case
-cd ~/Coding/Personal/aperture && coi shell             # container Stopped — restarts it, disk intact
-cd ~/Coding/Personal/aperture && coi shell --resume    # container gone
+cd <mac-repo> && coi attach            # container Running — the normal case
+cd <mac-repo> && coi shell             # container Stopped — restarts it, disk intact
+cd <mac-repo> && coi shell --resume    # container gone
 ```
 
 Bypass perms, restricted network, the Vite range mapped out, no runtime cap. `pnpm dev` inside binds
@@ -575,7 +575,7 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
    <!-- prettier-ignore -->
    ```yaml
    mounts:
-   - location: "~/Coding/Personal/aperture"
+   - location: "<mac-repo>"
      writable: true
    ```
 
@@ -702,7 +702,7 @@ be found`) until this runs.
     ([Incident D](COI-INCIDENTS.md)).
 
     ```bash
-    /Users/<you>/Coding/Personal/aperture/scripts/coi-vm-setup.sh
+    <mac-repo>/scripts/coi-vm-setup.sh
     ```
 
     Symlinks `~/.coi/sessions-claude` and `~/.coi/profiles` into `localNotes/coi-state/` on the repo
@@ -717,7 +717,7 @@ be found`) until this runs.
 11. **First shell, trust, and verify the scoping.**
 
     ```bash
-    cd ~/Coding/Personal/aperture && coi shell
+    cd <mac-repo> && coi shell
     ```
 
     On a fresh `~/.coi/`, the repo's port declarations are untrusted — COI treats a repo declaring

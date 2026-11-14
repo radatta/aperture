@@ -226,7 +226,7 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
 - **LeetCode: three tools, and a live pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
   the sitting open right now: its code in full, the newest Run and Submit with the failing case, counts,
   LeetCode's timer, editing facts — or, with nothing open, `lastSitting`. Code is at most ~30 s behind (one
-  snapshot per 30 s, plus one right before each Run or Submit), and a Run or Submit judged after Rahul leaves
+  snapshot per 30 s, plus one right before each Run or Submit), and a Run or Submit judged after the maintainer leaves
   the page still lands in its sitting. Its one write is the pull's own count on that sitting ("Claude watched
   live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
   `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final

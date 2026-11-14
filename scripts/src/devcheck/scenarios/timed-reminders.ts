@@ -7,7 +7,7 @@
 //   endpoint that was never issued (`devcheck-e2e`), subscribed well before that minute so it's armed in time
 //   (§3); the reminder's tick encrypts, signs and POSTs to A — the one malformed POST to Apple a run makes
 //   (plan Q7, approved) — and Apple's refusal comes back on the health line. A goes the moment it's read.
-// Batching a reminder and a test into one notification is a unit test only (Rahul, review round 3).
+// Batching a reminder and a test into one notification is a unit test only (the maintainer, review round 3).
 //
 // Devices sit on fixed endpoints (api.ts HARNESS_PUSH_SLOTS), so their ids repeat run to run: a re-subscribe
 // revives last run's tombstone instead of adding one (the ledger reads an id created again as pending again —
@@ -273,7 +273,7 @@ export const timedReminders: Scenario = {
       offDev: {
         file: 'lambdas/src/push/dispatch.test.ts',
         test: 'a toggle that is off silences its kind only',
-        why: 'dev could show it only by waiting out a tick for a silence; kept off dev to hold the run’s time (Rahul, review round 2) — the toggle check runs whole in the test',
+        why: 'dev could show it only by waiting out a tick for a silence; kept off dev to hold the run’s time (the maintainer, review round 2) — the toggle check runs whole in the test',
       },
     },
     {
@@ -284,7 +284,7 @@ export const timedReminders: Scenario = {
       offDev: {
         file: 'lambdas/src/push/dispatch.test.ts',
         test: 'never pings twice: the dedup row is written before the send',
-        why: 'showing a second tick sends nothing would take another tick’s wait and a second POST to Apple (one a run is approved); kept off dev (Rahul, review round 2)',
+        why: 'showing a second tick sends nothing would take another tick’s wait and a second POST to Apple (one a run is approved); kept off dev (the maintainer, review round 2)',
       },
     },
     {
@@ -306,7 +306,7 @@ export const timedReminders: Scenario = {
       offDev: {
         file: 'lambdas/src/push/dispatch.test.ts',
         test: 'never a done, cancelled or deleted task — the stale index row is re-read',
-        why: 'dev could show it only by finishing a task and waiting out a tick for a silence; kept off dev to hold the run’s time (Rahul, review round 2)',
+        why: 'dev could show it only by finishing a task and waiting out a tick for a silence; kept off dev to hold the run’s time (the maintainer, review round 2)',
       },
     },
     {
@@ -317,7 +317,7 @@ export const timedReminders: Scenario = {
       offDev: {
         file: 'lambdas/src/push/dispatch.test.ts',
         test: 'one notification per device: a batch goes to each of them once',
-        why: 'riding a reminder and a test on one dev tick needs a timed wait for the tick; a unit test only (Rahul, review round 3)',
+        why: 'riding a reminder and a test on one dev tick needs a timed wait for the tick; a unit test only (the maintainer, review round 3)',
       },
     },
     {

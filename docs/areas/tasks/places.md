@@ -52,7 +52,7 @@ Shortcut "Aperture list"  ── GET /api/places/safeway/tasks ──▶  place 
 A fifth lens beside Today · Week · Backlog · Done (`query.ts`): **every open errand, grouped by store** — the same
 items the Shortcut lists (`placeTasks`), so "Safeway · 3" taps through to three. An errand that's dated this week,
 planned or started also shows in Week/Today; Backlog never shows errands, so an undated one lives only here
-(Rahul, 2026-11-04 — the notification and the lens must agree). Grouped by place, one tap checks an item off (chained `in_progress → done` — `backlog → done` isn't an edge) with a few
+(the maintainer, 2026-11-04 — the notification and the lens must agree). Grouped by place, one tap checks an item off (chained `in_progress → done` — `backlog → done` isn't an edge) with a few
 seconds of "Add again", since done is terminal. `/tasks?lens=places&place=<slug>` (`placeLensPath`) focuses one
 store — the notification's tap-through.
 

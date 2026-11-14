@@ -1,0 +1,25 @@
+{
+  "_comment": "The one tracked home for public identifiers (docs/ops/IDENTIFIERS.md). Code reads these; nothing else hard-codes them. The Mac repo path is never here: it lives in the gitignored .local/mac-root.",
+  "maintainer": {
+    "name": "Rahul Datta",
+    "github": "radatta"
+  },
+  "repo": "radatta/aperture",
+  "email": {
+    "contact": "rahul3datta@gmail.com",
+    "alerts": "rahul3datta@gmail.com",
+    "devTestUser": "devcheck@dev.aperture.rahuldatta.dev"
+  },
+  "domains": {
+    "apex": "rahuldatta.dev",
+    "prod": "aperture.rahuldatta.dev",
+    "dev": "dev.aperture.rahuldatta.dev",
+    "devb": "devb.aperture.rahuldatta.dev"
+  },
+  "aws": {
+    "devAccountId": "618015769091",
+    "region": "us-west-1",
+    "prodAccountSha256": "d8615bef2da136d6a79f55256d4ad85a42d02b3b0c5ea7dbd67750f390c5e7cf"
+  },
+  "bundlePrefix": "dev.rahuldatta"
+}

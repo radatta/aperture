@@ -1,5 +1,6 @@
-// queue.json: the hub's hand-kept dev queue, Rahul's to-dos and the wave checklist (schema v1:
+// queue.json: the hub's hand-kept dev queue, the maintainer's to-dos and the wave checklist (schema v1:
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
+import { findIdentifiers } from '../../identifiers.ts';
 import { clean, parseTime } from './fmt.ts';
 
 export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building', 'ready', 'needs-you'] as const;
@@ -9,7 +10,7 @@ export type WaveState = (typeof WAVE_STATES)[number];
 // the dev slot a lane is on (CI-BOT.md → Dev slots): optional, `dev` when absent
 export const LANE_SLOTS = ['dev', 'devb'] as const;
 export type LaneSlot = (typeof LANE_SLOTS)[number];
-export const PLAN_KINDS = ['dev', 'merge', 'rahul', 'ci'] as const;
+export const PLAN_KINDS = ['dev', 'merge', 'maintainer', 'ci'] as const;
 export type PlanKind = (typeof PLAN_KINDS)[number];
 
 export type Lane = {
@@ -37,7 +38,7 @@ export type PlanItem = { at: number | null; what: string; kind: PlanKind; who: s
 
 // dispatch's follow-up ledger (docs/ops/HUB.md → The hub's duties): the web tower's SLIPPING panel reads it.
 export const FOLLOWUP_STATUS = ['open', 'tracked', 'done', 'dropped'] as const;
-export const FOLLOWUP_OWNERS = ['rahul', 'lane', 'dispatch'] as const;
+export const FOLLOWUP_OWNERS = ['maintainer', 'lane', 'dispatch'] as const;
 export type Followup = {
   id: string;
   what: string;
@@ -55,10 +56,21 @@ export const staleFollowups = (fu: Followup[], now: number) =>
     (f) => f.status === 'open' && f.after === 'now' && f.since !== null && now - f.since > STALE_MS,
   );
 
+const QUEUE_KEYS = [
+  'v',
+  'updatedAt',
+  'devQueue',
+  'maintainer',
+  'wave',
+  'proofs',
+  'plan',
+  'followups',
+];
+
 export type QueueData = {
   updatedAt: number;
   devQueue: Lane[];
-  rahul: Todo[];
+  maintainer: Todo[];
   wave: { name: string; items: WaveItem[] } | null;
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
@@ -123,6 +135,15 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   if (updatedAt === null)
     return { status: 'bad', data: prev, unread: 'all', problems: ['updatedAt is not an ISO time'] };
 
+  // The per-person to-dos were renamed to `maintainer`: a file still on the old key (the maintainer's name, which
+  // the identifier rules know without this file spelling it) would drop them from NEEDS YOU without a word. Any
+  // other extra key — the hub's own `mergeOrder` among them — passes.
+  for (const k of Object.keys(raw))
+    if (!QUEUE_KEYS.includes(k) && findIdentifiers(k).some((h) => h.kind === 'name'))
+      problems.push(
+        `the to-dos sit under an old key — rename it to "maintainer" (docs/ops/TOWER.md)`,
+      );
+
   const devQueue: Lane[] = [];
   let unread: 'all' | string[] = [];
   const drop = (b: string | null, why: string) => {
@@ -154,12 +175,12 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     });
   });
 
-  const rahul: Todo[] = [];
-  arr(raw.rahul).forEach((x, i) => {
+  const maintainer: Todo[] = [];
+  arr(raw.maintainer).forEach((x, i) => {
     const t = x as Record<string, unknown>;
     const text = typeof x === 'string' ? str(x) : str(t?.text);
-    if (!text) return void problems.push(`rahul[${i}]: no text`);
-    rahul.push({ text, since: typeof x === 'string' ? null : str(t.since) });
+    if (!text) return void problems.push(`maintainer[${i}]: no text`);
+    maintainer.push({ text, since: typeof x === 'string' ? null : str(t.since) });
   });
 
   let wave: QueueData['wave'] = null;
@@ -230,7 +251,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
 
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, rahul, wave, deadRows, plan, followups },
+    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups },
     problems,
     ...(unread.length ? { unread } : {}),
   };

@@ -1,6 +1,6 @@
 // The web tower's one derivation (docs/ops/TOWER.md): board state + lane files + GitHub → the View the page
 // renders. Pure: every input is passed in, so each lane state and the automatic HOLD are tested on fixtures.
-// Truth comes from locks, PRs and Actions runs; lane files add the phase, the step and what Rahul must do.
+// Truth comes from locks, PRs and Actions runs; lane files add the phase, the step and what the maintainer must do.
 import { SHAPE_PATHS } from '../../deploy-base.ts';
 import { hhmm } from './fmt.ts';
 import type { Checks, Cached, GhRun, Minutes } from './gh.ts';
@@ -24,7 +24,7 @@ export type State =
   | 'DONE'
   | 'DEPLOY FAILED'
   | 'PARKED'
-  // no lane file yet: dispatch's queue.json state, in Rahul's words
+  // no lane file yet: dispatch's queue.json state, in the maintainer's words
   | 'WAITING'
   | 'NEEDS YOU'
   | 'READY'
@@ -35,7 +35,7 @@ export type LaneRow = {
   branch: string;
   session: string | null;
   state: State;
-  label: string; // the state in Rahul's words: `TESTING on devb`, `HOLD (dev: …)`, `PR (checks running)`
+  label: string; // the state in the maintainer's words: `TESTING on devb`, `HOLD (dev: …)`, `PR (checks running)`
   detail: string | null;
   tone: Tone;
   since: number | null;
@@ -109,7 +109,7 @@ export type View = {
   next: {
     queue: { slot: Slot; branch: string; state: string; waitingOn: string | null }[];
     merge: LaneRow[];
-    rahul: string | null;
+    maintainer: string | null;
     parked: string[];
   };
   done: {
@@ -175,7 +175,7 @@ const mainDeploys = (runs: GhRun[]) =>
 const running = (r: GhRun) => r.status !== 'completed';
 const sinceAt = (at: number | null) => (at === null ? '' : `, last read ${hhmm(at)}`);
 
-// A source read Rahul can act on only when it is fresh: failed, stale or never read is `why`, never "fine".
+// A source read the maintainer can act on only when it is fresh: failed, stale or never read is `why`, never "fine".
 export function ghFresh(
   c: { at: number | null; error: string | null },
   now: number,
@@ -245,7 +245,7 @@ export function deployFor(
   return later ? { run: later, via: own } : { run: own, via: null };
 }
 
-// What a slot's holder is doing, in the order Rahul asks about it.
+// What a slot's holder is doing, in the order the maintainer asks about it.
 export function slotDetail(
   slot: Slot,
   lock: Lock & { branch: string },
@@ -255,7 +255,7 @@ export function slotDetail(
   if (lock.sha && dispatching(i, lock.sha)) return 'deploying';
   const run = openRun(i, slot);
   if (run) return `devcheck running since ${hhmm(run.start!)}`;
-  if (file?.needs) return `held for Rahul: ${file.needs.what}`;
+  if (file?.needs) return `held for you: ${file.needs.what}`;
   return file?.step ?? (file ? file.phase : null);
 }
 
@@ -566,10 +566,10 @@ export function derive(i: Inputs): View {
     );
   });
 
-  // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for Rahul, sources only Rahul can fix.
+  // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for the maintainer, sources only the maintainer can fix.
   const needs: NeedItem[] = [];
   for (const l of i.lanes) if (l.needs) needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
-  // an unreadable lane file may have carried a needs item: say so where Rahul looks first
+  // an unreadable lane file may have carried a needs item: say so where the maintainer looks first
   for (const p of i.laneProblems)
     needs.push({
       kind: 'source',
@@ -609,7 +609,7 @@ export function derive(i: Inputs): View {
       branch: r.branch,
     });
   }
-  for (const todo of q?.rahul ?? [])
+  for (const todo of q?.maintainer ?? [])
     needs.push({
       kind: 'todo',
       what: todo.text,
@@ -679,9 +679,9 @@ export function derive(i: Inputs): View {
       .map((l) => ({ slot: l.slot, branch: l.branch, state: l.state, waitingOn: l.waitingOn })),
     parked: rows.filter((r) => r.state === 'PARKED').map((r) => r.branch),
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
-    rahul:
+    maintainer:
       needs[0]?.what ??
-      q?.plan.find((p) => p.kind === 'rahul' && p.at !== null && p.at >= i.now - 2 * 3600e3)
+      q?.plan.find((p) => p.kind === 'maintainer' && p.at !== null && p.at >= i.now - 2 * 3600e3)
         ?.what ??
       null,
   };

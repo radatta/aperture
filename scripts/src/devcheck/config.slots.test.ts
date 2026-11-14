@@ -24,8 +24,8 @@ afterEach(() => useSlot('dev'));
 const signed = 'X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123';
 const devFiles = 'aperturedata-dev-files8e6940b8-1a2b3c4d5e6f.s3.us-west-1.amazonaws.com';
 const devbFiles = 'aperturedata-devb-files8e6940b8-1a2b3c4d5e6f.s3.us-west-1.amazonaws.com';
-const devPool = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com';
-const devbPool = 'aperture-devb-618015769091.auth.us-west-1.amazoncognito.com';
+const devPool = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
+const devbPool = 'aperture-devb-123456789012.auth.us-west-1.amazoncognito.com';
 
 describe('dev slots', () => {
   it('keeps its slot list in step with the shared one', () => {

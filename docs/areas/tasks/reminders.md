@@ -136,7 +136,7 @@ proves the whole chain. The BFF never holds the private key.
   the app tombstones its own old row. It records the new id first, so the tombstone doesn't read as a
   removal from another device. Otherwise the old row would sit live as a twin the poller 410s and reports as
   "stopped accepting". A retire that fails is retried on a later launch.
-- **Removal sticks** (Rahul). A device removed in Settings on another device is a tombstone, listed in
+- **Removal sticks** (the maintainer). A device removed in Settings on another device is a tombstone, listed in
   `removedDeviceIds`. When a status read finds this device's id there, the app drops its opt-in and its
   browser subscription and writes nothing to the server. Settings then shows a one-time note worded for
   what this browser can do next: tap Enable, allow notifications first, open the Home Screen app, or
@@ -190,7 +190,7 @@ proves the whole chain. The BFF never holds the private key.
 Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full log).
 
 - **D1 Three kinds, one fire-time function each,** with a toggle per kind.
-- **D2 A 1-minute poller, not per-reminder schedules.** Rahul questioned it; it was kept, because one-shot
+- **D2 A 1-minute poller, not per-reminder schedules.** The maintainer questioned it; it was kept, because one-shot
   schedules would have to stay in sync across every task write path, the BFF would need scheduler IAM plus the
   dev freeze, and a failed schedule is lost. An always-on server costs about $5–15/mo plus ops.
 - **D3 Dedup and the guard are written before the send** (fail-closed).

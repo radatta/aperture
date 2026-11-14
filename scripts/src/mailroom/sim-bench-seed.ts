@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createApiClient } from '../devcheck/api';
+import { REPO_SLUG } from '../identifiers.ts';
 import { launch, loadPlaywright } from '../devcheck/browser';
 import {
   devcheckHome,
@@ -216,11 +217,9 @@ async function main(): Promise<number> {
         lsRemote: () => git(['ls-remote', 'origin', 'refs/locks/dev', 'refs/locks/devb']),
         tagMessage: async (tag) =>
           (
-            await exec(
-              'gh',
-              ['api', `repos/radatta/aperture/git/tags/${tag}`, '--jq', '.message'],
-              { cwd: worktree },
-            )
+            await exec('gh', ['api', `repos/${REPO_SLUG}/git/tags/${tag}`, '--jq', '.message'], {
+              cwd: worktree,
+            })
           ).stdout.trim(),
       }),
     async acquire() {

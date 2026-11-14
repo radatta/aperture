@@ -23,9 +23,8 @@ import {
   KILL_ALARM_PREFIX,
   KILL_FORWARDER_ROLE,
 } from '../config/devAccount';
+import { ALERT_EMAIL } from '../config/identifiers';
 
-// Where kill-switch and dev-budget alerts land. Personal email by design — this is a personal project.
-const ALERT_EMAIL = 'rahul3datta@gmail.com';
 // The dev budget: email at $1 of actual dev-account spend in a month, kill at $3.
 export const DEV_BUDGET_EMAIL_USD = 1;
 export const DEV_BUDGET_KILL_USD = 3;
