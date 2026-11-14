@@ -209,8 +209,9 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 ## Throttles (429)
 
-Home's cold burst is 9–16 `/api` calls (2026-11 runs), under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
-_Dev deploy blast radius_ → Compute), with room for the harness's own calls. The app has had no client-side cap since
+Home's cold load is 15 `/api` calls, at most 12 on the wire at once (measured on devb 2026-11-13, no cap), under
+the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute), with room
+for the harness's own calls. The app has had no client-side cap since
 2026-11: the cap of 8 (`inflight-cap`) patched the account quota of 10, and the quota is 1,000 now. (Before the cap, a
 dated _Known 429s_ rule here let a run count as green with them.) A 429 means
 Lambda never started the function, so that attempt was never tested — the app's retry (`app/src/data/retry.ts`) may

@@ -26,7 +26,7 @@ export const DEV_MAIN_GITHUB_ROLE = `${GITHUB_ROLE_PREFIX}dev-main`;
 export const DEV_CONCURRENCY_CEILING = 30;
 // One dev stack's shares, by function; every slot gets the same.
 const SLOT_RESERVED_CONCURRENCY: Readonly<Record<string, number>> = {
-  bff: 18, // Home's cold burst is 9–16 /api calls, the harness ~2; a second cold Home at once can 429 (retried)
+  bff: 18, // Home's cold load peaks at 12 /api at once, the harness ~2; a second cold Home at once can 429 (retried)
   mcp: 10, // a devcheck's /mcp steps beside a live connector session
   'finance-sync': 1, // the per-item lock serialises anyway; a throttled async event is retried
   'push-dispatch': 1, // one tick at a time, as on prod
