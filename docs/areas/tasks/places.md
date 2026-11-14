@@ -14,20 +14,20 @@ fix whichever is wrong and say so here.
 
 ## 1. Why
 
-Most of what went overdue in September was errands a ping would have caught — shampoo, nails, caramel syrup.
+Errands are what a ping catches best — the item you only remember once you're home.
 They aren't timed work; they're things to pick up _when you're at the store_. A PWA can't watch your location,
 but the iPhone can: a Shortcuts **Arrive** automation geofences on-device and runs a Shortcut when you get
-there. Aperture only has to answer "what's on the Safeway list?".
+there. Aperture only has to answer "what's on the Grocer list?".
 
 ## 2. Shape
 
 ```
 iPhone (on-device)                                  Aperture
 ─────────────────                                   ────────
-Arrive at Safeway (Main St)  ── automation ──┐
-Arrive at Safeway (Elm St)   ── automation ──┤ Run Shortcut "Aperture list", input "safeway"
+Arrive at Grocer (Main St)   ── automation ──┐
+Arrive at Grocer (Elm St)    ── automation ──┤ Run Shortcut "Aperture list", input "grocer"
                                              ▼
-Shortcut "Aperture list"  ── GET /api/places/safeway/tasks ──▶  place token → user → open errands
+Shortcut "Aperture list"  ── GET /api/places/grocer/tasks  ──▶  place token → user → open errands
    if text → Show Notification       ◀── { count, titles, text, url } ──┘
 ```
 
@@ -41,16 +41,16 @@ Shortcut "Aperture list"  ── GET /api/places/safeway/tasks ──▶  place 
   carries a parent's open parts along, attaching a part gives it the parent's place. The digest lists the
   _items_: a parent with open parts is left out and its parts listed, so the Shortcut, Settings' count and the lens
   agree.
-- **Grammar**: `shampoo | @safeway` (bulk add + capture's token line, `bulkTasks.ts`); in a natural-language quick
+- **Grammar**: `shampoo | @grocer` (bulk add + capture's token line, `bulkTasks.ts`); in a natural-language quick
   add, a known `@slug` word is taken before the model call (`takePlaceWord`) — the model never guesses a place.
-- **Digest** (`places.ts placeDigestOf`): open errands oldest first; `text` = `Safeway · 3 — shampoo, nails, syrup`
+- **Digest** (`places.ts placeDigestOf`): open errands oldest first; `text` = `Grocer · 3 — batteries, tape, stamps`
   (at most 12 titles, then `+N more`), `''` when empty so the Shortcut skips the banner. Settings' "Test" shows the
   same text.
 
 ## 3. The Places lens
 
 A fifth lens beside Today · Week · Backlog · Done (`query.ts`): **every open errand, grouped by store** — the same
-items the Shortcut lists (`placeTasks`), so "Safeway · 3" taps through to three. An errand that's dated this week,
+items the Shortcut lists (`placeTasks`), so "Grocer · 3" taps through to three. An errand that's dated this week,
 planned or started also shows in Week/Today; Backlog never shows errands, so an undated one lives only here
 (the maintainer, 2026-11-04 — the notification and the lens must agree). Grouped by place, one tap checks an item off (chained `in_progress → done` — `backlog → done` isn't an edge) with a few
 seconds of "Add again", since done is terminal. `/tasks?lens=places&place=<slug>` (`placeLensPath`) focuses one
@@ -95,7 +95,7 @@ store — the notification's tap-through.
 
 Once (Settings › Places shows these with the URL and token filled in):
 
-1. Settings › Places → add a place (e.g. Safeway) → **Generate token** → Copy.
+1. Settings › Places → add a place (e.g. Grocer) → **Generate token** → Copy.
 2. Shortcuts → **+** → name it **Aperture list** → _Get Contents of URL_ `https://<app>/api/places/[Shortcut Input]/tasks`,
    Method GET, header `x-aperture-authorization` = `Bearer apl_…` → _Get Dictionary Value_ `text` → _If_ `text` has any
    value → _Show Notification_ `text` → _Otherwise_ → _If_ `count` does not have any value → _Show Notification_ "Aperture didn't
@@ -105,10 +105,10 @@ Once (Settings › Places shows these with the URL and token filled in):
 Per store (about a minute each, only for stores you actually go to):
 
 3. Automation → **+** → **Arrive** → pick the store → **Run Immediately**, **Notify When Run** off → _Run Shortcut_
-   **Aperture list** with input `safeway`.
+   **Aperture list** with input `grocer`.
 
-A second Safeway is another automation with the same input. Rotating the token means editing only the one
-Shortcut. A place with no automation still works in the Places lens and through Claude ("what's on my Target
+A second Grocer is another automation with the same input. Rotating the token means editing only the one
+Shortcut. A place with no automation still works in the Places lens and through Claude ("what's on my Tackle
 list?" → `list_place_tasks`).
 
 ## 6. Decision log

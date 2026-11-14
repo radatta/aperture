@@ -10,7 +10,7 @@ import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck-recur ${ctx.nonce} ${what}`;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-// packages/shared/src/dates.ts fmtMonthShortDay for a day key: "Dec 5" (scripts doesn't depend on shared).
+// packages/shared/src/dates.ts fmtMonthShortDay for a day key: "Nov 30" (scripts doesn't depend on shared).
 const monthDay = (key: string) =>
   `${MONTHS[Number(key.slice(5, 7)) - 1]} ${Number(key.slice(8, 10))}`;
 const shiftDays = (key: string, n: number) => {
@@ -21,7 +21,7 @@ const shiftDays = (key: string, n: number) => {
 
 // Steps share what earlier ones made; a failed step skips the rest, so these are set when read.
 let appToday: string; // the app's day — todayKey(dayStartHour), not the calendar's (lenses.md D13)
-let prelab: DevSeries; // the form's series: due next day, until +30 d
+let report: DevSeries; // the form's series: due next day, until +30 d
 let ended: DevSeries; // the form's series whose until is already past
 let plain: DevSeries; // the form's series with no cadence
 let viaMcp: DevSeries; // create_series's
@@ -203,14 +203,14 @@ export const recurring: Scenario = {
       title: 'Recurring → New recurring task: every day, 60 min, Due “Next day”, Until +30 days',
       async run(ctx) {
         const until = shiftDays(appToday, 30);
-        prelab = await addSeries(ctx, name(ctx, 'prelab'), {
+        report = await addSeries(ctx, name(ctx, 'report'), {
           repeats: 'Every day',
           estimate: '60',
           due: 'Next day',
           until,
         });
-        if (prelab.dueOffsetDays !== 1 || prelab.until !== until || prelab.anchorDate !== appToday)
-          throw new Error(`the server has ${JSON.stringify(prelab)}`);
+        if (report.dueOffsetDays !== 1 || report.until !== until || report.anchorDate !== appToday)
+          throw new Error(`the server has ${JSON.stringify(report)}`);
         await ctx.ui.expectText(`Every day · due next day · until ${monthDay(until)}`);
         await ctx.shot('recurring-row');
       },
@@ -221,12 +221,12 @@ export const recurring: Scenario = {
       proves: ['today-due', 'reload-one'],
       title: 'Today shows it “due tomorrow”; a reload keeps one occurrence',
       async run(ctx) {
-        const title = name(ctx, 'prelab');
+        const title = name(ctx, 'report');
         await todaySearched(ctx, title);
         await rowOf(ctx, title).waitFor({ timeout: 15_000 });
         await ctx.ui.expectText('due tomorrow');
         await ctx.shot('today-due-tomorrow');
-        const first = await occurrencesOf(ctx, prelab.id);
+        const first = await occurrencesOf(ctx, report.id);
         if (first.length !== 1) throw new Error(`${first.length} occurrences after the first load`);
         const t = first[0]!;
         if (
@@ -239,7 +239,7 @@ export const recurring: Scenario = {
         await rowOf(ctx, title).waitFor({ timeout: 15_000 });
         if ((await rowOf(ctx, title).count()) !== 1)
           throw new Error('more than one row after a reload');
-        const again = await occurrencesOf(ctx, prelab.id);
+        const again = await occurrencesOf(ctx, report.id);
         if (again.length !== 1) throw new Error(`${again.length} occurrences after a reload`);
       },
     },
@@ -250,14 +250,14 @@ export const recurring: Scenario = {
       title:
         'Unplan → backlog status; after two reloads the one row offers “+ Today”, never a planned copy',
       async run(ctx) {
-        const title = name(ctx, 'prelab');
+        const title = name(ctx, 'report');
         await todaySearched(ctx, title);
         const unplan = ctx.page.getByRole('button', { name: 'Unplan', exact: true });
         await unplan.waitFor({ timeout: 15_000 });
         if ((await unplan.count()) !== 1)
           throw new Error(`search left ${await unplan.count()} Unplan buttons`);
         await unplan.click();
-        const [t] = await occurrencesOf(ctx, prelab.id);
+        const [t] = await occurrencesOf(ctx, report.id);
         for (let i = 0; (await ctx.api.reads.getTask(t!.id))?.status !== 'backlog'; i++) {
           if (i >= 40) throw new Error('Unplan never reached the server');
           await new Promise((r) => setTimeout(r, 250));
@@ -273,7 +273,7 @@ export const recurring: Scenario = {
           const unplans = await unplan.count();
           if (rows !== 1 || unplans !== 0)
             throw new Error(`reload ${pass}: ${rows} rows, ${unplans} Unplan buttons`);
-          const mine = await occurrencesOf(ctx, prelab.id);
+          const mine = await occurrencesOf(ctx, report.id);
           if (mine.length !== 1 || mine[0]!.status !== 'backlog')
             throw new Error(
               `reload ${pass}: ${mine.length} occurrences, ${mine.map((r) => r.status).join(',')}`,
@@ -288,20 +288,20 @@ export const recurring: Scenario = {
       proves: ['replan'],
       title: '“+ Today” from Week → the same occurrence is back on Today, still one',
       async run(ctx) {
-        const title = name(ctx, 'prelab');
+        const title = name(ctx, 'report');
         await ctx.ui.goto('/tasks?lens=week');
         await ctx.page.getByLabel('Search tasks').fill(title);
         const add = ctx.page.getByRole('button', { name: `Add ${title} to today` });
         await add.waitFor({ timeout: 15_000 });
         await add.click();
-        const [before] = await occurrencesOf(ctx, prelab.id);
+        const [before] = await occurrencesOf(ctx, report.id);
         for (let i = 0; (await ctx.api.reads.getTask(before!.id))?.status !== 'planned'; i++) {
           if (i >= 40) throw new Error('“+ Today” never reached the server');
           await new Promise((r) => setTimeout(r, 250));
         }
         await todaySearched(ctx, title);
         await rowOf(ctx, title).waitFor({ timeout: 15_000 });
-        const rows = await occurrencesOf(ctx, prelab.id);
+        const rows = await occurrencesOf(ctx, report.id);
         if (rows.length !== 1 || rows[0]!.id !== before!.id)
           throw new Error(
             `${rows.length} occurrences after “+ Today” (same task: ${rows[0]?.id === before!.id})`,
@@ -342,7 +342,7 @@ export const recurring: Scenario = {
           throw new Error(`the undated occurrence is ${JSON.stringify(plainRow)}`);
         if ((await occurrencesOf(ctx, ended.id)).length !== 0)
           throw new Error('an ended series spawned');
-        const first = await occurrencesOf(ctx, prelab.id);
+        const first = await occurrencesOf(ctx, report.id);
         if (
           first.length !== 1 ||
           first[0]!.status !== 'planned' ||
@@ -426,9 +426,9 @@ export const recurring: Scenario = {
       entry: 'api',
       title: 'Delete this run’s series with their occurrences (by recorded id); clear the search',
       async run(ctx) {
-        for (const s of [prelab, ended, plain, viaMcp]) await ctx.api.writes.deleteSeries(s.id);
+        for (const s of [report, ended, plain, viaMcp]) await ctx.api.writes.deleteSeries(s.id);
         const left = (await ctx.api.reads.listTasks()).filter((t) =>
-          [prelab, ended, plain, viaMcp].some((s) => s.id === t.seriesId),
+          [report, ended, plain, viaMcp].some((s) => s.id === t.seriesId),
         );
         if (left.length) throw new Error(`${left.length} occurrences left after deleteSeries`);
         await ctx.ui.goto('/tasks');

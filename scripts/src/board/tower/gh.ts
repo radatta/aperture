@@ -9,7 +9,7 @@ import { clean, parseTime } from './fmt.ts';
 import { REPO_SLUG } from '../../identifiers.ts';
 export { REPO_SLUG };
 
-export const ACTIONS_INCLUDED_MIN = 3000; // the maintainer's plan (Student Pro): the page says "of 3,000 (plan)"
+export const ACTIONS_INCLUDED_MIN = 3000; // the account's plan: the page says "of 3,000 (plan)"
 
 export type GhRun = {
   id: number;

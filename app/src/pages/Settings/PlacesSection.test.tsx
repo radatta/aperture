@@ -24,7 +24,7 @@ describe('Settings › Places: the list', () => {
   it('starts empty with an invitation — no default store offered', async () => {
     renderWithProviders(<PlacesSection />, { api: stub() });
     await screen.findByText(/No places yet — add the stores you run errands at/);
-    expect(screen.queryByRole('button', { name: /Safeway/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Grocer/i })).toBeNull();
   });
 
   it('adds a place, showing its link word as you type, and refuses a clash before sending', async () => {
@@ -40,17 +40,17 @@ describe('Settings › Places: the list', () => {
     );
 
     await user.clear(field);
-    await user.type(field, "Trader Joe's");
-    expect(screen.getByText('Link word: @trader-joe-s')).toBeTruthy();
+    await user.type(field, "Thrift Jo's");
+    expect(screen.getByText('Link word: @thrift-jo-s')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Add place' }));
     await waitFor(async () =>
       expect((await api.listPlaces()).map((p) => p.slug)).toEqual([
         'corner',
         'market',
-        'trader-joe-s',
+        'thrift-jo-s',
       ]),
     );
-    expect(await screen.findByLabelText("Rename Trader Joe's")).toBeTruthy();
+    expect(await screen.findByLabelText("Rename Thrift Jo's")).toBeTruthy();
     expect((field as HTMLInputElement).value).toBe('');
   });
 

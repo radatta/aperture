@@ -66,7 +66,7 @@ Done on the rep ─────────────────────�
 
 All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda share them):
 
-- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), his review
+- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), the user's review
   (`review`, _Review and the Claude draft_ below) and the `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
   runs before the first submit, LeetCode's timer state, and `headEvents`, how many rows it folds.
   **Recomputed, never incremented:** any events call carrying a head event — fresh or a repeat — rebuilds it
@@ -124,8 +124,8 @@ its window is marked `expired: true`, its minutes stopped at the window.
 
 ### Review and the Claude draft
 
-A sitting's review is his own words, on the head (`review`, `setSittingReview`): a one-liner, how much help it
-took (`none` / `hint` / `solution`), up to 8 mistakes, how it went, up to 10 pattern tags of his own, and
+A sitting's review is the user's own words, on the head (`review`, `setSittingReview`): a one-liner, how much help it
+took (`none` / `hint` / `solution`), up to 8 mistakes, how it went, up to 10 of the user's own pattern tags, and
 `draftUsed`. One normalizer (`normalizeSittingReview`) folds whitespace, lowercases and dedupes the tags, refuses
 anything over a cap naming the field, and turns a review that says nothing into `null`. It's on the head, not a
 row of its own, so the list's reviewed dot and `list_sittings` read it free; a refold spreads the head and keeps
@@ -135,7 +135,7 @@ sitting included. The form starts help on `hint` once a submit failed before the
 **Draft with Claude** (`draftSittingReview`) is a button, never automatic: one Haiku call (`claude-haiku-5-5`,
 `lambdas/src/anthropic/sittingReviewPrompt.ts`, snapshot-tested) over the problem, the newest 8 judged Runs and
 Submits with their cases (each field ≤ 400 chars), and the code at the first submit and the final code (≤ 4 KB
-each; his code goes to the API — decided). It proposes **mistake lines only** — at most 5, each ≤ 160
+each; the user's code goes to the API — decided). It proposes **mistake lines only** — at most 5, each ≤ 160
 characters, each naming a failing case or a concrete code change, describing and never judging; the one-liner and
 how it went are never drafted. The answer is made fit (`draftMistakes`): a line over 160 is cut to 160 ending
 "…" and only the first 5 are kept; only an answer that isn't a list of text is `bad-shape`. It writes
@@ -153,7 +153,7 @@ talk-through after a sitting and for prep planning. `get_sitting` carries the pr
 (`timelineOf`: every judged Run and Submit with verdict and case, each case field ≤ 300 chars, the newest 30, and
 `codeChanged` markers counting the snapshots between them — snapshots expire with the raw bulk, so an older
 sitting has none), the final code in full, editing facts and the review. `list_sittings` rows are heads only:
-day, problem, status, minutes, outcome, prep target, `reviewed` and his tags; at most 100, `more` when cut.
+day, problem, status, minutes, outcome, prep target, `reviewed` and the user's tags; at most 100, `more` when cut.
 
 ### Storage and expiry
 

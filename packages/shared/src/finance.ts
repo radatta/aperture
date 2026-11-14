@@ -1,4 +1,4 @@
-// Finances — the three-bucket budget, plus Not spending (ported from penny-pilot) over Plaid-synced bank data.
+// Finances — the three-bucket budget, plus Not spending (ported from an earlier budget app) over Plaid-synced bank data.
 // Entities, DTOs, and every pure rule both ApiClient impls share: sign normalisation, internal-move
 // matching, the billing period, the overview numbers, rules, and sync-page reconciliation.
 //
@@ -11,14 +11,14 @@ import type { PlaidTransaction } from './plaidTypes';
 import { addDays, daysBetween } from './dates';
 
 // --- Entities --------------------------------------------------------------
-// not_spending: money out that isn't spending (a brokerage deposit, a cash withdrawal) — sorted, so it
+// not_spending: money out that isn't spending (a transfer to an outside account, a cash withdrawal) — sorted, so it
 // leaves the queue, but in no total. A stored bucket value, so rules and sync carry it like the others.
 export type FinanceBucket = 'parents_pay' | 'budget' | 'i_pay' | 'not_spending';
 export type FinanceSpendBucket = Exclude<FinanceBucket, 'not_spending'>;
 export const FINANCE_SPEND_BUCKETS: FinanceSpendBucket[] = ['parents_pay', 'budget', 'i_pay'];
 export const FINANCE_BUCKETS: FinanceBucket[] = [...FINANCE_SPEND_BUCKETS, 'not_spending']; // order = keys 1–4
 export const FINANCE_BUCKET_LABELS: Record<FinanceBucket, string> = {
-  parents_pay: 'Parents pay',
+  parents_pay: 'Covered',
   budget: 'Budget',
   i_pay: 'I pay',
   not_spending: 'Not spending',
@@ -203,8 +203,8 @@ export interface RequestFinanceSyncResult {
 }
 
 // --- Constants -------------------------------------------------------------
-export const FINANCE_DEFAULT_BUDGET_CENTS = 60_000;
-export const FINANCE_DEFAULT_PAYMENT_DAY = 20;
+export const FINANCE_DEFAULT_BUDGET_CENTS = 50_000;
+export const FINANCE_DEFAULT_PAYMENT_DAY = 1;
 export const FINANCE_REFRESH_COOLDOWN_MS = 5 * 60_000;
 export const FINANCE_REFRESH_POLL_MS = 20_000;
 export const FINANCE_REFRESH_POLL_MAX_MS = 4 * 60_000;
@@ -613,7 +613,7 @@ export function suggestRefundMatches(input: {
 // The search under the suggestions, for the charge they miss: any merchant, any age in the loaded
 // range, any size (the overshoot never counts — capRefunds). Still only what refundLinkError accepts,
 // and only with something left to refund. Matches a case-insensitive substring of the merchant, the
-// bank's text, the note, or the dollar amount ("34.99", "$1,000.50"). Newest first, then id; a blank
+// bank's text, the note, or the dollar amount ("30.00", "$800.50"). Newest first, then id; a blank
 // query lists every such charge.
 export function searchRefundCharges(input: {
   refund: FinanceTransaction;
@@ -628,7 +628,7 @@ export function searchRefundCharges(input: {
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
   const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
   const needle = query.trim().toLowerCase();
-  // "+$34.99" pasted from a row's signed amount still matches.
+  // "+$30.00" pasted from a row's signed amount still matches.
   const amountNeedle = needle.replace(/[+\-$,]/g, '');
   const matches = (c: FinanceTransaction) =>
     needle === '' ||

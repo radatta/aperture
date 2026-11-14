@@ -41,14 +41,14 @@ describe('habit creation', () => {
     const api = freshApi();
     const old = await api.upsertCategory({ label: 'Studying', isWork: true });
     await api.upsertCategory({ id: old.id, label: 'Studying', isWork: true, active: false });
-    await api.upsertCategory({ label: 'SOCI 49', isWork: true });
+    await api.upsertCategory({ label: 'PHYS 110', isWork: true });
     const user = userEvent.setup();
     renderApp({ api, path: '/habits' });
 
     await user.click(await screen.findByRole('button', { name: /New habit/ }));
     const select = screen.getByLabelText('Category') as HTMLSelectElement;
     await waitFor(() =>
-      expect(Array.from(select.options).map((o) => o.textContent)).toContain('SOCI 49'),
+      expect(Array.from(select.options).map((o) => o.textContent)).toContain('PHYS 110'),
     );
     expect(
       Array.from(select.options)

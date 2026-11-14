@@ -9,7 +9,7 @@ describe('stub finances', () => {
   it('seeds a linked bank with rules, some history sorted, and recent charges left to sort', async () => {
     const api = createStubClient({ storageKey: `fin-seed-${Math.random()}` });
     const o = await api.getFinanceOverview({ today: todayKey(4) });
-    expect(o.items.map((i) => i.institutionName)).toEqual(['Bank of America']);
+    expect(o.items.map((i) => i.institutionName)).toEqual(['First Platypus Bank']);
     expect(o.accounts).toHaveLength(3);
     expect(o.sync.environment).toBe('stub');
     expect(o.period.source).toBe('marked');
@@ -17,8 +17,8 @@ describe('stub finances', () => {
     expect(o.spentCents).toBeGreaterThan(0);
     expect((await api.listFinanceRules()).map((r) => r.pattern)).toEqual([
       'netflix',
+      'shell',
       'spotify',
-      "trader joe's",
     ]);
   });
 
@@ -59,8 +59,8 @@ describe('stub finances', () => {
 
     const upgraded = createStubClient({ seed: false, storageKey: key });
     const settings = await upgraded.getSettings();
-    expect(settings.financeBudgetCents).toBe(60000);
-    expect(settings.financePaymentDay).toBe(20);
+    expect(settings.financeBudgetCents).toBe(50000);
+    expect(settings.financePaymentDay).toBe(1);
     expect('financeCycleDay' in settings).toBe(false);
     expect((await upgraded.getFinanceOverview({ today: todayKey(4) })).items).toEqual([]);
     const [old] = await upgraded.listFinanceTransactions({ from: '2026-01-01', to: '2026-01-01' });

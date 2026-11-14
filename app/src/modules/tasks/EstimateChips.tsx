@@ -11,7 +11,7 @@ import { typedBadMinutes, WHOLE_MINUTES_ERROR, wholeMinutes } from './taskMath';
 const CHIPS = [15, 30, 45, 60, 90, 120];
 const BUSY = 'aria-disabled:pointer-events-none aria-disabled:opacity-50';
 
-// Start on an unscoped task: a nudge, not a wall ("I shouldn't, but I should be able to"). A chip lands the
+// Start on an unscoped task: a nudge, not a wall (discouraged, never blocked). A chip lands the
 // estimate BEFORE the start, so the lock freezes on it; "Start without one" starts with no lock, and the
 // Done form asks in hindsight (docs/areas/calibration/integrity.md). A write that fails keeps this open and
 // says so; an estimate that landed before a failed start is simply there on the retry.

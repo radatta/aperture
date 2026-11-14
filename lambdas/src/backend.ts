@@ -1059,7 +1059,7 @@ export class BackendClient implements ApiClient {
       this.now(),
     );
   }
-  // His review, on the head by the same CAS as the prep target; a refold spreads the head, so it keeps it.
+  // The user's review, on the head by the same CAS as the prep target; a refold spreads the head, so it keeps it.
   async setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting> {
     const r = normalizeSittingReview(review);
     const now = this.now();

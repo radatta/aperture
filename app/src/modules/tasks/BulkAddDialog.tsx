@@ -11,9 +11,9 @@ import { useAllTasks, useCreateTasks } from '../../data/hooks/useTasks';
 import { TaskTokenChips } from './TaskTokenChips';
 
 const PLACEHOLDER = `email coach
-finish 214 pset | ~90 #"Deep Work" due:2026-09-25@17:00
+finish the pset | ~90 #"Deep Work" due:2026-09-25@17:00
 book flight | due:2026-10-02
-read ch. 4 | notes:"q6: use the lemma\\nhttps://example.edu/pset4"`;
+read ch. 4 | notes:"q6: use the lemma\\nhttps://example.org/pset4"`;
 
 // Bulk add — the plan-pass surface (PRODUCT §2: batch entry is the morning plan, not capture). One line
 // = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category, @place,

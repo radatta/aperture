@@ -20,8 +20,7 @@ disagree, fix whichever is wrong and say so here.
 
 Some of the things you most want to keep doing have **no deadline** — LeetCode daily, studying systems
 design, working on Aperture. Nothing forces them, so they're the first to slip, and a plain task or a
-"someday" checkbox has no pull. In the maintainer's words: _"I will do things with an actual deadline; LC I will
-keep putting off."_
+"someday" checkbox has no pull.
 
 Streaks are the usual fix, and they _do_ motivate — but a resetting streak is a guilt machine: one missed
 day zeroes it, and you start optimizing to protect the number instead of doing the thing. That's the exact
@@ -65,7 +64,7 @@ now     # # #
 Aperture already has **Habits** (a binary behavior you tap, a weekly cadence target, its own dot grid).
 Rolls are mechanically different and neither subsumes the other: a habit's completion is a _stored check_
 (a counter — the thing Rolls avoid), it has no estimate and no task; a roll's completion is a _timed
-task_ that accrues calibration and flows into the daytime lane. Habits fit non-work presence ("call home
+task_ that accrues calibration and flows into the daytime lane. Habits fit non-work presence ("call a friend
 1×/week"); Rolls fit timed work you want to keep at. They read as one system because the contact sheet
 reuses the Habits grid grammar (`recentWeeks`/`weekDates`), but the sheet is **read-only, ring-less, and
 count-less-by-color** — that restraint is the visible difference. Revisit if real use shows the two

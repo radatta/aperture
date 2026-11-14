@@ -19,7 +19,7 @@ function overview(syncing: boolean, items: Partial<FinanceItemSync>[]): FinanceO
       lastErrorAt: null,
       environment: 'sandbox',
       items: items.map((i) => ({
-        itemId: 'bofa',
+        itemId: 'item-1',
         lastSyncedAt: 100,
         lastError: null,
         lastErrorAt: null,
@@ -49,7 +49,7 @@ describe('useSyncWatch', () => {
     h.rerender({ o: overview(true, [{}]) }); // the poll sees the request
     expect(h.result.current.failed).toBeNull();
     h.rerender({ o: overview(false, [{ lastError: 'INSTITUTION_DOWN', lastErrorAt: 200 }]) });
-    expect(h.result.current.failed).toEqual({ itemId: 'bofa', code: 'INSTITUTION_DOWN' });
+    expect(h.result.current.failed).toEqual({ itemId: 'item-1', code: 'INSTITUTION_DOWN' });
   });
 
   it('the overview on screen when arming never decides, even though it isn’t syncing', () => {
@@ -75,12 +75,12 @@ describe('useSyncWatch', () => {
   it('connecting a second bank: its first-sync failure is caught although lastSyncedAt went to null', () => {
     const h = setup(overview(false, [{}]));
     act(() => h.result.current.arm());
-    h.rerender({ o: overview(true, [{}, { itemId: 'chase', lastSyncedAt: null }]) });
+    h.rerender({ o: overview(true, [{}, { itemId: 'item-2', lastSyncedAt: null }]) });
     h.rerender({
       o: overview(false, [
         {},
         {
-          itemId: 'chase',
+          itemId: 'item-2',
           lastSyncedAt: null,
           lastError: 'INSTITUTION_NOT_RESPONDING',
           lastErrorAt: 210,
@@ -88,7 +88,7 @@ describe('useSyncWatch', () => {
       ]),
     });
     expect(h.result.current.failed).toEqual({
-      itemId: 'chase',
+      itemId: 'item-2',
       code: 'INSTITUTION_NOT_RESPONDING',
     });
   });

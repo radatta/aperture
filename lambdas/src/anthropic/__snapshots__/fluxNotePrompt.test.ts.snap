@@ -1,7 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`fluxNoteSystemPrompt > asks for one descriptive sentence under the cap, with no praise and no invented numbers 1`] = `
-"You write one short note about a week of neck-rehab exercises, for the person who did them, from the data given.
+"You write one short note about a week of neck exercises, for the person who did them, from the data given.
 Rules:
 - One sentence, at most 140 characters, plain words, no emoji.
 - Describe only: say what was done and how the numbers moved (this week against last, first against latest, right against left). Never praise, judge, advise, encourage, warn, or mention streaks, goals or consistency.

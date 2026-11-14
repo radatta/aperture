@@ -9,7 +9,7 @@ this early sketch are called out inline so the record stays honest:
   The product decision moved to writing real events onto real calendars (add-to-calendar), so read-only
   was dropped. (Consequence: `calendarList.list` isn't granted by that scope → primary-calendar-only; see
   index.md.)
-- **Multi-account, not single-grant.** Shipped two first-class OAuth grants (personal + school), each
+- **Multi-account, not single-grant.** Shipped two first-class OAuth grants, each
   read+write; this doc assumed one read-only grant.
 - **Pieces 1–2 shipped** (calendar shape; the commitment framing is implicit in the shape). **Pieces 3–4
   (estimate-time multiplier, night reconciliation) are unbuilt** — they're the PR-D "Calibration Payoffs"

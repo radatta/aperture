@@ -147,9 +147,9 @@ export function validateParsedTask(
   return { input, categoryLabel, dropped };
 }
 
-// A known `@slug` word in a natural-language line ("shampoo @safeway"): the place, and the line without it.
+// A known `@slug` word in a natural-language line ("shampoo @grocer"): the place, and the line without it.
 // Deterministic, like the grammar — the model never guesses a place. An unknown `@word` stays in the line.
-// Trailing punctuation ("@safeway, nails") goes with the word.
+// Trailing punctuation ("@grocer, nails") goes with the word.
 export function takePlaceWord(
   line: string,
   places: readonly PlaceRef[],

@@ -20,14 +20,14 @@ describe('Rolls page', () => {
     const api = freshApi();
     const old = await api.upsertCategory({ label: 'Studying', isWork: true });
     await api.upsertCategory({ id: old.id, label: 'Studying', isWork: true, active: false });
-    await api.upsertCategory({ label: 'ECEN 21', isWork: true });
+    await api.upsertCategory({ label: 'CS 101', isWork: true });
     const user = userEvent.setup();
     renderApp({ api, path: '/rolls' });
 
     await user.click(await screen.findByRole('button', { name: /New roll/ }));
     const select = screen.getByLabelText('Category') as HTMLSelectElement;
     await waitFor(() =>
-      expect(Array.from(select.options).map((o) => o.textContent)).toContain('ECEN 21'),
+      expect(Array.from(select.options).map((o) => o.textContent)).toContain('CS 101'),
     );
     expect(
       Array.from(select.options)

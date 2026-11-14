@@ -33,7 +33,7 @@ function periodLine(period: FinancePeriod, today: string, paymentDay: number): s
   return `Day ${period.dayCount} · ${fmtMonthShortDay(period.start)} – today · ${since}`;
 }
 
-// "$X left of $600" for the current billing period, the three bucket totals, and what's left to sort.
+// "$X left of $<budget>" for the current billing period, the three bucket totals, and what's left to sort.
 // With the transactions loaded (`view`), it also offers the newest unmarked card payment as a
 // one-click period start — the page never moves the boundary on its own.
 export function PeriodHeader({

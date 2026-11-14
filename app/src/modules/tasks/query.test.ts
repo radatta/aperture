@@ -71,7 +71,7 @@ const cat = (id: string, label: string, order: number, active = true): Category 
   area: null,
 });
 
-const CATS = [cat('c2', 'CSCI 187', 2), cat('c1', 'CSEN 146', 1), cat('hw', 'Homework', 0, false)];
+const CATS = [cat('c2', 'HIST 110', 2), cat('c1', 'MATH 200', 1), cat('hw', 'Homework', 0, false)];
 const ctx = (planOrder: [string, number][] = []): QueryCtx => ({
   today: TODAY,
   planOrder: new Map(planOrder),
@@ -218,7 +218,7 @@ describe('text search', () => {
   });
   it('t3 matches the category label too', () => {
     const t = task({ title: 'pset 3', categoryId: 'c1' });
-    expect(matchesText(t, 'csen pset', labelOf)).toBe(true);
+    expect(matchesText(t, 'math pset', labelOf)).toBe(true);
   });
   it('t4 blank text matches everything', () => {
     expect(matchesText(task({}), '   ', labelOf)).toBe(true);
@@ -234,7 +234,7 @@ describe('text search', () => {
     const t = task({ title: 'pset 4', categoryId: 'c1', notes: 'use the lemma' });
     expect(matchedInNotes(t, 'lemma', labelOf)).toBe(true);
     expect(matchedInNotes(t, 'pset lemma', labelOf)).toBe(true);
-    expect(matchedInNotes(t, 'csen pset', labelOf)).toBe(false); // title + category explain it
+    expect(matchedInNotes(t, 'math pset', labelOf)).toBe(false); // title + category explain it
     expect(matchedInNotes(t, 'zebra', labelOf)).toBe(false); // no match at all
     expect(matchedInNotes(t, '  ', labelOf)).toBe(false);
     expect(matchedInNotes(task({ title: 'x' }), 'x', labelOf)).toBe(false);
@@ -430,8 +430,8 @@ describe('groupTasks', () => {
     ];
     const groups = groupTasks(tasks, 'category', ctx());
     expect(groups.map((g) => [g.label, g.tasks.map((t) => t.id)])).toEqual([
-      ['CSEN 146', ['a']],
-      ['CSCI 187', ['b']],
+      ['MATH 200', ['a']],
+      ['HIST 110', ['b']],
       ['Homework (retired)', ['hw']],
       ['No category', ['n', 'gone']],
     ]);
@@ -478,7 +478,7 @@ describe('override chips', () => {
     const query = q({ categories: ['c1', ''], due: 'week', sort: 'newest', groupBy: 'none' });
     const chips = overrideChips(query, 'backlog', CATS);
     expect(chips.map((c) => c.label)).toEqual([
-      'CSEN 146',
+      'MATH 200',
       'No category',
       'Due this week',
       'Sort: Newest',
@@ -518,7 +518,7 @@ describe('override chips', () => {
 describe('areas (D14)', () => {
   const AREA_CATS = [
     { ...cat('ap', 'Aperture', 0), area: 'aperture' as const },
-    { ...cat('sc', 'CSEN 146', 1), area: 'school' as const },
+    { ...cat('sc', 'MATH 200', 1), area: 'school' as const },
     cat('none', 'Misc', 2), // no area → Personal
   ];
   const actx = (planOrder: [string, number][] = []): QueryCtx => ({
@@ -547,7 +547,7 @@ describe('areas (D14)', () => {
     const r = applyQuery([dev, hw], 'backlog', q({ areas: [] }), actx());
     expect(r.groups.map((g) => [g.label, g.tasks.length])).toEqual([
       ['Aperture', 1],
-      ['CSEN 146', 1],
+      ['MATH 200', 1],
     ]);
   });
 

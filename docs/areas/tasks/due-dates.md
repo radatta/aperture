@@ -63,7 +63,7 @@ _Why:_ a pset is "due Friday", not "due 3:14pm Friday" — clock precision would
 _Rejected:_ a `dueTime` / full datetime. Clock-time events are Google Calendar's job; keeping this
 day-granular is what keeps the two concepts (and the two areas) cleanly separated.
 **Revisited 2026-10-05 — an optional `dueTime` is added.** Real use said otherwise: titles like
-"Prep case study (due 4pm)" and "P1 proposal (due 12pm)" were carrying the clock by hand, and timed
+"Submit the essay (due 4pm)" and "Send the report (due 12pm)" were carrying the clock by hand, and timed
 reminders need it. The time is a deadline (submit by), not an appointment. It is a **second field**
 (`"HH:MM"`, 24h local wall clock), not a datetime: every consumer that treats `dueDay` as a day — the
 Week lens cutoff (`dueDay <= today+6` as a string compare), Coming up, `fmtDueDay`, the date input,
@@ -81,7 +81,7 @@ _Rejected:_ a due-date field at capture. It would be convenient occasionally and
 `dueDay` is editable at **any** status and never touches `estimateLockedMin`.
 _Why:_ `estimateLockedMin` is the calibration anchor — it freezes on first exit from planning precisely
 so the predict-vs-actual gap stays honest. A deadline moving is not a scope change; conflating the two
-would corrupt calibration data every time a professor pushed a due date.
+would corrupt calibration data every time someone else pushed a due date.
 _Rejected:_ treating a due-date edit like an estimate edit (locked after planning).
 
 **D4 — A dedicated in-progress surface, because "editable at any status" has nowhere to live otherwise.**

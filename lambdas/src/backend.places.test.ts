@@ -328,8 +328,8 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
   async function seeded() {
     const e = env();
     const b = e.make('u1');
-    await b.upsertPlace({ name: 'Safeway' });
-    await b.createTask({ title: 'shampoo', place: 'safeway' });
+    await b.upsertPlace({ name: 'Grocer' });
+    await b.createTask({ title: 'shampoo', place: 'grocer' });
     const { token } = await b.rotatePlaceToken();
     const auth = await resolvePlaceRead(e.tokens, `Bearer ${token}`, NOW);
     e.log.length = 0;
@@ -338,7 +338,7 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
 
   it('performs exactly two writes on success: the token count, then the place heartbeat', async () => {
     const { b, auth, log, tokens } = await seeded();
-    const digest = await b.readPlaceForShortcut('safeway', auth);
+    const digest = await b.readPlaceForShortcut('grocer', auth);
     expect(digest).toMatchObject({ count: 1, titles: ['shampoo'] });
     expect(log).toEqual([
       { kind: 'putIf', pk: placeTokenPk(auth.hash), sk: PLACE_TOKEN_SK },
@@ -350,21 +350,21 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
 
   it('an unknown slug writes nothing', async () => {
     const { b, auth, log } = await seeded();
-    await expect(b.readPlaceForShortcut('target', auth)).rejects.toThrow('No place "target"');
+    await expect(b.readPlaceForShortcut('tackle', auth)).rejects.toThrow('No place "tackle"');
     expect(log).toEqual([]);
   });
 
   it("the lookup row's userId is the only partition read: two users, one token", async () => {
     const { b, make, tokens, auth } = await seeded();
     const other = make('u2');
-    await other.upsertPlace({ name: 'Safeway' });
-    await other.createTask({ title: "u2's secret errand", place: 'safeway' });
+    await other.upsertPlace({ name: 'Grocer' });
+    await other.createTask({ title: "u2's secret errand", place: 'grocer' });
     expect(auth.userId).toBe('u1');
     // The edge builds the backend for auth.userId — u1's list, never u2's.
-    const digest = await make(auth.userId).readPlaceForShortcut('safeway', auth);
+    const digest = await make(auth.userId).readPlaceForShortcut('grocer', auth);
     expect(digest.titles).toEqual(['shampoo']);
     // A backend for any other user refuses the token outright.
-    await expect(other.readPlaceForShortcut('safeway', auth)).rejects.toThrow(/^Unauthorized/);
+    await expect(other.readPlaceForShortcut('grocer', auth)).rejects.toThrow(/^Unauthorized/);
     expect((await tokens.get(auth.hash))!.readsCount).toBe(1);
     expect((await b.listPlaces())[0]!.lastReadAt).toBe(NOW);
     expect((await other.listPlaces())[0]!.lastReadAt).toBeNull();
@@ -374,7 +374,7 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
     const { b, auth, doc, log } = await seeded();
     await doc.delete(placeTokenPk(auth.hash), PLACE_TOKEN_SK);
     log.length = 0;
-    await expect(b.readPlaceForShortcut('safeway', auth)).rejects.toThrow(/^Unauthorized/);
+    await expect(b.readPlaceForShortcut('grocer', auth)).rejects.toThrow(/^Unauthorized/);
     expect(tokenRows(doc)).toEqual([]); // not written back to life
     expect(log.filter((w) => w.sk.startsWith('place#'))).toEqual([]);
   });
@@ -388,12 +388,12 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
         PK: pk('u1'),
         SK: key,
         ...place!,
-        name: 'Safeway Main St',
+        name: 'Grocer Main St',
         updatedAt: place!.updatedAt + 5,
       }),
     );
-    await b.readPlaceForShortcut('safeway', auth);
-    expect((await b.listPlaces())[0]).toMatchObject({ name: 'Safeway Main St', lastReadAt: NOW });
+    await b.readPlaceForShortcut('grocer', auth);
+    expect((await b.listPlaces())[0]).toMatchObject({ name: 'Grocer Main St', lastReadAt: NOW });
   });
 
   it('a failed heartbeat after the count still returns the digest, logging only the error name', async () => {
@@ -405,7 +405,7 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
       .spyOn(console, 'log')
       .mockImplementation((l: unknown) => void logs.push(String(l)));
     try {
-      const digest = await b.readPlaceForShortcut('safeway', auth);
+      const digest = await b.readPlaceForShortcut('grocer', auth);
       expect(digest).toMatchObject({ count: 1, titles: ['shampoo'] });
       expect((await tokens.get(auth.hash))!.readsCount).toBe(1); // the read was counted
       expect(logs.map((l) => JSON.parse(l))).toEqual([
@@ -421,7 +421,7 @@ describe('the Shortcut read (readPlaceForShortcut)', () => {
   it('is not an RPC method — the dispatch refuses it', async () => {
     const doc = new InMemoryDoc();
     await expect(
-      handleRpc(doc, { userId: 'u1', method: 'readPlaceForShortcut', args: ['safeway', {}] }),
+      handleRpc(doc, { userId: 'u1', method: 'readPlaceForShortcut', args: ['grocer', {}] }),
     ).rejects.toThrow('Unknown method');
   });
 });
@@ -430,11 +430,11 @@ describe('places on tasks (lambda specifics beyond the contract)', () => {
   it('refuses a non-string place or slug from the wire', async () => {
     const { make } = env();
     const b = make('u1');
-    await b.upsertPlace({ name: 'Safeway' });
+    await b.upsertPlace({ name: 'Grocer' });
     await expect(b.createTask({ title: 'x', place: 7 as unknown as string })).rejects.toThrow(
       /No place/,
     );
-    await expect(b.upsertPlace({ name: 'Target', slug: 123 as unknown as string })).rejects.toThrow(
+    await expect(b.upsertPlace({ name: 'Tackle', slug: 123 as unknown as string })).rejects.toThrow(
       /must be a string/,
     );
     await expect(b.upsertPlace({ name: 5 as unknown as string })).rejects.toThrow(/needs a name/);
@@ -443,52 +443,52 @@ describe('places on tasks (lambda specifics beyond the contract)', () => {
   it('a slug change rewrites only that place’s tasks, done ones included; delete to none keeps done', async () => {
     const { make } = env();
     const b = make('u1');
-    const sw = await b.upsertPlace({ name: 'Safeway' });
-    await b.upsertPlace({ name: 'Target' });
-    const a = await b.createTask({ title: 'a', place: 'safeway' });
-    const t = await b.createTask({ title: 't', place: 'target' });
+    const gr = await b.upsertPlace({ name: 'Grocer' });
+    await b.upsertPlace({ name: 'Tackle' });
+    const a = await b.createTask({ title: 'a', place: 'grocer' });
+    const t = await b.createTask({ title: 't', place: 'tackle' });
     await b.transitionTask(a.id, 'in_progress');
     await b.transitionTask(a.id, 'done');
-    await b.upsertPlace({ id: sw.id, name: 'Safeway', slug: 'sw' });
-    expect((await b.getTask(a.id))!.place).toBe('sw');
-    expect((await b.getTask(t.id))!.place).toBe('target');
-    await b.deletePlace(sw.id, null);
-    expect((await b.getTask(a.id))!.place).toBe('sw'); // done: its place is history
-    await expect(b.deletePlace(sw.id, null)).rejects.toThrow('Not found');
+    await b.upsertPlace({ id: gr.id, name: 'Grocer', slug: 'gr' });
+    expect((await b.getTask(a.id))!.place).toBe('gr');
+    expect((await b.getTask(t.id))!.place).toBe('tackle');
+    await b.deletePlace(gr.id, null);
+    expect((await b.getTask(a.id))!.place).toBe('gr'); // done: its place is history
+    await expect(b.deletePlace(gr.id, null)).rejects.toThrow('Not found');
   });
 
   it('upsertPlace reads the place consistently: a stale read never reverts a slug just changed', async () => {
     const { doc, make } = env();
     const b = make('u1');
-    const sw = await b.upsertPlace({ name: 'Safeway' });
-    const t = await b.createTask({ title: 'a', place: 'safeway' });
-    const old = doc.snapshot().find((i) => i.SK === sk.place(sw.id))!;
-    await b.upsertPlace({ id: sw.id, name: 'Safeway', slug: 'sw' });
-    doc.staleNextGets(pk('u1'), sk.place(sw.id), old, 5); // an eventual read would still see 'safeway'
-    const renamed = await b.upsertPlace({ id: sw.id, name: 'Safeway Main St' }); // slug omitted: kept
-    expect(renamed).toMatchObject({ name: 'Safeway Main St', slug: 'sw' });
-    expect((await b.getTask(t.id))!.place).toBe('sw');
-    const reads = doc.gets.filter((g) => g.key === `${pk('u1')} ${sk.place(sw.id)}`);
+    const gr = await b.upsertPlace({ name: 'Grocer' });
+    const t = await b.createTask({ title: 'a', place: 'grocer' });
+    const old = doc.snapshot().find((i) => i.SK === sk.place(gr.id))!;
+    await b.upsertPlace({ id: gr.id, name: 'Grocer', slug: 'gr' });
+    doc.staleNextGets(pk('u1'), sk.place(gr.id), old, 5); // an eventual read would still see 'grocer'
+    const renamed = await b.upsertPlace({ id: gr.id, name: 'Grocer Main St' }); // slug omitted: kept
+    expect(renamed).toMatchObject({ name: 'Grocer Main St', slug: 'gr' });
+    expect((await b.getTask(t.id))!.place).toBe('gr');
+    const reads = doc.gets.filter((g) => g.key === `${pk('u1')} ${sk.place(gr.id)}`);
     expect(reads.every((g) => g.consistent)).toBe(true);
   });
 
   it('a task naming a place added a moment ago finds it (consistent slug list)', async () => {
     const { doc, make } = env();
     const b = make('u1');
-    const sw = await b.upsertPlace({ name: 'Safeway' });
-    doc.staleNextQueries(pk('u1'), sk.place(sw.id), null, 5); // not visible to an eventual query yet
-    expect((await b.createTask({ title: 'a', place: 'safeway' })).place).toBe('safeway');
-    expect((await b.createTasks([{ title: 'b', place: 'safeway' }]))[0]!.place).toBe('safeway');
+    const gr = await b.upsertPlace({ name: 'Grocer' });
+    doc.staleNextQueries(pk('u1'), sk.place(gr.id), null, 5); // not visible to an eventual query yet
+    expect((await b.createTask({ title: 'a', place: 'grocer' })).place).toBe('grocer');
+    expect((await b.createTasks([{ title: 'b', place: 'grocer' }]))[0]!.place).toBe('grocer');
   });
 
   it('setTaskPlace refuses a finished task, before any write', async () => {
     const { log, make } = env();
     const b = make('u1');
-    await b.upsertPlace({ name: 'Safeway' });
+    await b.upsertPlace({ name: 'Grocer' });
     const t = await b.createTask({ title: 'a' });
     await b.transitionTask(t.id, 'cancelled');
     log.length = 0;
-    await expect(b.setTaskPlace(t.id, 'safeway')).rejects.toThrow(PLACE_FINISHED_ERROR);
+    await expect(b.setTaskPlace(t.id, 'grocer')).rejects.toThrow(PLACE_FINISHED_ERROR);
     expect(log).toEqual([]);
   });
 
@@ -500,7 +500,7 @@ describe('places on tasks (lambda specifics beyond the contract)', () => {
       now: () => NOW,
       anthropic,
     });
-    await b.upsertPlace({ name: 'Safeway' });
+    await b.upsertPlace({ name: 'Grocer' });
     anthropic.next = {
       ok: true,
       fields: {
@@ -512,8 +512,8 @@ describe('places on tasks (lambda specifics beyond the contract)', () => {
         estimateMin: null,
       },
     };
-    const out = await b.parseTask('shampoo @safeway');
-    expect(out).toMatchObject({ ok: true, placeName: 'Safeway', input: { place: 'safeway' } });
+    const out = await b.parseTask('shampoo @grocer');
+    expect(out).toMatchObject({ ok: true, placeName: 'Grocer', input: { place: 'grocer' } });
     expect(anthropic.calls.map((c) => c.text)).toEqual(['shampoo']);
   });
 });

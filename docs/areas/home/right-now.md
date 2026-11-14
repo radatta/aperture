@@ -21,10 +21,7 @@ disagree, fix whichever is wrong and say so here.
 ## 1. Why
 
 The trigger: a task you've _started_ (`in_progress`) was buried in the backlog list — the one thing you
-most need to see was the hardest to find. And the deeper problem, in the maintainer's words, is _"cognitive
-overload of having to do everything, a growing todo list in my face."_ For a student juggling ~1 HW per
-class plus labs, errands, and deadline-free wants (LeetCode, study), the stress isn't the tasks — it's
-holding them all at once.
+most need to see was the hardest to find. The deeper problem is cognitive overload: a growing list of everything, all in view at once. For anyone juggling coursework, errands and deadline-free wants (LeetCode, study), the stress isn't the tasks — it's holding them all at once.
 
 The fix is to only ever show the **tight plane** during the day: what you're doing now, the few that
 count, and a calm radar of what's coming — while everything captured and every deadline stays in a

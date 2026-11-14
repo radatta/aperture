@@ -261,7 +261,7 @@ export interface Settings extends BaseEntity {
   pomodoroWorkMin: number; // default 25
   pomodoroBreakMin: number; // default 5
   theme: 'auto' | 'light' | 'dark'; // auto follows home mode
-  // Connected Google accounts (personal + school). Written server-side at connect/disconnect; [] when none.
+  // Connected Google accounts (up to two). Written server-side at connect/disconnect; [] when none.
   googleAccounts: GoogleAccount[];
   // Calendars whose events feed the morning shape read, across accounts. [] → shape falls back to manual.
   calendarShapeRefs: CalendarRef[];
@@ -274,8 +274,8 @@ export interface Settings extends BaseEntity {
   dayEndHour: number; // default 22
   // Finances: the budget bucket's limit per billing period, and the card payment day the period falls
   // back to (starting the day after) until you mark a payment (see finance.ts computeFinancePeriod).
-  financeBudgetCents: number; // default 60000
-  financePaymentDay: number; // default 20
+  financeBudgetCents: number; // default 50000
+  financePaymentDay: number; // default 1
   // Flux: the Roll whose daily rep a Flux session counts toward (docs/areas/flux), and when the
   // disclaimer was accepted. Synced, so it's accepted once, not once per device. null → unset.
   fluxRollId: string | null; // default null
@@ -440,20 +440,20 @@ export interface Sitting extends BaseEntity {
   // shapes it fully — a Start that died after making the rep still finishes; after, a resume only starts it.
   shapedAt: number | null;
   summary: SittingSummary;
-  // His review (setSittingReview), on the head so the list and list_sittings read it free; a refold spreads the
+  // The user's review (setSittingReview), on the head so the list and list_sittings read it free; a refold spreads the
   // head, so it survives ingest. Absent on heads written before reviews existed — read it as `review ?? null`.
   review?: SittingReview | null;
 }
 
 // How much help a sitting took: none, a hint (a nudge, a topic), or the solution read.
 export type HelpLevel = 'none' | 'hint' | 'solution';
-// A sitting's review — his words; a Claude draft only ever proposes mistake lines he ticks (draftUsed).
+// A sitting's review — the user's words; a Claude draft only ever proposes mistake lines they tick (draftUsed).
 export interface SittingReview {
   insight: string | null; // the one-liner
   help: HelpLevel;
   mistakes: string[];
   howItWent: string | null;
-  tags: string[]; // his own pattern tags: lowercased, deduped, order kept
+  tags: string[]; // their own pattern tags: lowercased, deduped, order kept
   draftUsed: boolean; // a Claude draft line was ticked into `mistakes` (kept while any mistake remains)
   updatedAt: number;
 }

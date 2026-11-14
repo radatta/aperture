@@ -3,7 +3,7 @@
 Type a task the way you'd say it — `aperture, fix login bug due fri 4pm 30m` — and **Claude Haiku** reads
 the structure out of it: a short title, notes for the overflow, the category, due day/time, estimate. It
 runs in the capture bar's Task mode and behind the Raycast hotkey, through **one server-side parse**.
-Started as "optional add fields to quick add" (2026-10-12); the user chose a model parse over field pickers.
+Started as a request for optional fields on quick add (2026-10-12); the user chose a model parse over field pickers.
 
 ```
 capture bar (Task) ─┐                                   ┌─ ' | ' line → strict grammar (no model)

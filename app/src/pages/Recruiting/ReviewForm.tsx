@@ -42,9 +42,9 @@ export const REVIEW_ID = 'sitting-review'; // End sitting's Mark done sends focu
 const folded = (s: string) => s.replace(/\s+/g, ' ').trim(); // as the server counts it
 const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 
-// The sitting's review (docs/areas/recruiting → Review): his one-liner, how much help it took, the mistakes,
-// how it went, his own pattern tags and the prep target — one Save for all of it. "Draft with Claude" only
-// proposes mistake lines, unticked; only the ones he ticks (edited or not) are saved. A failed save keeps every
+// The sitting's review (docs/areas/recruiting → Review): the user's one-liner, how much help it took, the mistakes,
+// how it went, their own pattern tags and the prep target — one Save for all of it. "Draft with Claude" only
+// proposes mistake lines, unticked; only the ones they tick (edited or not) are saved. A failed save keeps every
 // field and says why.
 export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const saved = sitting.review ?? null;

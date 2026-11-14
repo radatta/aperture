@@ -58,7 +58,7 @@ describe('backend recurrence', () => {
       now: () => AUG_4_NOON, // reads 2026-08-04, which getDay refuses from a 2023 clock
     });
     const series = await backend.upsertSeries({
-      title: 'Pre-lab',
+      title: 'Weekly report',
       categoryId: null,
       defaultEstimateMin: 60,
       rule: { kind: 'daily' },
@@ -90,7 +90,7 @@ describe('backend recurrence', () => {
       now: () => clock,
     });
     const input = {
-      title: 'Pre-lab',
+      title: 'Weekly report',
       categoryId: null,
       defaultEstimateMin: 60,
       rule: { kind: 'daily' } as const,

@@ -17,8 +17,8 @@ Built + verified on an Apple-silicon Mac, 2026-08-10/11.
 You are always doing exactly one of these. There are three layers (Mac → Lima VM → container) and
 almost every mistake is running a command at the wrong one.
 
-**Container name for this repo is `coi-88cded0c-1`** — derived from the workspace path, so it's
-stable. `incus list` prints it if you doubt that.
+**Container name for this repo is `coi-<hash>-1`** — the hash is derived from the workspace path,
+so it's stable. `incus list` prints it; substitute it wherever this doc writes `coi-<hash>-1`.
 
 ### 1. I want to use Claude
 
@@ -40,7 +40,7 @@ claude --resume                           # (in the container, from /workspace) 
 #   Gone     → rebuild it from the export, then pick your session in the container.
 ls ~/.coi/ && ./scripts/coi-vm-setup.sh --check    # both pass 9/10 times → skip to the next line
 coi shell --resume                        # → you are now in the container
-claude --resume                           # (prompt: code@coi-88cded0c-1) pick your session
+claude --resume                           # (prompt: code@coi-<hash>-1) pick your session
 ```
 
 **Reach for `coi attach` first — it is the normal case.** A persistent container is _kept running_
@@ -72,7 +72,7 @@ disk, which quietly costs you sessions on the next VM rebuild.
 > [COI-INCIDENTS.md → Incident G.2](COI-INCIDENTS.md)):
 >
 > **Git identity.** The image ships `~/.gitconfig` with `useConfigOnly = true` and no name/email
-> (deliberate — it stops an agent committing as `code@coi-88cded0c-1`), so commits fail until you
+> (deliberate — it stops an agent committing as `code@coi-<hash>-1`), so commits fail until you
 > set one, and a `--global` fix inside the container dies with it. The fix is repo-local, run **on
 > the Mac** (`.git/config` is a read-only mount inside the container):
 >
@@ -113,8 +113,8 @@ cd <mac-repo> && limactl shell incus
 incus list                                # is the container there, and Running/Frozen/gone?
 coi list
 ls -lt ~/.coi/sessions-claude/            # what COI actually saved, newest first
-grep '"level":"high"' ~/.coi/audit/coi-88cded0c-1.jsonl    # threat pauses (`coi audit` under-reports)
-coi unfreeze coi-88cded0c-1               # container stuck Frozen
+grep '"level":"high"' ~/.coi/audit/coi-<hash>-1.jsonl    # threat pauses (`coi audit` under-reports)
+coi unfreeze coi-<hash>-1                 # container stuck Frozen
 ```
 
 **A session didn't come back — look at the export before resuming.** After `coi shutdown` and before
@@ -138,8 +138,8 @@ reading. One-line test either way: **`ls ~/.coi/` works → VM. Fails → contai
 Your terminal goes dead mid-session and you get:
 
 ```
-*** SECURITY: Container coi-88cded0c-1 PAUSED due to security threat.
-    Unfreeze with: coi unfreeze coi-88cded0c-1 ***
+*** SECURITY: Container coi-<hash>-1 PAUSED due to security threat.
+    Unfreeze with: coi unfreeze coi-<hash>-1 ***
 ```
 
 **Do not start with `coi audit`**: read-path defect — it returned empty for a fully populated log
@@ -151,7 +151,7 @@ lifetime:
 
 ```bash
 coi list                                          # exact name + confirm status Frozen
-A=~/.coi/audit/coi-88cded0c-1.jsonl               # -nft.jsonl alongside it = network layer
+A=~/.coi/audit/coi-<hash>-1.jsonl                 # -nft.jsonl alongside it = network layer
 grep '"level":"high"' "$A" | tail -5
 ```
 
@@ -210,7 +210,7 @@ PY
 All benign → false positive. Unfreeze and carry on:
 
 ```bash
-coi unfreeze coi-88cded0c-1
+coi unfreeze coi-<hash>-1
 ```
 
 **A Bash line containing `/curl` or `/wget` pauses the container too** — Sigma's _Suspicious Download
@@ -366,7 +366,7 @@ misbehaving:
 
 ```bash
 # from the VM
-incus exec coi-88cded0c-1 -t --user 1000 --cwd /workspace --env HOME=/home/code -- bash
+incus exec coi-<hash>-1 -t --user 1000 --cwd /workspace --env HOME=/home/code -- bash
 ```
 
 Then the usual: `paste -d/ /sys/fs/cgroup/pids.{current,max}` (want `.../4096`),
@@ -388,13 +388,13 @@ To relaunch Claude this way instead of `bash`, add the token env var — see _Op
 #    the container's disk keeps ~/.claude. cpu/memory seem applied only when a container is created (unverified),
 #    so set them on the stopped one too (processes as well — re-applying it on reuse isn't verified).
 #    Then, inside, `claude --resume` from /workspace for each session.
-coi container stop coi-88cded0c-1
-incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB limits.processes=N   # only if [limits] changed
+coi container stop coi-<hash>-1
+incus config set coi-<hash>-1 limits.cpu=N limits.memory=NGiB limits.processes=N   # only if [limits] changed
 cd <mac-repo> && coi shell
 
 # ── in the VM ──  ONLY when you actually want the container GONE — reclaiming disk, a broken box.
 # 4. coi shutdown — exports nothing itself; run it only after step 2.
-coi shutdown coi-88cded0c-1               # DELETES the container, persistent ones included. Name
+coi shutdown coi-<hash>-1                 # DELETES the container, persistent ones included. Name
                                           # REQUIRED (or --all). `coi close` is an alias. --force skips the prompt.
 
 # ── on the Mac ──  (only if you're done for the day — frees the VM's RAM/battery)

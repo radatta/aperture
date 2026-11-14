@@ -176,14 +176,14 @@ describe('finances settings', () => {
     expect(await screen.findByText('Enter a day from 1 to 31.')).toBeTruthy();
     expect(day.getAttribute('aria-invalid')).toBe('true');
     expect((day as HTMLInputElement).value).toBe('40');
-    expect((await api.getSettings()).financePaymentDay).toBe(20);
+    expect((await api.getSettings()).financePaymentDay).toBe(1);
 
     const budget = screen.getByLabelText('Budget per period ($)');
     await user.clear(budget);
     await user.type(budget, '-5');
     await user.tab();
-    expect(await screen.findByText('Enter a dollar amount, like 600 or 600.00.')).toBeTruthy();
-    expect(screen.getByText(/Now \$600\.00, payment day 20/)).toBeTruthy(); // still shows
+    expect(await screen.findByText('Enter a dollar amount, like 500 or 500.00.')).toBeTruthy();
+    expect(screen.getByText(/Now \$500\.00, payment day 1\. /)).toBeTruthy(); // still shows
 
     await user.clear(day);
     await user.type(day, '15');

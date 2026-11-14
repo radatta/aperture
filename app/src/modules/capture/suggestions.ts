@@ -47,8 +47,8 @@ export function categorySuggestions(
   }));
 }
 
-// A place by its link word or a word of its name: `@tr` finds "Trader Joe's" (slug `tj`) as well as a
-// slug starting "tr". The chip types the slug — the grammar's word.
+// A place by its link word or a word of its name: `@th` finds "Thrift Jo's" (slug `bargains`) as well as a
+// slug starting "th". The chip types the slug — the grammar's word.
 function placeMatches<P extends { slug: string; name: string }>(
   partial: string,
   places: readonly P[],

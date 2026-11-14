@@ -136,7 +136,7 @@ paste -d/ /sys/fs/cgroup/pids.{current,max}
 Committing the config change is not the same as fixing it. **Resolved as of `54fbe95`, cause
 unconfirmed** — the first attempt silently did nothing, which is the reason this section exists.
 
-Measured on `coi-88cded0c-1`, booted 09:00 PDT — an hour _after_ `edf1d4e` set
+Measured on `coi-<hash>-1`, booted 09:00 PDT — an hour _after_ `edf1d4e` set
 `max_processes = 1024`:
 
 ```
@@ -524,7 +524,7 @@ not Amphetamine. **Unattended runs must be on AC.** Full stop.
 
 ### Container leak — the cost of skipping `coi shutdown`
 
-Four "ephemeral" containers were alive simultaneously (`coi-d2220571-1/-2/-3`, `coi-88cded0c-1`);
+Four "ephemeral" containers were alive simultaneously (`coi-<other>-1/-2/-3`, `coi-<hash>-1`);
 `-3` alone held **2.93 GiB** and 205 processes. Not because anything crashed — because ephemeral
 destroy (and the `--resume` session write) happen **only** on the `coi shell` teardown, and none of
 these sessions got one.
@@ -571,16 +571,16 @@ followed it is **Incident E** below.
 
 ## Timeline
 
-| Time        | Event                                                                                                                                                                                                                                                                                                          |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| earlier     | `ls /workspace` in a `coi shell` shows the **entire Mac home** — `.ssh`, `.aws`, `.gitconfig`, Desktop, Documents. The Lima `mounts:` block is `- location: "~"`. This is a real security finding, independent of everything below, and is the reason a `mounts:` edit was attempted at all.                   |
-| 19:15       | A separate thread opens: a previous Claude Code session was lost ("i lost my cc session permanently"), so `coi shutdown`'s persistence claim gets a written test plan. Its preferred fix is _also_ a mount change (scoped host mount of `~/.claude/projects`). Both threads now point at `limactl edit incus`. |
-| 19:18–19:20 | The VM-side before/after snapshot for that test is captured — and not read back until much later. It turns out to hold the answer (see _The session-export finding_).                                                                                                                                          |
-| 19:46       | `.coi/config.toml` → `persistent = true`, as a stopgap against further session loss.                                                                                                                                                                                                                           |
-| 19:55       | `limactl edit incus`. The YAML is rejected. Recovery attempts end with the `incus` instance recreated from scratch.                                                                                                                                                                                            |
-| 20:08–20:30 | Full manual bootstrap of the VM from nothing (below).                                                                                                                                                                                                                                                          |
-| 20:31       | First `coi shell` on the rebuilt VM — and the first container ever to run `persistent = true`.                                                                                                                                                                                                                 |
-| 20:33       | Container freezes on a HIGH threat verdict → **Incident E**.                                                                                                                                                                                                                                                   |
+| Time        | Event                                                                                                                                                                                                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| earlier     | `ls /workspace` in a `coi shell` shows the **entire Mac home** — `.ssh`, `.aws`, `.gitconfig`, Desktop, Documents. The Lima `mounts:` block is `- location: "~"`. This is a real security finding, independent of everything below, and is the reason a `mounts:` edit was attempted at all. |
+| 19:15       | A separate thread opens: a previous Claude Code session was lost for good, so `coi shutdown`'s persistence claim gets a written test plan. Its preferred fix is _also_ a mount change (scoped host mount of `~/.claude/projects`). Both threads now point at `limactl edit incus`.           |
+| 19:18–19:20 | The VM-side before/after snapshot for that test is captured — and not read back until much later. It turns out to hold the answer (see _The session-export finding_).                                                                                                                        |
+| 19:46       | `.coi/config.toml` → `persistent = true`, as a stopgap against further session loss.                                                                                                                                                                                                         |
+| 19:55       | `limactl edit incus`. The YAML is rejected. Recovery attempts end with the `incus` instance recreated from scratch.                                                                                                                                                                          |
+| 20:08–20:30 | Full manual bootstrap of the VM from nothing (below).                                                                                                                                                                                                                                        |
+| 20:31       | First `coi shell` on the rebuilt VM — and the first container ever to run `persistent = true`.                                                                                                                                                                                               |
+| 20:33       | Container freezes on a HIGH threat verdict → **Incident E**.                                                                                                                                                                                                                                 |
 
 ## Cause — one character
 
@@ -844,8 +844,8 @@ Wired into COI-SANDBOX _One-time setup_ as step 10. Step 12 was the container ha
 Terminal output froze, and:
 
 ```
-*** SECURITY: Container coi-88cded0c-1 PAUSED due to security threat.
-    Unfreeze with: coi unfreeze coi-88cded0c-1 ***
+*** SECURITY: Container coi-<hash>-1 PAUSED due to security threat.
+    Unfreeze with: coi unfreeze coi-<hash>-1 ***
 ```
 
 `coi list` confirmed status `Frozen`.
@@ -853,7 +853,7 @@ Terminal output froze, and:
 ## The diagnostic dead end — `coi audit` returned nothing
 
 ```bash
-coi audit coi-88cded0c-1        # empty output
+coi audit coi-<hash>-1        # empty output
 ```
 
 Empty, despite `coi list` confirming the exact container name and its frozen state. This matched a
@@ -865,8 +865,8 @@ _no record exists_. **That assumption was wrong and cost time.** Also dry:
 
 ```bash
 find ~/.coi -iname "*audit*" -o -iname "*.jsonl"
-# /home/<user>.guest/.coi/audit/coi-88cded0c-1.jsonl
-# /home/<user>.guest/.coi/audit/coi-88cded0c-1-nft.jsonl
+# /home/<user>.guest/.coi/audit/coi-<hash>-1.jsonl
+# /home/<user>.guest/.coi/audit/coi-<hash>-1-nft.jsonl
 ```
 
 The file existed and was **fully populated** — per-poll JSON Lines telemetry (network connections,
@@ -906,7 +906,7 @@ followed immediately by the same event with `"action":"paused"`.
 - **Network mode was `restricted`, not `allowlist`** — so this was not the already-known-noisy
   allowlist-violation trigger. A distinct detector (`file_read_rate_mb_per_sec`) fired on its own.
 
-`coi unfreeze coi-88cded0c-1`. No recurrence that session.
+`coi unfreeze coi-<hash>-1`. No recurrence that session.
 
 ## Two distinct root causes
 
@@ -1217,7 +1217,7 @@ evaporates with the container. Two instances, same day:
 
 **Git identity — bit twice on 2026-09-07.** The image ships `~/.gitconfig` with
 `useConfigOnly = true` and no name/email (deliberate — it stops an agent committing as
-`code@coi-88cded0c-1`), so commits fail until an identity is set, and a `--global` fix inside the
+`code@coi-<hash>-1`), so commits fail until an identity is set, and a `--global` fix inside the
 container dies with it. The fix is repo-local (`git config --local user.name` / `user.email`, run
 on the Mac because `.git/config` is a read-only mount in the container). Verified by pointing
 `GIT_CONFIG_GLOBAL` at a bare image-default gitconfig: identity still resolves, and stripping

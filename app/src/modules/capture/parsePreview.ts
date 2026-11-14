@@ -25,7 +25,7 @@ export function previewLine(r: Parsed): BulkLine {
   };
 }
 
-// The one-line readback of what a quick add saved — "fix login bug · Aperture · @Safeway · due Fri · 30m ·
+// The one-line readback of what a quick add saved — "fix login bug · Aperture · @Grocer · due Fri · 30m ·
 // +notes".
 // `today` is the server's (the day "tmw" was resolved against), so the phrasing matches the parse;
 // `dayStartHour` reads tomorrow's small hours as tonight's.

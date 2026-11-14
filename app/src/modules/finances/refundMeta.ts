@@ -4,7 +4,7 @@ import { fmtMoney } from './money';
 import type { FinanceView } from './useFinanceData';
 
 // "· refund of Amazon · Sep 18" on a linked refund (plus "· counts $X" when it overshoots what was left
-// of the charge), "· refunded $34.99" on a charge that has refunds.
+// of the charge), "· refunded $30.00" on a charge that has refunds.
 export function refundMeta(
   txn: FinanceTransaction,
   kind: FinanceTxnKind,

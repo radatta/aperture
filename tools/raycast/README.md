@@ -7,8 +7,8 @@ short title, notes, category, due date/time and estimate, then the script calls 
 browser, no Claude chat.
 
 ```
-aperture, feat: make LC more how I SOHULD use it. ie recruiting tab should …, due tmw
-→ Added: feat: make LC more how I SHOULD use it · Aperture · due Sat 10/10 · +notes
+aperture, fix: tighten the capture bar spacing on phones. the dock overlaps …, due tmw
+→ Added: fix: tighten the capture bar spacing on phones · Aperture · due Sat 10/10 · +notes
 ```
 
 Haiku only parses (it has no tools); the script does the one write. Needs only `curl`, `jq` and

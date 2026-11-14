@@ -24,7 +24,7 @@ export function placeholderFor(mode: CaptureMode, toToday = false): string {
 // it vanishes from the field — so every submit says where the thought went. A "→ today" task that
 // was created but couldn't be planned says so: it's in the backlog, not on today. A timed one isn't
 // planned at all — its day is its time (lenses.md D13) — so it says when (`timedOn`, "due Fri 4pm"). An
-// errand waits on its store's list, not the backlog, so it names the store (`placeName`, "Safeway").
+// errand waits on its store's list, not the backlog, so it names the store (`placeName`, "Grocer").
 export interface CaptureDest {
   today: boolean;
   planned: boolean;

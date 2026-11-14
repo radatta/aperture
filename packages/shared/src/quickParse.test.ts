@@ -14,7 +14,7 @@ const ctx = {
     { id: 'c-ap', label: 'Aperture' },
     { id: 'c-lc', label: 'LeetCode' },
   ],
-  places: [{ slug: 'safeway', name: 'Safeway' }],
+  places: [{ slug: 'grocer', name: 'Grocer' }],
   today: '2026-10-12',
   dayStartHour: 4,
 };
@@ -283,50 +283,50 @@ describe('runQuickParse', () => {
 
   it('takes a known @place word before the model, which never sees it', async () => {
     const model = ok(fields({ title: 'shampoo' }));
-    const r = await runQuickParse('shampoo @Safeway', ctx, model);
+    const r = await runQuickParse('shampoo @Grocer', ctx, model);
     expect(model).toHaveBeenCalledWith('shampoo');
     expect(r).toMatchObject({
       ok: true,
-      input: { title: 'shampoo', place: 'safeway' },
-      placeName: 'Safeway',
+      input: { title: 'shampoo', place: 'grocer' },
+      placeName: 'Grocer',
     });
   });
 
   it('takes a known @place followed by punctuation, stripping the punctuation with it', async () => {
     for (const [line, rest] of [
-      ['shampoo @safeway, nails', 'shampoo nails'],
-      ['shampoo @safeway.', 'shampoo'],
-      ['shampoo @Safeway!?', 'shampoo'],
-      ['@safeway: shampoo', 'shampoo'],
-      ['shampoo @safeway;', 'shampoo'],
+      ['shampoo @grocer, nails', 'shampoo nails'],
+      ['shampoo @grocer.', 'shampoo'],
+      ['shampoo @Grocer!?', 'shampoo'],
+      ['@grocer: shampoo', 'shampoo'],
+      ['shampoo @grocer;', 'shampoo'],
     ]) {
       const model = ok(fields({ title: rest }));
       const r = await runQuickParse(line!, ctx, model);
       expect(model).toHaveBeenCalledWith(rest);
-      expect(r).toMatchObject({ ok: true, input: { place: 'safeway' }, placeName: 'Safeway' });
+      expect(r).toMatchObject({ ok: true, input: { place: 'grocer' }, placeName: 'Grocer' });
     }
     // Punctuation inside the word isn't trailing: an unknown word stays in the line.
     const model = ok(fields());
-    await runQuickParse('ask @safeway,target', ctx, model);
-    expect(model).toHaveBeenCalledWith('ask @safeway,target');
+    await runQuickParse('ask @grocer,tackle', ctx, model);
+    expect(model).toHaveBeenCalledWith('ask @grocer,tackle');
   });
 
   it('leaves an unknown @word in the line, and a lone @place is an empty title', async () => {
     const model = ok(fields());
-    await runQuickParse('email bob @target', ctx, model);
-    expect(model).toHaveBeenCalledWith('email bob @target');
-    expect(await runQuickParse('@safeway', ctx, model)).toEqual({
+    await runQuickParse('email bob @tackle', ctx, model);
+    expect(model).toHaveBeenCalledWith('email bob @tackle');
+    expect(await runQuickParse('@grocer', ctx, model)).toEqual({
       ok: false,
       reason: 'empty-title',
     });
   });
 
   it('grammar: @place resolves and names the list', async () => {
-    const r = await runQuickParse('nails | @safeway', ctx, ok(fields()));
+    const r = await runQuickParse('nails | @grocer', ctx, ok(fields()));
     expect(r).toMatchObject({
       ok: true,
-      input: { title: 'nails', place: 'safeway' },
-      placeName: 'Safeway',
+      input: { title: 'nails', place: 'grocer' },
+      placeName: 'Grocer',
     });
   });
 

@@ -49,7 +49,7 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   (decided once, the first time the group is seen, so it doesn't snap shut as it grows). A search or a
   narrowing filter (category, due, status) opens every group; a different sort or grouping doesn't.
   The filter panel offers only options that can match on that lens (Week: due today; Backlog/Done:
-  dated or not; status only on Done). Group headers carry a count (`CSEN 146 · 4`) — per-course sizes
+  dated or not; status only on Done). Group headers carry a count (`MATH 200 · 4`) — per-course sizes
   are what you plan from; it's the whole-backlog tally the lens pill leaves out.
 - **D5 — one write path.** `useAddToDay(day?)` is the only code that puts a task on a day or takes it
   off:

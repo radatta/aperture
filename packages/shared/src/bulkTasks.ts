@@ -237,9 +237,9 @@ function parseLine(
     } else if (tok.startsWith('@')) {
       if (!once('place', 'place (@)')) continue;
       const slug = tok.slice(1).toLowerCase();
-      if (slug === '') fail('empty place — use @<place>, e.g. @safeway', PLACE);
+      if (slug === '') fail('empty place — use @<place>, e.g. @grocer', PLACE);
       else if (!PLACE_SLUG_RE.test(slug))
-        fail(`invalid place '${tok}' — use @ and the place's link word, e.g. @safeway`, PLACE);
+        fail(`invalid place '${tok}' — use @ and the place's link word, e.g. @grocer`, PLACE);
       else {
         out.placeSlug = slug;
         if (places.some((p) => p.slug === slug)) out.place = slug;

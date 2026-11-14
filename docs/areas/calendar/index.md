@@ -1,6 +1,6 @@
 # Google Calendar integration
 
-Connect **two Google accounts** (personal + school), **read** their calendars into a morning "day
+Connect **two Google accounts**, **read** their calendars into a morning "day
 shape" number, and **write real events** onto them from tasks. Aperture owns the events it creates and
 only ever touches those — and since two-way sync (2026-10-05), edits you make to _those_ events in Google
 come back onto their tasks. Built in PR-C on branch `google-calendar`.
@@ -15,14 +15,14 @@ BFF returns — so the server does no date math and the shape re-clips for dayti
 
 ## Multi-account (the core shape of the feature)
 
-The school calendar lives on a university Workspace whose admin blocks external write-sharing. A
-personal-account share is read-only forever — but the school account can **authorize Aperture directly**
+The second calendar lives on a managed Workspace whose admin blocks external write-sharing. A
+personal-account share is read-only forever — but the second account can **authorize Aperture directly**
 (verified against the live consent screen, no `admin_policy_enforced`). So there is **no shared calendar
 and no read-only import**: two first-class OAuth grants, each read+write on its own real calendars.
 
 ```
 Aperture ──grant #1──▶ personal @gmail    (read + write)
-         ──grant #2──▶ school   @school.edu (read + write — owner, no share needed)
+         ──grant #2──▶ second   @example.org (read + write — owner, no share needed)
 
 READS : merge across BOTH accounts' selected calendars, each via its own token
 WRITES: route to the target calendar's OWNING account's token

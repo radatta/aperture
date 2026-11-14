@@ -23,7 +23,7 @@ describe('RecurringSection — cadences', () => {
   it('a new series takes a due offset and an until, and its row reads them back', async () => {
     const until = addDays(today, 30);
     const { api, user } = await openForm();
-    await user.type(screen.getByLabelText('Title'), 'Pre-lab report');
+    await user.type(screen.getByLabelText('Title'), 'Weekly report');
     await user.selectOptions(screen.getByLabelText('Repeats'), 'weekdays');
     await user.type(screen.getByLabelText('Estimate (min)'), '60');
     await user.selectOptions(screen.getByLabelText('Due'), '1');
@@ -34,7 +34,7 @@ describe('RecurringSection — cadences', () => {
     await waitFor(async () => expect(await api.listSeries()).toHaveLength(1));
     const [series] = await api.listSeries();
     expect(series).toMatchObject({
-      title: 'Pre-lab report',
+      title: 'Weekly report',
       defaultEstimateMin: 60,
       dueOffsetDays: 1,
       until,

@@ -1303,7 +1303,7 @@ describe('TaskEditor', () => {
     const client = api();
     const hw = await client.upsertCategory({ label: 'Homework', isWork: true });
     const st = await client.upsertCategory({ label: 'Studying', isWork: true });
-    await client.upsertCategory({ label: 'CSEN 146', isWork: true });
+    await client.upsertCategory({ label: 'MATH 200', isWork: true });
     for (const c of [hw, st])
       await client.upsertCategory({ id: c.id, label: c.label, isWork: true, active: false });
     const t = await client.createTask({ title: 'pset', categoryId: hw.id });
@@ -1313,7 +1313,7 @@ describe('TaskEditor', () => {
     await waitFor(() => expect(select.value).toBe(hw.id));
     const labels = Array.from(select.options).map((o) => o.textContent);
     expect(labels).toContain('Homework (retired)');
-    expect(labels).toContain('CSEN 146');
+    expect(labels).toContain('MATH 200');
     expect(labels).not.toContain('Studying');
     expect(labels).not.toContain('Studying (retired)');
     // The retired option is the saved value, so the form opens clean.

@@ -12,6 +12,8 @@ const PAGES = 'app/pwa/identityPages.test.ts';
 const OPEN_PR = 'scripts/src/mailroom/open-pr.test.ts';
 const MAC_ROOT = 'scripts/src/mac-root.test.ts';
 const NOT_DEPLOYED = 'a repo-side rule: dev runs the build, never the checkout or a commit';
+// Personal details swept from the model-facing text before the repo went public.
+const PERSONAL_DETAIL = /parents pay|safeway|trader joe|costco|neck.?rehab|the quarter\b/i;
 
 // The app's oidc session in localStorage: its profile's email.
 async function sessionEmail(page: Ctx['page']): Promise<string | null> {
@@ -212,10 +214,21 @@ export const identifierCleanup: Scenario = {
       },
     },
     {
+      id: 'projects-folder-local',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The projects-folder rule comes from .local/mac-root, never a tracked literal; no rule without the file',
+      offDev: {
+        file: GUARD,
+        test: 'builds the projects-folder rule from the Mac root, and has none without it',
+        why: 'a container-side file; dev has none',
+      },
+    },
+    {
       id: 'mcp-descriptions',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'The deployed LeetCode MCP tools describe the person as “the user … their”: no name, no he/his/him',
+      what: 'Every deployed MCP tool describes the person as “the user … their”: no name, no he/his/him, no swept personal detail (bucket label, store, school term, rehab framing)',
     },
     {
       id: 'live-hook',
@@ -274,21 +287,23 @@ export const identifierCleanup: Scenario = {
       id: 'mcp-descriptions',
       entry: 'mcp',
       proves: ['mcp-descriptions'],
-      title: 'The LeetCode tools’ deployed descriptions name no one',
+      title: 'Every deployed MCP tool description names no one and no personal detail',
       async run(ctx) {
-        const tools = (await ctx.mcp.reads.toolSchemas()).filter((t) =>
-          ['live_sitting', 'get_sitting', 'list_sittings'].includes(t.name),
-        );
-        if (tools.length !== 3)
-          throw new Error(`tools/list has ${tools.length} of the 3 LeetCode tools`);
+        const tools = await ctx.mcp.reads.toolSchemas();
+        const lc = ['live_sitting', 'get_sitting', 'list_sittings'];
+        const found = tools.filter((t) => lc.includes(t.name)).length;
+        if (found !== 3) throw new Error(`tools/list has ${found} of the 3 LeetCode tools`);
         for (const t of tools) {
-          const d = t.description ?? '';
+          // The arg schemas are model-facing too (e.g. a place arg's example slug).
+          const d = `${t.description ?? ''} ${JSON.stringify(t.inputSchema ?? {})}`;
           if (findIdentifiers(d).length)
             throw new Error(`${t.name}'s description names a personal identifier`);
           if (/\b(he|his|him)\b/i.test(d))
             throw new Error(`${t.name}'s description says he/his/him`);
+          const detail = PERSONAL_DETAIL.exec(d);
+          if (detail) throw new Error(`${t.name}'s description says "${detail[0]}"`);
         }
-        ctx.log('live_sitting, get_sitting, list_sittings: no identifier, no gendered pronoun');
+        ctx.log(`${tools.length} tools: no identifier, gendered pronoun or personal detail`);
       },
     },
     {

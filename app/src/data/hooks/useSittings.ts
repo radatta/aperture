@@ -43,7 +43,7 @@ export function useSetSittingPrepTarget() {
   });
 }
 
-// Claude's draft: a mutation, never a query — a model call only when he presses the button, never on open.
+// Claude's draft: a mutation, never a query — a model call only when the user presses the button, never on open.
 export function useDraftSittingReview() {
   const api = useApi();
   return useMutation({ mutationFn: (id: string) => api.draftSittingReview(id) });

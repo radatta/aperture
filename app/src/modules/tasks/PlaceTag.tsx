@@ -1,6 +1,6 @@
 import { usePlaces } from '../../data/hooks/usePlaces';
 
-// The errand list a task is on, as "@Safeway" — the name resolves live from the places roster (a rename
+// The errand list a task is on, as "@Grocer" — the name resolves live from the places roster (a rename
 // propagates), the task stores the slug. No place renders nothing. A failed roster read marks the gap
 // (the "—" pill, CategoryTag's rule); a slug the roster doesn't know reads as the slug itself.
 export function PlaceTag({ place }: { place: string | null }) {

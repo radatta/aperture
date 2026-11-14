@@ -1,6 +1,6 @@
 # Log — private entries
 
-The interstitial log (`/log`, capture's Log mode) is append-only text, one day per page. This doc records **private entries** (2026-11, branch `private-log`): the user wants some lines (a disk password, a PIN) kept away from Claude once log entries reach the MCP tools.
+The interstitial log (`/log`, capture's Log mode) is append-only text, one day per page. This doc records **private entries** (2026-11, branch `private-log`): the user can mark a line private, which keeps it away from Claude once log entries reach the MCP tools.
 
 ## What "private" means
 
@@ -25,7 +25,7 @@ In Log mode, with the pill off, a matching draft shows a gold row under the fiel
 
 - **Make private** arms the pill and doesn't save, because it can be tapped mid-sentence.
 - **×** dismisses the nudge for this draft. Edits don't bring it back, and an emptied field starts a new draft. Nothing is stored and there's no setting.
-- **The first Enter on a sensitive draft is held once.** The row then reads "Enter again saves it as is" and the receipt "Not saved yet". The second Enter saves the entry public. This is because the original incident was type-then-Enter. A false positive costs one extra Enter.
+- **The first Enter on a sensitive draft is held once.** The row then reads "Enter again saves it as is" and the receipt "Not saved yet". The second Enter saves the entry public. This is because type-then-Enter leaves no time to tap the row. A false positive costs one extra Enter.
 - The app never marks anything private on its own.
 
 ## Decisions

@@ -823,7 +823,7 @@ export function normalizeSittingReview(input: unknown): SittingReviewInput | nul
 export const suggestedHelp = (s: Pick<Sitting, 'summary'>): HelpLevel =>
   (s.summary.submitsBeforeAccepted ?? 0) > 0 ? 'hint' : 'none';
 
-// --- The Claude draft (draftSittingReview): mistake lines only — the one-liner and how it went are his words ---
+// --- The Claude draft (draftSittingReview): mistake lines only — the one-liner and how it went are the user's words ---
 export const DRAFT_LINES_MAX = 5;
 export const DRAFT_CODE_MAX = 4096; // each of the first-submit and the final code, in the prompt
 export type DraftFailReason =

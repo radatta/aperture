@@ -82,11 +82,11 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     theme: 'auto',
     googleAccounts: [
       { sub: 'seed-personal', email: 'you@gmail.com' },
-      { sub: 'seed-school', email: 'you@school.edu' },
+      { sub: 'seed-work', email: 'you@example.org' },
     ],
     calendarShapeRefs: [
       { accountSub: 'seed-personal', calendarId: 'you@gmail.com' },
-      { accountSub: 'seed-school', calendarId: 'you@school.edu' },
+      { accountSub: 'seed-work', calendarId: 'you@example.org' },
     ],
     calendarWriteDefault: { accountSub: 'seed-personal', calendarId: 'you@gmail.com' },
     autoCalendar: true,
@@ -120,7 +120,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     'Long meeting; low focus after.',
     'Good gym session, cleared my head.',
     'Read a chapter before bed.',
-    'Called home — overdue.',
+    'Called a friend — overdue.',
     'Stuck on a bug for an hour, stepped away, fixed it in five.',
     'Planned tomorrow: fewer things, bigger things.',
   ];
@@ -434,7 +434,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       cat: 'Deep Work',
       est: 60,
       notes:
-        'Ch. 4, q1–8. Office hours Thu.\n\n1. q1–5 are warm-ups\n2. q6: use the `lemma` from lecture\n3. q8 is the long one\n\nhttps://example.edu/pset4',
+        'Ch. 4, q1–8. Office hours Thu.\n\n1. q1–5 are warm-ups\n2. q6: use the `lemma` from lecture\n3. q8 is the long one\n\nhttps://example.org/pset4',
     },
     { title: 'Rewrite the onboarding section', cat: 'Deep Work', est: 45, inProgress: true },
     { title: 'Clear the email backlog', cat: 'Admin', est: 20 },
@@ -494,7 +494,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   };
   const call: Habit = {
     ...mk(nowMs - 20 * DAY),
-    name: 'Call family',
+    name: 'Call a friend',
     categoryId: byLabel('People').id,
     cadencePerWeek: 1,
     active: true,
@@ -534,12 +534,12 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   };
   store.rolls.push(leetcode, study, build);
 
-  // --- A recurring series with a cadence (docs/areas/tasks/recurring.md): the pre-lab is written the day
-  // before the lab, so it recurs weekly on today's weekday (its occurrence materializes on today's load),
-  // due the next day, through the quarter's last lab. Course = category.
-  const prelab: TaskSeries = {
+  // --- A recurring series with a cadence (docs/areas/tasks/recurring.md): the weekly report is written the
+  // day before it's due, so it recurs weekly on today's weekday (its occurrence materializes on today's
+  // load), due the next day, through the term's last week. Course = category.
+  const weeklyReport: TaskSeries = {
     ...mk(nowMs - 20 * DAY),
-    title: 'Pre-lab report',
+    title: 'Weekly report',
     categoryId: byLabel('Learning').id,
     defaultEstimateMin: 60,
     rule: { kind: 'weekly', daysOfWeek: [weekdayOf(today)] },
@@ -548,7 +548,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     dueOffsetDays: 1,
     until: addDays(today, 42),
   };
-  store.series.push(prelab);
+  store.series.push(weeklyReport);
 
   // One done rep = one filled cell. `seq` offsets a second rep on the same day so a cell can read "2".
   const rep = (roll: Roll, dAgo: number, seq = 0): Task => {
@@ -776,7 +776,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     [['submit', 10, 'Accepted', 31, 1568, 1568]],
     'class Solution:\n    def addTwoNumbers(self, l1, l2):\n        ...',
   );
-  // Reviewed (setSittingReview's shape — his words, no draft).
+  // Reviewed (setSittingReview's shape — the user's words, no draft).
   addTwo.review = {
     insight: 'Carry handled on the first try — walk both lists at once.',
     help: 'none',
@@ -950,8 +950,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   // Places — two sample errand lists so the Places lens and Settings › Places have something to show
   // offline. Stub-only: the deployed app starts with no places (an empty Settings card invites one).
   const placeDefs = [
-    { name: 'Safeway', slug: 'safeway', errands: ['shampoo', 'nails', 'maple syrup'] },
-    { name: "Trader Joe's", slug: 'tj', errands: ['frozen dumplings'] },
+    { name: 'Grocer', slug: 'grocer', errands: ['batteries', 'tape', 'stamps'] },
+    { name: "Thrift Jo's", slug: 'thrift-jos', errands: ['light bulbs'] },
   ];
   placeDefs.forEach(({ name, slug, errands }, i) => {
     store.places.push({ ...mk(nowMs - (20 - i) * DAY), name, slug, lastReadAt: null });

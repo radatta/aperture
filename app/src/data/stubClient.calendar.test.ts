@@ -6,7 +6,7 @@ import { createStubClient, STUB_GCAL_EDITS_KEY, type StubGcalEdit } from './stub
 // behavior depends on external gateway state (connected accounts) that can't be established through the
 // ApiClient interface — connect is a browser OAuth redirect, not a method. So the stub is held to the
 // SAME behavior the backend asserts in lambdas/src/backend.calendar.test.ts, via this parallel test. The
-// seeded store provides two connected accounts (seed-personal, seed-school).
+// seeded store provides two connected accounts (seed-personal, seed-work).
 function stub() {
   return createStubClient({
     seed: true,
@@ -18,14 +18,14 @@ function stub() {
 describe('stub Google Calendar parity', () => {
   it('reports the seeded accounts as connected', async () => {
     const status = await stub().getGoogleStatus();
-    expect(status.accounts.map((a) => a.sub).sort()).toEqual(['seed-personal', 'seed-school']);
+    expect(status.accounts.map((a) => a.sub).sort()).toEqual(['seed-personal', 'seed-work']);
     expect(status.accounts.every((a) => a.connected && !a.reconnectRequired)).toBe(true);
   });
 
   it('lists calendars per connected account', async () => {
     const cals = await stub().listGoogleCalendars();
     expect(cals.some((c) => c.accountSub === 'seed-personal')).toBe(true);
-    expect(cals.some((c) => c.accountSub === 'seed-school')).toBe(true);
+    expect(cals.some((c) => c.accountSub === 'seed-work')).toBe(true);
   });
 
   it('returns busy intervals for the shape read', async () => {
@@ -123,7 +123,7 @@ describe('stub Google Calendar parity', () => {
     const api = stub();
     await api.disconnectGoogleAccount('seed-personal');
     const s = await api.getSettings();
-    expect(s.googleAccounts.map((a) => a.sub)).toEqual(['seed-school']);
+    expect(s.googleAccounts.map((a) => a.sub)).toEqual(['seed-work']);
     expect(s.calendarShapeRefs.some((r) => r.accountSub === 'seed-personal')).toBe(false);
     expect(s.calendarWriteDefault?.accountSub).not.toBe('seed-personal');
   });
@@ -549,16 +549,16 @@ describe('stub calendar pull (two-way sync)', () => {
 
   it('a failing account shows on its status; the other still pulls', async () => {
     const { api, queue } = setup();
-    queue([{ failAccount: 'seed-school', error: 'timeout' }]);
+    queue([{ failAccount: 'seed-work', error: 'timeout' }]);
     const res = await api.pullCalendar();
     expect(res.accounts).toEqual(
       expect.arrayContaining([
-        { sub: 'seed-school', ok: false, error: 'timeout' },
+        { sub: 'seed-work', ok: false, error: 'timeout' },
         { sub: 'seed-personal', ok: true, error: null },
       ]),
     );
     const status = await api.getGoogleStatus();
-    expect(status.accounts.find((a) => a.sub === 'seed-school')).toMatchObject({
+    expect(status.accounts.find((a) => a.sub === 'seed-work')).toMatchObject({
       lastPullError: 'timeout',
     });
     expect(status.accounts.find((a) => a.sub === 'seed-personal')!.lastSyncedAt).toBeGreaterThan(0);
