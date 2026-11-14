@@ -226,7 +226,10 @@ describe('mailroom runner', () => {
       'fast) take_lock lock-fast 5 || exit 0 ;;',
       'all) { take_lock lock 15 && take_lock lock-fast 5; } || exit 0 ;;',
       "mr_cap 3 jq -rs 'if length == 1",
-      '[ "$LANE" = all ] || [ "$(peek_lane "$entry")" = "$LANE" ] || continue',
+      '[ "$(peek_lane "$entry")" = "$LANE" ] || continue',
+      '[ "$LANE" = all ] || WD="work-$LANE"',
+      'MAX_PEEKS=50',
+      'echo gone',
       'if [ "$LANE" != all ] && [ "$(lane_of_job "$job")" != "$LANE" ]; then',
     ])
       expect(runner).toContain(pin);
