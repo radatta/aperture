@@ -96,18 +96,29 @@ type Fields<T> = { [K in keyof Required<T>]: Check<T[K]> };
 
 // A plain object holding only its type's keys, each checked. An undefined value is an absent key (JSON drops
 // it; in-process callers pass it). Unknown keys are refused by name — Object.keys sees a parsed own
-// `__proto__` too. `what` names the object in its messages; `notObject` overrides that one message.
-export const obj = <T>(what: string, fields: NoInfer<Fields<T>>, notObject?: string): Check<T> => {
+// `__proto__` too. `what` names the object in its messages; `notObject` overrides that one message;
+// `extraKeys: 'allow'` is for a third party's object we read but never store (Plaid's account metadata,
+// whose field set isn't closed).
+export interface ObjOptions {
+  notObject?: string;
+  extraKeys?: 'allow';
+}
+export const obj = <T>(
+  what: string,
+  fields: NoInfer<Fields<T>>,
+  opts: ObjOptions = {},
+): Check<T> => {
   const known = Object.keys(fields);
   return check(
     (v, p) => {
-      if (!isPlainObject(v)) fail(notObject ?? `${p || what} must be an object`);
+      if (!isPlainObject(v)) fail(opts.notObject ?? `${p || what} must be an object`);
       const o = v as Record<string, unknown>;
-      const bad = Object.keys(o).filter((k) => !known.includes(k));
+      const bad =
+        opts.extraKeys === 'allow' ? [] : Object.keys(o).filter((k) => !known.includes(k));
       if (bad.length > 0) fail(`Unknown ${what} field: ${bad.join(', ')}`);
       for (const k of known) {
         const f = (fields as Record<string, AnyCheck>)[k]!;
-        const val = o[k];
+        const val = Object.hasOwn(o, k) ? o[k] : undefined;
         if (val === undefined) {
           if (!f.optional) fail(`${at(p, k)} is required`);
           continue;

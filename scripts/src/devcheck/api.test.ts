@@ -136,6 +136,7 @@ describe('createApiClient', () => {
       'createSeries',
       'createStory',
       'createTask',
+      'createTaskExpectingRefusal',
       'deleteAttachment',
       'deleteCategory',
       'deleteFinanceRule',

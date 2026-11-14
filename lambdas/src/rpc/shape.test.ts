@@ -99,9 +99,19 @@ describe('shape checks', () => {
     const c = obj<{ a?: string }>(
       'story',
       { a: opt(str(5)) },
-      'story patch must be an object',
+      { notObject: 'story patch must be an object' },
     ) as Check<unknown>;
     refuses(c, 'title', /^story patch must be an object$/, '');
+  });
+
+  it("obj with extraKeys 'allow' checks its own fields and lets a third party's others through", () => {
+    const c = obj<{ id: string }>(
+      'account',
+      { id: str(5) },
+      { extraKeys: 'allow' },
+    ) as Check<unknown>;
+    expect(run(c, { id: 'a', verification_status: null }, '')).not.toThrow();
+    refuses(c, { id: 1, verification_status: null }, /^id must be text$/, '');
   });
 
   it('oneOf: the discriminant picks the variant, whose keys then apply', () => {

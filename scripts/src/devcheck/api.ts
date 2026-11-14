@@ -254,6 +254,14 @@ export interface DevRoll {
   estimateMin: number | null;
   active: boolean;
 }
+// An upsert takes the input's keys only — the BFF refuses a stored row's others (userId, createdAt…).
+const rollInput = (r: DevRoll, active: boolean) => ({
+  id: r.id,
+  name: r.name,
+  categoryId: r.categoryId,
+  estimateMin: r.estimateMin,
+  active,
+});
 export interface DevVerdict {
   verdict: string;
   passed: number | null;
@@ -715,6 +723,21 @@ export function createApiClient({
     // Only for a stop the server must refuse (a bad cap): the app stops its timers through the UI.
     stopSession: (id: string, status: 'completed', opts: { capMin: number }) =>
       call<DevSession>('stopSession', [id, status, opts]),
+    // A createTask the BFF must refuse (bff-shapes: an unknown key), ledgered like a create: a refusal
+    // resolves the intent as `refused`; a create a regression let through is recorded and cleaned like any
+    // other. `args` go as given; returns the raw answer for the step to read.
+    async createTaskExpectingRefusal(
+      args: unknown[],
+      title: string,
+    ): Promise<{ status: number; body: unknown }> {
+      ledger.append({ run, op: 'intent', via: 'api:createTask', title });
+      const got = await this.rpcRaw('createTask', JSON.stringify({ args }), 'jwt');
+      const id = (got.body as { id?: unknown } | null)?.id;
+      if (got.status === 200 && typeof id === 'string')
+        ledger.append({ run, op: 'created', id, via: 'api:createTask', title });
+      else ledger.append({ run, op: 'refused', via: 'api:createTask', title });
+      return got;
+    },
     async createTask(input: CreateTaskInput): Promise<DevTask> {
       ledger.append({ run, op: 'intent', via: 'api:createTask', title: input.title });
       const task = await call<DevTask>('createTask', [input]);
@@ -883,7 +906,7 @@ export function createApiClient({
       assertLedger(id, 'roll');
       const roll = (await reads.listRolls()).find((r) => r.id === id);
       if (!roll || !roll.active) return;
-      await call<DevRoll>('upsertRoll', [{ ...roll, active: false }]);
+      await call<DevRoll>('upsertRoll', [rollInput(roll, false)]);
     },
     // Link one of this run's rolls as the LeetCode roll, or unlink (null). Recorded before the first link.
     async linkLeetcodeRoll(rollId: string | null): Promise<DevSettings> {
@@ -980,14 +1003,17 @@ export function createApiClient({
       assertLedger(id, 'roll');
       const roll = (await reads.listRolls()).find((r) => r.id === id);
       if (!roll) throw new Error(`roll ${id} isn’t listed`);
-      return call<DevRoll>('upsertRoll', [{ ...roll, active }]);
+      return call<DevRoll>('upsertRoll', [rollInput(roll, active)]);
     },
     // Cleanup's "delete": the API has none for habits, so the recorded habit is archived (HABIT_VIA).
     async archiveHabit(id: string): Promise<void> {
       assertLedger(id, 'habit');
       const habit = (await reads.listHabits()).find((h) => h.id === id);
       if (!habit) return; // never there, or gone some other way — nothing to archive
-      await call<DevHabit>('upsertHabit', [{ ...habit, active: false }]);
+      const { name, categoryId, cadencePerWeek } = habit;
+      await call<DevHabit>('upsertHabit', [
+        { id, name, categoryId, cadencePerWeek, active: false },
+      ]);
     },
     checkHabit: (habitId: string, date: string) => {
       assertLedger(habitId, 'habit');

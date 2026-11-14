@@ -7,9 +7,8 @@
 import { noConsoleErrors, type Row, type Scenario } from '../scenario';
 import type { Ctx } from '../scenario';
 
-// Mirrors argSpecs.ts's TEXT_MAX and TITLE_MAX: drift fails this scenario's max rows loudly.
+// Mirrors argSpecs.ts's TEXT_MAX (prose and titles): drift fails this scenario's max rows loudly.
 const TEXT_MAX = 20_000;
-const TITLE_MAX = 500;
 const BODY_MAX = 1024 * 1024; // RPC_BODY_MAX
 
 const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
@@ -147,7 +146,7 @@ export const bffShapes: Scenario = {
     api(
       'optional-args',
       'nominal',
-      'listIdeas(null), listSittings() and createTasks([]) still answer 200',
+      'listIdeas(), listSittings() and createTasks([]) still answer 200',
     ),
     api('body-cap', 'edge', 'A body over 1 MiB is a 413'),
     api(
@@ -196,13 +195,6 @@ export const bffShapes: Scenario = {
       "every call passes the BFF's argument check, so the deploy smoke can't go red on a shape",
       'the harness can’t invoke the function directly; every merge’s deploy-stage.yml smoke step proves it live',
     ),
-    offDev(
-      'spec-lockstep',
-      'Every ApiClient method has a spec, and a legal call of each object input passes',
-      'lambdas/src/rpc/argSpecs.test.ts',
-      'has a spec for every API method',
-      'a property of the code (typecheck plus the table), not of a deployed call',
-    ),
   ],
   steps: [
     {
@@ -230,14 +222,16 @@ export const bffShapes: Scenario = {
       proves: ['unknown-key'],
       async run(ctx) {
         const title = titleOf(ctx, 'mass-assign');
-        for (let i = 0; i < 2; i++)
-          await expectRpc(
-            ctx,
-            'createTask',
+        for (let i = 0; i < 2; i++) {
+          const got = await ctx.api.writes.createTaskExpectingRefusal(
             [{ title, userId: 'someone-else' }],
-            400,
-            /^Unknown task field: userId$/,
+            title,
           );
+          if (got.status !== 400 || errorOf(got.body) !== 'Unknown task field: userId')
+            throw new Error(
+              `createTask with userId answered ${got.status} ${JSON.stringify(got.body)}`,
+            );
+        }
         await noTaskTitled(ctx, title);
       },
     },
@@ -365,46 +359,56 @@ export const bffShapes: Scenario = {
       proves: ['settings-nested-bad', 'settings-nested-ok'],
       async run(ctx) {
         const before = (await ctx.api.reads.getSettings()) as unknown as Record<string, unknown>;
-        await expectRpc(
-          ctx,
-          'updateSettings',
-          [{ calendarShapeRefs: [{ accountSub: 1 }] }],
-          400,
-          /accountSub must be text/,
-        );
-        await expectRpc(
-          ctx,
-          'updateSettings',
-          [{ calendarShapeRefs: [{ accountSub: 'a', calendarId: 'b', x: 1 }] }],
-          400,
-          /^Unknown calendar field: x$/,
-        );
-        await expectRpc(
-          ctx,
-          'updateSettings',
-          [{ calendarWriteDefault: 'x' }],
-          400,
-          /calendarWriteDefault must be an object/,
-        );
-        await expectRpc(
-          ctx,
-          'updateSettings',
-          [{ theme: { dark: true } }],
-          400,
-          /theme must be one of/,
-        );
-        const after = (await ctx.api.reads.getSettings()) as unknown as Record<string, unknown>;
-        for (const k of ['updatedAt', 'calendarShapeRefs', 'calendarWriteDefault', 'theme'])
-          if (JSON.stringify(after[k]) !== JSON.stringify(before[k]))
-            throw new Error(`a refused updateSettings changed the test user’s settings (${k})`);
-        const ok = (await ctx.api.writes.updateSettings({
+        // The legal patch is also the restore: it puts back the current values in `finally`, so a regression
+        // that stored a refused probe leaves the test user's settings as they were.
+        const current = {
           calendarShapeRefs: before.calendarShapeRefs,
           calendarWriteDefault: before.calendarWriteDefault,
-        } as never)) as unknown as Record<string, unknown>;
-        if (JSON.stringify(ok.calendarShapeRefs) !== JSON.stringify(before.calendarShapeRefs))
-          throw new Error(
-            `a legal patch answered calendarShapeRefs ${JSON.stringify(ok.calendarShapeRefs)}`,
+          theme: before.theme,
+        };
+        let ok: Record<string, unknown>;
+        try {
+          await expectRpc(
+            ctx,
+            'updateSettings',
+            [{ calendarShapeRefs: [{ accountSub: 1 }] }],
+            400,
+            /accountSub must be text/,
           );
+          await expectRpc(
+            ctx,
+            'updateSettings',
+            [{ calendarShapeRefs: [{ accountSub: 'a', calendarId: 'b', x: 1 }] }],
+            400,
+            /^Unknown calendar field: x$/,
+          );
+          await expectRpc(
+            ctx,
+            'updateSettings',
+            [{ calendarWriteDefault: 'x' }],
+            400,
+            /calendarWriteDefault must be an object/,
+          );
+          await expectRpc(
+            ctx,
+            'updateSettings',
+            [{ theme: { dark: true } }],
+            400,
+            /theme must be one of/,
+          );
+          const after = (await ctx.api.reads.getSettings()) as unknown as Record<string, unknown>;
+          for (const k of ['updatedAt', 'calendarShapeRefs', 'calendarWriteDefault', 'theme'])
+            if (JSON.stringify(after[k]) !== JSON.stringify(before[k]))
+              throw new Error(`a refused updateSettings changed the test user’s settings (${k})`);
+        } finally {
+          ok = (await ctx.api.writes.updateSettings(current as never)) as unknown as Record<
+            string,
+            unknown
+          >;
+        }
+        for (const [k, v] of Object.entries(current))
+          if (JSON.stringify(ok[k]) !== JSON.stringify(v))
+            throw new Error(`a legal patch answered ${k} ${JSON.stringify(ok[k])}`);
       },
     },
     {
@@ -506,7 +510,7 @@ export const bffShapes: Scenario = {
       entry: 'api',
       proves: ['optional-args'],
       async run(ctx) {
-        await expectRpc(ctx, 'listIdeas', [null], 200);
+        await expectRpc(ctx, 'listIdeas', [], 200);
         await expectRpc(ctx, 'listSittings', [], 200);
         const made = await expectRpc(ctx, 'createTasks', [[]], 200);
         if (!Array.isArray(made) || made.length !== 0)
@@ -546,15 +550,12 @@ export const bffShapes: Scenario = {
       entry: 'mcp',
       proves: ['mcp-refusal', 'mcp-ok'],
       async run(ctx) {
-        const long = `${titleOf(ctx, 'mcp long')} ${'x'.repeat(TITLE_MAX)}`;
-        await ctx.mcp.writes.createTask({ title: long }).then(
-          () => {
-            throw new Error('create_task with a title over the cap saved');
-          },
-          (err: unknown) => {
-            if (!/title is limited to 500 characters/.test(String(err))) throw err;
-          },
-        );
+        const long = `${titleOf(ctx, 'mcp long')} ${'x'.repeat(TEXT_MAX)}`;
+        const refused = await ctx.mcp.writes.createTaskExpectingRefusal({ title: long });
+        if (!refused.isError || refused.text !== 'title is limited to 20000 characters')
+          throw new Error(
+            `create_task with a title over the cap answered ${refused.text.slice(0, 120)}`,
+          );
         await noTaskTitled(ctx, long);
         const task = await ctx.mcp.writes.createTask({
           title: titleOf(ctx, 'mcp'),

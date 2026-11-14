@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { API_METHODS } from '@aperture/shared';
 import type { ApiMethod } from '@aperture/shared';
-import { RPC_ARGS, TEXT_MAX, TITLE_MAX, checkArgs } from './argSpecs';
+import { RPC_ARGS, TEXT_MAX, checkArgs } from './argSpecs';
 import type { ArgSpecs } from './argSpecs';
 import { ShapeError, obj, opt, str } from './shape';
 
@@ -72,10 +72,8 @@ describe('the RPC argument specs', () => {
       ],
       ['upsertSeries', [{ ...series, rule: { kind: 'weekly', daysOfWeek: [] } }]],
       ['stopSession', ['s', 'completed']],
-      ['stopSession', ['s', 'completed', null]],
       ['stopSession', ['s', 'completed', { capMin: 5 }]],
       ['listIdeas', []],
-      ['listIdeas', [null]],
       ['listSittings', []],
       ['upsertCategory', [{ label: 'x' }]],
       ['upsertCategory', [{ id: 'c', area: null }]],
@@ -109,6 +107,35 @@ describe('the RPC argument specs', () => {
       ['lcSittingStart', [{ anything: 'the normalizer owns it' }]],
     ];
     for (const [m, a] of legal) passes(m, a);
+  });
+
+  it('passes the long titles real callers send: an idea made a task, an unparsed capture line', () => {
+    passes('createTask', [{ title: 'i'.repeat(TEXT_MAX) }]);
+    passes('createTasks', [[{ title: 'c'.repeat(2500) }]]);
+    passes('createAttachmentUploadUrl', [
+      { taskId: 't', filename: 'f'.repeat(255), contentType: 'image/png', size: 1 },
+    ]);
+  });
+
+  it('refuses a null where the type is not nullable, even in an optional slot', () => {
+    refuses('listAttachments', [null], /^taskId must be text$/);
+    refuses('listIdeas', [null], /^status must be text$/);
+    refuses('stopSession', ['s', 'completed', null], /^options must be an object$/);
+    passes('setTaskActual', ['t', 30, null]); // nullable: clears the reflection
+  });
+
+  it('refuses values stored as sent with no domain rule behind them', () => {
+    refuses('triageIdea', ['i', 'archived'], /^status must be one of open, triaged, discarded$/);
+    refuses(
+      'setFinancePeriodOverride',
+      ['t', 'later'],
+      /^override must be one of current, previous$/,
+    );
+    refuses(
+      'createStory',
+      [{ title: 'x', competencyTags: ['teamwork'] }],
+      /competencyTags\[0\] must be one of/,
+    );
   });
 
   it('refuses a wrong top-level shape, a missing argument and an extra one', () => {
@@ -160,7 +187,7 @@ describe('the RPC argument specs', () => {
         [{ endpoint: 'https://x', keys: {}, label: 'l', userId: 'm' }],
         /^Unknown push subscription field: userId$/,
       ],
-      ['setFinancePeriodOverride', ['t', { current: true }], /override must be text/],
+      ['setFinancePeriodOverride', ['t', { current: true }], /override must be one of/],
       [
         'exchangePlaidPublicToken',
         [{ publicToken: 'p', institution: { id: 1 }, accounts: [] }],
@@ -177,7 +204,7 @@ describe('the RPC argument specs', () => {
         [{ taskId: 't', accountSub: 'a', calendarId: 'c', title: { t: 1 }, startMs: 1, endMs: 2 }],
         /title must be text/,
       ],
-      ['createTask', [{ title: 't'.repeat(TITLE_MAX + 1) }], /title is limited to 500/],
+      ['createTask', [{ title: 't'.repeat(TEXT_MAX + 1) }], /title is limited to 20000/],
       [
         'createTasks',
         [[{ title: 'ok' }, { title: 'x', userId: 'm' }]],

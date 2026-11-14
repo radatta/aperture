@@ -9,13 +9,12 @@ import type {
   ApiMethod,
   Area,
   CalendarRef,
-  CompetencyTag,
   CreateLinkTokenInput,
   CreateTaskInput,
   DateRange,
   FinanceBucket,
-  FinancePeriodOverride,
   IdeaStatus,
+  LinkAccountMeta,
   RecurrenceRule,
   TaskStatus,
   UpsertCategoryInput,
@@ -45,8 +44,11 @@ export const ID_MAX = 128; // ULIDs are 26; Plaid ids ~37; Google subs ~21
 export const CALENDAR_ID_MAX = 256; // group calendar ids run ~90
 export const KEY_MAX = 64; // day keys, clock times, enum-ish strings a domain rule owns
 export const NAME_MAX = 200; // a habit, roll, category, account or file name
-export const TITLE_MAX = 500; // a task, series or story title (none is capped today)
-export const TEXT_MAX = 20_000; // free prose: 4× TASK_NOTES_MAX; three story fields stay under DynamoDB's 400 KB
+// Free prose, and titles: no title has a domain cap, and real callers fill one with long text (an idea
+// made a task, an unparsed capture line, a calendar block's "Parent · Part"). 4× TASK_NOTES_MAX; three
+// story fields stay under DynamoDB's 400 KB.
+export const TEXT_MAX = 20_000;
+export const FILENAME_MAX = 1024; // the raw file name; sanitizeFilename trims it to 200
 export const BATCH_MAX = 500; // createTasks inputs, setFinanceBucket ids
 export const CALENDAR_REFS_MAX = 50;
 export const PLAID_ACCOUNTS_MAX = 100;
@@ -73,7 +75,7 @@ const calendarRef = obj<CalendarRef>('calendar', {
 const capOpts = opt(obj<{ capMin?: number }>('options', { capMin: opt(minutes) }));
 
 const taskInput = obj<CreateTaskInput>('task', {
-  title: str(TITLE_MAX),
+  title: str(TEXT_MAX),
   categoryId: opt(nullable(str(ID_MAX))),
   estimateMin: opt(nullable(minutes)),
   bufferMin: opt(nullable(minutes)),
@@ -133,7 +135,7 @@ const categoryInput = as<UpsertCategoryInput>(
 );
 
 const storyFields = {
-  competencyTags: opt(arr(strOf<CompetencyTag>(KEY_MAX), COMPETENCY_TAGS.length)),
+  competencyTags: opt(arr(lit(...COMPETENCY_TAGS), COMPETENCY_TAGS.length)), // no domain check behind it
   situation: opt(str(TEXT_MAX)),
   action: opt(str(TEXT_MAX)),
   result: opt(str(TEXT_MAX)),
@@ -182,7 +184,7 @@ export const RPC_ARGS = {
     id,
     obj('due', { dueDay: nullable(str(KEY_MAX)), dueTime: opt(nullable(str(KEY_MAX))) }),
   ],
-  setTaskTitle: [id, named('title', str(TITLE_MAX))],
+  setTaskTitle: [id, named('title', str(TEXT_MAX))],
   setTaskNotes: [id, named('notes', nullable(str(TEXT_MAX)))],
   setTaskReflection: [id, named('reflection', nullable(str(TEXT_MAX)))],
   transitionTask: [id, named('to', strOf<TaskStatus>(KEY_MAX))],
@@ -195,13 +197,13 @@ export const RPC_ARGS = {
     id,
     obj('split', {
       finish: lit('done', 'keep'),
-      title: opt(str(TITLE_MAX)),
+      title: opt(str(TEXT_MAX)),
       estimateMin: opt(nullable(minutes)),
       bufferMin: opt(nullable(minutes)),
       actualMin: opt(minutes),
-      parentTitle: opt(str(TITLE_MAX)),
+      parentTitle: opt(str(TEXT_MAX)),
       followUp: obj('followUp', {
-        title: str(TITLE_MAX),
+        title: str(TEXT_MAX),
         estimateMin: nullable(minutes),
         bufferMin: opt(nullable(minutes)),
       }),
@@ -228,7 +230,7 @@ export const RPC_ARGS = {
   upsertSeries: [
     obj('series', {
       id: opt(str(ID_MAX)),
-      title: str(TITLE_MAX),
+      title: str(TEXT_MAX),
       categoryId: nullable(str(ID_MAX)),
       defaultEstimateMin: nullable(minutes),
       rule,
@@ -291,7 +293,7 @@ export const RPC_ARGS = {
   // Ideas
   listIdeas: [named('status', opt(strOf<IdeaStatus>(KEY_MAX)))],
   createIdea: [text],
-  triageIdea: [id, named('status', strOf<IdeaStatus>(KEY_MAX))],
+  triageIdea: [id, named('status', lit('open', 'triaged', 'discarded'))], // stored as sent
 
   // Day
   getDay: [day],
@@ -349,7 +351,7 @@ export const RPC_ARGS = {
         remindDueDay: opt(bool),
         remindPlanned: opt(bool),
       },
-      'settings patch must be an object',
+      { notObject: 'settings patch must be an object' },
     ),
   ],
 
@@ -369,7 +371,7 @@ export const RPC_ARGS = {
       taskId: str(ID_MAX),
       accountSub: str(ID_MAX),
       calendarId: str(CALENDAR_ID_MAX),
-      title: str(TITLE_MAX),
+      title: str(TEXT_MAX),
       startMs: num,
       endMs: num,
     }),
@@ -410,10 +412,14 @@ export const RPC_ARGS = {
 
   // Stories
   listStories: [],
-  createStory: [obj('story', { title: str(TITLE_MAX), ...storyFields })],
+  createStory: [obj('story', { title: str(TEXT_MAX), ...storyFields })],
   updateStory: [
     id,
-    obj('story', { title: opt(str(TITLE_MAX)), ...storyFields }, 'story patch must be an object'),
+    obj(
+      'story',
+      { title: opt(str(TEXT_MAX)), ...storyFields },
+      { notObject: 'story patch must be an object' },
+    ),
   ],
   deleteStory: [id],
 
@@ -421,7 +427,7 @@ export const RPC_ARGS = {
   createAttachmentUploadUrl: [
     obj('attachment', {
       taskId: str(ID_MAX),
-      filename: str(NAME_MAX),
+      filename: str(FILENAME_MAX),
       contentType: str(NAME_MAX),
       size: num,
     }),
@@ -441,10 +447,7 @@ export const RPC_ARGS = {
       rule: opt(obj('rule', { pattern: str(NAME_MAX) })),
     }),
   ],
-  setFinancePeriodOverride: [
-    id,
-    named('override', nullable(strOf<FinancePeriodOverride>(KEY_MAX))),
-  ],
+  setFinancePeriodOverride: [id, named('override', nullable(lit('current', 'previous')))],
   setFinanceNote: [id, named('note', nullable(str(TEXT_MAX)))],
   setFinancePeriodStart: [id, named('marked', bool)],
   linkFinanceRefund: [idAs('refundId'), named('chargeId', nullable(str(ID_MAX)))],
@@ -475,14 +478,19 @@ export const RPC_ARGS = {
     obj('Plaid link', {
       publicToken: str(NAME_MAX),
       institution: obj('institution', { id: str(ID_MAX), name: str(NAME_MAX) }),
+      // Read for the duplicate-login check and never stored; Link adds fields (verification_status…).
       accounts: arr(
-        obj('account', {
-          id: str(ID_MAX),
-          name: str(NAME_MAX),
-          mask: nullable(str(KEY_MAX)),
-          type: str(KEY_MAX),
-          subtype: nullable(str(KEY_MAX)),
-        }),
+        obj<LinkAccountMeta>(
+          'account',
+          {
+            id: str(ID_MAX),
+            name: str(NAME_MAX),
+            mask: nullable(str(KEY_MAX)),
+            type: str(KEY_MAX),
+            subtype: nullable(str(KEY_MAX)),
+          },
+          { extraKeys: 'allow' },
+        ),
         PLAID_ACCOUNTS_MAX,
       ),
     }),
@@ -496,8 +504,9 @@ export const RPC_ARGS = {
 
 // The boundary check: at most the method's arity (an extra argument that isn't undefined is refused —
 // getDay's backend-only second parameter is not the wire's), each required argument present, each
-// present one its shape. A null in an optional slot passes through: JSON turns a mid-list undefined into
-// null, and the handler reads both as absent.
+// present one its shape. A null is a value, refused where the type isn't nullable: the app drops trailing
+// undefined arguments (httpClient's omitTrailing), and a handler can read a null as a real value
+// (listAttachments(null) would look up a task named "null").
 export function checkArgs(method: ApiMethod, args: readonly unknown[]): void {
   const spec = RPC_ARGS[method] as readonly Check<unknown>[];
   const extra = args.slice(spec.length).some((a) => a !== undefined);
@@ -508,7 +517,7 @@ export function checkArgs(method: ApiMethod, args: readonly unknown[]): void {
   spec.forEach((c, i) => {
     const v = args[i];
     const name = c.name ?? `argument ${i + 1}`;
-    if (v === undefined || (v === null && c.optional)) {
+    if (v === undefined) {
       if (!c.optional) throw new ShapeError(`${method}: ${name} is required`);
       return;
     }
