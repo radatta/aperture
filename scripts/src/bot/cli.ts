@@ -11,6 +11,7 @@ import { loadConfig } from './config.ts';
 import { deployDev } from './deploy-dev.ts';
 import type { Clock } from './dispatch.ts';
 import { featureBranch, requirePushed } from './git.ts';
+import { iosFiles } from './ios-routing.ts';
 import {
   LockHeld,
   SLOTS,
@@ -208,6 +209,7 @@ export async function main(argv: string[]): Promise<number> {
             requirePushed(run, featureBranch(run)),
             clock.now(),
             only,
+            iosFiles(run),
           ),
         );
         cache(holder, slot);

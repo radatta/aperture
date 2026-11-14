@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fakeClock } from '../bot/fakes.ts';
 import { memFs } from '../mailroom/fakes.ts';
 import { IosAssert, type SimResult } from '../mailroom/sim.ts';
-import { IOS_NOTE, SIM_SLOT_A_ONLY, createIos } from './ios';
+import { IOS_NOTE, SIM_SLOT_A_ONLY, createIos, iosSlotNote } from './ios';
 import { NeedsYou, needsYouReason } from './scenario';
 
 const HJ = '/repo/.hostjobs';
@@ -111,6 +111,27 @@ describe('ctx.ios', () => {
     const onA = mac(() => ({ buildsSeen: ['aaaaaaa'] }), undefined, 'dev');
     await onA.client.run('launch', [{ op: 'launch' }]);
     expect(onA.submitted).toHaveLength(1);
+  });
+
+  it('on devb a branch touching iOS paths reads needs you with the way to slot A, never a quiet skip', () => {
+    expect(iosSlotNote('devb', ['ios-standalone'])).toMatch(
+      /pnpm bot lock release.*pnpm bot deploy-dev/,
+    );
+    expect(iosSlotNote('devb', [])).toBeUndefined(); // no iOS step would run: nothing to say
+    expect(iosSlotNote('dev', ['ios-standalone'])).toBeUndefined();
+    const fs = memFs([`${HJ}/inbox`]);
+    const ios = createIos({
+      fs,
+      clock: fakeClock(),
+      dir: HJ,
+      expectedSha: 'a'.repeat(40),
+      outDir: '/out',
+      copy: () => undefined,
+      log: () => undefined,
+      slot: 'devb',
+      slotNote: 'release devb',
+    });
+    expect(ios.unavailable()).toBe(`${SIM_SLOT_A_ONLY} — release devb`);
   });
 
   it('no soft keyboard is needs you for that step only: the next plan still goes to the Mac', async () => {

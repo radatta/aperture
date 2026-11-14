@@ -21,8 +21,9 @@ pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=
 
 ## Run it
 
-From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy running (no `pnpm test`, no dev server —
-CLAUDE.md → COI ceilings):
+From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy of your own running (no `pnpm test`, no dev
+server — CLAUDE.md → COI ceilings); another session's run on the other slot is fine (_Dev slots_). Wrapped as
+`HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …`, the run shows on the board with its peaks:
 
 ```bash
 pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages, an API read; creates nothing
@@ -48,7 +49,7 @@ Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--fea
 printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status, and when the
 harness itself failed (the deploy wait, a sign-in, the build check, cleanup) the error's text follows it, with a
 `**Failed:** <code> — <message>` line per failure under _Leftovers_ (a step's error is in its _Steps_ row, so a
-step-only failure's first line is exactly `# Dev check — FAIL: STEP_FAILED`) — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`; per slot once the quota allows — _Dev slots_).
+step-only failure's first line is exactly `# Dev check — FAIL: STEP_FAILED`) — then the screenshots. One run per slot at a time (`localNotes/devcheck/run.lock` for `dev`, `run.devb.lock` for `devb` — _Dev slots_).
 
 ## Dev slots
 
@@ -61,10 +62,13 @@ run too (`SLOT_UNKNOWN`). The report's header names the target (`· on devb (htt
 per slot: the env file
 (`.secrets/devcheck.<slot>.env`), the signed-in state (`devcheck.<slot>.state.json`), the ledger
 (`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
-scope (`config.ts` → `SLOT_TARGETS`). The run lock stays one for both slots while the dev account's Lambda quota is
-10: two runs (~10 calls in flight each) would throttle each other. Once it reads ≥ 160 with the reservations in
-(CI-BOT.md → Compute), `PER_SLOT_RUNS` in `config.ts` gives each slot its own (`run.devb.lock`), so two sessions can
-each run one devcheck at once. On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's). The `dev-slot-b` scenario's
+scope (`config.ts` → `SLOT_TARGETS`). So is the run lock (`run.lock` for `dev`, `run.devb.lock`; `config.ts` → `runLockFile`): two
+sessions can each run one devcheck at once, one per slot — each slot's functions have their own reservations
+(CI-BOT.md → Compute), and each run sweeps only its own slot's ledger and table. Two at once stay well inside the kill
+alarms: a full run is ~95–106k Lambda ms and peaks near 810 calls a minute (measured 2026-11-13; the arithmetic is
+CI-BOT.md → Compute). On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
+touches iOS paths the reason says to release devb and `deploy-dev` again, which sends such a branch to dev
+(CI-BOT.md → _Dev slots_). The `dev-slot-b` scenario's
 rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its
 reminders are configured and its poller ticking — so it stays as a standing check that a run is where its lock says.
 
@@ -428,7 +432,7 @@ paste as they are — from _Other scenarios (regression)_: per-scenario counts a
 since those belong to their own features. Without `--feature` there are no paste lists: the table is every
 scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
 carry its verdict: they hold only once a run passes.
-Shared, in the main checkout: the ledgers (one per slot) and `run.lock` (_Dev slots_). Secrets beside the env file:
+Shared, in the main checkout: the ledgers and the run locks, one of each per slot (_Dev slots_). Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session and the Hosted UI cookie, mode 600 — re-saved after the MCP
 sign-in).
 

@@ -7,6 +7,7 @@
 // headless check before it.
 import { IosAssert, type SimResult } from '../../mailroom/sim';
 import { IOS_NOTE } from '../ios';
+import { IOS_PROBE_PATHS } from './ios-paths';
 import { recordIosPlans } from '../ios-plans';
 import { probeJobs, type Plan } from '../probe-only';
 import { needsYou, type Ctx, type Scenario } from '../scenario';
@@ -65,7 +66,7 @@ export const iosProbe: Scenario = {
   id: 'ios-probe',
   title: 'iOS probe job: every sim plan’s probe points, on the Simulator, without drafts',
   tiers: ['full'],
-  slowPaths: ['scripts/src/devcheck/probe-only.ts', 'scripts/src/devcheck/scenarios/ios-probe.ts'],
+  slowPaths: IOS_PROBE_PATHS,
   rows: [
     {
       id: 'probe-launch',

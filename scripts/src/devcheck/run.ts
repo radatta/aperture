@@ -1,8 +1,9 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
 //   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full|all [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
-// Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per container: the
-// sweep of earlier runs' leftovers would otherwise race a live run.
+// Never alongside your own tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per slot: the
+// sweep of earlier runs' leftovers would otherwise race a live run on the same slot. Each slot sweeps its own ledger
+// and table, so another session's run on the other slot may overlap.
 import { execFile } from 'node:child_process';
 import {
   copyFileSync,
@@ -40,7 +41,7 @@ import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
 import { ensureSignedIn, readCheckedSession, refreshSession, validateCachedState } from './login';
-import { createIos } from './ios';
+import { createIos, iosSlotNote } from './ios';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
 import { pickSlot } from './slot';
@@ -94,7 +95,7 @@ export function parseArgs(argv: string[]): Args {
   return args;
 }
 
-// One live run per container: a pid file in the shared devcheck home, created exclusively (O_EXCL) so two
+// One live run per slot: a pid file in the shared devcheck home (runLockFile), created exclusively (O_EXCL) so two
 // runs starting together can't both take it. A stale file (its pid is dead) is removed and retried once.
 export function takeLock(path: string): () => void {
   for (let attempt = 0; ; attempt++) {
@@ -231,6 +232,11 @@ async function main(): Promise<number> {
   const shotsDir = join(out, 'shots');
   mkdirSync(shotsDir, { recursive: true });
   const log = (msg: string) => console.log(`[devcheck] ${msg}`);
+  const slotNote = iosSlotNote(
+    currentSlot(),
+    slow.filter((id) => scenarios.find((s) => s.id === id)?.steps.some((x) => x.entry === 'ios')),
+  );
+  if (slotNote) log(`on ${currentSlot()}, the iPhone rows read needs-you — ${slotNote}`);
   log(`target: ${currentSlot()} → ${slotOrigin()} (${pick.why})`);
   log(
     `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} against ${sha.slice(0, 7)} → ${out}`,
@@ -266,6 +272,7 @@ async function main(): Promise<number> {
         log,
         repoVersion: () => repoRunnerVersion(sh('git', ['rev-parse', '--show-toplevel'])),
         slot: currentSlot(),
+        slotNote,
       }),
       waitForDeploy: args.deployWait
         ? () =>

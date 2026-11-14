@@ -13,6 +13,7 @@ import type { IosOp } from '../../mailroom/sim.ts';
 import type { PwLocator } from '../pw-types';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { DOCK, MODE_ROW } from '../ios';
+import { CATEGORY_SUGGEST_PATHS } from './ios-paths';
 
 const GARDEN = [
   'water the tomato beds',
@@ -297,11 +298,7 @@ export const categorySuggest: Scenario = {
   id: 'category-suggest',
   title: 'Editor and Review preview: tap-only category suggestion',
   tiers: ['full'],
-  slowPaths: [
-    'app/src/modules/capture/CaptureBar.tsx',
-    'app/src/modules/capture/PreviewCategory.tsx',
-    'scripts/src/devcheck/scenarios/category-suggest.ts',
-  ],
+  slowPaths: CATEGORY_SUGGEST_PATHS,
   rows: [
     {
       id: 'accept',

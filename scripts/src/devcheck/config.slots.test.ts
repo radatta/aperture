@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEVB_ORIGIN,
   DEV_ORIGIN,
-  PER_SLOT_RUNS,
   SLOTS,
   assertDevCognitoUrl,
   assertDevOrigin,
@@ -75,12 +74,12 @@ describe('dev slots', () => {
     expect(mcpScopes()).toEqual(['openid', 'email', `${DEV_ORIGIN}/mcp/access`]);
   });
 
-  it('keeps per-slot files apart, and one run lock for both until the quota allows two runs', () => {
+  it('keeps per-slot files apart, the run lock included, so the two slots’ runs may overlap', () => {
     useSlot('devb');
     expect(envPath('/m')).toBe('/m/.secrets/devcheck.devb.env');
     expect(statePath('/m')).toBe('/m/.secrets/devcheck.devb.state.json');
     expect(ledgerFile()).toBe('ledger.devb.jsonl');
-    expect(runLockFile()).toBe(PER_SLOT_RUNS ? 'run.devb.lock' : 'run.lock');
+    expect(runLockFile()).toBe('run.devb.lock');
     expect(runLockFile('dev')).toBe('run.lock');
   });
 

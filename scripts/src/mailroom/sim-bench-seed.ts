@@ -46,7 +46,7 @@ export interface SeedDeps {
   pick(): Promise<SlotPick>; // pickSlot: whose the dev locks are
   acquire(): Promise<string>; // `pnpm bot lock acquire --slot dev` → the lock's expiry (ISO)
   release(): Promise<void>; // `pnpm bot lock release`
-  runLock(): () => void; // the devcheck's one-run-per-container lock
+  runLock(): () => void; // slot A's devcheck run lock
   ledger: Ledger;
   signIn(run: string): Promise<{ api: SeedApi; close(): Promise<void> }>;
   seed: BenchSeed;
@@ -81,7 +81,7 @@ async function slotA(d: SeedDeps): Promise<{ heldBefore: boolean }> {
 export async function seed(
   d: SeedDeps,
 ): Promise<{ id: string; expiresAt: string; reused: boolean }> {
-  // The run lock first: a devcheck running now (on either slot, until PER_SLOT_RUNS) refuses the seed before dev is locked.
+  // Slot A's run lock first: a dev devcheck running now refuses the seed before dev is locked.
   const unlock = d.runLock();
   let session: Awaited<ReturnType<SeedDeps['signIn']>> | undefined;
   let took = false;

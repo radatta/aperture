@@ -12,6 +12,7 @@ import {
   slowScenarios,
 } from './index';
 import { NeedsYou, type Ctx, type Scenario } from '../scenario';
+import { IOS_SLOW_PATHS } from './ios-paths';
 
 // The gate's half of MATRIX_GAP: a scenario whose rows don't hold fails CI before any devcheck runs.
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -71,6 +72,16 @@ describe('the slow tier', () => {
     expect(selectScenarios('all', []).map((s) => s.id)).toEqual(
       selectScenarios('full', []).map((s) => s.id),
     );
+  });
+
+  it("the bot's iOS routing list is exactly every iOS scenario's slowPaths", () => {
+    const ios = SCENARIOS.filter((s) => s.steps.some((x) => x.entry === 'ios'));
+    expect(ios.map((s) => s.id).sort()).toEqual([
+      'category-suggest',
+      'ios-probe',
+      'ios-standalone',
+    ]);
+    expect([...IOS_SLOW_PATHS].sort()).toEqual(ios.flatMap((s) => s.slowPaths ?? []).sort());
   });
 
   it('ios-standalone is slow everywhere and covers what iOS can see plus its own harness', () => {

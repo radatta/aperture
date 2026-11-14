@@ -163,18 +163,15 @@ export function worktreeRoot(cwd = process.cwd()): string {
 }
 
 export const secretsDir = (main: string): string => join(main, '.secrets');
-// Per slot: the test user's env file (written by the user's one-time setup line), the signed-in browser state and the
-// cross-run ledger. The one-run-at-a-time lock stays shared until the dev account's Lambda quota is past both slots'
-// reservations: at quota 10 two runs (~10 calls in flight each) throttle each other (CI-BOT.md → Compute). Flip
-// PER_SLOT_RUNS once `get-account-settings` reads ≥ 160 and caps' reservations are in.
-export const PER_SLOT_RUNS = false;
+// Per slot: the test user's env file (written by the user's one-time setup line), the signed-in browser state, the
+// cross-run ledger and the run lock — one run per slot, so two sessions' runs on dev and devb may overlap (each slot's
+// functions have their own reservations: CI-BOT.md → Compute). Slot A keeps the old shared name, `run.lock`.
 export const envPath = (main: string, s: Slot = slot): string =>
   join(secretsDir(main), `devcheck.${s}.env`);
 export const statePath = (main: string, s: Slot = slot): string =>
   join(secretsDir(main), `devcheck.${s}.state.json`);
 export const ledgerFile = (s: Slot = slot): string => `ledger.${s}.jsonl`;
-export const runLockFile = (s: Slot = slot): string =>
-  s === 'dev' || !PER_SLOT_RUNS ? 'run.lock' : `run.${s}.lock`;
+export const runLockFile = (s: Slot = slot): string => (s === 'dev' ? 'run.lock' : `run.${s}.lock`);
 // Shared across worktrees (the cross-run ledger lives here); per-run artifacts go to the worktree instead.
 export const devcheckHome = (main: string): string => join(main, 'localNotes', 'devcheck');
 export const runDir = (worktree: string, runId: string): string =>

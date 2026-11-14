@@ -69,7 +69,7 @@ left running is this run's leak (the class that broke phone-nits and timer-credi
   well-known metadata answers "not configured" locally — the façade is dev's.
 - **Lambda's clock.** The server runs with `TZ=UTC`, as Lambda does — the container is Los Angeles time, and a UTC
   day-key bug only shows on a UTC server.
-- **Separate from dev's state.** Its own ledger and report under `localNotes/devcheck-local/<run>/`, no `run.lock`;
+- **Separate from dev's state.** Its own ledger and report under `localNotes/devcheck-local/<run>/`, no run lock;
   `open-pr.ts` reads only `localNotes/devcheck/`, so a local report never feeds a PR.
 
 ## When it fails

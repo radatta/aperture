@@ -54,12 +54,22 @@ export interface IosDeps {
   log: (s: string) => void;
   repoVersion?: () => string; // the runner this checkout would install; an older one on the Mac gets a line once
   slot?: 'dev' | 'devb'; // the run's dev slot: the Simulator is slot A's
+  slotNote?: string; // appended to SIM_SLOT_A_ONLY: what to do about it (iosSlotNote)
 }
 
 // The sim's Home Screen app, Keychain item and sign-in host (tools/mailroom/jobs/sim.sh) are slot A's, so a devb run's
 // iOS rows read "needs you" with this reason before any job is queued — never a failure (docs/ops/IOS-CHECK.md).
 export const SIM_SLOT_A_ONLY =
   'SIM_SLOT_A_ONLY — the Simulator is set up for dev (slot A) only; this run is on devb';
+
+// A devb run whose iOS slow steps would run (the branch touches their paths): its needs-you rows are a deploy to the
+// wrong slot, not a Mac that's out — say how to get them proven. `pnpm bot deploy-dev` routes such a branch to slot A
+// (bot/ios-routing.ts); this catches one that reached devb another way.
+// `iosSlow`: the scenarios with an ios step whose slow steps this run would run.
+export function iosSlotNote(slot: string, iosSlow: string[]): string | undefined {
+  if (slot === 'dev' || !iosSlow.length) return undefined;
+  return 'this branch touches iOS paths, so its iPhone rows need slot A: `pnpm bot lock release`, then `pnpm bot deploy-dev` (it takes dev or names `lock wait`)';
+}
 
 export interface Ios {
   forScenario(scenarioId: string): IosClient;
@@ -73,7 +83,12 @@ export interface Ios {
 const runWide = (reason: string) => !reason.endsWith('/KEYBOARD_SETUP');
 
 export function createIos(d: IosDeps): Ios {
-  let out: string | null = d.slot && d.slot !== 'dev' ? SIM_SLOT_A_ONLY : null;
+  let out: string | null =
+    d.slot && d.slot !== 'dev'
+      ? d.slotNote
+        ? `${SIM_SLOT_A_ONLY} — ${d.slotNote}`
+        : SIM_SLOT_A_ONLY
+      : null;
   let ran = false;
   let lastBooted: string | undefined;
   let warned = false;

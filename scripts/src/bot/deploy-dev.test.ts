@@ -7,8 +7,8 @@ const R = '/repos/radatta/aperture';
 const SHA = 'e'.repeat(40);
 const quiet = () => undefined;
 
-// A pushed feature branch that contains main.
-const repo = () =>
+// A pushed feature branch that contains main; `changed` is its diff against origin/main.
+const repo = (changed = 'docs/ops/X.md') =>
   fakeRun([
     ['git symbolic-ref', 'ci-bot'],
     ['git rev-parse HEAD', SHA],
@@ -16,6 +16,7 @@ const repo = () =>
     ['git fetch', ''],
     ['git merge-base', ''],
     ['git diff --quiet', ''],
+    ['git diff --name-only', changed],
   ]);
 
 // GitHub with free locks (or slot A held by `heldA`), no prior dev deploys, and a run that takes `minutes` then ends
@@ -131,6 +132,30 @@ describe('deployDev', () => {
     expect(lines.at(-1)).toMatch(/^devb now serves .*`pnpm devcheck` aims at devb/);
   });
 
+  it('sends a branch touching iOS paths to slot A, and refuses rather than take a free devb when A is held', async () => {
+    const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
+    const flux = {
+      branch: 'flux',
+      sha: SHA,
+      expiresAt: new Date(clock.now() + 30 * 60_000).toISOString(),
+    };
+    const held = github(clock, 3, 'success', flux);
+    const lines: string[] = [];
+    const ios = 'app/src/modules/capture/CaptureBar.tsx\ndocs/x.md';
+    await expect(deployDev(repo(ios).run, held.api, clock, (l) => lines.push(l))).rejects.toThrow(
+      /dev is locked by flux/,
+    );
+    expect(lines.join('\n')).toMatch(
+      /touches iOS paths \(app\/src\/modules\/capture\/CaptureBar\.tsx\).*never devb/,
+    );
+    expect(held.lockOf('devb')).toBeNull();
+    expect(held.inputs).toHaveLength(0);
+    const free = github(clock, 3, 'success');
+    await deployDev(repo(ios).run, free.api, clock, quiet);
+    expect(free.lockOf('dev')?.branch).toBe('ci-bot');
+    expect(free.inputs[0]).not.toHaveProperty('slot');
+  });
+
   it('sends slot A no slot input, so an older main YAML still accepts it', async () => {
     const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
     const g = github(clock, 3, 'success');
@@ -212,6 +237,7 @@ describe('deployDev', () => {
           throw new Error('differs');
         },
       ],
+      ['git diff --name-only', '.github/workflows/ci.yml'],
     ]);
     const logs: string[] = [];
     await deployDev(run, g.api, clock, (s: string) => void logs.push(s));

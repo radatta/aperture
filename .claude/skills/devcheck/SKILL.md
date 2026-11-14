@@ -14,8 +14,9 @@ The reference is `docs/ops/DEV-CHECK.md`. This is the procedure.
 - The branch's commit is on dev through `pnpm bot deploy-dev` (a `deploy-dev <sha> <key>` run). `git rev-parse HEAD` is what
   the check expects unless you pass `--sha` — which is also how a scenario-only fix proves the build already on
   dev (`scripts/` isn't deployed, so no redeploy).
-- Nothing heavy is running in the container — no `pnpm test`, no dev server, no other headless browser. A
-  second dev check refuses to start (`run.lock`).
+- Nothing heavy of yours is running in the container — no `pnpm test`, no dev server, no other headless browser. A
+  second dev check on the same slot refuses to start (`run.lock` / `run.devb.lock`); another session's run on the
+  other slot is fine. `HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …` puts the run on the board.
 - Setup exists: `/workspace/.secrets/devcheck.dev.env` and `~/pw` with Playwright. Missing → the run fails
   `ENV_MISSING` / `PW_MISSING`; that is an operator step, not something to work around.
 

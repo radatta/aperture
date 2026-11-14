@@ -1,7 +1,7 @@
 // The Home Screen web app on the Mac's iOS Simulator (docs/ops/IOS-CHECK.md): it launches signed in, survives
 // three kinds of kill, picks up a deploy by its second launch, and keeps the capture bar and the Done form's
 // Reflection box above the soft keyboard without zooming. Every step is slow (a sim run is minutes), so a full
-// run defers them unless the branch touches what they can see (APP, below) or names this scenario (DEV-CHECK.md → Slow tier).
+// run defers them unless the branch touches what they can see (`IOS_STANDALONE_PATHS`, ios-paths.ts) or names this scenario (DEV-CHECK.md → Slow tier).
 // The sim never submits: the one task it opens is set up here through MCP, and the sim only focuses, types a
 // draft by key taps and erases it — capture-long also seeds 16 API tasks (ledgered) and taps Review, a real parse
 // that saves nothing. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
@@ -10,6 +10,7 @@
 import { datesFor, needsYou, type Ctx, type Scenario } from '../scenario';
 import { IosAssert, type IosOp, type SimResult } from '../../mailroom/sim';
 import { DOCK, MODE_ROW } from '../ios';
+import { IOS_STANDALONE_PATHS } from './ios-paths';
 
 // One keyboard layer only (`keys` takes ^[a-z ]+$): the nonce with its digits as letters. Six: the run's time of day
 // (the nonce's tail is the tier), and each typed key is a tap that can drop.
@@ -293,41 +294,11 @@ const RELAUNCH: IosOp[] = [
   { op: 'shutdown' }, // the run's last sim job: nothing else needs it, and it's the heaviest thing on the Mac
 ];
 
-// What these rows can see: the keyboard's lift and the fields it covers, zoom, the shell and its insets, staying signed
-// in, the service worker's second launch. `app/**` would rerun the sim on every app change, ~6 min a run for most of them
-// nothing iOS can see (Rahul, 2026-11-05). Elsewhere an iOS-only bug waits for --tier all or naming the scenario.
-const APP = [
-  'app/index.html',
-  'app/vite.config.ts',
-  'app/pwa/**',
-  'app/src/main.tsx',
-  'app/src/index.css',
-  'app/src/auth/**',
-  'app/src/lib/useKeyboardInset.ts',
-  'app/src/components/AppNav.tsx',
-  'app/src/components/AppShell.tsx',
-  'app/src/components/Modal/**',
-  'app/src/modules/capture/CaptureBar.tsx',
-  'app/src/modules/capture/mode.ts',
-  'app/src/modules/capture/useAutoGrow.ts',
-  'app/src/modules/tasks/QueryControls.tsx',
-  'app/src/modules/tasks/DoneForm.tsx',
-  'app/src/modules/tasks/TaskModal.tsx',
-  'app/src/modules/tasks/editor/TaskEditor.tsx',
-  'app/src/modules/tasks/notes/NotesField.tsx',
-];
-const HARNESS = [
-  'tools/mailroom/jobs/sim.sh',
-  'scripts/src/mailroom/sim.ts',
-  'scripts/src/devcheck/ios.ts',
-  'scripts/src/devcheck/scenarios/ios-standalone.ts',
-];
-
 export const iosStandalone: Scenario = {
   id: 'ios-standalone',
   title: 'iOS: the Home Screen app on the Mac’s Simulator',
   tiers: ['full'],
-  slowPaths: [...APP, ...HARNESS],
+  slowPaths: IOS_STANDALONE_PATHS,
   rows: [
     {
       id: 'launch-signed-in',

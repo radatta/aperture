@@ -29,7 +29,7 @@ sim-bench.sh ── prelude (sign in, shut down) ─▶ run 1..N × [launch, cap
 
 `pnpm sim-bench:seed` runs from a pushed branch's worktree, since the dev lock is held by a branch name. It:
 
-1. takes the devcheck's run lock. A devcheck running now refuses the seed before any dev lock is taken.
+1. takes slot A's devcheck run lock. A dev devcheck running now refuses the seed before any dev lock is taken.
 2. checks slot A is free or already this branch's. If another branch is testing on dev, it refuses with `NO_LOCK` before any lock or write.
 3. takes the dev lock: `pnpm bot lock acquire --slot dev`, the same lock `deploy-dev` takes.
 4. signs in as the test user through the devcheck's own sign-in and API client (cached Hosted UI state).
@@ -40,7 +40,7 @@ If it fails after taking the lock, it frees dev again (unless the branch held de
 
 **While the bench runs:**
 
-- Other lanes' slot-A devchecks and deploys wait through `pnpm bot lock wait`. Slot B is unaffected; until `PER_SLOT_RUNS` flips, its devchecks wait only for the seed step itself, which shares the run lock.
+- Other lanes' slot-A devchecks and deploys wait through `pnpm bot lock wait`. Slot B is unaffected: its devchecks have their own run lock.
 - The lock's TTL is 45 minutes. The session that seeded renews it (`pnpm bot lock renew`) before each expiry, and a 5-run M1 bench needs several renewals.
 - **The lock doesn't stop a merge.** A merge to `main` redeploys dev whatever the lock says (CLAUDE.md → _Git workflow_), and the summary then shows `devBuildChanged`. So the M1 window is also one where dispatch holds merges.
 
