@@ -18,7 +18,8 @@ export type Limits = {
   };
   tuning: { test: { workspaceConcurrency?: number; maxWorkers?: number } | null };
   // At most this many heavy jobs of a class at once (policy, not a measured cost — the quiet window
-  // rewrites `classes`, never this). `test`: 4, from the 2026-10-13 edge (a 6th suite timed out).
+  // rewrites `classes`, never this). `test`: 2 since 2026-11-13, from the 2026-11-08 bench (2 suites
+  // measured safe at 4 workers; 3+ unmeasured, estimated near the hard line). Was 4, from the 2026-10-13 edge.
   concurrency?: Record<string, number>;
   classes: Record<string, ClassCost>;
 };

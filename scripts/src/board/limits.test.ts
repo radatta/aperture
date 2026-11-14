@@ -18,7 +18,8 @@ describe('limits.json', () => {
   it('ships valid, enforcing, with a test cap, measured at the live limits', () => {
     const l = parseLimits(shipped);
     expect(l.enforce).toBe(true);
-    expect(l.concurrency).toEqual({ test: 4 });
+    expect(l.concurrency).toEqual({ test: 2 });
+    expect(l.tuning).toEqual({ test: { maxWorkers: 4 } });
     expect(l.measuredLimits).toEqual({ pidsMax: 4096, highMiB: 18432 });
     expect(Object.keys(l.classes)).toEqual(
       expect.arrayContaining(['test', 'ui', 'typecheck', 'lint', 'dev', 'build']),
@@ -85,7 +86,8 @@ describe('staleness', () => {
       measuredAt: '2026-10-14',
       measuredLimits: { pidsMax: 4096, highMiB: 18432 },
     });
-    const runs = [ev('test', 300, 4500), ev('test', 310, 4400), ev('test', 290, 4600)];
+    const p = shipped.classes.test.pids; // within budget, so only the anon line fires
+    const runs = [ev('test', p, 4500), ev('test', p, 4400), ev('test', p, 4600)];
     expect(staleness(measured, live, runs, now)).toEqual([
       expect.stringContaining(`class test: p95 Δanon 4600 MiB vs ${shipped.classes.test.anonMiB}`),
     ]);

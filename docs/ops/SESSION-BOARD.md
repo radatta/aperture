@@ -7,7 +7,7 @@ lock, and the hub — `docs/ops/HUB.md`), keeps a usage history, and leases heav
 
 **It must never make a session timid.** Tests and the headless UI pass always run. Below the _measured_
 edge the board only offers advice. A heavy job waits only at a measured edge — past the hard line, or when
-its class's concurrency cap is full (`test`: 4 suites at once, from the CPU edge in _Results_) — and only while
+its class's concurrency cap is full (`test`: 2 suites at once, each at 4 vitest workers — the 2026-11-08 bench in _Results_) — and only while
 `limits.json` says `enforce: true` (shipped 2026-10-29, after the 2026-10-13 quiet window found the CPU edge). Every hold is logged, so how
 limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 
@@ -138,7 +138,9 @@ not counted as a block. Load tests are excluded.
   conditions (load tests only).
 - **Container-only tuning** (`limits.json` `tuning.test`: `workspaceConcurrency`, `maxWorkers`) applies only
   in a `coi-*` container and only once measured: a setting ships only if it cuts peak anon ≥ 30 % for ≤ 15 %
-  more wall time. Until then `null` — no guessing.
+  more wall time. `maxWorkers: 4` shipped 2026-11-13 **below that bar**, on the user's call: it cut anon 26 % solo /
+  19 % in a pair, and was taken for the pair's speed and headroom (_Results_ → _Vitest worker bench_). vitest applies
+  `VITEST_MAX_WORKERS` over every config, so `scripts`' test script pins its own 2 (CI parity, `scripts/vitest.config.ts`).
 
 ## Leases
 
@@ -153,7 +155,7 @@ GitHub, below. History keeps its old `lease: "dev"` events for their 90 days, an
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
 (not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
-with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 4 `test` slots already
+with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 2 `test` slots already
 held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
 over the hard line when both apply (it names the holders), other classes and `test-file` runs are never
 capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — and the hard-line wait too: they probe the
@@ -202,7 +204,9 @@ job class's cost (`pids`, `anonMiB`, `p95Sec`, `source`) — shipped as the 2026
 8-worker fan-out, `measuredAt: null`, `enforce: false`; the 2026-10-13 quiet window filled them in and set
 `measuredLimits`; on 2026-10-29 (the user's call) `enforce: true` shipped with `"concurrency": { "test": 4 }` — a policy
 key, top-level like `tuning`, so a quiet window rewriting `classes` never loses it. The value is the CPU edge:
-a 6th concurrent suite timed out (_Results_). Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
+a 6th concurrent suite timed out (_Results_). On 2026-11-13 the cap became 2, with `tuning.test`
+`{ maxWorkers: 4 }`, and `classes.test` was re-measured solo at that cap (the 2026-11-08 bench); the other classes and
+`measuredAt` still date from 2026-10-13. Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
 
 ## Hooks
@@ -310,20 +314,39 @@ What it means:
 - **CPU is the edge, not memory or pids.** One `pnpm test` keeps ~7.9 of 9 cores busy; two saturate them.
   Past ~5 concurrent suites, jsdom tests start timing out — a flaky timeout under parallel load is
   contention, not a bug. Memory and pids never came near their lines, so the anon/pids budget (and
-  `enforce`) can't see this edge — hence the shipped `test` cap of 4 (`concurrency`), tracked by
+  `enforce`) can't see this edge — hence the `test` cap (`concurrency`: 4 from 2026-10-29, 2 since 2026-11-13, below), tracked by
   `cli.ts barriers` so it can be loosened with data.
 - **CPU plus memory pressure is what breaks the app suite's waits (2026-11-09).** Beside 16 threads
   sweeping 256 MB each (container anon about 13.5 GiB, as in the gate runs that failed), 4 runs in 6
   failed one wait: opening a Flux exercise from the list outran Testing Library's 1 s (each failing test
   ran 1.5–2.2 s). CPU-only load (up to 24 busy threads) failed 0 in 23. Capping workers at 4 still failed
-  1 in 6, ran about 18 % slower and misses the tuning bar below, so it isn't set. `app/src/test/setup.ts`
+  1 in 6, ran about 18 % slower under that load, so the worker cap isn't the fix for this wait (it ships since 2026-11-13 for
+  the pair gain, below). `app/src/test/setup.ts`
   raises `asyncUtilTimeout` to 3000 ms instead: 0 in 6 under the same load, and no change in idle
   duration (about 20 s for the app suite).
 - **Three sessions' full gate + UI at once is fine** (+6.6 GiB, +776 pids, all green), just CPU-bound.
-- **Test tuning: none** (answer 3's bar is ≥ 30 % peak-anon cut for ≤ 15 % more wall time).
-  `VITEST_MAX_WORKERS=3` cuts 24 % at no wall cost; `--workspace-concurrency=1` saves nothing and is 15 %
-  slower. `tuning.test` stays null.
-- **Class costs** in `limits.json` are these maxima, rounded up; `build` wasn't measured.
+- **Test tuning, 2026-10-13: none** (answer 3's bar is ≥ 30 % peak-anon cut for ≤ 15 % more wall time).
+  `VITEST_MAX_WORKERS=3` cut 24 % at no wall cost; `--workspace-concurrency=1` saved nothing and was 15 % slower.
+- **Vitest worker bench, 2026-11-08** (quiet board, ~3,680 tests, 37 runs, every one through `heavy.sh`; 3 reps per
+  cell, 2 for workspace-concurrency 1; no failures or timeouts). A pair is two full suites started together from two
+  worktrees. Medians:
+
+  | Workers (cap) | Solo wall s | Solo Δanon  | Pair wall s (range) | Pair Δanon  | Pair container anon peak |
+  | ------------- | ----------- | ----------- | ------------------- | ----------- | ------------------------ |
+  | default (8)   | 74.4        | 3.5 GiB     | 104.1 (98–116)      | 6.8 GiB     | 11.3 GiB (over soft)     |
+  | 6             | 77.2        | 3.5 GiB     | 103.5 (97–117)      | 6.1 GiB     | 11.0 GiB                 |
+  | **4**         | **76.3**    | **2.6 GiB** | **97.4 (95–98)**    | **5.5 GiB** | **9.9 GiB**              |
+
+  One suite keeps 8.1–8.7 of 9 cores busy at any cap; the cap cuts oversubscription (threads 273 → 213), not CPU.
+  `--workspace-concurrency=1` halves threads but gains nothing alone or on top of cap 4 (100.6 s pair). **2
+  concurrent suites are measured safe** (26 pair runs, 0 failures); 3+ weren't run. Each extra suite adds ~3.0 GiB at
+  cap 4 on a ~4.4 GiB base, so 3 ≈ 13.1 GiB (under the 14.4 hard line) and 4 ≈ 16 GiB (over it) — the 2026-10-13
+  edge of ~5 suites (2,600 tests then) no longer holds. Hence `concurrency.test` 2 and `tuning.test` `{ maxWorkers: 4 }`
+  (2026-11-13, the user's call, below the 30 % bar). Measure 3 and 4 suites at cap 4 in a quiet window before
+  loosening. Not covered: typecheck or lint beside the suites, a busy board, CI.
+
+- **Class costs** in `limits.json` are these maxima, rounded up, except `test` (the 2026-11-08 bench's solo cap-4
+  maxima: +217 pids, +2738 MiB, 78.5 s); `build` wasn't measured.
 
 ## Control tower
 
@@ -474,7 +497,7 @@ carry the same list.
   (`APERTURE_SAMPLER_LOCK`, `APERTURE_SAMPLER_PID`).
 - On the Mac there is no `timeout` (coreutils), so `devlock.sh refresh` doesn't peek there and `board.sh status`
   shows the container's last cache, marked stale once it's 5 min old.
-- The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4
-  wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes only the case where 4 wrapped suites already run.
+- The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 2
+  wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes only the case where 2 wrapped suites already run.
 - `edge.sh` maps the throttle regime; pids exhaustion is container-wide, so other live sessions can abort —
   hence the quiet-window precondition.

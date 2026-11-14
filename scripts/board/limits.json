@@ -1,7 +1,7 @@
 {
   "v": 1,
   "enforce": true,
-  "concurrency": { "test": 4 },
+  "concurrency": { "test": 2 },
   "measuredAt": "2026-10-14T02:52:03Z",
   "measuredLimits": { "pidsMax": 4096, "highMiB": 18432 },
   "container": {
@@ -12,13 +12,13 @@
     "psiFullKill": 15,
     "currentGuardMiB": 1536
   },
-  "tuning": { "test": null },
+  "tuning": { "test": { "maxWorkers": 4 } },
   "classes": {
     "test": {
-      "pids": 260,
-      "anonMiB": 2500,
-      "p95Sec": 33,
-      "source": "quiet window 2026-10-13: max of 3 reps (8 workers, ~7.9 of 9 cores)"
+      "pids": 220,
+      "anonMiB": 2800,
+      "p95Sec": 79,
+      "source": "bench 2026-11-08: max of 3 solo reps at VITEST_MAX_WORKERS=4 (~8.6 of 9 cores, ~3,680 tests)"
     },
     "ui": {
       "pids": 160,

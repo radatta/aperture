@@ -68,7 +68,8 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   lint, build, dev server or browser with its peak usage logged and a budget slot others can see. Measured
   (2026-10-13): **CPU gives out first** — one `pnpm test` keeps ~8 of 9 cores busy, and past ~5 concurrent
   suites jsdom tests time out at 7.6 GiB / 1140 threads, so a timeout under parallel load is contention,
-  not a bug. So `heavy.sh` caps full test suites at **4 at once** (`limits.json` `concurrency`): a 5th waits up to
+  not a bug. So `heavy.sh` runs each full suite at **4 vitest workers** and caps them at **2 at once** (`limits.json`
+  `tuning` / `concurrency`, from the 2026-11-08 bench — the suite has grown since: `docs/ops/SESSION-BOARD.md` → _Results_): a 3rd waits up to
   90 s for a slot, then exits 75 naming the holders — tell the user rather than retry; give a full suite a 600 s
   timeout or run it in the background. Single-file runs are never capped, and every hold is tracked
   (`board.sh status`, `cli.ts barriers`). Within one session, still serialise: screenshot, kill the browser, then test. Measured edges and the rest:
