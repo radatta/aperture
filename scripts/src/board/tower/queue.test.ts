@@ -86,6 +86,14 @@ describe('parseQueue', () => {
     });
   });
 
+  it('says so when the to-dos sit under a key it does not know (the old per-person key)', () => {
+    const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","someone":["merge PR 41"]}');
+    expect(q.data!.maintainer).toEqual([]);
+    expect(q.problems).toEqual([
+      'unknown list "someone" — the to-dos are "maintainer" now (docs/ops/TOWER.md)',
+    ]);
+  });
+
   it('says what is wrong and keeps the last good parse', () => {
     const good = parseQueue(example).data;
     for (const [text, problem] of [

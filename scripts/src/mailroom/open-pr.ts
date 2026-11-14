@@ -158,7 +158,8 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   // container-side, before anything is submitted or a hand-off line printed — never a Mac job reason.
   const hits = [
     describeHits(findIdentifiers(title), 'title'),
-    describeHits(findIdentifiers(body), `localNotes/pr-${branch}.md (with any banner)`),
+    describeHits(findIdentifiers(banner ?? ''), 'the iPhone-checks banner'),
+    describeHits(findIdentifiers(written), `localNotes/pr-${branch}.md`),
   ].filter(Boolean);
   if (hits.length) {
     d.log(

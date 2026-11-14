@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { IDS, simCognitoPin } from './identifiers.ts';
-import { scanCommit, scanDiff } from './identifiers-scan.ts';
+import { commitMessages, scanCommit, scanDiff, scanRange } from './identifiers-scan.ts';
 
 const name = IDS.maintainer.name.split(' ')[0]!;
-const diff = (path: string, start: number, lines: string[]) =>
+const diff = (path: string, start: number, lines: string[], header = `+++ b/${path}`) =>
   [
     `diff --git a/${path} b/${path}`,
     `--- a/${path}`,
-    `+++ b/${path}`,
+    header,
     `@@ -1,0 +${start},${lines.length} @@`,
     ...lines,
   ].join('\n');
+const GIT = ['git', 'commit'].join(' '); // spelled apart: the commit hook reads any Bash line naming it
 
 describe('scanDiff', () => {
   it('names the file and the new line number of each added hit, never the identifier', () => {
@@ -21,9 +22,14 @@ describe('scanDiff', () => {
 
   it('ignores removed lines and a deleted file, so a cleanup commit passes', () => {
     expect(scanDiff(diff('docs/a.md', 1, [`-asked by ${name}`]))).toEqual([]);
-    expect(
-      scanDiff(['--- a/x.md', '+++ /dev/null', '@@ -1 +0,0 @@', `-${name}`].join('\n')),
-    ).toEqual([]);
+    const deleted = [
+      'diff --git a/x.md b/x.md',
+      '--- a/x.md',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      `-${name}`,
+    ];
+    expect(scanDiff(deleted.join('\n'))).toEqual([]);
   });
 
   it('exempts identifiers.json and the sim runner pin, nothing else', () => {
@@ -37,16 +43,54 @@ describe('scanDiff', () => {
   });
 
   it('a new file counts from its hunk start', () => {
-    const out = scanDiff(
-      ['--- /dev/null', '+++ b/n.md', '@@ -0,0 +1,2 @@', '+ok', `+${name}`].join('\n'),
-    );
-    expect(out).toEqual(['n.md:2 name']);
+    const added = ['diff --git a/n.md b/n.md', '--- /dev/null', '+++ b/n.md', '@@ -0,0 +1,2 @@'];
+    expect(scanDiff([...added, '+ok', `+${name}`].join('\n'))).toEqual(['n.md:2 name']);
+  });
+
+  it('reads quoted and tab-suffixed header paths, and a content line that looks like a header', () => {
+    expect(scanDiff(diff('caf.md', 1, [`+${name}`], '+++ "b/caf\\303\\251.md"'))).toEqual([
+      'café.md:1 name',
+    ]);
+    expect(scanDiff(diff('a b.md', 1, [`+${name}`], '+++ b/a b.md\t'))).toEqual(['a b.md:1 name']);
+    expect(scanDiff(diff('c.md', 1, ['+++ not a header', `+${name}`]))).toEqual(['c.md:2 name']);
+  });
+
+  it('a path that names the maintainer is a hit', () => {
+    const p = `docs/${name.toLowerCase()}-notes.md`;
+    expect(scanDiff(diff(p, 1, ['+fine']))).toEqual([`${p} (its path) name`]);
   });
 });
 
 describe('scanCommit', () => {
   it('checks the command (its message) as well as the diff', () => {
-    expect(scanCommit('', `git commit -m "thanks ${name}"`)).toEqual(['the commit command:1 name']);
-    expect(scanCommit('', 'git commit -m "added the config"')).toEqual([]);
+    expect(scanCommit('', `${GIT} -m "thanks ${name}"`)).toEqual(['the commit message:1 name']);
+    expect(scanCommit('', `${GIT} -m "added the config"`)).toEqual([]);
+  });
+
+  it('scans only the message, so removing a file named for someone passes', () => {
+    expect(scanCommit('', `git rm docs/${name}-notes.md && ${GIT} -m "removed old notes"`)).toEqual(
+      [],
+    );
+  });
+});
+
+describe('commitMessages', () => {
+  it.each([
+    [`${GIT} -m "a b"`, ['a b']],
+    [`${GIT} -am 'a b'`, ['a b']],
+    [`${GIT} --message="a \\"b\\""`, ['a "b"']],
+    [`${GIT} -mword && echo`, ['word']],
+    [`${GIT} -F msg.txt`, []],
+  ])('%s', (cmd, want) => {
+    expect(commitMessages(cmd)).toEqual(want);
+  });
+});
+
+describe('scanRange', () => {
+  it('prefixes each hit with its commit, message and diff alike', () => {
+    const sha = 'a'.repeat(40);
+    expect(
+      scanRange([{ sha, message: `by ${name}`, diff: diff('d.md', 3, [`+${name}`]) }]),
+    ).toEqual(['aaaaaaaaaaaa message:1 name', 'aaaaaaaaaaaa d.md:3 name']);
   });
 });

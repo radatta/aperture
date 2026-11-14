@@ -40,7 +40,8 @@ after the hook ran) and "ledger_count" (its exact line count after);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
 "ids": true gives the throwaway repo the real identifiers.json and scripts/src/identifiers{,-scan}.ts (the
-personal-identifier block), and "stage_ids" stages that config; "stage_path" names the staged file (default staged.txt). {ID_NAME}, {ID_MAILBOX},
+personal-identifier block), and "stage_ids" stages that config; "write" puts a file in the tree unstaged
+(at "write_path"); "stage_path" names the staged file (default staged.txt). {ID_NAME}, {ID_MAILBOX},
 {ID_HOME}, {ID_FOLDER}, {ID_DEV_ACCOUNT} and {ID_DOMAIN} in "stage" or "cmd" expand from identifiers.json, so this file
 carries no identifier itself (docs/ops/IDENTIFIERS.md).
 """
@@ -250,6 +251,11 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
         staged.parent.mkdir(parents=True, exist_ok=True)
         staged.write_text(content + "\n", encoding="utf-8")
         subprocess.run(["git", "-C", repo, "add", str(staged.relative_to(repo))], check=True)
+    if "write" in case:
+        # Written, not staged: what a `git add … && git commit` in the same command will stage.
+        (pathlib.Path(repo) / case.get("write_path", "unstaged.txt")).write_text(
+            expand_ids(case["write"]) + "\n", encoding="utf-8"
+        )
     ledger = pathlib.Path(repo) / "localNotes" / "devcheck" / "mcp-ledger.dev.jsonl"
     if "ledger" in case:
         ledger.parent.mkdir(parents=True)

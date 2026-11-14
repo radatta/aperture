@@ -2,7 +2,9 @@ import { mkdtempSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readCosts, readMacStats, sumCosts } from './health.ts';
+import { createHash } from 'node:crypto';
+import { IDS } from '../../identifiers.ts';
+import { accountKind, readCosts, readMacStats, sumCosts } from './health.ts';
 
 const T = Date.parse('2026-11-13T20:00:00Z');
 const stats = (t: number, over: object = {}) =>
@@ -74,6 +76,19 @@ const ce = (days: [string, string, string][]) =>
   });
 
 describe('AWS costs (costs-daily.json)', () => {
+  it('labels dev by its id and prod by its id’s hash, anything else other', () => {
+    const fake = '444455556666';
+    const ids = {
+      ...IDS,
+      aws: { ...IDS.aws, prodAccountSha256: createHash('sha256').update(fake).digest('hex') },
+    };
+    expect([
+      accountKind(IDS.aws.devAccountId, ids),
+      accountKind(fake, ids),
+      accountKind('111111111111', ids),
+    ]).toEqual(['dev', 'prod', 'other']);
+  });
+
   it('sums this month only, split dev / prod / other, with the last day it covers', () => {
     const c = sumCosts(
       ce([
@@ -83,6 +98,7 @@ describe('AWS costs (costs-daily.json)', () => {
         ['2026-11-12', '333333333333', '0.05'],
       ]),
       '2026-11',
+      (id) => ({ '111111111111': 'dev', '222222222222': 'prod' })[id] ?? 'other',
     );
     expect(c.total).toBeCloseTo(0.4);
     expect(c.byAccount).toEqual({ dev: 0.25, prod: 0.1, other: 0.05 });

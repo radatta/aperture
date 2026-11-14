@@ -2,8 +2,9 @@
   # PreToolUse hook on Bash — gates `git commit`:
   #   1. Blocks a commit on a protected/deploy branch (main/master/dev) — branch first.
   #   2. Hard-blocks if the staged diff contains obvious credential patterns.
-  #   3. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
-  #   4. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 3 and 4.
+  #   3. Hard-blocks a personal identifier in an added line, a new path or the message (docs/ops/IDENTIFIERS.md).
+  #   4. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
+  #   5. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 4 and 5.
   # set -euo pipefail; only acts on `git commit`, passes through otherwise.
 
   set -euo pipefail
@@ -34,12 +35,24 @@
   # Personal identifiers (docs/ops/IDENTIFIERS.md): the repo is public, so no added line and no commit message may
   # carry the maintainer's name, personal mailbox, a Mac home path, the projects folder or an AWS account id —
   # identifiers.json alone holds them. WIP commits too. One rule set, scripts/src/identifiers.ts, run under plain
-  # node from this checkout; fails open when the checkout predates it, node is missing, or the scan errors (exit ≥ 2).
+  # node from this checkout; fails open when the checkout predates it, node is missing, or the scan fails (exit 2).
+  # The hook runs before the command, so a `git add … && git commit` or `commit -a` hasn't staged yet: with either
+  # in the command, the unstaged and untracked changes are scanned too. `pnpm bot push` scans every commit again.
   TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
   SCAN="$TOP/scripts/src/identifiers-scan.ts"
   if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$SCAN" ] && command -v node >/dev/null; then
+    gd() { git -c core.quotePath=false diff -U0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$@" 2>/dev/null || true; }
+    ids_diff() {
+      gd --cached
+      if printf '%s' "$COMMAND" | grep -Eq 'git[[:space:]]+add|commit[[:space:]].*(-[a-zA-Z]*a[a-zA-Z]*|--all)([[:space:]]|$)'; then
+        gd
+        git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null |
+          while IFS= read -r -d '' f; do gd --no-index -- /dev/null "$f"; done
+      fi
+      true
+    }
     IDS_RC=0
-    IDS_HITS=$(git diff --cached -U0 --no-color 2>/dev/null | HOOK_CMD="$COMMAND" node "$SCAN" 2>/dev/null) || IDS_RC=$?
+    IDS_HITS=$(ids_diff | HOOK_CMD="$COMMAND" node "$SCAN" 2>/dev/null) || IDS_RC=$?
     if [ "$IDS_RC" = 1 ] && [ -n "$IDS_HITS" ]; then
       jq -n --arg h "$IDS_HITS" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
         "permissionDecisionReason":("This commit adds a personal identifier (docs/ops/IDENTIFIERS.md: the name, the personal mailbox, a Mac home path, the projects folder or an AWS account id belong only in identifiers.json; docs say \"the maintainer\" and <mac-repo>). Where:\n" + $h + "\nReword those lines (or the message) and commit again.")}}'

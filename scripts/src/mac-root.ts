@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const MAC_PLACEHOLDER = '<mac-repo>';
-export const MAC_ROOT_NOTE = `(${MAC_PLACEHOLDER} is the Mac repo path; this checkout has no .local/mac-root — write it once on the Mac: cd <the repo> && mkdir -p .local && pwd -P > .local/mac-root)`;
+export const MAC_ROOT_NOTE = `(${MAC_PLACEHOLDER} is the Mac repo path; this checkout has no valid .local/mac-root — write it once on the Mac: cd <the repo> && mkdir -p .local && pwd -P > .local/mac-root)`;
 // An absolute path that is safe unquoted in a `cd …` line: no spaces, no shell metacharacters, no `..`.
 const VALID = /^\/[\w./-]+$/;
 

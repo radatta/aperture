@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fakeRun } from './fakes.ts';
+import { IDS } from '../identifiers.ts';
 import { credentialEnv, push, pushArgs } from './push.ts';
 
 const quiet = () => undefined;
@@ -9,12 +10,42 @@ const onBranch = (branch: string, extra: [string, string | (() => string)][] = [
     ['git rev-parse --verify -q refs/remotes/origin/', 'a'.repeat(40)],
     ['git rev-parse --short HEAD', 'abc1234'],
     ...extra,
+    ['git rev-list', ''],
     ['git push', ''],
     ['git fetch', ''],
     ['git branch --set-upstream-to', ''],
   ]);
 
 describe('bot push', () => {
+  it('refuses a commit whose message or diff carries a personal identifier, before pushing', () => {
+    const first = IDS.maintainer.name.split(' ')[0]!;
+    for (const [message, diff, where] of [
+      [`thanks ${first}`, '', '1111111111111111 message:1 name'],
+      [
+        'clean',
+        [
+          'diff --git a/n.md b/n.md',
+          '--- /dev/null',
+          '+++ b/n.md',
+          '@@ -0,0 +1 @@',
+          `+${first}`,
+        ].join('\n'),
+        '1111111111111111 n.md:1 name',
+      ],
+    ]) {
+      const { run, calls } = fakeRun([
+        ['git symbolic-ref', 'feat'],
+        ['git rev-list', `${'1'.repeat(40)}\n`],
+        ['git show -s', message!],
+        ['git -c core.quotePath=false show', diff!],
+      ]);
+      expect(() => push(run, 't', { afterRebase: false }, quiet)).toThrow(
+        where!.replace(/^(\w{12})\w+/, '$1'),
+      );
+      expect(calls.some((c) => c.args[0] === 'push')).toBe(false);
+    }
+  });
+
   it.each(['main', 'master', 'dev'])('refuses the deploy branch %s', (b) => {
     const { run, calls } = onBranch(b);
     expect(() => push(run, 't', { afterRebase: false }, quiet)).toThrow(/deploy branch/);

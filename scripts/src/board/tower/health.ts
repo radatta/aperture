@@ -127,12 +127,13 @@ export function readMacStats(
 // AWS month-to-date from localNotes/costs-daily.json: `aws ce get-cost-and-usage --granularity DAILY --group-by
 // LINKED_ACCOUNT,SERVICE`, re-pulled by the maintainer on request. Its "as of" is the file's mtime; it covers only
 // through its last day, which the page shows too. Accounts by identifiers.json: dev by its id, prod by its id's
-// sha256 (the prod id stays out of tracked files — docs/ops/IDENTIFIERS.md); the fixtures' synthetic ids too.
-const FIXTURE_ACCOUNTS: Record<string, string> = { '111111111111': 'dev', '222222222222': 'prod' };
+// sha256 (the prod id stays out of tracked files — docs/ops/IDENTIFIERS.md). The fixtures' synthetic ids come
+// from their own accounts.json (web/main.ts --fixtures), never from here.
+export type AccountKind = (id: string) => string;
 export function accountKind(id: string, ids = IDS): string {
   if (id === ids.aws.devAccountId) return 'dev';
   if (/^\d{12}$/.test(id) && sha256(id) === ids.aws.prodAccountSha256) return 'prod';
-  return FIXTURE_ACCOUNTS[id] ?? 'other';
+  return 'other';
 }
 export const COSTS_STALE_SEC = 3 * 86400;
 export type Costs = {
@@ -145,7 +146,11 @@ export type Costs = {
   byAccount: Record<string, number>; // dev / prod / other
 };
 
-export function sumCosts(text: string, month: string): Omit<Costs, 'state' | 'at' | 'error'> {
+export function sumCosts(
+  text: string,
+  month: string,
+  kind: AccountKind = (id) => accountKind(id),
+): Omit<Costs, 'state' | 'at' | 'error'> {
   const r = JSON.parse(text.replace(/^\uFEFF/, '')) as { ResultsByTime?: unknown };
   if (!r || !Array.isArray(r.ResultsByTime)) throw new Error('no ResultsByTime');
   const byAccount: Record<string, number> = {};
@@ -161,7 +166,7 @@ export function sumCosts(text: string, month: string): Omit<Costs, 'state' | 'at
     }[]) {
       const amt = Number(g?.Metrics?.UnblendedCost?.Amount);
       if (!Number.isFinite(amt)) continue;
-      const acct = accountKind(g.Keys?.[0] ?? '');
+      const acct = kind(g.Keys?.[0] ?? '');
       byAccount[acct] = (byAccount[acct] ?? 0) + amt;
       total += amt;
     }
@@ -169,7 +174,7 @@ export function sumCosts(text: string, month: string): Omit<Costs, 'state' | 'at
   return { month, through, total, byAccount };
 }
 
-export function readCosts(path: string, now: number, month: string): Costs {
+export function readCosts(path: string, now: number, month: string, kind?: AccountKind): Costs {
   const empty = { month, through: null, total: 0, byAccount: {} };
   let mtime: number;
   let text: string;
@@ -186,7 +191,7 @@ export function readCosts(path: string, now: number, month: string): Costs {
     };
   }
   try {
-    const c = sumCosts(text, month);
+    const c = sumCosts(text, month, kind);
     // a pull with no rows for this month (the 1st, before a re-pull) is not "$0.00, fine"
     if (c.through === null)
       return { ...c, state: 'stale', at: mtime, error: `no rows for ${month}: re-pull` };

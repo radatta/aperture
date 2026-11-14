@@ -45,8 +45,10 @@ MAC=$(
   set +e
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
   f="${common%/.git}/.local/mac-root"
-  v=$(head -n 1 "$f" 2>/dev/null | tr -d '\r')
-  if printf '%s' "$v" | grep -Eq '^/[A-Za-z0-9_./-]+$'; then
+  # The same rule as scripts/src/mac-root.ts: one absolute line of [A-Za-z0-9_./-], no `..`, trailing / dropped.
+  v=''
+  [ "$(grep -c '' "$f" 2>/dev/null)" = 1 ] && v=$(tr -d '\r\n' <"$f" 2>/dev/null) && v=${v%/}
+  if printf '%s' "$v" | grep -Eq '^/[A-Za-z0-9_./-]+$' && ! printf '%s' "$v" | grep -Eq '(^|/)\.\.(/|$)'; then
     printf '\nMac repo path (<mac-repo>, from .local/mac-root): %s — /workspace is this path on the Mac.\n' "$v"
   else
     printf '\nMac repo path: unknown (no valid .local/mac-root in the main checkout) — hand the user <mac-repo> lines and ask them to run: cd <the repo> && mkdir -p .local && pwd -P > .local/mac-root\n'

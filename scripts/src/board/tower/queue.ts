@@ -55,6 +55,17 @@ export const staleFollowups = (fu: Followup[], now: number) =>
     (f) => f.status === 'open' && f.after === 'now' && f.since !== null && now - f.since > STALE_MS,
   );
 
+const QUEUE_KEYS = [
+  'v',
+  'updatedAt',
+  'devQueue',
+  'maintainer',
+  'wave',
+  'proofs',
+  'plan',
+  'followups',
+];
+
 export type QueueData = {
   updatedAt: number;
   devQueue: Lane[];
@@ -122,6 +133,12 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   const updatedAt = parseTime(raw.updatedAt);
   if (updatedAt === null)
     return { status: 'bad', data: prev, unread: 'all', problems: ['updatedAt is not an ISO time'] };
+
+  // A list under a key this schema doesn't know is said, never skipped: the per-person to-dos were renamed to
+  // `maintainer`, and a file still on the old key would drop them from NEEDS YOU without a word. Other extras pass.
+  for (const k of Object.keys(raw))
+    if (!QUEUE_KEYS.includes(k) && Array.isArray(raw[k]))
+      problems.push(`unknown list "${k}" — the to-dos are "maintainer" now (docs/ops/TOWER.md)`);
 
   const devQueue: Lane[] = [];
   let unread: 'all' | string[] = [];

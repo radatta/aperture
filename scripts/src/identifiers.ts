@@ -55,7 +55,9 @@ export interface IdentifierHit {
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const PERSONAL_MAIL = /@(gmail|googlemail)\.com$/i;
-const TWELVE_DIGITS = /(?<!\d)\d{12}(?!\d)/g;
+// An account id as written plain or in the console's dashed form (1234-5678-9012), on digit boundaries.
+const ACCOUNT_IDS = /(?<!\d)\d{4}-?\d{4}-?\d{4}(?!\d)/g;
+const accountIds = (l: string) => [...l.matchAll(ACCOUNT_IDS)].map((m) => m[0].replaceAll('-', ''));
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const test = (re: RegExp) => (l: string) => re.test(l);
 
@@ -75,12 +77,14 @@ export function identifierRules(ids = IDS): IdentifierRule[] {
   if (locals.length)
     rules.push(['personal-email', test(new RegExp(locals.map(escape).join('|'), 'i'))]);
   rules.push(
-    ['home-path', test(/\/Users\/(?!Shared(?![\w.-]))[A-Za-z0-9_][\w.-]*/)],
-    ['projects-folder', test(new RegExp(['Coding', 'Personal'].join('/'), 'i'))],
-    ['account-id', test(new RegExp(`(?<!\\d)${ids.aws.devAccountId}(?!\\d)`))],
+    // Case-sensitive: an API's /users/me is no Mac home. JSON's escaped slashes count too.
+    ['home-path', test(/\\?\/Users\\?\/(?!Shared(?![\w.-]))[A-Za-z0-9_][\w.-]*/)],
+    // The folder's name is generic, so it's spelled here, not in the config — either way it's in a tracked file.
+    ['projects-folder', test(new RegExp(['Coding', 'Personal'].join('\\\\?[/\\\\]'), 'i'))],
+    ['account-id', (l) => accountIds(l).includes(ids.aws.devAccountId)],
     [
       'prod-account-id',
-      (l) => [...l.matchAll(TWELVE_DIGITS)].some((m) => sha256(m[0]) === ids.aws.prodAccountSha256),
+      (l) => accountIds(l).some((id) => sha256(id) === ids.aws.prodAccountSha256),
     ],
   );
   return rules;

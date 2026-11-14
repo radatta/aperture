@@ -295,11 +295,7 @@ describe('openPr', () => {
     const home = ['', 'Users', 'someone', 'repo'].join('/');
     for (const [title, body, where] of [
       [`Asked by ${first}`, undefined, 'title:1 name'],
-      [
-        'Mac mailroom opens PRs',
-        `fine\n\ncd ${home} && x`,
-        'pr-mac-mailroom.md (with any banner):3 home-path',
-      ],
+      ['Mac mailroom opens PRs', `fine\n\ncd ${home} && x`, 'pr-mac-mailroom.md:3 home-path'],
     ] as const) {
       const { d, fs, logs } = setup({ mac: () => ({ status: 'opened', pr: PR }), body });
       expect(await openPr(d, title)).toBe(EXIT.failed);

@@ -31,7 +31,7 @@ import type { Tool } from './types';
 // How fresh the capture is — the extension's pacing (PR A2: extension/src/lib/batch.js), in the description and
 // on every answer, so the model never reads a 30-second-old snapshot as the whole truth.
 const FRESHNESS =
-  'Code arrives as snapshots at most once per 30 s (the latest code) and right before each Run or Submit, so it can be up to ~30 s behind what is on screen. A Run or Submit judged after he leaves the page still lands in its sitting.';
+  'Code arrives as snapshots at most once per 30 s (the latest code) and right before each Run or Submit, so it can be up to ~30 s behind what is on screen. A Run or Submit judged after they leave the page still lands in its sitting.';
 
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 const agoSec = (ms: number | null, now: number) =>
@@ -152,7 +152,7 @@ function inactive(pull: LiveSittingPull, now: number) {
           liveReads: pull.liveReads,
         }
       : null,
-    note: 'No sitting is open: he starts one with Start on a LeetCode problem page.',
+    note: 'No sitting is open: they start one with Start on a LeetCode problem page.',
   };
 }
 
@@ -245,7 +245,7 @@ function sittingRead(d: SittingDetail, now: number) {
           }
         : null,
     review: s.review ? { ...s.review, updatedAt: iso(s.review.updatedAt) } : null,
-    note: 'Snapshots between submits are kept 14 days, so an older sitting may have no "codeChanged" markers. `review` is his own words.',
+    note: 'Snapshots between submits are kept 14 days, so an older sitting may have no "codeChanged" markers. `review` is their own words.',
   };
 }
 
@@ -256,7 +256,7 @@ export const LEETCODE_TOOLS: Tool[] = [
       "The LeetCode sitting the user has open right now, captured by Aperture's Safari extension: the problem, minutes since Start, their current code in full, the newest Run and Submit with verdict, failing input, expected vs output and the error head, run/submit counts, LeetCode's own timer, and editing facts.",
       FRESHNESS,
       'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are their Mac’s clock, so their ages can be off by its skew.',
-      'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste his code back at him — point at a line, a name or a case.',
+      'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste their code back at them — point at a line, a name or a case.',
       '`active: false` carries `lastSitting`, the most recent one.',
       '`expired: true` marks a last sitting left open past its 24 h window (no longer capturing; the next Start ends it).',
       'Not read-only: each pull of an open sitting writes one count on it ("Claude watched live") — nothing else.',
@@ -296,8 +296,8 @@ export const LEETCODE_TOOLS: Tool[] = [
     name: 'get_sitting',
     description: [
       'One LeetCode sitting, read back whole — for talking it through afterwards ("how did that sitting go?"). With no `id`, the most recent sitting.',
-      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, his final code in full, editing facts, and his review (his own words — never rewrite them back to him as yours).',
-      'Talk from this data, not from memory, and never paste his code back at him — point at a line, a name or a case.',
+      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, their final code in full, editing facts, and their review (their own words — never rewrite them back to them as yours).',
+      'Talk from this data, not from memory, and never paste their code back at them — point at a line, a name or a case.',
       'Read-only.',
     ].join(' '),
     inputSchema: {
@@ -327,7 +327,7 @@ export const LEETCODE_TOOLS: Tool[] = [
   {
     name: 'list_sittings',
     description: [
-      'LeetCode sittings, newest first — for planning prep ("what have I done this week?", "which problems took a hint?"). Each row: day, problem, status, minutes, submit count, the outcome (first submit accepted, submits before accepted, time to first submit), prep target, and whether he reviewed it with his own pattern tags.',
+      'LeetCode sittings, newest first — for planning prep ("what have I done this week?", "which problems took a hint?"). Each row: day, problem, status, minutes, submit count, the outcome (first submit accepted, submits before accepted, time to first submit), prep target, and whether they reviewed it with their own pattern tags.',
       'Optional from/to day keys (pass BOTH or NEITHER) and `limit` (1–100, default 30). `get_sitting` with a row’s id reads one in full.',
       'Read-only.',
     ].join(' '),

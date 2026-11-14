@@ -43,7 +43,7 @@ const MAC = macRoot();
 export const macInstallLine = (root: string) =>
   `cd ${root} && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/${REPO_SLUG}/contents/tools/macstats/install.sh?ref=main')`;
 export const MAC_INSTALL =
-  macInstallLine(MAC) + (MAC === MAC_PLACEHOLDER ? ` ${MAC_ROOT_NOTE}` : '');
+  macInstallLine(MAC) + (MAC === MAC_PLACEHOLDER ? `\n${MAC_ROOT_NOTE}` : '');
 
 export type Args = {
   port: number;
@@ -176,6 +176,11 @@ export function build(a: Args) {
       )
     : null;
   const costsPath = fx ? join(fx, 'costs-daily.json') : join(paths.boardDir, '../costs-daily.json');
+  // The fixtures' cost rows use synthetic account ids, labelled by their own accounts.json.
+  const fxAccounts = fx
+    ? (JSON.parse(readFileSync(join(fx, 'accounts.json'), 'utf8')) as Record<string, string>)
+    : null;
+  const fixtureAccounts = fxAccounts ? (id: string) => fxAccounts[id] ?? 'other' : undefined;
   const macPath = join(paths.boardDir, 'mac-stats.json');
   let version: string | null = null;
   try {
@@ -245,7 +250,7 @@ export function build(a: Args) {
       files: (sha) => files?.get(sha) ?? null,
       minutes,
       mac,
-      aws: readCosts(costsPath, now, monthKey(now)),
+      aws: readCosts(costsPath, now, monthKey(now), fixtureAccounts),
       tests: fx ? 0 : liveTests(paths.boardDir),
       testCap: testCap(paths.limits),
       macInstall: MAC_INSTALL,

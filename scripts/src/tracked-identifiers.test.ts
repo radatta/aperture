@@ -27,6 +27,8 @@ function scanTree(root: string): string[] {
     .filter(Boolean);
   const out: string[] = [];
   for (const f of files) {
+    const named = findIdentifiers(f, rules); // a file named for someone is a hit too
+    if (named.length) out.push(named.map((h) => `${f} (its path) ${h.kind}`).join('\n'));
     let buf: Buffer;
     try {
       buf = readFileSync(join(root, f));
@@ -45,15 +47,18 @@ describe('tracked files carry no personal identifier', () => {
     expect(scanTree(ROOT)).toEqual([]);
   });
 
-  it('a seeded hit in a throwaway tree fails, and the config itself is exempt', () => {
+  it('a seeded hit in a throwaway tree fails, its path too, and the config itself is exempt', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ids-'));
     execFileSync('git', ['init', '-q'], { cwd: dir });
     const word = IDS.maintainer.name.split(' ')[0]!;
     writeFileSync(join(dir, 'a.md'), `fine\nasked by ${word}\n`);
     writeFileSync(join(dir, 'b.ts'), `const p = '${['', 'Users', 'someone', 'x'].join('/')}';\n`);
+    writeFileSync(join(dir, `${word.toLowerCase()}.md`), 'fine\n');
     writeFileSync(join(dir, IDENTIFIERS_FILE), JSON.stringify(IDS));
     execFileSync('git', ['add', '.'], { cwd: dir });
-    expect(scanTree(dir)).toEqual(['a.md:2 name', 'b.ts:1 home-path']);
+    expect(scanTree(dir).sort()).toEqual(
+      ['a.md:2 name', 'b.ts:1 home-path', `${word.toLowerCase()}.md (its path) name`].sort(),
+    );
   });
 });
 
@@ -112,7 +117,7 @@ describe('rules', () => {
   });
 });
 
-// The Mac-installed shell and the extension can't read identifiers.json (launchd runs copies fetched from GitHub;
+// The Mac-installed shell can't read identifiers.json (launchd runs copies fetched from GitHub;
 // the installed runner is the trust boundary), so each keeps one literal, held equal to the config here.
 describe('pinned literals equal the config', () => {
   const text = (f: string) => readFileSync(join(ROOT, f), 'utf8');
@@ -129,6 +134,11 @@ describe('pinned literals equal the config', () => {
     ['tools/mailroom/install.sh', `REPO_SLUG="${IDS.repo}"`],
     ['tools/mailroom/jobs/open-pr.sh', `MR_OWNER="${IDS.maintainer.github}"`],
     ['tools/mailroom/jobs/open-pr.sh', `MR_REPO="${IDS.repo}"`],
+    // job.ts builds the same cross-reference rule from the config; the Mac mirror keeps it literal
+    [
+      'tools/mailroom/jobs/open-pr.sh',
+      `MR_XREF='[Gg][Ii][Tt][Hh][Uu][Bb]\\.[Cc][Oo][Mm]/(?!${IDS.repo.replace(/[.]/g, '\\.')}/)`,
+    ],
     ['tools/macstats/install.sh', `LABEL="${IDS.bundlePrefix}.aperture.macstats"`],
     ['tools/macstats/install.sh', `REPO_SLUG="${IDS.repo}"`],
     [

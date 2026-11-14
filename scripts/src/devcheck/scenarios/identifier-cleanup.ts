@@ -83,11 +83,22 @@ export const identifierCleanup: Scenario = {
       id: 'page-escaped',
       entry: 'ui',
       kind: 'edge',
-      what: 'A config value with < or & is HTML-escaped in the pages; an unknown token fails the build',
+      what: 'A config value with < or & is HTML-escaped in the pages',
       offDev: {
         file: PAGES,
         test: 'fills every token, HTML-escaped',
         why: 'dev ships the real values only',
+      },
+    },
+    {
+      id: 'page-unknown-token',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'An unknown {{token}} in a page template fails the build instead of shipping',
+      offDev: {
+        file: PAGES,
+        test: 'refuses an unknown token rather than shipping it',
+        why: 'a build-time refusal: a dev deploy of a bad template would never get that far',
       },
     },
     {
@@ -108,7 +119,7 @@ export const identifierCleanup: Scenario = {
       what: 'A seeded name or home path in a throwaway tree fails the guard; the config itself is exempt',
       offDev: {
         file: GUARD,
-        test: 'a seeded hit in a throwaway tree fails, and the config itself is exempt',
+        test: 'a seeded hit in a throwaway tree fails, its path too, and the config itself is exempt',
         why: NOT_DEPLOYED,
       },
     },
@@ -116,11 +127,33 @@ export const identifierCleanup: Scenario = {
       id: 'public-values-pass',
       entry: 'api',
       kind: 'edge',
-      what: 'The domain, the GitHub login, the bundle prefix and a placeholder mailbox are not hits',
+      what: 'The domain, the GitHub login and the bundle prefix are not hits',
       offDev: {
         file: GUARD,
         test: 'lets the domain, the GitHub login and the bundle prefix through',
         why: NOT_DEPLOYED,
+      },
+    },
+    {
+      id: 'mailbox-aliases',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Every +alias of the personal mailbox is a hit; a placeholder mailbox is not',
+      offDev: {
+        file: GUARD,
+        test: 'blocks every alias of the personal mailbox, but not a placeholder one',
+        why: NOT_DEPLOYED,
+      },
+    },
+    {
+      id: 'push-blocked',
+      entry: 'api',
+      kind: 'nominal',
+      what: '`pnpm bot push` refuses a branch any of whose commits (message or own diff) carries an identifier',
+      offDev: {
+        file: 'scripts/src/bot/push.test.ts',
+        test: 'refuses a commit whose message or diff carries a personal identifier, before pushing',
+        why: 'pushing a seeded identifier to GitHub to prove the refusal would publish it',
       },
     },
     {

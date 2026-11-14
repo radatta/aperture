@@ -2,6 +2,7 @@
 // To the explicit HTTPS URL, so the pusher is the bot even where `origin` is SSH. The token reaches git through
 // an env-configured credential helper: never argv, never .git/config. GIT_CONFIG_* outranks every config file,
 // and an empty helper value clears the inherited list (the container's read-only `gh` helper).
+import { scanRange } from '../identifiers-scan.ts';
 import { REPO_URL } from './config.ts';
 import { featureBranch } from './git.ts';
 import type { Run } from './sh.ts';
@@ -36,6 +37,34 @@ export function pushArgs(branch: string, afterRebase: boolean, leaseSha: string)
   return args;
 }
 
+// The last stop before the branch is public (docs/ops/IDENTIFIERS.md): every commit not yet on origin/main — its
+// message and its own diff, since a branch's history is visible on its PR — carries no personal identifier. The
+// commit hook can miss what a `git add` in the same command staged; this can't.
+export function identifierHits(run: Run): string[] {
+  const shas = run('git', ['rev-list', '--reverse', 'origin/main..HEAD'])
+    .split('\n')
+    .filter(Boolean);
+  return scanRange(
+    shas.map((sha) => ({
+      sha,
+      message: run('git', ['show', '-s', '--format=%B', sha]),
+      diff: run('git', [
+        '-c',
+        'core.quotePath=false',
+        'show',
+        '--format=',
+        '-U0',
+        '--no-color',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--src-prefix=a/',
+        '--dst-prefix=b/',
+        sha,
+      ]),
+    })),
+  );
+}
+
 export function push(
   run: Run,
   token: string,
@@ -55,6 +84,11 @@ export function push(
         `--after-rebase needs origin/${branch} to lease against — it was never pushed; use a plain \`pnpm bot push\``,
       );
   }
+  const hits = identifierHits(run);
+  if (hits.length)
+    throw new Error(
+      `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md). Rebase it out of the commit that added it — a later commit removing it still leaves it in the pushed history:\n${hits.join('\n')}`,
+    );
   run('git', pushArgs(branch, opts.afterRebase, lease), { env: credentialEnv(token) });
   // Record what we pushed (the next lease) and track it — read-only fetch, no token.
   run('git', ['fetch', '-q', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
