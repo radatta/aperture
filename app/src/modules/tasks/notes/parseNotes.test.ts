@@ -96,8 +96,8 @@ describe('parseInline', () => {
   });
 
   it('links [text](url) for http, https, and mailto', () => {
-    expect(parseInline('[pset](https://example.edu/p4)')).toEqual([
-      { kind: 'link', href: 'https://example.edu/p4', text: 'pset' },
+    expect(parseInline('[pset](https://example.org/p4)')).toEqual([
+      { kind: 'link', href: 'https://example.org/p4', text: 'pset' },
     ]);
     expect(parseInline('[me](mailto:a@b.co)')).toEqual([
       { kind: 'link', href: 'mailto:a@b.co', text: 'me' },

@@ -933,7 +933,7 @@ describe('Refund link search', () => {
   it('Unlink on a card credit with no suggestions focuses Bucket', async () => {
     const user = userEvent.setup();
     const api = await linked();
-    await api.linkFinanceRefund('fx-refund-2', 'fx-card-12'); // the $15 Target credit, on a Target charge
+    await api.linkFinanceRefund('fx-refund-2', 'fx-card-12'); // the $15 Target credit, on a Shell charge
     // Seen as −$5,000 nothing has that much left, so neither pass offers a charge: by merchant or by size.
     const list = api.listFinanceTransactions.bind(api);
     api.listFinanceTransactions = async (range) =>

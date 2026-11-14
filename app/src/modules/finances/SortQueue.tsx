@@ -105,7 +105,7 @@ export function SortQueue({
           onRetry={onRetry}
           title="All sorted."
         >
-          New charges land here after each sync (four times a day). Sort them whenever — mid-cycle
+          New charges land here after each sync (three times a day). Sort them whenever — mid-cycle
           or right before the payment.
         </EmptyState>
       </div>

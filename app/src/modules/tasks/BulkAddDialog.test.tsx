@@ -65,13 +65,13 @@ describe('bulk add', () => {
     renderApp({ api, path: '/tasks' });
     await open(user);
 
-    await user.paste('finish pset | ~90 notes:"Ch. 4 q1-8\\nhttps://example.edu/pset4"');
+    await user.paste('finish pset | ~90 notes:"Ch. 4 q1-8\\nhttps://example.org/pset4"');
     expect(screen.getByText('notes')).toBeTruthy();
     await user.click(addBtn());
 
     await waitFor(async () => {
       const [t] = await api.listBacklog();
-      expect(t?.notes).toBe('Ch. 4 q1-8\nhttps://example.edu/pset4');
+      expect(t?.notes).toBe('Ch. 4 q1-8\nhttps://example.org/pset4');
     });
   });
 

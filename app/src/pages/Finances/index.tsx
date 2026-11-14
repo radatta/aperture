@@ -93,7 +93,7 @@ export function FinancesPage() {
               overview && <ConnectButton environment={overview.sync.environment} link={link} />
             }
           >
-            Connect your bank once — checking, savings and the card — and charges sync four times a
+            Connect your bank once — checking, savings and the card — and charges sync three times a
             day. Then sort them into Covered, Budget, or I pay whenever suits you.
           </EmptyState>
           {link.error && (
