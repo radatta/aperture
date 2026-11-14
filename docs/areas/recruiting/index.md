@@ -436,11 +436,12 @@ like a failed patch (`window.fetch` stays `[native code]`).
 
 ### Loading a temporary extension (layer 3)
 
-Safari: Develop → **Add Temporary Extension…** → this repo's `extension/` folder (Safari 18.4+; the
-Develop menu needs Settings → Advanced → _Show features for web developers_). Options: README →
+Safari: Settings → **Developer** → **Add Temporary Extension…** → this repo's `extension/` folder, then
+tick it under Extensions → _Temporary_ (the Developer tab needs Settings → Advanced → _Show features for
+web developers_; Apple, "Running your Safari web extension", checked 2026-11-13). Options: README →
 _Configure_.
-Temporary extensions don't survive a restart; re-add each time — acceptable for iteration, not for the
-daily driver.
+Safari drops temporary extensions on quit or after 24 h; re-add each time — acceptable for iteration,
+not for the daily driver.
 
 ### Firefox: signing via AMO (2026-09-08; retired and removed 2026-11-10)
 
