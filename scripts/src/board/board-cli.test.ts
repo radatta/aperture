@@ -116,7 +116,7 @@ beforeEach(() => {
   delete rest.CLAUDE_CODE_SESSION_ID;
   delete rest.TMUX_PANE; // else sessions are named after the tmux window running the tests
   delete rest.TMUX;
-  delete rest.VITEST_MAX_WORKERS; // set when this suite itself runs under heavy.sh in the container
+  delete rest.VITEST_MAX_WORKERS; // scripts' test script pins it (and heavy.sh may export it): inherited, it'd mask the export
   // edge.sh / matrix.sh run this suite with HEAVY_LOADTEST / HEAVY_GUARD exported: inherited, they'd bypass
   // the cap these tests check (and their failure would read as a load-caused edge)
   for (const k of Object.keys(rest)) if (k.startsWith('HEAVY_')) delete rest[k];

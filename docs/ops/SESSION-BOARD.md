@@ -249,11 +249,12 @@ the edge test need the quiet window.**
    Bash tool's 120 s default: run cells with `run_in_background` (or a 600 s timeout). Pair and session
    cells refuse until `setup` has installed their trees. Cells (`matrix.sh list`): `typecheck` and
    `lint` cold (`tsc -b --force`, `eslint` without cache); `test`; `test-wc1`/`-wc2`
-   (`--workspace-concurrency`); `test-w3`/`-w4` (`VITEST_MAX_WORKERS`); `dev` (90 s); `ui` and `ui-rpl1`
+   (`--workspace-concurrency`); `test-w3`/`-w4` (`VITEST_MAX_WORKERS`) — `test` and `test-wc*` unset heavy.sh's
+   tuning, so they stay vitest's default and pairs and sessions compose that; `dev` (90 s); `ui` and `ui-rpl1`
    (`measure/ui-cell.sh`: dev server + Chromium over 4 routes at phone width, `--renderer-process-limit=1`
    on/off; `PW_DIR` must hold Playwright); `pair:test+test`, `pair:test+ui`, `pair:test+typecheck`,
    `pair:dev+ui`; `two-sessions` / `three-sessions` (test → typecheck → ui per tree, trees in parallel).
-4. `edge.sh --detach` — detached (progress in `history/edge-<date>.log`), adds a looping `pnpm test` instance every 30 s until a
+4. `edge.sh --detach` — detached (progress in `history/edge-<date>.log`), adds a looping `pnpm test` instance (tuned, 4 workers, since 2026-11-13) every 30 s until a
    stop fires, a run fails (any exit but 0 / 143 — the gate was green, so the load caused it), or 12
    instances; stops them by PID (each wrapper's PID is recorded as it starts), waits for anon to settle,
    writes `history/edge-<date>-<HHMM>.json` (per step: instances launched and alive, peaks, PSI,
@@ -340,7 +341,7 @@ What it means:
   One suite keeps 8.1–8.7 of 9 cores busy at any cap; the cap cuts oversubscription (threads 273 → 213), not CPU.
   `--workspace-concurrency=1` halves threads but gains nothing alone or on top of cap 4 (100.6 s pair). **2
   concurrent suites are measured safe** (26 pair runs, 0 failures); 3+ weren't run. Each extra suite adds ~3.0 GiB at
-  cap 4 on a ~4.4 GiB base, so 3 ≈ 13.1 GiB (under the 14.4 hard line) and 4 ≈ 16 GiB (over it) — the 2026-10-13
+  cap 4 on a ~4.4 GiB base, so 3 ≈ 13 GiB (under the 14.4 hard line) and 4 ≈ 16 GiB (over it) — the 2026-10-13
   edge of ~5 suites (2,600 tests then) no longer holds. Hence `concurrency.test` 2 and `tuning.test` `{ maxWorkers: 4 }`
   (2026-11-13, the user's call, below the 30 % bar). Measure 3 and 4 suites at cap 4 in a quiet window before
   loosening. Not covered: typecheck or lint beside the suites, a busy board, CI.
