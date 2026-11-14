@@ -201,7 +201,7 @@ Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full lo
 - **D8 Tap-through to the task modal.** Whether iOS opens the installed PWA rather than Safari is
   **unverified** and is a device test.
 - **D9 Google Calendar popup at event start** on every timed task's event. It is always on, with no toggle
-  ("if it's annoying we can change it later").
+  (revisit if it proves intrusive).
 - **D10 PR 3 slots in as another candidate source** (ritual nudges): no rework of send, dedup, guard or health.
 - **D11 No dependencies.**
 - **D12 Keys in SSM, treated as permanent.**
