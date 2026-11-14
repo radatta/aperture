@@ -239,6 +239,7 @@ It writes `tools/mailroom/bench/plans.json`, along with the prelude (`launch`, `
 10. **An unreadable `result.json`** is recorded `BAD_RESULT`.
 11. **A runner that dies mid-drain**, leaving its envelope and lock behind: after every job the bench clears its private inbox and runner lock, so the stranded job never runs inside the next one or locks it out.
 12. **The shared checkout:** the bench refuses to run from, or write results into, a directory under one holding `.hostjobs`, and refuses a `--runner` there. Only fixture mode off a Mac (`SIM_BENCH_FX_ALLOW_SHARE=1`) skips the check, since the suite itself runs inside the shared checkout.
+13. **Temp dirs:** a failed `mktemp` bails the suite; it never works in, or deletes, the cwd.
 
 The plans' drift, validity (`validateSimParams`), order and seed are checked in `sim-bench.test.ts`, and the seed's lock and ledger handling in `sim-bench-seed.test.ts`. Static checks cover the scripts:
 

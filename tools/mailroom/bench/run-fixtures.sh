@@ -68,7 +68,10 @@ xcrun() {
 }
 export -f curl security launchctl memory_pressure vm_stat ps pmset sysctl sw_vers xcodebuild axe xcrun
 
-new_dir() { T="$(cd "$(mktemp -d)" && pwd -P)"; export SIM_BENCH_FX_DIR="$T" SIM_BENCH_MAILROOM_STATE="$T/mailroom-state"; }
+# A failed mktemp must stop the suite: `cd ""` would leave T on the cwd, and a case's rm would delete it.
+tmpdir_real() { local d; d="$(mktemp -d)" && [ -n "$d" ] && (cd "$d" && pwd -P); }
+bail() { echo "Bail out! $1"; exit 1; }
+new_dir() { T="$(tmpdir_real)" || bail "no temp dir for a case"; export SIM_BENCH_FX_DIR="$T" SIM_BENCH_MAILROOM_STATE="$T/mailroom-state"; }
 bench() { /bin/bash "$BENCH" --out "$T/out" --tag fx --runner "$FX/fake-runner.sh" "$@" >"$T/log" 2>&1; }
 rdir() { find "$T/out" -mindepth 1 -maxdepth 1 -type d | head -1; }
 jqe() { jq -e "$@" >/dev/null 2>&1; } # jq -e, quiet
@@ -77,7 +80,7 @@ jqe() { jq -e "$@" >/dev/null 2>&1; } # jq -e, quiet
 # in run 2's notes; run 1's Done form misses its row's Done (a missing seed); run 3's launch an AX_TIMEOUT.
 PLANS="$HERE/plans.json"
 DONE_I="$(jq '[.jobs[] | select(.name == "done-form") | .steps | to_entries[] | select(.value.op == "tap" and .value.label == "Done") | .key][0]' "$PLANS")"
-TAPE="$(mktemp)"
+TAPE="$(mktemp)" && [ -n "$TAPE" ] || bail "no temp file for the tape"
 trap 'rm -f -- "$TAPE"' EXIT
 jq -n --argjson d "$DONE_I" '{
   "capture@r1": {ms: 3000}, "capture@r2": {ms: 2000, steps: {"3": {note: "focused; tapped again (still there after the first)"}, "5": {note: "typed; retyped once (first read zq)"}}},
@@ -362,6 +365,15 @@ share_case "refuses to write results inside the shared checkout" "inside the sha
 rc=$?
 check "refuses a --runner inside the shared checkout" "$([ "$rc" = 75 ] && grep -q 'shares with the container' "$T/log" || echo "exit $rc")" "$T/log"
 rm -r -f -- "$T"
+
+# --- 12. temp dirs: a failed mktemp yields no dir, never the cwd --------------------------------------------------------
+why=""
+out="$(cd "$HERE" && mktemp() { return 1; } && tmpdir_real)" && why="succeeded with mktemp failing"
+[ -z "$out" ] || why="printed '$out' with mktemp failing"
+out="$(cd "$HERE" && mktemp() { :; } && tmpdir_real)" && why="${why:-succeeded with mktemp printing nothing}"
+[ -z "$out" ] || why="${why:-printed '$out' with mktemp printing nothing}"
+d="$(tmpdir_real)" && [ -d "$d" ] && [ "$d" != "$PWD" ] && rmdir "$d" || why="${why:-no real temp dir}"
+check "a failed mktemp yields no temp dir, never the cwd" "$why"
 
 echo "# $pass passed, $failed failed, of $cases cases"
 [ "$failed" = 0 ] && [ "$pass" = "$cases" ] && [ "$cases" -gt 0 ]
