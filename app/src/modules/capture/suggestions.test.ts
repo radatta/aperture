@@ -36,11 +36,11 @@ describe('categorySuggestions', () => {
 describe('placeSuggestions', () => {
   const PLACES = [
     { slug: 'corner', name: 'Corner Shop' },
-    { slug: 'tj', name: "Thrift Jo's" },
+    { slug: 'bargains', name: "Thrift Jo's" },
   ];
   it('matches the link word or a word of the name, and types the link word', () => {
     expect(labels(placeSuggestions('', PLACES))).toEqual(['@Corner Shop', "@Thrift Jo's"]);
-    expect(labels(placeSuggestions('tj', PLACES))).toEqual(["@Thrift Jo's"]);
+    expect(labels(placeSuggestions('barg', PLACES))).toEqual(["@Thrift Jo's"]);
     expect(labels(placeSuggestions('JO', PLACES))).toEqual(["@Thrift Jo's"]);
     expect(placeSuggestions('shop', PLACES)[0]!.insert).toBe('@corner');
     expect(placeSuggestions('x', PLACES)).toEqual([]);
@@ -111,7 +111,7 @@ describe('applySuggestion', () => {
 describe('completeTokens — a half-typed token never drops quietly', () => {
   const places = [
     { slug: 'grocer', name: 'Grocer' },
-    { slug: 'tj', name: "Thrift Jo's" },
+    { slug: 'bargains', name: "Thrift Jo's" },
     { slug: 'tackle', name: 'Tackle' },
   ];
   const done = (text: string) => completeTokens(parseTaskLine(text, CATS, places), CATS, places);
@@ -128,7 +128,7 @@ describe('completeTokens — a half-typed token never drops quietly', () => {
       placeSlug: 'grocer',
       warnings: [],
     });
-    expect(done('x | @thrift')).toMatchObject({ place: 'tj' }); // a word of the name
+    expect(done('x | @thrift')).toMatchObject({ place: 'bargains' }); // a word of the name
   });
 
   it('several matches are a red error naming them', () => {
@@ -144,7 +144,7 @@ describe('completeTokens — a half-typed token never drops quietly', () => {
       warnings: ["no place '@zz' — created without one"],
     });
     expect(done('x | #Nope').warnings).toEqual(["no category 'Nope' — created without one"]);
-    expect(done('x | @tj')).toEqual(parseTaskLine('x | @tj', CATS, places));
+    expect(done('x | @bargains')).toEqual(parseTaskLine('x | @bargains', CATS, places));
   });
 
   it('completes nothing while the lists are still loading (empty)', () => {

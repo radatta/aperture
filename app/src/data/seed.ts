@@ -951,7 +951,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   // offline. Stub-only: the deployed app starts with no places (an empty Settings card invites one).
   const placeDefs = [
     { name: 'Grocer', slug: 'grocer', errands: ['batteries', 'tape', 'stamps'] },
-    { name: "Thrift Jo's", slug: 'tj', errands: ['light bulbs'] },
+    { name: "Thrift Jo's", slug: 'thrift-jos', errands: ['light bulbs'] },
   ];
   placeDefs.forEach(({ name, slug, errands }, i) => {
     store.places.push({ ...mk(nowMs - (20 - i) * DAY), name, slug, lastReadAt: null });

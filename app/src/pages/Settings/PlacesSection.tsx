@@ -192,7 +192,7 @@ function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
             <span aria-hidden>@</span>
             <input
               value={slug}
-              // Link words are lowercase; typing "TJ" means tj.
+              // Link words are lowercase; typing "JO" means jo.
               onChange={(e) => setSlug(e.target.value.toLowerCase())}
               onBlur={() => void save()}
               aria-label={`Link word for ${place.name}`}

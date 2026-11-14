@@ -2800,15 +2800,15 @@ export function runApiContract(
       const grocer = await api.upsertPlace({ name: 'Grocer' });
       expect(grocer).toMatchObject({ name: 'Grocer', slug: 'grocer', lastReadAt: null });
       advance(1); // add order is createdAt; a same-ms tie falls to the ULID, random across Lambda calls
-      const tj = await api.upsertPlace({ name: "Thrift Jo's", slug: 'tj' });
-      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['grocer', 'tj']);
+      const thrift = await api.upsertPlace({ name: "Thrift Jo's", slug: 'jo' });
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['grocer', 'jo']);
       await expect(api.upsertPlace({ name: 'Grocer 2', slug: 'grocer' })).rejects.toThrow(
         /already uses/,
       );
       await expect(api.upsertPlace({ name: 'Bad', slug: 'Bad Slug' })).rejects.toThrow(/lowercase/);
       await expect(api.upsertPlace({ name: '  ' })).rejects.toThrow(/needs a name/);
-      const renamed = await api.upsertPlace({ id: tj.id, name: 'TJs' });
-      expect(renamed).toMatchObject({ name: 'TJs', slug: 'tj' }); // omitted slug is kept
+      const renamed = await api.upsertPlace({ id: thrift.id, name: 'Thrift Shop' });
+      expect(renamed).toMatchObject({ name: 'Thrift Shop', slug: 'jo' }); // omitted slug is kept
     });
 
     it('places: tasks carry a known slug, refuse an unknown one, and a finished task keeps its place', async () => {

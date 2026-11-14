@@ -63,7 +63,7 @@ _Why:_ a pset is "due Friday", not "due 3:14pm Friday" — clock precision would
 _Rejected:_ a `dueTime` / full datetime. Clock-time events are Google Calendar's job; keeping this
 day-granular is what keeps the two concepts (and the two areas) cleanly separated.
 **Revisited 2026-10-05 — an optional `dueTime` is added.** Real use said otherwise: titles like
-"Prep case study (due 4pm)" and "P1 proposal (due 12pm)" were carrying the clock by hand, and timed
+"Submit the essay (due 4pm)" and "Send the report (due 12pm)" were carrying the clock by hand, and timed
 reminders need it. The time is a deadline (submit by), not an appointment. It is a **second field**
 (`"HH:MM"`, 24h local wall clock), not a datetime: every consumer that treats `dueDay` as a day — the
 Week lens cutoff (`dueDay <= today+6` as a string compare), Coming up, `fmtDueDay`, the date input,
