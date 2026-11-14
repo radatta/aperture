@@ -127,7 +127,7 @@ jobs:
           if [ "$mode" = none ]; then mode=app; fi
           echo "Deploy mode: $mode"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          # A preview, not this dispatch's mode. It says whether a merge would run CDK (check what it changes locally first, INFRA §9),
+          # A preview, not this dispatch's mode. It says whether a merge would run CDK (read the CDK diff step's resource list first, INFRA §9),
           # and it is the only run of deploy-base.ts against the real API before a merge: main-push classification runs
           # only on main. Read the log lines above this one for that proof, not the modes: a broken walk also prints `full`. API
           # trouble prints `full` with a ::warning; a crash fails here, on purpose. Assigned, so a crash can't be masked.

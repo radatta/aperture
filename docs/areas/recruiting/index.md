@@ -380,7 +380,8 @@ Both pairs are load-bearing:
   page stayed empty, and nothing errored anywhere** — still what a wrong value, or a local synth with
   no `device-user-id.<stage>` file, does. The single most confusing failure mode in the feature.
 - `DEVICE_USER_ID_*` also gates the **finance sync schedule** ([finances/](../finances/index.md)): unset →
-  no scheduled sync on that stage (Refresh still works); wrong → the schedule syncs an empty partition,
+  no schedule on that stage — only devb or a local synth now, since dev and prod CI refuse it (Refresh
+  still works); wrong → the schedule syncs an empty partition,
   silently.
 
 Find your `sub`: sign in to the app, then decode the access token's payload, or read it from the Cognito

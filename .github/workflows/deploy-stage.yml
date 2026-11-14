@@ -202,9 +202,9 @@ jobs:
       - name: CDK synth
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/cdk exec cdk synth "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" -c "stage=$APERTURE_STAGE" --no-lookups --output cdk.out
-      # The log shows only `<stack>: changed|unchanged`: a full diff lays out IAM statements and resource properties
-      # in a public log. The whole diff stays in the runner's RUNNER_TEMP, never uploaded; to read one, run cdk diff
-      # locally (INFRA §9 → Public repo). Inside, --method=template compares the synthesized template with the deployed
+      # The log shows, per stack, `changed|unchanged` and each changed resource's header (type, path, logical id,
+      # impact) — never a property value, the IAM table or an output, which a full diff lays out in a public log. The
+      # whole diff goes to the runner's RUNNER_TEMP, never uploaded, gone with the runner (INFRA §9 → Public repo). Inside, --method=template compares the synthesized template with the deployed
       # one (lookup role) instead of creating a change set the deploy would build again.
       - name: CDK diff (informational) # no approval pause — a failing diff still fails the job
         if: inputs.mode == 'full'

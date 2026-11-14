@@ -276,7 +276,7 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **Dev lives in its own AWS account** since the dev-account PR (INFRA §2): its `client_id`/`secret` were
   copied across once; its Sandbox items were not — relink on dev.
 - **The schedule is gated on `DEVICE_USER_ID_<STAGE>`** (the same GitHub secret the LeetCode ingest uses):
-  unset means no scheduled sync; wrong means it syncs an empty partition. See
+  unset means no scheduled sync (devb, a local synth — dev and prod CI refuse to deploy without it); wrong means it syncs an empty partition. See
   [recruiting/](../recruiting/index.md) → Operator setup.
 - **Linking:** from a Safari tab. Tick every account in BofA's picker; add a missed one later with the
   bank's **⋯ → Add or remove accounts** (update mode), never a second Connect.

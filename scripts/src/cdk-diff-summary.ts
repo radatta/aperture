@@ -1,5 +1,7 @@
-// @aperture/scripts — runs a stage's `cdk diff` and prints one line per stack, changed or unchanged. The diff itself goes
-// to a file in the job's RUNNER_TEMP that nothing uploads: public run logs never print it (INFRA §9 → Public repo).
+// @aperture/scripts — runs a stage's `cdk diff` and prints, per stack, changed or unchanged plus the header of each
+// changed resource (type, path, logical id, impact: all in the public source), never a property value, the IAM table or
+// an output. The whole diff goes to a file in the job's RUNNER_TEMP, which nothing uploads and which goes with the runner:
+// public run logs never print it (INFRA §9 → Public repo).
 //
 // Run: `node scripts/src/cdk-diff-summary.ts <stage>`, after `cdk synth` wrote cdk/cdk.out. Like mask-function-url.ts:
 // erasable syntax and node: builtins only, so the runner's Node strips the types with no build.
@@ -10,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 export type Result = { status: number | null; stdout: string; stderr: string };
 export type Verdict = 'changed' | 'unchanged';
+export type Stack = { verdict: Verdict; resources: string[] };
 type Log = (line: string) => void;
 
 export const stacksOf = (stage: string) => [`ApertureData-${stage}`, `ApertureApp-${stage}`];
@@ -18,10 +21,25 @@ export const stacksOf = (stage: string) => [`ApertureData-${stage}`, `ApertureAp
 const ANSI = /\x1b\[[0-9;]*m/g;
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// `[~] AWS::Lambda::Function Bff Bff4A420414 replace`: prefix, type, then the construct path and logical id, then the
+// impact. Rebuilt from those fields, never echoed: a name outside the code-identifier charset is left out.
+const RESOURCE = /^\[([+~\-\u2190])\] ((?:AWS|Custom)::[A-Za-z0-9]+(?:::[A-Za-z0-9]+)*) (.+)$/;
+const IMPACT = / (may be replaced|replace|destroy|orphan|import)$/;
+const NAME = /^[A-Za-z0-9/_.-]+(?: [A-Za-z0-9]+)?$/;
+export function resourceLine(line: string): string | undefined {
+  const m = RESOURCE.exec(line);
+  if (!m) return undefined;
+  const impact = IMPACT.exec(m[3]!)?.[1];
+  const name = impact ? m[3]!.slice(0, -impact.length - 1) : m[3]!;
+  return [`[${m[1]}]`, m[2], NAME.test(name) ? name : undefined, impact && `(${impact})`]
+    .filter(Boolean)
+    .join(' ');
+}
+
 // CDK (2.1135) opens each stack's section with `Stack <name>`, prints `There were no differences` (plus an optional
 // hint) for one with none, and closes with `Number of stacks with differences: N`. Any other shape → undefined, never a
 // guess: each header exactly once, the summary exactly once, and its N equal to the sections that changed.
-export function summarize(output: string, stacks: string[]): Record<string, Verdict> | undefined {
+export function summarize(output: string, stacks: string[]): Record<string, Stack> | undefined {
   const lines = output
     .replace(ANSI, '')
     .split(/\r?\n/)
@@ -37,16 +55,16 @@ export function summarize(output: string, stacks: string[]): Record<string, Verd
   if (heads.some((h) => h.length !== 1) || counts.length !== 1) return undefined;
   const starts = heads.map((h) => h[0]!);
   const ends = starts.map((s) => Math.min(...[...starts, lines.length].filter((x) => x > s)));
-  const verdicts = stacks.map((_, i): Verdict =>
-    lines.slice(starts[i], ends[i]).some((l) => l.startsWith('There were no differences'))
-      ? 'unchanged'
-      : 'changed',
-  );
-  if (verdicts.filter((v) => v === 'changed').length !== counts[0]) return undefined;
+  const sections = stacks.map((_, i) => lines.slice(starts[i]! + 1, ends[i]));
+  const verdicts = sections.map((sec): Stack => ({
+    verdict: sec.some((l) => l.startsWith('There were no differences')) ? 'unchanged' : 'changed',
+    resources: sec.flatMap((l) => resourceLine(l) ?? []),
+  }));
+  if (verdicts.filter((v) => v.verdict === 'changed').length !== counts[0]) return undefined;
   return Object.fromEntries(stacks.map((s, i) => [s, verdicts[i]!]));
 }
 
-// Prints a fixed error, a fixed warning or the per-stack lines — never a line of the diff. Returns the exit code.
+// Prints a fixed error, a fixed warning or the per-stack lines — never a line of the diff as is. Returns the exit code.
 export function run(
   argv: string[],
   deps: {
@@ -64,7 +82,7 @@ export function run(
   // A failing diff fails the job, as when it printed: its output may be the diff, so it stays off the log.
   if (r.status !== 0) {
     deps.log(
-      `::error::cdk diff failed (exit ${r.status ?? 'none'}); its output stays off the public log — run cdk diff locally (INFRA §9)`,
+      `::error::cdk diff failed (exit ${r.status ?? 'none'}); its output stays off the public log (INFRA §9 → Public repo)`,
     );
     return 1;
   }
@@ -74,7 +92,10 @@ export function run(
     deps.log(
       "::warning::couldn't read cdk diff's output (a CDK upgrade?) — fix scripts/src/cdk-diff-summary.ts",
     );
-  for (const s of stacks) deps.log(`${s}: ${verdicts?.[s] ?? 'unknown'}`);
+  for (const s of stacks) {
+    deps.log(`${s}: ${verdicts?.[s]?.verdict ?? 'unknown'}`);
+    for (const r of verdicts?.[s]?.resources ?? []) deps.log(`  ${r}`);
+  }
   return 0;
 }
 

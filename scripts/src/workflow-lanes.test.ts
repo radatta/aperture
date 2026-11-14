@@ -231,13 +231,33 @@ describe('the device user id', () => {
       /^ {4}secrets:\n(?: {6}.*\n|\n)*? {6}device_user_id:\n(?: {8}#.*\n)* {8}required: false\n/m,
     );
     expect(stage).toContain('APERTURE_DEVICE_USER_ID: ${{ secrets.device_user_id }}');
-    const passes = (f: string) => read(f).match(/^ +device_user_id: .*$/gm);
-    expect(passes('deploy.yml')).toEqual([
-      '      device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}',
-      '      device_user_id: ${{ secrets.DEVICE_USER_ID_PROD }} # a prod environment secret, like the three above',
-    ]);
-    expect(passes('deploy-dev.yml')).toEqual([
-      '      device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}',
-    ]);
+    // The lines a call job passes under one key (`with:` or `secrets:`), so a line moved under `with:` (an undeclared
+    // input: GitHub refuses the whole run) fails here.
+    const under = (f: string, job: string, key: string) => {
+      const lines = read(f).split('\n');
+      const start = lines.indexOf(`  ${job}:`);
+      expect(start, `${f} ${job}`).toBeGreaterThan(-1);
+      const from = lines.findIndex((l, i) => i > start && l.startsWith(`    ${key}:`));
+      const block: string[] = [];
+      for (const l of lines.slice(from + 1)) {
+        if (!l.startsWith('      ')) break;
+        block.push(l.trim());
+      }
+      return block.filter((l) => l.startsWith('device_user_id:'));
+    };
+    const DEV = 'device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}';
+    const PROD =
+      'device_user_id: ${{ secrets.DEVICE_USER_ID_PROD }} # a prod environment secret, like the three above';
+    for (const [f, job, want] of [
+      ['deploy.yml', 'deploy-dev', [DEV]],
+      ['deploy.yml', 'deploy-devb', []],
+      ['deploy.yml', 'deploy-prod', [PROD]],
+      ['deploy-dev.yml', 'deploy', [DEV]],
+      ['deploy-dev.yml', 'deploy-b', []],
+    ] as const) {
+      expect(under(f, job, 'secrets'), `${f} ${job}`).toEqual(want);
+      expect(under(f, job, 'with'), `${f} ${job}`).toEqual([]);
+    }
+    expect(all.match(/^ +device_user_id: \$/gm)).toHaveLength(3); // nothing passes it outside those jobs
   });
 });
