@@ -34,9 +34,9 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 - **Data:** DynamoDB, on-demand. Logical entities per §2; the physical model (keys / access patterns) is §2.4 — DDB is access-pattern-first, not relational.
 - **Cost:** effectively free at single-user scale — breakdown in INFRA §11.
 
-**Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route Lambda (§4) · CDK (§3) · custom domain (§8).
+**Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route BFF Lambda (§4), beside the MCP, finance-sync and reminder-dispatch Lambdas (INFRA §1/§4) · CDK (§3) · custom domain (§8).
 
-**Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1.
+**Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1 — bar per-feature crash-safety outboxes since: capture's (`app/src/modules/capture/captureOutbox.ts`), Flux sets' ([flux](../areas/flux/index.md)) and the extension's ([recruiting](../areas/recruiting/index.md)).
 
 **Version discipline:** check the registry (`npm show <pkg> version`) before pinning — the rule lives in `CLAUDE.md`.
 
@@ -63,7 +63,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `id · title · status · categoryId · seriesId? · rollId? · dueDay? · dueTime? · notes? · reflection? · createdAt · startedAt? · completedAt? · cancelledAt?`
 - `rollId` (id | null) — set when the task is a **rep** of a [Roll](../areas/home/rolls.md). Required-nullable; readers compare `=== id` / `!rollId` (pre-existing rows read back `undefined`). The contact-sheet momentum is derived from done tasks carrying this — no counter.
 - `status`: `backlog | planned | in_progress | done | cancelled`.
-- `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (_when I'll work it_). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
+- `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (_when it gets worked_). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
 - `dueTime` (`HH:MM` 24h local | null) — the deadline's clock time, only with a `dueDay` (clearing the day clears it). Drives the urgency colour and calendar auto-sync (`gcalSyncError` holds a failed sync; `Settings.autoCalendar` is the toggle — [areas/calendar/index.md](../areas/calendar/index.md) → Auto-sync).
 - Two-way calendar sync bookkeeping — `gcalSeen` (with Google's `updated`) and `gcalPulled` — is **optional** on `Task` (absent on old rows and literals), an exception to required-nullable: sync state, not task data (the other exception is `estimateSource`, stamped only at done). A Google edit can set `title`, `dueDay`/`dueTime` and `estimateMin` ([areas/calendar/index.md](../areas/calendar/index.md) → Two-way sync).
 - `notes` (string | null, ≤ 5,000 chars) — free-form light markdown, editable at any status, **never part of the estimate lock**. Required-nullable; pre-existing rows read back `undefined`, so readers use `!notes`. Design: [areas/tasks/notes.md](../areas/tasks/notes.md).
@@ -72,8 +72,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **Done gate** ([areas/calibration/integrity.md](../areas/calibration/integrity.md)): `taskTransition(→ done)` refuses a calibrated task (`isCalibrated`: not an errand) without `estimateMin ≥ 1` and `actualAccruedMin ≥ 1`, and a parent bypasses it (`completeParent`). Done also sets `estimateLockedMin` from `estimateMin` when there's no baseline (null or 0), and `estimateSource` (`planned | revised | retro | null`, optional on `Task` like the sync bookkeeping: older rows, parents and errands have none). The one write into a finished estimate: `withEstimate` on a done calibrated task with no lock, once.
 - `parentId` (string | null) — the task this one is a part of (2026-10-08; replaced `splitFromId`, whose stored attribute is inert on old rows). One level; parenthood is derived, never stored. A parent holds the deadline and never takes plans, sessions or its own estimate; its `estimateLockedMin` freezes when its first part starts (the one lock that's ever cleared: a parent whose last part goes is plain again, and its lock goes with them), and its `actualAccruedMin` is stamped with Σ done parts when it's marked done (refused while a part is open). Every part, and a done parent, is a calibration point. A parent's one calendar event is its due marker; a part's block is named after it (v2a). Required-nullable; old rows read `undefined` → `!parentId`. Design: [areas/tasks/parts.md](../areas/tasks/parts.md).
 - `actualAccruedMin` — **denormalized**, bumped when a _work_ session closes onto an open task (excludes breaks + paused time; a session stopped onto a `done`/`cancelled` task keeps its minutes in history and adds none — shared `accruesTime`). Avoids scanning sessions.
-- `cancelled` tasks are excluded from calibration.
-- **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#delete-on-cancel); each attachment's S3 bytes are deleted first ([attachments D7](../areas/tasks/attachments.md)). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
+- `cancelled` tasks are excluded from calibration, and so are errands (a task with a `place`, [tasks/places](../areas/tasks/places.md)).
+- **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#flows); each attachment's S3 bytes are deleted first ([attachments D7](../areas/tasks/attachments.md)). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
 
 **taskPlans** — scheduling (the _when_), separate from the task (the _what_). Enables multi-day + ordering.
 
@@ -208,13 +208,13 @@ PK = push / SK = user#<userId> · health
 **Routes (React Router):**
 
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /recruiting (+ /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /recruiting (+ /recruiting/sittings/:id, /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId, /flux/history) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode sittings + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
-- **Capture bar is global** — always present, not a route.
+- **Capture bar is global** — always present, not a route (hidden only mid-set in Flux, through the route's `handle.hideCapture`).
 
 **State — three layers:**
 
-- **Server/data → React Query.** One query per access pattern. Task writes are **written through**: what a write returns goes straight into the one tasks list (`app/src/data/taskCache.ts`), newer `updatedAt` wins, and the app remembers its own writes for 60 s so the BFF's eventually consistent `listTasks` (not retried) never undoes one; the invalidate still runs for rows a write changes without returning (a parent's lock, plan rows, the day's sweep). The backlog derives from that list. On the BFF, every read whose copy is written back is strongly consistent — tasks (`mustTask` and kin), plan rows, the day row, categories, settings, stories, habits and their checks, log entries, series, rolls, ideas, attachments, the calendar sync cursor — so two quick RPCs on one row never lose the first; display reads (`listTasks`, `listPlans`, `getSettings` on load) stay eventual; sessions still read eventually (`mustSession`: heartbeat, resume, stop write back what they read) — the one exception, which the stop-session rewrite closes.
+- **Server/data → React Query.** One query per access pattern. Task writes are **written through**: what a write returns goes straight into the one tasks list (`app/src/data/taskCache.ts`), newer `updatedAt` wins, and the app remembers its own writes for 60 s so the BFF's eventually consistent `listTasks` (not retried) never undoes one; the invalidate still runs for rows a write changes without returning (a parent's lock, plan rows, the day's sweep). The backlog derives from that list. On the BFF, every read whose copy is written back is strongly consistent — tasks (`mustTask` and kin), plan rows, the day row, categories, settings, stories, habits and their checks, log entries, series, rolls, ideas, attachments, the calendar sync cursor — so two quick RPCs on one row never lose the first; display reads (`listTasks`, `listPlans`, `getSettings` on load) stay eventual; sessions read consistently too (`mustSession`: heartbeat, resume and stop write back what they read).
 - **UI/session → React Context.** Current home mode, running timer, capture-bar state.
 - **Auth → Cognito session** in a context provider. Frontend lib: **`react-oidc-context` + Cognito Hosted UI** (PKCE auth-code grant, no client secret).
 
@@ -260,15 +260,15 @@ aperture/
 
 ---
 
-## 5. The AI seam (v1.1+, boundary only)
+## 5. The AI seam (gated, server-side)
 
-Reflection isn't built — just a clean boundary so it's additive later. The first model call that _is_ built is quick add's parse ([tasks/quick-add](../areas/tasks/quick-add.md), 2026-10-12), and it set the pattern.
+AI period reflection (week / month / year) isn't built — just a clean boundary so it's additive later. Three model calls are built, all Claude Haiku through the one gateway: quick add's parse ([tasks/quick-add](../areas/tasks/quick-add.md), 2026-10-12), which set the pattern; Flux's weekly note ([flux](../areas/flux/index.md) D62); and the sitting review draft ([recruiting](../areas/recruiting/index.md) → _Review and the Claude draft_). The task editor's category suggestion is not a model call — local naive Bayes over the user's own tasks (`packages/shared/src/categorySuggest.ts`).
 
 - **Server-side only:** the Lambda calls the model; never from the browser. This is why sending journal text out is a Lambda concern. The call is a **gated gateway** (`lambdas/src/anthropic/`): noop under testMode/smoke, a fake in tests, live fetch + the SSM key (INFRA §10) only in the Lambda entrypoints.
 - **The 2026-10-09 carve-out is closed (2026-10-12):** the Raycast quick-add (`tools/raycast/`) used to call Haiku from the Mac with the user's own key in Keychain; a second client (the app's capture bar) wanted parsing, so the parse moved behind `parseTask` / the `parse_task` MCP tool and the Mac holds no model key ([areas/mcp → Raycast](../areas/mcp/index.md)).
 - **Substrate already exists:** reflection reads `logEntries` / `tasks` / `pomodoroSessions` over a date range — existing access patterns. **No schema change** needed for basic reflection.
 - **Reserved entity** (not built): `reflections` — `id · periodType(week|month|year) · periodKey · generatedAt · promptVersion · content`.
-- **Model:** Claude (Anthropic API), latest at build time, per repo norms.
+- **Model:** Claude (Anthropic API), latest at build time, per repo norms — pinned per prompt module (its `*_MODEL` constant).
 
 ---
 
@@ -304,7 +304,7 @@ outlier, and two things make it worse than an ordinary bug:
 
 _(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; a plan read keeps one row per id within what it reads, the newest, so no read misses it and a failed write never loses it), and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
-`deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)_
+`deleteCheck` was the only one that destroyed a row. The reminder dispatcher's bookkeeping rows (test, sent and count) and a dead device's push subscription are deleted for real too, on purpose ([tasks/reminders](../areas/tasks/reminders.md)). The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)_
 
 - **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
   `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The
