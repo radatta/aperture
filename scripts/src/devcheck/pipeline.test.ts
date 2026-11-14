@@ -6,6 +6,7 @@ import {
   FINANCE_RULE_VIA,
   FLUX_SET_VIA,
   LOG_VIA,
+  STORY_VIA,
   CATEGORY_VIA,
   PLACE_TOKEN_VIA,
   PUSH_SUB_VIA,
@@ -17,6 +18,7 @@ import {
   type DevFluxSet,
   type DevLogEntry,
   type DevPlace,
+  type DevStory,
   type DevTask,
 } from './api';
 import { DevcheckError } from './errors';
@@ -66,6 +68,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const fluxDeleted: string[] = [];
   const logEntries = new Map<string, DevLogEntry>();
   const logDeleted: string[] = [];
+  const stories = new Map<string, DevStory>();
+  const storiesDeleted: string[] = [];
   const places = new Map<string, DevPlace>();
   const placesDeleted: string[] = [];
   const categories = new Map<string, DevCategory>();
@@ -255,6 +259,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       exportLogEntries: async () => [...logEntries.values()],
       listLogEntries: async (day) => [...logEntries.values()].filter((e) => e.day === day),
       listLogRange: async () => [...logEntries.values()],
+      listStories: async () => [...stories.values()],
       listAttachments: async () => [],
       getAttachmentDownloadUrl: async () => {
         throw new Error('unused');
@@ -337,6 +342,16 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       },
       createLogEntry: async () => {
         throw new Error('unused');
+      },
+      createStory: async () => {
+        throw new Error('unused');
+      },
+      updateStory: async () => {
+        throw new Error('unused');
+      },
+      deleteStory: async (id) => {
+        storiesDeleted.push(id);
+        stories.delete(id);
       },
       deleteLogEntry: async (id) => {
         logDeleted.push(id);
@@ -546,6 +561,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     fluxDeleted,
     logEntries,
     logDeleted,
+    stories,
+    storiesDeleted,
     places,
     placesDeleted,
     placeToken,
@@ -1075,6 +1092,22 @@ describe('runPipeline', () => {
     expect(w.deleted).toEqual([]);
     expect(r.swept).toEqual(['lg-old']);
     expect(r.created).toEqual([{ id: 'lg-new', via: LOG_VIA, title: undefined, final: 'deleted' }]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a story is read back and tombstoned as a story, never as a task — a crashed run’s too', async () => {
+    const w = world();
+    const story = (id: string): DevStory => ({ id, title: id, situation: '' });
+    w.stories.set('st-old', story('st-old'));
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'st-old', via: STORY_VIA }]);
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'st-new', via: STORY_VIA });
+      x.stories.set('st-new', story('st-new'));
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.storiesDeleted).toEqual(['st-old', 'st-new']);
+    expect(w.deleted).toEqual([]);
+    expect(r.swept).toEqual(['st-old']);
     expect(r.status).toBe('PASS');
   });
 

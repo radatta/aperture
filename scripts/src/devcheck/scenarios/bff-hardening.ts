@@ -1,7 +1,8 @@
 // The BFF's edge, hardened (bff-testmode-auth): testMode opens nothing over the Function URL, a malformed
 // body is a 400 rather than a thrown handler, and updateSettings/updateStory refuse any key outside their
-// patch type. Every dev step sends a call the BFF must refuse before it writes, so nothing needs a ledger;
-// the one legal patch re-sends the test user's current value.
+// patch type. Every refusal step sends a call the BFF must refuse before it writes; a probe that a regression
+// would accept carries the row's current value, so even then it changes nothing. The legal story patch
+// works on a ledgered story, deleted after.
 import { type Row, type Scenario } from '../scenario';
 
 const INDEX = 'lambdas/src/index.test.ts';
@@ -68,13 +69,25 @@ export const bffHardening: Scenario = {
       id: 'settings-mass-assign',
       entry: 'api',
       kind: 'edge',
-      what: 'updateSettings with googleAccounts or userId is a 400 naming the key; settings unchanged',
+      what: 'updateSettings with googleAccounts or createdAt is a 400 naming the key; settings unchanged',
     },
     {
       id: 'settings-patch-ok',
       entry: 'api',
       kind: 'nominal',
       what: 'A legal settings patch (the current pomodoroWorkMin) still lands',
+    },
+    {
+      id: 'fault-500',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A fault in our code (createTask with a null input) is a 500 with the fixed body “Internal error”, never its text',
+    },
+    {
+      id: 'story-patch-ok',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A legal story patch still saves and reads back',
     },
     {
       id: 'story-mass-assign',
@@ -104,18 +117,11 @@ export const bffHardening: Scenario = {
       'a scenario can’t read dev’s CloudWatch; the line’s shape and redaction are the test’s to prove',
     ),
     offDev(
-      'fault-500',
-      'A fault in our code is a 500 with a fixed body; a refusal (ConflictError and kin) keeps its message at 400',
+      'refusal-400',
+      'An AWS 5xx is a 500 too; a refusal subclass (ConflictError and kin) keeps its message at 400',
       INDEX,
       'a fault inside dispatch is a 500 with a fixed body; a refusal keeps its message at 400',
-      'dev can’t throw a TypeError inside dispatch on demand',
-    ),
-    offDev(
-      'story-patch-ok',
-      'A legal story patch still saves; an unknown key on either patch writes nothing',
-      INDEX,
-      'over HTTP an unknown patch key is a 400 naming it, writing nothing; a legal story patch saves',
-      'the harness has no story ledger kind to clean a created story; the stub and the backend refuse alike in the contract suite',
+      'dev can’t make DynamoDB answer a 5xx or lose a conditional write on demand',
     ),
     offDev(
       'ingest-unchanged',
@@ -133,6 +139,36 @@ export const bffHardening: Scenario = {
     ),
   ],
   steps: [
+    {
+      id: 'fault',
+      title: 'A fault in our code: 500, fixed body',
+      entry: 'api',
+      proves: ['fault-500'],
+      async run(ctx) {
+        // createTask reads input.parentId before any read or write: a null input throws a TypeError.
+        const got = await ctx.api.reads.rpcRaw(
+          'createTask',
+          JSON.stringify({ args: [null] }),
+          'jwt',
+        );
+        expectRefusal('createTask(null)', got, 500, /^Internal error$/);
+      },
+    },
+    {
+      id: 'story-ok',
+      title: 'A legal story patch saves and reads back',
+      entry: 'api',
+      proves: ['story-patch-ok'],
+      async run(ctx) {
+        const story = await ctx.api.writes.createStory(`devcheck story ${ctx.nonce}`);
+        const renamed = `devcheck story renamed ${ctx.nonce}`;
+        await ctx.api.writes.updateStory(story.id, { title: renamed, situation: 'probe' });
+        const back = (await ctx.api.reads.listStories()).find((x) => x.id === story.id);
+        if (back?.title !== renamed || back.situation !== 'probe')
+          throw new Error(`the patched story read back as ${JSON.stringify(back)}`);
+        await ctx.api.writes.deleteStory(story.id);
+      },
+    },
     {
       id: 'testmode-no-jwt',
       title: 'testMode with no JWT: 401, nothing written',
@@ -200,27 +236,21 @@ export const bffHardening: Scenario = {
       proves: ['settings-mass-assign', 'settings-patch-ok'],
       async run(ctx) {
         const before = await ctx.api.reads.getSettings();
-        const account = { sub: 'devcheck-not-an-account', email: 'devcheck@example.invalid' };
-        expectRefusal(
-          'updateSettings googleAccounts',
-          await ctx.api.reads.rpcRaw(
-            'updateSettings',
-            JSON.stringify({ args: [{ googleAccounts: [account] }] }),
-            'jwt',
-          ),
-          400,
-          /Unknown settings field: googleAccounts/,
-        );
-        expectRefusal(
-          'updateSettings userId',
-          await ctx.api.reads.rpcRaw(
-            'updateSettings',
-            JSON.stringify({ args: [{ userId: 'someone-else' }] }),
-            'jwt',
-          ),
-          400,
-          /Unknown settings field: userId/,
-        );
+        // Each probe carries the current value, so a regressed allowlist that took it changes nothing.
+        const current = before as unknown as { googleAccounts: unknown; createdAt: unknown };
+        const probe = async (key: 'googleAccounts' | 'createdAt') =>
+          expectRefusal(
+            `updateSettings ${key}`,
+            await ctx.api.reads.rpcRaw(
+              'updateSettings',
+              JSON.stringify({ args: [{ [key]: current[key] }] }),
+              'jwt',
+            ),
+            400,
+            new RegExp(`Unknown settings field: ${key}`),
+          );
+        await probe('googleAccounts');
+        await probe('createdAt');
         const after = await ctx.api.reads.getSettings();
         if (JSON.stringify(after) !== JSON.stringify(before))
           throw new Error('a refused updateSettings changed the test user’s settings');

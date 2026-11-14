@@ -297,7 +297,10 @@ describe('handler device-token ingest branch', () => {
         [new TypeError('our bug'), 500],
       ] as const) {
         fail(e);
-        expect((await rpc('lcSittingEvents', headers, events)).statusCode).toBe(code);
+        const res = await rpc('lcSittingEvents', headers, events);
+        expect(res.statusCode).toBe(code);
+        // A fault's text is internals: the extension retries on the status alone.
+        if (code === 500) expect(JSON.parse(res.body ?? '{}')).toEqual({ error: 'Internal error' });
       }
       vi.restoreAllMocks();
       h.doc = new InMemoryDoc();
@@ -760,13 +763,15 @@ describe('handler testMode and body parsing', () => {
     await http('getSettings', '{not json', 'Bearer good-jwt'); // 400
     vi.spyOn(h.doc, 'get').mockRejectedValueOnce(new TypeError('secret detail'));
     await http('getSettings', JSON.stringify({ args: [] }), 'Bearer good-jwt'); // 500
+    await http('x'.repeat(2000), JSON.stringify({ args: [] }), 'Bearer good-jwt'); // 404, path text
     expect(logs.map((l) => JSON.parse(l) as unknown)).toEqual([
       { event: 'rpc_failed', method: 'getSettings', status: 401, name: 'Error' },
       { event: 'rpc_failed', method: 'getSettings', status: 400, name: 'Error' },
       { event: 'rpc_failed', method: 'getSettings', status: 500, name: 'TypeError' },
+      { event: 'rpc_failed', method: 'unknown', status: 404, name: 'Error' },
     ]);
     const all = logs.join('\n');
-    for (const leak of ['good-jwt', '{not json', 'secret detail', 'Invalid JSON'])
+    for (const leak of ['good-jwt', '{not json', 'secret detail', 'Invalid JSON', 'xxxx'])
       expect(all).not.toContain(leak);
   });
 

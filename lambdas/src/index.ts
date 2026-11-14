@@ -13,6 +13,7 @@ import {
   placeReadUnknownText,
   placeUnknownError,
 } from '@aperture/shared';
+import { isApiMethod } from '@aperture/shared';
 import type { PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
@@ -324,10 +325,13 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
         : ingest
           ? ingestFailureStatus(err)
           : rpcFailureStatus(err);
-    // One line per failure: the outcome only — never the message, body, args or a header.
+    // One line per failure: the outcome only — never the message, body, args or a header. The method is
+    // path text anyone can send, so only a known one is logged by name.
     const name = err instanceof Error ? err.name : 'unknown';
-    console.log(JSON.stringify({ event: 'rpc_failed', method, status, name }));
-    const shown = !ingest && status === 500 ? 'Internal error' : message;
+    const logged = isApiMethod(method) ? method : 'unknown';
+    console.log(JSON.stringify({ event: 'rpc_failed', method: logged, status, name }));
+    // A 500's text is internals (a TypeError's, an AWS fault's): every caller retries on the status alone.
+    const shown = status === 500 ? 'Internal error' : message;
     return { statusCode: status, headers: CORS, body: JSON.stringify({ error: shown }) };
   }
 }

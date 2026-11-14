@@ -9,6 +9,7 @@ import {
   PLACE_TOKEN_VIA,
   HABIT_VIA,
   LOG_VIA,
+  STORY_VIA,
   UI_LOG_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
@@ -121,6 +122,7 @@ describe('createApiClient', () => {
       'listSessionsForDay',
       'listSittingReplay',
       'listSittings',
+      'listStories',
       'listTasks',
       'placeDigestRaw',
       'probePresigned',
@@ -133,6 +135,7 @@ describe('createApiClient', () => {
       'createAttachment',
       'createLogEntry',
       'createSeries',
+      'createStory',
       'createTask',
       'deleteAttachment',
       'deleteCategory',
@@ -142,6 +145,7 @@ describe('createApiClient', () => {
       'deletePlace',
       'deleteSeries',
       'deleteSitting',
+      'deleteStory',
       'deleteTask',
       'finishTask',
       'lcSittingEvents',
@@ -186,6 +190,7 @@ describe('createApiClient', () => {
       'unsubscribePush',
       'updateLogEntry',
       'updateSettings',
+      'updateStory',
       'upsertCategory',
       'upsertFinanceRule',
       'upsertHabit',
@@ -412,6 +417,7 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'C3', via: MCP_CATEGORY_VIA },
         { run: 'r', op: 'created' as const, id: 'L', via: LOG_VIA },
         { run: 'r', op: 'created' as const, id: 'L2', via: UI_LOG_VIA },
+        { run: 'r', op: 'created' as const, id: 'ST', via: STORY_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -433,6 +439,7 @@ describe('createApiClient', () => {
           'C3',
           'L',
           'L2',
+          'ST',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -454,6 +461,7 @@ describe('createApiClient', () => {
         'category',
         'log',
         'log',
+        'story',
         'task',
       ]);
     });
