@@ -13,7 +13,7 @@ import { laneFor, synthesizerFor } from '../config/lane';
 import { SECRETS_DIR, stageSecret } from '../config/ciSecrets';
 
 // The Cognito `sub` device-token writes are attributed to, so captured attempts show under the
-// signed-in user. Not a secret, but account-specific → not committed: APERTURE_DEVICE_USER_ID (CI), else
+// signed-in user. No credential, but account-specific → not committed: APERTURE_DEVICE_USER_ID (CI, from a GitHub secret so public logs print ***), else
 // a gitignored file, else undefined → the handler falls back to the 'local' dev user.
 function deviceUserIdFor(stage: string): string | undefined {
   const fromEnv = process.env.APERTURE_DEVICE_USER_ID;

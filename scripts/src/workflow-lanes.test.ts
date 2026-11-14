@@ -89,7 +89,8 @@ describe('the dispatched dev slots', () => {
       expect(callJob(j)).toContain('origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}');
       expect(callJob(j)).not.toContain('lane:');
     }
-    expect(callJob('deploy-b')).toContain("device_user_id: ''");
+    expect(callJob('deploy')).toContain('device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}');
+    expect(callJob('deploy-b')).not.toMatch(/^\s+device_user_id:/m);
   });
 
   it('refuses any other slot before the deploy role is assumed, and queues per slot', () => {
@@ -118,11 +119,13 @@ describe('deploy-stage Validate mode, run', () => {
   writeFileSync(file, script.replace(/^ {10}/gm, ''));
   const DEV_ROLE = 'arn:aws:iam::111111111111:role/aperture-github-deploy-dev';
   const DEV_MAIN_ROLE = 'arn:aws:iam::111111111111:role/aperture-github-dev-main';
+  const SUB = '00000000-0000-4000-8000-000000000000'; // synthetic, a Cognito sub's shape
   const validate = (over: Record<string, string> = {}) => {
     const env = {
       MODE: 'full',
       APERTURE_STAGE: 'dev',
       APERTURE_DEPLOY_LANE: '',
+      APERTURE_DEVICE_USER_ID: SUB,
       ROLE_ARN: DEV_ROLE,
       REF: '',
       GITHUB_EVENT_NAME: 'workflow_dispatch',
@@ -148,7 +151,10 @@ describe('deploy-stage Validate mode, run', () => {
 
   it.each([
     ['a dev dispatch', {}],
-    ['devb, app mode', { APERTURE_STAGE: 'devb', MODE: 'app' }],
+    [
+      'devb, app mode, no device user id',
+      { APERTURE_STAGE: 'devb', MODE: 'app', APERTURE_DEVICE_USER_ID: '' },
+    ],
     [
       'prod, none',
       {
@@ -159,7 +165,7 @@ describe('deploy-stage Validate mode, run', () => {
     ],
     ['a dispatch with a ref', { REF: 'a'.repeat(40) }],
     ["main's devmain push", MAIN_PUSH],
-    ["main's devb push", { ...MAIN_PUSH, APERTURE_STAGE: 'devb' }],
+    ["main's devb push", { ...MAIN_PUSH, APERTURE_STAGE: 'devb', APERTURE_DEVICE_USER_ID: '' }],
   ])('passes %s', (_, over) => {
     const r = validate(over);
     expect(r.status).toBe(0);
@@ -178,6 +184,17 @@ describe('deploy-stage Validate mode, run', () => {
     ['devmain with the frozen role', { ...MAIN_PUSH, ROLE_ARN: DEV_ROLE }],
     ['devmain with no role (variable unset)', { ...MAIN_PUSH, ROLE_ARN: '' }],
     ['the dev-main role with no lane', { ROLE_ARN: DEV_MAIN_ROLE }],
+    ['a dev dispatch with no device user id', { APERTURE_DEVICE_USER_ID: '' }],
+    ["main's devmain push with no device user id", { ...MAIN_PUSH, APERTURE_DEVICE_USER_ID: '' }],
+    [
+      'prod with no device user id, even on mode none',
+      {
+        APERTURE_STAGE: 'prod',
+        MODE: 'none',
+        APERTURE_DEVICE_USER_ID: '',
+        ROLE_ARN: 'arn:aws:iam::222222222222:role/aperture-github-deploy-prod',
+      },
+    ],
   ])('refuses %s', (_, over) => {
     const r = validate(over);
     expect(r.status).toBe(1);
@@ -194,5 +211,33 @@ describe('deploy-stage Validate mode, run', () => {
     const r = validate(over);
     expect(r.status).toBe(1);
     expect(r.out).not.toMatch(/^pwned$/m);
+  });
+
+  it('takes a hostile device user id as data, and never prints it', () => {
+    const r = validate({ APERTURE_DEVICE_USER_ID: '$(echo pwned)"; echo pwned; "' });
+    expect(r.status).toBe(0);
+    expect(r.out).not.toMatch(/pwned/);
+  });
+});
+
+// The device user id is a secret end to end, so the job's env header prints *** (INFRA §9 → Public repo).
+describe('the device user id', () => {
+  const stage = read('deploy-stage.yml');
+  const all = ['deploy.yml', 'deploy-dev.yml', 'deploy-stage.yml'].map(read).join('\n');
+
+  it('reaches deploy-stage only as a secret, which dev and prod pass and devb does not', () => {
+    expect(all).not.toMatch(/vars\.DEVICE_USER_ID|inputs\.device_user_id/);
+    expect(stage).toMatch(
+      /^ {4}secrets:\n(?: {6}.*\n|\n)*? {6}device_user_id:\n(?: {8}#.*\n)* {8}required: false\n/m,
+    );
+    expect(stage).toContain('APERTURE_DEVICE_USER_ID: ${{ secrets.device_user_id }}');
+    const passes = (f: string) => read(f).match(/^ +device_user_id: .*$/gm);
+    expect(passes('deploy.yml')).toEqual([
+      '      device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}',
+      '      device_user_id: ${{ secrets.DEVICE_USER_ID_PROD }} # a prod environment secret, like the three above',
+    ]);
+    expect(passes('deploy-dev.yml')).toEqual([
+      '      device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}',
+    ]);
   });
 });

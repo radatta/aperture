@@ -127,7 +127,7 @@ jobs:
           if [ "$mode" = none ]; then mode=app; fi
           echo "Deploy mode: $mode"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          # A preview, not this dispatch's mode. It says whether a merge would run CDK (read the cdk diff first, INFRA §9),
+          # A preview, not this dispatch's mode. It says whether a merge would run CDK (check what it changes locally first, INFRA §9),
           # and it is the only run of deploy-base.ts against the real API before a merge: main-push classification runs
           # only on main. Read the log lines above this one for that proof, not the modes: a broken walk also prints `full`. API
           # trouble prints `full` with a ::warning; a crash fails here, on purpose. Assigned, so a crash can't be masked.
@@ -156,11 +156,11 @@ jobs:
       role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEV }}
-      device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
     secrets:
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
+      device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}
 
   # Slot B: the same call on the devb stack. No custom domain until CERT_ARN_DEVB is set; no finance schedule ever.
   deploy-b:
@@ -178,8 +178,7 @@ jobs:
       role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEVB }}
-      device_user_id: ''
-    secrets:
+    secrets: # no device_user_id: devb has no finance schedule
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
