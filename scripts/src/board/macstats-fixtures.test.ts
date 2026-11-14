@@ -68,6 +68,20 @@ describe('macstats.sh --render', () => {
     expect(j.mem.activeMiB).toBe(2048);
   });
 
+  it('an unreadable swap line is null; a G unit converts', () => {
+    const g = variant((f) => {
+      f['sysctl.txt'] = f['sysctl.txt']!.replace(
+        'total = 2048.00M  used = 1024.50M',
+        'total = 2.00G  used = 1.00G',
+      );
+    });
+    expect(render(g).swap).toEqual({ totalMiB: 2048, usedMiB: 1024 });
+    const bad = variant((f) => {
+      f['sysctl.txt'] = f['sysctl.txt']!.replace(/total = .*\n/, 'swap off\n');
+    });
+    expect(render(bad).swap).toBeNull();
+  });
+
   it('unreadable vm_stat fails loudly', () => {
     const d = variant((f) => {
       f['vm_stat.txt'] =
@@ -99,6 +113,17 @@ describe('macstats.sh out-dir pin (runs before any macOS tool)', () => {
     symlinkSync(join(t, 'real'), join(t, 'link'));
     expect(tick(join(t, 'link'), join(t, 'state')).stdout).toMatch(/not a plain directory/);
     expect(existsSync(join(t, 'real/mac-stats.json'))).toBe(false);
+  });
+
+  it('a directory (or a link to one) at the target is refused: mv would move into it', () => {
+    const t = mkdtempSync(join(tmpdir(), 'pin-'));
+    mkdirSync(join(t, 'out'));
+    mkdirSync(join(t, 'elsewhere'));
+    symlinkSync(join(t, 'elsewhere'), join(t, 'out/mac-stats.json'));
+    expect(tick(join(t, 'out'), join(t, 'state')).stdout).toMatch(
+      /refusing: .* is a directory or a link to one/,
+    );
+    expect(readFileSync(join(t, 'state/last'), 'utf8').trim()).toBe('target');
   });
 
   it('wrong argv is a usage error', () => {

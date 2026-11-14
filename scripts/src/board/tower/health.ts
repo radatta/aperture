@@ -19,7 +19,7 @@ export type MacStats = {
     freePct: number | null;
     pressure: string;
   };
-  swap: { totalMiB: number; usedMiB: number };
+  swap: { totalMiB: number; usedMiB: number } | null; // null: sysctl's swap line was unreadable
   load: number[];
   cpus: number;
   vm: { pid: number; comm: string; rssMiB: number } | null;
@@ -63,7 +63,10 @@ export function parseMacStats(text: string): MacStats {
       freePct: num(m.freePct),
       pressure: typeof m.pressure === 'string' ? clean(m.pressure) : '?',
     },
-    swap: { totalMiB: num(r.swap?.totalMiB) ?? 0, usedMiB: num(r.swap?.usedMiB) ?? 0 },
+    swap:
+      num(r.swap?.totalMiB) !== null && num(r.swap?.usedMiB) !== null
+        ? { totalMiB: r.swap.totalMiB, usedMiB: r.swap.usedMiB }
+        : null,
     load: Array.isArray(r.load) ? r.load.map(num).filter((x: number | null) => x !== null) : [],
     cpus: num(r.cpus) ?? 0,
     vm:
@@ -107,6 +110,9 @@ export function readMacStats(
     };
   }
   const sec = (now - stats.t) / 1000;
+  // a time ahead of ours (a skewed clock, a bug) would read fresh until the clock caught up
+  if (sec < -60)
+    return { state: 'bad', at: stats.t, error: `t is ${Math.round(-sec)} s in the future`, stats };
   const state: Fresh = sec > MAC_SILENT_SEC ? 'silent' : sec > MAC_STALE_SEC ? 'stale' : 'ok';
   return { state, at: stats.t, error: null, stats };
 }
@@ -168,6 +174,9 @@ export function readCosts(path: string, now: number, month: string): Costs {
   }
   try {
     const c = sumCosts(text, month);
+    // a pull with no rows for this month (the 1st, before a re-pull) is not "$0.00, fine"
+    if (c.through === null)
+      return { ...c, state: 'stale', at: mtime, error: `no rows for ${month}: re-pull` };
     return {
       ...c,
       state: (now - mtime) / 1000 > COSTS_STALE_SEC ? 'stale' : 'ok',

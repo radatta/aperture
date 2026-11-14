@@ -1,6 +1,7 @@
-// The web tower's GitHub reads, all through the container's read-only `gh` (docs/ops/TOWER.md → Sources): Actions
-// runs once a minute, a PR's files once per head sha, and the month's Actions minutes as an hourly estimate. Every
-// cache keeps its last good value, the time it got it and the last error: a failed read shows as failed, never empty.
+// The web tower's GitHub reads, all through the container's read-only `gh` (docs/ops/TOWER.md → Panels): Actions
+// runs once a minute, each open PR's checks by head sha, a PR's files once per head sha, and the month's Actions
+// minutes as an hourly estimate. Every cache keeps its last good value, the time it got it and the last error: a
+// failed read shows as failed, never empty.
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -11,7 +12,8 @@ export const ACTIONS_INCLUDED_MIN = 3000; // Rahul's plan (Student Pro): the pag
 
 export type GhRun = {
   id: number;
-  name: string; // the workflow's run name: `Deploy`, `PR`, or `deploy-dev <sha> <key>` for a dispatch
+  name: string; // the workflow's name: `Deploy`, `PR`, `Deploy dev (dispatch)`
+  title: string; // display_title, the run-name: `deploy-dev <sha> <key>` for a dev dispatch (bot/dispatch.ts)
   event: string;
   branch: string; // head_branch
   sha: string;
@@ -43,6 +45,7 @@ export function parseRuns(text: string): GhRun[] {
     .map((r) => ({
       id: r.id as number,
       name: s(r.name),
+      title: s(r.display_title),
       event: s(r.event),
       branch: s(r.head_branch),
       sha: s(r.head_sha),
@@ -95,34 +98,74 @@ export const runsPoller = (gh: GhText, everyMs = 60000) =>
     everyMs,
   );
 
-// A PR's changed files, fetched once per head sha (the automatic HOLD's devb rule needs them).
+// A PR's changed files, fetched once per head sha (the automatic HOLD's devb rule needs them). A failed read is
+// retried after a minute, not every tick.
 export class FilesCache {
-  private map = new Map<string, { files: string[] | null; error: string | null }>();
+  private map = new Map<string, { files: string[] | null; error: string | null; tried: number }>();
   private busy = new Set<string>();
   private gh: GhText;
   constructor(gh: GhText) {
     this.gh = gh;
   }
-  get(sha: string) {
+  get(sha: string): { files: string[] | null; error: string | null } | null {
     return this.map.get(sha) ?? null;
   }
-  async want(pr: number, sha: string): Promise<void> {
-    if (this.busy.has(sha) || this.map.get(sha)?.files) return;
+  async want(pr: number, sha: string, now: number): Promise<void> {
+    const c = this.map.get(sha);
+    if (this.busy.has(sha) || c?.files || (c && now - c.tried < 60000)) return;
     this.busy.add(sha);
     try {
       const out = JSON.parse(
         await this.gh(['pr', 'view', String(pr), '--json', 'files,headRefOid']),
-      ) as {
-        files?: { path?: unknown }[];
-        headRefOid?: string;
-      };
-      if (out.headRefOid !== sha) throw new Error('head moved'); // the next poll asks for the new sha
-      this.map.set(sha, {
-        files: (out.files ?? []).map((f) => s(f.path)).filter(Boolean),
-        error: null,
-      });
+      ) as { files?: { path?: unknown }[]; headRefOid?: string };
+      if (out.headRefOid !== sha) throw new Error('head moved'); // the next PR poll brings the new sha
+      const files = (out.files ?? []).map((f) => s(f.path)).filter(Boolean);
+      this.map.set(sha, { files, error: null, tried: now });
     } catch (e) {
-      this.map.set(sha, { files: null, error: errText(e) });
+      this.map.set(sha, { files: null, error: errText(e), tried: now });
+    } finally {
+      this.busy.delete(sha);
+    }
+    if (this.map.size > 50) this.map.delete(this.map.keys().next().value!);
+  }
+}
+
+// An open PR's checks: the pull_request runs for its head sha (`gh pr` can't read check rollups with this token).
+// Re-read every minute while any is unfinished or none is seen yet, every 2 min once all finished (a re-run shows
+// within that).
+export type Checks = { runs: GhRun[]; at: number | null; error: string | null };
+export class ChecksCache {
+  private map = new Map<string, Checks & { tried: number }>();
+  private busy = new Set<string>();
+  private gh: GhText;
+  constructor(gh: GhText) {
+    this.gh = gh;
+  }
+  get(sha: string): Checks | null {
+    return this.map.get(sha) ?? null;
+  }
+  async want(sha: string, now: number): Promise<void> {
+    const c = this.map.get(sha);
+    const done = !!c?.at && c.runs.length > 0 && c.runs.every((r) => r.status === 'completed');
+    if (this.busy.has(sha) || (c && now - c.tried < (done ? 120000 : 60000))) return;
+    this.busy.add(sha);
+    try {
+      const runs = parseRuns(
+        await this.gh([
+          'api',
+          `repos/${REPO_SLUG}/actions/runs?head_sha=${sha}&event=pull_request&per_page=30`,
+        ]),
+      );
+      // a re-run replaces its workflow's earlier run: keep the newest per workflow name
+      const newest = new Map<string, GhRun>();
+      for (const r of runs) {
+        const o = newest.get(r.name);
+        if (!o || (r.createdAt ?? 0) > (o.createdAt ?? 0)) newest.set(r.name, r);
+      }
+      this.map.set(sha, { runs: [...newest.values()], at: now, error: null, tried: now });
+    } catch (e) {
+      // keeps the last runs for the record, but derive.ts never turns them green while `error` is set
+      this.map.set(sha, { runs: c?.runs ?? [], at: c?.at ?? null, error: errText(e), tried: now });
     } finally {
       this.busy.delete(sha);
     }
@@ -131,7 +174,9 @@ export class FilesCache {
 }
 
 // Actions minutes this month, ESTIMATED: the container token can't read billing (403), so each run's jobs are
-// summed, each job rounded up to a whole minute (GitHub's per-job rounding), cached per run on disk.
+// summed, each job rounded up to a whole minute (GitHub's per-job rounding), cached per run on disk. The month is
+// UTC (GitHub's billing month). Listed one UTC day at a time: a filtered listing stops at 1,000 results, so a day
+// that reaches it makes the estimate a lower bound (`capped`), never a quiet undercount.
 export type Minutes = {
   month: string;
   minutes: number;
@@ -140,10 +185,12 @@ export type Minutes = {
   capped: boolean;
 };
 type MinutesFile = { v: 1; month: string; runs: Record<string, number> };
+export const LISTING_CAP = 1000;
 
+const pad = (n: number) => String(n).padStart(2, '0');
 export const monthKey = (now: number) => {
   const d = new Date(now);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
 };
 
 export function jobMinutes(text: string): number {
@@ -176,34 +223,45 @@ export class MinutesCache {
     }
   }
 
-  // Lists this month's completed runs (paged), then fetches jobs for up to `perCycle` uncounted ones.
+  // Lists this month's completed runs day by day (paged), then fetches jobs for up to `perCycle` uncounted ones.
+  // A failure mid-way throws (the poller keeps the last good estimate), but what was counted is saved first.
   async load(now: number): Promise<Minutes> {
     const month = monthKey(now);
     if (this.data.month !== month) this.data = { v: 1, month, runs: {} };
     const ids: number[] = [];
-    for (let page = 1; page <= 20; page++) {
-      const runs = parseRuns(
-        await this.gh([
-          'api',
-          `repos/${REPO_SLUG}/actions/runs?created=>=${month}-01&status=completed&per_page=100&page=${page}`,
-        ]),
-      );
-      ids.push(...runs.map((r) => r.id));
-      if (runs.length < 100) break;
+    let capped = false;
+    for (let day = 1; day <= new Date(now).getUTCDate(); day++) {
+      const date = `${month}-${pad(day)}`;
+      let n = 0;
+      for (let page = 1; page <= 10; page++) {
+        const runs = parseRuns(
+          await this.gh([
+            'api',
+            `repos/${REPO_SLUG}/actions/runs?created=${date}&status=completed&per_page=100&page=${page}`,
+          ]),
+        );
+        ids.push(...runs.map((r) => r.id));
+        n += runs.length;
+        if (runs.length < 100) break;
+      }
+      if (n >= LISTING_CAP) capped = true;
     }
     const todo = ids.filter((id) => !(String(id) in this.data.runs));
-    for (const id of todo.slice(0, this.perCycle))
-      this.data.runs[String(id)] = jobMinutes(
-        await this.gh(['api', `repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100`]),
-      );
-    this.save();
+    try {
+      for (const id of todo.slice(0, this.perCycle))
+        this.data.runs[String(id)] = jobMinutes(
+          await this.gh(['api', `repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100`]),
+        );
+    } finally {
+      this.save();
+    }
     const counted = ids.filter((id) => String(id) in this.data.runs);
     return {
       month,
       minutes: counted.reduce((n, id) => n + this.data.runs[String(id)]!, 0),
       counted: counted.length,
       total: ids.length,
-      capped: ids.length >= 2000,
+      capped,
     };
   }
 
@@ -217,44 +275,3 @@ export class MinutesCache {
 
 export const minutesPoller = (cache: MinutesCache, clock: () => number, everyMs = 3600000) =>
   new Poller<Minutes | null>(null, () => cache.load(clock()), everyMs);
-
-// An open PR's checks: the pull_request runs for its head sha (`gh pr` can't read check rollups with this
-// token). Re-read every minute while any is unfinished or none is seen yet, every 10 min once all finished.
-export type Checks = { runs: GhRun[]; at: number | null; error: string | null };
-export class ChecksCache {
-  private map = new Map<string, Checks & { tried: number }>();
-  private busy = new Set<string>();
-  private gh: GhText;
-  constructor(gh: GhText) {
-    this.gh = gh;
-  }
-  get(sha: string): Checks | null {
-    return this.map.get(sha) ?? null;
-  }
-  async want(sha: string, now: number): Promise<void> {
-    const c = this.map.get(sha);
-    const done = !!c?.at && c.runs.length > 0 && c.runs.every((r) => r.status === 'completed');
-    if (this.busy.has(sha) || (c && now - c.tried < (done ? 600000 : 60000))) return;
-    this.busy.add(sha);
-    try {
-      const runs = parseRuns(
-        await this.gh([
-          'api',
-          `repos/${REPO_SLUG}/actions/runs?head_sha=${sha}&event=pull_request&per_page=30`,
-        ]),
-      );
-      // a re-run replaces its workflow's earlier run: keep the newest per workflow name
-      const newest = new Map<string, GhRun>();
-      for (const r of runs) {
-        const o = newest.get(r.name);
-        if (!o || (r.createdAt ?? 0) > (o.createdAt ?? 0)) newest.set(r.name, r);
-      }
-      this.map.set(sha, { runs: [...newest.values()], at: now, error: null, tried: now });
-    } catch (e) {
-      this.map.set(sha, { runs: c?.runs ?? [], at: c?.at ?? null, error: errText(e), tried: now });
-    } finally {
-      this.busy.delete(sha);
-    }
-    if (this.map.size > 50) this.map.delete(this.map.keys().next().value!);
-  }
-}

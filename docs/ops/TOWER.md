@@ -21,16 +21,16 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 
 ## Run it
 
-| Command                                       | Does                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`), holding `/tmp/aperture-tower.lock`; its log is `localNotes/board/tower.log` |
-| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                     |
+| Command                                       | Does                                                                                                                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`). It writes `/tmp/aperture-tower.pid` once the port is bound, and "running" means that pid is alive as the tower's node; the port is the one-server lock. Log: `localNotes/board/tower.log` |
+| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                   |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
 and never from a worktree. After a merge that changes it, run `board.sh tower restart` from `/workspace`. The page's
 header shows the commit it serves. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves three read-only routes, `/`, `/app.js` and `/api/state` (`?history=1` adds the chart series),
-and nothing else.
+and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -49,7 +49,8 @@ and nothing else.
    - the container: memory against soft and hard, CPU, pids, live `test` slots against `limits.json`;
    - the Mac (below);
    - Actions minutes: an **estimate**, job times each rounded up to a minute, of the plan's 3,000 (the container
-     token can't read billing: 403);
+     token can't read billing: 403), for the UTC month, listed one UTC day at a time. A filtered listing stops at
+     1,000 runs, so a day that reaches it turns the figure into a lower bound (`≥`, amber);
    - AWS month to date.
 6. **SLIPPING**:
    - `followups[]` that are STALE (open, `after: "now"`, over 24 h: `staleFollowups()` in `queue.ts`, which
@@ -80,26 +81,32 @@ Freshness limits (`derive.ts` `STALE`):
 `derive.ts` `laneRow`, first match wins. Truth comes from locks, PRs and runs; the lane file adds the phase, the step
 and what Rahul must do.
 
-| State                                        | When                                                                                                                                                                                               |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PARKED                                       | the lane file says `parked`, or the queue's `waitingOn` starts `PARKED`                                                                                                                            |
-| MERGED → DEPLOYING → DONE / DEPLOY FAILED    | the PR merged; main's `Deploy` push run for its merge sha. A run cancelled by a later merge (deploy.yml's concurrency group) follows the newest later Deploy run, which carries it                 |
-| TESTING on dev / devb                        | the branch holds that slot's live lock. Detail: `deploying` (its `deploy-dev <sha>` run in progress), `devcheck running since` (an open ledger run, under 2 h), `held for Rahul: …`, else the step |
-| PR (checks running / no checks seen / draft) | open PR; the `pull_request` runs for its head sha (newest per workflow)                                                                                                                            |
-| CHECKS FAILED                                | a check ended other than success / skipped / neutral                                                                                                                                               |
-| MERGE ME / HOLD (reason)                     | every check green; HOLD when `holdReason` gives one                                                                                                                                                |
-| BUILDING                                     | anything else: the lane file's phase and step, or `no status file` in grey                                                                                                                         |
+| State                                                         | When                                                                                                                                                                                                             |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PARKED                                                        | the lane file says `parked`, or the queue's `waitingOn` starts `PARKED`                                                                                                                                          |
+| MERGED → DEPLOYING → DONE / DEPLOY FAILED                     | the PR merged; main's `Deploy` push run for its merge sha. A run cancelled by a later merge (deploy.yml's concurrency group) follows the newest later Deploy run, which carries it                               |
+| TESTING on dev / devb                                         | the branch holds that slot's live lock. Detail: `deploying` (its `deploy-dev <sha>` run in progress), `devcheck running since` (an open ledger run, under 2 h), `held for Rahul: …`, else the step               |
+| PR (checks running / no checks seen / checks unknown / draft) | open PR; the `pull_request` runs for its head sha (newest per workflow). Green is believed only from fresh reads: a failed or stale PR list (its head may have moved) or checks read caps it at `checks unknown` |
+| CHECKS FAILED                                                 | a check ended other than success / skipped / neutral                                                                                                                                                             |
+| MERGE ME / HOLD (reason)                                      | every check green; HOLD when `holdReason` gives one                                                                                                                                                              |
+| BUILDING                                                      | anything else: the lane file's phase and step, or `no status file` in grey                                                                                                                                       |
 
 **The automatic HOLD** (`holdReason`, first match wins). A main merge redeploys dev over a dispatched branch
 (CLAUDE.md → _Git workflow_), so:
 
-1. another branch holds a live `dev` lock;
-2. another branch holds a live `devb` lock and the PR changes devb's shape (`cdk/`, `pnpm-lock.yaml`,
-   `packages/shared/src/stage.ts`: `deploy-base.ts` → `SHAPE_PATHS`), or its files aren't read yet;
-3. a main Deploy run is queued or running;
-4. dispatch's `devQueue[].hold` reason.
+1. the `dev` lock is unknown: no cache, a failed or stale refresh (over 5 min), an unreadable expiry;
+2. another branch holds a live `dev` lock;
+3. a devcheck run is open on `dev` (even with the lock lapsed);
+4. the runs read is failed, stale or not read yet (`main deploy state unknown`);
+5. a dev dispatch (`deploy-dev <sha> <key>` run-name) is running;
+6. `devb` is busy (its lock unknown, held by another branch, or a devcheck open on it) and the PR changes devb's
+   shape (`cdk/`, `pnpm-lock.yaml`, `packages/shared/src/stage.ts`: `deploy-base.ts` → `SHAPE_PATHS`), or its
+   files aren't read yet;
+7. a main Deploy run is queued or running;
+8. dispatch's `devQueue[].hold` reason.
 
-An expired lock never holds. HOLD is never a NEEDS YOU item.
+An expired lock, when its cache is fresh, never holds. HOLD is never a NEEDS YOU item. A slot card shows `free`
+only for a fresh, free lock; an unknown one says why, in red.
 
 ## Lane files
 
@@ -165,8 +172,10 @@ and writes `<main checkout>/localNotes/board/mac-stats.json`:
 - Its only argv are the two absolute paths the installer rendered into the plist.
 - It reads nothing from the shared folder and executes nothing from it.
 - It makes no network or Keychain call.
-- Its one write is `mktemp` in the board dir, then `mv -f`, so a planted symlink at the target is replaced, never
-  followed.
+- Its one write is `mktemp` in the board dir, then `mv -f`. Before that, a symlink at the target is removed (rm
+  removes the link, not what it points at), and a directory or a link to one is refused, since `mv` would move into
+  it. The remaining race (a link re-planted between the rm and the mv) can at worst drop one stats file into the
+  directory it points at; the agent never reads or runs it.
 - A symlinked or missing board dir is refused, with one log line per change.
 
 The worst outcome of a bug is a wrong number on the page. `macstats-fixtures.test.ts` checks this statically, plus

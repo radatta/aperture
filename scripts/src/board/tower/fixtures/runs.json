@@ -12,11 +12,12 @@
       "run_started_at": "2026-11-08T03:56:00Z",
       "created_at": "2026-11-08T03:56:00Z",
       "html_url": "https://github.com/radatta/aperture/actions/runs/901",
-      "run_number": 270
+      "run_number": 270,
+      "display_title": "Alpha: an earlier change (#40)"
     },
     {
       "id": 902,
-      "name": "deploy-dev 0000000000000000000000000000000000000000 bravo-k",
+      "name": "Deploy dev (dispatch)",
       "event": "workflow_dispatch",
       "head_branch": "main",
       "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
@@ -25,7 +26,8 @@
       "run_started_at": "2026-11-08T05:50:00Z",
       "created_at": "2026-11-08T05:50:00Z",
       "html_url": "https://github.com/radatta/aperture/actions/runs/902",
-      "run_number": 130
+      "run_number": 130,
+      "display_title": "deploy-dev 0000000000000000000000000000000000000000 bravo-k"
     }
   ]
 }

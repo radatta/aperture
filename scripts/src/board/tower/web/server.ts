@@ -14,6 +14,10 @@ const STATIC: Record<string, [string, string]> = {
 
 export type GetState = (history: boolean) => unknown;
 
+// Only a browser on this machine: the Host must be localhost or a loopback address (any port), so a page elsewhere
+// can't reach the View through DNS rebinding.
+const HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
+
 // Pure of sockets: tests call it with stand-in req/res. Static files are read per request (a restart isn't
 // needed to see an edit, and they're a few KB).
 export function createHandler(getState: GetState, dir = HERE) {
@@ -29,7 +33,13 @@ export function createHandler(getState: GetState, dir = HERE) {
       res.end(body);
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain', 'GET only\n');
-    const url = new URL(req.url ?? '/', 'http://tower');
+    if (!HOST.test(req.headers.host ?? '')) return send(403, 'text/plain', 'localhost only\n');
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://tower');
+    } catch {
+      return send(400, 'text/plain', 'bad URL\n');
+    }
     const file = STATIC[url.pathname];
     if (file) {
       try {

@@ -6,7 +6,7 @@
 //   --once            print one View as JSON and exit (no socket)
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { execFile, execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -179,7 +179,7 @@ export function build(a: Args) {
     for (const p of prs?.list ?? []) {
       if (p.state !== 'OPEN' || !p.sha) continue;
       await checks?.want(p.sha, now);
-      await files?.want(p.number, p.sha);
+      await files?.want(p.number, p.sha, now);
     }
   }
 
@@ -253,6 +253,10 @@ async function run(a: Args) {
   process.stdout.write(
     `tower-web: http://localhost:${a.port} (bound ${a.bind}:${a.port}, pid ${process.pid})\n`,
   );
+  // The pidfile is written only once the port is bound: `board.sh tower` reads "running" from it, and the port
+  // itself is the one-server lock (a second server fails with EADDRINUSE). Fixture servers never write it.
+  const pidFile = process.env.APERTURE_TOWER_PID;
+  if (pidFile && !a.fixtures) writeFileSync(pidFile, `${process.pid}\n`);
   void t.poll(t.clock());
   setInterval(() => void t.poll(t.clock()), TICK_MS);
   if (!a.fixtures) {

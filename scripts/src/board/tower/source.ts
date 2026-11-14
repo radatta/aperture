@@ -273,7 +273,8 @@ export class Source {
     const f = this.lockFiles[slot].get();
     if (!f) return null;
     const branch = typeof f.holder?.branch === 'string' ? clean(f.holder.branch) : null;
-    const expiresAt = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : null;
+    const exp = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : NaN;
+    const expiresAt = Number.isNaN(exp) ? null : exp; // unreadable → null: the web tower calls that lock unknown
     const lock: Lock = {
       branch,
       sha:

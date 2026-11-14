@@ -101,3 +101,27 @@ describe('AWS costs (costs-daily.json)', () => {
     expect(readCosts(p, T, '2026-11')).toMatchObject({ state: 'bad', error: 'no ResultsByTime' });
   });
 });
+
+describe('round 1 health fixes', () => {
+  it('a Mac time over a minute ahead is bad, not fresh', () => {
+    expect(readMacStats('x', T, at(stats(T + 120000)))).toMatchObject({
+      state: 'bad',
+      error: 't is 120 s in the future',
+    });
+    expect(readMacStats('x', T, at(stats(T + 30000))).state).toBe('ok');
+  });
+  it('an unreadable swap is null, never 0 of 0', () => {
+    expect(readMacStats('x', T, at(stats(T, { swap: null }))).stats!.swap).toBeNull();
+    expect(readMacStats('x', T, at(stats(T, { swap: { totalMiB: 'x' } }))).stats!.swap).toBeNull();
+  });
+  it('a pull with no rows for this month is stale with a reason, not $0.00 ok', () => {
+    const d = mkdtempSync(join(tmpdir(), 'costs-'));
+    const p = join(d, 'costs-daily.json');
+    writeFileSync(p, ce([['2026-10-31', '618015769091', '5']]));
+    expect(readCosts(p, Date.now(), '2026-11')).toMatchObject({
+      state: 'stale',
+      total: 0,
+      error: 'no rows for 2026-11: re-pull',
+    });
+  });
+});

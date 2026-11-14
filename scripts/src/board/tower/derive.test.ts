@@ -5,6 +5,7 @@ import {
   holdReason,
   laneRow,
   liveLock,
+  lockRead,
   sources,
   type Inputs,
 } from './derive.ts';
@@ -44,6 +45,7 @@ const pr = (over: Partial<Pr> = {}): Pr => ({
 const run = (over: Partial<GhRun> = {}): GhRun => ({
   id: 1,
   name: 'PR',
+  title: 'A change',
   event: 'pull_request',
   branch: 'echo',
   sha: sha('e'),
@@ -187,7 +189,8 @@ describe('laneRow states', () => {
 
   it("TESTING's detail: deploying, then devcheck running, then held for Rahul, then the step", () => {
     const deploying = run({
-      name: `deploy-dev ${sha('a')} echo-k`,
+      name: 'Deploy dev (dispatch)',
+      title: `deploy-dev ${sha('a')} echo-k`,
       event: 'workflow_dispatch',
       branch: 'main',
       status: 'in_progress',
@@ -474,7 +477,7 @@ describe('derive', () => {
 
 describe('sources: every source with its age; failed is failed, never empty', () => {
   it('names every source and marks failures and staleness', () => {
-    const i = inputs({ lock: lock(null, { failed: true }) });
+    const i = inputs({ lock: lock(null, { failed: true, asOf: NOW - 400000 }) });
     i.tower.prs = { list: [pr()], at: NOW - 10 * MIN, error: 'HTTP 502' };
     i.runs = { value: [], at: NOW - 10 * MIN, error: null, tried: NOW };
     const s = Object.fromEntries(sources(i).map((r) => [r.name, r]));
@@ -485,13 +488,14 @@ describe('sources: every source with its age; failed is failed, never empty', ()
       'queue.json',
       'gh PRs',
       'gh runs',
+      'gh checks',
       'Actions minutes',
       'Mac stats',
       'AWS costs',
       'lane files',
     ]);
     expect(s['sampler']!.state).toBe('missing');
-    expect(s['dev lock']).toMatchObject({ state: 'failed', detail: 'last refresh failed' });
+    expect(s['dev lock']).toMatchObject({ state: 'failed', detail: 'refresh failing' });
     expect(s['gh PRs']).toMatchObject({ state: 'failed', detail: 'HTTP 502' });
     expect(s['gh runs']!.state).toBe('stale');
     expect(s['Actions minutes']!.state).toBe('missing');
@@ -502,5 +506,111 @@ describe('sources: every source with its age; failed is failed, never empty', ()
     expect(liveLock(lock('x'), NOW)).toBe(true);
     expect(liveLock(lock('x', { expiresAt: null }), NOW)).toBe(false);
     expect(liveLock(null, NOW)).toBe(false);
+  });
+});
+
+describe('round 1: a failed, stale or missing source never reads as good', () => {
+  const p = pr();
+  it('lockRead: no cache, a failed refresh, a stale cache, an unreadable expiry are unknown', () => {
+    expect(lockRead(null, NOW)).toMatchObject({ state: 'unknown', why: 'no lock cache' });
+    expect(lockRead(lock(null, { failed: true, asOf: NOW - 301000 }), NOW).why).toMatch(
+      /^refresh failed, last read \d\d:\d\d$/,
+    );
+    expect(lockRead(lock(null, { asOf: NOW - 301000 }), NOW).why).toMatch(/^cache stale/);
+    // a failed refresh after a read under 5 min old: the read stands (devlock.sh's rule)
+    expect(lockRead(lock('x', { failed: true }), NOW).state).toBe('live');
+    expect(lockRead(lock('x', { expiresAt: null }), NOW).why).toBe('holder expiry unreadable');
+    expect(lockRead(lock('x'), NOW).state).toBe('live');
+    expect(lockRead(lock(null), NOW).state).toBe('free');
+  });
+  it('an unknown dev lock holds every merge', () => {
+    expect(
+      holdReason(p, null, inputs({ lock: lock(null, { failed: true, asOf: NOW - 400000 }) })),
+    ).toMatch(/^dev lock unknown \(refresh failed/);
+    expect(holdReason(p, null, inputs({ lock: null }))).toBe('dev lock unknown (no lock cache)');
+  });
+  it('a dev devcheck in flight or a dev dispatch running holds, even with the lock lapsed', () => {
+    const ledger = [
+      { run: 'r', start: NOW - 5 * MIN, end: null, status: null, full: true, slot: 'dev' as const },
+    ];
+    expect(holdReason(p, null, inputs({ ledger }))).toMatch(/^dev: a devcheck is running since/);
+    const disp = run({
+      name: 'Deploy dev (dispatch)',
+      title: `deploy-dev ${sha('c')} k`,
+      status: 'in_progress',
+      conclusion: null,
+    });
+    expect(holdReason(p, null, inputs({ runs: [disp] }))).toBe('a dev deploy is running');
+  });
+  it('failed, stale or unread runs hold as "main deploy state unknown"', () => {
+    const i = inputs();
+    i.runs = { value: [], at: NOW - MIN, error: 'HTTP 502', tried: NOW };
+    expect(holdReason(p, null, i)).toMatch(/^main deploy state unknown \(gh runs failed: HTTP 502/);
+    i.runs = { value: [], at: NOW - 10 * MIN, error: null, tried: NOW };
+    expect(holdReason(p, null, i)).toMatch(/stale/);
+    i.runs = { value: [], at: null, error: null, tried: null };
+    expect(holdReason(p, null, i)).toMatch(/not read yet/);
+  });
+  it('an unknown devb lock holds only a shape-changing or unread PR', () => {
+    const i = (files: string[] | null) =>
+      inputs({
+        lockB: lock(null, { failed: true, asOf: NOW - 400000 }),
+        ...(files ? { files: { [sha('e')]: files } } : {}),
+      });
+    expect(holdReason(p, null, i(['app/x.ts']))).toBeNull();
+    expect(holdReason(p, null, i(['cdk/x.ts']))).toMatch(
+      /^devb lock unknown .* changes devb's shape$/,
+    );
+    expect(holdReason(p, null, i(null))).toMatch(/^devb lock unknown .* aren't read yet$/);
+  });
+  it('green checks are not MERGE ME when the checks read failed, or the PR list is stale or failed', () => {
+    const i = inputs({ checks: green });
+    i.checks = () => ({ runs: green[sha('e')]!, at: NOW - MIN, error: 'HTTP 403' });
+    expect(row(i, { pr: p })).toMatchObject({
+      label: 'PR (checks unknown)',
+      detail: expect.stringMatching(/failed: HTTP 403/),
+    });
+    const j = inputs({ checks: green });
+    j.tower.prs = { list: [p], at: NOW - 10 * MIN, error: null };
+    expect(row(j, { pr: p }).label).toBe('PR (checks unknown)');
+    const k = inputs({ checks: green });
+    k.checks = () => ({ runs: green[sha('e')]!, at: NOW - 6 * MIN, error: null });
+    expect(row(k, { pr: p }).label).toBe('PR (checks unknown)');
+    // a failure stays a failure: only green is held back
+    const f = inputs({ checks: { [sha('e')]: [run({ conclusion: 'failure' })] } });
+    f.tower.prs = { list: [p], at: NOW - 10 * MIN, error: 'x' };
+    expect(row(f, { pr: p }).state).toBe('CHECKS FAILED');
+  });
+  it('a merged PR with failed runs says the deploy is unknown, not "not seen"', () => {
+    const i = inputs();
+    i.runs = { value: [], at: NOW - MIN, error: 'HTTP 502', tried: NOW };
+    expect(
+      row(i, { pr: pr({ state: 'MERGED', mergedAt: NOW, mergeSha: sha('m') }) }).detail,
+    ).toMatch(/^deploy unknown \(gh runs failed/);
+  });
+  it('slot cards carry the lock state; an unreadable lane file is a NEEDS YOU item', () => {
+    const i = inputs({ lock: lock('bravo', { failed: true, asOf: NOW - 400000 }), lockB: null });
+    i.laneProblems = [{ file: 'x.json', problem: 'not JSON: …' }];
+    const v = derive(i);
+    expect(v.slots.map((s) => [s.slot, s.state, s.branch])).toEqual([
+      ['dev', 'unknown', 'bravo'],
+      ['devb', 'unknown', null],
+    ]);
+    expect(v.needs.find((n) => n.kind === 'source')!.what).toMatch(/lanes\/x.json is unreadable/);
+  });
+  it('a merged lane file whose PR fell out of the list is MERGED, not BUILDING', () => {
+    expect(row(inputs(), { file: file({ phase: 'merged' }) })).toMatchObject({
+      state: 'MERGED',
+      tone: 'warn',
+    });
+  });
+  it('gh checks source: failed with the PR, ok with none open', () => {
+    const i = inputs();
+    i.tower.prs = { list: [pr()], at: NOW - MIN, error: null };
+    i.checks = () => ({ runs: [], at: null, error: 'HTTP 403' });
+    expect(sources(i).find((s) => s.name === 'gh checks')).toMatchObject({
+      state: 'failed',
+      detail: 'PR 50: HTTP 403',
+    });
   });
 });

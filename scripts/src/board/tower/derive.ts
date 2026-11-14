@@ -55,6 +55,8 @@ export type SlotCard = {
   since: number | null;
   expiresAt: number | null;
   live: boolean;
+  state: LockRead['state']; // the page shows `free` only for `free`, never for `unknown`
+  why: string | null;
   asOf: number | null;
   failed: boolean;
 };
@@ -79,7 +81,14 @@ export type Health = {
     testCap: number | null;
   } | null;
   mac: MacRead;
-  actions: { minutes: number; of: number; counted: number; total: number; month: string } | null;
+  actions: {
+    minutes: number;
+    of: number;
+    counted: number;
+    total: number;
+    month: string;
+    capped: boolean;
+  } | null;
   aws: Costs;
 };
 export type View = {
@@ -135,6 +144,7 @@ export type Inputs = {
 
 // Freshness thresholds, seconds (TOWER.md → Sources): past them a source shows amber with its age.
 export const STALE = {
+  checks: 300,
   sampler: 90,
   lock: 300,
   gh: 180,
@@ -151,6 +161,47 @@ export const liveLock = (l: Lock | null, now: number): l is Lock & { branch: str
 const mainDeploys = (runs: GhRun[]) =>
   runs.filter((r) => r.name === 'Deploy' && r.event === 'push' && r.branch === 'main');
 const running = (r: GhRun) => r.status !== 'completed';
+const sinceAt = (at: number | null) => (at === null ? '' : `, last read ${hhmm(at)}`);
+
+// A source read Rahul can act on only when it is fresh: failed, stale or never read is `why`, never "fine".
+export function ghFresh(
+  c: { at: number | null; error: string | null },
+  now: number,
+  lim = STALE.gh,
+): string | null {
+  if (c.error) return `failed: ${c.error}${sinceAt(c.at)}`;
+  if (c.at === null) return 'not read yet';
+  return now - c.at > lim * 1000 ? `stale${sinceAt(c.at)}` : null;
+}
+
+// A dev slot's lock as the page may claim it: live, free, or unknown (no cache, no good read in 5 min, an unreadable
+// expiry). An unknown lock is never shown as free and always holds a merge.
+export type LockRead = { state: 'live' | 'free' | 'unknown'; why: string | null };
+export function lockRead(l: Lock | null, now: number): LockRead {
+  if (!l) return { state: 'unknown', why: 'no lock cache' };
+  // devlock.sh's rule: a failed refresh matters once the last good read is stale (refreshes there fail now and then)
+  if (l.asOf === null || now - l.asOf > STALE.lock * 1000)
+    return {
+      state: 'unknown',
+      why: `${l.failed ? 'refresh failed' : 'cache stale'}${sinceAt(l.asOf)}`,
+    };
+  if (l.branch && l.expiresAt === null)
+    return { state: 'unknown', why: 'holder expiry unreadable' };
+  return liveLock(l, now) ? { state: 'live', why: null } : { state: 'free', why: null };
+}
+
+// An open devcheck run on a slot (a ledger run-start with no end, under 2 h: older is an orphan).
+const openRun = (i: Inputs, slot: Slot) =>
+  i.tower.runs.find(
+    (r) => r.slot === slot && r.start !== null && r.end === null && i.now - r.start < RUN_FRESH_MS,
+  );
+// A dev dispatch in flight, matched by its run-name (display_title `deploy-dev <sha> <key>`).
+const dispatching = (i: Inputs, sha?: string | null) =>
+  i.runs.value.find(
+    (r) =>
+      running(r) &&
+      (sha ? r.title.startsWith(`deploy-dev ${sha} `) : r.title.startsWith('deploy-dev ')),
+  );
 
 // The main Deploy run that carries a merge: its own, or, when that one was cancelled by a later merge (deploy.yml's
 // concurrency group), the newest later Deploy run, which deploys main's head and so this merge too.
@@ -176,13 +227,8 @@ export function slotDetail(
   i: Inputs,
   file: LaneFile | null,
 ): string | null {
-  const dispatch = lock.sha
-    ? i.runs.value.find((r) => r.name.startsWith(`deploy-dev ${lock.sha} `) && running(r))
-    : undefined;
-  if (dispatch) return 'deploying';
-  const run = i.tower.runs.find(
-    (r) => r.slot === slot && r.start !== null && r.end === null && i.now - r.start < RUN_FRESH_MS,
-  );
+  if (lock.sha && dispatching(i, lock.sha)) return 'deploying';
+  const run = openRun(i, slot);
   if (run) return `devcheck running since ${hhmm(run.start!)}`;
   if (file?.needs) return `held for Rahul: ${file.needs.what}`;
   return file?.step ?? (file ? file.phase : null);
@@ -191,16 +237,33 @@ export function slotDetail(
 // The automatic merge HOLD (TOWER.md → HOLD): a main merge redeploys dev over a dispatched branch (CLAUDE.md →
 // Git workflow), and devb only when the merge changes devb's shape (deploy-base.ts → SHAPE_PATHS). First match wins.
 export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null {
-  const lock = (slot: Slot) => (slot === 'dev' ? i.tower.lock : i.tower.lockB);
-  const dev = lock('dev');
-  if (liveLock(dev, i.now) && dev.branch !== pr.branch)
-    return `dev: ${dev.branch} is testing, lock to ${hhmm(dev.expiresAt!)}`;
-  const devb = lock('devb');
-  if (liveLock(devb, i.now) && devb.branch !== pr.branch) {
+  const dev = lockRead(i.tower.lock, i.now);
+  if (dev.state === 'unknown') return `dev lock unknown (${dev.why})`;
+  const devLock = i.tower.lock!;
+  if (dev.state === 'live' && devLock.branch !== pr.branch)
+    return `dev: ${devLock.branch} is testing, lock to ${hhmm(devLock.expiresAt!)}`;
+  const devRun = openRun(i, 'dev');
+  if (devRun) return `dev: a devcheck is running since ${hhmm(devRun.start!)}`;
+  const runs = ghFresh(i.runs, i.now);
+  if (runs) return `main deploy state unknown (gh runs ${runs})`;
+  if (dispatching(i)) return 'a dev deploy is running';
+
+  // devb only matters when the merge changes devb's shape
+  const b = lockRead(i.tower.lockB, i.now);
+  const bLock = i.tower.lockB;
+  const bBusy =
+    b.state === 'unknown'
+      ? `devb lock unknown (${b.why})`
+      : b.state === 'live' && bLock!.branch !== pr.branch
+        ? `devb: ${bLock!.branch} is testing`
+        : openRun(i, 'devb')
+          ? 'devb: a devcheck is running'
+          : null;
+  if (bBusy) {
     const f = pr.sha ? i.files(pr.sha) : null;
-    if (!f?.files) return `devb: ${devb.branch} is testing and this PR's files aren't read yet`;
-    if (f.files.some(SHAPE_PATHS))
-      return `devb: ${devb.branch} is testing and this PR changes devb's shape`;
+    if (!f?.files)
+      return `${bBusy} and this PR's files aren't read yet${f?.error ? ` (${f.error})` : ''}`;
+    if (f.files.some(SHAPE_PATHS)) return `${bBusy} and this PR changes devb's shape`;
   }
   const dep = mainDeploys(i.runs.value).find(running);
   if (dep) return `main deploy${dep.number ? ` ${dep.number}` : ''} running`;
@@ -238,7 +301,16 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
 
   if (pr?.state === 'MERGED') {
     const d = deployFor(pr.mergeSha, i.runs.value);
-    if (!d) return row('MERGED', 'MERGED', 'deploy run not seen yet', 'warn', pr.mergedAt);
+    if (!d) {
+      const r = ghFresh(i.runs, i.now);
+      return row(
+        'MERGED',
+        'MERGED',
+        r ? `deploy unknown (gh runs ${r})` : 'deploy run not seen yet',
+        'warn',
+        pr.mergedAt,
+      );
+    }
     const dep = d.run;
     const via = d.via ? ` (its own was superseded)` : '';
     if (running(dep))
@@ -313,12 +385,25 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
         'bad',
         pr.createdAt,
       );
+    // Green only from fresh reads: the PR list (its head may have moved) and this head's checks.
+    const unsure =
+      ghFresh(i.tower.prs, i.now) ?? (ch ? ghFresh(ch, i.now, STALE.checks) : 'not read yet');
+    if (unsure) return row('PR', 'PR (checks unknown)', `gh ${unsure}`, 'warn', pr.createdAt);
     const hold = holdReason(pr, queue, i);
     if (hold) return row('HOLD', `HOLD (${hold})`, null, 'warn', pr.createdAt, hold);
     return row('MERGE ME', 'MERGE ME', null, 'good', pr.createdAt);
   }
 
   if (!file) return row('BUILDING', 'BUILDING', 'no status file', 'dim', null);
+  // a lane file past its merge whose PR is no longer in the PR list (the newest 40): Cleanup clears it
+  if ((file.phase === 'merged' || file.phase === 'cleanup') && !pr)
+    return row(
+      'MERGED',
+      'MERGED',
+      'PR not in the newest 40 read; `pnpm board lane --clear` at Cleanup',
+      'warn',
+      file.phaseSince,
+    );
   const word: Record<string, string> = {
     plan: 'Plan',
     build: 'Build',
@@ -397,6 +482,17 @@ export function derive(i: Inputs): View {
   // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for Rahul, sources only Rahul can fix.
   const needs: NeedItem[] = [];
   for (const l of i.lanes) if (l.needs) needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
+  // an unreadable lane file may have carried a needs item: say so where Rahul looks first
+  for (const p of i.laneProblems)
+    needs.push({
+      kind: 'source',
+      what: `Lane file lanes/${p.file} is unreadable (${p.problem}): what it asked is unknown`,
+      link: null,
+      cmd: null,
+      unblocks: null,
+      since: null,
+      branch: null,
+    });
   for (const r of rows.filter((r) => r.state === 'MERGE ME' && r.pr)) {
     const waiting = (q?.devQueue ?? []).filter(
       (l) => l.branch !== r.branch && (l.waitingOn ?? '').includes(`PR ${r.pr!.number}`),
@@ -452,7 +548,8 @@ export function derive(i: Inputs): View {
 
   const slots: SlotCard[] = (['dev', 'devb'] as const).map((slot) => {
     const lock = slot === 'dev' ? t.lock : t.lockB;
-    const live = liveLock(lock, i.now);
+    const read = lockRead(lock, i.now);
+    const live = liveLock(lock, i.now); // a holder from a stale cache still shows, marked unknown
     const file = live ? (files.get(lock.branch) ?? null) : null;
     return {
       slot,
@@ -464,6 +561,8 @@ export function derive(i: Inputs): View {
       since: live && file?.phase === 'dev' ? file.phaseSince : null,
       expiresAt: live ? lock.expiresAt : null,
       live,
+      state: read.state,
+      why: read.why,
       asOf: lock?.asOf ?? null,
       failed: lock?.failed ?? false,
     };
@@ -571,6 +670,7 @@ export function derive(i: Inputs): View {
       actions: m
         ? {
             minutes: m.minutes,
+            capped: m.capped,
             of: ACTIONS_INCLUDED_MIN,
             counted: m.counted,
             total: m.total,
@@ -616,9 +716,19 @@ export function sources(i: Inputs): SourceRow[] {
     out.push(
       !l
         ? { name, state: 'missing', at: null, detail: 'no lock cache' }
-        : l.failed
-          ? { name, state: 'failed', at: l.asOf, detail: 'last refresh failed' }
-          : { name, state: fresh(l.asOf, STALE.lock), at: l.asOf, detail: null },
+        : fresh(l.asOf, STALE.lock) === 'stale'
+          ? {
+              name,
+              state: l.failed ? 'failed' : 'stale',
+              at: l.asOf,
+              detail: l.failed ? 'refresh failing' : null,
+            }
+          : {
+              name,
+              state: 'ok',
+              at: l.asOf,
+              detail: l.failed ? 'the last refresh failed; this read stands' : null,
+            },
     );
   const q = t.queue;
   out.push(
@@ -640,6 +750,27 @@ export function sources(i: Inputs): SourceRow[] {
   );
   out.push(gh('gh PRs', { at: t.prs.at, error: t.prs.error }, i.now));
   out.push(gh('gh runs', i.runs, i.now));
+  const open = t.prs.list.filter((p) => p.state === 'OPEN' && !p.draft && p.sha);
+  const bad = open.map((p) => ({ p, c: i.checks(p.sha!) })).filter(({ c }) => !c || c.error);
+  out.push(
+    !open.length
+      ? { name: 'gh checks', state: 'ok', at: t.prs.at, detail: 'no open PRs' }
+      : bad.length
+        ? {
+            name: 'gh checks',
+            state: bad.some(({ c }) => c?.error) ? 'failed' : 'missing',
+            at: null,
+            detail: bad
+              .map(({ p, c }) => `PR ${p.number}: ${c?.error ?? 'not read yet'}`)
+              .join('; '),
+          }
+        : {
+            name: 'gh checks',
+            state: 'ok',
+            at: Math.min(...open.map((p) => i.checks(p.sha!)!.at ?? 0)),
+            detail: `${open.length} open PRs`,
+          },
+  );
   if (i.minutes) {
     const s = i.minutes.state;
     const m = s.value;

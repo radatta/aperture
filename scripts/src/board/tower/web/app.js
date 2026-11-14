@@ -44,6 +44,27 @@ function body(id) {
   return b;
 }
 const empty = (b, text) => b.append(el('div', 'empty', text));
+// Each panel's sources: an empty panel says "can't tell" when one of them isn't ok, never a calm "nothing".
+const PANEL_SOURCES = {
+  needs: ['lane files', 'gh PRs', 'gh checks', 'gh runs', 'queue.json', 'Mac stats'],
+  now: ['dev lock', 'devb lock', 'lane files', 'gh PRs'],
+  next: ['queue.json', 'gh PRs', 'gh checks'],
+  done: ['gh PRs', 'gh runs'],
+  slipping: ['queue.json', 'lane files'],
+};
+const notOk = (v, id) =>
+  v.sources.filter((s) => PANEL_SOURCES[id].includes(s.name) && s.state !== 'ok');
+function emptyOr(v, b, id, text) {
+  const bad = notOk(v, id);
+  if (!bad.length) return empty(b, text);
+  b.append(
+    el(
+      'div',
+      't-bad',
+      `can't tell: ${bad.map((s) => `${s.name} ${s.state}${s.detail ? ` (${s.detail})` : ''}`).join('; ')}`,
+    ),
+  );
+}
 
 function copyButton(text) {
   const btn = el('button', null, 'copy');
@@ -64,7 +85,7 @@ function needs(v) {
   const b = body('needs');
   $('#needs .count').textContent = `(${v.needs.length})`;
   $('#needs').classList.toggle('has', v.needs.length > 0);
-  if (!v.needs.length) return empty(b, 'nothing needs you');
+  if (!v.needs.length) return emptyOr(v, b, 'needs', 'nothing needs you');
   for (const n of v.needs) {
     const r = el('div', 'row');
     const w = el('div', 'what');
@@ -117,6 +138,8 @@ function nowPanel(v) {
   for (const s of v.slots) {
     const c = el('div', 'slot');
     c.append(el('div', 'name', s.slot));
+    if (s.state === 'unknown')
+      c.append(el('div', 'sub t-bad', `unknown: ${s.why}${s.live ? ' · last seen held:' : ''}`));
     if (s.live) {
       c.append(el('div', null, `${s.branch}${s.session ? ` (${s.session})` : ''}`));
       c.append(el('div', 'sub', s.detail ?? 'holding the lock'));
@@ -127,13 +150,12 @@ function nowPanel(v) {
           `${s.since ? `for ${ago(s.since, v.now)} · ` : ''}lock to ${hhmm(s.expiresAt)}`,
         ),
       );
-    } else c.append(el('div', 'sub', 'free'));
-    if (s.failed) c.append(el('div', 'sub t-bad', 'lock refresh failed: this may be stale'));
+    } else if (s.state === 'free') c.append(el('div', 'sub', 'free'));
     slots.append(c);
   }
   b.append(slots);
   const rows = v.active.filter((r) => r.state !== 'TESTING');
-  if (!rows.length) empty(b, 'no lanes building');
+  if (!rows.length) emptyOr(v, b, 'now', 'no lanes building');
   for (const r of rows) b.append(laneLine(r, v.now));
 }
 
@@ -158,12 +180,12 @@ function next(v) {
       b.append(r);
     });
   }
-  if (!b.children.length) empty(b, 'nothing queued');
+  if (!b.children.length) emptyOr(v, b, 'next', 'nothing queued');
 }
 
 function done(v) {
   const b = body('done');
-  if (!v.done.length) return empty(b, 'no merges today');
+  if (!v.done.length) return emptyOr(v, b, 'done', 'no merges today');
   for (const d of v.done) {
     const r = el('div', 'row');
     r.append(el('span', 'sub', hhmm(d.mergedAt)));
@@ -244,7 +266,11 @@ function health(v) {
           s.mem.pressure,
           s.mem.pressure === 'normal' ? null : s.mem.pressure === 'warn' ? 'warn' : 'bad',
         ],
-        ['swap', `${gib(s.swap.usedMiB)} of ${gib(s.swap.totalMiB)}`, null],
+        [
+          'swap',
+          s.swap ? `${gib(s.swap.usedMiB)} of ${gib(s.swap.totalMiB)}` : 'unknown (unreadable)',
+          s.swap ? null : 'warn',
+        ],
         ['VM', s.vm ? `${s.vm.comm} ${gib(s.vm.rssMiB)}` : 'no VM process found', null],
         ['load', s.load.map((x) => x.toFixed(2)).join(' ') + ` (${s.cpus} cpus)`, null],
         [
@@ -269,12 +295,23 @@ function health(v) {
     );
   else {
     const a = h.actions;
+    const srcTone =
+      minutesSrc?.state === 'ok' ? null : minutesSrc?.state === 'stale' ? 'warn' : 'bad';
+    if (srcTone)
+      b.append(
+        el(
+          'div',
+          `t-${srcTone}`,
+          `estimate ${minutesSrc.state}: ${minutesSrc.detail ?? ''} (the figure below is the last good one)`,
+        ),
+      );
     b.append(
       kv([
         [
           'minutes',
-          `≈ ${a.minutes.toLocaleString()} of ${a.of.toLocaleString()} (plan) · ${a.month}`,
-          a.minutes > a.of ? 'bad' : a.minutes > a.of * 0.8 ? 'warn' : null,
+          `${a.capped ? '≥' : '≈'} ${a.minutes.toLocaleString()} of ${a.of.toLocaleString()} (plan) · ${a.month} UTC${a.capped ? ' (a day hit the 1,000-run listing cap: a lower bound)' : ''}`,
+          srcTone ??
+            (a.capped || a.minutes > a.of * 0.8 ? (a.minutes > a.of ? 'bad' : 'warn') : null),
         ],
         [
           'how',
@@ -289,6 +326,7 @@ function health(v) {
   if (w.state === 'missing')
     b.append(el('div', 't-bad', 'no costs pull (localNotes/costs-daily.json)'));
   else if (w.state === 'bad') b.append(el('div', 't-bad', `costs unreadable: ${w.error}`));
+  else if (w.error) b.append(el('div', 't-warn', `costs: ${w.error}`));
   else {
     const acct = Object.entries(w.byAccount)
       .map(([k, x]) => `${k} $${x.toFixed(2)}`)
@@ -309,7 +347,7 @@ function health(v) {
 function slipping(v) {
   const b = body('slipping');
   $('#slipping .count').textContent = `(${v.slipping.length})`;
-  if (!v.slipping.length) return empty(b, 'nothing slipping');
+  if (!v.slipping.length) return emptyOr(v, b, 'slipping', 'nothing slipping');
   for (const s of v.slipping) {
     const r = el('div', 'row');
     r.append(
@@ -339,16 +377,18 @@ function sources(v) {
     b.append(r);
   }
   for (const p of v.problems) b.append(el('div', 'row t-bad', p));
-  const ages = (names) => {
-    const xs = v.sources.filter((s) => names.includes(s.name));
-    const worst = xs.find((s) => s.state !== 'ok');
-    return worst
+  for (const id of ['needs', 'now', 'done']) {
+    const a = $(`#${id} .age`);
+    const bad = notOk(v, id);
+    const worst = bad.find((s) => s.state !== 'stale') ?? bad[0];
+    a.className = `age ${worst ? (worst.state === 'stale' ? 't-warn' : 't-bad') : 'sub'}`;
+    a.textContent = worst
       ? `${worst.name}: ${worst.state}`
-      : xs.map((s) => (s.at ? ago(s.at, v.now) : '')).join(' · ');
-  };
-  $('#needs .age').textContent = ages(['lane files', 'gh PRs', 'queue.json']);
-  $('#now .age').textContent = ages(['dev lock', 'devb lock', 'lane files']);
-  $('#done .age').textContent = ages(['gh PRs', 'gh runs']);
+      : v.sources
+          .filter((s) => PANEL_SOURCES[id].includes(s.name) && s.at)
+          .map((s) => ago(s.at, v.now))
+          .join(' · ');
+  }
 }
 
 // One series per chart (one axis each), crosshair + value on hover; reference lines recessive.

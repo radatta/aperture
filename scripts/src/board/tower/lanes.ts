@@ -90,8 +90,10 @@ export function readLanes(boardDir: string): { lanes: LaneFile[]; problems: Lane
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith('.json'));
-  } catch {
-    return { lanes: [], problems: [] };
+  } catch (e) {
+    // no dir yet is no lanes; anything else (EACCES, EIO) is a problem, never a quiet "0 lanes"
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { lanes: [], problems: [] };
+    return { lanes: [], problems: [{ file: 'lanes/', problem: clean((e as Error).message) }] };
   }
   const lanes: LaneFile[] = [];
   const problems: LaneProblem[] = [];

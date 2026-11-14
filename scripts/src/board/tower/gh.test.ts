@@ -83,7 +83,7 @@ describe('ChecksCache', () => {
     expect(calls).toHaveLength(2);
     await c.want(sha, 120000);
     expect(calls).toHaveLength(2);
-    await c.want(sha, 660000);
+    await c.want(sha, 180001);
     expect(calls).toHaveLength(3);
   });
 });
@@ -95,13 +95,18 @@ describe('FilesCache', () => {
     const f = new FilesCache(
       async () => (n++, JSON.stringify({ headRefOid: head, files: [{ path: 'cdk/x.ts' }] })),
     );
-    await f.want(5, 'a'.repeat(40));
-    await f.want(5, 'a'.repeat(40));
-    expect(f.get('a'.repeat(40))).toEqual({ files: ['cdk/x.ts'], error: null });
+    await f.want(5, 'a'.repeat(40), 0);
+    await f.want(5, 'a'.repeat(40), 1000);
+    expect(f.get('a'.repeat(40))).toMatchObject({ files: ['cdk/x.ts'], error: null });
     expect(n).toBe(1);
     head = 'c'.repeat(40);
-    await f.want(5, 'b'.repeat(40));
-    expect(f.get('b'.repeat(40))).toEqual({ files: null, error: 'head moved' });
+    await f.want(5, 'b'.repeat(40), 2000);
+    expect(f.get('b'.repeat(40))).toMatchObject({ files: null, error: 'head moved' });
+    // a failed read waits a minute before the next try
+    await f.want(5, 'b'.repeat(40), 30000);
+    expect(n).toBe(2);
+    await f.want(5, 'b'.repeat(40), 62001);
+    expect(n).toBe(3);
   });
 });
 
@@ -127,7 +132,10 @@ describe('Actions minutes estimate', () => {
         return JSON.stringify({
           jobs: [{ started_at: '2026-11-13T19:00:00Z', completed_at: '2026-11-13T19:01:30Z' }],
         });
-      return page(ids.map((id) => runJson({ id })));
+      // the runs were all created on the 13th (or, in December, the 1st); other days list none
+      return route.includes('created=2026-11-13&') || route.includes('created=2026-12-01&')
+        ? page(ids.map((id) => runJson({ id })))
+        : page([]);
     };
     const now = Date.parse('2026-11-13T20:00:00Z');
     const m = new MinutesCache(file, gh, 2);
@@ -138,12 +146,33 @@ describe('Actions minutes estimate', () => {
       total: 3,
       capped: false,
     });
-    expect(calls[0]).toContain(`created=>=2026-11-01`);
+    // one UTC day per listing (a filtered listing stops at 1,000 results)
+    expect(
+      calls.filter((c) => c.includes('created=')).map((c) => /created=([\d-]+)/.exec(c)![1]),
+    ).toEqual(Array.from({ length: 13 }, (_, d) => `2026-11-${String(d + 1).padStart(2, '0')}`));
     expect(await new MinutesCache(file, gh, 2).load(now)).toMatchObject({ minutes: 6, counted: 3 });
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ v: 1, month: '2026-11' });
     calls.length = 0;
     await new MinutesCache(file, gh, 5).load(Date.parse('2026-12-01T09:00:00Z'));
     expect(calls.filter((c) => c.includes('/jobs'))).toHaveLength(3);
     expect(monthKey(Date.parse('2026-12-01T09:00:00Z'))).toBe('2026-12');
+  });
+});
+
+describe('the listing cap', () => {
+  it('a day with 1,000 runs makes the estimate a lower bound', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'cap-')), 'runs.json');
+    let next = 1;
+    const gh = async (a: string[]) => {
+      const route = a[1]!;
+      if (route.includes('/jobs')) return JSON.stringify({ jobs: [] });
+      if (!route.includes('created=2026-11-02&')) return page([]);
+      return page(Array.from({ length: 100 }, () => runJson({ id: next++ })));
+    };
+    const r = await new MinutesCache(file, gh, 0).load(Date.parse('2026-11-02T12:00:00Z'));
+    expect(r).toMatchObject({ capped: true, total: 1000 });
+  });
+  it('the month is UTC: 2026-11-30 20:00 PST is already December', () => {
+    expect(monthKey(Date.parse('2026-12-01T04:00:00Z'))).toBe('2026-12');
   });
 });

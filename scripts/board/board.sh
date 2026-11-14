@@ -201,32 +201,38 @@ cmd_sampler() {
 
 # --- web tower lifecycle (docs/ops/TOWER.md) ---
 
-tower_running() { ! flock -n "$TOWER_LOCK" true 2>/dev/null; }
+# Running = the pidfile's process is alive and is the tower's node (the server writes it only once it has bound
+# the port). Never by name, never by a lock an inherited fd could keep held (kill-by-PID rule).
+tower_pid() {
+  local p; p=$(cat "$TOWER_PID" 2>/dev/null) || return 1
+  [[ "$p" =~ ^[0-9]+$ ]] && sb_alive "$p" && [ "$(sb_comm "$p")" = node ] \
+    && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q 'tower/web/main.ts' && printf '%s' "$p"
+}
 
 cmd_tower() {
+  local p i
   case "${1:-status}" in
     start)
-      tower_running && { echo "tower: already running (pid $(cat "$TOWER_PID" 2>/dev/null)) — http://localhost:6183"; return 0; }
+      p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:6183"; return 0; }
       sb_init_dirs
       setsid nohup bash "$SB_SCRIPTS/tower-web.sh" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
-      local i
-      for ((i = 0; i < 20; i++)); do
-        tower_running && { echo "tower: started (pid $(cat "$TOWER_PID" 2>/dev/null)) — http://localhost:6183, log $BOARD_DIR/tower.log"; return 0; }
+      # "started" only once the server has bound the port and written its pid (≤ 3 s; node starts in ~0.3 s)
+      for ((i = 0; i < 30; i++)); do
+        p=$(tower_pid) && { echo "tower: started (pid $p) — http://localhost:6183, log $BOARD_DIR/tower.log"; return 0; }
         sleep 0.1
       done
       echo "tower: did not start — see $BOARD_DIR/tower.log" >&2
       return 1 ;;
     stop|restart)
-      local p i
-      p=$(cat "$TOWER_PID" 2>/dev/null)
-      # By the recorded PID only, and only while it holds the lock as node (never by name: kill-by-pid rule).
-      if [ -n "$p" ] && tower_running && [ "$(sb_comm "$p")" = node ]; then kill "$p" && echo "tower: stopped $p"; fi
-      for ((i = 0; i < 25; i++)); do tower_running || break; sleep 0.2; done
-      if tower_running; then echo "tower: still running — see $TOWER_PID" >&2; return 1; fi
+      if p=$(tower_pid); then
+        kill "$p" && echo "tower: stopped $p"
+        for ((i = 0; i < 25; i++)); do sb_alive "$p" || break; sleep 0.2; done
+        sb_alive "$p" && { echo "tower: $p still running" >&2; return 1; }
+      fi
       [ "$1" = restart ] && cmd_tower start
       return 0 ;;
     status)
-      if tower_running; then echo "tower: running (pid $(cat "$TOWER_PID" 2>/dev/null)) — http://localhost:6183"
+      if p=$(tower_pid); then echo "tower: running (pid $p) — http://localhost:6183"
       else echo "tower: stopped — board.sh tower start"; return 1; fi ;;
     *) echo "usage: board.sh tower start|restart|stop|status" >&2; return 2 ;;
   esac

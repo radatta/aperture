@@ -15,7 +15,11 @@ AGENT_VERSION="${MACSTATS_VERSION:-dev}"
 # collect VM SYSCTL PS: the three raw texts, one per variable
 collect() {
   VM=$(vm_stat)
-  SYSCTL=$(sysctl -n hw.memsize hw.ncpu vm.loadavg vm.swapusage kern.memorystatus_vm_pressure_level 2>/dev/null || true)
+  # one OID per call, one line each: a missing OID leaves its own line empty instead of shifting the rest
+  local o
+  SYSCTL=$(for o in hw.memsize hw.ncpu vm.loadavg vm.swapusage kern.memorystatus_vm_pressure_level; do
+    printf '%s\n' "$(sysctl -n "$o" 2>/dev/null | head -n 1)"
+  done)
   PS=$(ps -axo pid=,rss=,comm=)
 }
 
@@ -33,8 +37,12 @@ render() {
   mem=$(printf '%s\n' "$SYSCTL" | sed -n 1p)
   ncpu=$(printf '%s\n' "$SYSCTL" | sed -n 2p)
   load=$(printf '%s\n' "$SYSCTL" | sed -n 3p | tr -d '{}')
-  swap_total=$(printf '%s\n' "$SYSCTL" | sed -n 4p | awk '{ for (i = 1; i <= NF; i++) if ($i == "total") { v = $(i + 2); sub(/M$/, "", v); print v; exit } }')
-  swap_used=$(printf '%s\n' "$SYSCTL" | sed -n 4p | awk '{ for (i = 1; i <= NF; i++) if ($i == "used") { v = $(i + 2); sub(/M$/, "", v); print v; exit } }')
+  # "total = 2048.00M  used = 1024.50M …": MiB with an M suffix, or G; anything else is unknown (null), not 0
+  swapv() { printf '%s\n' "$SYSCTL" | sed -n 4p | awk -v k="$1" '{ for (i = 1; i <= NF; i++) if ($i == k) { v = $(i + 2)
+      if (v ~ /^[0-9.]+M$/) { sub(/M$/, "", v); print v } else if (v ~ /^[0-9.]+G$/) { sub(/G$/, "", v); print v * 1024 }
+      exit } }'; }
+  swap_total=$(swapv total)
+  swap_used=$(swapv used)
   level=$(printf '%s\n' "$SYSCTL" | sed -n 5p)
   case "$mem" in '' | *[!0-9]*) echo "macstats: unreadable hw.memsize" >&2; return 1 ;; esac
   # The VM: the largest resident process whose name is a hypervisor's (COI's VM on this Mac).
@@ -44,7 +52,7 @@ render() {
   jq -n --arg t "$2" --arg host "$1" --arg ver "$AGENT_VERSION" \
     --argjson page "$page" --argjson free "$free" --argjson active "$active" --argjson inactive "$inactive" \
     --argjson spec "${spec:-0}" --argjson wired "$wired" --argjson comp "$comp" --argjson mem "$mem" \
-    --arg ncpu "$ncpu" --arg load "$load" --arg st "${swap_total:-0}" --arg su "${swap_used:-0}" --arg level "$level" \
+    --arg ncpu "$ncpu" --arg load "$load" --arg st "$swap_total" --arg su "$swap_used" --arg level "$level" \
     --arg vm "$vm" '
     def mib(p): (p * $page / 1048576 | floor);
     def n(s): (s | tonumber? // null);
@@ -54,7 +62,8 @@ render() {
              wiredMiB: mib($wired), compressedMiB: mib($comp), usedMiB: mib($active + $wired + $comp),
              freePct: (if $total > 0 then (mib($free + $spec) * 100 / $total | floor) else null end),
              pressure: ({"1": "normal", "2": "warn", "4": "critical"}[$level] // "unknown") },
-      swap: { totalMiB: (n($st) // 0 | floor), usedMiB: (n($su) // 0 | floor) },
+      swap: (if n($st) == null or n($su) == null then null
+             else { totalMiB: (n($st) | floor), usedMiB: (n($su) | floor) } end),
       load: ($load | split(" ") | map(select(. != "") | tonumber? // empty)),
       cpus: (n($ncpu) // 0),
       vm: (if $vm == "" then null else ($vm | split("\t")) as $v
@@ -79,10 +88,19 @@ main() {
     echo missing >"$state/last"
     return 0
   fi
+  # A directory (or a link to one) at the target would make `mv` move into it: refuse it. A link to a file is just
+  # removed (rm on a link removes the link) so the rename below replaces it.
+  if [ -d "$out/mac-stats.json" ]; then
+    [ "$was" = target ] || echo "$(date -u +%FT%TZ) refusing: $out/mac-stats.json is a directory or a link to one"
+    echo target >"$state/last"
+    return 0
+  fi
+  [ ! -L "$out/mac-stats.json" ] || rm -f "$out/mac-stats.json"
   collect
   now=$(date -u +%FT%TZ)
   json=$(render "$(hostname -s)" "$now")
   tmp=$(mktemp "$out/.mac-stats.XXXXXX")
+  trap 'rm -f "$tmp"' EXIT # a failure before the rename leaves no stray temp file
   printf '%s\n' "$json" >"$tmp"
   mv -f "$tmp" "$out/mac-stats.json"
   [ "$was" = ok ] || echo "$now writing $out/mac-stats.json"

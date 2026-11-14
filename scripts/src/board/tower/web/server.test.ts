@@ -1,6 +1,9 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { get } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { liveTests, parseArgs } from './main.ts';
@@ -113,5 +116,42 @@ describe('--once on the fixtures', () => {
 describe('liveTests', () => {
   it('a missing leases dir is zero', () => {
     expect(liveTests('/nonexistent-board')).toBe(0);
+  });
+});
+
+const raw = (path: string, host: string) =>
+  new Promise<number>((resolve, reject) => {
+    const u = new URL(base);
+    get({ host: u.hostname, port: u.port, path, headers: { host } }, (r) => {
+      r.resume();
+      resolve(r.statusCode ?? 0);
+    }).on('error', reject);
+  });
+
+describe('round 1 server fixes', () => {
+  it('a malformed URL is a 400, and the server keeps serving', async () => {
+    expect(await raw('//[', 'localhost:6183')).toBe(400);
+    expect((await fetch(`${base}/api/state`)).status).toBe(200);
+  });
+  it('only a localhost or loopback Host is served (no DNS rebinding)', async () => {
+    expect(await raw('/api/state', 'evil.example:6183')).toBe(403);
+    expect(await raw('/api/state', 'localhost')).toBe(200);
+    expect(await raw('/api/state', '127.0.0.1:6183')).toBe(200);
+    expect(await raw('/api/state', '[::1]:6183')).toBe(200);
+    expect(await raw('/api/state', 'localhost.evil.example')).toBe(403);
+  });
+});
+
+describe('board.sh tower status', () => {
+  it('reads a stale or foreign pidfile as stopped (exit 1), never as running', () => {
+    const board = join(import.meta.dirname, '../../../../board/board.sh');
+    const pidFile = join(tmpdir(), `tower-pid-${process.pid}`);
+    writeFileSync(pidFile, `${process.pid}\n`); // alive, but this vitest worker, not the tower
+    const r = spawnSync('bash', [board, 'tower', 'status'], {
+      encoding: 'utf8',
+      env: { ...process.env, APERTURE_TOWER_PID: pidFile, APERTURE_BOARD_DIR: tmpdir() },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/tower: stopped/);
   });
 });
