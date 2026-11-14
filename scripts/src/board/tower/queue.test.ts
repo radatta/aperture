@@ -203,12 +203,35 @@ describe('hold and followups (the web tower)', () => {
   const q = (extra: object) =>
     parseQueue(JSON.stringify({ v: 1, updatedAt: '2026-11-13T20:00:00Z', ...extra }));
   it("reads a lane's hold reason", () => {
-    const r = q({ devQueue: [{ branch: 'a', state: 'ready', hold: 'after the Safari pass' }, { branch: 'b', state: 'ready' }] });
+    const r = q({
+      devQueue: [
+        { branch: 'a', state: 'ready', hold: 'after the Safari pass' },
+        { branch: 'b', state: 'ready' },
+      ],
+    });
     expect(r.data!.devQueue.map((l) => l.hold)).toEqual(['after the Safari pass', null]);
   });
   it("reads followups with pq-check's rules and says what is wrong", () => {
-    const f = (o: object) => ({ id: 'F1', what: 'w', owner: 'lane', after: 'now', status: 'open', source: 's', since: '2026-11-10', ...o });
-    const r = q({ followups: [f({}), f({ id: 'F2', status: 'maybe' }), f({ id: 'F3', owner: 'bob' }), f({}), f({ id: 'F5', since: 'soon' }), { id: 'F6' }] });
+    const f = (o: object) => ({
+      id: 'F1',
+      what: 'w',
+      owner: 'lane',
+      after: 'now',
+      status: 'open',
+      source: 's',
+      since: '2026-11-10',
+      ...o,
+    });
+    const r = q({
+      followups: [
+        f({}),
+        f({ id: 'F2', status: 'maybe' }),
+        f({ id: 'F3', owner: 'bob' }),
+        f({}),
+        f({ id: 'F5', since: 'soon' }),
+        { id: 'F6' },
+      ],
+    });
     expect(r.data!.followups.map((x) => x.id)).toEqual(['F1', 'F1', 'F5']);
     expect(r.problems).toEqual([
       'followups[1]: status "maybe"',

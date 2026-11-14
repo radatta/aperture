@@ -31,7 +31,8 @@ export const ghText: GhText = (args) =>
     ),
   );
 
-const errText = (e: unknown) => clean(((e as Error)?.message || 'failed').split('\n')[0]!).slice(0, 80);
+const errText = (e: unknown) =>
+  clean(((e as Error)?.message || 'failed').split('\n')[0]!).slice(0, 80);
 const s = (x: unknown) => (typeof x === 'string' ? clean(x) : '');
 
 export function parseRuns(text: string): GhRun[] {
@@ -49,7 +50,10 @@ export function parseRuns(text: string): GhRun[] {
       conclusion: typeof r.conclusion === 'string' ? r.conclusion : null,
       startedAt: parseTime(r.run_started_at),
       createdAt: parseTime(r.created_at),
-      url: typeof r.html_url === 'string' && r.html_url.startsWith('https://github.com/') ? s(r.html_url) : null,
+      url:
+        typeof r.html_url === 'string' && r.html_url.startsWith('https://github.com/')
+          ? s(r.html_url)
+          : null,
       number: Number.isInteger(r.run_number) ? (r.run_number as number) : null,
     }));
 }
@@ -106,12 +110,17 @@ export class FilesCache {
     if (this.busy.has(sha) || this.map.get(sha)?.files) return;
     this.busy.add(sha);
     try {
-      const out = JSON.parse(await this.gh(['pr', 'view', String(pr), '--json', 'files,headRefOid'])) as {
+      const out = JSON.parse(
+        await this.gh(['pr', 'view', String(pr), '--json', 'files,headRefOid']),
+      ) as {
         files?: { path?: unknown }[];
         headRefOid?: string;
       };
       if (out.headRefOid !== sha) throw new Error('head moved'); // the next poll asks for the new sha
-      this.map.set(sha, { files: (out.files ?? []).map((f) => s(f.path)).filter(Boolean), error: null });
+      this.map.set(sha, {
+        files: (out.files ?? []).map((f) => s(f.path)).filter(Boolean),
+        error: null,
+      });
     } catch (e) {
       this.map.set(sha, { files: null, error: errText(e) });
     } finally {
@@ -123,7 +132,13 @@ export class FilesCache {
 
 // Actions minutes this month, ESTIMATED: the container token can't read billing (403), so each run's jobs are
 // summed, each job rounded up to a whole minute (GitHub's per-job rounding), cached per run on disk.
-export type Minutes = { month: string; minutes: number; counted: number; total: number; capped: boolean };
+export type Minutes = {
+  month: string;
+  minutes: number;
+  counted: number;
+  total: number;
+  capped: boolean;
+};
 type MinutesFile = { v: 1; month: string; runs: Record<string, number> };
 
 export const monthKey = (now: number) => {
@@ -168,14 +183,19 @@ export class MinutesCache {
     const ids: number[] = [];
     for (let page = 1; page <= 20; page++) {
       const runs = parseRuns(
-        await this.gh(['api', `repos/${REPO_SLUG}/actions/runs?created=>=${month}-01&status=completed&per_page=100&page=${page}`]),
+        await this.gh([
+          'api',
+          `repos/${REPO_SLUG}/actions/runs?created=>=${month}-01&status=completed&per_page=100&page=${page}`,
+        ]),
       );
       ids.push(...runs.map((r) => r.id));
       if (runs.length < 100) break;
     }
     const todo = ids.filter((id) => !(String(id) in this.data.runs));
     for (const id of todo.slice(0, this.perCycle))
-      this.data.runs[String(id)] = jobMinutes(await this.gh(['api', `repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100`]));
+      this.data.runs[String(id)] = jobMinutes(
+        await this.gh(['api', `repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100`]),
+      );
     this.save();
     const counted = ids.filter((id) => String(id) in this.data.runs);
     return {
@@ -218,7 +238,10 @@ export class ChecksCache {
     this.busy.add(sha);
     try {
       const runs = parseRuns(
-        await this.gh(['api', `repos/${REPO_SLUG}/actions/runs?head_sha=${sha}&event=pull_request&per_page=30`]),
+        await this.gh([
+          'api',
+          `repos/${REPO_SLUG}/actions/runs?head_sha=${sha}&event=pull_request&per_page=30`,
+        ]),
       );
       // a re-run replaces its workflow's earlier run: keep the newest per workflow name
       const newest = new Map<string, GhRun>();

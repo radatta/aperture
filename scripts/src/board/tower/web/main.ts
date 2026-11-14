@@ -7,11 +7,23 @@
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sessionNames } from '../../sessions.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
-import { ChecksCache, FilesCache, MinutesCache, Poller, ghText, minutesPoller, monthKey, runsPoller, type GhRun, type GhText } from '../gh.ts';
+import {
+  ChecksCache,
+  FilesCache,
+  MinutesCache,
+  Poller,
+  ghText,
+  minutesPoller,
+  monthKey,
+  runsPoller,
+  type GhRun,
+  type GhText,
+} from '../gh.ts';
 import { readCosts, readMacStats, type MacRead } from '../health.ts';
 import { readLanes } from '../lanes.ts';
 import { fixturePaths } from '../main.ts';
@@ -27,7 +39,14 @@ const DEVLOCK_MS = 60000;
 export const MAC_INSTALL =
   "cd /Users/rahuldatta/Coding/Personal/aperture && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' \"$(security find-generic-password -s aperture-mailroom-gh -w)\") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/macstats/install.sh?ref=main')";
 
-export type Args = { port: number; bind: string; fixtures: string | null; now: number | null; gh: boolean; once: boolean };
+export type Args = {
+  port: number;
+  bind: string;
+  fixtures: string | null;
+  now: number | null;
+  gh: boolean;
+  once: boolean;
+};
 
 export function parseArgs(argv: string[]): Args {
   const a: Args = { port: 6183, bind: '0.0.0.0', fixtures: null, now: null, gh: true, once: false };
@@ -35,7 +54,8 @@ export function parseArgs(argv: string[]): Args {
     const k = argv[i];
     if (k === '--port') {
       a.port = Number(argv[++i]);
-      if (!Number.isInteger(a.port) || a.port < 1 || a.port > 65535) throw new Error('--port wants 1–65535');
+      if (!Number.isInteger(a.port) || a.port < 1 || a.port > 65535)
+        throw new Error('--port wants 1–65535');
     } else if (k === '--bind') a.bind = argv[++i] ?? '';
     else if (k === '--fixtures') a.fixtures = resolve(argv[++i] ?? '.');
     else if (k === '--now') a.now = Date.parse(argv[++i] ?? '');
@@ -60,7 +80,11 @@ export function liveTests(boardDir: string): number {
   }
   for (const f of files) {
     try {
-      const l = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { class?: string; wrapperPid?: number; wrapperStart?: string | number };
+      const l = JSON.parse(readFileSync(join(dir, f), 'utf8')) as {
+        class?: string;
+        wrapperPid?: number;
+        wrapperStart?: string | number;
+      };
       if (l.class !== 'test') continue;
       const stat = readFileSync(`/proc/${l.wrapperPid}/stat`, 'utf8');
       const r = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
@@ -74,7 +98,8 @@ export function liveTests(boardDir: string): number {
 
 function testCap(limits: string): number | null {
   try {
-    const c = (JSON.parse(readFileSync(limits, 'utf8')) as { concurrency?: { test?: unknown } }).concurrency?.test;
+    const c = (JSON.parse(readFileSync(limits, 'utf8')) as { concurrency?: { test?: unknown } })
+      .concurrency?.test;
     return typeof c === 'number' ? c : null;
   } catch {
     return null;
@@ -96,28 +121,51 @@ export function build(a: Args) {
     if (route.includes('/jobs')) return readFileSync(join(fx!, 'jobs.json'), 'utf8');
     if (route.includes('head_sha=')) {
       const sha = /head_sha=([0-9a-f]+)/.exec(route)![1]!;
-      const all = JSON.parse(readFileSync(join(fx!, 'checks.json'), 'utf8')) as Record<string, unknown[]>;
+      const all = JSON.parse(readFileSync(join(fx!, 'checks.json'), 'utf8')) as Record<
+        string,
+        unknown[]
+      >;
       return JSON.stringify({ workflow_runs: all[sha] ?? [] });
     }
     if (args[0] === 'pr' && args[1] === 'view') {
-      const all = JSON.parse(readFileSync(join(fx!, 'files.json'), 'utf8')) as Record<string, unknown>;
+      const all = JSON.parse(readFileSync(join(fx!, 'files.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >;
       return JSON.stringify(all[args[2]!] ?? {});
     }
     return readFileSync(join(fx!, 'runs.json'), 'utf8');
   };
   const gh: GhText | null = fx ? fileGh : a.gh ? ghText : null;
-  const prFetch: Fetch | null = fx ? async () => readFileSync(join(fx, 'prs.json'), 'utf8') : a.gh ? ghFetch : null;
+  const prFetch: Fetch | null = fx
+    ? async () => readFileSync(join(fx, 'prs.json'), 'utf8')
+    : a.gh
+      ? ghFetch
+      : null;
   const prs = prFetch ? new PrCache(prFetch) : null;
   const source = new Source(paths, prs);
   const runs = gh ? runsPoller(gh) : new Poller<GhRun[]>([], async () => [], Infinity);
   const checks = gh ? new ChecksCache(gh) : null;
   const files = gh ? new FilesCache(gh) : null;
-  const minutes = gh ? minutesPoller(new MinutesCache(join(paths.boardDir, 'tower/actions-runs.json'), gh), clock) : null;
+  const minutes = gh
+    ? minutesPoller(
+        new MinutesCache(
+          fx
+            ? join(tmpdir(), `tower-fixture-runs-${process.pid}.json`)
+            : join(paths.boardDir, 'tower/actions-runs.json'),
+          gh,
+        ),
+        clock,
+      )
+    : null;
   const costsPath = fx ? join(fx, 'costs-daily.json') : join(paths.boardDir, '../costs-daily.json');
   const macPath = join(paths.boardDir, 'mac-stats.json');
   let version: string | null = null;
   try {
-    version = execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    version = execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
   } catch {
     // not a checkout
   }
@@ -141,7 +189,11 @@ export function build(a: Args) {
     const lanes = readLanes(paths.boardDir);
     const mac: MacRead = readMacStats(macPath, now);
     if (mac.stats && macHist.at(-1)?.t !== mac.stats.t) {
-      macHist.push({ t: mac.stats.t, usedMiB: mac.stats.mem.usedMiB, totalMiB: mac.stats.memTotalMiB });
+      macHist.push({
+        t: mac.stats.t,
+        usedMiB: mac.stats.mem.usedMiB,
+        totalMiB: mac.stats.memTotalMiB,
+      });
       while (macHist.length && macHist[0]!.t < now - 24 * 3600e3) macHist.shift();
     }
     const inputs: Inputs = {
@@ -177,7 +229,12 @@ export function build(a: Args) {
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
 function refreshDevlock() {
-  execFile('bash', [join(REPO, 'scripts/board/devlock.sh'), 'refresh', '--max-age', '50'], { timeout: 30000 }, () => undefined);
+  execFile(
+    'bash',
+    [join(REPO, 'scripts/board/devlock.sh'), 'refresh', '--max-age', '50'],
+    { timeout: 30000 },
+    () => undefined,
+  );
 }
 
 async function run(a: Args) {
@@ -188,8 +245,14 @@ async function run(a: Args) {
     process.stdout.write(JSON.stringify(t.view(false), null, 2) + '\n');
     return;
   }
-  const server = await serve(createHandler((h) => t.view(h)), a.bind, a.port);
-  process.stdout.write(`tower-web: http://localhost:${a.port} (bound ${a.bind}:${a.port}, pid ${process.pid})\n`);
+  const server = await serve(
+    createHandler((h) => t.view(h)),
+    a.bind,
+    a.port,
+  );
+  process.stdout.write(
+    `tower-web: http://localhost:${a.port} (bound ${a.bind}:${a.port}, pid ${process.pid})\n`,
+  );
   void t.poll(t.clock());
   setInterval(() => void t.poll(t.clock()), TICK_MS);
   if (!a.fixtures) {
@@ -207,4 +270,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exit(1);
   });
 }
-

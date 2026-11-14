@@ -28,6 +28,9 @@ preview the user sees, so the tag and branch go first.
 | Phase 10, mailroom `MAC_UNREACHABLE` or a token error | `[pr-ready] <branch> — "<title>"`, the same facts, and that the user has the hand-off line.                                                   |
 | Phase 11, after cleanup                               | `[merged] <branch> — cleaned up. Follow-ups: <list \| none>. Decisions: <roadmap-relevant \| none>.`                                          |
 
+Each checkpoint, and each phase change between them, is also `pnpm board lane <phase> …` from the worktree
+(`docs/ops/TOWER.md` → _Lane files_): the web tower reads those files, never the messages.
+
 Anything else worth the hub's attention (a scope change, a finding that touches another branch) goes as a
 plain message between checkpoints. Replies arrive as messages; read them, but see _Approval_.
 
@@ -59,7 +62,8 @@ anything a session was refused goes back to its user, not to a peer.
   first)_ (PR, branch, merge sha, note); _Rules the hub enforces_. Start it with an "Updated <date>" line and
   "check every line against `git log origin/main` and `gh pr list` before acting on it".
 - **The tower's queue.** The hub keeps `/workspace/localNotes/board/queue.json` current — the control tower's
-  dev queue, the user's to-dos, the wave checklist and the `plan` timeline (the one source for the next merge;
+  dev queue (a lane's optional `hold` reason shows on its PR as HOLD), the user's to-dos, the wave checklist, the
+  `followups[]` ledger (SLIPPING shows the STALE ones: `docs/ops/TOWER.md`) and the `plan` timeline (the one source for the next merge;
   schema: `docs/ops/SESSION-BOARD.md` → _Control tower_), written with a tmp file + rename on every checkpoint
   that changes them — the `plan` at every event. A lane state or `plan` `kind` the tower's parser doesn't know yet
   (`/workspace`'s main) is a bad write that drops that entry (new keys are ignored): write new ones only once

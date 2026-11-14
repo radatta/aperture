@@ -1,7 +1,15 @@
 // The Mac stats agent (tools/macstats/, docs/ops/TOWER.md → Mac stats): its parse on recorded macOS output, its
 // out-dir pin, and static checks of the trust boundary — like runner-fixtures.test.ts for the mailroom.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,7 +19,8 @@ const ROOT = join(import.meta.dirname, '../../..');
 const AGENT = join(ROOT, 'tools/macstats/macstats.sh');
 const INSTALL = join(ROOT, 'tools/macstats/install.sh');
 const FX = join(import.meta.dirname, 'tower/fixtures/mac');
-const render = (dir: string) => JSON.parse(execFileSync('bash', [AGENT, '--render', dir], { encoding: 'utf8' }));
+const render = (dir: string) =>
+  JSON.parse(execFileSync('bash', [AGENT, '--render', dir], { encoding: 'utf8' }));
 const variant = (edit: (f: Record<string, string>) => void) => {
   const d = mkdtempSync(join(tmpdir(), 'mac-'));
   cpSync(FX, d, { recursive: true });
@@ -61,7 +70,8 @@ describe('macstats.sh --render', () => {
 
   it('unreadable vm_stat fails loudly', () => {
     const d = variant((f) => {
-      f['vm_stat.txt'] = 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: lots.\n';
+      f['vm_stat.txt'] =
+        'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: lots.\n';
     });
     const r = spawnSync('bash', [AGENT, '--render', d], { encoding: 'utf8' });
     expect(r.status).not.toBe(0);
@@ -70,7 +80,8 @@ describe('macstats.sh --render', () => {
 });
 
 describe('macstats.sh out-dir pin (runs before any macOS tool)', () => {
-  const tick = (out: string, state: string) => spawnSync('bash', [AGENT, out, state], { encoding: 'utf8' });
+  const tick = (out: string, state: string) =>
+    spawnSync('bash', [AGENT, out, state], { encoding: 'utf8' });
 
   it('a missing out dir logs once per change and writes nothing', () => {
     const t = mkdtempSync(join(tmpdir(), 'pin-'));
@@ -118,7 +129,12 @@ describe('the trust boundary, statically', () => {
   });
 
   it('bash 3.2 only: no mapfile, associative arrays or case-changing expansions', () => {
-    for (const bad of [word('mapfile'), word('readarray'), /declare -A/, /\$\{[a-zA-Z_]+(,,|\^\^)\}/])
+    for (const bad of [
+      word('mapfile'),
+      word('readarray'),
+      /declare -A/,
+      /\$\{[a-zA-Z_]+(,,|\^\^)\}/,
+    ])
       expect(agent).not.toMatch(bad);
   });
 
@@ -127,7 +143,8 @@ describe('the trust boundary, statically', () => {
     expect(install).toContain('security find-generic-password -s "$KEYCHAIN" -w');
     const urls = install.match(/https:\/\/[^\s"']+/g) ?? [];
     expect(urls.length).toBeGreaterThan(0);
-    for (const u of urls) expect(u.startsWith('https://api.github.com/repos/$REPO_SLUG/')).toBe(true);
+    for (const u of urls)
+      expect(u.startsWith('https://api.github.com/repos/$REPO_SLUG/')).toBe(true);
     expect(install).toContain("NOT main's head");
     expect(install.trimEnd().split('\n').at(-1)).toMatch(/^main "\$@"/);
   });

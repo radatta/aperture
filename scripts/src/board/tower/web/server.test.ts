@@ -59,12 +59,14 @@ describe('the HTTP surface', () => {
 describe('parseArgs', () => {
   it('defaults to 0.0.0.0:6183 and validates', () => {
     expect(parseArgs([])).toMatchObject({ port: 6183, bind: '0.0.0.0', gh: true, once: false });
-    expect(parseArgs(['--port', '7000', '--bind', '127.0.0.1', '--no-gh', '--once'])).toMatchObject({
-      port: 7000,
-      bind: '127.0.0.1',
-      gh: false,
-      once: true,
-    });
+    expect(parseArgs(['--port', '7000', '--bind', '127.0.0.1', '--no-gh', '--once'])).toMatchObject(
+      {
+        port: 7000,
+        bind: '127.0.0.1',
+        gh: false,
+        once: true,
+      },
+    );
     expect(() => parseArgs(['--port', '99999'])).toThrow(/port/);
     expect(() => parseArgs(['--now', 'soon'])).toThrow(/ISO/);
     expect(() => parseArgs(['--wat'])).toThrow(/unknown flag/);
@@ -90,9 +92,14 @@ describe('--once on the fixtures', () => {
     const v = JSON.parse(out) as V;
     expect(v.needs.map((n: V) => n.kind)).toEqual(['lane', 'todo', 'todo']);
     expect(v.needs[0].what).toBe('india-branch: admit the branch to dev');
-    expect(v.slots.map((s: V) => `${s.slot}:${s.branch}`)).toEqual(['dev:bravo-branch', 'devb:juliet-branch']);
+    expect(v.slots.map((s: V) => `${s.slot}:${s.branch}`)).toEqual([
+      'dev:bravo-branch',
+      'devb:juliet-branch',
+    ]);
     expect(v.slots[0].detail).toBe('devcheck running since 06:02');
-    expect(v.next.merge.map((r: V) => r.label)).toEqual(['HOLD (dev: bravo-branch is testing, lock to 06:37)']);
+    expect(v.next.merge.map((r: V) => r.label)).toEqual([
+      'HOLD (dev: bravo-branch is testing, lock to 06:37)',
+    ]);
     expect(v.active.find((r: V) => r.branch === 'hotel-branch').label).toBe('PR (checks running)');
     expect(v.done.map((d: V) => `${d.number} ${d.deploy}`)).toEqual(['40 deployed']);
     expect(v.slipping.map((s: V) => s.kind)).toEqual(['followup', 'parked', 'quiet']);

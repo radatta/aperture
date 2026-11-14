@@ -7,10 +7,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -19,10 +16,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",
@@ -39,10 +33,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -51,10 +42,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",
@@ -71,10 +59,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -83,10 +68,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",
@@ -103,10 +85,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -115,10 +94,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",
@@ -135,10 +111,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -147,10 +120,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",
@@ -167,10 +137,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -179,10 +146,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",
@@ -199,10 +163,7 @@
       },
       "Groups": [
         {
-          "Keys": [
-            "618015769091",
-            "AWS Lambda"
-          ],
+          "Keys": ["618015769091", "AWS Lambda"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.04",
@@ -211,10 +172,7 @@
           }
         },
         {
-          "Keys": [
-            "594060113104",
-            "Amazon S3"
-          ],
+          "Keys": ["594060113104", "Amazon S3"],
           "Metrics": {
             "UnblendedCost": {
               "Amount": "0.01",

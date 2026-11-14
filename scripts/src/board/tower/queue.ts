@@ -51,7 +51,9 @@ export type Followup = {
 // STALE: open, due now (`after: "now"`), and older than 24 h. One definition; localNotes/board/pq-check.ts imports it.
 export const STALE_MS = 24 * 3600e3;
 export const staleFollowups = (fu: Followup[], now: number) =>
-  fu.filter((f) => f.status === 'open' && f.after === 'now' && f.since !== null && now - f.since > STALE_MS);
+  fu.filter(
+    (f) => f.status === 'open' && f.after === 'now' && f.since !== null && now - f.since > STALE_MS,
+  );
 
 export type QueueData = {
   updatedAt: number;

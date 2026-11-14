@@ -12,7 +12,9 @@ const read = (d: string) => JSON.parse(readFileSync(join(d, 'lanes/tower-web.jso
 
 describe('parseLaneArgs', () => {
   it('reads a phase with its flags', () => {
-    expect(parseLaneArgs(['review', '--step', 'round 1 of 3', '--pr', '161', '--slot', 'devb'])).toMatchObject({
+    expect(
+      parseLaneArgs(['review', '--step', 'round 1 of 3', '--pr', '161', '--slot', 'devb']),
+    ).toMatchObject({
       phase: 'review',
       step: 'round 1 of 3',
       pr: 161,
@@ -21,14 +23,19 @@ describe('parseLaneArgs', () => {
     });
   });
   it('a needs item wants exactly one of an https link or a one-line command', () => {
-    expect(parseLaneArgs(['dev', '--needs', 'Safari pass', '--cmd', 'open x', '--unblocks', 'the PR']).needs).toEqual({
+    expect(
+      parseLaneArgs(['dev', '--needs', 'Safari pass', '--cmd', 'open x', '--unblocks', 'the PR'])
+        .needs,
+    ).toEqual({
       what: 'Safari pass',
       link: null,
       cmd: 'open x',
       unblocks: 'the PR',
     });
     expect(() => parseLaneArgs(['dev', '--needs', 'x'])).toThrow(/exactly one/);
-    expect(() => parseLaneArgs(['dev', '--needs', 'x', '--link', 'https://a', '--cmd', 'b'])).toThrow(/exactly one/);
+    expect(() =>
+      parseLaneArgs(['dev', '--needs', 'x', '--link', 'https://a', '--cmd', 'b']),
+    ).toThrow(/exactly one/);
     expect(() => parseLaneArgs(['dev', '--needs', 'x', '--link', 'http://a'])).toThrow(/https/);
     expect(() => parseLaneArgs(['dev', '--needs', 'x', '--cmd', 'a\nb'])).toThrow(/one line/);
     expect(() => parseLaneArgs(['dev', '--link', 'https://a'])).toThrow(/go with --needs/);
@@ -48,10 +55,23 @@ describe('writeLane', () => {
   const args = (a: string[]): LaneArgs => parseLaneArgs(a);
   it('writes tmp + rename, keeps phaseSince while the phase is unchanged and resets it on a change', () => {
     const d = dir();
-    expect(writeLane(d, args(['review', '--step', 'round 1 of 3']), env())).toBe('lane tower-web: review · round 1 of 3');
-    expect(read(d)).toMatchObject({ v: 1, branch: 'tower-web', session: 'auto-6', phase: 'review', phaseSince: T0.toISOString(), sha: 'a'.repeat(40) });
+    expect(writeLane(d, args(['review', '--step', 'round 1 of 3']), env())).toBe(
+      'lane tower-web: review · round 1 of 3',
+    );
+    expect(read(d)).toMatchObject({
+      v: 1,
+      branch: 'tower-web',
+      session: 'auto-6',
+      phase: 'review',
+      phaseSince: T0.toISOString(),
+      sha: 'a'.repeat(40),
+    });
     writeLane(d, args(['review', '--step', 'round 2 of 3']), env(T1));
-    expect(read(d)).toMatchObject({ step: 'round 2 of 3', phaseSince: T0.toISOString(), updatedAt: T1.toISOString() });
+    expect(read(d)).toMatchObject({
+      step: 'round 2 of 3',
+      phaseSince: T0.toISOString(),
+      updatedAt: T1.toISOString(),
+    });
     writeLane(d, args(['dev']), env(T1));
     expect(read(d)).toMatchObject({ phase: 'dev', step: null, phaseSince: T1.toISOString() });
     expect(existsSync(join(d, `lanes/tower-web.json.tmp.${process.pid}`))).toBe(false);
@@ -68,8 +88,12 @@ describe('writeLane', () => {
     writeLane(d, args(['build']), env());
     expect(writeLane(d, args(['--clear']), env())).toBe('lane tower-web: cleared');
     expect(existsSync(join(d, 'lanes/tower-web.json'))).toBe(false);
-    expect(() => writeLane(d, args(['build']), { ...env(), branch: '../evil' })).toThrow(/not a lane name/);
-    expect(() => writeLane(d, args(['build']), { ...env(), branch: 'Feature/X' })).toThrow(/not a lane name/);
+    expect(() => writeLane(d, args(['build']), { ...env(), branch: '../evil' })).toThrow(
+      /not a lane name/,
+    );
+    expect(() => writeLane(d, args(['build']), { ...env(), branch: 'Feature/X' })).toThrow(
+      /not a lane name/,
+    );
   });
 });
 
@@ -80,7 +104,10 @@ describe('readLanes / parseLane', () => {
     mkdirSync(join(d, 'lanes'));
     writeLane(d, parseLaneArgs(['gate']), env());
     writeFileSync(join(d, 'lanes/broken.json'), '{nope');
-    writeFileSync(join(d, 'lanes/other.json'), JSON.stringify({ v: 1, branch: 'tower-web', phase: 'gate', updatedAt: T0.toISOString() }));
+    writeFileSync(
+      join(d, 'lanes/other.json'),
+      JSON.stringify({ v: 1, branch: 'tower-web', phase: 'gate', updatedAt: T0.toISOString() }),
+    );
     const r = readLanes(d);
     expect(r.lanes.map((l) => l.branch)).toEqual(['tower-web']);
     expect(r.problems.map((p) => [p.file, p.problem.split(':')[0]])).toEqual([
@@ -90,11 +117,26 @@ describe('readLanes / parseLane', () => {
   });
   it('drops a non-https link and an unknown slot; cleans text', () => {
     const l = parseLane(
-      JSON.stringify({ v: 1, branch: 'x', phase: 'dev', updatedAt: T0.toISOString(), slot: 'prod', step: 'a\u001b[2Jb', needs: { what: 'w', link: 'javascript:alert(1)' } }),
+      JSON.stringify({
+        v: 1,
+        branch: 'x',
+        phase: 'dev',
+        updatedAt: T0.toISOString(),
+        slot: 'prod',
+        step: 'a\u001b[2Jb',
+        needs: { what: 'w', link: 'javascript:alert(1)' },
+      }),
       'x.json',
     );
     expect(l).toMatchObject({ slot: null, step: 'a[2Jb', needs: { what: 'w', link: null } });
-    expect(parseLane(JSON.stringify({ v: 2 }), 'x.json')).toMatchObject({ problem: 'v is 2, want 1' });
-    expect(parseLane(JSON.stringify({ v: 1, branch: 'x', phase: 'nope', updatedAt: T0.toISOString() }), 'x.json')).toMatchObject({ problem: 'phase "nope"' });
+    expect(parseLane(JSON.stringify({ v: 2 }), 'x.json')).toMatchObject({
+      problem: 'v is 2, want 1',
+    });
+    expect(
+      parseLane(
+        JSON.stringify({ v: 1, branch: 'x', phase: 'nope', updatedAt: T0.toISOString() }),
+        'x.json',
+      ),
+    ).toMatchObject({ problem: 'phase "nope"' });
   });
 });

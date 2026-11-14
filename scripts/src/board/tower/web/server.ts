@@ -23,7 +23,8 @@ export function createHandler(getState: GetState, dir = HERE) {
         'Content-Type': type,
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+        'Content-Security-Policy':
+          "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
       });
       res.end(body);
     };
@@ -39,7 +40,11 @@ export function createHandler(getState: GetState, dir = HERE) {
     }
     if (url.pathname === '/api/state') {
       try {
-        return send(200, 'application/json', JSON.stringify(getState(url.searchParams.get('history') === '1')));
+        return send(
+          200,
+          'application/json',
+          JSON.stringify(getState(url.searchParams.get('history') === '1')),
+        );
       } catch (e) {
         return send(500, 'application/json', JSON.stringify({ error: (e as Error).message }));
       }
@@ -48,7 +53,11 @@ export function createHandler(getState: GetState, dir = HERE) {
   };
 }
 
-export function serve(handler: ReturnType<typeof createHandler>, bind: string, port: number): Promise<Server> {
+export function serve(
+  handler: ReturnType<typeof createHandler>,
+  bind: string,
+  port: number,
+): Promise<Server> {
   return new Promise((resolve, reject) => {
     const s = createServer(handler);
     s.once('error', reject);

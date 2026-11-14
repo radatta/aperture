@@ -25,7 +25,12 @@ export type MacStats = {
   vm: { pid: number; comm: string; rssMiB: number } | null;
   agentVersion: string | null;
 };
-export type MacRead = { state: Fresh; at: number | null; error: string | null; stats: MacStats | null };
+export type MacRead = {
+  state: Fresh;
+  at: number | null;
+  error: string | null;
+  stats: MacStats | null;
+};
 
 export const MAC_STALE_SEC = 60; // four missed 15 s ticks
 export const MAC_SILENT_SEC = 300;
@@ -61,26 +66,45 @@ export function parseMacStats(text: string): MacStats {
     swap: { totalMiB: num(r.swap?.totalMiB) ?? 0, usedMiB: num(r.swap?.usedMiB) ?? 0 },
     load: Array.isArray(r.load) ? r.load.map(num).filter((x: number | null) => x !== null) : [],
     cpus: num(r.cpus) ?? 0,
-    vm: vm && num(vm.rssMiB) !== null
-      ? { pid: num(vm.pid) ?? 0, comm: typeof vm.comm === 'string' ? clean(vm.comm) : '?', rssMiB: vm.rssMiB }
-      : null,
+    vm:
+      vm && num(vm.rssMiB) !== null
+        ? {
+            pid: num(vm.pid) ?? 0,
+            comm: typeof vm.comm === 'string' ? clean(vm.comm) : '?',
+            rssMiB: vm.rssMiB,
+          }
+        : null,
     agentVersion: typeof r.agentVersion === 'string' ? clean(r.agentVersion).slice(0, 64) : null,
   };
 }
 
-export function readMacStats(path: string, now: number, read = (p: string) => readFileSync(p, 'utf8')): MacRead {
+export function readMacStats(
+  path: string,
+  now: number,
+  read = (p: string) => readFileSync(p, 'utf8'),
+): MacRead {
   let text: string;
   try {
     text = read(path);
   } catch (e) {
     const missing = (e as NodeJS.ErrnoException).code === 'ENOENT';
-    return { state: missing ? 'missing' : 'bad', at: null, error: missing ? null : clean((e as Error).message), stats: null };
+    return {
+      state: missing ? 'missing' : 'bad',
+      at: null,
+      error: missing ? null : clean((e as Error).message),
+      stats: null,
+    };
   }
   let stats: MacStats;
   try {
     stats = parseMacStats(text);
   } catch (e) {
-    return { state: 'bad', at: null, error: clean((e as Error).message).slice(0, 120), stats: null };
+    return {
+      state: 'bad',
+      at: null,
+      error: clean((e as Error).message).slice(0, 120),
+      stats: null,
+    };
   }
   const sec = (now - stats.t) / 1000;
   const state: Fresh = sec > MAC_SILENT_SEC ? 'silent' : sec > MAC_STALE_SEC ? 'stale' : 'ok';
@@ -112,7 +136,10 @@ export function sumCosts(text: string, month: string): Omit<Costs, 'state' | 'at
     const start = day?.TimePeriod?.Start;
     if (typeof start !== 'string' || !start.startsWith(`${month}-`)) continue;
     if (!through || start > through) through = start;
-    for (const g of (Array.isArray(day.Groups) ? day.Groups : []) as { Keys?: string[]; Metrics?: any }[]) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    for (const g of (Array.isArray(day.Groups) ? day.Groups : []) as {
+      Keys?: string[];
+      Metrics?: { UnblendedCost?: { Amount?: unknown } };
+    }[]) {
       const amt = Number(g?.Metrics?.UnblendedCost?.Amount);
       if (!Number.isFinite(amt)) continue;
       const acct = (AWS_ACCOUNTS as Record<string, string>)[g.Keys?.[0] ?? ''] ?? 'other';
@@ -132,11 +159,21 @@ export function readCosts(path: string, now: number, month: string): Costs {
     text = readFileSync(path, 'utf8');
   } catch (e) {
     const missing = (e as NodeJS.ErrnoException).code === 'ENOENT';
-    return { ...empty, state: missing ? 'missing' : 'bad', at: null, error: missing ? null : clean((e as Error).message) };
+    return {
+      ...empty,
+      state: missing ? 'missing' : 'bad',
+      at: null,
+      error: missing ? null : clean((e as Error).message),
+    };
   }
   try {
     const c = sumCosts(text, month);
-    return { ...c, state: (now - mtime) / 1000 > COSTS_STALE_SEC ? 'stale' : 'ok', at: mtime, error: null };
+    return {
+      ...c,
+      state: (now - mtime) / 1000 > COSTS_STALE_SEC ? 'stale' : 'ok',
+      at: mtime,
+      error: null,
+    };
   } catch (e) {
     return { ...empty, state: 'bad', at: mtime, error: clean((e as Error).message).slice(0, 120) };
   }

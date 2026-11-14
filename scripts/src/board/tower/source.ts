@@ -276,7 +276,10 @@ export class Source {
     const expiresAt = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : null;
     const lock: Lock = {
       branch,
-      sha: typeof f.holder?.sha === 'string' && /^[0-9a-f]{40}$/.test(f.holder.sha) ? f.holder.sha : null,
+      sha:
+        typeof f.holder?.sha === 'string' && /^[0-9a-f]{40}$/.test(f.holder.sha)
+          ? f.holder.sha
+          : null,
       session: branch ? (sessions.find((s) => s.branch === branch)?.name ?? null) : null,
       expiresAt,
       asOf: f.t ? Date.parse(f.t) : null,

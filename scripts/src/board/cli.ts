@@ -151,7 +151,9 @@ export function main(argv: string[], stdin: () => string): string {
       const here = process.env.INIT_CWD ?? process.cwd(); // pnpm runs scripts from the root; INIT_CWD is where it was typed
       const branch = git(here, 'branch', '--show-current').trim();
       if (!branch) throw new Error('not on a branch (a lane file is per feature branch)');
-      const dir = boardDir((c, args) => execFileSync(c, args, { cwd: here, encoding: 'utf8' }).trim());
+      const dir = boardDir((c, args) =>
+        execFileSync(c, args, { cwd: here, encoding: 'utf8' }).trim(),
+      );
       if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
       return writeLane(dir, a, {
         branch,

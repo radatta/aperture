@@ -95,8 +95,15 @@ describe('the fields the web tower reads', () => {
         },
       ]),
     );
-    expect(p).toMatchObject({ sha: 'a'.repeat(40), mergeSha: 'b'.repeat(40), url: 'https://github.com/radatta/aperture/pull/9', draft: true });
-    const [q] = parsePrs(JSON.stringify([{ number: 9, headRefOid: 'zz', mergeCommit: null, url: 'javascript:x' }]));
+    expect(p).toMatchObject({
+      sha: 'a'.repeat(40),
+      mergeSha: 'b'.repeat(40),
+      url: 'https://github.com/radatta/aperture/pull/9',
+      draft: true,
+    });
+    const [q] = parsePrs(
+      JSON.stringify([{ number: 9, headRefOid: 'zz', mergeCommit: null, url: 'javascript:x' }]),
+    );
     expect(q).toMatchObject({ sha: null, mergeSha: null, url: null, draft: false });
   });
 });

@@ -58,7 +58,12 @@ export type SlotCard = {
   asOf: number | null;
   failed: boolean;
 };
-export type SourceRow = { name: string; state: 'ok' | 'stale' | 'failed' | 'missing'; at: number | null; detail: string | null };
+export type SourceRow = {
+  name: string;
+  state: 'ok' | 'stale' | 'failed' | 'missing';
+  at: number | null;
+  detail: string | null;
+};
 export type Health = {
   container: {
     at: number;
@@ -89,9 +94,22 @@ export type View = {
     merge: LaneRow[];
     rahul: string | null;
   };
-  done: { number: number; title: string; branch: string; mergedAt: number; deploy: string; tone: Tone; url: string | null }[];
+  done: {
+    number: number;
+    title: string;
+    branch: string;
+    mergedAt: number;
+    deploy: string;
+    tone: Tone;
+    url: string | null;
+  }[];
   health: Health;
-  slipping: { kind: 'followup' | 'parked' | 'quiet'; what: string; owner: string | null; since: number | null }[];
+  slipping: {
+    kind: 'followup' | 'parked' | 'quiet';
+    what: string;
+    owner: string | null;
+    since: number | null;
+  }[];
   sources: SourceRow[];
   problems: string[];
 };
@@ -116,7 +134,15 @@ export type Inputs = {
 };
 
 // Freshness thresholds, seconds (TOWER.md → Sources): past them a source shows amber with its age.
-export const STALE = { sampler: 90, lock: 300, gh: 180, queue: 7200, lane: 7200, laneQuiet: 86400, minutes: 7200 };
+export const STALE = {
+  sampler: 90,
+  lock: 300,
+  gh: 180,
+  queue: 7200,
+  lane: 7200,
+  laneQuiet: 86400,
+  minutes: 7200,
+};
 const RUN_FRESH_MS = 2 * 3600e3; // a ledger run with no end older than this is an orphan, not in flight
 
 export const liveLock = (l: Lock | null, now: number): l is Lock & { branch: string } =>
@@ -128,7 +154,10 @@ const running = (r: GhRun) => r.status !== 'completed';
 
 // The main Deploy run that carries a merge: its own, or, when that one was cancelled by a later merge (deploy.yml's
 // concurrency group), the newest later Deploy run, which deploys main's head and so this merge too.
-export function deployFor(mergeSha: string | null, runs: GhRun[]): { run: GhRun; via: GhRun | null } | null {
+export function deployFor(
+  mergeSha: string | null,
+  runs: GhRun[],
+): { run: GhRun; via: GhRun | null } | null {
   if (!mergeSha) return null;
   const deps = mainDeploys(runs);
   const own = deps.find((r) => r.sha === mergeSha);
@@ -141,7 +170,12 @@ export function deployFor(mergeSha: string | null, runs: GhRun[]): { run: GhRun;
 }
 
 // What a slot's holder is doing, in the order Rahul asks about it.
-export function slotDetail(slot: Slot, lock: Lock & { branch: string }, i: Inputs, file: LaneFile | null): string | null {
+export function slotDetail(
+  slot: Slot,
+  lock: Lock & { branch: string },
+  i: Inputs,
+  file: LaneFile | null,
+): string | null {
   const dispatch = lock.sha
     ? i.runs.value.find((r) => r.name.startsWith(`deploy-dev ${lock.sha} `) && running(r))
     : undefined;
@@ -165,7 +199,8 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
   if (liveLock(devb, i.now) && devb.branch !== pr.branch) {
     const f = pr.sha ? i.files(pr.sha) : null;
     if (!f?.files) return `devb: ${devb.branch} is testing and this PR's files aren't read yet`;
-    if (f.files.some(SHAPE_PATHS)) return `devb: ${devb.branch} is testing and this PR changes devb's shape`;
+    if (f.files.some(SHAPE_PATHS))
+      return `devb: ${devb.branch} is testing and this PR changes devb's shape`;
   }
   const dep = mainDeploys(i.runs.value).find(running);
   if (dep) return `main deploy${dep.number ? ` ${dep.number}` : ''} running`;
@@ -183,26 +218,64 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     hold: null as string | null,
     fileAge: file ? Math.max(0, (i.now - file.updatedAt) / 1000) : null,
   };
-  const row = (state: State, label: string, detail: string | null, tone: Tone, since: number | null, hold: string | null = null): LaneRow =>
-    ({ ...base, state, label, detail, tone, since, hold });
+  const row = (
+    state: State,
+    label: string,
+    detail: string | null,
+    tone: Tone,
+    since: number | null,
+    hold: string | null = null,
+  ): LaneRow => ({ ...base, state, label, detail, tone, since, hold });
 
   if (file?.phase === 'parked' || /^PARKED/i.test(queue?.waitingOn ?? ''))
-    return row('PARKED', 'PARKED', queue?.waitingOn ?? file?.step ?? null, 'dim', file?.phaseSince ?? null);
+    return row(
+      'PARKED',
+      'PARKED',
+      queue?.waitingOn ?? file?.step ?? null,
+      'dim',
+      file?.phaseSince ?? null,
+    );
 
   if (pr?.state === 'MERGED') {
     const d = deployFor(pr.mergeSha, i.runs.value);
     if (!d) return row('MERGED', 'MERGED', 'deploy run not seen yet', 'warn', pr.mergedAt);
     const dep = d.run;
     const via = d.via ? ` (its own was superseded)` : '';
-    if (running(dep)) return row('DEPLOYING', 'DEPLOYING', `main deploy${dep.number ? ` ${dep.number}` : ''}${via}`, 'warn', dep.startedAt);
-    if (dep.conclusion === 'success') return row('DONE', 'DONE', d.via ? `by main deploy ${dep.number ?? ''}${via}`.trim() : null, 'good', pr.mergedAt);
-    return row('DEPLOY FAILED', 'DEPLOY FAILED', `${dep.conclusion ?? 'failed'}${via}`, 'bad', dep.startedAt);
+    if (running(dep))
+      return row(
+        'DEPLOYING',
+        'DEPLOYING',
+        `main deploy${dep.number ? ` ${dep.number}` : ''}${via}`,
+        'warn',
+        dep.startedAt,
+      );
+    if (dep.conclusion === 'success')
+      return row(
+        'DONE',
+        'DONE',
+        d.via ? `by main deploy ${dep.number ?? ''}${via}`.trim() : null,
+        'good',
+        pr.mergedAt,
+      );
+    return row(
+      'DEPLOY FAILED',
+      'DEPLOY FAILED',
+      `${dep.conclusion ?? 'failed'}${via}`,
+      'bad',
+      dep.startedAt,
+    );
   }
 
   for (const slot of ['dev', 'devb'] as const) {
     const lock = slot === 'dev' ? i.tower.lock : i.tower.lockB;
     if (liveLock(lock, i.now) && lock.branch === branch)
-      return row('TESTING', `TESTING on ${slot}`, slotDetail(slot, lock, i, file), 'warn', file?.phase === 'dev' ? file.phaseSince : null);
+      return row(
+        'TESTING',
+        `TESTING on ${slot}`,
+        slotDetail(slot, lock, i, file),
+        'warn',
+        file?.phase === 'dev' ? file.phaseSince : null,
+      );
   }
 
   if (pr?.state === 'OPEN') {
@@ -210,10 +283,36 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     const runs = ch?.runs ?? [];
     if (pr.draft) return row('PR', 'PR (draft)', null, 'dim', pr.createdAt);
     if (!runs.length)
-      return row('PR', 'PR (no checks seen)', ch?.error ? `checks: ${ch.error}` : null, 'warn', pr.createdAt);
-    if (runs.some(running)) return row('PR', 'PR (checks running)', runs.filter(running).map((r) => r.name).join(', '), 'warn', pr.createdAt);
-    const bad = runs.filter((r) => r.conclusion !== 'success' && r.conclusion !== 'skipped' && r.conclusion !== 'neutral');
-    if (bad.length) return row('CHECKS FAILED', 'CHECKS FAILED', bad.map((r) => `${r.name} ${r.conclusion}`).join(', '), 'bad', pr.createdAt);
+      return row(
+        'PR',
+        'PR (no checks seen)',
+        ch?.error ? `checks: ${ch.error}` : null,
+        'warn',
+        pr.createdAt,
+      );
+    if (runs.some(running))
+      return row(
+        'PR',
+        'PR (checks running)',
+        'running: ' +
+          runs
+            .filter(running)
+            .map((r) => r.name)
+            .join(', '),
+        'warn',
+        pr.createdAt,
+      );
+    const bad = runs.filter(
+      (r) => r.conclusion !== 'success' && r.conclusion !== 'skipped' && r.conclusion !== 'neutral',
+    );
+    if (bad.length)
+      return row(
+        'CHECKS FAILED',
+        'CHECKS FAILED',
+        bad.map((r) => `${r.name} ${r.conclusion}`).join(', '),
+        'bad',
+        pr.createdAt,
+      );
     const hold = holdReason(pr, queue, i);
     if (hold) return row('HOLD', `HOLD (${hold})`, null, 'warn', pr.createdAt, hold);
     return row('MERGE ME', 'MERGE ME', null, 'good', pr.createdAt);
@@ -221,22 +320,43 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
 
   if (!file) return row('BUILDING', 'BUILDING', 'no status file', 'dim', null);
   const word: Record<string, string> = {
-    plan: 'Plan', build: 'Build', gate: 'Gate', review: 'Review', local: 'Local', dev: 'Dev test',
-    pr: 'PR', merged: 'Merged', cleanup: 'Cleanup', blocked: 'Blocked',
+    plan: 'Plan',
+    build: 'Build',
+    gate: 'Gate',
+    review: 'Review',
+    local: 'Local',
+    dev: 'Dev test',
+    pr: 'PR',
+    merged: 'Merged',
+    cleanup: 'Cleanup',
+    blocked: 'Blocked',
   };
   const w = word[file.phase] ?? file.phase;
-  return row('BUILDING', 'BUILDING', file.step ? `${w} · ${file.step}` : w, file.phase === 'blocked' ? 'bad' : 'normal', file.phaseSince);
+  return row(
+    'BUILDING',
+    'BUILDING',
+    file.step ? `${w} · ${file.step}` : w,
+    file.phase === 'blocked' ? 'bad' : 'normal',
+    file.phaseSince,
+  );
 }
 
 // Which PR is a branch's: the open one, else the newest merged one.
-function prFor(branch: string, prs: Pr[], queuePr: number | null, filePr: number | null): Pr | null {
+function prFor(
+  branch: string,
+  prs: Pr[],
+  queuePr: number | null,
+  filePr: number | null,
+): Pr | null {
   const mine = prs.filter((p) => p.branch === branch);
   const byNum = (n: number | null) => (n === null ? undefined : prs.find((p) => p.number === n));
   return (
     mine.find((p) => p.state === 'OPEN') ??
     byNum(filePr) ??
     byNum(queuePr) ??
-    mine.filter((p) => p.state === 'MERGED').sort((a, b) => (b.mergedAt ?? 0) - (a.mergedAt ?? 0))[0] ??
+    mine
+      .filter((p) => p.state === 'MERGED')
+      .sort((a, b) => (b.mergedAt ?? 0) - (a.mergedAt ?? 0))[0] ??
     null
   );
 }
@@ -254,22 +374,33 @@ export function derive(i: Inputs): View {
     if (b && !names.includes(b)) names.push(b);
   };
   [...i.lanes.map((l) => l.branch)].sort().forEach(add);
-  prs.filter((p) => p.state === 'OPEN' && !p.draft).map((p) => p.branch).sort().forEach(add);
+  prs
+    .filter((p) => p.state === 'OPEN' && !p.draft)
+    .map((p) => p.branch)
+    .sort()
+    .forEach(add);
   add(t.lock?.branch);
   add(t.lockB?.branch);
-  prs.filter((p) => p.state === 'MERGED' && (p.mergedAt ?? 0) >= i.midnight).forEach((p) => add(p.branch));
+  prs
+    .filter((p) => p.state === 'MERGED' && (p.mergedAt ?? 0) >= i.midnight)
+    .forEach((p) => add(p.branch));
 
   const rows = names.map((b) => {
     const file = files.get(b) ?? null;
     const queue = queued.get(b) ?? null;
-    return laneRow({ branch: b, file, queue, pr: prFor(b, prs, queue?.pr ?? null, file?.pr ?? null) }, i);
+    return laneRow(
+      { branch: b, file, queue, pr: prFor(b, prs, queue?.pr ?? null, file?.pr ?? null) },
+      i,
+    );
   });
 
   // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for Rahul, sources only Rahul can fix.
   const needs: NeedItem[] = [];
   for (const l of i.lanes) if (l.needs) needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
   for (const r of rows.filter((r) => r.state === 'MERGE ME' && r.pr)) {
-    const waiting = (q?.devQueue ?? []).filter((l) => l.branch !== r.branch && (l.waitingOn ?? '').includes(`PR ${r.pr!.number}`));
+    const waiting = (q?.devQueue ?? []).filter(
+      (l) => l.branch !== r.branch && (l.waitingOn ?? '').includes(`PR ${r.pr!.number}`),
+    );
     needs.push({
       kind: 'merge',
       what: `Merge PR ${r.pr!.number}: ${r.pr!.title}`,
@@ -281,15 +412,37 @@ export function derive(i: Inputs): View {
     });
   }
   for (const r of rows.filter((r) => r.state === 'DEPLOY FAILED')) {
-    const dep = deployFor(prs.find((p) => p.number === r.pr?.number)?.mergeSha ?? null, i.runs.value)?.run;
-    needs.push({ kind: 'deploy', what: `Main deploy failed after PR ${r.pr?.number}`, link: dep?.url ?? null, cmd: null, unblocks: null, since: r.since, branch: r.branch });
+    const dep = deployFor(
+      prs.find((p) => p.number === r.pr?.number)?.mergeSha ?? null,
+      i.runs.value,
+    )?.run;
+    needs.push({
+      kind: 'deploy',
+      what: `Main deploy failed after PR ${r.pr?.number}`,
+      link: dep?.url ?? null,
+      cmd: null,
+      unblocks: null,
+      since: r.since,
+      branch: r.branch,
+    });
   }
   for (const todo of q?.rahul ?? [])
-    needs.push({ kind: 'todo', what: todo.text, link: null, cmd: null, unblocks: null, since: todo.since ? Date.parse(todo.since) || null : null, branch: null });
+    needs.push({
+      kind: 'todo',
+      what: todo.text,
+      link: null,
+      cmd: null,
+      unblocks: null,
+      since: todo.since ? Date.parse(todo.since) || null : null,
+      branch: null,
+    });
   if (i.mac.state === 'missing' || i.mac.state === 'silent')
     needs.push({
       kind: 'source',
-      what: i.mac.state === 'missing' ? 'Install the Mac stats agent' : 'Mac stats silent: is the Mac asleep, or the agent stopped?',
+      what:
+        i.mac.state === 'missing'
+          ? 'Install the Mac stats agent'
+          : 'Mac stats silent: is the Mac asleep, or the agent stopped?',
       link: null,
       cmd: i.mac.state === 'missing' ? i.macInstall : null,
       unblocks: 'HEALTH → Mac',
@@ -304,7 +457,9 @@ export function derive(i: Inputs): View {
     return {
       slot,
       branch: live ? lock.branch : null,
-      session: live ? (file?.session ?? lock.session ?? i.sessionsByBranch[lock.branch] ?? null) : null,
+      session: live
+        ? (file?.session ?? lock.session ?? i.sessionsByBranch[lock.branch] ?? null)
+        : null,
       detail: live ? slotDetail(slot, lock, i, file) : null,
       since: live && file?.phase === 'dev' ? file.phaseSince : null,
       expiresAt: live ? lock.expiresAt : null,
@@ -314,7 +469,15 @@ export function derive(i: Inputs): View {
     };
   });
 
-  const nowStates: State[] = ['BUILDING', 'TESTING', 'PR', 'CHECKS FAILED', 'MERGED', 'DEPLOYING', 'DEPLOY FAILED'];
+  const nowStates: State[] = [
+    'BUILDING',
+    'TESTING',
+    'PR',
+    'CHECKS FAILED',
+    'MERGED',
+    'DEPLOYING',
+    'DEPLOY FAILED',
+  ];
   const next = {
     queue: (q?.devQueue ?? [])
       .filter((l) => l.state === 'next' || l.state === 'waiting')
@@ -322,7 +485,8 @@ export function derive(i: Inputs): View {
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
     rahul:
       needs[0]?.what ??
-      q?.plan.find((p) => p.kind === 'rahul' && p.at !== null && p.at >= i.now - 2 * 3600e3)?.what ??
+      q?.plan.find((p) => p.kind === 'rahul' && p.at !== null && p.at >= i.now - 2 * 3600e3)
+        ?.what ??
       null,
   };
 
@@ -340,15 +504,40 @@ export function derive(i: Inputs): View {
           : dep.conclusion === 'success'
             ? [`deployed${via}`, 'good']
             : [`deploy ${dep.conclusion ?? 'failed'}${via}`, 'bad'];
-      return { number: p.number, title: p.title, branch: p.branch, mergedAt: p.mergedAt!, deploy, tone, url: dep?.url ?? p.url };
+      return {
+        number: p.number,
+        title: p.title,
+        branch: p.branch,
+        mergedAt: p.mergedAt!,
+        deploy,
+        tone,
+        url: dep?.url ?? p.url,
+      };
     });
 
   const slipping: View['slipping'] = [
-    ...staleFollowups(q?.followups ?? [], i.now).map((f) => ({ kind: 'followup' as const, what: `${f.id}: ${f.what}`, owner: f.owner, since: f.since })),
-    ...rows.filter((r) => r.state === 'PARKED').map((r) => ({ kind: 'parked' as const, what: `${r.branch}${r.detail ? `: ${r.detail}` : ''}`, owner: r.session, since: r.since })),
+    ...staleFollowups(q?.followups ?? [], i.now).map((f) => ({
+      kind: 'followup' as const,
+      what: `${f.id}: ${f.what}`,
+      owner: f.owner,
+      since: f.since,
+    })),
+    ...rows
+      .filter((r) => r.state === 'PARKED')
+      .map((r) => ({
+        kind: 'parked' as const,
+        what: `${r.branch}${r.detail ? `: ${r.detail}` : ''}`,
+        owner: r.session,
+        since: r.since,
+      })),
     ...rows
       .filter((r) => r.state === 'BUILDING' && r.fileAge !== null && r.fileAge > STALE.laneQuiet)
-      .map((r) => ({ kind: 'quiet' as const, what: `${r.branch}: no lane update`, owner: r.session, since: files.get(r.branch)!.updatedAt })),
+      .map((r) => ({
+        kind: 'quiet' as const,
+        what: `${r.branch}: no lane update`,
+        owner: r.session,
+        since: files.get(r.branch)!.updatedAt,
+      })),
   ];
 
   const g = t.gauges;
@@ -364,15 +553,38 @@ export function derive(i: Inputs): View {
     done,
     health: {
       container: g
-        ? { at: g.t, anonMiB: g.anonMiB, highMiB: g.highMiB, anonSoft: g.anonSoft, anonHard: g.anonHard, cpu: g.cpu, cores: g.cores, pids: g.pids, pidsMax: g.pidsMax, tests: i.tests, testCap: i.testCap }
+        ? {
+            at: g.t,
+            anonMiB: g.anonMiB,
+            highMiB: g.highMiB,
+            anonSoft: g.anonSoft,
+            anonHard: g.anonHard,
+            cpu: g.cpu,
+            cores: g.cores,
+            pids: g.pids,
+            pidsMax: g.pidsMax,
+            tests: i.tests,
+            testCap: i.testCap,
+          }
         : null,
       mac: i.mac,
-      actions: m ? { minutes: m.minutes, of: ACTIONS_INCLUDED_MIN, counted: m.counted, total: m.total, month: m.month } : null,
+      actions: m
+        ? {
+            minutes: m.minutes,
+            of: ACTIONS_INCLUDED_MIN,
+            counted: m.counted,
+            total: m.total,
+            month: m.month,
+          }
+        : null,
       aws: i.aws,
     },
     slipping,
     sources: sources(i),
-    problems: [...t.queue.problems.map((p) => `queue.json: ${p}`), ...i.laneProblems.map((p) => `lanes/${p.file}: ${p.problem}`)],
+    problems: [
+      ...t.queue.problems.map((p) => `queue.json: ${p}`),
+      ...i.laneProblems.map((p) => `lanes/${p.file}: ${p.problem}`),
+    ],
   };
 }
 
@@ -397,7 +609,10 @@ export function sources(i: Inputs): SourceRow[] {
       ? { name: 'sampler', state: fresh(t.gauges.t, STALE.sampler), at: t.gauges.t, detail: null }
       : { name: 'sampler', state: 'missing', at: null, detail: 'no sample yet' },
   );
-  for (const [name, l] of [['dev lock', t.lock], ['devb lock', t.lockB]] as const)
+  for (const [name, l] of [
+    ['dev lock', t.lock],
+    ['devb lock', t.lockB],
+  ] as const)
     out.push(
       !l
         ? { name, state: 'missing', at: null, detail: 'no lock cache' }
@@ -410,8 +625,18 @@ export function sources(i: Inputs): SourceRow[] {
     q.status === 'missing'
       ? { name: 'queue.json', state: 'missing', at: null, detail: null }
       : q.status === 'bad'
-        ? { name: 'queue.json', state: 'failed', at: q.data?.updatedAt ?? null, detail: q.problems[0] ?? 'bad' }
-        : { name: 'queue.json', state: fresh(q.data!.updatedAt, STALE.queue), at: q.data!.updatedAt, detail: null },
+        ? {
+            name: 'queue.json',
+            state: 'failed',
+            at: q.data?.updatedAt ?? null,
+            detail: q.problems[0] ?? 'bad',
+          }
+        : {
+            name: 'queue.json',
+            state: fresh(q.data!.updatedAt, STALE.queue),
+            at: q.data!.updatedAt,
+            detail: null,
+          },
   );
   out.push(gh('gh PRs', { at: t.prs.at, error: t.prs.error }, i.now));
   out.push(gh('gh runs', i.runs, i.now));
@@ -419,33 +644,63 @@ export function sources(i: Inputs): SourceRow[] {
     const s = i.minutes.state;
     const m = s.value;
     const r = gh('Actions minutes', s, i.now, STALE.minutes);
-    if (m && m.counted < m.total && r.state === 'ok') r.detail = `estimate, ${m.counted} of ${m.total} runs counted`;
+    if (m && m.counted < m.total && r.state === 'ok')
+      r.detail = `estimate, ${m.counted} of ${m.total} runs counted`;
     else if (m && r.state === 'ok') r.detail = 'estimate from job times';
     out.push(r);
   } else out.push({ name: 'Actions minutes', state: 'missing', at: null, detail: 'gh off' });
   const mac = i.mac;
   out.push({
     name: 'Mac stats',
-    state: mac.state === 'ok' ? 'ok' : mac.state === 'stale' ? 'stale' : mac.state === 'missing' ? 'missing' : 'failed',
+    state:
+      mac.state === 'ok'
+        ? 'ok'
+        : mac.state === 'stale'
+          ? 'stale'
+          : mac.state === 'missing'
+            ? 'missing'
+            : 'failed',
     at: mac.at,
-    detail: mac.state === 'missing' ? 'agent not installed' : mac.state === 'silent' ? 'silent' : mac.error,
+    detail:
+      mac.state === 'missing'
+        ? 'agent not installed'
+        : mac.state === 'silent'
+          ? 'silent'
+          : mac.error,
   });
   out.push({
     name: 'AWS costs',
-    state: i.aws.state === 'ok' ? 'ok' : i.aws.state === 'stale' ? 'stale' : i.aws.state === 'missing' ? 'missing' : 'failed',
+    state:
+      i.aws.state === 'ok'
+        ? 'ok'
+        : i.aws.state === 'stale'
+          ? 'stale'
+          : i.aws.state === 'missing'
+            ? 'missing'
+            : 'failed',
     at: i.aws.at,
     detail: i.aws.error ?? (i.aws.through ? `through ${i.aws.through}` : null),
   });
   out.push({
     name: 'lane files',
     state: i.laneProblems.length ? 'failed' : 'ok',
-    at: i.lanes.reduce<number | null>((a, l) => (a === null || l.updatedAt > a ? l.updatedAt : a), null),
-    detail: i.laneProblems.length ? `${i.laneProblems.length} unreadable` : `${i.lanes.length} lanes`,
+    at: i.lanes.reduce<number | null>(
+      (a, l) => (a === null || l.updatedAt > a ? l.updatedAt : a),
+      null,
+    ),
+    detail: i.laneProblems.length
+      ? `${i.laneProblems.length} unreadable`
+      : `${i.lanes.length} lanes`,
   });
   return out;
 }
 
-function gh(name: string, c: { at: number | null; error: string | null }, now: number, lim = STALE.gh): SourceRow {
+function gh(
+  name: string,
+  c: { at: number | null; error: string | null },
+  now: number,
+  lim = STALE.gh,
+): SourceRow {
   if (c.error) return { name, state: 'failed', at: c.at, detail: c.error };
   if (c.at === null) return { name, state: 'missing', at: null, detail: 'not read yet' };
   return { name, state: (now - c.at) / 1000 > lim ? 'stale' : 'ok', at: c.at, detail: null };

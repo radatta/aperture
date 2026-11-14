@@ -21,7 +21,12 @@ export const PHASES = [
 export type Phase = (typeof PHASES)[number];
 export const BRANCH_RE = /^[a-z0-9][a-z0-9-]{0,62}$/; // the mailroom's branch rule: a safe filename too
 
-export type Needs = { what: string; link: string | null; cmd: string | null; unblocks: string | null };
+export type Needs = {
+  what: string;
+  link: string | null;
+  cmd: string | null;
+  unblocks: string | null;
+};
 export type LaneFile = {
   branch: string;
   session: string | null;
@@ -53,7 +58,8 @@ export function parseLane(text: string, file: string): LaneFile | LaneProblem {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return { file, problem: 'not an object' };
   if (r.v !== 1) return { file, problem: `v is ${JSON.stringify(r.v)}, want 1` };
   const branch = typeof r.branch === 'string' && BRANCH_RE.test(r.branch) ? r.branch : null;
-  if (!branch || `${branch}.json` !== file) return { file, problem: 'branch missing or not the file name' };
+  if (!branch || `${branch}.json` !== file)
+    return { file, problem: 'branch missing or not the file name' };
   if (!(PHASES as readonly unknown[]).includes(r.phase))
     return { file, problem: `phase ${JSON.stringify(r.phase)}` };
   const updatedAt = parseTime(r.updatedAt);
@@ -121,7 +127,15 @@ export const LANE_USAGE =
   `  phase: ${PHASES.join(' | ')}`;
 
 export function parseLaneArgs(argv: string[]): LaneArgs {
-  const a: LaneArgs = { clear: false, phase: null, step: null, pr: null, slot: null, session: null, needs: null };
+  const a: LaneArgs = {
+    clear: false,
+    phase: null,
+    step: null,
+    pr: null,
+    slot: null,
+    session: null,
+    needs: null,
+  };
   let what: string | null = null;
   let lnk: string | null = null;
   let cmd: string | null = null;
@@ -157,7 +171,8 @@ export function parseLaneArgs(argv: string[]): LaneArgs {
     return a;
   }
   if (!a.phase) throw new Error('a phase is required');
-  if ((lnk || cmd || unblocks) && !what) throw new Error('--link, --cmd and --unblocks go with --needs');
+  if ((lnk || cmd || unblocks) && !what)
+    throw new Error('--link, --cmd and --unblocks go with --needs');
   if (what) {
     if (!lnk === !cmd) throw new Error('--needs wants exactly one of --link or --cmd');
     if (lnk && !/^https:\/\/\S+$/.test(lnk)) throw new Error('--link wants an https URL');

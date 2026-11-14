@@ -71,7 +71,17 @@ function needs(v) {
     w.append(n.link ? httpsLink(n.link, n.what) : el('span', null, n.what));
     if (n.unblocks) w.append(el('div', 'sub', `unblocks: ${n.unblocks}`));
     if (n.cmd) w.append(el('code', null, n.cmd));
-    r.append(badge(n.kind === 'merge' ? 'MERGE ME' : n.kind === 'deploy' ? 'DEPLOY FAILED' : n.kind.toUpperCase(), n.kind === 'deploy' ? 'bad' : n.kind === 'merge' ? 'good' : 'warn'), w);
+    r.append(
+      badge(
+        n.kind === 'merge'
+          ? 'MERGE ME'
+          : n.kind === 'deploy'
+            ? 'DEPLOY FAILED'
+            : n.kind.toUpperCase(),
+        n.kind === 'deploy' ? 'bad' : n.kind === 'merge' ? 'good' : 'warn',
+      ),
+      w,
+    );
     if (n.since) r.append(el('span', 'sub', ago(n.since, v.now)));
     if (n.cmd) r.append(copyButton(n.cmd));
     b.append(r);
@@ -89,7 +99,14 @@ function laneLine(r, now) {
   row.append(w);
   if (r.since) row.append(el('span', 'sub', `for ${ago(r.since, now)}`));
   if (r.fileAge === null) row.append(el('span', 'sub t-dim', 'no lane file'));
-  else row.append(el('span', `sub ${r.fileAge > 86400 ? 't-dim' : r.fileAge > 7200 ? 't-warn' : ''}`, `updated ${ago(v_now - r.fileAge * 1000, now)} ago`));
+  else
+    row.append(
+      el(
+        'span',
+        `sub ${r.fileAge > 86400 ? 't-dim' : r.fileAge > 7200 ? 't-warn' : ''}`,
+        `updated ${ago(v_now - r.fileAge * 1000, now)} ago`,
+      ),
+    );
   return row;
 }
 let v_now = 0;
@@ -103,7 +120,13 @@ function nowPanel(v) {
     if (s.live) {
       c.append(el('div', null, `${s.branch}${s.session ? ` (${s.session})` : ''}`));
       c.append(el('div', 'sub', s.detail ?? 'holding the lock'));
-      c.append(el('div', 'sub', `${s.since ? `for ${ago(s.since, v.now)} · ` : ''}lock to ${hhmm(s.expiresAt)}`));
+      c.append(
+        el(
+          'div',
+          'sub',
+          `${s.since ? `for ${ago(s.since, v.now)} · ` : ''}lock to ${hhmm(s.expiresAt)}`,
+        ),
+      );
     } else c.append(el('div', 'sub', 'free'));
     if (s.failed) c.append(el('div', 'sub t-bad', 'lock refresh failed: this may be stale'));
     slots.append(c);
@@ -128,7 +151,10 @@ function next(v) {
     b.append(el('div', 'sub', `${slot} order`));
     q.forEach((l, i) => {
       const r = el('div', 'row');
-      r.append(el('span', 'sub', `${i + 1}.`), el('div', 'what', `${l.branch}  ${l.state}${l.waitingOn ? ` · ${l.waitingOn}` : ''}`));
+      r.append(
+        el('span', 'sub', `${i + 1}.`),
+        el('div', 'what', `${l.branch}  ${l.state}${l.waitingOn ? ` · ${l.waitingOn}` : ''}`),
+      );
       b.append(r);
     });
   }
@@ -151,7 +177,8 @@ function done(v) {
 
 function kv(rows) {
   const g = el('div', 'kv');
-  for (const [k, val, tone] of rows) g.append(el('span', 'k', k), el('span', tone ? `t-${tone}` : null, val));
+  for (const [k, val, tone] of rows)
+    g.append(el('span', 'k', k), el('span', tone ? `t-${tone}` : null, val));
   return g;
 }
 
@@ -163,50 +190,119 @@ function health(v) {
   if (!c) b.append(el('div', 't-bad', 'no sampler data'));
   else {
     const stale = (v.now - c.at) / 1000 > 90;
-    b.append(kv([
-      ['memory', `${gib(c.anonMiB)} of ${gib(c.highMiB)} (soft ${gib(c.anonSoft)}, hard ${gib(c.anonHard)})`, c.anonMiB > c.anonHard ? 'bad' : c.anonMiB > c.anonSoft ? 'warn' : null],
-      ['cpu', c.cpu === null ? 'unknown (bad tick)' : `${c.cpu.toFixed(1)} of ${c.cores} cores`, c.cpu !== null && c.cpu > c.cores * 0.9 ? 'warn' : null],
-      ['pids', `${c.pids} of ${c.pidsMax}`, null],
-      ['test slots', `${c.tests} of ${c.testCap ?? '?'}`, c.testCap !== null && c.tests >= c.testCap ? 'warn' : null],
-      ['as of', `${hhmm(c.at)} (${ago(c.at, v.now)} ago)${stale ? ': sampler silent' : ''}`, stale ? 'warn' : null],
-    ]));
+    b.append(
+      kv([
+        [
+          'memory',
+          `${gib(c.anonMiB)} of ${gib(c.highMiB)} (soft ${gib(c.anonSoft)}, hard ${gib(c.anonHard)})`,
+          c.anonMiB > c.anonHard ? 'bad' : c.anonMiB > c.anonSoft ? 'warn' : null,
+        ],
+        [
+          'cpu',
+          c.cpu === null ? 'unknown (bad tick)' : `${c.cpu.toFixed(1)} of ${c.cores} cores`,
+          c.cpu !== null && c.cpu > c.cores * 0.9 ? 'warn' : null,
+        ],
+        ['pids', `${c.pids} of ${c.pidsMax}`, null],
+        [
+          'test slots',
+          `${c.tests} of ${c.testCap ?? '?'}`,
+          c.testCap !== null && c.tests >= c.testCap ? 'warn' : null,
+        ],
+        [
+          'as of',
+          `${hhmm(c.at)} (${ago(c.at, v.now)} ago)${stale ? ': sampler silent' : ''}`,
+          stale ? 'warn' : null,
+        ],
+      ]),
+    );
   }
   b.append(el('div', 'sub', 'Mac'));
   const m = h.mac;
-  if (!m.stats) b.append(el('div', 't-bad', m.state === 'missing' ? 'Mac stats agent not installed (see NEEDS YOU)' : `Mac stats unreadable: ${m.error}`));
+  if (!m.stats)
+    b.append(
+      el(
+        'div',
+        't-bad',
+        m.state === 'missing'
+          ? 'Mac stats agent not installed (see NEEDS YOU)'
+          : `Mac stats unreadable: ${m.error}`,
+      ),
+    );
   else {
     const s = m.stats;
     const tone = m.state === 'ok' ? null : m.state === 'stale' ? 'warn' : 'bad';
-    b.append(kv([
-      ['memory', `${gib(s.mem.usedMiB)} used of ${gib(s.memTotalMiB)} · ${gib(s.mem.freeMiB)} free`, null],
-      ['compressor', gib(s.mem.compressedMiB), null],
-      ['pressure', s.mem.pressure, s.mem.pressure === 'normal' ? null : s.mem.pressure === 'warn' ? 'warn' : 'bad'],
-      ['swap', `${gib(s.swap.usedMiB)} of ${gib(s.swap.totalMiB)}`, null],
-      ['VM', s.vm ? `${s.vm.comm} ${gib(s.vm.rssMiB)}` : 'no VM process found', null],
-      ['load', s.load.map((x) => x.toFixed(2)).join(' ') + ` (${s.cpus} cpus)`, null],
-      ['as of', `${hhmm(s.t)} (${ago(s.t, v.now)} ago)${m.state === 'stale' ? ': stale' : m.state === 'silent' ? ': SILENT, asleep or stopped' : ''}`, tone],
-    ]));
+    b.append(
+      kv([
+        [
+          'memory',
+          `${gib(s.mem.usedMiB)} used of ${gib(s.memTotalMiB)} · ${gib(s.mem.freeMiB)} free`,
+          null,
+        ],
+        ['compressor', gib(s.mem.compressedMiB), null],
+        [
+          'pressure',
+          s.mem.pressure,
+          s.mem.pressure === 'normal' ? null : s.mem.pressure === 'warn' ? 'warn' : 'bad',
+        ],
+        ['swap', `${gib(s.swap.usedMiB)} of ${gib(s.swap.totalMiB)}`, null],
+        ['VM', s.vm ? `${s.vm.comm} ${gib(s.vm.rssMiB)}` : 'no VM process found', null],
+        ['load', s.load.map((x) => x.toFixed(2)).join(' ') + ` (${s.cpus} cpus)`, null],
+        [
+          'as of',
+          `${hhmm(s.t)} (${ago(s.t, v.now)} ago)${m.state === 'stale' ? ': stale' : m.state === 'silent' ? ': SILENT, asleep or stopped' : ''}`,
+          tone,
+        ],
+      ]),
+    );
   }
   b.append(el('div', 'sub', 'GitHub Actions'));
   const minutesSrc = v.sources.find((x) => x.name === 'Actions minutes');
-  if (!h.actions) b.append(el('div', minutesSrc?.state === 'failed' ? 't-bad' : 't-warn', minutesSrc?.state === 'failed' ? `estimate failed: ${minutesSrc.detail}` : 'estimate not ready yet'));
+  if (!h.actions)
+    b.append(
+      el(
+        'div',
+        minutesSrc?.state === 'failed' ? 't-bad' : 't-warn',
+        minutesSrc?.state === 'failed'
+          ? `estimate failed: ${minutesSrc.detail}`
+          : 'estimate not ready yet',
+      ),
+    );
   else {
     const a = h.actions;
-    b.append(kv([
-      ['minutes', `≈ ${a.minutes.toLocaleString()} of ${a.of.toLocaleString()} (plan) · ${a.month}`, a.minutes > a.of ? 'bad' : a.minutes > a.of * 0.8 ? 'warn' : null],
-      ['how', `estimate: job times, each rounded up · ${a.counted} of ${a.total} runs counted`, a.counted < a.total ? 'warn' : null],
-    ]));
+    b.append(
+      kv([
+        [
+          'minutes',
+          `≈ ${a.minutes.toLocaleString()} of ${a.of.toLocaleString()} (plan) · ${a.month}`,
+          a.minutes > a.of ? 'bad' : a.minutes > a.of * 0.8 ? 'warn' : null,
+        ],
+        [
+          'how',
+          `estimate: job times, each rounded up · ${a.counted} of ${a.total} runs counted`,
+          a.counted < a.total ? 'warn' : null,
+        ],
+      ]),
+    );
   }
   b.append(el('div', 'sub', 'AWS'));
   const w = h.aws;
-  if (w.state === 'missing') b.append(el('div', 't-bad', 'no costs pull (localNotes/costs-daily.json)'));
+  if (w.state === 'missing')
+    b.append(el('div', 't-bad', 'no costs pull (localNotes/costs-daily.json)'));
   else if (w.state === 'bad') b.append(el('div', 't-bad', `costs unreadable: ${w.error}`));
   else {
-    const acct = Object.entries(w.byAccount).map(([k, x]) => `${k} $${x.toFixed(2)}`).join(' · ');
-    b.append(kv([
-      ['month to date', `$${w.total.toFixed(2)}${acct ? ` (${acct})` : ''}`, null],
-      ['as of', `pulled ${new Date(w.at).toLocaleDateString()} ${hhmm(w.at)}, through ${w.through ?? '?'}${w.state === 'stale' ? ': older than 3 days' : ''}`, w.state === 'stale' ? 'warn' : null],
-    ]));
+    const acct = Object.entries(w.byAccount)
+      .map(([k, x]) => `${k} $${x.toFixed(2)}`)
+      .join(' · ');
+    b.append(
+      kv([
+        ['month to date', `$${w.total.toFixed(2)}${acct ? ` (${acct})` : ''}`, null],
+        [
+          'as of',
+          `pulled ${new Date(w.at).toLocaleDateString()} ${hhmm(w.at)}, through ${w.through ?? '?'}${w.state === 'stale' ? ': older than 3 days' : ''}`,
+          w.state === 'stale' ? 'warn' : null,
+        ],
+      ]),
+    );
   }
 }
 
@@ -216,7 +312,13 @@ function slipping(v) {
   if (!v.slipping.length) return empty(b, 'nothing slipping');
   for (const s of v.slipping) {
     const r = el('div', 'row');
-    r.append(badge(s.kind === 'followup' ? 'STALE' : s.kind === 'parked' ? 'PARKED' : 'QUIET', s.kind === 'parked' ? 'dim' : 'warn'), el('div', 'what', s.what));
+    r.append(
+      badge(
+        s.kind === 'followup' ? 'STALE' : s.kind === 'parked' ? 'PARKED' : 'QUIET',
+        s.kind === 'parked' ? 'dim' : 'warn',
+      ),
+      el('div', 'what', s.what),
+    );
     if (s.owner) r.append(el('span', 'sub', s.owner));
     if (s.since) r.append(el('span', 'sub', ago(s.since, v.now)));
     b.append(r);
@@ -228,7 +330,11 @@ function sources(v) {
   for (const s of v.sources) {
     const tone = s.state === 'ok' ? 'good' : s.state === 'stale' ? 'warn' : 'bad';
     const r = el('div', 'row');
-    r.append(badge(s.state, tone), el('span', null, s.name), el('span', 'sub', s.at ? `${ago(s.at, v.now)} ago` : 'never'));
+    r.append(
+      badge(s.state, tone),
+      el('span', null, s.name),
+      el('span', 'sub', s.at ? `${ago(s.at, v.now)} ago` : 'never'),
+    );
     if (s.detail) r.append(el('span', 'sub', s.detail));
     b.append(r);
   }
@@ -236,7 +342,9 @@ function sources(v) {
   const ages = (names) => {
     const xs = v.sources.filter((s) => names.includes(s.name));
     const worst = xs.find((s) => s.state !== 'ok');
-    return worst ? `${worst.name}: ${worst.state}` : xs.map((s) => (s.at ? ago(s.at, v.now) : '')).join(' · ');
+    return worst
+      ? `${worst.name}: ${worst.state}`
+      : xs.map((s) => (s.at ? ago(s.at, v.now) : '')).join(' · ');
   };
   $('#needs .age').textContent = ages(['lane files', 'gh PRs', 'queue.json']);
   $('#now .age').textContent = ages(['dev lock', 'devb lock', 'lane files']);
@@ -333,17 +441,42 @@ function charts(v) {
   const c = v.health.container;
   const hc = v.history.container;
   if (c) {
-    b.append(lineChart('container memory (GiB)', hc.map((p) => [p[0], p[1] / 1024]), c.highMiB / 1024, [c.anonSoft / 1024, c.anonHard / 1024], (x) => `${x.toFixed(1)} GiB`));
-    b.append(lineChart('container cpu (cores)', hc.map((p) => [p[0], p[2]]), c.cores, [c.cores], (x) => `${x.toFixed(1)} cores`));
+    b.append(
+      lineChart(
+        'container memory (GiB)',
+        hc.map((p) => [p[0], p[1] / 1024]),
+        c.highMiB / 1024,
+        [c.anonSoft / 1024, c.anonHard / 1024],
+        (x) => `${x.toFixed(1)} GiB`,
+      ),
+    );
+    b.append(
+      lineChart(
+        'container cpu (cores)',
+        hc.map((p) => [p[0], p[2]]),
+        c.cores,
+        [c.cores],
+        (x) => `${x.toFixed(1)} cores`,
+      ),
+    );
   }
   const hm = v.history.mac;
   const total = hm.length ? hm[hm.length - 1][2] / 1024 : 1;
-  b.append(lineChart('Mac memory used (GiB)', hm.map((p) => [p[0], p[1] / 1024]), total, [], (x) => `${x.toFixed(1)} GiB`));
+  b.append(
+    lineChart(
+      'Mac memory used (GiB)',
+      hm.map((p) => [p[0], p[1] / 1024]),
+      total,
+      [],
+      (x) => `${x.toFixed(1)} GiB`,
+    ),
+  );
 }
 
 function render(v) {
   v_now = v.now;
-  $('#meta').textContent = `as of ${hhmm(v.now)} · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`;
+  $('#meta').textContent =
+    `as of ${hhmm(v.now)} · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`;
   needs(v);
   nowPanel(v);
   next(v);

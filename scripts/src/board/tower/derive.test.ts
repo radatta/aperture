@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { deployFor, derive, holdReason, laneRow, liveLock, sources, type Inputs } from './derive.ts';
+import {
+  deployFor,
+  derive,
+  holdReason,
+  laneRow,
+  liveLock,
+  sources,
+  type Inputs,
+} from './derive.ts';
 import type { GhRun } from './gh.ts';
 import type { MacRead, Costs } from './health.ts';
 import type { LaneFile } from './lanes.ts';
@@ -73,22 +81,32 @@ const queueLane = (over: Partial<Lane> = {}): Lane => ({
   ...over,
 });
 const mac: MacRead = { state: 'ok', at: NOW - 10000, error: null, stats: null };
-const aws: Costs = { state: 'ok', at: NOW - 3600e3, error: null, month: '2026-11', through: '2026-11-12', total: 0.57, byAccount: { dev: 0.54, prod: 0.03 } };
+const aws: Costs = {
+  state: 'ok',
+  at: NOW - 3600e3,
+  error: null,
+  month: '2026-11',
+  through: '2026-11-12',
+  total: 0.57,
+  byAccount: { dev: 0.54, prod: 0.03 },
+};
 
-function inputs(over: {
-  lock?: Lock | null;
-  lockB?: Lock | null;
-  prs?: Pr[];
-  runs?: GhRun[];
-  checks?: Record<string, GhRun[]>;
-  files?: Record<string, string[]>;
-  lanes?: LaneFile[];
-  devQueue?: Lane[];
-  ledger?: TowerState['runs'];
-  mac?: MacRead;
-  followups?: NonNullable<TowerState['queue']['data']>['followups'];
-  rahul?: { text: string; since: string | null }[];
-} = {}): Inputs {
+function inputs(
+  over: {
+    lock?: Lock | null;
+    lockB?: Lock | null;
+    prs?: Pr[];
+    runs?: GhRun[];
+    checks?: Record<string, GhRun[]>;
+    files?: Record<string, string[]>;
+    lanes?: LaneFile[];
+    devQueue?: Lane[];
+    ledger?: TowerState['runs'];
+    mac?: MacRead;
+    followups?: NonNullable<TowerState['queue']['data']>['followups'];
+    rahul?: { text: string; since: string | null }[];
+  } = {},
+): Inputs {
   const tower = {
     now: NOW,
     gauges: null,
@@ -124,7 +142,8 @@ function inputs(over: {
     laneProblems: [],
     sessionsByBranch: {},
     runs: { value: over.runs ?? [], at: NOW - MIN, error: null, tried: NOW - MIN },
-    checks: (s) => (over.checks?.[s] ? { runs: over.checks[s]!, at: NOW - MIN, error: null } : null),
+    checks: (s) =>
+      over.checks?.[s] ? { runs: over.checks[s]!, at: NOW - MIN, error: null } : null,
     files: (s) => (over.files?.[s] ? { files: over.files[s]!, error: null } : null),
     minutes: null,
     mac: over.mac ?? mac,
@@ -141,38 +160,78 @@ const row = (i: Inputs, c: Partial<Parameters<typeof laneRow>[0]> = {}) =>
 
 describe('laneRow states', () => {
   it('BUILDING with the phase word and step, or "no status file" in grey', () => {
-    expect(row(inputs())).toMatchObject({ state: 'BUILDING', detail: 'no status file', tone: 'dim', fileAge: null });
+    expect(row(inputs())).toMatchObject({
+      state: 'BUILDING',
+      detail: 'no status file',
+      tone: 'dim',
+      fileAge: null,
+    });
     const r = row(inputs(), { file: file({ phase: 'review', step: 'round 2 of 3' }) });
-    expect(r).toMatchObject({ state: 'BUILDING', detail: 'Review · round 2 of 3', since: NOW - 20 * MIN, fileAge: 300 });
+    expect(r).toMatchObject({
+      state: 'BUILDING',
+      detail: 'Review · round 2 of 3',
+      since: NOW - 20 * MIN,
+      fileAge: 300,
+    });
     expect(row(inputs(), { file: file({ phase: 'blocked' }) }).tone).toBe('bad');
   });
 
   it('TESTING on dev or devb while it holds a live lock; an expired lock is not testing', () => {
-    expect(row(inputs({ lock: lock('echo') }))).toMatchObject({ state: 'TESTING', label: 'TESTING on dev' });
+    expect(row(inputs({ lock: lock('echo') }))).toMatchObject({
+      state: 'TESTING',
+      label: 'TESTING on dev',
+    });
     expect(row(inputs({ lockB: lock('echo') }))).toMatchObject({ label: 'TESTING on devb' });
     expect(row(inputs({ lock: lock('echo', { expiresAt: NOW - 1 }) })).state).toBe('BUILDING');
   });
 
   it("TESTING's detail: deploying, then devcheck running, then held for Rahul, then the step", () => {
-    const deploying = run({ name: `deploy-dev ${sha('a')} echo-k`, event: 'workflow_dispatch', branch: 'main', status: 'in_progress' });
+    const deploying = run({
+      name: `deploy-dev ${sha('a')} echo-k`,
+      event: 'workflow_dispatch',
+      branch: 'main',
+      status: 'in_progress',
+    });
     expect(row(inputs({ lock: lock('echo'), runs: [deploying] })).detail).toBe('deploying');
-    const ledger = [{ run: 'r1', start: NOW - 4 * MIN, end: null, status: null, full: true, slot: 'dev' as const }];
-    expect(row(inputs({ lock: lock('echo'), ledger })).detail).toMatch(/^devcheck running since \d\d:\d\d$/);
+    const ledger = [
+      {
+        run: 'r1',
+        start: NOW - 4 * MIN,
+        end: null,
+        status: null,
+        full: true,
+        slot: 'dev' as const,
+      },
+    ];
+    expect(row(inputs({ lock: lock('echo'), ledger })).detail).toMatch(
+      /^devcheck running since \d\d:\d\d$/,
+    );
     // an orphan run (no end, over 2 h old) is not in flight
     const orphan = [{ ...ledger[0]!, start: NOW - 3 * 3600e3 }];
-    expect(row(inputs({ lock: lock('echo'), ledger: orphan }), { file: file({ step: 'devcheck full' }) }).detail).toBe('devcheck full');
+    expect(
+      row(inputs({ lock: lock('echo'), ledger: orphan }), { file: file({ step: 'devcheck full' }) })
+        .detail,
+    ).toBe('devcheck full');
     const needs = { what: 'Safari pass', link: null, cmd: 'open x', unblocks: null };
-    expect(row(inputs({ lock: lock('echo') }), { file: file({ needs }) }).detail).toBe('held for Rahul: Safari pass');
+    expect(row(inputs({ lock: lock('echo') }), { file: file({ needs }) }).detail).toBe(
+      'held for Rahul: Safari pass',
+    );
   });
 
   it('PR states from the head sha checks: running, none seen, failed, draft', () => {
     const p = pr();
-    expect(row(inputs({ checks: { [sha('e')]: [run({ status: 'in_progress', conclusion: null })] } }), { pr: p })).toMatchObject({
+    expect(
+      row(inputs({ checks: { [sha('e')]: [run({ status: 'in_progress', conclusion: null })] } }), {
+        pr: p,
+      }),
+    ).toMatchObject({
       label: 'PR (checks running)',
       tone: 'warn',
     });
     expect(row(inputs(), { pr: p })).toMatchObject({ label: 'PR (no checks seen)', tone: 'warn' });
-    expect(row(inputs({ checks: { [sha('e')]: [run({ conclusion: 'failure' })] } }), { pr: p })).toMatchObject({
+    expect(
+      row(inputs({ checks: { [sha('e')]: [run({ conclusion: 'failure' })] } }), { pr: p }),
+    ).toMatchObject({
       state: 'CHECKS FAILED',
       detail: 'PR failure',
       tone: 'bad',
@@ -181,30 +240,52 @@ describe('laneRow states', () => {
   });
 
   it('MERGE ME when every check passed and nothing holds it', () => {
-    expect(row(inputs({ checks: green }), { pr: pr() })).toMatchObject({ state: 'MERGE ME', tone: 'good', hold: null });
+    expect(row(inputs({ checks: green }), { pr: pr() })).toMatchObject({
+      state: 'MERGE ME',
+      tone: 'good',
+      hold: null,
+    });
   });
 
   it('MERGED → DEPLOYING → DONE / DEPLOY FAILED from main Deploy runs', () => {
     const merged = pr({ state: 'MERGED', mergedAt: NOW - 5 * MIN, mergeSha: sha('m') });
-    expect(row(inputs(), { pr: merged })).toMatchObject({ state: 'MERGED', detail: 'deploy run not seen yet' });
-    const dep = (o: Partial<GhRun>) => run({ name: 'Deploy', event: 'push', branch: 'main', sha: sha('m'), ...o });
-    expect(row(inputs({ runs: [dep({ status: 'in_progress', conclusion: null })] }), { pr: merged }).state).toBe('DEPLOYING');
+    expect(row(inputs(), { pr: merged })).toMatchObject({
+      state: 'MERGED',
+      detail: 'deploy run not seen yet',
+    });
+    const dep = (o: Partial<GhRun>) =>
+      run({ name: 'Deploy', event: 'push', branch: 'main', sha: sha('m'), ...o });
+    expect(
+      row(inputs({ runs: [dep({ status: 'in_progress', conclusion: null })] }), { pr: merged })
+        .state,
+    ).toBe('DEPLOYING');
     expect(row(inputs({ runs: [dep({})] }), { pr: merged }).state).toBe('DONE');
-    expect(row(inputs({ runs: [dep({ conclusion: 'failure' })] }), { pr: merged })).toMatchObject({ state: 'DEPLOY FAILED', tone: 'bad' });
+    expect(row(inputs({ runs: [dep({ conclusion: 'failure' })] }), { pr: merged })).toMatchObject({
+      state: 'DEPLOY FAILED',
+      tone: 'bad',
+    });
   });
 
   it('PARKED from the lane file or dispatch’s PARKED word', () => {
     expect(row(inputs(), { file: file({ phase: 'parked' }) }).state).toBe('PARKED');
-    expect(row(inputs(), { queue: queueLane({ waitingOn: 'PARKED until Fri' }) }).state).toBe('PARKED');
+    expect(row(inputs(), { queue: queueLane({ waitingOn: 'PARKED until Fri' }) }).state).toBe(
+      'PARKED',
+    );
   });
 });
 
 describe('deployFor', () => {
   const dep = (s: string, created: number, o: Partial<GhRun> = {}) =>
     run({ name: 'Deploy', event: 'push', branch: 'main', sha: s, createdAt: created, ...o });
-  it("a merge whose own run was cancelled by a later merge rides the later run", () => {
-    const runs = [dep(sha('1'), NOW - 9 * MIN, { conclusion: 'cancelled' }), dep(sha('2'), NOW - 5 * MIN, { status: 'in_progress', conclusion: null, number: 9 })];
-    expect(deployFor(sha('1'), runs)).toMatchObject({ run: { number: 9 }, via: { conclusion: 'cancelled' } });
+  it('a merge whose own run was cancelled by a later merge rides the later run', () => {
+    const runs = [
+      dep(sha('1'), NOW - 9 * MIN, { conclusion: 'cancelled' }),
+      dep(sha('2'), NOW - 5 * MIN, { status: 'in_progress', conclusion: null, number: 9 }),
+    ];
+    expect(deployFor(sha('1'), runs)).toMatchObject({
+      run: { number: 9 },
+      via: { conclusion: 'cancelled' },
+    });
     expect(deployFor(sha('2'), runs)).toMatchObject({ run: { number: 9 }, via: null });
   });
   it('a cancelled run with nothing later stays cancelled; an unknown merge has none', () => {
@@ -221,15 +302,21 @@ describe('deployFor', () => {
 describe('holdReason (the automatic HOLD)', () => {
   const p = pr();
   it('(a) another branch holds dev → HOLD with who and until when', () => {
-    expect(holdReason(p, null, inputs({ lock: lock('bravo') }))).toMatch(/^dev: bravo is testing, lock to \d\d:\d\d$/);
-    expect(row(inputs({ lock: lock('bravo'), checks: green }), { pr: p })).toMatchObject({ state: 'HOLD', tone: 'warn' });
+    expect(holdReason(p, null, inputs({ lock: lock('bravo') }))).toMatch(
+      /^dev: bravo is testing, lock to \d\d:\d\d$/,
+    );
+    expect(row(inputs({ lock: lock('bravo'), checks: green }), { pr: p })).toMatchObject({
+      state: 'HOLD',
+      tone: 'warn',
+    });
   });
   it('an expired lock, or the PR’s own branch’s lock, never holds', () => {
     expect(holdReason(p, null, inputs({ lock: lock('bravo', { expiresAt: NOW - 1 }) }))).toBeNull();
     expect(holdReason(p, null, inputs({ lock: lock('echo') }))).toBeNull();
   });
   it('(b) devb busy holds only a PR that changes devb’s shape, or whose files are unread', () => {
-    const i = (files: string[] | null) => inputs({ lockB: lock('juliet'), ...(files ? { files: { [sha('e')]: files } } : {}) });
+    const i = (files: string[] | null) =>
+      inputs({ lockB: lock('juliet'), ...(files ? { files: { [sha('e')]: files } } : {}) });
     expect(holdReason(p, null, i(['app/src/x.ts']))).toBeNull();
     expect(holdReason(p, null, i(['cdk/lib/x.ts']))).toMatch(/changes devb's shape/);
     expect(holdReason(p, null, i(['pnpm-lock.yaml']))).toMatch(/shape/);
@@ -237,35 +324,73 @@ describe('holdReason (the automatic HOLD)', () => {
     expect(holdReason(p, null, i(null))).toMatch(/aren't read yet/);
   });
   it('(c) a main deploy running', () => {
-    const r = run({ name: 'Deploy', event: 'push', branch: 'main', status: 'queued', conclusion: null, number: 280 });
+    const r = run({
+      name: 'Deploy',
+      event: 'push',
+      branch: 'main',
+      status: 'queued',
+      conclusion: null,
+      number: 280,
+    });
     expect(holdReason(p, null, inputs({ runs: [r] }))).toBe('main deploy 280 running');
   });
   it("(d) dispatch's hold word, last", () => {
-    expect(holdReason(p, queueLane({ hold: 'after the Safari pass' }), inputs())).toBe('after the Safari pass');
-    expect(holdReason(p, queueLane({ hold: 'x' }), inputs({ lock: lock('bravo') }))).toMatch(/^dev:/);
+    expect(holdReason(p, queueLane({ hold: 'after the Safari pass' }), inputs())).toBe(
+      'after the Safari pass',
+    );
+    expect(holdReason(p, queueLane({ hold: 'x' }), inputs({ lock: lock('bravo') }))).toMatch(
+      /^dev:/,
+    );
   });
 });
 
 describe('derive', () => {
   it('NEEDS YOU: lane asks, then merges with what they unblock, failed deploys, to-dos, the Mac agent', () => {
     const needs = { what: 'Safari pass', link: null, cmd: 'open -a Safari x', unblocks: 'lc PR' };
-    const merged = pr({ number: 48, branch: 'golf', state: 'MERGED', mergedAt: NOW - 50 * MIN, mergeSha: sha('9') });
+    const merged = pr({
+      number: 48,
+      branch: 'golf',
+      state: 'MERGED',
+      mergedAt: NOW - 50 * MIN,
+      mergeSha: sha('9'),
+    });
     const v = derive(
       inputs({
         lanes: [file({ branch: 'india', needs })],
         prs: [pr(), merged],
         checks: green,
-        runs: [run({ name: 'Deploy', event: 'push', branch: 'main', sha: sha('9'), conclusion: 'failure' })],
-        devQueue: [queueLane({ branch: 'delta', state: 'waiting', waitingOn: 'Rahul: merge PR 50' })],
+        runs: [
+          run({
+            name: 'Deploy',
+            event: 'push',
+            branch: 'main',
+            sha: sha('9'),
+            conclusion: 'failure',
+          }),
+        ],
+        devQueue: [
+          queueLane({ branch: 'delta', state: 'waiting', waitingOn: 'Rahul: merge PR 50' }),
+        ],
         rahul: [{ text: 'answer §5', since: '2026-11-12' }],
         mac: { state: 'missing', at: null, error: null, stats: null },
       }),
     );
     expect(v.needs.map((n) => n.kind)).toEqual(['lane', 'merge', 'deploy', 'todo', 'source']);
-    expect(v.needs[0]).toMatchObject({ what: 'india: Safari pass', cmd: 'open -a Safari x', unblocks: 'lc PR' });
-    expect(v.needs[1]).toMatchObject({ what: 'Merge PR 50: A change', link: pr().url, unblocks: 'delta' });
+    expect(v.needs[0]).toMatchObject({
+      what: 'india: Safari pass',
+      cmd: 'open -a Safari x',
+      unblocks: 'lc PR',
+    });
+    expect(v.needs[1]).toMatchObject({
+      what: 'Merge PR 50: A change',
+      link: pr().url,
+      unblocks: 'delta',
+    });
     expect(v.needs[2]!.what).toBe('Main deploy failed after PR 48');
-    expect(v.needs[4]).toMatchObject({ what: 'Install the Mac stats agent', cmd: 'cd /x && install' });
+    expect(v.needs[4]).toMatchObject({
+      what: 'Install the Mac stats agent',
+      cmd: 'cd /x && install',
+    });
     expect(v.next.rahul).toBe('india: Safari pass');
   });
 
@@ -285,14 +410,26 @@ describe('derive', () => {
         lockB: lock('yankee'),
       }),
     );
-    expect(v.active.map((r) => r.branch)).toEqual(['zulu', 'alpha', 'bravo', 'mike', 'kilo', 'yankee']);
+    expect(v.active.map((r) => r.branch)).toEqual([
+      'zulu',
+      'alpha',
+      'bravo',
+      'mike',
+      'kilo',
+      'yankee',
+    ]);
   });
 
   it('DONE TODAY: merges since local midnight with their deploy result', () => {
-    const m = (n: number, at: number, s: string) => pr({ number: n, branch: `b${n}`, state: 'MERGED', mergedAt: at, mergeSha: sha(s) });
+    const m = (n: number, at: number, s: string) =>
+      pr({ number: n, branch: `b${n}`, state: 'MERGED', mergedAt: at, mergeSha: sha(s) });
     const v = derive(
       inputs({
-        prs: [m(1, NOW - 60 * MIN, '1'), m(2, NOW - 30 * MIN, '2'), m(3, Date.parse('2026-11-12T20:00:00Z'), '3')],
+        prs: [
+          m(1, NOW - 60 * MIN, '1'),
+          m(2, NOW - 30 * MIN, '2'),
+          m(3, Date.parse('2026-11-12T20:00:00Z'), '3'),
+        ],
         runs: [run({ name: 'Deploy', event: 'push', branch: 'main', sha: sha('1') })],
       }),
     );
@@ -303,11 +440,28 @@ describe('derive', () => {
   });
 
   it('SLIPPING: STALE follow-ups at 24 h, parked lanes, lanes quiet for a day', () => {
-    const f = (id: string, since: number, o = {}) => ({ id, what: 'w', owner: 'lane', after: 'now', status: 'open', source: null, since, ...o });
+    const f = (id: string, since: number, o = {}) => ({
+      id,
+      what: 'w',
+      owner: 'lane',
+      after: 'now',
+      status: 'open',
+      source: null,
+      since,
+      ...o,
+    });
     const v = derive(
       inputs({
-        followups: [f('F1', NOW - 24 * 3600e3 - 1000), f('F2', NOW - 24 * 3600e3 + 1000), f('F3', 0, { after: 'wave 4' }), f('F4', 0, { status: 'tracked' })],
-        lanes: [file({ branch: 'parky', phase: 'parked' }), file({ branch: 'quiet', updatedAt: NOW - 25 * 3600e3 })],
+        followups: [
+          f('F1', NOW - 24 * 3600e3 - 1000),
+          f('F2', NOW - 24 * 3600e3 + 1000),
+          f('F3', 0, { after: 'wave 4' }),
+          f('F4', 0, { status: 'tracked' }),
+        ],
+        lanes: [
+          file({ branch: 'parky', phase: 'parked' }),
+          file({ branch: 'quiet', updatedAt: NOW - 25 * 3600e3 }),
+        ],
       }),
     );
     expect(v.slipping.map((s) => [s.kind, s.what.split(':')[0]])).toEqual([
@@ -324,7 +478,18 @@ describe('sources: every source with its age; failed is failed, never empty', ()
     i.tower.prs = { list: [pr()], at: NOW - 10 * MIN, error: 'HTTP 502' };
     i.runs = { value: [], at: NOW - 10 * MIN, error: null, tried: NOW };
     const s = Object.fromEntries(sources(i).map((r) => [r.name, r]));
-    expect(Object.keys(s)).toEqual(['sampler', 'dev lock', 'devb lock', 'queue.json', 'gh PRs', 'gh runs', 'Actions minutes', 'Mac stats', 'AWS costs', 'lane files']);
+    expect(Object.keys(s)).toEqual([
+      'sampler',
+      'dev lock',
+      'devb lock',
+      'queue.json',
+      'gh PRs',
+      'gh runs',
+      'Actions minutes',
+      'Mac stats',
+      'AWS costs',
+      'lane files',
+    ]);
     expect(s['sampler']!.state).toBe('missing');
     expect(s['dev lock']).toMatchObject({ state: 'failed', detail: 'last refresh failed' });
     expect(s['gh PRs']).toMatchObject({ state: 'failed', detail: 'HTTP 502' });

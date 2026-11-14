@@ -11,7 +11,16 @@ const stats = (t: number, over: object = {}) =>
     t: new Date(t).toISOString(),
     host: 'mac',
     memTotalMiB: 36864,
-    mem: { freeMiB: 1124, activeMiB: 8192, inactiveMiB: 4096, wiredMiB: 3072, compressedMiB: 4096, usedMiB: 15360, freePct: 3, pressure: 'warn' },
+    mem: {
+      freeMiB: 1124,
+      activeMiB: 8192,
+      inactiveMiB: 4096,
+      wiredMiB: 3072,
+      compressedMiB: 4096,
+      usedMiB: 15360,
+      freePct: 3,
+      pressure: 'warn',
+    },
     swap: { totalMiB: 2048, usedMiB: 1024 },
     load: [3.2, 2.7, 2.4],
     cpus: 12,
@@ -30,10 +39,24 @@ describe('readMacStats', () => {
     expect(readMacStats('x', T, at(stats(T - 1000))).stats!.vm!.rssMiB).toBe(22528);
   });
   it('missing is "missing"; bad JSON or a bad field is "bad" with the reason', () => {
-    expect(readMacStats(join(tmpdir(), 'no-such-mac-stats.json'), T)).toEqual({ state: 'missing', at: null, error: null, stats: null });
-    expect(readMacStats('x', T, at('{oops'))).toMatchObject({ state: 'bad', error: expect.stringMatching(/JSON/) });
-    expect(readMacStats('x', T, at(stats(T, { memTotalMiB: 'lots' })))).toMatchObject({ state: 'bad', error: 'memTotalMiB is not a number' });
-    expect(readMacStats('x', T, at(stats(T, { v: 2 })))).toMatchObject({ state: 'bad', error: 'v is 2, want 1' });
+    expect(readMacStats(join(tmpdir(), 'no-such-mac-stats.json'), T)).toEqual({
+      state: 'missing',
+      at: null,
+      error: null,
+      stats: null,
+    });
+    expect(readMacStats('x', T, at('{oops'))).toMatchObject({
+      state: 'bad',
+      error: expect.stringMatching(/JSON/),
+    });
+    expect(readMacStats('x', T, at(stats(T, { memTotalMiB: 'lots' })))).toMatchObject({
+      state: 'bad',
+      error: 'memTotalMiB is not a number',
+    });
+    expect(readMacStats('x', T, at(stats(T, { v: 2 })))).toMatchObject({
+      state: 'bad',
+      error: 'v is 2, want 1',
+    });
   });
   it('a null vm stays null', () => {
     expect(readMacStats('x', T, at(stats(T, { vm: null }))).stats!.vm).toBeNull();
@@ -44,7 +67,9 @@ const ce = (days: [string, string, string][]) =>
   JSON.stringify({
     ResultsByTime: days.map(([day, acct, amt]) => ({
       TimePeriod: { Start: day, End: day },
-      Groups: [{ Keys: [acct, 'AWS Lambda'], Metrics: { UnblendedCost: { Amount: amt, Unit: 'USD' } } }],
+      Groups: [
+        { Keys: [acct, 'AWS Lambda'], Metrics: { UnblendedCost: { Amount: amt, Unit: 'USD' } } },
+      ],
     })),
   });
 
