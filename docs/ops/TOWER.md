@@ -32,8 +32,8 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
 and never from a worktree. After a merge that changes it, run `board.sh tower restart` from `/workspace`. The page's
 header shows the commit it serves. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
-inside). It serves three read-only routes, `/`, `/app.js` and `/api/state` (`?history=1` adds the chart series),
-and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
+icon (`/icon.svg`, and `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -125,7 +125,9 @@ From the top:
   never over the numbers.
 - Mac-only copy buttons become an "on the Mac" label.
 - Home Screen metas: `viewport-fit=cover` with safe-area padding, `theme-color` per scheme,
-  `apple-mobile-web-app-title`. iOS reads them when the icon is added, so a re-add picks them up.
+  `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
+  `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
+  added, so a re-add picks them up.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)

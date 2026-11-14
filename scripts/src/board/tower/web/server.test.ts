@@ -52,6 +52,23 @@ describe('the HTTP surface', () => {
     expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
   });
 
+  it('serves the radar icon: a 180 px PNG at the paths iOS probes, the SVG as the favicon', async () => {
+    const page = await (await fetch(`${base}/`)).text();
+    expect(page).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />');
+    expect(page).toContain('<link rel="icon" href="/icon.svg" type="image/svg+xml" />');
+    for (const p of ['/apple-touch-icon.png', '/apple-touch-icon-precomposed.png']) {
+      const r = await fetch(`${base}${p}`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-type')).toBe('image/png');
+      const png = Buffer.from(await r.arrayBuffer());
+      expect(png.subarray(1, 4).toString()).toBe('PNG');
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([180, 180]); // IHDR width, height
+    }
+    const svg = await fetch(`${base}/icon.svg`);
+    expect(svg.headers.get('content-type')).toBe('image/svg+xml');
+    expect(await svg.text()).toMatch(/^<svg [^>]*viewBox="0 0 180 180"/);
+  });
+
   it('/api/state is the View; ?history=1 asks for the series', async () => {
     calls = [];
     expect(await (await fetch(`${base}/api/state`)).json()).toEqual({ v: 1, now: 1 });
