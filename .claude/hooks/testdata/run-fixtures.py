@@ -37,6 +37,7 @@ suite's tool name, e.g. Monitor, which carries a shell command like Bash);
 "ledger" (lines pre-written to the repo's MCP ledger; a string is written raw, e.g. a corrupt line), "expect_ledger" ("op:id" lines that must be in it
 after the hook ran) and "ledger_count" (its exact line count after);
 {SECRETS_PARENT} / {PLAIN_DIR} anywhere in "input" expand to fresh temp dirs with and without `.secrets/ci-bot/`;
+{PAD_200K} in "stage" expands to ~200 KB of filler (a diff past the 64 KiB pipe buffer);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
 "ids": true gives the throwaway repo the real identifiers.json and scripts/src/identifiers{,-scan}.ts (the
@@ -57,7 +58,7 @@ import tempfile
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
-PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE"}
+PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE", "{PAD_200K}": "\n".join(["padding line"] * 16000)}
 REPO_ROOT = HERE.parent.parent.parent
 _IDS = json.loads((REPO_ROOT / "identifiers.json").read_text(encoding="utf-8"))
 ID_PLACEHOLDERS = {

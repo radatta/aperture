@@ -99,8 +99,8 @@ describe('scanDiff on real git output', () => {
     g(dir, 'mv', 'old.md', `${n}-notes.md`);
     writeFileSync(join(dir, `${n}.bin`), Buffer.from([0, 1, 2, 0, 255]));
     writeFileSync(join(dir, `${n}-empty.md`), '');
-    mkdirSync(join(dir, 'x b'));
-    writeFileSync(join(dir, 'x b', `${n}-deep.png`), Buffer.from([0, 9, 0])); // a name holding ` b/`
+    mkdirSync(join(dir, `${n} b`)); // the name before a ` b/`: a last-` b/` split would cut it off
+    writeFileSync(join(dir, `${n} b`, 'deep.png'), Buffer.from([0, 9, 0]));
     g(dir, 'rm', '-q', `${n}-gone.md`);
     g(dir, 'add', '.');
     expect(scanDiff(gd(dir)).sort()).toEqual(
@@ -108,7 +108,7 @@ describe('scanDiff on real git output', () => {
         `${n}-empty.md (its path) name`,
         `${n}-notes.md (its path) name`,
         `${n}.bin (its path) name`,
-        `x b/${n}-deep.png (its path) name`,
+        `${n} b/deep.png (its path) name`,
       ].sort(),
     );
   });

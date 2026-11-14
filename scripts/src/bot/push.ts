@@ -116,7 +116,7 @@ export function push(
   const hits = identifierHits(run, branch);
   if (hits.length)
     throw new Error(
-      `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md → Push). Fix it in the commit that added it — a later commit removing it still leaves it in the pushed history: edit the line, \`git commit --fixup=<sha>\`, \`git rebase --autosquash origin/main\`, then \`pnpm bot push --after-rebase\`:\n${hits.join('\n')}`,
+      `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md → Push). Fix it in the commit that added it — a later commit removing it still leaves it in the pushed history: edit the line, \`git commit --fixup=<sha>\`, \`git rebase --autosquash origin/main\`, then \`pnpm bot push --after-rebase\` (a plain \`pnpm bot push\` if the branch was never pushed):\n${hits.join('\n')}`,
     );
   run('git', pushArgs(branch, opts.afterRebase, lease), { env: credentialEnv(token) });
   // Record what we pushed (the next lease) and track it — read-only fetch, no token.

@@ -28,7 +28,9 @@
   # One line on purpose: from #4 until the fixtures caught it, a hard wrap inside this regex made grep error
   # out on every commit and the `if` read that as "no match" — the scan never fired. The fixtures pin it now.
   SECRET_PATTERNS='(sk-[a-zA-Z0-9]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|AKIA[0-9A-Z]{16}|aws_secret_access_key[[:space:]]*=[[:space:]]*["'\'']?[A-Za-z0-9/+=]{20,}|BEGIN[[:space:]]+(RSA[[:space:]]+)?PRIVATE[[:space:]]+KEY|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})'
-  if echo "$DIFF" | grep -qE "$SECRET_PATTERNS"; then
+  # A here-string, not a pipe: under pipefail grep -q exiting on an early match SIGPIPEs the writer, and a diff
+  # over 64 KiB with a key in it read as clean.
+  if grep -qE "$SECRET_PATTERNS" <<<"$DIFF"; then
     jq -n '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
       "permissionDecisionReason":"Staged diff appears to contain a credential or private key. Secrets belong in env / Secrets Manager, not the repo. Unstage the file (git restore --staged <file>), remove the credential, and try again."}}'
     exit 0
@@ -64,7 +66,7 @@
     fi
   fi
 
-  if echo "$COMMAND" | grep -q 'WIP'; then exit 0; fi
+  if grep -q 'WIP' <<<"$COMMAND"; then exit 0; fi
 
   # Commit-message rule (CLAUDE.md → Git workflow). Enforced here because prose alone never held: a "few
   # words" rule with an 8-word example produced 8-11-word messages across sessions, and the harness asks

@@ -36,3 +36,4 @@
 {"expect": "allow", "why": "identifiers: an untracked file a plain commit leaves out is not the commit's", "ids": true, "stage": "const answer = 42;", "write": "asked by {ID_NAME}", "write_path": "notes.md", "cmd": "git commit -m \"added the answer\""}
 {"expect": "deny", "why": "identifiers: `git -C <dir> commit` no longer slips past the hook", "ids": true, "stage": "asked by {ID_NAME}", "cmd": "git -C . commit -m \"added the notes file\"", "reason": "personal identifier"}
 {"expect": "deny", "why": "deploy-branch block also behind `git -c k=v commit`", "branch": "main", "cmd": "git -c core.editor=true commit -m \"fixed ttl\""}
+{"expect": "deny", "why": "a key early in a staged diff past 64 KiB \u2014 the pipe form SIGPIPEd under pipefail and read clean", "stage": "aws_key = {FAKE_AWS_KEY}\n{PAD_200K}", "cmd": "git commit -m \"added the big config\"", "reason": "credential"}
