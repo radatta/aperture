@@ -10,13 +10,15 @@ Cross-cutting rules that override defaults everywhere in this repo.
 
 - Chosen over npm (kills the slow-install pain) and over Bun (Node-runtime **test parity** for the Lambda, first-class CDK `NodejsFunction` support, strict/correct dep resolution, zero ecosystem edges).
 - Node is the runtime everywhere — local scripts, tests, and Lambda. pnpm is purely the package manager; Vite bundles the app, esbuild-via-CDK bundles the Lambda.
+- **Versions:** pnpm's comes only from `packageManager` in the root `package.json`, via corepack — CI resolves it from that field, so never pin it a second time in a machine-global tool manager (the mise trap: [COI-SANDBOX](../ops/COI-SANDBOX.md) → _Start here_ → 1). Node is 22, from `.nvmrc`.
+- **Formatting: Prettier.** `main` is Prettier-clean (since 2026-11-09): format the files a change touches, and `pnpm format:check` stays at zero findings. It is not a CI gate — CI runs lint, typecheck and tests.
 - **Test runner: Vitest** — one runner across the whole repo: Vite-native for `app/`, and running on **Node** for `lambdas/` so tests match the Lambda's prod runtime exactly.
 
 ---
 
 ## No personal identifiers in tracked text
 
-The repo is public. No code, doc, test, fixture, commit message, PR title or PR body names the maintainer, their personal mailbox, a Mac home path, the Mac projects folder or an AWS account id: prose says **"the maintainer"**, the Mac path is `<mac-repo>`, and `identifiers.json` is the one tracked home for the public values code needs. A test, the commit hook, `pnpm bot push` and `pnpm mailroom open-pr` enforce it. Rules, readers and the one exception: [`docs/ops/IDENTIFIERS.md`](../ops/IDENTIFIERS.md).
+The repo is public. No code, doc, test, fixture, commit message, PR title or PR body names the maintainer, their personal mailbox, a Mac home path, the Mac projects folder or an AWS account id: prose says **"the maintainer"**, the Mac path is `<mac-repo>`, and `identifiers.json` is the one tracked home for the public values code needs. A test, the commit hook, `pnpm bot push` and `pnpm mailroom open-pr` enforce it. Rules, readers and the one exception: [`docs/ops/IDENTIFIERS.md`](../ops/IDENTIFIERS.md). The judgment half — no life-stage bio, real money, school identifiers, family or verbatim quotes; product voice, never first person — is [`docs/ops/PUBLIC-CONTENT.md`](../ops/PUBLIC-CONTENT.md).
 
 ## First-principles: build it ourselves by default
 
@@ -32,8 +34,10 @@ When proposing a dep, **justify against A/B explicitly**, note its footprint + t
 **Worked calls (applying the rule):**
 
 - **Justified (B):** `react-oidc-context` — OIDC/PKCE + token refresh is subtle and security-critical.
-- **Roll our own:** date helpers — day-start offset + ISO-week cadence are small and targeted; hand-roll them. Only reach for a date lib if DST edge cases prove genuinely gnarly.
+- **Roll our own:** date helpers — day-start offset + ISO-week cadence are small and targeted; hand-roll them. Only reach for a date lib if DST edge cases prove genuinely gnarly. They live in `packages/shared/src/dates.ts`, and every date/time goes through them: never inline `Date` math or raw ISO strings in a component.
 - **Rolled our own (decided at the point of need):** ULID generation — small, but ID correctness (monotonicity, base32, entropy) is subtle; hand-rolled at `packages/shared/src/ulid.ts` (+ `ulid.test.ts`), reasoning in `V1_PLAN.md` §B.
+
+Every v1 dependency's verdict is the ledger in [`V1_PLAN.md` §B](../V1_PLAN.md#b-dependency-ledger--first-principles-discipline-conventions).
 
 ---
 
@@ -42,6 +46,12 @@ When proposing a dep, **justify against A/B explicitly**, note its footprint + t
 Build the `app/` against a **stubbed API first** — validate the home modes, the capture flow, and the calibration UX feel right in-hand — **then** wire the Lambda + DynamoDB behind the same contract.
 
 Rationale: it's far cheaper to discover the product is wrong against a stub than against real infra.
+
+---
+
+## BFF writes: one `writes` object
+
+Every external write (POST / PUT / PATCH / DELETE) a Lambda handler makes is declared in one `writes` object at the top of the handler and nowhere else; helpers call the functions passed in through it, never a write API directly. One audit point, and a guarantee that no write fires during a test or smoke run ([INFRA §4](../arch/INFRA.md#4-compute--api)).
 
 ---
 
