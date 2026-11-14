@@ -72,8 +72,8 @@ async function main(): Promise<number> {
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
   const feature = selectFeature(args.feature, scenarios);
   const changed = await Promise.all([
-    git(['diff', '--name-only', 'origin/main...HEAD']),
-    git(['diff', '--name-only', 'HEAD']),
+    git(['diff', '--name-only', '--no-renames', 'origin/main...HEAD']),
+    git(['diff', '--name-only', '--no-renames', 'HEAD']),
   ]).then(
     (outs) => [...new Set(outs.flatMap((o) => o.split('\n').filter(Boolean)))],
     () => null,

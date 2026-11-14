@@ -39,7 +39,7 @@ Measured (2026-11-07): smoke 25 s, full 190 s (startup 1–5 s), ~2.8 GiB peak f
 
 Every scenario and step except what `scripts/src/devcheck/local/skips.ts` leaves to dev — reported `deferred` with
 `local: … runs on dev`, never failed: every `ios` step (the Mac's Simulator), `ios-standalone`, `flux-perf`
-(service-worker precache, brotli wasm at the edge), `attachment-delete` (presigned S3), `finance` (the Plaid
+(service-worker precache, brotli wasm at the edge), `per-slot-runs` (the slot is the dev lock's), `attachment-delete` (presigned S3), `finance` (the Plaid
 Sandbox bank), `category-suggest`'s three real-parse steps (real Haiku), `lc-sittings`' `draft-real` (the real Haiku review draft) and `grace-over` (a wall-clock wait of up to 10 min after Done), `dev-concurrency-caps`' `poller-ticks` (the poller's minute schedule), `cognito-refresh`'s `renews` (a real
 refresh-token grant at Cognito), and `timed-reminders`' poller chain and health line (the push-dispatch poller's minute
 ticks; locally the BFF gets a throwaway VAPID public key so Settings' opt-in runs). `skips.test.ts` fails the gate if a
@@ -69,7 +69,7 @@ left running is this run's leak (the class that broke phone-nits and timer-credi
   well-known metadata answers "not configured" locally — the façade is dev's.
 - **Lambda's clock.** The server runs with `TZ=UTC`, as Lambda does — the container is Los Angeles time, and a UTC
   day-key bug only shows on a UTC server.
-- **Separate from dev's state.** Its own ledger and report under `localNotes/devcheck-local/<run>/`, no `run.lock`;
+- **Separate from dev's state.** Its own ledger and report under `localNotes/devcheck-local/<run>/`, no run lock;
   `open-pr.ts` reads only `localNotes/devcheck/`, so a local report never feeds a PR.
 
 ## When it fails

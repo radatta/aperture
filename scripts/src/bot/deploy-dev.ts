@@ -1,5 +1,6 @@
 // `pnpm bot deploy-dev` — put the current (pushed) feature commit on a dev stack: slot A (`dev`) or slot B (`devb`),
-// whichever lock it holds or takes (lock.ts → acquireSlot). The lock's slot is the only thing that picks the stack.
+// whichever lock it holds or takes (lock.ts → acquireSlot). The lock's slot is the only thing that picks the stack; a
+// branch touching iOS paths takes only dev (ios-routing.ts).
 // lock → dispatch deploy-dev.yml (on main, or on the branch when it changes .github/) with this sha → wait, renewing the lock while it waits. On success the
 // lock is renewed once more and stays HELD for the devcheck; `pnpm bot lock release` frees it (TTL covers a
 // crashed session). A run that finished unsuccessfully releases it; a timeout or API error leaves it to the TTL,
@@ -8,6 +9,7 @@ import type { Api } from './api.ts';
 import type { Clock, Job, Run } from './dispatch.ts';
 import { DispatchRejected, dispatchAndWait, listJobs, listRuns } from './dispatch.ts';
 import { featureBranch, requirePushed, runKey } from './git.ts';
+import { iosFiles } from './ios-routing.ts';
 import { acquireSlot, release, renew } from './lock.ts';
 import type { Holder, Slot } from './lock.ts';
 import type { Run as Sh } from './sh.ts';
@@ -137,7 +139,12 @@ export async function deployDev(
       `${branch} changes .github/ — dispatching on ${branch}, so its own workflows run on dev. The \`dev\` environment must admit ${branch} by name first (docs/ops/CI-BOT.md → Commands → workflow changes), else its deploy job is refused.`,
     );
   }
-  const took = await acquireSlot(api, branch, sha, clock.now(), only);
+  const ios = iosFiles(sh);
+  if (ios.length && !only)
+    log(
+      `${branch} touches iOS paths (${ios.slice(0, 3).join(', ')}${ios.length > 3 ? ', …' : ''}) — the Simulator is slot A's, so this deploy goes to dev, never devb (a held dev means \`lock wait\`, even with devb free)`,
+    );
+  const took = await acquireSlot(api, branch, sha, clock.now(), only, ios);
   slot = took.slot;
   let holder = took.holder;
   lockChanged(holder);

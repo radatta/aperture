@@ -1,6 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseSlot, tellingWhoToTell } from './cli.ts';
 import { LockHeld } from './lock.ts';
@@ -79,5 +81,18 @@ describe('--slot', () => {
     expect(parseSlot('devb')).toBe('devb');
     for (const bad of ['true', 'prod', 'devc', ''])
       expect(() => parseSlot(bad)).toThrow(/--slot must be/);
+  });
+});
+
+// `pnpm bot` is plain node (type stripping, builtins only): an import past node: builtins, an extensionless one, or
+// syntax Node can't strip dies here — the iOS routing reaches into the devcheck's glob and path list for this reason.
+describe('the CLI under plain node', () => {
+  it('loads and prints its usage', () => {
+    const cli = fileURLToPath(new URL('./cli.ts', import.meta.url));
+    const out = execFileSync(process.execPath, [cli, 'help'], {
+      env: { PATH: process.env.PATH },
+      encoding: 'utf8',
+    });
+    expect(out).toMatch(/^pnpm bot <command>/);
   });
 });

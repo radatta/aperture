@@ -138,15 +138,28 @@ export async function heldSlot(api: Api, branch: string): Promise<Slot | null> {
 
 // deploy-dev's acquire (docs/ops/CI-BOT.md → Dev lock): the slot this branch already holds, renewed; else the first
 // free one, A before B; else LockHeld naming every holder. `only` asks for one slot by name (`lock acquire --slot`),
-// and is refused while the branch holds the other — a branch never holds both.
+// and is refused while the branch holds the other — a branch never holds both. `ios`, the branch's changed files that
+// only slot A's Simulator proves (ios-routing.ts), pins it to dev: held → LockHeld for dev alone, so the session
+// waits for A rather than taking a free devb; holding devb, or asking for it, is refused.
 export async function acquireSlot(
   api: Api,
   branch: string,
   sha: string,
   nowMs: number,
   only?: Slot,
+  ios: string[] = [],
 ): Promise<{ slot: Slot; holder: Holder }> {
   const mine = await heldSlot(api, branch);
+  if (ios.length) {
+    const files = `${ios.slice(0, 3).join(', ')}${ios.length > 3 ? `, +${ios.length - 3} more` : ''}`;
+    const why = `${branch} touches iOS paths (${files}), which only slot A's Simulator can prove (SIM_SLOT_A_ONLY)`;
+    if (mine === 'devb')
+      throw new Error(
+        `${why}, but holds devb — \`pnpm bot lock release\`, then \`pnpm bot deploy-dev\` again (it takes dev or names \`lock wait\`)`,
+      );
+    if (only === 'devb') throw new Error(`${why} — take dev instead: \`lock acquire --slot dev\``);
+    only = 'dev';
+  }
   if (mine && only && mine !== only)
     throw new Error(
       `${branch} holds the ${mine} lock — \`pnpm bot lock release\` first to move to ${only}`,

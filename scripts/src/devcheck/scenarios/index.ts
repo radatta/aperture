@@ -2,6 +2,7 @@
 // delta --scenario <id>` runs just that one, `--tier full` runs them all — their slow steps only where the
 // branch touches the scenario's slowPaths or `--feature` names it — and `--tier all` runs every step.
 // `--feature <id>` marks whose rows are the feature's in the report.
+import { globMatch } from '../glob';
 import type { Scenario, Tier } from '../scenario';
 import { areas } from './areas';
 import { attachmentDelete } from './attachment-delete';
@@ -37,6 +38,7 @@ import { recurring } from './recurring';
 import { smoke } from './smoke';
 import { timedReminders } from './timed-reminders';
 import { timerCredit } from './timer-credit';
+import { perSlotRuns } from './per-slot-runs';
 
 export const SCENARIOS: Scenario[] = [
   smoke,
@@ -70,6 +72,7 @@ export const SCENARIOS: Scenario[] = [
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   devConcurrencyCaps,
   bffHardening,
+  perSlotRuns,
   lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
@@ -116,19 +119,7 @@ export function selectFeature(ids: string[], selected: Scenario[], all = SCENARI
   return ids;
 }
 
-// A repo-relative glob: `**` crosses folders, `*` stays inside one.
-export function globMatch(glob: string, path: string): boolean {
-  const re = glob
-    .split('**')
-    .map((part) =>
-      part
-        .split('*')
-        .map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-        .join('[^/]*'),
-    )
-    .join('.*');
-  return new RegExp(`^${re}$`).test(path);
-}
+export { globMatch } from '../glob';
 
 // The scenarios whose slow steps run this time (DEV-CHECK.md → Slow tier). `changed` is the branch's diff
 // against origin/main; null when it couldn't be read — then nothing is deferred, never silently skipped.

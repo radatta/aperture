@@ -475,6 +475,28 @@ describe('dev slots', () => {
     );
   });
 
+  it('pins a branch with iOS paths to slot A: waits for it, never takes or keeps devb', async () => {
+    const ios = ['app/src/auth/x.ts'];
+    const heldA = slots({ dev: live('flux') });
+    const err = await acquireSlot(heldA.api, 'ci-bot', SHA, NOW, undefined, ios).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(LockHeld);
+    expect((err as LockHeld).held.map((x) => x.slot)).toEqual(['dev']); // `lock wait`, not --any
+    expect(heldA.holderOf('devb')).toBeNull();
+    const free = slots();
+    expect((await acquireSlot(free.api, 'ci-bot', SHA, NOW, undefined, ios)).slot).toBe('dev');
+    const onB = slots({ devb: live('ci-bot') });
+    await expect(acquireSlot(onB.api, 'ci-bot', SHA, NOW, undefined, ios)).rejects.toThrow(
+      /touches iOS paths \(app\/src\/auth\/x\.ts\).*holds devb — `pnpm bot lock release`/,
+    );
+    expect(onB.holderOf('devb')?.branch).toBe('ci-bot'); // left as it was
+    await expect(acquireSlot(free.api, 'other', SHA, NOW, 'devb', ios)).rejects.toThrow(
+      /lock acquire --slot dev/,
+    );
+    expect(free.holderOf('devb')).toBeNull();
+  });
+
   it('finds, renews and releases only the slot the branch holds', async () => {
     const g = slots({ dev: live('flux'), devb: live('ci-bot') });
     expect(await heldSlot(g.api, 'ci-bot')).toBe('devb');
