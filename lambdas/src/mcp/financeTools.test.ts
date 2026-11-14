@@ -231,7 +231,7 @@ describe('list_finance_transactions', () => {
     expect(ns.transactions.map((x) => [x.id, x.bucket])).toEqual([
       ['fx-brokerage', 'not_spending'],
     ]);
-    expect(ns.totalUsd).toBe(350);
+    expect(ns.totalUsd).toBe(400);
     await expect(call('list_finance_transactions', { bucket: 'nope' })).rejects.toThrow(
       'parents_pay, budget, i_pay, not_spending',
     );
@@ -249,10 +249,10 @@ describe('list_finance_transactions', () => {
       kind: 'income',
       bucket: 'budget',
       linkedChargeId: 'fx-rent',
-      amountUsd: -1000.5,
-      countedUsd: -1000,
+      amountUsd: -800.5,
+      countedUsd: -800,
     });
-    expect(all.transactions.find((x) => x.id === 'fx-rent')!.refundedUsd).toBe(1000);
+    expect(all.transactions.find((x) => x.id === 'fx-rent')!.refundedUsd).toBe(800);
     expect(all.transactions.find((x) => x.id === 'fx-refund-1')).not.toHaveProperty('countedUsd');
     const o = await call<OverviewOut>('get_finance_overview');
     expect(o.spentUsd).toBe(0); // Budget holds only the rent, netted to $0 by the capped refund

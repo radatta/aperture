@@ -133,7 +133,7 @@ describe('normalizeAmountCents', () => {
   });
   it('toCents rounds float dollars', () => {
     expect(toCents(0.1 + 0.2)).toBe(30);
-    expect(toCents(-745.18)).toBe(-74518);
+    expect(toCents(-650.07)).toBe(-65007);
   });
 });
 
@@ -193,7 +193,7 @@ describe('detectInternalMoves', () => {
     expect(r.size).toBe(0);
   });
   it('a marked card credit pairs with its checking outflow even without a PFC', () => {
-    const rows = [tx('a', 'chk', '2026-09-16', 74518), tx('b', 'card', '2026-09-17', -74518)];
+    const rows = [tx('a', 'chk', '2026-09-16', 65000), tx('b', 'card', '2026-09-17', -65000)];
     expect(detectInternalMoves(rows, [chk, card]).size).toBe(0);
     const marked = [rows[0]!, { ...rows[1]!, startsPeriod: true }];
     expect(detectInternalMoves(marked, [chk, card]).get('a')).toBe('card_payment');
@@ -485,7 +485,7 @@ describe('not_spending', () => {
 });
 
 describe('list filters: matchesFinanceFilter / matchesFinanceText / netCents', () => {
-  const charge = tx('c', 'card', '2026-09-20', 3499, { bucket: 'budget', merchantName: 'Amazon' });
+  const charge = tx('c', 'card', '2026-09-20', 3000, { bucket: 'budget', merchantName: 'Amazon' });
   const refund = tx('r', 'card', '2026-09-22', -1000, { refundOfId: 'c', merchantName: 'Amazon' });
   const xfer = tx('x', 'chk', '2026-09-21', 5000, { pfcPrimary: 'TRANSFER_OUT' });
   const inn = tx('y', 'sav', '2026-09-21', -5000, { pfcPrimary: 'TRANSFER_IN' });
@@ -516,7 +516,7 @@ describe('list filters: matchesFinanceFilter / matchesFinanceText / netCents', (
   });
 
   it('netCents is net: money in subtracts', () => {
-    expect(netCents([charge, refund], (t) => t.rawAmountCents)).toBe(2499);
+    expect(netCents([charge, refund], (t) => t.rawAmountCents)).toBe(2000);
     expect(netCents([], (t: FinanceTransaction) => t.rawAmountCents)).toBe(0);
   });
 });
@@ -606,8 +606,8 @@ describe('buildFinanceOverview', () => {
     expect([cleared.sync.lastError, cleared.sync.lastErrorAt]).toEqual([null, null]);
   });
   it('financeSyncErrorMessage names the bank, and falls back to the code', () => {
-    expect(financeSyncErrorMessage('INSTITUTION_NOT_RESPONDING', 'Bank of America')).toBe(
-      'Bank of America isn’t responding right now.',
+    expect(financeSyncErrorMessage('INSTITUTION_NOT_RESPONDING', 'First Platypus Bank')).toBe(
+      'First Platypus Bank isn’t responding right now.',
     );
     expect(financeSyncErrorMessage('WEIRD_CODE')).toBe('The sync failed (WEIRD_CODE).');
     // The codes our own gateway and sync produce all read as words, never the raw fallback.
@@ -618,7 +618,7 @@ describe('buildFinanceOverview', () => {
       'NOT_FOUND',
       'PRODUCT_NOT_READY',
     ])
-      expect(financeSyncErrorMessage(code, 'Bank of America')).not.toMatch(/sync failed \(/);
+      expect(financeSyncErrorMessage(code, 'First Platypus Bank')).not.toMatch(/sync failed \(/);
   });
   it('last synced is null until every item has synced', () => {
     expect(build([sync({ lastSyncedAt: null })]).sync.lastSyncedAt).toBeNull();
@@ -665,7 +665,7 @@ describe('rules + grouping', () => {
 
 describe('isDuplicateItem', () => {
   const item = { ...base, id: 'item', institutionId: 'ins_1' } as FinanceItem;
-  const accounts = [acct('chk-0000', 'depository'), acct('card-8812', 'credit')];
+  const accounts = [acct('chk-0000', 'depository'), acct('card-3333', 'credit')];
   const meta = (name: string) => ({
     id: 'x',
     name,
@@ -677,17 +677,17 @@ describe('isDuplicateItem', () => {
     expect(isDuplicateItem([item], accounts, 'ins_1', [meta('chk-0000')])).toBe(true);
   });
   it('allows a new account, another bank, or a removed item', () => {
-    expect(isDuplicateItem([item], accounts, 'ins_1', [meta('sav-4321')])).toBe(false);
+    expect(isDuplicateItem([item], accounts, 'ins_1', [meta('sav-1111')])).toBe(false);
     expect(isDuplicateItem([item], accounts, 'ins_2', [meta('chk-0000')])).toBe(false);
     expect(
       isDuplicateItem([{ ...item, deletedAt: 5 }], accounts, 'ins_1', [meta('chk-0000')]),
     ).toBe(false);
   });
   it('flags a same-bank item whose accounts haven’t synced (or were all removed)', () => {
-    expect(isDuplicateItem([item], [], 'ins_1', [meta('sav-4321')])).toBe(true);
+    expect(isDuplicateItem([item], [], 'ins_1', [meta('sav-1111')])).toBe(true);
     const gone = accounts.map((a) => ({ ...a, deletedAt: 5 }));
-    expect(isDuplicateItem([item], gone, 'ins_1', [meta('sav-4321')])).toBe(true);
-    expect(isDuplicateItem([item], [], 'ins_2', [meta('sav-4321')])).toBe(false);
+    expect(isDuplicateItem([item], gone, 'ins_1', [meta('sav-1111')])).toBe(true);
+    expect(isDuplicateItem([item], [], 'ins_2', [meta('sav-1111')])).toBe(false);
   });
 });
 
@@ -769,7 +769,7 @@ describe('reconcileSyncPage', () => {
   });
 
   it('pending→posted carries the user fields, even from a tombstoned pending row', () => {
-    const pending = tx('fx-pending-1', FIXTURE_ACCOUNT_IDS.card, addDays(today, -1), 2150, {
+    const pending = tx('fx-pending-1', FIXTURE_ACCOUNT_IDS.card, addDays(today, -1), 2200, {
       pending: true,
       bucket: 'parents_pay',
       bucketSetBy: 'user',
@@ -783,11 +783,11 @@ describe('reconcileSyncPage', () => {
     expect(posted.bucket).toBe('parents_pay'); // carried, not the rule's bucket
     expect(posted.bucketSetBy).toBe('user');
     expect(posted.note).toBe('dinner w/ mom');
-    expect(posted.rawAmountCents).toBe(2450);
+    expect(posted.rawAmountCents).toBe(2600);
   });
 
   it('removed tombstones an alive row', () => {
-    const pending = tx('fx-pending-1', 'card', today, 2150);
+    const pending = tx('fx-pending-1', 'card', today, 2200);
     const existing = new Map([[pending.id, pending]]);
     run(existing, { added: [], modified: [], removed: [{ transaction_id: 'fx-pending-1' }] });
     expect(existing.get('fx-pending-1')!.deletedAt).toBe(1000);
@@ -832,11 +832,11 @@ describe('refund links', () => {
   const amazon = { merchantName: 'Amazon' };
 
   it('resolves directly, through a posted charge’s pending id, and not to a tombstone', () => {
-    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
-    const refund = tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' });
+    const charge = tx('c', 'card', '2026-09-20', 3000, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, { ...amazon, refundOfId: 'c' });
     expect(resolveRefundLinks([charge, refund]).get('r')?.id).toBe('c');
 
-    const posted = tx('c-posted', 'card', '2026-09-20', 3499, {
+    const posted = tx('c-posted', 'card', '2026-09-20', 3000, {
       ...amazon,
       pendingTransactionId: 'c',
     });
@@ -847,8 +847,8 @@ describe('refund links', () => {
   });
 
   it('bucketOf follows the charge, including an unsorted one', () => {
-    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
-    const refund = tx('r', 'card', '2026-09-22', -3499, { refundOfId: 'c', bucket: 'i_pay' });
+    const charge = tx('c', 'card', '2026-09-20', 3000, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, { refundOfId: 'c', bucket: 'i_pay' });
     const links = resolveRefundLinks([charge, refund]);
     expect(bucketOf(refund, links)).toBeNull();
     expect(isUnsorted(refund, links)).toBe(false);
@@ -858,9 +858,9 @@ describe('refund links', () => {
   it('a linked refund nets in its charge’s bucket and period, and never counts', () => {
     const txns = [
       ...payments,
-      tx('c', 'card', '2026-09-20', 3499, { ...amazon, bucket: 'budget' }),
-      tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' }),
-      tx('old', 'card', '2026-09-01', 2689, { bucket: 'budget' }), // previous period
+      tx('c', 'card', '2026-09-20', 3000, { ...amazon, bucket: 'budget' }),
+      tx('r', 'card', '2026-09-22', -3000, { ...amazon, refundOfId: 'c' }),
+      tx('old', 'card', '2026-09-01', 2500, { bucket: 'budget' }), // previous period
       tx('r2', 'card', '2026-09-23', -1000, { refundOfId: 'old' }), // dated current, counts previous
     ];
     const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
@@ -884,8 +884,8 @@ describe('refund links', () => {
   it('a charge its refunds cancel in full no longer needs sorting', () => {
     const txns = [
       ...payments,
-      tx('c', 'card', '2026-09-20', 3499, amazon),
-      tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' }),
+      tx('c', 'card', '2026-09-20', 3000, amazon),
+      tx('r', 'card', '2026-09-22', -3000, { ...amazon, refundOfId: 'c' }),
     ];
     const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
     expect(s.unsortedCount).toBe(0);
@@ -896,36 +896,36 @@ describe('refund links', () => {
     const other = acct('card2', 'credit', { hidden: true });
     const txns = [
       ...payments,
-      tx('c', 'card2', '2026-09-20', 3499, { ...amazon, bucket: 'budget' }),
-      tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' }),
+      tx('c', 'card2', '2026-09-20', 3000, { ...amazon, bucket: 'budget' }),
+      tx('r', 'card', '2026-09-22', -3000, { ...amazon, refundOfId: 'c' }),
     ];
     const s = summarizePeriod({ period, txns, accounts: [chk, card, other], budgetCents: 60000 });
     expect(s.unsortedCount).toBe(1);
   });
 
   it('periodOf with links follows the charge’s override', () => {
-    const charge = tx('c', 'card', '2026-09-20', 3499, { periodOverride: 'previous' });
-    const refund = tx('r', 'card', '2026-09-22', -3499, { refundOfId: 'c' });
+    const charge = tx('c', 'card', '2026-09-20', 3000, { periodOverride: 'previous' });
+    const refund = tx('r', 'card', '2026-09-22', -3000, { refundOfId: 'c' });
     expect(periodOf(refund, period, resolveRefundLinks([charge, refund]))).toBe('previous');
   });
 
   it('suggestRefundMatches ranks and filters', () => {
     const card2 = acct('card2', 'credit');
-    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, amazon);
     const txns = [
       refund,
-      tx('exact-other-acct', 'card2', '2026-09-21', 3499, amazon),
-      tx('exact-far', 'card', '2026-08-01', 3499, amazon),
-      tx('exact-near', 'card', '2026-09-15', 3499, amazon),
+      tx('exact-other-acct', 'card2', '2026-09-21', 3000, amazon),
+      tx('exact-far', 'card', '2026-08-01', 3000, amazon),
+      tx('exact-near', 'card', '2026-09-15', 3000, amazon),
       tx('bigger', 'card', '2026-09-20', 5000, amazon),
-      tx('pending-exact', 'card', '2026-09-15', 3499, { ...amazon, pending: true }),
+      tx('pending-exact', 'card', '2026-09-15', 3000, { ...amazon, pending: true }),
       tx('too-small', 'card', '2026-09-20', 1000, amazon),
-      tx('too-old', 'card', '2026-06-01', 3499, amazon),
-      tx('slack', 'card', '2026-09-24', 3499, amazon), // posted 2 days after its refund
-      tx('after', 'card', '2026-09-26', 3499, amazon), // past the 3-day slack
-      tx('other-merchant', 'card', '2026-09-20', 3499, { merchantName: 'Target' }),
-      tx('used-up', 'card', '2026-09-19', 3499, amazon),
-      tx('earlier-refund', 'card', '2026-09-20', -3499, { ...amazon, refundOfId: 'used-up' }),
+      tx('too-old', 'card', '2026-06-01', 3000, amazon),
+      tx('slack', 'card', '2026-09-24', 3000, amazon), // posted 2 days after its refund
+      tx('after', 'card', '2026-09-26', 3000, amazon), // past the 3-day slack
+      tx('other-merchant', 'card', '2026-09-20', 3000, { merchantName: 'Target' }),
+      tx('used-up', 'card', '2026-09-19', 3000, amazon),
+      tx('earlier-refund', 'card', '2026-09-20', -3000, { ...amazon, refundOfId: 'used-up' }),
     ];
     const links = resolveRefundLinks(txns);
     const ids = suggestRefundMatches({
@@ -946,8 +946,8 @@ describe('refund links', () => {
   });
 
   it('refundLinkError guards each rule', () => {
-    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
-    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const charge = tx('c', 'card', '2026-09-20', 3000, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, amazon);
     const ok = { refund, refundAccount: card, charge, chargeAccount: card };
     expect(refundLinkError(ok)).toBeNull();
     expect(refundLinkError({ ...ok, charge: refund, chargeAccount: card })).toMatch(
@@ -966,8 +966,8 @@ describe('refund links', () => {
   });
 
   it('refundLinkError: hidden accounts, transfers, moves, marks, and a late charge are refused', () => {
-    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
-    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const charge = tx('c', 'card', '2026-09-20', 3000, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, amazon);
     const ok = { refund, refundAccount: card, charge, chargeAccount: card };
     expect(refundLinkError({ ...ok, chargeAccount: { ...card, hidden: true } })).toMatch(/shown/);
     expect(refundLinkError({ ...ok, chargeAccount: undefined })).toMatch(/shown/);
@@ -988,8 +988,8 @@ describe('refund links', () => {
   });
 
   it('refundLinkError accepts checking/savings on either side', () => {
-    const debit = tx('c', 'chk', '2026-09-20', 3861);
-    const back = tx('r', 'chk', '2026-09-24', -3861);
+    const debit = tx('c', 'chk', '2026-09-20', 5500);
+    const back = tx('r', 'chk', '2026-09-24', -5500);
     const ok = { refund: back, refundAccount: chk, charge: debit, chargeAccount: chk };
     expect(refundLinkError(ok)).toBeNull();
     expect(refundLinkError({ ...ok, refundAccount: card })).toBeNull(); // a card credit → debit
@@ -1004,8 +1004,8 @@ describe('refund links', () => {
   it('a linked checking refund nets its charge; an unlinked deposit stays out of the budget', () => {
     const txns = [
       ...payments,
-      tx('c', 'chk', '2026-09-20', 3861, { bucket: 'budget' }),
-      tx('r', 'chk', '2026-09-24', -3861, { refundOfId: 'c' }),
+      tx('c', 'chk', '2026-09-20', 5500, { bucket: 'budget' }),
+      tx('r', 'chk', '2026-09-24', -5500, { refundOfId: 'c' }),
       tx('wage', 'chk', '2026-09-25', -150000),
     ];
     const accounts = [chk, card];
@@ -1023,12 +1023,12 @@ describe('refund links', () => {
     const unlinked = txns.map((t) => (t.id === 'r' ? { ...t, refundOfId: null } : t));
     expect(
       summarizePeriod({ period, txns: unlinked, accounts, budgetCents: 60000 }).spentCents,
-    ).toBe(3861);
+    ).toBe(5500);
   });
 
   it('a flipped checking account drops its refund link', () => {
-    const charge = tx('c', 'chk', '2026-09-20', 3861);
-    const refund = tx('r', 'chk', '2026-09-24', -3861, { refundOfId: 'c' });
+    const charge = tx('c', 'chk', '2026-09-20', 5500);
+    const refund = tx('r', 'chk', '2026-09-24', -5500, { refundOfId: 'c' });
     const flipped = acct('chk', 'depository', { signOverride: 'flip' });
     expect(resolveRefundLinks([charge, refund], (t) => amountOf(t, flipped)).has('r')).toBe(false);
   });
@@ -1055,20 +1055,20 @@ describe('refund links', () => {
   });
 
   it('capRefunds: refunds count in date order, only up to what’s left of the charge', () => {
-    const charge = tx('c', 'chk', '2026-09-20', 100000);
-    const over = tx('r', 'chk', '2026-09-24', -100050, { refundOfId: 'c' });
+    const charge = tx('c', 'chk', '2026-09-20', 200000);
+    const over = tx('r', 'chk', '2026-09-24', -200050, { refundOfId: 'c' });
     let txns = [charge, over];
     let got = capRefunds(
       resolveRefundLinks(txns),
       new Map(txns.map((t) => [t.id, t])),
       (t) => t.rawAmountCents,
     );
-    expect(got.byCharge.get('c')).toBe(100000);
-    expect(got.byRefund.get('r')).toBe(100000);
+    expect(got.byCharge.get('c')).toBe(200000);
+    expect(got.byRefund.get('r')).toBe(200000);
 
-    const first = tx('r1', 'card', '2026-09-21', -3499, { refundOfId: 'c2' });
+    const first = tx('r1', 'card', '2026-09-21', -3000, { refundOfId: 'c2' });
     const second = tx('r2', 'card', '2026-09-22', -1000, { refundOfId: 'c2' });
-    txns = [tx('c2', 'card', '2026-09-20', 3499), first, second];
+    txns = [tx('c2', 'card', '2026-09-20', 3000), first, second];
     const run = (rows: FinanceTransaction[]) =>
       capRefunds(
         resolveRefundLinks(rows),
@@ -1077,19 +1077,19 @@ describe('refund links', () => {
       );
     got = run(txns);
     expect([got.byCharge.get('c2'), got.byRefund.get('r1'), got.byRefund.get('r2')]).toEqual([
-      3499, 3499, 0,
+      3000, 3000, 0,
     ]);
     // Swap the dates: the other refund is now first and uses the charge up.
     got = run([txns[0]!, { ...first, date: '2026-09-23' }, second]);
-    expect([got.byRefund.get('r2'), got.byRefund.get('r1')]).toEqual([1000, 2499]);
+    expect([got.byRefund.get('r2'), got.byRefund.get('r1')]).toEqual([1000, 2000]);
     // A date tie falls back to id.
     got = run([txns[0]!, { ...first, date: '2026-09-22' }, second]);
-    expect([got.byRefund.get('r1'), got.byRefund.get('r2')]).toEqual([3499, 0]);
+    expect([got.byRefund.get('r1'), got.byRefund.get('r2')]).toEqual([3000, 0]);
   });
 
   it('an over-refund nets its charge to exactly $0 — in a bucket or unsorted, never below', () => {
-    const rent = tx('rent', 'chk', '2026-09-21', 100000, { pfcPrimary: 'RENT_AND_UTILITIES' });
-    const back = tx('back', 'chk', '2026-09-23', -100050, {
+    const rent = tx('rent', 'chk', '2026-09-21', 200000, { pfcPrimary: 'RENT_AND_UTILITIES' });
+    const back = tx('back', 'chk', '2026-09-23', -200050, {
       pfcPrimary: 'TRANSFER_IN',
       refundOfId: 'rent',
     });
@@ -1119,15 +1119,15 @@ describe('refund links', () => {
   });
 
   it('suggestions offer a charge a refund overshoots by at most REFUND_OVER_RATIO', () => {
-    const refund = tx('r', 'chk', '2026-09-24', -100050, {
-      merchantName: 'Family',
+    const refund = tx('r', 'chk', '2026-09-24', -200050, {
+      merchantName: 'Example Payer',
       pfcPrimary: 'TRANSFER_IN',
     });
     const txns = [
       refund,
-      tx('rent', 'chk', '2026-09-21', 100000, { merchantName: 'Roommate' }),
-      tx('exact', 'chk', '2026-09-20', 100050, { merchantName: 'Landlord' }),
-      tx('way-under', 'chk', '2026-09-20', 80000, { merchantName: 'Store' }), // over by 25% of it
+      tx('rent', 'chk', '2026-09-21', 200000, { merchantName: 'Example Landlord' }),
+      tx('exact', 'chk', '2026-09-20', 200050, { merchantName: 'Landlord' }),
+      tx('way-under', 'chk', '2026-09-20', 160000, { merchantName: 'Store' }), // over by 25% of it
     ];
     const ids = suggestRefundMatches({
       refund,
@@ -1156,11 +1156,11 @@ describe('refund links', () => {
   });
 
   it('suggestRefundMatches offers the same-account checking charge first', () => {
-    const refund = tx('r', 'chk', '2026-09-24', -3861, { merchantName: 'Safeway' });
+    const refund = tx('r', 'chk', '2026-09-24', -5500, { merchantName: 'Safeway' });
     const txns = [
       refund,
-      tx('on-card', 'card', '2026-09-20', 3861, { merchantName: 'Safeway' }),
-      tx('on-chk', 'chk', '2026-09-18', 3861, { merchantName: 'Safeway' }),
+      tx('on-card', 'card', '2026-09-20', 5500, { merchantName: 'Safeway' }),
+      tx('on-chk', 'chk', '2026-09-18', 5500, { merchantName: 'Safeway' }),
     ];
     const ids = suggestRefundMatches({
       refund,
@@ -1173,15 +1173,15 @@ describe('refund links', () => {
   });
 
   it('a flipped account drops links whose signs no longer read refund → charge', () => {
-    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
-    const refund = tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' });
+    const charge = tx('c', 'card', '2026-09-20', 3000, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, { ...amazon, refundOfId: 'c' });
     const flipped = (t: FinanceTransaction) => -t.rawAmountCents;
     expect(resolveRefundLinks([charge, refund], flipped).has('r')).toBe(false);
   });
 
   it('anyMerchant falls back to other charges when the descriptor doesn’t match', () => {
-    const refund = tx('r', 'card', '2026-09-22', -3499, { merchantName: null, name: 'AMZN MKTP' });
-    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, { merchantName: null, name: 'AMZN MKTP' });
+    const charge = tx('c', 'card', '2026-09-20', 3000, amazon);
     const args = {
       refund,
       txns: [refund, charge],
@@ -1194,13 +1194,13 @@ describe('refund links', () => {
   });
 
   it('searchRefundCharges matches merchant, bank text, note and amount, case-insensitively', () => {
-    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, amazon);
     const txns = [
       refund,
       tx('m', 'card', '2026-09-20', 1200, amazon),
       tx('d', 'card', '2026-09-19', 1300, { name: 'SQ *BLUE BOTTLE' }),
       tx('n', 'card', '2026-09-18', 1400, { note: 'split with Sam' }),
-      tx('big', 'chk', '2026-09-17', 100050),
+      tx('big', 'chk', '2026-09-17', 200050),
     ];
     const ids = (query: string) =>
       searchRefundCharges({
@@ -1214,8 +1214,8 @@ describe('refund links', () => {
     expect(ids('AMAZON')).toEqual(['m']);
     expect(ids('blue bot')).toEqual(['d']);
     expect(ids('sam')).toEqual(['n']);
-    expect(ids('1,000.50')).toEqual(['big']);
-    expect(ids('$1000.5')).toEqual(['big']);
+    expect(ids('2,000.50')).toEqual(['big']);
+    expect(ids('$2000.5')).toEqual(['big']);
     expect(ids('12.00')).toEqual(['m']);
     expect(ids('+$12.00')).toEqual(['m']); // pasted from a row's signed amount
     expect(ids('zzz')).toEqual([]);
@@ -1223,20 +1223,20 @@ describe('refund links', () => {
 
   it('searchRefundCharges reaches what the suggestions drop, and nothing the server refuses', () => {
     const hiddenCard = acct('hid', 'credit', { hidden: true });
-    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, amazon);
     const txns = [
       refund,
-      tx('old', 'card', '2026-06-01', 3499, amazon), // past the 90-day window
+      tx('old', 'card', '2026-06-01', 3000, amazon), // past the 90-day window
       tx('small', 'card', '2026-09-20', 1000, amazon), // overshot by far more than 10%
-      tx('other', 'card', '2026-09-20', 3499, { merchantName: 'Target' }),
-      tx('slack', 'card', '2026-09-25', 3499, amazon), // 3 days after: still allowed
-      tx('after', 'card', '2026-09-26', 3499, amazon), // past the slack
-      tx('hidden', 'hid', '2026-09-20', 3499, amazon),
-      tx('payment', 'card', '2026-09-20', 3499, { ...amazon, pfcPrimary: 'LOAN_PAYMENTS' }),
-      tx('marked', 'card', '2026-09-20', 3499, { ...amazon, ...MARK }),
-      tx('gone', 'card', '2026-09-20', 3499, { ...amazon, deletedAt: 1 }),
-      tx('used-up', 'card', '2026-09-19', 3499, amazon),
-      tx('earlier-refund', 'card', '2026-09-20', -3499, { ...amazon, refundOfId: 'used-up' }),
+      tx('other', 'card', '2026-09-20', 3000, { merchantName: 'Target' }),
+      tx('slack', 'card', '2026-09-25', 3000, amazon), // 3 days after: still allowed
+      tx('after', 'card', '2026-09-26', 3000, amazon), // past the slack
+      tx('hidden', 'hid', '2026-09-20', 3000, amazon),
+      tx('payment', 'card', '2026-09-20', 3000, { ...amazon, pfcPrimary: 'LOAN_PAYMENTS' }),
+      tx('marked', 'card', '2026-09-20', 3000, { ...amazon, ...MARK }),
+      tx('gone', 'card', '2026-09-20', 3000, { ...amazon, deletedAt: 1 }),
+      tx('used-up', 'card', '2026-09-19', 3000, amazon),
+      tx('earlier-refund', 'card', '2026-09-20', -3000, { ...amazon, refundOfId: 'used-up' }),
     ];
     const accounts = [chk, card, hiddenCard];
     const found = searchRefundCharges({
@@ -1262,7 +1262,7 @@ describe('refund links', () => {
   });
 
   it('searchRefundCharges lists newest first, then id; a blank query lists every charge', () => {
-    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3000, amazon);
     const txns = [
       refund,
       tx('a', 'card', '2026-09-01', 500),
@@ -1279,7 +1279,7 @@ describe('refund links', () => {
   });
 
   it('reconcileSyncPage carries the link pending→posted and skips the merchant rule', () => {
-    const pending = tx('p-refund', 'card', '2026-09-22', -3499, {
+    const pending = tx('p-refund', 'card', '2026-09-22', -3000, {
       ...amazon,
       pending: true,
       refundOfId: 'c',
@@ -1289,7 +1289,7 @@ describe('refund links', () => {
       ...fixtureHistory('2026-09-26')[0]!,
       transaction_id: 'posted-refund',
       account_id: 'card',
-      amount: -34.99,
+      amount: -30,
       merchant_name: 'Amazon',
       pending: false,
       pending_transaction_id: 'p-refund',

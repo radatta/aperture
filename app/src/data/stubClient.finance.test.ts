@@ -9,7 +9,7 @@ describe('stub finances', () => {
   it('seeds a linked bank with rules, some history sorted, and recent charges left to sort', async () => {
     const api = createStubClient({ storageKey: `fin-seed-${Math.random()}` });
     const o = await api.getFinanceOverview({ today: todayKey(4) });
-    expect(o.items.map((i) => i.institutionName)).toEqual(['Bank of America']);
+    expect(o.items.map((i) => i.institutionName)).toEqual(['First Platypus Bank']);
     expect(o.accounts).toHaveLength(3);
     expect(o.sync.environment).toBe('stub');
     expect(o.period.source).toBe('marked');

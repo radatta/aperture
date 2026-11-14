@@ -613,7 +613,7 @@ export function suggestRefundMatches(input: {
 // The search under the suggestions, for the charge they miss: any merchant, any age in the loaded
 // range, any size (the overshoot never counts — capRefunds). Still only what refundLinkError accepts,
 // and only with something left to refund. Matches a case-insensitive substring of the merchant, the
-// bank's text, the note, or the dollar amount ("34.99", "$1,000.50"). Newest first, then id; a blank
+// bank's text, the note, or the dollar amount ("30.00", "$800.50"). Newest first, then id; a blank
 // query lists every such charge.
 export function searchRefundCharges(input: {
   refund: FinanceTransaction;
@@ -628,7 +628,7 @@ export function searchRefundCharges(input: {
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
   const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
   const needle = query.trim().toLowerCase();
-  // "+$34.99" pasted from a row's signed amount still matches.
+  // "+$30.00" pasted from a row's signed amount still matches.
   const amountNeedle = needle.replace(/[+\-$,]/g, '');
   const matches = (c: FinanceTransaction) =>
     needle === '' ||

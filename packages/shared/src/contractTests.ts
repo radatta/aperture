@@ -2360,7 +2360,7 @@ export function runApiContract(
       const link = await api.createPlaidLinkToken({ mode: 'connect' });
       expect(link.linkToken).toBeTruthy();
       const item = await connect();
-      expect(item.institutionName).toBe('Bank of America');
+      expect(item.institutionName).toBe('First Platypus Bank');
       expect(item.status).toBe('ok');
 
       const o = await api.getFinanceOverview({ today: finToday() });
@@ -2594,7 +2594,7 @@ export function runApiContract(
       await connect();
       await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
       const before = await api.getFinanceOverview({ today: finToday() });
-      expect(before.spentCents).toBe(3499);
+      expect(before.spentCents).toBe(3000);
 
       const linked = await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
       expect(linked.refundOfId).toBe('fx-card-8');
@@ -2605,7 +2605,7 @@ export function runApiContract(
 
       await api.linkFinanceRefund('fx-refund-1', null);
       const unlinked = await api.getFinanceOverview({ today: finToday() });
-      expect(unlinked.spentCents).toBe(3499);
+      expect(unlinked.spentCents).toBe(3000);
       expect(unlinked.unsortedCount).toBe(before.unsortedCount);
     });
 
@@ -2616,7 +2616,7 @@ export function runApiContract(
       // The charge is in the previous period — so is its refund, though it's dated this period.
       expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
       await api.setFinancePeriodOverride('fx-card-14', 'current');
-      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(2689 - 1000);
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(2500 - 1500);
     });
 
     it('finance: refund link validation', async () => {
@@ -2624,7 +2624,7 @@ export function runApiContract(
       await expect(api.linkFinanceRefund('fx-card-8', 'fx-card-2')).rejects.toThrow(); // charge as refund
       await expect(api.linkFinanceRefund('fx-refund-1', 'fx-refund-2')).rejects.toThrow(); // onto a credit
       await expect(api.linkFinanceRefund('fx-refund-1', 'fx-refund-1')).rejects.toThrow(); // self
-      // Any size: $10 onto a $6.75 charge links, and counts only $6.75 (capRefunds).
+      // Any size: $15 onto a $5.00 charge links, and counts only $5.00 (capRefunds).
       expect((await api.linkFinanceRefund('fx-refund-2', 'fx-card-10')).refundOfId).toBe(
         'fx-card-10',
       );
@@ -2661,8 +2661,8 @@ export function runApiContract(
       await connect();
       await api.setFinanceBucket({ ids: ['fx-rent'], bucket: 'budget' });
       const before = await api.getFinanceOverview({ today: finToday() });
-      expect(before.spentCents).toBe(100000);
-      // $1,000.50 back against $1,000.00: links, and counts only what was left of the charge.
+      expect(before.spentCents).toBe(80000);
+      // $800.50 back against $800.00: links, and counts only what was left of the charge.
       const linked = await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
       expect(linked.refundOfId).toBe('fx-rent');
       const after = await api.getFinanceOverview({ today: finToday() });
@@ -2672,10 +2672,10 @@ export function runApiContract(
         after,
         await api.listFinanceTransactions(financeListRange(finToday(), after)),
       );
-      expect(view.refunded.get('fx-rent')).toBe(100000);
-      expect(view.counted.get('fx-reimburse')).toBe(100000);
+      expect(view.refunded.get('fx-rent')).toBe(80000);
+      expect(view.counted.get('fx-reimburse')).toBe(80000);
       await api.linkFinanceRefund('fx-reimburse', null);
-      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(100000);
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(80000);
     });
 
     it('finance: an over-refund on an unsorted charge takes it out of the queue, never below $0', async () => {
@@ -2684,7 +2684,7 @@ export function runApiContract(
       await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
       const after = await api.getFinanceOverview({ today: finToday() });
       expect(after.unsortedCount).toBe(before.unsortedCount - 1);
-      expect(after.unsortedCents).toBe(before.unsortedCents - 100000);
+      expect(after.unsortedCents).toBe(before.unsortedCents - 80000);
     });
 
     it('finance: two refunds where the second over-covers count only up to the charge', async () => {
@@ -2698,7 +2698,7 @@ export function runApiContract(
         o,
         await api.listFinanceTransactions(financeListRange(finToday(), o)),
       );
-      expect(view.refunded.get('fx-card-8')).toBe(3499);
+      expect(view.refunded.get('fx-card-8')).toBe(3000);
       expect(view.counted.get('fx-refund-2')).toBe(0); // the later refund found the charge used up
     });
 
@@ -2711,7 +2711,7 @@ export function runApiContract(
       const txns = await api.listFinanceTransactions(await finRange());
       expect(resolveRefundLinks(txns).get('fx-refund-2')?.id).toBe('fx-posted-1');
       const o = await api.getFinanceOverview({ today: finToday() });
-      expect(o.buckets.parents_pay.totalCents).toBe(2450 - 1000);
+      expect(o.buckets.parents_pay.totalCents).toBe(2600 - 1500);
       expect(
         (await api.exportData()).financeTransactions.find((t) => t.id === 'fx-refund-2')!
           .refundOfId,
@@ -2765,7 +2765,7 @@ export function runApiContract(
       await connect();
       await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
       const before = await api.getFinanceOverview({ today: finToday() });
-      expect(before.spentCents).toBe(3861);
+      expect(before.spentCents).toBe(5500);
 
       await api.linkFinanceRefund('fx-refund-3', 'fx-safeway');
       const after = await api.getFinanceOverview({ today: finToday() });
@@ -2773,7 +2773,7 @@ export function runApiContract(
       expect(after.unsortedCount).toBe(before.unsortedCount); // a deposit was never in the queue
 
       await api.linkFinanceRefund('fx-refund-3', null);
-      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(3861);
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(5500);
 
       await api.linkFinanceRefund('fx-refund-1', 'fx-safeway'); // a card credit → a debit charge
       await expect(api.linkFinanceRefund('fx-xfer-sav', 'fx-safeway')).rejects.toThrow(); // transfer in

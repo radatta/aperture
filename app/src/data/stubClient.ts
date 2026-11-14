@@ -2392,7 +2392,7 @@ class StubClient implements ApiClient {
   }
 
   // --- Finances (stub: Plaid is faked with the shared fixtures) -----------------------------------
-  // Link is a FakeLinkDialog (environment 'stub'), the exchange "returns" the fixture BofA login, and a
+  // Link is a FakeLinkDialog (environment 'stub'), the exchange "returns" the fixture bank login, and a
   // sync replays fixture pages by cursor — the same pages the lambdas' InMemoryPlaid serves, through
   // the same reconcileSyncPage. Syncs run inline, so `syncing` is never observed here.
   private finToday(): string {
@@ -2508,7 +2508,7 @@ class StubClient implements ApiClient {
     this.syncItem(item.id);
     return item;
   }
-  // Dev seed: a linked BofA with three rules, both card payments marked, older history sorted, and
+  // Dev seed: a linked fixture bank with three rules, both card payments marked, older history sorted, and
   // the recent weeks mostly not.
   private seedFinance(): void {
     for (const [pattern, bucket] of [
