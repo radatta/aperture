@@ -54,6 +54,14 @@ describe('mailroom runner', () => {
     }
   });
 
+  // The Mac runs these under bash 3.2, which garbles a $( ) holding parens inside a case arm (the MIXED_TEXT result
+  // came out as no JSON, 2026-11-13); this suite runs bash 5, so the shape is pinned out instead.
+  it('no case arm holds a $( ) with parens inside (bash 3.2 misparses it)', () => {
+    const src = [code(), readFileSync(`${TOOLS_DIR}install.sh`, 'utf8')].join('\n');
+    const arms = src.split('\n').filter((l) => /^\s*[^#]*[\w*|-]+\)\s.*\$\([^)]*\(/.test(l));
+    expect(arms).toEqual([]);
+  });
+
   it('reads each secret only from its Keychain item, never a file or the environment', () => {
     const src = code();
     expect(src).toContain('MR_KEYCHAIN="aperture-mailroom-gh"');
