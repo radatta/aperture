@@ -163,9 +163,11 @@ describe('decideHeavy', () => {
     });
 
     it('reads the cap from limits.json', () => {
-      const two = { ...limits(true), concurrency: { test: 2 } };
-      expect(decideHeavy(two, ll, idle, tests(2), { class: 'test' }, now).verdict).toBe('cap-full');
-      expect(decideHeavy(two, ll, idle, tests(1), { class: 'test' }, now).verdict).toBe('grant');
+      const three = { ...limits(true), concurrency: { test: 3 } }; // not the shipped value
+      expect(decideHeavy(three, ll, idle, tests(3), { class: 'test' }, now).verdict).toBe(
+        'cap-full',
+      );
+      expect(decideHeavy(three, ll, idle, tests(2), { class: 'test' }, now).verdict).toBe('grant');
     });
   });
 });

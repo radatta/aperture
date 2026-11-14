@@ -1,7 +1,7 @@
 {
   "v": 1,
   "enforce": true,
-  "concurrency": { "test": 4 },
+  "concurrency": { "test": 2 },
   "measuredAt": "2026-10-14T02:52:03Z",
   "measuredLimits": { "pidsMax": 4096, "highMiB": 18432 },
   "container": {
@@ -12,19 +12,19 @@
     "psiFullKill": 15,
     "currentGuardMiB": 1536
   },
-  "tuning": { "test": null },
+  "tuning": { "test": { "maxWorkers": 4 } },
   "classes": {
     "test": {
-      "pids": 260,
-      "anonMiB": 2500,
-      "p95Sec": 33,
-      "source": "quiet window 2026-10-13: max of 3 reps (8 workers, ~7.9 of 9 cores)"
+      "pids": 320,
+      "anonMiB": 3200,
+      "p95Sec": 155,
+      "source": "2026-11-13 at VITEST_MAX_WORKERS=4, scripts at 2 (4,742 tests): pids/wall the max of 3 solo runs; anon the median (max 4046 had neighbours' noise) - SESSION-BOARD.md Results"
     },
     "ui": {
-      "pids": 160,
-      "anonMiB": 700,
-      "p95Sec": 7,
-      "source": "quiet window 2026-10-13: dev server + Chromium, 4 routes at 390 px"
+      "pids": 280,
+      "anonMiB": 2700,
+      "p95Sec": 305,
+      "source": "2026-11-13 solo devcheck:local --tier full (heavy 0): +276 pids, +2664 MiB anon, 301 s, rounded up - SESSION-BOARD.md Results. Was 160/700/7 from the 2026-10-13 dev server + Chromium cell"
     },
     "typecheck": {
       "pids": 30,

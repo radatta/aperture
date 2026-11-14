@@ -198,6 +198,17 @@ describe('barriers — how limiting the cap is', () => {
     expect(x).toMatchObject({ blocks: 2, merged: 0 });
   });
 
+  it('an interrupted wait is a gave-up block, with its real wait, and says so', () => {
+    const x = barriers(
+      [ev('gaveUp', '10:00:00', 10, 'flux', { waitedSec: 41, interrupted: true })],
+      week,
+      now,
+    );
+    expect(x).toMatchObject({ blocks: 1, gaveUp: 1, interrupted: 1, waitSec: { total: 41 } });
+    expect(formatBarriers(x)).toContain('1 gave up (1 interrupted)');
+    expect(b.interrupted).toBe(0);
+  });
+
   it('a lock-busy fail-open is reported, not counted as a block', () => {
     const x = barriers(
       [ev('lockBusy', '10:00:00', 10, 'flux', { reason: 'lock', waitedSec: 90 })],

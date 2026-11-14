@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "VITEST_MAX_WORKERS=2 vitest run",
     "typecheck": "tsc -b",
     "smoke": "tsx src/smoke.ts",
     "devcheck": "tsx src/devcheck/run.ts",

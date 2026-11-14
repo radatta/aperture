@@ -12,14 +12,15 @@ set -u
 read -r -a TREES <<<"$(sb_matrix_trees)"
 GAP="${MATRIX_GAP:-20}"
 
-# cell → "class|command" for one job; pairs and sessions compose these.
+# cell → "class|command" for one job; pairs and sessions compose these. heavy.sh exports limits.json's
+# tuning (VITEST_MAX_WORKERS) for every test-class job, so the untuned cells unset it: they stay vitest's default.
 job() {
   case "$1" in
     typecheck) echo "typecheck|pnpm exec tsc -b --force" ;;  # cold: the incremental gate is cheaper
     lint) echo "lint|pnpm exec eslint ." ;;  # cold: no --cache
-    test) echo "test|pnpm test" ;;
-    test-wc1) echo "test|pnpm -r --workspace-concurrency=1 test" ;;
-    test-wc2) echo "test|pnpm -r --workspace-concurrency=2 test" ;;
+    test) echo "test|env -u VITEST_MAX_WORKERS pnpm test" ;;
+    test-wc1) echo "test|env -u VITEST_MAX_WORKERS pnpm -r --workspace-concurrency=1 test" ;;
+    test-wc2) echo "test|env -u VITEST_MAX_WORKERS pnpm -r --workspace-concurrency=2 test" ;;
     test-w3) echo "test|env VITEST_MAX_WORKERS=3 pnpm test" ;;
     test-w4) echo "test|env VITEST_MAX_WORKERS=4 pnpm test" ;;
     dev) echo "dev|pnpm dev" ;;

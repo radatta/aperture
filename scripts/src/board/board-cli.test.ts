@@ -8,6 +8,7 @@ import {
   writeFileSync,
   existsSync,
   readdirSync,
+  rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -115,6 +116,7 @@ beforeEach(() => {
   delete rest.CLAUDE_CODE_SESSION_ID;
   delete rest.TMUX_PANE; // else sessions are named after the tmux window running the tests
   delete rest.TMUX;
+  delete rest.VITEST_MAX_WORKERS; // scripts' test script pins it (and heavy.sh may export it): inherited, it'd mask the export
   // edge.sh / matrix.sh run this suite with HEAVY_LOADTEST / HEAVY_GUARD exported: inherited, they'd bypass
   // the cap these tests check (and their failure would read as a load-caused edge)
   for (const k of Object.keys(rest)) if (k.startsWith('HEAVY_')) delete rest[k];
@@ -455,7 +457,8 @@ describe('live slots', () => {
       cwd: tmp,
       encoding: 'utf8',
     });
-    expect(status.stdout).toMatch(/heavy: 1 slot\(s\) · test 1\/4/);
+    const cap = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).concurrency.test;
+    expect(status.stdout).toContain(`heavy: 1 slot(s) · test 1/${cap}`);
     expect(readdirSync(dir).sort()).toEqual(['dead.json', 'live.json']); // readers never delete
   });
 });
@@ -590,6 +593,30 @@ describe('heavy.sh', () => {
     expect(['gone', 'Z']).toContain(state);
   }, 30000);
 
+  it('exports tuning.test maxWorkers as VITEST_MAX_WORKERS for a suite, in a coi container only', () => {
+    const seen = join(tmp, 'workers');
+    const run = (host: string) => {
+      const bin = join(tmp, `bin-${host}`); // sb_in_container reads `hostname`
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, 'hostname'), `#!/bin/sh\necho ${host}\n`, { mode: 0o755 });
+      rmSync(seen, { force: true });
+      const cmd = `printf %s "$VITEST_MAX_WORKERS" >${seen}`;
+      const r = heavy(['--', 'bash', '-c', cmd], {
+        HEAVY_CLASS: 'test',
+        PATH: `${bin}:${env.PATH}`,
+      });
+      expect(r.code).toBe(0);
+      return readFileSync(seen, 'utf8');
+    };
+    limits({});
+    const shipped = JSON.parse(readFileSync(join(tmp, 'limits.json'), 'utf8')).tuning.test
+      .maxWorkers;
+    expect(run('coi-test')).toBe(String(shipped));
+    expect(run('macbook')).toBe(''); // never on the Mac (or CI)
+    limits({ tuning: { test: null } });
+    expect(run('coi-test')).toBe(''); // read from the file, not built in
+  });
+
   it('never takes a slot or waits for a single-file test run', () => {
     cgroup(3700, 2 * GiB);
     limits({ enforce: true });
@@ -600,6 +627,10 @@ describe('heavy.sh', () => {
 });
 
 describe('heavy.sh test cap', () => {
+  // the shipped cap (limits.json `concurrency.test`), so a policy change moves no test
+  const cap: number = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).concurrency
+    .test;
+  const full = `${cap}\\/${cap}`;
   // n live `test` slots held by `pid`'s process (so gc keeps them), as other sessions' suites would be
   function testSlots(n: number, pid = liveSession()) {
     const start = readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[19];
@@ -624,10 +655,10 @@ describe('heavy.sh test cap', () => {
 
   it('cap full: waits, gives up with 75 naming the holders, and records the barrier', () => {
     limits({ enforce: true });
-    testSlots(4);
+    testSlots(cap);
     const r = heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test', HEAVY_LABEL: 'gate' });
     expect(r.code).toBe(75);
-    expect(r.err).toMatch(/test cap full \(4\/4/);
+    expect(r.err).toMatch(new RegExp(`test cap full \\(${full}`));
     expect(r.err).toMatch(/tell the user/);
     expect(leases()).toEqual([
       expect.objectContaining({
@@ -636,18 +667,18 @@ describe('heavy.sh test cap', () => {
         reason: 'cap',
         class: 'test',
         label: 'gate',
-        cap: { max: 4, running: 4, full: true },
+        cap: { max: cap, running: cap, full: true },
         waitedSec: 0,
       }),
     ]);
-    expect(leases()[0].holders).toHaveLength(4);
+    expect(leases()[0].holders).toHaveLength(cap);
     expect(events().filter((e) => e.kind === 'job')).toEqual([]);
-    expect(slotFiles()).toHaveLength(4); // no 5th slot
+    expect(slotFiles()).toHaveLength(cap); // no extra slot
   });
 
   it('a freed slot lets it run, and the wait is recorded', async () => {
     limits({ enforce: true });
-    testSlots(3);
+    testSlots(cap - 1);
     // an orphan (its bash parent exits at once), so init reaps it the moment it ends — like a real wrapper's
     // shell would; a direct child of this blocked test runner would linger as a zombie and keep its slot
     const brief = spawnSync('bash', ['-c', 'sleep 1.5 >/dev/null 2>&1 & echo $!'], {
@@ -657,14 +688,44 @@ describe('heavy.sh test cap', () => {
     const r = heavy(['--wait', '20', '--', 'true'], { HEAVY_CLASS: 'test' });
     expect(r.code).toBe(0);
     const waited = leases().find((e) => e.action === 'waited');
-    expect(waited).toMatchObject({ reason: 'cap', class: 'test', cap: { running: 4 } });
+    expect(waited).toMatchObject({ reason: 'cap', class: 'test', cap: { running: cap } });
     expect(waited.waitedSec).toBeGreaterThanOrEqual(1);
     expect(events().find((e) => e.kind === 'job')).toMatchObject({ class: 'test', exit: 0 });
   }, 30000);
 
+  it('a wait killed before it ends is still recorded: gaveUp, interrupted, the real wait', async () => {
+    limits({ enforce: true });
+    testSlots(cap);
+    const c = spawn('bash', [join(boardDir, 'heavy.sh'), '--wait', '60', '--', 'true'], {
+      env: { ...env, HEAVY_CLASS: 'test', HEAVY_LABEL: 'gate' },
+      cwd: tmp,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let err = '';
+    c.stderr!.on('data', (d) => (err += d));
+    for (let i = 0; i < 200 && !/waiting up to/.test(err); i++)
+      await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 1100)); // a whole second of waiting
+    const exited = new Promise<number | null>((r) => c.on('exit', (code) => r(code)));
+    c.kill('SIGTERM');
+    expect(await exited).toBe(143);
+    expect(leases()).toEqual([
+      expect.objectContaining({
+        action: 'gaveUp',
+        reason: 'cap',
+        class: 'test',
+        label: 'gate',
+        interrupted: true,
+      }),
+    ]);
+    expect(leases()[0].waitedSec).toBeGreaterThanOrEqual(1);
+    expect(leases()[0].waitedSec).toBeLessThan(60);
+    expect(slotFiles()).toHaveLength(cap);
+  }, 30000);
+
   it('below the cap nothing changes: no wait, no barrier', () => {
     limits({ enforce: true });
-    testSlots(3);
+    testSlots(cap - 1);
     const r = heavy(['--', 'true'], { HEAVY_CLASS: 'test' });
     expect(r.code).toBe(0);
     expect(r.err).not.toMatch(/cap/);
@@ -673,7 +734,7 @@ describe('heavy.sh test cap', () => {
 
   it('is per class, and never touches single-file runs', () => {
     limits({ enforce: true });
-    testSlots(4);
+    testSlots(cap);
     expect(heavy(['--', 'true'], { HEAVY_CLASS: 'typecheck' }).code).toBe(0);
     expect(heavy(['--', 'true'], { HEAVY_CLASS: 'test-file' }).code).toBe(0);
     expect(leases()).toEqual([]);
@@ -681,16 +742,16 @@ describe('heavy.sh test cap', () => {
 
   it('never holds a load test', () => {
     limits({ enforce: true });
-    testSlots(4);
+    testSlots(cap);
     const r = heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test', HEAVY_LOADTEST: '1' });
     expect(r.code).toBe(0);
     expect(events().find((e) => e.kind === 'job')).toMatchObject({ loadTest: true });
     expect(leases()).toEqual([]);
   });
 
-  it('the guard denies a raw 5th suite, records `denied`, and `cli.ts barriers` counts the holds', () => {
+  it('the guard denies a raw suite past the cap, records `denied`, and `cli.ts barriers` counts the holds', () => {
     limits({ enforce: true });
-    testSlots(4);
+    testSlots(cap);
     const guard = fileURLToPath(
       new URL('../../../.claude/hooks/board-heavy-guard.sh', import.meta.url),
     );
@@ -704,7 +765,9 @@ describe('heavy.sh test cap', () => {
     });
     const out = JSON.parse(g.stdout).hookSpecificOutput;
     expect(out.permissionDecision).toBe('deny');
-    expect(out.permissionDecisionReason).toMatch(/the test cap is full \(4\/4 running/);
+    expect(out.permissionDecisionReason).toMatch(
+      new RegExp(`the test cap is full \\(${full} running`),
+    );
     expect(leases()).toEqual([
       expect.objectContaining({ action: 'denied', reason: 'cap', label: 'guard' }),
     ]);
@@ -753,9 +816,9 @@ describe('heavy.sh test cap', () => {
     expect(leases()).toEqual([expect.objectContaining({ action: 'lockBusy', reason: 'lock' })]);
   }, 30000);
 
-  it('held at the cap, then the lock stays busy: still gives up with 75 — never a 5th unslotted suite', async () => {
+  it('held at the cap, then the lock stays busy: still gives up with 75 — never an unslotted suite past the cap', async () => {
     limits({ enforce: true });
-    testSlots(4);
+    testSlots(cap);
     const run = heavyAsync(['--wait', '6', '--', 'true'], { HEAVY_CLASS: 'test' });
     await new Promise((r) => setTimeout(r, 1000)); // after its first (blocking) decision
     await holdLock(20);
@@ -775,10 +838,10 @@ describe('heavy.sh test cap', () => {
 
   it('with enforce off it runs at a full cap and logs wouldWait', () => {
     limits({ enforce: false });
-    testSlots(4);
+    testSlots(cap);
     const r = heavy(['--', 'true'], { HEAVY_CLASS: 'test' });
     expect(r.code).toBe(0);
-    expect(r.err).toMatch(/cap full \(4\/4\) — running \(enforce off/);
+    expect(r.err).toMatch(new RegExp(`cap full \\(${full}\\) — running \\(enforce off`));
     expect(leases()).toEqual([expect.objectContaining({ action: 'wouldWait', reason: 'cap' })]);
   });
 });

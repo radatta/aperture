@@ -217,8 +217,8 @@ looks intermittent:
   trims it; killing the browser before tests (the CLAUDE.md rule) is the real control.
 - **Vite dev server ≈ 35–60** — node plus 4 libuv workers _per process_. `UV_THREADPOOL_SIZE=2`
   roughly halves the worker share.
-- **`pnpm test -r`** — one Vitest per package, each with its own worker pool. Nothing in the repo caps
-  it today; `poolOptions.threads.maxThreads` would bound it.
+- **`pnpm test -r`** — one Vitest per package, each with its own worker pool. Since 2026-11-13 `heavy.sh` sets
+  `VITEST_MAX_WORKERS=4` in the container (`SESSION-BOARD.md` → _Results_); a raw `pnpm test` is still uncapped.
 - **MCP servers × sessions** — no dedup across sessions, so it's N×M, and they aren't reliably reaped
   when a session ends. The failed container had 6 live `claude` processes.
 - **Claude Code itself: ~16 threads/session** (measured 16, matching the ~15 estimate). Not the fat one.

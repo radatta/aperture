@@ -33,7 +33,7 @@ work="${TMPDIR:-/tmp}/aperture-heavy.$me"
 rm -f "$work".*  # a reused pid's leftovers (a stale `duration` stop would turn a failure into exit 0)
 eval "$(sb_thresholds)"
 
-# Container-only tuning, per limits.json `tuning.test` (null until measured — answer 3: no guessing).
+# Container-only tuning, per limits.json `tuning.test` (`maxWorkers: 4` since 2026-11-13 — SESSION-BOARD.md → Results).
 if [ "$class" = test ] && sb_in_container; then
   wc=$(sb_limit '.tuning.test.workspaceConcurrency'); mw=$(sb_limit '.tuning.test.maxWorkers')
   [ -n "$mw" ] && export VITEST_MAX_WORKERS="$mw"

@@ -74,6 +74,7 @@ export type BarrierEvent = {
   class: string;
   reason?: 'cap' | 'hard' | 'lock';
   waitedSec?: number;
+  interrupted?: boolean; // a gaveUp whose wait was killed (INT/TERM/HUP) before it ran out
   holders?: { name?: string | null; label?: string; class: string }[];
   mix?: Sample['mix'] | null;
   loadTest?: boolean;
@@ -89,6 +90,7 @@ export type Barriers = {
   perDay: number;
   waited: number;
   gaveUp: number;
+  interrupted: number; // of gaveUp: killed mid-wait, not run out
   denied: number;
   merged: number; // deny + re-run pairs counted once
   wouldWait: number; // enforce off: what the cap / hard line would have held
@@ -161,6 +163,7 @@ export function barriers(events: unknown[], since: Date, now: Date): Barriers {
     perDay: Math.round((blocks / span) * 10) / 10,
     waited: of('waited').length,
     gaveUp: of('gaveUp').length,
+    interrupted: of('gaveUp').filter((e) => e.interrupted).length,
     denied: denies.length,
     merged,
     wouldWait: of('wouldWait').length,
@@ -189,7 +192,7 @@ export function formatBarriers(b: Barriers): string {
   const reasons = b.byReason.map((r) => `${r.key} ${r.n}`).join(' / ');
   return (
     `barriers (${b.days} d): ${b.blocks} block${b.blocks === 1 ? '' : 's'} (${b.perDay}/day) · ${b.waited} waited · ` +
-    `${b.gaveUp} gave up · ${b.denied} denied${b.merged ? ` (${b.merged} re-run, counted once)` : ''} · ` +
+    `${b.gaveUp} gave up${b.interrupted ? ` (${b.interrupted} interrupted)` : ''} · ${b.denied} denied${b.merged ? ` (${b.merged} re-run, counted once)` : ''} · ` +
     `waited ${b.waitSec.total} s total, p50 ${b.waitSec.p50} s, p90 ${b.waitSec.p90} s · ${reasons}${would}`
   );
 }
