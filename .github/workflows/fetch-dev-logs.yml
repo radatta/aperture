@@ -85,5 +85,5 @@ jobs:
         with:
           name: dev-logs-${{ inputs.key }}
           path: dev-logs/
-          retention-days: 3
+          retention-days: 1 # public once the repo is: any signed-in user can download it (INFRA §9 → Public repo)
           if-no-files-found: error

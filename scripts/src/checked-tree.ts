@@ -9,7 +9,8 @@
 //                                                preview, open with head.sha = sha)
 //   its check runs on the PR head               by the github-actions app only — never the bot, never another app
 //   the newest suite holding any REQUIRED_CHECKS name: it must hold all, each completed + success (newest attempt)
-//   that suite's run                            pr.yml, pull_request, success, head_sha = the PR head
+//   that suite's run                            pr.yml, pull_request, success, head_sha = the PR head, from this repo
+//                                                (never a fork's: its run executes the fork's own YAML)
 //   ci / check's annotations                    exactly one `tested-tree` notice on ci.yml, equal to this tree
 //   ci / check's steps                          the secret scan success; the fixture suite decides the plan:
 //                                                success → skip, skipped (the PR's paths didn't reach it) → fixtures
@@ -60,6 +61,7 @@ interface WorkflowRun {
   event?: string;
   conclusion?: string | null;
   head_sha?: string;
+  head_repository?: { full_name?: string } | null;
 }
 interface Annotation {
   path?: string;
@@ -154,6 +156,10 @@ export async function plan(
     )
       return check(
         `run ${runId} is ${run.path} on ${run.event} (${run.conclusion}), not a green PR run`,
+      );
+    if (run.head_repository?.full_name !== repo)
+      return check(
+        `run ${runId} ran ${run.head_repository?.full_name ?? 'an unknown repo'}'s head, not ${repo}'s`,
       );
 
     const notes = (

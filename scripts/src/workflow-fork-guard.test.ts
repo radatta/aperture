@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkForkGuard, GUARD_STEP, guardScript } from './workflow-fork-guard';
 
@@ -15,9 +17,11 @@ const repoFiles = () => {
   return files;
 };
 
-// As GitHub runs a `run:` step with no `shell:` on ubuntu: bash -e.
+// As GitHub runs a `run:` step with no `shell:` on ubuntu: the script in a file, `bash --noprofile --norc -eo pipefail {0}`.
+const SCRIPT = join(mkdtempSync(join(tmpdir(), 'fork-guard-')), 'guard.sh');
+writeFileSync(SCRIPT, guardScript());
 const runGuard = (env: Record<string, string>) => {
-  const r = spawnSync('bash', ['-e', '-c', guardScript()], {
+  const r = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', SCRIPT], {
     env: { PATH: process.env.PATH ?? '', GITHUB_REPOSITORY: 'radatta/aperture', ...env },
     encoding: 'utf8',
   });
@@ -88,6 +92,13 @@ describe('workflow-fork-guard', () => {
       );
   });
 
+  it('flags a key appended to the guard step, which would still be its own', () => {
+    for (const key of ['continue-on-error: true', 'if: false', 'shell: sh'])
+      expect(
+        check({ '.github/workflows/x.yml': wf(PR, stepsJob(`${GUARD_STEP}\n        ${key}`)) }),
+      ).toContain(".github/workflows/x.yml › a: the first step isn't the fork guard");
+  });
+
   it('flags a new unguarded workflow file', () => {
     const files = {
       ...repoFiles(),
@@ -155,7 +166,18 @@ describe('workflow-fork-guard', () => {
     );
     for (const text of [title, ref])
       expect(check({ '.github/workflows/x.yml': text })).toEqual([
-        '.github/workflows/x.yml: reads github.event.* or github.head_ref outside the fork guard',
+        '.github/workflows/x.yml: reads event data (github.event, github.head_ref, the whole github context) outside the fork guard',
+      ]);
+    const hashed = [
+      `      - run: echo "PR #\${{ github.event.pull_request.title }}"`,
+      '      - run: echo "${{ toJSON(github) }}"',
+      '      - run: echo "${{ github[\'event\'] }}"',
+    ];
+    for (const step of hashed)
+      expect(
+        check({ '.github/workflows/x.yml': wf(PR, stepsJob(`${GUARD_STEP}\n${step}`)) }),
+      ).toEqual([
+        '.github/workflows/x.yml: reads event data (github.event, github.head_ref, the whole github context) outside the fork guard',
       ]);
     const name = wf(
       PR,
@@ -186,11 +208,21 @@ describe('workflow-fork-guard', () => {
         '.github/workflows/called.yml: pull_request-reachable and mentions environment:',
       ].sort(),
     );
+    const hashed = {
+      ...files,
+      '.github/workflows/called.yml': called.replace(
+        '      - uses: ./.github/actions/setup',
+        '      - run: echo "tok #${{ secrets.X }}"\n      - uses: ./.github/actions/setup',
+      ),
+    };
+    expect(check(hashed)).toEqual([
+      '.github/workflows/called.yml: pull_request-reachable and mentions secrets',
+    ]);
     // A push-only workflow may hold all three.
     const deploy = wf(
       '  push:\n',
       stepsJob(
-        `${GUARD_STEP}\n        env:\n          T: \${{ secrets.X }}`,
+        `${GUARD_STEP}\n      - run: echo\n        env:\n          T: \${{ secrets.X }}`,
         '    environment: prod\n',
       ),
     );
@@ -229,6 +261,29 @@ describe('workflow-fork-guard', () => {
     expect(checkForkGuard({ '.github/workflows/x.yml': wf(PR, stepsJob(GUARD_STEP)) })).toContain(
       "allowlisted action gitleaks/gitleaks-action isn't used — drop it from ACTIONS",
     );
+  });
+
+  it('flags container, services and defaults, and reads a loosely spaced uses', () => {
+    const job = (head: string) => wf(PR, stepsJob(GUARD_STEP, head));
+    expect(check({ '.github/workflows/x.yml': job('    container: node:22\n') })).toEqual([
+      ".github/workflows/x.yml:8: container: isn't allowed",
+    ]);
+    expect(
+      check({
+        '.github/workflows/x.yml': job('    services:\n      db:\n        image: postgres\n'),
+      }),
+    ).toEqual([".github/workflows/x.yml:8: services: isn't allowed"]);
+    const defaults = wf(PR, stepsJob(GUARD_STEP)).replace(
+      'jobs:',
+      'defaults:\n  run:\n    shell: sh\njobs:',
+    );
+    expect(check({ '.github/workflows/x.yml': defaults })).toEqual([
+      ".github/workflows/x.yml:6: defaults: isn't allowed",
+    ]);
+    const spaced = wf(PR, stepsJob(`${GUARD_STEP}\n      -   uses: tj-actions/changed-files@v46`));
+    expect(check({ '.github/workflows/x.yml': spaced })).toEqual([
+      ".github/workflows/x.yml:21: action tj-actions/changed-files isn't on the allowlist",
+    ]);
   });
 
   it('throws on shapes it cannot read rather than pass them', () => {

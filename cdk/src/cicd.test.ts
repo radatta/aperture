@@ -375,6 +375,17 @@ describe('ApertureCicdStack OIDC trust, for a public repo', () => {
               expect(Object.keys(s.Principal)).toEqual(['Service']);
         for (const { name, s } of stmts)
           expect([name, trustProblems(s, subject)]).toEqual([name, []]);
+        // a walked role holds nothing but its one federated statement, and that names this stack's own provider
+        const [provider] = Object.keys(t.findResources('Custom::AWSCDKOpenIdConnectProvider'));
+        for (const id of walked) {
+          const all = (
+            t.findResources('AWS::IAM::Role')[id] as {
+              Properties: { AssumeRolePolicyDocument: { Statement: Trust[] } };
+            }
+          ).Properties.AssumeRolePolicyDocument.Statement;
+          expect(all).toHaveLength(1);
+          expect(all[0]!.Principal).toEqual({ Federated: { Ref: provider } });
+        }
         const envs = stmts
           .flatMap(({ s }) => s.Condition!.StringLike![`${OIDC}:sub`] as string[])
           .map((sub) => sub.slice(`repo:${subject}:environment:`.length));
@@ -449,9 +460,9 @@ describe('ApertureCicdStack OIDC trust, for a public repo', () => {
 
   // A GitHub-trusted role anywhere else would escape the walk above, so there's one home for them.
   it('creates GitHub-federated roles only in cicd-stack.ts', () => {
-    const dir = new URL('./lib/', import.meta.url);
-    const holders = readdirSync(dir)
-      .filter((f) => f.endsWith('.ts'))
+    const dir = new URL('./', import.meta.url); // all of cdk/src — bin/, config/, lib/ — but the tests
+    const holders = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
       .filter((f) =>
         readFileSync(new URL(f, dir), 'utf8')
           .split('\n')
@@ -462,6 +473,6 @@ describe('ApertureCicdStack OIDC trust, for a public repo', () => {
             ),
           ),
       );
-    expect(holders).toEqual(['cicd-stack.ts']);
+    expect(holders).toEqual(['lib/cicd-stack.ts']);
   });
 });

@@ -113,7 +113,7 @@ export function checkForkGuard(files: Record<string, string>): string[] {
     for (const [i, l] of lines.entries()) {
       if (!isContent(l)) continue;
       const c = code(l);
-      const u = /^\s*(?:- )?uses:\s*['"]?([^'"\s]+)/.exec(c)?.[1];
+      const u = /^\s*(?:-\s+)?uses:\s*['"]?([^'"\s]+)/.exec(c)?.[1];
       if (u?.startsWith('./')) {
         const local = u.slice(2).replace(/\/$/, '');
         localUses[f]!.push(/\.ya?ml$/.test(local) ? local : `${local}/action.yml`);
@@ -128,14 +128,20 @@ export function checkForkGuard(files: Record<string, string>): string[] {
       if (runsOn !== undefined && runsOn !== 'ubuntu-latest')
         problems.push(`${f}:${i + 1}: runs-on "${runsOn}" — only ubuntu-latest (GitHub-hosted)`);
       for (const ev of ['pull_request_target', 'workflow_run'])
-        if (new RegExp(`\\b${ev}\\b`).test(c)) problems.push(`${f}:${i + 1}: mentions ${ev}`);
+        if (new RegExp(`\\b${ev}\\b`).test(l)) problems.push(`${f}:${i + 1}: mentions ${ev}`);
+      // A container, service image or default shell would run around the allowlist, or the guard's own shell.
+      const key = /^\s*(container|services|defaults):/.exec(c)?.[1];
+      if (key) problems.push(`${f}:${i + 1}: ${key}: isn't allowed`);
     }
     for (const local of localUses[f]!)
       if (!(local in files)) problems.push(`${f} uses ./${local}, which doesn't exist`);
-    // Event data only ever reaches a step through the guard's env line, never an expression elsewhere.
-    const rest = text.split(GUARD_STEP).join('').split('\n').filter(isContent).map(code).join('\n');
-    if (/github\.event\b(?!_)|github\.head_ref/.test(rest))
-      problems.push(`${f}: reads github.event.* or github.head_ref outside the fork guard`);
+    // Event data only ever reaches a step through the guard's env line, never an expression elsewhere. Only whole-line
+    // comments are dropped: `echo "#${{ … }}"` is code, and a trailing comment that trips this is a cheap false alarm.
+    const rest = text.split(GUARD_STEP).join('').split('\n').filter(isContent).join('\n');
+    if (/github\.event\b(?!_)|github\.head_ref|toJSON\(\s*github\s*\)|github\s*\[/.test(rest))
+      problems.push(
+        `${f}: reads event data (github.event, github.head_ref, the whole github context) outside the fork guard`,
+      );
   }
   for (const a of ACTIONS)
     if (!allUses.has(a)) problems.push(`allowlisted action ${a} isn't used — drop it from ACTIONS`);
@@ -176,15 +182,19 @@ export function checkForkGuard(files: Record<string, string>): string[] {
       else {
         if (!wf.perms && !job.perms) problems.push(`${where}: no permissions block`);
         const first = steps.findIndex(isContent);
-        const head = steps.slice(first, first + GUARD_STEP.split('\n').length).join('\n');
-        if (head !== GUARD_STEP) problems.push(`${where}: the first step isn't the fork guard`);
+        const end = first + GUARD_STEP.split('\n').length;
+        const head = steps.slice(first, end).join('\n');
+        // and nothing appended to it: an `if:`, `continue-on-error:` or `shell:` after `exit 1` is still its key
+        const next = steps.slice(end).find(isContent);
+        if (head !== GUARD_STEP || (next !== undefined && !/^ {6}- /.test(next)))
+          problems.push(`${where}: the first step isn't the fork guard`);
       }
     }
   }
 
   // A pull_request run gets no secrets from GitHub; pin that our files never ask for any either.
   for (const f of reachable) {
-    const text = files[f]!.split('\n').filter(isContent).map(code).join('\n');
+    const text = files[f]!.split('\n').filter(isContent).join('\n');
     for (const [what, re] of [
       ['secrets', /\bsecrets\b/],
       ['id-token', /\bid-token\b/],
