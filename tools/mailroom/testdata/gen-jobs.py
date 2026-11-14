@@ -866,6 +866,7 @@ c('lanes: the slow lane leaves a bad file name for the fast lane', lane='slow', 
 c('lanes: the slow lane leaves a dotfile for the fast lane', lane='slow', file='.DS_Store', noResult=True, inboxLeft=1, calls=[])
 c('lanes: the slow lane leaves a FIFO unread', lane='slow', setup='fifo', noResult=True, inboxLeft=1, calls=[])
 c('lanes: the slow lane leaves non-JSON', lane='slow', raw='{not json', noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves an oversized file unopened (the fast lane refuses it)', lane='slow', setup='oversize', noResult=True, inboxLeft=1, calls=[])
 c('lanes: the slow lane leaves an unknown job', lane='slow', patch={'job': 'merge-pr'}, noResult=True, inboxLeft=1, calls=[])
 c('lanes: the slow lane leaves an expired clip', kind='clip', lane='slow', submittedAgoMin=2, noResult=True, inboxLeft=1, simExcludes=['osascript'])
 c('lanes: the fast lane parks a bad file name (junk never waits behind a sim)', lane='fast', file='notes.txt', noResult=True, calls=[])

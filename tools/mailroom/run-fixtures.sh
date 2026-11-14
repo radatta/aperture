@@ -387,6 +387,13 @@ lanes_check() {
     ok "lanes: a second slow drain leaves the next sim queued while one runs"
   else bad "lanes: a second slow drain leaves the next sim queued while one runs" "rc $rc, inbox: $(ls "$hj/inbox")" "$L/out"; fi
   jq -c --arg id "$cl" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$clipbase" >"$hj/inbox/$cl.json"
+  # The container re-sends the running sim's id as a clip: the fast lane runs nothing (DUPLICATE), and its own work dir
+  # means the slow lane's private snapshot of the sim is untouched.
+  jq -c --arg id "$a" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$clipbase" >"$hj/inbox/$a.json"
+  lane_run fast
+  if [ -f "$st/work-slow/$a.json" ] && [ ! -e "$hj/inbox/$a.json" ] && grep -q "$a DUPLICATE" "$L/out"; then
+    ok "lanes: a fast drain never touches the slow lane's private snapshot (work dir per lane)"
+  else bad "lanes: a fast drain never touches the slow lane's private snapshot (work dir per lane)" "work-slow: $(ls "$st/work-slow" 2>/dev/null)" "$L/out"; fi
   lane_run fast
   if [ "$(jq -r .status "$hj/results/$cl/result.json" 2>/dev/null)" = served ] && [ ! -e "$hj/results/$a/result.json" ] &&
     [ -d "$st/lock" ] && [ ! -e "$st/lock-fast" ] && [ -f "$hj/inbox/$b.json" ]; then
@@ -399,9 +406,36 @@ lanes_check() {
     ok "lanes: once the sim ends, the next slow drain takes the queued one and both locks are gone"
   else bad "lanes: once the sim ends, the next slow drain takes the queued one and both locks are gone" "a $(jq -c '{status, reason, detail}' "$hj/results/$a/result.json" 2>/dev/null), b $([ -f "$hj/results/$b/result.json" ] && echo done || echo none)" "$L/out"; fi
   rm -r -f -- "$L"
+
+  # Both agents fire on one drop: a slow and a fast drain start together on the same sim entry, 10 times. Exactly one
+  # takes it (the slow), it passes, nothing is parked or refused, and the fast drain never chases it once it's gone.
+  local k fails=""
+  for k in 1 2 3 4 5 6 7 8 9 10; do
+    L="$(cd "$(mktemp -d)" && pwd -P)"
+    hj="$L/hj"; st="$L/state"
+    mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
+    : >"$L/calls"; : >"$L/simcalls"
+    printf '%s' "$defapi" >"$L/api.json"
+    jq -r '.[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring), (.out // "" | if type == "string" then . else tojson end)] | join("\t")' <<<"$deftape" >"$L/tape"
+    a="20261113T230010Z-ios-race-$k"
+    jq -c --arg id "$a" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate) | .params.steps = [{"op": "wait", "s": 1}]' <<<"$simbase" >"$hj/inbox/$a.json"
+    lane_run slow &
+    pa=$!
+    lane_run fast
+    wait "$pa"
+    if [ "$(jq -r .status "$hj/results/$a/result.json" 2>/dev/null)" != pass ] || [ -n "$(ls -A "$st/rejected" 2>/dev/null)" ] ||
+      [ -n "$(ls -A "$hj/inbox")" ] || [ "$(find "$hj/results" -name result.json | wc -l | tr -d ' ')" != 1 ] ||
+      grep -q 'could not be moved out' "$L/out"; then # a vanished entry is skipped, never chased
+      fails="$fails $k"
+      sed 's/^/    /' "$L/out"
+    fi
+    rm -r -f -- "$L"
+  done
+  if [ -z "$fails" ]; then ok "lanes: slow and fast drains started together on one sim: only the slow takes it (10 runs)"
+  else bad "lanes: slow and fast drains started together on one sim: only the slow takes it (10 runs)" "failed runs:$fails"; fi
 }
 lanes_check
-LANES_CHECKS=3
+LANES_CHECKS=5
 
 cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2 + 1 + LANES_CHECKS))"
 echo "# $pass passed, $failed failed, of $cases cases"

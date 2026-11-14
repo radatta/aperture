@@ -42,8 +42,11 @@ if [ "$HJ_REAL" != "$HJ" ]; then
   log "refusing: $HJ resolves elsewhere ($HJ_REAL)"
   exit 1
 fi
-mkdir -p "$STATE/work" "$STATE/rejected"
-WORK="$(cd "$STATE/work" && pwd -P)"
+# A work dir per lane: the two lanes' drains run at once, and each clears and deletes $WORK/<stem>.* freely.
+WD=work
+[ "$LANE" = all ] || WD="work-$LANE"
+mkdir -p "$STATE/$WD" "$STATE/rejected"
+WORK="$(cd "$STATE/$WD" && pwd -P)"
 REJECTED="$(cd "$STATE/rejected" && pwd -P)"
 
 # --- one drain per lane -------------------------------------------------------------------------------------
@@ -86,11 +89,17 @@ mr_cap() {
   if [ "$rc" = 143 ]; then return 124; fi
   return "$rc"
 }
-# peek_lane ENTRY → slow|fast: a routing hint read from the shared file. Capped, so a FIFO swapped in under the -f check
-# costs one drain 3 s, never a hang; the snapshot's job field, checked after the move, is what decides.
+# peek_lane ENTRY → slow|fast|gone: a routing hint read from the shared file. Capped, so a FIFO swapped in under the -f
+# check costs one drain 3 s, never a hang; the snapshot's job field, checked after the move, is what decides. Gone: the
+# other lane moved it out after this drain listed the inbox. A link, a non-file or one over MAX_FILE (judged without
+# opening it) is the fast lane's, which refuses it.
 peek_lane() {
   local j=""
-  if [ -L "$1" ] || [ ! -f "$1" ]; then
+  if [ ! -e "$1" ] && [ ! -L "$1" ]; then
+    echo gone
+    return 0
+  fi
+  if [ -L "$1" ] || [ ! -f "$1" ] || [ -z "$(find "$1" -maxdepth 0 -size -$((MAX_FILE + 1))c 2>/dev/null)" ]; then
     echo fast
     return 0
   fi
@@ -178,7 +187,10 @@ ENVELOPE_JQ='try (
   else empty end
 ) catch "BAD_PARAM"'
 
-for f in "$HERE"/jobs/*.sh; do . "$f"; done
+# The jobs are sourced at the first entry this drain takes: the fast agent re-fires every 2 s while a sim waits for the
+# slow lane, and such a drain should cost a few peeks, not a parse of every job file.
+SOURCED=""
+MAX_PEEKS=50 # entries a lane drain looks at, its own or not
 
 # --- drain --------------------------------------------------------------------------------------------------
 cd "$HJ_REAL/inbox" && [ "$(pwd -P)" = "$HJ_REAL/inbox" ] || {
@@ -187,9 +199,18 @@ cd "$HJ_REAL/inbox" && [ "$(pwd -P)" = "$HJ_REAL/inbox" ] || {
 }
 shopt -s nullglob dotglob
 n=0
+peeks=0
 for entry in ./*; do
   [ "$n" -lt "$MAX_PER_DRAIN" ] || break
-  [ "$LANE" = all ] || [ "$(peek_lane "$entry")" = "$LANE" ] || continue # the other lane's: left in the inbox
+  if [ "$LANE" != all ]; then
+    [ "$peeks" -lt "$MAX_PEEKS" ] || break
+    peeks=$((peeks + 1))
+    [ "$(peek_lane "$entry")" = "$LANE" ] || continue # the other lane's, or gone: left in the inbox
+  fi
+  if [ -z "$SOURCED" ]; then
+    for f in "$HERE"/jobs/*.sh; do . "$f"; done
+    SOURCED=1
+  fi
   n=$((n + 1))
   name="${entry#./}"
   stem="${name%.json}"

@@ -251,7 +251,7 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
   # A process group of its own, led by the runner's PID. stdin from /dev/null as under launchd: with -m, bash no longer
   # does that for `&`, and sim.sh hands its stdin to every axe/simctl call (sim_cap), so a tty there could stop the group.
   set -m
-  bash "$RUNNER" "$HJ" "$ST" </dev/null >>"$LOG" 2>&1 &
+  bash "$RUNNER" "$HJ" "$ST" slow </dev/null >>"$LOG" 2>&1 & # the slow lane: it drives the Simulator, and takes only state/lock
   RPID=$!
   set +m
   while kill -0 "$RPID" 2>/dev/null; do
