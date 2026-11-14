@@ -63,7 +63,8 @@ const test = (re: RegExp) => (l: string) => re.test(l);
 const SEP = '\\\\?[/\\\\]'; // a slash, JSON-escaped or not, or a backslash
 const [TOP, SUB] = ['Coding', 'Personal'];
 const FOLDER = new RegExp(`${TOP}${SEP}${SUB}`, 'i');
-const HOME_FOLDER = new RegExp(`(?:~|\\$HOME|\\$\\{HOME\\})${SEP}${TOP}\\b`, 'i');
+// ~, $HOME or ${HOME} (a :- default too), quoted or not.
+const HOME_FOLDER = new RegExp(`(?:~|\\$HOME|\\$\\{HOME(?::-[^}]*)?\\})"?${SEP}${TOP}\\b`, 'i');
 
 export function identifierRules(ids = IDS): IdentifierRule[] {
   // Whole words only, so the domain (the name run together) and the GitHub login don't match.

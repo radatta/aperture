@@ -107,6 +107,8 @@ describe('rules', () => {
       `\${HOME}/${top}/a`,
       `"~\\/${top}\\/x"`,
       `~/${top.toLowerCase()} `,
+      `"$HOME"/${top}/x`,
+      `\${HOME:-/tmp}/${top}`,
       `~/${top}/Personal/x`, // the full form too: still one hit
     ])
       expect(kinds(hit), hit).toEqual(['projects-folder']);

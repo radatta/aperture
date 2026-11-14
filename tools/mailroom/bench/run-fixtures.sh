@@ -373,6 +373,9 @@ out="$(cd "$HERE" && mktemp() { return 1; } && tmpdir_real)" && why="succeeded w
 out="$(cd "$HERE" && mktemp() { :; } && tmpdir_real)" && why="${why:-succeeded with mktemp printing nothing}"
 [ -z "$out" ] || why="${why:-printed '$out' with mktemp printing nothing}"
 d="$(tmpdir_real)" && [ -d "$d" ] && [ "$d" != "$PWD" ] && rmdir "$d" || why="${why:-no real temp dir}"
+out="$(cd "$HERE" && mktemp() { return 1; } && new_dir; echo survived)"
+case "$out" in *survived* | "") why="${why:-new_dir went on with mktemp failing: $out}" ;; esac
+[ -n "$why" ] || case "$out" in *"Bail out!"*) ;; *) why="no bail line from new_dir: $out" ;; esac
 check "a failed mktemp yields no temp dir, never the cwd" "$why"
 
 echo "# $pass passed, $failed failed, of $cases cases"
