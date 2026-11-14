@@ -172,8 +172,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - env:
+      - name: Fail the run
+        env:
           RESULTS: changes=${{ needs.changes.result }} check=${{ needs.check.result }} dev=${{ needs.deploy-dev.result }} devb=${{ needs.deploy-devb.result }} prod=${{ needs.deploy-prod.result }} plan=${{ needs.changes.outputs.check }}
         run: |
-          echo "::error::a deploy job was cancelled, or dev was skipped with nothing failing — $RESULTS"
+          echo "::error::a job was cancelled, or dev was skipped with nothing failing — $RESULTS"
           exit 1
