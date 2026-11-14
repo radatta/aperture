@@ -665,7 +665,7 @@ describe('rules + grouping', () => {
 
 describe('isDuplicateItem', () => {
   const item = { ...base, id: 'item', institutionId: 'ins_1' } as FinanceItem;
-  const accounts = [acct('chk-2050', 'depository'), acct('card-8812', 'credit')];
+  const accounts = [acct('chk-0000', 'depository'), acct('card-8812', 'credit')];
   const meta = (name: string) => ({
     id: 'x',
     name,
@@ -674,13 +674,13 @@ describe('isDuplicateItem', () => {
     subtype: null,
   });
   it('flags a re-link of the same accounts at the same bank', () => {
-    expect(isDuplicateItem([item], accounts, 'ins_1', [meta('chk-2050')])).toBe(true);
+    expect(isDuplicateItem([item], accounts, 'ins_1', [meta('chk-0000')])).toBe(true);
   });
   it('allows a new account, another bank, or a removed item', () => {
     expect(isDuplicateItem([item], accounts, 'ins_1', [meta('sav-4321')])).toBe(false);
-    expect(isDuplicateItem([item], accounts, 'ins_2', [meta('chk-2050')])).toBe(false);
+    expect(isDuplicateItem([item], accounts, 'ins_2', [meta('chk-0000')])).toBe(false);
     expect(
-      isDuplicateItem([{ ...item, deletedAt: 5 }], accounts, 'ins_1', [meta('chk-2050')]),
+      isDuplicateItem([{ ...item, deletedAt: 5 }], accounts, 'ins_1', [meta('chk-0000')]),
     ).toBe(false);
   });
   it('flags a same-bank item whose accounts haven’t synced (or were all removed)', () => {
