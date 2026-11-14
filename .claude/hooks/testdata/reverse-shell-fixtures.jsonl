@@ -67,3 +67,39 @@
 {"expect":"allow","why":"a glued '-e' with no nc on the line","cmd":"aws s3 ls --region us-east-1"}
 {"expect":"deny","reason":"Sigma","why":"the Monitor tool runs a shell command too — same rules","tool":"Monitor","cmd":"tail -f docs/curl/log.txt | grep --line-buffered x"}
 {"expect":"allow","why":"an ordinary Monitor until-loop","tool":"Monitor","cmd":"until [ -f out.txt ]; do sleep 1; done; echo ready"}
+{"expect":"deny","reason":"padding quantifier","why":"Incident I — the 2026-11-14 shape: git grep -o -i -E with wide padding on `.` from the main checkout","cwd":"/workspace","cmd":"git grep -o -i -E '.{0,110}(session|board).{0,80}' ."}
+{"expect":"deny","reason":"padding quantifier","why":"padding is refused even with a real pathspec — the pattern is the cost, not the scope","cwd":"/workspace","cmd":"git grep -n -E 'foo.{0,80}' -- scripts docs"}
+{"expect":"deny","reason":"padding quantifier","why":"grep -r with -o and padding, scoped","cmd":"grep -rnoE '.{0,110}foo' docs/"}
+{"expect":"deny","reason":"padding quantifier","why":"rg too — one rule for all three tools","cmd":"rg -o '.{0,80}foo.{0,80}' app/src"}
+{"expect":"deny","reason":"padding quantifier","why":"BRE interval spelling","cmd":"grep -o 'x.\\{0,40\\}y' notes.txt"}
+{"expect":"deny","reason":"padding quantifier","why":"padding reaching grep through xargs","cmd":"find docs -name '*.md' | xargs grep -oE 'foo.{0,80}'"}
+{"expect":"deny","reason":"padding quantifier","why":"Monitor runs a shell line too","tool":"Monitor","cwd":"/workspace","cmd":"git grep -o -E '.{0,60}todo.{0,60}' ."}
+{"expect":"allow","why":"padding on piped output — small input, the common legitimate use","cmd":"pnpm test 2>&1 | grep -oE '.{0,80}error.{0,80}' | head"}
+{"expect":"allow","why":"padding under the N >= 20 bar","cmd":"grep -rnE 'foo.{0,12}bar' docs/"}
+{"expect":"allow","why":"padding text with no search reading files","cmd":"echo 'pad is .{0,80}' && ls"}
+{"expect":"deny","reason":"ignore-blind","why":"grep -r on `.` at the main checkout","cwd":"/workspace","cmd":"grep -rn foo ."}
+{"expect":"deny","reason":"ignore-blind","why":"grep -r with no path defaults to `.`; a redirect is not a path","cwd":"/workspace","cmd":"grep -rn foo 2>/dev/null | head"}
+{"expect":"deny","reason":"ignore-blind","why":"-R and ./ ; a quoted --include is not a path","cwd":"/workspace","cmd":"grep -R --include='*.ts' foo ./"}
+{"expect":"deny","reason":"ignore-blind","why":"absolute root from a scoped cwd, --recursive, -e pattern","cwd":"/workspace/docs","cmd":"grep --recursive -e foo /workspace/"}
+{"expect":"deny","reason":"ignore-blind","why":"home, behind timeout (which runs the real GNU grep)","cwd":"/workspace/docs","cmd":"timeout 60 grep -rn foo ~"}
+{"expect":"deny","reason":"ignore-blind","why":"rgrep with no path at a worktree root","cwd":"/workspace/.claude/worktrees/x","cmd":"rgrep foo"}
+{"expect":"deny","reason":"ignore-blind","why":"`..` from a worktree is the worktrees dir","cwd":"/workspace/.claude/worktrees/x","cmd":"grep -rn foo .."}
+{"expect":"deny","reason":"ignore-blind","why":".claude/ from the main checkout holds every worktree","cwd":"/workspace","cmd":"grep -rln foo .claude/"}
+{"expect":"deny","reason":"ignore-blind","why":"cd to the root, then `.`","cwd":"/workspace/docs","cmd":"cd /workspace && grep -rn foo ."}
+{"expect":"deny","reason":"ignore-blind","why":"rg with ignore handling switched off, no path","cwd":"/workspace","cmd":"rg -uu foo"}
+{"expect":"deny","reason":"ignore-blind","why":"rg on home — outside the repo's ignore files","cwd":"/workspace/docs","cmd":"rg foo ~"}
+{"expect":"deny","reason":"ignore-blind","why":"git grep leaving the index","cwd":"/workspace","cmd":"git grep --no-index foo"}
+{"expect":"deny","reason":"ignore-blind","why":"git -C <root> grep --untracked on `.`","cwd":"/workspace/docs","cmd":"git -C /workspace grep --untracked foo -- ."}
+{"expect":"allow","why":"ordinary scoped recursive grep at the root","cwd":"/workspace","cmd":"grep -rn foo docs/ scripts/"}
+{"expect":"allow","why":"`.` in a subdirectory is scoped","cwd":"/workspace/docs","cmd":"grep -rn foo ."}
+{"expect":"allow","why":"a relative cd makes `.` a subdirectory","cwd":"/workspace","cmd":"cd docs && grep -rn foo ."}
+{"expect":"allow","why":"git grep with a real pathspec","cwd":"/workspace","cmd":"git grep -n foo -- scripts docs"}
+{"expect":"allow","why":"plain git grep reads tracked files only (14.5 MB, no worktrees) — measured 2026-11-14","cwd":"/workspace","cmd":"git grep -n foo"}
+{"expect":"allow","why":"rg scoped","cwd":"/workspace","cmd":"rg foo app/src"}
+{"expect":"allow","why":"rg at the root honours .gitignore; -C is the advised context","cwd":"/workspace","cmd":"rg -n -C 3 foo"}
+{"expect":"allow","why":"the advised safe form","cwd":"/workspace","cmd":"timeout 60 nice -n 10 rg -n -C 2 foo app/src lambdas/src | head -500"}
+{"expect":"allow","why":"rg -uu on a named dir (node_modules needs it)","cwd":"/workspace","cmd":"rg -uu foo node_modules/vite"}
+{"expect":"allow","why":"non-recursive grep; `.` here is the pattern","cwd":"/workspace","cmd":"grep -c . file"}
+{"expect":"allow","why":"a quoted mention is text","cwd":"/workspace","cmd":"echo 'run grep -r foo . here'"}
+{"expect":"allow","why":"a heredoc body is text","cwd":"/workspace","cmd":"cat > n.md <<'EOF'\ngrep -r foo .\nEOF\ngrep -c x n.md"}
+{"expect":"allow","why":"a -e value containing r is not -r","cwd":"/workspace","cmd":"pnpm test | grep -e prefix"}

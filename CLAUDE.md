@@ -32,7 +32,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 | `pnpm devcheck --tier …`      | The dev check: headless Chromium as the dev test user on the deployed dev stage (`docs/ops/DEV-CHECK.md`), plus `ios` rows on the Mac's iOS Simulator (`docs/ops/IOS-CHECK.md`); slow steps run only where the branch can affect them, `--tier all` runs everything. Never alongside tests or a dev server; one run per dev slot, so another session's run on the other slot is fine. |
 | `pnpm devcheck:local …`       | The local check: the same scenarios against the real Lambda edges in the container — no deploy, no lock (`docs/ops/LOCAL-CHECK.md`). The pre-flight before `pnpm bot deploy-dev`; never a substitute for dev.                                                                                                                                                                         |
 
-**Inside the COI container (the usual case), four things bite:**
+**Inside the COI container (the usual case), five things bite:**
 
 - **Never put a reverse-shell shape on a Bash command line or in a Grep pattern — it kills the container.**
   COI v0.15 kills on these anywhere in any process's argv (token-anchored, lowercased): `nc -e`/`ncat -e`;
@@ -52,6 +52,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   `coi-grep-guard.sh` (Grep) enforce it; the rule stands whether or not they're registered. Mechanism:
   `docs/ops/COI-INCIDENTS.md` → Incidents F and H.
 
+- **A hook refuses padded or ignore-blind repo-wide searches** (one froze the VM): `docs/ops/COI-INCIDENTS.md` → Incident I; `.claude/hooks/coi-reverse-shell-guard.sh`.
 - **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
 - **`node_modules` is shared with the macOS host** — native binaries belong to whichever side installed
   last. `vite dev`/`vite build` dying with `Cannot find module '../lightningcss.*.node'` is this;

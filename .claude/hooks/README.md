@@ -40,6 +40,8 @@ rules: `docs/ops/COI-SANDBOX.md` → _Container killed_; re-derive them from
 `localNotes/code-on-incus/APERTURE-ANALYSIS.md` on every COI upgrade. Implementation constraint (builtins
 only, deny text over stdin): the Bash guard's header.
 
+The Bash guard also carries one rule that is **not** COI's: the search-load arm (`search_load_shape` in `_search-load.sh`; `docs/ops/COI-INCIDENTS.md` → Incident I). It denies wide `.{0,N}` padding (N >= 20) in a grep / git grep / rg that reads files, and ignore-blind recursive searches on a checkout root, home, `/` or the worktrees dir. It reads the payload's `.cwd`; quoted spans and heredoc bodies are text. The Grep guard has no such arm — `rg` honours ignore files.
+
 ## MCP dev ledger
 
 `mcp-dev-ledger.sh` (PreToolUse on `aperture-dev` `delete_task` and `update_task`, PostToolUse on its create/split/update/delete
