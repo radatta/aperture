@@ -144,6 +144,19 @@ describe('shape checks', () => {
     refuses(c, { help: 'none', extra: 1 }, /^Unknown review field: extra$/);
   });
 
+  it('reads an undefined value as no key, as JSON would have dropped it', () => {
+    const c = obj<{ a: string }>('thing', { a: str(5) }) as Check<unknown>;
+    expect(run(c, { a: 'x', stray: undefined }, '')).not.toThrow();
+    expect(
+      run(owned('review', ['help']) as Check<unknown>, { help: 'none', x: undefined }),
+    ).not.toThrow();
+    refuses(
+      owned('flux set', undefined, { object: true }) as Check<unknown>,
+      null,
+      /^flux set must be an object$/,
+    );
+  });
+
   it('named labels a positional check without changing it', () => {
     const c = named('title', str(2));
     expect(c.name).toBe('title');

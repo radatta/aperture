@@ -83,7 +83,11 @@ export function fluxSetError(input: RecordFluxSetInput): string | null {
     return 'A Flux set must say whether it was calibrated.';
   if (input.delegate !== null && input.delegate !== 'GPU' && input.delegate !== 'CPU')
     return `Unknown tracking delegate "${String(input.delegate)}".`;
-  if (input.repTaskId !== null && (typeof input.repTaskId !== 'string' || !input.repTaskId))
+  // An id, not prose: the row stores it as sent (ULIDs are 26 characters).
+  if (
+    input.repTaskId !== null &&
+    (typeof input.repTaskId !== 'string' || !input.repTaskId || input.repTaskId.length > 128)
+  )
     return 'A Flux set links to its Roll rep by task id.';
   if (typeof input.stoppedEarly !== 'boolean')
     return 'A Flux set must say whether it was stopped early.';

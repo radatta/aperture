@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { API_METHODS } from '@aperture/shared';
 import type { ApiMethod } from '@aperture/shared';
-import { RPC_ARGS, TEXT_MAX, checkArgs } from './argSpecs';
+import { CAPTURE_MAX, RPC_ARGS, TEXT_MAX, checkArgs } from './argSpecs';
 import type { ArgSpecs } from './argSpecs';
 import { ShapeError, obj, opt, str } from './shape';
 
@@ -110,7 +110,11 @@ describe('the RPC argument specs', () => {
   });
 
   it('passes the long titles real callers send: an idea made a task, an unparsed capture line', () => {
-    passes('createTask', [{ title: 'i'.repeat(TEXT_MAX) }]);
+    passes('createTask', [{ title: 'i'.repeat(CAPTURE_MAX) }]);
+    passes('createLogEntry', ['l'.repeat(25_000), '2026-11-13']); // a long paste into the capture bar
+    passes('createIdea', ['l'.repeat(25_000)]);
+    passes('parseTask', ['l'.repeat(25_000)]); // saved raw past PARSE_TEXT_MAX
+    passes('createTasks', [Array(600).fill({ title: 'bulk' })]);
     passes('createTasks', [[{ title: 'c'.repeat(2500) }]]);
     passes('createAttachmentUploadUrl', [
       { taskId: 't', filename: 'f'.repeat(255), contentType: 'image/png', size: 1 },
@@ -198,13 +202,13 @@ describe('the RPC argument specs', () => {
         [{ mode: 'connect', itemId: 'i' }],
         /Unknown link token field: itemId/,
       ],
-      ['setFinanceBucket', [{ ids: Array(501).fill('t'), bucket: null }], /500 items/],
+      ['setFinanceBucket', [{ ids: Array(2001).fill('t'), bucket: null }], /2000 items/],
       [
         'insertCalendarEvent',
         [{ taskId: 't', accountSub: 'a', calendarId: 'c', title: { t: 1 }, startMs: 1, endMs: 2 }],
         /title must be text/,
       ],
-      ['createTask', [{ title: 't'.repeat(TEXT_MAX + 1) }], /title is limited to 20000/],
+      ['createTask', [{ title: 't'.repeat(CAPTURE_MAX + 1) }], /title is limited to 100000/],
       [
         'createTasks',
         [[{ title: 'ok' }, { title: 'x', userId: 'm' }]],
@@ -225,6 +229,11 @@ describe('the RPC argument specs', () => {
       ],
     ];
     for (const [m, a, msg] of bad) refuses(m, a, msg);
+  });
+
+  it('refuses a non-object flux set here: fluxSetError reads fields without checking', () => {
+    refuses('recordFluxSet', [null], /^flux set must be an object$/);
+    refuses('recordFluxSet', ['x'], /^flux set must be an object$/);
   });
 
   it('keeps the two ingest methods to arity, so their normalizers keep their own messages', () => {

@@ -101,6 +101,7 @@ describe('fluxSetError', () => {
     ['a missing rom axis', { rom: { pitch: 1, yaw: 2 } as never }, 'not a number'],
     ['an unknown delegate', { delegate: 'TPU' as never }, 'delegate'],
     ['an empty rep id', { repTaskId: '' }, 'Roll rep'],
+    ['an over-long rep id', { repTaskId: 'x'.repeat(129) }, 'Roll rep'],
     ['no stopped-early flag', { stoppedEarly: undefined as never }, 'stopped early'],
     ['a fractional planned count', { planned: 2.5 }, 'planned count'],
     ['a zero planned count', { planned: 0 }, 'planned count'],

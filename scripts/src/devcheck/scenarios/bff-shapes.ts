@@ -7,8 +7,9 @@
 import { noConsoleErrors, type Row, type Scenario } from '../scenario';
 import type { Ctx } from '../scenario';
 
-// Mirrors argSpecs.ts's TEXT_MAX (prose and titles): drift fails this scenario's max rows loudly.
+// Mirror argSpecs.ts's TEXT_MAX (prose) and CAPTURE_MAX (titles): drift fails this scenario's max rows loudly.
 const TEXT_MAX = 20_000;
+const CAPTURE_MAX = 100_000;
 const BODY_MAX = 1024 * 1024; // RPC_BODY_MAX
 
 const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
@@ -203,9 +204,19 @@ export const bffShapes: Scenario = {
       entry: 'api',
       proves: ['null-input', 'missing-required'],
       async run(ctx) {
-        await expectRpc(ctx, 'createTask', [null], 400, /^task must be an object$/);
-        await expectRpc(ctx, 'createTask', ['x'], 400, /^task must be an object$/);
-        await expectRpc(ctx, 'createTask', [{}], 400, /^title is required$/);
+        // Ledgered: a regression's create would land untitled, so only its id could clean it.
+        const label = titleOf(ctx, 'untitled probe');
+        for (const [args, error] of [
+          [[null], 'task must be an object'],
+          [['x'], 'task must be an object'],
+          [[{}], 'title is required'],
+        ] as const) {
+          const got = await ctx.api.writes.createTaskExpectingRefusal([...args], label);
+          if (got.status !== 400 || errorOf(got.body) !== error)
+            throw new Error(
+              `createTask(${JSON.stringify(args)}) answered ${got.status} ${JSON.stringify(got.body)}`,
+            );
+        }
         await expectRpc(
           ctx,
           'setTaskTitle',
@@ -550,9 +561,9 @@ export const bffShapes: Scenario = {
       entry: 'mcp',
       proves: ['mcp-refusal', 'mcp-ok'],
       async run(ctx) {
-        const long = `${titleOf(ctx, 'mcp long')} ${'x'.repeat(TEXT_MAX)}`;
+        const long = `${titleOf(ctx, 'mcp long')} ${'x'.repeat(CAPTURE_MAX)}`;
         const refused = await ctx.mcp.writes.createTaskExpectingRefusal({ title: long });
-        if (!refused.isError || refused.text !== 'title is limited to 20000 characters')
+        if (!refused.isError || refused.text !== 'title is limited to 100000 characters')
           throw new Error(
             `create_task with a title over the cap answered ${refused.text.slice(0, 120)}`,
           );

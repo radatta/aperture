@@ -17,6 +17,10 @@ import type {
   LinkAccountMeta,
   RecurrenceRule,
   TaskStatus,
+  CreateCategoryInput,
+  SittingReviewInput,
+  SubscribePushInput,
+  UpdateCategoryInput,
   UpsertCategoryInput,
 } from '@aperture/shared';
 import type { Check } from './shape';
@@ -48,8 +52,12 @@ export const NAME_MAX = 200; // a habit, roll, category, account or file name
 // made a task, an unparsed capture line, a calendar block's "Parent · Part"). 4× TASK_NOTES_MAX; three
 // story fields stay under DynamoDB's 400 KB.
 export const TEXT_MAX = 20_000;
+// What a capture line can become as sent: a log entry, an idea, a task title (an unparsed line saves raw).
+// The capture field has no maxLength, so this sits far out — near DynamoDB's 400 KB item at 3 bytes a
+// character — and only stops a body nothing types.
+export const CAPTURE_MAX = 100_000;
 export const FILENAME_MAX = 1024; // the raw file name; sanitizeFilename trims it to 200
-export const BATCH_MAX = 500; // createTasks inputs, setFinanceBucket ids
+export const BATCH_MAX = 2000; // createTasks inputs, setFinanceBucket ids; RPC_BODY_MAX bounds them too
 export const CALENDAR_REFS_MAX = 50;
 export const PLAID_ACCOUNTS_MAX = 100;
 export const RPC_BODY_MAX = 1024 * 1024; // non-ingest bodies (index.ts); ingest keeps its 300 KB
@@ -67,6 +75,7 @@ const id = named('id', str(ID_MAX));
 const idAs = (name: string) => named(name, str(ID_MAX));
 const day = named('day', str(KEY_MAX));
 const text = named('text', str(TEXT_MAX));
+const captured = named('text', str(CAPTURE_MAX));
 const range = obj<DateRange>('range', { from: str(KEY_MAX), to: str(KEY_MAX) });
 const calendarRef = obj<CalendarRef>('calendar', {
   accountSub: str(ID_MAX),
@@ -75,7 +84,7 @@ const calendarRef = obj<CalendarRef>('calendar', {
 const capOpts = opt(obj<{ capMin?: number }>('options', { capMin: opt(minutes) }));
 
 const taskInput = obj<CreateTaskInput>('task', {
-  title: str(TEXT_MAX),
+  title: str(CAPTURE_MAX),
   categoryId: opt(nullable(str(ID_MAX))),
   estimateMin: opt(nullable(minutes)),
   bufferMin: opt(nullable(minutes)),
@@ -116,21 +125,21 @@ const rule = oneOf<RecurrenceRule>('rule', 'kind', {
 
 // A create/update pair spec'd as one object, every field optional: which ones a create needs is the
 // domain's rule (its 'needs label and isWork' refusal).
+// A create/update pair spec'd as one object, every field optional: which ones a create needs is the
+// domain's rule (its 'needs label and isWork' refusal). Typed by the update's fields, so a new one fails
+// typecheck here; the create must carry no field the update lacks.
+type CategoryFields = Partial<UpdateCategoryInput>;
+const createKeysCovered: keyof CreateCategoryInput extends keyof CategoryFields ? true : never =
+  true;
+void createKeysCovered;
 const categoryInput = as<UpsertCategoryInput>(
-  obj<{
-    id?: string;
-    label?: string;
-    isWork?: boolean;
-    order?: number;
-    active?: boolean;
-    area?: string | null;
-  }>('category', {
+  obj<CategoryFields>('category', {
     id: opt(str(ID_MAX)),
     label: opt(str(NAME_MAX)),
     isWork: opt(bool),
     order: opt(num),
     active: opt(bool),
-    area: opt(nullable(str(KEY_MAX))),
+    area: opt(nullable(strOf<Area>(KEY_MAX))),
   }),
 );
 
@@ -143,8 +152,17 @@ const storyFields = {
 
 // The two LeetCode ingest methods keep arity only: their normalizers check every field with the
 // extension's messages, and an extension in the wild can't change its keys in lockstep with this table.
-const SITTING_REVIEW_KEYS = ['insight', 'help', 'mistakes', 'howItWent', 'tags', 'draftUsed'];
-const PUSH_KEYS = ['endpoint', 'keys', 'label'];
+// Each list is checked against its type's keys, so a new input field fails typecheck until it's here.
+const keysOf = <T>(all: Record<keyof T, true>): string[] => Object.keys(all);
+const SITTING_REVIEW_KEYS = keysOf<SittingReviewInput>({
+  insight: true,
+  help: true,
+  mistakes: true,
+  howItWent: true,
+  tags: true,
+  draftUsed: true,
+});
+const PUSH_KEYS = keysOf<SubscribePushInput>({ endpoint: true, keys: true, label: true });
 
 type Positional<F> = F extends (...a: infer P) => unknown
   ? { [I in keyof Required<P>]: Check<P[I]> }
@@ -155,11 +173,11 @@ export const RPC_ARGS = {
   // Log
   listLogEntries: [day],
   createLogEntry: [
-    text,
+    captured,
     day,
     named('opts', opt(obj<{ private?: boolean }>('options', { private: opt(bool) }))),
   ],
-  updateLogEntry: [id, text],
+  updateLogEntry: [id, captured],
   listLogRange: [
     obj<Partial<DateRange>>('range', { from: opt(str(KEY_MAX)), to: opt(str(KEY_MAX)) }),
   ],
@@ -172,7 +190,7 @@ export const RPC_ARGS = {
   getTask: [id],
   createTask: [taskInput],
   createTasks: [named('inputs', arr(taskInput, BATCH_MAX))],
-  parseTask: [text],
+  parseTask: [captured], // runQuickParse saves a line over PARSE_TEXT_MAX raw
   setTaskEstimate: [
     id,
     named('estimateMin', nullable(minutes)),
@@ -184,7 +202,7 @@ export const RPC_ARGS = {
     id,
     obj('due', { dueDay: nullable(str(KEY_MAX)), dueTime: opt(nullable(str(KEY_MAX))) }),
   ],
-  setTaskTitle: [id, named('title', str(TEXT_MAX))],
+  setTaskTitle: [id, named('title', str(CAPTURE_MAX))],
   setTaskNotes: [id, named('notes', nullable(str(TEXT_MAX)))],
   setTaskReflection: [id, named('reflection', nullable(str(TEXT_MAX)))],
   transitionTask: [id, named('to', strOf<TaskStatus>(KEY_MAX))],
@@ -292,7 +310,7 @@ export const RPC_ARGS = {
 
   // Ideas
   listIdeas: [named('status', opt(strOf<IdeaStatus>(KEY_MAX)))],
-  createIdea: [text],
+  createIdea: [captured],
   triageIdea: [id, named('status', lit('open', 'triaged', 'discarded'))], // stored as sent
 
   // Day
@@ -397,7 +415,7 @@ export const RPC_ARGS = {
   deleteSitting: [id],
 
   // Flux — fluxSetError checks every field of a set and the row is rebuilt from them.
-  recordFluxSet: [owned('flux set')],
+  recordFluxSet: [owned('flux set', undefined, { object: true })],
   listFluxSets: [
     opt(
       obj('filter', {

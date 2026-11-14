@@ -38,6 +38,10 @@ const at = (path: string, key: string): string => (path ? `${path}.${key}` : key
 const label = (path: string): string => path || 'value';
 export const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
+// Keys off the list. An undefined value is no key (JSON drops it), so an in-process caller passing one is
+// read the same as one over /api.
+const unknownKeys = (o: Record<string, unknown>, known: readonly string[]): string[] =>
+  Object.keys(o).filter((k) => o[k] !== undefined && !known.includes(k));
 
 // A positional argument's name in its messages (`<name> must be text`, `<method>: <name> is required`).
 export const named = <T>(name: string, c: Check<T>): Check<T> => ({ ...c, name });
@@ -113,8 +117,7 @@ export const obj = <T>(
     (v, p) => {
       if (!isPlainObject(v)) fail(opts.notObject ?? `${p || what} must be an object`);
       const o = v as Record<string, unknown>;
-      const bad =
-        opts.extraKeys === 'allow' ? [] : Object.keys(o).filter((k) => !known.includes(k));
+      const bad = opts.extraKeys === 'allow' ? [] : unknownKeys(o, known);
       if (bad.length > 0) fail(`Unknown ${what} field: ${bad.join(', ')}`);
       for (const k of known) {
         const f = (fields as Record<string, AnyCheck>)[k]!;
@@ -158,11 +161,20 @@ export const record = <T>(c: AnyCheck, max: number, keyMax = 64): Check<T> =>
 
 // A value whose shape a domain normalizer owns, with its own messages (normalizeSittingReview,
 // parsePushInput, fluxSetError…). With `keys`, a plain object must hold only those top-level keys — what the
-// normalizer reads; anything else (a non-object included) is the normalizer's to refuse.
-export const owned = <T>(what: string, keys?: readonly string[]): Check<T> =>
+// normalizer reads; anything else is the normalizer's to refuse. `object: true` is for a normalizer that
+// reads fields without checking it was handed an object (fluxSetError): a non-object is refused here.
+export const owned = <T>(
+  what: string,
+  keys?: readonly string[],
+  opts: { object?: boolean } = {},
+): Check<T> =>
   check((v) => {
-    if (!keys || !isPlainObject(v)) return;
-    const bad = Object.keys(v).filter((k) => !keys.includes(k));
+    if (!isPlainObject(v)) {
+      if (opts.object) fail(`${what} must be an object`);
+      return;
+    }
+    if (!keys) return;
+    const bad = unknownKeys(v, keys);
     if (bad.length > 0) fail(`Unknown ${what} field: ${bad.join(', ')}`);
   });
 

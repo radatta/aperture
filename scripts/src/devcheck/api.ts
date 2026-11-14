@@ -723,19 +723,21 @@ export function createApiClient({
     // Only for a stop the server must refuse (a bad cap): the app stops its timers through the UI.
     stopSession: (id: string, status: 'completed', opts: { capMin: number }) =>
       call<DevSession>('stopSession', [id, status, opts]),
-    // A createTask the BFF must refuse (bff-shapes: an unknown key), ledgered like a create: a refusal
-    // resolves the intent as `refused`; a create a regression let through is recorded and cleaned like any
-    // other. `args` go as given; returns the raw answer for the step to read.
+    // A createTask the BFF must refuse (bff-shapes' wrong shapes), ledgered like a create: a 4xx resolves
+    // the intent as `refused`; a create a regression let through — titled or not — is recorded by its id
+    // and cleaned like any other. `args` go as given; returns the raw answer for the step to read.
     async createTaskExpectingRefusal(
       args: unknown[],
       title: string,
     ): Promise<{ status: number; body: unknown }> {
       ledger.append({ run, op: 'intent', via: 'api:createTask', title });
-      const got = await this.rpcRaw('createTask', JSON.stringify({ args }), 'jwt');
+      const got = await writes.rpcRaw('createTask', JSON.stringify({ args }), 'jwt');
       const id = (got.body as { id?: unknown } | null)?.id;
       if (got.status === 200 && typeof id === 'string')
         ledger.append({ run, op: 'created', id, via: 'api:createTask', title });
-      else ledger.append({ run, op: 'refused', via: 'api:createTask', title });
+      // Only a 4xx is a refusal before any write; a 5xx may have landed, so its intent stays open.
+      else if (got.status >= 400 && got.status < 500)
+        ledger.append({ run, op: 'refused', via: 'api:createTask', title });
       return got;
     },
     async createTask(input: CreateTaskInput): Promise<DevTask> {
