@@ -215,4 +215,58 @@ describe('mailroom runner', () => {
     ]);
     expect(src).toContain('TOKEN="$(security find-generic-password -s "$KEYCHAIN" -w');
   });
+
+  // Two launchd agents on one inbox (MAILROOM.md → Lanes): only sim is slow, each lane has its own lock, and the one
+  // template renders a valid agent per lane.
+  it('lanes: sim alone is slow, a lock per lane, two agents from one template', () => {
+    const runner = readFileSync(`${TOOLS_DIR}runner.sh`, 'utf8');
+    for (const pin of [
+      'SLOW_JOBS="sim"',
+      'slow) take_lock lock 15 || exit 0 ;;',
+      'fast) take_lock lock-fast 5 || exit 0 ;;',
+      'all) { take_lock lock 15 && take_lock lock-fast 5; } || exit 0 ;;',
+      "mr_cap 3 jq -rs 'if length == 1",
+      '[ "$LANE" = all ] || [ "$(peek_lane "$entry")" = "$LANE" ] || continue',
+      'if [ "$LANE" != all ] && [ "$(lane_of_job "$job")" != "$LANE" ]; then',
+    ])
+      expect(runner).toContain(pin);
+    const install = readFileSync(`${TOOLS_DIR}install.sh`, 'utf8');
+    for (const pin of [
+      'LABEL_FAST="dev.rahuldatta.aperture.mailroom.fast"',
+      'render "$LABEL" slow 10',
+      'render "$LABEL_FAST" fast 2',
+      'load "$LABEL" "$PLIST"',
+      'load "$LABEL_FAST" "$PLIST_FAST"',
+      'launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true',
+      'rm -f "$PLIST" "$PLIST_FAST"',
+    ])
+      expect(install).toContain(pin);
+    const tmpl = readFileSync(`${TOOLS_DIR}dev.rahuldatta.aperture.mailroom.plist.tmpl`, 'utf8');
+    const render = (label: string, lane: string, throttle: string) =>
+      tmpl
+        .replaceAll('@LABEL@', label)
+        .replaceAll('@LANE@', lane)
+        .replaceAll('@THROTTLE@', throttle)
+        .replaceAll('@RUNNER@', '/r/runner.sh')
+        .replaceAll('@HOSTJOBS@', '/h')
+        .replaceAll('@STATE@', '/s')
+        .replaceAll('@LOG@', '/l')
+        .replaceAll(
+          '@TRIGGER@',
+          '  <key>QueueDirectories</key>\n  <array><string>/h/inbox</string></array>',
+        );
+    for (const [label, lane, throttle] of [
+      ['dev.rahuldatta.aperture.mailroom', 'slow', '10'],
+      ['dev.rahuldatta.aperture.mailroom.fast', 'fast', '2'],
+    ] as const) {
+      const p = render(label, lane, throttle);
+      expect(p).not.toMatch(/@[A-Z]+@/);
+      expect(p).toContain(`<key>Label</key>\n  <string>${label}</string>`);
+      expect(p).toContain(`<string>/s</string>\n    <string>${lane}</string>\n  </array>`);
+      expect(p).toContain(`<key>ThrottleInterval</key>\n  <integer>${throttle}</integer>`);
+      // every <key> in the top dict is followed by a value element
+      const keys = [...p.matchAll(/<key>([^<]+)<\/key>\s*<(\w+)/g)].map((m) => m[2]);
+      expect(keys.every((t) => t !== 'key')).toBe(true);
+    }
+  });
 });

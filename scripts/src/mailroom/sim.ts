@@ -450,7 +450,7 @@ export async function runSimJob(d: SimDeps, job: SimJob): Promise<SimResult> {
             : `last result ${Math.round((d.clock.now() - seen.lastResultMs) / 60_000)} min ago`;
         throw new IosUnavailable(
           'MAC_UNREACHABLE',
-          `no pickup in ${PICKUP_MS / 1000} s — Mac asleep, mailroom not running, or busy with another job (${age})`,
+          `no pickup in ${PICKUP_MS / 1000} s — Mac asleep, mailroom not running, or busy with another sim job (the slow lane runs one at a time) (${age})`,
         );
       }
       break; // taken just now

@@ -5,23 +5,28 @@
 # Bash 3.2 (macOS /bin/bash) + jq + curl + security, all builtin on macOS 15+; the sim job adds AXe (Homebrew) and
 # Xcode's simctl. Design: docs/ops/MAILROOM.md, docs/ops/IOS-CHECK.md.
 #
-#   runner.sh <hostjobs-dir> <state-dir>     both absolute; the plist passes them (install.sh renders it)
+#   runner.sh <hostjobs-dir> <state-dir> [slow|fast]   paths absolute; the plists pass them (install.sh renders two)
+# Two launchd agents drain the one inbox: the slow lane runs SLOW_JOBS (the Simulator), the fast lane everything else,
+# so a clip or an open-pr never waits behind a sim run. No lane = both locks, today's single drain (bench, hand runs).
 set -euo pipefail
 umask 077
 export LC_ALL=C # deterministic globs and regexes, as under launchd
 
 HJ="${1:?usage: runner.sh <hostjobs-dir> <state-dir>}"
 STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir>}"
+LANE="${3:-all}"
+case "$LANE" in slow | fast | all) ;; *) echo "usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]" >&2; exit 1 ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 JOBS="open-pr sim clip" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
+SLOW_JOBS="sim"         # the slow lane's; every other job, and anything unparseable, is the fast lane's
 MAX_FILE=73728 # 72 KiB per job file
-MAX_PER_DRAIN=5
+MAX_PER_DRAIN=5 # per lane, counting only the entries this lane takes
 ID_RE='^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,48}$'
 RUNNER_VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo dev)"
 
 now_iso() { jq -nr 'now | todate'; }
 now_ms() { jq -nr 'now * 1000 | floor'; }
-log() { printf '%s %s\n' "$(now_iso)" "$*"; }
+log() { if [ "$LANE" = all ]; then printf '%s %s\n' "$(now_iso)" "$*"; else printf '%s %s %s\n' "$(now_iso)" "$LANE" "$*"; fi; }
 sha256() { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
 
 # --- pin the shared directories: refuse symlinks, then work relative to a pinned cwd ------------------------
@@ -41,15 +46,57 @@ mkdir -p "$STATE/work" "$STATE/rejected"
 WORK="$(cd "$STATE/work" && pwd -P)"
 REJECTED="$(cd "$STATE/rejected" && pwd -P)"
 
-# --- single instance ----------------------------------------------------------------------------------------
-if ! mkdir "$STATE/lock" 2>/dev/null; then
-  if [ -n "$(find "$STATE/lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] && rmdir "$STATE/lock" && mkdir "$STATE/lock"; then
-    log "took a stale lock"
-  else
-    exit 0 # another drain is running; launchd re-fires while the inbox is non-empty
+# --- one drain per lane -------------------------------------------------------------------------------------
+# lock is the slow lane's (the sim job touches it per op, so a long run never reads as stale); lock-fast the fast
+# lane's, whose jobs are capped well under 5 min. A held lock exits 0: launchd re-fires while the inbox is non-empty.
+HELD=""
+trap 'for l in $HELD; do rmdir "$l" 2>/dev/null || true; done' EXIT
+take_lock() { # NAME STALE_MIN → 0 held, 1 another drain of this lane is running
+  if ! mkdir "$STATE/$1" 2>/dev/null; then
+    if [ -n "$(find "$STATE/$1" -maxdepth 0 -mmin +"$2" 2>/dev/null)" ] && rmdir "$STATE/$1" && mkdir "$STATE/$1"; then
+      log "took a stale $1"
+    else
+      return 1
+    fi
   fi
-fi
-trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+  HELD="$HELD $STATE/$1"
+}
+case "$LANE" in
+  slow) take_lock lock 15 || exit 0 ;;
+  fast) take_lock lock-fast 5 || exit 0 ;;
+  all) { take_lock lock 15 && take_lock lock-fast 5; } || exit 0 ;;
+esac
+
+# --- lanes ----------------------------------------------------------------------------------------------------
+lane_of_job() { case " $SLOW_JOBS " in *" $1 "*) echo slow ;; *) echo fast ;; esac; }
+# mr_cap SECS CMD… — run CMD, stopped after SECS (macOS has no timeout(1)); 124 when stopped. jobs/sim.sh's sim_cap
+# shape: `command sleep` (the fixtures stub sleep), and the watchdog's output detached, so a $(…) never waits on it.
+mr_cap() {
+  local cap="$1" pid wd rc
+  shift
+  "$@" &
+  pid=$!
+  (command sleep "$cap" && kill -TERM "$pid" 2>/dev/null) >/dev/null 2>&1 &
+  wd=$!
+  rc=0
+  wait "$pid" || rc=$?
+  pkill -P "$wd" 2>/dev/null || true
+  kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
+  if [ "$rc" = 143 ]; then return 124; fi
+  return "$rc"
+}
+# peek_lane ENTRY → slow|fast: a routing hint read from the shared file. Capped, so a FIFO swapped in under the -f check
+# costs one drain 3 s, never a hang; the snapshot's job field, checked after the move, is what decides.
+peek_lane() {
+  local j=""
+  if [ -L "$1" ] || [ ! -f "$1" ]; then
+    echo fast
+    return 0
+  fi
+  j="$(mr_cap 3 jq -rs 'if length == 1 and (.[0] | type) == "object" then (.[0].job | strings) else empty end' "$1" 2>/dev/null)" || j=""
+  lane_of_job "$j"
+}
 
 # Park anything we won't parse in rejected/ (Mac-side), under a name we choose.
 park() { mv -- "$1" "$REJECTED/$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM" 2>/dev/null || rm -f -- "$1" 2>/dev/null || true; }
@@ -142,6 +189,7 @@ shopt -s nullglob dotglob
 n=0
 for entry in ./*; do
   [ "$n" -lt "$MAX_PER_DRAIN" ] || break
+  [ "$LANE" = all ] || [ "$(peek_lane "$entry")" = "$LANE" ] || continue # the other lane's: left in the inbox
   n=$((n + 1))
   name="${entry#./}"
   stem="${name%.json}"
@@ -195,6 +243,12 @@ for entry in ./*; do
     continue
   fi
   job="$(jq -r .job "$w")"
+  if [ "$LANE" != all ] && [ "$(lane_of_job "$job")" != "$LANE" ]; then
+    rm -f -- "$w"
+    log "$stem lane changed under the peek"
+    result "$stem" rejected BAD_FILE "$started"
+    continue
+  fi
   fn="${job//-/_}"
   reason="$("validate_$fn" "$w")"
   if [ -n "$reason" ]; then

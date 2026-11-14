@@ -140,11 +140,12 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   {
     IFS= read -r name; read -r kind; read -r setup; read -r raw; read -r no_token; read -r no_simpw; read -r no_simpw_read
     read -r want_rc; read -r want_left; read -r no_result; read -r calls_type; read -r has_post; read -r has_md; read -r want_pw
-    read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j
+    read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j; read -r lane; read -r locks_j
   } <<<"$(jq -r '[.name, (.kind // "open-pr"), (.setup // ""), (if has("raw") then "1" else "" end),
     (.noToken // false), (.noSimPassword // false), (.noSimPasswordRead // false), (.exit // 0), (.inboxLeft // 0),
     (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
-    (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson)] | .[]' <<<"$c")"
+    (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson),
+    (.lane // ""), (.locks | tojson)] | .[]' <<<"$c")"
   T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state"
@@ -188,6 +189,18 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     duplicate) mkdir "$hj/results/$rid"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
     lock) mkdir "$st/lock"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
     stale-lock) mkdir "$st/lock"; touch -t 202001010000 "$st/lock"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    lock-fast) mkdir "$st/lock-fast"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    stale-lock-fast) mkdir "$st/lock-fast"; touch -t 202001010000 "$st/lock-fast"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    aged-lock | aged-lock-fast) # 6 minutes old: past the fast lane's 5-minute rule, inside the slow lane's 15
+      l="lock${setup#aged-lock}"
+      mkdir "$st/$l"; touch -t "$(jq -nr --argjson t $((now - 360)) '$t | strflocaltime("%Y%m%d%H%M.%S")')" "$st/$l"
+      mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    mixed) # 6 copies of the case's job, then 2 sims: a lane's cap counts only the entries it takes
+      for i in 1 2 3 4 5 6; do jq -c --arg id "${id}-$i" '.id = $id' <<<"$job" >"$hj/inbox/${id}-$i.json"; done
+      for i in 1 2; do
+        sid="$(jq -r .id <<<"$simbase")-s$i"
+        jq -c --arg id "$sid" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$simbase" >"$hj/inbox/$sid.json"
+      done ;;
     many)
       for i in 1 2 3 4 5 6; do
         jq -c --arg id "${id}-$i" '.id = $id' <<<"$job" >"$hj/inbox/${id}-$i.json"
@@ -220,7 +233,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$no_simpw" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
     [ "$no_simpw_read" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
     MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
-      MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st"
+      MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st" ${lane:+"$lane"}
   ) >"$T/out" 2>&1
   rc=$?
 
@@ -233,7 +246,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     if [ "$no_result" = true ]; then
       found="$(find "$hj/results/" "$T/elsewhere" -name result.json 2>/dev/null | wc -l | tr -d ' ')"
       [ "$found" = 0 ] || why="wrote $found result(s), want none"
-    elif [ "$setup" = many ]; then
+    elif [ "$setup" = many ] || [ "$setup" = mixed ]; then
       found="$(find "$hj/results/" -name result.json | wc -l | tr -d ' ')"
       [ "$found" = 5 ] || why="wrote $found results, want 5"
     elif [ ! -f "$hj/results/$rid/result.json" ]; then
@@ -259,6 +272,11 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     sent="$( [ -z "$idx" ] || cat "$T/calls.$((idx - 1)).data" 2>/dev/null || true)"
     jq -e --argjson p "$body_j" '. == $p' <<<"$sent" >/dev/null 2>&1 || why="$k body ${sent:-not sent}"
   done
+  # The lock dirs the run left: a lane releases only its own.
+  if [ -z "$why" ] && [ "$locks_j" != null ]; then
+    got="$(cd "$st" && find . -mindepth 1 -maxdepth 1 -name 'lock*' -type d | sed 's|^\./||' | sort | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    [ "$got" = "$(jq -c 'sort' <<<"$locks_j")" ] || why="locks left $got, want $locks_j"
+  fi
   if [ -z "$why" ] && [ "$setup" = hardlink ] && [ ! -f "$hj/staging/mine" ]; then why="the hard-linked original went missing"; fi
   if [ -z "$why" ] && grep -rq -e "$MAILROOM_FIXTURE_TOKEN" -e BODYMARK -e "$MAILROOM_FIXTURE_PW" "$T/out" "$hj/results/" 2>/dev/null; then
     why="the token, the test user's password or body text reached the log or a result"
@@ -340,6 +358,51 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
   [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ]
 ) && ok "sim_cap kills a command at its cap" || bad "sim_cap kills a command at its cap" "it did not return 124 promptly"
 
-cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2 + 1))"
+# Lanes, for real: a slow drain inside a 20 s sim op, a second slow drain, and a fast drain beside it — as launchd's
+# two agents would run them.
+lanes_check() {
+  local L hj st now a b cl pa i rc
+  L="$(cd "$(mktemp -d)" && pwd -P)"
+  hj="$L/hj"; st="$L/state"
+  mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
+  : >"$L/calls"; : >"$L/simcalls"
+  printf '%s' "$defapi" >"$L/api.json"
+  { printf '%s\t0\t0\t%s\n' '-l JavaScript - ' '{"cc":41,"front":"com.googlecode.iterm2","source":"png","bytes":21}'
+    jq -r '.[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring), (.out // "" | if type == "string" then . else tojson end)] | join("\t")' <<<"$deftape"
+  } >"$L/tape"
+  lane_run() {
+    MAILROOM_FIXTURE_API="$L/api.json" MAILROOM_FIXTURE_CALLS="$L/calls" MAILROOM_FIXTURE_TAPE="$L/tape" \
+      MAILROOM_FIXTURE_SIMCALLS="$L/simcalls" bash "$HERE/runner.sh" "$hj" "$st" "$1" >>"$L/out" 2>&1
+  }
+  now="$(date +%s)"
+  a="20261113T230000Z-ios-lane-aa01"; b="20261113T230001Z-ios-lane-bb02"; cl="20261113T230002Z-clip-cc03"
+  jq -c --arg id "$a" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate) | .params.steps = [{"op": "wait", "s": 20}]' <<<"$simbase" >"$hj/inbox/$a.json"
+  lane_run slow &
+  pa=$!
+  for i in $(seq 1 150); do [ -d "$hj/results/$a" ] && break; command sleep 0.1; done
+  [ -d "$hj/results/$a" ] || { bad "lanes: a slow drain takes the sim" "results/$a never appeared" "$L/out"; wait "$pa"; return; }
+  jq -c --arg id "$b" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$simbase" >"$hj/inbox/$b.json"
+  lane_run slow; rc=$?
+  if [ "$rc" = 0 ] && [ -f "$hj/inbox/$b.json" ] && [ ! -e "$hj/results/$b" ]; then
+    ok "lanes: a second slow drain leaves the next sim queued while one runs"
+  else bad "lanes: a second slow drain leaves the next sim queued while one runs" "rc $rc, inbox: $(ls "$hj/inbox")" "$L/out"; fi
+  jq -c --arg id "$cl" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$clipbase" >"$hj/inbox/$cl.json"
+  lane_run fast
+  if [ "$(jq -r .status "$hj/results/$cl/result.json" 2>/dev/null)" = served ] && [ ! -e "$hj/results/$a/result.json" ] &&
+    [ -d "$st/lock" ] && [ ! -e "$st/lock-fast" ] && [ -f "$hj/inbox/$b.json" ]; then
+    ok "lanes: a clip is served while the sim runs, and the sim stays queued"
+  else bad "lanes: a clip is served while the sim runs, and the sim stays queued" "clip $(cat "$hj/results/$cl/result.json" 2>/dev/null), sim result $([ -e "$hj/results/$a/result.json" ] && echo early || echo none)" "$L/out"; fi
+  wait "$pa"
+  lane_run slow
+  if [ "$(jq -r .status "$hj/results/$a/result.json" 2>/dev/null)" = pass ] && [ -f "$hj/results/$b/result.json" ] &&
+    [ -z "$(find "$st" -mindepth 1 -maxdepth 1 -name 'lock*')" ]; then
+    ok "lanes: once the sim ends, the next slow drain takes the queued one and both locks are gone"
+  else bad "lanes: once the sim ends, the next slow drain takes the queued one and both locks are gone" "a $(jq -c '{status, reason, detail}' "$hj/results/$a/result.json" 2>/dev/null), b $([ -f "$hj/results/$b/result.json" ] && echo done || echo none)" "$L/out"; fi
+  rm -r -f -- "$L"
+}
+lanes_check
+LANES_CHECKS=3
+
+cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2 + 1 + LANES_CHECKS))"
 echo "# $pass passed, $failed failed, of $cases cases"
 [ "$failed" = 0 ] && [ "$pass" = "$cases" ] # a harness that ran nothing must not pass

@@ -2,12 +2,13 @@
 
 Opening a PR used to be the user's last manual step before a merge: running `gh pr create` on the Mac. The bot can't take it over. A squash commit's author is whoever opened the PR, and `main` must stay the user's (CI-BOT.md). The **mailroom** takes it over instead. Claude drops a job file into a folder the Mac shares with the container. A launchd agent on the Mac picks it up and opens the PR with the user's own **PR-only token**. The PR is the user's, and no one had to touch it.
 
-Think of it as a mailroom. The container drops off a form, the clerk follows a fixed checklist, and the form can only fill in blanks. Built 2026-11-01 on the `mac-mailroom` branch, PR 1 of mac-sim. PR 2 added the `sim` job: the devcheck's iOS rows on the Mac's iOS Simulator, with its own home in [IOS-CHECK.md](IOS-CHECK.md). `clip-paste` (2026-11-13) added the `clip` job: Ctrl+V of a Mac clipboard image in a container Claude Code (_The clip job_).
+Think of it as a mailroom. The container drops off a form, the clerk follows a fixed checklist, and the form can only fill in blanks. Built 2026-11-01 on the `mac-mailroom` branch, PR 1 of mac-sim. PR 2 added the `sim` job: the devcheck's iOS rows on the Mac's iOS Simulator, with its own home in [IOS-CHECK.md](IOS-CHECK.md). `clip-paste` (2026-11-13) added the `clip` job: Ctrl+V of a Mac clipboard image in a container Claude Code (_The clip job_). `mailroom-fast-lane` (2026-11-13) split the drain into two lanes, so a short job never waits behind a `sim` run (_The runner_ → _Lanes_).
 
 ```
 container (untrusted)                               Mac (trusted; nothing from the shared folder is executed)
 pnpm mailroom open-pr --title T
-  localNotes/pr-<branch>.md → lint → embed            launchd agent dev.rahuldatta.aperture.mailroom (Aqua)
+  localNotes/pr-<branch>.md → lint → embed            launchd agents dev.rahuldatta.aperture.mailroom (Aqua):
+                                                        the slow lane (sim) and …mailroom.fast (everything else)
   .hostjobs/staging/<id>.json ─rename─▶ .hostjobs/inbox/<id>.json
                                                         │ QueueDirectories (or StartInterval 15 s: --mode poll)
                                                         ▼
@@ -75,12 +76,12 @@ This line is also what the CLI prints when the installed runner is out of date (
 1. Resolves main's head.
 2. Fetches the files at that commit.
 3. Computes `VERSION`: the sha256 of `runner.sh` followed by `jobs/*.sh`.
-4. Renders and lints the plist.
+4. Renders and lints the two plists, one per lane, from the one template (`@LABEL@`, `@LANE@`, `@THROTTLE@`: slow 10 s, fast 2 s).
 5. Checks that `.hostjobs/{staging,inbox,results}` are not symlinks and creates them. This happens before anything is swapped, so a refusal never leaves a half-install.
-6. Prints the diff against what's installed (runner, jobs and plist).
+6. Prints the diff against what's installed (runner, jobs and both plists).
 7. Swaps the new copy in.
-8. Writes `.hostjobs/installed.json` (installed at, version, commit, mode). This is only a hint, since the container could forge it, so a failed write doesn't stop the install.
-9. Loads the agent with `launchctl bootout` then `bootstrap`, retrying while the old instance tears down.
+8. Writes `.hostjobs/installed.json` (installed at, version, commit, mode, lanes). This is only a hint, since the container could forge it, so a failed write doesn't stop the install.
+9. Loads both agents with `launchctl bootout` then `bootstrap`, retrying while the old instance tears down. Upgrading from the single agent needs nothing more: its label is the slow lane's, overwritten and re-bootstrapped. An older `install.sh` (a downgrade) leaves the fast agent loaded, running the old runner, which ignores the lane argument and takes `state/lock`. The two then serialise, which is harmless; `--uninstall`, or `launchctl bootout gui/$(id -u)/dev.rahuldatta.aperture.mailroom.fast`, removes it.
 
 The whole script is one `main` function, called on its last line, so a truncated download defines nothing and runs nothing.
 
@@ -90,8 +91,8 @@ Other uses:
 
 - **Before a merge.** Only a branch that changes `tools/mailroom/` needs this, for its trial or dev test. Use `?ref=<sha>` in the URL plus `--ref <sha>`. That commit is bot-pushed and nobody has approved it, and its `install.sh` runs directly on the Mac. So **first read `tools/mailroom/` at that commit on github.com**. The script then prints `NOT main's head` and asks `[y/N]` before swapping anything in. Re-run from `main` once it merges.
 - **`--mode poll`** swaps the folder watch for a 15 s timer. Use it if QueueDirectories never fires on the shared folder (_Trial_).
-- **`--uninstall`** removes the agent and the installed copy. It keeps `.hostjobs/` and the Keychain item. Remove those with `security delete-generic-password -s aperture-mailroom-gh`, and revoke the token on GitHub.
-- **The log** is `~/Library/Logs/aperture-mailroom/agent.log`. It holds codes, ids, durations and HTTP statuses, never the token or the body.
+- **`--uninstall`** removes both agents and the installed copy. It keeps `.hostjobs/` and the Keychain item. Remove those with `security delete-generic-password -s aperture-mailroom-gh`, and revoke the token on GitHub.
+- **The log** is `~/Library/Logs/aperture-mailroom/agent.log`, shared by both agents; a lane's lines carry `slow` or `fast` after the time. It holds codes, ids, durations and HTTP statuses, never the token or the body.
 
 ## Using it (container)
 
@@ -110,7 +111,7 @@ Other uses:
 4. Submits the job and waits **75 s plus 30 s of grace**, counted from when the command started. That keeps it under the Bash tool's 120 s default timeout, because a killed caller would leave the job queued. If the pre-submit checks have left under 10 s of that budget, it queues nothing and exits 3.
 5. Checks that the result's `bodySha256` matches the file, and that the PR's head is the pushed sha. A push that landed mid-job fails loudly.
 
-Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire — or it's busy: the runner drains one job at a time, so an `open-pr` queued behind a running `sim` job (up to 10 min, IOS-CHECK.md) waits it out and can read as unreachable. Rerun after the devcheck. The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
+Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire. A running `sim` job no longer delays it: `open-pr` runs in the fast lane (_The runner_ → _Lanes_). The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
 
 ```sh
 cd <Mac worktree> && gh pr create --title "…" --body-file localNotes/pr-<branch>.md
@@ -206,7 +207,7 @@ Some entries never get a result:
 
 - A bad name or a dotfile is parked in `state/rejected/`.
 - An id whose results dir exists is logged `DUPLICATE` and doesn't run.
-- A held lock leaves the inbox for the next run.
+- A held lock leaves the inbox for the next run, and so does an entry for the other lane.
 - A symlinked or moved `.hostjobs`, `inbox` or `results` stops the runner with exit 1.
 
 ## The clip job
@@ -223,7 +224,7 @@ Ctrl+V in Claude Code
   xclip … -t image/png -o ──▶ prints the kept PNG once
 ```
 
-**The shim answers exactly those two argvs.** Every other call exits 1 with no output and no job: text reads (`-t text/plain`, a bare `-o`, the primary selection), copy (stdin), the bmp fallback. Text never crosses, and nothing passes through to the real xclip. TARGETS waits at most **15 s** for the result (`CLIP_WAIT_MS`), then withdraws the job like `open-pr` does, so a Ctrl+V with the Mac asleep costs 15 s and pastes nothing. If the Mac already took the job, it waits up to 17 s more (the Mac's read is capped at 10 s, its banner at 5 s), so a late image is still collected rather than left in the shared folder. Each TARGETS also sweeps: an uncollected `clip.png` older than 30 s, and a clip job's result dir or withdrawn file older than an hour. A result dir with a `progress.json` younger than 30 s and no `result.json` means the runner is draining a long job (a `sim` run, up to 10 min); TARGETS then usually fails at once and queues nothing. A sim op that runs longer than 30 s between heartbeats (a boot, a build) slips past that check, and the paste then waits out the 15 s. Each call logs one line to `~/.cache/xclip-shim/log` (ids, outcomes, sizes; never content). Cmd+V in iTerm is a bracketed paste through tmux and never reaches xclip, so pasting text is unchanged. A Ctrl+V with only text on the clipboard costs one `NO_IMAGE` job and pastes nothing.
+**The shim answers exactly those two argvs.** Every other call exits 1 with no output and no job: text reads (`-t text/plain`, a bare `-o`, the primary selection), copy (stdin), the bmp fallback. Text never crosses, and nothing passes through to the real xclip. TARGETS waits at most **15 s** for the result (`CLIP_WAIT_MS`), then withdraws the job like `open-pr` does, so a Ctrl+V with the Mac asleep costs 15 s and pastes nothing. If the Mac already took the job, it waits up to 17 s more (the Mac's read is capped at 10 s, its banner at 5 s), so a late image is still collected rather than left in the shared folder. Each TARGETS also sweeps: an uncollected `clip.png` older than 30 s, and a clip job's result dir or withdrawn file older than an hour. A running `sim` job doesn't hold a paste up: clips run in the fast lane (_The runner_ → _Lanes_), whose lock also serialises them, so the per-copy and per-minute caps can't race. Each call logs one line to `~/.cache/xclip-shim/log` (ids, outcomes, sizes; never content). Cmd+V in iTerm is a bracketed paste through tmux and never reaches xclip, so pasting text is unchanged. A Ctrl+V with only text on the clipboard costs one `NO_IMAGE` job and pastes nothing.
 
 **The Mac side, `jobs/clip.sh`.** `params` must be `{}` and `expiresInMin` at most 2 (`BAD_PARAM`). The gates are checked in order, each before any pasteboard data is read:
 
@@ -246,7 +247,7 @@ The read is JXA fed to `osascript -l JavaScript -` on stdin from a constant, cap
 `tools/mailroom/runner.sh` sources `jobs/*.sh`. It uses bash 3.2, `set -euo pipefail` and argv arrays, with no `eval` and no `sh -c`. On each run it does six things:
 
 1. **Pins the shared folder.** It refuses a symlinked `.hostjobs`, `inbox` or `results`, and refuses a `.hostjobs` whose real path isn't the one the plist passed. That catches a swap between the check and the resolve. It then works from a cwd whose `pwd -P` it has verified, so swapping a path afterwards changes nothing.
-2. **Takes a lock.** `state/lock/` is taken over when it's older than 15 min. A run handles at most 5 entries, and launchd re-fires while the inbox isn't empty.
+2. **Takes its lane's lock** (_Lanes_). A run handles at most 5 entries of its own lane, and launchd re-fires while the inbox isn't empty.
 3. **Takes each entry out of the shared folder, then makes a private copy.** It `mv`s the entry to `state/work/`. That file can still be the container's inode, through a hard link or a handle opened before the move. So it refuses symlinks, non-regular files and any file with a **link count above 1**. It then copies the content into a fresh file it creates itself (`head -c`, noclobber) and deletes the moved one. **Every later read uses that copy only.** A re-sent id runs nothing.
 4. **Validates fully before any network call.** It checks size, then exactly one JSON value, then the envelope, then the job's own params.
 5. **Runs the job.** `sim`: IOS-CHECK.md. `open-pr` makes these calls, in this order:
@@ -271,7 +272,7 @@ The read is JXA fed to `osascript -l JavaScript -` on stdin from a constant, cap
 | Wrong repo, base or head                                  | Repo and base are constants. Deploy branches are refused. The head sha and the author are verified.                                                                                                                                                                                                                               |
 | Symlink or swap games on shared paths                     | Real-path pin, pinned cwd plus `pwd -P`, move-out before parse, and results written with `mkdir` plus noclobber.                                                                                                                                                                                                                  |
 | Replay, stale jobs                                        | Unique ids, `DUPLICATE`, expiry, the head-sha check (a branch that moved is refused), and the CLI's withdraw.                                                                                                                                                                                                                     |
-| DoS                                                       | Caps of 72 KiB, 5 per run and 30 s per call, plus the lock and ThrottleInterval 10 s.                                                                                                                                                                                                                                             |
+| DoS                                                       | Caps of 72 KiB, 5 per run per lane and 30 s per call, plus a lock per lane and ThrottleInterval 10 s (slow) / 2 s (fast).                                                                                                                                                                                                         |
 | Escalation                                                | A user LaunchAgent with no sudo. Egress goes only to api.github.com.                                                                                                                                                                                                                                                              |
 | The `clip` job: harvesting clipboard images               | Images only: no text data is ever read, a copy that also carries text is refused (`MIXED_TEXT`: no picture of an Excel range), and the shim refuses every text argv. A terminal must be frontmost, each copy serves 3 times at most, 6 serves a minute, a 2-min job life, and a log line plus a banner per serve. _The clip job_. |
 | The `sim` job (dev test user's password, driving the sim) | Keychain-only password, typed only on dev's Cognito page, never read back; allowlisted ops; no network from the job. IOS-CHECK.md → _Security_.                                                                                                                                                                                   |
@@ -281,7 +282,7 @@ Residual risks:
 - The `clip` job lets the container read the clipboard's image on request, by design. Bounded by the gates above, but a compromised container can still take the image currently on the clipboard while a terminal is in front, up to 3 times. The banner shows each serve.
 - A credential with the user's identity sits in the Mac Keychain. That's the same posture as the Raycast prod token.
 - The token can also comment on or review PRs opened by others. None exist on this repo.
-- Noclobber in bash still writes through a pre-planted symlink to an existing _non-regular_ file. A FIFO planted into the fresh result dir in the instant between the pre-check and the write could hang the runner. That's DoS only: kill the stuck run. The narrow race carries no data.
+- Noclobber in bash still writes through a pre-planted symlink to an existing _non-regular_ file. A FIFO planted into the fresh result dir in the instant between the pre-check and the write could hang the runner. That's DoS only: kill the stuck run. The narrow race carries no data. The lane peek reads the shared file too, but capped at 3 s, so a FIFO swapped in there costs one drain 3 s.
 - The trust in `install.sh` rests on the one-line fetch above. A compromised container could hand over a different line, and the local copy of this doc is writable from the container too. So check the line against [this doc on github.com at `main`](https://github.com/radatta/aperture/blob/main/docs/ops/MAILROOM.md#install-update-remove).
 - Before its own merge, the mailroom's trial installs a bot-pushed commit (_Install_ → before a merge). That's one install, gated by reading the code at that commit on github.com and by the `[y/N]` prompt. It's superseded by the `main` install at merge.
 
@@ -291,7 +292,7 @@ The trial runs at dev test with the real install. A Claude session on the Mac do
 
 1. **Review:** read `tools/mailroom/` at the branch's sha on github.com: `install.sh`, `runner.sh`, `jobs/`, `run-fixtures.sh` and `testdata/`.
 2. **Fixtures, from GitHub, outside the mount.** Fetch the tarball at that sha with the mailroom token (Contents: read) into a fresh Mac temp dir, then run `/bin/bash tools/mailroom/run-fixtures.sh` there. On Darwin it pins `/bin/bash` 3.2 and the system `PATH`, as launchd would. Want `0 failed`. The trial runbook has the exact line.
-3. **Install:** the branch's commit, with the `--ref` form under _Install_. Answer `y` only if the diff matches what step 1 read. A fresh install shows the files in full (`diff -ruN`) and the rendered plist. `launchctl print … | grep -A8 'event triggers'` should show the label and the inbox path, with no error.
+3. **Install:** the branch's commit, with the `--ref` form under _Install_. Answer `y` only if the diff matches what step 1 read. A fresh install shows the files in full (`diff -ruN`) and the rendered plist. `launchctl print … | grep -A8 'event triggers'`, for each of the two labels, should show the label and the inbox path, with no error.
 4. **Probe:** the container runs `pnpm mailroom probe`. Want `probe ok`, a latency, and the token expiry.
    - No result in time: re-install with `--mode poll` and re-probe. That's a logged design change, not a kill.
    - `TOKEN_MISSING`: run `security find-generic-password -s aperture-mailroom-gh -w >/dev/null` once from Terminal, click Always Allow, and re-probe.
@@ -318,6 +319,16 @@ The rest of the run:
 - Result files are written `0600`/`0700` (the runner's `umask 077`). The container reads them through the share as the same user.
 
 Findings are in the worktree's `localNotes/trial/findings.md`, archived at Cleanup.
+
+### Lanes
+
+launchd runs one process per label: a second start of a running label is a no-op. So one agent can't serve a clip while its own process is inside a 10-minute sim. Two agents watch the same inbox instead, each running the installed `runner.sh <hostjobs> <state> slow|fast`:
+
+- **slow** (`dev.rahuldatta.aperture.mailroom`): the jobs in `SLOW_JOBS`, today `sim`, so the Simulator never gets two at once. Lock `state/lock/`, taken over when older than 15 min; the sim job touches it on every op, so a long run never reads as stale.
+- **fast** (`…mailroom.fast`, ThrottleInterval 2 s, so a Ctrl+V retry doesn't wait 10 s): everything else, `open-pr` (and its probe), `clip`, and anything unparseable, so junk never waits behind a sim. Lock `state/lock-fast/`, taken over when older than 5 min: every fast job is capped well under that.
+- **No lane argument** (the bench, a hand run) takes both locks, as one drain did before.
+
+The lane of an entry is known only from its `job` field. Each drain **peeks** the shared file for it (one `jq`, capped at 3 s, so a FIFO swapped in under the `-f` check costs that drain 3 s, never a hang; a link or non-file counts as fast), and leaves another lane's entry in the inbox, uncounted. The peek is only a hint: after the move and private copy, the snapshot's `job` decides, and one whose lane changed meanwhile (the container rewriting its own job) is `rejected BAD_FILE`. A `sim` therefore only ever runs in a drain that holds `state/lock/`.
 
 ## Tests
 
@@ -347,15 +358,16 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
   - the five fixed calls;
   - no `gh`, `git`, `eval` or `sh -c`;
   - that `install.sh` reads only GitHub, at `$ref`.
+- **Lanes** have their own cases (`lane: "slow" | "fast"`, the runner's third argument; `locks` checks which lock dirs a run leaves): each lane leaves the other's jobs and the fast lane takes junk, a held or stale lock per lane (and the 5- vs 15-minute rules at 6 minutes), and the per-lane cap counting only a lane's own entries. A real-concurrency block after the shards runs a slow drain inside a 20 s sim op, then a second slow drain (exits, the next sim stays queued) and a fast drain beside it (the clip is served before the sim's result).
 - **`job.test.ts`** runs the container's `validateJob` over the same JSONL cases (the `ts` field), so the two fast passes can't drift.
 - **`submit.test.ts` and `open-pr.test.ts`** cover the file drop, withdraw, unreachable, late pickup, a body-hash mismatch, the token and version warnings, the probe, and the iPhone-checks banner.
-- **The `clip` job** has its own cases (`kind: "clip"`, base `clipBase`): `osascript` is an exported-function stub answering from the tape, and a JXA read that answers 0 writes a PNG (or, on cue, a GIF or a file one byte over the cap) to its path argv. A `clip-state=` setup seeds the Mac-private serve counts, and `clipState` checks them afterwards. `runner-fixtures.test.ts` pins the gates' constants, the three pasteboard calls, the two `osascript` lines and no network. `clip.test.ts` covers `clip-probe`, and `xclip-shim.test.ts` runs the real `tools/coi/xclip` against a temp `.hostjobs`, with the test playing the Mac.
+- **The `clip` job** has its own cases (`kind: "clip"`, base `clipBase`): `osascript` is an exported-function stub answering from the tape, and a JXA read that answers 0 writes a PNG (or, on cue, a GIF or a file one byte over the cap) to its path argv. A `clip-state=` setup seeds the Mac-private serve counts, and `clipState` checks them afterwards. `runner-fixtures.test.ts` pins the gates' constants, the three pasteboard calls, the two `osascript` lines and no network. `clip.test.ts` covers `clip-probe`, and `xclip-shim.test.ts` runs the real `tools/coi/xclip` against a temp `.hostjobs`, with the test playing the Mac. It also pins the timing headroom: the shim's grace covers the Mac's 10 s read + 5 s banner + 2 s, `clip.ts` mirrors the shim's caps, a Ctrl+V never hangs past 35 s, and the shim has no busy check. Its give-up test reads the shim's own elapsed time from its log, not the test's clock: on a loaded CI VM the two disagreed by about 90 ms (F70).
 - **The `sim` job** has its own cases in the same JSONL (`kind: "sim"`, base `simBase`). `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` are exported-function stubs answering from a per-case **tape** (`{m: argv substring, rc, n: uses, out}`, first match wins, defaults on line 2); short `sleep`s return at once. Each case asserts the result, ordered tool calls that must happen and calls that must not, how often the test user's password was read and typed (and never on argv), artifact files, and that the password reaches no log or result. `sim.test.ts` covers pickup, withdraw, late pickup, the heartbeat and result mapping; `runner-fixtures.test.ts` pins the sim job's constants and its no-network, tools-by-name rules.
 
 ## Adding a job
 
 1. Add one file `jobs/<name>.sh` (the installer and the CLI hash `jobs/*.sh` in name order, and a helper file's place in that order can differ by locale), defining `validate_<name> W` (prints a reason, or nothing) and `run_<name> W PREFIX RESULT_DIR` (prints `STATUS REASON EXTRA_JSON`; artifacts go under `RESULT_DIR`, written as in _The runner_ step 6).
-2. Add the name to `JOBS` in `runner.sh`, any new `error` reasons its validator returns to `status_of` (a run's own status passes through as printed), and its cases to `gen-jobs.py`.
+2. Add the name to `JOBS` in `runner.sh` (and to `SLOW_JOBS` if it drives the Simulator or runs for minutes), any new `error` reasons its validator returns to `status_of` (a run's own status passes through as printed), and its cases to `gen-jobs.py`.
 3. On the container side, mirror the validator and wait for the result: `open-pr.ts` (one short wait) or `sim.ts` (pickup, then a heartbeat) are the two patterns.
 
 A second credential follows the same Keychain-only rule (the `sim` job's test-user password: IOS-CHECK.md).

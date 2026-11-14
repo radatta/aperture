@@ -16,6 +16,7 @@ export interface Case {
   file?: string;
   setup?: string;
   kind?: 'sim' | 'clip';
+  lane?: 'slow' | 'fast'; // runner.sh's third argument; none = both lanes
   ts?: string | null;
 }
 

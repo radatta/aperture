@@ -16,7 +16,6 @@ HJ="${XCLIP_SHIM_HOSTJOBS:-/workspace/.hostjobs}"
 WAIT_MS="${XCLIP_SHIM_WAIT_MS:-15000}"
 GRACE_MS="${XCLIP_SHIM_GRACE_MS:-17000}" # once the Mac took the job: its read (≤ 10 s) + banner (≤ 5 s), jobs/clip.sh
 KEEP_S=10
-BUSY_S=30 # a job whose heartbeat is younger than this, with no result yet, holds the runner (it drains one at a time)
 MAX_BYTES=16777216
 CACHE="${XCLIP_SHIM_CACHE:-${XDG_RUNTIME_DIR:-/tmp}/xclip-shim-$(id -u)}"
 LOG="${XCLIP_SHIM_LOG:-$HOME/.cache/xclip-shim/log}"
@@ -54,13 +53,7 @@ targets() {
     if [ -L "$d" ] || [ ! -d "$d" ]; then no "no mailroom: $d is missing or a link"; fi
   done
   sweep
-  # The runner is busy with a long job (a sim run, up to 10 min): don't queue a paste behind it.
-  for p in "$HJ"/results/*/progress.json; do
-    [ -f "$p" ] || continue
-    if [ ! -e "$(dirname "$p")/result.json" ] && [ "$(age_s "$p")" -lt "$BUSY_S" ]; then
-      no "busy: $(basename "$(dirname "$p")") is running"
-    fi
-  done
+  # No busy check: a sim run holds only the Mac's slow lane; clips run in the fast lane meanwhile (MAILROOM.md → Lanes).
   id="$(date -u +%Y%m%dT%H%M%SZ)-clip-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$id" =~ ^[0-9]{8}T[0-9]{6}Z-clip-[a-z0-9]{4}$ ]] || no "could not make a job id"
   job="$(jq -cn --arg id "$id" '{v: 1, id: $id, job: "clip", submittedAt: (now | floor | todate), expiresInMin: 1, params: {}}')"
@@ -76,7 +69,7 @@ targets() {
       fi
       # The Mac took it: wait out its read, so the answer is collected (and its clip.png deleted) rather than left.
       if [ -z "$took" ]; then took=1; cap=$((WAIT_MS + GRACE_MS)); continue; fi
-      no "$id no answer in $((cap / 1000)) s though the Mac took it"
+      no "$id no answer in $(($(ms) - t0)) ms though the Mac took it"
     fi
     sleep 0.1
   done

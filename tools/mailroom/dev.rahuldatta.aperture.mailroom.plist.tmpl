@@ -1,20 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Rendered by tools/mailroom/install.sh into ~/Library/LaunchAgents/. The @…@ fields are absolute paths. -->
+<!-- Rendered twice by tools/mailroom/install.sh into ~/Library/LaunchAgents/, once per lane (slow, fast). The path
+     @…@ fields are absolute; @LABEL@, @LANE@ and @THROTTLE@ are the lane's. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.rahuldatta.aperture.mailroom</string>
+  <string>@LABEL@</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
     <string>@RUNNER@</string>
     <string>@HOSTJOBS@</string>
     <string>@STATE@</string>
+    <string>@LANE@</string>
   </array>
 @TRIGGER@
   <key>ThrottleInterval</key>
-  <integer>10</integer>
+  <integer>@THROTTLE@</integer>
   <key>RunAtLoad</key>
   <false/>
   <key>LimitLoadToSessionType</key>

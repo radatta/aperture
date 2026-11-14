@@ -855,6 +855,36 @@ crej('clip: params that are not an object are BAD_PARAM', 'BAD_PARAM', patch={'p
 c('clip: an expired paste is EXPIRED, read nothing', kind='clip', patch={'submittedAt': 'now'}, submittedAgoMin=2, ts='EXPIRED',
   expect={'status': 'expired', 'reason': 'EXPIRED'}, simExcludes=['osascript'])
 
+
+# --- lanes (runner.sh LANE): the slow lane takes only SLOW_JOBS (sim), the fast lane everything else ---
+# `lane` is the runner's third argument; no lane = both locks, as every case above. `locks` = the lock dirs left after.
+SIMLEFT = dict(noResult=True, inboxLeft=1, simExcludes=NOSIM)
+sc('lanes: the fast lane leaves a sim job in the inbox', lane='fast', **SIMLEFT)
+cc_('lanes: the slow lane leaves a clip job in the inbox', lane='slow', noResult=True, inboxLeft=1, simExcludes=['osascript'])
+c('lanes: the slow lane leaves an open-pr job in the inbox', lane='slow', noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves a bad file name for the fast lane', lane='slow', file='notes.txt', noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves a dotfile for the fast lane', lane='slow', file='.DS_Store', noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves a FIFO unread', lane='slow', setup='fifo', noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves non-JSON', lane='slow', raw='{not json', noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves an unknown job', lane='slow', patch={'job': 'merge-pr'}, noResult=True, inboxLeft=1, calls=[])
+c('lanes: the slow lane leaves an expired clip', kind='clip', lane='slow', submittedAgoMin=2, noResult=True, inboxLeft=1, simExcludes=['osascript'])
+c('lanes: the fast lane parks a bad file name (junk never waits behind a sim)', lane='fast', file='notes.txt', noResult=True, calls=[])
+c('lanes: the fast lane answers an unknown job', lane='fast', patch={'job': 'merge-pr'}, expect={'status': 'rejected', 'reason': 'UNKNOWN_JOB'}, calls=[])
+c('lanes: the fast lane answers non-JSON', lane='fast', raw='{not json', expect={'status': 'rejected', 'reason': 'BAD_JSON'}, calls=[])
+c('lanes: the fast lane answers a FIFO without reading it', lane='fast', setup='fifo', expect={'status': 'rejected', 'reason': 'BAD_FILE'}, calls=[])
+cc_('lanes: a clip is served while the slow lock is held', lane='fast', setup='lock', tape=[RD(0, source='png', bytes=21)], expect=SERVED, locks=['lock'])
+c('lanes: an open-pr opens while the slow lock is held', lane='fast', setup='lock', expect={'status': 'opened'}, calls=ALL, locks=['lock'])
+sc('lanes: a held slow lock leaves the next sim queued', lane='slow', setup='lock', locks=['lock'], **SIMLEFT)
+spass('lanes: the slow lane takes a stale slow lock', lane='slow', setup='stale-lock', locks=[])
+spass('lanes: the slow lane ignores a held fast lock', lane='slow', setup='lock-fast', locks=['lock-fast'])
+c('lanes: the fast lane takes a stale fast lock', lane='fast', setup='stale-lock-fast', expect={'status': 'opened'}, calls=ALL, locks=[])
+c('lanes: a held fast lock leaves the job queued', lane='fast', setup='lock-fast', noResult=True, inboxLeft=1, calls=[], locks=['lock-fast'])
+c('lanes: a held fast lock stops a both-lanes drain too', setup='lock-fast', noResult=True, inboxLeft=1, calls=[], locks=['lock-fast'])
+c('lanes: a 6-minute-old fast lock is stale (5-minute rule)', lane='fast', setup='aged-lock-fast', expect={'status': 'opened'}, calls=ALL, locks=[])
+sc('lanes: a 6-minute-old slow lock is not (15-minute rule: a sim touches it per op)', lane='slow', setup='aged-lock', locks=['lock'], **SIMLEFT)
+cc_('lanes: at most 5 per drain, counting only the lane\'s own (6 clips + 2 sims → 5 answered, 3 left)', lane='fast', setup='mixed',
+    tape=[RD(0, source='png', bytes=21)], inboxLeft=3, simExcludes=NOSIM)
+
 with open(out, 'w') as f:
     f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase}) + '\n')
     f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')

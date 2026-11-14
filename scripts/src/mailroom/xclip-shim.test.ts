@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CLIP_GRACE_MS, CLIP_WAIT_MS } from './clip.ts';
 import { validateJob } from './job.ts';
 
 const SHIM = fileURLToPath(new URL('../../../tools/coi/xclip', import.meta.url));
@@ -171,7 +172,13 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     rmSync(join(hj, 'inbox', `${id}.json`));
     const r = await run;
     expect(r.code).toBe(1);
-    expect(r.ms).toBeGreaterThanOrEqual(1200); // the grace ran
+    // The shim's own clock, not this process's: on a loaded CI VM the two disagreed by ~90 ms (F70). The line also
+    // proves the grace path ran rather than the withdraw.
+    const m = /no answer in (\d+) ms though the Mac took it/.exec(
+      readFileSync(join(T, 'log'), 'utf8'),
+    );
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(500 + 700);
     expect(readdirSync(join(hj, 'staging')).filter((f) => f.includes(id))).toEqual([]);
   });
 
@@ -218,16 +225,9 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     expect((await xclip(IMAGE)).code).toBe(1);
   });
 
-  it('a busy runner (a fresh heartbeat, no result) fails at once and queues nothing; a stale one does not count', async () => {
+  it('a running sim job (a fresh heartbeat, no result) no longer stops a paste: the clip is queued and served', async () => {
     mkdirSync(join(hj, 'results', 'sim-run'));
-    const hb = join(hj, 'results', 'sim-run', 'progress.json');
-    writeFileSync(hb, '{}');
-    const busy = await xclip(TARGETS);
-    expect(busy.code).toBe(1);
-    expect(busy.ms).toBeLessThan(5000); // well inside the 10 s wait: it never queued
-    expect(inbox()).toEqual([]);
-    const old = Date.now() / 1000 - 120;
-    utimesSync(hb, old, old);
+    writeFileSync(join(hj, 'results', 'sim-run', 'progress.json'), '{}');
     const run = xclip(TARGETS);
     await answer({ status: 'served', reason: null });
     expect((await run).code).toBe(0);
@@ -264,5 +264,25 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     const r = await xclip(TARGETS);
     expect(r.code).toBe(1);
     expect(inbox()).toEqual([]);
+  });
+});
+
+// F51: the shim's caps must cover the Mac's worst case for a clip it took (read ≤ 10 s + banner ≤ 5 s, jobs/clip.sh),
+// and the probe's must match the shim's. Mailroom v2 rewrites these files; this keeps the headroom from eroding.
+describe('clip timing headroom', () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  it('wait + grace cover the Mac read and banner, and the probe matches the shim', () => {
+    const shim = read('../../../tools/coi/xclip');
+    const mac = read('../../../tools/mailroom/jobs/clip.sh');
+    const num = (re: RegExp, src: string) => Number(re.exec(src)?.[1] ?? NaN);
+    const wait = num(/^WAIT_MS="\$\{XCLIP_SHIM_WAIT_MS:-(\d+)\}"/m, shim);
+    const grace = num(/^GRACE_MS="\$\{XCLIP_SHIM_GRACE_MS:-(\d+)\}"/m, shim);
+    const readCap = num(/clip_cap (\d+) osascript -l JavaScript/, mac);
+    const bannerCap = num(/clip_cap (\d+) osascript -e "display notification/, mac);
+    expect([wait, grace, readCap, bannerCap].every(Number.isFinite)).toBe(true);
+    expect(grace).toBeGreaterThanOrEqual((readCap + bannerCap) * 1000 + 2000);
+    expect(wait + grace).toBeLessThanOrEqual(35_000); // a Ctrl+V never hangs longer
+    expect([CLIP_WAIT_MS, CLIP_GRACE_MS]).toEqual([wait, grace]);
+    expect(shim).not.toMatch(/progress\.json|BUSY_S/); // a sim no longer blocks a paste (F50)
   });
 });
