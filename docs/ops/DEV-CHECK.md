@@ -209,7 +209,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 ## Throttles (429)
 
-Home's cold burst is 7–10 `/api` calls at once, under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
+Home's cold burst is 9–16 `/api` calls (2026-11 runs), under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
 _Dev deploy blast radius_ → Compute), with room for the harness's own calls. The app has had no client-side cap since
 2026-11: the cap of 8 (`inflight-cap`) patched the account quota of 10, and the quota is 1,000 now. (Before the cap, a
 dated _Known 429s_ rule here let a run count as green with them.) A 429 means
@@ -217,7 +217,7 @@ Lambda never started the function, so that attempt was never tested — the app'
 have recovered the call, but the method isn't proven by this run. Chromium logs every 429 as a console error, retried
 or not, and the report's _Throttled (429)_ section names each (`/api/<method>`), which Chromium's line doesn't. Treat
 one as a bug — a refetch storm, a burst wider than the reservation, the harness bursting on its own — never as weather:
-every scenario's closing `noConsoleErrors` fails on any real 429 the run has seen so far, naming the method. It reads
+every feature scenario's closing `noConsoleErrors` (smoke's too) fails on any real 429 the run has seen so far, naming the method. It reads
 the responses themselves (`ctx.throttled()`), so it also catches a 429 inside an injected-failure window, whose console
 line is dropped. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's

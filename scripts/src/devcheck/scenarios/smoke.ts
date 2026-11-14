@@ -1,6 +1,6 @@
 // Smoke (~2 min): the signed-in app renders its main pages with no console errors, and the API and MCP both
 // answer a read as the test user. Writes nothing.
-import type { Scenario } from '../scenario';
+import { noConsoleErrors, type Scenario } from '../scenario';
 
 export const smoke: Scenario = {
   id: 'smoke',
@@ -74,14 +74,6 @@ export const smoke: Scenario = {
         ctx.log(`mcp: ${tools.length} tools, backlog ${viaMcp.length} — same as the API`);
       },
     },
-    {
-      id: 'no-console-errors',
-      entry: 'ui',
-      title: 'No console errors on the way',
-      async run(ctx) {
-        const errors = ctx.consoleErrors();
-        if (errors.length) throw new Error(`${errors.length} console error(s): ${errors[0]}`);
-      },
-    },
+    noConsoleErrors,
   ],
 };

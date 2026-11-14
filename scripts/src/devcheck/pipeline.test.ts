@@ -1577,14 +1577,31 @@ describe('runPipeline', () => {
         const i = await ctx.intercept('getDay');
         await x.call('getDay'); // injected: never counts
         x.respond('/api/listCategories', 429); // real, while the console's load lines are dropped
+        x.consoleError('Failed to load resource: the server responded with a status of 429 ()');
         await i.release();
       },
       (_, ctx) => noConsoleErrors.run(ctx),
     )(w);
     const r = await runPipeline(deps(w, [sc]));
-    expect(r.consoleErrors).toEqual([]);
-    expect(r.steps[1]).toMatchObject({ status: 'fail', error: 'throttled: /api/listCategories' });
+    expect(r.consoleErrors).toEqual([]); // the console line went with the window…
+    expect(r.steps[1]).toMatchObject({ status: 'fail', error: 'throttled: /api/listCategories' }); // …the 429 didn't
     expect(r.codes).toEqual(['STEP_FAILED']);
+  });
+
+  it('noConsoleErrors names both a console error and a throttle when there are both', async () => {
+    const w = world();
+    const sc = scenario(
+      async (x) => {
+        x.respond('/api/getDay', 429);
+        x.consoleError('TypeError: x is undefined');
+      },
+      (_, ctx) => noConsoleErrors.run(ctx),
+    )(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.steps[1]).toMatchObject({
+      status: 'fail',
+      error: 'console errors: TypeError: x is undefined — throttled: /api/getDay',
+    });
   });
 
   it('noConsoleErrors passes when the only 429 was injected', async () => {

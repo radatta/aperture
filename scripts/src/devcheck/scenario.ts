@@ -132,7 +132,7 @@ export const needsYouReason = (err: unknown): string | null =>
 // (429)). Its own step, proving no row, so either fails it without unproving the feature's rows.
 export const noConsoleErrors: Step = {
   id: 'no-console-errors',
-  title: 'No console errors on the way',
+  title: 'No console errors or throttles on the way',
   entry: 'ui',
   async run(ctx) {
     const errors = ctx.consoleErrors();
