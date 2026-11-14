@@ -49,6 +49,7 @@ export type Lock = {
   expiresAt: number | null;
   asOf: number | null; // cache time
   failed: boolean; // the last refresh failed
+  bad?: string | null; // the cache or its holder is unreadable: the web tower says so, never "free"
 };
 
 export type Gauges = {

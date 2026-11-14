@@ -170,6 +170,24 @@ export function build(a: Args) {
     // not a checkout
   }
   const macHist: { t: number; usedMiB: number; totalMiB: number }[] = [];
+  // Is the Mac installer on origin/main yet (the install line fetches it from there)? Fixtures: yes. Re-checked
+  // every 10 min with a local git read (the fetch that moves origin/main is the sessions'; no network here).
+  let ready: { at: number; ok: boolean } | null = null;
+  const installReady = (now: number) => {
+    if (fx) return true;
+    if (ready && now - ready.at < 600000) return ready.ok;
+    let ok = false;
+    try {
+      execFileSync('git', ['-C', REPO, 'cat-file', '-e', 'origin/main:tools/macstats/install.sh'], {
+        stdio: 'ignore',
+      });
+      ok = true;
+    } catch {
+      // not merged yet
+    }
+    ready = { at: now, ok };
+    return ok;
+  };
 
   // GitHub, in the background: never awaited by a request, never two of one kind at once.
   // The minutes backfill (up to 100 job reads) runs detached: it never delays the PR and run reads.
@@ -212,6 +230,7 @@ export function build(a: Args) {
       tests: fx ? 0 : liveTests(paths.boardDir),
       testCap: testCap(paths.limits),
       macInstall: MAC_INSTALL,
+      macInstallReady: installReady(now),
       midnight: localMidnight(now),
     };
     const v = derive(inputs);

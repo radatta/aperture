@@ -6,34 +6,38 @@
     <meta name="color-scheme" content="light dark" />
     <title>tower</title>
     <style>
+      /* Read at a glance from arm's length on a 14" screen (1512 px) or an iTerm pane: big type, one line per
+         item, details on click. Status colours always come with a word. */
       :root {
-        --bg: #fcfcfb;
+        --bg: #f6f6f4;
         --panel: #ffffff;
-        --ink: #0b0b0b;
-        --ink2: #52514e;
-        --line: #e4e3df;
+        --ink: #111110;
+        --ink2: #5c5b57;
+        --line: #e2e1dc;
         --good: #0a7d0a;
         --warn: #8a5a00;
         --bad: #c22f2f;
         --warn-bg: #fff4d6;
         --bad-bg: #fde8e8;
         --good-bg: #e6f6e6;
+        --dim-bg: #efeeea;
         --series: #2a78d6;
         --mark: #b5b3ad;
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #1a1a19;
-          --panel: #222220;
+          --bg: #161615;
+          --panel: #1f1f1d;
           --ink: #f0efec;
-          --ink2: #c3c2b7;
-          --line: #383835;
+          --ink2: #a9a89f;
+          --line: #34342f;
           --good: #4cc94c;
-          --warn: #fab219;
+          --warn: #f2b84b;
           --bad: #ef6b6b;
           --warn-bg: #3a3014;
           --bad-bg: #3d1e1e;
           --good-bg: #1d331d;
+          --dim-bg: #2a2a27;
           --series: #3987e5;
           --mark: #6b6a64;
         }
@@ -46,62 +50,143 @@
         background: var(--bg);
         color: var(--ink);
         font:
-          14px/1.4 -apple-system,
+          17px/1.35 -apple-system,
           BlinkMacSystemFont,
           'Helvetica Neue',
           sans-serif;
       }
+      button {
+        font: inherit;
+        font-size: 14px;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+      a {
+        color: var(--series);
+      }
+
       header {
         display: flex;
-        gap: 12px;
-        align-items: baseline;
-        padding: 10px 16px;
-        border-bottom: 1px solid var(--line);
+        gap: 14px;
+        align-items: center;
+        padding: 10px 18px;
       }
       header h1 {
-        font-size: 16px;
+        font-size: 20px;
         margin: 0;
       }
       header .meta {
         color: var(--ink2);
-        font-size: 12px;
+        font-size: 14px;
       }
       header .spacer {
         flex: 1;
       }
       #banner {
         display: none;
-        padding: 8px 16px;
+        padding: 10px 18px;
         background: var(--bad-bg);
         color: var(--bad);
         font-weight: 600;
       }
+
+      /* the health strip: always above the fold */
+      #health {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        padding: 0 18px 10px;
+      }
+      @media (max-width: 1000px) {
+        #health {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      .tile {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left-width: 5px;
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+        min-width: 0;
+      }
+      .tile.s-warn {
+        border-left-color: var(--warn);
+      }
+      .tile.s-bad {
+        border-left-color: var(--bad);
+      }
+      .tile.s-good {
+        border-left-color: var(--good);
+      }
+      .tile.s-dim {
+        border-left-color: var(--mark);
+      }
+      .tile .label {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--ink2);
+      }
+      .tile.s-warn .sub {
+        color: var(--warn);
+      }
+      .tile.s-bad .sub {
+        color: var(--bad);
+      }
+      .tile .value {
+        font-size: 21px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tile .sub {
+        font-size: 14px;
+        color: var(--ink2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tile .more {
+        display: none;
+        margin-top: 6px;
+        font-size: 14px;
+      }
+      .tile.open .more {
+        display: block;
+      }
+
       main {
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
         gap: 12px;
-        padding: 12px 16px;
+        padding: 0 18px 18px;
       }
       @media (min-width: 1000px) {
         main {
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         }
-        #needs,
-        #now {
-          grid-column: span 1;
+        .wide {
+          grid-column: 1 / -1;
         }
       }
       section {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px 12px;
+        border-radius: 10px;
+        padding: 10px 14px;
         min-width: 0;
       }
       section h2 {
-        font-size: 12px;
-        letter-spacing: 0.06em;
-        margin: 0 0 8px;
+        font-size: 14px;
+        letter-spacing: 0.07em;
+        margin: 0 0 6px;
         color: var(--ink2);
         display: flex;
         gap: 8px;
@@ -114,37 +199,75 @@
         font-weight: 400;
         letter-spacing: 0;
         margin-left: auto;
+        font-size: 13px;
       }
       #needs.has {
         border-color: var(--warn);
+        border-width: 2px;
       }
+
       .row {
         display: flex;
-        gap: 8px;
+        gap: 10px;
         align-items: baseline;
-        padding: 4px 0;
+        padding: 6px 0;
         border-top: 1px solid var(--line);
-        flex-wrap: wrap;
+        cursor: pointer;
+        min-width: 0;
       }
-      .row:first-of-type {
+      .row:first-child {
         border-top: 0;
       }
-      .what {
-        flex: 1 1 260px;
+      .row .text {
+        flex: 1;
         min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .row .meta {
+        color: var(--ink2);
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .row .who {
+        color: var(--ink2);
+        font-size: 15px;
+      }
+      .more {
+        display: none;
+        padding: 2px 0 8px;
+        font-size: 15px;
+        color: var(--ink2);
         overflow-wrap: anywhere;
       }
-      .sub {
-        color: var(--ink2);
-        font-size: 12px;
+      .item.open .row .text {
+        white-space: normal;
+      }
+      .item.open .more {
+        display: block;
+      }
+      .more code {
+        display: block;
+        font:
+          13px ui-monospace,
+          Menlo,
+          monospace;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 8px;
+        margin: 6px 0;
+        white-space: pre-wrap;
+        color: var(--ink);
       }
       .badge {
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 700;
-        padding: 1px 6px;
-        border-radius: 4px;
+        letter-spacing: 0.03em;
+        padding: 2px 7px;
+        border-radius: 5px;
         white-space: nowrap;
-        border: 1px solid currentColor;
       }
       .t-good {
         color: var(--good);
@@ -158,55 +281,74 @@
       .t-dim {
         color: var(--ink2);
       }
-      .b-good {
+      .badge.t-good {
         background: var(--good-bg);
       }
-      .b-warn {
+      .badge.t-warn {
         background: var(--warn-bg);
       }
-      .b-bad {
+      .badge.t-bad {
         background: var(--bad-bg);
       }
-      code {
-        font:
-          12px ui-monospace,
-          Menlo,
-          monospace;
-        background: var(--bg);
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 2px 4px;
-        display: block;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        margin-top: 2px;
+      .badge.t-dim,
+      .badge.t-normal {
+        background: var(--dim-bg);
+        color: var(--ink2);
       }
-      button {
-        font: inherit;
-        font-size: 12px;
-        color: var(--ink);
-        background: var(--bg);
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        padding: 1px 8px;
-        cursor: pointer;
+      .empty {
+        color: var(--ink2);
+        padding: 4px 0;
       }
-      a {
-        color: var(--series);
+      .cant {
+        color: var(--bad);
+        padding: 4px 0;
       }
+      .showall {
+        margin-top: 4px;
+      }
+
       .slots {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 4px;
       }
       .slot {
         border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 6px 8px;
+        border-radius: 8px;
+        padding: 6px 10px;
+        min-width: 0;
       }
       .slot .name {
+        font-size: 13px;
         font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--ink2);
+      }
+      .slot .who,
+      .slot .what {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .slot .what {
+        font-size: 15px;
+        color: var(--ink2);
+      }
+
+      #slipping h2,
+      #sources h2 {
+        cursor: pointer;
+        margin: 0;
+      }
+      #slipping .body,
+      #sources .body {
+        display: none;
+        margin-top: 6px;
+      }
+      #slipping.open .body,
+      #sources.open .body {
+        display: block;
       }
       .kv {
         display: grid;
@@ -216,23 +358,11 @@
       .kv .k {
         color: var(--ink2);
       }
-      .empty {
-        color: var(--ink2);
-        font-style: italic;
-      }
-      #sources {
-        grid-column: 1 / -1;
-      }
-      #sources .row {
-        border: 0;
-        padding: 1px 0;
-        font-size: 12px;
-      }
-      .charts {
+
+      #charts {
         display: none;
-        grid-column: 1 / -1;
       }
-      .charts.on {
+      #charts.on {
         display: block;
       }
       .chart {
@@ -248,7 +378,7 @@
         position: absolute;
         top: 0;
         pointer-events: none;
-        font-size: 12px;
+        font-size: 13px;
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 4px;
@@ -257,7 +387,7 @@
         white-space: nowrap;
       }
       .chart .title {
-        font-size: 12px;
+        font-size: 14px;
         color: var(--ink2);
       }
     </style>
@@ -267,9 +397,11 @@
       <h1>tower</h1>
       <span class="meta" id="meta">loading…</span>
       <span class="spacer"></span>
+      <button id="sources-chip" type="button">sources</button>
       <button id="charts-toggle" type="button">charts</button>
     </header>
     <div id="banner"></div>
+    <div id="health"></div>
     <main>
       <section id="needs">
         <h2>NEEDS YOU <span class="count"></span><span class="age"></span></h2>
@@ -287,20 +419,16 @@
         <h2>DONE TODAY <span class="age"></span></h2>
         <div class="body"></div>
       </section>
-      <section id="health">
-        <h2>HEALTH</h2>
+      <section id="slipping" class="wide">
+        <h2>SLIPPING <span class="count"></span><span class="age">click to show</span></h2>
         <div class="body"></div>
       </section>
-      <section id="slipping">
-        <h2>SLIPPING <span class="count"></span></h2>
-        <div class="body"></div>
-      </section>
-      <section id="charts" class="charts">
+      <section id="charts" class="wide">
         <h2>LOAD <span class="age">container: last 24 h · Mac: since the server started</span></h2>
         <div class="body"></div>
       </section>
-      <section id="sources">
-        <h2>SOURCES</h2>
+      <section id="sources" class="wide">
+        <h2>SOURCES <span class="count"></span><span class="age">click to show</span></h2>
         <div class="body"></div>
       </section>
     </main>

@@ -104,7 +104,7 @@ describe('--once on the fixtures', () => {
       'HOLD (dev: bravo-branch is testing, lock to 06:37)',
     ]);
     expect(v.active.find((r: V) => r.branch === 'hotel-branch').label).toBe('PR (checks running)');
-    expect(v.done.map((d: V) => `${d.number} ${d.deploy}`)).toEqual(['40 deployed']);
+    expect(v.done.map((d: V) => `${d.number} ${d.deploy}`)).toEqual(['40 deployed ✓']);
     expect(v.slipping.map((s: V) => s.kind)).toEqual(['followup', 'parked', 'quiet']);
     expect(v.health.mac.state).toBe('stale');
     expect(v.health.aws.total).toBeCloseTo(0.35);

@@ -20,8 +20,8 @@ export type MacStats = {
     pressure: string;
   };
   swap: { totalMiB: number; usedMiB: number } | null; // null: sysctl's swap line was unreadable
-  load: number[];
-  cpus: number;
+  load: number[] | null; // null: unreadable (never an empty list read as calm)
+  cpus: number | null;
   vm: { pid: number; comm: string; rssMiB: number } | null;
   agentVersion: string | null;
 };
@@ -67,8 +67,11 @@ export function parseMacStats(text: string): MacStats {
       num(r.swap?.totalMiB) !== null && num(r.swap?.usedMiB) !== null
         ? { totalMiB: r.swap.totalMiB, usedMiB: r.swap.usedMiB }
         : null,
-    load: Array.isArray(r.load) ? r.load.map(num).filter((x: number | null) => x !== null) : [],
-    cpus: num(r.cpus) ?? 0,
+    load:
+      Array.isArray(r.load) && r.load.length === 3 && r.load.every((x: unknown) => num(x) !== null)
+        ? (r.load as number[])
+        : null,
+    cpus: num(r.cpus),
     vm:
       vm && num(vm.rssMiB) !== null
         ? {

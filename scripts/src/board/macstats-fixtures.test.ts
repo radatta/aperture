@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   symlinkSync,
   writeFileSync,
@@ -128,6 +129,76 @@ describe('macstats.sh out-dir pin (runs before any macOS tool)', () => {
 
   it('wrong argv is a usage error', () => {
     expect(spawnSync('bash', [AGENT], { encoding: 'utf8' }).status).toBe(2);
+  });
+});
+
+describe('one real tick, macOS tools stubbed', () => {
+  // a copy of the agent whose fixed PATH starts with stub vm_stat / sysctl / ps that print the fixtures
+  function stubbed() {
+    const t = mkdtempSync(join(tmpdir(), 'tick-'));
+    const bin = join(t, 'bin');
+    mkdirSync(bin);
+    const sys = readFileSync(join(FX, 'sysctl.txt'), 'utf8').trimEnd().split('\n');
+    const oids = [
+      'hw.memsize',
+      'hw.ncpu',
+      'vm.loadavg',
+      'vm.swapusage',
+      'kern.memorystatus_vm_pressure_level',
+    ];
+    writeFileSync(join(bin, 'vm_stat'), `#!/bin/bash\ncat '${join(FX, 'vm_stat.txt')}'\n`, {
+      mode: 0o755,
+    });
+    writeFileSync(join(bin, 'ps'), `#!/bin/bash\ncat '${join(FX, 'ps.txt')}'\n`, { mode: 0o755 });
+    writeFileSync(
+      join(bin, 'sysctl'),
+      `#!/bin/bash\ncase "$2" in\n${oids.map((o, i) => `  ${o}) echo '${sys[i]}' ;;`).join('\n')}\n  *) exit 1 ;;\nesac\n`,
+      { mode: 0o755 },
+    );
+    const agent = readFileSync(AGENT, 'utf8').replace(
+      /^export LC_ALL=C PATH=/m,
+      `export LC_ALL=C PATH=${bin}:`,
+    );
+    expect(agent).toContain(`PATH=${bin}:`);
+    writeFileSync(join(t, 'macstats.sh'), agent);
+    mkdirSync(join(t, 'out'));
+    return t;
+  }
+
+  it('writes mac-stats.json, exits 0 with nothing on stderr, and leaves no temp file', () => {
+    const t = stubbed();
+    const r = spawnSync('bash', [join(t, 'macstats.sh'), join(t, 'out'), join(t, 'state')], {
+      encoding: 'utf8',
+    });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(readdirSync(join(t, 'out'))).toEqual(['mac-stats.json']);
+    const j = JSON.parse(readFileSync(join(t, 'out/mac-stats.json'), 'utf8'));
+    expect(j).toMatchObject({ v: 1, mem: { usedMiB: 15360 }, cpus: 12 });
+    expect(readFileSync(join(t, 'state/last'), 'utf8').trim()).toBe('ok');
+    // a second tick logs nothing (one log line per change) and still writes
+    const r2 = spawnSync('bash', [join(t, 'macstats.sh'), join(t, 'out'), join(t, 'state')], {
+      encoding: 'utf8',
+    });
+    expect([r2.status, r2.stdout, r2.stderr]).toEqual([0, '', '']);
+  });
+
+  it('a link to a file at the target is replaced, not written through', () => {
+    const t = stubbed();
+    writeFileSync(join(t, 'victim'), 'keep');
+    symlinkSync(join(t, 'victim'), join(t, 'out/mac-stats.json'));
+    expect(
+      spawnSync('bash', [join(t, 'macstats.sh'), join(t, 'out'), join(t, 'state')]).status,
+    ).toBe(0);
+    expect(readFileSync(join(t, 'victim'), 'utf8')).toBe('keep');
+    expect(JSON.parse(readFileSync(join(t, 'out/mac-stats.json'), 'utf8')).v).toBe(1);
+  });
+
+  it('an unreadable cpu count and load are null, never 0 and []', () => {
+    const d = variant((f) => {
+      f['sysctl.txt'] = f['sysctl.txt']!.replace(/^12$/m, '').replace(/^\{.*\}$/m, '');
+    });
+    expect(render(d)).toMatchObject({ cpus: null, load: null });
   });
 });
 

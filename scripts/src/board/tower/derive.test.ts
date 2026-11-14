@@ -153,6 +153,7 @@ function inputs(
     tests: 1,
     testCap: 4,
     macInstall: 'cd /x && install',
+    macInstallReady: true,
     midnight: Date.parse('2026-11-13T08:00:00Z'),
   };
 }
@@ -161,13 +162,17 @@ const row = (i: Inputs, c: Partial<Parameters<typeof laneRow>[0]> = {}) =>
   laneRow({ branch: 'echo', file: null, queue: null, pr: null, ...c }, i);
 
 describe('laneRow states', () => {
-  it('BUILDING with the phase word and step, or "no status file" in grey', () => {
+  it("BUILDING with the phase word and step, or, with no lane file, dispatch's words quietly", () => {
     expect(row(inputs())).toMatchObject({
       state: 'BUILDING',
-      detail: 'no status file',
-      tone: 'dim',
+      detail: null,
+      tone: 'normal',
       fileAge: null,
     });
+    // no lane file: dispatch's waitingOn, quietly
+    expect(
+      row(inputs(), { queue: queueLane({ waitingOn: 'proof PASS, running A/B' }) }).detail,
+    ).toBe('proof PASS, running A/B');
     const r = row(inputs(), { file: file({ phase: 'review', step: 'round 2 of 3' }) });
     expect(r).toMatchObject({
       state: 'BUILDING',
@@ -438,7 +443,7 @@ describe('derive', () => {
     );
     expect(v.done.map((d) => [d.number, d.deploy, d.tone])).toEqual([
       [2, 'deploy not seen', 'warn'],
-      [1, 'deployed', 'good'],
+      [1, 'deployed ✓', 'good'],
     ]);
   });
 
@@ -540,7 +545,8 @@ describe('round 1: a failed, stale or missing source never reads as good', () =>
       status: 'in_progress',
       conclusion: null,
     });
-    expect(holdReason(p, null, inputs({ runs: [disp] }))).toBe('a dev deploy is running');
+    // no dev lock sha to match: taken as devb's, which holds a PR whose files aren't read
+    expect(holdReason(p, null, inputs({ runs: [disp] }))).toMatch(/^a devb deploy is running/);
   });
   it('failed, stale or unread runs hold as "main deploy state unknown"', () => {
     const i = inputs();
@@ -612,5 +618,91 @@ describe('round 1: a failed, stale or missing source never reads as good', () =>
       state: 'failed',
       detail: 'PR 50: HTTP 403',
     });
+  });
+});
+
+describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks', () => {
+  it("with no lane file, the queue's state in Rahul's words", () => {
+    const st = (state: Lane['state'], o: Partial<Lane> = {}) =>
+      row(inputs(), { queue: queueLane({ state, ...o }) });
+    expect(st('waiting')).toMatchObject({ state: 'WAITING', label: 'WAITING', tone: 'dim' });
+    expect(st('next').label).toBe('NEXT FOR DEV');
+    expect(st('needs-you', { waitingOn: 'MAC_UNREACHABLE; retrying' })).toMatchObject({
+      state: 'NEEDS YOU',
+      tone: 'warn',
+      detail: 'MAC_UNREACHABLE; retrying',
+    });
+    expect(st('ready')).toMatchObject({ state: 'READY', tone: 'good' });
+    expect(st('on-dev', { slot: 'devb' })).toMatchObject({ state: 'ON DEV', label: 'ON devb?' });
+    expect(st('building').state).toBe('BUILDING');
+  });
+  it('parked lanes leave the dev order for one parked line; waiting lanes are not in NOW', () => {
+    const v = derive(
+      inputs({
+        devQueue: [
+          queueLane({ branch: 'axe', state: 'waiting', waitingOn: 'PARKED tonight' }),
+          queueLane({ branch: 'fast', state: 'waiting', waitingOn: 'start' }),
+        ],
+      }),
+    );
+    expect(v.next.queue.map((l) => l.branch)).toEqual(['fast']);
+    expect(v.next.parked).toEqual(['axe']);
+    expect(v.active.map((r) => r.branch)).toEqual([]);
+  });
+  it("a dispatch carrying the dev holder's sha holds; any other is devb's and holds only shape PRs", () => {
+    const disp = (s: string) =>
+      run({
+        name: 'Deploy dev (dispatch)',
+        title: `deploy-dev ${s} k`,
+        status: 'in_progress',
+        conclusion: null,
+      });
+    const p = pr();
+    expect(
+      holdReason(
+        p,
+        null,
+        inputs({ lock: lock('bravo', { sha: sha('a') }), runs: [disp(sha('a'))] }),
+      ),
+    ).toMatch(/^dev: bravo/);
+    expect(
+      holdReason(
+        p,
+        null,
+        inputs({
+          lock: lock(null, { sha: null }),
+          runs: [disp(sha('b'))],
+          files: { [sha('e')]: ['app/x.ts'] },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      holdReason(
+        p,
+        null,
+        inputs({
+          lock: lock(null, { sha: null }),
+          runs: [disp(sha('b'))],
+          files: { [sha('e')]: ['cdk/x.ts'] },
+        }),
+      ),
+    ).toBe("a devb deploy is running and this PR changes devb's shape");
+  });
+  it('an unreadable cache or holder is unknown, never free; a stale lock read marks TESTING with ?', () => {
+    expect(lockRead(lock(null, { bad: 'lock cache unreadable' }), NOW)).toEqual({
+      state: 'unknown',
+      why: 'lock cache unreadable',
+    });
+    expect(lockRead(lock(null, { bad: 'holder unreadable' }), NOW).state).toBe('unknown');
+    expect(row(inputs({ lock: lock('echo', { asOf: NOW - 400000 }) }))).toMatchObject({
+      label: 'TESTING on dev?',
+      detail: expect.stringMatching(/^lock cache stale/),
+    });
+  });
+  it('the gh checks source goes stale when a read is over 5 min old', () => {
+    const i = inputs();
+    i.tower.prs = { list: [pr()], at: NOW - MIN, error: null };
+    i.checks = () => ({ runs: [], at: NOW - 6 * MIN, error: null });
+    expect(sources(i).find((s) => s.name === 'gh checks')!.state).toBe('stale');
   });
 });

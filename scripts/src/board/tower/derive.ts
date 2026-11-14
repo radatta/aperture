@@ -23,7 +23,12 @@ export type State =
   | 'DEPLOYING'
   | 'DONE'
   | 'DEPLOY FAILED'
-  | 'PARKED';
+  | 'PARKED'
+  // no lane file yet: dispatch's queue.json state, in Rahul's words
+  | 'WAITING'
+  | 'NEEDS YOU'
+  | 'READY'
+  | 'ON DEV';
 export type Tone = 'normal' | 'dim' | 'good' | 'warn' | 'bad';
 
 export type LaneRow = {
@@ -81,6 +86,7 @@ export type Health = {
     testCap: number | null;
   } | null;
   mac: MacRead;
+  macReady: boolean; // the installer is on main (else the Mac tile says it installs at merge)
   actions: {
     minutes: number;
     of: number;
@@ -102,13 +108,15 @@ export type View = {
     queue: { slot: Slot; branch: string; state: string; waitingOn: string | null }[];
     merge: LaneRow[];
     rahul: string | null;
+    parked: string[];
   };
   done: {
     number: number;
     title: string;
     branch: string;
     mergedAt: number;
-    deploy: string;
+    deploy: string; // short: `deployed ✓`, `deploying`, `deploy failed`
+    deployDetail: string | null; // the long form, for the tooltip (`by deploy 274, its own superseded`)
     tone: Tone;
     url: string | null;
   }[];
@@ -138,7 +146,8 @@ export type Inputs = {
   aws: Costs;
   tests: number;
   testCap: number | null;
-  macInstall: string; // NEEDS YOU's command when the Mac agent is missing or silent
+  macInstall: string; // NEEDS YOU's command when the Mac agent is missing
+  macInstallReady: boolean; // tools/macstats/install.sh is on origin/main (the install line fetches it from there)
   midnight: number; // local midnight, for DONE TODAY
 };
 
@@ -153,6 +162,7 @@ export const STALE = {
   laneQuiet: 86400,
   minutes: 7200,
 };
+const PARKED = /^PARKED/i; // dispatch's word for a parked lane, at the start of its waitingOn
 const RUN_FRESH_MS = 2 * 3600e3; // a ledger run with no end older than this is an orphan, not in flight
 
 export const liveLock = (l: Lock | null, now: number): l is Lock & { branch: string } =>
@@ -179,6 +189,7 @@ export function ghFresh(
 export type LockRead = { state: 'live' | 'free' | 'unknown'; why: string | null };
 export function lockRead(l: Lock | null, now: number): LockRead {
   if (!l) return { state: 'unknown', why: 'no lock cache' };
+  if (l.bad) return { state: 'unknown', why: l.bad };
   // devlock.sh's rule: a failed refresh matters once the last good read is stale (refreshes there fail now and then)
   if (l.asOf === null || now - l.asOf > STALE.lock * 1000)
     return {
@@ -246,7 +257,9 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
   if (devRun) return `dev: a devcheck is running since ${hhmm(devRun.start!)}`;
   const runs = ghFresh(i.runs, i.now);
   if (runs) return `main deploy state unknown (gh runs ${runs})`;
-  if (dispatching(i)) return 'a dev deploy is running';
+  // a dispatch carrying the dev lock holder's sha is dev's; any other in flight is taken as devb's (below)
+  if (devLock.sha && dispatching(i, devLock.sha)) return 'a dev deploy is running';
+  const otherDispatch = dispatching(i);
 
   // devb only matters when the merge changes devb's shape
   const b = lockRead(i.tower.lockB, i.now);
@@ -258,7 +271,9 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
         ? `devb: ${bLock!.branch} is testing`
         : openRun(i, 'devb')
           ? 'devb: a devcheck is running'
-          : null;
+          : otherDispatch
+            ? 'a devb deploy is running'
+            : null;
   if (bBusy) {
     const f = pr.sha ? i.files(pr.sha) : null;
     if (!f?.files)
@@ -290,7 +305,7 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     hold: string | null = null,
   ): LaneRow => ({ ...base, state, label, detail, tone, since, hold });
 
-  if (file?.phase === 'parked' || /^PARKED/i.test(queue?.waitingOn ?? ''))
+  if (file?.phase === 'parked' || PARKED.test(queue?.waitingOn ?? ''))
     return row(
       'PARKED',
       'PARKED',
@@ -340,14 +355,18 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
 
   for (const slot of ['dev', 'devb'] as const) {
     const lock = slot === 'dev' ? i.tower.lock : i.tower.lockB;
-    if (liveLock(lock, i.now) && lock.branch === branch)
-      return row(
-        'TESTING',
-        `TESTING on ${slot}`,
-        slotDetail(slot, lock, i, file),
-        'warn',
-        file?.phase === 'dev' ? file.phaseSince : null,
-      );
+    if (liveLock(lock, i.now) && lock.branch === branch) {
+      const r = lockRead(lock, i.now);
+      return r.state === 'unknown'
+        ? row('TESTING', `TESTING on ${slot}?`, `lock ${r.why}`, 'warn', null) // the last read said so; it may be over
+        : row(
+            'TESTING',
+            `TESTING on ${slot}`,
+            slotDetail(slot, lock, i, file),
+            'warn',
+            file?.phase === 'dev' ? file.phaseSince : null,
+          );
+    }
   }
 
   if (pr?.state === 'OPEN') {
@@ -394,7 +413,35 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     return row('MERGE ME', 'MERGE ME', null, 'good', pr.createdAt);
   }
 
-  if (!file) return row('BUILDING', 'BUILDING', 'no status file', 'dim', null);
+  // No lane file yet (lanes write them from this PR on): dispatch's words for the lane, quietly.
+  if (!file) {
+    const words = queue?.waitingOn ?? queue?.note ?? null;
+    switch (queue?.state) {
+      case 'waiting':
+      case 'next':
+        return row(
+          'WAITING',
+          queue.state === 'next' ? 'NEXT FOR DEV' : 'WAITING',
+          words,
+          'dim',
+          null,
+        );
+      case 'needs-you':
+        return row('NEEDS YOU', 'NEEDS YOU', words, 'warn', null);
+      case 'ready':
+        return row('READY', 'READY', words, 'good', null);
+      case 'on-dev': // the lock says otherwise (no live lock for it): the queue's claim, marked
+        return row(
+          'ON DEV',
+          `ON ${queue.slot}?`,
+          words ?? 'the queue says on dev; no live lock seen',
+          'warn',
+          null,
+        );
+      default:
+        return row('BUILDING', 'BUILDING', words, 'normal', null);
+    }
+  }
   // a lane file past its merge whose PR is no longer in the PR list (the newest 40): Cleanup clears it
   if ((file.phase === 'merged' || file.phase === 'cleanup') && !pr)
     return row(
@@ -532,7 +579,8 @@ export function derive(i: Inputs): View {
       since: todo.since ? Date.parse(todo.since) || null : null,
       branch: null,
     });
-  if (i.mac.state === 'missing' || i.mac.state === 'silent')
+  // the install line only once the installer is on main (before that it would 404): until then HEALTH says so
+  if ((i.mac.state === 'missing' && i.macInstallReady) || i.mac.state === 'silent')
     needs.push({
       kind: 'source',
       what:
@@ -568,7 +616,11 @@ export function derive(i: Inputs): View {
     };
   });
 
+  // WAITING lanes show in NEXT's dev order, not in NOW
   const nowStates: State[] = [
+    'NEEDS YOU',
+    'READY',
+    'ON DEV',
     'BUILDING',
     'TESTING',
     'PR',
@@ -578,9 +630,13 @@ export function derive(i: Inputs): View {
     'DEPLOY FAILED',
   ];
   const next = {
+    // parked lanes aren't next for dev: they get one muted line instead
     queue: (q?.devQueue ?? [])
-      .filter((l) => l.state === 'next' || l.state === 'waiting')
+      .filter(
+        (l) => (l.state === 'next' || l.state === 'waiting') && !PARKED.test(l.waitingOn ?? ''),
+      )
       .map((l) => ({ slot: l.slot, branch: l.branch, state: l.state, waitingOn: l.waitingOn })),
+    parked: rows.filter((r) => r.state === 'PARKED').map((r) => r.branch),
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
     rahul:
       needs[0]?.what ??
@@ -595,20 +651,28 @@ export function derive(i: Inputs): View {
     .map((p) => {
       const d = deployFor(p.mergeSha, i.runs.value);
       const dep = d?.run;
-      const via = d?.via ? ` (by deploy ${dep!.number ?? ''}, its own superseded)` : '';
-      const [deploy, tone]: [string, Tone] = !dep
-        ? [i.runs.at === null ? 'deploy unknown (no runs read)' : 'deploy not seen', 'warn']
+      const via = d?.via
+        ? `by main deploy ${dep!.number ?? ''}: its own was superseded by a later merge`
+        : dep?.number
+          ? `main deploy ${dep.number}`
+          : null;
+      const r = ghFresh(i.runs, i.now);
+      const [deploy, tone, detail]: [string, Tone, string | null] = !dep
+        ? r
+          ? ['deploy unknown', 'warn', `gh runs ${r}`]
+          : ['deploy not seen', 'warn', 'not in the newest 100 runs']
         : running(dep)
-          ? [`deploying${via}`, 'warn']
+          ? ['deploying', 'warn', via]
           : dep.conclusion === 'success'
-            ? [`deployed${via}`, 'good']
-            : [`deploy ${dep.conclusion ?? 'failed'}${via}`, 'bad'];
+            ? ['deployed ✓', 'good', via]
+            : [`deploy ${dep.conclusion ?? 'failed'}`, 'bad', via];
       return {
         number: p.number,
         title: p.title,
         branch: p.branch,
         mergedAt: p.mergedAt!,
         deploy,
+        deployDetail: detail,
         tone,
         url: dep?.url ?? p.url,
       };
@@ -667,6 +731,7 @@ export function derive(i: Inputs): View {
           }
         : null,
       mac: i.mac,
+      macReady: i.macInstallReady,
       actions: m
         ? {
             minutes: m.minutes,
@@ -766,7 +831,9 @@ export function sources(i: Inputs): SourceRow[] {
           }
         : {
             name: 'gh checks',
-            state: 'ok',
+            state: open.some((p) => i.now - (i.checks(p.sha!)!.at ?? 0) > STALE.checks * 1000)
+              ? 'stale'
+              : 'ok',
             at: Math.min(...open.map((p) => i.checks(p.sha!)!.at ?? 0)),
             detail: `${open.length} open PRs`,
           },

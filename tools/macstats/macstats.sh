@@ -64,12 +64,13 @@ render() {
              pressure: ({"1": "normal", "2": "warn", "4": "critical"}[$level] // "unknown") },
       swap: (if n($st) == null or n($su) == null then null
              else { totalMiB: (n($st) | floor), usedMiB: (n($su) | floor) } end),
-      load: ($load | split(" ") | map(select(. != "") | tonumber? // empty)),
-      cpus: (n($ncpu) // 0),
+      load: ($load | split(" ") | map(select(. != "") | tonumber? // empty) | if length == 3 then . else null end),
+      cpus: n($ncpu),
       vm: (if $vm == "" then null else ($vm | split("\t")) as $v
            | { pid: ($v[0] | tonumber), rssMiB: ($v[1] | tonumber / 1024 | floor), comm: $v[2] } end) }'
 }
 
+tmp=''
 main() {
   if [ "${1:-}" = --render ]; then
     VM=$(cat "$2/vm_stat.txt"); SYSCTL=$(cat "$2/sysctl.txt"); PS=$(cat "$2/ps.txt")
@@ -77,7 +78,7 @@ main() {
     return
   fi
   [ $# -eq 2 ] || { echo "usage: macstats.sh <out-dir> <state-dir> | --render <fixture-dir>" >&2; return 2; }
-  local out="$1" state="$2" real tmp json was now
+  local out="$1" state="$2" real json was now
   mkdir -p "$state"
   was=$(cat "$state/last" 2>/dev/null || true)
   # Pin the out dir: a real directory, not a symlink, at exactly the path the installer rendered. Absent (the
@@ -100,9 +101,11 @@ main() {
   now=$(date -u +%FT%TZ)
   json=$(render "$(hostname -s)" "$now")
   tmp=$(mktemp "$out/.mac-stats.XXXXXX")
-  trap 'rm -f "$tmp"' EXIT # a failure before the rename leaves no stray temp file
+  trap 'rm -f "${tmp:-}"' EXIT # a failure before the rename leaves no stray temp file (tmp is global: the trap
+  # runs after main returns)
   printf '%s\n' "$json" >"$tmp"
   mv -f "$tmp" "$out/mac-stats.json"
+  trap - EXIT
   [ "$was" = ok ] || echo "$now writing $out/mac-stats.json"
   echo ok >"$state/last"
 }

@@ -215,7 +215,7 @@ cmd_tower() {
     start)
       p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:6183"; return 0; }
       sb_init_dirs
-      setsid nohup bash "$SB_SCRIPTS/tower-web.sh" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
+      APERTURE_TOWER_PID="$TOWER_PID" setsid nohup bash "$SB_SCRIPTS/tower-web.sh" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
       # "started" only once the server has bound the port and written its pid (≤ 3 s; node starts in ~0.3 s)
       for ((i = 0; i < 30; i++)); do
         p=$(tower_pid) && { echo "tower: started (pid $p) — http://localhost:6183, log $BOARD_DIR/tower.log"; return 0; }
