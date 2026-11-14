@@ -6,6 +6,13 @@ Aperture exists to make its user **calmer and more honest about their time**, no
 
 Not a mood tracker, not a habit-shaming app, not a productivity cult. Balance is invited, never policed.
 
+<p>
+  <img src="docs/assets/readme/home-day-light.png" width="300" alt="Home in the morning, light theme: the day shape, the budget line, the plan-today card with today's Rolls, habits due, and the day's intent above the capture dock">
+  <img src="docs/assets/readme/home-night-dark.png" width="300" alt="Home at night, dark theme: today in review — the day's log, done tasks as estimate-versus-actual bars, and the still-open tasks asking when">
+</p>
+
+<sub>Phone width, on the built-in stub data — every name, number and entry is made up.</sub>
+
 ---
 
 ## What it does (v2)

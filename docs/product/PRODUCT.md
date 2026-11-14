@@ -162,7 +162,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 **Direction: quiet modern** — clean, muted, lots of air — but committed to specifics so it never drifts generic (the failure mode of the last build).
 
-**Palette — anchored to a reference photo** (a muted, desaturated dusky teal-green, chosen by the user; the photo is kept out of the repo, the tokens live in `app/src/index.css`):
+**Palette — anchored to a reference photo** (a muted, desaturated dusky teal-green, chosen by the user; the photo is kept out of the repo, the tokens live in `app/src/styles/tokens.css`):
 
 - **Dark theme (night):** deep desaturated teal-green ground, soft off-white text, translucent teal for selection/active states.
 - **Light theme (day):** derived to match the same family — pale warm off-white with a faint sage tint, deep teal-green-gray text. The "lights-on" version, not a different look.

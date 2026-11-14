@@ -21,7 +21,9 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 - **PWA:** `vite-plugin-pwa` — manifest, service worker, installable. App shell caches for offline load; **data is online-first** (see below).
 - **Client data:** **React Query** — fetch/cache/mutate against the Lambda API. (Dexie/local-first dropped in the AWS pivot; may return later only as an offline cache.)
 - **Routing:** React Router. **UI/session state:** React Context + hooks (home mode, running timer).
-- **Styling:** **Tailwind (v4, CSS-first)** with theme colors as **CSS custom properties** (`--surface`, `--fg`, `--accent-gold`, …) → auto light/dark is a one-line flip. Anti-generic: semantic token layer + a few primitive components, not raw utilities everywhere.
+- **Styling:** **Tailwind (v4, CSS-first)** with theme colors as **CSS custom properties** (`--surface`, `--ink`, `--gold`, …; `app/src/styles/tokens.css`) → auto light/dark is a one-line flip. Anti-generic: semantic token layer + a few primitive components, not raw utilities everywhere.
+- **Fonts:** Hanken Grotesk, self-hosted via `@fontsource-variable/hanken-grotesk` (no font CDN).
+- **On-device vision:** `@mediapipe/tasks-vision` — Flux's face tracking runs in the browser; video never leaves the device ([flux](../areas/flux/index.md)).
 - **Testing:** Vitest. **Lint/format:** ESLint + Prettier.
 - **Dates:** **roll our own** small helpers (day-start offset + ISO-week cadence are small, targeted) — only reach for a date lib if DST edge cases prove genuinely gnarly. Per [CONVENTIONS.md](../product/CONVENTIONS.md).
 - **Charts:** deferred; v1 viz is hand-rolled CSS/SVG.
@@ -35,6 +37,8 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 - **Cost:** effectively free at single-user scale — breakdown in INFRA §11.
 
 **Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route BFF Lambda (§4), beside the MCP, finance-sync and reminder-dispatch Lambdas (INFRA §1/§4) · CDK (§3) · custom domain (§8).
+
+**Beyond the BFF** (each in INFRA §1/§4 and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
 
 **Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1 — bar per-feature crash-safety outboxes since: capture's (`app/src/modules/capture/captureOutbox.ts`), Flux sets' ([flux](../areas/flux/index.md)) and the extension's ([recruiting](../areas/recruiting/index.md)).
 
@@ -56,11 +60,11 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 ### 2.2 Entities
 
-**logEntries** — `id · createdAt · day · text`. Edit allowed; soft-delete allowed.
+**logEntries** — `id · createdAt · day · text · private?`. Edit allowed; soft-delete allowed. `private` keeps an entry out of every MCP read and search; older rows read back `undefined` = not private ([log](../areas/log/index.md)).
 
 **tasks** — the signature module.
 
-- `id · title · status · categoryId · seriesId? · rollId? · dueDay? · dueTime? · notes? · reflection? · createdAt · startedAt? · completedAt? · cancelledAt?`
+- `id · title · status · categoryId · seriesId? · seriesDay? · rollId? · parentId? · place? · dueDay? · dueTime? · notes? · reflection? · createdAt · startedAt? · completedAt? · cancelledAt?`
 - `rollId` (id | null) — set when the task is a **rep** of a [Roll](../areas/home/rolls.md). Required-nullable; readers compare `=== id` / `!rollId` (pre-existing rows read back `undefined`). The contact-sheet momentum is derived from done tasks carrying this — no counter.
 - `status`: `backlog | planned | in_progress | done | cancelled`.
 - `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (_when it gets worked_). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
@@ -72,6 +76,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **Done gate** ([areas/calibration/integrity.md](../areas/calibration/integrity.md)): `taskTransition(→ done)` refuses a calibrated task (`isCalibrated`: not an errand) without `estimateMin ≥ 1` and `actualAccruedMin ≥ 1`, and a parent bypasses it (`completeParent`). Done also sets `estimateLockedMin` from `estimateMin` when there's no baseline (null or 0), and `estimateSource` (`planned | revised | retro | null`, optional on `Task` like the sync bookkeeping: older rows, parents and errands have none). The one write into a finished estimate: `withEstimate` on a done calibrated task with no lock, once.
 - `parentId` (string | null) — the task this one is a part of (2026-10-08; replaced `splitFromId`, whose stored attribute is inert on old rows). One level; parenthood is derived, never stored. A parent holds the deadline and never takes plans, sessions or its own estimate; its `estimateLockedMin` freezes when its first part starts (the one lock that's ever cleared: a parent whose last part goes is plain again, and its lock goes with them), and its `actualAccruedMin` is stamped with Σ done parts when it's marked done (refused while a part is open). Every part, and a done parent, is a calibration point. A parent's one calendar event is its due marker; a part's block is named after it (v2a). Required-nullable; old rows read `undefined` → `!parentId`. Design: [areas/tasks/parts.md](../areas/tasks/parts.md).
 - `actualAccruedMin` — **denormalized**, bumped when a _work_ session closes onto an open task (excludes breaks + paused time; a session stopped onto a `done`/`cancelled` task keeps its minutes in history and adds none — shared `accruesTime`). Avoids scanning sessions.
+- `place` (slug | null) — the errand list the task is on; a slug edit rewrites its tasks. Required-nullable; old rows read `undefined` → `!place`.
 - `cancelled` tasks are excluded from calibration, and so are errands (a task with a `place`, [tasks/places](../areas/tasks/places.md)).
 - **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#flows); each attachment's S3 bytes are deleted first ([attachments D7](../areas/tasks/attachments.md)). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
 
@@ -95,7 +100,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **pomodoroSessions**
 
-- `id · taskId? · categoryId · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt`
+- `id · taskId? · categoryId · label? · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt · blocks?`
+- `label`: a taskless timer's focus name — how concurrent timers tell apart. `blocks`: the blocks the timer runs to, raised by Again; absent = 1.
 - `kind`: `work | break` — **only `work` accrues** to `task.actualAccruedMin` + time-budget.
 - `wasWork`: **snapshot** of the category's `isWork` at write time → immutable balance history.
 - `categoryId`: **follows the task** when `taskId` is set; manual only for taskless freeform focus.
@@ -132,7 +138,15 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **finance** — Plaid-synced bank data: `financeItems` (a bank login), `financeSyncStates` (per item: cursor, lock, request/refresh stamps), `financeAccounts`, `financeTransactions`, `financeRules` (ULID ids). Transaction fields are Plaid-owned (amount, date, merchant…) except the **user-owned** ones a sync never overwrites: `bucket · bucketSetBy · periodOverride · note · refundOfId · startsPeriod`. Design: [finances/](../areas/finances/index.md).
 
-**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc.
+**places** — `id · name · slug · lastReadAt`. A store you run errands at; tasks reference it by `slug` (the word in `@slug`, the Shortcut's URL, the lens link). No address — the geofence lives in the iPhone's Shortcuts automation. `lastReadAt` is the last Shortcut read, the setup's heartbeat. The place token is a credential: never exported (§2.4). Design: [tasks/places](../areas/tasks/places.md).
+
+**pushSubs** — `id · endpoint · p256dh · auth · label · lastOkAt · lastError · lastErrorAt`. One device's Web Push subscription; `id` is a `sha256(endpoint)` prefix, so re-subscribing upserts. A credential: never exported or returned. Design: [tasks/reminders](../areas/tasks/reminders.md).
+
+**fluxSets** — one finished Flux set: `id · day · exerciseId · kind · side · condition · count · avgPeakDeg · avgErrorDeg · rom · calibrated · delegate · durationSec · completedAt · repTaskId · stoppedEarly · planned`. The client mints the ULID (idempotent put); `repTaskId` is the Roll rep it counted toward. **The week note** — one cached line per week (`weekStart · text` ≤ 140 chars `· generatedAt`, plus the server's `fingerprint` cache key), written by Haiku from that week's sets, or the deterministic line when it can't be,, rebuilt when they change; derived, not exported. Design: [flux](../areas/flux/index.md).
+
+**gcalSyncStates** — the two-way calendar cursor, one per connected Google account (`id = sub`): `calendarId · syncToken · lastPulledAt · lastSyncedAt · lastPullError · lastPullErrorAt`. Exported, no credentials; a null token means a full resync ([calendar](../areas/calendar/index.md) → Two-way sync).
+
+**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc. Also the calendar wiring — `googleAccounts` (up to two, `sub · email`; `sub` is the key and the refresh token lives in SSM under it; written server-side only, never client-patched), `calendarShapeRefs`, `calendarWriteDefault`, `autoCalendar`, the waking window `dayFocusStart` / `dayEndHour` — and the Roll links `fluxRollId` / `leetcodeRollId`.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
 
@@ -237,16 +251,22 @@ aperture/
   app/                 # React PWA (Vite)
     src/
       pages/           # Home, Log, Tasks, Recruiting, Habits, Rolls, Finances, Flux, Inbox, Settings (a dir each)
-      modules/         # calendar, calibration, capture, finances, flux, habits, home, log, pomodoro, reflection, rolls, tasks
+      modules/         # calendar, calibration, capture, finances, flux, habits, home, log, pomodoro, push,
+                       #   reflection, rolls, tasks
       components/      # primitives: Card, Text, … (anti-generic token layer)
       data/            # React Query hooks + the api clients (stubClient, httpClient) + seed
       lib/             # cx, format, useDisclosure, useRowAction (ulid/dates live in packages/shared)
       auth/            # Cognito/OIDC glue (userManager, OidcBridge, AuthProvider)
-      styles/          # Tailwind tokens (CSS-var theme)
+      styles/          # tokens.css (the CSS-var theme) + theme.ts
+      shared/ · test/  # env.ts (the one Vite env reader) · the jsdom setup + test utils
   lambdas/src/         # BFF — index.ts, handler.ts, backend.ts, sessions.ts (pomodoro sessions); auth/ (verify),
-                       #   push/ (service.ts: reminder devices + Send test; the poller's sender),
-                       #   ddb/ (keys, repo, writes, mapping, DocClient), google/, mcp/, s3/
-  cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
+                       #   rpc/ (argSpecs, shape, failure), ddb/ (keys, repo, writes, mapping, DocClient),
+                       #   anthropic/ (the gated Haiku gateway + prompts), google/, plaid/, s3/, mcp/,
+                       #   push/ (service.ts: reminder devices + Send test; the poller's sender) + pushDispatch.ts,
+                       #   finance/ + financeSync.ts (the sync Lambda), kill/ (the dev account's kill switch),
+                       #   local/ (the devcheck:local server, LOCAL-CHECK), util/
+  cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing, org, dev-guard stacks;
+                       #   monitoring, finance-sync, push-dispatch constructs), config/
   extension/           # MV3 web extension (Safari) — LeetCode sittings. No runtime deps,
                        #   bundler or build step; a workspace member for its tests only (vitest, jsdom)
   packages/shared/     # shared TS types + contract across app + lambda (also ulid, dates, machines, contractTests)
