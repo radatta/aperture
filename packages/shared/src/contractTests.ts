@@ -1466,7 +1466,7 @@ export function runApiContract(
 
     it('series: unplanning an occurrence never respawns it; “+ Today” brings the same one back', async () => {
       await api.upsertSeries({
-        title: 'Pre-lab',
+        title: 'Weekly report',
         categoryId: null,
         defaultEstimateMin: 60,
         rule: { kind: 'daily' },
@@ -1502,7 +1502,7 @@ export function runApiContract(
 
     it('series: a due offset dates each occurrence from its day, untimed; a legacy series spawns undated', async () => {
       const dated = await api.upsertSeries({
-        title: 'Pre-lab',
+        title: 'Weekly report',
         categoryId: null,
         defaultEstimateMin: 60,
         rule: { kind: 'daily' },
@@ -1529,7 +1529,7 @@ export function runApiContract(
       at('2026-08-31');
       await api.getDay('2026-08-31');
       const byTitle = Object.fromEntries((await api.listTasks()).map((t) => [t.title, t]));
-      expect(byTitle['Pre-lab']).toMatchObject({
+      expect(byTitle['Weekly report']).toMatchObject({
         seriesId: dated.id,
         seriesDay: '2026-08-31',
         dueDay: '2026-09-01',
@@ -1542,10 +1542,10 @@ export function runApiContract(
     });
 
     it('series: an occurrence moved onto another due day is its own deliverable — that day still spawns', async () => {
-      // Identity is (series, day), not the plan row (recurring.md D4): the pre-lab for lab 3, replanned onto
-      // next Tuesday, doesn't stand in for lab 4's — both show, each with its own due date.
+      // Identity is (series, day), not the plan row (recurring.md D4): report 3, replanned onto
+      // next Tuesday, doesn't stand in for report 4's — both show, each with its own due date.
       const s = await api.upsertSeries({
-        title: 'Pre-lab',
+        title: 'Weekly report',
         categoryId: null,
         defaultEstimateMin: 60,
         rule: { kind: 'daily' },
@@ -1575,7 +1575,7 @@ export function runApiContract(
 
     it('series: nothing spawns after until; the row stays active', async () => {
       const s = await api.upsertSeries({
-        title: 'Pre-lab',
+        title: 'Weekly report',
         categoryId: null,
         defaultEstimateMin: 60,
         rule: { kind: 'daily' },
@@ -1597,7 +1597,7 @@ export function runApiContract(
 
     it('series: a bad cadence is refused before any write, on create and on edit', async () => {
       const input = {
-        title: 'Pre-lab',
+        title: 'Weekly report',
         categoryId: null,
         defaultEstimateMin: 60,
         rule: { kind: 'daily' } as const,
@@ -1619,7 +1619,7 @@ export function runApiContract(
 
     it('series: deleteSeries tombstones the template; its occurrences stay; idempotent', async () => {
       const s = await api.upsertSeries({
-        title: 'Pre-lab',
+        title: 'Weekly report',
         categoryId: null,
         defaultEstimateMin: 60,
         rule: { kind: 'daily' },

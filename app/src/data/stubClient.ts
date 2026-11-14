@@ -2514,7 +2514,7 @@ class StubClient implements ApiClient {
     for (const [pattern, bucket] of [
       ['spotify', 'i_pay'],
       ['netflix', 'i_pay'],
-      ["trader joe's", 'parents_pay'],
+      ['shell', 'parents_pay'],
     ] as const)
       this.writes.insert(this.store.financeRules, {
         ...this.base(),

@@ -773,7 +773,7 @@ describe('reconcileSyncPage', () => {
       pending: true,
       bucket: 'parents_pay',
       bucketSetBy: 'user',
-      note: 'dinner w/ mom',
+      note: 'dinner w/ sam',
       deletedAt: 900,
     });
     const existing = new Map([[pending.id, pending]]);
@@ -782,7 +782,7 @@ describe('reconcileSyncPage', () => {
     const posted = existing.get('fx-posted-1')!;
     expect(posted.bucket).toBe('parents_pay'); // carried, not the rule's bucket
     expect(posted.bucketSetBy).toBe('user');
-    expect(posted.note).toBe('dinner w/ mom');
+    expect(posted.note).toBe('dinner w/ sam');
     expect(posted.rawAmountCents).toBe(2600);
   });
 

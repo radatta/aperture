@@ -17,8 +17,8 @@ describe('stub finances', () => {
     expect(o.spentCents).toBeGreaterThan(0);
     expect((await api.listFinanceRules()).map((r) => r.pattern)).toEqual([
       'netflix',
+      'shell',
       'spotify',
-      "trader joe's",
     ]);
   });
 

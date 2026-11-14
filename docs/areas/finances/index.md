@@ -105,7 +105,7 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - **Search** (`searchRefundCharges`), above the suggestions so typing never moves it, for the charge they
   miss: every charge in the loaded range on shown accounts — any merchant, any age, any size (the cap
   still applies) — that `refundLinkError` accepts and has something left to refund. A case-insensitive substring of the
-  merchant, bank text, note or dollar amount (`$1,000.50`, `34.99`); newest first, eight shown with
+  merchant, bank text, note or dollar amount (`$800.50`, `30.00`); newest first, eight shown with
   "Showing 8 of N". While you type, its results replace the suggestions; Escape clears it first, then
   closes the detail.
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
@@ -237,7 +237,7 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   `pending_transaction_id`.
 - **The linked bank:** OAuth. It hosts its own account picker — tick every account (checking, savings, card). Deposit history ~18 months; card = current cycle + 11 previous. Consent lasts 12 months;
   `PENDING_DISCONNECT` a week before, then `ITEM_LOGIN_REQUIRED` → reconnect.
-- **Seen on the first real sync:** a card payment arrives as a pair whose descriptors
+- **Seen on the first real sync (2026-09-28):** a card payment arrives as a pair whose descriptors
   share one confirmation code — card side money in (category `TRANSFER_IN_ACCOUNT_TRANSFER`), checking
   side money out (`LOAN_PAYMENTS_CREDIT_CARD_PAYMENT`). Purchases are positive on the card, refunds negative, and the card's
   `current` balance is what's owed — no flip needed. The bank **does** send pending rows. Still unmeasured:

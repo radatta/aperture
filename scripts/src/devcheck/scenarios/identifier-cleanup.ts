@@ -13,7 +13,7 @@ const OPEN_PR = 'scripts/src/mailroom/open-pr.test.ts';
 const MAC_ROOT = 'scripts/src/mac-root.test.ts';
 const NOT_DEPLOYED = 'a repo-side rule: dev runs the build, never the checkout or a commit';
 // Personal details swept from the model-facing text before the repo went public.
-const PERSONAL_DETAIL = /parents pay|safeway|trader joe|costco|neck rehab|the quarter\b/i;
+const PERSONAL_DETAIL = /parents pay|safeway|trader joe|costco|neck.?rehab|the quarter\b/i;
 
 // The app's oidc session in localStorage: its profile's email.
 async function sessionEmail(page: Ctx['page']): Promise<string | null> {
@@ -283,7 +283,8 @@ export const identifierCleanup: Scenario = {
         const found = tools.filter((t) => lc.includes(t.name)).length;
         if (found !== 3) throw new Error(`tools/list has ${found} of the 3 LeetCode tools`);
         for (const t of tools) {
-          const d = t.description ?? '';
+          // The arg schemas are model-facing too (e.g. a place arg's example slug).
+          const d = `${t.description ?? ''} ${JSON.stringify(t.inputSchema ?? {})}`;
           if (findIdentifiers(d).length)
             throw new Error(`${t.name}'s description names a personal identifier`);
           if (/\b(he|his|him)\b/i.test(d))
