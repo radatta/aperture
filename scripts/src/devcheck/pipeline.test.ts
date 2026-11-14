@@ -34,7 +34,7 @@ import {
 import { statusLine } from './report';
 import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
-import { hidingSecret, needsYou, type Ctx, type Scenario } from './scenario';
+import { hidingSecret, needsYou, noConsoleErrors, type Ctx, type Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
 const shell = (sha: string) => `<meta name="aperture-build" content="${sha}" />`;
@@ -1568,6 +1568,38 @@ describe('runPipeline', () => {
       '/api/listCategories → 429',
       '/api/getDay → dropped',
     ]);
+  });
+
+  it('noConsoleErrors fails on a real 429 inside an injected window, which the console never shows', async () => {
+    const w = world();
+    const sc = scenario(
+      async (x, ctx) => {
+        const i = await ctx.intercept('getDay');
+        await x.call('getDay'); // injected: never counts
+        x.respond('/api/listCategories', 429); // real, while the console's load lines are dropped
+        await i.release();
+      },
+      (_, ctx) => noConsoleErrors.run(ctx),
+    )(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.consoleErrors).toEqual([]);
+    expect(r.steps[1]).toMatchObject({ status: 'fail', error: 'throttled: /api/listCategories' });
+    expect(r.codes).toEqual(['STEP_FAILED']);
+  });
+
+  it('noConsoleErrors passes when the only 429 was injected', async () => {
+    const w = world();
+    const sc = scenario(
+      async (x, ctx) => {
+        const i = await ctx.intercept('listCategories');
+        await x.call('listCategories');
+        await i.release();
+      },
+      (_, ctx) => noConsoleErrors.run(ctx),
+    )(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.injected).toEqual(['/api/listCategories → 429']);
+    expect(r.steps[1]).toMatchObject({ status: 'pass' });
   });
 
   it('an injected 429 is reported as injected, not throttled', async () => {

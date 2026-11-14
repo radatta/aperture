@@ -275,6 +275,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       shot,
       createdIds: () => [...runIds],
       consoleErrors: () => [...r.consoleErrors],
+      throttled: () => [...r.throttled],
       intercept: (method, opts) => intercept(page, method, opts),
       ios: NO_IOS,
       log: d.log,

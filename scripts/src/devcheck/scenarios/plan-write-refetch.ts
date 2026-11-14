@@ -36,8 +36,8 @@ const runningOn = async (ctx: Ctx, task: DevTask) =>
   (await ctx.api.reads.listRunningSessions()).filter((s) => s.taskId === task.id);
 
 // Served /api reads by method — 200 responses to requests made after `arm()`, so a 429 the client retries
-// counts once and a page-load read still in flight at arming time (paired by request identity, as
-// inflight-cap does) counts not at all — until the wire has been quiet for `quietMs`. The page's load burst
+// counts once and a page-load read still in flight at arming time (paired by request identity)
+// counts not at all — until the wire has been quiet for `quietMs`. The page's load burst
 // (useDay's cascade refetches tasks and plans after getDay lands) should be over before arming anyway:
 // `quiet()` first, then `arm()`, then the tap.
 function countApi(ctx: Ctx) {

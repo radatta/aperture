@@ -71,6 +71,9 @@ export interface Ctx {
   shot(name: string): Promise<void>;
   createdIds(): string[]; // ids the ledger got from this run's UI creates, oldest first
   consoleErrors(): string[]; // console errors + uncaught page errors so far
+  // Every real HTTP 429 the page got so far, as /api/<method> (pipeline.ts). Read from the response, not the
+  // console, so one inside an injected-failure window counts too; the harness's own injected ones never do.
+  throttled(): string[];
   // Fails dev's /api/<method> from the harness side (Playwright route), never a switch in shipped code: the
   // next `times` calls (default: every call) get `status` and `body`, or a dropped connection with `abort`. While
   // a failing one (dropped, or status ≥ 400) is active, the console's resource-load lines are this run's own doing and are left out of consoleErrors
@@ -125,15 +128,20 @@ export function needsYou(reason: string, opts: { stepOnly?: boolean } = {}): nev
 export const needsYouReason = (err: unknown): string | null =>
   err instanceof NeedsYou ? err.reason : null;
 
-// A scenario's last step: the run's console so far is clean. Its own step, proving no row, so a console error
-// (a throttled call, DEV-CHECK.md → Throttles (429)) fails it without unproving the feature's rows.
+// A scenario's last step: the run so far has no console error and no real 429 (DEV-CHECK.md → Throttles
+// (429)). Its own step, proving no row, so either fails it without unproving the feature's rows.
 export const noConsoleErrors: Step = {
   id: 'no-console-errors',
   title: 'No console errors on the way',
   entry: 'ui',
   async run(ctx) {
     const errors = ctx.consoleErrors();
-    if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
+    const throttled = ctx.throttled();
+    const found = [
+      ...(errors.length ? [`console errors: ${errors.join(' | ')}`] : []),
+      ...(throttled.length ? [`throttled: ${throttled.join(', ')}`] : []),
+    ];
+    if (found.length) throw new Error(found.join(' — '));
   },
 };
 

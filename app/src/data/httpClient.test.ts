@@ -1,6 +1,6 @@
 import { AUTH_HEADER } from '@aperture/shared';
-import { describe, expect, it, vi } from 'vitest';
-import { MAX_IN_FLIGHT, SLOT_MS, createHttpClient } from './httpClient';
+import { describe, expect, it } from 'vitest';
+import { createHttpClient } from './httpClient';
 import { ApiError } from './retry';
 import type { FetchLike } from './httpClient';
 
@@ -191,129 +191,6 @@ describe('createHttpClient (RPC transport)', () => {
       );
       await expect(offline.stopSession('s1', 'completed')).rejects.toThrow(TypeError);
       expect(sent).toBe(1);
-    });
-  });
-
-  describe('the in-flight cap', () => {
-    // A fetch the test answers by hand: which calls hit the wire, in what order, and how many at once.
-    const wire = () => {
-      const pending: { resolve: (status: number) => void; reject: (e: unknown) => void }[] = [];
-      const started: string[] = []; // the first arg of each call, in the order it was sent
-      let peak = 0;
-      const fetchImpl: FetchLike = (_url, init) =>
-        new Promise((resolve, reject) => {
-          started.push(String((JSON.parse(init.body) as { args: unknown[] }).args[0]));
-          pending.push({
-            resolve: (status) => resolve({ ok: status < 400, status, text: async () => 'null' }),
-            reject,
-          });
-          peak = Math.max(peak, pending.length);
-        });
-      const answer = (status = 200) => pending.shift()!.resolve(status);
-      const drop = () => pending.shift()!.reject(new TypeError('Failed to fetch'));
-      return { fetchImpl, pending, started, answer, drop, peak: () => peak };
-    };
-    const tick = () => new Promise((r) => setTimeout(r, 0));
-    const ids = (n: number) => Array.from({ length: n }, (_, i) => String(i));
-    const client = (
-      w: ReturnType<typeof wire>,
-      sleep: (ms: number) => Promise<void> = async () => {},
-    ) =>
-      createHttpClient(
-        '',
-        w.fetchImpl,
-        () => null,
-        () => {},
-        sleep,
-      );
-
-    it('never has more than MAX_IN_FLIGHT calls on the wire, and starts them in dispatch order', async () => {
-      const w = wire();
-      const api = client(w);
-      const calls = ids(20).map((id) => api.getTask(id));
-      await tick();
-      expect(w.started).toEqual(ids(MAX_IN_FLIGHT));
-      w.answer();
-      await tick();
-      expect(w.started).toEqual(ids(MAX_IN_FLIGHT + 1)); // the freed slot went to the next in line
-      while (w.pending.length) {
-        w.answer();
-        await tick();
-      }
-      await Promise.all(calls);
-      expect(w.started).toEqual(ids(20));
-      expect(w.peak()).toBe(MAX_IN_FLIGHT);
-    });
-
-    it('a rejected fetch frees its slot', async () => {
-      const w = wire();
-      const api = client(w);
-      const calls = ids(MAX_IN_FLIGHT + 1).map((id) => api.getTask(id));
-      const dropped = calls[0]!.catch((e: unknown) => e); // handled now, so its rejection isn't unhandled
-      await tick();
-      expect(w.started).toHaveLength(MAX_IN_FLIGHT);
-      w.drop();
-      await tick();
-      expect(w.started).toEqual(ids(MAX_IN_FLIGHT + 1));
-      expect(await dropped).toBeInstanceOf(TypeError);
-      while (w.pending.length) {
-        w.answer();
-        await tick();
-      }
-      await Promise.all(calls.slice(1));
-    });
-
-    it('a 429 re-enters the queue while it waits to retry', async () => {
-      const w = wire();
-      let wake = () => {};
-      const api = client(w, () => new Promise<void>((r) => (wake = r)));
-      const calls = ids(MAX_IN_FLIGHT + 1).map((id) => api.getTask(id));
-      await tick();
-      w.answer(429); // call 0 is throttled: it backs off holding no slot…
-      await tick();
-      expect(w.started).toEqual(ids(MAX_IN_FLIGHT + 1)); // …so call 8 took the slot at once
-      expect(w.pending).toHaveLength(MAX_IN_FLIGHT);
-      wake(); // its backoff is over: the wire is full, so it queues
-      await tick();
-      expect(w.started).toHaveLength(MAX_IN_FLIGHT + 1);
-      w.answer(); // call 1 answers; the retry is next in line
-      await tick();
-      expect(w.started.at(-1)).toBe('0');
-      while (w.pending.length) {
-        w.answer();
-        await tick();
-      }
-      await Promise.all(calls);
-      expect(w.peak()).toBe(MAX_IN_FLIGHT);
-    });
-
-    it('a call that never answers frees its slot after SLOT_MS — the Lambda behind it has timed out', async () => {
-      vi.useFakeTimers();
-      try {
-        const w = wire();
-        const api = client(w);
-        const calls = ids(MAX_IN_FLIGHT + 1).map((id) => api.getTask(id));
-        await vi.advanceTimersByTimeAsync(SLOT_MS - 1);
-        expect(w.started).toHaveLength(MAX_IN_FLIGHT); // eight stalled, the ninth still waiting
-        await vi.advanceTimersByTimeAsync(1);
-        expect(w.started).toEqual(ids(MAX_IN_FLIGHT + 1)); // the leases lapsed: the ninth is on the wire
-        // The stalled calls still answer in their own time, and answering frees nothing twice.
-        while (w.pending.length) {
-          w.answer();
-          await vi.advanceTimersByTimeAsync(0);
-        }
-        await Promise.all(calls);
-        const late = ids(MAX_IN_FLIGHT + 2).map((id) => api.getTask(id));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(w.started).toHaveLength(2 * MAX_IN_FLIGHT + 1); // the count is whole again: 8 go, 2 wait
-        while (w.pending.length) {
-          w.answer();
-          await vi.advanceTimersByTimeAsync(0);
-        }
-        await Promise.all(late);
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 });

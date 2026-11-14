@@ -209,18 +209,17 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 ## Throttles (429)
 
-The app keeps a page's burst under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
-_Dev deploy blast radius_ → Compute; the account quota of 10 before 2026-11): at most 8 `/api` calls in flight (`app/src/data/httpClient.ts` →
-`MAX_IN_FLIGHT`), leaving room for the harness's own calls, so Home's ~10 RPCs on a cold BFF no longer get HTTP 429
-(`inflight-cap`, 2026-11; before it, a dated _Known 429s_ rule here let a run count as green with them). A 429 means
+Home's cold burst is 7–10 `/api` calls at once, under the BFF's reserved concurrency on dev, 18 ([CI-BOT.md](CI-BOT.md) →
+_Dev deploy blast radius_ → Compute), with room for the harness's own calls. The app has had no client-side cap since
+2026-11: the cap of 8 (`inflight-cap`) patched the account quota of 10, and the quota is 1,000 now. (Before the cap, a
+dated _Known 429s_ rule here let a run count as green with them.) A 429 means
 Lambda never started the function, so that attempt was never tested — the app's retry (`app/src/data/retry.ts`) may
 have recovered the call, but the method isn't proven by this run. Chromium logs every 429 as a console error, retried
-or not, so one fails the run like any other console error, and the report's _Throttled (429)_ section names each
-(`/api/<method>`), which Chromium's line doesn't. Treat one as a bug — a burst wider than the cap, a refetch storm, the
-harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run's console saw (one
-inside an injected-failure window is dropped from the console and shows under _Throttled (429)_ (and _Failed loads_) — read that
-section too). The same scenario holds every `/api` response while Home and three nav taps want more than 8 calls,
-then releases them: it fails unless exactly 8 were on the wire and the rest went out after. Failures a scenario injects on
+or not, and the report's _Throttled (429)_ section names each (`/api/<method>`), which Chromium's line doesn't. Treat
+one as a bug — a refetch storm, a burst wider than the reservation, the harness bursting on its own — never as weather:
+every scenario's closing `noConsoleErrors` fails on any real 429 the run has seen so far, naming the method. It reads
+the responses themselves (`ctx.throttled()`), so it also catches a 429 inside an injected-failure window, whose console
+line is dropped. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
 own `/api` and `/mcp` clients back off a Lambda 429 and retry, so no console sees it and a call that succeeds may
 still have been throttled; `ctx.api.throttles()` and `ctx.mcp.throttles()` count those, for a step that must prove
@@ -325,8 +324,8 @@ ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user),
 (makes a title findable on screen — never a cleanup key). A step throws to fail; the rest of that scenario is
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
-extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console check is its own
-step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove. Chromium's
+extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console and throttle check is its own
+step, proving no row, so a console error or a real 429 fails the run without unproving the rows the feature's steps did prove. Chromium's
 `Failed to load resource` line names no URL, so the report's _Failed loads_ lists, in order, every non-injected
 response ≥ 400 and every request that got none or whose body failed (not a `net::ERR_ABORTED`, the page cancelling its own), as
 `<status or net error> <METHOD> <host/path>` with the query dropped: trace a console error by it. It fails nothing itself.
