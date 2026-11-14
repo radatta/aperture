@@ -170,26 +170,3 @@ jobs:
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
-
-  # Same ntfy channel as deploy.yml, failures and cancellations only: the bot reports every conclusion to the session
-  # that dispatched, and a skipped job bills nothing.
-  notify:
-    needs: [verify, deploy, deploy-b]
-    if: failure() || cancelled()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify ntfy
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          VERIFY_RESULT: ${{ needs.verify.result }}
-          # The slot that ran; the other's job is skipped.
-          DEV_RESULT: ${{ inputs.slot == 'devb' && needs.deploy-b.result || needs.deploy.result }}
-          SLOT: ${{ inputs.slot }}
-          SHA: ${{ inputs.sha }}
-          KEY: ${{ inputs.key }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="verify=$VERIFY_RESULT $SLOT=$DEV_RESULT  $SHA"
-          curl -s -H "Title: ❌ dev dispatch FAILED ($KEY)" -H "Priority: high" -H "Tags: warning" \
-            -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"

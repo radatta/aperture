@@ -72,9 +72,6 @@ describe('deploy.yml classifies per stage', () => {
     expect(job(deploy, 'deploy-devb')).toContain('mode: full');
     expect(job(deploy, 'deploy-devb')).toContain('stage: devb');
     expect(job(deploy, 'deploy-prod')).not.toContain('deploy-devb');
-    expect(job(deploy, 'notify')).toContain(
-      'needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]',
-    );
     expect(deploy).not.toContain('outputs.mode }}');
   });
 
@@ -184,12 +181,17 @@ describe('deploy.yml skips the check only on a tree match', () => {
     );
   });
 
-  it('notifies only on a failure, a cancellation, or (main) a dev deploy that silently never ran', () => {
-    expect(job(dispatch, 'notify')).toContain('if: failure() || cancelled()');
-    expect(job(deploy, 'notify')).toContain(
-      "if: ${{ failure() || cancelled() || (needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped') }}",
+  it('turns a main push that silently deployed nothing red, and runs no notify job anywhere', () => {
+    const noDeploy = job(deploy, 'no-deploy');
+    expect(noDeploy).toContain('needs: [changes, check, deploy-dev]');
+    expect(noDeploy).toContain(
+      "if: ${{ !cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure' }}",
     );
-    for (const yml of [deploy, dispatch]) expect(job(yml, 'notify')).not.toContain('Priority: min');
+    expect(noDeploy).toContain('exit 1');
+    for (const yml of [deploy, dispatch]) {
+      expect(yml).not.toMatch(/\n {2}notify:/);
+      expect(yml.toLowerCase()).not.toContain('ntfy');
+    }
   });
 });
 

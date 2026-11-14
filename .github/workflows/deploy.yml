@@ -161,37 +161,18 @@ jobs:
       device_token: ${{ secrets.DEVICE_TOKEN_PROD }}
       agent_token: ${{ secrets.AGENT_TOKEN_PROD }}
 
-  # Push a failed deploy to ntfy (subscribed in a desktop browser, high priority) so a solo operator gets an
-  # out-of-band signal without watching the Actions tab. Failure or cancellation only (a timeout reads as cancelled):
-  # a skipped job bills nothing, and the success ping (min priority, silent) cost a billed minute every merge.
-  # NTFY_TOPIC is the only access control on the public ntfy instance → a secret, not a var; not an AWS cred, so this
-  # job stays keyless. No-ops (doesn't fail) until the secret is set.
-  # The last clause catches a silent non-deploy: `changes` succeeded but dev was skipped (a check skipped, or
-  # reporting a result the guards don't expect) — no job failed, yet nothing shipped.
-  notify:
-    needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]
-    if: ${{ failure() || cancelled() || (needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped') }}
+  # A main push that classified fine but deployed nothing to dev, with no job failing — a skipped `check` that wasn't
+  # planned, or a result the deploy guards don't expect — would end green. This makes it red, so GitHub's failed-run
+  # notice reaches the merger. A skipped job bills nothing; a failed check already makes the run red, so it stays out.
+  no-deploy:
+    needs: [changes, check, deploy-dev]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
-      - name: Notify ntfy
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      - env:
           CHECK_RESULT: ${{ needs.check.result }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          DEV_RESULT: ${{ needs.deploy-dev.result }}
-          DEVB_RESULT: ${{ needs.deploy-devb.result }}
-          PROD_RESULT: ${{ needs.deploy-prod.result }}
-          MODE_DEV: ${{ needs.changes.outputs.mode_dev }}
-          MODE_DEVB: ${{ needs.changes.outputs.mode_devb }}
-          MODE_PROD: ${{ needs.changes.outputs.mode_prod }}
           CHECK_PLAN: ${{ needs.changes.outputs.check }}
-          REF: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="check=$CHECK_RESULT($CHECK_PLAN) changes=$CHANGES_RESULT dev=$DEV_RESULT devb=$DEVB_RESULT prod=$PROD_RESULT  modes=dev:$MODE_DEV devb:$MODE_DEVB prod:$MODE_PROD  $SHA"
-          # Only a failed or cancelled job gets here (the `if:`); `changes` is watched too: its failure (the classifier)
-          # must not pass quietly just because the deploy jobs got skipped.
-          curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
-            -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          echo "::error::deploy-dev was skipped although changes succeeded (check=$CHECK_RESULT, plan=$CHECK_PLAN) — nothing deployed"
+          exit 1
