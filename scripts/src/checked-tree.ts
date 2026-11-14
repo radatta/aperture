@@ -82,7 +82,8 @@ export const treeOf = (sha: string, cwd?: string) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 
-// Newest suite first; within a suite the newest check run per name (a re-run adds newer runs to the same suite).
+// The PR head's green suite: within a suite the newest check run per name (a re-run adds newer runs to the same
+// suite), and only the newest suite holding any required name may answer.
 export function greenSuite(runs: CheckRun[], head: string): Map<string, CheckRun> | undefined {
   const suites = new Map<number, Map<string, CheckRun>>();
   for (const r of runs) {
@@ -93,10 +94,12 @@ export function greenSuite(runs: CheckRun[], head: string): Map<string, CheckRun
     if (!seen || r.id > seen.id) byName.set(r.name, r);
     suites.set(r.check_suite.id, byName);
   }
+  // The newest suite with any required check decides: one still missing a name (jobs not created yet) is no
+  // answer, never a reason to fall back to an older green suite.
   const full = [...suites.entries()]
-    .filter(([, byName]) => REQUIRED_CHECKS.every((n) => byName.has(n)))
+    .filter(([, byName]) => REQUIRED_CHECKS.some((n) => byName.has(n)))
     .sort(([a], [b]) => b - a)[0]?.[1];
-  if (!full) return undefined;
+  if (!full || !REQUIRED_CHECKS.every((n) => full.has(n))) return undefined;
   const green = REQUIRED_CHECKS.every((n) => {
     const r = full.get(n);
     return r?.status === 'completed' && r.conclusion === 'success';

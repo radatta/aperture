@@ -58,11 +58,12 @@ jobs:
       # The mailroom fixture suite is most of the non-app step (~210 s of ~300) and reads only tools/mailroom/
       # and scripts/src/mailroom/. On a PR it runs only when one of its inputs changed — the rule and its list
       # are scripts/src/fixture-inputs.ts, tested, not inline shell (classify-changes.ts' lesson). A main push
-      # always runs it, and `check` gates the deploy, so a break the PR's paths can't show (a dependency bump,
-      # the runner image) stops there instead (INFRA §9). The diff against HEAD^1 on the PR's merge commit is
+      # runs it unless a PR run already ran it on that exact tree (deploy.yml's `skip`; `fixtures` runs it alone),
+      # and `check` gates the deploy, so a break the PR's paths can't show (a dependency bump, the runner image)
+      # stops there instead (INFRA §9). The diff against HEAD^1 on the PR's merge commit is
       # exactly the PR (--no-renames: a file moved out of the inputs counts by its old path too). A HEAD that
       # isn't that merge, or a failed diff, leaves the list empty, and empty runs it: only an explicit `false`
-      # skips the suite. It goes first, so no failing step can skip it, and the suite with it.
+      # skips the suite. It goes before any step that can fail, so none can skip it, and the suite with it.
       - name: Mailroom fixture inputs
         id: fixtures
         if: ${{ github.event_name == 'pull_request' }}
@@ -84,7 +85,7 @@ jobs:
       - uses: ./.github/actions/setup
         if: ${{ !cancelled() }}
       - run: pnpm lint
-        if: ${{ !inputs.fixtures_only }}
+        if: ${{ !cancelled() && !inputs.fixtures_only }}
       # !cancelled() so a lint failure doesn't mask whether typecheck/test would pass — the job still
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
       - run: pnpm typecheck

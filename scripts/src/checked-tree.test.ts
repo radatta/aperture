@@ -272,6 +272,23 @@ describe('checked-tree plans main’s check', () => {
       ];
       expect(await planOf({ runs: failedLast })).toBe('check');
     });
+    it('a newer suite still missing a required check is no answer, not a fall-back to an older green one', async () => {
+      const older = greenRuns().map((r) => ({
+        ...r,
+        id: r.id - 50,
+        details_url: url(r.id - 50),
+        check_suite: { id: 40 },
+      }));
+      const newerPartial = [
+        checkRun(201, 'ci / check', {
+          check_suite: { id: 80 },
+          status: 'in_progress',
+          conclusion: null,
+        }),
+      ];
+      expect(await planOf({ runs: [...older, ...newerPartial] })).toBe('check');
+      expect(await planOf({ runs: older })).toBe('skip');
+    });
     it('the newest full suite decides: an older green suite never outvotes a newer red one', async () => {
       const older = greenRuns().map((r) => ({
         ...r,
@@ -390,6 +407,19 @@ describe('pins against the workflows and the docs', () => {
     const marker =
       'run: echo "::notice file=.github/workflows/ci.yml,line=1,title=tested-tree::$(git rev-parse HEAD^{tree})"';
     expect(ci.split(marker)).toHaveLength(2);
+    // Straight after checkout, PR-only, before setup: nothing from the PR (an install script) has run yet to move
+    // HEAD or the work tree the line reads.
+    const stepsText = ci.slice(ci.indexOf('\n  check:'), ci.indexOf('\n  test-app:'));
+    const at = (t: string) => stepsText.indexOf(t);
+    expect(stepsText).toContain(
+      "- name: Tested tree\n        if: ${{ github.event_name == 'pull_request' }}\n        " +
+        marker,
+    );
+    expect(at('- uses: actions/checkout@v7')).toBeLessThan(at('- name: Tested tree'));
+    expect(
+      stepsText.slice(at('- uses: actions/checkout@v7'), at('- name: Tested tree')),
+    ).not.toMatch(/\n {6}- (uses|run|name):/);
+    expect(at('- name: Tested tree')).toBeLessThan(at('- uses: ./.github/actions/setup'));
     expect(ci.match(/tested-tree/g)?.length).toBeGreaterThanOrEqual(1);
     expect(ci).toContain(`- name: ${FIXTURE_STEP}\n`);
     expect(ci).toContain(`- name: ${SCAN_STEP}\n`);

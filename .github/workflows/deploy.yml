@@ -166,9 +166,11 @@ jobs:
   # a skipped job bills nothing, and the success ping (min priority, silent) cost a billed minute every merge.
   # NTFY_TOPIC is the only access control on the public ntfy instance → a secret, not a var; not an AWS cred, so this
   # job stays keyless. No-ops (doesn't fail) until the secret is set.
+  # The last clause catches a silent non-deploy: `changes` succeeded but dev was skipped (a check skipped, or
+  # reporting a result the guards don't expect) — no job failed, yet nothing shipped.
   notify:
     needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]
-    if: failure() || cancelled()
+    if: ${{ failure() || cancelled() || (needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Notify ntfy
