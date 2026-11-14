@@ -7,7 +7,8 @@
 #   devlock.sh line                                      one line from the caches, slot A first: free · held · EXPIRED ·
 #                                                        stale · unknown, then ` · devb: …` once devb has a cache
 # The bot writes the same caches on every lock read or change (scripts/src/bot/lock-cache.ts). A failed peek keeps the
-# old cache and marks it failedAt, failedWhy (git's or the tag read's last error line) and failedBy (the caller);
+# old cache and marks it failedAt, failedWhy (git's or the tag read's last error line), failedBy (the caller) and
+# failedFor (each caller's last failure: the per-caller backoff);
 # a good read writes the cache afresh, without them. Nothing here ever fails its caller. Test seam: APERTURE_DEVLOCK_SOURCE=file:<path>
 # stands in for GitHub — slot A's tag message at <path>, devb's at <path>.devb (holder JSON), an empty file for
 # "no ref", a missing file for a failed fetch.
@@ -19,13 +20,19 @@ _cache() { if [ "$1" = dev ]; then echo "$BOARD_DIR/devlock.json"; else echo "$B
 # Both refs in one `ls-remote`, made at most once per refresh and only when a cache is due: REFS holds its output,
 # REFS_RC its status (unset until asked), REFS_ERR why it failed (git's last stderr line, or the timeout).
 REFS='' REFS_RC='' REFS_ERR=''
+# Temp files for stderr, removed on any exit (the tower's execFile kills a refresh at 30 s). A string, not an array:
+# the Mac's bash 3.2 calls an empty array unbound under set -u.
+TMPS=''
+trap 'rm -f $TMPS' EXIT
+_tmp() { local f; f=$(mktemp 2>/dev/null) || f=/dev/null; [ "$f" = /dev/null ] || TMPS="$TMPS $f"; printf -v "$1" '%s' "$f"; }
+# An error line goes into the cache and onto the tower page (which leaves the box): never a URL's userinfo.
+_why() { tail -n 1 "$1" 2>/dev/null | sed -E 's#//[^/@ ]+@#//#g' | cut -c1-160; }
 _refs() {
   [ -n "$REFS_RC" ] && return "$REFS_RC"
-  local err; err=$(mktemp 2>/dev/null) || err=/dev/null
+  local err; _tmp err
   REFS=$(timeout "$1" git -C "$SB_REPO" ls-remote origin refs/locks/dev refs/locks/devb 2>"$err"); REFS_RC=$?
   if [ "$REFS_RC" = 124 ]; then REFS_ERR="timed out after $1 s"
-  elif [ "$REFS_RC" != 0 ]; then REFS_ERR=$(tail -n 1 "$err" 2>/dev/null | cut -c1-160); REFS_ERR=${REFS_ERR:-exit $REFS_RC}; fi
-  [ "$err" = /dev/null ] || rm -f "$err"
+  elif [ "$REFS_RC" != 0 ]; then REFS_ERR=$(_why "$err"); REFS_ERR=${REFS_ERR:-exit $REFS_RC}; fi
   return "$REFS_RC"
 }
 
@@ -71,23 +78,24 @@ CALLER="${APERTURE_DEVLOCK_CALLER:-$(sb_comm "$PPID")}"
 CALLER="${CALLER:-unknown}"
 
 _refresh_one() {
-  local slot="$1" max="$2" to="$3" CACHE t h before f by rc src why errf
+  local slot="$1" max="$2" to="$3" CACHE t h before f rc src why errf
   CACHE=$(_cache "$slot")
   before=$(jq -r '.t // empty' "$CACHE" 2>/dev/null)
   t=$(jq -r '.t | sub("\\.[0-9]+"; "") | fromdate' "$CACHE" 2>/dev/null)
   [ -n "$t" ] && [ $(( $(sb_epoch) - t )) -lt "$max" ] && return 0
-  # A peek that failed under a minute ago, for this caller (or an older cache that doesn't say who): don't make it
-  # wait on GitHub again. Another caller still asks — one broken caller (the tmux bar with no HOME, 2026-11-14)
-  # once kept every other one from ever refreshing.
-  f=$(jq -r '.failedAt // empty | fromdate' "$CACHE" 2>/dev/null)
-  by=$(jq -r '.failedBy // empty' "$CACHE" 2>/dev/null)
-  [ -n "$f" ] && { [ -z "$by" ] || [ "$by" = "$CALLER" ]; } && [ $(( $(sb_epoch) - f )) -lt 60 ] && return 0
+  # A peek this caller made that failed under a minute ago (`failedFor`, one time per caller; an older cache with
+  # only `failedAt` holds every caller): don't make it wait on GitHub again. Another caller still asks — one broken
+  # caller (the tmux bar with no HOME, 2026-11-14) once kept every other one from ever refreshing — and in an outage
+  # each caller backs off on its own minute, however their failures interleave.
+  f=$(jq -r --arg c "$CALLER" 'if .failedFor then (.failedFor[$c] // empty) else (.failedAt // empty) end | fromdate' \
+    "$CACHE" 2>/dev/null)
+  [ -n "$f" ] && [ $(( $(sb_epoch) - f )) -lt 60 ] && return 0
   # The shared ls-remote runs here, in this shell: _peek's $( ) subshell couldn't keep its answer for the next slot.
   src="${APERTURE_DEVLOCK_SOURCE:-}"
   if [ "${src#file:}" = "$src" ] && command -v timeout >/dev/null; then _refs "$to"; fi
-  errf=$(mktemp 2>/dev/null) || errf=/dev/null
+  _tmp errf
   h=$(_peek "$to" "$slot" 2>"$errf"); rc=$?
-  why=$(tail -n 1 "$errf" 2>/dev/null | cut -c1-160); [ "$errf" = /dev/null ] || rm -f "$errf"
+  why=$(_why "$errf")
   [ "$rc" = 2 ] && return 0
   if [ "$rc" = 0 ]; then
     # The bot wrote while we were asking GitHub: its write is newer than our answer, so keep it.
@@ -95,7 +103,8 @@ _refresh_one() {
     jq -nc --argjson h "$h" --arg t "$(sb_now)" '{v: 1, t: $t, source: "peek", holder: $h}' | sb_write "$CACHE"
   elif [ -f "$CACHE" ] && [ "$(jq -r '.t // empty' "$CACHE" 2>/dev/null)" = "$before" ]; then
     jq -c --arg f "$(sb_now)" --arg why "${why:-tag read failed}" --arg by "$CALLER" \
-      '.failedAt = $f | .failedWhy = $why | .failedBy = $by' "$CACHE" 2>/dev/null | sb_write "$CACHE"
+      '.failedAt = $f | .failedWhy = $why | .failedBy = $by | .failedFor[$by] = $f' "$CACHE" 2>/dev/null \
+      | sb_write "$CACHE"
   fi
   return 0
 }

@@ -526,6 +526,35 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
   };
 }
 
+// A landing-order entry's row when it isn't in the lane universe: its lane as far as anything knows it, or, with no
+// lane file, queue entry or PR at all, NOT STARTED.
+function orderRow(
+  o: { branch: string; pr: number | null },
+  i: Inputs,
+  prs: Pr[],
+  files: Map<string, LaneFile>,
+  queued: Map<string, Lane>,
+): LaneRow {
+  const file = files.get(o.branch) ?? null;
+  const queue = queued.get(o.branch) ?? null;
+  const pr = prFor(o.branch, prs, o.pr, file?.pr ?? null);
+  if (file || queue || pr) return laneRow({ branch: o.branch, file, queue, pr }, i);
+  return {
+    branch: o.branch,
+    session: i.sessionsByBranch[o.branch] ?? null,
+    state: 'WAITING',
+    label: 'NOT STARTED',
+    detail: null,
+    tone: 'dim',
+    since: null,
+    pr: null,
+    hold: null,
+    fileAge: null,
+    quiet: false,
+    phase: null,
+  };
+}
+
 // Which PR is a branch's: the open one, else the newest merged one.
 function prFor(
   branch: string,
@@ -569,13 +598,13 @@ export function derive(i: Inputs): View {
   prs
     .filter((p) => p.state === 'MERGED' && (p.mergedAt ?? 0) >= i.dayStart)
     .forEach((p) => add(p.branch));
-  // dispatch's landing order names lanes that may have no file or PR yet; a merged one has landed (any age)
+  // dispatch's landing order (NEXT only: it names lanes that may not have started, which NOW never shows); an entry
+  // whose PR merged (in the PR list's newest 40) has landed
   const landed = (o: { branch: string; pr: number | null }) =>
     prs.some(
       (p) => p.state === 'MERGED' && (o.pr !== null ? p.number === o.pr : p.branch === o.branch),
     );
   const order = (q?.mergeOrder ?? []).filter((o) => !landed(o));
-  order.forEach((o) => add(o.branch));
 
   const rows = names.map((b) => {
     const file = files.get(b) ?? null;
@@ -712,7 +741,9 @@ export function derive(i: Inputs): View {
   );
   const first = needs[0]?.what ?? mine[0]?.what ?? null;
   const next = {
-    order: order.map((o) => ({ ...o, row: byBranch.get(o.branch)! })),
+    order: order
+      .map((o) => ({ ...o, row: byBranch.get(o.branch) ?? orderRow(o, i, prs, files, queued) }))
+      .filter((o) => !['MERGED', 'DEPLOYING', 'DONE', 'DEPLOY FAILED'].includes(o.row.state)),
     // parked lanes aren't next for dev: they get one muted line instead
     queue: (q?.devQueue ?? [])
       .filter(
@@ -723,7 +754,10 @@ export function derive(i: Inputs): View {
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
     maintainer: first,
     more: Math.max(0, needs.length - 1),
-    plan: mine.map((p) => p.what).filter((w) => w !== first),
+    plan: mine
+      .map((p) => p.what)
+      .filter((w) => w !== first)
+      .slice(0, 3),
   };
 
   const done = prs

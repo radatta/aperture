@@ -25,7 +25,7 @@ branch=$(jq -r '.branch // empty' "$BOARD_DIR/sessions/$PID.json" 2>/dev/null)
   cat "$BOARD_DIR/status.line" 2>/dev/null
   # At most three read-only calls of 2 s each (one ls-remote for both dev slots, a tag read per held slot), skipped
   # when the caches are under a minute old: the hook's timeout is 10 s, and an overrun loses every line below.
-  bash "$B/devlock.sh" refresh --max-age 60 --timeout 2 >/dev/null 2>&1
+  APERTURE_DEVLOCK_CALLER=hook bash "$B/devlock.sh" refresh --max-age 60 --timeout 2 >/dev/null 2>&1
   bash "$B/devlock.sh" line 2>/dev/null
   name=$(jq -r '.name // empty' "$BOARD_DIR/sessions/$PID.json" 2>/dev/null)
   if [ -n "$name" ] && [ "$name" = "$(jq -r '.name // empty' "$B/hub.json" 2>/dev/null)" ]; then

@@ -340,6 +340,8 @@ describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
       day: null,
     });
     expect(sinceTime(null)).toEqual({ at: null, day: null });
+    for (const bad of ['2026-13-01', '2026-11-99', '2026-02-31'])
+      expect(sinceTime(bad)).toEqual({ at: null, day: null }); // a problem, never a rolled-over date
     const f = q({
       followups: [
         { id: 'F1', what: 'w', owner: 'lane', after: 'now', status: 'open', since: '2026-11-13' },
@@ -361,14 +363,27 @@ describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
     expect(firedAt('lc-polish merge', merged, now)).toBeNull(); // not merged
     expect(firedAt('2026-11-20', merged, now)).toBe(new Date(2026, 10, 20).getTime());
     expect(firedAt('2026-11-14 ~19:30 PT (board-limits)', merged, now)).toBe(
+      new Date(2026, 10, 14, 19, 30).getTime(),
+    );
+    expect(firedAt('2026-11-14 (after a trial)', merged, now)).toBe(
       new Date(2026, 10, 14).getTime(),
     );
     expect(firedAt('Sat 11-14 (flip day)', merged, now)).toBe(new Date(2026, 10, 14).getTime());
+    expect(firedAt('11-01', merged, now)).toBe(new Date(2026, 10, 1).getTime()); // two weeks back: this year
+    // written in December for early January: next year's, not eleven months ago
+    expect(firedAt('01-05 (new year)', merged, new Date(2026, 11, 20).getTime())).toBe(
+      new Date(2027, 0, 5).getTime(),
+    );
     for (const a of [
       'wave 4',
       'repo goes public',
       'lane deploy-log-mask (before the flip)',
       'next CI lane',
+      '1-2 days after tower merge',
+      '2-3 merges',
+      '13-40',
+      '2026-02-31',
+      '2026-11-14 ~25:00',
     ])
       expect(firedAt(a, merged, now)).toBeNull();
   });

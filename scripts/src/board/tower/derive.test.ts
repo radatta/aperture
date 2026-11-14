@@ -337,11 +337,13 @@ describe('the accuracy audit (2026-11-14)', () => {
         ],
       }),
     );
-    expect(v.next.order.map((o) => [o.branch, o.row.state, o.note])).toEqual([
+    expect(v.next.order.map((o) => [o.branch, o.row.label, o.note])).toEqual([
       ['echo', 'BUILDING', 'lands first'],
-      ['bravo', 'PR', null],
-      ['ghost', 'BUILDING', null],
+      ['bravo', 'PR (no checks seen)', null],
+      ['ghost', 'NOT STARTED', null],
     ]);
+    // NEXT only: a lane that hasn't started never shows in NOW
+    expect(v.active.map((r) => r.branch)).not.toContain('ghost');
     expect(derive(inputs()).next.order).toEqual([]);
   });
 

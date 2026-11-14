@@ -208,14 +208,16 @@ _is_tower() {
   [[ "$1" =~ ^[0-9]+$ ]] && sb_alive "$1" && [ "$(sb_comm "$1")" = node ] \
     && tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -q 'tower/web/main.ts'
 }
+# A proof server (`--fixtures`, `--once`) is a tower too, but never the board's: the fallback doesn't claim one.
+_is_board_tower() { _is_tower "$1" && ! tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -qE -- ' --(fixtures|once)( |$)'; }
 # The pid listening on the tower's port, if any (whatever it is).
 _port_pid() { ss -ltnpH "sport = :$TOWER_PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -n 1; }
 tower_pid() {
   local p; p=$(cat "$TOWER_PID" 2>/dev/null)
   _is_tower "$p" && { printf '%s' "$p"; return 0; }
   p=$(_port_pid)
-  _is_tower "$p" || return 1
-  printf '%s\n' "$p" >"$TOWER_PID" 2>/dev/null
+  _is_board_tower "$p" || return 1
+  { printf '%s\n' "$p" >"$TOWER_PID"; } 2>/dev/null
   printf '%s' "$p"
 }
 

@@ -196,42 +196,70 @@ describe('board.sh tower status', () => {
     expect(existsSync(pidFile)).toBe(false);
   });
 
-  it('finds the server by its listener when the pidfile is gone, writes the pidfile back, and stops it', async () => {
-    const port = await freePort();
-    const pidFile = join(tmpdir(), `tower-pid-gone-${process.pid}`);
-    rmSync(pidFile, { force: true });
-    // a fixtures server never writes the pidfile: exactly the "pidfile vanished" case
-    const web = spawn(
+  // A tower on a free port: the board's own (a temp board, no GitHub) or a fixtures proof server.
+  async function web(port: number, fixtures: boolean) {
+    const board = mkdtempSync(join(tmpdir(), 'tower-board-'));
+    const args = fixtures ? ['--fixtures', FIXTURES, '--now', '2026-11-08T06:10:00Z'] : [];
+    const c = spawn(
       'bash',
       [
         join(import.meta.dirname, '../../../../board/tower-web.sh'),
-        '--fixtures',
-        FIXTURES,
-        '--now',
-        '2026-11-08T06:10:00Z',
+        ...args,
         '--no-gh',
         '--port',
         `${port}`,
         '--bind',
         '127.0.0.1',
       ],
-      { stdio: 'ignore' },
+      {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          APERTURE_BOARD_DIR: board,
+          APERTURE_DEVLOCK_SOURCE: `file:${join(board, 'missing')}`, // its lock refresh never asks GitHub
+        },
+      },
     );
+    for (let i = 0; i < 100 && !(await up(port)); i++) await new Promise((r) => setTimeout(r, 100));
+    return { c, board };
+  }
+
+  it('finds the server by its listener when the pidfile is gone, writes the pidfile back, and stops it', async () => {
+    const port = await freePort();
+    const pidFile = join(tmpdir(), `tower-pid-gone-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    const { c, board } = await web(port, false); // started without APERTURE_TOWER_PID: no pidfile, as if /tmp was cleaned
     try {
-      for (let i = 0; i < 100 && !(await up(port)); i++)
-        await new Promise((r) => setTimeout(r, 100));
       const e = { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` };
       const r = tower('status', e);
       expect(r.status).toBe(0);
       expect(r.stdout).toMatch(
-        new RegExp(`tower: running \\(pid ${web.pid}\\) — http://localhost:${port}`),
+        new RegExp(`tower: running \\(pid ${c.pid}\\) — http://localhost:${port}`),
       );
-      expect(readFileSync(pidFile, 'utf8').trim()).toBe(`${web.pid}`);
-      expect(tower('stop', e).stdout).toMatch(`tower: stopped ${web.pid}`);
+      expect(readFileSync(pidFile, 'utf8').trim()).toBe(`${c.pid}`);
+      expect(tower('stop', e).stdout).toMatch(`tower: stopped ${c.pid}`);
       expect(tower('status', e).status).toBe(1);
     } finally {
-      web.kill();
+      c.kill();
       rmSync(pidFile, { force: true });
+      rmSync(board, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('never claims a proof server (--fixtures) on its port: another session owns it', async () => {
+    const port = await freePort();
+    const pidFile = join(tmpdir(), `tower-pid-proof-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    const { c, board } = await web(port, true);
+    try {
+      const e = { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` };
+      expect(tower('status', e).status).toBe(1);
+      expect(existsSync(pidFile)).toBe(false);
+      tower('stop', e);
+      expect(await up(port)).toBe(true); // still serving
+    } finally {
+      c.kill();
+      rmSync(board, { recursive: true, force: true });
     }
   }, 20_000);
 });

@@ -176,7 +176,7 @@ by the next acquire and by `gc`.
 
 `board.sh status`, the SessionStart hook and the status line's `dev:` show the real `refs/locks/dev`
 (`docs/ops/CI-BOT.md` → _Dev lock_), from one cache, `board/devlock.json`
-(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?, failedWhy?, failedBy?}`); slot B's
+(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?, failedWhy?, failedBy?, failedFor?}`); slot B's
 `refs/locks/devb` has its own, `board/devlock.devb.json`, the same shape (_Dev slots_). `devlock.sh line` prints
 slot A as before, then ` · devb: free` / `· devb: <branch> (<session>) until HH:MM` once slot B has a cache; the
 status line's `dev:` and `board.sh json` still read slot A only. Two writers, each for both files:
@@ -185,10 +185,12 @@ status line's `dev:` and `board.sh json` still read slot A only. Two writers, ea
   one `git ls-remote origin refs/locks/dev refs/locks/devb` for both slots, then `gh api …/git/tags/<sha>` for each held slot's holder — each call under
   `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
   the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
-  `failedAt`, `failedWhy` (git's last error line, `timed out after N s`, or the tag read) and `failedBy` (the
-  caller: `status`, `sampler`, `tower` via `APERTURE_DEVLOCK_CALLER`, else its parent's process name); a good
-  read writes the cache afresh, without them. The minute's wait after a failure is that caller's own: another
-  caller still asks (an older cache with no `failedBy` holds every caller for the minute). One broken caller —
+  `failedAt`, `failedWhy` (git's last error line, any URL userinfo stripped, `timed out after N s`, or the tag
+  read), `failedBy` (the caller: `status`, `sampler`, `tower`, `hook` via `APERTURE_DEVLOCK_CALLER`, else its
+  parent's process name) and `failedFor` (each caller's last failure); a good read writes the cache afresh,
+  without them. The minute's wait after a failure is that caller's own (`failedFor[caller]`), however callers'
+  failures interleave: another caller still asks (an older cache with only `failedAt` holds every caller for the
+  minute). One broken caller —
   the COI tmux status bar, whose `#()` jobs ran with no `HOME`, so git lost `~/.gitconfig`'s https rewrite and
   credential helper and fell back to SSH (2026-11-14) — once stamped `failedAt` every minute and kept every
   other caller from ever refreshing. `lib.sh` now sets a missing `HOME` from the passwd entry (`HOME=~`) for every

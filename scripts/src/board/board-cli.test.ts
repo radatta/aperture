@@ -349,6 +349,27 @@ describe('devlock.sh', () => {
     expect(cache()).toEqual({ v: 1, t: expect.any(String), source: 'peek', holder: null });
   });
 
+  it('in an outage each caller keeps its own minute, however their failures interleave', () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: old, source: 'peek', holder: null }),
+    );
+    const as = (caller: string, source: string) =>
+      spawnSync('bash', [join(boardDir, 'devlock.sh'), 'refresh'], {
+        env: { ...env, APERTURE_DEVLOCK_CALLER: caller, APERTURE_DEVLOCK_SOURCE: source },
+        encoding: 'utf8',
+      });
+    const down = `file:${join(tmp, 'missing')}`;
+    as('tower', down);
+    as('status', down);
+    expect(cache().failedFor).toEqual({ tower: expect.any(String), status: expect.any(String) });
+    ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(20 * 60_000) }); // back up, but…
+    as('tower', `file:${join(tmp, 'gh-lock')}`); // …the tower failed under a minute ago: not asked
+    expect(cache().holder).toBeNull();
+    expect(cache().failedBy).toBe('status');
+  });
+
   it('says why when GitHub refuses, and asks with HOME set when the caller has none (the tmux status bar)', () => {
     // git and gh stand-ins first on PATH: git records the HOME it saw, then answers as told
     const bin = join(tmp, 'bin');

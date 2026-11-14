@@ -54,11 +54,19 @@ export type Followup = {
 // is never overstated (as UTC midnight it read a follow-up raised that evening as 32 h old). Anything else is an
 // ISO time.
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+// A local time from its parts, or null when they aren't a real one (2026-02-31 and 13-40 don't roll over).
+function local(y: number, mo: number, d: number, h = 0, mi = 0): number | null {
+  const t = new Date(y, mo - 1, d, h, mi);
+  return t.getFullYear() === y && t.getMonth() === mo - 1 && t.getDate() === d && h < 24 && mi < 60
+    ? t.getTime()
+    : null;
+}
 export function sinceTime(x: unknown): { at: number | null; day: string | null } {
   const m = typeof x === 'string' ? DAY.exec(x) : null;
   if (!m) return { at: parseTime(x), day: null };
-  const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1).getTime() - 1;
-  return { at, day: `${m[2]}-${m[3]}` };
+  const start = local(+m[1]!, +m[2]!, +m[3]!);
+  if (start === null) return { at: null, day: null };
+  return { at: new Date(+m[1]!, +m[2]! - 1, +m[3]! + 1).getTime() - 1, day: `${m[2]}-${m[3]}` };
 }
 
 // STALE: open, due now (`after: "now"`), and older than 24 h. One definition; localNotes/board/pq-check.ts imports it.
@@ -81,19 +89,23 @@ const QUEUE_KEYS = [
 ];
 
 // An open follow-up whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`, `PR <n>`,
-// optionally `+ N day(s)|week(s)` and a trailing `(…)`), or a date that has begun (`2026-11-20 …`, `Sat 11-14 …`,
-// this year). Exact shapes only: free text (`wave 4`, `repo goes public`) never fires. → when it fired.
+// optionally `+ N day(s)|week(s)` and a trailing `(…)`), or a real date that has begun (`2026-11-20 …`, at its
+// `~HH:MM` when it gives one; `Sat 11-14 …`, zero-padded, the nearest such date: one over half a year back is next
+// year's). Exact shapes only: free text (`wave 4`, `1-2 days after …`) never fires. → when it fired.
 const AFTER_REF =
   /^(?:PR (\d+)|([a-z0-9][a-z0-9-]*))(?: merges?)?(?: \+ (\d+) (day|week)s?)?(?: \(.*\))?$/;
-const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:$|[ T(~])/;
-const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{1,2})-(\d{1,2})(?:$|[ (])/;
+const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:(?:T| ~?)(\d{1,2}):(\d{2}))?(?=$|[ (~])/;
+const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{2})-(\d{2})(?=$|[ (])/;
 export type Merged = { branch: string; number: number; mergedAt: number };
 export function firedAt(after: string, merged: Merged[], now: number): number | null {
-  const day = (y: number, m: number, d: number) => new Date(y, m - 1, d).getTime();
   let m = AFTER_ISO.exec(after);
-  if (m) return day(+m[1]!, +m[2]!, +m[3]!);
+  if (m) return local(+m[1]!, +m[2]!, +m[3]!, +(m[4] ?? 0), +(m[5] ?? 0));
   m = AFTER_MD.exec(after);
-  if (m) return day(new Date(now).getFullYear(), +m[1]!, +m[2]!);
+  if (m) {
+    const y = new Date(now).getFullYear();
+    const at = local(y, +m[1]!, +m[2]!);
+    return at !== null && now - at > 183 * 86400e3 ? local(y + 1, +m[1]!, +m[2]!) : at;
+  }
   const r = AFTER_REF.exec(after);
   const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));
   if (!r || !pr) return null;

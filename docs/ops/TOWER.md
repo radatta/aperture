@@ -24,10 +24,10 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 
 ## Run it
 
-| Command                                       | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts`, is the server, and its pid is written back; any other listener is never claimed, and `start` names it. Log: `localNotes/board/tower.log` |
-| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                |
+| Command                                       | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts` without `--fixtures` / `--once`, is the server, and its pid is written back; any other listener (a proof server included) is never claimed, and `start` names it. `APERTURE_TOWER_PORT` moves the port (6183), `APERTURE_TOWER_PID` the pidfile. Log: `localNotes/board/tower.log` |
+| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
 and never from a worktree. After a merge that changes it, run `board.sh tower restart` from `/workspace`. The page's
@@ -88,12 +88,14 @@ From the top:
    - A building lane whose lane file hasn't moved in 2 h (`STALE.lane`) carries an amber "quiet" age.
 4. **NEXT**:
    - your next step (the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item that is
-     undated or due in the last 2 h);
-   - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…); an
-     entry whose PR merged, at any age, drops out;
+     undated, or timed no more than 2 h ago);
+   - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…, or NOT
+     STARTED with no lane file, queue entry or PR; such a lane shows here only, never in NOW). An entry whose PR
+     merged (in the PR list's newest 40) or whose row is merged / deploying drops out;
    - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
-   - your other `plan[]` steps (PLAN);
-   - the dev order per slot (`devQueue` `next` / `waiting`);
+   - your other such `plan[]` steps, up to 3 (PLAN);
+   - the dev order per slot (`devQueue` `next` / `waiting`): a different order from the landing order, so a lane
+     can show in both;
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
 5. **DONE TODAY**: PRs merged since the day began: local midnight, but before noon it reaches back 12 h
    (`dayStart` in `web/main.ts`), so last night's merges stay in view through the morning (marked `yest`) and age
@@ -104,8 +106,9 @@ From the top:
    - `followups[]` that are STALE (open, `after: "now"`, over 24 h: `staleFollowups()` in `queue.ts`, which
      `pq-check.ts` imports);
    - DUE: open `followups[]` whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`,
-     `PR <n>`, optionally `+ N day(s)|week(s)` and a trailing `(…)`) or a date that has begun (`2026-11-20 …`,
-     `Sat 11-14 …`). Exact shapes only: free text (`wave 4`) never fires (`firedFollowups()` in `queue.ts`);
+     `PR <n>`, optionally `+ N day(s)|week(s)` and a trailing `(…)`; in the PR list's newest 40) or a real date that
+     has begun (`2026-11-20 …`, at its `~HH:MM` if given; `Sat 11-14 …`, zero-padded, the nearest such date). Exact
+     shapes only: free text (`wave 4`, `1-2 days after …`) never fires (`firedFollowups()` in `queue.ts`);
    - parked lanes;
    - lanes whose file hasn't moved in a day.
 
