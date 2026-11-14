@@ -45,6 +45,7 @@ vi.mock('./ddb/LiveDoc', () => ({
 }));
 
 import { handler, runtime } from './index';
+import { RPC_BODY_MAX } from './rpc/argSpecs';
 import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
@@ -307,6 +308,20 @@ describe('handler device-token ingest branch', () => {
       expect(
         (await rpc('lcSittingEvents', headers, [{ sittingId: 'bad', events: [] }])).statusCode,
       ).toBe(400);
+    });
+
+    it('a wrongly shaped ingest call is a 400 on the device-token path, not a 500', async () => {
+      process.env.DEVICE_TOKEN = 'right-token';
+      const headers = { 'x-aperture-authorization': 'Bearer right-token' };
+      for (const [args, error] of [
+        [[null], 'A sitting start is required'],
+        [[{}, {}], 'lcSittingStart takes at most 1 argument'],
+      ] as const) {
+        const res = await rpc('lcSittingStart', headers, [...args]);
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body ?? '{}')).toEqual({ error });
+      }
+      expect((h.doc as InMemoryDoc).size).toBe(0);
     });
 
     it('events inside the grace answer 200 with the status and the skipped count; past it a 400', async () => {
@@ -803,6 +818,53 @@ describe('handler testMode and body parsing', () => {
     );
     expect(ok.statusCode).toBe(200);
     expect((JSON.parse(ok.body ?? '') as { title: string }).title).toBe('renamed');
+  });
+
+  it('a wrongly shaped call is a 400 naming the problem, logged as a ShapeError, writing nothing', async () => {
+    const jwt = 'Bearer good-jwt';
+    for (const [method, args, error] of [
+      ['createTask', [null], 'task must be an object'],
+      ['createTask', ['x'], 'task must be an object'],
+      ['createTask', [{}], 'title is required'],
+      ['createTask', [{ title: 'x', userId: 'mallory' }], 'Unknown task field: userId'],
+      ['getDay', ['2026-11-13', { consistent: true }], 'getDay takes at most 1 argument'],
+      ['upsertSeries', [{ title: 'x', rule: 'weekly' }], 'categoryId is required'],
+    ] as const) {
+      const res = await http(method, JSON.stringify({ args }), jwt);
+      expect(res.statusCode, `${method} ${JSON.stringify(args)}`).toBe(400);
+      expect(errorOf(res)).toBe(error);
+    }
+    expect((h.doc as InMemoryDoc).size).toBe(0);
+    expect(logs.map((l) => (JSON.parse(l) as { name: string }).name)).toEqual(
+      Array(6).fill('ShapeError'),
+    );
+  });
+
+  it('a body over RPC_BODY_MAX is a 413 before it is parsed', async () => {
+    const pad = 'x'.repeat(RPC_BODY_MAX);
+    const res = await http('getSettings', JSON.stringify({ args: [], pad }), 'Bearer good-jwt');
+    expect(res.statusCode).toBe(413);
+    const ok = await http('getSettings', JSON.stringify({ args: [], pad: 'x' }), 'Bearer good-jwt');
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it('a throttle or an AWS refusal on rpc is a 500 with the fixed body, never its text', async () => {
+    const call = () => http('getSettings', JSON.stringify({ args: [] }), 'Bearer good-jwt');
+    const throttle = Object.assign(new Error('arn:aws:dynamodb:table/secret slow down'), {
+      name: 'ThrottlingException',
+      $metadata: { httpStatusCode: 400 },
+    });
+    const refused = Object.assign(new Error('arn:aws:dynamodb:table/secret bad item'), {
+      name: 'ValidationException',
+      $metadata: { httpStatusCode: 400 },
+    });
+    for (const e of [throttle, refused]) {
+      vi.spyOn(h.doc, 'get').mockRejectedValueOnce(e);
+      const res = await call();
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('arn:aws');
+      expect(errorOf(res)).toBe('Internal error');
+    }
   });
 
   it('a fault inside dispatch is a 500 with a fixed body; a refusal keeps its message at 400', async () => {

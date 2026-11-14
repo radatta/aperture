@@ -77,12 +77,13 @@ export const bffHardening: Scenario = {
       kind: 'nominal',
       what: 'A legal settings patch (the current pomodoroWorkMin) still lands',
     },
-    {
-      id: 'fault-500',
-      entry: 'api',
-      kind: 'edge',
-      what: 'A fault in our code (createTask with a null input) is a 500 with the fixed body “Internal error”, never its text',
-    },
+    offDev(
+      'fault-500',
+      'A fault in our code is a 500 with the fixed body “Internal error”, never its text',
+      INDEX,
+      'a fault inside dispatch is a 500 with a fixed body; a refusal keeps its message at 400',
+      'no wire shape reaches a fault any more: the argument check refuses createTask(null) with a 400 (bff-shapes’ null-input row, on dev)',
+    ),
     {
       id: 'story-patch-ok',
       entry: 'api',
@@ -139,21 +140,6 @@ export const bffHardening: Scenario = {
     ),
   ],
   steps: [
-    {
-      id: 'fault',
-      title: 'A fault in our code: 500, fixed body',
-      entry: 'api',
-      proves: ['fault-500'],
-      async run(ctx) {
-        // createTask reads input.parentId before any read or write: a null input throws a TypeError.
-        const got = await ctx.api.writes.rpcRaw(
-          'createTask',
-          JSON.stringify({ args: [null] }),
-          'jwt',
-        );
-        expectRefusal('createTask(null)', got, 500, /^Internal error$/);
-      },
-    },
     {
       id: 'story-ok',
       title: 'A legal story patch saves and reads back',

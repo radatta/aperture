@@ -35,7 +35,19 @@ describe('smoke', () => {
     ).toThrow(/error/);
   });
 
-  it('only smokes read methods with empty args (no side effects)', () => {
-    expect(SMOKE_CALLS.every((c) => c.args.length === 0)).toBe(true);
+  it('only smokes read methods, with no args or a read range (no side effects)', () => {
+    const range = (a: unknown) =>
+      typeof a === 'object' && a !== null && Object.keys(a).sort().join() === 'from,to';
+    expect(SMOKE_CALLS.every((c) => c.args.every(range))).toBe(true);
+  });
+
+  it("every call passes the BFF's argument check, so the deploy smoke can't go red on a shape", async () => {
+    // scripts doesn't depend on lambdas (rootDir src), so the check is loaded by path at runtime.
+    const spec = new URL('../../lambdas/src/rpc/argSpecs.ts', import.meta.url).pathname;
+    const { checkArgs } = (await import(/* @vite-ignore */ spec)) as {
+      checkArgs: (method: string, args: unknown[]) => void;
+    };
+    for (const c of SMOKE_CALLS) expect(() => checkArgs(c.method, c.args), c.method).not.toThrow();
+    expect(() => checkArgs('getCalibration', [])).toThrow(/range is required/);
   });
 });

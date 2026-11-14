@@ -9,6 +9,7 @@ import type { PublicKeyReader } from './push/publicKey';
 import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
+import { checkArgs } from './rpc/argSpecs';
 import type { Presigner } from './s3/presigner';
 import { noopObjectStore } from './s3/objects';
 import type { ObjectStore } from './s3/objects';
@@ -40,7 +41,8 @@ export interface RpcDeps {
   pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM read, index.ts); ignored in testMode
 }
 
-// Transport-agnostic RPC core: validate the method against the shared allowlist, build a BackendClient
+// Transport-agnostic RPC core: validate the method against the shared allowlist and its arguments against
+// their shapes (rpc/argSpecs.ts — a ShapeError, before anything is built or read), build a BackendClient
 // (live writes, or write-free for a smoke call), and invoke it. The AWS handler and the httpClient's
 // in-process test harness both go through here, so there's one dispatch path to trust.
 export async function handleRpc(
@@ -49,6 +51,7 @@ export async function handleRpc(
   deps: RpcDeps = {},
 ): Promise<unknown> {
   if (!isApiMethod(call.method)) throw new Error(`Unknown method: ${call.method}`);
+  checkArgs(call.method, call.args ?? []);
   const writes = call.testMode ? noopWrites() : liveWrites(doc);
   // testMode forces the inert gateway too — a smoke run reads no SSM token and makes no Google fetch.
   const google = call.testMode ? noopGoogle() : (call.google ?? noopGoogle());

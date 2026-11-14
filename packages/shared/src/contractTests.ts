@@ -3569,7 +3569,8 @@ export function runApiContract(
 
       it('an archived roll reads as unlinked', async () => {
         const { roll } = await startSitting(api);
-        await api.upsertRoll({ ...roll, active: false });
+        const { id, name, categoryId, estimateMin } = roll; // an input, not the stored row
+        await api.upsertRoll({ id, name, categoryId, estimateMin, active: false });
         await expect(
           api.lcSittingStart(sittingStart({ problemSlug: 'three-sum', problemTitle: '3Sum' })),
         ).rejects.toThrow(LC_ROLL_UNLINKED_ERROR);

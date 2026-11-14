@@ -1,5 +1,6 @@
 import { TOOLS } from './tools';
 import { RpcParamError } from './types';
+import { failureStatus, shownMessage } from '../rpc/failure';
 import type { ToolContext } from './types';
 
 // A hand-rolled MCP transport core — the STATELESS, tools-only subset of the spec (no sessions, no SSE,
@@ -79,7 +80,7 @@ export async function handleMcpMessage(
     // Bad args / unknown tool are protocol errors (-32602); anything else is internal (-32603). A tool's
     // EXECUTION error never reaches here — callTool turns it into an isError result the model can read.
     if (e instanceof RpcParamError) return fail(id, -32602, e.message);
-    return fail(id, -32603, e instanceof Error ? e.message : 'Internal error');
+    return fail(id, -32603, shown(e));
   }
 }
 
@@ -115,9 +116,10 @@ async function callTool(params: unknown, ctx: ToolContext): Promise<ToolCallResu
   } catch (e) {
     if (e instanceof RpcParamError) throw e; // → -32602 (the model sent bad args)
     // Execution error (e.g. "Not found", "Title is required") → isError so the model can self-correct.
-    return {
-      content: [{ type: 'text', text: e instanceof Error ? e.message : 'error' }],
-      isError: true,
-    };
+    return { content: [{ type: 'text', text: shown(e) }], isError: true };
   }
 }
+
+// The /api edge's rule (rpc/failure.ts): our own refusals keep their message; a fault in our code or any
+// AWS error reads `Internal error` / `Request refused` — never its text.
+const shown = (e: unknown): string => shownMessage(e, failureStatus(e, 'rpc'));

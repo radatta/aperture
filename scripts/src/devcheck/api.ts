@@ -191,6 +191,7 @@ export interface DevStory {
   id: string;
   title: string;
   situation: string;
+  competencyTags?: string[];
 }
 export interface DevLogEntry {
   id: string;
@@ -749,7 +750,13 @@ export function createApiClient({
     },
     async updateStory(
       id: string,
-      patch: { title?: string; situation?: string },
+      patch: {
+        title?: string;
+        situation?: string;
+        action?: string;
+        result?: string;
+        competencyTags?: string[];
+      },
     ): Promise<DevStory> {
       assertLedger(id, 'story');
       return call<DevStory>('updateStory', [id, patch]);

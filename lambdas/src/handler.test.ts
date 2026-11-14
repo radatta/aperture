@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Attachment, Task } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { handleRpc } from './handler';
+import { ShapeError } from './rpc/shape';
 import { FakeAnthropic } from './anthropic/gateway';
 import { fakePresigner } from './s3/presigner';
 import { fakeObjectStore } from './s3/objects';
@@ -16,6 +17,43 @@ describe('handleRpc dispatch', () => {
     })) as Task;
     expect(task.title).toBe('x');
     expect(doc.size).toBe(1);
+  });
+
+  it('checks the arguments before anything is built, read or written (a ShapeError)', async () => {
+    const doc = new InMemoryDoc();
+    const call = (method: string, args: unknown[]) =>
+      handleRpc(doc, { userId: 'local', method, args });
+    await expect(call('createTask', [null])).rejects.toThrow(ShapeError);
+    await expect(call('createTask', [{ title: 'x', userId: 'mallory' }])).rejects.toThrow(
+      'Unknown task field: userId',
+    );
+    await expect(
+      call('upsertSeries', [
+        {
+          title: 'x',
+          categoryId: null,
+          defaultEstimateMin: null,
+          rule: 'daily',
+          anchorDate: '2026-11-13',
+        },
+      ]),
+    ).rejects.toThrow('rule must be an object');
+    expect(doc.size).toBe(0);
+    // Legal shapes still land: a weekly series, and settings carrying calendar refs.
+    await call('upsertSeries', [
+      {
+        title: 'Gym',
+        categoryId: null,
+        defaultEstimateMin: null,
+        rule: { kind: 'weekly', daysOfWeek: [1] },
+        anchorDate: '2026-11-13',
+      },
+    ]);
+    const ref = { accountSub: 'g', calendarId: 'primary' };
+    const s = (await call('updateSettings', [{ calendarShapeRefs: [ref] }])) as {
+      calendarShapeRefs: unknown;
+    };
+    expect(s.calendarShapeRefs).toEqual([ref]);
   });
 
   it('rejects an unknown method (never invokes an arbitrary property)', async () => {
