@@ -33,7 +33,8 @@ The SessionStart hook (`board-session.sh`) starts it when none is running, alway
 and never from a worktree. After a merge that changes it, run `board.sh tower restart` from `/workspace`. The page's
 header shows the commit it serves. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
-icon (`/icon.svg`, and `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
+`/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -128,6 +129,9 @@ From the top:
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
   added, so a re-add picks them up.
+- The tab icon is the same radar as PNGs, linked before the SVG because Safari's tab skips an SVG icon (it showed a
+  letter monogram): `favicon-32.png` and `favicon-64.png` (`rsvg-convert -w 32 -h 32 …`), and `favicon.ico` holding
+  both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)

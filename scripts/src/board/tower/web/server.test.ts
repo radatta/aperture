@@ -64,6 +64,23 @@ describe('the HTTP surface', () => {
       expect(png.subarray(1, 4).toString()).toBe('PNG');
       expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([180, 180]); // IHDR width, height
     }
+    // Safari's tab skips the SVG icon: PNGs at 32 and 64 px, linked first, and /favicon.ico (both sizes) it falls back to
+    for (const [p, px] of [
+      ['/favicon-32.png', 32],
+      ['/favicon-64.png', 64],
+    ] as const) {
+      expect(page).toContain(
+        `<link rel="icon" type="image/png" sizes="${px}x${px}" href="${p}" />`,
+      );
+      const png = Buffer.from(await (await fetch(`${base}${p}`)).arrayBuffer());
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([px, px]);
+    }
+    expect(page.indexOf('/favicon-32.png')).toBeLessThan(page.indexOf('/icon.svg'));
+    const ico = await fetch(`${base}/favicon.ico`);
+    expect(ico.status).toBe(200);
+    expect(ico.headers.get('content-type')).toBe('image/x-icon');
+    const icoBytes = Buffer.from(await ico.arrayBuffer());
+    expect([icoBytes.readUInt16LE(2), icoBytes.readUInt16LE(4)]).toEqual([1, 2]); // an icon file, two images
     const svg = await fetch(`${base}/icon.svg`);
     expect(svg.headers.get('content-type')).toBe('image/svg+xml');
     expect(await svg.text()).toMatch(/^<svg [^>]*viewBox="0 0 180 180"/);
