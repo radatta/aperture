@@ -68,7 +68,6 @@ const EVENTS: Record<string, string[]> = {
   'deploy-stage.yml': ['workflow_call'],
   'deploy.yml': ['push'],
   'fetch-dev-logs.yml': ['workflow_dispatch'],
-  'gitleaks.yml': ['pull_request', 'push'],
   'pr.yml': ['pull_request'],
 };
 

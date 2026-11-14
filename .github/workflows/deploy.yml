@@ -6,8 +6,9 @@ name: Deploy
 # Never add workflow_dispatch or another push branch here: this is the prod path.
 # Keyless via OIDC (prod's role from ApertureCicd; dev's from ApertureCicdDev in the dev account — a `main` push
 # deploys dev as dev-main's, in the freeze-exempt lane). Origin secret injected from GitHub secrets per stage.
-# The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
-# each stage against what it serves → deploy each stage at its own tier.
+# The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: classify each stage against what it
+# serves, and look up whether a PR run already checked this exact tree → check (all of it, the fixture suite alone, or
+# nothing) → deploy each stage at its own tier.
 on:
   push:
     branches: [main]
@@ -23,22 +24,24 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    uses: ./.github/workflows/ci.yml
-
-  # Classify each stage (docs / app-only / full) against what that stage serves, from its deployment records. Runs in
-  # parallel with `check`; deploy-dev waits on both. Kept toolchain-free and short.
+  # Classify each stage (docs / app-only / full) against what that stage serves, from its deployment records, and plan
+  # the check: `skip` when a green PR run checked this exact tree, `fixtures` when it did but skipped the fixture suite,
+  # else `check` (scripts/src/checked-tree.ts; INFRA §9 → Tree-matched main checks). `check` and the deploys wait on it.
+  # Kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full` well inside this
+    timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full`/`check` well inside this
     permissions:
       contents: read
       deployments: read # each stage's deployment records
-      actions: read # the recorded job's steps: what that deployment actually deployed
+      actions: read # the recorded job's steps: what that deployment actually deployed; the PR run and its steps
+      checks: read # the PR head's check runs and the tested-tree annotation
+      pull-requests: read # the PR that introduced the commit
     outputs:
       mode_dev: ${{ steps.detect.outputs.mode_dev }}
       mode_devb: ${{ steps.detect.outputs.mode_devb }}
       mode_prod: ${{ steps.detect.outputs.mode_prod }}
+      check: ${{ steps.detect.outputs.check }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -63,14 +66,31 @@ jobs:
           # Slot B: full only on a shape change since its last main deploy (cdk/, the lockfile, or shared's stage.ts), else none.
           mode_devb=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot devb)
           mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")
+          check=$(node scripts/src/checked-tree.ts "$GITHUB_SHA")
           for mode in "$mode_dev" "$mode_devb" "$mode_prod"; do
             case "$mode" in none|app|full) ;; *) echo "::error::classifier returned '$mode'"; exit 1 ;; esac
           done
-          echo "Deploy modes: dev-main=$mode_dev devb=$mode_devb prod=$mode_prod"
-          { echo "mode_dev=$mode_dev"; echo "mode_devb=$mode_devb"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"
+          case "$check" in skip|fixtures|check) ;; *) echo "::error::checked-tree returned '$check'"; exit 1 ;; esac
+          echo "Deploy modes: dev-main=$mode_dev devb=$mode_devb prod=$mode_prod  check=$check"
+          { echo "mode_dev=$mode_dev"; echo "mode_devb=$mode_devb"; echo "mode_prod=$mode_prod"; echo "check=$check"; } >> "$GITHUB_OUTPUT"
 
+  # Fail-closed: only a `changes` that succeeded and printed `skip` skips this. A failed or crashed `changes` leaves the
+  # output empty, so the check still runs (and nothing deploys: the deploy jobs require `changes` to succeed).
+  check:
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.check != 'skip' }}
+    permissions:
+      contents: read
+      pull-requests: read # ci.yml's check job declares it (the secret scan); a caller granting less fails at startup
+    uses: ./.github/workflows/ci.yml
+    with:
+      fixtures_only: ${{ needs.changes.outputs.check == 'fixtures' }}
+
+  # `check` succeeded, or was skipped because `changes` said so — a check skipped for any other reason deploys nothing.
+  # Explicit results, not the implicit success(), which a skipped `check` would fail.
   deploy-dev:
     needs: [check, changes]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
     permissions:
       id-token: write
       contents: read
@@ -99,7 +119,7 @@ jobs:
   # bot's currentBase tell devb's records by it.
   deploy-devb:
     needs: [check, changes]
-    if: github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full'
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
     permissions:
       id-token: write
       contents: read
@@ -121,7 +141,9 @@ jobs:
 
   deploy-prod:
     needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode_prod` output
-    if: github.ref == 'refs/heads/main' # main is the only trigger; kept so a trigger ever added here stops at dev
+    # main is the only trigger; the ref test stays so a trigger ever added here stops at dev. Results spelled out: an
+    # upstream skipped `check` (a tree match) must not read as a failure through the implicit success().
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.deploy-dev.result == 'success' && needs.changes.result == 'success' }}
     permissions:
       id-token: write
       contents: read
@@ -139,14 +161,14 @@ jobs:
       device_token: ${{ secrets.DEVICE_TOKEN_PROD }}
       agent_token: ${{ secrets.AGENT_TOKEN_PROD }}
 
-  # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
-  # signal without watching the Actions tab. Runs for every main push. Failure = high priority
-  # (breaks through), success = min priority (quiet). NTFY_TOPIC is the only access control on the public
-  # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
-  # until the secret is set, so it's safe to land before the topic exists.
+  # Push a failed deploy to ntfy (subscribed in a desktop browser, high priority) so a solo operator gets an
+  # out-of-band signal without watching the Actions tab. Failure or cancellation only (a timeout reads as cancelled):
+  # a skipped job bills nothing, and the success ping (min priority, silent) cost a billed minute every merge.
+  # NTFY_TOPIC is the only access control on the public ntfy instance → a secret, not a var; not an AWS cred, so this
+  # job stays keyless. No-ops (doesn't fail) until the secret is set.
   notify:
-    needs: [check, changes, deploy-dev, deploy-devb, deploy-prod]
-    if: always()
+    needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]
+    if: failure() || cancelled()
     runs-on: ubuntu-latest
     steps:
       - name: Notify ntfy
@@ -160,23 +182,14 @@ jobs:
           MODE_DEV: ${{ needs.changes.outputs.mode_dev }}
           MODE_DEVB: ${{ needs.changes.outputs.mode_devb }}
           MODE_PROD: ${{ needs.changes.outputs.mode_prod }}
+          CHECK_PLAN: ${{ needs.changes.outputs.check }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT devb=$DEVB_RESULT prod=$PROD_RESULT  modes=dev:$MODE_DEV devb:$MODE_DEVB prod:$MODE_PROD  $SHA"
-          # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod's `if:` can skip it; a
-          # docs-only job still reports success (steps just no-op). `changes` is watched too: its failure (the
-          # classifier) must not slip through as a success just because the deploy jobs got skipped.
-          failed=0
-          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$DEVB_RESULT" "$PROD_RESULT"; do
-            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
-          done
-          if [ "$failed" = "1" ]; then
-            curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
-              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
-          else
-            curl -s -H "Title: ✅ Aperture deploy ok ($REF)" -H "Priority: min" \
-              -d "$body" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
-          fi
+          body="check=$CHECK_RESULT($CHECK_PLAN) changes=$CHANGES_RESULT dev=$DEV_RESULT devb=$DEVB_RESULT prod=$PROD_RESULT  modes=dev:$MODE_DEV devb:$MODE_DEVB prod:$MODE_PROD  $SHA"
+          # Only a failed or cancelled job gets here (the `if:`); `changes` is watched too: its failure (the classifier)
+          # must not pass quietly just because the deploy jobs got skipped.
+          curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
+            -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"

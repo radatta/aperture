@@ -5,20 +5,33 @@ name: CI
 # Three jobs so the app suite (the long pole) runs beside lint/typecheck/the other tests instead of after
 # them, itself halved with vitest --shard. A caller's `needs` sees one combined result, but a ruleset
 # gates on per-job check names, so both shards must be required checks by name too (INFRA §9).
-# Toolchain + install is the local setup action (.github/actions/setup).
+# Toolchain + install is the local setup action (.github/actions/setup). The secret scan is a step of `check` (it was
+# its own one-minute workflow). On a main push deploy.yml may skip this whole call when a PR run already checked the
+# exact tree, or pass `fixtures_only` to run just the fixture suite (scripts/src/checked-tree.ts, INFRA §9).
 on:
   workflow_call:
+    inputs:
+      fixtures_only:
+        description: Run only the mailroom fixture suite — deploy.yml's tree match on a PR run that skipped it
+        type: boolean
+        default: false
 
 jobs:
   check: # job id unchanged, so the required check `ci / check` keeps its name
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read # the secret scan lists a PR's commits (GET /pulls/{n}/commits)
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2 # a PR's merge commit and both parents: HEAD^1 is main, for the fixture-inputs diff
-      - uses: ./.github/actions/setup
+          fetch-depth: 0 # full history for the secret scan; also HEAD^1 (main) for the fixture-inputs diff
+      # The tree this PR run tests, as a check-run annotation: deploy.yml's `changes` skips main's check when the squash
+      # commit's tree equals it (scripts/src/checked-tree.ts). Inline here, not a repo script, on purpose: an exact tree
+      # match means main's own copy of this line printed it, and the module rejects a job with more than one.
+      - name: Tested tree
+        if: ${{ github.event_name == 'pull_request' }}
+        run: echo "::notice file=.github/workflows/ci.yml,line=1,title=tested-tree::$(git rev-parse HEAD^{tree})"
       # Incremental caches: tsc -b's .tsbuildinfo (TS re-hashes any input newer than its buildinfo, and a
       # checkout stamps every file newer than the restored cache) plus shared's emitted d.ts they vouch
       # for, and ESLint's content-keyed cache (safe only while no lint rule is type-aware). Keyed per
@@ -30,6 +43,7 @@ jobs:
       # and the post-job save). Only this job restores and saves it: the app shards resolve shared from
       # source and never run tsc, and a second saver would race this one for the same per-commit key.
       - uses: actions/cache@v6
+        if: ${{ !inputs.fixtures_only }}
         with:
           path: |
             app/node_modules/.tmp
@@ -58,22 +72,35 @@ jobs:
             { cat "$RUNNER_TEMP/fixtures.txt"; exit 1; }
           cat "$RUNNER_TEMP/fixtures.txt" # stdout, so a skip's ::notice:: becomes an annotation on the run
           echo "run=$run" >> "$GITHUB_OUTPUT"
+      # gitleaks over the commits in the push or PR (full history on hand); findings fail the job. Suppress false
+      # positives via .gitleaksignore. The one leak class OIDC doesn't already prevent (e.g. a pasted origin secret).
+      # After the fixture inputs (which go first), before setup, so a finding fails fast; setup still runs after one, so
+      # the steps below report their own results. The step name is checked-tree.ts' SCAN_STEP (a test pins it).
+      - name: Secret scan
+        if: ${{ !inputs.fixtures_only }}
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # the job's auto-issued token, not a managed secret
+      - uses: ./.github/actions/setup
+        if: ${{ !cancelled() }}
       - run: pnpm lint
+        if: ${{ !inputs.fixtures_only }}
       # !cancelled() so a lint failure doesn't mask whether typecheck/test would pass — the job still
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
       - run: pnpm typecheck
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs.fixtures_only }}
       # Everything but app, which runs in the test-app shards, and the fixture suite, which runs next. The root
       # `pnpm test` (pnpm -r test) is unchanged for local use; the split lives here only. --exclude reaches every
       # package's vitest and matches only in scripts.
       - run: pnpm -r --filter '!@aperture/app' test --exclude src/mailroom/runner-fixtures.test.ts
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs.fixtures_only }}
       - name: Mailroom fixture suite
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run != 'false') }}
         run: pnpm --filter @aperture/scripts test src/mailroom/runner-fixtures.test.ts
 
   test-app:
     name: test-app-${{ matrix.shard }} # the check name; without it GitHub renders `test-app (1)`
+    if: ${{ !inputs.fixtures_only }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

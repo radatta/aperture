@@ -99,6 +99,7 @@ describe('ci.yml wiring', () => {
       'git rev-parse -q --verify HEAD^2 >/dev/null && files=$(git diff --name-only --no-renames HEAD^1 HEAD)',
     );
     expect(ci).toContain('node scripts/src/fixture-inputs.ts');
-    expect(ci).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 2/);
+    // Full history (the secret scan's), which includes the merge commit's first parent.
+    expect(ci).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 0 /);
   });
 });
