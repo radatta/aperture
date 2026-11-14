@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 export type Result = { status: number | null; stdout: string; stderr: string };
 export type Verdict = 'changed' | 'unchanged';
-export type Stack = { verdict: Verdict; resources: string[] };
+// `withheld`: resource headers this can't rebuild (a type or name outside the patterns below), counted, never printed.
+export type Stack = { verdict: Verdict; resources: string[]; withheld: number };
 type Log = (line: string) => void;
 
 export const stacksOf = (stage: string) => [`ApertureData-${stage}`, `ApertureApp-${stage}`];
@@ -24,6 +25,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // `[~] AWS::Lambda::Function Bff Bff4A420414 replace`: prefix, type, then the construct path and logical id, then the
 // impact. Rebuilt from those fields, never echoed: a name outside the code-identifier charset is left out.
 const RESOURCE = /^\[([+~\-\u2190])\] ((?:AWS|Custom)::[A-Za-z0-9]+(?:::[A-Za-z0-9]+)*) (.+)$/;
+const ANY_RESOURCE = /^\[[^\]]{1,2}\] [A-Za-z0-9]+::/; // a typed header; Parameter, Output etc. carry no `::`
 const IMPACT = / (may be replaced|replace|destroy|orphan|import)$/;
 const NAME = /^[A-Za-z0-9/_.-]+(?: [A-Za-z0-9]+)?$/;
 export function resourceLine(line: string): string | undefined {
@@ -59,6 +61,7 @@ export function summarize(output: string, stacks: string[]): Record<string, Stac
   const verdicts = sections.map((sec): Stack => ({
     verdict: sec.some((l) => l.startsWith('There were no differences')) ? 'unchanged' : 'changed',
     resources: sec.flatMap((l) => resourceLine(l) ?? []),
+    withheld: sec.filter((l) => ANY_RESOURCE.test(l) && !resourceLine(l)).length,
   }));
   if (verdicts.filter((v) => v.verdict === 'changed').length !== counts[0]) return undefined;
   return Object.fromEntries(stacks.map((s, i) => [s, verdicts[i]!]));
@@ -95,6 +98,8 @@ export function run(
   for (const s of stacks) {
     deps.log(`${s}: ${verdicts?.[s]?.verdict ?? 'unknown'}`);
     for (const r of verdicts?.[s]?.resources ?? []) deps.log(`  ${r}`);
+    if (verdicts?.[s]?.withheld)
+      deps.log(`  (${verdicts[s].withheld} more resource header(s) withheld)`);
   }
   return 0;
 }

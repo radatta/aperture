@@ -237,7 +237,10 @@ describe('the device user id', () => {
       const lines = read(f).split('\n');
       const start = lines.indexOf(`  ${job}:`);
       expect(start, `${f} ${job}`).toBeGreaterThan(-1);
-      const from = lines.findIndex((l, i) => i > start && l.startsWith(`    ${key}:`));
+      const next = lines.findIndex((l, i) => i > start && /^ {2}\S/.test(l));
+      const end = next === -1 ? lines.length : next;
+      const from = lines.findIndex((l, i) => i > start && i < end && l.startsWith(`    ${key}:`));
+      expect(from, `${f} ${job} ${key}`).toBeGreaterThan(start);
       const block: string[] = [];
       for (const l of lines.slice(from + 1)) {
         if (!l.startsWith('      ')) break;

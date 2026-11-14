@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,8 +36,8 @@ const diffOf = (data: boolean, app: boolean, n = Number(data) + Number(app)) =>
     section('ApertureApp-dev', app),
     `\n✨  Number of stacks with differences: ${n}\n`,
   ].join('\n');
-const changed = { verdict: 'changed', resources: [RES] };
-const unchanged = { verdict: 'unchanged', resources: [] };
+const changed = { verdict: 'changed', resources: [RES], withheld: 0 };
+const unchanged = { verdict: 'unchanged', resources: [], withheld: 0 };
 
 describe('resourceLine', () => {
   it.each([
@@ -120,6 +120,7 @@ describe('summarize', () => {
     expect(summarize(text, STACKS)?.['ApertureData-dev']).toEqual({
       verdict: 'changed',
       resources: ['[+] AWS::DynamoDB::Table Table TableCD117FA1'],
+      withheld: 0,
     });
   });
 
@@ -133,7 +134,7 @@ describe('summarize', () => {
     ].join('\n');
     expect(summarize(text, STACKS)).toEqual({
       'ApertureData-dev': unchanged,
-      'ApertureApp-dev': { verdict: 'changed', resources: [`${RES} (replace)`] },
+      'ApertureApp-dev': { verdict: 'changed', resources: [`${RES} (replace)`], withheld: 0 },
     });
   });
 
@@ -203,6 +204,22 @@ describe('run', () => {
     expect(d.saved[0]![1]).toContain(SECRET);
   });
 
+  it('counts the resource headers it cannot rebuild, and prints none of them', () => {
+    const odd = [
+      `[~] Org::Third::Party X X1`,
+      `[+] Custom::My-Thing ${SECRET} Y1`,
+      '[~] Fn::ForEach::Loop',
+    ];
+    const d = deps({ stderr: diffOf(false, true).replace(RES, [RES, ...odd].join('\n')) });
+    expect(run(['dev'], d.deps)).toBe(0);
+    expect(d.out).toEqual([
+      'ApertureData-dev: unchanged',
+      'ApertureApp-dev: changed',
+      `  ${RES}`,
+      '  (3 more resource header(s) withheld)',
+    ]);
+  });
+
   it("warns and reads unknown on output it can't read, without failing or printing it", () => {
     const d = deps({ stderr: `${SECRET}\n${RES}\nsomething new` });
     expect(run(['dev'], d.deps)).toBe(0);
@@ -233,11 +250,15 @@ describe('the script as the deploy runs it', () => {
       `#!/bin/sh\necho "pnpm says ${SECRET}"\ncat "$(dirname "$0")/diff.txt" >&2\nexit ${exit}\n`,
     );
     chmodSync(pnpm, 0o755);
-    const r = spawnSync(process.execPath, [script, 'dev'], {
-      env: { PATH: `${dir}:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir },
-      encoding: 'utf8',
-    });
-    return { ...r, saved: readFileSync(join(dir, 'aperture-cdk-diff.dev.txt'), 'utf8') };
+    try {
+      const r = spawnSync(process.execPath, [script, 'dev'], {
+        env: { PATH: `${dir}:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir },
+        encoding: 'utf8',
+      });
+      return { ...r, saved: readFileSync(join(dir, 'aperture-cdk-diff.dev.txt'), 'utf8') };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   };
 
   it.each([
