@@ -53,12 +53,21 @@ function xclip(
     },
   });
   const out: Buffer[] = [];
+  const err: Buffer[] = [];
   child.stdout.on('data', (b: Buffer) => out.push(b));
+  child.stderr.on('data', (b: Buffer) => err.push(b));
   child.stdin.on('error', () => {}); // a refused copy exits before reading
   child.stdin.end(o.stdin ?? '');
   const t0 = Date.now();
-  return new Promise<{ code: number | null; out: Buffer; ms: number }>((resolve) =>
-    child.on('close', (code) => resolve({ code, out: Buffer.concat(out), ms: Date.now() - t0 })),
+  return new Promise<{ code: number | null; out: Buffer; err: string; ms: number }>((resolve) =>
+    child.on('close', (code) =>
+      resolve({
+        code,
+        out: Buffer.concat(out),
+        err: Buffer.concat(err).toString(),
+        ms: Date.now() - t0,
+      }),
+    ),
   );
 }
 
@@ -171,12 +180,13 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     const id = await nextJob();
     rmSync(join(hj, 'inbox', `${id}.json`));
     const r = await run;
-    expect(r.code).toBe(1);
-    // The shim's own (monotonic) clock, not this process's wall clock (F70: two CI runs read 1109 and 473 ms). Matching
-    // the whole log prints it on a failure, so the line shows which exit fired.
-    const log = readFileSync(join(T, 'log'), 'utf8');
+    // The shim's own (monotonic) clock, not this process's wall clock (F70: CI runs read 1109, 473 and 450 ms). Matching
+    // the whole log and stderr prints both on a failure, so it shows which exit fired, or the shell error.
+    const lf = join(T, 'log');
+    const log = `${existsSync(lf) ? readFileSync(lf, 'utf8') : '(no log)\n'}--- stderr:\n${r.err}`;
     expect(log).toMatch(/no answer in \d+ ms though the Mac took it/);
     expect(Number(/no answer in (\d+) ms/.exec(log)?.[1])).toBeGreaterThanOrEqual(500 + 700);
+    expect(r.code).toBe(1);
     expect(readdirSync(join(hj, 'staging')).filter((f) => f.includes(id))).toEqual([]);
   });
 
