@@ -27,7 +27,11 @@ log() { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s %s %s\n' "$(date 
 no() { log "$1"; exit 1; }
 # NOW_MS: milliseconds on the monotonic boot clock, set without a fork. Two CI runs gave up early by the wall clock
 # (`$(date)`: a stepped clock, or a fork that failed and left t0 empty, both read as time gone by; F70).
-now() { local u; read -r u _ </proc/uptime; NOW_MS=$((${u%.*} * 1000 + 10#${u#*.} * 10)); }
+now() {
+  local u=""
+  read -r u _ </proc/uptime 2>/dev/null && [[ "$u" =~ ^[0-9]+\.[0-9]{2}$ ]] || return 1
+  NOW_MS=$((${u%.*} * 1000 + 10#${u#*.} * 10))
+}
 age_s() { echo $(($(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0))); }
 
 # The cache dir: ours, 0700, not a link.
@@ -56,6 +60,7 @@ targets() {
   done
   sweep
   # No busy check: a sim run holds only the Mac's slow lane; clips run in the fast lane meanwhile (MAILROOM.md → Lanes).
+  now || no "refused: no clock (/proc/uptime)" # before queueing, so a failed read leaves no job behind
   id="$(date -u +%Y%m%dT%H%M%SZ)-clip-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$id" =~ ^[0-9]{8}T[0-9]{6}Z-clip-[a-z0-9]{4}$ ]] || no "could not make a job id"
   job="$(jq -cn --arg id "$id" '{v: 1, id: $id, job: "clip", submittedAt: (now | floor | todate), expiresInMin: 1, params: {}}')"
@@ -69,7 +74,7 @@ targets() {
     now
     if [ $((NOW_MS - t0)) -ge "$cap" ]; then
       if mv -- "$HJ/inbox/$id.json" "$HJ/staging/$id.withdrawn.json" 2>/dev/null; then
-        no "$id no answer in $((WAIT_MS / 1000)) s — withdrawn (Mac asleep or mailroom not installed)"
+        no "$id no answer in $((WAIT_MS / 1000)) s — withdrawn (Mac asleep, mailroom not installed, or an old single-lane mailroom busy: reinstall from main)"
       fi
       # The Mac took it: wait out its read, so the answer is collected (and its clip.png deleted) rather than left.
       if [ -z "$took" ]; then took=1; cap=$((WAIT_MS + GRACE_MS)); continue; fi

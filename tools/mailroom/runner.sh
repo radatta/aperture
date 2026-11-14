@@ -12,8 +12,8 @@ set -euo pipefail
 umask 077
 export LC_ALL=C # deterministic globs and regexes, as under launchd
 
-HJ="${1:?usage: runner.sh <hostjobs-dir> <state-dir>}"
-STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir>}"
+HJ="${1:?usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]}"
+STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]}"
 LANE="${3:-all}"
 case "$LANE" in slow | fast | all) ;; *) echo "usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]" >&2; exit 1 ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
@@ -76,7 +76,7 @@ esac
 # --- lanes ----------------------------------------------------------------------------------------------------
 # The lane of an entry comes from its name alone: nothing in the shared folder is opened before the move. The name is the
 # container's word, like the content, so it only routes; the snapshot's job field decides (job_lane_ok).
-lane_of_name() { if [[ "$1" == *.json && "${1%.json}" =~ $SLOW_RE ]]; then echo slow; else echo fast; fi; }
+slow_name() { [[ "$1" == *.json && "${1%.json}" =~ $SLOW_RE ]]; } # no subshell: it runs once per inbox entry
 job_lane_ok() { # JOB → 0 when this drain holds the lock the job needs
   case " $SLOW_JOBS " in *" $1 "*) [ "$LANE" != fast ] || return 1 ;; esac
   case " $FAST_JOBS " in *" $1 "*) [ "$LANE" != slow ] || return 1 ;; esac
@@ -176,10 +176,11 @@ shopt -s nullglob dotglob
 n=0
 for entry in ./*; do
   [ "$n" -lt "$MAX_PER_DRAIN" ] || break
-  [ "$LANE" = all ] || [ "$(lane_of_name "${entry#./}")" = "$LANE" ] || continue # the other lane's: left, uncounted
+  if [ "$LANE" = slow ]; then slow_name "${entry#./}" || continue; fi # the other lane's: left, uncounted
+  if [ "$LANE" = fast ]; then ! slow_name "${entry#./}" || continue; fi
   for l in $HELD; do touch "$STATE/$l" 2>/dev/null || true; done
   if [ -z "$SOURCED" ]; then
-    for f in "$HERE"/jobs/*.sh; do . "$f"; done
+    for f in "$HERE"/jobs/[!.]*.sh; do . "$f"; done # dotglob is on here: never a stray ._clip.sh
     SOURCED=1
   fi
   n=$((n + 1))
