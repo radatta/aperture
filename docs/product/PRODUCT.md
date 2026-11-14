@@ -127,7 +127,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 
 **Actual-time measurement — hybrid:** on "done," prompt for one number, **prefilled from any pomodoro time tracked, editable.** Works even on days no timer ran, so calibration data stays complete. An honest manual guess still calibrates fine.
 
-**Rollover:** an unfinished planned task rolls back to backlog — no penalty, but repeated rollovers stay visible as an honest signal, never a scold.
+**Rollover:** an unfinished planned task rolls back to backlog when the next day loads, or by hand from Night's _Still open_ (Tomorrow · Backlog · Leave) — no penalty. Repeated rollovers are meant to stay visible as an honest signal, never a scold; that signal isn't built yet.
 
 **Calibration payoff:** per-task delta shows in the night review; an aggregate estimate/actual ratio + trend is meaningful only after weeks of data (present early, but honestly sparse). The buffer suggestion starts flat (e.g. +25%) and later personalizes to the user's measured bias.
 
@@ -154,7 +154,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 
 ### Categories
 
-Tasks + pomodoro sessions carry a category (drives the time-budget glance + weekly balance view). Starting set (editable): **deep work · admin · learning · health · people.** Collapsible to just work / non-work if the fuller set is too much. Every category belongs to a **life area** (School · Aperture · Recruiting · Personal — [areas](../areas/tasks/areas.md)), and the task editor suggests a category from past tasks, tap-only ([task-editor](../areas/tasks/task-editor.md)).
+Tasks + pomodoro sessions carry a category (drives the time-budget glance + weekly balance view). Starting set (editable; the stub's seed): **deep work · admin · learning · health · people.** Each category is work or non-work (`isWork`); collapsing to just work / non-work comes with the weekly balance view, not built yet. Every category belongs to a **life area** (School · Aperture · Recruiting · Personal — [areas](../areas/tasks/areas.md)), and the task editor suggests a category from past tasks, tap-only ([task-editor](../areas/tasks/task-editor.md)).
 
 ---
 
