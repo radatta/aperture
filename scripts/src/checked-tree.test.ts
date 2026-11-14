@@ -94,6 +94,7 @@ function world(w: World = {}) {
       event: 'pull_request',
       conclusion: 'success',
       head_sha: HEAD,
+      head_repository: { full_name: 'o/r' },
       ...w.run,
     }),
     'GET /repos/o/r/check-runs/': () => w.notes ?? [note()],
@@ -155,6 +156,10 @@ describe('checked-tree plans main’s check', () => {
       ).toBe('check');
       expect(await planOf({ run: { event: 'push' } })).toBe('check');
       expect(await planOf({ run: { path: '.github/workflows/ci.yml' } })).toBe('check');
+    });
+    it("a fork's run, or one that names no head repo", async () => {
+      expect(await planOf({ run: { head_repository: { full_name: 'fork/r' } } })).toBe('check');
+      expect(await planOf({ run: { head_repository: null } })).toBe('check');
     });
     it('a run on another head', async () => {
       expect(await planOf({ run: { head_sha: OTHER } })).toBe('check');
@@ -248,6 +253,7 @@ describe('checked-tree plans main’s check', () => {
           event: 'pull_request',
           conclusion: 'success',
           head_sha: SHA,
+          head_repository: { full_name: 'o/r' },
         }),
         'GET /repos/o/r/check-runs/': () => [note()],
         'GET /repos/o/r/actions/jobs/': () => ({ conclusion: 'success', steps: steps() }),

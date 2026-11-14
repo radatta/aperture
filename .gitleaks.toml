@@ -1,4 +1,4 @@
-# gitleaks config (CI: .github/workflows/gitleaks.yml). Default rules, plus allowlisted false positives.
+# gitleaks config (CI: the `Secret scan` step of ci.yml's `check`). Default rules, plus allowlisted false positives.
 [extend]
 useDefault = true
 

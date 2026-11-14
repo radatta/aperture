@@ -23,7 +23,7 @@ const KEY = /^( *)([A-Za-z0-9_-]+):\s*(.*?)\s*$/;
 const stripComment = (v: string) => v.replace(/(^|\s)#.*$/, '').trim();
 const unquote = (v: string) => v.replace(/^(['"])(.*)\1$/, '$2');
 const indentOf = (line: string) => line.length - line.trimStart().length;
-const isContent = (line: string) => !!line.trim() && !line.trim().startsWith('#');
+export const isContent = (line: string) => !!line.trim() && !line.trim().startsWith('#');
 
 export function parseWorkflow(text: string, name = 'workflow'): Workflow {
   const lines = text.split('\n');

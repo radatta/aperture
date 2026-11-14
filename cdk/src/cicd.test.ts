@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
@@ -282,5 +283,198 @@ describe('ApertureCicdStack roles', () => {
         Statement: Match.arrayWith([Match.objectLike({ Action: 'cloudformation:DescribeStacks' })]),
       }),
     });
+  });
+});
+
+// The public-repo check (INFRA §9 → Public repo): every role GitHub can assume admits only this repo's named
+// environments — never a wildcard (another repo, a fork), never a pull_request subject — for both forms of the
+// subject segment (the slug, and the ID-embedded `owner@id/repo@id` the live roles use, INFRA §9).
+const OIDC = 'token.actions.githubusercontent.com';
+const ENVIRONMENTS = { prod: ['prod'], dev: ['dev', 'dev-main', 'dev-logs'] };
+interface Trust {
+  Effect?: string;
+  Action?: unknown;
+  Principal?: { Federated?: unknown };
+  Condition?: Record<string, Record<string, unknown>>;
+}
+
+// What's wrong with one trust statement for `subject` — an empty list is a statement that admits only named
+// environments of this one repo.
+function trustProblems(s: Trust, subject: string): string[] {
+  const out: string[] = [];
+  if (s.Effect !== 'Allow') out.push(`Effect ${String(s.Effect)}`);
+  if (s.Action !== 'sts:AssumeRoleWithWebIdentity') out.push(`Action ${JSON.stringify(s.Action)}`);
+  const ops = Object.keys(s.Condition ?? {}).sort();
+  if (ops.join() !== 'StringEquals,StringLike')
+    out.push(`condition operators ${ops.join() || 'none'}`);
+  const aud = s.Condition?.StringEquals?.[`${OIDC}:aud`];
+  if (aud !== 'sts.amazonaws.com') out.push(`aud ${JSON.stringify(aud)}`);
+  const extra = Object.keys(s.Condition?.StringEquals ?? {}).filter((k) => k !== `${OIDC}:aud`);
+  if (extra.length) out.push(`unexpected StringEquals keys ${extra.join()}`);
+  const subKeys = Object.keys(s.Condition?.StringLike ?? {});
+  if (subKeys.join() !== `${OIDC}:sub`) out.push(`StringLike keys ${subKeys.join() || 'none'}`);
+  const raw = s.Condition?.StringLike?.[`${OIDC}:sub`];
+  const subs = Array.isArray(raw) ? raw : [raw];
+  if (!subs.length) out.push('no sub');
+  const lit = subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ok = new RegExp(`^repo:${lit}:environment:(prod|dev|dev-main|dev-logs)$`);
+  for (const sub of subs)
+    if (
+      typeof sub !== 'string' ||
+      /[*?]/.test(sub) ||
+      sub.includes('pull_request') ||
+      !ok.test(sub)
+    )
+      out.push(`sub ${JSON.stringify(sub)}`);
+  return out;
+}
+
+const federated = (t: Template) =>
+  Object.entries(t.findResources('AWS::IAM::Role')).flatMap(([id, r]) => {
+    const props = (
+      r as { Properties: { RoleName?: string; AssumeRolePolicyDocument: { Statement: Trust[] } } }
+    ).Properties;
+    return props.AssumeRolePolicyDocument.Statement.filter(
+      (s) =>
+        s.Principal?.Federated !== undefined ||
+        JSON.stringify(s.Action).includes('WebIdentity') ||
+        JSON.stringify(s).includes(OIDC),
+    ).map((s) => ({ id, name: props.RoleName ?? id, s }));
+  });
+
+describe('ApertureCicdStack OIDC trust, for a public repo', () => {
+  const build = (roles: 'prod' | 'dev', githubSubject?: string) =>
+    Template.fromStack(
+      new ApertureCicdStack(new App(), 'Cicd', {
+        env: { account: '111111111111', region: 'us-west-1' },
+        githubRepo: 'acme/aperture',
+        githubSubject,
+        roles,
+      }),
+    );
+
+  for (const roles of ['prod', 'dev'] as const)
+    for (const subject of ['acme/aperture', 'acme@1/aperture@2']) {
+      it(`${roles}, subject ${subject}: every federated role admits only its named environments`, () => {
+        const t = build(roles, subject === 'acme/aperture' ? undefined : subject);
+        const stmts = federated(t);
+        // not vacuous: every aperture-github-* role is walked, and every other role (CDK's provider Lambda) trusts
+        // only an AWS service
+        expect(stmts.length).toBeGreaterThan(0);
+        expect([...new Set(stmts.map((x) => x.name))].sort()).toEqual(
+          roleNames(t).filter((n) => n?.startsWith('aperture-github-')),
+        );
+        const walked = new Set(stmts.map((x) => x.id));
+        for (const [id, r] of Object.entries(t.findResources('AWS::IAM::Role')))
+          if (!walked.has(id))
+            for (const s of (
+              r as {
+                Properties: { AssumeRolePolicyDocument: { Statement: { Principal: object }[] } };
+              }
+            ).Properties.AssumeRolePolicyDocument.Statement)
+              expect(Object.keys(s.Principal)).toEqual(['Service']);
+        for (const { name, s } of stmts)
+          expect([name, trustProblems(s, subject)]).toEqual([name, []]);
+        // a walked role holds nothing but its one federated statement, and that names this stack's own provider
+        const [provider] = Object.keys(t.findResources('Custom::AWSCDKOpenIdConnectProvider'));
+        for (const id of walked) {
+          const all = (
+            t.findResources('AWS::IAM::Role')[id] as {
+              Properties: { AssumeRolePolicyDocument: { Statement: Trust[] } };
+            }
+          ).Properties.AssumeRolePolicyDocument.Statement;
+          expect(all).toHaveLength(1);
+          expect(all[0]!.Principal).toEqual({ Federated: { Ref: provider } });
+        }
+        const envs = stmts
+          .flatMap(({ s }) => s.Condition!.StringLike![`${OIDC}:sub`] as string[])
+          .map((sub) => sub.slice(`repo:${subject}:environment:`.length));
+        expect(envs.sort()).toEqual([...ENVIRONMENTS[roles]].sort());
+      });
+    }
+
+  it('the checker flags every way a trust can admit too much', () => {
+    const good: Trust = {
+      Effect: 'Allow',
+      Action: 'sts:AssumeRoleWithWebIdentity',
+      Condition: {
+        StringEquals: { [`${OIDC}:aud`]: 'sts.amazonaws.com' },
+        StringLike: { [`${OIDC}:sub`]: ['repo:acme/aperture:environment:prod'] },
+      },
+    };
+    expect(trustProblems(good, 'acme/aperture')).toEqual([]);
+    const withSub = (sub: unknown): Trust => ({
+      ...good,
+      Condition: { ...good.Condition, StringLike: { [`${OIDC}:sub`]: sub } },
+    });
+    for (const sub of [
+      'repo:acme/aperture:*',
+      'repo:acme/*:environment:prod',
+      'repo:*',
+      'repo:acme/aperture:pull_request',
+      'repo:acme/aperture:ref:refs/heads/main',
+      'repo:acme/aperture:environment:staging',
+      'repo:acme/aperture-fork:environment:prod',
+      'repo:acme/aperture:environment:pr?d',
+    ])
+      expect(trustProblems(withSub([sub]), 'acme/aperture')).toEqual([
+        `sub ${JSON.stringify(sub)}`,
+      ]);
+    expect(trustProblems(withSub([]), 'acme/aperture')).toEqual(['no sub']);
+    expect(
+      trustProblems(
+        { ...good, Condition: { StringLike: good.Condition!.StringLike! } },
+        'acme/aperture',
+      ),
+    ).toEqual(['condition operators StringLike', 'aud undefined']);
+    expect(
+      trustProblems(
+        { ...good, Condition: { ...good.Condition, StringEquals: { [`${OIDC}:aud`]: '*' } } },
+        'acme/aperture',
+      ),
+    ).toEqual(['aud "*"']);
+    expect(trustProblems({ ...good, Condition: undefined }, 'acme/aperture')).toEqual([
+      'condition operators none',
+      'aud undefined',
+      'StringLike keys none',
+      'sub undefined',
+    ]);
+  });
+
+  it('refuses a githubRepo or githubSubject that StringLike would read as a pattern', () => {
+    for (const [key, value] of [
+      ['githubRepo', 'acme/*'],
+      ['githubRepo', 'acme/aperture:ref'],
+      ['githubSubject', 'acme@1/aperture@?'],
+      ['githubRepo', 'aperture'],
+      ['githubRepo', 'acme/${aws:username}'],
+      ['githubSubject', 'acme@1/aper ture@2'],
+    ] as const)
+      expect(
+        () =>
+          new ApertureCicdStack(new App(), 'Cicd', {
+            githubRepo: 'acme/aperture',
+            roles: 'prod',
+            [key]: value,
+          }),
+      ).toThrow(new RegExp(`^${key} `));
+  });
+
+  // A GitHub-trusted role anywhere else would escape the walk above, so there's one home for them.
+  it('creates GitHub-federated roles only in cicd-stack.ts', () => {
+    const dir = new URL('./', import.meta.url); // all of cdk/src — bin/, config/, lib/ — but the tests
+    const holders = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+      .filter((f) =>
+        readFileSync(new URL(f, dir), 'utf8')
+          .split('\n')
+          .filter((l) => !l.trim().startsWith('//'))
+          .some((l) =>
+            /token\.actions\.githubusercontent|OpenIdConnect|WebIdentity|FederatedPrincipal/.test(
+              l,
+            ),
+          ),
+      );
+    expect(holders).toEqual(['lib/cicd-stack.ts']);
   });
 });

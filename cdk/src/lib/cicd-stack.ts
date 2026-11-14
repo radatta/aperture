@@ -37,6 +37,14 @@ export class ApertureCicdStack extends Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
     super(scope, id, props);
     const { githubRepo, githubSubject = githubRepo } = props;
+    // The trust matches `sub` with StringLike, so a `*`, `?` or IAM `${…}` variable typed into `-c githubRepo=…` would
+    // admit other repos (a fork's among them, once the repo is public), and a `:` would shift the claim's fields. Only
+    // GitHub's own owner/repo charset, plus the ID-embedded form's `@<id>` (INFRA §9).
+    for (const [name, slug] of Object.entries({ githubRepo, githubSubject }))
+      if (!/^[A-Za-z0-9-]+(@\d+)?\/[A-Za-z0-9._-]+(@\d+)?$/.test(slug))
+        throw new Error(
+          `${name} "${slug}" must be one owner/repo (GitHub's charset, optional @<id>)`,
+        );
     const { account, region } = this;
     // cdk-nag prints a pinned account literally and an unpinned one as the <AWS::AccountId> token; the ack ids below
     // must match either form.
