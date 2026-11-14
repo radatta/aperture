@@ -297,7 +297,10 @@ describe('handler device-token ingest branch', () => {
         [new TypeError('our bug'), 500],
       ] as const) {
         fail(e);
-        expect((await rpc('lcSittingEvents', headers, events)).statusCode).toBe(code);
+        const res = await rpc('lcSittingEvents', headers, events);
+        expect(res.statusCode).toBe(code);
+        // A fault's text is internals: the extension retries on the status alone.
+        if (code === 500) expect(JSON.parse(res.body ?? '{}')).toEqual({ error: 'Internal error' });
       }
       vi.restoreAllMocks();
       h.doc = new InMemoryDoc();
@@ -676,5 +679,160 @@ describe('handler place route', () => {
     expect(all).not.toContain(token);
     expect(all).not.toContain(hashPlaceToken(token));
     expect(all).not.toContain('B'.repeat(43));
+  });
+});
+
+// testMode is the CI smoke's dry run over a DIRECT invoke; over the Function URL it opens nothing.
+describe('handler testMode and body parsing', () => {
+  let logs: string[];
+  beforeEach(() => {
+    h.doc = new InMemoryDoc();
+    logs = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => void logs.push(String(line)));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const http = (method: string, body: string, auth?: string) =>
+    handler({
+      rawPath: `/api/${method}`,
+      requestContext: { http: { method: 'POST', path: `/api/${method}` } },
+      headers: auth ? { authorization: auth } : {},
+      body,
+    });
+  const errorOf = (res: { body?: string }) =>
+    (JSON.parse(res.body ?? '{}') as { error?: string }).error;
+
+  it('an HTTP request with testMode and no JWT is a 401 — the flag opens nothing over the Function URL', async () => {
+    const doc = h.doc as InMemoryDoc;
+    for (const [method, args] of [
+      ['getSettings', []],
+      ['createTask', [{ title: 'x' }]],
+    ] as const) {
+      const res = await http(method, JSON.stringify({ testMode: true, args }));
+      expect(res.statusCode).toBe(401);
+    }
+    expect(doc.size).toBe(0);
+    expect(doc.gets).toHaveLength(0);
+  });
+
+  it('an HTTP request with testMode and a valid JWT is refused with 400, nothing dispatched', async () => {
+    const doc = h.doc as InMemoryDoc;
+    const res = await http(
+      'createTask',
+      JSON.stringify({ testMode: true, args: [{ title: 'x' }] }),
+      'Bearer good-jwt',
+    );
+    expect(res.statusCode).toBe(400);
+    expect(errorOf(res)).toMatch(/direct invoke/);
+    expect(doc.size).toBe(0);
+  });
+
+  it('a direct invoke with testMode runs as smoke-test and persists nothing (the CI smoke path)', async () => {
+    const doc = h.doc as InMemoryDoc;
+    // Exactly smoke.ts's buildEvent shape: no requestContext, no header.
+    const created = await handler({
+      rawPath: '/api/createTask',
+      body: JSON.stringify({ testMode: true, args: [{ title: 'x' }] }),
+    });
+    expect(created.statusCode).toBe(200);
+    expect(doc.size).toBe(0);
+    const settings = await handler({
+      rawPath: '/api/getSettings',
+      body: JSON.stringify({ testMode: true, args: [] }),
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(JSON.parse(settings.body ?? 'null')).toMatchObject({ dayStartHour: expect.any(Number) });
+  });
+
+  it('a malformed body is a 400 Invalid JSON, not a thrown handler', async () => {
+    for (const raw of ['{not json', 'null', '[]', '"x"']) {
+      const res = await http('getSettings', raw, 'Bearer good-jwt');
+      expect(res.statusCode).toBe(400);
+      expect(errorOf(res)).toBe('Invalid JSON');
+    }
+  });
+
+  it('args that are not an array are refused with 400', async () => {
+    const res = await http('getSettings', JSON.stringify({ args: 'x' }), 'Bearer good-jwt');
+    expect(res.statusCode).toBe(400);
+    expect(errorOf(res)).toBe('args must be an array');
+  });
+
+  it('logs one rpc_failed line per failed call — method, status, name — never the body, the header or the message', async () => {
+    await http('getSettings', JSON.stringify({ args: [] })); // no JWT → 401
+    await http('getSettings', '{not json', 'Bearer good-jwt'); // 400
+    vi.spyOn(h.doc, 'get').mockRejectedValueOnce(new TypeError('secret detail'));
+    await http('getSettings', JSON.stringify({ args: [] }), 'Bearer good-jwt'); // 500
+    await http('x'.repeat(2000), JSON.stringify({ args: [] }), 'Bearer good-jwt'); // 404, path text
+    expect(logs.map((l) => JSON.parse(l) as unknown)).toEqual([
+      { event: 'rpc_failed', method: 'getSettings', status: 401, name: 'Error' },
+      { event: 'rpc_failed', method: 'getSettings', status: 400, name: 'Error' },
+      { event: 'rpc_failed', method: 'getSettings', status: 500, name: 'TypeError' },
+      { event: 'rpc_failed', method: 'unknown', status: 404, name: 'Error' },
+    ]);
+    const all = logs.join('\n');
+    for (const leak of ['good-jwt', '{not json', 'secret detail', 'Invalid JSON', 'xxxx'])
+      expect(all).not.toContain(leak);
+  });
+
+  it('over HTTP an unknown patch key is a 400 naming it, writing nothing; a legal story patch saves', async () => {
+    const jwt = 'Bearer good-jwt';
+    const story = JSON.parse(
+      (await http('createStory', JSON.stringify({ args: [{ title: 'mine' }] }), jwt)).body ?? '',
+    ) as { id: string; title: string };
+    const before = (h.doc as InMemoryDoc).snapshot();
+    const bad = await http(
+      'updateStory',
+      JSON.stringify({ args: [story.id, { userId: 'x' }] }),
+      jwt,
+    );
+    expect(bad.statusCode).toBe(400);
+    expect(errorOf(bad)).toBe('Unknown story field: userId');
+    const settings = await http(
+      'updateSettings',
+      JSON.stringify({ args: [{ googleAccounts: [] }] }),
+      jwt,
+    );
+    expect(settings.statusCode).toBe(400);
+    expect(errorOf(settings)).toBe('Unknown settings field: googleAccounts');
+    expect((h.doc as InMemoryDoc).snapshot()).toEqual(before);
+    const ok = await http(
+      'updateStory',
+      JSON.stringify({ args: [story.id, { title: 'renamed' }] }),
+      jwt,
+    );
+    expect(ok.statusCode).toBe(200);
+    expect((JSON.parse(ok.body ?? '') as { title: string }).title).toBe('renamed');
+  });
+
+  it('a fault inside dispatch is a 500 with a fixed body; a refusal keeps its message at 400', async () => {
+    const call = () => http('getSettings', JSON.stringify({ args: [] }), 'Bearer good-jwt');
+    vi.spyOn(h.doc, 'get').mockRejectedValueOnce(new TypeError('secret detail'));
+    let res = await call();
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain('secret detail');
+    expect(errorOf(res)).toBe('Internal error');
+
+    const aws5xx = Object.assign(new Error('ServiceUnavailable'), {
+      name: 'ServiceUnavailable',
+      $metadata: { httpStatusCode: 503 },
+    });
+    vi.spyOn(h.doc, 'get').mockRejectedValueOnce(aws5xx);
+    res = await call();
+    expect(res.statusCode).toBe(500);
+
+    vi.spyOn(h.doc, 'get').mockRejectedValueOnce(new Error('Not found: x'));
+    res = await call();
+    expect(res.statusCode).toBe(400);
+    expect(errorOf(res)).toBe('Not found: x');
+
+    // A custom subclass (ConflictError and kin) is a refusal the app shows, not a fault.
+    class ConflictError extends Error {
+      name = 'ConflictError';
+    }
+    vi.spyOn(h.doc, 'get').mockRejectedValueOnce(new ConflictError('Conflict — try again'));
+    res = await call();
+    expect(res.statusCode).toBe(400);
+    expect(errorOf(res)).toBe('Conflict — try again');
   });
 });

@@ -9,6 +9,7 @@ import {
   PLACE_TOKEN_VIA,
   HABIT_VIA,
   LOG_VIA,
+  STORY_VIA,
   UI_LOG_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
@@ -121,6 +122,7 @@ describe('createApiClient', () => {
       'listSessionsForDay',
       'listSittingReplay',
       'listSittings',
+      'listStories',
       'listTasks',
       'placeDigestRaw',
       'probePresigned',
@@ -132,6 +134,7 @@ describe('createApiClient', () => {
       'createAttachment',
       'createLogEntry',
       'createSeries',
+      'createStory',
       'createTask',
       'deleteAttachment',
       'deleteCategory',
@@ -141,6 +144,7 @@ describe('createApiClient', () => {
       'deletePlace',
       'deleteSeries',
       'deleteSitting',
+      'deleteStory',
       'deleteTask',
       'finishTask',
       'lcSittingEvents',
@@ -159,6 +163,7 @@ describe('createApiClient', () => {
       'restoreReminderToggles',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'rpcRaw',
       'sendTestPush',
       'setCategoryArea',
       'setDayCapacity',
@@ -185,6 +190,7 @@ describe('createApiClient', () => {
       'unsubscribePush',
       'updateLogEntry',
       'updateSettings',
+      'updateStory',
       'upsertCategory',
       'upsertFinanceRule',
       'upsertHabit',
@@ -411,6 +417,7 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'C3', via: MCP_CATEGORY_VIA },
         { run: 'r', op: 'created' as const, id: 'L', via: LOG_VIA },
         { run: 'r', op: 'created' as const, id: 'L2', via: UI_LOG_VIA },
+        { run: 'r', op: 'created' as const, id: 'ST', via: STORY_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -432,6 +439,7 @@ describe('createApiClient', () => {
           'C3',
           'L',
           'L2',
+          'ST',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -453,6 +461,7 @@ describe('createApiClient', () => {
         'category',
         'log',
         'log',
+        'story',
         'task',
       ]);
     });
@@ -473,6 +482,29 @@ describe('createApiClient', () => {
       expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/safeway/tasks`, {
         method: 'POST',
         headers: {},
+        redirect: 'error',
+      });
+    });
+
+    it('rpcRaw posts the body as given, with the session token or with no auth header at all', async () => {
+      const refusal = { error: 'Invalid JSON' };
+      const fetch = vi.fn<FetchLike>(async () => reply(400, refusal));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger: memLedger(), run: 'r1' });
+      expect(await api.writes.rpcRaw('getSettings', '{not json', 'jwt')).toEqual({
+        status: 400,
+        body: refusal,
+      });
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/getSettings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-aperture-authorization': 'Bearer jwt' },
+        body: '{not json',
+        redirect: 'error',
+      });
+      await api.writes.rpcRaw('getSettings', '{"testMode":true}', 'none');
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/getSettings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"testMode":true}',
         redirect: 'error',
       });
     });

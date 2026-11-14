@@ -241,6 +241,7 @@ import type {
   SittingStartInput,
   SittingStartResult,
 } from '@aperture/shared';
+import { patchKeyError, SETTINGS_PATCH_KEYS, STORY_PATCH_KEYS } from '@aperture/shared';
 import {
   FLUX_NOTE_MIN_SETS,
   fluxFilterError,
@@ -1223,6 +1224,8 @@ class StubClient implements ApiClient {
     });
   }
   async updateStory(id: string, patch: StoryPatch): Promise<Story> {
+    const keyErr = patchKeyError('story', patch, STORY_PATCH_KEYS); // as the BFF: before any lookup
+    if (keyErr) throw new Error(keyErr);
     return this.writes.patch(this.store.stories, id, patch); // patch throws on a tombstone
   }
   async deleteStory(id: string): Promise<void> {
@@ -2142,6 +2145,8 @@ class StubClient implements ApiClient {
     return this.ensureSettings();
   }
   async updateSettings(patch: SettingsPatch): Promise<Settings> {
+    const keyErr = patchKeyError('settings', patch, SETTINGS_PATCH_KEYS);
+    if (keyErr) throw new Error(keyErr);
     if (patch.fluxSets !== undefined) {
       const err = fluxSetsError(patch.fluxSets);
       if (err) throw new Error(err);

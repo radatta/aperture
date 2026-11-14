@@ -195,6 +195,7 @@ import type {
   NormalizedSittingStart,
   SittingLive,
 } from '@aperture/shared';
+import { patchKeyError, SETTINGS_PATCH_KEYS, STORY_PATCH_KEYS } from '@aperture/shared';
 import {
   FLUX_NOTE_MIN_SETS,
   fluxFilterError,
@@ -1254,6 +1255,9 @@ export class BackendClient implements ApiClient {
     });
   }
   async updateStory(id: string, patch: StoryPatch): Promise<Story> {
+    // Allowlist first, before any lookup: a spread would store id/userId/deletedAt as sent.
+    const keyErr = patchKeyError('story', patch, STORY_PATCH_KEYS);
+    if (keyErr) throw new Error(keyErr);
     return this.repo.putStory({ ...(await this.mustStory(id)), ...patch, updatedAt: this.now() });
   }
   async deleteStory(id: string): Promise<void> {
@@ -2307,6 +2311,9 @@ export class BackendClient implements ApiClient {
     return this.ensureSettings();
   }
   async updateSettings(patch: SettingsPatch): Promise<Settings> {
+    // Allowlist first: googleAccounts, userId, deletedAt… are never the client's to set.
+    const keyErr = patchKeyError('settings', patch, SETTINGS_PATCH_KEYS);
+    if (keyErr) throw new Error(keyErr);
     if (patch.fluxSets !== undefined) {
       const err = fluxSetsError(patch.fluxSets);
       if (err) throw new Error(err);

@@ -13,6 +13,7 @@ import {
   placeReadUnknownText,
   placeUnknownError,
 } from '@aperture/shared';
+import { isApiMethod } from '@aperture/shared';
 import type { PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
@@ -132,8 +133,37 @@ const CORS: Record<string, string> = {
 
 // CI smoke tests reach the handler by DIRECT invoke (aws lambda invoke) with a testMode payload — no
 // HTTP request context, no JWT. They run as this throwaway user against an always-empty partition, and
-// the writes-object no-ops, so a smoke run touches no real data even against prod.
+// the writes-object no-ops, so a smoke run touches no real data even against prod. testMode is honoured
+// ONLY on a direct invoke (no requestContext.http, which a Function URL always sets): over HTTP the flag
+// opens nothing — the JWT path runs (no JWT → 401), and with a JWT the call is refused (400).
 const SMOKE_USER = 'smoke-test';
+
+// The RPC body. Parsed inside handle()'s try, so a malformed one is a 400, never a thrown handler.
+function parseBody(raw: string | null | undefined): { args: unknown[]; testMode: boolean } {
+  if (!raw) return { args: [], testMode: false };
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new Error('Invalid JSON');
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body))
+    throw new Error('Invalid JSON');
+  const { args, testMode } = body as { args?: unknown; testMode?: unknown };
+  if (args !== undefined && !Array.isArray(args)) throw new Error('args must be an array');
+  return { args: args ?? [], testMode: testMode === true };
+}
+
+// Non-ingest failures: a fault in our code (a builtin error class) or an AWS 5xx is a 500 with a fixed
+// body — its text is internals. Everything else, our own refusals and their subclasses (ConflictError,
+// EventGoneError…), stays a 400 whose message the app shows. Never 429: the app retries a 429 as a call
+// that never ran (retry.ts), which a throttle mid-write can't promise.
+function rpcFailureStatus(err: unknown): 400 | 500 {
+  if (err instanceof TypeError || err instanceof RangeError || err instanceof SyntaxError)
+    return 500;
+  const e = err as { $metadata?: { httpStatusCode?: number } } | null;
+  return (e?.$metadata?.httpStatusCode ?? 0) >= 500 ? 500 : 400;
+}
 
 // The browser extension's methods (LC_INGEST_METHODS) take its device token — or the user's JWT, which is
 // already the whole user (the dev check drives them that way). Their bodies are capped before parsing:
@@ -248,28 +278,31 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   const ingest = isLcIngestMethod(method);
   if (ingest && (event.body?.length ?? 0) > INGEST_BODY_MAX)
     return { statusCode: 413, headers: CORS, body: JSON.stringify({ error: 'Too large' }) };
-  const body = event.body
-    ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
-    : {};
   // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;
 
   try {
+    const body = parseBody(event.body);
+    // Off HTTP only: a direct invoke is already AWS-cred-gated (the CI smoke); over the Function URL a
+    // body flag is anyone's to send.
+    const testMode = !isHttp && body.testMode;
     // The device token opens the ingest methods ONLY; every other method takes the untouched JWT path, so a
     // device token sent anywhere else hits resolveUserId → 401 (not a valid JWT).
-    const userId = body.testMode
+    const userId = testMode
       ? SMOKE_USER
       : ingest
         ? await ingestUserId(authHeader, d.verifier)
         : await resolveUserId(authHeader, d.verifier); // JWT `sub`, or dev user locally
+    // Authenticated, but asked for a dry run HTTP can't give: refuse rather than run it wet.
+    if (isHttp && body.testMode) throw new Error('testMode is only honoured on a direct invoke');
     const result = await handleRpc(
       d.doc,
       {
         userId,
         method,
-        args: body.args ?? [],
-        testMode: body.testMode,
+        args: body.args,
+        testMode,
         google: d.google,
         stateSecret: process.env.ORIGIN_SECRET,
       },
@@ -291,8 +324,15 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
         ? 404
         : ingest
           ? ingestFailureStatus(err)
-          : 400;
-    return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
+          : rpcFailureStatus(err);
+    // One line per failure: the outcome only — never the message, body, args or a header. The method is
+    // path text anyone can send, so only a known one is logged by name.
+    const name = err instanceof Error ? err.name : 'unknown';
+    const logged = isApiMethod(method) ? method : 'unknown';
+    console.log(JSON.stringify({ event: 'rpc_failed', method: logged, status, name }));
+    // A 500's text is internals (a TypeError's, an AWS fault's): every caller retries on the status alone.
+    const shown = status === 500 ? 'Internal error' : message;
+    return { statusCode: status, headers: CORS, body: JSON.stringify({ error: shown }) };
   }
 }
 

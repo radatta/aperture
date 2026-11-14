@@ -1,0 +1,295 @@
+// The BFF's edge, hardened (bff-testmode-auth): testMode opens nothing over the Function URL, a malformed
+// body is a 400 rather than a thrown handler, and updateSettings/updateStory refuse any key outside their
+// patch type. Every refusal step sends a call the BFF must refuse before it writes; a probe that a regression
+// would accept carries the row's current value, so even then it changes nothing. The legal story patch
+// works on a ledgered story, deleted after.
+import { type Row, type Scenario } from '../scenario';
+
+const INDEX = 'lambdas/src/index.test.ts';
+
+const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
+  id,
+  entry: 'api',
+  kind: 'edge',
+  what,
+  offDev: { file, test, why },
+});
+
+const errorOf = (body: unknown): string =>
+  body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string'
+    ? (body as { error: string }).error
+    : '';
+
+function expectRefusal(
+  label: string,
+  got: { status: number; body: unknown },
+  status: number,
+  error?: RegExp,
+): void {
+  if (got.status !== status)
+    throw new Error(
+      `${label}: expected HTTP ${status}, got ${got.status} — ${JSON.stringify(got.body)}`,
+    );
+  if (error && !error.test(errorOf(got.body)))
+    throw new Error(
+      `${label}: expected an error matching ${error}, got ${JSON.stringify(got.body)}`,
+    );
+}
+
+export const bffHardening: Scenario = {
+  id: 'bff-hardening',
+  title: 'The BFF refuses testMode over HTTP, malformed bodies and unknown patch keys',
+  tiers: ['full'],
+  rows: [
+    {
+      id: 'http-testmode-no-jwt',
+      entry: 'api',
+      kind: 'edge',
+      what: 'An /api call with testMode and no JWT (a read and a write) is a 401; no task appears',
+    },
+    {
+      id: 'http-testmode-jwt',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The same with the test user’s JWT is a 400 naming the direct invoke; nothing is written',
+    },
+    {
+      id: 'bad-json',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A malformed body is a 400 “Invalid JSON”, not a thrown handler',
+    },
+    {
+      id: 'args-not-array',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A body whose args is not an array is a 400',
+    },
+    {
+      id: 'settings-mass-assign',
+      entry: 'api',
+      kind: 'edge',
+      what: 'updateSettings with googleAccounts or createdAt is a 400 naming the key; settings unchanged',
+    },
+    {
+      id: 'settings-patch-ok',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A legal settings patch (the current pomodoroWorkMin) still lands',
+    },
+    {
+      id: 'fault-500',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A fault in our code (createTask with a null input) is a 500 with the fixed body “Internal error”, never its text',
+    },
+    {
+      id: 'story-patch-ok',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A legal story patch still saves and reads back',
+    },
+    {
+      id: 'story-mass-assign',
+      entry: 'api',
+      kind: 'edge',
+      what: 'updateStory with userId is a 400 naming the key, before any lookup',
+    },
+    offDev(
+      'direct-invoke-smoke',
+      'A direct invoke with testMode still runs as smoke-test, write-free (the CI smoke)',
+      INDEX,
+      'a direct invoke with testMode runs as smoke-test and persists nothing (the CI smoke path)',
+      'the harness has no AWS credential to invoke the function directly; deploy-stage.yml’s smoke step runs this event against dev and prod on every merge’s deploy',
+    ),
+    offDev(
+      'presigner-inert',
+      'testMode never mints a presigned URL, even with a live presigner',
+      'lambdas/src/handler.test.ts',
+      'testMode never mints a presigned URL, even with a live presigner injected',
+      'only a direct invoke can carry testMode now, and the harness can’t invoke directly',
+    ),
+    offDev(
+      'failure-logged',
+      'Each failed call logs one rpc_failed line (method, status, name) and nothing sensitive',
+      INDEX,
+      'logs one rpc_failed line per failed call — method, status, name — never the body, the header or the message',
+      'a scenario can’t read dev’s CloudWatch; the line’s shape and redaction are the test’s to prove',
+    ),
+    offDev(
+      'refusal-400',
+      'An AWS 5xx is a 500 too; a refusal subclass (ConflictError and kin) keeps its message at 400',
+      INDEX,
+      'a fault inside dispatch is a 500 with a fixed body; a refusal keeps its message at 400',
+      'dev can’t make DynamoDB answer a 5xx or lose a conditional write on demand',
+    ),
+    offDev(
+      'ingest-unchanged',
+      'Device-token ingest still maps a lost race, a throttle and a fault to 409, 429 and 500',
+      INDEX,
+      'says which ingest failures are worth a retry: 409 a lost race, 429 a throttle, 500 a fault',
+      'dev can’t make DynamoDB conflict or throttle on demand',
+    ),
+    offDev(
+      'ci-smoke-event',
+      'The CI smoke’s event shape is unchanged (no http context)',
+      'scripts/src/smoke.test.ts',
+      'builds a testMode direct-invoke event (no http context → skips the origin gate)',
+      'proven live by every merge’s deploy-stage.yml smoke step on dev, then prod — the deploy fails if it regresses',
+    ),
+  ],
+  steps: [
+    {
+      id: 'fault',
+      title: 'A fault in our code: 500, fixed body',
+      entry: 'api',
+      proves: ['fault-500'],
+      async run(ctx) {
+        // createTask reads input.parentId before any read or write: a null input throws a TypeError.
+        const got = await ctx.api.writes.rpcRaw(
+          'createTask',
+          JSON.stringify({ args: [null] }),
+          'jwt',
+        );
+        expectRefusal('createTask(null)', got, 500, /^Internal error$/);
+      },
+    },
+    {
+      id: 'story-ok',
+      title: 'A legal story patch saves and reads back',
+      entry: 'api',
+      proves: ['story-patch-ok'],
+      async run(ctx) {
+        const story = await ctx.api.writes.createStory(`devcheck story ${ctx.nonce}`);
+        const renamed = `devcheck story renamed ${ctx.nonce}`;
+        const saved = await ctx.api.writes.updateStory(story.id, {
+          title: renamed,
+          situation: 'probe',
+        });
+        if (saved.title !== renamed || saved.situation !== 'probe')
+          throw new Error(`updateStory answered ${JSON.stringify(saved)}`);
+        const back = (await ctx.api.reads.listStories()).find((x) => x.id === story.id);
+        if (back?.title !== renamed || back.situation !== 'probe')
+          throw new Error(`the patched story read back as ${JSON.stringify(back)}`);
+        await ctx.api.writes.deleteStory(story.id);
+      },
+    },
+    {
+      id: 'testmode-no-jwt',
+      title: 'testMode with no JWT: 401, nothing written',
+      entry: 'api',
+      proves: ['http-testmode-no-jwt'],
+      async run(ctx) {
+        const title = `devcheck testMode probe ${ctx.nonce}`;
+        const read = await ctx.api.writes.rpcRaw(
+          'getSettings',
+          JSON.stringify({ testMode: true, args: [] }),
+          'none',
+        );
+        expectRefusal('getSettings testMode, no JWT', read, 401);
+        const write = await ctx.api.writes.rpcRaw(
+          'createTask',
+          JSON.stringify({ testMode: true, args: [{ title }] }),
+          'none',
+        );
+        expectRefusal('createTask testMode, no JWT', write, 401);
+        if ((await ctx.api.reads.listTasks()).some((t) => t.title === title))
+          throw new Error('a testMode createTask with no JWT left a task in the test user’s list');
+      },
+    },
+    {
+      id: 'testmode-jwt',
+      title: 'testMode with the JWT: 400, nothing written',
+      entry: 'api',
+      proves: ['http-testmode-jwt'],
+      async run(ctx) {
+        const title = `devcheck testMode probe ${ctx.nonce}`;
+        const got = await ctx.api.writes.rpcRaw(
+          'createTask',
+          JSON.stringify({ testMode: true, args: [{ title }] }),
+          'jwt',
+        );
+        expectRefusal('createTask testMode with JWT', got, 400, /direct invoke/);
+        if ((await ctx.api.reads.listTasks()).some((t) => t.title === title))
+          throw new Error('a refused testMode createTask left a task in the test user’s list');
+      },
+    },
+    {
+      id: 'bad-body',
+      title: 'A malformed body or non-array args: 400',
+      entry: 'api',
+      proves: ['bad-json', 'args-not-array'],
+      async run(ctx) {
+        expectRefusal(
+          'malformed body',
+          await ctx.api.writes.rpcRaw('getSettings', '{not json', 'jwt'),
+          400,
+          /^Invalid JSON$/,
+        );
+        expectRefusal(
+          'args not an array',
+          await ctx.api.writes.rpcRaw('getSettings', JSON.stringify({ args: 'x' }), 'jwt'),
+          400,
+          /args must be an array/,
+        );
+      },
+    },
+    {
+      id: 'settings-reject',
+      title: 'updateSettings refuses googleAccounts and userId; a legal patch lands',
+      entry: 'api',
+      proves: ['settings-mass-assign', 'settings-patch-ok'],
+      async run(ctx) {
+        const before = await ctx.api.reads.getSettings();
+        // Each probe carries the current value, so a regressed allowlist that took it changes nothing.
+        const current = before as unknown as { googleAccounts: unknown; createdAt: unknown };
+        const probe = async (key: 'googleAccounts' | 'createdAt') =>
+          expectRefusal(
+            `updateSettings ${key}`,
+            await ctx.api.writes.rpcRaw(
+              'updateSettings',
+              JSON.stringify({ args: [{ [key]: current[key] }] }),
+              'jwt',
+            ),
+            400,
+            new RegExp(`Unknown settings field: ${key}`),
+          );
+        await probe('googleAccounts');
+        await probe('createdAt');
+        // A refusal throws before any write, so updatedAt stays put; any write a regression let through moves it.
+        const after = (await ctx.api.reads.getSettings()) as unknown as typeof current & {
+          updatedAt: unknown;
+        };
+        const was = before as unknown as typeof after;
+        for (const k of ['updatedAt', 'googleAccounts', 'createdAt'] as const)
+          if (JSON.stringify(after[k]) !== JSON.stringify(was[k]))
+            throw new Error(`a refused updateSettings changed the test user’s settings (${k})`);
+        const ok = await ctx.api.writes.updateSettings({ pomodoroWorkMin: before.pomodoroWorkMin });
+        if (ok.pomodoroWorkMin !== before.pomodoroWorkMin)
+          throw new Error(
+            `a legal patch answered pomodoroWorkMin ${ok.pomodoroWorkMin}, sent ${before.pomodoroWorkMin}`,
+          );
+      },
+    },
+    {
+      id: 'story-reject',
+      title: 'updateStory refuses userId before any lookup',
+      entry: 'api',
+      proves: ['story-mass-assign'],
+      async run(ctx) {
+        expectRefusal(
+          'updateStory userId',
+          await ctx.api.writes.rpcRaw(
+            'updateStory',
+            JSON.stringify({
+              args: [`devcheck-no-such-story-${ctx.nonce}`, { userId: 'someone-else' }],
+            }),
+            'jwt',
+          ),
+          400,
+          /Unknown story field: userId/,
+        );
+      },
+    },
+  ],
+};

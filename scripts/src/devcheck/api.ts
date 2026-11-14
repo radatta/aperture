@@ -187,6 +187,11 @@ export interface DevFluxSetInput {
   stoppedEarly: boolean;
   planned: number | null;
 }
+export interface DevStory {
+  id: string;
+  title: string;
+  situation: string;
+}
 export interface DevLogEntry {
   id: string;
   day: string;
@@ -337,6 +342,8 @@ export interface DevSession {
 export const FLUX_SET_VIA = 'api:recordFluxSet';
 // A log entry this harness created (through the API, or the capture bar's createLogEntry — recorder.ts).
 export const LOG_VIA = 'api:createLogEntry';
+// A Recruiting story this harness created (bff-hardening's legal patch); cleaned by deleteStory (a tombstone).
+export const STORY_VIA = 'api:createStory';
 export const UI_LOG_VIA = 'ui:createLogEntry';
 // A place this harness created (through the API, or the browser's upsertPlace create — recorder.ts).
 export const PLACE_VIA = 'api:upsertPlace';
@@ -414,6 +421,7 @@ export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':')
 // What a ledger id names, by the `via` it was created with — each kind is read and deleted its own way.
 export type LedgerKind =
   | 'task'
+  | 'story'
   | 'flux'
   | 'log'
   | 'place'
@@ -434,6 +442,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
   if (via === LOG_VIA || via === UI_LOG_VIA) return 'log';
+  if (via === STORY_VIA) return 'story';
   if (via !== undefined && SERIES_VIAS.includes(via)) return 'series';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
   if (via === CATEGORY_VIA || via === UI_CATEGORY_VIA || via === MCP_CATEGORY_VIA)
@@ -604,6 +613,7 @@ export function createApiClient({
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
     listLogEntries: (day: string) => call<DevLogEntry[]>('listLogEntries', [day]),
+    listStories: () => call<DevStory[]>('listStories', []),
     // The user's own download (Settings → Export) — read only for its log entries.
     exportLogEntries: async () =>
       (await call<{ logEntries: DevLogEntry[] }>('exportData', [])).logEntries,
@@ -674,6 +684,30 @@ export function createApiClient({
   };
 
   const writes = {
+    // An RPC posted raw — a body string as sent (malformed on purpose, or carrying testMode), with the test
+    // user's JWT or none — returning the status and parsed body so a step can assert a refusal. Here, not in
+    // reads: it can name a write method. Only for calls the BFF must refuse before it writes anything, each
+    // carrying a value that would change nothing if a regression took it (bff-hardening). A 429 carrying the BFF's own
+    // `{error}` is returned as is; any other is Lambda throttling, backed off like call()'s.
+    async rpcRaw(
+      method: string,
+      rawBody: string,
+      auth: 'jwt' | 'none',
+    ): Promise<{ status: number; body: unknown }> {
+      const url = `${targetOrigin()}/api/${method}`;
+      assertDevOrigin(url);
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (auth === 'jwt') headers[AUTH_HEADER] = `Bearer ${token()}`;
+      const { status, text } = await backoff(
+        () => fetch(url, { method: 'POST', headers, body: rawBody, redirect: 'error' }),
+        (s, t) => s === 429 && !bffError(t),
+      );
+      try {
+        return { status, body: JSON.parse(text) as unknown };
+      } catch {
+        return { status, body: text.slice(0, 200) };
+      }
+    },
     // The test user's own settings row — not ledgered; a step that changes it puts it back in its `finally`
     // (a 1-minute block for the capped-stop row, 25 again after), and a killed run's next run does (pipeline).
     updateSettings: (patch: Partial<DevSettings>) => call<DevSettings>('updateSettings', [patch]),
@@ -706,6 +740,23 @@ export function createApiClient({
       );
       ledger.append({ run, op: 'created', id: entry.id, via: LOG_VIA, title: text });
       return entry;
+    },
+    async createStory(title: string): Promise<DevStory> {
+      ledger.append({ run, op: 'intent', via: STORY_VIA, title });
+      const story = await call<DevStory>('createStory', [{ title }]);
+      ledger.append({ run, op: 'created', id: story.id, via: STORY_VIA, title });
+      return story;
+    },
+    async updateStory(
+      id: string,
+      patch: { title?: string; situation?: string },
+    ): Promise<DevStory> {
+      assertLedger(id, 'story');
+      return call<DevStory>('updateStory', [id, patch]);
+    },
+    async deleteStory(id: string): Promise<void> {
+      assertLedger(id, 'story');
+      await call<null>('deleteStory', [id]);
     },
     async deleteLogEntry(id: string): Promise<void> {
       assertLedger(id, 'log');
