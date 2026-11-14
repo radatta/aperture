@@ -66,7 +66,7 @@ Severity:
 - **Fine as is** → not a finding. Don't flag it, don't suggest scrubbing it.
 - Unsure whether a value is real → Severity 3, "confirm synthetic".
 
-Report as `path:line — <category> — <what to write instead>`; **never repeat the offending text**. Lines the diff didn't add are out of scope. End the section with one line even when clean: `Public content: clean (diff, N commit messages, PR body read|absent, report read|absent)`.
+Report as `path:line — <category> — <what to write instead>`; **never repeat the offending text**. Lines the diff didn't add are out of scope (at most one "pre-existing" note). End the section with one line: `Public content: clean (diff, N commit messages, PR body read|absent, report read|absent)`, or `Public content: N findings (S1 n, S3 n) — <paths>` when not.
 
 ## New-surfaces inventory (always emit)
 

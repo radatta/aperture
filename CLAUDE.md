@@ -52,7 +52,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   `coi-grep-guard.sh` (Grep) enforce it; the rule stands whether or not they're registered. Mechanism:
   `docs/ops/COI-INCIDENTS.md` → Incidents F and H.
 
-- **A hook refuses padded or ignore-blind repo-wide searches** (one froze the VM): `docs/ops/COI-INCIDENTS.md` → Incident I; `.claude/hooks/coi-reverse-shell-guard.sh`.
+- **A hook refuses padded searches, and ignore-blind ones at a checkout root** (one froze the VM): `docs/ops/COI-INCIDENTS.md` → Incident I; `.claude/hooks/coi-reverse-shell-guard.sh`.
 - **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
 - **`node_modules` is shared with the macOS host** — native binaries belong to whichever side installed
   last. `vite dev`/`vite build` dying with `Cannot find module '../lightningcss.*.node'` is this;

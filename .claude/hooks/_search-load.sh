@@ -29,12 +29,14 @@ _sl_repo() { # a checkout root, as `.`/`./`/$PWD or an absolute path
 # git tracks or doesn't ignore, so they pass at the root.
 search_load_shape() {
   local c=$1 ecwd=${2%/} main=${3%/} line end='' body='' seg a ch v tool vals i p gcwd rest
-  local q="\"[^\"]*\"|'[^']*'" pad='\.\\?\{[0-9]*,([0-9]+)\\?\}'
+  local q="\"[^\"]*\"|'[^']*'" pad='\.\\?\{([0-9]*),?([0-9]*)\\?\}'
   local gate="${COI_TOK}(e?grep|fgrep|rgrep|ugrep|rg)([[:space:]]|\$)"
   local -a w pos
   local piped xa rec unr noidx pat dd wide=0 files walk
   SEARCH_REASON=''
+  (( ${#c} <= 8000 )) || return 1 # an accident guard: a huge command isn't worth the quote-blanking loop's time
   [[ $c =~ $gate ]] || return 1
+  c=${c//$'\\\n'/ } # join backslash continuations
   while IFS= read -r line; do # drop heredoc bodies, keep the opening line
     if [[ -n $end ]]; then [[ ${line//[[:space:]]/} == "$end" ]] && end=''; continue; fi
     body+=$line$'\n'
@@ -42,8 +44,10 @@ search_load_shape() {
   done <<<"$c"
   rest=$body # padding is read before the quotes are blanked: it lives inside them
   while [[ $rest =~ $pad ]]; do
-    v=${BASH_REMATCH[1]}
-    if (( ${#v} > 3 || 10#$v >= 20 )); then wide=1; break; fi
+    for v in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; do # .{M,N}, .{M,} or .{N}: either bound
+      [[ -n $v ]] && (( ${#v} > 3 || 10#$v >= 20 )) && wide=1
+    done
+    (( wide )) && break
     rest=${rest#*"${BASH_REMATCH[0]}"}
   done
   c=$body
@@ -117,7 +121,8 @@ search_load_shape() {
     if (( pat == 0 && ${#pos[@]} )); then pos=("${pos[@]:1}"); fi # the first positional is the pattern
     files=0
     if [[ $tool == gitgrep ]] || (( !piped || rec || xa || ${#pos[@]} )); then files=1; fi
-    if (( wide && files )); then SEARCH_REASON=pad; return 0; fi
+    # rg is exempt: its engine runs in linear time with bounded memory (Rust regex size limits)
+    if (( wide && files )) && [[ $tool != rg ]]; then SEARCH_REASON=pad; return 0; fi
     (( xa )) && continue
     case $tool in gitgrep) walk=$noidx ;; rg) walk=$unr ;; *) walk=$rec ;; esac # does it ignore .gitignore?
     if (( ${#pos[@]} == 0 )); then
@@ -125,7 +130,10 @@ search_load_shape() {
       continue
     fi
     for p in "${pos[@]}"; do
-      if [[ $tool != gitgrep || $noidx == 1 ]] && _sl_outer "$p" "$gcwd" "$main"; then SEARCH_REASON=scope; return 0; fi
+      # outside any checkout: a recursive grep, git grep off the index, or rg (whose ignore files stop at the repo)
+      if (( walk )) || [[ $tool == rg && ! $p =~ ^\.\.(/\.\.)*/?$ ]]; then
+        if _sl_outer "$p" "$gcwd" "$main"; then SEARCH_REASON=scope; return 0; fi
+      fi
       if (( walk )) && _sl_repo "$p" "$gcwd" "$main"; then SEARCH_REASON=scope; return 0; fi
     done
   done <<<"$c"

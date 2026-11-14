@@ -111,7 +111,7 @@ case "$LC" in *grep*|*rg*)
   if search_load_shape "$COMMAND" "$CWD" "$MAIN"; then
     SAFE='Safe form: timeout 60 nice -n 10 rg -n <pattern> <dirs> | head -500, scoped to tracked source dirs (app/src lambdas/src packages scripts docs …); -C N for context lines. Mechanism: docs/ops/COI-INCIDENTS.md → Incident I.'
     if [[ $SEARCH_REASON == pad ]]; then
-      coi_deny "Blocked: a wide padding quantifier (.{0,N} with N >= 20) in a grep / git grep / rg pattern over files. On 2026-11-14 one such search took 12 GB and froze the VM for every session. Use -C for context instead of padding; for context inside one long line, pipe a single named file in (cat <file> | grep -oE '…') — piped input is not blocked.
+      coi_deny "Blocked: a wide padding quantifier (.{0,N} with N >= 20) in a grep / git grep / rg pattern over files. On 2026-11-14 one such search took 12 GB and froze the VM for every session. Use -C for context instead of padding, or rg (its engine is linear-time; rg is exempt); for one very long line, the Read tool with an offset. Padding on a pipe of command output is not blocked.
 $SAFE"
     fi
     coi_deny "Blocked: an ignore-blind recursive search (grep -r, rg -u/--no-ignore, git grep --no-index/--untracked) on a checkout root, home, / or the worktrees dir walks node_modules and every checkout under .claude/worktrees. Name the dirs, or use git grep -n <pattern> -- <dirs> (tracked files only).

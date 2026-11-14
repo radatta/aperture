@@ -70,7 +70,7 @@
 {"expect":"deny","reason":"padding quantifier","why":"Incident I — the 2026-11-14 shape: git grep -o -i -E with wide padding on `.` from the main checkout","cwd":"/workspace","cmd":"git grep -o -i -E '.{0,110}(session|board).{0,80}' ."}
 {"expect":"deny","reason":"padding quantifier","why":"padding is refused even with a real pathspec — the pattern is the cost, not the scope","cwd":"/workspace","cmd":"git grep -n -E 'foo.{0,80}' -- scripts docs"}
 {"expect":"deny","reason":"padding quantifier","why":"grep -r with -o and padding, scoped","cmd":"grep -rnoE '.{0,110}foo' docs/"}
-{"expect":"deny","reason":"padding quantifier","why":"rg too — one rule for all three tools","cmd":"rg -o '.{0,80}foo.{0,80}' app/src"}
+{"expect":"allow","why":"rg is exempt from the padding rule: Rust regex runs in linear time with bounded memory","cmd":"rg -o '.{0,80}foo.{0,80}' app/src"}
 {"expect":"deny","reason":"padding quantifier","why":"BRE interval spelling","cmd":"grep -o 'x.\\{0,40\\}y' notes.txt"}
 {"expect":"deny","reason":"padding quantifier","why":"padding reaching grep through xargs","cmd":"find docs -name '*.md' | xargs grep -oE 'foo.{0,80}'"}
 {"expect":"deny","reason":"padding quantifier","why":"Monitor runs a shell line too","tool":"Monitor","cwd":"/workspace","cmd":"git grep -o -E '.{0,60}todo.{0,60}' ."}
@@ -103,3 +103,9 @@
 {"expect":"allow","why":"a quoted mention is text","cwd":"/workspace","cmd":"echo 'run grep -r foo . here'"}
 {"expect":"allow","why":"a heredoc body is text","cwd":"/workspace","cmd":"cat > n.md <<'EOF'\ngrep -r foo .\nEOF\ngrep -c x n.md"}
 {"expect":"allow","why":"a -e value containing r is not -r","cwd":"/workspace","cmd":"pnpm test | grep -e prefix"}
+{"expect":"deny","reason":"padding quantifier","why":"a minimum-only bound is just as wide","cmd":"grep -rnoE 'foo.{40,}' docs/"}
+{"expect":"deny","reason":"padding quantifier","why":"an exact count too","cmd":"git grep -oE '.{90}foo' -- docs"}
+{"expect":"deny","reason":"ignore-blind","why":"a backslash continuation is joined first","cwd":"/workspace","cmd":"grep -rn foo \\\n  ."}
+{"expect":"allow","why":"a non-recursive grep on / reads nothing recursive","cwd":"/workspace","cmd":"grep -n foo / 2>/dev/null"}
+{"expect":"allow","why":"rg on .. from a subdirectory is the repo root, where rg honours .gitignore","cwd":"/workspace/app","cmd":"rg foo .."}
+{"expect":"deny","reason":"ignore-blind","why":"grep -r on .. from a subdirectory reaches the root","cwd":"/workspace/app","cmd":"grep -rn foo .."}
