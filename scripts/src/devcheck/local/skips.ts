@@ -7,6 +7,7 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason:
       'local: the iOS Simulator is the Mac’s (pnpm ios-probe is the headless check) — runs on dev',
   },
+  'per-slot-runs': { reason: 'local: the slot is the dev lock’s — runs on dev' },
   'flux-perf': {
     reason:
       'local: the service-worker precache and brotli wasm are the CloudFront build’s — runs on dev',

@@ -2,11 +2,12 @@
 // runLockFile), and `pnpm bot deploy-dev` sends a branch touching iOS paths to slot A, the only slot with a
 // Simulator (bot/ios-routing.ts, CI-BOT.md → Dev slots). A run holds one slot, so the lock and routing rules are the
 // bot's and the harness's own tests; dev proves the outcome a run can see — an iOS-touching branch is on dev. That
-// step is slow, gated on the iOS paths: a branch touching none defers it, rather than passing it vacuously.
+// step is slow, gated on the iOS paths: a branch touching none defers it, and one run anyway (by name, --tier all)
+// reads needs-you — never a pass with nothing checked. Locally it is skipped: the slot is the dev lock's.
 import { execFileSync } from 'node:child_process';
 import { currentSlot } from '../config';
 import { globMatch } from '../glob';
-import { noConsoleErrors, type Row, type RowKind, type Scenario } from '../scenario';
+import { NeedsYou, noConsoleErrors, type Row, type RowKind, type Scenario } from '../scenario';
 import { IOS_SLOW_PATHS } from './ios-paths';
 
 const off = (
@@ -141,10 +142,12 @@ export const perSlotRuns: Scenario = {
         )
           .split('\n')
           .filter((f) => f && IOS_SLOW_PATHS.some((g) => globMatch(g, f)));
-        if (!files.length) {
-          ctx.log(`no iOS paths in this branch's diff: either slot is fine (${currentSlot()})`);
-          return;
-        }
+        // Run by name, by --tier all, or for an edit to this file alone: nothing to route, so nothing proven.
+        if (!files.length)
+          throw new NeedsYou(
+            `this branch touches no iOS paths, so it may run on either slot (${currentSlot()}): nothing to route`,
+            true,
+          );
         if (currentSlot() !== 'dev')
           throw new Error(
             `this branch touches iOS paths (${files.slice(0, 3).join(', ')}) but runs on ${currentSlot()} — deploy-dev should have sent it to dev`,
