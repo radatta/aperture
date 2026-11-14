@@ -77,6 +77,9 @@ export function fakeXHR(
         return this.blob === undefined ? (this.blob = blobOf(this.text, w)) : this.blob;
       return this.type === '' || this.type === 'text' ? this.text : null;
     }
+    get readyState() {
+      return this.s ? 4 : this.opened ? 1 : 0; // DONE, OPENED, UNSENT
+    }
     get responseURL() {
       return this.s ? new URL(this.url, 'https://leetcode.com').href : '';
     }

@@ -126,11 +126,10 @@
     items.forEach(onItem);
   }
   function onItem(m) {
-    // A problem doc names its own problem, so it's kept by that slug wherever it was fetched — LeetCode fetches
-    // the next problem's before you click Next (debug log 9) — and used only while the address names it.
+    // A problem doc is kept by its own slug, wherever it was fetched (relay.js keepsDoc).
     if (m.kind === 'problem') {
-      if (typeof m.slug !== 'string' || relayLib.slugOf(`/problems/${m.slug}/`) !== m.slug)
-        return debug.log('relay.reject', { reason: 'slug', kind: m.kind });
+      const k = relayLib.keepsDoc(m);
+      if (!k.ok) return debug.log('relay.reject', { reason: k.reason, kind: m.kind });
       return onProblem(m.slug, m.payload, m.questionId);
     }
     // Made from another page (the last problem, before a nav): never this one's. A run or submit made on its
@@ -333,11 +332,15 @@
     if (!fit) return;
     problems.delete(slug); // a refetch is the newest
     problems.set(slug, fit);
+    let out = null;
     for (const k of problems.keys()) {
       if (problems.size <= PROBLEMS_MAX) break;
-      if (k !== screenSlug) problems.delete(k);
+      if (k === screenSlug) continue;
+      problems.delete(k);
+      if (!binding || binding.slug !== k) questionIds.delete(k); // its id goes with it
+      out = k;
     }
-    debug.log('doc.keep', { on: slug === screenSlug, n: problems.size });
+    debug.log('doc.keep', { on: slug === screenSlug, n: problems.size, out });
     if (questionId) learnQuestionId(slug, questionId);
     if (slug === screenSlug && state.phase !== 'hidden') paint();
     maybeFill();

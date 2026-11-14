@@ -2,7 +2,8 @@
 // rules (docs/areas/recruiting/index.md → Design decisions): a page message can never Start anything — it
 // can only add events to the sitting the extension itself opened, for the problem on screen. accept() checks
 // the envelope: this load's tag, a fresh sequence number, raw text of the right shape. The isolated world
-// then parses that text itself (lib/wire.js), and admit() rules on each item it finds.
+// then parses that text itself (lib/wire.js), and admit() rules on each item it finds — but a problem doc,
+// which names its own problem and is only ever used for that one, goes to keepsDoc() instead.
 (function (root, factory) {
   const api = factory(root.ApertureLC && root.ApertureLC.tag);
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -11,7 +12,7 @@
   'use strict';
   const tag = tagLib || (typeof require === 'function' ? require('./tag.js') : null);
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
-  const CACHE_ONLY = ['problem', 'hint'];
+  const CACHE_ONLY = ['hint'];
   // LeetCode's judging can finish after you've moved on: these, when made from their own problem's page, go
   // to that problem's open sitting (content.js asks admit() again with that problem as ctx), never to the one
   // on screen (Rahul, 2026-11-08).
@@ -91,13 +92,10 @@
     if (!item || (!SENDABLE.includes(item.kind) && !CACHE_ONLY.includes(item.kind)))
       return { ok: false, reason: 'kind' };
     if (!ctx.screenSlug) return { ok: false, reason: 'off-problem' };
-    // A problem doc or hint counts only for the problem on screen, so one for another slug can't set this
-    // sitting's title or question id. Nothing about them needs a sitting: they're kept for the next Start.
-    if (item.kind === 'problem' && item.slug !== ctx.screenSlug)
-      return { ok: false, reason: 'off-screen-slug' };
     if (item.slug != null && item.slug !== ctx.screenSlug)
       return { ok: false, reason: 'off-screen-slug' };
-    if (item.kind === 'problem' || item.kind === 'hint') return { ok: true };
+    // A hint counts only for the problem on screen; it needs no sitting: it's kept for the next Start.
+    if (item.kind === 'hint') return { ok: true };
     const b = ctx.binding;
     if (!b || b.status !== 'active') return { ok: false, reason: 'no-sitting' };
     if (
@@ -109,5 +107,14 @@
     return { ok: true };
   }
 
-  return { createRelay, admit, slugOf, SENDABLE, LATE, RAW_MAX };
+  // A problem doc → whether to keep it. It's kept by its own slug wherever it was fetched — LeetCode fetches the
+  // next problem's before you click Next (debug log 9) — and content.js uses it only while the address names
+  // that slug, so one for another problem can't set this sitting's title or question id.
+  const isSlug = (s) => typeof s === 'string' && slugOf(`/problems/${s}/`) === s;
+  const keepsDoc = (item) =>
+    item && item.kind === 'problem' && isSlug(item.slug)
+      ? { ok: true }
+      : { ok: false, reason: 'slug' };
+
+  return { createRelay, admit, keepsDoc, isSlug, slugOf, SENDABLE, LATE, RAW_MAX };
 });

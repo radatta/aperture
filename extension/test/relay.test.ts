@@ -71,7 +71,7 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     });
   });
 
-  it('admits a problem doc or hint only for the problem on screen, and events only for its open sitting', () => {
+  it('admits a hint only for the problem on screen, and events only for its open sitting', () => {
     const { admit } = relayLib;
     expect(admit(snapshot, active)).toEqual({ ok: true });
     expect(admit({ ...snapshot, kind: 'note', slug: 'other' }, active)).toEqual({
@@ -90,14 +90,9 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
       ok: false,
       reason: 'no-sitting',
     });
-    expect(admit({ kind: 'problem', slug: 'two-sum', payload: {} }, none)).toEqual({ ok: true });
-    expect(admit({ kind: 'problem', slug: 'next-one', payload: {} }, none)).toEqual({
+    expect(admit({ kind: 'problem', slug: 'two-sum', payload: {} }, none)).toEqual({
       ok: false,
-      reason: 'off-screen-slug',
-    });
-    expect(admit({ kind: 'problem', slug: null, payload: {} }, none)).toEqual({
-      ok: false,
-      reason: 'off-screen-slug',
+      reason: 'kind', // keepsDoc's, below
     });
     expect(admit({ kind: 'hint', slug: null, questionId: '1' }, none)).toEqual({ ok: true });
     expect(
@@ -131,5 +126,16 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     expect(relayLib.slugOf('/problems/two-sum')).toBe('two-sum');
     expect(relayLib.slugOf('/problemset/')).toBeNull();
     expect(relayLib.slugOf('/problems/Two_Sum/')).toBeNull();
+  });
+
+  it('keeps a problem doc by its own slug, on screen or not, only when that is a slug', () => {
+    const { keepsDoc } = relayLib;
+    expect(keepsDoc({ kind: 'problem', slug: 'two-sum', payload: {} })).toEqual({ ok: true });
+    expect(keepsDoc({ kind: 'problem', slug: 'next-one', payload: {} })).toEqual({ ok: true });
+    const no = { ok: false, reason: 'slug' };
+    for (const slug of [null, '', 'Two_Sum', 'a/b', 'two-sum/', 'x'.repeat(129), 7])
+      expect(keepsDoc({ kind: 'problem', slug, payload: {} })).toEqual(no);
+    expect(keepsDoc({ kind: 'hint', slug: 'two-sum' })).toEqual(no);
+    expect(keepsDoc(null)).toEqual(no);
   });
 });

@@ -125,10 +125,21 @@ export const lcExtension: Scenario = {
       id: 'ext-off-screen',
       entry: 'extension',
       kind: 'edge',
-      what: 'A problem doc or hint counts only for the problem on screen; events only for its open sitting',
+      what: 'A hint counts only for the problem on screen; events only for its open sitting',
       offDev: {
         file: 'extension/test/relay.test.ts',
-        test: 'admits a problem doc or hint only for the problem on screen, and events only for its open sitting',
+        test: 'admits a hint only for the problem on screen, and events only for its open sitting',
+        why: `${noStep}; the relay's acceptance rules are pure functions`,
+      },
+    },
+    {
+      id: 'ext-doc-slug',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A problem doc is kept by its own slug, on screen or not, and only when that is a slug',
+      offDev: {
+        file: 'extension/test/relay.test.ts',
+        test: 'keeps a problem doc by its own slug, on screen or not, only when that is a slug',
         why: `${noStep}; the relay's acceptance rules are pure functions`,
       },
     },
@@ -563,10 +574,21 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-xhr-resend-on-load',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'An XHR the page sends again from its load handler still has its next response captured, never paired with the first',
+      offDev: {
+        file: 'extension/test/replay.test.ts',
+        test: 'still captures the next response when the page sends the XHR again from its load handler',
+        why: `${noStep}; the real page-world script runs in jsdom, the XHR reused as a page could`,
+      },
+    },
+    {
       id: 'ext-doc-ahead',
       entry: 'extension',
       kind: 'edge',
-      what: 'The doc LeetCode fetches before Next is kept for its own problem, never used for the one on screen, and the next problem’s Start carries it; a ninth doc evicts the oldest',
+      what: 'The doc LeetCode fetches before Next is kept for its own problem, never used for the one on screen, and the next problem’s Start carries it; a ninth doc evicts the oldest off screen, never the one on screen',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'keeps the doc LeetCode fetched before Next, and the next problem’s Start carries it',

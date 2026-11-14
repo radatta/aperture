@@ -1187,6 +1187,7 @@ describe('the problem doc LeetCode fetches', () => {
     for (let i = 1; i <= 8; i++) await docFetch(q, `other-${i}`);
     await until(() => entries(ext2, 'doc.keep').length >= 9);
     expect(entries(ext2, 'doc.keep').map((e) => e.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 8]);
+    expect(entries(ext2, 'doc.keep').at(-1)).toMatchObject({ out: 'add-two-numbers' });
     next(q);
     await until(() => q.text().includes('Add Two Numbers'));
     q.tap('start');
@@ -1196,6 +1197,17 @@ describe('the problem doc LeetCode fetches', () => {
       difficulty: null,
       problem: null,
     });
+
+    // The problem on screen keeps its doc even when it's the oldest: the oldest off screen goes instead.
+    const ext3 = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await ext3.local.set({ debug: true });
+    const r = open('/problems/two-sum/', ext3);
+    await until(() => r.phase() === 'prompt');
+    await docFetch(r, 'two-sum');
+    expect(await logged(ext3, 'doc.keep')).toMatchObject({ on: true, n: 1, out: null });
+    for (let i = 1; i <= 8; i++) await docFetch(r, `other-${i}`);
+    await until(() => entries(ext3, 'doc.keep').length >= 9);
+    expect(entries(ext3, 'doc.keep').at(-1)).toMatchObject({ on: false, n: 8, out: 'other-1' });
   }, 30_000);
 
   it('with GraphQL over blob XHRs, a Next’d problem’s Start has its doc and a Submit its details', async () => {

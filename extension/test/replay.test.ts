@@ -1,6 +1,7 @@
 // The real page-world script (page/tag.js + inject-main.js, as the manifest loads them) in a jsdom page,
 // fed LeetCode's traffic over both transports. This test plays the isolated world's part exactly as
-// content.js does: the handshake, the real relay's envelope check, the real wire parse, the relay's admit.
+// content.js does: the handshake, the real relay's envelope check, the real wire parse, the relay's admit
+// (and keepsDoc for a problem doc).
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JSDOM } from 'jsdom';
 import { FetchedResponse, MAIN_JS, fakeXHR, lib, page, run, until } from './load';
@@ -56,7 +57,7 @@ function loadMain(
       raws.push(r.raw);
       seqs.push(JSON.parse(JSON.parse(detail).body).seq);
       for (const item of capture.observe(r.raw)) {
-        const a = relayLib.admit(item, ctx);
+        const a = item.kind === 'problem' ? relayLib.keepsDoc(item) : relayLib.admit(item, ctx);
         if (a.ok) admitted.push(item);
         else rejected.push(a.reason);
       }
@@ -122,9 +123,8 @@ describe('inject-main in a page', () => {
       body: T.updateSyncedCode.reqText,
     });
 
-    const kinds = await until(() => (admitted.length >= 8 ? admitted.map((m) => m.kind) : null));
-    await until(() => rejected.length >= 1);
-    expect(rejected).toEqual(['off-screen-slug']); // the next problem's prefetched doc: not on screen
+    const kinds = await until(() => (admitted.length >= 9 ? admitted.map((m) => m.kind) : null));
+    expect(rejected).toEqual([]);
     expect(new Set(kinds)).toEqual(
       new Set(['hint', 'snapshot', 'note', 'replay', 'problem', 'submit', 'submitDetails', 'run']),
     );
@@ -135,7 +135,11 @@ describe('inject-main in a page', () => {
     expect(admitted.find((m) => m.kind === 'submit')).toMatchObject({
       payload: { submissionId: '900001', result: { status_msg: 'Wrong Answer' } },
     });
-    expect(admitted.filter((m) => m.kind === 'problem').map((m) => m.slug)).toEqual(['two-sum']);
+    // The next problem's prefetched doc is kept too, by its own slug (relay.js keepsDoc).
+    expect(admitted.filter((m) => m.kind === 'problem').map((m) => m.slug)).toEqual([
+      'two-sum',
+      'add-two-numbers',
+    ]);
     // Raw text only, numbered in order; nothing for another host.
     for (const r of raws) {
       expect(typeof r.url).toBe('string');
@@ -458,6 +462,34 @@ describe('inject-main over blob XHRs', () => {
           [T.submissionDetails.reqText, T.submissionDetails.resText, how],
         ].sort(),
       );
+      dom!.window.close();
+    }
+  });
+
+  it('still captures the next response when the page sends the XHR again from its load handler', async () => {
+    // load fires before loadend: by the first request's loadend, the second send's listener is already on.
+    for (const xhrType of ['blob', '']) {
+      const m = loadMain([T.questionDetail, T.submissionDetails] as Pair[], undefined, { xhrType });
+      const x = m.xhr(T.questionDetail as Pair);
+      x.addEventListener(
+        'load',
+        () => {
+          x.open('POST', T.submissionDetails.url);
+          if (xhrType) x.responseType = xhrType as XMLHttpRequestResponseType;
+          x.send(T.submissionDetails.reqText);
+        },
+        { once: true },
+      );
+      await until(() => m.raws.length >= 1);
+      await settle();
+      // The first request's response went with its re-open: lost, never paired with the second's.
+      expect(pairs(m), xhrType || 'text').toEqual([
+        [
+          T.submissionDetails.reqText,
+          T.submissionDetails.resText,
+          xhrType ? 'xhr:blob-ok' : 'xhr:ok',
+        ],
+      ]);
       dom!.window.close();
     }
   });
