@@ -144,4 +144,6 @@ jobs:
       # half and prints its seed. Each shard runs on vitest's default one worker — a second worker measured
       # no faster on the 2-vCPU runner. No `--` before the flag: pnpm forwards a `--` itself, and vitest
       # then runs all 68 files.
-      - run: pnpm --filter @aperture/app test --shard=${{ matrix.shard }}/2
+      - env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter @aperture/app test --shard="$SHARD/2"

@@ -92,6 +92,9 @@ jobs:
       # Which CDK bootstrap the dev stacks synthesize against (cdk/src/config/lane.ts); empty everywhere but main's
       # dev deploy.
       APERTURE_DEPLOY_LANE: ${{ inputs.lane }}
+      # Every script below reads the stage from here: no `run:` body holds an expression, so an input reaches a shell
+      # only as a quoted variable (scripts/src/workflow-run-scripts.ts).
+      APERTURE_STAGE: ${{ inputs.stage }}
     steps:
       # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
       # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
@@ -106,28 +109,35 @@ jobs:
           esac
           echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
           exit 1
+      # Inputs arrive as variables (the job's APERTURE_* plus these), and the runner's GITHUB_EVENT_NAME / GITHUB_REF equal
+      # github.event_name / github.ref in a called workflow.
       - name: Validate mode
+        env:
+          MODE: ${{ inputs.mode }}
+          ROLE_ARN: ${{ inputs.role_arn }}
+          REF: ${{ inputs.ref }}
         run: |
-          case "${{ inputs.mode }}" in
-            none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }} lane=${{ inputs.lane }}" ;;
-            *) echo "::error::invalid mode '${{ inputs.mode }}'"; exit 1 ;;
+          case "$MODE" in
+            none|app|full) ;;
+            *) echo "::error::invalid mode '$MODE'"; exit 1 ;;
           esac
-          case "${{ inputs.stage }}" in
+          case "$APERTURE_STAGE" in
             dev|devb|prod) ;;
-            *) echo "::error::invalid stage '${{ inputs.stage }}'"; exit 1 ;;
+            *) echo "::error::invalid stage '$APERTURE_STAGE'"; exit 1 ;;
           esac
-          case "${{ inputs.lane }}" in
+          case "$APERTURE_DEPLOY_LANE" in
             '') ;;
-            devmain) [ "${{ inputs.stage }}" != prod ] || { echo "::error::lane devmain is dev-only"; exit 1; } ;;
-            *) echo "::error::invalid lane '${{ inputs.lane }}'"; exit 1 ;;
+            devmain) [ "$APERTURE_STAGE" != prod ] || { echo "::error::lane devmain is dev-only"; exit 1; } ;;
+            *) echo "::error::invalid lane '$APERTURE_DEPLOY_LANE'"; exit 1 ;;
           esac
+          echo "mode=$MODE stage=$APERTURE_STAGE lane=$APERTURE_DEPLOY_LANE"
           # The exempt lane is for merged code only: a `main` push deploying its own commit — never a dispatch, which can
           # also run on ref main and check out a branch's commit (deploy-dev.yml's `ref`).
-          if [ "${{ inputs.lane }}" = devmain ] && { [ "${{ github.event_name }}" != push ] || [ "${{ github.ref }}" != refs/heads/main ] || [ -n "${{ inputs.ref }}" ]; }; then
+          if [ "$APERTURE_DEPLOY_LANE" = devmain ] && { [ "$GITHUB_EVENT_NAME" != push ] || [ "$GITHUB_REF" != refs/heads/main ] || [ -n "$REF" ]; }; then
             echo "::error::lane devmain is only for a main push of its own commit"; exit 1
           fi
           # Each lane with its own role, so an unset variable fails here, not as an opaque OIDC trust error.
-          case "${{ inputs.lane }}:${{ inputs.role_arn }}" in
+          case "$APERTURE_DEPLOY_LANE:$ROLE_ARN" in
             devmain:*:role/aperture-github-dev-main) ;;
             devmain:*) echo "::error::lane devmain needs the dev-main role (is AWS_DEPLOY_ROLE_DEV_MAIN set?)"; exit 1 ;;
             *:role/aperture-github-dev-main) echo "::error::the dev-main role is for lane devmain only"; exit 1 ;;
@@ -173,25 +183,31 @@ jobs:
           role-to-assume: ${{ inputs.role_arn }}
           aws-region: ${{ inputs.aws_region }}
           role-duration-seconds: ${{ contains(fromJSON('["dev","devb"]'), inputs.stage) && 1800 || 3600 }}
+      # Public run logs never print a Lambda Function URL (INFRA §9 → Public repo; scripts/src/mask-function-url.ts). A
+      # mask covers only this job's later lines, so this sits before every step that reads or prints the stack outputs.
+      # No stack yet (a first deploy) → nothing to mask; any other DescribeStacks failure fails here, before a deploy.
+      - name: Mask Function URLs
+        if: inputs.mode != 'none'
+        run: node scripts/src/mask-function-url.ts "$APERTURE_STAGE"
       # --- full only: infra path ---
       # One synth → diff + deploy consume the same cdk.out: no double esbuild bundle, and the diff you
       # read is byte-identical to what deploys. --no-lookups fails loudly on any (unexpected) lookup.
       - name: CDK synth
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/cdk exec cdk synth ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} -c stage=${{ inputs.stage }} --no-lookups --output cdk.out
+        run: pnpm --filter @aperture/cdk exec cdk synth "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" -c "stage=$APERTURE_STAGE" --no-lookups --output cdk.out
       # --method=template compares the synthesized template with the deployed one (lookup role) instead of
       # creating a CloudFormation change set — the diff then built a change set and the deploy built a
       # second, identical one. Property-level "requires replacement" still comes from the resource spec;
       # what's lost is CloudFormation's own change-set analysis.
       - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --method=template
+        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" --method=template
       # --method=direct: UpdateStack without a change set. Same rollback-on-failure from CloudFormation, less
       # per-resource progress in the log; unchanged stacks still no-op.
       - name: Deploy stacks # --outputs-file is what publish/health-check read downstream
         id: deploy
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --method=direct --require-approval never --outputs-file cdk-outputs.${{ inputs.stage }}.json
+        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" --method=direct --require-approval never --outputs-file "cdk-outputs.$APERTURE_STAGE.json"
       # A dev deploy the freeze refused doesn't roll back by itself: CloudFormation's rollback re-applies the function's
       # configuration as the same frozen role, which the freeze refuses too, so the stack sticks in
       # UPDATE_ROLLBACK_FAILED — and a stuck stack blocks both lanes, main's included (seen in the dev-account freeze
@@ -202,7 +218,7 @@ jobs:
       - name: Unstick a refused dev deploy
         if: failure() && steps.deploy.outcome == 'failure' && contains(fromJSON('["dev","devb"]'), inputs.stage) && inputs.lane == ''
         run: |
-          if out=$(pnpm --filter @aperture/cdk exec cdk rollback --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --force 2>&1); then
+          if out=$(pnpm --filter @aperture/cdk exec cdk rollback --app cdk.out "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" --force 2>&1); then
             echo "$out"; echo "::notice::rolled the refused dev deploy back; dev is deployable again"; exit 0
           fi
           echo "$out"
@@ -211,19 +227,24 @@ jobs:
           else
             echo "::error::a dev stack may still be stuck in UPDATE_ROLLBACK_FAILED, blocking both lanes — break-glass (docs/ops/CI-BOT.md → Kill switch)"
           fi
+      # A URL this deploy created wasn't known to the mask above (it prints once, in the Outputs block); cover it for
+      # every step below.
+      - name: Mask new Function URLs
+        if: inputs.mode == 'full'
+        run: node scripts/src/mask-function-url.ts "$APERTURE_STAGE" --from-file
       - name: Smoke
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts ${{ inputs.stage }}
+        run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts "$APERTURE_STAGE"
       # --- app or full: publish the frontend ---
       # app skipped the deploy that writes the outputs file, so fetch it from CloudFormation instead.
       - name: Fetch stack outputs
         if: inputs.mode == 'app'
-        run: node scripts/aws/fetch-stack-outputs.mjs ${{ inputs.stage }}
+        run: node scripts/aws/fetch-stack-outputs.mjs "$APERTURE_STAGE"
       - name: Publish frontend
         if: inputs.mode != 'none'
-        run: node scripts/aws/publish-frontend.mjs ${{ inputs.stage }}
+        run: node scripts/aws/publish-frontend.mjs "$APERTURE_STAGE"
       # Polls the edge until it serves the shell publish just built, then curls the real public URLs —
       # proves edge wiring + origin-secret gate.
       - name: Post-deploy health check
         if: inputs.mode != 'none'
-        run: node scripts/aws/health-check.mjs ${{ inputs.stage }}
+        run: node scripts/aws/health-check.mjs "$APERTURE_STAGE"
