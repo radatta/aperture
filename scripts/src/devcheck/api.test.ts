@@ -126,7 +126,6 @@ describe('createApiClient', () => {
       'listTasks',
       'placeDigestRaw',
       'probePresigned',
-      'rpcRaw',
     ]);
     expect(Object.keys(api.writes).sort()).toEqual([
       'archiveHabit',
@@ -164,6 +163,7 @@ describe('createApiClient', () => {
       'restoreReminderToggles',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'rpcRaw',
       'sendTestPush',
       'setCategoryArea',
       'setDayCapacity',
@@ -490,7 +490,7 @@ describe('createApiClient', () => {
       const refusal = { error: 'Invalid JSON' };
       const fetch = vi.fn<FetchLike>(async () => reply(400, refusal));
       const api = createApiClient({ fetch, token: () => 'jwt', ledger: memLedger(), run: 'r1' });
-      expect(await api.reads.rpcRaw('getSettings', '{not json', 'jwt')).toEqual({
+      expect(await api.writes.rpcRaw('getSettings', '{not json', 'jwt')).toEqual({
         status: 400,
         body: refusal,
       });
@@ -500,7 +500,7 @@ describe('createApiClient', () => {
         body: '{not json',
         redirect: 'error',
       });
-      await api.reads.rpcRaw('getSettings', '{"testMode":true}', 'none');
+      await api.writes.rpcRaw('getSettings', '{"testMode":true}', 'none');
       expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/getSettings`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

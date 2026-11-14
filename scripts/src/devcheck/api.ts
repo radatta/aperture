@@ -681,9 +681,13 @@ export function createApiClient({
         return { status, body: text.slice(0, 200) };
       }
     },
+  };
+
+  const writes = {
     // An RPC posted raw — a body string as sent (malformed on purpose, or carrying testMode), with the test
-    // user's JWT or none — returning the status and parsed body so a step can assert a refusal. Only for
-    // calls the BFF must refuse before it writes anything (bff-hardening). A 429 carrying the BFF's own
+    // user's JWT or none — returning the status and parsed body so a step can assert a refusal. Here, not in
+    // reads: it can name a write method. Only for calls the BFF must refuse before it writes anything, each
+    // carrying a value that would change nothing if a regression took it (bff-hardening). A 429 carrying the BFF's own
     // `{error}` is returned as is; any other is Lambda throttling, backed off like call()'s.
     async rpcRaw(
       method: string,
@@ -704,9 +708,6 @@ export function createApiClient({
         return { status, body: text.slice(0, 200) };
       }
     },
-  };
-
-  const writes = {
     // The test user's own settings row — not ledgered; a step that changes it puts it back in its `finally`
     // (a 1-minute block for the capped-stop row, 25 again after), and a killed run's next run does (pipeline).
     updateSettings: (patch: Partial<DevSettings>) => call<DevSettings>('updateSettings', [patch]),

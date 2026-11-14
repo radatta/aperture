@@ -146,7 +146,7 @@ export const bffHardening: Scenario = {
       proves: ['fault-500'],
       async run(ctx) {
         // createTask reads input.parentId before any read or write: a null input throws a TypeError.
-        const got = await ctx.api.reads.rpcRaw(
+        const got = await ctx.api.writes.rpcRaw(
           'createTask',
           JSON.stringify({ args: [null] }),
           'jwt',
@@ -162,7 +162,12 @@ export const bffHardening: Scenario = {
       async run(ctx) {
         const story = await ctx.api.writes.createStory(`devcheck story ${ctx.nonce}`);
         const renamed = `devcheck story renamed ${ctx.nonce}`;
-        await ctx.api.writes.updateStory(story.id, { title: renamed, situation: 'probe' });
+        const saved = await ctx.api.writes.updateStory(story.id, {
+          title: renamed,
+          situation: 'probe',
+        });
+        if (saved.title !== renamed || saved.situation !== 'probe')
+          throw new Error(`updateStory answered ${JSON.stringify(saved)}`);
         const back = (await ctx.api.reads.listStories()).find((x) => x.id === story.id);
         if (back?.title !== renamed || back.situation !== 'probe')
           throw new Error(`the patched story read back as ${JSON.stringify(back)}`);
@@ -176,13 +181,13 @@ export const bffHardening: Scenario = {
       proves: ['http-testmode-no-jwt'],
       async run(ctx) {
         const title = `devcheck testMode probe ${ctx.nonce}`;
-        const read = await ctx.api.reads.rpcRaw(
+        const read = await ctx.api.writes.rpcRaw(
           'getSettings',
           JSON.stringify({ testMode: true, args: [] }),
           'none',
         );
         expectRefusal('getSettings testMode, no JWT', read, 401);
-        const write = await ctx.api.reads.rpcRaw(
+        const write = await ctx.api.writes.rpcRaw(
           'createTask',
           JSON.stringify({ testMode: true, args: [{ title }] }),
           'none',
@@ -199,7 +204,7 @@ export const bffHardening: Scenario = {
       proves: ['http-testmode-jwt'],
       async run(ctx) {
         const title = `devcheck testMode probe ${ctx.nonce}`;
-        const got = await ctx.api.reads.rpcRaw(
+        const got = await ctx.api.writes.rpcRaw(
           'createTask',
           JSON.stringify({ testMode: true, args: [{ title }] }),
           'jwt',
@@ -217,13 +222,13 @@ export const bffHardening: Scenario = {
       async run(ctx) {
         expectRefusal(
           'malformed body',
-          await ctx.api.reads.rpcRaw('getSettings', '{not json', 'jwt'),
+          await ctx.api.writes.rpcRaw('getSettings', '{not json', 'jwt'),
           400,
           /^Invalid JSON$/,
         );
         expectRefusal(
           'args not an array',
-          await ctx.api.reads.rpcRaw('getSettings', JSON.stringify({ args: 'x' }), 'jwt'),
+          await ctx.api.writes.rpcRaw('getSettings', JSON.stringify({ args: 'x' }), 'jwt'),
           400,
           /args must be an array/,
         );
@@ -241,7 +246,7 @@ export const bffHardening: Scenario = {
         const probe = async (key: 'googleAccounts' | 'createdAt') =>
           expectRefusal(
             `updateSettings ${key}`,
-            await ctx.api.reads.rpcRaw(
+            await ctx.api.writes.rpcRaw(
               'updateSettings',
               JSON.stringify({ args: [{ [key]: current[key] }] }),
               'jwt',
@@ -251,9 +256,14 @@ export const bffHardening: Scenario = {
           );
         await probe('googleAccounts');
         await probe('createdAt');
-        const after = await ctx.api.reads.getSettings();
-        if (JSON.stringify(after) !== JSON.stringify(before))
-          throw new Error('a refused updateSettings changed the test user’s settings');
+        // A refusal throws before any write, so updatedAt stays put; any write a regression let through moves it.
+        const after = (await ctx.api.reads.getSettings()) as unknown as typeof current & {
+          updatedAt: unknown;
+        };
+        const was = before as unknown as typeof after;
+        for (const k of ['updatedAt', 'googleAccounts', 'createdAt'] as const)
+          if (JSON.stringify(after[k]) !== JSON.stringify(was[k]))
+            throw new Error(`a refused updateSettings changed the test user’s settings (${k})`);
         const ok = await ctx.api.writes.updateSettings({ pomodoroWorkMin: before.pomodoroWorkMin });
         if (ok.pomodoroWorkMin !== before.pomodoroWorkMin)
           throw new Error(
@@ -269,7 +279,7 @@ export const bffHardening: Scenario = {
       async run(ctx) {
         expectRefusal(
           'updateStory userId',
-          await ctx.api.reads.rpcRaw(
+          await ctx.api.writes.rpcRaw(
             'updateStory',
             JSON.stringify({
               args: [`devcheck-no-such-story-${ctx.nonce}`, { userId: 'someone-else' }],
