@@ -377,7 +377,7 @@ describe('devlock.sh', () => {
     writeFileSync(
       join(bin, 'git'),
       `#!/bin/bash\necho "\${HOME:-unset}" >"${join(tmp, 'git-home')}"\n` +
-        `[ -f "${join(tmp, 'git-fail')}" ] && { echo 'fatal: Could not read from remote repository.' >&2; exit 128; }\nexit 0\n`,
+        `[ -f "${join(tmp, 'git-fail')}" ] && { cat "${join(tmp, 'git-fail')}" >&2; exit 128; }\nexit 0\n`,
       { mode: 0o755 },
     );
     const noHome = { ...env };
@@ -387,16 +387,24 @@ describe('devlock.sh', () => {
         env: { ...noHome, PATH: `${bin}:${env.PATH}`, APERTURE_DEVLOCK_CALLER: 'status' },
         encoding: 'utf8',
       });
-    writeFileSync(join(tmp, 'git-fail'), '');
-    writeFileSync(
-      join(tmp, 'board/devlock.json'),
-      JSON.stringify({ v: 1, t: iso(-10 * 60_000), source: 'peek', holder: null }),
-    );
-    run();
-    expect(cache()).toMatchObject({
+    const failWith = (line: string) => {
+      writeFileSync(join(tmp, 'git-fail'), `warning: noise\n${line}\n`);
+      writeFileSync(
+        join(tmp, 'board/devlock.json'),
+        JSON.stringify({ v: 1, t: iso(-10 * 60_000), source: 'peek', holder: null }),
+      );
+      run();
+      return cache();
+    };
+    expect(failWith('fatal: Could not read from remote repository.')).toMatchObject({
       failedWhy: 'ls-remote: fatal: Could not read from remote repository.',
       failedBy: 'status',
     });
+    // the reason reaches a page that leaves the box: a URL's credentials never do
+    const why = failWith(
+      "fatal: unable to access 'https://x-access-token:tok@github.com/o/r/'",
+    ).failedWhy;
+    expect(why).toBe("ls-remote: fatal: unable to access 'https://github.com/o/r/'");
     rmSync(join(tmp, 'git-fail'));
     writeFileSync(
       join(tmp, 'board/devlock.json'),

@@ -98,13 +98,21 @@ const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:(?:T| ~?)(\d{1,2}):(\d{2}))?(?=$|[
 const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{2})-(\d{2})(?=$|[ (])/;
 export type Merged = { branch: string; number: number; mergedAt: number };
 export function firedAt(after: string, merged: Merged[], now: number): number | null {
+  const iso = planAt(after.split(/[ (]/)[0]); // a whole ISO date-time (`2026-11-20T09:00Z`), as the plan takes it
+  if (iso !== null) return iso;
   let m = AFTER_ISO.exec(after);
   if (m) return local(+m[1]!, +m[2]!, +m[3]!, +(m[4] ?? 0), +(m[5] ?? 0));
   m = AFTER_MD.exec(after);
   if (m) {
     const y = new Date(now).getFullYear();
     const at = local(y, +m[1]!, +m[2]!);
-    return at !== null && now - at > 183 * 86400e3 ? local(y + 1, +m[1]!, +m[2]!) : at;
+    if (at === null) return null;
+    const half = 183 * 86400e3; // the nearest such date: over half a year off is the next or the last year's
+    return now - at > half
+      ? local(y + 1, +m[1]!, +m[2]!)
+      : at - now > half
+        ? local(y - 1, +m[1]!, +m[2]!)
+        : at;
   }
   const r = AFTER_REF.exec(after);
   const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));

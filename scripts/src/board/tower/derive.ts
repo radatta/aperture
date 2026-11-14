@@ -734,10 +734,10 @@ export function derive(i: Inputs): View {
     'DEPLOY FAILED',
   ];
   const byBranch = new Map(rows.map((r) => [r.branch, r]));
-  // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or due in
-  // the last 2 h); the rest of their plan[] steps follow it
+  // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
+  // within 2 h of now either way: tomorrow evening's step never jumps the undated ones); the rest follow it
   const mine = (q?.plan ?? []).filter(
-    (p) => p.kind === 'maintainer' && (p.at === null || p.at >= i.now - 2 * 3600e3),
+    (p) => p.kind === 'maintainer' && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
   );
   const first = needs[0]?.what ?? mine[0]?.what ?? null;
   const next = {

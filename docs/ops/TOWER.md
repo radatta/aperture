@@ -88,7 +88,7 @@ From the top:
    - A building lane whose lane file hasn't moved in 2 h (`STALE.lane`) carries an amber "quiet" age.
 4. **NEXT**:
    - your next step (the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item that is
-     undated, or timed no more than 2 h ago);
+     undated, or timed within 2 h of now either way);
    - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…, or NOT
      STARTED with no lane file, queue entry or PR; such a lane shows here only, never in NOW). An entry whose PR
      merged (in the PR list's newest 40) or whose row is merged / deploying drops out;
@@ -107,7 +107,8 @@ From the top:
      `pq-check.ts` imports);
    - DUE: open `followups[]` whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`,
      `PR <n>`, optionally `+ N day(s)|week(s)` and a trailing `(…)`; in the PR list's newest 40) or a real date that
-     has begun (`2026-11-20 …`, at its `~HH:MM` if given; `Sat 11-14 …`, zero-padded, the nearest such date). Exact
+     has begun (`2026-11-20 …`, at its `~HH:MM` if given, or a whole ISO time; `Sat 11-14 …`, zero-padded, the nearest
+     such date, a year either way). Exact
      shapes only: free text (`wave 4`, `1-2 days after …`) never fires (`firedFollowups()` in `queue.ts`);
    - parked lanes;
    - lanes whose file hasn't moved in a day.

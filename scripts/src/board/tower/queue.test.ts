@@ -374,6 +374,11 @@ describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
     expect(firedAt('01-05 (new year)', merged, new Date(2026, 11, 20).getTime())).toBe(
       new Date(2027, 0, 5).getTime(),
     );
+    // written in early January for late December: last year's (fired), not eleven months away
+    expect(firedAt('Mon 12-29 (year end)', merged, new Date(2027, 0, 3).getTime())).toBe(
+      new Date(2026, 11, 29).getTime(),
+    );
+    expect(firedAt('2026-11-14T09:00:00Z', merged, now)).toBe(Date.parse('2026-11-14T09:00:00Z'));
     for (const a of [
       'wave 4',
       'repo goes public',
