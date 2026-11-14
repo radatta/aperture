@@ -136,19 +136,21 @@ export function checkForkGuard(files: Record<string, string>): string[] {
       if (key) problems.push(`${f}:${i + 1}: ${key}: isn't allowed`);
       const loose = new RegExp(`(?:^|[\\s{,'"])(${WATCHED})['"]?\\s*:`, 'i').exec(c)?.[1];
       if (loose && !new RegExp(`^\\s*(?:-\\s+)?(${WATCHED}):(\\s|$)`).test(c))
-        problems.push(`${f}:${i + 1}: unreadable ${loose} line — write it as a plain block key`);
+        problems.push(
+          `${f}:${i + 1}: unreadable ${loose} line — a plain block key, or rephrase the text`,
+        );
       if (/^\s*-\s*\{/.test(c))
         problems.push(`${f}:${i + 1}: flow mapping — write the step as a block`);
       const using = /^\s*using:\s*(.*?)\s*$/.exec(c)?.[1];
       if (using !== undefined && using !== 'composite')
         problems.push(`${f}:${i + 1}: using "${using}" — local actions are composite only`);
       // A job that skips by who triggered it shows green on a fork PR; BASH_ENV runs before the guard's own script.
-      if (/\b(github\.actor|github\.triggering_actor)\b/i.test(c))
+      if (/\bgithub\.(triggering_)?actor/i.test(c))
+        // actor_id too
         problems.push(`${f}:${i + 1}: keys on github.actor — a skip by who triggered it passes`);
-      if (/^\s*(BASH_ENV|ENV)\s*:/.test(c))
-        problems.push(
-          `${f}:${i + 1}: sets ${c.trim().split(':')[0]} — bash sources it before the guard runs`,
-        );
+      const bashEnv = /(?:^|[\s{,'"])(BASH_ENV|ENV)['"]?\s*:/.exec(c)?.[1]; // case-sensitive: `env:` is fine
+      if (bashEnv)
+        problems.push(`${f}:${i + 1}: sets ${bashEnv} — bash sources it before the guard runs`);
     }
     if (ACTION.test(f) && !/^ {2}using: composite\s*$/m.test(text))
       problems.push(`${f}: not a composite action`);

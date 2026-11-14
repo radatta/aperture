@@ -294,18 +294,18 @@ describe('workflow-fork-guard', () => {
     const at = (step: string) =>
       check({ '.github/workflows/x.yml': wf(PR, stepsJob(`${GUARD_STEP}\n${step}`)) });
     expect(at('      - { uses: tj-actions/changed-files@v46 }')).toEqual([
-      '.github/workflows/x.yml:21: unreadable uses line — write it as a plain block key',
+      '.github/workflows/x.yml:21: unreadable uses line — a plain block key, or rephrase the text',
       '.github/workflows/x.yml:21: flow mapping — write the step as a block',
     ]);
     expect(at('      - "uses": tj-actions/changed-files@v46')).toEqual([
-      '.github/workflows/x.yml:21: unreadable uses line — write it as a plain block key',
+      '.github/workflows/x.yml:21: unreadable uses line — a plain block key, or rephrase the text',
     ]);
     expect(at('      - uses : tj-actions/changed-files@v46')).toEqual([
-      '.github/workflows/x.yml:21: unreadable uses line — write it as a plain block key',
+      '.github/workflows/x.yml:21: unreadable uses line — a plain block key, or rephrase the text',
     ]);
     const quotedRunsOn = wf(PR, stepsJob(GUARD_STEP)).replace('runs-on:', "'runs-on':");
     expect(check({ '.github/workflows/x.yml': quotedRunsOn })).toEqual([
-      '.github/workflows/x.yml:8: unreadable runs-on line — write it as a plain block key',
+      '.github/workflows/x.yml:8: unreadable runs-on line — a plain block key, or rephrase the text',
     ]);
   });
 
@@ -319,16 +319,33 @@ describe('workflow-fork-guard', () => {
         "allowlisted action actions/setup-node isn't used — drop it from ACTIONS",
       ].sort(),
     );
-    const actor = wf(PR, stepsJob(GUARD_STEP, "    if: github.actor == 'acme'\n"));
-    expect(check({ '.github/workflows/x.yml': actor })).toEqual([
-      '.github/workflows/x.yml:8: keys on github.actor — a skip by who triggered it passes',
-    ]);
-    const bashEnv = wf(PR, stepsJob(GUARD_STEP)).replace(
+    for (const cond of [
+      "github.actor == 'acme'",
+      "github.actor_id == '1'",
+      'github.TRIGGERING_ACTOR',
+    ])
+      expect(
+        check({ '.github/workflows/x.yml': wf(PR, stepsJob(GUARD_STEP, `    if: ${cond}\n`)) }),
+      ).toEqual([
+        '.github/workflows/x.yml:8: keys on github.actor — a skip by who triggered it passes',
+      ]);
+    for (const env of ['  BASH_ENV: ./x.sh', '  "BASH_ENV": ./x.sh', '  ENV: ./x.sh'])
+      expect(
+        check({
+          '.github/workflows/x.yml': wf(PR, stepsJob(GUARD_STEP)).replace(
+            'jobs:',
+            `env:\n${env}\njobs:`,
+          ),
+        }),
+      ).toEqual([
+        `.github/workflows/x.yml:7: sets ${env.includes('BASH') ? 'BASH_ENV' : 'ENV'} — bash sources it before the guard runs`,
+      ]);
+    const flowEnv = wf(PR, stepsJob(GUARD_STEP)).replace(
       'jobs:',
-      'env:\n  BASH_ENV: ./x.sh\njobs:',
+      'env: { BASH_ENV: ./x.sh }\njobs:',
     );
-    expect(check({ '.github/workflows/x.yml': bashEnv })).toEqual([
-      '.github/workflows/x.yml:7: sets BASH_ENV — bash sources it before the guard runs',
+    expect(check({ '.github/workflows/x.yml': flowEnv })).toEqual([
+      '.github/workflows/x.yml:6: sets BASH_ENV — bash sources it before the guard runs',
     ]);
   });
 
