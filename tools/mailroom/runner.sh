@@ -6,8 +6,8 @@
 # Xcode's simctl. Design: docs/ops/MAILROOM.md, docs/ops/IOS-CHECK.md.
 #
 #   runner.sh <hostjobs-dir> <state-dir> [slow|fast]   paths absolute; the plists pass them (install.sh renders two)
-# Two launchd agents drain the one inbox: the slow lane runs SLOW_JOBS (the Simulator), the fast lane everything else,
-# so a clip or an open-pr never waits behind a sim run. No lane = both locks, today's single drain (bench, hand runs).
+# Two launchd agents drain the one inbox: the slow lane takes the sim jobs (named …Z-ios-…), the fast lane everything
+# else, so a clip or an open-pr never waits behind a sim run. No lane = both locks, one drain of everything (a hand run).
 set -euo pipefail
 umask 077
 export LC_ALL=C # deterministic globs and regexes, as under launchd
@@ -18,7 +18,9 @@ LANE="${3:-all}"
 case "$LANE" in slow | fast | all) ;; *) echo "usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]" >&2; exit 1 ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 JOBS="open-pr sim clip" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
-SLOW_JOBS="sim"         # the slow lane's; every other job, and anything unparseable, is the fast lane's
+SLOW_JOBS="sim"         # run only holding lock (slow lane): they drive the Simulator
+FAST_JOBS="clip"        # run only holding lock-fast (fast lane): they keep state (clip.json's caps)
+SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-' # the slow lane takes entries named so (sim.ts's ids); open-pr may run in either
 MAX_FILE=73728 # 72 KiB per job file
 MAX_PER_DRAIN=5 # per lane, counting only the entries this lane takes
 ID_RE='^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,48}$'
@@ -50,10 +52,11 @@ WORK="$(cd "$STATE/$WD" && pwd -P)"
 REJECTED="$(cd "$STATE/rejected" && pwd -P)"
 
 # --- one drain per lane -------------------------------------------------------------------------------------
-# lock is the slow lane's (the sim job touches it per op, so a long run never reads as stale); lock-fast the fast
-# lane's, whose jobs are capped well under 5 min. A held lock exits 0: launchd re-fires while the inbox is non-empty.
-HELD=""
-trap 'for l in $HELD; do rmdir "$l" 2>/dev/null || true; done' EXIT
+# lock is the slow lane's, lock-fast the fast lane's. Each held lock is touched before every job (and the sim job touches
+# lock per op), so only a crashed drain's lock goes stale: 15 min, and 5 for the fast lane, whose longest job is an
+# open-pr's 5 calls × 30 s. A held lock exits 0: launchd re-fires while the inbox is non-empty.
+HELD="" # lock names under $STATE, which has a space in it on the Mac (Application Support): always quote the path
+trap 'for l in $HELD; do rmdir "$STATE/$l" 2>/dev/null || true; done' EXIT
 take_lock() { # NAME STALE_MIN → 0 held, 1 another drain of this lane is running
   if ! mkdir "$STATE/$1" 2>/dev/null; then
     if [ -n "$(find "$STATE/$1" -maxdepth 0 -mmin +"$2" 2>/dev/null)" ] && rmdir "$STATE/$1" && mkdir "$STATE/$1"; then
@@ -62,7 +65,7 @@ take_lock() { # NAME STALE_MIN → 0 held, 1 another drain of this lane is runni
       return 1
     fi
   fi
-  HELD="$HELD $STATE/$1"
+  HELD="$HELD $1"
 }
 case "$LANE" in
   slow) take_lock lock 15 || exit 0 ;;
@@ -71,40 +74,13 @@ case "$LANE" in
 esac
 
 # --- lanes ----------------------------------------------------------------------------------------------------
-lane_of_job() { case " $SLOW_JOBS " in *" $1 "*) echo slow ;; *) echo fast ;; esac; }
-# mr_cap SECS CMD… — run CMD, stopped after SECS (macOS has no timeout(1)); 124 when stopped. jobs/sim.sh's sim_cap
-# shape: `command sleep` (the fixtures stub sleep), and the watchdog's output detached, so a $(…) never waits on it.
-mr_cap() {
-  local cap="$1" pid wd rc
-  shift
-  "$@" &
-  pid=$!
-  (command sleep "$cap" && kill -TERM "$pid" 2>/dev/null) >/dev/null 2>&1 &
-  wd=$!
-  rc=0
-  wait "$pid" || rc=$?
-  pkill -P "$wd" 2>/dev/null || true
-  kill "$wd" 2>/dev/null || true
-  wait "$wd" 2>/dev/null || true
-  if [ "$rc" = 143 ]; then return 124; fi
-  return "$rc"
-}
-# peek_lane ENTRY → slow|fast|gone: a routing hint read from the shared file. Capped, so a FIFO swapped in under the -f
-# check costs one drain 3 s, never a hang; the snapshot's job field, checked after the move, is what decides. Gone: the
-# other lane moved it out after this drain listed the inbox. A link, a non-file or one over MAX_FILE (judged without
-# opening it) is the fast lane's, which refuses it.
-peek_lane() {
-  local j=""
-  if [ ! -e "$1" ] && [ ! -L "$1" ]; then
-    echo gone
-    return 0
-  fi
-  if [ -L "$1" ] || [ ! -f "$1" ] || [ -z "$(find "$1" -maxdepth 0 -size -$((MAX_FILE + 1))c 2>/dev/null)" ]; then
-    echo fast
-    return 0
-  fi
-  j="$(mr_cap 3 jq -rs 'if length == 1 and (.[0] | type) == "object" then (.[0].job | strings) else empty end' "$1" 2>/dev/null)" || j=""
-  lane_of_job "$j"
+# The lane of an entry comes from its name alone: nothing in the shared folder is opened before the move. The name is the
+# container's word, like the content, so it only routes; the snapshot's job field decides (job_lane_ok).
+lane_of_name() { if [[ "$1" == *.json && "${1%.json}" =~ $SLOW_RE ]]; then echo slow; else echo fast; fi; }
+job_lane_ok() { # JOB → 0 when this drain holds the lock the job needs
+  case " $SLOW_JOBS " in *" $1 "*) [ "$LANE" != fast ] || return 1 ;; esac
+  case " $FAST_JOBS " in *" $1 "*) [ "$LANE" != slow ] || return 1 ;; esac
+  return 0
 }
 
 # Park anything we won't parse in rejected/ (Mac-side), under a name we choose.
@@ -188,9 +164,8 @@ ENVELOPE_JQ='try (
 ) catch "BAD_PARAM"'
 
 # The jobs are sourced at the first entry this drain takes: the fast agent re-fires every 2 s while a sim waits for the
-# slow lane, and such a drain should cost a few peeks, not a parse of every job file.
+# slow lane, and such a drain should cost a directory listing, not a parse of every job file.
 SOURCED=""
-MAX_PEEKS=50 # entries a lane drain looks at, its own or not
 
 # --- drain --------------------------------------------------------------------------------------------------
 cd "$HJ_REAL/inbox" && [ "$(pwd -P)" = "$HJ_REAL/inbox" ] || {
@@ -199,14 +174,10 @@ cd "$HJ_REAL/inbox" && [ "$(pwd -P)" = "$HJ_REAL/inbox" ] || {
 }
 shopt -s nullglob dotglob
 n=0
-peeks=0
 for entry in ./*; do
   [ "$n" -lt "$MAX_PER_DRAIN" ] || break
-  if [ "$LANE" != all ]; then
-    [ "$peeks" -lt "$MAX_PEEKS" ] || break
-    peeks=$((peeks + 1))
-    [ "$(peek_lane "$entry")" = "$LANE" ] || continue # the other lane's, or gone: left in the inbox
-  fi
+  [ "$LANE" = all ] || [ "$(lane_of_name "${entry#./}")" = "$LANE" ] || continue # the other lane's: left, uncounted
+  for l in $HELD; do touch "$STATE/$l" 2>/dev/null || true; done
   if [ -z "$SOURCED" ]; then
     for f in "$HERE"/jobs/*.sh; do . "$f"; done
     SOURCED=1
@@ -264,9 +235,9 @@ for entry in ./*; do
     continue
   fi
   job="$(jq -r .job "$w")"
-  if [ "$LANE" != all ] && [ "$(lane_of_job "$job")" != "$LANE" ]; then
+  if ! job_lane_ok "$job"; then # a sim not named …Z-ios-…, or a clip that is: never from the container's own code
     rm -f -- "$w"
-    log "$stem lane changed under the peek"
+    log "$stem $job job in the $LANE lane"
     result "$stem" rejected BAD_FILE "$started"
     continue
   fi

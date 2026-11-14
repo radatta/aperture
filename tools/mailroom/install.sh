@@ -125,6 +125,9 @@ main() {
     [ "$answer" = y ] || die "not installed"
   fi
 
+  # Both agents out before the swap: a drain started mid-swap would source new (or no) jobs under the old runner.
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+  launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true
   rm -f "$APP/bin/runner.sh" "$APP/bin/VERSION" "$APP"/bin/jobs/*.sh
   cp "$stage/bin/runner.sh" "$stage/bin/VERSION" "$APP/bin/"
   cp "$stage"/bin/jobs/*.sh "$APP/bin/jobs/"
@@ -142,10 +145,9 @@ main() {
       '{installedAt: (now | todate), runnerVersion: $v, ref: $ref, mode: $mode, lanes: ["slow", "fast"]}' >"$HJ/installed.json"
   ) 2>/dev/null || echo "note: could not write $HJ/installed.json (something replaced it) — the agent is still installed"
 
-  # load LABEL PLIST — bootout returns before the old instance is gone; bootstrap can fail ("5: Input/output error")
-  # until it is. Upgrading from the single agent: $LABEL is the slow lane's, overwritten and re-bootstrapped.
+  # load LABEL PLIST — the bootout above returns before the old instance is gone; bootstrap can fail ("5: Input/output
+  # error") until it is. Upgrading from the single agent: $LABEL is the slow lane's, overwritten and re-bootstrapped.
   load() {
-    launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
     for try in 1 2 3 4 5; do
       if launchctl bootstrap "$DOMAIN" "$2" 2>/dev/null; then return 0; fi
       [ "$try" -lt 5 ] || die "launchctl bootstrap failed 5 times — run: launchctl bootstrap $DOMAIN $2"

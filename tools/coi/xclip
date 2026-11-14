@@ -25,7 +25,9 @@ KEPT="$CACHE/${PANE:-nopane}.png"
 
 log() { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s %s %s\n' "$(date -u +%FT%TZ)" "${PANE:-nopane}" "$*" >>"$LOG" 2>/dev/null; return 0; }
 no() { log "$1"; exit 1; }
-ms() { date +%s%3N; }
+# NOW_MS: milliseconds on the monotonic boot clock, set without a fork. Two CI runs gave up early by the wall clock
+# (`$(date)`: a stepped clock, or a fork that failed and left t0 empty, both read as time gone by; F70).
+now() { local u; read -r u _ </proc/uptime; NOW_MS=$((${u%.*} * 1000 + 10#${u#*.} * 10)); }
 age_s() { echo $(($(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0))); }
 
 # The cache dir: ours, 0700, not a link.
@@ -59,17 +61,19 @@ targets() {
   job="$(jq -cn --arg id "$id" '{v: 1, id: $id, job: "clip", submittedAt: (now | floor | todate), expiresInMin: 1, params: {}}')"
   mkdir -p "$HJ/staging" && (set -C && printf '%s' "$job" >"$HJ/staging/$id.json") && mv -- "$HJ/staging/$id.json" "$HJ/inbox/$id.json" ||
     no "could not queue $id"
-  t0="$(ms)"
+  now
+  t0="$NOW_MS"
   cap="$WAIT_MS"
   r="$HJ/results/$id/result.json"
   until [ -f "$r" ] && jq -e --arg id "$id" '.id == $id' "$r" >/dev/null 2>&1; do
-    if [ $(($(ms) - t0)) -ge "$cap" ]; then
+    now
+    if [ $((NOW_MS - t0)) -ge "$cap" ]; then
       if mv -- "$HJ/inbox/$id.json" "$HJ/staging/$id.withdrawn.json" 2>/dev/null; then
         no "$id no answer in $((WAIT_MS / 1000)) s — withdrawn (Mac asleep or mailroom not installed)"
       fi
       # The Mac took it: wait out its read, so the answer is collected (and its clip.png deleted) rather than left.
       if [ -z "$took" ]; then took=1; cap=$((WAIT_MS + GRACE_MS)); continue; fi
-      no "$id no answer in $(($(ms) - t0)) ms though the Mac took it"
+      no "$id no answer in $((NOW_MS - t0)) ms though the Mac took it"
     fi
     sleep 0.1
   done
@@ -89,7 +93,8 @@ targets() {
     rm -f -- "$KEPT"
     no "$id served a file that is not a PNG within the cap"
   fi
-  log "$id served $size bytes in $(($(ms) - t0)) ms"
+  now
+  log "$id served $size bytes in $((NOW_MS - t0)) ms"
   printf 'TARGETS\nimage/png\n'
 }
 

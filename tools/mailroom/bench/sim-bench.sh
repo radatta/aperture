@@ -240,7 +240,7 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
       say "  couldn't read dev's build marker; keeping ${CUR_SHA:0:7}"
     fi
   fi
-  id="$(date -u +%Y%m%dT%H%M%SZ)-bench-$(printf '%03d' "$SEQ")-r$run-$name"
+  id="$(date -u +%Y%m%dT%H%M%SZ)-ios-bench-$(printf '%03d' "$SEQ")-r$run-$name" # …Z-ios-…: the slow lane takes only those
   f="$RD/staging/$id.json"
   jq -n --arg id "$id" --arg sha "$CUR_SHA" --argjson t "$tmo" --argjson steps "$steps" \
     '{v: 1, id: $id, job: "sim", submittedAt: (now | floor | todate), expiresInMin: 60,

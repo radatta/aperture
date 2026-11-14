@@ -172,13 +172,11 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     rmSync(join(hj, 'inbox', `${id}.json`));
     const r = await run;
     expect(r.code).toBe(1);
-    // The shim's own clock, not this process's: on a loaded CI VM the two disagreed by ~90 ms (F70). The line also
-    // proves the grace path ran rather than the withdraw.
-    const m = /no answer in (\d+) ms though the Mac took it/.exec(
-      readFileSync(join(T, 'log'), 'utf8'),
-    );
-    expect(m).not.toBeNull();
-    expect(Number(m![1])).toBeGreaterThanOrEqual(500 + 700);
+    // The shim's own (monotonic) clock, not this process's wall clock (F70: two CI runs read 1109 and 473 ms). Matching
+    // the whole log prints it on a failure, so the line shows which exit fired.
+    const log = readFileSync(join(T, 'log'), 'utf8');
+    expect(log).toMatch(/no answer in \d+ ms though the Mac took it/);
+    expect(Number(/no answer in (\d+) ms/.exec(log)?.[1])).toBeGreaterThanOrEqual(500 + 700);
     expect(readdirSync(join(hj, 'staging')).filter((f) => f.includes(id))).toEqual([]);
   });
 
@@ -284,5 +282,6 @@ describe('clip timing headroom', () => {
     expect(wait + grace).toBeLessThanOrEqual(35_000); // a Ctrl+V never hangs longer
     expect([CLIP_WAIT_MS, CLIP_GRACE_MS]).toEqual([wait, grace]);
     expect(shim).not.toMatch(/progress\.json|BUSY_S/); // a sim no longer blocks a paste (F50)
+    expect(shim).not.toMatch(/\$\(ms\)|%3N/); // the caps run on the monotonic clock (F70)
   });
 });

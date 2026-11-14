@@ -148,7 +148,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     (.lane // ""), (.locks | tojson)] | .[]' <<<"$c")"
   T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
-  st="$T/state"
+  st="$T/state dir" # the Mac's is under Application Support: a space in every state path
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
   : >"$T/calls"
   : >"$T/simcalls"
@@ -363,7 +363,7 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 lanes_check() {
   local L hj st now a b cl pa i rc
   L="$(cd "$(mktemp -d)" && pwd -P)"
-  hj="$L/hj"; st="$L/state"
+  hj="$L/hj"; st="$L/state dir"
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
   : >"$L/calls"; : >"$L/simcalls"
   printf '%s' "$defapi" >"$L/api.json"
@@ -386,14 +386,14 @@ lanes_check() {
   if [ "$rc" = 0 ] && [ -f "$hj/inbox/$b.json" ] && [ ! -e "$hj/results/$b" ]; then
     ok "lanes: a second slow drain leaves the next sim queued while one runs"
   else bad "lanes: a second slow drain leaves the next sim queued while one runs" "rc $rc, inbox: $(ls "$hj/inbox")" "$L/out"; fi
-  jq -c --arg id "$cl" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$clipbase" >"$hj/inbox/$cl.json"
-  # The container re-sends the running sim's id as a clip: the fast lane runs nothing (DUPLICATE), and its own work dir
-  # means the slow lane's private snapshot of the sim is untouched.
+  # The container re-sends the running sim's id as a clip: its name is the slow lane's, so the fast lane leaves it (the
+  # slow lane later finds results/<id> and runs nothing), and the slow lane's private snapshot is untouched.
   jq -c --arg id "$a" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$clipbase" >"$hj/inbox/$a.json"
   lane_run fast
-  if [ -f "$st/work-slow/$a.json" ] && [ ! -e "$hj/inbox/$a.json" ] && grep -q "$a DUPLICATE" "$L/out"; then
-    ok "lanes: a fast drain never touches the slow lane's private snapshot (work dir per lane)"
-  else bad "lanes: a fast drain never touches the slow lane's private snapshot (work dir per lane)" "work-slow: $(ls "$st/work-slow" 2>/dev/null)" "$L/out"; fi
+  if [ -f "$st/work-slow/$a.json" ] && [ -f "$hj/inbox/$a.json" ] && [ ! -e "$hj/results/$a/result.json" ]; then
+    ok "lanes: a fast drain leaves a sim-named entry alone and never touches the slow lane's private snapshot"
+  else bad "lanes: a fast drain leaves a sim-named entry alone and never touches the slow lane's private snapshot" "work-slow: $(ls "$st/work-slow" 2>/dev/null | tr '\n' ' '), inbox: $(ls "$hj/inbox" | tr '\n' ' ')" "$L/out"; fi
+  jq -c --arg id "$cl" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate)' <<<"$clipbase" >"$hj/inbox/$cl.json"
   lane_run fast
   if [ "$(jq -r .status "$hj/results/$cl/result.json" 2>/dev/null)" = served ] && [ ! -e "$hj/results/$a/result.json" ] &&
     [ -d "$st/lock" ] && [ ! -e "$st/lock-fast" ] && [ -f "$hj/inbox/$b.json" ]; then
@@ -402,17 +402,18 @@ lanes_check() {
   wait "$pa"
   lane_run slow
   if [ "$(jq -r .status "$hj/results/$a/result.json" 2>/dev/null)" = pass ] && [ -f "$hj/results/$b/result.json" ] &&
+    [ -z "$(ls -A "$hj/inbox")" ] && grep -q "$a DUPLICATE" "$L/out" &&
     [ -z "$(find "$st" -mindepth 1 -maxdepth 1 -name 'lock*')" ]; then
-    ok "lanes: once the sim ends, the next slow drain takes the queued one and both locks are gone"
-  else bad "lanes: once the sim ends, the next slow drain takes the queued one and both locks are gone" "a $(jq -c '{status, reason, detail}' "$hj/results/$a/result.json" 2>/dev/null), b $([ -f "$hj/results/$b/result.json" ] && echo done || echo none)" "$L/out"; fi
+    ok "lanes: once the sim ends, the next slow drain takes the queued one, refuses the re-sent id, and both locks are gone"
+  else bad "lanes: once the sim ends, the next slow drain takes the queued one, refuses the re-sent id, and both locks are gone" "a $(jq -c '{status, reason, detail}' "$hj/results/$a/result.json" 2>/dev/null), b $([ -f "$hj/results/$b/result.json" ] && echo done || echo none)" "$L/out"; fi
   rm -r -f -- "$L"
 
   # Both agents fire on one drop: a slow and a fast drain start together on the same sim entry, 10 times. Exactly one
-  # takes it (the slow), it passes, nothing is parked or refused, and the fast drain never chases it once it's gone.
+  # takes it (the slow), it passes, nothing is parked or refused, and the fast drain never touches it.
   local k fails=""
   for k in 1 2 3 4 5 6 7 8 9 10; do
     L="$(cd "$(mktemp -d)" && pwd -P)"
-    hj="$L/hj"; st="$L/state"
+    hj="$L/hj"; st="$L/state dir"
     mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
     : >"$L/calls"; : >"$L/simcalls"
     printf '%s' "$defapi" >"$L/api.json"

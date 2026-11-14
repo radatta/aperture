@@ -222,15 +222,16 @@ describe('mailroom runner', () => {
     const runner = readFileSync(`${TOOLS_DIR}runner.sh`, 'utf8');
     for (const pin of [
       'SLOW_JOBS="sim"',
+      'FAST_JOBS="clip"',
+      "SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-'",
       'slow) take_lock lock 15 || exit 0 ;;',
       'fast) take_lock lock-fast 5 || exit 0 ;;',
       'all) { take_lock lock 15 && take_lock lock-fast 5; } || exit 0 ;;',
-      "mr_cap 3 jq -rs 'if length == 1",
-      '[ "$(peek_lane "$entry")" = "$LANE" ] || continue',
+      'trap \'for l in $HELD; do rmdir "$STATE/$l" 2>/dev/null || true; done\' EXIT',
+      '[ "$LANE" = all ] || [ "$(lane_of_name "${entry#./}")" = "$LANE" ] || continue',
+      'for l in $HELD; do touch "$STATE/$l" 2>/dev/null || true; done',
+      'if ! job_lane_ok "$job"; then',
       '[ "$LANE" = all ] || WD="work-$LANE"',
-      'MAX_PEEKS=50',
-      'echo gone',
-      'if [ "$LANE" != all ] && [ "$(lane_of_job "$job")" != "$LANE" ]; then',
     ])
       expect(runner).toContain(pin);
     const install = readFileSync(`${TOOLS_DIR}install.sh`, 'utf8');
@@ -242,6 +243,7 @@ describe('mailroom runner', () => {
       'load "$LABEL_FAST" "$PLIST_FAST"',
       'launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true',
       'rm -f "$PLIST" "$PLIST_FAST"',
+      'launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true\n  rm -f "$APP/bin/runner.sh"',
     ])
       expect(install).toContain(pin);
     const tmpl = readFileSync(`${TOOLS_DIR}dev.rahuldatta.aperture.mailroom.plist.tmpl`, 'utf8');

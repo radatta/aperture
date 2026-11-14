@@ -883,6 +883,12 @@ c('lanes: a held fast lock leaves the job queued', lane='fast', setup='lock-fast
 c('lanes: a held fast lock stops a both-lanes drain too', setup='lock-fast', noResult=True, inboxLeft=1, calls=[], locks=['lock-fast'])
 c('lanes: a 6-minute-old fast lock is stale (5-minute rule)', lane='fast', setup='aged-lock-fast', expect={'status': 'opened'}, calls=ALL, locks=[])
 sc('lanes: a 6-minute-old slow lock is not (15-minute rule: a sim touches it per op)', lane='slow', setup='aged-lock', locks=['lock'], **SIMLEFT)
+sc('lanes: a sim not named …Z-ios-… is refused, never run in the fast lane', lane='fast', patch={'id': '20261104T190000Z-launch-ab12'},
+   expect={'status': 'rejected', 'reason': 'BAD_FILE'}, simExcludes=NOSIM)
+cc_('lanes: a clip named …Z-ios-… is refused, never run in the slow lane', lane='slow', patch={'id': '20261113T231500Z-ios-clip-ab12'},
+    expect={'status': 'rejected', 'reason': 'BAD_FILE'}, simExcludes=['osascript'])
+c('lanes: an open-pr for a branch named ios-… runs in the slow lane', lane='slow', patch={'id': '20261101T204512Z-ios-probe-check-3kx9'},
+  expect={'status': 'opened'}, calls=ALL)
 cc_('lanes: at most 5 per drain, counting only the lane\'s own (6 clips + 2 sims → 5 answered, 3 left)', lane='fast', setup='mixed',
     tape=[RD(0, source='png', bytes=21)], inboxLeft=3, simExcludes=NOSIM)
 
