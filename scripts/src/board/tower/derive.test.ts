@@ -396,6 +396,17 @@ describe('the accuracy audit (2026-11-14)', () => {
       more: 0,
       plan: ['Install the trial'],
     });
+    // a timed step counts within 2 h of now either way, sorted ahead of the undated (plan[] is by `at`); tomorrow
+    // evening's never jumps them
+    const timed = [
+      { at: NOW + 3600e3, what: 'In an hour', kind: 'maintainer' as const, who: null },
+      { at: NOW + 3 * 3600e3, what: 'Tomorrow evening', kind: 'maintainer' as const, who: null },
+      ...plan,
+    ];
+    expect(derive(inputs({ plan: timed })).next).toMatchObject({
+      maintainer: 'In an hour',
+      plan: ['Flip the repo public', 'Install the trial'],
+    });
   });
 
   it('a bare-date since is the end of that local day, shown as the day', () => {

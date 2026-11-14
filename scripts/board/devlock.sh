@@ -26,7 +26,7 @@ TMPS=''
 trap 'rm -f $TMPS' EXIT
 _tmp() { local f; f=$(mktemp 2>/dev/null) || f=/dev/null; [ "$f" = /dev/null ] || TMPS="$TMPS $f"; printf -v "$1" '%s' "$f"; }
 # An error line goes into the cache and onto the tower page (which leaves the box): never a URL's userinfo.
-_why() { tail -n 1 "$1" 2>/dev/null | sed -E 's#//[^/@ ]+@#//#g' | cut -c1-160; }
+_why() { tail -n 1 "$1" 2>/dev/null | sed -E 's#//[^/ ]+@#//#g' | cut -c1-160; }  # to the last @: a password may hold one
 _refs() {
   [ -n "$REFS_RC" ] && return "$REFS_RC"
   local err; _tmp err

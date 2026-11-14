@@ -405,6 +405,9 @@ describe('devlock.sh', () => {
       "fatal: unable to access 'https://x-access-token:tok@github.com/o/r/'",
     ).failedWhy;
     expect(why).toBe("ls-remote: fatal: unable to access 'https://github.com/o/r/'");
+    expect(failWith("fatal: unable to access 'https://u:p@ss@github.com/o/r/'").failedWhy).toBe(
+      "ls-remote: fatal: unable to access 'https://github.com/o/r/'",
+    );
     rmSync(join(tmp, 'git-fail'));
     writeFileSync(
       join(tmp, 'board/devlock.json'),
