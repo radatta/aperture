@@ -74,6 +74,18 @@ describe('bot push', () => {
     expect([...merges.calls, ...named.calls].some((c) => c.args[0] === 'push')).toBe(false);
   });
 
+  it('checks only commits not yet on origin/<branch>', () => {
+    const { run, calls } = onBranch('feat');
+    push(run, 't', { afterRebase: false }, quiet);
+    const list = calls.find((c) => c.args[0] === 'rev-list' && c.args[1] === '--reverse');
+    expect(list?.args).toEqual([
+      'rev-list',
+      '--reverse',
+      'origin/main..HEAD',
+      `^${'a'.repeat(40)}`,
+    ]);
+  });
+
   it('refuses detached HEAD', () => {
     const { run } = fakeRun([
       [

@@ -34,8 +34,14 @@ function headerPath(raw: string): string {
 function gitLinePath(l: string): string {
   const q = /("(?:[^"\\]|\\.)*")$/.exec(l);
   if (q) return headerPath(q[1]!);
-  const i = l.lastIndexOf(' b/');
-  return i < 0 ? '' : l.slice(i + 3);
+  // Unquoted, both sides are the same path when it isn't a rename (renames carry `rename to`): split at the middle,
+  // so a name that itself holds ` b/` isn't cut short.
+  const rest = l.slice('diff --git '.length);
+  const n = (rest.length - 1) / 2;
+  if (Number.isInteger(n) && rest.slice(0, n) === `a/${rest.slice(n + 3)}`)
+    return rest.slice(n + 3);
+  const i = rest.lastIndexOf(' b/');
+  return i < 0 ? '' : rest.slice(i + 3);
 }
 
 export function scanDiff(diff: string, rules = identifierRules()): string[] {

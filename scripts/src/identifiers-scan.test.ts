@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -86,7 +86,7 @@ describe('scanDiff on real git output', () => {
     );
   const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
 
-  it('names a renamed, a binary and an empty new file, and lets a deleted one go', () => {
+  it('names a renamed, a binary and an empty new file (one under a dir holding ` b/`), and lets a deleted one go', () => {
     const dir = mkdtempSync(join(tmpdir(), 'scan-'));
     g(dir, 'init', '-q');
     g(dir, 'config', 'user.email', 'x@example.com');
@@ -99,6 +99,8 @@ describe('scanDiff on real git output', () => {
     g(dir, 'mv', 'old.md', `${n}-notes.md`);
     writeFileSync(join(dir, `${n}.bin`), Buffer.from([0, 1, 2, 0, 255]));
     writeFileSync(join(dir, `${n}-empty.md`), '');
+    mkdirSync(join(dir, 'x b'));
+    writeFileSync(join(dir, 'x b', `${n}-deep.png`), Buffer.from([0, 9, 0])); // a name holding ` b/`
     g(dir, 'rm', '-q', `${n}-gone.md`);
     g(dir, 'add', '.');
     expect(scanDiff(gd(dir)).sort()).toEqual(
@@ -106,6 +108,7 @@ describe('scanDiff on real git output', () => {
         `${n}-empty.md (its path) name`,
         `${n}-notes.md (its path) name`,
         `${n}.bin (its path) name`,
+        `x b/${n}-deep.png (its path) name`,
       ].sort(),
     );
   });

@@ -2,7 +2,7 @@
 // test user on its new address (the dev subdomain, read from identifiers.json — not a personal mailbox), through the
 // app and through /mcp, and the about and privacy pages, now built from templates, come out filled. The rules
 // themselves — tracked files, commits, PR text — are tests: dev deploys the build, not the repo.
-import { IDS } from '../../identifiers.ts';
+import { IDS, findIdentifiers } from '../../identifiers.ts';
 import { TEST_USER_EMAIL, assertDevOrigin, targetOrigin } from '../config';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -215,12 +215,7 @@ export const identifierCleanup: Scenario = {
       id: 'mcp-descriptions',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'The LeetCode MCP tools describe the person as “the user … their”, no name or gendered pronoun',
-      offDev: {
-        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
-        test: 'says the freshness rules and the etiquette in its description',
-        why: 'the description is a constant the deployed tools/list returns verbatim; the tracked-files guard holds it name-free',
-      },
+      what: 'The deployed LeetCode MCP tools describe the person as “the user … their”: no name, no he/his/him',
     },
     {
       id: 'live-hook',
@@ -273,6 +268,27 @@ export const identifierCleanup: Scenario = {
         ];
         if (ids(viaMcp) !== ids(viaApi)) throw new Error('MCP and the API list different backlogs');
         ctx.log(`mcp: backlog ${viaMcp.length}, same as the API`);
+      },
+    },
+    {
+      id: 'mcp-descriptions',
+      entry: 'mcp',
+      proves: ['mcp-descriptions'],
+      title: 'The LeetCode tools’ deployed descriptions name no one',
+      async run(ctx) {
+        const tools = (await ctx.mcp.reads.toolSchemas()).filter((t) =>
+          ['live_sitting', 'get_sitting', 'list_sittings'].includes(t.name),
+        );
+        if (tools.length !== 3)
+          throw new Error(`tools/list has ${tools.length} of the 3 LeetCode tools`);
+        for (const t of tools) {
+          const d = t.description ?? '';
+          if (findIdentifiers(d).length)
+            throw new Error(`${t.name}'s description names a personal identifier`);
+          if (/\b(he|his|him)\b/i.test(d))
+            throw new Error(`${t.name}'s description says he/his/him`);
+        }
+        ctx.log('live_sitting, get_sitting, list_sittings: no identifier, no gendered pronoun');
       },
     },
     {

@@ -42,16 +42,30 @@ export function pushArgs(branch: string, afterRebase: boolean, leaseSha: string)
 // message and its own diff, since a branch's history is visible on its PR — carries no personal identifier. The
 // commit hook can miss what a `git add` in the same command staged; this can't.
 export function identifierHits(run: Run, branch = ''): string[] {
+  // Commits already on origin/<branch> are public whatever this push does: only the new ones are checked, so a
+  // branch from before the rules can still push a fix on top (its rebase onto main then checks every commit).
+  const published = (() => {
+    try {
+      return branch
+        ? run('git', ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`])
+        : '';
+    } catch {
+      return '';
+    }
+  })();
+  const range = ['origin/main..HEAD', ...(published ? [`^${published}`] : [])];
   let shas: string[];
   try {
-    shas = run('git', ['rev-list', '--reverse', 'origin/main..HEAD']).split('\n').filter(Boolean);
+    shas = run('git', ['rev-list', '--reverse', ...range])
+      .split('\n')
+      .filter(Boolean);
   } catch (err) {
     throw new Error("can't list the commits to check for identifiers — `git fetch origin` first", {
       cause: err,
     });
   }
   // A merge commit's combined diff isn't scanned line by line, and the project rebases: say so instead.
-  if (run('git', ['rev-list', '--merges', 'origin/main..HEAD']).trim())
+  if (run('git', ['rev-list', '--merges', ...range]).trim())
     throw new Error(
       'this branch has merge commits — rebase onto origin/main instead (the identifier scan reads plain commits)',
     );
@@ -102,7 +116,7 @@ export function push(
   const hits = identifierHits(run, branch);
   if (hits.length)
     throw new Error(
-      `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md). Rebase it out of the commit that added it — a later commit removing it still leaves it in the pushed history:\n${hits.join('\n')}`,
+      `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md → Push). Fix it in the commit that added it — a later commit removing it still leaves it in the pushed history: edit the line, \`git commit --fixup=<sha>\`, \`git rebase --autosquash origin/main\`, then \`pnpm bot push --after-rebase\`:\n${hits.join('\n')}`,
     );
   run('git', pushArgs(branch, opts.afterRebase, lease), { env: credentialEnv(token) });
   // Record what we pushed (the next lease) and track it — read-only fetch, no token.
