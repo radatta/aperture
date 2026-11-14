@@ -146,16 +146,19 @@ describe('emit', () => {
 
 describe('run', () => {
   const outputsFile = JSON.stringify({ 'ApertureApp-dev': { FunctionUrl: URL_ } });
-  const deps = (over: Partial<Parameters<typeof run>[1]> = {}) => {
+  const deps = (over: Partial<Parameters<typeof run>[1]> = {}, seen?: string[]) => {
     const { out, log } = lines();
     const read: string[] = [];
+    const store = { seen };
     return {
       out,
       read,
+      store,
       deps: {
         describe: () => JSON.stringify([{ OutputKey: 'FunctionUrl', OutputValue: URL_ }]),
         readFile: (p: string) => (read.push(p), outputsFile),
         log,
+        seen: { load: () => store.seen, save: (m: string[]) => void (store.seen = m) },
         ...over,
       },
     };
@@ -170,6 +173,28 @@ describe('run', () => {
       'masked 2 value(s) for dev',
     ]);
     expect(d.read).toEqual([]);
+    expect(d.store.seen).toEqual([HOST, ID]); // kept for the second pass
+  });
+
+  it('is quiet on the second pass when the deploy created no URL', () => {
+    const d = deps({}, [HOST, ID]);
+    run(['dev', '--from-file'], d.deps);
+    expect(d.out.filter((l) => l.startsWith('::warning::'))).toEqual([]);
+  });
+
+  it('warns to delete the log when the deploy created a URL, without printing it', () => {
+    const d = deps({}, []); // the first pass found no stack (a first deploy)
+    run(['dev', '--from-file'], d.deps);
+    const warnings = d.out.filter((l) => l.startsWith('::warning::'));
+    expect(warnings).toEqual([expect.stringMatching(/delete this run's log/)]);
+    expect(warnings.join('\n')).not.toContain(ID);
+  });
+
+  it('fails on an unreadable outputs file without quoting it', () => {
+    const d = deps({ readFile: () => `{"ApertureApp-dev": {"FunctionUrl": "${URL_}"` });
+    expect(() => run(['dev', '--from-file'], d.deps)).toThrow(
+      /^cdk-outputs\.dev\.json isn't JSON$/,
+    );
   });
 
   it('masks from the outputs file cdk deploy wrote with --from-file', () => {

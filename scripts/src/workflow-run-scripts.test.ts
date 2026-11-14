@@ -56,6 +56,15 @@ describe('workflow-run-scripts', () => {
     ]);
   });
 
+  it.each(['|-', '>+', '|2', '|2-', '|-2', '| # a note'])(
+    'reads the body under a %s header',
+    (h) => {
+      expect(runScripts(`        run: ${h}\n          echo \${{ x }}\n        env:\n`)).toEqual([
+        { line: 2, script: '          echo ${{ x }}' },
+      ]);
+    },
+  );
+
   it.each([
     ['an inline run', `      - run: echo ${E}\n`, 1],
     [
@@ -106,6 +115,10 @@ describe('workflow-run-scripts', () => {
     ['no space after the colon', `        run:echo hi`],
     ['an empty value', `        run:`],
     ['a multi-line quoted value', `        run: "echo one\n          echo ${E}"`],
+    ['a multi-line plain value', `        run: echo one\n          echo ${E}`],
+    ['a flow-mapping step', `      - { name: x, run: echo ${E} }`],
+    ['a flow-mapping step, run first', `      - {run: echo ${E}}`],
+    ['an unknown block header', `        run: |x\n          echo ${E}`],
   ])('throws on %s rather than guess', (_, text) => {
     expect(() => runScripts(text, 'w.yml')).toThrow(/^w\.yml:1: /);
   });

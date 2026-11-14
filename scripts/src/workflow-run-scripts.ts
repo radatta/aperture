@@ -8,8 +8,11 @@
 export type RunScript = { line: number; script: string };
 
 const KEY = /^(\s*)(-\s+)?run:(?:\s+(.*?))?\s*$/;
-const LOOSE = /^\s*(?:-\s+)?(?:['"]run['"]\s*:|run\s+:|run:\S)/;
-const BLOCK = /^[|>][+-]?$/;
+// A quoted or spaced key, a flow mapping (`- { run: … }`): shapes this reader can't follow, so it throws, never skips.
+const LOOSE = /^\s*(?:-\s+)?(?:['"]run['"]\s*:|run\s+:|run:\S)|[{,]\s*['"]?run['"]?\s*:/;
+// `|` or `>`, with an optional chomping and indentation indicator in either order, and a trailing comment.
+const BLOCK = /^[|>](?:[+-]?[1-9]?|[1-9][+-])(?:\s+#.*)?$/;
+const indent = (l: string) => l.length - l.trimStart().length;
 
 // Every `run:` script in a workflow or action file, with its 1-based line.
 export function runScripts(text: string, file = 'workflow'): RunScript[] {
@@ -22,19 +25,23 @@ export function runScripts(text: string, file = 'workflow'): RunScript[] {
     const m = KEY.exec(l);
     if (!m) continue;
     const value = m[3] ?? '';
-    if (value && !BLOCK.test(value)) {
-      if (/^['"]/.test(value) && !/['"]$/.test(value))
-        throw new Error(`${file}:${i + 1}: multi-line quoted run value — use a block (run: |)`);
+    const col = m[1]!.length + (m[2]?.length ?? 0); // the key's own column
+    if (!value) throw new Error(`${file}:${i + 1}: empty run value — use a block (run: |)`);
+    if (/^[|>]/.test(value) && !BLOCK.test(value))
+      throw new Error(`${file}:${i + 1}: unreadable block header "${value}"`);
+    if (!BLOCK.test(value)) {
+      // A plain or quoted value that runs on into more-indented lines would be read as its first line only.
+      const next = lines.slice(i + 1).find((n) => n.trim());
+      if (next !== undefined && indent(next) > col)
+        throw new Error(`${file}:${i + 1}: multi-line run value — use a block (run: |)`);
       out.push({ line: i + 1, script: value });
       continue;
     }
-    if (!value) throw new Error(`${file}:${i + 1}: empty run value — use a block (run: |)`);
-    // The body: every following line indented past the key's own column (blank lines included).
-    const col = m[1]!.length + (m[2]?.length ?? 0);
+    // The body: every following line indented past the key's column (blank lines included).
     const body: string[] = [];
     while (i + 1 < lines.length) {
       const next = lines[i + 1]!;
-      if (next.trim() && next.length - next.trimStart().length <= col) break;
+      if (next.trim() && indent(next) <= col) break;
       body.push(next);
       i++;
     }

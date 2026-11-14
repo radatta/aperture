@@ -1,14 +1,11 @@
-// @aperture/scripts — keeps the Lambda Function URLs out of public run logs (INFRA §9 → Public repo). The URLs skip
-// CloudFront; the origin secret still gates them, so this is defence in depth, not a secret. `cdk deploy` prints every
-// stack output, so the deploy job registers a `::add-mask::` for each Function URL before any step prints one.
-// A mask covers only its own job's later lines, which is why deploy-stage.yml runs this twice: from CloudFormation
-// before synth, and from the outputs file after `Deploy stacks` (a URL that deploy created). A URL new in this deploy
-// still prints once, in that deploy's own Outputs block — a documented gap.
+// @aperture/scripts — registers a `::add-mask::` for every Lambda Function URL in a stage's stack outputs, so public run
+// logs never print one. Why, where deploy-stage.yml runs it (twice) and the one gap: INFRA §9 → Public repo.
 //
 // Run: `node scripts/src/mask-function-url.ts <stage> [--from-file]`. Like classify-changes.ts: erasable syntax and
 // node: builtins only, so the runner's Node strips the types with no build.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 export type Outputs = Record<string, Record<string, string>>; // stack → { OutputKey: OutputValue }
@@ -78,9 +75,13 @@ export function emit(masks: string[], stage: string, log: Log): void {
   );
 }
 
+// What the first pass masked, kept for the second (a file in the job's RUNNER_TEMP): a host the second pass finds
+// that the first didn't was created by this deploy and printed unmasked in its Outputs block.
+export type Seen = { load: () => string[] | undefined; save: (masks: string[]) => void };
+
 export function run(
   argv: string[],
-  deps: { describe: Describe; readFile: (p: string) => string; log: Log },
+  deps: { describe: Describe; readFile: (p: string) => string; log: Log; seen: Seen },
 ) {
   const [stage, flag] = argv;
   if (
@@ -99,13 +100,25 @@ export function run(
     } catch {
       deps.log(`::notice::no cdk-outputs.${stage}.json — nothing new to mask`);
     }
-    outputs = text === undefined ? {} : (JSON.parse(text) as Outputs);
+    try {
+      outputs = text === undefined ? {} : (JSON.parse(text) as Outputs);
+    } catch {
+      throw new Error(`cdk-outputs.${stage}.json isn't JSON`); // V8's message would quote the file
+    }
   } else outputs = fromCloudFormation(stage, deps.describe, deps.log);
-  emit(masksWithFallback(outputs, deps.log), stage, deps.log);
+  const masks = masksWithFallback(outputs, deps.log);
+  emit(masks, stage, deps.log);
+  if (!flag) return deps.seen.save(masks);
+  const before = deps.seen.load();
+  if (before && masks.some((m) => !before.includes(m)))
+    deps.log(
+      "::warning::this deploy created a Function URL, and its Outputs block printed it unmasked — delete this run's log (INFRA §9 → Public repo)",
+    );
 }
 
 if (process.argv[1]?.endsWith('mask-function-url.ts')) {
   const root = fileURLToPath(new URL('../..', import.meta.url));
+  const SEEN = `${process.env.RUNNER_TEMP ?? tmpdir()}/aperture-function-url-masks.json`;
   run(process.argv.slice(2), {
     // stdout captured, never inherited: the outputs reach the log only as masks.
     describe: (stack) =>
@@ -124,6 +137,16 @@ if (process.argv[1]?.endsWith('mask-function-url.ts')) {
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
       ),
     readFile: (p) => readFileSync(`${root}/${p}`, 'utf8'),
+    seen: {
+      load: () => {
+        try {
+          return JSON.parse(readFileSync(SEEN, 'utf8')) as string[];
+        } catch {
+          return undefined;
+        }
+      },
+      save: (masks) => writeFileSync(SEEN, JSON.stringify(masks)),
+    },
     log: (l) => console.log(l),
   });
 }
