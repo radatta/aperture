@@ -28,8 +28,9 @@ Five rules that break a session otherwise, each with its home:
    other platform installed last, not a port clash. `CLAUDE.md` → Commands; COI-INCIDENTS → _Related:
    the shared `node_modules` hazard_.
 4. **Ports are split by owner:** `5173+` is the Mac, `6173+` is a container (_Ports_ below).
-5. **Some command text kills or pauses the container** — reverse-shell shapes, a slash right before
-   `curl`/`wget`, a remote `:8080` connection — anywhere in a command line, even inside a string.
+5. **Some command text kills or pauses the container** — reverse-shell shapes and a slash right before
+   `curl`/`wget`, anywhere in a Bash line or a Grep pattern, even inside a string; separately, a remote
+   `:8080` connection.
    The list: `CLAUDE.md` → Commands; the mechanism: COI-INCIDENTS → Incidents F and H.
 
 ---

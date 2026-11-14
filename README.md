@@ -39,7 +39,7 @@ v1 was the ritual app — [`docs/V1_PLAN.md`](docs/V1_PLAN.md) phases 0–14, ke
 - **Flux** — webcam-guided neck exercises with on-device face tracking, saved history and trends; a session is a Roll rep ([flux](docs/areas/flux/index.md)).
 - **Recruiting** — LeetCode sittings captured by a Safari extension, plus a behavioral [story bank](docs/areas/recruiting/story-bank.md) ([recruiting](docs/areas/recruiting/index.md)).
 - **MCP connector** — Claude Code and claude.ai read and write Aperture through one `/mcp` endpoint, which also carries voice capture and a Raycast hotkey ([mcp](docs/areas/mcp/index.md)).
-- **Private log entries** — kept out of every MCP read and search ([log](docs/areas/log/index.md)).
+- **Private log entries** — the text never leaves over MCP: reads show it redacted, search never matches it ([log](docs/areas/log/index.md)).
 
 The full map, with what's still open, is [`docs/index.md`](docs/index.md).
 
@@ -55,20 +55,22 @@ flowchart LR
   BFF --> DDB[("DynamoDB, one table")]
   MCP --> DDB
   Sched["EventBridge Scheduler"] --> Jobs["finance sync + push dispatch Lambdas"]
+  BFF -.->|"finance refresh / connect"| Jobs
   Jobs --> DDB
 ```
 
+Not drawn: the Files bucket (attachments, reached by presigned URL), the `/.well-known/` OAuth metadata paths to the MCP Lambda, and the external APIs (Google, Plaid, Claude, Web Push) — [INFRA §1](docs/arch/INFRA.md#1-shape) and §4.
+
 React + Vite + TypeScript PWA on an **AWS-native serverless BFF**. The one-paragraph shape is
 [`CLAUDE.md`](CLAUDE.md) → Architecture; the blueprint is [`docs/arch/INFRA.md`](docs/arch/INFRA.md)
-(§4 for the Function URL + origin-secret edge, §11 for why it costs effectively $0 at single-user
-scale). Multi-device sync is **structural** — laptop and phone hit the same table under the same
+(§4 for the Function URL + origin-secret edge). Multi-device sync is **structural** — laptop and phone hit the same table under the same
 identity ([`docs/arch/TECH.md`](docs/arch/TECH.md) §1).
 
 **AWS cost:** effectively free at single-user scale — DynamoDB, Lambda and Cognito sit inside the always-free tiers, and the only real line item is S3 + CloudFront, in pennies ([INFRA §11](docs/arch/INFRA.md#11-cost)).
 
 ## Status
 
-Built and in daily use. What's shipped and what's still open is the block at the top of [`docs/index.md`](docs/index.md); CI (`.github/workflows/`) is the test status, on every PR and every push to `main`.
+Built and in daily use. What's shipped and what's still open is the block at the top of [`docs/index.md`](docs/index.md); CI (`.github/workflows/`) is the test status: on every PR, and on a push to `main` unless a green PR run already checked that tree.
 
 ## Develop
 
@@ -86,7 +88,7 @@ pnpm build         # production build
 
 Testing the deployed dev stage: `pnpm devcheck` ([DEV-CHECK](docs/ops/DEV-CHECK.md)), and its container-local pre-flight `pnpm devcheck:local` ([LOCAL-CHECK](docs/ops/LOCAL-CHECK.md)). The rest of the root scripts are maintainer tooling — [`docs/index.md`](docs/index.md) → _ops/_.
 
-Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `packages/shared/` (the cross-cutting contract) · `extension/` (the Safari LeetCode extension) · `scripts/` (dev/CI utilities) · `tools/` (Mac-side clients) · `docs/`.
+Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `packages/shared/` (the cross-cutting contract) · `extension/` (the Safari LeetCode extension) · `scripts/` (dev/CI utilities) · `tools/` (Mac-side clients, the mailroom runner, the container's tmux kit) · `docs/`.
 
 Development runs Claude Code inside an Incus container: the runbook — and the rules that bite there — is [`docs/ops/COI-SANDBOX.md`](docs/ops/COI-SANDBOX.md), the post-mortems [`docs/ops/COI-INCIDENTS.md`](docs/ops/COI-INCIDENTS.md).
 

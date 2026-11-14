@@ -36,9 +36,9 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 - **Data:** DynamoDB, on-demand. Logical entities per §2; the physical model (keys / access patterns) is §2.4 — DDB is access-pattern-first, not relational.
 - **Cost:** effectively free at single-user scale — breakdown in INFRA §11.
 
-**Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route BFF Lambda (§4), beside the MCP, finance-sync and reminder-dispatch Lambdas (INFRA §1/§4) · CDK (§3) · custom domain (§8).
+**Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route BFF Lambda (§4; the others: _Beyond the BFF_, below) · CDK (§3) · custom domain (§8).
 
-**Beyond the BFF** (each in INFRA §1/§4 and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
+**Beyond the BFF** (each in INFRA — §1, §3, §4 or §10 — and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
 
 **Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1 — bar per-feature crash-safety outboxes since: capture's (`app/src/modules/capture/captureOutbox.ts`), Flux sets' ([flux](../areas/flux/index.md)) and the extension's ([recruiting](../areas/recruiting/index.md)).
 
@@ -60,7 +60,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 ### 2.2 Entities
 
-**logEntries** — `id · createdAt · day · text · private?`. Edit allowed; soft-delete allowed. `private` keeps an entry out of every MCP read and search; older rows read back `undefined` = not private ([log](../areas/log/index.md)).
+**logEntries** — `id · createdAt · day · text · private?`. Edit allowed; soft-delete allowed. `private` hides an entry's text from every MCP read (the entry, its day and time stay) and keeps it out of MCP search; older rows read back `undefined` = not private ([log](../areas/log/index.md)).
 
 **tasks** — the signature module.
 
@@ -101,7 +101,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **pomodoroSessions**
 
 - `id · taskId? · categoryId · label? · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt · blocks?`
-- `label`: a taskless timer's focus name — how concurrent timers tell apart. `blocks`: the blocks the timer runs to, raised by Again; absent = 1.
+- `label`: a taskless timer's focus name — how concurrent timers are told apart. `blocks`: the blocks the timer runs to, raised by Again; absent = 1.
 - `kind`: `work | break` — **only `work` accrues** to `task.actualAccruedMin` + time-budget.
 - `wasWork`: **snapshot** of the category's `isWork` at write time → immutable balance history.
 - `categoryId`: **follows the task** when `taskId` is set; manual only for taskless freeform focus.
@@ -142,7 +142,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **pushSubs** — `id · endpoint · p256dh · auth · label · lastOkAt · lastError · lastErrorAt`. One device's Web Push subscription; `id` is a `sha256(endpoint)` prefix, so re-subscribing upserts. A credential: never exported or returned. Design: [tasks/reminders](../areas/tasks/reminders.md).
 
-**fluxSets** — one finished Flux set: `id · day · exerciseId · kind · side · condition · count · avgPeakDeg · avgErrorDeg · rom · calibrated · delegate · durationSec · completedAt · repTaskId · stoppedEarly · planned`. The client mints the ULID (idempotent put); `repTaskId` is the Roll rep it counted toward. **The week note** — one cached line per week (`weekStart · text` ≤ 140 chars `· generatedAt`, plus the server's `fingerprint` cache key), written by Haiku from that week's sets, or the deterministic line when it can't be,, rebuilt when they change; derived, not exported. Design: [flux](../areas/flux/index.md).
+**fluxSets** — one finished Flux set: `id · day · exerciseId · kind · side · condition · count · avgPeakDeg · avgErrorDeg · rom · calibrated · delegate · durationSec · completedAt · repTaskId · stoppedEarly · planned`. The client mints the ULID (idempotent put); `repTaskId` is the Roll rep it counted toward. **The week note** — one cached line per week (`weekStart · text` ≤ 140 chars `· generatedAt`, plus the server's `fingerprint` cache key), written by Haiku from that week's sets, or the deterministic line when it can't be, rebuilt when they change; derived, not exported. Design: [flux](../areas/flux/index.md).
 
 **gcalSyncStates** — the two-way calendar cursor, one per connected Google account (`id = sub`): `calendarId · syncToken · lastPulledAt · lastSyncedAt · lastPullError · lastPullErrorAt`. Exported, no credentials; a null token means a full resync ([calendar](../areas/calendar/index.md) → Two-way sync).
 
@@ -224,7 +224,7 @@ PK = push / SK = user#<userId> · health
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
 - `/log · /tasks · /recruiting (+ /recruiting/sittings/:id, /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId, /flux/history) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode sittings + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
-- **Capture bar is global** — always present, not a route (hidden only mid-set in Flux, through the route's `handle.hideCapture`).
+- **Capture bar is global** — always present, not a route (hidden on a Flux exercise view, `/flux/:exerciseId`, through the route's `handle.hideCapture`).
 
 **State — three layers:**
 
@@ -324,7 +324,7 @@ outlier, and two things make it worse than an ordinary bug:
 
 _(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; a plan read keeps one row per id within what it reads, the newest, so no read misses it and a failed write never loses it), and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
-`deleteCheck` was the only one that destroyed a row. The reminder dispatcher's bookkeeping rows (test, sent and count) and a dead device's push subscription are deleted for real too, on purpose ([tasks/reminders](../areas/tasks/reminders.md)). The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)_
+`deleteCheck` was the only one that destroyed a row. The reminder dispatcher's bookkeeping rows (test, sent and count) a dead device's push subscription, and the poller's per-user registry row once a user has no device left are deleted for real too, on purpose ([tasks/reminders](../areas/tasks/reminders.md)). The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)_
 
 - **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
   `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The

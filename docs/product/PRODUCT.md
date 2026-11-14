@@ -78,7 +78,7 @@ _Amended 2026-10-12:_ Task mode parses natural language with Claude Haiku ([quic
 ### ☀️ Morning — plan the day (the anti-overconfidence surface)
 
 1. Capture bar (Log default)
-2. **Day shape** — the calendar's longest free stretch and how fragmented the day is, or a prompt to connect one ([calendar](../areas/calendar/index.md))
+2. **Day shape** — the calendar's longest free stretch and how fragmented the day is, measured over the focus window, or a prompt to connect a calendar or pick which ones feed it ([calendar](../areas/calendar/index.md))
 3. **Plan today** — pull backlog tasks in, set estimate + buffer on each → shows **planned hours vs hours actually available** ("11h planned into a 6h day"). Under-scoping gets caught here, before it becomes stress. Also holds the **Rolls picker** — pick 1–2 deadline-free efforts for today; each drops a rep onto the plan (see 4b).
 4. Habits due today
 5. One-line intent (optional, non-scored)
@@ -133,7 +133,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 
 ### 4b. The lighter modules
 
-- **Interstitial log** — timestamped, append-only, one day per page. Light edit allowed (fix a typo); **no backdating** in v1. The durable reflection substrate. An entry can be **private** (kept out of every MCP read and search), and the log is readable over MCP ([log](../areas/log/index.md)).
+- **Interstitial log** — timestamped, append-only, one day per page. Light edit allowed (fix a typo); **no backdating** in v1. The durable reflection substrate. An entry can be **private** (its text never leaves over MCP: reads show it redacted, search never matches it), and the log is readable over MCP ([log](../areas/log/index.md)).
 - **Pomodoro** — configurable work/break (default 25/5), tied to the current task; sessions accrue time + category to the task and prefill its "actual." Minimal.
 - **Habits** — weekly-cadence ("3×/week"), calendar view, marked in the night check. **No consecutive-streak, no guilt** — a miss is just a miss, repair-friendly. **Habits may hold non-work items** ("call a friend 1×/week") — this is the gentle, non-policing way non-work life gets a presence (weekly + repair-friendly keeps it supportive, not a scold).
 - **Rolls** — deadline-free ongoing _efforts_ you keep returning to (LeetCode daily, study, work on Aperture). Each has a **forgiving momentum "contact sheet"** — a dot grid that only fills; a gap is a fainter dot, **never a resetting streak, red, or score**. A "rep" is a completed _task_ tagged to the roll (derived, never a stored counter), so calibration rides ongoing effort too (a Flux session and a LeetCode sitting count the same way). The morning picker drops a rep onto today's plan, where it flows into the daytime Right-now lane. Distinct from Habits (a _timed task_ vs a _binary check_). Full design: **[home/rolls.md](../areas/home/rolls.md)**.
@@ -190,7 +190,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 4. **Richer calibration** — personalized buffer from measured bias, trend analytics. v1 keeps per-task delta + a simple aggregate ratio. Since built, in part: the done gate and hindsight estimates ([integrity](../areas/calibration/integrity.md)) and two-level calibration for parent + parts ([parts](../areas/tasks/parts.md)); the buffer is still a flat +25%.
 5. **Quarterly / annual cadence** — v1 has the daily loop only.
 6. **Calendar integration** — v1's "hours available" was a manual daily capacity number, not calendar-derived. Since built: **[calendar/](../areas/calendar/index.md)**.
-7. **Offline data editing** — v1 is online-first (DynamoDB is the source of truth, so multi-device sync is automatic — laptop + phone share one store). Full offline editing + a sync-on-reconnect write queue is deferred. Since built, in part: crash-safe outboxes for capture and for Flux sets ([flux](../areas/flux/index.md)).
+7. **Offline data editing** — v1 is online-first (DynamoDB is the source of truth, so multi-device sync is automatic — laptop + phone share one store). Full offline editing + a sync-on-reconnect write queue is deferred. Since built, in part: crash-safe outboxes for capture ([quick-add](../areas/tasks/quick-add.md)) and for Flux sets ([flux](../areas/flux/index.md)).
 8. **Deeper reflection modules** — decision journal, commonplace book, intentions-as-module, values, future-self letters. The task-estimation calibration already delivers the "data about one's own overconfidence" hit in v1. Since built, in part: one optional reflection line per finished task ([reflection](../areas/tasks/reflection.md)).
 
 **Never:** XP / badges / levels · guilt-streaks · daily policing of non-work life · storing mood as a number.
