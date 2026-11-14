@@ -54,6 +54,20 @@ async function expectRpc(
   return got.body;
 }
 
+// Equal as JSON values, whatever the key order: DynamoDB hands a map's keys back in its own order.
+const canonical = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(canonical)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((k) => [k, canonical((v as Record<string, unknown>)[k])]),
+        )
+      : v;
+const same = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+
 const titleOf = (ctx: Ctx, what: string) => `devcheck shapes ${what} ${ctx.nonce}`;
 async function noTaskTitled(ctx: Ctx, title: string): Promise<void> {
   if ((await ctx.api.reads.listTasks()).some((t) => t.title === title))
@@ -320,9 +334,7 @@ export const bffShapes: Scenario = {
           const read = async () =>
             (await ctx.api.reads.listSeries()).find((s) => s.id === series.id);
           const saved = await read();
-          if (
-            JSON.stringify(saved?.rule) !== JSON.stringify({ kind: 'weekly', daysOfWeek: [1, 3] })
-          )
+          if (!same(saved?.rule, { kind: 'weekly', daysOfWeek: [1, 3] }))
             throw new Error(`the series rule read back as ${JSON.stringify(saved?.rule)}`);
           const edit = (rule: unknown) => [
             {
@@ -363,7 +375,7 @@ export const bffShapes: Scenario = {
             400,
             /^Unknown rule field: extra$/,
           );
-          if (JSON.stringify((await read())?.rule) !== JSON.stringify(saved?.rule))
+          if (!same((await read())?.rule, saved?.rule))
             throw new Error('a refused upsertSeries changed the series rule');
         } finally {
           await ctx.api.writes.deleteSeries(series.id);
@@ -416,7 +428,7 @@ export const bffShapes: Scenario = {
           );
           const after = (await ctx.api.reads.getSettings()) as unknown as Record<string, unknown>;
           for (const k of ['updatedAt', 'calendarShapeRefs', 'calendarWriteDefault', 'theme'])
-            if (JSON.stringify(after[k]) !== JSON.stringify(before[k]))
+            if (!same(after[k], before[k]))
               throw new Error(`a refused updateSettings changed the test user’s settings (${k})`);
         } finally {
           ok = (await ctx.api.writes.updateSettings(current as never)) as unknown as Record<
@@ -425,7 +437,7 @@ export const bffShapes: Scenario = {
           >;
         }
         for (const [k, v] of Object.entries(current))
-          if (JSON.stringify(ok[k]) !== JSON.stringify(v))
+          if (!same(ok[k], v))
             throw new Error(`a legal patch answered ${k} ${JSON.stringify(ok[k])}`);
       },
     },
@@ -460,7 +472,7 @@ export const bffShapes: Scenario = {
             400,
             /situation is limited to 20000 characters/,
           );
-          if (JSON.stringify(await ctx.api.reads.listStories()) !== JSON.stringify(before))
+          if (!same(await ctx.api.reads.listStories(), before))
             throw new Error('a refused updateStory changed the story list');
           const full = 's'.repeat(TEXT_MAX);
           const saved = await ctx.api.writes.updateStory(story.id, {
@@ -469,10 +481,7 @@ export const bffShapes: Scenario = {
           });
           const back = (await ctx.api.reads.listStories()).find((s) => s.id === story.id);
           for (const got of [saved, back])
-            if (
-              got?.situation !== full ||
-              JSON.stringify(got.competencyTags) !== '["ownership","impact"]'
-            )
+            if (got?.situation !== full || !same(got.competencyTags, ['ownership', 'impact']))
               throw new Error(
                 `the story at the cap read back as ${JSON.stringify(got).slice(0, 200)}`,
               );
