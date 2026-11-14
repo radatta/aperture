@@ -17,6 +17,7 @@ import {
   ISOLATED_JS,
   MAIN_JS,
   fakeExtension,
+  fakeXHR,
   page,
   run,
   shadowRoots,
@@ -156,6 +157,7 @@ function open(
     loading?: boolean;
     css?: { supports(p: string, v: string): boolean };
     lateHint?: boolean; // LeetCode names the question only on fake().sendHint()
+    blobGql?: boolean; // LeetCode's GraphQL goes as Safari sends it: blob XHRs (fake-leetcode.js)
   } = {},
 ) {
   const tag =
@@ -192,10 +194,13 @@ function open(
   };
   const rootOf = shadowRoots(dom);
   if (opts.css) (w as Record<string, unknown>).CSS = opts.css; // the browser's CSS namespace, as the page's scripts see it
-  if (opts.lateHint) w.__fakeOpts = { lateHint: true };
+  w.__fakeOpts = { lateHint: !!opts.lateHint, blobGql: !!opts.blobGql };
   // The page's own Date is the realm's, which fake timers don't reach: give it the fake one, so the scripts'
   // deadlines (waitFor, the batcher, the badge minutes) run on the same clock as their timers.
   Object.defineProperty(w, 'Date', { value: Date, configurable: true, writable: true });
+  const answer = (url: string, body: string | null, method: string) =>
+    (lc.respond(new URL(url, w.location.href).pathname, method, body) ?? { body: '{}' }).body;
+  if (opts.blobGql) w.XMLHttpRequest = fakeXHR(w, answer) as unknown as typeof XMLHttpRequest;
   run(dom, MAIN_JS, { fetch: fetchFake });
   run(dom, ISOLATED_JS, { chrome: ext.api });
   run(dom, ['test/fixtures/fake-leetcode.js']);
@@ -1127,6 +1132,110 @@ describe('the problem doc from the page', () => {
     await until(() => messages(ext, 'start').some((m) => m.body!.problem), 6000);
     expect(new Set(messages(ext, 'start').map((m) => m.body!.clientSittingId)).size).toBe(1);
   }, 20_000);
+});
+
+// The doc LeetCode fetches itself: before Next, from the old page (debug log 9), and in Safari over blob XHRs.
+describe('the problem doc LeetCode fetches', () => {
+  const entries = (ext: ReturnType<typeof fakeExtension>, type: string) =>
+    ((ext.local.data.debugLog as DebugEntry[] | undefined) ?? []).filter((e) => e.type === type);
+  const lastStart = (ext: ReturnType<typeof fakeExtension>) =>
+    messages(ext, 'start').at(-1)!.body as Record<string, unknown>;
+  const next = (p: ReturnType<typeof open>) => {
+    p.fake().slowNext = true; // no doc comes after the click: only the one fetched before it
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+  };
+  const docFetch = (p: ReturnType<typeof open>, titleSlug: string) =>
+    p.w.fetch('/graphql/', {
+      method: 'POST',
+      body: JSON.stringify({
+        operationName: 'questionDetail',
+        variables: { titleSlug },
+        query: 'q',
+      }),
+    });
+
+  it('keeps the doc LeetCode fetched before Next, and the next problem’s Start carries it', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt' && p.text().includes('Two Sum'));
+    p.fake().finishNext(); // fetched from two-sum's page, for the problem Next goes to
+    expect(await logged(ext, 'doc.keep')).toMatchObject({ on: false, n: 1 });
+    expect(p.text()).not.toContain('Add Two Numbers'); // never used for the problem on screen
+    next(p);
+    await until(() => p.text().includes('Add Two Numbers'));
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(lastStart(ext)).toMatchObject({
+      problemSlug: 'add-two-numbers',
+      problemTitle: 'Add Two Numbers',
+      questionId: '2',
+      difficulty: 'Medium', // the doc's: with no doc it goes null (the slowNext tests above)
+      problem: { titleSlug: 'add-two-numbers', title: 'Add Two Numbers' },
+    });
+    expect(ext.local.data['sitting:add-two-numbers']).toMatchObject({ problemSent: true });
+
+    // Eight docs at most: a ninth evicts the oldest off screen.
+    const bg2 = fakeBackground();
+    const ext2 = fakeExtension({ onMessage: (m) => bg2.handle(m as Msg) });
+    await ext2.local.set({ debug: true });
+    const q = open('/problems/two-sum/', ext2);
+    await until(() => q.phase() === 'prompt');
+    q.fake().finishNext(); // the oldest
+    await logged(ext2, 'doc.keep');
+    for (let i = 1; i <= 8; i++) await docFetch(q, `other-${i}`);
+    await until(() => entries(ext2, 'doc.keep').length >= 9);
+    expect(entries(ext2, 'doc.keep').map((e) => e.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 8]);
+    next(q);
+    await until(() => q.text().includes('Add Two Numbers'));
+    q.tap('start');
+    await until(() => q.phase() === 'active', 8000);
+    expect(lastStart(ext2)).toMatchObject({
+      problemSlug: 'add-two-numbers',
+      difficulty: null,
+      problem: null,
+    });
+  }, 30_000);
+
+  it('with GraphQL over blob XHRs, a Next’d problem’s Start has its doc and a Submit its details', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext, { blobGql: true });
+    await until(() => p.phase() === 'prompt');
+    p.fake().finishNext();
+    await logged(ext, 'doc.keep');
+    next(p);
+    await until(() => p.text().includes('Add Two Numbers'));
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(lastStart(ext)).toMatchObject({
+      problemSlug: 'add-two-numbers',
+      difficulty: 'Medium',
+      problem: { titleSlug: 'add-two-numbers' },
+    });
+    (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
+    await until(() => sentEvents(ext).some((e) => e.type === 'submitDetails'), 8000);
+    expect(sentEvents(ext).find((e) => e.type === 'submit')).toMatchObject({
+      payload: { slug: 'add-two-numbers', result: { status_msg: 'Accepted' } },
+    });
+    expect(sentEvents(ext).find((e) => e.type === 'submitDetails')).toMatchObject({
+      payload: { details: { question: { titleSlug: 'add-two-numbers' } } },
+    });
+    // The probe: GraphQL read from blobs (syncedCode needs only its request), the submit and its check by
+    // fetch, as in Safari.
+    const wires = entries(ext, 'wire');
+    expect(wires.filter((e) => e.how === 'xhr:blob-ok').map((e) => e.items)).toEqual(
+      expect.arrayContaining([['problem'], ['submitDetails']]),
+    );
+    expect(wires.find((e) => JSON.stringify(e.ops) === '["syncedCode"]')).toMatchObject({
+      how: 'xhr:skip',
+      items: ['hint'],
+    });
+    expect(wires.some((e) => String(e.how).startsWith('xhr:type-'))).toBe(false);
+    expect(wires.some((e) => e.how === 'fetch:ok')).toBe(true);
+  }, 30_000);
 });
 
 describe('the scrim', () => {

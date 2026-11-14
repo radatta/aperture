@@ -265,4 +265,35 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     expect(await page.evaluate<{ resets: number }>('window.__fake')).toMatchObject({ resets: 0 });
     expect((await rpc<Sitting[]>('listSittings')).length).toBe(before.length);
   }, 60_000);
+
+  // Safari sends LeetCode's GraphQL as blob XHRs (debug log 9); Chromium's real XHR and Blob prove the read.
+  it('reads LeetCode’s GraphQL from a real blob XHR, and the page still gets its own', async () => {
+    await worker.evaluate(`chrome.storage.local.set({ debug: true })`);
+    const blob = await context.newPage();
+    try {
+      await blob.addInitScript!('window.__fakeOpts = { blobGql: true }');
+      await blob.goto('https://leetcode.com/problems/two-sum/description/');
+      // The page's own read, through FileReader, after ours: whole and parsed.
+      expect(
+        await blob.evaluate<string>(
+          'window.__fake.fetchDoc().then((r) => r.data.question.titleSlug)',
+        ),
+      ).toBe('two-sum');
+      const entry = await until(async () => {
+        const log = await worker.evaluate<Array<Record<string, unknown>>>(
+          "chrome.storage.local.get('debugLog').then((r) => r.debugLog || [])",
+        );
+        return log.find((e) => e.type === 'wire' && e.how === 'xhr:blob-ok');
+      });
+      expect(entry).toMatchObject({
+        how: 'xhr:blob-ok',
+        items: ['problem'],
+        ops: ['questionDetail'],
+        res: expect.any(Number),
+      });
+    } finally {
+      await blob.close();
+      await worker.evaluate(`chrome.storage.local.set({ debug: false })`);
+    }
+  }, 60_000);
 });

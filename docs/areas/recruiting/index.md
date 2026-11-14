@@ -241,13 +241,14 @@ leetcode.com/problems/<slug>   (your tab)
   ╎  observed — never blocked, altered, or re-issued
   ▼
 inject-main.js          [MAIN world, document_start] — evidence only
-  • patches window.fetch + XMLHttpRequest; ships the raw URL, request and response text — parses nothing
+  • patches window.fetch + XMLHttpRequest; ships the raw URL, request and response text (a blob XHR's
+    read as text: Safari's GraphQL) — parses nothing
   • each message tagged HMAC-SHA256(per-load nonce, body) with a sequence number
   │  dispatchEvent(CustomEvent("aperture-lc"))  — nothing ever comes back
   ▼
 content.js              [ISOLATED world]
   • the relay: tag, sequence, raw shape; lib/wire.js parses here; then the problem on screen (its own
-    location) and a sitting it opened → else dropped
+    location) and a sitting it opened → else dropped; a problem doc is kept by its own slug, used on screen
   • the overlay (closed shadow roots): Start → lcSittingStart → LeetCode's reset → its confirm → its timer
   • the binding sitting:<slug> (a reload resumes); LeetCode's QD_TIMER_STATE every 2 s; 3 s batches,
     one snapshot per 30 s (the latest — live code ≤ 30 s behind)
@@ -287,9 +288,11 @@ request of its own: the `POST` to our own backend.) That's the best ToS posture 
 this exists as an extension rather than a scheduled scraper.
 
 **The problem doc is LeetCode's own `questionDetail`, the DOM the fallback.** A fresh load carries it
-server-rendered in `__NEXT_DATA__`, and LeetCode fetches it only after a submit or on a navigation (2026-11-08
-capture; 2026-11-10 debug log). So the extension reads the page's copy, for the problem the document was
-loaded for only, as names and text — never a question id — and a fetched doc wins over it; without either,
+server-rendered in `__NEXT_DATA__`, and LeetCode fetches it only after a submit, and for the next problem from
+the old page before the Next click (2026-11-08 capture; 2026-11-10 and 2026-11-13 debug logs; Safari over blob
+XHRs). So the extension keeps a fetched doc by its own slug, used only while the address names it, and reads
+the page's copy, for the problem the document was loaded for only, as names and text — never a question id —
+and a fetched doc wins over it; without either,
 Start reads title, difficulty and tags off the page (degrading to a slug-derived title and `null`s). A doc
 that comes after the Start goes in a repeat Start that fills it in. How, and the 64 KB fit:
 `extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the

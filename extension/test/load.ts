@@ -39,6 +39,68 @@ export class FetchedResponse extends Response {
     return #url in this ? this.#url : super.url;
   }
 }
+// LeetCode's XMLHttpRequest, its state behind prototype getters as in a browser. `answer` gives each request's
+// response text. `responseType` 'blob' answers with one Blob per response, cached as WebKit's wrapper caches it
+// (`blobOf` may swap it for what a test needs: null, a non-Blob); `responseText` throws for any type but text,
+// as browsers do. A re-open drops the last response. Events: load, then loadend.
+export function fakeXHR(
+  w: Window & typeof globalThis,
+  answer: (url: string, body: string | null, method: string) => string,
+  opts: { blobOf?: (text: string, w: Window & typeof globalThis) => unknown } = {},
+) {
+  const blobOf = opts.blobOf ?? ((text: string) => new w.Blob([text]));
+  return class FakeXHR extends (w.EventTarget as typeof EventTarget) {
+    url = '';
+    method = 'GET';
+    s = 0;
+    text = '';
+    type = '';
+    blob: unknown = undefined; // undefined: not made yet
+    opened = 0;
+    get status() {
+      return this.s;
+    }
+    get responseType() {
+      return this.type;
+    }
+    set responseType(t: string) {
+      this.type = t;
+    }
+    get responseText() {
+      if (this.type !== '' && this.type !== 'text')
+        throw new w.DOMException('responseType is not text', 'InvalidStateError');
+      return this.text;
+    }
+    get response() {
+      if (!this.s) return this.type === 'blob' ? null : '';
+      if (this.type === 'blob')
+        return this.blob === undefined ? (this.blob = blobOf(this.text, w)) : this.blob;
+      return this.type === '' || this.type === 'text' ? this.text : null;
+    }
+    get responseURL() {
+      return this.s ? new URL(this.url, 'https://leetcode.com').href : '';
+    }
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+      this.opened++;
+      this.s = 0;
+      this.text = '';
+      this.blob = undefined;
+    }
+    setRequestHeader() {}
+    send(body?: string | null) {
+      const { url, opened } = this;
+      setTimeout(() => {
+        if (this.opened !== opened) return; // re-opened meanwhile: this request was dropped
+        this.s = 200;
+        this.text = answer(url, body ?? null, this.method);
+        this.dispatchEvent(new w.Event('load'));
+        this.dispatchEvent(new w.Event('loadend'));
+      }, 5);
+    }
+  };
+}
 // A jsdom page at `url`, with node's WebCrypto and TextEncoder (jsdom has no SubtleCrypto).
 export function page(url: string, html = '<!doctype html><html><head></head><body></body></html>') {
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });

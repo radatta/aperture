@@ -8,6 +8,7 @@
   'use strict';
   function createServer() {
     const checks = new Map(); // id -> polls so far
+    const submitted = new Map(); // submission id -> its problem's slug
     let nextId = 900001;
     const question = (slug) => ({
       title: slug === 'two-sum' ? 'Two Sum' : 'Add Two Numbers',
@@ -35,14 +36,17 @@
                 code: 'x',
                 statusCode: 10,
                 user: { username: 'user' },
-                question: { titleSlug: 'two-sum' },
+                question: { titleSlug: submitted.get(String(v.submissionId)) || 'two-sum' },
               },
             },
           }[op.operationName] || {};
         return { status: 200, body: JSON.stringify({ data }) };
       }
       let m = path.match(/^\/problems\/([^/]+)\/submit\/$/);
-      if (m) return { status: 200, body: JSON.stringify({ submission_id: nextId++ }) };
+      if (m) {
+        submitted.set(String(nextId), m[1]);
+        return { status: 200, body: JSON.stringify({ submission_id: nextId++ }) };
+      }
       m = path.match(/^\/problems\/([^/]+)\/interpret_solution\/$/);
       if (m)
         return {
