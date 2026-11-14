@@ -23,6 +23,19 @@ jobs:
       contents: read
       pull-requests: read # the secret scan lists a PR's commits (GET /pulls/{n}/commits)
     steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history for the secret scan; also HEAD^1 (main) for the fixture-inputs diff
@@ -74,7 +87,7 @@ jobs:
           cat "$RUNNER_TEMP/fixtures.txt" # stdout, so a skip's ::notice:: becomes an annotation on the run
           echo "run=$run" >> "$GITHUB_OUTPUT"
       # gitleaks over the commits in the push or PR (full history on hand); findings fail the job. Suppress false
-      # positives via .gitleaksignore. The one leak class OIDC doesn't already prevent (e.g. a pasted origin secret).
+      # positives in .gitleaks.toml's allowlist. The one leak class OIDC doesn't already prevent (e.g. a pasted origin secret).
       # After the fixture inputs (which go first), before setup, so a finding fails fast; setup still runs after one, so
       # the steps below report their own results. The step name is checked-tree.ts' SCAN_STEP (a test pins it).
       - name: Secret scan
@@ -110,6 +123,19 @@ jobs:
       matrix:
         shard: [1, 2]
     steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       # Half the suite per job, by vitest's own --shard: a file is assigned by a hash of its path, so it

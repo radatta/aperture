@@ -1,0 +1,247 @@
+import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { checkForkGuard, GUARD_STEP, guardScript } from './workflow-fork-guard';
+
+const ROOT = new URL('../../', import.meta.url);
+const read = (p: string) => readFileSync(new URL(p, ROOT), 'utf8');
+// Every workflow and every local action, so a file added later is checked without an edit here.
+const repoFiles = () => {
+  const files: Record<string, string> = {};
+  for (const f of readdirSync(new URL('.github/workflows/', ROOT)))
+    files[`.github/workflows/${f}`] = read(`.github/workflows/${f}`);
+  for (const a of readdirSync(new URL('.github/actions/', ROOT)))
+    files[`.github/actions/${a}/action.yml`] = read(`.github/actions/${a}/action.yml`);
+  return files;
+};
+
+// As GitHub runs a `run:` step with no `shell:` on ubuntu: bash -e.
+const runGuard = (env: Record<string, string>) => {
+  const r = spawnSync('bash', ['-e', '-c', guardScript()], {
+    env: { PATH: process.env.PATH ?? '', GITHUB_REPOSITORY: 'radatta/aperture', ...env },
+    encoding: 'utf8',
+  });
+  return { status: r.status, out: r.stdout };
+};
+
+const wf = (on: string, job: string) => `on:\n${on}permissions:\n  contents: read\njobs:\n${job}`;
+const PR = '  pull_request:\n    branches: [main]\n';
+const stepsJob = (steps: string, head = '') =>
+  `  a:\n${head}    runs-on: ubuntu-latest\n    steps:\n${steps}\n      - uses: actions/checkout@v7\n`;
+const ACTION = `name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-node@v7\n`;
+// The allowlist must all be used somewhere, so fixtures carry a file that uses the rest.
+const REST = wf(
+  '  push:\n    branches: [main]\n',
+  stepsJob(
+    `${GUARD_STEP}\n      - uses: actions/cache@v6\n      - uses: actions/upload-artifact@v7\n      - uses: aws-actions/configure-aws-credentials@v6\n      - uses: gitleaks/gitleaks-action@v3`,
+  ),
+);
+const check = (files: Record<string, string>) =>
+  checkForkGuard({
+    '.github/workflows/rest.yml': REST,
+    '.github/actions/setup/action.yml': ACTION,
+    ...files,
+  });
+
+describe('workflow-fork-guard', () => {
+  it("passes on this repo's workflows and actions", () => {
+    expect(checkForkGuard(repoFiles())).toEqual([]);
+  });
+
+  it('the guard is a plain run step: no shell override, no if, no continue-on-error', () => {
+    expect(GUARD_STEP).not.toMatch(/shell:|\bif:|continue-on-error/);
+  });
+
+  describe('the guard script', () => {
+    it.each([
+      ['push', {}],
+      ['workflow_dispatch', {}],
+      ['pull_request', { HEAD_REPO: 'radatta/aperture' }],
+    ])('passes a %s', (event, env) => {
+      expect(runGuard({ EVENT: event, ...env }).status).toBe(0);
+    });
+
+    it.each([
+      ['a fork', 'pull_request', 'someone/aperture'],
+      ['a deleted fork (empty head repo)', 'pull_request', ''],
+      ['a look-alike name', 'pull_request', 'radatta/aperture-fork'],
+      ['pull_request_target, even same-repo', 'pull_request_target', 'radatta/aperture'],
+      ['a schedule', 'schedule', ''],
+      ['an empty event', '', ''],
+    ])('fails %s', (_, event, head) => {
+      const r = runGuard({ EVENT: event, HEAD_REPO: head });
+      expect(r.status).toBe(1);
+      expect(r.out).toMatch(/^::error::/);
+    });
+  });
+
+  it('accepts a fixture set that follows every rule', () => {
+    expect(check({ '.github/workflows/pr.yml': wf(PR, stepsJob(GUARD_STEP)) })).toEqual([]);
+  });
+
+  it('flags a job without the guard, with it second, or with it changed by one character', () => {
+    const second = `      - run: echo hi\n${GUARD_STEP}`;
+    const changed = GUARD_STEP.replace('exit 1', 'exit 0');
+    for (const steps of ['      - run: echo hi', second, changed])
+      expect(check({ '.github/workflows/x.yml': wf(PR, stepsJob(steps)) })).toContain(
+        ".github/workflows/x.yml › a: the first step isn't the fork guard",
+      );
+  });
+
+  it('flags a new unguarded workflow file', () => {
+    const files = {
+      ...repoFiles(),
+      '.github/workflows/new.yml': wf(PR, stepsJob('      - run: make')),
+    };
+    expect(checkForkGuard(files)).toContain(
+      ".github/workflows/new.yml › a: the first step isn't the fork guard",
+    );
+  });
+
+  it('flags self-hosted, matrix and block runs-on', () => {
+    for (const runsOn of ['self-hosted', '${{ matrix.os }}', '[self-hosted, linux]']) {
+      const text = wf(PR, stepsJob(GUARD_STEP)).replace(
+        'runs-on: ubuntu-latest',
+        `runs-on: ${runsOn}`,
+      );
+      expect(check({ '.github/workflows/x.yml': text })).toEqual([
+        `.github/workflows/x.yml:8: runs-on "${runsOn}" — only ubuntu-latest (GitHub-hosted)`,
+      ]);
+    }
+  });
+
+  it('flags a remote reusable workflow, a missing local one, and a job with neither steps nor uses', () => {
+    const job = (body: string) => `  a:\n${body}`;
+    expect(
+      check({
+        '.github/workflows/x.yml': wf(PR, job('    uses: org/repo/.github/workflows/w.yml@v1\n')),
+      }),
+    ).toEqual([
+      ".github/workflows/x.yml:8: action org/repo isn't on the allowlist",
+      '.github/workflows/x.yml › a: calls "org/repo/.github/workflows/w.yml@v1" — only local workflows, which carry their own guard',
+    ]);
+    expect(
+      check({ '.github/workflows/x.yml': wf(PR, job('    uses: ./.github/workflows/gone.yml\n')) }),
+    ).toEqual([".github/workflows/x.yml uses ./.github/workflows/gone.yml, which doesn't exist"]);
+    expect(
+      check({ '.github/workflows/x.yml': wf(PR, job('    runs-on: ubuntu-latest\n')) }),
+    ).toEqual(['.github/workflows/x.yml › a: neither steps: nor uses:']);
+  });
+
+  it('flags dangerous triggers, by event and by mention', () => {
+    for (const ev of ['pull_request_target', 'workflow_run', 'issue_comment', 'schedule']) {
+      const problems = check({ '.github/workflows/x.yml': wf(`  ${ev}:\n`, stepsJob(GUARD_STEP)) });
+      expect(problems).toContain(
+        `.github/workflows/x.yml: triggers on ${ev} — allowed: push, pull_request, workflow_dispatch, workflow_call`,
+      );
+    }
+    const mention = wf(
+      PR,
+      stepsJob(`${GUARD_STEP}\n      - run: gh workflow run x --ref pull_request_target`),
+    );
+    expect(check({ '.github/workflows/x.yml': mention })).toEqual([
+      '.github/workflows/x.yml:21: mentions pull_request_target',
+    ]);
+  });
+
+  it('flags event data read outside the guard, but not event_name', () => {
+    const title = wf(
+      PR,
+      stepsJob(`${GUARD_STEP}\n      - run: echo "\${{ github.event.pull_request.title }}"`),
+    );
+    const ref = wf(
+      PR,
+      stepsJob(`${GUARD_STEP}\n      - if: github.head_ref == 'x'\n        run: echo`),
+    );
+    for (const text of [title, ref])
+      expect(check({ '.github/workflows/x.yml': text })).toEqual([
+        '.github/workflows/x.yml: reads github.event.* or github.head_ref outside the fork guard',
+      ]);
+    const name = wf(
+      PR,
+      stepsJob(`${GUARD_STEP}\n      - if: \${{ github.event_name == 'push' }}\n        run: echo`),
+    );
+    expect(check({ '.github/workflows/x.yml': name })).toEqual([]);
+  });
+
+  it('flags secrets, id-token and environments anywhere a pull_request run reaches, through calls and actions', () => {
+    const called = wf(
+      '  workflow_call:\n',
+      stepsJob(`${GUARD_STEP}\n      - uses: ./.github/actions/setup`),
+    );
+    const caller = wf(PR, '  ci:\n    uses: ./.github/workflows/called.yml\n');
+    const files = { '.github/workflows/pr.yml': caller, '.github/workflows/called.yml': called };
+    expect(check(files)).toEqual([]);
+    const leaky = {
+      ...files,
+      '.github/actions/setup/action.yml': `${ACTION}      env:\n        T: \${{ secrets.X }}\n`,
+      '.github/workflows/called.yml': called
+        .replace('    runs-on:', '    environment: dev\n    runs-on:')
+        .replace('  contents: read', '  contents: read\n  id-token: write'),
+    };
+    expect(check(leaky).sort()).toEqual(
+      [
+        '.github/actions/setup/action.yml: pull_request-reachable and mentions secrets',
+        '.github/workflows/called.yml: pull_request-reachable and mentions id-token',
+        '.github/workflows/called.yml: pull_request-reachable and mentions environment:',
+      ].sort(),
+    );
+    // A push-only workflow may hold all three.
+    const deploy = wf(
+      '  push:\n',
+      stepsJob(
+        `${GUARD_STEP}\n        env:\n          T: \${{ secrets.X }}`,
+        '    environment: prod\n',
+      ),
+    );
+    expect(check({ '.github/workflows/deploy.yml': deploy })).toEqual([]);
+  });
+
+  it('flags any write scope but id-token, top level or per job', () => {
+    const top = wf(PR, stepsJob(GUARD_STEP)).replace('  contents: read', '  contents: write');
+    const job = wf(PR, stepsJob(GUARD_STEP, '    permissions:\n      pull-requests: write\n'));
+    expect(check({ '.github/workflows/x.yml': top })).toEqual([
+      '.github/workflows/x.yml (top level): contents: write',
+    ]);
+    expect(check({ '.github/workflows/x.yml': job })).toEqual([
+      '.github/workflows/x.yml › a: pull-requests: write',
+    ]);
+  });
+
+  it('flags a steps job with no permissions block anywhere', () => {
+    const text = `on:\n${PR}jobs:\n${stepsJob(GUARD_STEP)}`;
+    expect(check({ '.github/workflows/x.yml': text })).toEqual([
+      '.github/workflows/x.yml › a: no permissions block',
+    ]);
+  });
+
+  it('flags an action off the allowlist, a docker action, and an allowlisted one nobody uses', () => {
+    const text = wf(
+      PR,
+      stepsJob(
+        `${GUARD_STEP}\n      - uses: tj-actions/changed-files@v46\n      - uses: docker://alpine:3`,
+      ),
+    );
+    expect(check({ '.github/workflows/x.yml': text })).toEqual([
+      ".github/workflows/x.yml:21: action tj-actions/changed-files isn't on the allowlist",
+      '.github/workflows/x.yml:22: unreadable uses "docker://alpine:3"',
+    ]);
+    expect(checkForkGuard({ '.github/workflows/x.yml': wf(PR, stepsJob(GUARD_STEP)) })).toContain(
+      "allowlisted action gitleaks/gitleaks-action isn't used — drop it from ACTIONS",
+    );
+  });
+
+  it('throws on shapes it cannot read rather than pass them', () => {
+    const guarded = stepsJob(GUARD_STEP);
+    expect(() => check({ '.github/workflows/x.yml': `on: push\njobs:\n${guarded}` })).toThrow(
+      /on: must be a bare block/,
+    );
+    expect(() => check({ '.github/workflows/x.yml': `on:\n  [push]\njobs:\n${guarded}` })).toThrow(
+      /unreadable trigger line/,
+    );
+    expect(() =>
+      check({ '.github/workflows/x.yml': wf(PR, guarded).replace(/\n/g, '\r\n') }),
+    ).toThrow(/CRLF/);
+    expect(() => checkForkGuard({ 'README.md': '' })).toThrow(/not a workflow or an action/);
+  });
+});

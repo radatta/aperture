@@ -51,6 +51,19 @@ jobs:
       id-token: write
       contents: read
     steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
