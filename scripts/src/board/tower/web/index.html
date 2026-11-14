@@ -23,7 +23,7 @@
         --pr: #8a5a86;
         --deploy: #b5582d;
         --dim: #7b8394;
-        --tint: 0.13;
+        --tint: 13%;
         --series: #5e81ac;
         --mark: #c3cad6;
         --shadow: 0 1px 2px rgba(46, 52, 64, 0.08), 0 4px 14px rgba(46, 52, 64, 0.06);
@@ -43,7 +43,7 @@
           --pr: #c7a1c1;
           --deploy: #e0976f;
           --dim: #8790a3;
-          --tint: 0.16;
+          --tint: 16%;
           --series: #88c0d0;
           --mark: #4c566a;
           --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.18);
@@ -384,7 +384,7 @@
         border-radius: 999px;
         white-space: nowrap;
         color: var(--c, var(--dim));
-        background: color-mix(in srgb, var(--c, var(--dim)) calc(var(--tint) * 100%), transparent);
+        background: color-mix(in srgb, var(--c, var(--dim)) var(--tint), transparent);
       }
       .t-good {
         color: var(--good);

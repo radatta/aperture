@@ -51,10 +51,11 @@ How it reads (Rahul, 2026-11-13: "text too small… just a bunch of long text", 
   | red    | failed                  |
   | grey   | waiting / parked        |
 
-- A pulsing dot marks work in flight. Elapsed timers tick every second. A row flashes when its state changes. All of
-  this is off under `prefers-reduced-motion`.
+- A pulsing dot marks work in flight, elapsed timers tick every second, and a row flashes when its state changes.
+  Under `prefers-reduced-motion` the pulse, flash and glow are off; the timers still tick (text, not motion).
 - Each lane has a phase track: plan › build › gate › review › local › dev › pr › merged, with the current step lit.
-- The page reloads itself when the served commit changes.
+- The page reloads itself when the server restarts on a new commit (its `version`). The script itself is read
+  from disk on each request, so a reload is all a new one needs.
 
 From the top:
 
@@ -137,15 +138,15 @@ and what Rahul must do.
 2. another branch holds a live `dev` lock;
 3. a devcheck run is open on `dev` (even with the lock lapsed);
 4. the runs read is failed, stale or not read yet (`main deploy state unknown`);
-5. a dev dispatch (`deploy-dev <sha> <key>` run-name) is running;
+5. a dispatch (`deploy-dev <sha> <key>` run-name) is running that is not devb's (below);
 6. `devb` is busy (its lock unknown, held by another branch, or a devcheck open on it) and the PR changes devb's
    shape (`cdk/`, `pnpm-lock.yaml`, `packages/shared/src/stage.ts`: `deploy-base.ts` → `SHAPE_PATHS`), or its
    files aren't read yet;
 7. a main Deploy run is queued or running;
 8. dispatch's `devQueue[].hold` reason.
 
-A dispatch is dev's when its run-name carries the dev holder's sha; any other running dispatch counts as devb's
-(rule 6). MERGE ME trusts a PR list up to 3 min old; a push inside that window still shows the old head's green
+A running dispatch is devb's (rule 6) only when its run-name carries devb's holder sha. Any other may be dev's (a lock
+released mid-deploy), so it holds as rule 5. MERGE ME trusts a PR list up to 3 min old; a push inside that window still shows the old head's green
 checks until the next poll, and GitHub's required checks are what gate the merge itself. An expired lock, when its cache is fresh, never holds. HOLD is never a NEEDS YOU item. A slot card shows `free`
 only for a fresh, free lock; an unknown one says why, in red.
 

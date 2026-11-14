@@ -258,9 +258,13 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
   if (devRun) return `dev: a devcheck is running since ${hhmm(devRun.start!)}`;
   const runs = ghFresh(i.runs, i.now);
   if (runs) return `main deploy state unknown (gh runs ${runs})`;
-  // a dispatch carrying the dev lock holder's sha is dev's; any other in flight is taken as devb's (below)
-  if (devLock.sha && dispatching(i, devLock.sha)) return 'a dev deploy is running';
-  const otherDispatch = dispatching(i);
+  // a running dispatch is devb's only when it carries devb's holder sha; any other may be dev's (a lock released
+  // mid-deploy, a lapsed lock): unknown means hold
+  const bSha = i.tower.lockB?.sha ?? null;
+  const devbDispatch = bSha ? dispatching(i, bSha) : undefined;
+  const anyDispatch = dispatching(i);
+  if (anyDispatch && anyDispatch !== devbDispatch) return 'a dev deploy is running';
+  const otherDispatch = devbDispatch;
 
   // devb only matters when the merge changes devb's shape
   const b = lockRead(i.tower.lockB, i.now);
@@ -800,19 +804,21 @@ export function sources(i: Inputs): SourceRow[] {
     out.push(
       !l
         ? { name, state: 'missing', at: null, detail: 'no lock cache' }
-        : fresh(l.asOf, STALE.lock) === 'stale'
-          ? {
-              name,
-              state: l.failed ? 'failed' : 'stale',
-              at: l.asOf,
-              detail: l.failed ? 'refresh failing' : null,
-            }
-          : {
-              name,
-              state: 'ok',
-              at: l.asOf,
-              detail: l.failed ? 'the last refresh failed; this read stands' : null,
-            },
+        : l.bad
+          ? { name, state: 'failed', at: l.asOf, detail: l.bad }
+          : fresh(l.asOf, STALE.lock) === 'stale'
+            ? {
+                name,
+                state: l.failed ? 'failed' : 'stale',
+                at: l.asOf,
+                detail: l.failed ? 'refresh failing' : null,
+              }
+            : {
+                name,
+                state: 'ok',
+                at: l.asOf,
+                detail: l.failed ? 'the last refresh failed; this read stands' : null,
+              },
     );
   const q = t.queue;
   out.push(

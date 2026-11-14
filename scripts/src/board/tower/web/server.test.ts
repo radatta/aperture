@@ -6,7 +6,7 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { liveTests, parseArgs } from './main.ts';
+import { liveTests, parseArgs, sparkBuckets } from './main.ts';
 import { createHandler, serve } from './server.ts';
 
 let server: Server;
@@ -153,5 +153,29 @@ describe('board.sh tower status', () => {
     });
     expect(r.status).toBe(1);
     expect(r.stdout).toMatch(/tower: stopped/);
+  });
+});
+
+describe('sparkBuckets', () => {
+  it('one point a minute for the last hour, the minute’s peak, null for an empty minute', () => {
+    const now = 3_600_000 * 10;
+    const b = sparkBuckets(
+      [
+        [now - 30_000, 5],
+        [now - 10_000, 7],
+        [now - 59 * 60_000 - 1, 1],
+        [now - 61 * 60_000, 9],
+        [now - 120_000, null],
+      ],
+      now,
+    );
+    expect(b).toHaveLength(60);
+    expect(b[59]).toBe(7);
+    expect(b[0]).toBe(1);
+    expect(b[57]).toBeNull();
+    expect(b.filter((x) => x !== null)).toEqual([1, 7]);
+  });
+  it('a sample a little ahead of our clock lands in the newest minute', () => {
+    expect(sparkBuckets([[1_000_000 + 5_000, 3]], 1_000_000)[59]).toBe(3);
   });
 });

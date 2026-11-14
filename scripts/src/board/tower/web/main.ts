@@ -106,6 +106,17 @@ function testCap(limits: string): number | null {
   }
 }
 
+// The health tiles' sparklines: the last hour, one point a minute (that minute's peak), null for a minute with no
+// sample. A sample a little ahead of our clock (the Mac's) lands in the newest minute, not off the end.
+export function sparkBuckets(pts: [number, number | null][], now: number): (number | null)[] {
+  const out: (number | null)[] = Array(60).fill(null);
+  for (const [t, y] of pts) {
+    const k = Math.min(59, 59 - Math.floor((now - t) / 60000));
+    if (k >= 0 && y !== null) out[k] = Math.max(out[k] ?? -Infinity, y);
+  }
+  return out;
+}
+
 const localMidnight = (now: number) => {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
@@ -236,19 +247,15 @@ export function build(a: Args) {
       midnight: localMidnight(now),
     };
     const v = derive(inputs);
-    // the health tiles' sparklines: the last hour, one point a minute (the minute's peak)
-    const spark = (pts: [number, number | null][]) => {
-      const out: (number | null)[] = Array(60).fill(null);
-      for (const [t, y] of pts) {
-        const k = 59 - Math.floor((now - t) / 60000);
-        if (k >= 0 && k < 60 && y !== null) out[k] = Math.max(out[k] ?? -Infinity, y);
-      }
-      return out;
-    };
     const sparks = {
-      anon: spark(tower.points.map((p) => [p.t, p.anon])),
-      cpu: spark(tower.points.map((p) => [p.t, p.cpu])),
-      mac: spark(macHist.map((m) => [m.t, m.usedMiB])),
+      anon: sparkBuckets(
+        tower.points.map((p) => [p.t, p.anon]),
+        now,
+      ),
+      mac: sparkBuckets(
+        macHist.map((m) => [m.t, m.usedMiB]),
+        now,
+      ),
     };
     if (!history) return { ...v, sparks };
     return {

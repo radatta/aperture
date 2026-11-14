@@ -92,12 +92,14 @@ function body(id) {
 // bar and badge; `sig` changing since the last poll flashes it.
 function item(key, parts) {
   const wrap = el('div', `item ${parts.c ?? ''}`);
+  wrap.dataset.key = key;
+  rendered.add(key);
   if (expanded.has(key)) wrap.classList.add('open');
   const sig = parts.sig ?? null;
   if (sig !== null && seen.has(key) && seen.get(key) !== sig) wrap.classList.add('flash');
   if (sig !== null) next_seen.set(key, sig);
   const row = el('div', 'row');
-  if (parts.live) row.append(el('span', 'dot live'));
+  if (parts.live) row.append(liveDot());
   if (parts.badge) row.append(badge(parts.badge, parts.c));
   const text = el('span', 'text');
   for (const p of parts.text) text.append(typeof p === 'string' ? document.createTextNode(p) : p);
@@ -121,6 +123,12 @@ function item(key, parts) {
   return wrap;
 }
 let next_seen = new Map();
+// a pulsing dot whose phase follows the wall clock, so re-rendering every 5 s doesn't restart its pulse
+function liveDot(extra = '') {
+  const d = el('span', `dot live${extra}`);
+  d.style.animationDelay = `-${Date.now() % 1600}ms`;
+  return d;
+}
 
 // the phase track: plan › build › gate › review › local › dev › pr › merged, the current one lit
 const TRACK = ['plan', 'build', 'gate', 'review', 'local', 'dev', 'pr', 'merged'];
@@ -143,7 +151,7 @@ function list(b, id, items, max) {
     btn.addEventListener('click', () => {
       if (all) showAll.delete(id);
       else showAll.add(id);
-      tick();
+      if (lastView) render(lastView); // the view in hand: no second fetch racing the poll
     });
     b.append(btn);
   }
@@ -175,6 +183,11 @@ function copyButton(text) {
       btn.textContent = 'copied ✓';
     } catch {
       btn.textContent = 'copy failed: select it below';
+      const it = btn.closest('.item');
+      if (it) {
+        it.classList.add('open');
+        expanded.add(it.dataset.key);
+      }
     }
     setTimeout(() => (btn.textContent = 'copy'), 2000);
   });
@@ -194,16 +207,16 @@ function needs(v) {
   $('#needs .count').textContent = v.needs.length ? `(${v.needs.length})` : '';
   $('#needs').classList.toggle('has', v.needs.length > 0);
   if (!v.needs.length) return emptyOr(v, b, 'needs', 'nothing needs you ✓');
-  const items = v.needs.map((n, i) => {
+  const items = v.needs.map((n) => {
     const [label, c] = NEED[n.kind] ?? NEED.todo;
-    return item(`need:${n.kind}:${n.branch ?? ''}:${n.what.slice(0, 40)}:${i}`, {
+    return item(`need:${n.kind}:${n.branch ?? ''}:${n.what.slice(0, 60)}`, {
       c,
       badge: label,
       sig: n.what,
       text: [n.link ? httpsLink(n.link, short(n.what)) : short(n.what)],
       meta: [n.cmd ? copyButton(n.cmd) : null, n.since ? timer(n.since) : null],
       more: [
-        short(n.what, 600) !== short(n.what) ? n.what : null,
+        short(n.what) !== n.what ? n.what : null,
         n.unblocks ? `unblocks: ${n.unblocks}` : null,
         n.cmd ? el('code', null, n.cmd) : null,
       ],
@@ -245,7 +258,7 @@ function nowPanel(v) {
     const name = el('div', 'name');
     const working = busy && /running|deploying/.test(s.detail ?? '');
     name.append(
-      el('span', `dot${working ? ' live' : ''}`),
+      working ? liveDot() : el('span', 'dot'),
       document.createTextNode(s.slot.toUpperCase()),
     );
     c.append(name);
@@ -391,14 +404,31 @@ function health(v) {
   // TODAY: the day's merges, the hero number
   const deployed = v.done.filter((d) => d.tone === 'good').length;
   const inFlight = v.done.filter((d) => d.deploy === 'deploying').length;
+  const unknown = v.done.filter((d) => d.tone === 'warn' && d.deploy !== 'deploying').length;
+  // green only when every deploy is known good and the reads behind it are ok
+  const doneBad = notOk(v, 'done');
   const today = tile(
     'h:t',
     'TODAY',
-    [String(v.done.length), v.done.length === 1 ? ' merged' : ' merged'],
-    v.done.length
-      ? `${deployed} deployed ✓${inFlight ? ` · ${inFlight} deploying` : ''}`
-      : 'nothing merged yet',
-    v.done.length ? (v.done.some((d) => d.tone === 'bad') ? 'c-bad' : 'c-good') : 'c-dim',
+    [String(v.done.length), ' merged'],
+    doneBad.length
+      ? `can't tell: ${doneBad.map((s) => `${s.name} ${s.state}`).join(', ')}`
+      : v.done.length
+        ? [
+            `${deployed} deployed ✓`,
+            inFlight ? `${inFlight} deploying` : '',
+            unknown ? `${unknown} deploy unknown` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : 'nothing merged yet',
+    v.done.some((d) => d.tone === 'bad')
+      ? 'c-bad'
+      : doneBad.length || unknown || inFlight
+        ? 'c-hold'
+        : v.done.length
+          ? 'c-good'
+          : 'c-dim',
     v.done.map((d) => [`PR ${d.number}`, `${d.deploy} · ${hhmm(d.mergedAt)}`]),
   );
   if (lastDone !== null && v.done.length > lastDone) today.classList.add('cheer');
@@ -408,7 +438,7 @@ function health(v) {
   const c = h.container;
   if (!c) box.append(tile('h:c', 'CONTAINER', 'no data', 'the sampler has no sample', 'c-bad', []));
   else {
-    const stale = (v.now - c.at) / 1000 > 90;
+    const stale = src('sampler')?.state !== 'ok'; // the server's rule (derive.ts STALE.sampler)
     const cc = stale
       ? 'c-hold'
       : c.anonMiB > c.anonHard
@@ -479,7 +509,9 @@ function health(v) {
         ? `pressure ${s.mem.pressure}`
         : m.state === 'stale'
           ? `stale: as of ${hhmm(s.t)}`
-          : `silent since ${hhmm(s.t)}`;
+          : m.state === 'bad'
+            ? short(m.error, 50) // e.g. a time ahead of ours: never "silent since <the future>"
+            : `silent since ${hhmm(s.t)}`;
     box.append(
       tile(
         'h:m',
@@ -564,7 +596,9 @@ function health(v) {
             'h:w',
             'AWS',
             [`$${w.total.toFixed(2)}`, ' this month'],
-            w.error ? short(w.error, 50) : `through ${w.through}`,
+            w.error
+              ? short(w.error, 50)
+              : `${w.state === 'stale' ? 'stale: ' : ''}through ${w.through}`,
             w.state === 'ok' ? 'c-good' : 'c-hold',
             [
               ['accounts', acct || '—'],
@@ -586,8 +620,8 @@ function slipping(v) {
   list(
     b,
     'slipping',
-    v.slipping.map((s, i) =>
-      item(`slip:${i}:${s.what.slice(0, 30)}`, {
+    v.slipping.map((s) =>
+      item(`slip:${s.kind}:${s.what.slice(0, 60)}`, {
         c: KIND[s.kind][1],
         badge: KIND[s.kind][0],
         text: [short(s.what)],
@@ -757,6 +791,10 @@ function charts(v) {
   );
 }
 
+let lastView = null;
+let rendered = new Set(); // keys drawn this render: `expanded` keeps only these (and the tiles')
+let seq = 0; // the newest poll: an older response arriving late is dropped
+
 function render(v) {
   // a restart onto new code: this page's script is old, so load the new one
   if (served && v.version && v.version !== served) return location.reload();
@@ -764,6 +802,8 @@ function render(v) {
   v_now = v.now;
   offset = v.now - Date.now();
   next_seen = new Map();
+  rendered = new Set();
+  lastView = v;
   $('#meta').textContent =
     `as of ${hhmm(v.now)} · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`;
   health(v);
@@ -775,25 +815,45 @@ function render(v) {
   sources(v);
   charts(v);
   seen = next_seen;
+  for (const k of [...expanded]) if (!k.startsWith('h:') && !rendered.has(k)) expanded.delete(k);
 }
 
 async function tick() {
+  const mine = ++seq;
+  let v;
   try {
     const res = await fetch(`/api/state${chartsOn ? '?history=1' : ''}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const v = await res.json();
+    v = await res.json();
     if (v.error) throw new Error(v.error);
+  } catch (e) {
+    return fail(
+      `tower server unreachable${lastOk ? ` since ${hhmm(lastOk)}` : ''}: everything below is old`,
+      e,
+    );
+  }
+  if (mine !== seq) return; // a newer poll started: its answer wins
+  // a text selection in a panel survives: skip this redraw (the next poll redraws)
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && $('main').contains(sel.anchorNode)) return;
+  try {
     render(v);
+  } catch (e) {
+    return fail('page render error: what is shown may be incomplete', e, true);
+  }
+  {
     failures = 0;
     lastOk = Date.now();
     $('#banner').style.display = 'none';
-  } catch (e) {
-    failures++;
-    if (failures >= 2) {
-      const ban = $('#banner');
-      ban.textContent = `tower server unreachable${lastOk ? ` since ${hhmm(lastOk)}` : ''}: everything below is old (${e.message})`;
-      ban.style.display = 'block';
-    }
+  }
+}
+
+function fail(text, e, now = false) {
+  failures++;
+  if (failures >= 2 || now) {
+    const ban = $('#banner');
+    ban.textContent = `${text} (${e.message})`;
+    ban.style.display = 'block';
   }
 }
 
@@ -801,7 +861,8 @@ for (const id of ['slipping', 'sources'])
   $(`#${id} h2`).addEventListener('click', () => $(`#${id}`).classList.toggle('open'));
 $('#sources-chip').addEventListener('click', () => {
   $('#sources').classList.add('open');
-  $('#sources').scrollIntoView({ behavior: 'smooth' });
+  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  $('#sources').scrollIntoView({ behavior: calm ? 'auto' : 'smooth' });
 });
 $('#charts-toggle').addEventListener('click', () => {
   chartsOn = !chartsOn;

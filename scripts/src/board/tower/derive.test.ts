@@ -545,8 +545,8 @@ describe('round 1: a failed, stale or missing source never reads as good', () =>
       status: 'in_progress',
       conclusion: null,
     });
-    // no dev lock sha to match: taken as devb's, which holds a PR whose files aren't read
-    expect(holdReason(p, null, inputs({ runs: [disp] }))).toMatch(/^a devb deploy is running/);
+    // no devb sha to match: it may be dev's (a lock released mid-deploy), so it holds
+    expect(holdReason(p, null, inputs({ runs: [disp] }))).toBe('a dev deploy is running');
   });
   it('failed, stale or unread runs hold as "main deploy state unknown"', () => {
     const i = inputs();
@@ -649,15 +649,16 @@ describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks'
     expect(v.next.parked).toEqual(['axe']);
     expect(v.active.map((r) => r.branch)).toEqual([]);
   });
-  it("a dispatch carrying the dev holder's sha holds; any other is devb's and holds only shape PRs", () => {
-    const disp = (s: string) =>
+  it("a dispatch carrying devb's holder sha is devb's and holds only shape PRs; any other holds as dev's", () => {
+    const disp = (x: string) =>
       run({
         name: 'Deploy dev (dispatch)',
-        title: `deploy-dev ${s} k`,
+        title: `deploy-dev ${x} k`,
         status: 'in_progress',
         conclusion: null,
       });
     const p = pr();
+    const b = lock('juliet', { sha: sha('b') });
     expect(
       holdReason(
         p,
@@ -670,7 +671,7 @@ describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks'
         p,
         null,
         inputs({
-          lock: lock(null, { sha: null }),
+          lockB: { ...b, expiresAt: NOW - 1 },
           runs: [disp(sha('b'))],
           files: { [sha('e')]: ['app/x.ts'] },
         }),
@@ -681,13 +682,14 @@ describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks'
         p,
         null,
         inputs({
-          lock: lock(null, { sha: null }),
+          lockB: { ...b, expiresAt: NOW - 1 },
           runs: [disp(sha('b'))],
           files: { [sha('e')]: ['cdk/x.ts'] },
         }),
       ),
     ).toBe("a devb deploy is running and this PR changes devb's shape");
   });
+
   it('an unreadable cache or holder is unknown, never free; a stale lock read marks TESTING with ?', () => {
     expect(lockRead(lock(null, { bad: 'lock cache unreadable' }), NOW)).toEqual({
       state: 'unknown',
@@ -704,5 +706,86 @@ describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks'
     i.tower.prs = { list: [pr()], at: NOW - MIN, error: null };
     i.checks = () => ({ runs: [], at: NOW - 6 * MIN, error: null });
     expect(sources(i).find((s) => s.name === 'gh checks')!.state).toBe('stale');
+  });
+});
+
+describe('round 3', () => {
+  it('a dispatch still running after its lock was released holds as dev; only one carrying devb’s sha is devb’s', () => {
+    const disp = (s: string) =>
+      run({
+        name: 'Deploy dev (dispatch)',
+        title: `deploy-dev ${s} k`,
+        status: 'in_progress',
+        conclusion: null,
+      });
+    const p = pr();
+    const files = { [sha('e')]: ['app/x.ts'] };
+    expect(
+      holdReason(
+        p,
+        null,
+        inputs({ lock: lock(null, { sha: null }), runs: [disp(sha('9'))], files }),
+      ),
+    ).toBe('a dev deploy is running');
+    expect(
+      holdReason(
+        p,
+        null,
+        inputs({
+          lockB: lock('juliet', { sha: sha('b'), expiresAt: NOW - 1 }),
+          runs: [disp(sha('b'))],
+          files,
+        }),
+      ),
+    ).toBeNull();
+  });
+  it('the phase track: the lane file’s phase, else what the state proves', () => {
+    expect(row(inputs(), { file: file({ phase: 'review' }) }).phase).toBe('review');
+    expect(row(inputs({ lock: lock('echo') })).phase).toBe('dev');
+    expect(row(inputs({ checks: green }), { pr: pr() }).phase).toBe('pr');
+    expect(
+      row(inputs(), { pr: pr({ state: 'MERGED', mergedAt: NOW, mergeSha: sha('m') }) }).phase,
+    ).toBe('merged');
+    expect(row(inputs(), { file: file({ phase: 'parked' }) }).phase).toBeNull();
+    expect(row(inputs()).phase).toBeNull();
+  });
+  it("DONE TODAY's short badge keeps the long form in deployDetail", () => {
+    const m = pr({ number: 7, state: 'MERGED', mergedAt: NOW - MIN, mergeSha: sha('1') });
+    const dep = (s: string, created: number, o: Partial<GhRun> = {}) =>
+      run({ name: 'Deploy', event: 'push', branch: 'main', sha: s, createdAt: created, ...o });
+    const v = derive(
+      inputs({
+        prs: [m],
+        runs: [
+          dep(sha('1'), NOW - 9 * MIN, { conclusion: 'cancelled' }),
+          dep(sha('2'), NOW - 5 * MIN, { number: 274 }),
+        ],
+      }),
+    );
+    expect(v.done[0]).toMatchObject({
+      deploy: 'deployed ✓',
+      tone: 'good',
+      deployDetail: 'by main deploy 274: its own was superseded by a later merge',
+    });
+    const i = inputs({ prs: [m] });
+    i.runs = { value: [], at: NOW - MIN, error: 'HTTP 502', tried: NOW };
+    expect(derive(i).done[0]).toMatchObject({ deploy: 'deploy unknown', tone: 'warn' });
+  });
+  it('before the installer is on main, a missing Mac agent is not a NEEDS YOU item', () => {
+    const missing = { state: 'missing' as const, at: null, error: null, stats: null };
+    const i = inputs({ mac: missing });
+    i.macInstallReady = false;
+    const v = derive(i);
+    expect(v.needs.filter((n) => n.kind === 'source')).toEqual([]);
+    expect(v.health.macReady).toBe(false);
+    i.macInstallReady = true;
+    expect(derive(i).needs.find((n) => n.kind === 'source')!.cmd).toBe('cd /x && install');
+  });
+  it('an unreadable lock is a failed source, not ok', () => {
+    const i = inputs({ lock: lock(null, { bad: 'holder unreadable' }) });
+    expect(sources(i).find((s) => s.name === 'dev lock')).toMatchObject({
+      state: 'failed',
+      detail: 'holder unreadable',
+    });
   });
 });

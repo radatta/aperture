@@ -104,6 +104,7 @@ main() {
   trap 'rm -f "${tmp:-}"' EXIT # a failure before the rename leaves no stray temp file (tmp is global: the trap
   # runs after main returns)
   printf '%s\n' "$json" >"$tmp"
+  chmod 644 "$tmp" # mktemp makes it 0600; the container reads it
   mv -f "$tmp" "$out/mac-stats.json"
   trap - EXIT
   [ "$was" = ok ] || echo "$now writing $out/mac-stats.json"
