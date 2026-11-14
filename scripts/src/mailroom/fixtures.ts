@@ -15,7 +15,7 @@ export interface Case {
   raw?: string;
   file?: string;
   setup?: string;
-  kind?: 'sim';
+  kind?: 'sim' | 'clip';
   ts?: string | null;
 }
 
@@ -29,10 +29,14 @@ export function deepMerge(a: unknown, b: unknown): unknown {
   return out;
 }
 
-export function loadCases(): { base: Obj; simBase: Obj; cases: Case[] } {
+export function loadCases(): { base: Obj; simBase: Obj; clipBase: Obj; cases: Case[] } {
   const lines = readFileSync(`${TOOLS_DIR}testdata/jobs.jsonl`, 'utf8').trim().split('\n');
-  const { base, simBase } = JSON.parse(lines[0] ?? '{}') as { base: Obj; simBase: Obj };
-  return { base, simBase, cases: lines.slice(2).map((l) => JSON.parse(l) as Case) };
+  const { base, simBase, clipBase } = JSON.parse(lines[0] ?? '{}') as {
+    base: Obj;
+    simBase: Obj;
+    clipBase: Obj;
+  };
+  return { base, simBase, clipBase, cases: lines.slice(2).map((l) => JSON.parse(l) as Case) };
 }
 
 // The case's job and the inbox file stem it would be dropped under.

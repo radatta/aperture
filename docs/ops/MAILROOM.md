@@ -2,7 +2,7 @@
 
 Opening a PR used to be the user's last manual step before a merge: running `gh pr create` on the Mac. The bot can't take it over. A squash commit's author is whoever opened the PR, and `main` must stay the user's (CI-BOT.md). The **mailroom** takes it over instead. Claude drops a job file into a folder the Mac shares with the container. A launchd agent on the Mac picks it up and opens the PR with the user's own **PR-only token**. The PR is the user's, and no one had to touch it.
 
-Think of it as a mailroom. The container drops off a form, the clerk follows a fixed checklist, and the form can only fill in blanks. Built 2026-11-01 on the `mac-mailroom` branch, PR 1 of mac-sim. PR 2 added the `sim` job: the devcheck's iOS rows on the Mac's iOS Simulator, with its own home in [IOS-CHECK.md](IOS-CHECK.md).
+Think of it as a mailroom. The container drops off a form, the clerk follows a fixed checklist, and the form can only fill in blanks. Built 2026-11-01 on the `mac-mailroom` branch, PR 1 of mac-sim. PR 2 added the `sim` job: the devcheck's iOS rows on the Mac's iOS Simulator, with its own home in [IOS-CHECK.md](IOS-CHECK.md). `clip-paste` (2026-11-13) added the `clip` job: Ctrl+V of a Mac clipboard image in a container Claude Code (_The clip job_).
 
 ```
 container (untrusted)                               Mac (trusted; nothing from the shared folder is executed)
@@ -99,6 +99,7 @@ Other uses:
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pnpm mailroom open-pr --title "<title>" [--wait <s>]` | Opens this pushed branch's PR as the user, from the worktree's `localNotes/pr-<branch>.md`. Exit 0 prints `opened <url>` or `exists <url>`.                                                                                                                                    |
 | `pnpm mailroom probe [--wait <s>]`                     | Runs the whole path (inbox → launchd → Keychain → GitHub) on a pushed branch with a zero sha, so it stops at `HEAD_MISMATCH` before any write. Exit 0 prints the token expiry. `HEAD_MISSING` fails, because a pushed branch is invisible only to a token without repo access. |
+| `pnpm mailroom clip-probe [--out <png>] [--wait <s>]`  | The `clip` job by hand: the Mac clipboard's image to `localNotes/clip-probe.png` (default). Exit 0 served, 1 refused (prints the reason and what to do), 3 no answer (withdrawn). _The clip job_.                                                                              |
 | `pnpm mailroom sim-probe [--sign-in]` / `sim-shutdown` | The `sim` job's whole path with no assertions (boot, launch the web app, screenshot), or a shutdown. IOS-CHECK.md → _Proving the Mac side_.                                                                                                                                    |
 
 `open-pr` works through these steps:
@@ -208,6 +209,38 @@ Some entries never get a result:
 - A held lock leaves the inbox for the next run.
 - A symlinked or moved `.hostjobs`, `inbox` or `results` stops the runner with exit 1.
 
+## The clip job
+
+Ctrl+V in a container Claude Code pastes the Mac's clipboard image. Claude Code (2.1.322, checked in its binary) pastes an image on Linux by running `xclip -selection clipboard -t TARGETS -o | grep image/…` and then `xclip -selection clipboard -t image/png -o > <file>`; any failure is a silent "no image". The container has no clipboard, so **`tools/coi/xclip`** stands in for xclip: linked from `~/.local/bin/xclip`, ahead of `/usr/bin` on PATH (COI-SANDBOX.md → _Pasting images_).
+
+```
+Ctrl+V in Claude Code
+  xclip … -t TARGETS -o ──▶ tools/coi/xclip: inbox/<id>.json {job: "clip", params: {}, expiresInMin: 1}
+                                                   │ launchd → runner.sh → jobs/clip.sh
+                                                   ▼ gates, then one JXA read: public.png, else public.tiff → PNG
+  keeps the PNG (≤ 10 s, per tmux pane) ◀──── results/<id>/clip.png + result.json (status served)
+  prints "image/png"; deletes clip.png from the shared folder
+  xclip … -t image/png -o ──▶ prints the kept PNG once
+```
+
+**The shim answers exactly those two argvs.** Every other call exits 1 with no output and no job: text reads (`-t text/plain`, a bare `-o`, the primary selection), copy (stdin), the bmp fallback. Text never crosses, and nothing passes through to the real xclip. TARGETS waits at most **15 s** for the result (`CLIP_WAIT_MS`), then withdraws the job like `open-pr` does, so a Ctrl+V with the Mac asleep costs 15 s and pastes nothing. A result dir with a `progress.json` younger than 30 s and no `result.json` means the runner is draining a long job (a `sim` run, up to 10 min); TARGETS then fails at once and queues nothing. Each call logs one line to `~/.cache/xclip-shim/log` (ids, outcomes, sizes; never content). Cmd+V in iTerm is a bracketed paste through tmux and never reaches xclip, so pasting text is unchanged. A Ctrl+V with only text on the clipboard costs one `NO_IMAGE` job and pastes nothing.
+
+**The Mac side, `jobs/clip.sh`.** `params` must be `{}` and `expiresInMin` at most 2 (`BAD_PARAM`). The gates are checked in order, each before any pasteboard data is read:
+
+1. At most `CLIP_PER_MIN` = 6 serves in the last minute (`RATE_LIMITED`, checked before osascript runs).
+2. The frontmost app is iTerm2 or Terminal (`CLIP_FRONT_IDS`; else `NOT_FRONTMOST`). A paste is happening there.
+3. The copied image (the pasteboard's `changeCount`) has been served fewer than `CLIP_PER_CC` = 3 times (`REPEAT`; copy it again). This stands in for a freshness window: the pasteboard records no copy time.
+
+The read is JXA fed to `osascript -l JavaScript -` on stdin from a constant. It asks the pasteboard for `changeCount`, `types` and `dataForType` of `public.png` or `public.tiff`, and nothing else: no text type is ever named. TIFF is re-encoded to PNG, because a screenshot can be either and `«class PNGf»` fails on TIFF-only. The bash side then trusts the file, not the report: a regular file, PNG magic, at most `CLIP_MAX_BYTES` = 16 MiB. It writes `results/<id>/clip.png` as in _The runner_ step 6, counts the serve in `$STATE/clip.json` (Mac-private), logs a line (size, a sha prefix, `changeCount`, source, frontmost app), and shows a macOS banner, "Sent a N KB image to the container" (`CLIP_BANNER`). The banner is the visible tell of a paste nobody pressed.
+
+| Status     | Reason codes, and what they mean                                                                                                                                              |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `served`   | none. `clip: {bytes, sha256, changeCount, source: png\|tiff, frontmost}`                                                                                                      |
+| `rejected` | `NO_IMAGE` (no image type), `NOT_FRONTMOST` (plus `frontmost`, when it reads as a bundle id), `REPEAT`, `RATE_LIMITED`, `TOO_LARGE`, `BAD_PARAM`                              |
+| `error`    | `PASTEBOARD_DENIED` (an image type listed, its data withheld: macOS pasteboard privacy), `CLIP_FAILED` (a read, re-encode or write failed, or no PNG magic), `TIMEOUT` (20 s) |
+
+**macOS pasteboard privacy.** macOS 15.4 added `NSPasteboard.accessBehavior` and a "paste from other apps" prompt as a developer preview. Whether macOS 26 prompts a LaunchAgent's `osascript` is unconfirmed (research 2026-11-13), and the first real Ctrl+V settles it. A denial reads `PASTEBOARD_DENIED`: allow `osascript` under System Settings → Privacy & Security, if macOS lists it there.
+
 ## The runner
 
 `tools/mailroom/runner.sh` sources `jobs/*.sh`. It uses bash 3.2, `set -euo pipefail` and argv arrays, with no `eval` and no `sh -c`. On each run it does six things:
@@ -226,24 +259,26 @@ Some entries never get a result:
 
 ## Security
 
-| Threat                                                    | Control                                                                                                                                                             |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runner bug → the token's worst                            | Open or edit a PR on this private repo, and read it. No push, merge, approval that counts, settings or workflows (_The token_).                                     |
-| The user's full GitHub login                              | Never used: there is no `gh` on the Mac side.                                                                                                                       |
-| Changed code on the Mac                                   | launchd runs only the installed copy, fetched from merged `main` on GitHub (_Install_). `runnerVersion` and the commit are in every result and in `installed.json`. |
-| Code execution via a job                                  | Jobs are data (jq), and every command takes argv arrays.                                                                                                            |
-| Content changed after validation (hard link, open handle) | Link count must be 1, and a private copy is made before any read.                                                                                                   |
-| Exfiltration through the body                             | The body is inline. The runner reads no container-named path.                                                                                                       |
-| Notifying or cross-referencing people as the user         | The fast pass, then GitHub's own render. Both run on the Mac.                                                                                                       |
-| Wrong repo, base or head                                  | Repo and base are constants. Deploy branches are refused. The head sha and the author are verified.                                                                 |
-| Symlink or swap games on shared paths                     | Real-path pin, pinned cwd plus `pwd -P`, move-out before parse, and results written with `mkdir` plus noclobber.                                                    |
-| Replay, stale jobs                                        | Unique ids, `DUPLICATE`, expiry, the head-sha check (a branch that moved is refused), and the CLI's withdraw.                                                       |
-| DoS                                                       | Caps of 72 KiB, 5 per run and 30 s per call, plus the lock and ThrottleInterval 10 s.                                                                               |
-| Escalation                                                | A user LaunchAgent with no sudo. Egress goes only to api.github.com.                                                                                                |
-| The `sim` job (dev test user's password, driving the sim) | Keychain-only password, typed only on dev's Cognito page, never read back; allowlisted ops; no network from the job. IOS-CHECK.md → _Security_.                     |
+| Threat                                                    | Control                                                                                                                                                                                                                                         |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runner bug → the token's worst                            | Open or edit a PR on this private repo, and read it. No push, merge, approval that counts, settings or workflows (_The token_).                                                                                                                 |
+| The user's full GitHub login                              | Never used: there is no `gh` on the Mac side.                                                                                                                                                                                                   |
+| Changed code on the Mac                                   | launchd runs only the installed copy, fetched from merged `main` on GitHub (_Install_). `runnerVersion` and the commit are in every result and in `installed.json`.                                                                             |
+| Code execution via a job                                  | Jobs are data (jq), and every command takes argv arrays.                                                                                                                                                                                        |
+| Content changed after validation (hard link, open handle) | Link count must be 1, and a private copy is made before any read.                                                                                                                                                                               |
+| Exfiltration through the body                             | The body is inline. The runner reads no container-named path.                                                                                                                                                                                   |
+| Notifying or cross-referencing people as the user         | The fast pass, then GitHub's own render. Both run on the Mac.                                                                                                                                                                                   |
+| Wrong repo, base or head                                  | Repo and base are constants. Deploy branches are refused. The head sha and the author are verified.                                                                                                                                             |
+| Symlink or swap games on shared paths                     | Real-path pin, pinned cwd plus `pwd -P`, move-out before parse, and results written with `mkdir` plus noclobber.                                                                                                                                |
+| Replay, stale jobs                                        | Unique ids, `DUPLICATE`, expiry, the head-sha check (a branch that moved is refused), and the CLI's withdraw.                                                                                                                                   |
+| DoS                                                       | Caps of 72 KiB, 5 per run and 30 s per call, plus the lock and ThrottleInterval 10 s.                                                                                                                                                           |
+| Escalation                                                | A user LaunchAgent with no sudo. Egress goes only to api.github.com.                                                                                                                                                                            |
+| The `clip` job: harvesting clipboard images               | Images only: no text type is ever asked for, and the shim refuses every text argv. A terminal must be frontmost, each copy serves 3 times at most, 6 serves a minute, a 2-min job life, and a log line plus a banner per serve. _The clip job_. |
+| The `sim` job (dev test user's password, driving the sim) | Keychain-only password, typed only on dev's Cognito page, never read back; allowlisted ops; no network from the job. IOS-CHECK.md → _Security_.                                                                                                 |
 
 Residual risks:
 
+- The `clip` job lets the container read the clipboard's image on request, by design. Bounded by the gates above, but a compromised container can still take the image currently on the clipboard while a terminal is in front, up to 3 times. The banner shows each serve.
 - A credential with the user's identity sits in the Mac Keychain. That's the same posture as the Raycast prod token.
 - The token can also comment on or review PRs opened by others. None exist on this repo.
 - Noclobber in bash still writes through a pre-planted symlink to an existing _non-regular_ file. A FIFO planted into the fresh result dir in the instant between the pre-check and the write could hang the runner. That's DoS only: kill the stuck run. The narrow race carries no data.
@@ -314,6 +349,7 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
   - that `install.sh` reads only GitHub, at `$ref`.
 - **`job.test.ts`** runs the container's `validateJob` over the same JSONL cases (the `ts` field), so the two fast passes can't drift.
 - **`submit.test.ts` and `open-pr.test.ts`** cover the file drop, withdraw, unreachable, late pickup, a body-hash mismatch, the token and version warnings, the probe, and the iPhone-checks banner.
+- **The `clip` job** has its own cases (`kind: "clip"`, base `clipBase`): `osascript` is an exported-function stub answering from the tape, and a JXA read that answers 0 writes a PNG (or, on cue, a GIF or a file one byte over the cap) to its path argv. A `clip-state=` setup seeds the Mac-private serve counts, and `clipState` checks them afterwards. `runner-fixtures.test.ts` pins the gates' constants, the three pasteboard calls, the two `osascript` lines and no network. `clip.test.ts` covers `clip-probe`, and `xclip-shim.test.ts` runs the real `tools/coi/xclip` against a temp `.hostjobs`, with the test playing the Mac.
 - **The `sim` job** has its own cases in the same JSONL (`kind: "sim"`, base `simBase`). `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` are exported-function stubs answering from a per-case **tape** (`{m: argv substring, rc, n: uses, out}`, first match wins, defaults on line 2); short `sleep`s return at once. Each case asserts the result, ordered tool calls that must happen and calls that must not, how often the test user's password was read and typed (and never on argv), artifact files, and that the password reaches no log or result. `sim.test.ts` covers pickup, withdraw, late pickup, the heartbeat and result mapping; `runner-fixtures.test.ts` pins the sim job's constants and its no-network, tools-by-name rules.
 
 ## Adding a job

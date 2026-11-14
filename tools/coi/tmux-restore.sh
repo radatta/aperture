@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Save / restore the COI tmux windows, each one resuming its Claude session.
 #   bash tools/coi/tmux-restore.sh save      # snapshot windows -> localNotes/tmux-sessions.tsv
-#   bash tools/coi/tmux-restore.sh           # restore (inside tmux: into this session; else a new one)
+#   bash tools/coi/tmux-restore.sh           # restore (inside tmux: into this session; else a new one), after links
+#   bash tools/coi/tmux-restore.sh links     # ~/.tmux.conf and ~/.local/bin/xclip → /workspace (main), e.g. after a rebuild
 # The snapshot holds session ids, so it lives in the gitignored localNotes/, not beside this script.
 set -euo pipefail
 tsv=/workspace/localNotes/tmux-sessions.tsv
@@ -25,7 +26,16 @@ save() {
   echo "saved $(wc -l < "$tsv") windows -> $tsv"
 }
 
+# Container config that lives in the repo: linked, so a merged change is live once /workspace is on it.
+links() {
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn /workspace/tools/coi/tmux.conf "$HOME/.tmux.conf"
+  ln -sfn /workspace/tools/coi/xclip "$HOME/.local/bin/xclip" # Ctrl+V of a Mac image (docs/ops/COI-SANDBOX.md)
+  echo "linked ~/.tmux.conf, ~/.local/bin/xclip"
+}
+
 restore() {
+  links
   [ -f "$tsv" ] || { echo "no $tsv"; exit 1; }
   if [ -n "${TMUX:-}" ]; then sess=$(tmux display -p '#S'); else sess=aperture; tmux has-session -t "$sess" 2>/dev/null || tmux new-session -d -s "$sess" -n _boot -c /workspace; fi
   while IFS=$'\t' read -r name sid cwd flags; do
@@ -38,4 +48,4 @@ restore() {
   [ -n "${TMUX:-}" ] || exec tmux attach -t "$sess"
 }
 
-case "${1:-restore}" in save) save ;; restore) restore ;; *) echo "usage: $0 [save|restore]"; exit 2 ;; esac
+case "${1:-restore}" in save) save ;; restore) restore ;; links) links ;; *) echo "usage: $0 [save|restore|links]"; exit 2 ;; esac

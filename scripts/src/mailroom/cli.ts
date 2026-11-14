@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../bot/cli.ts';
 import type { Clock } from '../bot/dispatch.ts';
 import { run } from '../bot/sh.ts';
+import { clipProbe } from './clip.ts';
 import { EXIT, openPr, probe } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
 import { simCommand } from './sim.ts';
@@ -15,7 +16,8 @@ const USAGE = `pnpm mailroom <command>
   open-pr --title "<title>" [--wait <seconds>]   open this pushed branch's PR as the user, from their Mac
   probe [--wait <seconds>]                       the whole path with a zero sha — stops before any write
   sim-probe [--sign-in]                          boot the Mac's iOS sim, launch the web app, screenshot (≤ 5 min)
-  sim-shutdown                                   shut the Mac's iOS sim down`;
+  sim-shutdown                                   shut the Mac's iOS sim down
+  clip-probe [--out <png>] [--wait <seconds>]    fetch the Mac clipboard's image, as tools/coi/xclip does on Ctrl+V`;
 
 const clock: Clock = {
   now: () => Date.now(),
@@ -55,6 +57,18 @@ export async function main(argv: string[]): Promise<number> {
         { fs: nodeFs, clock, dir: hostjobsDir(run), log: (s) => console.log(s) },
         cmd === 'sim-probe' ? 'probe' : 'shutdown',
         flags['sign-in'] === 'true',
+      );
+    case 'clip-probe':
+      return clipProbe(
+        {
+          fs: nodeFs,
+          clock,
+          dir: hostjobsDir(run),
+          out:
+            flags.out && flags.out !== 'true' ? flags.out : `${root()}/localNotes/clip-probe.png`,
+          log: (s) => console.log(s),
+        },
+        waitMs,
       );
     case 'help':
     case undefined:

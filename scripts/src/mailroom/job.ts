@@ -1,12 +1,13 @@
 // The mailroom's job contract, container side: build an `open-pr` job and check any job with the same rules, in
-// the same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh; a `sim` job's plan: sim.ts). The runner is the authority; this is
+// the same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh; a `sim` job's plan: sim.ts; a `clip` job: clip.ts). The runner is the authority; this is
 // the early, fixable copy, and tools/mailroom/testdata/jobs.jsonl drives both (job.test.ts). docs/ops/MAILROOM.md.
 import { createHash } from 'node:crypto';
+import { validateClipParams } from './clip.ts';
 import { isoSeconds, makeId } from './ids.ts';
 import { SIM_REASON_HINT, validateSimParams } from './sim.ts';
 import type { SimReason } from './sim.ts';
 
-export const JOBS = ['open-pr', 'sim'] as const;
+export const JOBS = ['open-pr', 'sim', 'clip'] as const;
 export const EXPIRES_IN_MIN = 20;
 export const MAX_BODY_BYTES = 65536;
 const ENVELOPE_KEYS = ['v', 'id', 'job', 'submittedAt', 'expiresInMin', 'params'];
@@ -124,6 +125,7 @@ export function validateJob(job: unknown, stem: string, nowMs: number): Reason |
   if (Number.isNaN(at)) return 'BAD_PARAM';
   if (at > nowMs + 300_000 || at + exp * 60_000 < nowMs) return 'EXPIRED';
   if (job.job === 'sim') return validateSimParams(job.params);
+  if (job.job === 'clip') return validateClipParams(job.params, exp);
 
   const p = job.params;
   if (!isObj(p) || !sameKeys(p, PARAM_KEYS)) return 'BAD_PARAM';
@@ -150,7 +152,7 @@ export const REASON_HINT: Record<Reason, string> = {
   BAD_JSON: 'malformed job',
   BAD_ID: 'job id does not match its file name',
   UNKNOWN_JOB: 'job not on the allowlist',
-  BAD_PARAM: `branch must match ${BRANCH_RE.source} (not main/master/dev); title must match ${TITLE_RE.source}; body 1–64 KiB — or, for a sim job, ${SIM_REASON_HINT.BAD_PARAM}`,
+  BAD_PARAM: `branch must match ${BRANCH_RE.source} (not main/master/dev); title must match ${TITLE_RE.source}; body 1–64 KiB — or, for a sim job, ${SIM_REASON_HINT.BAD_PARAM}; a clip job takes {} params and at most 2 min`,
   EXPIRED: 'job expired',
   BAD_TEXT: 'the body holds a control, zero-width or bidi character',
   MENTION:

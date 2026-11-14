@@ -1,0 +1,99 @@
+// The `clip` job, container side: the Mac's clipboard image for a Ctrl+V in a container Claude Code. The everyday
+// path is tools/coi/xclip (bash, no node start); this is the job's contract mirrored for validateJob, and
+// `pnpm mailroom clip-probe`, the same round trip by hand. Mac side: tools/mailroom/jobs/clip.sh. docs/ops/MAILROOM.md
+// → The clip job.
+import { copyFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Clock } from '../bot/dispatch.ts';
+import { isoSeconds, makeId } from './ids.ts';
+import { NotInstalled, submit, waitForResult, withdraw } from './submit.ts';
+import type { Fs } from './submit.ts';
+
+export const CLIP_EXPIRES_MIN = 1; // the Mac refuses more than 2: a queued paste is worthless a minute later
+export const CLIP_MAX_EXPIRES_MIN = 2;
+export const CLIP_WAIT_MS = 15_000; // the shim's cap too (tools/coi/xclip)
+
+export interface ClipJob {
+  v: 1;
+  id: string;
+  job: 'clip';
+  submittedAt: string;
+  expiresInMin: number;
+  params: Record<string, never>;
+}
+
+export function makeClipJob(nowMs: number, rand?: string): ClipJob {
+  return {
+    v: 1,
+    id: makeId('clip', nowMs, rand),
+    job: 'clip',
+    submittedAt: isoSeconds(nowMs),
+    expiresInMin: CLIP_EXPIRES_MIN,
+    params: {},
+  };
+}
+
+// jobs/clip.sh → CLIP_JQ: params are {} exactly, and the job lives at most 2 min.
+export function validateClipParams(params: unknown, expiresInMin: number): 'BAD_PARAM' | null {
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) return 'BAD_PARAM';
+  if (Object.keys(params).length) return 'BAD_PARAM';
+  return expiresInMin > CLIP_MAX_EXPIRES_MIN ? 'BAD_PARAM' : null;
+}
+
+export const CLIP_REASON_HINT = {
+  NO_IMAGE: 'no image on the Mac clipboard (text is never served)',
+  NOT_FRONTMOST: 'a terminal (iTerm2 or Terminal) must be the frontmost app on the Mac',
+  REPEAT: 'this copy was already served 3 times — copy it again',
+  RATE_LIMITED: 'more than 6 serves in the last minute — wait a minute',
+  TOO_LARGE: 'the image is over 16 MiB as PNG',
+  PASTEBOARD_DENIED:
+    'macOS listed an image but would not hand it over — allow osascript under System Settings → Privacy & Security',
+  CLIP_FAILED: 'the Mac could not read or write the image',
+  TIMEOUT: 'the pasteboard read took over 20 s',
+} as const;
+
+export interface ClipDeps {
+  fs: Fs;
+  clock: Clock;
+  dir: string;
+  out: string;
+  log: (s: string) => void;
+  copy?: (from: string, to: string) => void;
+  remove?: (p: string) => void;
+}
+
+// `pnpm mailroom clip-probe`: one clip job by hand; the served PNG goes to `out`, and its copy in the shared folder is
+// deleted (a screenshot shouldn't sit in .hostjobs). Exit 0 served, 1 refused, 3 no answer (withdrawn).
+export async function clipProbe(d: ClipDeps, waitMs = CLIP_WAIT_MS): Promise<number> {
+  const job = makeClipJob(d.clock.now());
+  try {
+    submit(d.fs, d.dir, job);
+  } catch (err) {
+    if (err instanceof NotInstalled) {
+      d.log(`clip: ${err.message}`);
+      return 3;
+    }
+    throw err;
+  }
+  const r = await waitForResult(d.fs, d.clock, d.dir, job.id, waitMs, 200);
+  if (!r) {
+    const pulled = withdraw(d.fs, d.dir, job.id);
+    d.log(
+      `clip: no answer in ${waitMs / 1000} s — ${pulled ? 'withdrawn; the Mac is asleep, not installed, or busy (a sim job)' : 'the Mac took it but has not answered'}`,
+    );
+    return 3;
+  }
+  if (r.status !== 'served') {
+    const hint = CLIP_REASON_HINT[r.reason as keyof typeof CLIP_REASON_HINT] ?? '';
+    d.log(`clip: ${r.status} ${r.reason ?? ''}${hint ? ` — ${hint}` : ''}`);
+    return 1;
+  }
+  const png = join(d.dir, 'results', job.id, 'clip.png');
+  (d.copy ?? copyFileSync)(png, d.out);
+  (d.remove ?? ((p) => rmSync(p, { force: true })))(png);
+  const c = r.clip;
+  d.log(
+    `clip: served ${c?.bytes ?? '?'} bytes (${c?.source ?? '?'}, ${c?.frontmost ?? '?'} in front) in ${r.durationMs} ms → ${d.out}`,
+  );
+  return 0;
+}

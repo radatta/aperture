@@ -882,7 +882,7 @@ sessions by them, and restore matches on them.
   `~/.tmux.conf` is a symlink into `/workspace`, so a merged change is live once `/workspace` is on the new
   `main` and tmux reloads:
   ```bash
-  ln -sf /workspace/tools/coi/tmux.conf ~/.tmux.conf   # once, and again after a container rebuild
+  bash /workspace/tools/coi/tmux-restore.sh links   # once, and again after a container rebuild (restore runs it too)
   tmux source ~/.tmux.conf
   ```
 - **Keys** (`tmux.conf`). The prefix is `Ctrl-a` (screen's; `Ctrl-a a` sends a real `Ctrl-a` to the shell);
@@ -900,6 +900,13 @@ sessions by them, and restore matches on them.
   bash /workspace/tools/coi/tmux-restore.sh save   # before a stop or rebuild
   bash /workspace/tools/coi/tmux-restore.sh        # after it
   ```
+- **Pasting images** (`xclip`). Copy an image on the Mac (a Cmd+Ctrl+Shift+4 screenshot, Safari's Copy Image),
+  keep iTerm in front, and press **Ctrl+V** in a container Claude Code: it pastes as an image. `~/.local/bin/xclip`
+  is a link to `tools/coi/xclip` (made by `links`), ahead of `/usr/bin/xclip` on PATH. It answers only Claude Code's
+  two image calls, through the Mac mailroom's `clip` job, and never text (MAILROOM.md → _The clip job_). It needs
+  the Mac mailroom installed from a `main` that has the job. With the Mac asleep, a Ctrl+V gives up after 15 s.
+  Text paste is Cmd+V as before. The shim's log is `~/.cache/xclip-shim/log`; `pnpm mailroom clip-probe` runs the
+  same round trip by hand.
 
 ## GitHub access inside the container
 

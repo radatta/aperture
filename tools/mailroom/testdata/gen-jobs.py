@@ -795,8 +795,59 @@ sfail('sim: unlabelled text off the bar\'s row is never taken for a draft', 'LAN
 sfail('sim: no keyboard after tapping the draft deletes nothing and stays LANDMARK', 'LANDMARK', [L],
       tape=[pt(220, 895, DRAFT), pt(221, 856, {})], simCount={DEL: 0}, notes={'0': 'tapping it brought no keyboard, so nothing was deleted'})
 
+# --- the clip job (jobs/clip.sh): the Mac's clipboard image for the container's Ctrl+V ---
+clipbase = {'v': 1, 'id': '20261113T231500Z-clip-ab12', 'job': 'clip', 'submittedAt': 'now', 'expiresInMin': 1, 'params': {}}
+JXA = '-l JavaScript - '
+BANNER = 'display notification'
+def RD(rc, **meta): return {'m': JXA, 'rc': rc, 'out': {'cc': 41, 'front': 'com.googlecode.iterm2', **meta}}
+def cc_(name, **k): c(name, kind='clip', **k)
+def crej(name, reason, ts=True, **k):
+    if ts: k['ts'] = reason
+    cc_(name, expect={'status': 'rejected', 'reason': reason}, simExcludes=['osascript'], **k)
+CLIP_SHA = '3064001f9933ee70c48b14f22ec2c487a2c1e205167f7eeed4e9fe1e088a458e'  # the stub's PNG
+SERVED = {'status': 'served', 'reason': None, 'job': 'clip'}
+cc_('clip: a PNG on the clipboard with iTerm in front is served, logged, bannered', tape=[RD(0, source='png', bytes=21)],
+    expect={**SERVED, 'clip': {'bytes': 21, 'sha256': CLIP_SHA, 'changeCount': 41, 'source': 'png', 'frontmost': 'com.googlecode.iterm2'}},
+    files=['clip.png'], simIncludes=['osascript ' + JXA, BANNER], clipState={'cc': 41, 'n': 1, 'serves': 1})
+cc_('clip: a TIFF-only clipboard is served as PNG', tape=[RD(0, source='tiff', bytes=21)],
+    expect={**SERVED, 'clip': {'bytes': 21, 'sha256': CLIP_SHA, 'changeCount': 41, 'source': 'tiff', 'frontmost': 'com.googlecode.iterm2'}},
+    files=['clip.png'], clipState={'cc': 41, 'n': 1, 'serves': 1})
+cc_('clip: a third serve of one copy is fine and counts on', setup='clip-state=' + json.dumps({'ago': [5, 4], 'cc': 41, 'n': 2}),
+    tape=[RD(0, source='png', bytes=21)], expect=SERVED, files=['clip.png'], clipState={'cc': 41, 'n': 3, 'serves': 3})
+cc_('clip: a new copy restarts the per-copy count', setup='clip-state=' + json.dumps({'ago': [5, 4, 3], 'cc': 40, 'n': 3}),
+    tape=[RD(0, source='png', bytes=21)], expect=SERVED, clipState={'cc': 41, 'n': 1, 'serves': 4})
+cc_('clip: serves older than a minute fall out of the rate window', setup='clip-state=' + json.dumps({'ago': [90, 80, 70, 65, 61, 61], 'cc': 40, 'n': 3}),
+    tape=[RD(0, source='png', bytes=21)], expect=SERVED, clipState={'cc': 41, 'n': 1, 'serves': 1})
+cc_('clip: a copy served 3 times is REPEAT, read nothing', setup='clip-state=' + json.dumps({'ago': [5, 4, 3], 'cc': 41, 'n': 3}),
+    tape=[RD(7)], expect={'status': 'rejected', 'reason': 'REPEAT'}, simIncludes=['osascript ' + JXA],
+    simExcludes=[BANNER], clipState={'cc': 41, 'n': 3, 'serves': 3})
+cc_('clip: the read is told which copy is spent', setup='clip-state=' + json.dumps({'ago': [5, 4, 3], 'cc': 41, 'n': 3}),
+    tape=[RD(7)], expect={'status': 'rejected', 'reason': 'REPEAT'}, simIncludes=['com.googlecode.iterm2 com.apple.Terminal 41'])
+cc_('clip: a fresh state tells the read nothing is spent', tape=[RD(0, source='png', bytes=21)], expect=SERVED,
+    simIncludes=['16777216 com.googlecode.iterm2 com.apple.Terminal -1'])
+crej('clip: a 7th serve inside a minute is RATE_LIMITED before any read', 'RATE_LIMITED', ts=False,
+     setup='clip-state=' + json.dumps({'ago': [50, 40, 30, 20, 10, 1], 'cc': 40, 'n': 1}), clipState={'cc': 40, 'n': 1, 'serves': 6})
+cc_('clip: no image on the clipboard is NO_IMAGE', tape=[RD(3)], expect={'status': 'rejected', 'reason': 'NO_IMAGE'}, simExcludes=[BANNER])
+cc_('clip: another app in front is NOT_FRONTMOST, naming it', tape=[RD(6, front='com.apple.Safari')],
+    expect={'status': 'rejected', 'reason': 'NOT_FRONTMOST', 'frontmost': 'com.apple.Safari'}, simExcludes=[BANNER])
+cc_('clip: a frontmost id that is not a bundle id is never echoed', tape=[RD(6, front='x"; rm -f y')],
+    expect={'status': 'rejected', 'reason': 'NOT_FRONTMOST', 'frontmost': ''})
+cc_('clip: an image the pasteboard will not hand over is PASTEBOARD_DENIED', tape=[RD(4, source='png')], expect={'status': 'error', 'reason': 'PASTEBOARD_DENIED'})
+cc_('clip: over the cap per the read is TOO_LARGE', tape=[RD(5, source='png', bytes=20000000)], expect={'status': 'rejected', 'reason': 'TOO_LARGE'}, simExcludes=[BANNER])
+cc_('clip: a written file over the cap is TOO_LARGE, not served', tape=[RD(0, source='png', bytes=21, write='big')], expect={'status': 'rejected', 'reason': 'TOO_LARGE'},
+    simExcludes=[BANNER])
+cc_('clip: a written file without PNG magic is CLIP_FAILED', tape=[RD(0, source='png', bytes=14, write='gif')], expect={'status': 'error', 'reason': 'CLIP_FAILED'}, simExcludes=[BANNER])
+cc_('clip: a report without a changeCount is CLIP_FAILED', tape=[{'m': JXA, 'rc': 0, 'out': {'source': 'png', 'bytes': 21}}], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
+cc_('clip: a read that fails otherwise is CLIP_FAILED', tape=[RD(8)], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
+cc_('clip: a banner that fails still serves', tape=[RD(0, source='png', bytes=21), {'m': BANNER, 'rc': 1}], expect=SERVED, files=['clip.png'])
+crej('clip: any param is BAD_PARAM', 'BAD_PARAM', patch={'params': {'path': '/etc/passwd'}})
+crej('clip: a life over 2 min is BAD_PARAM', 'BAD_PARAM', patch={'expiresInMin': 5})
+crej('clip: params that are not an object are BAD_PARAM', 'BAD_PARAM', patch={'params': ['x']})
+c('clip: an expired paste is EXPIRED, read nothing', kind='clip', patch={'submittedAt': 'now'}, submittedAgoMin=2, ts='EXPIRED',
+  expect={'status': 'expired', 'reason': 'EXPIRED'}, simExcludes=['osascript'])
+
 with open(out, 'w') as f:
-    f.write(json.dumps({'base': base, 'simBase': simbase}) + '\n')
+    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase}) + '\n')
     f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')
     for x in C:
         f.write(json.dumps(x, ensure_ascii=True) + '\n')

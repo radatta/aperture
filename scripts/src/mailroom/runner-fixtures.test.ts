@@ -132,6 +132,44 @@ describe('mailroom runner', () => {
     ]);
   });
 
+  it('the clip job: pinned gates, images only, no network, a fixed read on stdin', () => {
+    const clip = readFileSync(`${TOOLS_DIR}jobs/clip.sh`, 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
+    for (const pin of [
+      'CLIP_FRONT_IDS="com.googlecode.iterm2 com.apple.Terminal"',
+      'CLIP_MAX_BYTES=16777216',
+      'CLIP_PER_CC=3',
+      'CLIP_PER_MIN=6',
+      'CLIP_BANNER=1',
+      'elif .expiresInMin > 2 then "BAD_PARAM"',
+    ])
+      expect(clip).toContain(pin);
+    // The pasteboard is asked for its change count, its type list, and the data of two image types — nothing else.
+    expect([...clip.matchAll(/\bpb\.(\w+)/g)].map((m) => m[1])).toEqual([
+      'changeCount',
+      'types',
+      'dataForType',
+    ]);
+    expect(clip).toContain('pb.dataForType(source === "png" ? "public.png" : "public.tiff")');
+    expect(clip.match(/NSPasteboard\.\w+/g)).toEqual(['NSPasteboard.generalPasteboard']);
+    for (const banned of [
+      'stringForType',
+      'readObjectsForClasses',
+      'propertyListForType',
+      'curl',
+      'security ',
+      'the clipboard',
+    ])
+      expect(clip).not.toContain(banned);
+    // osascript runs only the constant JXA (on stdin) and the constant banner; nothing a job names.
+    expect(clip.match(/\bosascript\b[^\n]*/g)).toEqual([
+      'osascript -l JavaScript - "$p.png" "$CLIP_MAX_BYTES" "$CLIP_FRONT_IDS" "$spent" <<<"$CLIP_JXA" 2>/dev/null)" || rc=$?',
+      'osascript -e "display notification \\"Sent a $kb KB image to the container\\" with title \\"Aperture mailroom\\"" >/dev/null 2>&1 || true',
+    ]);
+  });
+
   it('calls GitHub only at api.github.com, with five fixed method + path pairs, one write', () => {
     const src = code();
     expect(src).toContain('MR_API="https://api.github.com"');
