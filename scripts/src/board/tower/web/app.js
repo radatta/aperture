@@ -1,6 +1,6 @@
 // The tower page (docs/ops/TOWER.md): polls /api/state every 5 s and renders it. Rendering only; every rule
 // (states, HOLD, NEEDS YOU, freshness) is server-side in derive.ts. Text goes in with textContent, never as HTML.
-// Layout (Rahul, 2026-11-13): big type, one short line per item, details on click, HEALTH above the fold; colour
+// Layout (the maintainer, 2026-11-13): big type, one short line per item, details on click, HEALTH above the fold; colour
 // only where it means a state, motion only on work in flight.
 'use strict';
 
@@ -288,14 +288,14 @@ function nowPanel(v) {
 function next(v) {
   const b = body('next');
   const items = [];
-  if (v.next.rahul)
+  if (v.next.maintainer)
     items.push(
-      item('next:rahul', {
+      item('next:maintainer', {
         c: 'c-hold',
         badge: 'YOU NEXT',
-        sig: v.next.rahul,
-        text: [short(v.next.rahul)],
-        more: [short(v.next.rahul) !== v.next.rahul ? v.next.rahul : null],
+        sig: v.next.maintainer,
+        text: [short(v.next.maintainer)],
+        more: [short(v.next.maintainer) !== v.next.maintainer ? v.next.maintainer : null],
       }),
     );
   for (const r of v.next.merge) items.push(laneItem(r));

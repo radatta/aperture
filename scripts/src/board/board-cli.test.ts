@@ -19,7 +19,7 @@ const GiB = 1073741824;
 const children: ChildProcess[] = [];
 afterAll(() => children.forEach((c) => c.kill()));
 // Each test here is several bash + node cold starts (cli.ts decide / barriers): 0.5–1 s idle, 5 s+ when the gate
-// runs beside the other packages at 9 cores — a timeout then is contention, not a bug (Rahul, 2026-11-05).
+// runs beside the other packages at 9 cores — a timeout then is contention, not a bug (the maintainer, 2026-11-05).
 vi.setConfig({ testTimeout: 20_000 });
 
 let tmp: string;

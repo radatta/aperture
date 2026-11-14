@@ -1,7 +1,11 @@
 // HEALTH's two file sources (docs/ops/TOWER.md → HEALTH): the Mac stats agent's JSON and the AWS cost pull.
 // Each reader returns a value with its age and a state; missing, unreadable and stale are states, never blanks.
+import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
+import { IDS } from '../../identifiers.ts';
 import { clean, parseTime } from './fmt.ts';
+
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
 export type Fresh = 'ok' | 'stale' | 'silent' | 'missing' | 'bad';
 
@@ -121,9 +125,15 @@ export function readMacStats(
 }
 
 // AWS month-to-date from localNotes/costs-daily.json: `aws ce get-cost-and-usage --granularity DAILY --group-by
-// LINKED_ACCOUNT,SERVICE`, re-pulled by Rahul on request. Its "as of" is the file's mtime; it covers only through
-// its last day, which the page shows too.
-export const AWS_ACCOUNTS = { '618015769091': 'dev', '594060113104': 'prod' } as const;
+// LINKED_ACCOUNT,SERVICE`, re-pulled by the maintainer on request. Its "as of" is the file's mtime; it covers only
+// through its last day, which the page shows too. Accounts by identifiers.json: dev by its id, prod by its id's
+// sha256 (the prod id stays out of tracked files — docs/ops/IDENTIFIERS.md); the fixtures' synthetic ids too.
+const FIXTURE_ACCOUNTS: Record<string, string> = { '111111111111': 'dev', '222222222222': 'prod' };
+export function accountKind(id: string, ids = IDS): string {
+  if (id === ids.aws.devAccountId) return 'dev';
+  if (/^\d{12}$/.test(id) && sha256(id) === ids.aws.prodAccountSha256) return 'prod';
+  return FIXTURE_ACCOUNTS[id] ?? 'other';
+}
 export const COSTS_STALE_SEC = 3 * 86400;
 export type Costs = {
   state: Fresh;
@@ -151,7 +161,7 @@ export function sumCosts(text: string, month: string): Omit<Costs, 'state' | 'at
     }[]) {
       const amt = Number(g?.Metrics?.UnblendedCost?.Amount);
       if (!Number.isFinite(amt)) continue;
-      const acct = (AWS_ACCOUNTS as Record<string, string>)[g.Keys?.[0] ?? ''] ?? 'other';
+      const acct = accountKind(g.Keys?.[0] ?? '');
       byAccount[acct] = (byAccount[acct] ?? 0) + amt;
       total += amt;
     }

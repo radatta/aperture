@@ -26,8 +26,8 @@ _refs() {
 
 # → the holder JSON (or null: no ref, or an unreadable holder — both mean the next acquire takes it) on stdout;
 # 1 when GitHub couldn't be asked, 2 when this machine can't ask (no `timeout`: the Mac). Each network call is bounded
-# by $1 seconds: one ls-remote for both slots, then a tag read per held slot. The repo is spelled out here because
-# this is shell-only (no node): it's config.ts's OWNER/REPO.
+# by $1 seconds: one ls-remote for both slots, then a tag read per held slot. The repo comes from identifiers.json
+# (jq, no node), as bot/config.ts's REPO_SLUG does.
 _peek() {
   local to="$1" slot="$2" src="${APERTURE_DEVLOCK_SOURCE:-}" ref msg f
   if [ "${src#file:}" != "$src" ]; then
@@ -39,7 +39,7 @@ _peek() {
     _refs "$to" || return 1
     ref=$(awk -v r="refs/locks/$slot" '$2 == r {print $1}' <<<"$REFS")
     msg=
-    [ -z "$ref" ] || msg=$(timeout "$to" gh api "repos/radatta/aperture/git/tags/$ref" --jq .message 2>/dev/null) || return 1
+    [ -z "$ref" ] || msg=$(timeout "$to" gh api "repos/$(jq -r .repo "$SB_REPO/identifiers.json")/git/tags/$ref" --jq .message 2>/dev/null) || return 1
   fi
   [ -n "$msg" ] || { echo null; return 0; }
   jq -c 'if (.branch | type) == "string" and (.sha | type) == "string" and (.expiresAt | type) == "string"

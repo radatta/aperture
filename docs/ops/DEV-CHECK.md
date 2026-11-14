@@ -85,7 +85,8 @@ reminders are configured and its poller ticking — so it stays as a standing ch
    ledgers archived — their ids name rows in a table that no longer exists.
    `DEVCHECK_CLAUDE_CLIENT_ID` (the `aperture-claude-dev` client, for _MCP as the test user_ below) came later —
    not a secret, kept beside the rest so the harness reads one file; required, so a file without it is
-   `ENV_MISSING`. Appended on the Mac with: `cd /Users/rahuldatta/Coding/Personal/aperture && id=$(aws
+   `ENV_MISSING`. Appended on the Mac (`<mac-repo>` is the Mac repo path, from the gitignored `.local/mac-root`:
+   main checkout; shown in the SessionStart context) with: `cd <mac-repo> && id=$(aws
 cloudformation describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureApp-dev --query
 "Stacks[0].Outputs[?OutputKey=='McpClientId'].OutputValue" --output text) && [ -n "$id" ] && [ "$id" != "None" ]
 && ! grep -q '^DEVCHECK_CLAUDE_CLIENT_ID=' .secrets/devcheck.dev.env && printf 'DEVCHECK_CLAUDE_CLIENT_ID=%s\n'

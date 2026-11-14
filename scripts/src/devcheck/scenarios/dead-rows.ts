@@ -1,6 +1,6 @@
 // Dev's tombstones (TECH §2.3): the delete paths still work with each list read once, and a stamped tombstone's
 // `expiresAt` never reaches an answer. The test user sees no raw row, so the stamp itself is a named test plus
-// Rahul's query, and TTL's real deletes are measured from the Mac after the merge enables it.
+// the maintainer's query, and TTL's real deletes are measured from the Mac after the merge enables it.
 import type { DevFluxSetInput, DevTask } from '../api';
 import { datesFor, noConsoleErrors, type Row, type Scenario } from '../scenario';
 import { devUlid } from './flux-history';

@@ -6,9 +6,10 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { clean, parseTime } from './fmt.ts';
+import { REPO_SLUG } from '../../identifiers.ts';
+export { REPO_SLUG };
 
-export const REPO_SLUG = 'radatta/aperture';
-export const ACTIONS_INCLUDED_MIN = 3000; // Rahul's plan (Student Pro): the page says "of 3,000 (plan)"
+export const ACTIONS_INCLUDED_MIN = 3000; // the maintainer's plan (Student Pro): the page says "of 3,000 (plan)"
 
 export type GhRun = {
   id: number;

@@ -21,7 +21,7 @@ disagree, fix whichever is wrong and say so here.
 ## 1. Why
 
 The trigger: a task you've _started_ (`in_progress`) was buried in the backlog list — the one thing you
-most need to see was the hardest to find. And the deeper problem, in Rahul's words, is _"cognitive
+most need to see was the hardest to find. And the deeper problem, in the maintainer's words, is _"cognitive
 overload of having to do everything, a growing todo list in my face."_ For a student juggling ~1 HW per
 class plus labs, errands, and deadline-free wants (LeetCode, study), the stress isn't the tasks — it's
 holding them all at once.

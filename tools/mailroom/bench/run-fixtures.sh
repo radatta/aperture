@@ -37,7 +37,7 @@ curl() { # dev's shell: shell.1 for the first $SIM_BENCH_FX_SWITCH calls, shell.
 }
 security() {
   case "$*" in
-    "find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com") [ -z "${SIM_BENCH_FX_NO_PW:-}" ] || return 44 ;;
+    "find-generic-password -s aperture-devcheck-dev -a devcheck@dev.aperture.rahuldatta.dev") [ -z "${SIM_BENCH_FX_NO_PW:-}" ] || return 44 ;;
     *) echo "security stub: unexpected $*" >&2; return 2 ;;
   esac
 }

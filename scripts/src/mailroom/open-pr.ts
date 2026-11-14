@@ -2,6 +2,8 @@
 // Mac with the user's PR-only token, so it is theirs; the bot never opens one (docs/ops/CI-BOT.md). Never silent:
 // an unreachable Mac prints the hand-off command. docs/ops/MAILROOM.md.
 import { join } from 'node:path';
+import { REPO_SLUG, describeHits, findIdentifiers } from '../identifiers.ts';
+import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
 import type { Clock } from '../bot/dispatch.ts';
 import { featureBranch, requirePushed } from '../bot/git.ts';
 import type { Run } from '../bot/sh.ts';
@@ -10,19 +12,21 @@ import type { Job } from './job.ts';
 import { NotInstalled, lastSeen, submit, waitForResult, withdraw } from './submit.ts';
 import type { Fs, Result } from './submit.ts';
 
-export const MAC_ROOT = '/Users/rahuldatta/Coding/Personal/aperture';
+// The Mac repo path from the gitignored .local/mac-root (mac-root.ts); never a tracked literal.
+export const MAC_ROOT = macRoot();
+// After a printed Mac line when the path is unknown here, so the placeholder never reads as a real path.
+export const MAC_NOTE = MAC_ROOT === MAC_PLACEHOLDER ? `\n  ${MAC_ROOT_NOTE}` : '';
 export const macPath = (p: string) =>
   p === '/workspace' || p.startsWith('/workspace/') ? MAC_ROOT + p.slice('/workspace'.length) : p;
 export const RENEW_LINE = `cd ${MAC_ROOT} && security add-generic-password -a "$USER" -s aperture-mailroom-gh -T /usr/bin/security -U -w`;
 // The one install line (MAILROOM.md → Install): install.sh fetched from merged main, never the shared folder's copy.
-export const INSTALL_LINE = `cd ${MAC_ROOT} && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/mailroom/install.sh?ref=main')`;
+export const INSTALL_LINE = `cd ${MAC_ROOT} && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/${REPO_SLUG}/contents/tools/mailroom/install.sh?ref=main')`;
 const GRACE_MS = 30_000; // after a failed withdraw the Mac holds the job: give it this long to finish
 // Wait + grace stays under the Bash tool's 120 s default timeout, so a caller is never killed before the withdraw.
 export const WAIT_MS = 75_000;
 
 // The branch is pushed (checked before submit), so a 404 on its ref means the token can't see it.
-const HEAD_MISSING_HINT =
-  'GitHub hid the pushed branch from the mailroom token — it lacks access to radatta/aperture or Contents: read (MAILROOM.md → The token)';
+const HEAD_MISSING_HINT = `GitHub hid the pushed branch from the mailroom token — it lacks access to ${REPO_SLUG} or Contents: read (MAILROOM.md → The token)`;
 
 export const EXIT = { ok: 0, failed: 1, usage: 2, unreachable: 3 } as const;
 
@@ -37,7 +41,7 @@ export interface Deps {
 }
 
 const handOff = (d: Deps, branch: string, title: string) =>
-  `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md`;
+  `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md${MAC_NOTE}`;
 
 function unreachable(d: Deps, why: string, branch: string, title: string, late = false): number {
   if (late) {
@@ -129,7 +133,7 @@ function warnings(d: Deps, r: Result): void {
   const want = d.repoVersion();
   if (r.runnerVersion !== want)
     d.log(
-      `the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall on the Mac (from merged main):\n  ${INSTALL_LINE}`,
+      `the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall on the Mac (from merged main):\n  ${INSTALL_LINE}${MAC_NOTE}`,
     );
 }
 
@@ -150,6 +154,18 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   const banner = written.includes(IOS_BANNER_MARK) ? null : iosBanner(d.fs, d.root, sha);
   if (banner) d.log(banner.slice(2));
   const body = banner ? `${banner}\n\n${written}` : written;
+  // The repo is public: no personal identifier in a PR's title or body (docs/ops/IDENTIFIERS.md). Refused here,
+  // container-side, before anything is submitted or a hand-off line printed — never a Mac job reason.
+  const hits = [
+    describeHits(findIdentifiers(title), 'title'),
+    describeHits(findIdentifiers(body), `localNotes/pr-${branch}.md (with any banner)`),
+  ].filter(Boolean);
+  if (hits.length) {
+    d.log(
+      `refused before submit: PERSONAL_IDENTIFIER — the PR text names a personal identifier (docs/ops/IDENTIFIERS.md); reword:\n${hits.join('\n')}`,
+    );
+    return EXIT.failed;
+  }
   const job = makeOpenPrJob({ branch, sha, title, body }, d.clock.now());
   const bad = validateJob(job, job.id, d.clock.now());
   if (bad) return refuse(d, job, bad);
@@ -197,7 +213,9 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   }
   d.log(`${r.status}: ${r.reason}`);
   if (r.reason?.startsWith('TOKEN_'))
-    d.log(`the mailroom token needs attention (MAILROOM.md → Token). Renew:\n  ${RENEW_LINE}`);
+    d.log(
+      `the mailroom token needs attention (MAILROOM.md → Token). Renew:\n  ${RENEW_LINE}${MAC_NOTE}`,
+    );
   if (r.reason === 'HEAD_MISMATCH')
     d.log('origin moved since this job was built — `pnpm bot push`, then retry');
   if (r.reason === 'HEAD_MISSING') d.log(HEAD_MISSING_HINT);

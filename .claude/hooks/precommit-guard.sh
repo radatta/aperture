@@ -31,6 +31,22 @@
     exit 0
   fi
 
+  # Personal identifiers (docs/ops/IDENTIFIERS.md): the repo is public, so no added line and no commit message may
+  # carry the maintainer's name, personal mailbox, a Mac home path, the projects folder or an AWS account id —
+  # identifiers.json alone holds them. WIP commits too. One rule set, scripts/src/identifiers.ts, run under plain
+  # node from this checkout; fails open when the checkout predates it, node is missing, or the scan errors (exit ≥ 2).
+  TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  SCAN="$TOP/scripts/src/identifiers-scan.ts"
+  if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$SCAN" ] && command -v node >/dev/null; then
+    IDS_RC=0
+    IDS_HITS=$(git diff --cached -U0 --no-color 2>/dev/null | HOOK_CMD="$COMMAND" node "$SCAN" 2>/dev/null) || IDS_RC=$?
+    if [ "$IDS_RC" = 1 ] && [ -n "$IDS_HITS" ]; then
+      jq -n --arg h "$IDS_HITS" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+        "permissionDecisionReason":("This commit adds a personal identifier (docs/ops/IDENTIFIERS.md: the name, the personal mailbox, a Mac home path, the projects folder or an AWS account id belong only in identifiers.json; docs say \"the maintainer\" and <mac-repo>). Where:\n" + $h + "\nReword those lines (or the message) and commit again.")}}'
+      exit 0
+    fi
+  fi
+
   if echo "$COMMAND" | grep -q 'WIP'; then exit 0; fi
 
   # Commit-message rule (CLAUDE.md → Git workflow). Enforced here because prose alone never held: a "few

@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { APERTURE_MANIFEST } from './pwa/manifest.ts';
+import { identityPages } from './pwa/identityPages.ts';
 
 // Port ownership — so a listening port always tells you WHOSE dev server it is (docs/ops/COI-SANDBOX.md
 // → Ports): 5173+ is you on the Mac, 6173+ is a COI container. Vite walks upward from its base port
@@ -52,6 +53,11 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // about.html + privacy.html, filled from identifiers.json at the repo root (docs/ops/IDENTIFIERS.md).
+    identityPages(
+      new URL('./pages/', import.meta.url),
+      new URL('../identifiers.json', import.meta.url),
+    ),
     VitePWA({
       registerType: 'autoUpdate', // ship a new shell the moment it's built; no update prompt
       manifest: APERTURE_MANIFEST,

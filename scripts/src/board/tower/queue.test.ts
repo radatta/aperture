@@ -32,8 +32,8 @@ describe('parseQueue', () => {
       'dev',
       'dev',
     ]);
-    expect(q.data!.devQueue[3]!.waitingOn).toBe('Rahul: merge PR 41');
-    expect(q.data!.rahul).toHaveLength(2);
+    expect(q.data!.devQueue[3]!.waitingOn).toBe('you: merge PR 41');
+    expect(q.data!.maintainer).toHaveLength(2);
     expect(q.data!.wave!.items.map((i) => i.state)).toEqual([
       'merged',
       'in-flight',
@@ -46,7 +46,7 @@ describe('parseQueue', () => {
       target: 12,
       excludedRuns: [],
     });
-    expect(q.data!.plan.map((p) => p.kind)).toEqual(['rahul', 'merge', 'dev', 'ci']);
+    expect(q.data!.plan.map((p) => p.kind)).toEqual(['maintainer', 'merge', 'dev', 'ci']);
   });
 
   it('sorts the plan by time, the unscheduled last in file order', () => {
@@ -57,7 +57,7 @@ describe('parseQueue', () => {
         plan: [
           { what: 'ci later', kind: 'ci' },
           { at: '2026-11-08T07:00:00Z', what: 'second', kind: 'dev', who: 'auto-1' },
-          { what: 'rahul later', kind: 'rahul' },
+          { what: 'maintainer later', kind: 'maintainer' },
           { at: '2026-11-08T06:30:00Z', what: 'first', kind: 'merge' },
           { at: '2026-11-08T07:00:00-00:00', what: 'tied, later in file', kind: 'ci' },
         ],
@@ -74,7 +74,7 @@ describe('parseQueue', () => {
         who: null,
       },
       { at: null, what: 'ci later', kind: 'ci', who: null },
-      { at: null, what: 'rahul later', kind: 'rahul', who: null },
+      { at: null, what: 'maintainer later', kind: 'maintainer', who: null },
     ]);
   });
 
@@ -82,7 +82,7 @@ describe('parseQueue', () => {
     const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","extra":true}');
     expect(q).toMatchObject({
       status: 'ok',
-      data: { devQueue: [], rahul: [], wave: null, deadRows: null, plan: [], followups: [] },
+      data: { devQueue: [], maintainer: [], wave: null, deadRows: null, plan: [], followups: [] },
     });
   });
 
@@ -122,7 +122,7 @@ describe('parseQueue', () => {
           { at: '22:40', what: 'a bare time', kind: 'merge' },
           { at: '2026-11-08', what: 'a bare date', kind: 'merge' },
         ],
-        rahul: ['plain text works', { since: '2026-11-08' }],
+        maintainer: ['plain text works', { since: '2026-11-08' }],
         wave: { items: [{ branch: 'c', state: 'done' }] },
       }),
     );
@@ -131,7 +131,7 @@ describe('parseQueue', () => {
       ['a', 'dev'], // no slot: slot A
       ['e', 'devb'],
     ]);
-    expect(q.data!.rahul).toEqual([{ text: 'plain text works', since: null }]);
+    expect(q.data!.maintainer).toEqual([{ text: 'plain text works', since: null }]);
     expect(q.data!.wave).toEqual({ name: 'Wave', items: [] });
     expect(q.data!.plan.map((p) => [p.what, p.at])).toEqual([
       ['ok', null],
@@ -144,7 +144,7 @@ describe('parseQueue', () => {
       'devQueue[2]: no branch',
       'devQueue[3]: state "pr-check"',
       'devQueue[5]: slot "devc"',
-      'rahul[1]: no text',
+      'maintainer[1]: no text',
       'wave.items[0]: state "done"',
       'plan[1]: kind "deploy"',
       'plan[2]: no what',

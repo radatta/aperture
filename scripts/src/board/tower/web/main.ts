@@ -10,6 +10,8 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { REPO_SLUG } from '../../../identifiers.ts';
+import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../../../mac-root.ts';
 import { sessionNames } from '../../sessions.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
 import {
@@ -36,8 +38,12 @@ const TICK_MS = 5000;
 const DEVLOCK_MS = 60000;
 
 // NEEDS YOU's command when the Mac stats agent is missing (tools/macstats/install.sh; TOWER.md → Mac stats).
+// The Mac repo path from the gitignored .local/mac-root (mac-root.ts); the placeholder, with a note, when unknown.
+const MAC = macRoot();
+export const macInstallLine = (root: string) =>
+  `cd ${root} && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/${REPO_SLUG}/contents/tools/macstats/install.sh?ref=main')`;
 export const MAC_INSTALL =
-  "cd /Users/rahuldatta/Coding/Personal/aperture && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' \"$(security find-generic-password -s aperture-mailroom-gh -w)\") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/macstats/install.sh?ref=main')";
+  macInstallLine(MAC) + (MAC === MAC_PLACEHOLDER ? ` ${MAC_ROOT_NOTE}` : '');
 
 export type Args = {
   port: number;

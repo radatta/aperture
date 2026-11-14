@@ -20,8 +20,8 @@ export const DEVMAIN_QUALIFIER = 'devmain';
 export const GITHUB_ROLE_PREFIX = 'aperture-github-';
 export const DEV_MAIN_GITHUB_ROLE = `${GITHUB_ROLE_PREFIX}dev-main`;
 // Each dev function's reserved concurrency (CI-BOT.md → What's capped → Compute). Their sum, not the account quota,
-// is dev's real ceiling, so the worst case holds whatever the quota. A slot is one dev stack's functions; Rahul's
-// call (2026-11-08) is this ceiling per slot. Keyed by full name like DEV_URL_FUNCTIONS: the kill's restore puts
+// is dev's real ceiling, so the worst case holds whatever the quota. A slot is one dev stack's functions; the
+// maintainer's call (2026-11-08) is this ceiling per slot. Keyed by full name like DEV_URL_FUNCTIONS: the kill's restore puts
 // these back (org-stack.ts → RESERVED_CONCURRENCY), so a change here needs an ApertureOrg redeploy too.
 export const DEV_CONCURRENCY_CEILING = 30;
 // One dev stack's shares, by function; every slot gets the same.

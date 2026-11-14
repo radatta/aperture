@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { fakeClock, fakeRun } from '../bot/fakes.ts';
 import { sha256 } from './job.ts';
 import { memFs } from './fakes.ts';
-import { EXIT, INSTALL_LINE, RENEW_LINE, WAIT_MS, macPath, openPr, probe } from './open-pr.ts';
+import { IDS } from '../identifiers.ts';
+import {
+  EXIT,
+  INSTALL_LINE,
+  MAC_NOTE,
+  MAC_ROOT,
+  RENEW_LINE,
+  WAIT_MS,
+  macPath,
+  openPr,
+  probe,
+} from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
 import type { Result } from './submit.ts';
 
@@ -279,12 +290,38 @@ describe('openPr', () => {
     expect(logs.at(-1)).toMatch(/different body/);
   });
 
+  it('refuses a personal identifier in the title or body before anything is queued or handed over', async () => {
+    const first = IDS.maintainer.name.split(' ')[0]!;
+    const home = ['', 'Users', 'someone', 'repo'].join('/');
+    for (const [title, body, where] of [
+      [`Asked by ${first}`, undefined, 'title:1 name'],
+      [
+        'Mac mailroom opens PRs',
+        `fine\n\ncd ${home} && x`,
+        'pr-mac-mailroom.md (with any banner):3 home-path',
+      ],
+    ] as const) {
+      const { d, fs, logs } = setup({ mac: () => ({ status: 'opened', pr: PR }), body });
+      expect(await openPr(d, title)).toBe(EXIT.failed);
+      expect([...fs.files.keys()].some((k) => k.includes('/inbox/'))).toBe(false);
+      const out = logs.join('\n');
+      expect(out).toContain('PERSONAL_IDENTIFIER');
+      expect(out).toContain(where);
+      expect(out).not.toContain('gh pr create');
+    }
+  });
+
+  it('a large clean body passes the identifier check', async () => {
+    const { d } = setup({ body: `${'clean line, no names\n'.repeat(3000)}` });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).not.toBe(EXIT.failed);
+  });
+
   it('withdraws an unanswered job and hands over the Mac command', async () => {
     const { d, fs, logs } = setup({ mac: () => null });
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
     expect([...fs.files.keys()].some((k) => k.endsWith('.withdrawn.json'))).toBe(true);
     expect(logs.join('\n')).toContain(
-      'cd /Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/mac-mailroom && gh pr create --title "Mac mailroom opens PRs" --body-file localNotes/pr-mac-mailroom.md',
+      `cd ${MAC_ROOT}/.claude/worktrees/mac-mailroom && gh pr create --title "Mac mailroom opens PRs" --body-file localNotes/pr-mac-mailroom.md${MAC_NOTE}`,
     );
     expect(logs.join('\n')).toMatch(/never installed; no result ever written/);
   });
@@ -364,8 +401,6 @@ describe('probe', () => {
 });
 
 it('maps container paths to the Mac', () => {
-  expect(macPath('/workspace/.claude/worktrees/x')).toBe(
-    '/Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/x',
-  );
+  expect(macPath('/workspace/.claude/worktrees/x')).toBe(`${MAC_ROOT}/.claude/worktrees/x`);
   expect(macPath('/workspacex')).toBe('/workspacex');
 });

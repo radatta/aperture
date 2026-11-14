@@ -87,6 +87,7 @@ Full detail in `docs/product/CONVENTIONS.md`. The load-bearing ones:
 - **Workspace packages resolve from source.** `packages/shared` exports `./src/index.ts`; app and lambdas import it directly and their bundler transpiles it — no build step in the dev/test loop. (`shared` still emits a gitignored `dist/` only to satisfy TS project references; nothing imports it.)
 - **One test runner: Vitest.** jsdom env for `app/`, **node env for `lambdas/`** so tests match the Lambda's prod runtime exactly.
 - **Dates/times via a shared helper** — never inline `Date` math or raw ISO strings in a component.
+- **No personal identifiers in anything tracked, a commit or PR text** — prose says "the maintainer", the Mac path is `<mac-repo>`, and `identifiers.json` holds the rest; a test, the commit hook and `open-pr` enforce it (`docs/ops/IDENTIFIERS.md`).
 
 ## Architecture
 
@@ -118,7 +119,7 @@ Same-origin `/api/*` via CloudFront (no CORS); the Function URL is auth `NONE`, 
 
 Worktrees are created with **relative paths** (repo config `worktree.useRelativePaths` + `extensions.relativeWorktrees`; needs git ≥ 2.48 on both the container and the Mac — an older git refuses the repo outright), so one checkout works from both sides. Check the new worktree's `.git` reads `gitdir: ../../../.git/worktrees/<name>`. If the container is ever rebuilt with an older git, upgrade it (git-core PPA) before touching worktrees.
 
-The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Every command handed to the user is one `&&`-chained line that starts with `cd` to the Mac path** — `/workspace` is `/Users/rahuldatta/Coding/Personal/aperture` there, so a worktree is `/Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/<branch>` — never a `/workspace/...` path, never separate lines. **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at _Feature workflow_ → _Cleanup_.**
+The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Every command handed to the user is one `&&`-chained line that starts with `cd` to the Mac path** — `/workspace` is `<mac-repo>` there, so a worktree is `<mac-repo>/.claude/worktrees/<branch>` — never a `/workspace/...` path, never separate lines. The real `<mac-repo>` is never in a tracked file: it's the gitignored `.local/mac-root`, and the SessionStart context prints it (`docs/ops/IDENTIFIERS.md`). **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at _Feature workflow_ → _Cleanup_.**
 
 ### Claude drives git — guarded
 

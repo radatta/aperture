@@ -9,7 +9,7 @@ SIM_NAME="aperture-devcheck"
 SIM_AXE_VERSION="1.8.0"
 SIM_TERMINATE_ID="com.apple.webapp"
 SIM_HUB_ID="com.apple.dt.Devices"
-SIM_EMAIL="rahul3datta+devcheck@gmail.com"
+SIM_EMAIL="devcheck@dev.aperture.rahuldatta.dev"
 SIM_KEYCHAIN="aperture-devcheck-dev" # the dev test user's password: this Mac's Keychain only, never a file
 SIM_COGNITO_RE='^aperture-dev-618015769091\.auth\.us-west-1\.amazoncognito\.com$'
 SIM_KB="com.apple.keyboard.preferences"
@@ -338,7 +338,7 @@ sim_shutdown() {
   SIM_STATE=Shutdown
 }
 sim_pref() { sx 30 spawn "$SIM_U" defaults read "$SIM_KB" "$1" 2>/dev/null | tr -d '[:space:]'; }
-# Everything that changes what a key does or when it lands is pinned (Rahul, 2026-11-08: "as deterministic as possible";
+# Everything that changes what a key does or when it lands is pinned (the maintainer, 2026-11-08: "as deterministic as possible";
 # job …233129Z…-done-form-80c5 typed "cdcgac" three times and kept "Cdc"): autocorrect, auto-capitalisation, spell check,
 # predictions and the suggestion bar, inline completion, the "." shortcut, smart quotes and dashes, slide to type, the
 # hardware keyboard's own three, and the slide-to-type, gesture and inline-completion tips marked seen. Keys from
@@ -890,7 +890,7 @@ sim_kill_switcher() {
   done
   # Still in the switcher (the card read as Aperture's, then a swipe left it running): leave it by its background.
   # Swiped and still running is the gesture not killing (2 of 2 runs on 2026-11-08, iOS 27.0), not a dropped input:
-  # needs you (Rahul, option a), never a pass, until the swipe is re-trialled.
+  # needs you (the maintainer, option a), never a pass, until the swipe is re-trialled.
   if [ -n "$inswitcher" ]; then
     ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
     sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app: re-trial the gesture (IOS-CHECK.md -> Failures)$why"

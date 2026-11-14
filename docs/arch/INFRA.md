@@ -105,7 +105,7 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 - **Second app client — `aperture-claude-<env>`** — the claude.ai MCP connector (no secret, authorization-code flow, callback URLs = Anthropic's connector constants, **30-day** refresh — why: `areas/mcp/index.md` D13). Plus an **MCP resource server** (identifier `<app-url>/mcp`, one `access` scope). Both live in the **app** stack (not the precious data stack) — the MCP OAuth façade + the credential-not-method fork are in **[areas/mcp/index.md](../areas/mcp/index.md)**.
 - **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-west-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional. The MCP function reads this host (`COGNITO_DOMAIN`) to build the façade's `/oauth2` endpoints.
 - Frontend: `react-oidc-context` + Hosted UI.
-- **Dev test user** `rahul3datta+devcheck@gmail.com` — dev pool only, never prod; admin-created (invite suppressed, email verified, no MFA), permanent password in the gitignored `.secrets/devcheck.dev.env`. It signs in through the same Hosted UI and owns its own partition; the dev check uses it ([ops/DEV-CHECK.md](../ops/DEV-CHECK.md)).
+- **Dev test user** `identifiers.json` → `email.devTestUser` (on the dev subdomain; needs no mailbox) — dev pool only, never prod; admin-created (invite suppressed, email verified, no MFA), permanent password in the gitignored `.secrets/devcheck.dev.env`. It signs in through the same Hosted UI and owns its own partition; the dev check uses it ([ops/DEV-CHECK.md](../ops/DEV-CHECK.md)).
 
 ## 7. Hosting & CDN
 

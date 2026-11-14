@@ -1,5 +1,5 @@
 // Where LeetCode's own controls are. Run, Submit and the language come from the 2026-11-08 page dump; the editor
-// reset, its confirm and the timer's controls from Rahul's debug session (2026-11-10, localNotes/debug-log.json).
+// reset, its confirm and the timer's controls from the maintainer's debug session (2026-11-10, localNotes/debug-log.json).
 // Options → Selectors overrides any of them without a rebuild (LeetCode moves its DOM; a prod Xcode rebuild is the
 // slow path). `null` on a click key (editorReset, resetConfirm, timer*) turns that step off: the overlay says "not
 // configured" and Continue still keeps the sitting. `dialog` and `lang` aren't steps — leave them set.

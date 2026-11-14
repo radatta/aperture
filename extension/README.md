@@ -17,7 +17,7 @@ Safari needs the extension wrapped in a macOS app, signed with a **free Apple ID
 4. **⌘R**, then copy the built app to `/Applications`, open that copy once, and delete the project's DerivedData folder (`~/Library/Developer/Xcode/DerivedData/Aperture_LeetCode-*` — spaces become underscores; `…Dev-*` for dev) — otherwise Safari lists the extension twice. **Every rebuild ends with this step**: the installed copy is frozen at the moment it was copied.
 5. Safari → Settings → Extensions: enable it **only in its own profile** (prod in your personal profile, dev in an "Aperture Dev" one), and allow `leetcode.com` and the API origin.
 
-After changing anything here: the prod project (made with `--copy-resources`) holds a **copy** of this folder, so re-copy the files into its extension target's `Resources/` first (on the 2026-10 prod project: `Aperture LeetCode/Aperture LeetCode Extension/Resources/`; find it with `find <project dir> -name manifest.json`, and check it holds `manifest.json` before an `rsync --delete` into it); the dev project reads it live. Its `src` and `icons` are folder references, so new files under them are built in. Then rebuild and redo step 4. The dev project reaches this folder by relative paths: when `~/Desktop` moved into "Desktop - Rahul’s MacBook Pro (4042)" (2026-11) they broke, and one more `../` in them fixed it.
+After changing anything here: the prod project (made with `--copy-resources`) holds a **copy** of this folder, so re-copy the files into its extension target's `Resources/` first (on the 2026-10 prod project: `Aperture LeetCode/Aperture LeetCode Extension/Resources/`; find it with `find <project dir> -name manifest.json`, and check it holds `manifest.json` before an `rsync --delete` into it); the dev project reads it live. Its `src` and `icons` are folder references, so new files under them are built in. Then rebuild and redo step 4. The dev project reaches this folder by relative paths: when `~/Desktop` moved into "Desktop - <name>’s MacBook Pro (4042)" (2026-11) they broke, and one more `../` in them fixed it.
 
 **If Safari then says "Unable to find … in the extension's resources" for every file** (seen 2026-11-10): it still points at the build in DerivedData that step 4 deleted. Quit Safari, open the `/Applications` copy once, and register its extension: `pluginkit -a "/Applications/Aperture LeetCode.app/Contents/PlugIns/Aperture LeetCode Extension.appex"`. `pluginkit -mAvvv -p com.apple.Safari.web-extension` lists what macOS knows and from which path.
 
@@ -95,7 +95,7 @@ A run or submit LeetCode never judges is sent after two minutes with `result: {p
 
 ## How it works
 
-Three contexts, as Rahul's forgery rules require (`docs/areas/recruiting/index.md` → _Design decisions_): the page's world can be spoofed by any script on leetcode.com, so it is only ever a source of evidence.
+Three contexts, as the maintainer's forgery rules require (`docs/areas/recruiting/index.md` → _Design decisions_): the page's world can be spoofed by any script on leetcode.com, so it is only ever a source of evidence.
 
 ```
 leetcode.com page (MAIN world)          extension side of the page (ISOLATED)        background
@@ -114,7 +114,7 @@ page/tag.js, inject-main.js             lib/*, debug.js, overlay.js, content.js 
 
 ## LeetCode's controls
 
-Found by Rahul's debug session (2026-11-10, the lane's `localNotes/debug-log.json`). How each default holds when LeetCode moves its DOM:
+Found by the maintainer's debug session (2026-11-10, the lane's `localNotes/debug-log.json`). How each default holds when LeetCode moves its DOM:
 
 | Key                               | Default                                                                                                                                                                                           | Rests on                                     | If LeetCode changes it                                                                                                                                                                                                                        |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -135,11 +135,11 @@ The session (≈5 minutes, on a problem you've solved): Just looking; hover each
 
 ## Safari behaviour
 
-**The rule: research before fixing.** jsdom and Chromium can't see Safari's quirks, and each guessed fix has cost one of Rahul's manual Safari passes (2026-11-10: three, one per guess). So before changing code for something Safari does: read WebKit's source, search for it, and ship a probe of the mechanism; then hand over a pass.
+**The rule: research before fixing.** jsdom and Chromium can't see Safari's quirks, and each guessed fix has cost one of the maintainer's manual Safari passes (2026-11-10: three, one per guess). So before changing code for something Safari does: read WebKit's source, search for it, and ship a probe of the mechanism; then hand over a pass.
 
 - **WebKit's source** — a sparse, shallow clone of just the extension code: `git clone --depth 1 --filter=blob:none --sparse https://github.com/WebKit/WebKit.git && cd WebKit && git sparse-checkout set Source/WebKit/UIProcess/Extensions Source/WebKit/WebProcess/Extensions Source/WebKit/Shared/Extensions`. For XHR and Blob, add `Source/WebCore/xml Source/WebCore/fileapi Source/WebCore/bindings/js`. Record the commit (`git log -1 --format=%H`) beside every file:line you cite: trunk moves, and the Safari on the Mac may be older than it.
 - **A probe** is a `debug.log(type, {...})` (`src/debug.js`; recorded only in Debug mode) that logs the mechanism, not the symptom — was the listener registered, which events arrived, why a read failed — as sizes, flags and fixed words, never content. The model is `content.js`'s `oc.reg` / `oc` / `pageshow`: the page's `readyState` when its `storage.onChanged` listener was added, every change it then heard (its own debug-log writes only counted), and whether it came back from the back/forward cache.
-- **The pass protocol.** Research done and probes in, then: say if the code is pre-review; no dev deploys while Rahul tests on dev; every Mac command a single line with `find`-found paths and a guard (`ls …/manifest.json &&`) before anything destructive; Debug mode on; a short scripted pass, then Options → **Export debug log**. After it, read the log for every state he could have seen — a state stuck where it shouldn't be is a bug.
+- **The pass protocol.** Research done and probes in, then: say if the code is pre-review; no dev deploys while the maintainer tests on dev; every Mac command a single line with `find`-found paths and a guard (`ls …/manifest.json &&`) before anything destructive; Debug mode on; a short scripted pass, then Options → **Export debug log**. After it, read the log for every state they could have seen — a state stuck where it shouldn't be is a bug.
 
 **Known quirks** (WebKit refs at `b22b2b9fbbcd` — 326323@main, 2026-11-10; the GraphQL row's at `277c3c0d`, trunk 2026-11-13, newer):
 

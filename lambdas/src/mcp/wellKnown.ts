@@ -10,7 +10,7 @@
 //    per the MCP auth spec a client MUST refuse PKCE when that field is absent. The façade injects it.
 
 export interface WellKnownEnv {
-  appUrl: string; // our origin, e.g. https://dev.aperture.rahuldatta.dev — the issuer and resource base
+  appUrl: string; // our origin, e.g. https://dev.<app-domain> — the issuer and resource base
   cognitoDomain: string; // hosted-UI host only, e.g. aperture-dev-<acct>.auth.us-west-1.amazoncognito.com
   userPoolId: string; // e.g. us-west-1_abc123 — the region prefix drives the jwks_uri
 }

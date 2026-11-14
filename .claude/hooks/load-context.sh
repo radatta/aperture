@@ -39,7 +39,21 @@ BRIEF=$(
   if [ -z "$S" ]; then printf 'working tree: clean\n'; else printf 'uncommitted changes:\n%s\n' "$S"; fi
 )
 
-COMBINED="$CONTENT$BRIEF"
+# --- the Mac repo path: never in a tracked file (docs/ops/IDENTIFIERS.md), so it comes from the main checkout's
+# gitignored .local/mac-root — the path every handed-over `cd …` line starts with. ---
+MAC=$(
+  set +e
+  common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+  f="${common%/.git}/.local/mac-root"
+  v=$(head -n 1 "$f" 2>/dev/null | tr -d '\r')
+  if printf '%s' "$v" | grep -Eq '^/[A-Za-z0-9_./-]+$'; then
+    printf '\nMac repo path (<mac-repo>, from .local/mac-root): %s — /workspace is this path on the Mac.\n' "$v"
+  else
+    printf '\nMac repo path: unknown (no valid .local/mac-root in the main checkout) — hand the user <mac-repo> lines and ask them to run: cd <the repo> && mkdir -p .local && pwd -P > .local/mac-root\n'
+  fi
+)
+
+COMBINED="$CONTENT$BRIEF$MAC"
 
 jq -n --arg content "$COMBINED" '{
   "hookSpecificOutput": {

@@ -1,4 +1,4 @@
-// The relay's acceptance rules, pure (the isolated world runs them on every page message). Rahul's forgery
+// The relay's acceptance rules, pure (the isolated world runs them on every page message). The maintainer's forgery
 // rules (docs/areas/recruiting/index.md → Design decisions): a page message can never Start anything — it
 // can only add events to the sitting the extension itself opened, for the problem on screen. accept() checks
 // the envelope: this load's tag, a fresh sequence number, raw text of the right shape. The isolated world
@@ -15,7 +15,7 @@
   const CACHE_ONLY = ['hint'];
   // LeetCode's judging can finish after you've moved on: these, when made from their own problem's page, go
   // to that problem's open sitting (content.js asks admit() again with that problem as ctx), never to the one
-  // on screen (Rahul, 2026-11-08).
+  // on screen (the maintainer, 2026-11-08).
   const LATE = ['run', 'submit', 'submitDetails'];
   // Far over any one item LeetCode sends (the outbox trims to the server's caps); bounds a flood's parse.
   const DETAIL_MAX = 6 * 1024 * 1024; // two raw texts at RAW_MAX, JSON-escaped twice over

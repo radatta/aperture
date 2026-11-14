@@ -1,6 +1,6 @@
 # The web tower
 
-A web page at **http://localhost:6183** that answers the five questions Rahul asks dispatch: what needs me, what's
+A web page at **http://localhost:6183** that answers the five questions the maintainer asks dispatch: what needs me, what's
 happening now, what's next, did anything get dropped, is the machine OK. It's served from the container (COI port
 `vite10`, container 6183 → the Mac's localhost:6183), so it opens in Safari or an iTerm2 browser pane. Not from the
 iPhone: the port is the Mac's only.
@@ -35,7 +35,7 @@ and nothing else, and only to a `Host` of `localhost` or a loopback address (no 
 
 ## Panels
 
-How it reads (Rahul, 2026-11-13: "text too small… just a bunch of long text", then "make it look more exciting"):
+How it reads (the maintainer, 2026-11-13: "text too small… just a bunch of long text", then "make it look more exciting"):
 
 - Big type, one line per item, details on click: long text from `queue.json` or a lane shows its first clause only.
 - Nord colours, each beside its word:
@@ -73,7 +73,7 @@ From the top:
    - lane `needs` items, with the link or a copy button for the one-line Mac command;
    - **MERGE ME** PRs, with what they unblock (queue lanes whose `waitingOn` names the PR);
    - **DEPLOY FAILED**, with the run link;
-   - `queue.json` `rahul[]` to-dos;
+   - `queue.json` `maintainer[]` to-dos;
    - an unreadable lane file (it may have carried an item);
    - the Mac agent missing (its install line, once that's on main) or silent.
 3. **NOW**: the `dev` and `devb` cards, then every lane that's building, needs you, ready, on dev, in PR, failing
@@ -81,7 +81,7 @@ From the top:
    - A card shows the holder, session, what it's doing and the lock's end.
    - A lock read under 5 min old is a quiet "as of HH:MM". Past that the card turns amber: "lock unknown: …".
 4. **NEXT**:
-   - your next step (the first NEEDS YOU item, else the next `plan[]` `rahul` item);
+   - your next step (the first NEEDS YOU item, else the next `plan[]` `maintainer` item);
    - the merge queue (MERGE ME and HOLD, with the reason);
    - the dev order per slot (`devQueue` `next` / `waiting`);
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
@@ -119,17 +119,17 @@ Freshness limits (`derive.ts` `STALE`):
 ## Lane states
 
 `derive.ts` `laneRow`, first match wins. Truth comes from locks, PRs and runs; the lane file adds the phase, the step
-and what Rahul must do.
+and what the maintainer must do.
 
-| State                                                           | When                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| PARKED                                                          | the lane file says `parked`, or the queue's `waitingOn` starts `PARKED`                                                                                                                                                                                                  |
-| MERGED → DEPLOYING → DONE / DEPLOY FAILED                       | the PR merged; main's `Deploy` push run for its merge sha. A run cancelled by a later merge (deploy.yml's concurrency group) follows the newest later Deploy run, which carries it                                                                                       |
-| TESTING on dev / devb                                           | the branch holds that slot's live lock. Detail: `deploying` (a running dispatch whose run-name carries its sha), `devcheck running since` (an open ledger run, under 2 h), `held for Rahul: …`, else the step. On a lock read over 5 min old: `TESTING on dev?` with why |
-| PR (checks running / no checks seen / checks unknown / draft)   | open PR; the `pull_request` runs for its head sha (newest per workflow). Green is believed only from fresh reads: a failed or stale PR list (its head may have moved) or checks read caps it at `checks unknown`                                                         |
-| CHECKS FAILED                                                   | a check ended other than success / skipped / neutral                                                                                                                                                                                                                     |
-| MERGE ME / HOLD (reason)                                        | every check green; HOLD when `holdReason` gives one                                                                                                                                                                                                                      |
-| BUILDING · WAITING · NEXT FOR DEV · NEEDS YOU · READY · ON dev? | anything else: the lane file's phase and step; with no lane file, the queue's own `state` and its `waitingOn`                                                                                                                                                            |
+| State                                                           | When                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PARKED                                                          | the lane file says `parked`, or the queue's `waitingOn` starts `PARKED`                                                                                                                                                                                                |
+| MERGED → DEPLOYING → DONE / DEPLOY FAILED                       | the PR merged; main's `Deploy` push run for its merge sha. A run cancelled by a later merge (deploy.yml's concurrency group) follows the newest later Deploy run, which carries it                                                                                     |
+| TESTING on dev / devb                                           | the branch holds that slot's live lock. Detail: `deploying` (a running dispatch whose run-name carries its sha), `devcheck running since` (an open ledger run, under 2 h), `held for you: …`, else the step. On a lock read over 5 min old: `TESTING on dev?` with why |
+| PR (checks running / no checks seen / checks unknown / draft)   | open PR; the `pull_request` runs for its head sha (newest per workflow). Green is believed only from fresh reads: a failed or stale PR list (its head may have moved) or checks read caps it at `checks unknown`                                                       |
+| CHECKS FAILED                                                   | a check ended other than success / skipped / neutral                                                                                                                                                                                                                   |
+| MERGE ME / HOLD (reason)                                        | every check green; HOLD when `holdReason` gives one                                                                                                                                                                                                                    |
+| BUILDING · WAITING · NEXT FOR DEV · NEEDS YOU · READY · ON dev? | anything else: the lane file's phase and step; with no lane file, the queue's own `state` and its `waitingOn`                                                                                                                                                          |
 
 **The automatic HOLD** (`holdReason`, first match wins). A main merge redeploys dev over a dispatched branch
 (CLAUDE.md → _Git workflow_), so:
@@ -187,7 +187,7 @@ pnpm board lane --clear          (Cleanup)
 ```
 
 Dispatch writes only intent, in `queue.json` (schema: SESSION-BOARD.md → _Control tower_), plus two keys the web
-tower reads: `devQueue[].hold` and `followups[]` (`id`, `what`, `owner` rahul|lane|dispatch, `after`, `status`
+tower reads: `devQueue[].hold` and `followups[]` (`id`, `what`, `owner` maintainer|lane|dispatch, `after`, `status`
 open|tracked|done|dropped, `source`, `since`).
 
 ## Mac stats
@@ -225,11 +225,11 @@ and writes `<main checkout>/localNotes/board/mac-stats.json`:
 The worst outcome of a bug is a wrong number on the page. `macstats-fixtures.test.ts` checks this statically, plus
 the parse on recorded macOS output (`fixtures/mac/`).
 
-**Install** from the main checkout. It's the mailroom's pattern: GitHub at main's head, read with the mailroom's
+**Install** from the main checkout, `<mac-repo>` (the Mac repo path, from the gitignored `.local/mac-root`; shown in the SessionStart context). It's the mailroom's pattern: GitHub at main's head, read with the mailroom's
 Keychain token (Contents: read); `--ref <sha>` installs an unmerged commit after a `[y/N]`:
 
 ```
-cd /Users/rahuldatta/Coding/Personal/aperture && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/macstats/install.sh?ref=main')
+cd <mac-repo> && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/macstats/install.sh?ref=main')
 ```
 
 The same line with ` --uninstall` appended removes it, keeping the last `mac-stats.json`, which the page then shows
@@ -237,6 +237,6 @@ stale and then silent. Logs: `~/Library/Logs/aperture-macstats/agent.log`.
 
 ## AWS costs
 
-`/workspace/localNotes/costs-daily.json` is Rahul's `aws ce get-cost-and-usage --granularity DAILY --group-by
+`/workspace/localNotes/costs-daily.json` is the maintainer's `aws ce get-cost-and-usage --granularity DAILY --group-by
 LINKED_ACCOUNT,SERVICE` pull, re-pulled on request. The page sums this month's `UnblendedCost`, split dev
-(618015769091) and prod (594060113104). "As of" is the file's mtime and "through" is its last day.
+(`aws.devAccountId`) and prod (matched by `aws.prodAccountSha256`; the id itself stays out of tracked files). "As of" is the file's mtime and "through" is its last day.

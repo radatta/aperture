@@ -39,6 +39,10 @@ after the hook ran) and "ledger_count" (its exact line count after);
 {SECRETS_PARENT} / {PLAIN_DIR} anywhere in "input" expand to fresh temp dirs with and without `.secrets/ci-bot/`;
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
+"ids": true gives the throwaway repo the real identifiers.json and scripts/src/identifiers{,-scan}.ts (the
+personal-identifier block), and "stage_ids" stages that config; "stage_path" names the staged file (default staged.txt). {ID_NAME}, {ID_MAILBOX},
+{ID_HOME}, {ID_FOLDER}, {ID_DEV_ACCOUNT} and {ID_DOMAIN} in "stage" or "cmd" expand from identifiers.json, so this file
+carries no identifier itself (docs/ops/IDENTIFIERS.md).
 """
 
 import fcntl
@@ -53,6 +57,22 @@ import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE"}
+REPO_ROOT = HERE.parent.parent.parent
+_IDS = json.loads((REPO_ROOT / "identifiers.json").read_text(encoding="utf-8"))
+ID_PLACEHOLDERS = {
+    "{ID_NAME}": _IDS["maintainer"]["name"].split()[0],
+    "{ID_MAILBOX}": _IDS["email"]["contact"].split("@")[0],
+    "{ID_FOLDER}": "Coding" + "/" + "Personal",
+    "{ID_HOME}": "/" + "Users/someone/repo",
+    "{ID_DEV_ACCOUNT}": _IDS["aws"]["devAccountId"],
+    "{ID_DOMAIN}": _IDS["domains"]["dev"],
+}
+
+
+def expand_ids(s: str) -> str:
+    for key, value in ID_PLACEHOLDERS.items():
+        s = s.replace(key, value)
+    return s
 
 # Matchers each guard must be registered under in .claude/settings.json — a fixture with "tool":"Monitor"
 # proves nothing if the Monitor entry is gone, since the guards never read tool_name.
@@ -199,7 +219,7 @@ def board_env(case: dict, root: str) -> dict:
 
 def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratch: str, board: bool = False) -> tuple[str, str]:
     tool = case.get("tool", tool)
-    tool_input = case["input"] if "input" in case else {"command": case["cmd"]}
+    tool_input = case["input"] if "input" in case else {"command": expand_ids(case["cmd"])}
     raw = json.dumps(tool_input)
     if "{SECRETS_PARENT}" in raw or "{PLAIN_DIR}" in raw:
         # Throwaway dirs (a space in the name on purpose) — one holding `.secrets/ci-bot/`, one without — for
@@ -214,12 +234,22 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
     if root is None:
         return decision_for(hook, tool, tool_input, case.get("cwd"), case.get("payload"))
     repo = make_repo(root, case.get("branch", "fixture-branch"))
+    if case.get("ids"):
+        shutil.copy2(REPO_ROOT / "identifiers.json", pathlib.Path(repo) / "identifiers.json")
+        src = pathlib.Path(repo) / "scripts" / "src"
+        src.mkdir(parents=True)
+        for name in ("identifiers.ts", "identifiers-scan.ts"):
+            shutil.copy2(REPO_ROOT / "scripts" / "src" / name, src / name)
+        if case.get("stage_ids"):
+            subprocess.run(["git", "-C", repo, "add", "identifiers.json"], check=True)
     if "stage" in case:
-        content = case["stage"]
+        content = expand_ids(case["stage"])
         for key, value in PLACEHOLDERS.items():
             content = content.replace(key, value)
-        (pathlib.Path(repo) / "staged.txt").write_text(content + "\n", encoding="utf-8")
-        subprocess.run(["git", "-C", repo, "add", "staged.txt"], check=True)
+        staged = pathlib.Path(repo) / case.get("stage_path", "staged.txt")
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text(content + "\n", encoding="utf-8")
+        subprocess.run(["git", "-C", repo, "add", str(staged.relative_to(repo))], check=True)
     ledger = pathlib.Path(repo) / "localNotes" / "devcheck" / "mcp-ledger.dev.jsonl"
     if "ledger" in case:
         ledger.parent.mkdir(parents=True)

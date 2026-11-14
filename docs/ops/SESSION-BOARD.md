@@ -377,10 +377,10 @@ What it means:
 
 **Panels.** Header: the dev-lock holder, its session, the countdown and the queue's `next`, then slot B's lock (` · devb …`, from `devlock.devb.json`; left out until that cache exists); gauges for anon
 memory and pids (soft / hard marks from `limits.json`) and CPU against the cores. _Dev queue_, _Waiting on
-Rahul_ (an age only past a day: `1d`), the wave (a merged / open / in-flight / not-started bar, then the
+you_ (an age only past a day: `1d`), the wave (a merged / open / in-flight / not-started bar, then the
 unmerged items; merged ones are counted in the bar, legend and title, not listed) and _Plan_ come from
 `queue.json` (below). _Plan_: dispatch's timeline, `HH:MM  countdown  kind  what (who)` by time, the
-unscheduled last (`--:--`); merges and Rahul's items bright, an item past due dimmed with `?` and dropped 2 h
+unscheduled last (`--:--`); merges and the maintainer's items bright, an item past due dimmed with `?` and dropped 2 h
 after; its title is `next merge ~HH:MM` (the first `merge` with a time, `?` once past) or `n planned`.
 _Sessions_: the latest sample's sessions, a row for each working one and each holding a branch, working first, then one `idle: a, b, c`
 line (cut with `…`; the title counts both). _Machine_:
@@ -400,7 +400,7 @@ nowhere in the tower. _Status_: the dead-row TTL proof
 when `localNotes/bench-vitest/results.tsv` exists, `queue.json`'s age, gh, the sampler's last tick, suites in
 24 h, heavy jobs now.
 
-**Sizes.** Wide at ≥ 160 × 40: queue, Rahul and wave across the top in thirds; history beside sessions, the
+**Sizes.** Wide at ≥ 160 × 40: queue, _Waiting on you_ and wave across the top in thirds; history beside sessions, the
 band as tall as history's full 15 rows and up to 20 for a long session list; then plan (`max(44, 26 %)` cols) |
 activity | failures over status (52). Narrow at ≥ 95 × 24: one column, pairs side by side, plan beside the
 wave; below that, the header and a size hint. `Ctrl-a t` opens it as a borderless full-size tmux popup
@@ -441,7 +441,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "note": ""
     }
   ],
-  "rahul": [{ "text": "", "since": "<YYYY-MM-DD>" }],
+  "maintainer": [{ "text": "", "since": "<YYYY-MM-DD>" }],
   "wave": {
     "name": "Wave 2",
     "items": [
@@ -455,12 +455,14 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
     ]
   },
   "proofs": { "deadRows": { "since": "<ISO>", "target": 12, "excludedRuns": ["<run id>"] } },
-  "plan": [{ "at": "<ISO, optional>", "what": "", "kind": "dev | merge | rahul | ci", "who": "" }]
+  "plan": [
+    { "at": "<ISO, optional>", "what": "", "kind": "dev | merge | maintainer | ci", "who": "" }
+  ]
 }
 ```
 
-A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `ready` (`READY`) is a PR whose check is green, waiting on Rahul's merge; `needs-you` (`RAHUL`)
-is blocked on a Rahul step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
+A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `ready` (`READY`) is a PR whose check is green, waiting on the maintainer's merge; `needs-you` (`YOU`)
+is blocked on a maintainer step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
 read check status, and the tower on a `main` without them drops such lanes as a bad write. `plan` is the one
 source for the next merge — the PLAN panel's title and the statusline (`localNotes/board/next-merge.sh`) both
 take the earliest `kind: merge` item with an `at` no more than 2 h past (the statusline also marks `?` once

@@ -1,4 +1,4 @@
-// queue.json: the hub's hand-kept dev queue, Rahul's to-dos and the wave checklist (schema v1:
+// queue.json: the hub's hand-kept dev queue, the maintainer's to-dos and the wave checklist (schema v1:
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
 import { clean, parseTime } from './fmt.ts';
 
@@ -9,7 +9,7 @@ export type WaveState = (typeof WAVE_STATES)[number];
 // the dev slot a lane is on (CI-BOT.md → Dev slots): optional, `dev` when absent
 export const LANE_SLOTS = ['dev', 'devb'] as const;
 export type LaneSlot = (typeof LANE_SLOTS)[number];
-export const PLAN_KINDS = ['dev', 'merge', 'rahul', 'ci'] as const;
+export const PLAN_KINDS = ['dev', 'merge', 'maintainer', 'ci'] as const;
 export type PlanKind = (typeof PLAN_KINDS)[number];
 
 export type Lane = {
@@ -37,7 +37,7 @@ export type PlanItem = { at: number | null; what: string; kind: PlanKind; who: s
 
 // dispatch's follow-up ledger (docs/ops/HUB.md → The hub's duties): the web tower's SLIPPING panel reads it.
 export const FOLLOWUP_STATUS = ['open', 'tracked', 'done', 'dropped'] as const;
-export const FOLLOWUP_OWNERS = ['rahul', 'lane', 'dispatch'] as const;
+export const FOLLOWUP_OWNERS = ['maintainer', 'lane', 'dispatch'] as const;
 export type Followup = {
   id: string;
   what: string;
@@ -58,7 +58,7 @@ export const staleFollowups = (fu: Followup[], now: number) =>
 export type QueueData = {
   updatedAt: number;
   devQueue: Lane[];
-  rahul: Todo[];
+  maintainer: Todo[];
   wave: { name: string; items: WaveItem[] } | null;
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
@@ -154,12 +154,12 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     });
   });
 
-  const rahul: Todo[] = [];
-  arr(raw.rahul).forEach((x, i) => {
+  const maintainer: Todo[] = [];
+  arr(raw.maintainer).forEach((x, i) => {
     const t = x as Record<string, unknown>;
     const text = typeof x === 'string' ? str(x) : str(t?.text);
-    if (!text) return void problems.push(`rahul[${i}]: no text`);
-    rahul.push({ text, since: typeof x === 'string' ? null : str(t.since) });
+    if (!text) return void problems.push(`maintainer[${i}]: no text`);
+    maintainer.push({ text, since: typeof x === 'string' ? null : str(t.since) });
   });
 
   let wave: QueueData['wave'] = null;
@@ -230,7 +230,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
 
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, rahul, wave, deadRows, plan, followups },
+    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups },
     problems,
     ...(unread.length ? { unread } : {}),
   };

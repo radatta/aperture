@@ -90,7 +90,7 @@ describe('readCheckedSession', () => {
 });
 
 describe('refreshSession', () => {
-  const HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com';
+  const HOST = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
   const renv = {
     ...env,
     DEVCHECK_COGNITO_HOST: HOST,

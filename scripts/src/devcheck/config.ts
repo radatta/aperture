@@ -5,10 +5,12 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { IDS } from '../identifiers.ts';
 import { DevcheckError } from './errors';
 
-export const DEV_ORIGIN = 'https://dev.aperture.rahuldatta.dev';
-export const DEVB_ORIGIN = 'https://devb.aperture.rahuldatta.dev';
+// From identifiers.json, read once at load: still constants, never a flag or an env var.
+export const DEV_ORIGIN = `https://${IDS.domains.dev}`;
+export const DEVB_ORIGIN = `https://${IDS.domains.devb}`;
 
 // Each slot's three addresses: its origin, its Files bucket (the CDK name of stack ApertureData-<slot>, construct
 // Files — never another bucket, prod's included) and its pool's Hosted UI (the CDK prefix carries the account id).
@@ -37,7 +39,8 @@ let slot: Slot = 'dev';
 export const currentSlot = (): Slot => slot;
 export const slotOrigin = (): string => SLOT_TARGETS[slot].origin;
 
-export const TEST_USER_EMAIL = 'rahul3datta+devcheck@gmail.com';
+// On the dev subdomain: no mailbox, and no one but the maintainer can receive a reset code for it.
+export const TEST_USER_EMAIL = IDS.email.devTestUser;
 // packages/shared/src/rpc.ts AUTH_HEADER — the BFF reads the JWT here (CloudFront owns Authorization).
 export const AUTH_HEADER = 'x-aperture-authorization';
 

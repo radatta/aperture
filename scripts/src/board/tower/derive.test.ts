@@ -106,7 +106,7 @@ function inputs(
     ledger?: TowerState['runs'];
     mac?: MacRead;
     followups?: NonNullable<TowerState['queue']['data']>['followups'];
-    rahul?: { text: string; since: string | null }[];
+    maintainer?: { text: string; since: string | null }[];
   } = {},
 ): Inputs {
   const tower = {
@@ -124,7 +124,7 @@ function inputs(
       data: {
         updatedAt: NOW - 10 * MIN,
         devQueue: over.devQueue ?? [],
-        rahul: over.rahul ?? [],
+        maintainer: over.maintainer ?? [],
         wave: null,
         deadRows: null,
         plan: [],
@@ -192,7 +192,7 @@ describe('laneRow states', () => {
     expect(row(inputs({ lock: lock('echo', { expiresAt: NOW - 1 }) })).state).toBe('BUILDING');
   });
 
-  it("TESTING's detail: deploying, then devcheck running, then held for Rahul, then the step", () => {
+  it("TESTING's detail: deploying, then devcheck running, then held for you, then the step", () => {
     const deploying = run({
       name: 'Deploy dev (dispatch)',
       title: `deploy-dev ${sha('a')} echo-k`,
@@ -222,7 +222,7 @@ describe('laneRow states', () => {
     ).toBe('devcheck full');
     const needs = { what: 'Safari pass', link: null, cmd: 'open x', unblocks: null };
     expect(row(inputs({ lock: lock('echo') }), { file: file({ needs }) }).detail).toBe(
-      'held for Rahul: Safari pass',
+      'held for you: Safari pass',
     );
   });
 
@@ -376,10 +376,8 @@ describe('derive', () => {
             conclusion: 'failure',
           }),
         ],
-        devQueue: [
-          queueLane({ branch: 'delta', state: 'waiting', waitingOn: 'Rahul: merge PR 50' }),
-        ],
-        rahul: [{ text: 'answer §5', since: '2026-11-12' }],
+        devQueue: [queueLane({ branch: 'delta', state: 'waiting', waitingOn: 'you: merge PR 50' })],
+        maintainer: [{ text: 'answer §5', since: '2026-11-12' }],
         mac: { state: 'missing', at: null, error: null, stats: null },
       }),
     );
@@ -399,7 +397,7 @@ describe('derive', () => {
       what: 'Install the Mac stats agent',
       cmd: 'cd /x && install',
     });
-    expect(v.next.rahul).toBe('india: Safari pass');
+    expect(v.next.maintainer).toBe('india: Safari pass');
   });
 
   it('a HOLD is never a NEEDS YOU item; it shows in NEXT with its reason', () => {
@@ -622,7 +620,7 @@ describe('round 1: a failed, stale or missing source never reads as good', () =>
 });
 
 describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks', () => {
-  it("with no lane file, the queue's state in Rahul's words", () => {
+  it("with no lane file, the queue's state in the maintainer's words", () => {
     const st = (state: Lane['state'], o: Partial<Lane> = {}) =>
       row(inputs(), { queue: queueLane({ state, ...o }) });
     expect(st('waiting')).toMatchObject({ state: 'WAITING', label: 'WAITING', tone: 'dim' });

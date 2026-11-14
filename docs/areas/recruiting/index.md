@@ -106,7 +106,7 @@ next Start ends it. With nothing open, the tool names the most recent sitting in
 its window is marked `expired: true`, its minutes stopped at the window.
 
 - **Freshness.** Code is at most ~30 s behind: the extension sends one snapshot per 30 s (the latest code)
-  and the pending one right before each Run or Submit. A Run or Submit judged after Rahul leaves the page
+  and the pending one right before each Run or Submit. A Run or Submit judged after the maintainer leaves the page
   still lands in its sitting (PR A2), so a pull a minute later may show more.
 - **One read.** The head rows (compact, `hd#`) give the counts and which Run and Submit are newest, and only
   those two payloads (`jd#`) are read in full, so a verdict, its failing case and the counts always agree. A
@@ -298,7 +298,7 @@ that comes after the Start goes in a repeat Start that fills it in. How, and the
 `extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the
 extension stays passive.
 
-**The page's world is evidence, never authority** (Rahul, 2026-11-08). Any script on leetcode.com can
+**The page's world is evidence, never authority** (the maintainer, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
 an overlay that is really showing; a page message can only add events to the sitting the extension itself
 opened, for the problem in the tab's address and made from that problem's page (a run or submit made there
@@ -602,7 +602,7 @@ it's only a Lambda invocation and a 401 in that browser's extension console.
 
 ## Open items
 
-- **LeetCode's controls are set from Rahul's debug session (2026-11-10)** (`extension/README.md` →
+- **LeetCode's controls are set from the maintainer's debug session (2026-11-10)** (`extension/README.md` →
   _LeetCode's controls_), and proven in Safari the same day: from a running countdown, a paused one and an idle
   one (the opener reads "Timer"). Still unproven: an expired countdown's state.
 - **One real Safari sitting on dev** through the temporary extension is A2's last proof.

@@ -253,9 +253,9 @@ export const LEETCODE_TOOLS: Tool[] = [
   {
     name: 'live_sitting',
     description: [
-      "The LeetCode sitting Rahul has open right now, captured by Aperture's Safari extension: the problem, minutes since Start, his current code in full, the newest Run and Submit with verdict, failing input, expected vs output and the error head, run/submit counts, LeetCode's own timer, and editing facts.",
+      "The LeetCode sitting the user has open right now, captured by Aperture's Safari extension: the problem, minutes since Start, their current code in full, the newest Run and Submit with verdict, failing input, expected vs output and the error head, run/submit counts, LeetCode's own timer, and editing facts.",
       FRESHNESS,
-      'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are his Mac’s clock, so their ages can be off by its skew.',
+      'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are their Mac’s clock, so their ages can be off by its skew.',
       'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste his code back at him — point at a line, a name or a case.',
       '`active: false` carries `lastSitting`, the most recent one.',
       '`expired: true` marks a last sitting left open past its 24 h window (no longer capturing; the next Start ends it).',

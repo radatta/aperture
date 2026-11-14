@@ -187,7 +187,7 @@ Removes Files-bucket objects that no live attachment row points at: the pre-D7 d
 
 **What counts as live.** A row at `SK = attach#<taskId>#<id>` with no `deletedAt` number and either `status = ready` or `createdAt` in the last 24 h — a 24 h grace in place of the cap's 15 min (`countsTowardCap`). Step 2 also skips any object modified in the last 24 h, so an upload in flight is never touched from either side. Keys are `u/<sub>/<taskId>/<attachmentId>`, so one Cognito sub per run: `SUB` is your own sub (the `DEVICE_USER_ID_<STAGE>` repository variable); on dev run it again with the devcheck user's (`DEVCHECK_SUB` in `.secrets/devcheck.dev.env`). The bucket is versioned, so a delete only adds a delete marker; step 7 undoes it for 30 days (the noncurrent-version expiry). Only totals go into §8 — never keys.
 
-Each block is one shell session from `cd /Users/rahuldatta/Coding/Personal/aperture`; set `S` and `P` first — `S=dev P=aperture-dev`, then `S=prod P=<prod profile>` (empty `P` means the default profile).
+Each block is one shell session from `cd <mac-repo>` (the Mac repo path, from the gitignored `.local/mac-root`: main checkout; shown in the SessionStart context); set `S` and `P` first — `S=dev P=aperture-dev`, then `S=prod P=<prod profile>` (empty `P` means the default profile).
 
 1. **Names.** The data stack's outputs, and the sub:
 

@@ -1,0 +1,55 @@
+# Identifiers — what may name the maintainer, and where
+
+The repo is public with its real history (old commits keep what they had; history rewrites and PR-body edits were ruled out). Going forward, nothing tracked — code, docs, tests, fixtures — and no commit message, PR title or PR body carries a personal identifier. This doc is their one home; everything else points here.
+
+## The two tiers
+
+| Tier                     | What                                                                                                                                                                                                                          | Where it may appear                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Blocked**              | the maintainer's name (either word, any case, as a whole word); the personal mailbox (every `+alias`); a concrete Mac home path (`/Users/<name>/…`); the Mac projects folder; the dev AWS account id; the prod AWS account id | only `identifiers.json` — and the one sim-runner line below. The prod id isn't even there: only its sha256 |
+| **Public, from config**  | the domains (prod, dev, devb, apex), the repo slug, the GitHub login, the bundle / launchd prefix, the alert and contact emails, the dev test user's address                                                                  | code reads them from `identifiers.json`; docs and tests may name them                                      |
+| **Never tracked at all** | the Mac repo path                                                                                                                                                                                                             | the main checkout's gitignored `.local/mac-root`                                                           |
+
+The domain is the maintainer's name run together, and the GitHub login is a short form of it; neither matches the whole-word rule, so both stay usable.
+
+**In prose:** the name is **"the maintainer"** (a dated quote keeps its date: `(the maintainer, 2026-11-08)`). CLAUDE.md and runbooks addressed to Claude keep "the user" — the role the approval rules hang on. A tool description a model reads says "the user". The Mac path is **`<mac-repo>`**; a worktree is `<mac-repo>/.claude/worktrees/<branch>`. A made-up path in a test is `/Volumes/host/aperture`. Another project of the maintainer's is `~/<other-project>`.
+
+## `identifiers.json`
+
+At the repo root. Read at runtime, never imported (it sits outside every package's `rootDir`):
+
+| Reader                                           | How                                                                                                      |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `scripts/src/identifiers.ts`                     | the loader, `REPO_SLUG`, the dev Cognito host, and the one rule set (`findIdentifiers`) every check uses |
+| `cdk/src/config/identifiers.ts`                  | `ALERT_EMAIL` (prod alarms, cost and kill-switch mail) and the stage domains                             |
+| devcheck, bot, mailroom, tower (`scripts/src/…`) | via `scripts/src/identifiers.ts` — origins, test user, repo slug, prod account by hash                   |
+| `app/pwa/identityPages.ts`                       | fills `app/pages/{about,privacy}.html` (`{{maintainer.name}}`, `{{email.contact}}`) at build and in dev  |
+| `scripts/board/devlock.sh`                       | `jq -r .repo`                                                                                            |
+
+**Pinned literals.** What runs on the Mac from an installed copy can't read the checkout — launchd runs files fetched from GitHub, and the installed runner is the trust boundary (MAILROOM.md). So `tools/mailroom/{install.sh,jobs/open-pr.sh,jobs/sim.sh,bench/sim-bench.sh}`, `tools/macstats/install.sh` and `tools/raycast/aperture-add.sh` keep their values as literals, and `scripts/src/tracked-identifiers.test.ts` holds each equal to the config.
+
+**The one blocked literal outside the config:** `jobs/sim.sh`'s `SIM_COGNITO_RE` pin (and its bench symlink). The sim checks its address bar against it before typing the test password, so it must not come from a file the container can write. Exempt by exact line, for the dev account id only. The mailroom fixtures write `@DEV_ACCOUNT@`; `run-fixtures.sh` fills it from that pin.
+
+**The prod account id** stays out of tracked files entirely: `aws.prodAccountSha256` is how the tower labels its costs and how the checks catch it (any 12-digit run whose sha256 matches). A 12-digit id's hash isn't secret — it just keeps the literal out.
+
+## The Mac repo path
+
+One line in `<main checkout>/.local/mac-root`, written once on the Mac:
+
+```
+cd <mac-repo> && mkdir -p .local && pwd -P > .local/mac-root && cat .local/mac-root
+```
+
+Every worktree reads the same file (`scripts/src/mac-root.ts`: an absolute path of `[A-Za-z0-9_./-]`, no `..`). It feeds `pnpm mailroom open-pr`'s hand-off and renew/install lines, the tower's Mac-stats install line, and the SessionStart context (`.claude/hooks/load-context.sh` prints "Mac repo path: …"), so Claude can hand over real `cd` lines without the path ever being committed. Missing or malformed → `<mac-repo>` plus a one-line note on how to write it; CI never has it and needs none.
+
+## The checks
+
+One rule set, `findIdentifiers` in `scripts/src/identifiers.ts`, built from the config (no rule spells an identifier). Hits report `path:line kind`, never the identifier.
+
+| Where             | Check                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tracked files     | `scripts/src/tracked-identifiers.test.ts` scans `git ls-files` (binaries skipped). Its failure list is the worklist. CI runs the same test.                                                                                                                                                                             |
+| Commits           | `.claude/hooks/precommit-guard.sh` → `scripts/src/identifiers-scan.ts`: added lines of the staged diff plus the commit command (its message), WIP commits included. Fails open on a checkout without the config, no node, or a scan error. Fixtures: `.claude/hooks/testdata/precommit-fixtures.jsonl` (`"ids": true`). |
+| PR title and body | `pnpm mailroom open-pr` refuses `PERSONAL_IDENTIFIER` container-side, before anything is queued or a hand-off line printed.                                                                                                                                                                                             |
+
+Not caught: the Mac username in another form (it equals the domain label), and a project or place name — the review of each change still matters.

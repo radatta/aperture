@@ -1105,7 +1105,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       ]),
     );
     expect(deployed).toStrictEqual(DEV_RESERVED_CONCURRENCY); // strict: a function with no reservation fails
-    // The ceiling is per slot (Rahul, 2026-11-08): each dev stack's functions sum to it, whatever the slots number.
+    // The ceiling is per slot (the maintainer, 2026-11-08): each dev stack's functions sum to it, whatever the slots number.
     const perSlot: Record<string, number> = {};
     for (const [fn, n] of Object.entries(DEV_RESERVED_CONCURRENCY))
       perSlot[slotOf(fn)] = (perSlot[slotOf(fn)] ?? 0) + n;

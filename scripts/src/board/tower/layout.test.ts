@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { HISTORY_H, layout, type Rect } from './layout.ts';
 
-const want = { queue: 4, rahul: 2, wave: 6, plan: 4, sessions: 12 };
+const want = { queue: 4, maintainer: 2, wave: 6, plan: 4, sessions: 12 };
 const cells = (r: Rect) => {
   const out: string[] = [];
   for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) out.push(`${x},${y}`);
@@ -42,9 +42,9 @@ describe('layout', () => {
         'feed',
         'header',
         'history',
+        'maintainer',
         'plan',
         'queue',
-        'rahul',
         'sessions',
         'tiles',
         'wave',
@@ -53,11 +53,11 @@ describe('layout', () => {
 
   it('splits the wide top band in thirds that fill the width', () => {
     for (const cols of [160, 185, 210]) {
-      const { queue, rahul, wave } = layout(cols, 55, want).rects;
-      expect(queue!.w + rahul!.w + wave!.w).toBe(cols);
-      expect(Math.max(queue!.w, rahul!.w, wave!.w) - Math.min(queue!.w, rahul!.w, wave!.w)).toBe(
-        cols % 3 === 0 ? 0 : 1,
-      );
+      const { queue, maintainer, wave } = layout(cols, 55, want).rects;
+      expect(queue!.w + maintainer!.w + wave!.w).toBe(cols);
+      expect(
+        Math.max(queue!.w, maintainer!.w, wave!.w) - Math.min(queue!.w, maintainer!.w, wave!.w),
+      ).toBe(cols % 3 === 0 ? 0 : 1);
     }
   });
 
