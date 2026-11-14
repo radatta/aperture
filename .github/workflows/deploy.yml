@@ -161,18 +161,19 @@ jobs:
       device_token: ${{ secrets.DEVICE_TOKEN_PROD }}
       agent_token: ${{ secrets.AGENT_TOKEN_PROD }}
 
-  # A main push that classified fine but deployed nothing to dev, with no job failing — a skipped `check` that wasn't
-  # planned, or a result the deploy guards don't expect — would end green. This makes it red, so GitHub's failed-run
-  # notice reaches the merger. A skipped job bills nothing; a failed check already makes the run red, so it stays out.
-  no-deploy:
-    needs: [changes, check, deploy-dev]
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure' }}
+  # GitHub's failed-run notice to the merger is the only failure signal (INFRA §9), and two outcomes would slip past it:
+  # a main push that classified fine but deployed nothing to dev with no job failing (a skipped `check` that wasn't
+  # planned, or a result the deploy guards don't expect), and a job that ended `cancelled` — a deploy job past its
+  # timeout, say, mid-CloudFormation — which may leave the run `cancelled` rather than failed. This job fails in both,
+  # under always() so a cancelled run can't skip it. A skipped job bills nothing; a failed check already fails the run.
+  quiet-failure:
+    needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]
+    if: ${{ always() && ((!cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - env:
-          CHECK_RESULT: ${{ needs.check.result }}
-          CHECK_PLAN: ${{ needs.changes.outputs.check }}
+          RESULTS: changes=${{ needs.changes.result }} check=${{ needs.check.result }} dev=${{ needs.deploy-dev.result }} devb=${{ needs.deploy-devb.result }} prod=${{ needs.deploy-prod.result }} plan=${{ needs.changes.outputs.check }}
         run: |
-          echo "::error::deploy-dev was skipped although changes succeeded (check=$CHECK_RESULT, plan=$CHECK_PLAN) — nothing deployed"
+          echo "::error::a deploy job was cancelled, or dev was skipped with nothing failing — $RESULTS"
           exit 1

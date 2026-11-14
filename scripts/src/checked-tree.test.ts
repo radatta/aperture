@@ -289,6 +289,13 @@ describe('checked-tree plans main’s check', () => {
       expect(await planOf({ runs: [...older, ...newerPartial] })).toBe('check');
       expect(await planOf({ runs: older })).toBe('skip');
     });
+    it('a newer suite with no required check (a branch-ref deploy-dev dispatch on the head) hides nothing', async () => {
+      const dispatch = [
+        checkRun(300, 'verify', { check_suite: { id: 90 } }),
+        checkRun(301, 'deploy / deploy', { check_suite: { id: 90 } }),
+      ];
+      expect(await planOf({ runs: [...greenRuns(), ...dispatch] })).toBe('skip');
+    });
     it('the newest full suite decides: an older green suite never outvotes a newer red one', async () => {
       const older = greenRuns().map((r) => ({
         ...r,
@@ -418,7 +425,7 @@ describe('pins against the workflows and the docs', () => {
     expect(at('- uses: actions/checkout@v7')).toBeLessThan(at('- name: Tested tree'));
     expect(
       stepsText.slice(at('- uses: actions/checkout@v7'), at('- name: Tested tree')),
-    ).not.toMatch(/\n {6}- (uses|run|name):/);
+    ).not.toMatch(/\n {6}- /);
     expect(at('- name: Tested tree')).toBeLessThan(at('- uses: ./.github/actions/setup'));
     expect(ci.match(/tested-tree/g)?.length).toBeGreaterThanOrEqual(1);
     expect(ci).toContain(`- name: ${FIXTURE_STEP}\n`);

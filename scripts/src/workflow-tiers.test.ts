@@ -181,13 +181,13 @@ describe('deploy.yml skips the check only on a tree match', () => {
     );
   });
 
-  it('turns a main push that silently deployed nothing red, and runs no notify job anywhere', () => {
-    const noDeploy = job(deploy, 'no-deploy');
-    expect(noDeploy).toContain('needs: [changes, check, deploy-dev]');
-    expect(noDeploy).toContain(
-      "if: ${{ !cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure' }}",
+  it('fails a main push that silently deployed nothing or had a job cancelled, and runs no notify job anywhere', () => {
+    const quiet = job(deploy, 'quiet-failure');
+    expect(quiet).toContain('needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]');
+    expect(quiet).toContain(
+      "if: ${{ always() && ((!cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure') || contains(needs.*.result, 'cancelled')) }}",
     );
-    expect(noDeploy).toContain('exit 1');
+    expect(quiet).toContain('exit 1');
     for (const yml of [deploy, dispatch]) {
       expect(yml).not.toMatch(/\n {2}notify:/);
       expect(yml.toLowerCase()).not.toContain('ntfy');
