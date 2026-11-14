@@ -182,6 +182,19 @@ describe('run', () => {
     expect(d.out.filter((l) => l.startsWith('::warning::'))).toEqual([]);
   });
 
+  it('is quiet when no first pass ran (nothing to compare)', () => {
+    const d = deps({}, undefined);
+    run(['dev', '--from-file'], d.deps);
+    expect(d.out.filter((l) => l.startsWith('::warning::'))).toEqual([]);
+  });
+
+  it('warns when the deploy replaced the URL', () => {
+    const old = 'zyxwvutsrqponmlk9876543210abcdef.lambda-url.us-west-1.on.aws';
+    const d = deps({}, [old, old.split('.')[0]!]);
+    run(['dev', '--from-file'], d.deps);
+    expect(d.out.filter((l) => l.startsWith('::warning::'))).toHaveLength(1);
+  });
+
   it('warns to delete the log when the deploy created a URL, without printing it', () => {
     const d = deps({}, []); // the first pass found no stack (a first deploy)
     run(['dev', '--from-file'], d.deps);

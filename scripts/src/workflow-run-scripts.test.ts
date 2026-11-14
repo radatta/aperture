@@ -91,6 +91,15 @@ describe('workflow-run-scripts', () => {
     ]);
   });
 
+  it('reads past a comment or a script that only mentions a run key', () => {
+    const text = [
+      '      # build, then { run: pnpm test }',
+      '      - run: |',
+      "          node -e 'console.log({ run: 1 })'",
+    ].join('\n');
+    expect(runScripts(text)).toHaveLength(1);
+  });
+
   it('lets an expression sit anywhere but a script', () => {
     const text = [
       '    timeout-minutes: ${{ inputs.t }}',
@@ -119,6 +128,10 @@ describe('workflow-run-scripts', () => {
     ['a flow-mapping step', `      - { name: x, run: echo ${E} }`],
     ['a flow-mapping step, run first', `      - {run: echo ${E}}`],
     ['an unknown block header', `        run: |x\n          echo ${E}`],
+    ['an alias', `        run: *script`],
+    ['an anchor', `        run: &script echo ${E}`],
+    ['a tag', `        run: !!str echo ${E}`],
+    ['a flow mapping under a key', `      steps: [{ name: x, run: echo ${E} }]`],
   ])('throws on %s rather than guess', (_, text) => {
     expect(() => runScripts(text, 'w.yml')).toThrow(/^w\.yml:1: /);
   });

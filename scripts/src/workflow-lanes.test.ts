@@ -141,7 +141,7 @@ describe('deploy-stage Validate mode, run', () => {
     ROLE_ARN: DEV_MAIN_ROLE,
   };
 
-  it('is the step right after the fork guard, with every input as a variable', () => {
+  it('takes every input as a variable', () => {
     expect(script).toContain('case "$MODE" in');
     expect(script).not.toContain('${{');
   });
