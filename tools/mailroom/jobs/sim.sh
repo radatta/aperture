@@ -338,7 +338,7 @@ sim_shutdown() {
   SIM_STATE=Shutdown
 }
 sim_pref() { sx 30 spawn "$SIM_U" defaults read "$SIM_KB" "$1" 2>/dev/null | tr -d '[:space:]'; }
-# Everything that changes what a key does or when it lands is pinned (the maintainer, 2026-11-08: "as deterministic as possible";
+# Everything that changes what a key does or when it lands is pinned (the maintainer, 2026-11-08: typing must be as repeatable as it can be made;
 # job …233129Z…-done-form-80c5 typed "cdcgac" three times and kept "Cdc"): autocorrect, auto-capitalisation, spell check,
 # predictions and the suggestion bar, inline completion, the "." shortcut, smart quotes and dashes, slide to type, the
 # hardware keyboard's own three, and the slide-to-type, gesture and inline-completion tips marked seen. Keys from
