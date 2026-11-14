@@ -885,6 +885,11 @@ sessions by them, and restore matches on them.
   bash /workspace/tools/coi/tmux-restore.sh links   # once, and again after a container rebuild (restore runs it too)
   tmux source ~/.tmux.conf
   ```
+- **24-bit color** (`tmux.conf`: `set-environment -g COLORTERM truecolor`). tmux already passes RGB through (the
+  iTerm client reports it in `#{client_termfeatures}`), but `update-environment` doesn't carry `COLORTERM`, so apps
+  that read it — Claude Code — fall back to 256 colors without it. A pane opened after `tmux source` has it
+  (`echo $COLORTERM`); a running pane and its processes keep their old environment — reopen the window, or
+  `export COLORTERM=truecolor` and restart Claude.
 - **Keys** (`tmux.conf`). The prefix is `Ctrl-a` (screen's; `Ctrl-a a` sends a real `Ctrl-a` to the shell);
   `Ctrl-b` is unbound and `d` still detaches.
   - `Ctrl-a t` — the control tower (`scripts/board/tower.sh`) in a pop-up over any window; `q` closes it.
