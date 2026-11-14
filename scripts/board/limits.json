@@ -15,10 +15,10 @@
   "tuning": { "test": { "maxWorkers": 4 } },
   "classes": {
     "test": {
-      "pids": 220,
-      "anonMiB": 2800,
-      "p95Sec": 79,
-      "source": "bench 2026-11-08: max of 3 solo reps at VITEST_MAX_WORKERS=4 (~8.6 of 9 cores, ~3,680 tests)"
+      "pids": 320,
+      "anonMiB": 3200,
+      "p95Sec": 155,
+      "source": "2026-11-13 at VITEST_MAX_WORKERS=4, scripts at 2 (4,742 tests): pids/wall the max of 3 solo runs; anon the median (max 4046 had neighbours' noise) - SESSION-BOARD.md Results"
     },
     "ui": {
       "pids": 160,

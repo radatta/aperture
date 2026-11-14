@@ -139,7 +139,7 @@ not counted as a block. Load tests are excluded.
 - **Container-only tuning** (`limits.json` `tuning.test`: `workspaceConcurrency`, `maxWorkers`) applies only
   in a `coi-*` container and only once measured: a setting ships only if it cuts peak anon ≥ 30 % for ≤ 15 %
   more wall time. `maxWorkers: 4` shipped 2026-11-13 **below that bar**, on the user's call: it cut anon 26 % solo /
-  19 % in a pair, and was taken for the pair's speed and headroom (_Results_ → _Vitest worker bench_). vitest applies
+  19 % in a pair, and was taken for the headroom and the bench's pair speed, at no wall cost on 2026-11-13 (_Results_). vitest applies
   `VITEST_MAX_WORKERS` over every config, so `scripts`' test script pins its own 2 (CI parity, `scripts/vitest.config.ts`).
 
 ## Leases
@@ -205,7 +205,7 @@ job class's cost (`pids`, `anonMiB`, `p95Sec`, `source`) — shipped as the 2026
 `measuredLimits`; on 2026-10-29 (the user's call) `enforce: true` shipped with `"concurrency": { "test": 4 }` — a policy
 key, top-level like `tuning`, so a quiet window rewriting `classes` never loses it. The value is the CPU edge:
 a 6th concurrent suite timed out (_Results_). On 2026-11-13 the cap became 2, with `tuning.test`
-`{ maxWorkers: 4 }`, and `classes.test` was re-measured solo at that cap (the 2026-11-08 bench); the other classes and
+`{ maxWorkers: 4 }`, and `classes.test` was re-measured at that cap (the 2026-11-13 check in _Results_); the other classes and
 `measuredAt` still date from 2026-10-13. Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
 
@@ -346,8 +346,17 @@ What it means:
   (2026-11-13, the user's call, below the 30 % bar). Measure 3 and 4 suites at cap 4 in a quiet window before
   loosening. Not covered: typecheck or lint beside the suites, a busy board, CI.
 
-- **Class costs** in `limits.json` are these maxima, rounded up, except `test` (the 2026-11-08 bench's solo cap-4
-  maxima: +217 pids, +2738 MiB, 78.5 s); `build` wasn't measured.
+- **Same-day check, 2026-11-13** (the shipped setup: cap 4, `scripts` at 2; 4,742 tests, 6 packages — `extension`, about
+  80 s, is new since the bench, so walls aren't comparable to it). Solo, uncapped vs cap 4, 2 each, no other suite
+  running: wall 158 / 152 s vs 154 / 147 s; subtree 367 vs 277 threads and 5.8 / 5.6 vs 4.4 / 4.3 GiB RSS; container
+  Δanon 4.8 / 4.2 vs 4.0 / 3.1 GiB. A pair at cap 4: 180 / 202 s, +6.0 GiB together, peak 13.7 GiB on a 7.5 GiB base
+  (15 idle sessions); a 3rd suite printed `test cap full (2/2 …) — waiting` and ran when a slot freed. So the cap
+  costs no wall time today; the pair-speed gain wasn't re-measured. At that base 3 suites ≈ 16.5 GiB — past hard.
+
+- **Class costs** in `limits.json` are these maxima, rounded up, except `test` (the 2026-11-13 check: +320 pids and
+  155 s, the maxima; 3200 MiB, the capped solo median and a pair's per-suite share — the 4.0 GiB max carried
+  neighbours' noise, and as a cost it would hold the 2nd suite at a 7.5 GiB base, a cap of 1 in practice); `build`
+  wasn't measured.
 
 ## Control tower
 
