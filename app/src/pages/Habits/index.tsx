@@ -267,7 +267,7 @@ function HabitForm() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && create()}
-          placeholder="Read 20 min, call home…"
+          placeholder="Read 20 min, call a friend…"
           className="w-56"
         />
         <Field

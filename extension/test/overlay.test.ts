@@ -611,7 +611,7 @@ describe('the overlay on a LeetCode problem', () => {
     expect(resetClicks).toBe(0);
     expect(p.fake().resets).toBe(1);
 
-    // Again, with his own Cancel on LeetCode's dialog in between: Retry clicks the reset again.
+    // Again, with the user's own Cancel on LeetCode's dialog in between: Retry clicks the reset again.
     const again = await startOn(null, { selectors: { resetConfirm: '#gone' } });
     (again.p.w.document.querySelector('[data-fake=cancel]') as HTMLElement).click();
     let again2 = 0;

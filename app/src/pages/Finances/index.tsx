@@ -94,7 +94,7 @@ export function FinancesPage() {
             }
           >
             Connect your bank once — checking, savings and the card — and charges sync four times a
-            day. Then sort them into Parents pay, Budget, or I pay whenever suits you.
+            day. Then sort them into Covered, Budget, or I pay whenever suits you.
           </EmptyState>
           {link.error && (
             <Text size="sm" tone="danger">

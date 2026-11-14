@@ -7,7 +7,7 @@ import { useFocusRescue } from '../../lib/useFocusRescue';
 import { Disclaimer, DisclaimerFooter } from '../../modules/flux/Disclaimer';
 import { useFluxOutboxFlush } from '../../modules/flux/useFluxOutbox';
 
-// Flux (docs/areas/flux): flux-track-2's webcam neck rehab, as an Aperture page. The layout holds the
+// Flux (docs/areas/flux): flux-track-2's webcam-guided neck exercises, as an Aperture page. The layout holds the
 // disclaimer gate (accepted once, synced via Settings) and the shared footer; the library and each
 // exercise's stage are child routes, so an exercise is a deep link and Back works.
 export function FluxPage() {

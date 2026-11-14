@@ -1,4 +1,4 @@
-// Finances — the three-bucket budget, plus Not spending (ported from penny-pilot) over Plaid-synced bank data.
+// Finances — the three-bucket budget, plus Not spending (ported from an earlier budget app) over Plaid-synced bank data.
 // Entities, DTOs, and every pure rule both ApiClient impls share: sign normalisation, internal-move
 // matching, the billing period, the overview numbers, rules, and sync-page reconciliation.
 //
@@ -11,14 +11,14 @@ import type { PlaidTransaction } from './plaidTypes';
 import { addDays, daysBetween } from './dates';
 
 // --- Entities --------------------------------------------------------------
-// not_spending: money out that isn't spending (a brokerage deposit, a cash withdrawal) — sorted, so it
+// not_spending: money out that isn't spending (a transfer to an outside account, a cash withdrawal) — sorted, so it
 // leaves the queue, but in no total. A stored bucket value, so rules and sync carry it like the others.
 export type FinanceBucket = 'parents_pay' | 'budget' | 'i_pay' | 'not_spending';
 export type FinanceSpendBucket = Exclude<FinanceBucket, 'not_spending'>;
 export const FINANCE_SPEND_BUCKETS: FinanceSpendBucket[] = ['parents_pay', 'budget', 'i_pay'];
 export const FINANCE_BUCKETS: FinanceBucket[] = [...FINANCE_SPEND_BUCKETS, 'not_spending']; // order = keys 1–4
 export const FINANCE_BUCKET_LABELS: Record<FinanceBucket, string> = {
-  parents_pay: 'Parents pay',
+  parents_pay: 'Covered',
   budget: 'Budget',
   i_pay: 'I pay',
   not_spending: 'Not spending',

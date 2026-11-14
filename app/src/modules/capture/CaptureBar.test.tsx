@@ -1357,13 +1357,13 @@ describe('CaptureBar — places', () => {
   });
 
   it('a half-typed @place that starts several refuses the save and says which', async () => {
-    const { api, user, box } = await placeBar({ more: ['Costco'] });
+    const { api, user, box } = await placeBar({ more: ['Counter'] });
     await user.type(box(), 'milk | @co');
     await screen.findByRole('group', { name: 'Suggestions' });
     expect(screen.queryByText(/could be/)).toBeNull(); // mid-word: the chips speak
     await user.keyboard('{Enter}');
     expect(await screen.findByText(/Not saved/)).toBeTruthy();
-    expect(screen.getByText('@co could be Corner Shop or Costco — pick one')).toBeTruthy();
+    expect(screen.getByText('@co could be Corner Shop or Counter — pick one')).toBeTruthy();
     expect(box().value).toBe('milk | @co');
     expect(await api.listTasks()).toHaveLength(0);
   });

@@ -308,7 +308,7 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   }
 }
 
-// Case-insensitive, then lowercased: an automation passing `Safeway` finds `safeway`.
+// Case-insensitive, then lowercased: an automation passing `Grocer` finds `grocer`.
 const PLACE_ROUTE = /^\/api\/places\/([A-Za-z0-9-]{1,32})\/tasks$/;
 // A fixed code per 401 (so the log line can never echo anything a message might one day carry).
 const UNAUTHORIZED_REASON = (message: string): string =>

@@ -1,4 +1,4 @@
-// Places — errand lists by store ("arrive at Safeway → what do I need there?"). Pure rules shared by the
+// Places — errand lists by store ("arrive at Grocer → what do I need there?"). Pure rules shared by the
 // stub and the Lambda: slug shape, the digest the iPhone Shortcut shows, and the token's constants. A task
 // joins a list by carrying the place's slug (Task.place); a placed task is an errand, never a calibration
 // point (machines.ts contributesCalibration). Aperture never sees a location — the geofence is the iPhone's

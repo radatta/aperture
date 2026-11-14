@@ -86,7 +86,7 @@ export const FLUX_TOOLS: Tool[] = [
   {
     name: 'list_flux_sets',
     description: [
-      'Saved Flux neck-rehab sets (webcam-tracked exercises), newest first — "how\'s my neck rehab going?". Each row has the exercise, side (right/left for the three one-sided stretches), count, and its one number (`metric`: avg peak degrees for ROM reps, holds done, avg error degrees for joint position — lower is better). A set stopped before its prescription has `stoppedEarly: true`; `planned` is the count it was going for.',
+      'Saved Flux sets (webcam-tracked neck exercises), newest first — "how\'s Flux going?". Each row has the exercise, side (right/left for the three one-sided stretches), count, and its one number (`metric`: avg peak degrees for ROM reps, holds done, avg error degrees for joint position — lower is better). A set stopped before its prescription has `stoppedEarly: true`; `planned` is the count it was going for.',
       "`summary` gives per-exercise first → latest over the window (a stopped set's count is left out of it, its angle isn't; `stoppedEarly` counts them), and `daySummary` a one-line summary when the window is a single day (from = to).",
       'Optional from/to ISO dates (pass BOTH or NEITHER) and exerciseId (see list_flux_exercises).',
       HONESTY,
@@ -131,7 +131,7 @@ export const FLUX_TOOLS: Tool[] = [
   {
     name: 'list_flux_exercises',
     description:
-      "The Flux exercise catalog (19 neck-rehab exercises): id, name, kind, how honestly it's measured (measured / approximate / guided), whether it's one-sided, its prescription (reps, hold seconds, target degrees), and the conditions and rehab stages it suits. Use the ids with list_flux_sets.",
+      "The Flux exercise catalog (19 neck exercises): id, name, kind, how honestly it's measured (measured / approximate / guided), whether it's one-sided, its prescription (reps, hold seconds, target degrees), and the conditions and rehab stages it suits. Use the ids with list_flux_sets.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run() {
       return (EXERCISES as readonly ExerciseDefinition[]).map(exercise);

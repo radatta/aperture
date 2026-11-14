@@ -10,7 +10,7 @@ import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck-recur ${ctx.nonce} ${what}`;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-// packages/shared/src/dates.ts fmtMonthShortDay for a day key: "Dec 5" (scripts doesn't depend on shared).
+// packages/shared/src/dates.ts fmtMonthShortDay for a day key: "Nov 30" (scripts doesn't depend on shared).
 const monthDay = (key: string) =>
   `${MONTHS[Number(key.slice(5, 7)) - 1]} ${Number(key.slice(8, 10))}`;
 const shiftDays = (key: string, n: number) => {

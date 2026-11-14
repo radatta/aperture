@@ -14,7 +14,7 @@ const base = { userId: 'u', createdAt: 0, updatedAt: 0, deletedAt: null };
 const series = (over: Partial<TaskSeries> = {}): TaskSeries => ({
   ...base,
   id: 's1',
-  title: 'Pre-lab',
+  title: 'Weekly report',
   categoryId: null,
   defaultEstimateMin: 60,
   rule: { kind: 'daily' },
@@ -106,9 +106,9 @@ describe('seriesHasOccurrence', () => {
 describe('seriesCadence', () => {
   it('omitted fields are null; valid ones pass through', () => {
     expect(seriesCadence({})).toEqual({ dueOffsetDays: null, until: null });
-    expect(seriesCadence({ dueOffsetDays: 0, until: '2026-12-05' })).toEqual({
+    expect(seriesCadence({ dueOffsetDays: 0, until: '2026-11-30' })).toEqual({
       dueOffsetDays: 0,
-      until: '2026-12-05',
+      until: '2026-11-30',
     });
   });
   it('a negative or fractional offset, or a malformed until, throws', () => {

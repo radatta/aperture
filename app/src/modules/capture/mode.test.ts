@@ -35,17 +35,17 @@ describe('→ today', () => {
       'backlog (couldn’t plan it)',
     );
     // An errand waits on its store's list, not the backlog.
-    expect(receiptFor('task', { today: false, planned: false, placeName: 'Safeway' }).label).toBe(
-      'Safeway',
+    expect(receiptFor('task', { today: false, planned: false, placeName: 'Grocer' }).label).toBe(
+      'Grocer',
     );
-    expect(receiptFor('task', { today: true, planned: false, placeName: 'Safeway' }).label).toBe(
-      'Safeway (couldn’t plan it)',
+    expect(receiptFor('task', { today: true, planned: false, placeName: 'Grocer' }).label).toBe(
+      'Grocer (couldn’t plan it)',
     );
     expect(
       receiptFor('task', {
         today: false,
         planned: false,
-        placeName: 'Safeway',
+        placeName: 'Grocer',
         timedOn: 'due Fri 4pm',
       }).label,
     ).toBe('due Fri 4pm, by its time');

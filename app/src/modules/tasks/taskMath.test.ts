@@ -164,7 +164,7 @@ describe('seriesSummary', () => {
     createdAt: 0,
     updatedAt: 0,
     deletedAt: null,
-    title: 'Pre-lab',
+    title: 'Weekly report',
     categoryId: null,
     defaultEstimateMin: 60,
     rule: { kind: 'weekly', daysOfWeek: [2] },
@@ -183,8 +183,8 @@ describe('seriesSummary', () => {
   });
   it('the due offset in words, and until / ended by today', () => {
     expect(seriesSummary(series({ dueOffsetDays: 0 }), '2026-11-04')).toBe('Tue · due same day');
-    expect(seriesSummary(series({ dueOffsetDays: 1, until: '2026-12-05' }), '2026-11-04')).toBe(
-      'Tue · due next day · until Dec 5',
+    expect(seriesSummary(series({ dueOffsetDays: 1, until: '2026-11-30' }), '2026-11-04')).toBe(
+      'Tue · due next day · until Nov 30',
     );
     expect(seriesSummary(series({ dueOffsetDays: 3, until: '2026-11-03' }), '2026-11-04')).toBe(
       'Tue · due in 3 days · ended Nov 3',

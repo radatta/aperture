@@ -97,12 +97,12 @@ describe('taskTransition — estimate freeze', () => {
   });
 
   it('a done errand with no lock takes no backfill: it is never measured', () => {
-    const errand = baseTask({ status: 'done', estimateLockedMin: null, place: 'safeway' });
+    const errand = baseTask({ status: 'done', estimateLockedMin: null, place: 'grocer' });
     expect(() => withEstimate(errand, 5, null, 1)).toThrow(/history/);
   });
 
   it('the gate spares an errand, which stamps no source', () => {
-    const errand = baseTask({ status: 'in_progress', estimateMin: null, place: 'safeway' });
+    const errand = baseTask({ status: 'in_progress', estimateMin: null, place: 'grocer' });
     const done = taskTransition(errand, 'done', 1);
     expect(done.status).toBe('done');
     expect(done.estimateSource ?? null).toBeNull();
@@ -134,7 +134,7 @@ describe('taskTransition — estimate freeze', () => {
     expect(needsEstimate({ place: null, estimateMin: null })).toBe(true);
     expect(needsEstimate({ place: null, estimateMin: 0 })).toBe(true);
     expect(needsEstimate({ place: null, estimateMin: 1 })).toBe(false);
-    expect(needsEstimate({ place: 'safeway', estimateMin: null })).toBe(false);
+    expect(needsEstimate({ place: 'grocer', estimateMin: null })).toBe(false);
   });
 
   it('rejects illegal transitions', () => {
@@ -164,7 +164,7 @@ describe('taskTransition — estimate freeze', () => {
   });
 
   it('an errand (a placed task) never contributes, even with a lock', () => {
-    const errand = baseTask({ status: 'done', estimateLockedMin: 5, place: 'safeway' });
+    const errand = baseTask({ status: 'done', estimateLockedMin: 5, place: 'grocer' });
     expect(contributesCalibration(errand)).toBe(false);
   });
 });
@@ -199,7 +199,7 @@ describe('sessions — heartbeat lifecycle', () => {
   it('a work session accrues only to an open task — an errand included, never a done or cancelled one', () => {
     for (const status of ['backlog', 'planned', 'in_progress'] as const)
       expect(accruesTime(baseTask({ status }))).toBe(true);
-    expect(accruesTime(baseTask({ status: 'in_progress', place: 'safeway' }))).toBe(true);
+    expect(accruesTime(baseTask({ status: 'in_progress', place: 'grocer' }))).toBe(true);
     expect(accruesTime(baseTask({ status: 'done', estimateLockedMin: 60 }))).toBe(false);
     expect(accruesTime(baseTask({ status: 'cancelled' }))).toBe(false);
   });

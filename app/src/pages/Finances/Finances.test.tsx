@@ -679,7 +679,7 @@ describe('Finances page', () => {
     const dialog = await screen.findByRole('dialog', { name: /Uber/ });
     const unsorted = within(dialog).getByRole('radio', { name: 'Unsorted' });
     await waitFor(() => expect(document.activeElement).toBe(unsorted));
-    await user.keyboard('{ArrowRight}{ArrowRight}'); // wraps to Parents pay, then Budget
+    await user.keyboard('{ArrowRight}{ArrowRight}'); // wraps to Covered, then Budget
     const budget = within(dialog).getByRole('radio', { name: 'Budget' });
     expect(budget.getAttribute('aria-checked')).toBe('true'); // shown at once
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
@@ -687,7 +687,7 @@ describe('Finances page', () => {
     expect(save).toHaveBeenCalledTimes(1); // the second waits for the first
     gates.shift()!();
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-    expect(budget.getAttribute('aria-checked')).toBe('true'); // no flash back to Parents pay
+    expect(budget.getAttribute('aria-checked')).toBe('true'); // no flash back to Covered
     gates.shift()!();
     const range = { from: '2000-01-01', to: '2100-01-01' };
     await waitFor(async () =>
@@ -712,9 +712,9 @@ describe('Finances page', () => {
         .map((r) => r.textContent),
     ).toEqual(['Unsorted', 'By date']); // one tab stop per group
     await user.keyboard('{ArrowRight}'); // wraps to the first
-    const parents = within(dialog).getByRole('radio', { name: 'Parents pay' });
-    await waitFor(() => expect(parents.getAttribute('aria-checked')).toBe('true'));
-    expect(document.activeElement).toBe(parents);
+    const covered = within(dialog).getByRole('radio', { name: 'Covered' });
+    await waitFor(() => expect(covered.getAttribute('aria-checked')).toBe('true'));
+    expect(document.activeElement).toBe(covered);
   });
 
   it('the Remove-bank confirm starts on Cancel, and Escape backs out to the menu', async () => {
@@ -1202,7 +1202,7 @@ describe('All tab: sort into and search', () => {
     const user = userEvent.setup();
     const api = await openAll();
     const spy = vi.spyOn(api, 'setFinanceBucket');
-    await user.click(brushBtn('Parents pay'));
+    await user.click(brushBtn('Covered'));
     const payroll = row('fx-pay-3')!;
     expect(payroll.getAttribute('aria-disabled')).toBe('true');
     await user.click(payroll);
@@ -1229,7 +1229,7 @@ describe('All tab: sort into and search', () => {
     expect(brushBtn('I pay').getAttribute('aria-pressed')).toBe('false');
     await user.keyboard('12');
     expect(brushBtn('Budget').getAttribute('aria-pressed')).toBe('true');
-    expect(brushBtn('Parents pay').getAttribute('aria-pressed')).toBe('false');
+    expect(brushBtn('Covered').getAttribute('aria-pressed')).toBe('false');
     await user.keyboard('{Escape}');
     const search = screen.getByRole('searchbox', { name: 'Search transactions' });
     await user.type(search, 'chipotle 2');
@@ -1248,9 +1248,9 @@ describe('All tab: sort into and search', () => {
     await user.keyboard('{Escape}');
     expect((search as HTMLInputElement).value).toBe('');
     expect(document.activeElement).toBe(search);
-    expect(brushBtn('Parents pay').getAttribute('aria-pressed')).toBe('true');
+    expect(brushBtn('Covered').getAttribute('aria-pressed')).toBe('true');
     await user.keyboard('{Escape}');
-    expect(brushBtn('Parents pay').getAttribute('aria-pressed')).toBe('false');
+    expect(brushBtn('Covered').getAttribute('aria-pressed')).toBe('false');
   });
 
   it('search matches merchant, bank text and note, combines with Show, and sums what’s shown', async () => {

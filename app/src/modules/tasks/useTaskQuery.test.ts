@@ -29,7 +29,7 @@ const beforeAreas = (over: Partial<Stored['query']> = {}): Stored => {
 async function seeded() {
   const api = createStubClient({ seed: false, storageKey: `tq-${Math.random()}` });
   const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });
-  const sc = await api.upsertCategory({ label: 'CSEN 146', isWork: true, area: 'school' });
+  const sc = await api.upsertCategory({ label: 'MATH 200', isWork: true, area: 'school' });
   await api.createTask({ title: 'fix cache policy', categoryId: ap.id });
   await api.createTask({ title: 'pset 4', categoryId: sc.id });
   return api;

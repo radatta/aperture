@@ -386,7 +386,7 @@ export const finance: Scenario = {
         const row = link.locator('xpath=ancestor::li[1]');
         const merchant = await row.getByText(GROCER).first().boundingBox();
         const bucket = await row
-          .getByText(/^(Unsorted|Budget|I pay|Parents pay|Not spending)/)
+          .getByText(/^(Unsorted|Budget|I pay|Covered|Not spending)/)
           .first()
           .boundingBox();
         const button = await link.boundingBox();

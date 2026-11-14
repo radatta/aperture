@@ -149,11 +149,11 @@ describe('Tasks never shows a failed read as empty', () => {
     api.listPlaces = () => (fail ? Promise.reject(new Error('listPlaces failed (503)')) : real());
     renderApp({ api, path: '/tasks?lens=places' });
     await screen.findByText(/Couldn.t load your places — lists show by their link word/);
-    expect(screen.getByRole('region', { name: '@safeway' })).toBeTruthy(); // the seed's sample list
+    expect(screen.getByRole('region', { name: '@grocer' })).toBeTruthy(); // the seed's sample list
     expect(screen.queryByText('No places yet.')).toBeNull();
     fail = false;
     await user.click(screen.getByRole('button', { name: 'Retry' }));
-    await screen.findByRole('region', { name: 'Safeway' });
+    await screen.findByRole('region', { name: 'Grocer' });
   });
 
   it('a failed tasks read on the Places lens says so instead of “No errands”', async () => {
@@ -167,7 +167,7 @@ describe('Tasks never shows a failed read as empty', () => {
     await screen.findByText(/Couldn.t load your places/);
     // A search shows the cards (TaskCard), whose tag can't resolve the name.
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText('Search tasks'), 'shampoo');
+    await user.type(screen.getByLabelText('Search tasks'), 'batteries');
     expect((await screen.findAllByTitle('Couldn’t load places')).length).toBeGreaterThan(0);
   });
 
@@ -186,7 +186,7 @@ describe('Tasks never shows a failed read as empty', () => {
     const api = failing(stub(), 'listPlaces');
     renderWithProviders(<BulkAddDialog open onClose={() => {}} onAdded={() => {}} />, { api });
     await user.click(await screen.findByRole('textbox'));
-    await user.paste('milk | @safeway');
+    await user.paste('milk | @grocer');
     await screen.findByText(/Couldn.t load places — remove the @places/);
     expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Add/ }).disabled).toBe(true);
   });

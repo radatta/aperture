@@ -15,8 +15,8 @@ const CATS = [
 ];
 
 const PLACES = [
-  { slug: 'safeway', name: 'Safeway' },
-  { slug: 'trader-joes', name: "Trader Joe's" },
+  { slug: 'grocer', name: 'Grocer' },
+  { slug: 'thrift-jos', name: "Thrift Jo's" },
 ];
 
 const parse = (text: string, existing?: ReadonlySet<string>) =>
@@ -240,12 +240,12 @@ describe('toCreateInputs', () => {
 describe('parseBulkTasks — notes token', () => {
   it('parses notes in any position, with \\n as a newline', () => {
     const l = only(
-      'finish 214 pset | ~90 #"Deep Work" due:2026-09-25 notes:"Ch. 4 q1-8\\n- q6 hint: use the lemma\\nhttps://example.edu/pset4"',
+      'finish the pset | ~90 #"Deep Work" due:2026-09-25 notes:"Ch. 4 q1-8\\n- q6 hint: use the lemma\\nhttps://example.org/pset4"',
     );
     expect(l.errors).toEqual([]);
     expect(l.estimateMin).toBe(90);
     expect(l.categoryId).toBe('c2');
-    expect(l.notes).toBe('Ch. 4 q1-8\n- q6 hint: use the lemma\nhttps://example.edu/pset4');
+    expect(l.notes).toBe('Ch. 4 q1-8\n- q6 hint: use the lemma\nhttps://example.org/pset4');
     const first = only('t | notes:"a b" ~15');
     expect(first.notes).toBe('a b');
     expect(first.estimateMin).toBe(15);
@@ -396,40 +396,40 @@ describe('errorKinds', () => {
 
 describe('@place', () => {
   it('resolves a known place, case-insensitively', () => {
-    const l = only('shampoo | @Safeway ~5');
+    const l = only('shampoo | @Grocer ~5');
     expect(l.errors).toEqual([]);
-    expect(l.placeSlug).toBe('safeway');
-    expect(l.place).toBe('safeway');
-    expect(toCreateInput(l).place).toBe('safeway');
-    expect(only('syrup | @trader-joes').place).toBe('trader-joes');
+    expect(l.placeSlug).toBe('grocer');
+    expect(l.place).toBe('grocer');
+    expect(toCreateInput(l).place).toBe('grocer');
+    expect(only('syrup | @thrift-jos').place).toBe('thrift-jos');
   });
   it('an unknown place is a yellow warning — created off any list', () => {
-    const l = only('nails | @target');
+    const l = only('nails | @tackle');
     expect(l.errors).toEqual([]);
     expect(l.place).toBeNull();
-    expect(l.placeSlug).toBe('target');
-    expect(l.warnings).toEqual(["no place '@target' — created without one"]);
+    expect(l.placeSlug).toBe('tackle');
+    expect(l.warnings).toEqual(["no place '@tackle' — created without one"]);
   });
   it('empty, malformed and duplicate places are red', () => {
     expect(only('x | @').errorKinds).toEqual([{ kind: 'place' }]);
     expect(only('x | @-bad').errorKinds).toEqual([{ kind: 'place' }]);
-    expect(only('x | @safeway @trader-joes').errors).toEqual([
+    expect(only('x | @grocer @thrift-jos').errors).toEqual([
       'duplicate place (@) token — each is allowed once',
     ]);
   });
   it("a due time's @ is never a place", () => {
-    const l = only('x | due:2026-10-03@09:30 @safeway');
+    const l = only('x | due:2026-10-03@09:30 @grocer');
     expect(l.errors).toEqual([]);
     expect(l.dueTime).toBe('09:30');
-    expect(l.place).toBe('safeway');
+    expect(l.place).toBe('grocer');
   });
   it('an @ in the title is literal', () => {
     expect(only('email bob@example.com').title).toBe('email bob@example.com');
   });
   it('tokenAtCaret completes @', () => {
-    expect(tokenAtCaret('x | @saf', 8)).toEqual({
+    expect(tokenAtCaret('x | @gro', 8)).toEqual({
       kind: 'place',
-      partial: 'saf',
+      partial: 'gro',
       replaceStart: 4,
       replaceEnd: 8,
     });

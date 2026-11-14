@@ -133,7 +133,7 @@ function SeriesForm() {
   }
 
   // Cancel discards the draft; the rule/day selection, due offset and until stay, since that's the shape
-  // of series you tend to make repeatedly (a quarter's courses share an end).
+  // of series you tend to make repeatedly (a term's courses share an end).
   function cancel() {
     setTitle('');
     setEstimate('');

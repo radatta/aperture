@@ -204,7 +204,7 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
       );
       return out;
     },
-    // His code goes to the API (decided, recruiting doc); the log line carries counts only, never the code.
+    // The user's code goes to the API (decided, recruiting doc); the log line carries counts only, never the code.
     async sittingReviewDraft(req: SittingDraftRequest) {
       const started = Date.now();
       const { meta, ...out } = await call({

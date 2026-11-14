@@ -15,9 +15,9 @@ const today = () => todayKey(4);
 
 async function seeded() {
   const api = createStubClient({ seed: false, storageKey: `tasklist-${Math.random()}` });
-  const csen = await api.upsertCategory({ label: 'CSEN 146', isWork: true });
-  const soci = await api.upsertCategory({ label: 'SOCI 49', isWork: true });
-  return { api, csen, soci };
+  const math = await api.upsertCategory({ label: 'MATH 200', isWork: true });
+  const phys = await api.upsertCategory({ label: 'PHYS 110', isWork: true });
+  return { api, math, phys };
 }
 
 const pill = (name: string) =>
@@ -36,19 +36,19 @@ describe('/tasks lenses', () => {
   });
 
   it('Week is flat and soonest-first; adding to today moves the task to the Today lens', async () => {
-    const { api, csen, soci } = await seeded();
-    await api.createTask({ title: 'pset 2', categoryId: csen.id, dueDay: addDays(today(), 1) });
-    await api.createTask({ title: 'reading', categoryId: soci.id, dueDay: today() });
+    const { api, math, phys } = await seeded();
+    await api.createTask({ title: 'pset 2', categoryId: math.id, dueDay: addDays(today(), 1) });
+    await api.createTask({ title: 'reading', categoryId: phys.id, dueDay: today() });
     await api.createTask({ title: 'someday', dueDay: addDays(today(), 30) }); // backlog, not week
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=week' });
 
-    // No category headers, and the soonest due comes first even though CSEN sorts ahead of SOCI.
+    // No category headers, and the soonest due comes first even though MATH sorts ahead of PHYS.
     const reading = await screen.findByRole('button', { name: 'reading' });
     const pset = screen.getByRole('button', { name: 'pset 2' });
     expect(reading.compareDocumentPosition(pset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /CSEN 146 · / })).toBeNull();
-    expect(screen.queryByRole('button', { name: /SOCI 49 · / })).toBeNull();
+    expect(screen.queryByRole('button', { name: /MATH 200 · / })).toBeNull();
+    expect(screen.queryByRole('button', { name: /PHYS 110 · / })).toBeNull();
     expect(screen.queryByRole('button', { name: 'someday' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Add pset 2 to today' }));
@@ -61,33 +61,33 @@ describe('/tasks lenses', () => {
   });
 
   it('Week can still be grouped by category for the session, shown as a chip', async () => {
-    const { api, csen } = await seeded();
-    await api.createTask({ title: 'pset 2', categoryId: csen.id, dueDay: addDays(today(), 1) });
+    const { api, math } = await seeded();
+    await api.createTask({ title: 'pset 2', categoryId: math.id, dueDay: addDays(today(), 1) });
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=week' });
 
     await user.click(await screen.findByRole('button', { name: 'Filter' }));
     await user.selectOptions(screen.getByLabelText('Group'), 'category');
-    expect(await screen.findByRole('button', { name: /CSEN 146 · 1/ })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /MATH 200 · 1/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Filter · 1' })).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Remove filter: By category' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: /CSEN 146 · / })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: /MATH 200 · / })).toBeNull());
     expect(screen.getByRole('button', { name: 'Filter' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'pset 2' })).toBeTruthy();
   });
 
   it('typing searches every open task, grouped by where each lives', async () => {
-    const { api, csen } = await seeded();
-    const onToday = await api.createTask({ title: 'pset 1', categoryId: csen.id });
+    const { api, math } = await seeded();
+    const onToday = await api.createTask({ title: 'pset 1', categoryId: math.id });
     await api.upsertPlan({ taskId: onToday.id, day: today(), plannedMinutes: 30, order: 0 });
     await api.transitionTask(onToday.id, 'planned');
-    await api.createTask({ title: 'pset 3', categoryId: csen.id });
+    await api.createTask({ title: 'pset 3', categoryId: math.id });
     await api.createTask({ title: 'groceries' });
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=backlog' });
 
-    await user.type(await screen.findByLabelText('Search tasks'), 'csen');
+    await user.type(await screen.findByLabelText('Search tasks'), 'math');
 
     const todayGroup = (await screen.findByText(/^Today · 1$/)).closest('section')!;
     expect(within(todayGroup as HTMLElement).getByRole('button', { name: 'pset 1' })).toBeTruthy();
@@ -143,17 +143,17 @@ describe('/tasks lenses', () => {
   });
 
   it('filters show as chips; zero results offer a reset', async () => {
-    const { api, csen } = await seeded();
-    await api.createTask({ title: 'pset 3', categoryId: csen.id });
+    const { api, math } = await seeded();
+    await api.createTask({ title: 'pset 3', categoryId: math.id });
     await api.createTask({ title: 'groceries' });
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=backlog' });
 
     await user.click(await screen.findByRole('button', { name: 'Filter' }));
     const cats = within(screen.getByRole('group', { name: 'Category' }));
-    await user.click(cats.getByRole('button', { name: 'CSEN 146' }));
+    await user.click(cats.getByRole('button', { name: 'MATH 200' }));
     expect(screen.getByRole('button', { name: 'Filter · 1' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Remove filter: CSEN 146' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove filter: MATH 200' })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('button', { name: 'groceries' })).toBeNull());
 
     await user.click(screen.getByRole('button', { name: 'Due: Dated' }));
@@ -310,13 +310,13 @@ describe('/tasks lenses', () => {
 
 describe('Backlog folds the Aperture area away (D14)', () => {
   async function withAreas() {
-    const { api, csen } = await seeded();
+    const { api, math } = await seeded();
     const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });
     await api.createTask({ title: 'fix cache policy', categoryId: ap.id });
     await api.createTask({ title: 'retune palette', categoryId: ap.id });
-    await api.createTask({ title: 'pset 4', categoryId: csen.id });
+    await api.createTask({ title: 'pset 4', categoryId: math.id });
     await api.createTask({ title: 'no category task' });
-    return { api, ap, csen };
+    return { api, ap, math };
   }
 
   it('hides Aperture-area tasks behind "Aperture · N"; the chip shows them, and again hides them', async () => {

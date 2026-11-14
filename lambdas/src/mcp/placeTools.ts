@@ -4,10 +4,10 @@ import { RpcParamError } from './types';
 import type { Tool } from './types';
 
 // Places — errand lists by store (docs/areas/tasks/places.md). Two reads; a task joins a list through
-// `place` on create_task / create_tasks / update_task. Voice: "add shampoo to my Safeway list" →
+// `place` on create_task / create_tasks / update_task. Voice: "add batteries to my Grocer list" →
 // list_places → create_task { place }. Neither read is the Shortcut's: no heartbeat, no count.
 
-// A place slug as the model may say it ('Safeway', '@safeway') → the stored form. null clears.
+// A place slug as the model may say it ('Grocer', '@grocer') → the stored form. null clears.
 export function placeArg(args: Record<string, unknown>, key: string): string | null {
   const v = args[key];
   if (v === null || v === undefined) return null;
@@ -15,7 +15,7 @@ export function placeArg(args: Record<string, unknown>, key: string): string | n
   return v.trim().replace(/^@/, '').toLowerCase() || null;
 }
 export const PLACE_ARG_DESC =
-  'the errand list: a place slug from list_places (e.g. "safeway"), or null for none. An errand is checked off at the store, never a calibration point';
+  'the errand list: a place slug from list_places (e.g. "grocer"), or null for none. An errand is checked off at the store, never a calibration point';
 
 export const PLACE_TOOLS: Tool[] = [
   {

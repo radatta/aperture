@@ -1816,18 +1816,18 @@ export function runApiContract(
     });
 
     it('categories: area round-trips, defaults to null, is kept by a rename and a retire, and refuses a bad value', async () => {
-      const cat = await api.upsertCategory({ label: 'ECEN 21', isWork: true });
+      const cat = await api.upsertCategory({ label: 'CS 101', isWork: true });
       expect(cat.area).toBeNull(); // no area yet — reads as Personal (areaOf)
       const set = await api.setCategoryArea(cat.id, 'school');
       expect(set.area).toBe('school');
       expect((await api.listCategories()).find((c) => c.id === cat.id)?.area).toBe('school');
 
       // Patch-style on update: omitted keeps it; a rename and a retire never clear it.
-      const renamed = await api.upsertCategory({ id: cat.id, label: 'ECEN 21L', isWork: true });
+      const renamed = await api.upsertCategory({ id: cat.id, label: 'CS 101L', isWork: true });
       expect(renamed.area).toBe('school');
       const retired = await api.upsertCategory({
         id: cat.id,
-        label: 'ECEN 21L',
+        label: 'CS 101L',
         isWork: true,
         active: false,
       });
@@ -1847,7 +1847,7 @@ export function runApiContract(
         }),
       ).rejects.toThrow(/area must be one of/);
       const unchanged = (await api.listCategories()).find((c) => c.id === cat.id);
-      expect(unchanged).toMatchObject({ label: 'ECEN 21L', isWork: true, area: 'school' });
+      expect(unchanged).toMatchObject({ label: 'CS 101L', isWork: true, area: 'school' });
 
       // Create with one; clear it back to null.
       const made = await api.upsertCategory({ label: 'LC', isWork: true, area: 'recruiting' });
@@ -2797,12 +2797,12 @@ export function runApiContract(
     });
 
     it('places: create slugs the name, list keeps add order, and refuses a clash or a bad slug', async () => {
-      const safeway = await api.upsertPlace({ name: 'Safeway' });
-      expect(safeway).toMatchObject({ name: 'Safeway', slug: 'safeway', lastReadAt: null });
+      const grocer = await api.upsertPlace({ name: 'Grocer' });
+      expect(grocer).toMatchObject({ name: 'Grocer', slug: 'grocer', lastReadAt: null });
       advance(1); // add order is createdAt; a same-ms tie falls to the ULID, random across Lambda calls
-      const tj = await api.upsertPlace({ name: "Trader Joe's", slug: 'tj' });
-      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['safeway', 'tj']);
-      await expect(api.upsertPlace({ name: 'Safeway 2', slug: 'safeway' })).rejects.toThrow(
+      const tj = await api.upsertPlace({ name: "Thrift Jo's", slug: 'tj' });
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['grocer', 'tj']);
+      await expect(api.upsertPlace({ name: 'Grocer 2', slug: 'grocer' })).rejects.toThrow(
         /already uses/,
       );
       await expect(api.upsertPlace({ name: 'Bad', slug: 'Bad Slug' })).rejects.toThrow(/lowercase/);
@@ -2812,251 +2812,251 @@ export function runApiContract(
     });
 
     it('places: tasks carry a known slug, refuse an unknown one, and a finished task keeps its place', async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      const t = await api.createTask({ title: 'shampoo', place: 'safeway' });
-      expect(t.place).toBe('safeway');
+      await api.upsertPlace({ name: 'Grocer' });
+      const t = await api.createTask({ title: 'shampoo', place: 'grocer' });
+      expect(t.place).toBe('grocer');
       expect((await api.createTask({ title: 'plain' })).place).toBeNull();
-      await expect(api.createTask({ title: 'x', place: 'target' })).rejects.toThrow(
-        placeUnknownError('target'),
+      await expect(api.createTask({ title: 'x', place: 'tackle' })).rejects.toThrow(
+        placeUnknownError('tackle'),
       );
       const before = (await api.listTasks()).length;
       await expect(
         api.createTasks([
-          { title: 'ok', place: 'safeway' },
-          { title: 'bad', place: 'target' },
+          { title: 'ok', place: 'grocer' },
+          { title: 'bad', place: 'tackle' },
         ]),
-      ).rejects.toThrow(placeUnknownError('target'));
+      ).rejects.toThrow(placeUnknownError('tackle'));
       expect(await api.listTasks()).toHaveLength(before); // the batch wrote nothing
-      const [bulk] = await api.createTasks([{ title: 'nails', place: 'safeway' }]);
-      expect(bulk!.place).toBe('safeway');
+      const [bulk] = await api.createTasks([{ title: 'nails', place: 'grocer' }]);
+      expect(bulk!.place).toBe('grocer');
 
       expect((await api.setTaskPlace(t.id, null)).place).toBeNull();
-      await expect(api.setTaskPlace(t.id, 'target')).rejects.toThrow(placeUnknownError('target'));
-      expect((await api.setTaskPlace(t.id, 'safeway')).place).toBe('safeway'); // open: any time
+      await expect(api.setTaskPlace(t.id, 'tackle')).rejects.toThrow(placeUnknownError('tackle'));
+      expect((await api.setTaskPlace(t.id, 'grocer')).place).toBe('grocer'); // open: any time
       // A finished task's place is history — on or off a list would flip its calibration after the fact.
       await api.transitionTask(bulk!.id, 'in_progress');
       await api.transitionTask(bulk!.id, 'done');
-      await api.upsertPlace({ name: 'Target' });
+      await api.upsertPlace({ name: 'Tackle' });
       await expect(api.setTaskPlace(bulk!.id, null)).rejects.toThrow(PLACE_FINISHED_ERROR);
-      await expect(api.setTaskPlace(bulk!.id, 'target')).rejects.toThrow(PLACE_FINISHED_ERROR);
+      await expect(api.setTaskPlace(bulk!.id, 'tackle')).rejects.toThrow(PLACE_FINISHED_ERROR);
       const plain = await api.createTask({ title: 'plain, cancelled' });
       await api.transitionTask(plain.id, 'cancelled');
-      await expect(api.setTaskPlace(plain.id, 'safeway')).rejects.toThrow(PLACE_FINISHED_ERROR);
-      expect((await api.getTask(bulk!.id))!.place).toBe('safeway');
+      await expect(api.setTaskPlace(plain.id, 'grocer')).rejects.toThrow(PLACE_FINISHED_ERROR);
+      expect((await api.getTask(bulk!.id))!.place).toBe('grocer');
       expect((await api.getTask(plain.id))!.place).toBeNull();
     });
 
     it('places: a slug change follows its tasks; delete moves them to a place or off any list', async () => {
-      const safeway = await api.upsertPlace({ name: 'Safeway' });
-      const target = await api.upsertPlace({ name: 'Target' });
-      const a = await api.createTask({ title: 'a', place: 'safeway' });
-      await api.upsertPlace({ id: safeway.id, name: 'Safeway', slug: 'sw' });
-      expect((await api.getTask(a.id))!.place).toBe('sw');
+      const grocer = await api.upsertPlace({ name: 'Grocer' });
+      const tackle = await api.upsertPlace({ name: 'Tackle' });
+      const a = await api.createTask({ title: 'a', place: 'grocer' });
+      await api.upsertPlace({ id: grocer.id, name: 'Grocer', slug: 'gr' });
+      expect((await api.getTask(a.id))!.place).toBe('gr');
 
-      await expect(api.deletePlace(safeway.id, 'nowhere')).rejects.toThrow(
+      await expect(api.deletePlace(grocer.id, 'nowhere')).rejects.toThrow(
         placeUnknownError('nowhere'),
       );
-      await expect(api.deletePlace(safeway.id, 'sw')).rejects.toThrow(); // not onto itself
-      await api.deletePlace(safeway.id, 'target');
-      expect((await api.getTask(a.id))!.place).toBe('target');
-      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['target']);
+      await expect(api.deletePlace(grocer.id, 'gr')).rejects.toThrow(); // not onto itself
+      await api.deletePlace(grocer.id, 'tackle');
+      expect((await api.getTask(a.id))!.place).toBe('tackle');
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['tackle']);
 
-      await api.deletePlace(target.id, null);
+      await api.deletePlace(tackle.id, null);
       expect((await api.getTask(a.id))!.place).toBeNull();
       expect(await api.listPlaces()).toEqual([]);
     });
 
     it("places: delete touches only that place's tasks", async () => {
-      const safeway = await api.upsertPlace({ name: 'Safeway' });
-      await api.upsertPlace({ name: 'Target' });
-      await api.upsertPlace({ name: 'Costco' });
-      const s = await api.createTask({ title: 's', place: 'safeway' });
-      const t = await api.createTask({ title: 't', place: 'target' });
-      const c = await api.createTask({ title: 'c', place: 'costco' });
+      const grocer = await api.upsertPlace({ name: 'Grocer' });
+      await api.upsertPlace({ name: 'Tackle' });
+      await api.upsertPlace({ name: 'Counter' });
+      const s = await api.createTask({ title: 's', place: 'grocer' });
+      const t = await api.createTask({ title: 't', place: 'tackle' });
+      const c = await api.createTask({ title: 'c', place: 'counter' });
       const none = await api.createTask({ title: 'none' });
-      await api.deletePlace(safeway.id, 'target');
-      expect((await api.getTask(s.id))!.place).toBe('target');
-      expect((await api.getTask(t.id))!.place).toBe('target');
-      expect((await api.getTask(c.id))!.place).toBe('costco');
+      await api.deletePlace(grocer.id, 'tackle');
+      expect((await api.getTask(s.id))!.place).toBe('tackle');
+      expect((await api.getTask(t.id))!.place).toBe('tackle');
+      expect((await api.getTask(c.id))!.place).toBe('counter');
       expect((await api.getTask(none.id))!.place).toBeNull();
     });
 
     it('places: a finished errand stays placed through a rename, a move and a delete to none', async () => {
-      const safeway = await api.upsertPlace({ name: 'Safeway' });
-      const target = await api.upsertPlace({ name: 'Target' });
-      const open = await api.createTask({ title: 'open', place: 'safeway' });
-      const done = await api.createTask({ title: 'done', place: 'safeway', estimateMin: 5 });
+      const grocer = await api.upsertPlace({ name: 'Grocer' });
+      const tackle = await api.upsertPlace({ name: 'Tackle' });
+      const open = await api.createTask({ title: 'open', place: 'grocer' });
+      const done = await api.createTask({ title: 'done', place: 'grocer', estimateMin: 5 });
       await api.transitionTask(done.id, 'in_progress');
       await api.transitionTask(done.id, 'done');
-      const gone = await api.createTask({ title: 'gone', place: 'safeway' });
+      const gone = await api.createTask({ title: 'gone', place: 'grocer' });
       await api.transitionTask(gone.id, 'cancelled');
       const points = async () =>
         (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map((p) => p.taskId);
       expect(await points()).not.toContain(done.id);
 
       // A slug rename and a move to another place rewrite finished tasks too — they stay placed.
-      await api.upsertPlace({ id: safeway.id, name: 'Safeway', slug: 'sw' });
-      expect((await api.getTask(done.id))!.place).toBe('sw');
-      await api.deletePlace(safeway.id, 'target');
-      expect((await api.getTask(done.id))!.place).toBe('target');
-      expect((await api.getTask(gone.id))!.place).toBe('target');
-      expect((await api.getTask(open.id))!.place).toBe('target');
+      await api.upsertPlace({ id: grocer.id, name: 'Grocer', slug: 'gr' });
+      expect((await api.getTask(done.id))!.place).toBe('gr');
+      await api.deletePlace(grocer.id, 'tackle');
+      expect((await api.getTask(done.id))!.place).toBe('tackle');
+      expect((await api.getTask(gone.id))!.place).toBe('tackle');
+      expect((await api.getTask(open.id))!.place).toBe('tackle');
 
       // Off any list: the open errand leaves it; the finished ones keep the old slug as history.
-      await api.deletePlace(target.id, null);
+      await api.deletePlace(tackle.id, null);
       expect((await api.getTask(open.id))!.place).toBeNull();
-      expect((await api.getTask(done.id))!.place).toBe('target');
-      expect((await api.getTask(gone.id))!.place).toBe('target');
+      expect((await api.getTask(done.id))!.place).toBe('tackle');
+      expect((await api.getTask(gone.id))!.place).toBe('tackle');
       expect(await points()).not.toContain(done.id); // calibration never flipped
     });
 
     it('places: a deleted place can be neither updated nor deleted again', async () => {
-      const safeway = await api.upsertPlace({ name: 'Safeway' });
-      await api.deletePlace(safeway.id, null);
-      await expect(api.upsertPlace({ id: safeway.id, name: 'Back' })).rejects.toThrow();
-      await expect(api.deletePlace(safeway.id, null)).rejects.toThrow();
+      const grocer = await api.upsertPlace({ name: 'Grocer' });
+      await api.deletePlace(grocer.id, null);
+      await expect(api.upsertPlace({ id: grocer.id, name: 'Back' })).rejects.toThrow();
+      await expect(api.deletePlace(grocer.id, null)).rejects.toThrow();
       expect(await api.listPlaces()).toEqual([]);
     });
 
     it('places: a rename onto a slug in use is refused, and changes nothing', async () => {
-      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      const grocer = await api.upsertPlace({ name: 'Grocer' });
       advance(1); // add order is createdAt (see above)
-      await api.upsertPlace({ name: 'Target' });
-      const a = await api.createTask({ title: 'a', place: 'safeway' });
+      await api.upsertPlace({ name: 'Tackle' });
+      const a = await api.createTask({ title: 'a', place: 'grocer' });
       await expect(
-        api.upsertPlace({ id: safeway.id, name: 'Safeway', slug: 'target' }),
+        api.upsertPlace({ id: grocer.id, name: 'Grocer', slug: 'tackle' }),
       ).rejects.toThrow(/already uses/);
-      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['safeway', 'target']);
-      expect((await api.getTask(a.id))!.place).toBe('safeway');
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['grocer', 'tackle']);
+      expect((await api.getTask(a.id))!.place).toBe('grocer');
     });
 
     it("places: a part is created on its parent's place, and refuses a different one", async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      await api.upsertPlace({ name: 'Target' });
-      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      await api.upsertPlace({ name: 'Grocer' });
+      await api.upsertPlace({ name: 'Tackle' });
+      const party = await api.createTask({ title: 'party', place: 'grocer' });
       const cups = await api.createTask({ title: 'cups', parentId: party.id });
-      expect(cups.place).toBe('safeway');
-      const same = await api.createTask({ title: 'ice', parentId: party.id, place: 'safeway' });
-      expect(same.place).toBe('safeway');
+      expect(cups.place).toBe('grocer');
+      const same = await api.createTask({ title: 'ice', parentId: party.id, place: 'grocer' });
+      expect(same.place).toBe('grocer');
       await expect(
-        api.createTask({ title: 'x', parentId: party.id, place: 'target' }),
+        api.createTask({ title: 'x', parentId: party.id, place: 'tackle' }),
       ).rejects.toThrow(PLACE_PART_ERROR);
       const before = (await api.listTasks()).length;
       await expect(
         api.createTasks([
           { title: 'ok', parentId: party.id },
-          { title: 'bad', parentId: party.id, place: 'target' },
+          { title: 'bad', parentId: party.id, place: 'tackle' },
         ]),
       ).rejects.toThrow(PLACE_PART_ERROR);
       expect(await api.listTasks()).toHaveLength(before); // the batch wrote nothing
       const [bulk] = await api.createTasks([{ title: 'napkins', parentId: party.id }]);
-      expect(bulk!.place).toBe('safeway');
+      expect(bulk!.place).toBe('grocer');
       // An unplaced parent's parts are unplaced: a slug on one is refused too.
       const plain = await api.createTask({ title: 'pset' });
       expect((await api.createTask({ title: 'q1', parentId: plain.id })).place).toBeNull();
       await expect(
-        api.createTask({ title: 'q2', parentId: plain.id, place: 'safeway' }),
+        api.createTask({ title: 'q2', parentId: plain.id, place: 'grocer' }),
       ).rejects.toThrow(PLACE_PART_ERROR);
     });
 
     it('places: a part follows its parent — refused on its own, carried when the parent moves', async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      await api.upsertPlace({ name: 'Target' });
-      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      await api.upsertPlace({ name: 'Grocer' });
+      await api.upsertPlace({ name: 'Tackle' });
+      const party = await api.createTask({ title: 'party', place: 'grocer' });
       const cups = await api.createTask({ title: 'cups', parentId: party.id });
       const ice = await api.createTask({ title: 'ice', parentId: party.id });
       await api.transitionTask(ice.id, 'in_progress');
       await api.transitionTask(ice.id, 'done');
-      await expect(api.setTaskPlace(cups.id, 'target')).rejects.toThrow(PLACE_PART_ERROR);
+      await expect(api.setTaskPlace(cups.id, 'tackle')).rejects.toThrow(PLACE_PART_ERROR);
       await expect(api.setTaskPlace(cups.id, null)).rejects.toThrow(PLACE_PART_ERROR);
-      expect((await api.setTaskPlace(party.id, 'target')).place).toBe('target');
-      expect((await api.getTask(cups.id))!.place).toBe('target'); // open: carried along
-      expect((await api.getTask(ice.id))!.place).toBe('safeway'); // finished: history
+      expect((await api.setTaskPlace(party.id, 'tackle')).place).toBe('tackle');
+      expect((await api.getTask(cups.id))!.place).toBe('tackle'); // open: carried along
+      expect((await api.getTask(ice.id))!.place).toBe('grocer'); // finished: history
       await api.setTaskPlace(party.id, null);
       expect((await api.getTask(cups.id))!.place).toBeNull();
-      expect((await api.getTask(ice.id))!.place).toBe('safeway');
+      expect((await api.getTask(ice.id))!.place).toBe('grocer');
     });
 
     it("places: attaching an open task gives it the parent's place; detaching keeps it", async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      await api.upsertPlace({ name: 'Target' });
-      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      await api.upsertPlace({ name: 'Grocer' });
+      await api.upsertPlace({ name: 'Tackle' });
+      const party = await api.createTask({ title: 'party', place: 'grocer' });
       await api.createTask({ title: 'cups', parentId: party.id });
-      const loose = await api.createTask({ title: 'ice', place: 'target' });
-      expect((await api.setTaskParent(loose.id, party.id)).place).toBe('safeway');
-      expect((await api.setTaskParent(loose.id, null)).place).toBe('safeway');
+      const loose = await api.createTask({ title: 'ice', place: 'tackle' });
+      expect((await api.setTaskParent(loose.id, party.id)).place).toBe('grocer');
+      expect((await api.setTaskParent(loose.id, null)).place).toBe('grocer');
       const unplaced = await api.createTask({ title: 'plates' });
-      expect((await api.setTaskParent(unplaced.id, party.id)).place).toBe('safeway');
+      expect((await api.setTaskParent(unplaced.id, party.id)).place).toBe('grocer');
       const plain = await api.createTask({ title: 'pset' });
       expect((await api.setTaskParent(loose.id, plain.id)).place).toBeNull(); // an unplaced parent's
     });
 
     it("places: a split keeps every part on the parent's place", async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      const big = await api.createTask({ title: 'big shop', place: 'safeway', estimateMin: 30 });
+      await api.upsertPlace({ name: 'Grocer' });
+      const big = await api.createTask({ title: 'big shop', place: 'grocer', estimateMin: 30 });
       const { parent, original, followUp } = await api.splitTask(big.id, {
         finish: 'keep',
         followUp: { title: 'rest of the shop', estimateMin: 10 },
       });
       expect([parent.place, original.place, followUp.place]).toEqual([
-        'safeway',
-        'safeway',
-        'safeway',
+        'grocer',
+        'grocer',
+        'grocer',
       ]);
       const again = await api.splitTask(followUp.id, {
         finish: 'keep',
         followUp: { title: 'last bits', estimateMin: 5 },
       });
-      expect(again.followUp.place).toBe('safeway');
+      expect(again.followUp.place).toBe('grocer');
     });
 
     it('places: the digest lists items — a parent with open parts gives way to them', async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      await api.upsertPlace({ name: 'Grocer' });
+      const party = await api.createTask({ title: 'party', place: 'grocer' });
       clock += 1000;
       await api.createTask({ title: 'cups', parentId: party.id });
       clock += 1000;
       await api.createTask({ title: 'ice', parentId: party.id });
       clock += 1000;
-      await api.createTask({ title: 'shampoo', place: 'safeway' });
-      expect((await api.listPlaceTasks('safeway')).titles).toEqual(['cups', 'ice', 'shampoo']);
+      await api.createTask({ title: 'shampoo', place: 'grocer' });
+      expect((await api.listPlaceTasks('grocer')).titles).toEqual(['cups', 'ice', 'shampoo']);
       for (const p of (await api.listTasks()).filter((t) => t.parentId === party.id)) {
         await api.transitionTask(p.id, 'in_progress');
         await api.transitionTask(p.id, 'done');
       }
       // Every part finished: the parent is the item again.
-      expect((await api.listPlaceTasks('safeway')).titles).toEqual(['party', 'shampoo']);
+      expect((await api.listPlaceTasks('grocer')).titles).toEqual(['party', 'shampoo']);
     });
 
     it("places: listPlaceTasks is the Shortcut's digest of open errands, oldest first", async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      expect(await api.listPlaceTasks('safeway')).toEqual({
-        place: 'Safeway',
-        slug: 'safeway',
+      await api.upsertPlace({ name: 'Grocer' });
+      expect(await api.listPlaceTasks('grocer')).toEqual({
+        place: 'Grocer',
+        slug: 'grocer',
         count: 0,
         titles: [],
         text: '',
       });
-      await api.createTask({ title: 'shampoo', place: 'safeway' });
+      await api.createTask({ title: 'shampoo', place: 'grocer' });
       clock += 1000;
-      const nails = await api.createTask({ title: 'nails', place: 'safeway' });
+      const nails = await api.createTask({ title: 'nails', place: 'grocer' });
       clock += 1000;
-      const gone = await api.createTask({ title: 'gone', place: 'safeway' });
+      const gone = await api.createTask({ title: 'gone', place: 'grocer' });
       await api.transitionTask(gone.id, 'cancelled');
-      expect(await api.listPlaceTasks('safeway')).toMatchObject({
+      expect(await api.listPlaceTasks('grocer')).toMatchObject({
         count: 2,
         titles: ['shampoo', 'nails'],
-        text: 'Safeway · 2 — shampoo, nails',
+        text: 'Grocer · 2 — shampoo, nails',
       });
       await api.transitionTask(nails.id, 'in_progress');
       await api.transitionTask(nails.id, 'done');
-      expect((await api.listPlaceTasks('safeway')).titles).toEqual(['shampoo']);
-      await expect(api.listPlaceTasks('target')).rejects.toThrow(placeUnknownError('target'));
+      expect((await api.listPlaceTasks('grocer')).titles).toEqual(['shampoo']);
+      await expect(api.listPlaceTasks('tackle')).rejects.toThrow(placeUnknownError('tackle'));
     });
 
     it('places: an errand never becomes a calibration point, even with an estimate', async () => {
-      await api.upsertPlace({ name: 'Safeway' });
-      const errand = await api.createTask({ title: 'shampoo', place: 'safeway', estimateMin: 5 });
+      await api.upsertPlace({ name: 'Grocer' });
+      const errand = await api.createTask({ title: 'shampoo', place: 'grocer', estimateMin: 5 });
       const work = await api.createTask({ title: 'pset', estimateMin: 60 });
       await api.setTaskActual(work.id, 45);
       for (const t of [errand, work]) {
@@ -3085,11 +3085,11 @@ export function runApiContract(
       expect(await api.getPlaceTokenStatus()).toEqual(first.status);
       const second = await api.rotatePlaceToken();
       expect(second.token).not.toBe(first.token);
-      await api.upsertPlace({ name: 'Safeway' });
+      await api.upsertPlace({ name: 'Grocer' });
       const data = JSON.stringify(await api.exportData());
       expect(data).not.toContain(second.token);
       expect(data).not.toContain(first.token);
-      expect((await api.exportData()).places.map((p) => p.slug)).toEqual(['safeway']);
+      expect((await api.exportData()).places.map((p) => p.slug)).toEqual(['grocer']);
       await api.revokePlaceToken();
       expect((await api.getPlaceTokenStatus()).active).toBe(false);
     });

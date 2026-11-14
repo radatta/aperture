@@ -222,7 +222,7 @@ describe('createLiveAnthropic', () => {
         },
       },
     });
-    expect(body.system).toContain('one short note about a week of neck-rehab exercises');
+    expect(body.system).toContain('one short note about a week of neck exercises');
     expect(body.messages).toEqual([
       { role: 'user', content: expect.stringContaining(`Draft line: ${line}`) },
     ]);

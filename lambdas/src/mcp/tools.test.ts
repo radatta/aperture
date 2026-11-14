@@ -511,10 +511,10 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     const hw = { label: 'Homework', isWork: true, order: 4 };
     const cat = (await call('create_category', hw)) as Category;
     await setup.upsertCategory({ ...hw, id: cat.id, active: false }); // retired outside the MCP
-    const renamed = (await call('update_category', { id: cat.id, label: 'CS 61B' })) as Category;
-    expect(renamed).toMatchObject({ label: 'CS 61B', isWork: true, order: 4, active: false });
+    const renamed = (await call('update_category', { id: cat.id, label: 'CS 102' })) as Category;
+    expect(renamed).toMatchObject({ label: 'CS 102', isWork: true, order: 4, active: false });
     const reordered = (await call('update_category', { id: cat.id, order: 1 })) as Category;
-    expect(reordered).toMatchObject({ label: 'CS 61B', order: 1, active: false });
+    expect(reordered).toMatchObject({ label: 'CS 102', order: 1, active: false });
   });
 
   it('update_category sends only the fields given — a stale label or isWork never rides along', async () => {
@@ -534,7 +534,7 @@ describe('mcp tools — categories, calibration, leetcode', () => {
   it('create_category / update_category carry area; list_categories returns it; a bad value is refused', async () => {
     const { call } = makeEnv();
     const cat = (await call('create_category', {
-      label: 'CSEN 146',
+      label: 'MATH 200',
       isWork: true,
       area: 'school',
     })) as Category;
@@ -542,8 +542,8 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     const noArea = (await call('create_category', { label: 'Misc', isWork: false })) as Category;
     expect(noArea.area).toBeNull();
     const moved = (await call('update_category', { id: cat.id, area: 'aperture' })) as Category;
-    expect(moved).toMatchObject({ label: 'CSEN 146', isWork: true, area: 'aperture' });
-    const renamed = (await call('update_category', { id: cat.id, label: 'CSEN 146L' })) as Category;
+    expect(moved).toMatchObject({ label: 'MATH 200', isWork: true, area: 'aperture' });
+    const renamed = (await call('update_category', { id: cat.id, label: 'MATH 200L' })) as Category;
     expect(renamed.area).toBe('aperture'); // unsent keeps it
     const cleared = (await call('update_category', { id: cat.id, area: null })) as Category;
     expect(cleared.area).toBeNull();
@@ -554,7 +554,7 @@ describe('mcp tools — categories, calibration, leetcode', () => {
       /must be one of/,
     );
     const listed = (await call('list_categories')) as Category[];
-    expect(listed.find((c) => c.id === cat.id)).toMatchObject({ label: 'CSEN 146L', area: null });
+    expect(listed.find((c) => c.id === cat.id)).toMatchObject({ label: 'MATH 200L', area: null });
   });
 
   it('update_category retires and restores via active', async () => {

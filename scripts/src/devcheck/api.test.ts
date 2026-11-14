@@ -470,17 +470,17 @@ describe('createApiClient', () => {
     it('GETs the Shortcut route on the dev origin with the place token, never the session token', async () => {
       const fetch = vi.fn<FetchLike>(async () => reply(200, { count: 0 }));
       const api = createApiClient({ fetch, token: () => 'jwt', ledger: memLedger(), run: 'r1' });
-      expect(await api.reads.placeDigestRaw('safeway', SECRET)).toEqual({
+      expect(await api.reads.placeDigestRaw('grocer', SECRET)).toEqual({
         status: 200,
         body: { count: 0 },
       });
-      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/safeway/tasks`, {
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/grocer/tasks`, {
         method: 'GET',
         headers: { 'x-aperture-authorization': `Bearer ${SECRET}` },
         redirect: 'error',
       });
-      await api.reads.placeDigestRaw('safeway', null, 'POST');
-      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/safeway/tasks`, {
+      await api.reads.placeDigestRaw('grocer', null, 'POST');
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/grocer/tasks`, {
         method: 'POST',
         headers: {},
         redirect: 'error',

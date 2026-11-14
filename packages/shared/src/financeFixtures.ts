@@ -166,7 +166,7 @@ export function fixtureHistory(today: string): PlaidTransaction[] {
       'TRANSFER_OUT',
       'TRANSFER_OUT_ACCOUNT_TRANSFER',
     ]),
-    // Money out that isn't spending: a brokerage deposit from savings, no matching inflow — the
+    // Money out that isn't spending: a transfer out from savings, no matching inflow — the
     // row "Not spending" exists for.
     txn('fx-brokerage', savings, addDays(today, -6), 400, 'BROKERAGE FUNDS', 'Brokerage', [
       'TRANSFER_OUT',

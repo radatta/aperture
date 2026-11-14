@@ -605,10 +605,10 @@ export interface ApiClient {
   pullLiveSitting(): Promise<LiveSittingPull>; // Claude's live read (live_sitting) — counts itself
   listSittingReplay(id: string): Promise<SittingReplayChunk[]>; // at asc; empty once the raw bulk expired
   setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting>;
-  // His review, whole-replaced (normalizeSittingReview; all-empty clears it to null). On the head, at any status.
+  // The user's review, whole-replaced (normalizeSittingReview; all-empty clears it to null). On the head, at any status.
   setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting>;
   // Claude's draft of mistake lines from the sitting's runs, submits and code (one Haiku call). Never automatic —
-  // the form's button — and it writes nothing: only the lines he ticks reach the review, through setSittingReview.
+  // the form's button — and it writes nothing: only the lines the user ticks reach the review, through setSittingReview.
   draftSittingReview(id: string): Promise<ReviewDraft>;
   // Tombstones the sitting and every child row. No UI: the dev check's cleanup, and deleteTask's cascade.
   deleteSitting(id: string): Promise<void>;

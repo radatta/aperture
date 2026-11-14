@@ -96,7 +96,7 @@ export const FINANCE_TOOLS: Tool[] = [
   {
     name: 'get_finance_overview',
     description: [
-      'The budget at a glance — "how much budget is left?". The current billing period (from the card payment the user marked, else their payment day), budget / spent / left (left < 0 = over), totals per bucket (parents_pay "Parents pay", budget "Budget", i_pay "I pay"; rows the user sorted as not_spending "Not spending" — a brokerage deposit, a cash withdrawal — are in no total), how many charges are still to sort, account balances, and each bank\'s sync status.',
+      'The budget at a glance — "how much budget is left?". The current billing period (from the card payment the user marked, else their payment day), budget / spent / left (left < 0 = over), totals per bucket (parents_pay "Covered", budget "Budget", i_pay "I pay"; rows the user sorted as not_spending "Not spending" — a transfer to an outside account, a cash withdrawal — are in no total), how many charges are still to sort, account balances, and each bank\'s sync status.',
       "Hidden accounts are listed (hidden: true) but excluded from every total. A credit account's balance is the amount owed.",
       SIGN,
       TODAY_ARG,

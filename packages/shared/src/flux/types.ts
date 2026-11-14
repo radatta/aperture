@@ -4,7 +4,7 @@
 // writing config, not code.
 //
 // The engine measures head ROTATION only (pitch/yaw/roll relative to a
-// calibrated neutral). Most neck-rehab exercises aren't cleanly measurable that
+// calibrated neutral). Most neck exercises aren't cleanly measurable that
 // way, so each definition declares how honestly the engine can grade it via
 // `measurement` and picks the `kind` that matches what we can actually observe.
 

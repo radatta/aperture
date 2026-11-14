@@ -414,7 +414,7 @@ describe('handler place route', () => {
     headers: Record<string, string | undefined>,
     opts: { method?: string; path?: string; body?: string } = {},
   ) => {
-    const path = opts.path ?? '/api/places/safeway/tasks';
+    const path = opts.path ?? '/api/places/grocer/tasks';
     return handler({
       rawPath: path,
       requestContext: { http: { method: opts.method ?? 'GET', path } },
@@ -424,8 +424,8 @@ describe('handler place route', () => {
   };
   const bearer = (token: string) => ({ 'x-aperture-authorization': `Bearer ${token}` });
   async function seeded() {
-    await backend.upsertPlace({ name: 'Safeway' });
-    await backend.createTask({ title: 'shampoo', place: 'safeway', notes: 'the blue one' });
+    await backend.upsertPlace({ name: 'Grocer' });
+    await backend.createTask({ title: 'shampoo', place: 'grocer', notes: 'the blue one' });
     return (await backend.rotatePlaceToken()).token;
   }
 
@@ -435,12 +435,12 @@ describe('handler place route', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body) as Record<string, unknown>;
     expect(body).toEqual({
-      place: 'Safeway',
-      slug: 'safeway',
+      place: 'Grocer',
+      slug: 'grocer',
       count: 1,
       titles: ['shampoo'],
-      text: 'Safeway · 1 — shampoo',
-      url: 'https://app.test/tasks?lens=places&place=safeway',
+      text: 'Grocer · 1 — shampoo',
+      url: 'https://app.test/tasks?lens=places&place=grocer',
     });
     expect(res.body).not.toContain('the blue one');
     // Both heartbeats landed: the token's count and the place's lastReadAt.
@@ -501,8 +501,8 @@ describe('handler place route', () => {
   it('403s without the origin secret, even with a valid token', async () => {
     const token = await seeded();
     const res = await handler({
-      rawPath: '/api/places/safeway/tasks',
-      requestContext: { http: { method: 'GET', path: '/api/places/safeway/tasks' } },
+      rawPath: '/api/places/grocer/tasks',
+      requestContext: { http: { method: 'GET', path: '/api/places/grocer/tasks' } },
       headers: bearer(token),
     });
     expect(res.statusCode).toBe(403);
@@ -513,16 +513,16 @@ describe('handler place route', () => {
   it('422s an unknown slug only after auth, writing nothing, with text for the notification', async () => {
     const token = await seeded();
     const before = doc.snapshot();
-    const path = '/api/places/target/tasks';
+    const path = '/api/places/tackle/tasks';
     expect((await read({}, { path })).statusCode).toBe(401); // no probing without a token
     const res = await read(bearer(token), { path });
     expect(res.statusCode).toBe(422);
     expect(JSON.parse(res.body)).toEqual({
-      error: 'No place "target" — add it in Settings › Places',
-      text: placeReadUnknownText('target'),
+      error: 'No place "tackle" — add it in Settings › Places',
+      text: placeReadUnknownText('tackle'),
     });
-    expect(placeReadUnknownText('target')).toBe(
-      'Aperture: no place "target" — check the Shortcut\'s input or Settings › Places',
+    expect(placeReadUnknownText('tackle')).toBe(
+      'Aperture: no place "tackle" — check the Shortcut\'s input or Settings › Places',
     );
     // A path the route regex refuses is the route's too — never the RPC dispatch, never a 404.
     for (const bad of ['/api/places/x', '/api/places//tasks', '/api/places/a%20b/tasks']) {
@@ -534,17 +534,17 @@ describe('handler place route', () => {
     expect(doc.snapshot()).toEqual(before);
   });
 
-  it('matches the slug case-insensitively: an automation passing "Safeway" reads safeway', async () => {
+  it('matches the slug case-insensitively: an automation passing "Grocer" reads grocer', async () => {
     const token = await seeded();
-    const res = await read(bearer(token), { path: '/api/places/SafeWay/tasks' });
+    const res = await read(bearer(token), { path: '/api/places/GroCer/tasks' });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ slug: 'safeway', count: 1 });
+    expect(JSON.parse(res.body)).toMatchObject({ slug: 'grocer', count: 1 });
   });
 
   it('an empty list is a 200 with text "" — the one case the Shortcut shows nothing', async () => {
-    await backend.upsertPlace({ name: 'Target' });
+    await backend.upsertPlace({ name: 'Tackle' });
     const token = (await backend.rotatePlaceToken()).token;
-    const res = await read(bearer(token), { path: '/api/places/target/tasks' });
+    const res = await read(bearer(token), { path: '/api/places/tackle/tasks' });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toMatchObject({ count: 0, titles: [], text: '' });
   });
@@ -580,7 +580,7 @@ describe('handler place route', () => {
     });
     const res = await read(bearer(token));
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ count: 1, text: 'Safeway · 1 — shampoo' });
+    expect(JSON.parse(res.body)).toMatchObject({ count: 1, text: 'Grocer · 1 — shampoo' });
     expect(logs.some((l) => l.includes('place_heartbeat_failed'))).toBe(true);
     const row = await new PlaceTokenStore(doc, liveWrites(doc)).get(hashPlaceToken(token));
     expect(row!.readsCount).toBe(1);
@@ -673,7 +673,7 @@ describe('handler place route', () => {
         rawPath: `/api/${method}`,
         requestContext: { http: { method: 'POST', path: `/api/${method}` } },
         headers: { ...ORIGIN, ...bearer(token) },
-        body: JSON.stringify({ args: ['safeway'] }),
+        body: JSON.stringify({ args: ['grocer'] }),
       });
       expect(res.statusCode).toBe(401);
     }

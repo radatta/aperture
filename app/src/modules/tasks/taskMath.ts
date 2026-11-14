@@ -116,7 +116,7 @@ export function ruleSummary(rule: RecurrenceRule): string {
 }
 
 // The series row's one line: the rule, then the cadence's due offset and end when set (recurring.md D6) —
-// "Mon, Wed · due next day · until Dec 5", "ended Dec 5" once `today` is past it. A year other than
+// "Mon, Wed · due next day · until Nov 30", "ended Nov 30" once `today` is past it. A year other than
 // today's is spelled out.
 export function seriesSummary(series: TaskSeries, today: string): string {
   const parts = [ruleSummary(series.rule)];

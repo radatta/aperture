@@ -38,23 +38,23 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
   if (!tool) throw new Error(`no tool ${name}`);
   return tool.run(args, ctx);
 };
-const prelab = {
-  title: 'Pre-lab',
+const report = {
+  title: 'Weekly report',
   rule: { kind: 'weekly', daysOfWeek: [2] },
   defaultEstimateMin: 60,
   dueOffsetDays: 1,
-  until: '2023-12-05',
+  until: '2023-11-30',
 };
 
 describe('create_series / list_series', () => {
   it('creates from the user’s today; the app’s next day load spawns the dated occurrence', async () => {
-    const s = (await call('create_series', prelab)) as TaskSeries;
+    const s = (await call('create_series', report)) as TaskSeries;
     expect(s).toMatchObject({
-      title: 'Pre-lab',
+      title: 'Weekly report',
       rule: { kind: 'weekly', daysOfWeek: [2] },
       defaultEstimateMin: 60,
       dueOffsetDays: 1,
-      until: '2023-12-05',
+      until: '2023-11-30',
       anchorDate: TODAY,
       categoryId: null,
       active: true,
@@ -87,17 +87,17 @@ describe('create_series / list_series', () => {
 
   it('refuses before any write: until before today, a negative offset, a bad rule, a blank title', async () => {
     const bad: [Record<string, unknown>, RegExp][] = [
-      [{ ...prelab, until: '2023-11-13' }, /before today \(2023-11-14\)/],
-      [{ ...prelab, until: '2023-2-5' }, /"until" must be an ISO date/],
-      [{ ...prelab, dueOffsetDays: -1 }, /"dueOffsetDays" must be an integer >= 0/],
-      [{ ...prelab, dueOffsetDays: 1.5 }, /"dueOffsetDays"/],
-      [{ ...prelab, rule: { kind: 'weekly', daysOfWeek: [] } }, /daysOfWeek/],
-      [{ ...prelab, rule: { kind: 'weekly', daysOfWeek: [7] } }, /daysOfWeek/],
-      [{ ...prelab, rule: { kind: 'everyN', interval: 0 } }, /interval/],
-      [{ ...prelab, rule: { kind: 'monthly' } }, /rule.kind/],
-      [{ ...prelab, rule: 'daily' }, /"rule" is required/],
-      [{ ...prelab, title: '  ' }, /"title" is required/],
-      [{ ...prelab, defaultEstimateMin: -5 }, /defaultEstimateMin/],
+      [{ ...report, until: '2023-11-13' }, /before today \(2023-11-14\)/],
+      [{ ...report, until: '2023-2-5' }, /"until" must be an ISO date/],
+      [{ ...report, dueOffsetDays: -1 }, /"dueOffsetDays" must be an integer >= 0/],
+      [{ ...report, dueOffsetDays: 1.5 }, /"dueOffsetDays"/],
+      [{ ...report, rule: { kind: 'weekly', daysOfWeek: [] } }, /daysOfWeek/],
+      [{ ...report, rule: { kind: 'weekly', daysOfWeek: [7] } }, /daysOfWeek/],
+      [{ ...report, rule: { kind: 'everyN', interval: 0 } }, /interval/],
+      [{ ...report, rule: { kind: 'monthly' } }, /rule.kind/],
+      [{ ...report, rule: 'daily' }, /"rule" is required/],
+      [{ ...report, title: '  ' }, /"title" is required/],
+      [{ ...report, defaultEstimateMin: -5 }, /defaultEstimateMin/],
     ];
     for (const [args, re] of bad) {
       await expect(call('create_series', args)).rejects.toThrow(re);
@@ -108,14 +108,14 @@ describe('create_series / list_series', () => {
   });
 
   it('until today itself is allowed (it recurs once more)', async () => {
-    const s = (await call('create_series', { ...prelab, until: TODAY })) as TaskSeries;
+    const s = (await call('create_series', { ...report, until: TODAY })) as TaskSeries;
     expect(s.until).toBe(TODAY);
   });
 });
 
 describe('stop_series', () => {
   it('deactivates: nothing spawns after, the occurrences stay, list_series omits it unless asked', async () => {
-    const s = (await call('create_series', { ...prelab, rule: { kind: 'daily' } })) as TaskSeries;
+    const s = (await call('create_series', { ...report, rule: { kind: 'daily' } })) as TaskSeries;
     await setup.getDay(TODAY);
     const stopped = (await call('stop_series', { id: s.id })) as TaskSeries;
     expect(stopped.active).toBe(false);

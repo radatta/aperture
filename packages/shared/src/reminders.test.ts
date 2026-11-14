@@ -58,7 +58,7 @@ describe('taskFireAt', () => {
     expect(taskFireAt(task({ ...due, deletedAt: 5 }), userDueEpoch)).toBeNull();
     expect(taskFireAt(task({}), userDueEpoch)).toBeNull();
     expect(
-      taskFireAt(task({ ...due, place: 'safeway', parentId: 'p' }), userDueEpoch),
+      taskFireAt(task({ ...due, place: 'grocer', parentId: 'p' }), userDueEpoch),
     ).not.toBeNull();
     expect(taskFireAt(task({ ...due, status: 'in_progress' }), userDueEpoch)).not.toBeNull();
   });
