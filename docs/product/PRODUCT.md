@@ -2,7 +2,7 @@
 
 Personal life-OS PWA. Web-first, installable to phone. One codebase, both surfaces.
 Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
-Versions: **v1** is the ritual app — [`V1_PLAN.md`](../V1_PLAN.md) phases 0–14, designed in §1–§6 below. **v2** is everything shipped since, mapped in §7; each piece's design lives in its `areas/` doc.
+Versions: **v1** is the ritual app — [`V1_PLAN.md`](../V1_PLAN.md) phases 0–14; §6's scope line is its boundary. **v2** is everything shipped since, mapped in §7; each piece's design lives in its `areas/` doc. §1–§5 describe the app as it is today: a whole v2 module is tagged `_(v2)_`, and a v2 addition inside a v1 surface (the Day shape card, private log entries, life areas) is listed in §7.
 
 ---
 
@@ -133,10 +133,10 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 
 ### 4b. The lighter modules
 
-- **Interstitial log** — timestamped, append-only, one day per page. Light edit allowed (fix a typo); **no backdating** in v1. The durable reflection substrate. An entry can be **private** (its text never leaves over MCP: reads show it redacted, search never matches it), and the log is readable over MCP ([log](../areas/log/index.md)).
+- **Interstitial log** — timestamped, append-only, one day per page. Light edit allowed (fix a typo); **no backdating** in v1. The durable reflection substrate. An entry can be **private** to MCP, and the log is readable over MCP ([log](../areas/log/index.md)).
 - **Pomodoro** — configurable work/break (default 25/5), tied to the current task; sessions accrue time + category to the task and prefill its "actual." Minimal.
 - **Habits** — weekly-cadence ("3×/week"), calendar view, marked in the night check. **No consecutive-streak, no guilt** — a miss is just a miss, repair-friendly. **Habits may hold non-work items** ("call a friend 1×/week") — this is the gentle, non-policing way non-work life gets a presence (weekly + repair-friendly keeps it supportive, not a scold).
-- **Rolls** — deadline-free ongoing _efforts_ you keep returning to (LeetCode daily, study, work on Aperture). Each has a **forgiving momentum "contact sheet"** — a dot grid that only fills; a gap is a fainter dot, **never a resetting streak, red, or score**. A "rep" is a completed _task_ tagged to the roll (derived, never a stored counter), so calibration rides ongoing effort too (a Flux session and a LeetCode sitting count the same way). The morning picker drops a rep onto today's plan, where it flows into the daytime Right-now lane. Distinct from Habits (a _timed task_ vs a _binary check_). Full design: **[home/rolls.md](../areas/home/rolls.md)**.
+- **Rolls** _(v2)_ — deadline-free ongoing _efforts_ you keep returning to (LeetCode daily, study, work on Aperture). Each has a **forgiving momentum "contact sheet"** — a dot grid that only fills; a gap is a fainter dot, **never a resetting streak, red, or score**. A "rep" is a completed _task_ tagged to the roll (derived, never a stored counter), so calibration rides ongoing effort too (a Flux session and a LeetCode sitting count the same way). The morning picker drops a rep onto today's plan, where it flows into the daytime Right-now lane. Distinct from Habits (a _timed task_ vs a _binary check_). Full design: **[home/rolls.md](../areas/home/rolls.md)**.
 - **Flux** _(v2)_ — guided neck exercises with live range-of-motion feedback from the front camera (a port of flux-track-2). Tracking runs on-device; no video ever leaves it. **Not a medical device** — angles are relative to a per-session neutral. A session counts as a **Roll rep** (the Roll is picked in Settings), so Flux sessions ride calibration with no new machinery. Off the daily home. Full design: **[flux/](../areas/flux/index.md)**.
 - **Quick-capture inbox** — where Idea-mode captures land; triage each into task / log / discard.
 - **Recruiting** _(v2)_ — a two-tab hub for interview prep.
@@ -180,7 +180,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 ## 6. Non-goals for v1
 
-**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · rolls (deadline-free efforts, forgiving momentum) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Online-first, multi-device (item 7 below). That's it. Everything built beyond this list — Finances included, which [`V1_PLAN.md`](../V1_PLAN.md) never planned — is v2: §7. The bar for v1 is: **it earns the morning + night ritual.**
+**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Online-first, multi-device (item 7 below). That's it. Everything built beyond this list — Rolls and Finances included, which [`V1_PLAN.md`](../V1_PLAN.md) never planned — is v2: §7. The bar for v1 is: **it earns the morning + night ritual.**
 
 **Parked for later (ordered by likely arrival):**
 
@@ -201,6 +201,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 Pointers only; each `areas/` doc owns its design and decision log. The whole map is [`docs/index.md`](../index.md).
 
+- **Home** — [right now + coming up](../areas/home/right-now.md) (the daytime home) · [Rolls](../areas/home/rolls.md) · the Day shape card ([calendar](../areas/calendar/index.md)).
 - **Tasks** — [due dates + times](../areas/tasks/due-dates.md) · [parent + parts](../areas/tasks/parts.md) and [split](../areas/tasks/split.md) · [recurring cadences](../areas/tasks/recurring.md) · [lenses](../areas/tasks/lenses.md) (Today · Week · Backlog · Done) · the [task editor](../areas/tasks/task-editor.md) · [notes](../areas/tasks/notes.md) · [attachments](../areas/tasks/attachments.md) · [reflection](../areas/tasks/reflection.md) · [life areas](../areas/tasks/areas.md) · [calibration integrity](../areas/calibration/integrity.md).
 - **Capture** — [quick add](../areas/tasks/quick-add.md) (Claude Haiku parse) · [bulk add](../areas/tasks/bulk-add.md) · [private log entries](../areas/log/index.md).
 - **Out in the world** — [places](../areas/tasks/places.md) (errand lists + an iPhone Shortcut) · [reminders](../areas/tasks/reminders.md) (Web Push) · [Google Calendar](../areas/calendar/index.md), two-way.
