@@ -6,9 +6,16 @@ import { IOS_SLOW_PATHS } from '../devcheck/scenarios/ios-paths.ts';
 import type { Run as Sh } from './sh.ts';
 
 // The committed diff only: requirePushed makes HEAD what deploys. Three dots, so a branch behind main (lock acquire
-// doesn't check) still names only its own changes.
+// doesn't check) still names only its own changes; no renames, so a file moved out of an iOS path still counts.
 export function iosFiles(sh: Sh): string[] {
-  return sh('git', ['diff', '--name-only', 'origin/main...HEAD'])
-    .split('\n')
-    .filter((f) => f && IOS_SLOW_PATHS.some((g) => globMatch(g, f)));
+  let out: string;
+  try {
+    out = sh('git', ['diff', '--name-only', '--no-renames', 'origin/main...HEAD']);
+  } catch (err) {
+    throw new Error(
+      "couldn't diff against origin/main to see whether this branch touches iOS paths — `git fetch origin main`, then retry",
+      { cause: err },
+    );
+  }
+  return out.split('\n').filter((f) => f && IOS_SLOW_PATHS.some((g) => globMatch(g, f)));
 }

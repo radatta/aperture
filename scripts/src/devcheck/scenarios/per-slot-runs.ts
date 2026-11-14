@@ -1,7 +1,8 @@
 // per-slot-runs: each dev slot has its own devcheck run lock, so a dev run and a devb run may overlap (config.ts →
 // runLockFile), and `pnpm bot deploy-dev` sends a branch touching iOS paths to slot A, the only slot with a
 // Simulator (bot/ios-routing.ts, CI-BOT.md → Dev slots). A run holds one slot, so the lock and routing rules are the
-// bot's and the harness's own tests; dev proves the outcome a run can see — an iOS-touching branch is on dev.
+// bot's and the harness's own tests; dev proves the outcome a run can see — an iOS-touching branch is on dev. That
+// step is slow, gated on the iOS paths: a branch touching none defers it, rather than passing it vacuously.
 import { execFileSync } from 'node:child_process';
 import { currentSlot } from '../config';
 import { globMatch } from '../glob';
@@ -24,6 +25,7 @@ export const perSlotRuns: Scenario = {
   id: 'per-slot-runs',
   title: 'Per-slot devcheck runs, and iOS branches routed to slot A',
   tiers: ['full'],
+  slowPaths: [...IOS_SLOW_PATHS, 'scripts/src/devcheck/scenarios/per-slot-runs.ts'],
   rows: [
     {
       id: 'ios-on-a',
@@ -48,7 +50,7 @@ export const perSlotRuns: Scenario = {
     ),
     off(
       'seed-waits',
-      'A dev devcheck still refuses the sim-bench seed (slot A’s run lock)',
+      'A devcheck running refuses the sim-bench seed before it takes the dev lock',
       'scripts/src/mailroom/sim-bench-seed.test.ts',
       'refuses while a devcheck runs, before taking the dev lock (none leaks)',
       HARNESS,
@@ -125,13 +127,18 @@ export const perSlotRuns: Scenario = {
     {
       id: 'slot-a-for-ios',
       title: 'A branch touching iOS paths is on dev',
-      entry: 'api',
+      entry: 'api', // reads the branch's diff and the slot its lock put this run on — no call to dev
+      cost: 'slow',
       proves: ['ios-on-a'],
       async run(ctx) {
         // The committed diff, as the bot routes it (ios-routing.ts).
-        const files = execFileSync('git', ['diff', '--name-only', 'origin/main...HEAD'], {
-          encoding: 'utf8',
-        })
+        const files = execFileSync(
+          'git',
+          ['diff', '--name-only', '--no-renames', 'origin/main...HEAD'],
+          {
+            encoding: 'utf8',
+          },
+        )
           .split('\n')
           .filter((f) => f && IOS_SLOW_PATHS.some((g) => globMatch(g, f)));
         if (!files.length) {

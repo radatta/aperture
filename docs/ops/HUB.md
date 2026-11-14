@@ -74,14 +74,16 @@ touch <area>; whichever merges second rebases — agree an order.`
 ## Lock etiquette
 
 One branch per dev slot at a time, under `refs/locks/dev` (slot A) and `refs/locks/devb` (slot B) (`docs/ops/CI-BOT.md`
-→ _Dev lock_, _Dev slots_). `deploy-dev` takes a free slot itself, so a session waits only when **both** are held, and
-never works around it:
+→ _Dev lock_, _Dev slots_). `deploy-dev` takes a free slot itself, so a session waits only when **both** are held — or, for a branch touching
+iOS paths, when dev is (it takes slot A only, the Simulator's) — and never works around it:
 
-1. The refusal (`pnpm bot deploy-dev`, or `lock acquire`, saying "both dev slots are locked — …") prints, above its
+1. The refusal (`pnpm bot deploy-dev`, or `lock acquire`, saying "both dev slots are locked — …", or "dev is locked — …" for an
+   iOS-path branch) prints, above its
    error line, the messages to send **now**, once each: `[lock] … queued behind <holder> on dev and <holder> on
 devb …` to the hub, and, for each holder whose live session the board names, a note to it: "Queued behind you
    for the <slot> lock — release at phase 10 rather than letting the TTL run; no rush."
-2. `pnpm bot lock wait --any` (the command the refusal names) in the background (the harness wakes the session when it exits; don't poll its output).
+2. The wait the refusal names — `pnpm bot lock wait --any`, or plain `pnpm bot lock wait` (slot A) when it named dev
+   alone, as for an iOS-path branch: `--any` would wake on a free devb it can't use — in the background (the harness wakes the session when it exits; don't poll its output).
    It polls every 30 s, wakes when either holder releases or its TTL lapses, and exits 0 (free, expired or already
    ours), **75** (still held after `--max`, default 45 min, at most 55: tell the user who holds it and until
    when) or 1 (three GitHub errors in a row: say so, and retry once).

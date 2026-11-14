@@ -1,7 +1,7 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
 //   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full|all [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
-// Never alongside your own tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per slot: the
+// Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per slot: the
 // sweep of earlier runs' leftovers would otherwise race a live run on the same slot. Each slot sweeps its own ledger
 // and table, so another session's run on the other slot may overlap.
 import { execFile } from 'node:child_process';
@@ -41,7 +41,9 @@ import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
 import { ensureSignedIn, readCheckedSession, refreshSession, validateCachedState } from './login';
+import { globMatch } from './glob';
 import { createIos, iosSlotNote } from './ios';
+import { IOS_SLOW_PATHS } from './scenarios/ios-paths';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
 import { pickSlot } from './slot';
@@ -177,10 +179,11 @@ async function main(): Promise<number> {
   );
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
   const feature = selectFeature(args.feature, scenarios);
-  // The branch's diff against origin/main (committed and not) decides which slow steps run; unreadable → all.
+  // The branch's diff against origin/main (committed and not) decides which slow steps run; unreadable → all. No
+  // renames, so a file moved out of a slowPath still counts.
   const changed = await Promise.all([
-    git(['diff', '--name-only', 'origin/main...HEAD']),
-    git(['diff', '--name-only', 'HEAD']),
+    git(['diff', '--name-only', '--no-renames', 'origin/main...HEAD']),
+    git(['diff', '--name-only', '--no-renames', 'HEAD']),
   ]).then(
     (outs) => [...new Set(outs.flatMap((o) => o.split('\n').filter(Boolean)))],
     () => null,
@@ -234,7 +237,7 @@ async function main(): Promise<number> {
   const log = (msg: string) => console.log(`[devcheck] ${msg}`);
   const slotNote = iosSlotNote(
     currentSlot(),
-    slow.filter((id) => scenarios.find((s) => s.id === id)?.steps.some((x) => x.entry === 'ios')),
+    (changed ?? []).filter((f) => IOS_SLOW_PATHS.some((g) => globMatch(g, f))),
   );
   if (slotNote) log(`on ${currentSlot()}, the iPhone rows read needs-you — ${slotNote}`);
   log(`target: ${currentSlot()} → ${slotOrigin()} (${pick.why})`);

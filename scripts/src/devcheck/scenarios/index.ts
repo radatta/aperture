@@ -24,7 +24,6 @@ import { inflightCap } from './inflight-cap';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcExtension } from './lc-extension';
-import { perSlotRuns } from './per-slot-runs';
 import { lcSittings } from './lc-sittings';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
@@ -39,6 +38,7 @@ import { recurring } from './recurring';
 import { smoke } from './smoke';
 import { timedReminders } from './timed-reminders';
 import { timerCredit } from './timer-credit';
+import { perSlotRuns } from './per-slot-runs';
 
 export const SCENARIOS: Scenario[] = [
   smoke,

@@ -21,8 +21,8 @@ pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=
 
 ## Run it
 
-From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy of your own running (no `pnpm test`, no dev
-server — CLAUDE.md → COI ceilings); another session's run on the other slot is fine (_Dev slots_). Wrapped as
+From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy running (no `pnpm test`, no dev
+server — CLAUDE.md → COI ceilings) but another session's dev check on the other slot, which is fine (_Dev slots_). Wrapped as
 `HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …`, the run shows on the board with its peaks:
 
 ```bash

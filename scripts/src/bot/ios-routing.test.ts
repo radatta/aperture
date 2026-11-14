@@ -19,7 +19,7 @@ describe('iosFiles', () => {
       'tools/mailroom/jobs/sim.sh',
       'scripts/src/devcheck/probe-only.ts',
     ]);
-    expect(calls[0]?.args).toEqual(['diff', '--name-only', 'origin/main...HEAD']);
+    expect(calls[0]?.args).toEqual(['diff', '--name-only', '--no-renames', 'origin/main...HEAD']);
   });
 
   it('is empty for a branch nothing iOS can see', () => {
@@ -27,5 +27,17 @@ describe('iosFiles', () => {
       [],
     );
     expect(iosFiles(diff().run)).toEqual([]);
+  });
+
+  it('says to fetch main when the diff fails, never routes blind', () => {
+    const { run } = fakeRun([
+      [
+        'git diff',
+        () => {
+          throw new Error('git diff failed: unknown revision');
+        },
+      ],
+    ]);
+    expect(() => iosFiles(run)).toThrow(/git fetch origin main/);
   });
 });

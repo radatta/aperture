@@ -114,11 +114,11 @@ describe('ctx.ios', () => {
   });
 
   it('on devb a branch touching iOS paths reads needs you with the way to slot A, never a quiet skip', () => {
-    expect(iosSlotNote('devb', ['ios-standalone'])).toMatch(
+    expect(iosSlotNote('devb', ['app/src/auth/x.ts'])).toMatch(
       /pnpm bot lock release.*pnpm bot deploy-dev/,
     );
-    expect(iosSlotNote('devb', [])).toBeUndefined(); // no iOS step would run: nothing to say
-    expect(iosSlotNote('dev', ['ios-standalone'])).toBeUndefined();
+    expect(iosSlotNote('devb', [])).toBeUndefined(); // run by name or --tier all: the plain reason
+    expect(iosSlotNote('dev', ['app/src/auth/x.ts'])).toBeUndefined();
     const fs = memFs([`${HJ}/inbox`]);
     const ios = createIos({
       fs,

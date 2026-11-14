@@ -62,12 +62,12 @@ export interface IosDeps {
 export const SIM_SLOT_A_ONLY =
   'SIM_SLOT_A_ONLY — the Simulator is set up for dev (slot A) only; this run is on devb';
 
-// A devb run whose iOS slow steps would run (the branch touches their paths): its needs-you rows are a deploy to the
-// wrong slot, not a Mac that's out — say how to get them proven. `pnpm bot deploy-dev` routes such a branch to slot A
-// (bot/ios-routing.ts); this catches one that reached devb another way.
-// `iosSlow`: the scenarios with an ios step whose slow steps this run would run.
-export function iosSlotNote(slot: string, iosSlow: string[]): string | undefined {
-  if (slot === 'dev' || !iosSlow.length) return undefined;
+// A devb run of a branch touching iOS paths (`iosChanged`, its diff's files in ios-paths.ts): its needs-you rows are a
+// deploy to the wrong slot, not a Mac that's out — say how to get them proven. `pnpm bot deploy-dev` routes such a
+// branch to slot A (bot/ios-routing.ts); this catches one that reached devb another way. A branch touching none (an
+// iOS scenario run by name or by --tier all) gets the plain reason.
+export function iosSlotNote(slot: string, iosChanged: string[]): string | undefined {
+  if (slot === 'dev' || !iosChanged.length) return undefined;
   return 'this branch touches iOS paths, so its iPhone rows need slot A: `pnpm bot lock release`, then `pnpm bot deploy-dev` (it takes dev or names `lock wait`)';
 }
 
