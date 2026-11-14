@@ -260,6 +260,19 @@ export function createMcpClient({
       ledger.append({ run, op: 'created', id: task.id, via: MCP_CREATE_VIA, title: input.title });
       return task;
     },
+    // A create_task the server must refuse (bff-shapes: a title over the BFF's cap), ledgered like a create:
+    // an execution error resolves the intent as `refused`; a create a regression let through is recorded
+    // and cleaned like any other. Returns the tool's answer for the step to read.
+    async createTaskExpectingRefusal(input: { title: string }): Promise<ToolResult> {
+      ledger.append({ run, op: 'intent', via: MCP_CREATE_VIA, title: input.title });
+      const r = await tool('create_task', input);
+      if (r.isError) ledger.append({ run, op: 'refused', via: MCP_CREATE_VIA, title: input.title });
+      else {
+        const task = JSON.parse(r.text) as DevTask;
+        ledger.append({ run, op: 'created', id: task.id, via: MCP_CREATE_VIA, title: input.title });
+      }
+      return r;
+    },
     // Patch fields on a task this run created (update_task: place moves it between errand lists; the
     // reflection scenario sets one up for complete_task to keep; the iOS scenario starts one, since the sim
     // never taps Start).

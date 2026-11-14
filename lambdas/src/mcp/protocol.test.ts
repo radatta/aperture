@@ -118,4 +118,24 @@ describe('handleMcpMessage', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/Not found/);
   });
+
+  it('a shape refusal keeps its reason; a fault or an AWS error never shows its text', async () => {
+    const call = (dispatch: ToolContext['dispatch']) =>
+      handleMcpMessage(req('tools/call', { name: 'create_task', arguments: { title: 'x' } }), {
+        dispatch,
+      } as ToolContext);
+    const text = async (dispatch: ToolContext['dispatch']) =>
+      ((await call(dispatch))?.result as { content: { text: string }[] }).content[0]!.text;
+    const long = { name: 'create_task', arguments: { title: 't'.repeat(40_001) } };
+    const refused = await handleMcpMessage(req('tools/call', long), makeCtx());
+    expect((refused?.result as { content: { text: string }[] }).content[0]!.text).toBe(
+      'title is limited to 40000 characters',
+    );
+    expect(await text(() => Promise.reject(new TypeError('secret detail')))).toBe('Internal error');
+    const aws = Object.assign(new Error('arn:aws:dynamodb secret'), {
+      name: 'ValidationException',
+      $metadata: { httpStatusCode: 400 },
+    });
+    expect(await text(() => Promise.reject(aws))).toBe('Internal error');
+  });
 });

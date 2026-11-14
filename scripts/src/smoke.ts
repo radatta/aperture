@@ -12,13 +12,15 @@ export interface SmokeCall {
   args: unknown[];
 }
 
-// Read-only methods — enough to prove auth-skip, dispatch, and the DynamoDB round-trip. All args empty
-// so nothing could mutate even if the writes-object guarantee regressed.
+// Read-only methods — enough to prove auth-skip, dispatch, and the DynamoDB round-trip. Args are empty
+// or a read range, so nothing could mutate even if the writes-object guarantee regressed. Each call must
+// pass the BFF's argument check (lambdas/src/rpc/argSpecs.ts; smoke.test.ts runs it), or the deploy's
+// smoke step goes red.
 export const SMOKE_CALLS: SmokeCall[] = [
   { method: 'getSettings', args: [] },
   { method: 'listCategories', args: [] },
   { method: 'listTasks', args: [] },
-  { method: 'getCalibration', args: [] },
+  { method: 'getCalibration', args: [{ from: '2026-01-01', to: '2026-01-07' }] },
   // Calendar read: proves the gated gateway no-ops under testMode (no SSM token read, no Google fetch).
   { method: 'getGoogleStatus', args: [] },
   // Also proves the S3 SDK loaded at cold start (listAttachments is a plain read; no presign, no bytes).

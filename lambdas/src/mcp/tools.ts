@@ -22,6 +22,7 @@ import {
   partsSummary,
   userDueEpoch,
 } from '@aperture/shared';
+import { failureStatus, shownMessage } from '../rpc/failure';
 import type {
   Attachment,
   CalendarBusy,
@@ -155,7 +156,7 @@ async function reflectAfterDone(ctx: ToolContext, id: string, reflection: string
   try {
     return (await ctx.dispatch('setTaskReflection', [id, reflection])) as Task;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'error';
+    const msg = shownMessage(e, failureStatus(e, 'rpc')); // never a fault's or AWS's own text
     throw new Error(`${msg} (the task is done; the reflection wasn't saved — use update_task)`, {
       cause: e,
     });
@@ -454,7 +455,7 @@ export const TOOLS: Tool[] = [
       } catch (e) {
         if (e instanceof RpcParamError) throw e; // bad args → -32602, unchanged
         // A later field can throw after earlier ones already landed — tell the model exactly what applied.
-        const msg = e instanceof Error ? e.message : 'error';
+        const msg = shownMessage(e, failureStatus(e, 'rpc')); // never a fault's or AWS's own text
         throw new Error(`${msg} (already applied: ${applied.join(', ') || 'none'})`, { cause: e });
       }
       return (await ctx.dispatch('getTask', [id])) as Task;

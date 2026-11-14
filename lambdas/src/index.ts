@@ -26,6 +26,8 @@ import type { PlaidGateway } from './plaid/gateway';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import type { AnthropicGateway } from './anthropic/gateway';
 import { handleRpc } from './handler';
+import { failureStatus, shownMessage } from './rpc/failure';
+import { RPC_BODY_MAX } from './rpc/argSpecs';
 import { BackendClient } from './backend';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
@@ -154,38 +156,11 @@ function parseBody(raw: string | null | undefined): { args: unknown[]; testMode:
   return { args: args ?? [], testMode: testMode === true };
 }
 
-// Non-ingest failures: a fault in our code (a builtin error class) or an AWS 5xx is a 500 with a fixed
-// body — its text is internals. Everything else, our own refusals and their subclasses (ConflictError,
-// EventGoneError…), stays a 400 whose message the app shows. Never 429: the app retries a 429 as a call
-// that never ran (retry.ts), which a throttle mid-write can't promise.
-function rpcFailureStatus(err: unknown): 400 | 500 {
-  if (err instanceof TypeError || err instanceof RangeError || err instanceof SyntaxError)
-    return 500;
-  const e = err as { $metadata?: { httpStatusCode?: number } } | null;
-  return (e?.$metadata?.httpStatusCode ?? 0) >= 500 ? 500 : 400;
-}
-
 // The browser extension's methods (LC_INGEST_METHODS) take its device token — or the user's JWT, which is
 // already the whole user (the dev check drives them that way). Their bodies are capped before parsing:
-// a leaked device token can't make the Lambda chew on megabytes (sittings.ts caps a call at 256 KB).
+// a leaked device token can't make the Lambda chew on megabytes (sittings.ts caps a call at 256 KB). Every
+// other method is capped too, looser (RPC_BODY_MAX, 1 MiB: ~5× the largest legal single-row body).
 const INGEST_BODY_MAX = 300 * 1024;
-// The extension's outbox retries 409, 429 and 5xx and keeps anything else as failed (extension/README.md), so an
-// ingest call says which it was: a lost CAS race is a 409; DynamoDB pushing back a 429; any other AWS or
-// internal fault a 500; a refusal of the input itself (the normalizers, guards and caps) a 400.
-function ingestFailureStatus(err: unknown): number {
-  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-  if (e?.name === 'ConflictError') return 409;
-  const throttles = [
-    'ProvisionedThroughputExceededException',
-    'ThrottlingException',
-    'RequestLimitExceeded',
-  ];
-  if (throttles.includes(e?.name ?? '')) return 429;
-  // An AWS error: its own status says whether retrying can help (a ValidationException never will).
-  if (e?.$metadata !== undefined) return (e.$metadata.httpStatusCode ?? 500) >= 500 ? 500 : 400;
-  // Our own refusals are plain Errors; a TypeError or RangeError is a fault in our code — retry, never drop.
-  return err instanceof Error && err.constructor === Error ? 400 : 500;
-}
 async function ingestUserId(
   authHeader: string | undefined,
   verifier: Verifier | null,
@@ -276,7 +251,7 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   if (path.startsWith('/api/places/')) return placeRead(event, path, d.doc);
 
   const ingest = isLcIngestMethod(method);
-  if (ingest && (event.body?.length ?? 0) > INGEST_BODY_MAX)
+  if ((event.body?.length ?? 0) > (ingest ? INGEST_BODY_MAX : RPC_BODY_MAX))
     return { statusCode: 413, headers: CORS, body: JSON.stringify({ error: 'Too large' }) };
   // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
@@ -317,22 +292,19 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
     );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'error';
-    const status = message.startsWith('Unauthorized')
-      ? 401
-      : message.startsWith('Unknown method')
-        ? 404
-        : ingest
-          ? ingestFailureStatus(err)
-          : rpcFailureStatus(err);
+    // One mapping for both paths (rpc/failure.ts): a ShapeError or our own refusal is a 400, a fault a 500.
+    const status = failureStatus(err, ingest ? 'ingest' : 'rpc');
     // One line per failure: the outcome only — never the message, body, args or a header. The method is
     // path text anyone can send, so only a known one is logged by name.
     const name = err instanceof Error ? err.name : 'unknown';
     const logged = isApiMethod(method) ? method : 'unknown';
     console.log(JSON.stringify({ event: 'rpc_failed', method: logged, status, name }));
-    // A 500's text is internals (a TypeError's, an AWS fault's): every caller retries on the status alone.
-    const shown = status === 500 ? 'Internal error' : message;
-    return { statusCode: status, headers: CORS, body: JSON.stringify({ error: shown }) };
+    // A 500's text is internals, and so is any AWS error's: every caller retries on the status alone.
+    return {
+      statusCode: status,
+      headers: CORS,
+      body: JSON.stringify({ error: shownMessage(err, status) }),
+    };
   }
 }
 
