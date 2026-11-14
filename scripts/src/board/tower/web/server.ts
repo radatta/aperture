@@ -18,9 +18,16 @@ export type GetState = (history: boolean) => unknown;
 // can't reach the View through DNS rebinding.
 const HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
 
-// Pure of sockets: tests call it with stand-in req/res. Static files are read per request (a restart isn't
-// needed to see an edit, and they're a few KB).
+// Pure of sockets: tests call it with stand-in req/res. The page and its script are read once, here: they must be
+// the same commit as the View code in this process (/workspace moves at every kickoff, and nothing restarts the
+// tower then), so an edit needs `board.sh tower restart`, and the page's version check then reloads it.
 export function createHandler(getState: GetState, dir = HERE) {
+  const files = Object.fromEntries(
+    Object.entries(STATIC).map(([path, [name, type]]) => [
+      path,
+      [readFileSync(join(dir, name), 'utf8'), type] as const,
+    ]),
+  );
   return (req: IncomingMessage, res: ServerResponse) => {
     const send = (code: number, type: string, body: string) => {
       res.writeHead(code, {
@@ -28,7 +35,7 @@ export function createHandler(getState: GetState, dir = HERE) {
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy':
-          "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+          "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
       });
       res.end(body);
     };
@@ -40,14 +47,8 @@ export function createHandler(getState: GetState, dir = HERE) {
     } catch {
       return send(400, 'text/plain', 'bad URL\n');
     }
-    const file = STATIC[url.pathname];
-    if (file) {
-      try {
-        return send(200, file[1], readFileSync(join(dir, file[0]), 'utf8'));
-      } catch (e) {
-        return send(500, 'text/plain', `tower: ${(e as Error).message}\n`);
-      }
-    }
+    const file = files[url.pathname];
+    if (file) return send(200, file[1], file[0]);
     if (url.pathname === '/api/state') {
       try {
         return send(

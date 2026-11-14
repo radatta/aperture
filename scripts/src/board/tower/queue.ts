@@ -82,6 +82,8 @@ export type Queue = {
   status: 'ok' | 'missing' | 'bad';
   data: QueueData | null;
   problems: string[];
+  // devQueue lanes this write couldn't read, so their `hold` is unknown ('all': the file, or an entry with no branch)
+  unread?: 'all' | string[];
 };
 
 const str = (x: unknown) => (typeof x === 'string' && x.length > 0 ? clean(x) : null);
@@ -101,27 +103,44 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   try {
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
-    return { status: 'bad', data: prev, problems: [`not JSON: ${(e as Error).message}`] };
+    return {
+      status: 'bad',
+      data: prev,
+      unread: 'all',
+      problems: [`not JSON: ${(e as Error).message}`],
+    };
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
-    return { status: 'bad', data: prev, problems: ['not an object'] };
+    return { status: 'bad', data: prev, unread: 'all', problems: ['not an object'] };
   if (raw.v !== 1)
-    return { status: 'bad', data: prev, problems: [`v is ${JSON.stringify(raw.v)}, want 1`] };
+    return {
+      status: 'bad',
+      data: prev,
+      unread: 'all',
+      problems: [`v is ${JSON.stringify(raw.v)}, want 1`],
+    };
   const updatedAt = parseTime(raw.updatedAt);
   if (updatedAt === null)
-    return { status: 'bad', data: prev, problems: ['updatedAt is not an ISO time'] };
+    return { status: 'bad', data: prev, unread: 'all', problems: ['updatedAt is not an ISO time'] };
 
   const devQueue: Lane[] = [];
+  let unread: 'all' | string[] = [];
+  const drop = (b: string | null, why: string) => {
+    problems.push(why);
+    if (unread !== 'all') unread = b ? [...unread, b] : 'all';
+  };
+  if (raw.devQueue !== undefined && !Array.isArray(raw.devQueue))
+    drop(null, 'devQueue is not an array');
   arr(raw.devQueue).forEach((x, i) => {
     const l = x as Record<string, unknown>;
     const branch = str(l?.branch);
     const state = l?.state as LaneState;
-    if (!branch) return void problems.push(`devQueue[${i}]: no branch`);
+    if (!branch) return drop(null, `devQueue[${i}]: no branch`);
     if (!LANE_STATES.includes(state))
-      return void problems.push(`devQueue[${i}]: state ${JSON.stringify(l.state)}`);
+      return drop(branch, `devQueue[${i}]: state ${JSON.stringify(l.state)}`);
     const slot = (l.slot ?? 'dev') as LaneSlot;
     if (!LANE_SLOTS.includes(slot))
-      return void problems.push(`devQueue[${i}]: slot ${JSON.stringify(l.slot)}`);
+      return drop(branch, `devQueue[${i}]: slot ${JSON.stringify(l.slot)}`);
     devQueue.push({
       branch,
       session: str(l.session),
@@ -213,6 +232,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     status: problems.length ? 'bad' : 'ok',
     data: { updatedAt, devQueue, rahul, wave, deadRows, plan, followups },
     problems,
+    ...(unread.length ? { unread } : {}),
   };
 }
 

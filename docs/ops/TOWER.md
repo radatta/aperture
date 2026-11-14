@@ -93,7 +93,7 @@ From the top:
    - parked lanes;
    - lanes whose file hasn't moved in a day.
 
-**Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory since the server started.
+**Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory over the last 24 h that a tower page was open (the server records a Mac sample only when a poll reads it).
 
 **SOURCES** (collapsed, plus a header chip that also tints the live dot) lists every source with its age and state:
 `ok`, `stale`, `failed` (with the error) or `missing`.
@@ -143,12 +143,12 @@ and what Rahul must do.
    shape (`cdk/`, `pnpm-lock.yaml`, `packages/shared/src/stage.ts`: `deploy-base.ts` → `SHAPE_PATHS`), or its
    files aren't read yet;
 7. a main Deploy run is queued or running;
-8. dispatch's `devQueue[].hold` reason.
+8. dispatch's `devQueue[].hold` reason, or `dispatch's hold unknown` when queue.json is missing or unreadable, or this lane's entry was dropped (a state or slot the parser doesn't know).
 
 A running dispatch is devb's (rule 6) only when its run-name carries devb's holder sha. Any other may be dev's (a lock
 released mid-deploy), so it holds as rule 5. MERGE ME trusts a PR list up to 3 min old; a push inside that window still shows the old head's green
 checks until the next poll, and GitHub's required checks are what gate the merge itself. An expired lock, when its cache is fresh, never holds. HOLD is never a NEEDS YOU item. A slot card shows `free`
-only for a fresh, free lock; an unknown one says why, in red.
+only for a fresh, free lock; an unknown one says why, in amber. A dev card with no live holder while a dispatch that isn't devb's still runs says `no holder · a dev deploy is running` (orange), matching rule 5, never `free`.
 
 ## Lane files
 
@@ -214,10 +214,9 @@ and writes `<main checkout>/localNotes/board/mac-stats.json`:
 - Its only argv are the two absolute paths the installer rendered into the plist.
 - It reads nothing from the shared folder and executes nothing from it.
 - It makes no network or Keychain call.
-- Its one write is `mktemp` in the board dir, then `mv -f`. Before that, a symlink at the target is removed (rm
-  removes the link, not what it points at), and a directory or a link to one is refused, since `mv` would move into
-  it. The remaining race (a link re-planted between the rm and the mv) can at worst drop one stats file into the
-  directory it points at; the agent never reads or runs it.
+- Its one write is `mktemp` in the board dir, then `mv -fh` (BSD: never follow a link to a directory at the
+  target, so a link planted there is replaced, not moved into). Before that, a symlink at the target is removed (rm
+  removes the link, not what it points at), and a real directory there is refused.
 - A symlinked or missing board dir is refused, with one log line per change.
 - The container could also swap the board dir itself for a link between the agent's check and its write. The names
   stay fixed and the content is the agent's own JSON, so the most it can do is put one stats file somewhere the Mac

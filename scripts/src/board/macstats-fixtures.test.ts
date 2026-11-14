@@ -183,6 +183,24 @@ describe('one real tick, macOS tools stubbed', () => {
     expect([r2.status, r2.stdout, r2.stderr]).toEqual([0, '', '']);
   });
 
+  it('a link to a directory planted after the check is replaced by the rename, never moved into', () => {
+    const t = stubbed();
+    mkdirSync(join(t, 'elsewhere'));
+    // re-plant the link right before the rename: the copy's mv runs after a hook that plants it
+    const s = readFileSync(join(t, 'macstats.sh'), 'utf8').replace(
+      '  mv -f "$MV_NOFOLLOW"',
+      `  ln -s '${join(t, 'elsewhere')}' "$out/mac-stats.json"\n  mv -f "$MV_NOFOLLOW"`,
+    );
+    expect(s).toContain('ln -s');
+    writeFileSync(join(t, 'macstats.sh'), s);
+    const r = spawnSync('bash', [join(t, 'macstats.sh'), join(t, 'out'), join(t, 'state')], {
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    expect(readdirSync(join(t, 'elsewhere'))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(t, 'out/mac-stats.json'), 'utf8')).v).toBe(1);
+  });
+
   it('a link to a file at the target is replaced, not written through', () => {
     const t = stubbed();
     writeFileSync(join(t, 'victim'), 'keep');
@@ -221,7 +239,8 @@ describe('the trust boundary, statically', () => {
     expect(code).not.toMatch(/cat\s+"?\$out/);
     expect(code).not.toMatch(/<\s*"?\$out/);
     expect(code).toContain('tmp=$(mktemp "$out/.mac-stats.XXXXXX")');
-    expect(code).toContain('mv -f "$tmp" "$out/mac-stats.json"');
+    expect(code).toContain('mv -f "$MV_NOFOLLOW" "$tmp" "$out/mac-stats.json"');
+    expect(code).toMatch(/Darwin\) MV_NOFOLLOW=-h ;;/);
   });
 
   it('bash 3.2 only: no mapfile, associative arrays or case-changing expansions', () => {

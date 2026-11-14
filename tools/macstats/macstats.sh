@@ -11,6 +11,7 @@ set -euo pipefail
 umask 022
 export LC_ALL=C PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin # jq: macOS 15 ships it; else Homebrew
 AGENT_VERSION="${MACSTATS_VERSION:-dev}"
+case "$(uname -s)" in Darwin) MV_NOFOLLOW=-h ;; *) MV_NOFOLLOW=-T ;; esac # the tests run on Linux (GNU mv)
 
 # collect VM SYSCTL PS: the three raw texts, one per variable
 collect() {
@@ -105,7 +106,9 @@ main() {
   # runs after main returns)
   printf '%s\n' "$json" >"$tmp"
   chmod 644 "$tmp" # mktemp makes it 0600; the container reads it
-  mv -f "$tmp" "$out/mac-stats.json"
+  # never into a directory: BSD mv -h / GNU mv -T rename onto the target name itself, even if a link to a directory
+  # was planted there after the check above
+  mv -f "$MV_NOFOLLOW" "$tmp" "$out/mac-stats.json"
   trap - EXIT
   [ "$was" = ok ] || echo "$now writing $out/mac-stats.json"
   echo ok >"$state/last"

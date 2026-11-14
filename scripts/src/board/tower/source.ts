@@ -284,7 +284,7 @@ export class Source {
           : null,
       session: branch ? (sessions.find((s) => s.branch === branch)?.name ?? null) : null,
       expiresAt,
-      asOf: f.t ? Date.parse(f.t) : null,
+      asOf: f.t && Number.isFinite(Date.parse(f.t)) ? Date.parse(f.t) : null, // garbled → unknown, never fresh
       failed: !!f.failedAt,
       bad: f.unreadable
         ? 'lock cache unreadable'

@@ -65,6 +65,7 @@ export type SlotCard = {
   why: string | null;
   asOf: number | null;
   failed: boolean;
+  deploying: boolean; // dev with no live holder, a dispatch still running (a lock released mid-deploy): not free
 };
 export type SourceRow = {
   name: string;
@@ -215,6 +216,18 @@ const dispatching = (i: Inputs, sha?: string | null) =>
       (sha ? r.title.startsWith(`deploy-dev ${sha} `) : r.title.startsWith('deploy-dev ')),
   );
 
+// A running dispatch that isn't devb's (devb's carries devb's holder sha): it may be dev's — a lock released or lapsed
+// mid-deploy — so it holds dev. Every running one is checked: the newest may be devb's while an older one is dev's.
+export const unattributedDispatch = (i: Inputs) => {
+  const bSha = i.tower.lockB?.sha ?? null;
+  return i.runs.value.find(
+    (r) =>
+      running(r) &&
+      r.title.startsWith('deploy-dev ') &&
+      !(bSha && r.title.startsWith(`deploy-dev ${bSha} `)),
+  );
+};
+
 // The main Deploy run that carries a merge: its own, or, when that one was cancelled by a later merge (deploy.yml's
 // concurrency group), the newest later Deploy run, which deploys main's head and so this merge too.
 export function deployFor(
@@ -262,9 +275,7 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
   // mid-deploy, a lapsed lock): unknown means hold
   const bSha = i.tower.lockB?.sha ?? null;
   const devbDispatch = bSha ? dispatching(i, bSha) : undefined;
-  const anyDispatch = dispatching(i);
-  if (anyDispatch && anyDispatch !== devbDispatch) return 'a dev deploy is running';
-  const otherDispatch = devbDispatch;
+  if (unattributedDispatch(i)) return 'a dev deploy is running';
 
   // devb only matters when the merge changes devb's shape
   const b = lockRead(i.tower.lockB, i.now);
@@ -276,7 +287,7 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
         ? `devb: ${bLock!.branch} is testing`
         : openRun(i, 'devb')
           ? 'devb: a devcheck is running'
-          : otherDispatch
+          : devbDispatch
             ? 'a devb deploy is running'
             : null;
   if (bBusy) {
@@ -287,6 +298,12 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
   }
   const dep = mainDeploys(i.runs.value).find(running);
   if (dep) return `main deploy${dep.number ? ` ${dep.number}` : ''} running`;
+  // dispatch's own hold: unknown when queue.json, or this lane's entry in it, can't be read
+  const q = i.tower.queue;
+  if (!q.data)
+    return `queue.json ${q.status === 'missing' ? 'missing' : 'unreadable'}: dispatch's hold unknown`;
+  if (q.unread === 'all' || q.unread?.includes(pr.branch))
+    return "queue.json: this lane's entry is unreadable, dispatch's hold unknown";
   return queue?.hold ?? null;
 }
 
@@ -636,6 +653,7 @@ export function derive(i: Inputs): View {
       why: read.why,
       asOf: lock?.asOf ?? null,
       failed: lock?.failed ?? false,
+      deploying: slot === 'dev' && !live && !!unattributedDispatch(i),
     };
   });
 
@@ -813,12 +831,14 @@ export function sources(i: Inputs): SourceRow[] {
                 at: l.asOf,
                 detail: l.failed ? 'refresh failing' : null,
               }
-            : {
-                name,
-                state: 'ok',
-                at: l.asOf,
-                detail: l.failed ? 'the last refresh failed; this read stands' : null,
-              },
+            : l.branch && l.expiresAt === null
+              ? { name, state: 'failed', at: l.asOf, detail: 'holder expiry unreadable' }
+              : {
+                  name,
+                  state: 'ok',
+                  at: l.asOf,
+                  detail: l.failed ? 'the last refresh failed; this read stands' : null,
+                },
     );
   const q = t.queue;
   out.push(

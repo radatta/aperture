@@ -255,3 +255,29 @@ describe('hold and followups (the web tower)', () => {
     expect(staleFollowups(fu, now).map((f) => f.id)).toEqual(['old']);
   });
 });
+
+describe('unread devQueue lanes (round 4)', () => {
+  const base = { v: 1, updatedAt: '2026-11-08T05:00:00Z' };
+  it('a lane with an unknown state or slot is named in unread; one with no branch makes it all', () => {
+    const q = parseQueue(
+      JSON.stringify({
+        ...base,
+        devQueue: [
+          { branch: 'a', state: 'building' },
+          { branch: 'b', state: 'brand-new' },
+          { branch: 'c', state: 'next', slot: 'devz' },
+        ],
+      }),
+    );
+    expect(q.unread).toEqual(['b', 'c']);
+    expect(q.data!.devQueue.map((l) => l.branch)).toEqual(['a']);
+    expect(parseQueue(JSON.stringify({ ...base, devQueue: [{ state: 'next' }] })).unread).toBe(
+      'all',
+    );
+    expect(parseQueue(JSON.stringify({ ...base, devQueue: {} })).unread).toBe('all');
+  });
+  it('an unreadable file is all unread, its last good data kept; a clean file has no unread', () => {
+    expect(parseQueue('{nope').unread).toBe('all');
+    expect(parseQueue(JSON.stringify({ ...base, devQueue: [] })).unread).toBeUndefined();
+  });
+});

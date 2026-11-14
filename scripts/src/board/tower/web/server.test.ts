@@ -2,11 +2,11 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { get } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { liveTests, parseArgs, sparkBuckets } from './main.ts';
+import { liveTests, MAC_INSTALL, parseArgs, sparkBuckets } from './main.ts';
 import { createHandler, serve } from './server.ts';
 
 let server: Server;
@@ -177,5 +177,16 @@ describe('sparkBuckets', () => {
   });
   it('a sample a little ahead of our clock lands in the newest minute', () => {
     expect(sparkBuckets([[1_000_000 + 5_000, 3]], 1_000_000)[59]).toBe(3);
+  });
+});
+
+describe('round 4', () => {
+  it("the page's Mac install line is TOWER.md's, word for word", () => {
+    const doc = readFileSync(join(import.meta.dirname, '../../../../../docs/ops/TOWER.md'), 'utf8');
+    expect(doc).toContain(MAC_INSTALL);
+  });
+  it('the CSP forbids framing', async () => {
+    const r = await fetch(`${base}/`);
+    expect(r.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
   });
 });

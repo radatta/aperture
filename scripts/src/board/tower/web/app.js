@@ -151,7 +151,7 @@ function list(b, id, items, max) {
     btn.addEventListener('click', () => {
       if (all) showAll.delete(id);
       else showAll.add(id);
-      if (lastView) render(lastView); // the view in hand: no second fetch racing the poll
+      if (lastView) render(lastView, false); // the view in hand: no second fetch racing the poll
     });
     b.append(btn);
   }
@@ -254,9 +254,11 @@ function nowPanel(v) {
   const slots = el('div', 'slots');
   for (const s of v.slots) {
     const busy = !!s.branch;
-    const c = el('div', `slot ${s.state === 'unknown' ? 'c-hold' : busy ? 'c-dev' : 'c-good'}`);
+    const tone =
+      s.state === 'unknown' ? 'c-hold' : busy ? 'c-dev' : s.deploying ? 'c-deploy' : 'c-good';
+    const c = el('div', `slot ${tone}`);
     const name = el('div', 'name');
-    const working = busy && /running|deploying/.test(s.detail ?? '');
+    const working = (busy && /running|deploying/.test(s.detail ?? '')) || s.deploying;
     name.append(
       working ? liveDot() : el('span', 'dot'),
       document.createTextNode(s.slot.toUpperCase()),
@@ -270,7 +272,8 @@ function nowPanel(v) {
         `${short(s.detail ?? 'holding the lock', 40)} · to ${hhmm(s.expiresAt)}`,
       );
       c.append(what);
-    } else if (s.state === 'free') c.append(el('div', 'who', 'free'));
+    } else if (s.deploying) c.append(el('div', 'who', 'no holder · a dev deploy is running'));
+    else if (s.state === 'free') c.append(el('div', 'who', 'free'));
     // known noise stays quiet: a lock read under 5 min old is just "as of"; past that it is unknown, and says so
     if (s.state === 'unknown') c.append(el('div', 'what t-warn', `lock unknown: ${s.why}`));
     else if (s.asOf) c.append(el('div', 'what', `as of ${hhmm(s.asOf)}`));
@@ -794,13 +797,15 @@ function charts(v) {
 let lastView = null;
 let rendered = new Set(); // keys drawn this render: `expanded` keeps only these (and the tiles')
 let seq = 0; // the newest poll: an older response arriving late is dropped
+const SELECT_HOLD_MS = 15000;
 
-function render(v) {
+// `fresh`: a view just fetched. A re-render of the view in hand keeps the clock offset (its `now` is old).
+function render(v, fresh = true) {
   // a restart onto new code: this page's script is old, so load the new one
   if (served && v.version && v.version !== served) return location.reload();
   served = served ?? v.version;
   v_now = v.now;
-  offset = v.now - Date.now();
+  if (fresh) offset = v.now - Date.now();
   next_seen = new Map();
   rendered = new Set();
   lastView = v;
@@ -833,9 +838,18 @@ async function tick() {
     );
   }
   if (mine !== seq) return; // a newer poll started: its answer wins
-  // a text selection in a panel survives: skip this redraw (the next poll redraws)
+  // a text selection in a panel survives a redraw or two, never longer: past SELECT_HOLD_MS the panels redraw
+  // anyway (a held selection mustn't freeze a MERGE ME that has turned HOLD), and the banner says it's paused
   const sel = window.getSelection();
-  if (sel && !sel.isCollapsed && $('main').contains(sel.anchorNode)) return;
+  if (sel && !sel.isCollapsed && $('main').contains(sel.anchorNode) && lastOk) {
+    const held = Date.now() - lastOk;
+    if (held < SELECT_HOLD_MS) {
+      const ban = $('#banner');
+      ban.textContent = `paused while text is selected: redraws in ${Math.ceil((SELECT_HOLD_MS - held) / 1000)} s`;
+      ban.style.display = 'block';
+      return;
+    }
+  }
   try {
     render(v);
   } catch (e) {
@@ -850,7 +864,11 @@ async function tick() {
 
 function fail(text, e, now = false) {
   failures++;
-  if (failures >= 2 || now) {
+  $('#live-dot').className = 'dot c-bad'; // no pulse: nothing is live
+  const chip = $('#sources-chip');
+  chip.textContent = 'sources ?';
+  chip.className = 't-bad';
+  if (failures >= 2 || now || !lastOk) {
     const ban = $('#banner');
     ban.textContent = `${text} (${e.message})`;
     ban.style.display = 'block';

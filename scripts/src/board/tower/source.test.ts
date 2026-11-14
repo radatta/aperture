@@ -81,6 +81,12 @@ describe('Source', () => {
     expect(src.refresh(t0 + 25 * 3600000).lockFeed).toEqual([]);
   });
 
+  it('a garbled read time is null (unknown), never NaN (which reads as fresh)', () => {
+    const { board, src } = setup();
+    writeFileSync(join(board, 'devlock.json'), JSON.stringify({ v: 1, t: 'soon', holder: null }));
+    expect(src.refresh(Date.parse('2026-11-08T00:00:00Z')).lock!.asOf).toBeNull();
+  });
+
   it("reads slot B's cache on its own, and feeds its changes as `lock devb:`", () => {
     const { board, src } = setup();
     const t0 = Date.parse('2026-11-08T00:00:00Z');

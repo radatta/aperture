@@ -789,3 +789,55 @@ describe('round 3', () => {
     });
   });
 });
+
+describe('round 4', () => {
+  const disp = (s: string, id: number) =>
+    run({
+      id,
+      name: 'Deploy dev (dispatch)',
+      title: `deploy-dev ${s} k`,
+      status: 'in_progress',
+      conclusion: null,
+    });
+  const files = { [sha('e')]: ['app/x.ts'] };
+
+  it('every running dispatch is checked: a newer devb one never hides an older dev one', () => {
+    const lockB = lock('juliet', { sha: sha('b') });
+    const both = [disp(sha('b'), 2), disp(sha('9'), 1)]; // newest first, as the runs list comes
+    expect(holdReason(pr(), null, inputs({ lockB, runs: both, files }))).toBe(
+      'a dev deploy is running',
+    );
+    // devb's alone: a PR that doesn't change devb's shape isn't held by it
+    expect(holdReason(pr(), null, inputs({ lockB, runs: [both[0]!], files }))).toBeNull();
+  });
+
+  it("an unattributed dispatch makes dev's card 'deploying', never free", () => {
+    const v = derive(inputs({ lock: lock(null), runs: [disp(sha('9'), 1)] }));
+    expect(v.slots[0]).toMatchObject({ slot: 'dev', state: 'free', deploying: true });
+    expect(v.slots[1]!.deploying).toBe(false);
+    expect(derive(inputs({ lock: lock(null) })).slots[0]!.deploying).toBe(false);
+  });
+
+  it("dispatch's hold is unknown when queue.json, or this lane's entry, can't be read", () => {
+    const i = inputs({ files });
+    i.tower.queue = { status: 'missing', data: null, problems: [] };
+    expect(holdReason(pr(), null, i)).toBe("queue.json missing: dispatch's hold unknown");
+    const j = inputs({ files });
+    j.tower.queue = { ...j.tower.queue, status: 'bad', unread: ['echo'] };
+    expect(holdReason(pr(), null, j)).toBe(
+      "queue.json: this lane's entry is unreadable, dispatch's hold unknown",
+    );
+    j.tower.queue.unread = ['zulu'];
+    expect(holdReason(pr(), null, j)).toBeNull();
+    j.tower.queue.unread = 'all';
+    expect(holdReason(pr(), null, j)).toMatch(/hold unknown/);
+  });
+
+  it('a holder with an unreadable expiry is a failed source, matching the amber card', () => {
+    const s = sources(inputs({ lock: lock('echo', { expiresAt: null }) }));
+    expect(s.find((x) => x.name === 'dev lock')).toMatchObject({
+      state: 'failed',
+      detail: 'holder expiry unreadable',
+    });
+  });
+});
