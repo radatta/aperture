@@ -2,8 +2,8 @@
 // path is tools/coi/xclip (bash, no node start); this is the job's contract mirrored for validateJob, and
 // `pnpm mailroom clip-probe`, the same round trip by hand. Mac side: tools/mailroom/jobs/clip.sh. docs/ops/MAILROOM.md
 // → The clip job.
-import { copyFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Clock } from '../bot/dispatch.ts';
 import { isoSeconds, makeId } from './ids.ts';
 import { NotInstalled, submit, waitForResult, withdraw } from './submit.ts';
@@ -12,7 +12,7 @@ import type { Fs } from './submit.ts';
 export const CLIP_EXPIRES_MIN = 1; // the Mac refuses more than 2: a queued paste is worthless a minute later
 export const CLIP_MAX_EXPIRES_MIN = 2;
 export const CLIP_WAIT_MS = 15_000; // the shim's caps too (tools/coi/xclip)
-export const CLIP_GRACE_MS = 12_000; // once the Mac took it: its read is capped at 10 s
+export const CLIP_GRACE_MS = 17_000; // once the Mac took it: its read (≤ 10 s) + banner (≤ 5 s)
 
 export interface ClipJob {
   v: 1;
@@ -47,7 +47,7 @@ export const CLIP_REASON_HINT = {
     'the copy carries text as well as an image (an Excel range, a Word selection) — refused, so text never crosses as a picture; copy just the image, or take a screenshot',
   NOT_FRONTMOST: 'a terminal (iTerm2 or Terminal) must be the frontmost app on the Mac',
   REPEAT: 'this copy was already served 3 times — copy it again',
-  RATE_LIMITED: 'more than 6 serves in the last minute — wait a minute',
+  RATE_LIMITED: '6 serves in the last minute already — wait a minute',
   TOO_LARGE: 'the image is over 16 MiB as PNG',
   PASTEBOARD_DENIED:
     'macOS listed an image but would not hand it over — allow osascript under System Settings → Privacy & Security',
@@ -56,13 +56,22 @@ export const CLIP_REASON_HINT = {
     'the pasteboard read took over 10 s — likely a macOS paste-permission prompt on the Mac: answer it, then press Ctrl+V again',
 } as const;
 
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// A regular file (not a link) with PNG magic, as the shim checks; the out dir is made if missing.
+function copyPng(from: string, to: string): void {
+  if (!lstatSync(from).isFile()) throw new Error(`${from} is not a regular file`);
+  if (!readFileSync(from).subarray(0, 8).equals(PNG_MAGIC)) throw new Error(`${from} is not a PNG`);
+  mkdirSync(dirname(to), { recursive: true });
+  copyFileSync(from, to);
+}
+
 export interface ClipDeps {
   fs: Fs;
   clock: Clock;
   dir: string;
   out: string;
   log: (s: string) => void;
-  copy?: (from: string, to: string) => void;
+  copy?: (from: string, to: string) => void; // defaults: checked as a regular PNG file, then copied
   remove?: (p: string) => void;
 }
 
@@ -103,7 +112,7 @@ export async function clipProbe(d: ClipDeps, waitMs = CLIP_WAIT_MS): Promise<num
   }
   const png = join(d.dir, 'results', job.id, 'clip.png');
   try {
-    (d.copy ?? copyFileSync)(png, d.out);
+    (d.copy ?? copyPng)(png, d.out);
   } finally {
     (d.remove ?? ((p) => rmSync(p, { force: true })))(png);
   }

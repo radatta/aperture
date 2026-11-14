@@ -1,5 +1,8 @@
+import { mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { makeClipJob, validateClipParams, clipProbe } from './clip.ts';
+import type { ClipDeps } from './clip.ts';
 import { memFs } from './fakes.ts';
 import { validateJob } from './job.ts';
 
@@ -122,6 +125,41 @@ describe('the clip job, container side', () => {
     };
     await expect(clipProbe(d)).rejects.toThrow('EACCES');
     expect(removed).toHaveLength(1);
+  });
+
+  it('clip-probe: the default copy refuses a non-PNG or a link, and still deletes the shared file', async () => {
+    const { mkdtempSync, writeFileSync, symlinkSync, existsSync, readdirSync } =
+      await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const t = mkdtempSync(join(tmpdir(), 'clip-probe-'));
+    for (const plant of ['gif', 'link'] as const) {
+      const { d } = rig((id, fs) => {
+        fs.files.set(
+          `${t}/results/${id}/result.json`,
+          result(id, { status: 'served', reason: null }),
+        );
+        const png = join(t, 'results', id, 'clip.png');
+        mkdirSync(join(t, 'results', id), { recursive: true });
+        if (plant === 'gif') writeFileSync(png, 'GIF89a');
+        else symlinkSync('/etc/hostname', png);
+      });
+      d.fs.dirs.add(`${t}/inbox`);
+      const real: ClipDeps = {
+        fs: d.fs,
+        clock: d.clock,
+        dir: t,
+        out: join(t, 'out', `${plant}.png`),
+        log: d.log,
+      };
+      await expect(clipProbe(real)).rejects.toThrow(
+        plant === 'gif' ? 'not a PNG' : 'not a regular file',
+      );
+      expect(existsSync(real.out)).toBe(false);
+      const [id] = readdirSync(join(t, 'results'));
+      expect(existsSync(join(t, 'results', id ?? '', 'clip.png'))).toBe(false); // deleted all the same
+      rmSync(join(t, 'results'), { recursive: true, force: true });
+    }
+    rmSync(t, { recursive: true, force: true });
   });
 
   it('clip-probe: no mailroom is exit 3', async () => {

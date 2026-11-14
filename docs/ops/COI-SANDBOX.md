@@ -900,7 +900,8 @@ sessions by them, and restore matches on them.
   bash /workspace/tools/coi/tmux-restore.sh save   # before a stop or rebuild
   bash /workspace/tools/coi/tmux-restore.sh        # after it
   ```
-- **Pasting images** (`xclip`). Copy an image on the Mac (a Cmd+Ctrl+Shift+4 screenshot, Safari's Copy Image),
+- **Pasting images** (`xclip`). Copy an image on the Mac (a Cmd+Ctrl+Shift+4 screenshot; Safari's Copy Image is
+  expected to work, unverified: a copy that also carries text is refused, MAILROOM.md → _The clip job_),
   keep iTerm in front, and press **Ctrl+V** in a container Claude Code: it pastes as an image. `~/.local/bin/xclip`
   is a link to `tools/coi/xclip` (made by `links`), ahead of `/usr/bin/xclip` on PATH. It answers only Claude Code's
   two image calls, through the Mac mailroom's `clip` job, and never text (MAILROOM.md → _The clip job_). It needs

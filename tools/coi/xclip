@@ -4,7 +4,7 @@
 # ~/.local/bin/xclip, ahead of /usr/bin on PATH, by tools/coi/tmux-restore.sh links.
 #
 # Claude Code (2.1.322) asks two things on Ctrl+V, and only these are answered:
-#   xclip -selection clipboard -t TARGETS -o     → ask the Mac (≤ 15 s, ≤ 27 s once it took the job), keep the
+#   xclip -selection clipboard -t TARGETS -o     → ask the Mac (≤ 15 s, ≤ 32 s once it took the job), keep the
 #                                                  PNG, print "image/png"
 #   xclip -selection clipboard -t image/png -o   → print the kept PNG once (≤ 10 s old), then drop it
 # Everything else — text reads, the primary selection, copy (stdin), bmp — exits 1 with no output. Text never
@@ -14,7 +14,7 @@ umask 077
 
 HJ="${XCLIP_SHIM_HOSTJOBS:-/workspace/.hostjobs}"
 WAIT_MS="${XCLIP_SHIM_WAIT_MS:-15000}"
-GRACE_MS="${XCLIP_SHIM_GRACE_MS:-12000}" # once the Mac took the job: its read is capped at 10 s (jobs/clip.sh)
+GRACE_MS="${XCLIP_SHIM_GRACE_MS:-17000}" # once the Mac took the job: its read (≤ 10 s) + banner (≤ 5 s), jobs/clip.sh
 KEEP_S=10
 BUSY_S=30 # a job whose heartbeat is younger than this, with no result yet, holds the runner (it drains one at a time)
 MAX_BYTES=16777216
@@ -40,14 +40,14 @@ sweep() {
   local d
   find "$HJ/results" -mindepth 2 -maxdepth 2 -path '*-clip-*/clip.png' -type f -mmin +0.5 -delete 2>/dev/null
   find "$HJ/staging" -maxdepth 1 -name '*-clip-*.withdrawn.json' -type f -mmin +60 -delete 2>/dev/null
-  while IFS= read -r d; do
+  while IFS= read -r -d '' d; do
     rm -f -- "$d/result.json" "$d/clip.png" && rmdir -- "$d" 2>/dev/null
-  done < <(find "$HJ/results" -mindepth 1 -maxdepth 1 -name '*-clip-*' -type d -mmin +60 2>/dev/null)
+  done < <(find "$HJ/results" -mindepth 1 -maxdepth 1 -name '*-clip-*' -type d -mmin +60 -print0 2>/dev/null)
   return 0
 }
 
 targets() {
-  local id job t0 r st rs png size cap
+  local id job t0 r st rs png size cap took=""
   cache_ok || no "refused: cache dir $CACHE is not ours"
   rm -f -- "$KEPT"
   for d in "$HJ" "$HJ/inbox" "$HJ/results"; do
@@ -75,7 +75,7 @@ targets() {
         no "$id no answer in $((WAIT_MS / 1000)) s — withdrawn (Mac asleep or mailroom not installed)"
       fi
       # The Mac took it: wait out its read, so the answer is collected (and its clip.png deleted) rather than left.
-      if [ "$cap" = "$WAIT_MS" ]; then cap=$((WAIT_MS + GRACE_MS)); continue; fi
+      if [ -z "$took" ]; then took=1; cap=$((WAIT_MS + GRACE_MS)); continue; fi
       no "$id no answer in $((cap / 1000)) s though the Mac took it"
     fi
     sleep 0.1
@@ -85,13 +85,14 @@ targets() {
   png="$HJ/results/$id/clip.png"
   if [ "$st" != served ]; then no "$id $st $rs"; fi
   if [ -L "$png" ] || [ ! -f "$png" ]; then no "$id served but clip.png is missing or a link"; fi
-  size="$(stat -c %s "$png")"
-  if [ "$size" -gt "$MAX_BYTES" ] || [ "$(head -c 8 "$png" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
-    rm -f -- "$png"
+  # Copy first, then check the copy: the shared file could change between a check and a read.
+  (set -C && head -c $((MAX_BYTES + 1)) -- "$png" >"$KEPT") || no "$id could not keep the image"
+  rm -f -- "$png" # the screenshot shouldn't sit in the shared folder
+  size="$(stat -c %s "$KEPT")"
+  if [ "$size" -gt "$MAX_BYTES" ] || [ "$(head -c 8 "$KEPT" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
+    rm -f -- "$KEPT"
     no "$id served a file that is not a PNG within the cap"
   fi
-  (set -C && cat -- "$png" >"$KEPT") || no "$id could not keep the image"
-  rm -f -- "$png" # the screenshot shouldn't sit in the shared folder
   log "$id served $size bytes in $(($(ms) - t0)) ms"
   printf 'TARGETS\nimage/png\n'
 }

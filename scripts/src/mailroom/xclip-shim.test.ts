@@ -171,6 +171,7 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     rmSync(join(hj, 'inbox', `${id}.json`));
     const r = await run;
     expect(r.code).toBe(1);
+    expect(r.ms).toBeGreaterThanOrEqual(1200); // the grace ran
     expect(readdirSync(join(hj, 'staging')).filter((f) => f.includes(id))).toEqual([]);
   });
 
