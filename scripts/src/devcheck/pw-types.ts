@@ -87,6 +87,8 @@ export interface PwPage {
     opts?: { timeout?: number },
   ): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
+  // A script run in every document this page loads, before its own (the lc-e2e sets the fake page's switches).
+  addInitScript?(script: string): Promise<void>;
   keyboard: { press(key: string): Promise<void> };
   screenshot(opts: { path: string; fullPage?: boolean }): Promise<unknown>;
   on(event: 'console', fn: (msg: { type(): string; text(): string }) => void): void;

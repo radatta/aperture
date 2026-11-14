@@ -8,8 +8,9 @@
 // A page script can patch built-ins after we load. So everything this file calls at request time is an
 // original captured below and called through Reflect.apply; it never awaits or chains on a promise (a
 // patched `then` could swap the value); the browser's own promise resolution can't be steered either —
-// `then` is pinned to undefined on what our promises settle with (Response, CryptoKey, ArrayBuffer); a
-// Response counts only if the browser fetched it from leetcode.com (its own type and final URL); and each
+// `then` is pinned to undefined on what our promises settle with (Response, CryptoKey, ArrayBuffer — a blob's
+// text is a string, which settles with no `then` lookup); a Response counts only if the browser fetched it
+// from leetcode.com (its own type and final URL), an XHR's body only through its own getters; and each
 // message is strings and numbers in null-prototype objects, so no page `toJSON` applies. What that can't
 // stop — a patch in place before we ran, or traffic a script makes or fakes for LeetCode itself, or one it
 // keeps from us (a listener ahead of ours) — is the accepted residual (README → How it works → The relay).
@@ -69,6 +70,14 @@
   const xhrType = getterOf(XHR, 'responseType');
   const xhrText = getterOf(XHR, 'responseText');
   const xhrUrl = getterOf(XHR, 'responseURL');
+  const xhrResponse = getterOf(XHR, 'response');
+  const xhrState = getterOf(XHR, 'readyState');
+  // A Blob's size getter brand-checks its receiver, so it is also the is-it-a-real-Blob test.
+  const blobSize = getterOf(typeof Blob === 'function' && Blob, 'size');
+  const blobText =
+    typeof Blob === 'function' && typeof Blob.prototype.text === 'function'
+      ? Blob.prototype.text
+      : null;
 
   const RAW_MAX = 1024 * 1024; // lib/relay.js RAW_MAX: a longer text goes as null
   const URL_MAX = 2048;
@@ -137,7 +146,7 @@
     },
   ]);
   // `how`: why a response went with or without its body, a few fixed words for the debug log's probe (the
-  // GraphQL bodies Safari never delivered, 2026-11-10: README → Safari behaviour) — never content.
+  // GraphQL bodies Safari sends as blob XHRs, debug log 9: README → Safari behaviour) — never content.
   function emit(url, reqBody, resBody, reqAt, page, how) {
     if (typeof url !== 'string' || url.length > URL_MAX) return;
     if (typeof page !== 'string' || page.length > URL_MAX) return;
@@ -259,6 +268,23 @@
     const realOpen = XHR.prototype.open;
     const realSend = XHR.prototype.send;
     const urls = new WeakMap();
+    const sends = new WeakMap(); // xhr → its latest send's token: a reused XHR's earlier listener stands down
+    const ONCE = { __proto__: null, once: true }; // no prototype: a polluted `capture` or `signal` isn't read
+    // A blob XHR's body (Safari's GraphQL, debug log 9): the Blob in hand, read through the originals. Nothing
+    // is read from the XHR after this tick, so a reuse before the text settles can't swap the pair. WebKit's
+    // wrapper caches the one Blob it makes per response, so the page gets that same Blob; an isolated world's
+    // read would likely get none, so the read stays in this world (README → Safari behaviour).
+    const readBlob = (blob, done) => {
+      const size = safe(blobSize, blob, []);
+      if (typeof size !== 'number') return done(null, 'xhr:blob-none'); // null, or not a real Blob
+      // UTF-8 bytes are at least the text's UTF-16 length, so a blob within RAW_MAX is a text within it.
+      if (size > RAW_MAX) return done(null, 'xhr:blob-big');
+      if (size === 0) return done(null, 'xhr:blob-empty');
+      if (!blobText) return done(null, 'xhr:blob-no-text');
+      when(safe(blobText, blob, []), (t) =>
+        typeof t === 'string' ? done(t, 'xhr:blob-ok') : done(null, 'xhr:blob-read-fail'),
+      );
+    };
     XHR.prototype.open = function () {
       // Read once, and the same string goes to the real open.
       const url = arguments.length > 1 ? safe(Str, undefined, [arguments[1]]) : null;
@@ -270,34 +296,43 @@
     };
     XHR.prototype.send = function (body) {
       const url = safe(wmGet, urls, [this]);
+      // Each send gets its own token, so a listener only ever pairs its own request with a response.
+      const prev = safe(wmGet, sends, [this]);
+      const token = { __proto__: null };
+      safe(wmSet, sends, [this, token]);
       if (hits(OURS, url)) {
         const reqBody = typeof body === 'string' ? body : null;
         const reqAt = now();
         const page = pageNow();
-        safe(addListener, this, [
-          'loadend',
-          () => {
-            const real = safe(xhrUrl, this, []); // where the browser went, not what the page wrote
-            if (!hits(LEETCODE, real)) return;
-            let text = null;
-            const status = safe(xhrStatus, this, []);
-            const type = safe(xhrType, this, []);
-            // LeetCode's XHRs are text (captured 2026-11-08); a 'json' one would need a page-patchable
-            // serialization, so it goes without its response.
-            let how;
-            if (!wantsRes(url, reqBody)) how = 'xhr:skip';
-            else if (!(status >= 200 && status < 300)) how = 'xhr:status-' + Str(status);
-            else if (type !== '' && type !== 'text')
-              how = 'xhr:type-' + Str(type); // the browser's enum
-            else {
-              text = safe(xhrText, this, []);
-              how = text === null ? 'xhr:no-text' : 'xhr:ok';
-            }
-            emit(real, reqBody, text, reqAt, page, how);
-          },
-        ]);
+        const onEnd = () => {
+          if (safe(wmGet, sends, [this]) !== token) return; // sent again since: not this send's response
+          // An earlier request's loadend, after the page re-sent from its load handler: wait for ours.
+          const st = safe(xhrState, this, []);
+          if (typeof st === 'number' && st !== 4)
+            return safe(addListener, this, ['loadend', onEnd, ONCE]);
+          const real = safe(xhrUrl, this, []); // where the browser went, not what the page wrote
+          if (!hits(LEETCODE, real)) return;
+          const done = (text, how) => emit(real, reqBody, text, reqAt, page, how);
+          const status = safe(xhrStatus, this, []);
+          const type = safe(xhrType, this, []); // the browser's enum
+          if (!wantsRes(url, reqBody)) return done(null, 'xhr:skip');
+          if (!(status >= 200 && status < 300)) return done(null, 'xhr:status-' + Str(status));
+          // Safari sends LeetCode's GraphQL as 'blob' (debug log 9; the 2026-11-08 capture's text XHRs were
+          // likely not Safari's). A 'json', 'document' or 'arraybuffer' one would need a page-patchable
+          // conversion, so it goes without its response.
+          if (type === 'blob') return readBlob(safe(xhrResponse, this, []), done);
+          if (type !== '' && type !== 'text') return done(null, 'xhr:type-' + Str(type));
+          const text = safe(xhrText, this, []);
+          done(text, text === null ? 'xhr:no-text' : 'xhr:ok');
+        };
+        safe(addListener, this, ['loadend', onEnd, ONCE]);
       }
-      return apply(realSend, this, arguments);
+      try {
+        return apply(realSend, this, arguments);
+      } catch (e) {
+        safe(wmSet, sends, [this, prev]); // a send the browser refused: the one in flight keeps its listener
+        throw e;
+      }
     };
   }
 })();

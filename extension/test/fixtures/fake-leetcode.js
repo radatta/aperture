@@ -4,8 +4,11 @@
 (() => {
   'use strict';
   const TEMPLATE = 'class Solution:\n    def twoSum(self, nums, target):\n        ';
-  const slug = (location.pathname.match(/^\/problems\/([^/]+)/) || [])[1] || 'two-sum';
-  const qid = slug === 'two-sum' ? 1 : 2;
+  // The problem in the address: the one this document loaded for, or (after Next) the one a Submit or Run is for.
+  const slugNow = () => (location.pathname.match(/^\/problems\/([^/]+)/) || [])[1] || 'two-sum';
+  const qidOf = (s) => (s === 'two-sum' ? 1 : 2);
+  const slug = slugNow();
+  const qid = qidOf(slug);
   const fake = (window.__fake = {
     resets: 0,
     timerStarts: 0,
@@ -20,12 +23,36 @@
     stickyPopup: false, // a test's switch: an outside click doesn't dismiss the pop-up
     timerResetClicks: 0, // clicks on the widget's own Reset control (the one that opens the pop-up)
   });
+  // A test's switch, set before load: GraphQL goes as Safari sends it (debug log 9) — an XHR whose
+  // responseType is 'blob', read back with FileReader.
+  const blobGql = !!(window.__fakeOpts && window.__fakeOpts.blobGql);
+  const blobXhr = (url, body) =>
+    new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('POST', url);
+      x.setRequestHeader('content-type', 'application/json');
+      x.responseType = 'blob';
+      x.addEventListener('load', () => {
+        const r = new FileReader();
+        r.addEventListener('load', () => resolve(JSON.parse(r.result)));
+        r.addEventListener('error', reject);
+        r.readAsText(x.response);
+      });
+      x.addEventListener('error', reject);
+      x.send(body);
+    });
   const gql = (operationName, variables) => {
     if (operationName === 'updateSyncedCode') fake.syncs++;
+    const body = JSON.stringify({
+      operationName,
+      variables,
+      query: `query ${operationName} { x }`,
+    });
+    if (blobGql) return blobXhr('/graphql/', body);
     return fetch('/graphql/', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ operationName, variables, query: `query ${operationName} { x }` }),
+      body,
     }).then((r) => r.json());
   };
   const $ = (q) => document.querySelector(q);
@@ -214,6 +241,8 @@
   };
   $('[data-e2e-locator=console-submit-button]').addEventListener('click', async () => {
     fake.submits++;
+    const slug = slugNow();
+    const qid = qidOf(slug);
     const r = await fetch(`/problems/${slug}/submit/`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -231,6 +260,8 @@
   });
   $('[data-e2e-locator=console-run-button]').addEventListener('click', async () => {
     fake.runs++;
+    const slug = slugNow();
+    const qid = qidOf(slug);
     const r = await fetch(`/problems/${slug}/interpret_solution/`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

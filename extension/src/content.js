@@ -17,6 +17,7 @@
   const PENDING_MAX = 500; // page messages waiting for the relay; past it a flood is dropped
   const bootState = document.readyState; // Safari may run document_start late — the debug log says
   const PROBLEM_MAX = 64 * 1024;
+  const PROBLEMS_MAX = 8; // fetched docs kept, each at most PROBLEM_MAX: the oldest off screen goes first
   const PAGE_DATA_MAX = 1024 * 1024; // a longer __NEXT_DATA__ isn't parsed
   const START_RETRY_MS = 60_000;
 
@@ -51,7 +52,7 @@
   let sel = selLib.merge(null);
   let pendingStart = null; // {slug, clientSittingId, startedAt} for the Start in progress
   let lastStartRetryable = false;
-  const problems = new Map(); // slug → LeetCode's questionDetail.question, this page load
+  const problems = new Map(); // slug → LeetCode's questionDetail.question, this page load, oldest first
   const pageDocs = new Map(); // slug → the same doc as rendered into this load's __NEXT_DATA__ (readPageDoc)
   const loadSlug = relayLib.slugOf(location.pathname); // the problem this document was loaded for
   const questionIds = new Map(); // slug → questionId (from syncedCode)
@@ -125,6 +126,12 @@
     items.forEach(onItem);
   }
   function onItem(m) {
+    // A problem doc is kept by its own slug, wherever it was fetched (relay.js keepsDoc).
+    if (m.kind === 'problem') {
+      const k = relayLib.keepsDoc(m);
+      if (!k.ok) return debug.log('relay.reject', { reason: k.reason, kind: m.kind });
+      return onProblem(m.slug, m.payload, m.questionId);
+    }
     // Made from another page (the last problem, before a nav): never this one's. A run or submit made on its
     // own problem's page and judged after you left goes to that problem's sitting.
     const from = relayLib.slugOf(m.page);
@@ -137,7 +144,6 @@
       if (a.reason !== 'no-sitting') debug.log('relay.reject', { reason: a.reason, kind: m.kind });
       return;
     }
-    if (m.kind === 'problem') return onProblem(m.slug, m.payload, m.questionId);
     if (m.kind === 'hint') {
       // A hint (syncedCode) names no slug, so it may be a late answer for the last problem: it's taken only
       // when no id is known yet and the problem doc, if any, agrees.
@@ -324,9 +330,20 @@
   function onProblem(slug, doc, questionId) {
     const fit = wire.fitProblem(doc, PROBLEM_MAX);
     if (!fit) return;
+    problems.delete(slug); // a refetch is the newest
     problems.set(slug, fit);
+    let out = null;
+    for (const k of problems.keys()) {
+      if (problems.size <= PROBLEMS_MAX) break;
+      if (k === screenSlug) continue;
+      problems.delete(k);
+      out = k;
+    }
+    const on = slug === screenSlug;
+    debug.log('doc.keep', { on, n: problems.size, out });
+    if (!on) return; // its id rides on the doc itself (startBody, the hint check), so it goes when the doc does
     if (questionId) learnQuestionId(slug, questionId);
-    if (slug === screenSlug && state.phase !== 'hidden') paint();
+    if (state.phase !== 'hidden') paint();
     maybeFill();
   }
   // The doc LeetCode rendered into a fresh load's __NEXT_DATA__ (README → step 8), kept only when it names
@@ -360,9 +377,10 @@
   }
   const docFor = (slug) => problems.get(slug) || pageDocs.get(slug) || null;
   // A1 fills in a sitting's problem doc on a repeat Start: one that came after the Start went (LeetCode
-  // fetches it only after a submit or a nav; the page's own may be read after Start) goes once the sitting is
-  // active — when the doc arrives, or when the phase gets there. The phase's try is once per sitting per page
-  // load, as a resume is: a page flipping its path must not turn each return into a Start call.
+  // fetches it after a submit, and for Next from the old page before the click; the page's own may be read
+  // after Start) goes once the sitting is active — when the doc arrives, or when the phase gets there. The
+  // phase's try is once per sitting per page load, as a resume is: a page flipping its path must not turn each
+  // return into a Start call.
   const filledOnActive = new Set();
   function maybeFill(onActive = false) {
     if (!binding || binding.slug !== screenSlug || binding.problemSent) return;

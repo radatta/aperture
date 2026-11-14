@@ -1,9 +1,10 @@
 // The real page-world script (page/tag.js + inject-main.js, as the manifest loads them) in a jsdom page,
 // fed LeetCode's traffic over both transports. This test plays the isolated world's part exactly as
-// content.js does: the handshake, the real relay's envelope check, the real wire parse, the relay's admit.
+// content.js does: the handshake, the real relay's envelope check, the real wire parse, the relay's admit
+// (and keepsDoc for a problem doc).
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JSDOM } from 'jsdom';
-import { FetchedResponse, MAIN_JS, lib, page, run, until } from './load';
+import { FetchedResponse, MAIN_JS, fakeXHR, lib, page, run, until } from './load';
 import { T } from './fixtures/traffic';
 
 const relayLib = lib('relay');
@@ -25,7 +26,11 @@ const ctx = { screenSlug: 'two-sum', binding: { questionId: '1', status: 'active
 function loadMain(
   pairs: Pair[],
   respond?: (url: string) => Response | null,
-  opts: { xhrType?: string } = {},
+  opts: {
+    xhrType?: string; // what LeetCode sets responseType to on its XHRs
+    blobOf?: (text: string, w: Window & typeof globalThis) => unknown; // the fake XHR's blob (load.ts)
+    before?: (w: Window & typeof globalThis) => void; // the page as it is before our scripts load
+  } = {},
 ) {
   dom = page('https://leetcode.com/problems/two-sum/description/');
   const w = dom.window as unknown as Window & typeof globalThis & Record<string, unknown>;
@@ -52,7 +57,7 @@ function loadMain(
       raws.push(r.raw);
       seqs.push(JSON.parse(JSON.parse(detail).body).seq);
       for (const item of capture.observe(r.raw)) {
-        const a = relayLib.admit(item, ctx);
+        const a = item.kind === 'problem' ? relayLib.keepsDoc(item) : relayLib.admit(item, ctx);
         if (a.ok) admitted.push(item);
         else rejected.push(a.reason);
       }
@@ -75,41 +80,21 @@ function loadMain(
       url: new URL(url, 'https://leetcode.com').href,
     });
   }) as unknown as typeof fetch;
-  // … and XMLHttpRequest, its state behind prototype getters as in a browser.
-  class FakeXHR extends (w.EventTarget as typeof EventTarget) {
-    url = '';
-    s = 0;
-    text = '';
-    get status() {
-      return this.s;
-    }
-    get responseType() {
-      return opts.xhrType ?? '';
-    }
-    get responseText() {
-      return this.text;
-    }
-    get responseURL() {
-      return this.s ? new URL(this.url, 'https://leetcode.com').href : '';
-    }
-    open(_m: string, url: string) {
-      this.url = url;
-    }
-    send(body: string | null) {
-      setTimeout(() => {
-        this.s = 200;
-        this.text = answer(this.url, body ?? null);
-        this.dispatchEvent(new w.Event('loadend'));
-      }, 5);
-    }
-  }
-  w.XMLHttpRequest = FakeXHR as unknown as typeof XMLHttpRequest;
+  // … and XMLHttpRequest.
+  w.XMLHttpRequest = fakeXHR(w, answer, {
+    blobOf: opts.blobOf,
+  }) as unknown as typeof XMLHttpRequest;
+  opts.before?.(w);
   run(dom, MAIN_JS);
   const post = (p: Pair) => w.fetch(p.url, { method: 'POST', body: p.reqText ?? undefined });
-  const xhr = (p: Pair) => {
+  // `prep` runs between open and send, where a page sets responseType.
+  const xhr = (p: Pair, prep?: (x: XMLHttpRequest) => void) => {
     const x = new w.XMLHttpRequest();
     x.open(p.reqText ? 'POST' : 'GET', p.url);
+    if (opts.xhrType) x.responseType = opts.xhrType as XMLHttpRequestResponseType;
+    prep?.(x);
     x.send(p.reqText);
+    return x;
   };
   return { w, raws, seqs, admitted, rejected, post, xhr };
 }
@@ -138,9 +123,8 @@ describe('inject-main in a page', () => {
       body: T.updateSyncedCode.reqText,
     });
 
-    const kinds = await until(() => (admitted.length >= 8 ? admitted.map((m) => m.kind) : null));
-    await until(() => rejected.length >= 1);
-    expect(rejected).toEqual(['off-screen-slug']); // the next problem's prefetched doc: not on screen
+    const kinds = await until(() => (admitted.length >= 9 ? admitted.map((m) => m.kind) : null));
+    expect(rejected).toEqual([]);
     expect(new Set(kinds)).toEqual(
       new Set(['hint', 'snapshot', 'note', 'replay', 'problem', 'submit', 'submitDetails', 'run']),
     );
@@ -151,7 +135,11 @@ describe('inject-main in a page', () => {
     expect(admitted.find((m) => m.kind === 'submit')).toMatchObject({
       payload: { submissionId: '900001', result: { status_msg: 'Wrong Answer' } },
     });
-    expect(admitted.filter((m) => m.kind === 'problem').map((m) => m.slug)).toEqual(['two-sum']);
+    // The next problem's prefetched doc is kept too, by its own slug (relay.js keepsDoc).
+    expect(admitted.filter((m) => m.kind === 'problem').map((m) => m.slug)).toEqual([
+      'two-sum',
+      'add-two-numbers',
+    ]);
     // Raw text only, numbered in order; nothing for another host.
     for (const r of raws) {
       expect(typeof r.url).toBe('string');
@@ -260,13 +248,284 @@ describe('inject-main in a page', () => {
     });
     dom!.window.close();
 
-    const x = loadMain([T.questionDetail, T.updateNote] as Pair[], undefined, { xhrType: 'json' });
-    x.xhr(T.questionDetail);
-    x.xhr(T.updateNote);
-    expect(await until(() => (x.raws.length >= 2 ? x.raws.map((r) => r.how) : null))).toEqual([
-      'xhr:type-json',
-      'xhr:skip',
+    // A type with no plain text to read (never seen from LeetCode) goes without its body, named.
+    for (const xhrType of ['json', 'document', 'arraybuffer']) {
+      const x = loadMain([T.questionDetail, T.updateNote] as Pair[], undefined, { xhrType });
+      x.xhr(T.questionDetail);
+      x.xhr(T.updateNote);
+      expect(await until(() => (x.raws.length >= 2 ? x.raws.map((r) => r.how) : null))).toEqual([
+        `xhr:type-${xhrType}`,
+        'xhr:skip',
+      ]);
+      expect(x.raws[0]!.resText).toBeNull();
+      dom!.window.close();
+    }
+  });
+});
+
+// Safari sends LeetCode's questionDetail and submissionDetails as XHRs with responseType 'blob' (debug log 9).
+describe('inject-main over blob XHRs', () => {
+  const RAW_MAX = relayLib.RAW_MAX as number;
+  const settle = () => new Promise((r) => setTimeout(r, 100));
+  const pairs = (m: ReturnType<typeof loadMain>) =>
+    m.raws.map((r) => [r.reqText, r.resText, r.how]).sort();
+
+  it('reads a blob XHR’s response as text, as Safari sends LeetCode’s GraphQL', async () => {
+    const m = loadMain([T.questionDetail, T.submissionDetails] as Pair[], undefined, {
+      xhrType: 'blob',
+    });
+    const x = m.xhr(T.questionDetail);
+    m.xhr(T.submissionDetails);
+    await until(() => m.admitted.length >= 2);
+    expect(pairs(m)).toEqual(
+      [
+        [T.questionDetail.reqText, T.questionDetail.resText, 'xhr:blob-ok'],
+        [T.submissionDetails.reqText, T.submissionDetails.resText, 'xhr:blob-ok'],
+      ].sort(),
+    );
+    expect(shape(m.admitted).sort((a, b) => String(a.kind).localeCompare(String(b.kind)))).toEqual([
+      {
+        kind: 'problem',
+        slug: 'two-sum',
+        questionId: '1',
+        payload: expect.objectContaining({ title: 'Two Sum' }),
+      },
+      {
+        kind: 'submitDetails',
+        slug: 'two-sum',
+        questionId: null,
+        payload: expect.objectContaining({ submissionId: '900001' }),
+      },
     ]);
-    expect(x.raws[0]!.resText).toBeNull();
+    expect(m.rejected).toEqual([]);
+    // The page's own read: the one Blob, whole.
+    expect(x.response).toBe(x.response);
+    expect(await (x.response as Blob).text()).toBe(T.questionDetail.resText);
+  });
+
+  it('sends a blob XHR without its body when it is empty, too big or not a Blob, and says which', async () => {
+    const reads: number[] = [];
+    const at = (resText: string) => ({ ...T.questionDetail, resText }) as Pair;
+    const cases = [
+      '',
+      'x'.repeat(RAW_MAX),
+      'x'.repeat(RAW_MAX + 1),
+      'NULL',
+      'NOT-A-BLOB',
+      'not json',
+    ];
+    const m = loadMain(cases.map(at), undefined, {
+      xhrType: 'blob',
+      // A null response (as after an error) and a look-alike that isn't a Blob.
+      blobOf: (text, w) =>
+        text === 'NULL'
+          ? null
+          : text === 'NOT-A-BLOB'
+            ? { size: 10, text: async () => T.questionDetail.resText }
+            : new w.Blob([text]),
+      before: (w) => {
+        const real = w.Blob.prototype.text;
+        w.Blob.prototype.text = function (this: Blob) {
+          reads.push(this.size);
+          return real.call(this);
+        };
+      },
+    });
+    cases.forEach(() => m.xhr(T.questionDetail as Pair));
+    await until(() => m.raws.length >= cases.length);
+    await settle();
+    expect(
+      m.raws.map((r) => [r.how, r.resText === null ? null : String(r.resText).length]).sort(),
+    ).toEqual(
+      [
+        ['xhr:blob-empty', null],
+        ['xhr:blob-ok', RAW_MAX], // exactly at the cap: read and sent
+        ['xhr:blob-big', null],
+        ['xhr:blob-none', null],
+        ['xhr:blob-none', null],
+        ['xhr:blob-ok', 8], // not JSON: sent, and nothing in it
+      ].sort(),
+    );
+    expect(reads.sort((a, b) => a - b)).toEqual([8, RAW_MAX]); // the big and empty ones are never read
+    expect(m.admitted).toEqual([]);
+    expect(m.rejected).toEqual([]);
+  });
+
+  it('says the read failed when a blob’s text never comes, and keeps relaying', async () => {
+    const fails = new WeakMap<object, 'reject' | 'throw'>();
+    const at = (resText: string) => ({ ...T.questionDetail, resText }) as Pair;
+    const m = loadMain([at('REJECT'), at('THROW'), T.questionDetail as Pair], undefined, {
+      xhrType: 'blob',
+      blobOf: (text, w) => {
+        const b = new w.Blob([text]);
+        if (text === 'REJECT' || text === 'THROW')
+          fails.set(b, text === 'REJECT' ? 'reject' : 'throw');
+        return b;
+      },
+      // The browser's own text() failing: a read error, or one that throws outright.
+      before: (w) => {
+        const real = w.Blob.prototype.text;
+        w.Blob.prototype.text = function (this: Blob) {
+          const f = fails.get(this);
+          if (f === 'throw') throw new w.DOMException('read', 'NotReadableError');
+          if (f === 'reject')
+            return w.Promise.reject(new w.DOMException('read', 'NotReadableError'));
+          return real.call(this);
+        };
+      },
+    });
+    m.xhr(T.questionDetail as Pair);
+    m.xhr(T.questionDetail as Pair);
+    await until(() => m.raws.length >= 2);
+    expect(m.raws.map((r) => [r.how, r.resText])).toEqual([
+      ['xhr:blob-read-fail', null],
+      ['xhr:blob-read-fail', null],
+    ]);
+    m.xhr(T.questionDetail as Pair);
+    await until(() => m.admitted.length >= 1);
+    expect(m.raws.map((r) => r.how)).toEqual([
+      'xhr:blob-read-fail',
+      'xhr:blob-read-fail',
+      'xhr:blob-ok',
+    ]);
+    expect(shape(m.admitted)).toMatchObject([{ kind: 'problem', slug: 'two-sum' }]);
+  });
+
+  it('relays the real blob when a page script patches Blob, FileReader and XMLHttpRequest after load', async () => {
+    const replayAll = async (
+      m: ReturnType<typeof loadMain>,
+      prep?: (x: XMLHttpRequest) => void,
+    ) => {
+      m.xhr(T.questionDetail as Pair, prep);
+      m.xhr(T.submissionDetails as Pair, prep);
+      await until(() => m.admitted.length >= 2);
+      await settle();
+      return { items: shape(m.admitted), raws: pairs(m) };
+    };
+    const list = [T.questionDetail, T.submissionDetails] as Pair[];
+    const clean = await replayAll(loadMain(list, undefined, { xhrType: 'blob' }));
+    dom!.window.close();
+
+    const m = loadMain(list, undefined, { xhrType: 'blob' });
+    const w = m.w as unknown as Window & typeof globalThis;
+    const forged = JSON.stringify({
+      data: { question: { title: 'Forged', titleSlug: 'two-sum', questionId: '999' } },
+    });
+    // What a hostile LeetCode script could do once our capture is in place.
+    w.Blob.prototype.text = async () => forged;
+    Object.defineProperty(w.Blob.prototype, 'size', { get: () => 0, configurable: true }); // "empty"
+    w.FileReader = class {
+      readAsText() {
+        throw new Error('patched FileReader');
+      }
+    } as unknown as typeof FileReader;
+    Object.defineProperty(w.XMLHttpRequest.prototype, 'response', {
+      get: () => new w.Blob([forged]),
+      configurable: true,
+    });
+    w.Promise.prototype.then = function () {
+      throw new Error('patched then');
+    };
+    const patched = await replayAll(m, (x) =>
+      Object.defineProperty(x, 'response', { value: new w.Blob([forged]) }),
+    );
+    expect(patched).toEqual(clean);
+    expect(m.rejected).toEqual([]);
+  });
+
+  it('keeps each request with its own response when an XHR is sent again before the blob is read', async () => {
+    // Text XHRs too: the same listener, and the same reuse.
+    for (const xhrType of ['blob', '']) {
+      const m = loadMain(
+        [T.questionDetail, T.submissionDetails, T.questionDetail] as Pair[],
+        undefined,
+        { xhrType },
+      );
+      const again = (x: XMLHttpRequest, p: Pair) => {
+        x.open('POST', p.url);
+        if (xhrType) x.responseType = xhrType as XMLHttpRequestResponseType;
+        x.send(p.reqText);
+      };
+      const x = m.xhr(T.questionDetail as Pair);
+      // LeetCode's own listener, after ours: it sends the XHR again before our read of the first settles.
+      x.addEventListener('loadend', () => again(x, T.submissionDetails as Pair), { once: true });
+      await until(() => m.raws.length >= 2);
+      await settle();
+      again(x, T.questionDetail as Pair); // and once more, after both have landed
+      await until(() => m.raws.length >= 3);
+      await settle();
+      const how = xhrType ? 'xhr:blob-ok' : 'xhr:ok';
+      expect(pairs(m), xhrType || 'text').toEqual(
+        [
+          [T.questionDetail.reqText, T.questionDetail.resText, how],
+          [T.questionDetail.reqText, T.questionDetail.resText, how],
+          [T.submissionDetails.reqText, T.submissionDetails.resText, how],
+        ].sort(),
+      );
+      dom!.window.close();
+    }
+  });
+
+  it('pairs nothing with a send the browser refused', async () => {
+    for (const xhrType of ['blob', '']) {
+      const how = xhrType ? 'xhr:blob-ok' : 'xhr:ok';
+      // A second send while the first is in flight: the browser throws, and the first keeps its own body.
+      const m = loadMain([T.questionDetail] as Pair[], undefined, { xhrType });
+      const x = m.xhr(T.questionDetail as Pair);
+      expect(() => x.send(T.submissionDetails.reqText)).toThrow(/invalid state/);
+      await until(() => m.raws.length >= 1);
+      await settle();
+      expect(pairs(m), xhrType || 'text').toEqual([
+        [T.questionDetail.reqText, T.questionDetail.resText, how],
+      ]);
+      dom!.window.close();
+    }
+  });
+
+  it('pairs nothing with a request re-opened in flight', async () => {
+    for (const xhrType of ['blob', '']) {
+      const how = xhrType ? 'xhr:blob-ok' : 'xhr:ok';
+      // Re-opened and sent again before the first answered: the first is dropped (no events), and the second
+      // goes once, with its own request.
+      const n = loadMain([T.submissionDetails] as Pair[], undefined, { xhrType });
+      const y = n.xhr(T.questionDetail as Pair);
+      y.open('POST', T.submissionDetails.url);
+      if (xhrType) y.responseType = xhrType as XMLHttpRequestResponseType;
+      y.send(T.submissionDetails.reqText);
+      await until(() => n.raws.length >= 1);
+      await settle();
+      expect(pairs(n), xhrType || 'text').toEqual([
+        [T.submissionDetails.reqText, T.submissionDetails.resText, how],
+      ]);
+      dom!.window.close();
+    }
+  });
+
+  it('still captures the next response when the page sends the XHR again from its load handler', async () => {
+    // load fires before loadend: by the first request's loadend, the second send's listener is already on.
+    for (const xhrType of ['blob', '']) {
+      const m = loadMain([T.questionDetail, T.submissionDetails] as Pair[], undefined, { xhrType });
+      const x = m.xhr(T.questionDetail as Pair);
+      x.addEventListener(
+        'load',
+        () => {
+          x.open('POST', T.submissionDetails.url);
+          if (xhrType) x.responseType = xhrType as XMLHttpRequestResponseType;
+          x.send(T.submissionDetails.reqText);
+        },
+        { once: true },
+      );
+      await until(() => m.raws.length >= 1);
+      await settle();
+      // The first request's response went with its re-open: lost, never paired with the second's.
+      expect(pairs(m), xhrType || 'text').toEqual([
+        [
+          T.submissionDetails.reqText,
+          T.submissionDetails.resText,
+          xhrType ? 'xhr:blob-ok' : 'xhr:ok',
+        ],
+      ]);
+      dom!.window.close();
+    }
   });
 });
