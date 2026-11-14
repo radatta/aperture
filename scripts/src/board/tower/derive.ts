@@ -42,6 +42,7 @@ export type LaneRow = {
   pr: { number: number; title: string; url: string | null } | null;
   hold: string | null;
   fileAge: number | null; // seconds since the lane file's last write; null = no file
+  phase: string | null; // where on the track plan › build › gate › review › local › dev › pr › merged it is
 };
 export type NeedItem = {
   kind: 'lane' | 'merge' | 'deploy' | 'todo' | 'source';
@@ -285,6 +286,15 @@ export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null
   return queue?.hold ?? null;
 }
 
+// The phase track's position: the lane file's phase, else what the state proves (a lock = dev, an open PR = pr).
+export const TRACK = ['plan', 'build', 'gate', 'review', 'local', 'dev', 'pr', 'merged'] as const;
+function trackPhase(state: State, file: LaneFile | null): string | null {
+  if (state === 'TESTING') return 'dev';
+  if (['PR', 'CHECKS FAILED', 'MERGE ME', 'HOLD'].includes(state)) return 'pr';
+  if (['MERGED', 'DEPLOYING', 'DONE', 'DEPLOY FAILED'].includes(state)) return 'merged';
+  return file && (TRACK as readonly string[]).includes(file.phase) ? file.phase : null;
+}
+
 type Ctx = { branch: string; file: LaneFile | null; queue: Lane | null; pr: Pr | null };
 
 export function laneRow(c: Ctx, i: Inputs): LaneRow {
@@ -303,7 +313,16 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     tone: Tone,
     since: number | null,
     hold: string | null = null,
-  ): LaneRow => ({ ...base, state, label, detail, tone, since, hold });
+  ): LaneRow => ({
+    ...base,
+    state,
+    label,
+    detail,
+    tone,
+    since,
+    hold,
+    phase: trackPhase(state, file),
+  });
 
   if (file?.phase === 'parked' || PARKED.test(queue?.waitingOn ?? ''))
     return row(

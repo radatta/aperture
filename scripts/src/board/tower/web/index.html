@@ -6,40 +6,47 @@
     <meta name="color-scheme" content="light dark" />
     <title>tower</title>
     <style>
-      /* Read at a glance from arm's length on a 14" screen (1512 px) or an iTerm pane: big type, one line per
-         item, details on click. Status colours always come with a word. */
+      /* Read at a glance from arm's length (Rahul, 2026-11-13): big type, one line per item, details on click.
+         Nord, like his tmux bar. Colour means a state, always beside its word: frost = live on dev, green =
+         ready / done, yellow = needs you / held, red = failed, purple = PR in flight, orange = deploying. */
       :root {
-        --bg: #f6f6f4;
+        --bg: #eceff4;
         --panel: #ffffff;
-        --ink: #111110;
-        --ink2: #5c5b57;
-        --line: #e2e1dc;
-        --good: #0a7d0a;
-        --warn: #8a5a00;
-        --bad: #c22f2f;
-        --warn-bg: #fff4d6;
-        --bad-bg: #fde8e8;
-        --good-bg: #e6f6e6;
-        --dim-bg: #efeeea;
-        --series: #2a78d6;
-        --mark: #b5b3ad;
+        --ink: #2e3440;
+        --ink2: #4c566a;
+        --line: #d8dee9;
+        --dev: #3b7e94;
+        --build: #5e81ac;
+        --good: #3f7a2e;
+        --hold: #9a6b00;
+        --bad: #b23a46;
+        --pr: #8a5a86;
+        --deploy: #b5582d;
+        --dim: #7b8394;
+        --tint: 0.13;
+        --series: #5e81ac;
+        --mark: #c3cad6;
+        --shadow: 0 1px 2px rgba(46, 52, 64, 0.08), 0 4px 14px rgba(46, 52, 64, 0.06);
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #161615;
-          --panel: #1f1f1d;
-          --ink: #f0efec;
-          --ink2: #a9a89f;
-          --line: #34342f;
-          --good: #4cc94c;
-          --warn: #f2b84b;
-          --bad: #ef6b6b;
-          --warn-bg: #3a3014;
-          --bad-bg: #3d1e1e;
-          --good-bg: #1d331d;
-          --dim-bg: #2a2a27;
-          --series: #3987e5;
-          --mark: #6b6a64;
+          --bg: #242933;
+          --panel: #2e3440;
+          --ink: #eceff4;
+          --ink2: #a8b1c2;
+          --line: #3b4252;
+          --dev: #88c0d0;
+          --build: #81a1c1;
+          --good: #a3be8c;
+          --hold: #ebcb8b;
+          --bad: #e07d87;
+          --pr: #c7a1c1;
+          --deploy: #e0976f;
+          --dim: #8790a3;
+          --tint: 0.16;
+          --series: #88c0d0;
+          --mark: #4c566a;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.18);
         }
       }
       * {
@@ -61,23 +68,27 @@
         color: var(--ink);
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 3px 10px;
+        border-radius: 999px;
+        padding: 3px 12px;
         cursor: pointer;
       }
       a {
-        color: var(--series);
+        color: var(--build);
       }
 
       header {
         display: flex;
         gap: 14px;
         align-items: center;
-        padding: 10px 18px;
+        padding: 12px 18px 10px;
       }
       header h1 {
-        font-size: 20px;
+        font-size: 21px;
         margin: 0;
+        letter-spacing: 0.02em;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
       header .meta {
         color: var(--ink2);
@@ -89,62 +100,105 @@
       #banner {
         display: none;
         padding: 10px 18px;
-        background: var(--bad-bg);
+        background: color-mix(in srgb, var(--bad) 18%, var(--panel));
         color: var(--bad);
         font-weight: 600;
       }
 
-      /* the health strip: always above the fold */
+      /* the colour of a state: --c drives text, tint and bar */
+      .c-dev {
+        --c: var(--dev);
+      }
+      .c-build {
+        --c: var(--build);
+      }
+      .c-good {
+        --c: var(--good);
+      }
+      .c-hold {
+        --c: var(--hold);
+      }
+      .c-bad {
+        --c: var(--bad);
+      }
+      .c-pr {
+        --c: var(--pr);
+      }
+      .c-deploy {
+        --c: var(--deploy);
+      }
+      .c-dim {
+        --c: var(--dim);
+      }
+
+      /* the live dot: pulses on work in flight (still under prefers-reduced-motion) */
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--c, var(--good));
+        display: inline-block;
+        flex: none;
+        align-self: center;
+      }
+      .dot.live {
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 color-mix(in srgb, var(--c, var(--good)) 55%, transparent);
+        }
+        50% {
+          box-shadow: 0 0 0 6px color-mix(in srgb, var(--c, var(--good)) 0%, transparent);
+        }
+      }
+
+      /* the health strip: hero numbers, always above the fold */
       #health {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: 0.8fr 1fr 1fr 1fr 0.9fr;
         gap: 10px;
-        padding: 0 18px 10px;
+        padding: 0 18px 12px;
       }
       @media (max-width: 1000px) {
         #health {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
+        #health .tile:first-child {
+          grid-column: 1 / -1;
+        }
       }
       .tile {
+        position: relative;
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-left-width: 5px;
-        border-radius: 8px;
-        padding: 8px 12px;
+        border-radius: 12px;
+        padding: 9px 13px 8px;
         cursor: pointer;
         min-width: 0;
-      }
-      .tile.s-warn {
-        border-left-color: var(--warn);
-      }
-      .tile.s-bad {
-        border-left-color: var(--bad);
-      }
-      .tile.s-good {
-        border-left-color: var(--good);
-      }
-      .tile.s-dim {
-        border-left-color: var(--mark);
+        box-shadow: var(--shadow);
+        border-top: 3px solid var(--c, var(--line));
+        overflow: hidden;
       }
       .tile .label {
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.09em;
         color: var(--ink2);
       }
-      .tile.s-warn .sub {
-        color: var(--warn);
-      }
-      .tile.s-bad .sub {
-        color: var(--bad);
-      }
       .tile .value {
-        font-size: 21px;
-        font-weight: 600;
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        font-variant-numeric: tabular-nums;
+      }
+      .tile .value small {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--ink2);
       }
       .tile .sub {
         font-size: 14px;
@@ -153,6 +207,10 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .tile.c-hold .sub,
+      .tile.c-bad .sub {
+        color: var(--c);
+      }
       .tile .more {
         display: none;
         margin-top: 6px;
@@ -160,6 +218,44 @@
       }
       .tile.open .more {
         display: block;
+      }
+      .tile svg.spark {
+        position: absolute;
+        right: 10px;
+        top: 12px;
+        width: 42%;
+        height: 38px;
+        opacity: 0.9;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 3px;
+        background: var(--line);
+        margin: 4px 0 3px;
+        overflow: hidden;
+      }
+      .bar > span {
+        display: block;
+        height: 100%;
+        background: var(--c);
+        border-radius: 3px;
+      }
+      .tile.cheer {
+        animation: cheer 2.4s ease-out;
+      }
+      @keyframes cheer {
+        0% {
+          box-shadow:
+            0 0 0 0 color-mix(in srgb, var(--good) 70%, transparent),
+            var(--shadow);
+          transform: translateY(-2px);
+        }
+        100% {
+          box-shadow:
+            0 0 0 18px transparent,
+            var(--shadow);
+          transform: none;
+        }
       }
 
       main {
@@ -178,14 +274,14 @@
       }
       section {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 10px;
+        border-radius: 12px;
         padding: 10px 14px;
         min-width: 0;
+        box-shadow: var(--shadow);
       }
       section h2 {
-        font-size: 14px;
-        letter-spacing: 0.07em;
+        font-size: 13px;
+        letter-spacing: 0.09em;
         margin: 0 0 6px;
         color: var(--ink2);
         display: flex;
@@ -202,21 +298,40 @@
         font-size: 13px;
       }
       #needs.has {
-        border-color: var(--warn);
-        border-width: 2px;
+        box-shadow:
+          inset 0 0 0 2px var(--hold),
+          var(--shadow);
+      }
+      #needs.has h2 {
+        color: var(--hold);
       }
 
+      .item {
+        border-radius: 8px;
+      }
+      .item.flash {
+        animation: flash 1.8s ease-out;
+      }
+      @keyframes flash {
+        from {
+          background: color-mix(in srgb, var(--c, var(--build)) 30%, transparent);
+        }
+        to {
+          background: transparent;
+        }
+      }
       .row {
         display: flex;
         gap: 10px;
         align-items: baseline;
-        padding: 6px 0;
-        border-top: 1px solid var(--line);
+        padding: 6px 6px 6px 10px;
+        border-left: 3px solid var(--c, transparent);
         cursor: pointer;
         min-width: 0;
+        border-radius: 6px;
       }
-      .row:first-child {
-        border-top: 0;
+      .row:hover {
+        background: color-mix(in srgb, var(--c, var(--build)) 7%, transparent);
       }
       .row .text {
         flex: 1;
@@ -229,6 +344,7 @@
         color: var(--ink2);
         font-size: 14px;
         white-space: nowrap;
+        font-variant-numeric: tabular-nums;
       }
       .row .who {
         color: var(--ink2);
@@ -236,7 +352,7 @@
       }
       .more {
         display: none;
-        padding: 2px 0 8px;
+        padding: 2px 6px 8px 13px;
         font-size: 15px;
         color: var(--ink2);
         overflow-wrap: anywhere;
@@ -254,7 +370,6 @@
           Menlo,
           monospace;
         background: var(--bg);
-        border: 1px solid var(--line);
         border-radius: 6px;
         padding: 6px 8px;
         margin: 6px 0;
@@ -264,16 +379,18 @@
       .badge {
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.03em;
-        padding: 2px 7px;
-        border-radius: 5px;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        border-radius: 999px;
         white-space: nowrap;
+        color: var(--c, var(--dim));
+        background: color-mix(in srgb, var(--c, var(--dim)) calc(var(--tint) * 100%), transparent);
       }
       .t-good {
         color: var(--good);
       }
       .t-warn {
-        color: var(--warn);
+        color: var(--hold);
       }
       .t-bad {
         color: var(--bad);
@@ -281,59 +398,78 @@
       .t-dim {
         color: var(--ink2);
       }
-      .badge.t-good {
-        background: var(--good-bg);
-      }
-      .badge.t-warn {
-        background: var(--warn-bg);
-      }
-      .badge.t-bad {
-        background: var(--bad-bg);
-      }
-      .badge.t-dim,
-      .badge.t-normal {
-        background: var(--dim-bg);
-        color: var(--ink2);
-      }
       .empty {
         color: var(--ink2);
-        padding: 4px 0;
+        padding: 4px 0 4px 13px;
       }
       .cant {
         color: var(--bad);
-        padding: 4px 0;
+        padding: 4px 0 4px 13px;
       }
       .showall {
-        margin-top: 4px;
+        margin: 4px 0 0 10px;
+      }
+
+      /* the phase track: plan › build › gate › review › local › dev › pr › merged, the current step lit */
+      .track {
+        display: inline-flex;
+        gap: 3px;
+        align-self: center;
+        flex: none;
+      }
+      .track i {
+        width: 13px;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--line);
+      }
+      .track i.done {
+        background: color-mix(in srgb, var(--c, var(--build)) 45%, var(--line));
+      }
+      .track i.now {
+        background: var(--c, var(--build));
+      }
+      @media (max-width: 700px) {
+        .track {
+          display: none;
+        }
       }
 
       .slots {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 8px;
-        margin-bottom: 4px;
+        margin-bottom: 6px;
       }
       .slot {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 6px 10px;
+        border-radius: 10px;
+        padding: 7px 11px;
         min-width: 0;
+        background: color-mix(in srgb, var(--c, var(--dim)) 9%, var(--panel));
+        border: 1px solid color-mix(in srgb, var(--c, var(--dim)) 30%, transparent);
       }
       .slot .name {
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.06em;
-        color: var(--ink2);
+        letter-spacing: 0.09em;
+        color: var(--c);
+        display: flex;
+        align-items: center;
+        gap: 7px;
       }
-      .slot .who,
-      .slot .what {
+      .slot .who {
+        font-weight: 600;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
       .slot .what {
-        font-size: 15px;
+        font-size: 14px;
         color: var(--ink2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-variant-numeric: tabular-nums;
       }
 
       #slipping h2,
@@ -390,11 +526,19 @@
         font-size: 14px;
         color: var(--ink2);
       }
+
+      @media (prefers-reduced-motion: reduce) {
+        .dot.live,
+        .item.flash,
+        .tile.cheer {
+          animation: none;
+        }
+      }
     </style>
   </head>
   <body>
     <header>
-      <h1>tower</h1>
+      <h1><span class="dot live c-good" id="live-dot"></span>tower</h1>
       <span class="meta" id="meta">loading…</span>
       <span class="spacer"></span>
       <button id="sources-chip" type="button">sources</button>

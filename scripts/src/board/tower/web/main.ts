@@ -201,7 +201,9 @@ export function build(a: Args) {
     }
   }
 
-  function view(history: boolean): View & { history?: unknown } {
+  function view(
+    history: boolean,
+  ): View & { history?: unknown; sparks: Record<string, (number | null)[]> } {
     const now = clock();
     const tower = source.refresh(now);
     const lanes = readLanes(paths.boardDir);
@@ -234,9 +236,24 @@ export function build(a: Args) {
       midnight: localMidnight(now),
     };
     const v = derive(inputs);
-    if (!history) return v;
+    // the health tiles' sparklines: the last hour, one point a minute (the minute's peak)
+    const spark = (pts: [number, number | null][]) => {
+      const out: (number | null)[] = Array(60).fill(null);
+      for (const [t, y] of pts) {
+        const k = 59 - Math.floor((now - t) / 60000);
+        if (k >= 0 && k < 60 && y !== null) out[k] = Math.max(out[k] ?? -Infinity, y);
+      }
+      return out;
+    };
+    const sparks = {
+      anon: spark(tower.points.map((p) => [p.t, p.anon])),
+      cpu: spark(tower.points.map((p) => [p.t, p.cpu])),
+      mac: spark(macHist.map((m) => [m.t, m.usedMiB])),
+    };
+    if (!history) return { ...v, sparks };
     return {
       ...v,
+      sparks,
       history: {
         container: tower.points.map((p) => [p.t, p.anon, p.cpu]),
         mac: macHist.map((m) => [m.t, m.usedMiB, m.totalMiB]),

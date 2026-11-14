@@ -1,6 +1,7 @@
 // The tower page (docs/ops/TOWER.md): polls /api/state every 5 s and renders it. Rendering only; every rule
 // (states, HOLD, NEEDS YOU, freshness) is server-side in derive.ts. Text goes in with textContent, never as HTML.
-// Layout rule (Rahul, 2026-11-13): big type, one short line per item, details on click, HEALTH above the fold.
+// Layout (Rahul, 2026-11-13): big type, one short line per item, details on click, HEALTH above the fold; colour
+// only where it means a state, motion only on work in flight.
 'use strict';
 
 const POLL_MS = 5000;
@@ -8,8 +9,11 @@ let chartsOn = new URLSearchParams(location.search).get('charts') === '1';
 let failures = 0;
 let lastOk = null;
 let served = null; // the commit this page's script came with: a new one reloads the page
+let offset = 0; // server clock − ours: timers tick against the server's now (fixtures run on a fixed clock)
 const expanded = new Set(); // keys of expanded items, kept across polls
 const showAll = new Set(); // panels showing every row
+let seen = new Map(); // item key → its last label: a change flashes the row
+let lastDone = null; // merges today at the last render: one more is a small cheer
 
 const $ = (sel) => document.querySelector(sel);
 function el(tag, cls, text) {
@@ -27,9 +31,16 @@ function ago(ms, now) {
   if (ms === null || ms === undefined) return '';
   const s = Math.max(0, (now - ms) / 1000);
   if (s < 90) return `${Math.round(s)}s`;
-  if (s < 5400) return `${Math.round(s / 60)}m`;
-  if (s < 172800) return `${Math.round(s / 3600)}h`;
+  if (s < 5400) return `${Math.floor(s / 60)}m`;
+  if (s < 172800) return `${Math.floor(s / 3600)}h${pad(Math.floor((s % 3600) / 60))}`;
   return `${Math.round(s / 86400)}d`;
+}
+// a live elapsed time: re-rendered every second by the ticker below
+function timer(since, prefix = '') {
+  const t = el('span', 'meta', `${prefix}${ago(since, Date.now() + offset)}`);
+  t.dataset.since = String(since);
+  t.dataset.prefix = prefix;
+  return t;
 }
 const gib = (mib) => `${(mib / 1024).toFixed(1)}`;
 const httpsLink = (url, text) => {
@@ -41,7 +52,28 @@ const httpsLink = (url, text) => {
   a.addEventListener('click', (e) => e.stopPropagation());
   return a;
 };
-const badge = (text, tone) => el('span', `badge t-${tone || 'dim'}`, text);
+// colour = meaning: tone (server) or state → one of the palette's classes
+const TONE_C = { good: 'c-good', warn: 'c-hold', bad: 'c-bad', dim: 'c-dim', normal: 'c-build' };
+const STATE_C = {
+  TESTING: 'c-dev',
+  'ON DEV': 'c-dev',
+  BUILDING: 'c-build',
+  PR: 'c-pr',
+  'CHECKS FAILED': 'c-bad',
+  'MERGE ME': 'c-good',
+  READY: 'c-good',
+  DONE: 'c-good',
+  HOLD: 'c-hold',
+  'NEEDS YOU': 'c-hold',
+  DEPLOYING: 'c-deploy',
+  'DEPLOY FAILED': 'c-bad',
+  MERGED: 'c-deploy',
+  WAITING: 'c-dim',
+  PARKED: 'c-dim',
+};
+const LIVE = (r) =>
+  r.state === 'TESTING' || r.state === 'DEPLOYING' || r.label === 'PR (checks running)';
+const badge = (text, c) => el('span', `badge ${c || 'c-dim'}`, text);
 // Long text from outside (queue.json, lane steps) never renders whole in a row: its first clause, capped.
 const short = (s, n = 90) => {
   const t = String(s ?? '')
@@ -56,15 +88,21 @@ function body(id) {
   return b;
 }
 
-// One item: a one-line row (badge · text · meta), and its details below, shown on click.
+// One item: a one-line row (dot · badge · text · track · meta), its details below on click. `c` colours the row's
+// bar and badge; `sig` changing since the last poll flashes it.
 function item(key, parts) {
-  const wrap = el('div', 'item');
+  const wrap = el('div', `item ${parts.c ?? ''}`);
   if (expanded.has(key)) wrap.classList.add('open');
+  const sig = parts.sig ?? null;
+  if (sig !== null && seen.has(key) && seen.get(key) !== sig) wrap.classList.add('flash');
+  if (sig !== null) next_seen.set(key, sig);
   const row = el('div', 'row');
-  if (parts.badge) row.append(badge(parts.badge[0], parts.badge[1]));
+  if (parts.live) row.append(el('span', 'dot live'));
+  if (parts.badge) row.append(badge(parts.badge, parts.c));
   const text = el('span', 'text');
   for (const p of parts.text) text.append(typeof p === 'string' ? document.createTextNode(p) : p);
   row.append(text);
+  if (parts.track) row.append(parts.track);
   for (const m of parts.meta ?? [])
     if (m) row.append(typeof m === 'string' ? el('span', 'meta', m) : m);
   wrap.append(row);
@@ -81,6 +119,18 @@ function item(key, parts) {
     row.title = 'click for details';
   }
   return wrap;
+}
+let next_seen = new Map();
+
+// the phase track: plan › build › gate › review › local › dev › pr › merged, the current one lit
+const TRACK = ['plan', 'build', 'gate', 'review', 'local', 'dev', 'pr', 'merged'];
+function track(phase) {
+  const k = TRACK.indexOf(phase);
+  if (k < 0) return null;
+  const t = el('span', 'track');
+  t.title = `${TRACK.slice(0, k + 1).join(' › ')}`;
+  TRACK.forEach((_, i) => t.append(el('i', i < k ? 'done' : i === k ? 'now' : '')));
+  return t;
 }
 
 // At most `max` rows, then a "+n more" button.
@@ -122,7 +172,7 @@ function copyButton(text) {
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(text);
-      btn.textContent = 'copied';
+      btn.textContent = 'copied ✓';
     } catch {
       btn.textContent = 'copy failed: select it below';
     }
@@ -131,64 +181,83 @@ function copyButton(text) {
   return btn;
 }
 
-const NEED_BADGE = {
-  merge: ['MERGE', 'good'],
-  lane: ['DO', 'warn'],
-  deploy: ['DEPLOY FAILED', 'bad'],
-  todo: ['TODO', 'warn'],
-  source: ['SETUP', 'warn'],
+const NEED = {
+  merge: ['MERGE', 'c-good'],
+  lane: ['DO', 'c-hold'],
+  deploy: ['DEPLOY FAILED', 'c-bad'],
+  todo: ['TODO', 'c-hold'],
+  source: ['SETUP', 'c-hold'],
 };
 
 function needs(v) {
   const b = body('needs');
   $('#needs .count').textContent = v.needs.length ? `(${v.needs.length})` : '';
   $('#needs').classList.toggle('has', v.needs.length > 0);
-  if (!v.needs.length) return emptyOr(v, b, 'needs', 'nothing needs you');
-  const items = v.needs.map((n, i) =>
-    item(`need:${n.kind}:${n.branch ?? ''}:${n.what.slice(0, 40)}:${i}`, {
-      badge: NEED_BADGE[n.kind] ?? ['TODO', 'warn'],
+  if (!v.needs.length) return emptyOr(v, b, 'needs', 'nothing needs you ✓');
+  const items = v.needs.map((n, i) => {
+    const [label, c] = NEED[n.kind] ?? NEED.todo;
+    return item(`need:${n.kind}:${n.branch ?? ''}:${n.what.slice(0, 40)}:${i}`, {
+      c,
+      badge: label,
+      sig: n.what,
       text: [n.link ? httpsLink(n.link, short(n.what)) : short(n.what)],
-      meta: [n.cmd ? copyButton(n.cmd) : null, n.since ? ago(n.since, v.now) : null],
+      meta: [n.cmd ? copyButton(n.cmd) : null, n.since ? timer(n.since) : null],
       more: [
         short(n.what, 600) !== short(n.what) ? n.what : null,
         n.unblocks ? `unblocks: ${n.unblocks}` : null,
         n.cmd ? el('code', null, n.cmd) : null,
       ],
-    }),
-  );
+    });
+  });
   list(b, 'needs', items, 6);
 }
 
-function laneItem(r, now) {
+function laneItem(r) {
   const text = [el('b', null, r.branch)];
   if (r.session) text.push(el('span', 'who', `  ${r.session}`));
   if (r.hold) text.push(`  ·  ${short(r.hold, 70)}`);
   else if (r.detail) text.push(`  ·  ${short(r.detail, 70)}`);
   return item(`lane:${r.branch}`, {
-    badge: [r.label.startsWith('HOLD') ? 'HOLD' : r.label, r.tone === 'normal' ? 'dim' : r.tone],
+    c: STATE_C[r.state] ?? TONE_C[r.tone] ?? 'c-build',
+    live: LIVE(r),
+    badge: r.label.startsWith('HOLD') ? 'HOLD' : r.label,
+    sig: r.label,
     text,
-    meta: [r.since ? ago(r.since, now) : null],
+    track: track(r.phase),
+    meta: [r.since ? timer(r.since) : null],
     more: [
       r.hold ? `held: ${r.hold}` : null,
       r.detail && short(r.detail, 70) !== r.detail ? r.detail : null,
       r.pr ? httpsLink(r.pr.url, `PR ${r.pr.number}: ${r.pr.title}`) : null,
-      r.fileAge !== null ? `lane file updated ${ago(now - r.fileAge * 1000, now)} ago` : null,
+      r.phase ? `phase: ${track(r.phase)?.title ?? r.phase}` : null,
+      r.fileAge !== null ? `lane file updated ${ago(v_now - r.fileAge * 1000, v_now)} ago` : null,
     ],
   });
 }
+let v_now = 0;
 
 function nowPanel(v) {
   const b = body('now');
   const slots = el('div', 'slots');
   for (const s of v.slots) {
-    const c = el('div', 'slot');
-    c.append(el('div', 'name', s.slot));
-    if (s.branch) {
-      c.append(el('div', 'who', `${s.branch}${s.session ? ` (${s.session})` : ''}`));
-      c.append(
-        el('div', 'what', `${short(s.detail ?? 'holding the lock', 40)} · to ${hhmm(s.expiresAt)}`),
+    const busy = !!s.branch;
+    const c = el('div', `slot ${s.state === 'unknown' ? 'c-hold' : busy ? 'c-dev' : 'c-good'}`);
+    const name = el('div', 'name');
+    const working = busy && /running|deploying/.test(s.detail ?? '');
+    name.append(
+      el('span', `dot${working ? ' live' : ''}`),
+      document.createTextNode(s.slot.toUpperCase()),
+    );
+    c.append(name);
+    if (busy) {
+      c.append(el('div', 'who', `${s.branch}${s.session ? ` · ${s.session}` : ''}`));
+      const what = el(
+        'div',
+        'what',
+        `${short(s.detail ?? 'holding the lock', 40)} · to ${hhmm(s.expiresAt)}`,
       );
-    } else if (s.state === 'free') c.append(el('div', 'who t-good', 'free'));
+      c.append(what);
+    } else if (s.state === 'free') c.append(el('div', 'who', 'free'));
     // known noise stays quiet: a lock read under 5 min old is just "as of"; past that it is unknown, and says so
     if (s.state === 'unknown') c.append(el('div', 'what t-warn', `lock unknown: ${s.why}`));
     else if (s.asOf) c.append(el('div', 'what', `as of ${hhmm(s.asOf)}`));
@@ -197,12 +266,7 @@ function nowPanel(v) {
   b.append(slots);
   const rows = v.active.filter((r) => r.state !== 'TESTING');
   if (!rows.length) return emptyOr(v, b, 'now', 'no lanes building');
-  list(
-    b,
-    'now',
-    rows.map((r) => laneItem(r, v.now)),
-    8,
-  );
+  list(b, 'now', rows.map(laneItem), 8);
 }
 
 function next(v) {
@@ -211,19 +275,22 @@ function next(v) {
   if (v.next.rahul)
     items.push(
       item('next:rahul', {
-        badge: ['YOU NEXT', 'warn'],
+        c: 'c-hold',
+        badge: 'YOU NEXT',
+        sig: v.next.rahul,
         text: [short(v.next.rahul)],
         more: [short(v.next.rahul) !== v.next.rahul ? v.next.rahul : null],
       }),
     );
-  for (const r of v.next.merge) items.push(laneItem(r, v.now));
+  for (const r of v.next.merge) items.push(laneItem(r));
   for (const slot of ['dev', 'devb'])
     v.next.queue
       .filter((l) => l.slot === slot)
       .forEach((l, i) =>
         items.push(
           item(`q:${slot}:${l.branch}`, {
-            badge: [`${slot} ${i + 1}`, 'dim'],
+            c: 'c-dim',
+            badge: `${slot} ${i + 1}`,
             text: [el('b', null, l.branch), l.waitingOn ? `  ·  ${short(l.waitingOn, 60)}` : ''],
             more: [l.waitingOn && short(l.waitingOn, 60) !== l.waitingOn ? l.waitingOn : null],
           }),
@@ -232,7 +299,8 @@ function next(v) {
   if (v.next.parked.length)
     items.push(
       item('next:parked', {
-        badge: ['PARKED', 'dim'],
+        c: 'c-dim',
+        badge: 'PARKED',
         text: [el('span', 'who', v.next.parked.join(', '))],
       }),
     );
@@ -242,10 +310,13 @@ function next(v) {
 
 function done(v) {
   const b = body('done');
-  if (!v.done.length) return emptyOr(v, b, 'done', 'no merges today');
+  if (!v.done.length) return emptyOr(v, b, 'done', 'no merges yet today');
   const items = v.done.map((d) =>
     item(`done:${d.number}`, {
-      badge: [d.deploy, d.tone],
+      c: TONE_C[d.tone],
+      live: d.deploy === 'deploying',
+      badge: d.deploy,
+      sig: d.deploy,
       text: [`PR ${d.number}  ${d.title}`],
       meta: [hhmm(d.mergedAt)],
       more: [d.branch, d.deployDetail, d.url ? httpsLink(d.url, 'the deploy run') : null],
@@ -260,10 +331,46 @@ function kv(rows) {
   return g;
 }
 
-function tile(key, label, value, sub, tone, details) {
-  const t = el('div', `tile s-${tone}`);
+// A sparkline (hand-rolled SVG): one series, its own scale 0..max, gaps where the minute had no sample.
+function spark(points, max) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'spark');
+  svg.setAttribute('viewBox', '0 0 60 20');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  if (!points || !max) return svg;
+  const segs = [];
+  let cur = [];
+  points.forEach((y, x) => {
+    if (y === null) {
+      if (cur.length) segs.push(cur);
+      cur = [];
+    } else cur.push(`${x},${(19 - Math.min(1, y / max) * 18).toFixed(1)}`);
+  });
+  if (cur.length) segs.push(cur);
+  for (const s of segs) {
+    const line = document.createElementNS(ns, 'polyline');
+    line.setAttribute('points', s.length === 1 ? `${s[0]} ${s[0]}` : s.join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', 'var(--c, var(--series))');
+    line.setAttribute('stroke-width', '1.6');
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    line.setAttribute('stroke-linejoin', 'round');
+    svg.append(line);
+  }
+  return svg;
+}
+
+function tile(key, label, value, sub, c, details, extra) {
+  const t = el('div', `tile ${c}`);
   if (expanded.has(key)) t.classList.add('open');
-  t.append(el('div', 'label', label), el('div', 'value', value), el('div', 'sub', sub));
+  const val = el('div', 'value');
+  if (Array.isArray(value))
+    val.append(document.createTextNode(value[0]), el('small', null, value[1]));
+  else val.textContent = value;
+  t.append(el('div', 'label', label), val);
+  if (extra) t.append(extra);
+  t.append(el('div', 'sub', sub));
   const more = el('div', 'more');
   more.append(kv(details));
   t.append(more);
@@ -281,28 +388,45 @@ function health(v) {
   box.replaceChildren();
   const src = (name) => v.sources.find((s) => s.name === name);
 
+  // TODAY: the day's merges, the hero number
+  const deployed = v.done.filter((d) => d.tone === 'good').length;
+  const inFlight = v.done.filter((d) => d.deploy === 'deploying').length;
+  const today = tile(
+    'h:t',
+    'TODAY',
+    [String(v.done.length), v.done.length === 1 ? ' merged' : ' merged'],
+    v.done.length
+      ? `${deployed} deployed ✓${inFlight ? ` · ${inFlight} deploying` : ''}`
+      : 'nothing merged yet',
+    v.done.length ? (v.done.some((d) => d.tone === 'bad') ? 'c-bad' : 'c-good') : 'c-dim',
+    v.done.map((d) => [`PR ${d.number}`, `${d.deploy} · ${hhmm(d.mergedAt)}`]),
+  );
+  if (lastDone !== null && v.done.length > lastDone) today.classList.add('cheer');
+  lastDone = v.done.length;
+  box.append(today);
+
   const c = h.container;
-  if (!c) box.append(tile('h:c', 'CONTAINER', 'no data', 'the sampler has no sample', 'bad', []));
+  if (!c) box.append(tile('h:c', 'CONTAINER', 'no data', 'the sampler has no sample', 'c-bad', []));
   else {
     const stale = (v.now - c.at) / 1000 > 90;
-    const tone = stale
-      ? 'warn'
+    const cc = stale
+      ? 'c-hold'
       : c.anonMiB > c.anonHard
-        ? 'bad'
+        ? 'c-bad'
         : c.anonMiB > c.anonSoft
-          ? 'warn'
-          : 'good';
+          ? 'c-hold'
+          : 'c-dev';
     box.append(
       tile(
         'h:c',
         'CONTAINER',
-        `${gib(c.anonMiB)} / ${gib(c.highMiB)} GiB`,
+        [gib(c.anonMiB), ` / ${gib(c.highMiB)} GiB`],
         stale
           ? `sampler silent since ${hhmm(c.at)}`
           : `${c.cpu === null ? '?' : c.cpu.toFixed(1)} cores · tests ${c.tests}/${c.testCap ?? '?'}`,
-        tone,
+        cc,
         [
-          ['memory', `soft ${gib(c.anonSoft)} · hard ${gib(c.anonHard)} GiB`],
+          ['memory', `soft ${gib(c.anonSoft)} · hard ${gib(c.anonHard)} GiB · line: last hour`],
           [
             'cpu',
             c.cpu === null ? 'unknown (bad tick)' : `${c.cpu.toFixed(1)} of ${c.cores} cores`,
@@ -310,6 +434,7 @@ function health(v) {
           ['pids', `${c.pids} of ${c.pidsMax}`],
           ['as of', `${hhmm(c.at)} (${ago(c.at, v.now)} ago)`],
         ],
+        spark(v.sparks?.anon, c.highMiB),
       ),
     );
   }
@@ -327,9 +452,8 @@ function health(v) {
           : m.state === 'missing'
             ? 'install line in NEEDS YOU'
             : short(m.error, 50),
-        notYet ? 'dim' : m.state === 'missing' ? 'warn' : 'bad',
+        notYet ? 'c-dim' : m.state === 'missing' ? 'c-hold' : 'c-bad',
         [
-          ['state', m.state],
           [
             'detail',
             m.error ??
@@ -340,16 +464,16 @@ function health(v) {
     );
   } else {
     const s = m.stats;
-    const tone =
+    const cc =
       m.state === 'ok'
         ? s.mem.pressure === 'critical'
-          ? 'bad'
+          ? 'c-bad'
           : s.mem.pressure === 'warn'
-            ? 'warn'
-            : 'good'
+            ? 'c-hold'
+            : 'c-dev'
         : m.state === 'stale'
-          ? 'warn'
-          : 'bad';
+          ? 'c-hold'
+          : 'c-bad';
     const age =
       m.state === 'ok'
         ? `pressure ${s.mem.pressure}`
@@ -360,9 +484,9 @@ function health(v) {
       tile(
         'h:m',
         'MAC',
-        `${gib(s.mem.usedMiB)} / ${gib(s.memTotalMiB)} GiB`,
+        [gib(s.mem.usedMiB), ` / ${gib(s.memTotalMiB)} GiB`],
         `${age}${s.vm ? ` · VM ${gib(s.vm.rssMiB)}` : ''}`,
-        tone,
+        cc,
         [
           ['free', `${gib(s.mem.freeMiB)} GiB`],
           ['compressor', `${gib(s.mem.compressedMiB)} GiB`],
@@ -374,6 +498,7 @@ function health(v) {
           ],
           ['as of', `${hhmm(s.t)} (${ago(s.t, v.now)} ago)`],
         ],
+        spark(v.sparks?.mac, s.memTotalMiB),
       ),
     );
   }
@@ -387,21 +512,29 @@ function health(v) {
         'ACTIONS',
         ms?.state === 'failed' ? 'failed' : 'counting…',
         short(ms?.detail ?? 'first estimate within the hour', 50),
-        ms?.state === 'failed' ? 'bad' : 'dim',
+        ms?.state === 'failed' ? 'c-bad' : 'c-dim',
         [],
       ),
     );
   else {
-    const srcTone = ms?.state === 'ok' ? null : ms?.state === 'stale' ? 'warn' : 'bad';
-    const tone =
-      srcTone ?? (a.minutes > a.of ? 'bad' : a.capped || a.minutes > a.of * 0.8 ? 'warn' : 'good');
+    const srcBad = ms?.state === 'ok' ? null : ms?.state === 'stale' ? 'c-hold' : 'c-bad';
+    const cc =
+      srcBad ??
+      (a.minutes > a.of ? 'c-bad' : a.capped || a.minutes > a.of * 0.8 ? 'c-hold' : 'c-good');
+    const bar = el('div', 'bar');
+    const fill = el('span');
+    fill.style.width = `${Math.min(100, (a.minutes / a.of) * 100).toFixed(1)}%`;
+    bar.append(fill);
     box.append(
       tile(
         'h:a',
         'ACTIONS',
-        `${a.capped ? '≥' : '≈'} ${a.minutes.toLocaleString()} / ${a.of.toLocaleString()} min`,
-        srcTone ? `estimate ${ms.state}` : `${a.month} UTC · estimate`,
-        tone,
+        [
+          `${a.capped ? '≥' : '≈'}${a.minutes.toLocaleString()}`,
+          ` / ${(a.of / 1000).toFixed(0)}k min`,
+        ],
+        srcBad ? `estimate ${ms.state}` : `${a.month} UTC · estimate`,
+        cc,
         [
           [
             'how',
@@ -413,6 +546,7 @@ function health(v) {
           ],
           ['as of', ms?.at ? `${hhmm(ms.at)} (${ago(ms.at, v.now)} ago)` : '—'],
         ],
+        bar,
       ),
     );
   }
@@ -423,15 +557,15 @@ function health(v) {
     .join(' · ');
   box.append(
     w.state === 'missing'
-      ? tile('h:w', 'AWS', 'no pull', 'localNotes/costs-daily.json missing', 'warn', [])
+      ? tile('h:w', 'AWS', 'no pull', 'costs-daily.json missing', 'c-hold', [])
       : w.state === 'bad'
-        ? tile('h:w', 'AWS', 'unreadable', short(w.error, 50), 'bad', [])
+        ? tile('h:w', 'AWS', 'unreadable', short(w.error, 50), 'c-bad', [])
         : tile(
             'h:w',
             'AWS',
-            `$${w.total.toFixed(2)} this month`,
+            [`$${w.total.toFixed(2)}`, ' this month'],
             w.error ? short(w.error, 50) : `through ${w.through}`,
-            w.state === 'ok' ? 'good' : 'warn',
+            w.state === 'ok' ? 'c-good' : 'c-hold',
             [
               ['accounts', acct || '—'],
               ['pulled', `${new Date(w.at).toLocaleDateString()} ${hhmm(w.at)}`],
@@ -444,13 +578,18 @@ function slipping(v) {
   const b = body('slipping');
   $('#slipping .count').textContent = `(${v.slipping.length})`;
   if (!v.slipping.length) return emptyOr(v, b, 'slipping', 'nothing slipping');
-  const KIND = { followup: ['STALE', 'warn'], parked: ['PARKED', 'dim'], quiet: ['QUIET', 'warn'] };
+  const KIND = {
+    followup: ['STALE', 'c-hold'],
+    parked: ['PARKED', 'c-dim'],
+    quiet: ['QUIET', 'c-hold'],
+  };
   list(
     b,
     'slipping',
     v.slipping.map((s, i) =>
       item(`slip:${i}:${s.what.slice(0, 30)}`, {
-        badge: KIND[s.kind],
+        c: KIND[s.kind][1],
+        badge: KIND[s.kind][0],
         text: [short(s.what)],
         meta: [s.owner, s.since ? ago(s.since, v.now) : null],
         more: [short(s.what) !== s.what ? s.what : null],
@@ -473,11 +612,14 @@ function sources(v) {
       ? 't-bad'
       : 't-warn'
     : 't-dim';
+  $('#live-dot').className =
+    `dot live ${off.some((s) => s.state === 'failed') ? 'c-bad' : off.length ? 'c-hold' : 'c-good'}`;
   for (const s of v.sources) {
-    const tone = s.state === 'ok' ? 'good' : s.state === 'stale' ? 'warn' : 'bad';
+    const c = s.state === 'ok' ? 'c-good' : s.state === 'stale' ? 'c-hold' : 'c-bad';
     b.append(
       item(`src:${s.name}`, {
-        badge: [s.state, tone],
+        c,
+        badge: s.state,
         text: [s.name, s.detail ? `  ·  ${s.detail}` : ''],
         meta: [s.at ? `${ago(s.at, v.now)} ago` : 'never'],
       }),
@@ -486,7 +628,8 @@ function sources(v) {
   for (const p of v.problems) b.append(el('div', 'cant', p));
   for (const id of ['needs', 'now', 'done']) {
     const a = $(`#${id} .age`);
-    const bad = notOk(v, id);
+    // NOW's lock sources speak on their own slot cards: not repeated in its header
+    const bad = notOk(v, id).filter((s) => id !== 'now' || !s.name.endsWith(' lock'));
     const worst = bad.find((s) => s.state !== 'stale') ?? bad[0];
     a.className = `age ${worst ? (worst.state === 'stale' ? 't-warn' : 't-bad') : 't-dim'}`;
     a.textContent = worst ? `${worst.name}: ${worst.state}` : '';
@@ -618,6 +761,9 @@ function render(v) {
   // a restart onto new code: this page's script is old, so load the new one
   if (served && v.version && v.version !== served) return location.reload();
   served = served ?? v.version;
+  v_now = v.now;
+  offset = v.now - Date.now();
+  next_seen = new Map();
   $('#meta').textContent =
     `as of ${hhmm(v.now)} · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`;
   health(v);
@@ -628,6 +774,7 @@ function render(v) {
   slipping(v);
   sources(v);
   charts(v);
+  seen = next_seen;
 }
 
 async function tick() {
@@ -666,3 +813,9 @@ $('#charts-toggle').addEventListener('click', () => {
 });
 tick();
 setInterval(tick, POLL_MS);
+// the live timers: every second, against the server's clock
+setInterval(() => {
+  const now = Date.now() + offset;
+  for (const t of document.querySelectorAll('[data-since]'))
+    t.textContent = `${t.dataset.prefix}${ago(Number(t.dataset.since), now)}`;
+}, 1000);
