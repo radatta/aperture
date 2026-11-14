@@ -9,7 +9,7 @@ Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
 
 **One line:** Aperture is the single aperture a person's whole digital life passes through — the place to plan, do, capture, and later look back through.
 
-**Who it's for:** one person at a time — someone motivated and ambitious who can lose the wider view when deep in work. They want to be more mindful _without_ sacrificing output — a work/life balance that comes from wanting it, not from forcing it and resenting it.
+**Who it's for:** one person, specifically — someone motivated and ambitious who can lose the wider view when deep in work. They want to be more mindful _without_ sacrificing output — a work/life balance that comes from wanting it, not from forcing it and resenting it.
 
 **The job it does:** get everything out of the user's head and into one trusted place, so there is less to carry, time gets scoped honestly, and weeks or months later the patterns that are invisible in the moment can be seen.
 
@@ -17,15 +17,15 @@ Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
 
 Stay ambitious and productive **and** get more mindful/balanced — with a hard rule: **balance can't be enforced by guilt.** If the app ever makes "call a friend" or "rest" feel like a chore being failed, it has broken its own premise. Non-work life is invited, never policed.
 
-### Why trackers like this fail (design against these)
+### Why earlier versions of this app failed (design against these)
 
-1. **Inconsistency, not features.** A tracker can have every feature and still lose to habit: the task list drifts back into the user's head and the morning/night check-in lapses. → **The #1 job of v1 is to earn a daily ritual without relying on willpower.** No guilt-streaks (they invite rebellion or bad feeling); the pull has to be that the home is genuinely worth opening.
-2. **Bland UI.** When all the effort goes to function, nothing about the app invites a return. → Smooth, quiet, considered UI is a v1 requirement, not polish-later.
+1. **Inconsistency, not features.** The functionality existed and still lost to habit: the task list drifted back into the user's head and the morning/night check-in lapsed. → **The #1 job of v1 is to earn a daily ritual without relying on willpower.** No guilt-streaks (they invite rebellion or bad feeling); the pull has to be that the home is genuinely worth opening.
+2. **Bland UI.** Pre-AI, all the effort went to function, and nothing about the app invited a return. → Smooth, quiet, considered UI is a v1 requirement, not polish-later.
 
 ### Two premises that define the product
 
 1. **The bar to beat is the user's own memory.** Keeping tasks in one's head "works" for completion — so Aperture's value prop is _not_ "get more done." It's **less stress + honest scoping.** That reframes success: the win is a calmer head and realistic plans, not a higher task count.
-2. **People under-scope and don't buffer — overconfident even when they know it.** → Tasks should capture **estimate vs actual time**, and the app should quietly show the user their own estimation bias over time. This is the decision-journal / calibration idea aimed at the planning fallacy — and it's the product's version of "mindfulness": data about one's own overconfidence, not a mood emoji.
+2. **The user under-scopes and doesn't buffer — overconfident even when aware of it.** → Tasks should capture **estimate vs actual time**, and the app should quietly show the user their own estimation bias over time. This is the decision-journal / calibration idea aimed at the planning fallacy — and it's the product's version of "mindfulness": data about one's own overconfidence, not a mood emoji.
 
 ### Derived design principles
 

@@ -3,8 +3,8 @@
 // (tracked-identifiers.test.ts), commits (.claude/hooks/precommit-guard.sh, via identifiers-scan.ts) and PR titles
 // and bodies (mailroom/open-pr.ts). Every pattern is built from the config or the gitignored .local/mac-root, so no
 // rule spells an identifier itself.
-// Read at runtime, never imported: the file sits outside every package's rootDir. Imports stay node: only, so the
-// bot CLI and the hook still load this under plain node.
+// Read at runtime, never imported: the file sits outside every package's rootDir. Imports stay node: and ./mac-root.ts
+// only, so the bot CLI and the hook still load this under plain node.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -46,8 +46,9 @@ export const cognitoHost = (slot: 'dev' | 'devb', ids = IDS): string =>
   `aperture-${slot}-${ids.aws.devAccountId}.auth.${ids.aws.region}.amazoncognito.com`;
 
 // What may never appear outside the config: the maintainer's name, the personal mailbox, a concrete Mac home path,
-// the Mac's projects folder (derived from .local/mac-root; no rule without it), and the AWS account ids (public-prep's scan, 2026-11-13): dev's by its id, prod's by its
-// id's sha256, since the prod id is in no tracked file at all — not even the config.
+// the Mac's projects folder (derived from .local/mac-root; no rule without it), and the AWS account ids (public-prep's
+// scan, 2026-11-13): dev's by its id, prod's by its id's sha256, since the prod id is in no tracked file at all — not
+// even the config.
 export type IdentifierKind =
   'name' | 'personal-email' | 'home-path' | 'projects-folder' | 'account-id' | 'prod-account-id';
 export type IdentifierRule = [IdentifierKind, (line: string) => boolean];
@@ -76,12 +77,14 @@ export function projectsFolder(root: string | null): string[] | null {
   return folder.length >= 2 ? folder : null;
 }
 
-// Read once per process: findIdentifiers() builds the rules per call, and the tower calls it in a loop.
+// Read once per process (findIdentifiers() builds the rules per call, and the tower calls it in a loop) — but only
+// once git answered: a failed launch (the pids ceiling) is retried, never cached as "no folder rule".
 let localRoot: string | null | undefined;
-const localMacRoot = (): string | null =>
-  localRoot === undefined
-    ? (localRoot = readMacRoot(macRootFile(dirname(fileURLToPath(import.meta.url)))))
-    : localRoot;
+function localMacRoot(): string | null {
+  if (localRoot !== undefined) return localRoot;
+  const file = macRootFile(dirname(fileURLToPath(import.meta.url)));
+  return file === null ? null : (localRoot = readMacRoot(file));
+}
 
 export function identifierRules(ids = IDS, root: string | null = localMacRoot()): IdentifierRule[] {
   // Whole words only, so the domain (the name run together) and the GitHub login don't match.
