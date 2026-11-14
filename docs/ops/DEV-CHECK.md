@@ -217,7 +217,7 @@ Lambda never started the function, so that attempt was never tested — the app'
 have recovered the call, but the method isn't proven by this run. Chromium logs every 429 as a console error, retried
 or not, and the report's _Throttled (429)_ section names each (`/api/<method>`), which Chromium's line doesn't. Treat
 one as a bug — a refetch storm, a burst wider than the reservation, the harness bursting on its own — never as weather:
-every feature scenario's closing `noConsoleErrors` (smoke's too) fails on any real 429 the run has seen so far, naming the method. It reads
+every scenario that closes with `noConsoleErrors` (smoke's too; `failed-reads`, the last, in a full run) fails on any real 429 the run has seen so far, naming the `/api` method (another origin's by host and path). It reads
 the responses themselves (`ctx.throttled()`), so it also catches a 429 inside an injected-failure window, whose console
 line is dropped. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
