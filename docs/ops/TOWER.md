@@ -35,7 +35,7 @@ and nothing else, and only to a `Host` of `localhost` or a loopback address (no 
 
 ## Panels
 
-How it reads (the maintainer, 2026-11-13: "text too small… just a bunch of long text", then "make it look more exciting"):
+How it reads (the maintainer, 2026-11-13: the text was too small and too long, and should look livelier):
 
 - Big type, one line per item, details on click: long text from `queue.json` or a lane shows its first clause only.
 - Nord colours, each beside its word:

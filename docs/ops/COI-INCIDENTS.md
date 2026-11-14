@@ -18,6 +18,7 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 | F   | Container **killed** three times mid-session, CRITICAL "reverse shell"                                                            | 2026-09-07             | False positive: a hardcoded pattern list flags `python3 -c`, gated only on "the command contains a `:`". Routine JSON one-liners match (fixed in v0.14; guard kept for the strong patterns and the Sigma pause) |
 | G   | 2026-09-07 config-iteration afternoon: session forks on every `--resume`; container-local dotfiles (git identity, mise shadowing) | 2026-09-07             | `--fork-session` on every resume (not COI's doing); `~/.gitconfig` + mise pins live on the rootfs and evaporate per container                                                                                   |
 | H   | Container paused by a Bash line containing `/curl`                                                                                | 2026-10-09, 2026-10-13 | Sigma download-and-execute rule; the Bash wrapper supplies its `/tmp/` + `sh -c` clauses, so `/curl`/`/wget` text alone matches                                                                                 |
+| I   | VM unusable for every session: one search at 12.2 GB RSS                                                                          | 2026-11-14             | a `git grep -o -i -E` with wide `.{0,N}` padding at the repo root; regex blow-up on long lines (_inference_), not a COI detector                                                                                |
 
 ---
 
@@ -1274,3 +1275,30 @@ committed with the v0.15 alignment), plus the `CLAUDE.md` rule. Rejected: `[dete
 "/nonexistent"` (switches off every Sigma rule, not just this one) and `auto_pause_on_high = false`
 (also disarms the network HIGHs). After an unfreeze the pause latch holds for the container's life on
 v0.15 (_inference_ — no reset code) — `COI-SANDBOX.md` → _Container frozen_.
+
+---
+
+# Incident I — one padded `git grep` took the VM's memory
+
+**2026-11-14, ~09:47.** Not a COI verdict: no pause, no kill. One search process reached **247 % CPU and 12.2 GB RSS**; the VM sat at **92 % memory, load 123**, and every session was unusable until the maintainer killed the process from the Mac.
+
+## What ran
+
+An unanchored `git grep -o -i -E` whose pattern was padded on both sides — shaped like `.{0,110}<something>.{0,80}` — with pathspec `.`, from `/workspace`. The exact command line was not captured.
+
+## Mechanism
+
+Measured (2026-11-14, afterwards):
+
+- `git grep` did **not** walk `.claude/worktrees`: the directory is gitignored and holds no tracked path, and `git grep` without `--no-index`/`--untracked` reads tracked files only — 1,092 files, 14.5 MB.
+- That tree holds a 110,480-byte single line (`tools/mailroom/testdata/jobs.jsonl`) and a 3.7 MB binary with lines up to 15 KB.
+- In the Bash tool `grep` is a shell function running a bundled ugrep with `--ignore-files`; behind `timeout`/`nice`/`xargs` it is GNU grep, which honours no ignore file. `rg` honours `.gitignore`.
+
+_Inference_ (not reproduced — rerunning it is the incident):
+
+- The cost was the pattern, not the scope: 12 GB cannot come from 14.5 MB of input. `git grep -E` matches with libc `regexec`; two wide counted paddings under `-i` on very long lines blow up its state sets.
+- `-o` re-runs the match along each line, and git's grep threads multiply both (hence 247 % CPU).
+
+## Fix
+
+A search-load arm in `.claude/hooks/coi-reverse-shell-guard.sh` (rule in `_search-load.sh`, cases in `testdata/reverse-shell-fixtures.jsonl`) — deliberately a hook, not prompt text: built-in Plan/Explore agents never read `CLAUDE.md`. It refuses (1) `.{M,N}`, `.{M,}` or `.{N}` padding with a bound >= 20 in a grep or git grep pattern that reads files (piped command output passes; rg is exempt, since Rust's regex engine runs in linear time with bounded memory — documented — which is also why the Grep tool's rg needs no arm), and (2) an ignore-blind recursive search — `grep -r`, `rg -u`/`--no-ignore`, `git grep --no-index`/`--untracked` — on a checkout root, home, `/` or the worktrees dir. The refusal names the safe form: `timeout 60 nice -n 10 rg <pattern> <dirs> | head -500`, `-C` for context. Not refused, on the measurement above: plain `git grep` and plain `rg` at the root. Not covered (an accident guard, not a wall): `find … -exec grep`, a `bash -c` body or `$(cat <<EOF …)` heredoc, quoted paths, wrapper options with values (`timeout -s KILL`, `sudo -u x`), a bare `cd`/`cd ~` before `.`, a glob like `*`, padding spelled `[^x]{0,80}`, and commands over 8,000 characters. Padding anywhere in a command that also runs a search counts, even outside the search.

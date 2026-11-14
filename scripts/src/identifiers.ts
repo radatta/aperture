@@ -60,6 +60,11 @@ const ACCOUNT_IDS = /(?<!\d)\d{4}-?\d{4}-?\d{4}(?!\d)/g;
 const accountIds = (l: string) => [...l.matchAll(ACCOUNT_IDS)].map((m) => m[0].replaceAll('-', ''));
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const test = (re: RegExp) => (l: string) => re.test(l);
+const SEP = '\\\\?[/\\\\]'; // a slash, JSON-escaped or not, or a backslash
+const [TOP, SUB] = ['Coding', 'Personal'];
+const FOLDER = new RegExp(`${TOP}${SEP}${SUB}`, 'i');
+// ~, $HOME or ${HOME} (a :- default too), quoted or not.
+const HOME_FOLDER = new RegExp(`(?:~|\\$HOME|\\$\\{HOME(?::-[^}]*)?\\})"?${SEP}${TOP}\\b`, 'i');
 
 export function identifierRules(ids = IDS): IdentifierRule[] {
   // Whole words only, so the domain (the name run together) and the GitHub login don't match.
@@ -79,8 +84,9 @@ export function identifierRules(ids = IDS): IdentifierRule[] {
   rules.push(
     // Case-sensitive: an API's /users/me is no Mac home. JSON's escaped slashes count too.
     ['home-path', test(/\\?\/Users\\?\/(?!Shared(?![\w.-]))[A-Za-z0-9_][\w.-]*/)],
-    // The folder's name is generic, so it's spelled here, not in the config — either way it's in a tracked file.
-    ['projects-folder', test(new RegExp(['Coding', 'Personal'].join('\\\\?[/\\\\]'), 'i'))],
+    // The folder's name is generic, so it's spelled here, not in the config — either way it's in a tracked file. Its
+    // first folder alone counts under a home prefix (~, $HOME, ${HOME}); one rule, so a line holding both hits once.
+    ['projects-folder', (l) => FOLDER.test(l) || HOME_FOLDER.test(l)],
     ['account-id', (l) => accountIds(l).includes(ids.aws.devAccountId)],
     [
       'prod-account-id',

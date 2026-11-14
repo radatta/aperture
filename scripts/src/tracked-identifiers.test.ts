@@ -99,6 +99,29 @@ describe('rules', () => {
       expect(kinds(ok), ok).toEqual([]);
   });
 
+  it("blocks the projects folder's first name under a home prefix, alone", () => {
+    const top = ['Cod', 'ing'].join('');
+    for (const hit of [
+      `~/${top}/x`,
+      `$HOME/${top}`,
+      `\${HOME}/${top}/a`,
+      `"~\\/${top}\\/x"`,
+      `~/${top.toLowerCase()} `,
+      `"$HOME"/${top}/x`,
+      `\${HOME:-/tmp}/${top}`,
+      `~/${top}/Personal/x`, // the full form too: still one hit
+    ])
+      expect(kinds(hit), hit).toEqual(['projects-folder']);
+    for (const ok of [
+      `~/${top}Guide`,
+      `docs/${top}/x`,
+      `$HOMEX/${top}`,
+      `/home/u/${top}`,
+      '~/<other-project>',
+    ])
+      expect(kinds(ok), ok).toEqual([]);
+  });
+
   it('blocks the dev account id on digit boundaries only', () => {
     const id = IDS.aws.devAccountId;
     expect(kinds(`aperture-dev-${id}.auth`)).toEqual(['account-id']);

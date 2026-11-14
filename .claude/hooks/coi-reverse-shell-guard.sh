@@ -6,7 +6,8 @@
 #
 # Rule reference (regenerated on every COI upgrade): localNotes/code-on-incus/APERTURE-ANALYSIS.md.
 # Mechanism and observed kills/pauses: docs/ops/COI-INCIDENTS.md → Incidents F and H. The any-process
-# rules live in _coi-patterns.sh, shared with coi-grep-guard.sh so the two can't drift.
+# rules live in _coi-patterns.sh, shared with coi-grep-guard.sh so the two can't drift. It also carries the
+# search-load rule (_search-load.sh, Incident I) — not a COI rule: it protects the VM's memory.
 #
 # ---------------------------------------------------------------------------
 # IMPLEMENTATION CONSTRAINT — READ BEFORE EDITING
@@ -99,6 +100,23 @@ fi
 case "$LC" in
   *"/curl"*|*"/wget"*)
     coi_deny "Blocked: the text \`/curl\` or \`/wget\` (with the slash) anywhere on a Bash line PAUSES the COI container — Sigma's download-and-execute rule, completed by the Bash wrapper's own \`/tmp/\` + \`bash -c\`. Bare \`curl\`/\`wget\` is fine. To read a file under a curl/ or wget/ path use the Read tool; to search for those words use a fragment (e.g. \`url\`) or the Read tool." ;;
+esac
+
+# Search-load rule (Incident I; not a COI rule): a padded pattern over files, or an ignore-blind recursive search
+# on a root. After the COI arms, so a kill or pause shape is always the reason given.
+case "$LC" in *grep*|*rg*)
+  source "${BASH_SOURCE[0]%/*}/_search-load.sh"
+  CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // ""')
+  MAIN=${BASH_SOURCE[0]%/*}; MAIN=${MAIN%/.claude/hooks}; MAIN=${MAIN%/.claude/worktrees/*}
+  if search_load_shape "$COMMAND" "$CWD" "$MAIN"; then
+    SAFE='Safe form: timeout 60 nice -n 10 rg -n <pattern> <dirs> | head -500, scoped to tracked source dirs (app/src lambdas/src packages scripts docs …); -C N for context lines. Mechanism: docs/ops/COI-INCIDENTS.md → Incident I.'
+    if [[ $SEARCH_REASON == pad ]]; then
+      coi_deny "Blocked: a wide padding quantifier (.{0,N} with N >= 20) in a grep / git grep / rg pattern over files. On 2026-11-14 one such search took 12 GB and froze the VM for every session. Use -C for context instead of padding, or rg (its engine is linear-time; rg is exempt); for one very long line, the Read tool with an offset. Padding on a pipe of command output is not blocked.
+$SAFE"
+    fi
+    coi_deny "Blocked: an ignore-blind recursive search (grep -r, rg -u/--no-ignore, git grep --no-index/--untracked) on a checkout root, home, / or the worktrees dir walks node_modules and every checkout under .claude/worktrees. Name the dirs, or use git grep -n <pattern> -- <dirs> (tracked files only).
+$SAFE"
+  fi ;;
 esac
 
 # Everything else passes through silently.
