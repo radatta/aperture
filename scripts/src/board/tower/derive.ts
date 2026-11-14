@@ -9,7 +9,7 @@ import type { Costs, MacRead } from './health.ts';
 import type { LaneFile, LaneProblem, Needs } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import type { Pr } from './prs.ts';
-import { staleFollowups, type Lane } from './queue.ts';
+import { firedFollowups, sinceTime, staleFollowups, type Lane } from './queue.ts';
 
 export type Slot = 'dev' | 'devb';
 export type State =
@@ -42,6 +42,7 @@ export type LaneRow = {
   pr: { number: number; title: string; url: string | null } | null;
   hold: string | null;
   fileAge: number | null; // seconds since the lane file's last write; null = no file
+  quiet: boolean; // a lane-file state (BUILDING) whose file hasn't moved in STALE.lane: amber on the page
   phase: string | null; // where on the track plan › build › gate › review › local › dev › pr › merged it is
 };
 export type NeedItem = {
@@ -51,6 +52,7 @@ export type NeedItem = {
   cmd: string | null;
   unblocks: string | null;
   since: number | null;
+  sinceDay?: string | null; // `since` was a bare date (MM-DD): show the day, not a timer
   branch: string | null;
 };
 export type SlotCard = {
@@ -107,9 +109,13 @@ export type View = {
   slots: SlotCard[];
   active: LaneRow[]; // NOW: building, testing, PR, checks failed, merged, deploying
   next: {
+    // dispatch's landing order (queue.json mergeOrder), each entry with its lane's row; merged ones dropped
+    order: { branch: string; pr: number | null; note: string | null; row: LaneRow }[];
     queue: { slot: Slot; branch: string; state: string; waitingOn: string | null }[];
     merge: LaneRow[];
     maintainer: string | null;
+    more: number; // further NEEDS YOU items after the one `maintainer` shows
+    plan: string[]; // dispatch's plan[] steps for the maintainer, undated or due, after the one shown
     parked: string[];
   };
   done: {
@@ -124,10 +130,12 @@ export type View = {
   }[];
   health: Health;
   slipping: {
-    kind: 'followup' | 'parked' | 'quiet';
+    kind: 'followup' | 'fired' | 'parked' | 'quiet';
     what: string;
     owner: string | null;
     since: number | null;
+    sinceDay?: string | null;
+    after?: string | null; // a fired follow-up's trigger, as written
   }[];
   sources: SourceRow[];
   problems: string[];
@@ -150,7 +158,7 @@ export type Inputs = {
   testCap: number | null;
   macInstall: string; // NEEDS YOU's command when the Mac agent is missing
   macInstallReady: boolean; // tools/macstats/install.sh is on origin/main (the install line fetches it from there)
-  midnight: number; // local midnight, for DONE TODAY
+  dayStart: number; // where DONE TODAY begins: local midnight, reaching back 12 h before noon (web/main.ts dayStart)
 };
 
 // Freshness thresholds, seconds (TOWER.md → Sources): past them a source shows amber with its age.
@@ -196,7 +204,7 @@ export function lockRead(l: Lock | null, now: number): LockRead {
   if (l.asOf === null || now - l.asOf > STALE.lock * 1000)
     return {
       state: 'unknown',
-      why: `${l.failed ? 'refresh failed' : 'cache stale'}${sinceAt(l.asOf)}`,
+      why: `${l.failed ? `refresh failed${l.failedWhy ? ` (${l.failedWhy})` : ''}` : 'cache stale'}${sinceAt(l.asOf)}`,
     };
   if (l.branch && l.expiresAt === null)
     return { state: 'unknown', why: 'holder expiry unreadable' };
@@ -229,7 +237,8 @@ export const unattributedDispatch = (i: Inputs) => {
 };
 
 // The main Deploy run that carries a merge: its own, or, when that one was cancelled by a later merge (deploy.yml's
-// concurrency group), the newest later Deploy run, which deploys main's head and so this merge too.
+// concurrency group), the first later Deploy run that wasn't cancelled too: it deploys main's head and so this merge.
+// (Not the newest: a run three merges on could still be running, or fail, after this one deployed.)
 export function deployFor(
   mergeSha: string | null,
   runs: GhRun[],
@@ -240,8 +249,8 @@ export function deployFor(
   if (!own) return null;
   if (own.conclusion !== 'cancelled') return { run: own, via: null };
   const later = deps
-    .filter((r) => (r.createdAt ?? 0) > (own.createdAt ?? 0))
-    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+    .filter((r) => (r.createdAt ?? 0) > (own.createdAt ?? 0) && r.conclusion !== 'cancelled')
+    .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))[0];
   return later ? { run: later, via: own } : { run: own, via: null };
 }
 
@@ -326,6 +335,7 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     pr: pr ? { number: pr.number, title: pr.title, url: pr.url } : null,
     hold: null as string | null,
     fileAge: file ? Math.max(0, (i.now - file.updatedAt) / 1000) : null,
+    quiet: false,
   };
   const row = (
     state: State,
@@ -504,13 +514,16 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     blocked: 'Blocked',
   };
   const w = word[file.phase] ?? file.phase;
-  return row(
-    'BUILDING',
-    'BUILDING',
-    file.step ? `${w} · ${file.step}` : w,
-    file.phase === 'blocked' ? 'bad' : 'normal',
-    file.phaseSince,
-  );
+  return {
+    ...row(
+      'BUILDING',
+      'BUILDING',
+      file.step ? `${w} · ${file.step}` : w,
+      file.phase === 'blocked' ? 'bad' : 'normal',
+      file.phaseSince,
+    ),
+    quiet: base.fileAge! > STALE.lane,
+  };
 }
 
 // Which PR is a branch's: the open one, else the newest merged one.
@@ -554,8 +567,15 @@ export function derive(i: Inputs): View {
   add(t.lock?.branch);
   add(t.lockB?.branch);
   prs
-    .filter((p) => p.state === 'MERGED' && (p.mergedAt ?? 0) >= i.midnight)
+    .filter((p) => p.state === 'MERGED' && (p.mergedAt ?? 0) >= i.dayStart)
     .forEach((p) => add(p.branch));
+  // dispatch's landing order names lanes that may have no file or PR yet; a merged one has landed (any age)
+  const landed = (o: { branch: string; pr: number | null }) =>
+    prs.some(
+      (p) => p.state === 'MERGED' && (o.pr !== null ? p.number === o.pr : p.branch === o.branch),
+    );
+  const order = (q?.mergeOrder ?? []).filter((o) => !landed(o));
+  order.forEach((o) => add(o.branch));
 
   const rows = names.map((b) => {
     const file = files.get(b) ?? null;
@@ -579,6 +599,17 @@ export function derive(i: Inputs): View {
       unblocks: null,
       since: null,
       branch: null,
+    });
+  // a lane in NEEDS YOU with no ask of its own (dispatch's queue says needs-you): its words are the ask
+  for (const r of rows.filter((r) => r.state === 'NEEDS YOU' && !files.get(r.branch)?.needs))
+    needs.push({
+      kind: 'lane',
+      what: `${r.branch}: ${r.detail ?? 'needs you (no detail in queue.json)'}`,
+      link: null,
+      cmd: null,
+      unblocks: null,
+      since: r.since,
+      branch: r.branch,
     });
   for (const r of rows.filter((r) => r.state === 'MERGE ME' && r.pr)) {
     const waiting = (q?.devQueue ?? []).filter(
@@ -609,16 +640,19 @@ export function derive(i: Inputs): View {
       branch: r.branch,
     });
   }
-  for (const todo of q?.maintainer ?? [])
+  for (const todo of q?.maintainer ?? []) {
+    const since = sinceTime(todo.since);
     needs.push({
       kind: 'todo',
       what: todo.text,
       link: null,
       cmd: null,
       unblocks: null,
-      since: todo.since ? Date.parse(todo.since) || null : null,
+      since: since.at,
+      sinceDay: since.day,
       branch: null,
     });
+  }
   // the install line only once the installer is on main (before that it would 404): until then HEALTH says so
   if ((i.mac.state === 'missing' && i.macInstallReady) || i.mac.state === 'silent')
     needs.push({
@@ -670,7 +704,15 @@ export function derive(i: Inputs): View {
     'DEPLOYING',
     'DEPLOY FAILED',
   ];
+  const byBranch = new Map(rows.map((r) => [r.branch, r]));
+  // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or due in
+  // the last 2 h); the rest of their plan[] steps follow it
+  const mine = (q?.plan ?? []).filter(
+    (p) => p.kind === 'maintainer' && (p.at === null || p.at >= i.now - 2 * 3600e3),
+  );
+  const first = needs[0]?.what ?? mine[0]?.what ?? null;
   const next = {
+    order: order.map((o) => ({ ...o, row: byBranch.get(o.branch)! })),
     // parked lanes aren't next for dev: they get one muted line instead
     queue: (q?.devQueue ?? [])
       .filter(
@@ -679,15 +721,13 @@ export function derive(i: Inputs): View {
       .map((l) => ({ slot: l.slot, branch: l.branch, state: l.state, waitingOn: l.waitingOn })),
     parked: rows.filter((r) => r.state === 'PARKED').map((r) => r.branch),
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
-    maintainer:
-      needs[0]?.what ??
-      q?.plan.find((p) => p.kind === 'maintainer' && p.at !== null && p.at >= i.now - 2 * 3600e3)
-        ?.what ??
-      null,
+    maintainer: first,
+    more: Math.max(0, needs.length - 1),
+    plan: mine.map((p) => p.what).filter((w) => w !== first),
   };
 
   const done = prs
-    .filter((p) => p.state === 'MERGED' && p.mergedAt !== null && p.mergedAt >= i.midnight)
+    .filter((p) => p.state === 'MERGED' && p.mergedAt !== null && p.mergedAt >= i.dayStart)
     .sort((a, b) => b.mergedAt! - a.mergedAt!)
     .map((p) => {
       const d = deployFor(p.mergeSha, i.runs.value);
@@ -725,6 +765,23 @@ export function derive(i: Inputs): View {
       what: `${f.id}: ${f.what}`,
       owner: f.owner,
       since: f.since,
+      sinceDay: f.sinceDay,
+    })),
+    // a follow-up whose trigger (a merge, a date) has happened: due, whatever its age
+    ...firedFollowups(
+      q?.followups ?? [],
+      prs.flatMap((p) =>
+        p.state === 'MERGED' && p.mergedAt !== null
+          ? [{ branch: p.branch, number: p.number, mergedAt: p.mergedAt }]
+          : [],
+      ),
+      i.now,
+    ).map((f) => ({
+      kind: 'fired' as const,
+      what: `${f.id}: ${f.what}`,
+      owner: f.owner,
+      since: f.firedAt,
+      after: f.after,
     })),
     ...rows
       .filter((r) => r.state === 'PARKED')
@@ -829,7 +886,7 @@ export function sources(i: Inputs): SourceRow[] {
                 name,
                 state: l.failed ? 'failed' : 'stale',
                 at: l.asOf,
-                detail: l.failed ? 'refresh failing' : null,
+                detail: l.failed ? `refresh failing${l.failedWhy ? `: ${l.failedWhy}` : ''}` : null,
               }
             : l.branch && l.expiresAt === null
               ? { name, state: 'failed', at: l.asOf, detail: 'holder expiry unreadable' }
@@ -837,7 +894,9 @@ export function sources(i: Inputs): SourceRow[] {
                   name,
                   state: 'ok',
                   at: l.asOf,
-                  detail: l.failed ? 'the last refresh failed; this read stands' : null,
+                  detail: l.failed
+                    ? `the last refresh failed${l.failedWhy ? ` (${l.failedWhy})` : ''}; this read stands`
+                    : null,
                 },
     );
   const q = t.queue;

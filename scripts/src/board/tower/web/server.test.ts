@@ -1,14 +1,25 @@
-import { execFileSync, spawnSync } from 'node:child_process';
-import { get } from 'node:http';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createServer, get } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MAC_PLACEHOLDER } from '../../../mac-root.ts';
 import { liveTests, macInstallLine, parseArgs, sparkBuckets } from './main.ts';
+import { build, dayStart } from './main.ts';
 import { createHandler, serve } from './server.ts';
+
+const FIXTURES = join(import.meta.dirname, '../fixtures');
+// Whether something answers HTTP on 127.0.0.1:<port> (the tower answers 400/403 to a bare GET; any status counts).
+const up = (port: number) =>
+  new Promise<boolean>((r) =>
+    get({ host: '127.0.0.1', port, path: '/', headers: { host: 'localhost' } }, (res) => {
+      res.resume();
+      r(true);
+    }).on('error', () => r(false)),
+  );
 
 let server: Server;
 let base: string;
@@ -106,6 +117,12 @@ describe('--once on the fixtures', () => {
     ]);
     expect(v.active.find((r: V) => r.branch === 'hotel-branch').label).toBe('PR (checks running)');
     expect(v.done.map((d: V) => `${d.number} ${d.deploy}`)).toEqual(['40 deployed ✓']);
+    // the landing order, alpha-branch dropped as merged
+    expect(v.next.order.map((o: V) => o.branch)).toEqual([
+      'charlie-branch',
+      'hotel-branch',
+      'echo-branch',
+    ]);
     expect(v.slipping.map((s: V) => s.kind)).toEqual(['followup', 'parked', 'quiet']);
     expect(v.health.mac.state).toBe('stale');
     expect(v.health.aws.total).toBeCloseTo(0.35);
@@ -144,17 +161,79 @@ describe('round 1 server fixes', () => {
 });
 
 describe('board.sh tower status', () => {
-  it('reads a stale or foreign pidfile as stopped (exit 1), never as running', () => {
-    const board = join(import.meta.dirname, '../../../../board/board.sh');
+  const board = join(import.meta.dirname, '../../../../board/board.sh');
+  const tower = (cmd: string, e: NodeJS.ProcessEnv) =>
+    spawnSync('bash', [board, 'tower', cmd], {
+      encoding: 'utf8',
+      env: { ...process.env, APERTURE_BOARD_DIR: tmpdir(), ...e },
+    });
+  // A port nothing listens on, so the listener fallback can't find the real tower on 6183.
+  const freePort = () =>
+    new Promise<number>((r) => {
+      const s = createServer().listen(0, '127.0.0.1', () => {
+        const p = (s.address() as AddressInfo).port;
+        s.close(() => r(p));
+      });
+    });
+
+  it('reads a stale or foreign pidfile as stopped (exit 1), never as running', async () => {
     const pidFile = join(tmpdir(), `tower-pid-${process.pid}`);
     writeFileSync(pidFile, `${process.pid}\n`); // alive, but this vitest worker, not the tower
-    const r = spawnSync('bash', [board, 'tower', 'status'], {
-      encoding: 'utf8',
-      env: { ...process.env, APERTURE_TOWER_PID: pidFile, APERTURE_BOARD_DIR: tmpdir() },
+    const r = tower('status', {
+      APERTURE_TOWER_PID: pidFile,
+      APERTURE_TOWER_PORT: `${await freePort()}`,
     });
     expect(r.status).toBe(1);
     expect(r.stdout).toMatch(/tower: stopped/);
   });
+
+  it('never claims a listener on its port that is not the tower', () => {
+    const port = (server.address() as AddressInfo).port; // this vitest worker's own HTTP server
+    const pidFile = join(tmpdir(), `tower-pid-none-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    const r = tower('status', { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` });
+    expect(r.status).toBe(1);
+    expect(existsSync(pidFile)).toBe(false);
+  });
+
+  it('finds the server by its listener when the pidfile is gone, writes the pidfile back, and stops it', async () => {
+    const port = await freePort();
+    const pidFile = join(tmpdir(), `tower-pid-gone-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    // a fixtures server never writes the pidfile: exactly the "pidfile vanished" case
+    const web = spawn(
+      'bash',
+      [
+        join(import.meta.dirname, '../../../../board/tower-web.sh'),
+        '--fixtures',
+        FIXTURES,
+        '--now',
+        '2026-11-08T06:10:00Z',
+        '--no-gh',
+        '--port',
+        `${port}`,
+        '--bind',
+        '127.0.0.1',
+      ],
+      { stdio: 'ignore' },
+    );
+    try {
+      for (let i = 0; i < 100 && !(await up(port)); i++)
+        await new Promise((r) => setTimeout(r, 100));
+      const e = { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` };
+      const r = tower('status', e);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(
+        new RegExp(`tower: running \\(pid ${web.pid}\\) — http://localhost:${port}`),
+      );
+      expect(readFileSync(pidFile, 'utf8').trim()).toBe(`${web.pid}`);
+      expect(tower('stop', e).stdout).toMatch(`tower: stopped ${web.pid}`);
+      expect(tower('status', e).status).toBe(1);
+    } finally {
+      web.kill();
+      rmSync(pidFile, { force: true });
+    }
+  }, 20_000);
 });
 
 describe('sparkBuckets', () => {
@@ -189,5 +268,45 @@ describe('round 4', () => {
   it('the CSP forbids framing', async () => {
     const r = await fetch(`${base}/`);
     expect(r.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+  });
+});
+
+describe('the day boundary and the Mac series (2026-11-14)', () => {
+  it('DONE TODAY begins at local midnight, reaching back 12 h before noon', () => {
+    const at = (h: number, m = 0) => new Date(2026, 10, 14, h, m).getTime();
+    expect(dayStart(at(0, 10))).toBe(at(0, 10) - 12 * 3600e3); // last night's 23:00 merges stay in view
+    expect(dayStart(at(11, 59))).toBe(at(11, 59) - 12 * 3600e3);
+    expect(dayStart(at(12))).toBe(at(0));
+    expect(dayStart(at(23, 30))).toBe(at(0));
+  });
+
+  it("the Mac series grows on the server's tick, whether or not a page polls", () => {
+    const fx = mkdtempSync(join(tmpdir(), 'tower-mac-'));
+    cpSync(FIXTURES, fx, { recursive: true });
+    const stats = JSON.parse(readFileSync(join(fx, 'board/mac-stats.json'), 'utf8'));
+    const t0 = Date.parse('2026-11-08T06:08:00Z');
+    const t = build({
+      port: 0,
+      bind: '127.0.0.1',
+      fixtures: fx,
+      now: t0 + 75000,
+      gh: false,
+      once: true,
+    });
+    try {
+      for (let k = 0; k < 5; k++) {
+        const now = t0 + k * 15000;
+        writeFileSync(
+          join(fx, 'board/mac-stats.json'),
+          JSON.stringify({ ...stats, t: new Date(now).toISOString() }),
+        );
+        t.sample(now);
+        t.sample(now); // the same file read twice is one point
+      }
+      const v = t.view(true) as V;
+      expect(v.history.mac).toHaveLength(5);
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
   });
 });

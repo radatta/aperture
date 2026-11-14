@@ -2,8 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#eceff4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#242933" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-title" content="tower" />
     <title>tower</title>
     <style>
       /* Read at a glance from arm's length (the maintainer, 2026-11-13): big type, one line per item, details on click.
@@ -56,6 +59,8 @@
         margin: 0;
         background: var(--bg);
         color: var(--ink);
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
         font:
           17px/1.35 -apple-system,
           BlinkMacSystemFont,
@@ -80,7 +85,8 @@
         display: flex;
         gap: 14px;
         align-items: center;
-        padding: 12px 18px 10px;
+        padding: max(12px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 10px
+          max(18px, env(safe-area-inset-left));
       }
       header h1 {
         font-size: 21px;
@@ -93,6 +99,10 @@
       header .meta {
         color: var(--ink2);
         font-size: 14px;
+        white-space: nowrap;
+      }
+      header button {
+        white-space: nowrap;
       }
       header .spacer {
         flex: 1;
@@ -219,6 +229,11 @@
       .tile.open .more {
         display: block;
       }
+      .tile.open .value,
+      .tile.open .sub {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
       .tile svg.spark {
         position: absolute;
         right: 10px;
@@ -226,6 +241,9 @@
         width: 42%;
         height: 38px;
         opacity: 0.9;
+      }
+      .tile svg.spark.none {
+        display: none;
       }
       .bar {
         height: 6px;
@@ -262,7 +280,8 @@
         display: grid;
         grid-template-columns: minmax(0, 1fr);
         gap: 12px;
-        padding: 0 18px 18px;
+        padding: 0 max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom))
+          max(18px, env(safe-area-inset-left));
       }
       @media (min-width: 1000px) {
         main {
@@ -330,8 +349,10 @@
         min-width: 0;
         border-radius: 6px;
       }
-      .row:hover {
-        background: color-mix(in srgb, var(--c, var(--build)) 7%, transparent);
+      @media (hover: hover) {
+        .row:hover {
+          background: color-mix(in srgb, var(--c, var(--build)) 7%, transparent);
+        }
       }
       .row .text {
         flex: 1;
@@ -359,6 +380,7 @@
       }
       .item.open .row .text {
         white-space: normal;
+        overflow-wrap: anywhere;
       }
       .item.open .more {
         display: block;
@@ -445,6 +467,7 @@
         border-radius: 10px;
         padding: 7px 11px;
         min-width: 0;
+        cursor: pointer;
         background: color-mix(in srgb, var(--c, var(--dim)) 9%, var(--panel));
         border: 1px solid color-mix(in srgb, var(--c, var(--dim)) 30%, transparent);
       }
@@ -470,6 +493,22 @@
         overflow: hidden;
         text-overflow: ellipsis;
         font-variant-numeric: tabular-nums;
+      }
+      .slot .more {
+        display: none;
+        padding: 2px 0 0;
+        font-size: 14px;
+      }
+      .slot.open .more {
+        display: block;
+      }
+      .slot.open .who,
+      .slot.open .what {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      .only-phone {
+        display: none;
       }
 
       #slipping h2,
@@ -532,6 +571,130 @@
         .item.flash,
         .tile.cheer {
           animation: none;
+        }
+      }
+
+      /* The phone (a Home Screen web app, 390–440 px): nothing is cut off. Text that CSS would clip wraps; a row
+         whose first clause is all it shows has a › and its full text one tap away; Mac-only buttons say where they
+         run instead. The desktop never reaches this width. */
+      @media (max-width: 700px) {
+        header {
+          gap: 8px;
+          padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
+            max(12px, env(safe-area-inset-left));
+        }
+        header h1 {
+          font-size: 19px;
+        }
+        header .ver {
+          display: none;
+        }
+        button {
+          min-height: 32px;
+        }
+        #health {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+          padding: 0 max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+        }
+        #health .tile:first-child {
+          grid-column: auto;
+        }
+        .tile.k-aws {
+          order: 1;
+        }
+        .tile.k-container,
+        .tile.k-mac {
+          order: 2;
+        }
+        .tile.k-actions {
+          order: 3;
+          grid-column: 1 / -1;
+        }
+        .tile {
+          padding: 7px 10px 6px;
+        }
+        .tile .value {
+          font-size: 21px;
+        }
+        .tile .value small {
+          font-size: 13px;
+        }
+        .tile .sub {
+          font-size: 13px;
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+        /* in the flow, between the number and its line: never over the text */
+        .tile svg.spark {
+          position: static;
+          display: block;
+          width: 100%;
+          height: 20px;
+          margin: 2px 0;
+        }
+        main {
+          padding: 0 max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom))
+            max(12px, env(safe-area-inset-left));
+        }
+        section {
+          padding: 9px 10px;
+        }
+        .row {
+          flex-wrap: wrap;
+          row-gap: 2px;
+          gap: 8px;
+          padding: 6px 4px 6px 8px;
+        }
+        .row .text {
+          flex: 1 1 14em;
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+        /* the chevron sits in the row's top-right corner, so a wrapped row never leaves it alone on a line */
+        .item.has-more > .row {
+          position: relative;
+          padding-right: 20px;
+        }
+        .item.has-more > .row::after {
+          content: '›';
+          color: var(--ink2);
+          position: absolute;
+          right: 6px;
+          top: 6px;
+          transition: transform 0.15s;
+        }
+        .item.has-more.open > .row::after {
+          transform: rotate(90deg);
+        }
+        .slots {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+        .slot {
+          padding: 6px 10px;
+          display: flex;
+          flex-wrap: wrap;
+          column-gap: 8px;
+          align-items: baseline;
+        }
+        .slot .who,
+        .slot .what {
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+        .slot .what,
+        .slot .more {
+          flex: 1 1 100%;
+        }
+        .slot .what.asof {
+          display: none;
+        }
+        .only-desk {
+          display: none;
+        }
+        .only-phone {
+          display: inline;
         }
       }
     </style>

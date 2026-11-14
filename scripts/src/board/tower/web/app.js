@@ -74,11 +74,26 @@ const STATE_C = {
 const LIVE = (r) =>
   r.state === 'TESTING' || r.state === 'DEPLOYING' || r.label === 'PR (checks running)';
 const badge = (text, c) => el('span', `badge ${c || 'c-dim'}`, text);
-// Long text from outside (queue.json, lane steps) never renders whole in a row: its first clause, capped.
+// Long text from outside (queue.json, lane steps) never renders whole in a row: its first clause, capped. A clause
+// ends at `.`/`;` + space or a newline, never inside ( ) or [ ] ("clear auto-3, then kickoff (F81; …)" stays whole).
 const short = (s, n = 90) => {
-  const t = String(s ?? '')
-    .split(/(?<=[.;])\s|\n/)[0]
-    .replace(/[.;,]$/, '');
+  const str = String(s ?? '');
+  let depth = 0;
+  let end = str.length;
+  for (let k = 0; k < str.length; k++) {
+    const ch = str[k];
+    if (ch === '\n') {
+      end = k;
+      break;
+    }
+    if (ch === '(' || ch === '[') depth++;
+    else if ((ch === ')' || ch === ']') && depth) depth--;
+    else if (!depth && (ch === '.' || ch === ';') && /\s/.test(str[k + 1] ?? '')) {
+      end = k + 1;
+      break;
+    }
+  }
+  const t = str.slice(0, end).replace(/[.;,]$/, '');
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
@@ -113,16 +128,19 @@ function item(key, parts) {
     if (m) more.append(typeof m === 'string' ? el('div', null, m) : m);
   if (more.childNodes.length) {
     wrap.append(more);
-    row.addEventListener('click', () => {
-      if (expanded.has(key)) expanded.delete(key);
-      else expanded.add(key);
-      wrap.classList.toggle('open');
-    });
+    wrap.classList.add('has-more');
     row.title = 'click for details';
   }
+  // every row opens: one with no details still unwraps its line (a phone shows what CSS had cut)
+  row.addEventListener('click', () => toggle(key, wrap));
   return wrap;
 }
 let next_seen = new Map();
+function toggle(key, node) {
+  if (expanded.has(key)) expanded.delete(key);
+  else expanded.add(key);
+  node.classList.toggle('open');
+}
 // a pulsing dot whose phase follows the wall clock, so re-rendering every 5 s doesn't restart its pulse
 function liveDot(extra = '') {
   const d = el('span', `dot live${extra}`);
@@ -174,7 +192,7 @@ function emptyOr(v, b, id, text) {
 }
 
 function copyButton(text) {
-  const btn = el('button', null, 'copy');
+  const btn = el('button', 'only-desk', 'copy');
   btn.type = 'button';
   btn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -214,7 +232,12 @@ function needs(v) {
       badge: label,
       sig: n.what,
       text: [n.link ? httpsLink(n.link, short(n.what)) : short(n.what)],
-      meta: [n.cmd ? copyButton(n.cmd) : null, n.since ? timer(n.since) : null],
+      meta: [
+        n.cmd ? copyButton(n.cmd) : null,
+        // a one-line Mac command can't run from a phone: it says where it runs; the command is in the details
+        n.cmd ? el('span', 'meta only-phone', 'on the Mac') : null,
+        n.sinceDay ? `since ${n.sinceDay}` : n.since ? timer(n.since) : null,
+      ],
       more: [
         short(n.what) !== n.what ? n.what : null,
         n.unblocks ? `unblocks: ${n.unblocks}` : null,
@@ -225,22 +248,28 @@ function needs(v) {
   list(b, 'needs', items, 6);
 }
 
-function laneItem(r) {
+// `o`: a landing-order row (NEXT): its own key, its place, dispatch's note
+function laneItem(r, o = null) {
   const text = [el('b', null, r.branch)];
   if (r.session) text.push(el('span', 'who', `  ${r.session}`));
   if (r.hold) text.push(`  ·  ${short(r.hold, 70)}`);
   else if (r.detail) text.push(`  ·  ${short(r.detail, 70)}`);
-  return item(`lane:${r.branch}`, {
+  return item(o ? `order:${r.branch}` : `lane:${r.branch}`, {
     c: STATE_C[r.state] ?? TONE_C[r.tone] ?? 'c-build',
     live: LIVE(r),
-    badge: r.label.startsWith('HOLD') ? 'HOLD' : r.label,
+    badge: `${o ? `${o.pos} · ` : ''}${r.label.startsWith('HOLD') ? 'HOLD' : r.label}`,
     sig: r.label,
     text,
     track: track(r.phase),
-    meta: [r.since ? timer(r.since) : null],
+    meta: [
+      r.quiet ? el('span', 'meta t-warn', `quiet ${ago(v_now - r.fileAge * 1000, v_now)}`) : null,
+      r.since ? timer(r.since) : null,
+    ],
     more: [
+      o?.note ? `landing order: ${o.note}` : null,
       r.hold ? `held: ${r.hold}` : null,
-      r.detail && short(r.detail, 70) !== r.detail ? r.detail : null,
+      // under a HOLD the row shows the hold, so the detail is only here
+      r.detail && (r.hold || short(r.detail, 70) !== r.detail) ? r.detail : null,
       r.pr ? httpsLink(r.pr.url, `PR ${r.pr.number}: ${r.pr.title}`) : null,
       r.phase ? `phase: ${track(r.phase)?.title ?? r.phase}` : null,
       r.fileAge !== null ? `lane file updated ${ago(v_now - r.fileAge * 1000, v_now)} ago` : null,
@@ -256,7 +285,11 @@ function nowPanel(v) {
     const busy = !!s.branch;
     const tone =
       s.state === 'unknown' ? 'c-hold' : busy ? 'c-dev' : s.deploying ? 'c-deploy' : 'c-good';
+    const key = `slot:${s.slot}`;
+    rendered.add(key);
     const c = el('div', `slot ${tone}`);
+    if (expanded.has(key)) c.classList.add('open');
+    c.addEventListener('click', () => toggle(key, c));
     const name = el('div', 'name');
     const working = (busy && /running|deploying/.test(s.detail ?? '')) || s.deploying;
     name.append(
@@ -275,14 +308,30 @@ function nowPanel(v) {
     } else if (s.deploying) c.append(el('div', 'who', 'no holder · a dev deploy is running'));
     else if (s.state === 'free') c.append(el('div', 'who', 'free'));
     // known noise stays quiet: a lock read under 5 min old is just "as of"; past that it is unknown, and says so
-    if (s.state === 'unknown') c.append(el('div', 'what t-warn', `lock unknown: ${s.why}`));
-    else if (s.asOf) c.append(el('div', 'what', `as of ${hhmm(s.asOf)}`));
+    // (briefly on the card, the server's why in full in its details)
+    if (s.state === 'unknown')
+      c.append(
+        el('div', 'what t-warn', `lock unknown${s.asOf ? ` · last read ${hhmm(s.asOf)}` : ''}`),
+      );
+    else if (s.asOf) c.append(el('div', `what${busy ? '' : ' asof'}`, `as of ${hhmm(s.asOf)}`));
+    const more = el('div', 'more');
+    if (busy && s.detail && short(s.detail, 40) !== s.detail)
+      more.append(el('div', null, s.detail));
+    if (s.why) more.append(el('div', null, s.why));
+    if (s.failed && s.state !== 'unknown')
+      more.append(el('div', null, 'the last refresh failed; this read stands'));
+    if (more.childNodes.length) c.append(more);
     slots.append(c);
   }
   b.append(slots);
   const rows = v.active.filter((r) => r.state !== 'TESTING');
   if (!rows.length) return emptyOr(v, b, 'now', 'no lanes building');
-  list(b, 'now', rows.map(laneItem), 8);
+  list(
+    b,
+    'now',
+    rows.map((r) => laneItem(r)),
+    8,
+  );
 }
 
 function next(v) {
@@ -295,10 +344,15 @@ function next(v) {
         badge: 'YOU NEXT',
         sig: v.next.maintainer,
         text: [short(v.next.maintainer)],
+        meta: [v.next.more ? `+${v.next.more} in NEEDS YOU` : null],
         more: [short(v.next.maintainer) !== v.next.maintainer ? v.next.maintainer : null],
       }),
     );
-  for (const r of v.next.merge) items.push(laneItem(r));
+  // dispatch's landing order, each lane as it stands; its merge rows aren't repeated below
+  const order = v.next.order ?? [];
+  order.forEach((o, k) => items.push(laneItem(o.row, { pos: k + 1, note: o.note })));
+  for (const r of v.next.merge)
+    if (!order.some((o) => o.branch === r.branch)) items.push(laneItem(r));
   for (const slot of ['dev', 'devb'])
     v.next.queue
       .filter((l) => l.slot === slot)
@@ -312,6 +366,16 @@ function next(v) {
           }),
         ),
       );
+  for (const p of v.next.plan ?? [])
+    items.push(
+      item(`plan:${p.slice(0, 60)}`, {
+        c: 'c-hold',
+        badge: 'PLAN',
+        sig: p,
+        text: [short(p)],
+        more: [short(p) !== p ? p : null],
+      }),
+    );
   if (v.next.parked.length)
     items.push(
       item('next:parked', {
@@ -334,12 +398,23 @@ function done(v) {
       badge: d.deploy,
       sig: d.deploy,
       text: [`PR ${d.number}  ${d.title}`],
-      meta: [hhmm(d.mergedAt)],
-      more: [d.branch, d.deployDetail, d.url ? httpsLink(d.url, 'the deploy run') : null],
+      // the day reaches back into last night before noon (web/main.ts dayStart): those say so
+      meta: [`${d.mergedAt < localMidnight(v.now) ? 'yest ' : ''}${hhmm(d.mergedAt)}`],
+      more: [
+        d.branch,
+        d.deployDetail,
+        d.url ? httpsLink(d.url, /\/pull\/\d+$/.test(d.url) ? 'the PR' : 'the deploy run') : null,
+      ],
     }),
   );
   list(b, 'done', items, 6);
 }
+
+const localMidnight = (ms) => {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
 
 function kv(rows) {
   const g = el('div', 'kv');
@@ -354,7 +429,11 @@ function spark(points, max) {
   svg.setAttribute('class', 'spark');
   svg.setAttribute('viewBox', '0 0 60 20');
   svg.setAttribute('preserveAspectRatio', 'none');
-  if (!points || !max) return svg;
+  // under 3 points there is no line to read (a fresh server, a Mac just back): no spark, not two dots
+  if (!points || !max || points.filter((y) => y !== null).length < 3) {
+    svg.classList.add('none');
+    return svg;
+  }
   const segs = [];
   let cur = [];
   points.forEach((y, x) => {
@@ -366,7 +445,12 @@ function spark(points, max) {
   if (cur.length) segs.push(cur);
   for (const s of segs) {
     const line = document.createElementNS(ns, 'polyline');
-    line.setAttribute('points', s.length === 1 ? `${s[0]} ${s[0]}` : s.join(' '));
+    // a lone point between gaps: a one-minute tick, not a zero-length line
+    const [x0, y0] = s[0].split(',').map(Number);
+    line.setAttribute(
+      'points',
+      s.length === 1 ? `${x0 - 0.5},${y0} ${x0 + 0.5},${y0}` : s.join(' '),
+    );
     line.setAttribute('fill', 'none');
     line.setAttribute('stroke', 'var(--c, var(--series))');
     line.setAttribute('stroke-width', '1.6');
@@ -378,7 +462,7 @@ function spark(points, max) {
 }
 
 function tile(key, label, value, sub, c, details, extra) {
-  const t = el('div', `tile ${c}`);
+  const t = el('div', `tile ${c} k-${label.toLowerCase()}`);
   if (expanded.has(key)) t.classList.add('open');
   const val = el('div', 'value');
   if (Array.isArray(value))
@@ -390,11 +474,7 @@ function tile(key, label, value, sub, c, details, extra) {
   const more = el('div', 'more');
   more.append(kv(details));
   t.append(more);
-  t.addEventListener('click', () => {
-    if (expanded.has(key)) expanded.delete(key);
-    else expanded.add(key);
-    t.classList.toggle('open');
-  });
+  t.addEventListener('click', () => toggle(key, t));
   return t;
 }
 
@@ -484,7 +564,7 @@ function health(v) {
           ? 'installs at merge (one line)'
           : m.state === 'missing'
             ? 'install line in NEEDS YOU'
-            : short(m.error, 50),
+            : m.error,
         notYet ? 'c-dim' : m.state === 'missing' ? 'c-hold' : 'c-bad',
         [
           [
@@ -513,7 +593,7 @@ function health(v) {
         : m.state === 'stale'
           ? `stale: as of ${hhmm(s.t)}`
           : m.state === 'bad'
-            ? short(m.error, 50) // e.g. a time ahead of ours: never "silent since <the future>"
+            ? m.error // e.g. a time ahead of ours: never "silent since <the future>"
             : `silent since ${hhmm(s.t)}`;
     box.append(
       tile(
@@ -546,7 +626,7 @@ function health(v) {
         'h:a',
         'ACTIONS',
         ms?.state === 'failed' ? 'failed' : 'counting…',
-        short(ms?.detail ?? 'first estimate within the hour', 50),
+        ms?.detail ?? 'first estimate within the hour',
         ms?.state === 'failed' ? 'c-bad' : 'c-dim',
         [],
       ),
@@ -594,14 +674,12 @@ function health(v) {
     w.state === 'missing'
       ? tile('h:w', 'AWS', 'no pull', 'costs-daily.json missing', 'c-hold', [])
       : w.state === 'bad'
-        ? tile('h:w', 'AWS', 'unreadable', short(w.error, 50), 'c-bad', [])
+        ? tile('h:w', 'AWS', 'unreadable', w.error, 'c-bad', [])
         : tile(
             'h:w',
             'AWS',
             [`$${w.total.toFixed(2)}`, ' this month'],
-            w.error
-              ? short(w.error, 50)
-              : `${w.state === 'stale' ? 'stale: ' : ''}through ${w.through}`,
+            w.error ? w.error : `${w.state === 'stale' ? 'stale: ' : ''}through ${w.through}`,
             w.state === 'ok' ? 'c-good' : 'c-hold',
             [
               ['accounts', acct || '—'],
@@ -617,6 +695,7 @@ function slipping(v) {
   if (!v.slipping.length) return emptyOr(v, b, 'slipping', 'nothing slipping');
   const KIND = {
     followup: ['STALE', 'c-hold'],
+    fired: ['DUE', 'c-hold'],
     parked: ['PARKED', 'c-dim'],
     quiet: ['QUIET', 'c-hold'],
   };
@@ -628,8 +707,13 @@ function slipping(v) {
         c: KIND[s.kind][1],
         badge: KIND[s.kind][0],
         text: [short(s.what)],
-        meta: [s.owner, s.since ? ago(s.since, v.now) : null],
-        more: [short(s.what) !== s.what ? s.what : null],
+        meta: [s.owner, s.sinceDay ? `since ${s.sinceDay}` : s.since ? ago(s.since, v.now) : null],
+        more: [
+          short(s.what) !== s.what ? s.what : null,
+          s.after
+            ? `trigger: ${s.after} (fired ${hhmm(s.since)}, ${ago(s.since, v.now)} ago)`
+            : null,
+        ],
       }),
     ),
     8,
@@ -663,6 +747,14 @@ function sources(v) {
     );
   }
   for (const p of v.problems) b.append(el('div', 'cant', p));
+  // the code this server runs: read at its start (a restart moves it)
+  b.append(
+    el(
+      'div',
+      'empty',
+      `serving ${v.version ? v.version.slice(0, 8) : 'an unknown commit'}${v.startedAt ? `, started ${hhmm(v.startedAt)}` : ''}`,
+    ),
+  );
   for (const id of ['needs', 'now', 'done']) {
     const a = $(`#${id} .age`);
     // NOW's lock sources speak on their own slot cards: not repeated in its header
@@ -809,8 +901,11 @@ function render(v, fresh = true) {
   next_seen = new Map();
   rendered = new Set();
   lastView = v;
-  $('#meta').textContent =
-    `as of ${hhmm(v.now)} · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`;
+  $('#meta').replaceChildren(
+    el('span', 'only-desk', 'as of '),
+    el('span', null, hhmm(v.now)),
+    el('span', 'ver', ` · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`),
+  );
   health(v);
   needs(v);
   nowPanel(v);

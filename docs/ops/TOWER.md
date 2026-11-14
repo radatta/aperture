@@ -2,8 +2,9 @@
 
 A web page at **http://localhost:6183** that answers the five questions the maintainer asks dispatch: what needs me, what's
 happening now, what's next, did anything get dropped, is the machine OK. It's served from the container (COI port
-`vite10`, container 6183 → the Mac's localhost:6183), so it opens in Safari or an iTerm2 browser pane. Not from the
-iPhone: the port is the Mac's only.
+`vite10`, container 6183 → the Mac's localhost:6183), so it opens in Safari or an iTerm2 browser pane. The phone
+reaches it as a Home Screen web app through Cloudflare (Access → a Worker that only proxies → Workers VPC →
+cloudflared → localhost:6183), so the page only polls: WebSockets don't pass that path (_Phone_, below).
 
 The terminal tower (`tower.sh`, `Ctrl-a t`; `docs/ops/SESSION-BOARD.md` → _Control tower_) stays as a fallback. Its
 render half retires after a week of web use (a follow-up). The two share the data modules in
@@ -12,7 +13,8 @@ render half retires after a week of web use (a follow-up). The two share the dat
 ```
 container                                                                       Mac
 board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET :6183 ── Safari / iTerm2 pane (polls 5 s)
-  every 5 s   Source.refresh: samples, events, ledgers, lock caches, queue.json, lanes/, mac-stats.json, costs
+  per poll    Source.refresh: samples, events, ledgers, lock caches, queue.json, lanes/, mac-stats.json, costs
+  every 5 s   gh polls (each on its own cadence below) · a Mac sample for the series (mac-stats.json)
   every 60 s  gh: pr list · newest 100 Actions runs · files per new head
               checks per open PR head (every 60 s while running, 2 min once all finished)
               devlock.sh refresh (the lock caches)
@@ -22,10 +24,10 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 
 ## Run it
 
-| Command                                       | Does                                                                                                                                                                                                                                                            |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. Log: `localNotes/board/tower.log` |
-| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                  |
+| Command                                       | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts`, is the server, and its pid is written back; any other listener is never claimed, and `start` names it. Log: `localNotes/board/tower.log` |
+| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
 and never from a worktree. After a merge that changes it, run `board.sh tower restart` from `/workspace`. The page's
@@ -60,7 +62,7 @@ How it reads (the maintainer, 2026-11-13: the text was too small and too long, a
 From the top:
 
 1. **The health strip**, always above the fold at 1512×860. Click a tile for its details.
-   - **TODAY**: merges since local midnight and how many deployed. It glows when one lands.
+   - **TODAY**: DONE TODAY's merges (the same day boundary) and how many deployed. It glows when one lands.
    - **CONTAINER**: memory against soft and hard (a last-hour sparkline), CPU, live `test` slots against
      `limits.json`.
    - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge".
@@ -70,30 +72,62 @@ From the top:
      latest attempt only; re-runs keep their run id.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
-   - lane `needs` items, with the link or a copy button for the one-line Mac command;
+   - lane `needs` items, with the link or a copy button for the one-line Mac command (the phone says "on the Mac"
+     instead; the command is in the details);
+   - queue lanes in `needs-you` with no lane-file ask, in the queue's words;
    - **MERGE ME** PRs, with what they unblock (queue lanes whose `waitingOn` names the PR);
    - **DEPLOY FAILED**, with the run link;
-   - `queue.json` `maintainer[]` to-dos;
+   - `queue.json` `maintainer[]` to-dos (a bare-date `since` shows as `since MM-DD`, not a timer);
    - an unreadable lane file (it may have carried an item);
    - the Mac agent missing (its install line, once that's on main) or silent.
 3. **NOW**: the `dev` and `devb` cards, then every lane that's building, needs you, ready, on dev, in PR, failing
    checks, merged or deploying.
-   - A card shows the holder, session, what it's doing and the lock's end.
-   - A lock read under 5 min old is a quiet "as of HH:MM". Past that the card turns amber: "lock unknown: …".
+   - A card shows the holder, session, what it's doing and the lock's end; a click shows the full detail.
+   - A lock read under 5 min old is a quiet "as of HH:MM". Past that the card turns amber: "lock unknown · last
+     read HH:MM", with why (the refresh's own error, `failedWhy`) in its details.
+   - A building lane whose lane file hasn't moved in 2 h (`STALE.lane`) carries an amber "quiet" age.
 4. **NEXT**:
-   - your next step (the first NEEDS YOU item, else the next `plan[]` `maintainer` item);
-   - the merge queue (MERGE ME and HOLD, with the reason);
+   - your next step (the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item that is
+     undated or due in the last 2 h);
+   - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…); an
+     entry whose PR merged, at any age, drops out;
+   - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
+   - your other `plan[]` steps (PLAN);
    - the dev order per slot (`devQueue` `next` / `waiting`);
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
-5. **DONE TODAY**: PRs merged since local midnight. Each shows `deployed ✓` / `deploying` / `deploy failed`, with the
-   long form (a superseded run) in its details.
+5. **DONE TODAY**: PRs merged since the day began: local midnight, but before noon it reaches back 12 h
+   (`dayStart` in `web/main.ts`), so last night's merges stay in view through the morning (marked `yest`) and age
+   out by noon, with no reset cliff. Each shows `deployed ✓` / `deploying` / `deploy failed`, with the long form (a
+   superseded run) in its details. A merge whose own Deploy run was cancelled rides the first later run that
+   wasn't cancelled too (not the newest, which may still be running or fail after this one deployed).
 6. **SLIPPING** (collapsed):
    - `followups[]` that are STALE (open, `after: "now"`, over 24 h: `staleFollowups()` in `queue.ts`, which
      `pq-check.ts` imports);
+   - DUE: open `followups[]` whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`,
+     `PR <n>`, optionally `+ N day(s)|week(s)` and a trailing `(…)`) or a date that has begun (`2026-11-20 …`,
+     `Sat 11-14 …`). Exact shapes only: free text (`wave 4`) never fires (`firedFollowups()` in `queue.ts`);
    - parked lanes;
    - lanes whose file hasn't moved in a day.
 
-**Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory over the last 24 h that a tower page was open (the server records a Mac sample only when a poll reads it).
+**Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory since the server started (up to 24 h; the server samples `mac-stats.json` on its own 5 s tick, so the series has no gap while no page is open). A sparkline with under 3 points isn't drawn.
+
+**Phone** (≤ 700 px; the maintainer's iPhone, 440 px, and 390 px):
+
+- Nothing is cut off. Text CSS would clip wraps; a row whose first clause is all it shows has a `›` and its full
+  text one tap away; every row and slot card opens on a tap, and stays open across polls.
+  `short()` never cuts inside `( )` or `[ ]`.
+- The header stays one line: the time without "as of", the commit in SOURCES (`serving <sha>, started HH:MM`).
+- The health strip is two columns: TODAY | AWS, CONTAINER | MAC, ACTIONS full width; sparklines sit in the flow,
+  never over the numbers.
+- Mac-only copy buttons become an "on the Mac" label.
+- Home Screen metas: `viewport-fit=cover` with safe-area padding, `theme-color` per scheme,
+  `apple-mobile-web-app-title`. iOS reads them when the icon is added, so a re-add picks them up.
+
+**Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
+fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
+and 1512×860, light and dark, plain / stress (every string long, every source off) / empty, and fails on hidden text,
+a sideways scroll, a wrapped header, a spark over its numbers, `undefined` on the page, or a Mac-only button on the
+phone.
 
 **SOURCES** (collapsed, plus a header chip that also tints the live dot) lists every source with its age and state:
 `ok`, `stale`, `failed` (with the error) or `missing`.

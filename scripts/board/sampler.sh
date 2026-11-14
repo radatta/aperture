@@ -70,7 +70,7 @@ while :; do
   fi
   # The real dev lock every 10th tick (~5 min), read-only and timed out (devlock.sh); same fd 8 rule.
   if [ $((n % 10)) -eq 0 ] && ! { [ -n "${dl:-}" ] && kill -0 "$dl" 2>/dev/null; }; then
-    bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 240 >/dev/null 2>&1 8>&- &
+    APERTURE_DEVLOCK_CALLER=sampler bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 240 >/dev/null 2>&1 8>&- &
     dl=$!
   fi
   n=$((n + 1))

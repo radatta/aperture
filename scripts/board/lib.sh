@@ -6,6 +6,9 @@
 # no interpreter one-liners (awk -f / heredocs only), no ps-pipe-grep sweeps, kill by PID, labels via
 # env (never argv — `pkill -f <label>` once killed the wrong process).
 
+# A caller with no HOME (the COI tmux server's status-bar jobs) would run git without ~/.gitconfig — no https
+# rewrite, no gh credential helper — and gh without its config: bash's `~` falls back to the passwd entry.
+[ -n "${HOME:-}" ] || export HOME=~
 SB_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SB_REPO="$(cd "$SB_SCRIPTS/../.." && pwd)"
 # The board lives in the MAIN checkout's localNotes/ (shared by every worktree): /workspace in the container;
@@ -20,6 +23,7 @@ LIMITS_JSON="${APERTURE_LIMITS_JSON:-$SB_SCRIPTS/limits.json}"
 SAMPLER_LOCK="${APERTURE_SAMPLER_LOCK:-/tmp/aperture-sampler.lock}"
 SAMPLER_PID="${APERTURE_SAMPLER_PID:-/tmp/aperture-sampler.pid}"
 TOWER_PID="${APERTURE_TOWER_PID:-/tmp/aperture-tower.pid}" # the web tower server, written once bound (docs/ops/TOWER.md)
+TOWER_PORT="${APERTURE_TOWER_PORT:-6183}" # its port: the one-server lock, and how `board.sh tower` finds it without the pidfile
 
 sb_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 sb_today() { date -u +%Y-%m-%d; }

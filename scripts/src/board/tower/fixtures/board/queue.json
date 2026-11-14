@@ -139,5 +139,11 @@
       "source": "fixture",
       "since": "2026-11-01"
     }
+  ],
+  "mergeOrder": [
+    { "branch": "alpha-branch", "pr": 40 },
+    { "branch": "charlie-branch", "pr": 41 },
+    { "branch": "hotel-branch", "pr": 42 },
+    { "branch": "echo-branch", "pr": null, "note": "after hotel: shares the tower files" }
   ]
 }

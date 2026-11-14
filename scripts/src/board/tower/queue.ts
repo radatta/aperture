@@ -47,7 +47,19 @@ export type Followup = {
   status: string;
   source: string | null;
   since: number | null;
+  sinceDay?: string | null; // `since` was a bare date (MM-DD): the page shows the day, not a timer
 };
+
+// A `since` the hub writes as a bare date (2026-11-13) means some time that local day: read as its end, so an age
+// is never overstated (as UTC midnight it read a follow-up raised that evening as 32 h old). Anything else is an
+// ISO time.
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+export function sinceTime(x: unknown): { at: number | null; day: string | null } {
+  const m = typeof x === 'string' ? DAY.exec(x) : null;
+  if (!m) return { at: parseTime(x), day: null };
+  const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1).getTime() - 1;
+  return { at, day: `${m[2]}-${m[3]}` };
+}
 
 // STALE: open, due now (`after: "now"`), and older than 24 h. One definition; localNotes/board/pq-check.ts imports it.
 export const STALE_MS = 24 * 3600e3;
@@ -65,7 +77,37 @@ const QUEUE_KEYS = [
   'proofs',
   'plan',
   'followups',
+  'mergeOrder',
 ];
+
+// An open follow-up whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`, `PR <n>`,
+// optionally `+ N day(s)|week(s)` and a trailing `(…)`), or a date that has begun (`2026-11-20 …`, `Sat 11-14 …`,
+// this year). Exact shapes only: free text (`wave 4`, `repo goes public`) never fires. → when it fired.
+const AFTER_REF =
+  /^(?:PR (\d+)|([a-z0-9][a-z0-9-]*))(?: merges?)?(?: \+ (\d+) (day|week)s?)?(?: \(.*\))?$/;
+const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:$|[ T(~])/;
+const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{1,2})-(\d{1,2})(?:$|[ (])/;
+export type Merged = { branch: string; number: number; mergedAt: number };
+export function firedAt(after: string, merged: Merged[], now: number): number | null {
+  const day = (y: number, m: number, d: number) => new Date(y, m - 1, d).getTime();
+  let m = AFTER_ISO.exec(after);
+  if (m) return day(+m[1]!, +m[2]!, +m[3]!);
+  m = AFTER_MD.exec(after);
+  if (m) return day(new Date(now).getFullYear(), +m[1]!, +m[2]!);
+  const r = AFTER_REF.exec(after);
+  const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));
+  if (!r || !pr) return null;
+  return pr.mergedAt + (r[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0);
+}
+export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
+  fu.flatMap((f) => {
+    if (f.status !== 'open' || f.after === 'now') return [];
+    const at = firedAt(f.after, merged, now);
+    return at !== null && at <= now ? [{ ...f, firedAt: at }] : [];
+  });
+
+// dispatch's landing order for the lanes in flight (NEXT): file order is the order.
+export type MergeOrderItem = { branch: string; pr: number | null; note: string | null };
 
 export type QueueData = {
   updatedAt: number;
@@ -75,6 +117,7 @@ export type QueueData = {
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
   followups: Followup[];
+  mergeOrder: MergeOrderItem[];
 };
 
 // A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
@@ -244,14 +287,26 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       return void problems.push(`followups[${i}]: owner ${JSON.stringify(f.owner)}`);
     if (ids.has(id)) problems.push(`followups[${i}]: duplicate id ${id}`);
     ids.add(id);
-    const since = parseTime(f.since);
+    const { at: since, day: sinceDay } = sinceTime(f.since);
     if (since === null) problems.push(`followups[${i}]: since is not a date`); // kept: never STALE, so say so
-    followups.push({ id, what, owner, after, status, source: str(f.source), since });
+    followups.push({ id, what, owner, after, status, source: str(f.source), since, sinceDay });
+  });
+
+  const mergeOrder: MergeOrderItem[] = [];
+  if (raw.mergeOrder !== undefined && !Array.isArray(raw.mergeOrder))
+    problems.push('mergeOrder is not an array');
+  arr(raw.mergeOrder).forEach((x, i) => {
+    const o = x as Record<string, unknown>;
+    const branch = str(o?.branch);
+    if (!branch) return void problems.push(`mergeOrder[${i}]: no branch`);
+    if (mergeOrder.some((e) => e.branch === branch))
+      return void problems.push(`mergeOrder[${i}]: duplicate branch ${branch}`);
+    mergeOrder.push({ branch, pr: int(o.pr), note: str(o.note) });
   });
 
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups },
+    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups, mergeOrder },
     problems,
     ...(unread.length ? { unread } : {}),
   };

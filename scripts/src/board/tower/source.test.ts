@@ -81,6 +81,19 @@ describe('Source', () => {
     expect(src.refresh(t0 + 25 * 3600000).lockFeed).toEqual([]);
   });
 
+  it('carries why the last refresh failed, only while it is failing', () => {
+    const { board, src } = setup();
+    const t0 = Date.parse('2026-11-08T00:00:00Z');
+    const f = { v: 1, t: '2026-11-08T00:00:00Z', holder: null, failedWhy: 'ls-remote: denied' };
+    writeFileSync(
+      join(board, 'devlock.json'),
+      JSON.stringify({ ...f, failedAt: '2026-11-08T00:01:00Z' }),
+    );
+    expect(src.refresh(t0).lock).toMatchObject({ failed: true, failedWhy: 'ls-remote: denied' });
+    writeFileSync(join(board, 'devlock.json'), JSON.stringify(f)); // a reason with no failedAt is not a failure
+    expect(src.refresh(t0 + 60000).lock).toMatchObject({ failed: false, failedWhy: null });
+  });
+
   it('a garbled read time is null (unknown), never NaN (which reads as fresh)', () => {
     const { board, src } = setup();
     writeFileSync(join(board, 'devlock.json'), JSON.stringify({ v: 1, t: 'soon', holder: null }));
