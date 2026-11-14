@@ -61,15 +61,15 @@ ownership, failure, ambiguity, impact] as const`, and the field is the **union t
 the editor cannot emit an unknown tag (wire-identical to `string[]`, but type-checked). _Rejected:_ freeform
 tags (no signal, no consistency) and an editable tag _entity_ (that's `Category`-style CRUD — overkill; the
 set changes rarely and a code edit is fine). The set is fixed for **recall consistency**, deliberately
-**not** to feed a coverage analytic — there is no "which competencies am I light on?" view. That would be a
+**not** to feed a coverage analytic — there is no "which competencies are thin?" view. That would be a
 score to fail at, against the DON'T-BUILD posture in [../PRODUCT.md](../../product/PRODUCT.md).
 
 **Tags are multi-select.** One story often answers several question types (a leadership story that's also
 about conflict), so a story carries a set, not a single primary competency.
 
 **Lifecycle — soft-delete only, with a confirm.** `deleteStory` re-puts the row with `deletedAt` set; it is
-never a physical delete, and reads drop tombstones via `alive()` (the app-wide rule; the lone `uncheckHabit`
-hard-delete is tracked tech-debt, not a pattern to copy). Delete asks first — an inline `alertdialog`
+never a physical delete, and reads drop tombstones via `alive()` (the app-wide rule; the `uncheckHabit`
+hard-delete it once broke is resolved — TECH.md → _Tech debt_ — and was never a pattern to copy). Delete asks first — an inline `alertdialog`
 confirm strip (the `HabitCard` pattern) — because there's no UI undo.
 
 **API — dedicated RPC methods, a whole-object patch.** `listStories`, `createStory(input)`,
