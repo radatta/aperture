@@ -119,11 +119,11 @@ jobs:
       role_arn: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_DEV_MAIN || vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEV }}
-      device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
     secrets:
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
+      device_user_id: ${{ secrets.DEVICE_USER_ID_DEV }}
 
   # Slot B (devb, the dev account's second stack — INFRA §2) through the same freeze-exempt lane, only when a merge
   # changed its shape: a dispatch onto devb is accepted only if devb already runs main's shape, and every dispatch
@@ -146,8 +146,7 @@ jobs:
       role_arn: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_DEV_MAIN || vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEVB }}
-      device_user_id: '' # devb has no finance schedule
-    secrets:
+    secrets: # no device_user_id: devb has no finance schedule
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
@@ -168,11 +167,11 @@ jobs:
       role_arn: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_PROD }}
-      device_user_id: ${{ vars.DEVICE_USER_ID_PROD }}
     secrets:
       origin_secret: ${{ secrets.ORIGIN_SECRET_PROD }}
       device_token: ${{ secrets.DEVICE_TOKEN_PROD }}
       agent_token: ${{ secrets.AGENT_TOKEN_PROD }}
+      device_user_id: ${{ secrets.DEVICE_USER_ID_PROD }} # a prod environment secret, like the three above
 
   # GitHub's failed-run notice to the merger is the only failure signal (INFRA §9), and two outcomes would slip past it:
   # a main push that classified fine but deployed nothing to dev with no job failing (a skipped `check` that wasn't

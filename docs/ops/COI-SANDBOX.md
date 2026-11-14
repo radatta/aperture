@@ -948,7 +948,7 @@ gh auth setup-git
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Contents: **read**                                        | `git fetch` — the whole point                                                         |
 | Pull requests: **read**                                   | PR state. **Write would allow merging, and a merge to `main` IS the prod deploy**     |
-| Actions: read                                             | run status, job logs, the CDK diff                                                    |
+| Actions: read                                             | run status, job logs, the CDK diff summary                                            |
 | Variables · Secrets · Deployments · Commit statuses: read | verify config instead of asking; secret _values_ are never returned by any permission |
 
 **Writes go through a second identity — the bot.** A fine-grained PAT authenticates _as you_, GitHub has

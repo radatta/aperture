@@ -358,25 +358,30 @@ storage — a different risk class from a JWT. A device token sent to any other 
 
 ## Operator setup
 
-### 1. GitHub secrets + vars (do this before the first deploy)
+### 1. GitHub secrets (do this before the first deploy)
 
 - [ ] **secret** `DEVICE_TOKEN_DEV` — any long random hex string (`openssl rand -hex 24`).
 - [ ] **secret** `DEVICE_TOKEN_PROD` — a _different_ one, in the `prod` GitHub environment (`gh secret set DEVICE_TOKEN_PROD --env prod`), not repo-level.
-- [ ] **var** `DEVICE_USER_ID_DEV` — your **dev** Cognito `sub`.
-- [ ] **var** `DEVICE_USER_ID_PROD` — your **prod** Cognito `sub`.
+- [ ] **secret** `DEVICE_USER_ID_DEV` — your **dev** Cognito `sub`, repo-level.
+- [ ] **secret** `DEVICE_USER_ID_PROD` — your **prod** Cognito `sub`, in the `prod` environment (`gh secret set DEVICE_USER_ID_PROD --env prod`).
 
-Both pairs are load-bearing, and they fail in different ways:
+The `sub` grants nothing, but it identifies the account, and a variable would print in clear in every public run log; a secret prints `***` (INFRA §9 → Public repo). They were repo variables until `deploy-log-quiet` (2026-11).
+
+Both pairs are load-bearing:
 
 - `DEVICE_TOKEN_*` unset or misnamed → the CI synth **fails, naming the secret** (`stageSecret`, since
   prod-secrets). Before that guard, each CI deploy minted a fresh random token, so the token saved in your
   extension options silently stopped matching after any deploy. (A _local_ `cdk synth`
   reuses the gitignored `cdk/.secrets/device-token.<stage>` file, so it's stable there — which is
   exactly why this is easy to miss until CI runs.)
-- `DEVICE_USER_ID_*` unset → the handler falls back to userId `'local'`, so attempts are written under
-  `u#local` while the page reads under `u#<your sub>`. **Capture works, the page stays empty, and
-  nothing errors anywhere.** This is the single most confusing failure mode in the feature.
+- `DEVICE_USER_ID_*` unset → the CI deploy **fails in deploy-stage's `Validate mode`, naming the secret**
+  (dev and prod; devb never has one). Before that check, the handler fell back to userId `'local'`, so
+  attempts were written under `u#local` while the page read under `u#<your sub>`: **capture worked, the
+  page stayed empty, and nothing errored anywhere** — still what a wrong value, or a local synth with
+  no `device-user-id.<stage>` file, does. The single most confusing failure mode in the feature.
 - `DEVICE_USER_ID_*` also gates the **finance sync schedule** ([finances/](../finances/index.md)): unset →
-  no scheduled sync on that stage (Refresh still works); wrong → the schedule syncs an empty partition,
+  no schedule on that stage — only devb or a local synth now, since dev and prod CI refuse it (Refresh
+  still works); wrong → the schedule syncs an empty partition,
   silently.
 
 Find your `sub`: sign in to the app, then decode the access token's payload, or read it from the Cognito

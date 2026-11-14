@@ -29,10 +29,6 @@ on:
         required: false
         type: string
         default: '' # us-east-1 ACM cert ARN; empty → no custom-domain alias
-      device_user_id:
-        required: false
-        type: string # the stage's Cognito sub (not secret); empty on devb, which has no finance schedule
-        default: ''
       ref:
         required: false
         type: string
@@ -48,6 +44,11 @@ on:
         required: true # pin per stage, else each deploy rotates the extension token
       agent_token:
         required: true # pin per stage, else each deploy rotates the MCP agent token (Claude Code re-register)
+      device_user_id:
+        # The stage's Cognito sub: not a credential, but a secret so public logs print it as *** (a var prints in
+        # clear in every step's env header). None on devb, which has no finance schedule; Validate mode requires it on
+        # dev and prod.
+        required: false
 
 permissions:
   id-token: write # assume the AWS deploy role via OIDC
@@ -84,7 +85,7 @@ jobs:
       APERTURE_ORIGIN_SECRET: ${{ secrets.origin_secret }}
       APERTURE_CERT_ARN: ${{ inputs.cert_arn }}
       APERTURE_DEVICE_TOKEN: ${{ secrets.device_token }}
-      APERTURE_DEVICE_USER_ID: ${{ inputs.device_user_id }}
+      APERTURE_DEVICE_USER_ID: ${{ secrets.device_user_id }}
       APERTURE_AGENT_TOKEN: ${{ secrets.agent_token }}
       # The commit this deploy serves. A dispatched run's GITHUB_SHA is main's (the workflow ran from main), so
       # the build marker reads this first and falls back to GITHUB_SHA (contract with dev-e2e — CI-BOT.md).
@@ -131,6 +132,12 @@ jobs:
             *) echo "::error::invalid lane '$APERTURE_DEPLOY_LANE'"; exit 1 ;;
           esac
           echo "mode=$MODE stage=$APERTURE_STAGE lane=$APERTURE_DEPLOY_LANE"
+          # Empty would silently attribute device-token writes to the 'local' user and drop the finance schedule
+          # (docs/areas/recruiting/index.md → Operator setup), so dev and prod refuse it on every mode.
+          case "$APERTURE_STAGE" in
+            dev) [ -n "$APERTURE_DEVICE_USER_ID" ] || { echo "::error::no device user id — set the repository secret DEVICE_USER_ID_DEV"; exit 1; } ;;
+            prod) [ -n "$APERTURE_DEVICE_USER_ID" ] || { echo "::error::no device user id — set the prod environment secret DEVICE_USER_ID_PROD"; exit 1; } ;;
+          esac
           # The exempt lane is for merged code only: a `main` push deploying its own commit — never a dispatch, which can
           # also run on ref main and check out a branch's commit (deploy-dev.yml's `ref`).
           if [ "$APERTURE_DEPLOY_LANE" = devmain ] && { [ "$GITHUB_EVENT_NAME" != push ] || [ "$GITHUB_REF" != refs/heads/main ] || [ -n "$REF" ]; }; then
@@ -195,13 +202,13 @@ jobs:
       - name: CDK synth
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/cdk exec cdk synth "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" -c "stage=$APERTURE_STAGE" --no-lookups --output cdk.out
-      # --method=template compares the synthesized template with the deployed one (lookup role) instead of
-      # creating a CloudFormation change set — the diff then built a change set and the deploy built a
-      # second, identical one. Property-level "requires replacement" still comes from the resource spec;
-      # what's lost is CloudFormation's own change-set analysis.
-      - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
+      # The log shows, per stack, `changed|unchanged` and each changed resource's header (type, path, logical id,
+      # impact) — never a property value, the IAM table or an output, which a full diff lays out in a public log. The
+      # whole diff goes to the runner's RUNNER_TEMP, never uploaded, gone with the runner (INFRA §9 → Public repo). Inside, --method=template compares the synthesized template with the deployed
+      # one (lookup role) instead of creating a change set the deploy would build again.
+      - name: CDK diff (informational) # no approval pause — a failing diff still fails the job
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out "ApertureData-$APERTURE_STAGE" "ApertureApp-$APERTURE_STAGE" --method=template
+        run: node scripts/src/cdk-diff-summary.ts "$APERTURE_STAGE"
       # --method=direct: UpdateStack without a change set. Same rollback-on-failure from CloudFormation, less
       # per-resource progress in the log; unchanged stacks still no-op.
       - name: Deploy stacks # --outputs-file is what publish/health-check read downstream

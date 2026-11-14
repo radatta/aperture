@@ -11,4 +11,6 @@ description = "Known false positives"
 # generic-api-key reads "authSecret: 'BTBZ…'" / "AUTH = 'BTBZ…'" as a key; it's the auth_secret test vector published
 # in RFC 8291 Appendix A, used by the Web Push tests (lambdas/src/push/*.test.ts, backend.push.test.ts). Public,
 # not a credential.
-regexes = ['''^exchangePlaidPublicToken$''', '''^tape=SIGNED_OUT$''', '''^BTBZMqHH6r4Tts7J_aSIgg$''']
+# generic-api-key reads "SECRET = 'sentinel-0123456789'" as a key; it's the planted sentinel the cdk-diff-summary
+# tests assert never reaches a log (scripts/src/cdk-diff-summary.test.ts), not a credential.
+regexes = ['''^exchangePlaidPublicToken$''', '''^tape=SIGNED_OUT$''', '''^BTBZMqHH6r4Tts7J_aSIgg$''', '''^sentinel-0123456789$''']
