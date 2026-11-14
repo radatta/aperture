@@ -58,6 +58,17 @@ describe('job building', () => {
     expect(job.submittedAt).toBe('2026-11-01T20:45:12Z');
   });
 
+  it('an open-pr id is never named like a sim (the slow lane on the Mac takes …Z-ios-…)', () => {
+    const j = (branch: string) =>
+      makeOpenPrJob({ branch, sha: 'a'.repeat(40), title: 'T', body: 'b' }, NOW).id;
+    expect(j('ios-probe-check')).toMatch(/^\d{8}T\d{6}Z-pr-ios-probe-check-[0-9a-f]{4}$/);
+    expect(j('x'.repeat(4) + 'ios-y')).toMatch(/Z-xxxxios-y-/);
+    for (const b of ['ios-' + 'x'.repeat(60), 'ios-a', 'mac-mailroom']) {
+      expect(j(b)).toMatch(ID_RE);
+      expect(j(b)).not.toMatch(/^\d{8}T\d{6}Z-ios-/);
+    }
+  });
+
   it('wait plus grace stays under the Bash tool timeout', async () => {
     const { WAIT_MS } = await import('./open-pr.ts');
     expect(WAIT_MS + 30_000).toBeLessThan(120_000);

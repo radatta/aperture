@@ -94,6 +94,11 @@ clip_rd() {
   ) 2>/dev/null
 }
 
+# The MIXED_TEXT result's {types}: the JXA report's type names, anchored. A function, not an inline "… $(jq …)":
+# the Mac's bash 3.2 brace-expands {1,80} inside a double-quoted $( ) that holds a nested " (the word came out
+# twice with empty types), so the result was not JSON and no result.json was written.
+clip_types() { jq -c '{types: [.types[]? | strings | select(test("^[A-Za-z0-9._-]{1,80}$"))][:12]}' 2>/dev/null || echo '{}'; }
+
 # Mac-private state ($STATE/clip.json): {serves: [epoch s in the last minute], cc, n: serves of that cc}.
 # Anything else in it (a hand edit, a clock jump) reads as numbers in range or not at all, so it can't jam a cap.
 clip_state() {
@@ -122,7 +127,7 @@ run_clip() {
     5) echo "rejected TOO_LARGE {}"; return 0 ;;
     6) echo "rejected NOT_FRONTMOST $(jq -cn --arg f "$front" '{frontmost: $f}')"; return 0 ;;
     7) echo "rejected REPEAT {}"; return 0 ;;
-    9) echo "rejected MIXED_TEXT $(jq -c '{types: [.types[]? | strings | select(test("^[A-Za-z0-9._-]{1,80}$"))][:12]}' <<<"$meta" 2>/dev/null || echo '{}')"; return 0 ;;
+    9) echo "rejected MIXED_TEXT $(clip_types <<<"$meta")"; return 0 ;;
     124) echo "error TIMEOUT {}"; return 0 ;;
     *) echo "error CLIP_FAILED {}"; return 0 ;;
   esac

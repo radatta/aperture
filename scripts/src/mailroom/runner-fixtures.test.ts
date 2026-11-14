@@ -54,6 +54,23 @@ describe('mailroom runner', () => {
     }
   });
 
+  // The Mac runs these under bash 3.2, which brace-expands a {a,b} or {a..b} inside a double-quoted $( ) once a nested
+  // " appears in it (the MIXED_TEXT result came out as no JSON, 2026-11-13); this suite runs bash 5, so the shape is
+  // pinned out instead. A bare v="$(…)" is safe (no brace expansion in assignments); `local v="$(…)"` is not.
+  // One line at a time: a multi-line $( ) is out of its reach.
+  it('no brace pattern inside a quoted $( ) with a nested quote (bash 3.2 expands it)', () => {
+    const src = [
+      runnerText(),
+      readFileSync(`${TOOLS_DIR}install.sh`, 'utf8'),
+      readFileSync(`${TOOLS_DIR}run-fixtures.sh`, 'utf8'),
+    ].join('\n');
+    const re = /"[^"]*\$\([^"]*"(?:[^"]*"[^"]*")*[^"]*\{[^{}\s"]*(,|\.\.)[^{}"]*\}/; // an odd count of " before it
+    const bad = src
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l) && re.test(l) && !/^\s*[A-Za-z_]\w*="\$\(/.test(l));
+    expect(bad).toEqual([]);
+  });
+
   it('reads each secret only from its Keychain item, never a file or the environment', () => {
     const src = code();
     expect(src).toContain('MR_KEYCHAIN="aperture-mailroom-gh"');
@@ -214,5 +231,65 @@ describe('mailroom runner', () => {
       'get "contents/tools/mailroom/$LABEL.plist.tmpl?ref=$ref"',
     ]);
     expect(src).toContain('TOKEN="$(security find-generic-password -s "$KEYCHAIN" -w');
+  });
+
+  // Two launchd agents on one inbox (MAILROOM.md → Lanes): only sim is slow, each lane has its own lock, and the one
+  // template renders a valid agent per lane.
+  it('lanes: sim alone is slow, a lock per lane, two agents from one template', () => {
+    const runner = readFileSync(`${TOOLS_DIR}runner.sh`, 'utf8');
+    for (const pin of [
+      'SLOW_JOBS="sim"',
+      'FAST_JOBS="clip"',
+      "SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-'",
+      'slow) take_lock lock 15 || exit 0 ;;',
+      'fast) take_lock lock-fast 5 || exit 0 ;;',
+      'all) { take_lock lock 15 && take_lock lock-fast 5; } || exit 0 ;;',
+      'trap \'for l in $HELD; do rmdir "$STATE/$l" 2>/dev/null || true; done\' EXIT',
+      'if [ "$LANE" = slow ]; then slow_name "${entry#./}" || continue; fi',
+      'if [ "$LANE" = fast ]; then ! slow_name "${entry#./}" || continue; fi',
+      'for l in $HELD; do touch "$STATE/$l" 2>/dev/null || true; done',
+      'if ! job_lane_ok "$job"; then',
+      '[ "$LANE" = all ] || WD="work-$LANE"',
+    ])
+      expect(runner).toContain(pin);
+    const install = readFileSync(`${TOOLS_DIR}install.sh`, 'utf8');
+    for (const pin of [
+      'LABEL_FAST="dev.rahuldatta.aperture.mailroom.fast"',
+      'render "$LABEL" slow 10',
+      'render "$LABEL_FAST" fast 2',
+      'load "$LABEL" "$PLIST"',
+      'load "$LABEL_FAST" "$PLIST_FAST"',
+      'launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true',
+      'rm -f "$PLIST" "$PLIST_FAST"',
+      'launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true\n  rm -f "$APP/bin/runner.sh"',
+    ])
+      expect(install).toContain(pin);
+    const tmpl = readFileSync(`${TOOLS_DIR}dev.rahuldatta.aperture.mailroom.plist.tmpl`, 'utf8');
+    const render = (label: string, lane: string, throttle: string) =>
+      tmpl
+        .replaceAll('@LABEL@', label)
+        .replaceAll('@LANE@', lane)
+        .replaceAll('@THROTTLE@', throttle)
+        .replaceAll('@RUNNER@', '/r/runner.sh')
+        .replaceAll('@HOSTJOBS@', '/h')
+        .replaceAll('@STATE@', '/s')
+        .replaceAll('@LOG@', '/l')
+        .replaceAll(
+          '@TRIGGER@',
+          '  <key>QueueDirectories</key>\n  <array><string>/h/inbox</string></array>',
+        );
+    for (const [label, lane, throttle] of [
+      ['dev.rahuldatta.aperture.mailroom', 'slow', '10'],
+      ['dev.rahuldatta.aperture.mailroom.fast', 'fast', '2'],
+    ] as const) {
+      const p = render(label, lane, throttle);
+      expect(p).not.toMatch(/@[A-Z]+@/);
+      expect(p).toContain(`<key>Label</key>\n  <string>${label}</string>`);
+      expect(p).toContain(`<string>/s</string>\n    <string>${lane}</string>\n  </array>`);
+      expect(p).toContain(`<key>ThrottleInterval</key>\n  <integer>${throttle}</integer>`);
+      // every <key> in the top dict is followed by a value element
+      const keys = [...p.matchAll(/<key>([^<]+)<\/key>\s*<(\w+)/g)].map((m) => m[2]);
+      expect(keys.every((t) => t !== 'key')).toBe(true);
+    }
   });
 });

@@ -119,7 +119,7 @@ export async function clipProbe(d: ClipDeps, waitMs = CLIP_WAIT_MS): Promise<num
   if (!r) {
     if (withdraw(d.fs, d.dir, job.id)) {
       d.log(
-        `clip: no answer in ${waitMs / 1000} s — withdrawn; the Mac is asleep, not installed, or busy (a sim job)`,
+        `clip: no answer in ${waitMs / 1000} s — withdrawn; the Mac is asleep, the mailroom is not installed, or an old single-lane mailroom is busy (reinstall from main)`,
       );
       return 3;
     }

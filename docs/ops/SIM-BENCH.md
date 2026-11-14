@@ -121,7 +121,7 @@ A job whose runner doesn't answer within its timeout plus 120 s is stopped with 
 
 ### The M3 baseline (main Mac)
 
-The M3's mailroom agent drives the same sim, `aperture-devcheck`, and a container devcheck arriving mid-bench would interleave jobs with it. So the bench refuses while the agent is loaded. Booting the agent out takes the M3's sim and `open-pr` away from every lane, so **ask dispatch for the M3 window**. It must be quiet: before auto-6's BEFORE runs or after its AFTER runs, never between them. The M1 run has no such restriction.
+The M3's mailroom agent drives the same sim, `aperture-devcheck`, and a container devcheck arriving mid-bench would interleave jobs with it. So the bench refuses while the agent is loaded. Booting the slow agent (`dev.rahuldatta.aperture.mailroom`) out takes the M3's sim away from every lane; `open-pr` and Ctrl+V keep working through the fast agent. So **ask dispatch for the M3 window**. It must be quiet: before auto-6's BEFORE runs or after its AFTER runs, never between them. The M1 run has no such restriction.
 
 After the merge, with `~/aperture-bench` unpacked from main's tarball (_Setup_):
 

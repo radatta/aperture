@@ -910,8 +910,10 @@ sessions by them, and restore matches on them.
   keep iTerm in front, and press **Ctrl+V** in a container Claude Code: it pastes as an image. `~/.local/bin/xclip`
   is a link to `tools/coi/xclip` (made by `links`), ahead of `/usr/bin/xclip` on PATH. It answers only Claude Code's
   two image calls, through the Mac mailroom's `clip` job, and never text (MAILROOM.md → _The clip job_). It needs
-  the Mac mailroom installed from a `main` that has the job. With the Mac asleep, a Ctrl+V gives up after 15 s.
-  Text paste is Cmd+V as before. The shim's log is `~/.cache/xclip-shim/log`; `pnpm mailroom clip-probe` runs the
+  the Mac mailroom installed from a `main` that has the job. With the Mac asleep, a Ctrl+V gives up after 15 s;
+  a running Simulator job doesn't hold it up (the mailroom's fast lane, MAILROOM.md → _Lanes_). Cmd+Shift+4 only
+  saves a file: `clip-probe` then answers `NO_IMAGE`. Don't set `DISPLAY` for Claude Code: image paste doesn't need
+  it, and with it set Claude Code sends text copies to `xclip`, which refuses them. Text paste is Cmd+V as before. The shim's log is `~/.cache/xclip-shim/log`; `pnpm mailroom clip-probe` runs the
   same round trip by hand.
 
 ## GitHub access inside the container

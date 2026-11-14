@@ -62,7 +62,7 @@ export { isoSeconds, makeId } from './ids.ts';
 export function makeOpenPrJob(
   p: Omit<OpenPrParams, 'bodySha256'>,
   nowMs: number,
-  id = makeId(p.branch, nowMs),
+  id = makeId(p.branch.startsWith('ios-') ? `pr-${p.branch}` : p.branch, nowMs), // …Z-ios-… is a sim's: the slow lane
 ): Job {
   return {
     v: 1,

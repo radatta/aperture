@@ -240,7 +240,7 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
       say "  couldn't read dev's build marker; keeping ${CUR_SHA:0:7}"
     fi
   fi
-  id="$(date -u +%Y%m%dT%H%M%SZ)-bench-$(printf '%03d' "$SEQ")-r$run-$name"
+  id="$(date -u +%Y%m%dT%H%M%SZ)-ios-bench-$(printf '%03d' "$SEQ")-r$run-$name" # …Z-ios-…: the slow lane takes only those
   f="$RD/staging/$id.json"
   jq -n --arg id "$id" --arg sha "$CUR_SHA" --argjson t "$tmo" --argjson steps "$steps" \
     '{v: 1, id: $id, job: "sim", submittedAt: (now | floor | todate), expiresInMin: 60,
@@ -251,7 +251,7 @@ run_job() { # NAME RUN STEPS_JSON TIMEOUT
   # A process group of its own, led by the runner's PID. stdin from /dev/null as under launchd: with -m, bash no longer
   # does that for `&`, and sim.sh hands its stdin to every axe/simctl call (sim_cap), so a tty there could stop the group.
   set -m
-  bash "$RUNNER" "$HJ" "$ST" </dev/null >>"$LOG" 2>&1 &
+  bash "$RUNNER" "$HJ" "$ST" slow </dev/null >>"$LOG" 2>&1 & # the slow lane: it drives the Simulator, and takes only state/lock
   RPID=$!
   set +m
   while kill -0 "$RPID" 2>/dev/null; do

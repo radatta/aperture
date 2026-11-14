@@ -9,13 +9,15 @@
 set -euo pipefail
 export LC_ALL=C # glob order = the container's sort, for VERSION
 
-LABEL="dev.rahuldatta.aperture.mailroom"
+LABEL="dev.rahuldatta.aperture.mailroom"           # the slow lane: sim (MAILROOM.md → Lanes)
+LABEL_FAST="dev.rahuldatta.aperture.mailroom.fast" # the fast lane: everything else
 REPO_SLUG="radatta/aperture"
 KEYCHAIN="aperture-mailroom-gh"
 REPO="$(pwd -P)"
 HJ="$REPO/.hostjobs"
 APP="$HOME/Library/Application Support/aperture-mailroom"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+PLIST_FAST="$HOME/Library/LaunchAgents/$LABEL_FAST.plist"
 LOG="$HOME/Library/Logs/aperture-mailroom/agent.log"
 DOMAIN="gui/$(id -u)"
 
@@ -31,9 +33,10 @@ main() {
       --ref) ref="${2:-}"; [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || usage; shift 2 ;;
       --uninstall)
         launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-        rm -f "$PLIST"
+        launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true
+        rm -f "$PLIST" "$PLIST_FAST"
         [ ! -d "$APP" ] || rm -r "$APP"
-        echo "removed the agent and $APP."
+        echo "removed both agents and $APP."
         echo "kept: .hostjobs/ and the Keychain item — drop the token with \`security delete-generic-password -s $KEYCHAIN\` and revoke it on GitHub."
         exit 0 ;;
       *) usage ;;
@@ -82,14 +85,23 @@ main() {
     trigger="  <key>StartInterval</key>
     <integer>15</integer>"
   fi
-  tmpl="$(cat "$stage/plist.tmpl")"
-  tmpl="${tmpl//@RUNNER@/$APP/bin/runner.sh}"
-  tmpl="${tmpl//@HOSTJOBS@/$HJ}"
-  tmpl="${tmpl//@STATE@/$APP/state}"
-  tmpl="${tmpl//@LOG@/$LOG}"
-  tmpl="${tmpl//@TRIGGER@/$trigger}"
-  printf '%s\n' "$tmpl" >"$stage/$LABEL.plist"
-  plutil -lint "$stage/$LABEL.plist" >/dev/null || die "the rendered plist is invalid: $(plutil -lint "$stage/$LABEL.plist")"
+  # render LABEL LANE THROTTLE — one plist per lane from the one template; both watch the same inbox.
+  render() {
+    local tmpl
+    tmpl="$(cat "$stage/plist.tmpl")"
+    tmpl="${tmpl//@LABEL@/$1}"
+    tmpl="${tmpl//@LANE@/$2}"
+    tmpl="${tmpl//@THROTTLE@/$3}"
+    tmpl="${tmpl//@RUNNER@/$APP/bin/runner.sh}"
+    tmpl="${tmpl//@HOSTJOBS@/$HJ}"
+    tmpl="${tmpl//@STATE@/$APP/state}"
+    tmpl="${tmpl//@LOG@/$LOG}"
+    tmpl="${tmpl//@TRIGGER@/$trigger}"
+    printf '%s\n' "$tmpl" >"$stage/$1.plist"
+    plutil -lint "$stage/$1.plist" >/dev/null || die "the rendered plist is invalid: $(plutil -lint "$stage/$1.plist")"
+  }
+  render "$LABEL" slow 10
+  render "$LABEL_FAST" fast 2 # a Ctrl+V retry inside 10 s must not wait for the throttle
 
   # The shared folder the container writes into, checked before anything is swapped (no half-install). Refuse
   # symlinks: the runner would refuse them anyway.
@@ -102,7 +114,10 @@ main() {
   mkdir -p "$APP/bin/jobs" "$APP/state" "$(dirname "$LOG")" "$(dirname "$PLIST")"
   # -N shows a fresh install's files in full, so the prompt below always has real content to check.
   diff -ruN "$APP/bin" "$stage/bin" || true
-  if [ -f "$PLIST" ]; then diff -u "$PLIST" "$stage/$LABEL.plist" || true; else diff -u /dev/null "$stage/$LABEL.plist" || true; fi
+  for l in "$LABEL" "$LABEL_FAST"; do
+    p="$HOME/Library/LaunchAgents/$l.plist"
+    if [ -f "$p" ]; then diff -u "$p" "$stage/$l.plist" || true; else diff -u /dev/null "$stage/$l.plist" || true; fi
+  done
   if [ "$ref" != "$main_sha" ]; then
     echo "!! $ref is NOT main's head — an unmerged commit nobody has approved. Read tools/mailroom/ at that commit on"
     echo "!! github.com first (MAILROOM.md → Trial), and re-run without --ref once it merges."
@@ -110,11 +125,15 @@ main() {
     [ "$answer" = y ] || die "not installed"
   fi
 
+  # Both agents out before the swap: a drain started mid-swap would source new (or no) jobs under the old runner.
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+  launchctl bootout "$DOMAIN/$LABEL_FAST" 2>/dev/null || true
   rm -f "$APP/bin/runner.sh" "$APP/bin/VERSION" "$APP"/bin/jobs/*.sh
   cp "$stage/bin/runner.sh" "$stage/bin/VERSION" "$APP/bin/"
   cp "$stage"/bin/jobs/*.sh "$APP/bin/jobs/"
   chmod 700 "$APP/bin/runner.sh"
   cp "$stage/$LABEL.plist" "$PLIST"
+  cp "$stage/$LABEL_FAST.plist" "$PLIST_FAST"
 
   # The stamp the container reads to tell "never installed" from "asleep" (pnpm mailroom → MAC_UNREACHABLE). Only
   # a hint — the container can forge it — so a failure to write it doesn't stop the install.
@@ -123,18 +142,22 @@ main() {
     rm -f "$HJ/installed.json"
     set -C
     jq -n --arg v "$version" --arg ref "$ref" --arg mode "$mode" \
-      '{installedAt: (now | todate), runnerVersion: $v, ref: $ref, mode: $mode}' >"$HJ/installed.json"
+      '{installedAt: (now | todate), runnerVersion: $v, ref: $ref, mode: $mode, lanes: ["slow", "fast"]}' >"$HJ/installed.json"
   ) 2>/dev/null || echo "note: could not write $HJ/installed.json (something replaced it) — the agent is still installed"
 
-  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-  # bootout returns before the old instance is gone; bootstrap can fail ("5: Input/output error") until it is.
-  for try in 1 2 3 4 5; do
-    if launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; then break; fi
-    [ "$try" -lt 5 ] || die "launchctl bootstrap failed 5 times — run: launchctl bootstrap $DOMAIN $PLIST"
-    sleep 1
-  done
-  echo "installed $LABEL (mode $mode, runner ${version:0:12}, $REPO_SLUG@${ref:0:12}) watching $HJ/inbox"
-  echo "check: launchctl print $DOMAIN/$LABEL | grep -A8 'event triggers'   ·   log: $LOG"
+  # load LABEL PLIST — the bootout above returns before the old instance is gone; bootstrap can fail ("5: Input/output
+  # error") until it is. Upgrading from the single agent: $LABEL is the slow lane's, overwritten and re-bootstrapped.
+  load() {
+    for try in 1 2 3 4 5; do
+      if launchctl bootstrap "$DOMAIN" "$2" 2>/dev/null; then return 0; fi
+      [ "$try" -lt 5 ] || die "launchctl bootstrap failed 5 times — run: launchctl bootstrap $DOMAIN $2"
+      sleep 1
+    done
+  }
+  load "$LABEL" "$PLIST"
+  load "$LABEL_FAST" "$PLIST_FAST"
+  echo "installed $LABEL + .fast, lanes slow+fast (mode $mode, runner ${version:0:12}, $REPO_SLUG@${ref:0:12}) watching $HJ/inbox"
+  echo "check: launchctl print $DOMAIN/$LABEL | grep -A8 'event triggers'   (and $DOMAIN/$LABEL_FAST)   ·   log: $LOG"
 }
 
 main "$@" # last line: a truncated download defines nothing and runs nothing
