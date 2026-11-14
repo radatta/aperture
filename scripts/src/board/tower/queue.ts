@@ -21,6 +21,7 @@ export type Lane = {
   eta: number | null;
   waitingOn: string | null;
   note: string | null;
+  hold: string | null; // dispatch's merge hold reason (the web tower's HOLD(<reason>))
 };
 export type Todo = { text: string; since: string | null };
 export type WaveItem = {
@@ -34,6 +35,24 @@ export type WaveItem = {
 // dispatch's timeline: the one source for "next merge" (the tower's PLAN panel and the statusline)
 export type PlanItem = { at: number | null; what: string; kind: PlanKind; who: string | null };
 
+// dispatch's follow-up ledger (docs/ops/HUB.md → The hub's duties): the web tower's SLIPPING panel reads it.
+export const FOLLOWUP_STATUS = ['open', 'tracked', 'done', 'dropped'] as const;
+export const FOLLOWUP_OWNERS = ['rahul', 'lane', 'dispatch'] as const;
+export type Followup = {
+  id: string;
+  what: string;
+  owner: string;
+  after: string;
+  status: string;
+  source: string | null;
+  since: number | null;
+};
+
+// STALE: open, due now (`after: "now"`), and older than 24 h. One definition; localNotes/board/pq-check.ts imports it.
+export const STALE_MS = 24 * 3600e3;
+export const staleFollowups = (fu: Followup[], now: number) =>
+  fu.filter((f) => f.status === 'open' && f.after === 'now' && f.since !== null && now - f.since > STALE_MS);
+
 export type QueueData = {
   updatedAt: number;
   devQueue: Lane[];
@@ -41,6 +60,7 @@ export type QueueData = {
   wave: { name: string; items: WaveItem[] } | null;
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
+  followups: Followup[];
 };
 
 // A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
@@ -109,6 +129,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       eta: parseTime(l.eta),
       waitingOn: str(l.waitingOn),
       note: str(l.note),
+      hold: str(l.hold),
     });
   });
 
@@ -165,9 +186,30 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   // stable sort: equal times and the `at`-less keep their file order
   plan.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || 0); // ∞ − ∞ is NaN → 0
 
+  const followups: Followup[] = [];
+  const ids = new Set<string>();
+  arr(raw.followups).forEach((x, i) => {
+    const f = x as Record<string, unknown>;
+    const id = str(f?.id);
+    const what = str(f?.what);
+    const after = str(f?.after);
+    const owner = f?.owner as string;
+    const status = f?.status as string;
+    if (!id || !what || !after) return void problems.push(`followups[${i}]: no id, what or after`);
+    if (!(FOLLOWUP_STATUS as readonly string[]).includes(status))
+      return void problems.push(`followups[${i}]: status ${JSON.stringify(f.status)}`);
+    if (!(FOLLOWUP_OWNERS as readonly string[]).includes(owner))
+      return void problems.push(`followups[${i}]: owner ${JSON.stringify(f.owner)}`);
+    if (ids.has(id)) problems.push(`followups[${i}]: duplicate id ${id}`);
+    ids.add(id);
+    const since = parseTime(f.since);
+    if (since === null) problems.push(`followups[${i}]: since is not a date`); // kept: never STALE, so say so
+    followups.push({ id, what, owner, after, status, source: str(f.source), since });
+  });
+
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, rahul, wave, deadRows, plan },
+    data: { updatedAt, devQueue, rahul, wave, deadRows, plan, followups },
     problems,
   };
 }

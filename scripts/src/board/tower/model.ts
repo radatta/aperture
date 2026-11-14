@@ -44,6 +44,7 @@ export type Session = {
 
 export type Lock = {
   branch: string | null; // null = free
+  sha?: string | null; // the holder's dispatched sha (the web tower matches its deploy-dev run)
   session: string | null;
   expiresAt: number | null;
   asOf: number | null; // cache time

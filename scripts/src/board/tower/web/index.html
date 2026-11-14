@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>tower</title>
+    <style>
+      :root {
+        --bg: #fcfcfb;
+        --panel: #ffffff;
+        --ink: #0b0b0b;
+        --ink2: #52514e;
+        --line: #e4e3df;
+        --good: #0a7d0a;
+        --warn: #8a5a00;
+        --bad: #c22f2f;
+        --warn-bg: #fff4d6;
+        --bad-bg: #fde8e8;
+        --good-bg: #e6f6e6;
+        --series: #2a78d6;
+        --mark: #b5b3ad;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1a19;
+          --panel: #222220;
+          --ink: #f0efec;
+          --ink2: #c3c2b7;
+          --line: #383835;
+          --good: #4cc94c;
+          --warn: #fab219;
+          --bad: #ef6b6b;
+          --warn-bg: #3a3014;
+          --bad-bg: #3d1e1e;
+          --good-bg: #1d331d;
+          --series: #3987e5;
+          --mark: #6b6a64;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; }
+      header { display: flex; gap: 12px; align-items: baseline; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+      header h1 { font-size: 16px; margin: 0; }
+      header .meta { color: var(--ink2); font-size: 12px; }
+      header .spacer { flex: 1; }
+      #banner { display: none; padding: 8px 16px; background: var(--bad-bg); color: var(--bad); font-weight: 600; }
+      main { display: grid; grid-template-columns: 1fr; gap: 12px; padding: 12px 16px; }
+      @media (min-width: 1000px) {
+        main { grid-template-columns: 1fr 1fr; }
+        #needs, #now { grid-column: span 1; }
+      }
+      section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+      section h2 { font-size: 12px; letter-spacing: 0.06em; margin: 0 0 8px; color: var(--ink2); display: flex; gap: 8px; align-items: baseline; }
+      section h2 .count { color: var(--ink); }
+      section h2 .age { font-weight: 400; letter-spacing: 0; margin-left: auto; }
+      #needs.has { border-color: var(--warn); }
+      .row { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+      .row:first-of-type { border-top: 0; }
+      .what { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+      .sub { color: var(--ink2); font-size: 12px; }
+      .badge { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; white-space: nowrap; border: 1px solid currentColor; }
+      .t-good { color: var(--good); } .t-warn { color: var(--warn); } .t-bad { color: var(--bad); } .t-dim { color: var(--ink2); }
+      .b-good { background: var(--good-bg); } .b-warn { background: var(--warn-bg); } .b-bad { background: var(--bad-bg); }
+      code { font: 12px ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+      button { font: inherit; font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
+      a { color: var(--series); }
+      .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+      .slot { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+      .slot .name { font-weight: 700; }
+      .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
+      .kv .k { color: var(--ink2); }
+      .empty { color: var(--ink2); font-style: italic; }
+      #sources { grid-column: 1 / -1; }
+      #sources .row { border: 0; padding: 1px 0; font-size: 12px; }
+      .charts { display: none; grid-column: 1 / -1; }
+      .charts.on { display: block; }
+      .chart { position: relative; margin: 6px 0 12px; }
+      .chart canvas { width: 100%; height: 120px; display: block; }
+      .chart .tip { position: absolute; top: 0; pointer-events: none; font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; display: none; white-space: nowrap; }
+      .chart .title { font-size: 12px; color: var(--ink2); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>tower</h1>
+      <span class="meta" id="meta">loading…</span>
+      <span class="spacer"></span>
+      <button id="charts-toggle" type="button">charts</button>
+    </header>
+    <div id="banner"></div>
+    <main>
+      <section id="needs"><h2>NEEDS YOU <span class="count"></span><span class="age"></span></h2><div class="body"></div></section>
+      <section id="now"><h2>NOW <span class="age"></span></h2><div class="body"></div></section>
+      <section id="next"><h2>NEXT</h2><div class="body"></div></section>
+      <section id="done"><h2>DONE TODAY <span class="age"></span></h2><div class="body"></div></section>
+      <section id="health"><h2>HEALTH</h2><div class="body"></div></section>
+      <section id="slipping"><h2>SLIPPING <span class="count"></span></h2><div class="body"></div></section>
+      <section id="charts" class="charts"><h2>LOAD <span class="age">container: last 24 h · Mac: since the server started</span></h2><div class="body"></div></section>
+      <section id="sources"><h2>SOURCES</h2><div class="body"></div></section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

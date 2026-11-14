@@ -100,7 +100,7 @@ function parseLimitsFile(text: string | null): Limits {
 
 type LockSlot = 'dev' | 'devb';
 type LockFile = {
-  holder?: { branch?: string; expiresAt?: string } | null;
+  holder?: { branch?: string; sha?: string; expiresAt?: string } | null;
   t?: string;
   failedAt?: string | null;
 };
@@ -276,6 +276,7 @@ export class Source {
     const expiresAt = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : null;
     const lock: Lock = {
       branch,
+      sha: typeof f.holder?.sha === 'string' && /^[0-9a-f]{40}$/.test(f.holder.sha) ? f.holder.sha : null,
       session: branch ? (sessions.find((s) => s.branch === branch)?.name ?? null) : null,
       expiresAt,
       asOf: f.t ? Date.parse(f.t) : null,
