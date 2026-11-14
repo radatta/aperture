@@ -337,12 +337,13 @@
       if (problems.size <= PROBLEMS_MAX) break;
       if (k === screenSlug) continue;
       problems.delete(k);
-      if (!binding || binding.slug !== k) questionIds.delete(k); // its id goes with it
       out = k;
     }
-    debug.log('doc.keep', { on: slug === screenSlug, n: problems.size, out });
+    const on = slug === screenSlug;
+    debug.log('doc.keep', { on, n: problems.size, out });
+    if (!on) return; // its id rides on the doc itself (startBody, the hint check), so it goes when the doc does
     if (questionId) learnQuestionId(slug, questionId);
-    if (slug === screenSlug && state.phase !== 'hidden') paint();
+    if (state.phase !== 'hidden') paint();
     maybeFill();
   }
   // The doc LeetCode rendered into a fresh load's __NEXT_DATA__ (README → step 8), kept only when it names
@@ -376,9 +377,10 @@
   }
   const docFor = (slug) => problems.get(slug) || pageDocs.get(slug) || null;
   // A1 fills in a sitting's problem doc on a repeat Start: one that came after the Start went (LeetCode
-  // fetches it only after a submit or a nav; the page's own may be read after Start) goes once the sitting is
-  // active — when the doc arrives, or when the phase gets there. The phase's try is once per sitting per page
-  // load, as a resume is: a page flipping its path must not turn each return into a Start call.
+  // fetches it after a submit, and for Next from the old page before the click; the page's own may be read
+  // after Start) goes once the sitting is active — when the doc arrives, or when the phase gets there. The
+  // phase's try is once per sitting per page load, as a resume is: a page flipping its path must not turn each
+  // return into a Start call.
   const filledOnActive = new Set();
   function maybeFill(onActive = false) {
     if (!binding || binding.slug !== screenSlug || binding.problemSent) return;

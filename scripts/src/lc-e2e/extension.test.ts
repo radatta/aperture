@@ -273,7 +273,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     try {
       await blob.addInitScript!('window.__fakeOpts = { blobGql: true }');
       await blob.goto('https://leetcode.com/problems/two-sum/description/');
-      // The page's own read, through FileReader, after ours: whole and parsed.
+      // The page's own read, through FileReader (in its load handler, before our loadend): whole and parsed.
       expect(
         await blob.evaluate<string>(
           'window.__fake.fetchDoc().then((r) => r.data.question.titleSlug)',

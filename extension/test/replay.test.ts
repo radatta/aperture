@@ -466,6 +466,41 @@ describe('inject-main over blob XHRs', () => {
     }
   });
 
+  it('pairs nothing with a send the browser refused', async () => {
+    for (const xhrType of ['blob', '']) {
+      const how = xhrType ? 'xhr:blob-ok' : 'xhr:ok';
+      // A second send while the first is in flight: the browser throws, and the first keeps its own body.
+      const m = loadMain([T.questionDetail] as Pair[], undefined, { xhrType });
+      const x = m.xhr(T.questionDetail as Pair);
+      expect(() => x.send(T.submissionDetails.reqText)).toThrow(/invalid state/);
+      await until(() => m.raws.length >= 1);
+      await settle();
+      expect(pairs(m), xhrType || 'text').toEqual([
+        [T.questionDetail.reqText, T.questionDetail.resText, how],
+      ]);
+      dom!.window.close();
+    }
+  });
+
+  it('pairs nothing with a request re-opened in flight', async () => {
+    for (const xhrType of ['blob', '']) {
+      const how = xhrType ? 'xhr:blob-ok' : 'xhr:ok';
+      // Re-opened and sent again before the first answered: the first is dropped (no events), and the second
+      // goes once, with its own request.
+      const n = loadMain([T.submissionDetails] as Pair[], undefined, { xhrType });
+      const y = n.xhr(T.questionDetail as Pair);
+      y.open('POST', T.submissionDetails.url);
+      if (xhrType) y.responseType = xhrType as XMLHttpRequestResponseType;
+      y.send(T.submissionDetails.reqText);
+      await until(() => n.raws.length >= 1);
+      await settle();
+      expect(pairs(n), xhrType || 'text').toEqual([
+        [T.submissionDetails.reqText, T.submissionDetails.resText, how],
+      ]);
+      dom!.window.close();
+    }
+  });
+
   it('still captures the next response when the page sends the XHR again from its load handler', async () => {
     // load fires before loadend: by the first request's loadend, the second send's listener is already on.
     for (const xhrType of ['blob', '']) {

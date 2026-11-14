@@ -10,7 +10,7 @@
 // patched `then` could swap the value); the browser's own promise resolution can't be steered either —
 // `then` is pinned to undefined on what our promises settle with (Response, CryptoKey, ArrayBuffer — a blob's
 // text is a string, which settles with no `then` lookup); a Response counts only if the browser fetched it
-// from leetcode.com (its own type and final URL), an XHR's body only through its own `response` getter; and each
+// from leetcode.com (its own type and final URL), an XHR's body only through its own getters; and each
 // message is strings and numbers in null-prototype objects, so no page `toJSON` applies. What that can't
 // stop — a patch in place before we ran, or traffic a script makes or fakes for LeetCode itself, or one it
 // keeps from us (a listener ahead of ours) — is the accepted residual (README → How it works → The relay).

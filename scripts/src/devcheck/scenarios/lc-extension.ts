@@ -574,6 +574,28 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-xhr-send-refused',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A second send the browser refuses while one is in flight pairs nothing with it: the first request keeps its own body',
+      offDev: {
+        file: 'extension/test/replay.test.ts',
+        test: 'pairs nothing with a send the browser refused',
+        why: `${noStep}; the real page-world script runs in jsdom, the fake XHR refusing as browsers do`,
+      },
+    },
+    {
+      id: 'ext-xhr-reopen-in-flight',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'An XHR re-opened and sent again before its first request answered gives one message, with the second request',
+      offDev: {
+        file: 'extension/test/replay.test.ts',
+        test: 'pairs nothing with a request re-opened in flight',
+        why: `${noStep}; the real page-world script runs in jsdom, the XHR reused as a page could`,
+      },
+    },
+    {
       id: 'ext-xhr-resend-on-load',
       entry: 'extension',
       kind: 'edge',
@@ -592,6 +614,17 @@ export const lcExtension: Scenario = {
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'keeps the doc LeetCode fetched before Next, and the next problem’s Start carries it',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-doc-evicted-id',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Back on a problem whose doc was evicted (eight more since), in the same load, a Start still carries its question id',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'keeps a problem’s question id after its doc is evicted, for a Start back on it',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },

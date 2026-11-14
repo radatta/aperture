@@ -288,7 +288,7 @@ request of its own: the `POST` to our own backend.) That's the best ToS posture 
 this exists as an extension rather than a scheduled scraper.
 
 **The problem doc is LeetCode's own `questionDetail`, the DOM the fallback.** A fresh load carries it
-server-rendered in `__NEXT_DATA__`, and LeetCode fetches it only after a submit, and for the next problem from
+server-rendered in `__NEXT_DATA__`, and LeetCode fetches it after a submit, and for the next problem from
 the old page before the Next click (2026-11-08 capture; 2026-11-10 and 2026-11-13 debug logs; Safari over blob
 XHRs). So the extension keeps a fetched doc by its own slug, used only while the address names it, and reads
 the page's copy, for the problem the document was loaded for only, as names and text — never a question id —

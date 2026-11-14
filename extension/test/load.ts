@@ -87,15 +87,22 @@ export function fakeXHR(
       this.method = method;
       this.url = url;
       this.opened++;
+      this.sending = false;
       this.s = 0;
       this.text = '';
       this.blob = undefined;
     }
     setRequestHeader() {}
+    sending = false;
     send(body?: string | null) {
+      // As browsers do: once per open — never while one is in flight, nor again after it's done.
+      if (this.sending || !this.opened || this.s)
+        throw new w.DOMException('The object is in an invalid state.', 'InvalidStateError');
+      this.sending = true;
       const { url, opened } = this;
       setTimeout(() => {
         if (this.opened !== opened) return; // re-opened meanwhile: this request was dropped
+        this.sending = false;
         this.s = 200;
         this.text = answer(url, body ?? null, this.method);
         this.dispatchEvent(new w.Event('load'));

@@ -1210,6 +1210,25 @@ describe('the problem doc LeetCode fetches', () => {
     expect(entries(ext3, 'doc.keep').at(-1)).toMatchObject({ on: false, n: 8, out: 'other-1' });
   }, 30_000);
 
+  it('keeps a problem’s question id after its doc is evicted, for a Start back on it', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext); // its hint names question 1
+    await until(() => p.phase() === 'prompt' && p.text().includes('Two Sum'));
+    await docFetch(p, 'two-sum');
+    await logged(ext, 'doc.keep');
+    next(p);
+    await until(() => p.text().includes('Add Two Numbers'));
+    for (let i = 1; i <= 8; i++) await docFetch(p, `other-${i}`);
+    await until(() => entries(ext, 'doc.keep').some((e) => e.out === 'two-sum'));
+    p.w.history.pushState({}, '', '/problems/two-sum/'); // back, in the same load
+    await until(() => p.text().includes('Two Sum'));
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(lastStart(ext)).toMatchObject({ problemSlug: 'two-sum', questionId: '1' });
+  }, 30_000);
+
   it('with GraphQL over blob XHRs, a Next’d problem’s Start has its doc and a Submit its details', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
