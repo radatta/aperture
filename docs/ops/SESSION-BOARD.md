@@ -352,6 +352,9 @@ What it means:
   Δanon 4.8 / 4.2 vs 4.0 / 3.1 GiB. A pair at cap 4: 180 / 202 s, +6.0 GiB together, peak 13.7 GiB on a 7.5 GiB base
   (15 idle sessions); a 3rd suite printed `test cap full (2/2 …) — waiting` and ran when a slot freed. So the cap
   costs no wall time today; the pair-speed gain wasn't re-measured. At that base 3 suites ≈ 16.5 GiB — past hard.
+  After PR 161 cut `extension` to ~15 s: uncapped 126 s vs cap 4 113 s. The same evening, 3 other sessions' suites
+  (main's heavy.sh, cap 4, untuned) ran beside a capped one: anon 14.8 GiB (past hard), PSI `full` 0.40, and the Flux
+  exercise wait failed at 4.4 s against `asyncUtilTimeout`'s 3 s, the 2026-11-09 failure mode below, at 4 suites.
 
 - **Class costs** in `limits.json` are these maxima, rounded up, except `test` (the 2026-11-13 check: +320 pids and
   155 s, the maxima; 3200 MiB, the capped solo median and a pair's per-suite share — the 4.0 GiB max carried
