@@ -693,6 +693,36 @@ describe('heavy.sh test cap', () => {
     expect(events().find((e) => e.kind === 'job')).toMatchObject({ class: 'test', exit: 0 });
   }, 30000);
 
+  it('a wait killed before it ends is still recorded: gaveUp, interrupted, the real wait', async () => {
+    limits({ enforce: true });
+    testSlots(cap);
+    const c = spawn('bash', [join(boardDir, 'heavy.sh'), '--wait', '60', '--', 'true'], {
+      env: { ...env, HEAVY_CLASS: 'test', HEAVY_LABEL: 'gate' },
+      cwd: tmp,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let err = '';
+    c.stderr!.on('data', (d) => (err += d));
+    for (let i = 0; i < 200 && !/waiting up to/.test(err); i++)
+      await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 1100)); // a whole second of waiting
+    const exited = new Promise<number | null>((r) => c.on('exit', (code) => r(code)));
+    c.kill('SIGTERM');
+    expect(await exited).toBe(143);
+    expect(leases()).toEqual([
+      expect.objectContaining({
+        action: 'gaveUp',
+        reason: 'cap',
+        class: 'test',
+        label: 'gate',
+        interrupted: true,
+      }),
+    ]);
+    expect(leases()[0].waitedSec).toBeGreaterThanOrEqual(1);
+    expect(leases()[0].waitedSec).toBeLessThan(60);
+    expect(slotFiles()).toHaveLength(cap);
+  }, 30000);
+
   it('below the cap nothing changes: no wait, no barrier', () => {
     limits({ enforce: true });
     testSlots(cap - 1);

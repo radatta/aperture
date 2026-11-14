@@ -106,8 +106,9 @@ guarded jobs and `edge.sh`'s instances) are left out, as they are from `stalenes
 
 **Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
 envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard"|"lock", cap: {max, running,
-full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?}`.
-`action`: `waited` (ran after the wait; `waitedSec` real), `gaveUp` (exit 75; `waitedSec` = the budget),
+full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?, interrupted?}`.
+`action`: `waited` (ran after the wait; `waitedSec` real), `gaveUp` (exit 75; `waitedSec` = the budget; or, with
+`interrupted: true` and the real `waitedSec`, a wait killed by INT, TERM or HUP, exit 128 + the signal; a KILL leaves none),
 `denied` (the PreToolUse guard refused a raw command; `label: "guard"`), `wouldWait` (enforce off — the
 counterfactual). `holders` and `cap` are the ones at the first block, the cause. `cli.ts barriers` (and the
 report's _Barriers_ section) counts **blocks** = waited + gaveUp + denied, except that a deny followed within
@@ -205,7 +206,7 @@ job class's cost (`pids`, `anonMiB`, `p95Sec`, `source`) — shipped as the 2026
 `measuredLimits`; on 2026-10-29 (the user's call) `enforce: true` shipped with `"concurrency": { "test": 4 }` — a policy
 key, top-level like `tuning`, so a quiet window rewriting `classes` never loses it. The value is the CPU edge:
 a 6th concurrent suite timed out (_Results_). On 2026-11-13 the cap became 2, with `tuning.test`
-`{ maxWorkers: 4 }`, and `classes.test` was re-measured at that cap (the 2026-11-13 check in _Results_); the other classes and
+`{ maxWorkers: 4 }`, and `classes.test` was re-measured at that cap and `classes.ui` against a local check (the 2026-11-13 check in _Results_); the other classes and
 `measuredAt` still date from 2026-10-13. Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
 
@@ -358,7 +359,12 @@ What it means:
 
 - **Class costs** in `limits.json` are these maxima, rounded up, except `test` (the 2026-11-13 check: +320 pids and
   155 s, the maxima; 3200 MiB, the capped solo median and a pair's per-suite share — the 4.0 GiB max carried
-  neighbours' noise, and as a cost it would hold the 2nd suite at a 7.5 GiB base, a cap of 1 in practice); `build`
+  neighbours' noise, and as a cost it would hold the 2nd suite at a 7.5 GiB base, a cap of 1 in practice) and `ui`
+  (since 2026-11-13: one solo `devcheck:local --tier full` with no other heavy job, +276 pids, +2664 MiB anon,
+  301 s, 3497 MiB subtree RSS, rounded up to 280 / 2700 / 305; was 160 / 700 / 7, the 2026-10-13 dev server +
+  Chromium cell, but `ui` jobs are mostly dev checks now; `staleness` still warns, since the class's 14-day p95 (406
+  runs) is +4859 MiB / +469 pids: it mixes `shot.mjs` (~0.5–0.7 GiB), remote `pnpm devcheck` (~0.5–1.5 GiB) and
+  local checks (2.4–6.9 GiB, partly neighbours' noise; a `--feature` local check is unmeasured solo)); `build`
   wasn't measured.
 
 ## Control tower

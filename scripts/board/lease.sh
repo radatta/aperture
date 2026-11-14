@@ -92,7 +92,8 @@ _heavy_event() {
      branch: (if $branch == "" then null else $branch end), class: $c, label: $l, cmd: $cmd,
      reason: (if .verdict == "cap-full" then "cap" elif .verdict == "lock-busy" then "lock" else "hard" end),
      cap, holders: (.holders // []),
-     predicted, thresholds, mix: $mix, loadTest: $lt} + (if $w == "" then {} else {waitedSec: ($w | tonumber)} end)' <<<"$dec")"
+     predicted, thresholds, mix: $mix, loadTest: $lt} + (if $w == "" then {} else {waitedSec: ($w | tonumber)} end)
+     + (if .interrupted then {interrupted: true} else {} end)' <<<"$dec")"
 }
 
 # heavy.sh's entry: slot owner class label cmd wrapperPid wrapperStart [waitSec]. Waits only with enforce:true,
@@ -100,17 +101,34 @@ _heavy_event() {
 # inside the Bash tool's 120 s timeout, so the message reaches Claude (--wait N for longer). Every hold is a
 # barrier event (waited / gaveUp; wouldWait when enforce is off).
 lease_heavy_acquire() {
+  local rc
+  _heavy_acquire "$@"; rc=$?
+  trap - INT TERM HUP
+  return "$rc"
+}
+
+# A held wait killed before it ends (Ctrl-C, a Bash-tool timeout) is still a block: gaveUp, interrupted, the real wait.
+_heavy_interrupted() {
+  trap - INT TERM HUP
+  _heavy_event gaveUp "$(jq -c '. + {interrupted: true}' <<<"$1")" "$2" "$3" "$4" "$5" "$(( $(sb_epoch) - $6 ))"
+  exit "$7"
+}
+
+_heavy_acquire() {
   local slot="$1" owner="$2" class="$3" label="$4" cmd="$5" wp="$6" ws="$7" wait="${8:-90}" t0 dec rc v first=
   t0=$(sb_epoch)
   while :; do
     dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws" 2>/dev/null); rc=$?
+    # The wait is over unless still held (3) or retrying a busy lock: disarm now, so a late signal can't add a
+    # second event for this hold (or a gaveUp for a granted run). A signal from here dies as it did before.
+    case "$rc" in 3) ;; 75) [ $(( $(sb_epoch) - t0 )) -lt "$wait" ] || trap - INT TERM HUP ;; *) trap - INT TERM HUP ;; esac
     if [ "$rc" = 75 ]; then
       # The board lock was busy for 5 s — likeliest at a full cap, with every waiter polling. Nudge-only
       # (enforce off): never wait on board plumbing. Enforcing: retry until our deadline rather than run unslotted
       # (invisible to everyone else's count). A run that was already held gives up as usual; one that never got
       # a decision fails open, logged as lockBusy.
       [ "${ENFORCE:-false}" = true ] || return 0
-      if [ $(( $(sb_epoch) - t0 )) -lt "$wait" ]; then sleep 2; continue; fi
+      if [ $(( $(sb_epoch) - t0 )) -lt "$wait" ]; then sleep 2 & wait $!; continue; fi
       [ -n "$first" ] && { _heavy_give_up "$first" "$owner" "$class" "$label" "$cmd" "$wait"; return 75; }
       _heavy_event lockBusy '{"verdict":"lock-busy"}' "$owner" "$class" "$label" "$cmd" "$(( $(sb_epoch) - t0 ))"
       echo "heavy: the board lock stayed busy for ${wait}s — running without a slot (logged)" >&2
@@ -132,6 +150,9 @@ lease_heavy_acquire() {
     [ "$rc" = 3 ] || return 0  # other lock trouble: fail open, never block work on board plumbing
     if [ -z "$first" ]; then
       first=$dec
+      trap '_heavy_interrupted "$first" "$owner" "$class" "$label" "$cmd" "$t0" 130' INT
+      trap '_heavy_interrupted "$first" "$owner" "$class" "$label" "$cmd" "$t0" 143' TERM
+      trap '_heavy_interrupted "$first" "$owner" "$class" "$label" "$cmd" "$t0" 129' HUP
       if [ "$v" = cap-full ]; then
         echo "heavy: $class cap full ($(jq -r '"\(.cap.running)/\(.cap.max)"' <<<"$dec"): $(_heavy_holders "$class")) — waiting up to ${wait}s" \
           "for a slot (board.sh status shows who; a slot freed late still runs inside this call — give a full suite a 600 s" \
@@ -141,10 +162,11 @@ lease_heavy_acquire() {
       fi
     fi
     if [ $(( $(sb_epoch) - t0 )) -ge "$wait" ]; then
+      trap - INT TERM HUP
       _heavy_give_up "$first" "$owner" "$class" "$label" "$cmd" "$wait"
       return 75
     fi
-    sleep 2
+    sleep 2 & wait $!  # interruptible: a signal runs the trap at once, not after the sleep
   done
 }
 
