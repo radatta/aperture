@@ -200,7 +200,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
 
   // The per-person to-dos were renamed to `maintainer`: a file still on the old key (the maintainer's name, which
   // the identifier rules know without this file spelling it) would drop them from NEEDS YOU without a word. Any
-  // other extra key — the hub's own `mergeOrder` among them — passes.
+  // other extra key passes.
   for (const k of Object.keys(raw))
     if (!QUEUE_KEYS.includes(k) && findIdentifiers(k).some((h) => h.kind === 'name'))
       problems.push(
@@ -316,7 +316,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   if (raw.mergeOrder !== undefined && !Array.isArray(raw.mergeOrder))
     problems.push('mergeOrder is not an array');
   arr(raw.mergeOrder).forEach((x, i) => {
-    const o = x as Record<string, unknown>;
+    const o = (typeof x === 'string' ? { branch: x } : x) as Record<string, unknown>; // a bare branch name is fine too
     const branch = str(o?.branch);
     if (!branch) return void problems.push(`mergeOrder[${i}]: no branch`);
     if (mergeOrder.some((e) => e.branch === branch))

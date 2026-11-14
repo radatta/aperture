@@ -470,7 +470,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
 }
 ```
 
-`mergeOrder` is the hub's landing order for the lanes in flight, first to land first; the web tower's NEXT shows
+`mergeOrder` is the hub's landing order for the lanes in flight, first to land first (an entry may be a bare branch name); the web tower's NEXT shows
 it (TOWER.md → _Panels_). Entries with no `branch`, a duplicate branch, or a field that isn't an array are named as
 problems; the tower drops the bad entries and holds nothing on them. A bare-date `since` (`2026-11-13`, in
 `maintainer[]` and `followups[]`) means some time that local day and is read as its end, so an age is never overstated.

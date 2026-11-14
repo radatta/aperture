@@ -103,9 +103,11 @@ describe('parseQueue', () => {
         updatedAt: '2026-11-08T06:00:00Z',
         [old]: ['merge PR 41'],
         mergeOrder: ['a'],
+        notes: ['an unknown list'],
       }),
     );
     expect(q.data!.maintainer).toEqual([]);
+    expect(q.data!.mergeOrder).toEqual([{ branch: 'a', pr: null, note: null }]); // a bare branch name
     expect(q.problems).toEqual([
       'the to-dos sit under an old key — rename it to "maintainer" (docs/ops/TOWER.md)',
     ]);
