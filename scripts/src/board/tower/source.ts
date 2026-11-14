@@ -100,9 +100,10 @@ function parseLimitsFile(text: string | null): Limits {
 
 type LockSlot = 'dev' | 'devb';
 type LockFile = {
-  holder?: { branch?: string; expiresAt?: string } | null;
+  holder?: { branch?: string; sha?: string; expiresAt?: string } | null;
   t?: string;
   failedAt?: string | null;
+  unreadable?: boolean;
 };
 
 export class Source {
@@ -143,7 +144,7 @@ export class Source {
         try {
           return t === null ? null : (JSON.parse(t) as LockFile);
         } catch {
-          return null;
+          return { unreadable: true }; // present but not JSON: not the same as no cache
         }
       });
     // one cache per dev slot, both written by devlock.sh / the bot (docs/ops/SESSION-BOARD.md → Dev lock line)
@@ -273,13 +274,23 @@ export class Source {
     const f = this.lockFiles[slot].get();
     if (!f) return null;
     const branch = typeof f.holder?.branch === 'string' ? clean(f.holder.branch) : null;
-    const expiresAt = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : null;
+    const exp = f.holder?.expiresAt ? Date.parse(f.holder.expiresAt) : NaN;
+    const expiresAt = Number.isNaN(exp) ? null : exp; // unreadable → null: the web tower calls that lock unknown
     const lock: Lock = {
       branch,
+      sha:
+        typeof f.holder?.sha === 'string' && /^[0-9a-f]{40}$/.test(f.holder.sha)
+          ? f.holder.sha
+          : null,
       session: branch ? (sessions.find((s) => s.branch === branch)?.name ?? null) : null,
       expiresAt,
-      asOf: f.t ? Date.parse(f.t) : null,
+      asOf: f.t && Number.isFinite(Date.parse(f.t)) ? Date.parse(f.t) : null, // garbled → unknown, never fresh
       failed: !!f.failedAt,
+      bad: f.unreadable
+        ? 'lock cache unreadable'
+        : f.holder && !branch
+          ? 'holder unreadable'
+          : null,
     };
     // The feed's lock lines: transitions seen by this tower, in memory only (a viewer writes no history).
     // Slot A's lines keep their `lock:` text; slot B's say `lock devb:`.

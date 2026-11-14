@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseQueue, planAt, queueAgeTone } from './queue.ts';
+import { parseQueue, planAt, queueAgeTone, staleFollowups } from './queue.ts';
 
 const example = readFileSync(
   join(import.meta.dirname, '../../../board/queue.example.json'),
@@ -82,7 +82,7 @@ describe('parseQueue', () => {
     const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","extra":true}');
     expect(q).toMatchObject({
       status: 'ok',
-      data: { devQueue: [], rahul: [], wave: null, deadRows: null, plan: [] },
+      data: { devQueue: [], rahul: [], wave: null, deadRows: null, plan: [], followups: [] },
     });
   });
 
@@ -196,5 +196,88 @@ describe('parseQueue', () => {
 
   it('turns amber past 30 min and red past 2 h', () => {
     expect([60, 1801, 7201].map(queueAgeTone)).toEqual(['dim', 'warn', 'bad']);
+  });
+});
+
+describe('hold and followups (the web tower)', () => {
+  const q = (extra: object) =>
+    parseQueue(JSON.stringify({ v: 1, updatedAt: '2026-11-13T20:00:00Z', ...extra }));
+  it("reads a lane's hold reason", () => {
+    const r = q({
+      devQueue: [
+        { branch: 'a', state: 'ready', hold: 'after the Safari pass' },
+        { branch: 'b', state: 'ready' },
+      ],
+    });
+    expect(r.data!.devQueue.map((l) => l.hold)).toEqual(['after the Safari pass', null]);
+  });
+  it("reads followups with pq-check's rules and says what is wrong", () => {
+    const f = (o: object) => ({
+      id: 'F1',
+      what: 'w',
+      owner: 'lane',
+      after: 'now',
+      status: 'open',
+      source: 's',
+      since: '2026-11-10',
+      ...o,
+    });
+    const r = q({
+      followups: [
+        f({}),
+        f({ id: 'F2', status: 'maybe' }),
+        f({ id: 'F3', owner: 'bob' }),
+        f({}),
+        f({ id: 'F5', since: 'soon' }),
+        { id: 'F6' },
+      ],
+    });
+    expect(r.data!.followups.map((x) => x.id)).toEqual(['F1', 'F1', 'F5']);
+    expect(r.problems).toEqual([
+      'followups[1]: status "maybe"',
+      'followups[2]: owner "bob"',
+      'followups[3]: duplicate id F1',
+      'followups[4]: since is not a date',
+      'followups[5]: no id, what or after',
+    ]);
+    expect(r.status).toBe('bad');
+  });
+  it('STALE: open, due now, older than 24 h; one definition for the tower and pq-check', () => {
+    const now = Date.parse('2026-11-13T20:00:00Z');
+    const base = { what: 'w', owner: 'lane', source: null };
+    const fu = [
+      { ...base, id: 'old', after: 'now', status: 'open', since: now - 24 * 3600e3 - 1 },
+      { ...base, id: 'young', after: 'now', status: 'open', since: now - 24 * 3600e3 + 1 },
+      { ...base, id: 'later', after: 'wave 4', status: 'open', since: 0 },
+      { ...base, id: 'tracked', after: 'now', status: 'tracked', since: 0 },
+      { ...base, id: 'undated', after: 'now', status: 'open', since: null },
+    ];
+    expect(staleFollowups(fu, now).map((f) => f.id)).toEqual(['old']);
+  });
+});
+
+describe('unread devQueue lanes (round 4)', () => {
+  const base = { v: 1, updatedAt: '2026-11-08T05:00:00Z' };
+  it('a lane with an unknown state or slot is named in unread; one with no branch makes it all', () => {
+    const q = parseQueue(
+      JSON.stringify({
+        ...base,
+        devQueue: [
+          { branch: 'a', state: 'building' },
+          { branch: 'b', state: 'brand-new' },
+          { branch: 'c', state: 'next', slot: 'devz' },
+        ],
+      }),
+    );
+    expect(q.unread).toEqual(['b', 'c']);
+    expect(q.data!.devQueue.map((l) => l.branch)).toEqual(['a']);
+    expect(parseQueue(JSON.stringify({ ...base, devQueue: [{ state: 'next' }] })).unread).toBe(
+      'all',
+    );
+    expect(parseQueue(JSON.stringify({ ...base, devQueue: {} })).unread).toBe('all');
+  });
+  it('an unreadable file is all unread, its last good data kept; a clean file has no unread', () => {
+    expect(parseQueue('{nope').unread).toBe('all');
+    expect(parseQueue(JSON.stringify({ ...base, devQueue: [] })).unread).toBeUndefined();
   });
 });

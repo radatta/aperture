@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>tower</title>
+    <style>
+      /* Read at a glance from arm's length (Rahul, 2026-11-13): big type, one line per item, details on click.
+         Nord, like his tmux bar. Colour means a state, always beside its word: frost = live on dev, green =
+         ready / done, yellow = needs you / held, red = failed, purple = PR in flight, orange = deploying. */
+      :root {
+        --bg: #eceff4;
+        --panel: #ffffff;
+        --ink: #2e3440;
+        --ink2: #4c566a;
+        --line: #d8dee9;
+        --dev: #3b7e94;
+        --build: #5e81ac;
+        --good: #3f7a2e;
+        --hold: #9a6b00;
+        --bad: #b23a46;
+        --pr: #8a5a86;
+        --deploy: #b5582d;
+        --dim: #7b8394;
+        --tint: 13%;
+        --series: #5e81ac;
+        --mark: #c3cad6;
+        --shadow: 0 1px 2px rgba(46, 52, 64, 0.08), 0 4px 14px rgba(46, 52, 64, 0.06);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #242933;
+          --panel: #2e3440;
+          --ink: #eceff4;
+          --ink2: #a8b1c2;
+          --line: #3b4252;
+          --dev: #88c0d0;
+          --build: #81a1c1;
+          --good: #a3be8c;
+          --hold: #ebcb8b;
+          --bad: #e07d87;
+          --pr: #c7a1c1;
+          --deploy: #e0976f;
+          --dim: #8790a3;
+          --tint: 16%;
+          --series: #88c0d0;
+          --mark: #4c566a;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.18);
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          17px/1.35 -apple-system,
+          BlinkMacSystemFont,
+          'Helvetica Neue',
+          sans-serif;
+      }
+      button {
+        font: inherit;
+        font-size: 14px;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 12px;
+        cursor: pointer;
+      }
+      a {
+        color: var(--build);
+      }
+
+      header {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 18px 10px;
+      }
+      header h1 {
+        font-size: 21px;
+        margin: 0;
+        letter-spacing: 0.02em;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      header .meta {
+        color: var(--ink2);
+        font-size: 14px;
+      }
+      header .spacer {
+        flex: 1;
+      }
+      #banner {
+        display: none;
+        padding: 10px 18px;
+        background: color-mix(in srgb, var(--bad) 18%, var(--panel));
+        color: var(--bad);
+        font-weight: 600;
+      }
+
+      /* the colour of a state: --c drives text, tint and bar */
+      .c-dev {
+        --c: var(--dev);
+      }
+      .c-build {
+        --c: var(--build);
+      }
+      .c-good {
+        --c: var(--good);
+      }
+      .c-hold {
+        --c: var(--hold);
+      }
+      .c-bad {
+        --c: var(--bad);
+      }
+      .c-pr {
+        --c: var(--pr);
+      }
+      .c-deploy {
+        --c: var(--deploy);
+      }
+      .c-dim {
+        --c: var(--dim);
+      }
+
+      /* the live dot: pulses on work in flight (still under prefers-reduced-motion) */
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--c, var(--good));
+        display: inline-block;
+        flex: none;
+        align-self: center;
+      }
+      .dot.live {
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 color-mix(in srgb, var(--c, var(--good)) 55%, transparent);
+        }
+        50% {
+          box-shadow: 0 0 0 6px color-mix(in srgb, var(--c, var(--good)) 0%, transparent);
+        }
+      }
+
+      /* the health strip: hero numbers, always above the fold */
+      #health {
+        display: grid;
+        grid-template-columns: 0.8fr 1fr 1fr 1fr 0.9fr;
+        gap: 10px;
+        padding: 0 18px 12px;
+      }
+      @media (max-width: 1000px) {
+        #health {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        #health .tile:first-child {
+          grid-column: 1 / -1;
+        }
+      }
+      .tile {
+        position: relative;
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 9px 13px 8px;
+        cursor: pointer;
+        min-width: 0;
+        box-shadow: var(--shadow);
+        border-top: 3px solid var(--c, var(--line));
+        overflow: hidden;
+      }
+      .tile .label {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        color: var(--ink2);
+      }
+      .tile .value {
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-variant-numeric: tabular-nums;
+      }
+      .tile .value small {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--ink2);
+      }
+      .tile .sub {
+        font-size: 14px;
+        color: var(--ink2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tile.c-hold .sub,
+      .tile.c-bad .sub {
+        color: var(--c);
+      }
+      .tile .more {
+        display: none;
+        margin-top: 6px;
+        font-size: 14px;
+      }
+      .tile.open .more {
+        display: block;
+      }
+      .tile svg.spark {
+        position: absolute;
+        right: 10px;
+        top: 12px;
+        width: 42%;
+        height: 38px;
+        opacity: 0.9;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 3px;
+        background: var(--line);
+        margin: 4px 0 3px;
+        overflow: hidden;
+      }
+      .bar > span {
+        display: block;
+        height: 100%;
+        background: var(--c);
+        border-radius: 3px;
+      }
+      .tile.cheer {
+        animation: cheer 2.4s ease-out;
+      }
+      @keyframes cheer {
+        0% {
+          box-shadow:
+            0 0 0 0 color-mix(in srgb, var(--good) 70%, transparent),
+            var(--shadow);
+          transform: translateY(-2px);
+        }
+        100% {
+          box-shadow:
+            0 0 0 18px transparent,
+            var(--shadow);
+          transform: none;
+        }
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 12px;
+        padding: 0 18px 18px;
+      }
+      @media (min-width: 1000px) {
+        main {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+        .wide {
+          grid-column: 1 / -1;
+        }
+      }
+      section {
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 10px 14px;
+        min-width: 0;
+        box-shadow: var(--shadow);
+      }
+      section h2 {
+        font-size: 13px;
+        letter-spacing: 0.09em;
+        margin: 0 0 6px;
+        color: var(--ink2);
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+      }
+      section h2 .count {
+        color: var(--ink);
+      }
+      section h2 .age {
+        font-weight: 400;
+        letter-spacing: 0;
+        margin-left: auto;
+        font-size: 13px;
+      }
+      #needs.has {
+        box-shadow:
+          inset 0 0 0 2px var(--hold),
+          var(--shadow);
+      }
+      #needs.has h2 {
+        color: var(--hold);
+      }
+
+      .item {
+        border-radius: 8px;
+      }
+      .item.flash {
+        animation: flash 1.8s ease-out;
+      }
+      @keyframes flash {
+        from {
+          background: color-mix(in srgb, var(--c, var(--build)) 30%, transparent);
+        }
+        to {
+          background: transparent;
+        }
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        padding: 6px 6px 6px 10px;
+        border-left: 3px solid var(--c, transparent);
+        cursor: pointer;
+        min-width: 0;
+        border-radius: 6px;
+      }
+      .row:hover {
+        background: color-mix(in srgb, var(--c, var(--build)) 7%, transparent);
+      }
+      .row .text {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .row .meta {
+        color: var(--ink2);
+        font-size: 14px;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .row .who {
+        color: var(--ink2);
+        font-size: 15px;
+      }
+      .more {
+        display: none;
+        padding: 2px 6px 8px 13px;
+        font-size: 15px;
+        color: var(--ink2);
+        overflow-wrap: anywhere;
+      }
+      .item.open .row .text {
+        white-space: normal;
+      }
+      .item.open .more {
+        display: block;
+      }
+      .more code {
+        display: block;
+        font:
+          13px ui-monospace,
+          Menlo,
+          monospace;
+        background: var(--bg);
+        border-radius: 6px;
+        padding: 6px 8px;
+        margin: 6px 0;
+        white-space: pre-wrap;
+        color: var(--ink);
+      }
+      .badge {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        border-radius: 999px;
+        white-space: nowrap;
+        color: var(--c, var(--dim));
+        background: color-mix(in srgb, var(--c, var(--dim)) var(--tint), transparent);
+      }
+      .t-good {
+        color: var(--good);
+      }
+      .t-warn {
+        color: var(--hold);
+      }
+      .t-bad {
+        color: var(--bad);
+      }
+      .t-dim {
+        color: var(--ink2);
+      }
+      .empty {
+        color: var(--ink2);
+        padding: 4px 0 4px 13px;
+      }
+      .cant {
+        color: var(--bad);
+        padding: 4px 0 4px 13px;
+      }
+      .showall {
+        margin: 4px 0 0 10px;
+      }
+
+      /* the phase track: plan › build › gate › review › local › dev › pr › merged, the current step lit */
+      .track {
+        display: inline-flex;
+        gap: 3px;
+        align-self: center;
+        flex: none;
+      }
+      .track i {
+        width: 13px;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--line);
+      }
+      .track i.done {
+        background: color-mix(in srgb, var(--c, var(--build)) 45%, var(--line));
+      }
+      .track i.now {
+        background: var(--c, var(--build));
+      }
+      @media (max-width: 700px) {
+        .track {
+          display: none;
+        }
+      }
+
+      .slots {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .slot {
+        border-radius: 10px;
+        padding: 7px 11px;
+        min-width: 0;
+        background: color-mix(in srgb, var(--c, var(--dim)) 9%, var(--panel));
+        border: 1px solid color-mix(in srgb, var(--c, var(--dim)) 30%, transparent);
+      }
+      .slot .name {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        color: var(--c);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .slot .who {
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .slot .what {
+        font-size: 14px;
+        color: var(--ink2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #slipping h2,
+      #sources h2 {
+        cursor: pointer;
+        margin: 0;
+      }
+      #slipping .body,
+      #sources .body {
+        display: none;
+        margin-top: 6px;
+      }
+      #slipping.open .body,
+      #sources.open .body {
+        display: block;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 2px 10px;
+      }
+      .kv .k {
+        color: var(--ink2);
+      }
+
+      #charts {
+        display: none;
+      }
+      #charts.on {
+        display: block;
+      }
+      .chart {
+        position: relative;
+        margin: 6px 0 12px;
+      }
+      .chart canvas {
+        width: 100%;
+        height: 120px;
+        display: block;
+      }
+      .chart .tip {
+        position: absolute;
+        top: 0;
+        pointer-events: none;
+        font-size: 13px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 2px 6px;
+        display: none;
+        white-space: nowrap;
+      }
+      .chart .title {
+        font-size: 14px;
+        color: var(--ink2);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .dot.live,
+        .item.flash,
+        .tile.cheer {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1><span class="dot c-dim" id="live-dot"></span>tower</h1>
+      <span class="meta" id="meta">loading…</span>
+      <span class="spacer"></span>
+      <button id="sources-chip" type="button">sources</button>
+      <button id="charts-toggle" type="button">charts</button>
+    </header>
+    <div id="banner"></div>
+    <div id="health"></div>
+    <main>
+      <section id="needs">
+        <h2>NEEDS YOU <span class="count"></span><span class="age"></span></h2>
+        <div class="body"></div>
+      </section>
+      <section id="now">
+        <h2>NOW <span class="age"></span></h2>
+        <div class="body"></div>
+      </section>
+      <section id="next">
+        <h2>NEXT</h2>
+        <div class="body"></div>
+      </section>
+      <section id="done">
+        <h2>DONE TODAY <span class="age"></span></h2>
+        <div class="body"></div>
+      </section>
+      <section id="slipping" class="wide">
+        <h2>SLIPPING <span class="count"></span><span class="age">click to show</span></h2>
+        <div class="body"></div>
+      </section>
+      <section id="charts" class="wide">
+        <h2>LOAD <span class="age">container: last 24 h · Mac: since the server started</span></h2>
+        <div class="body"></div>
+      </section>
+      <section id="sources" class="wide">
+        <h2>SOURCES <span class="count"></span><span class="age">click to show</span></h2>
+        <div class="body"></div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

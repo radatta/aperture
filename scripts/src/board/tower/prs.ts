@@ -10,7 +10,13 @@ export type Pr = {
   state: string;
   mergedAt: number | null;
   createdAt: number | null;
+  sha: string | null; // headRefOid
+  mergeSha: string | null; // mergeCommit.oid
+  url: string | null;
+  draft: boolean;
 };
+
+const oid = (x: unknown) => (typeof x === 'string' && /^[0-9a-f]{40}$/.test(x) ? x : null);
 
 export function parsePrs(text: string): Pr[] {
   const raw = JSON.parse(text) as unknown;
@@ -25,6 +31,11 @@ export function parsePrs(text: string): Pr[] {
       state: typeof x.state === 'string' ? x.state : '',
       mergedAt: parseTime(x.mergedAt),
       createdAt: parseTime(x.createdAt),
+      sha: oid(x.headRefOid),
+      mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
+      url:
+        typeof x.url === 'string' && x.url.startsWith('https://github.com/') ? clean(x.url) : null,
+      draft: x.isDraft === true,
     }));
 }
 
@@ -36,7 +47,7 @@ export const GH_ARGS = [
   '--limit',
   '40',
   '--json',
-  'number,title,headRefName,state,mergedAt,createdAt',
+  'number,title,headRefName,state,mergedAt,createdAt,headRefOid,mergeCommit,url,isDraft',
 ];
 
 export type Fetch = () => Promise<string>;

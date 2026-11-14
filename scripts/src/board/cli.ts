@@ -4,6 +4,7 @@
 //   node scripts/src/board/cli.ts overlap <repo> <boardDir>                              → writes <boardDir>/overlap.json
 //   node scripts/src/board/cli.ts report <historyDir> [days] [--json]                     → usage by mix + job peaks
 //   node scripts/src/board/cli.ts barriers <historyDir> [days] [--json]                   → how limiting the cap is
+//   pnpm board lane <phase> [--step …] [--needs … --link|--cmd …] | --clear               → this lane's status file
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
@@ -21,6 +22,8 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
+import { boardDir } from '../bot/lock-cache.ts';
+import { LANE_USAGE, parseLaneArgs, writeLane } from './tower/lanes.ts';
 
 const cgroup = process.env.APERTURE_CGROUP_DIR ?? '/sys/fs/cgroup';
 
@@ -136,9 +139,32 @@ export function main(argv: string[], stdin: () => string): string {
       const b = barriers(readJsonl(historyDir, 'events-'), since, now);
       return rest.includes('--json') ? JSON.stringify(b) : formatBarriers(b);
     }
+    case 'lane': {
+      // docs/ops/TOWER.md → Lane files: the branch and sha come from git, never from an argument
+      if (rest.includes('--help') || rest.length === 0) return LANE_USAGE;
+      let a;
+      try {
+        a = parseLaneArgs(rest);
+      } catch (e) {
+        throw new Error(`${(e as Error).message}\n${LANE_USAGE}`, { cause: e });
+      }
+      const here = process.env.INIT_CWD ?? process.cwd(); // pnpm runs scripts from the root; INIT_CWD is where it was typed
+      const branch = git(here, 'branch', '--show-current').trim();
+      if (!branch) throw new Error('not on a branch (a lane file is per feature branch)');
+      const dir = boardDir((c, args) =>
+        execFileSync(c, args, { cwd: here, encoding: 'utf8' }).trim(),
+      );
+      if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+      return writeLane(dir, a, {
+        branch,
+        sha: git(here, 'rev-parse', 'HEAD').trim() || null,
+        session: sessionNames(dir)[branch] ?? null,
+        now,
+      });
+    }
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | lane (got ${cmd ?? 'nothing'})`,
       );
   }
 }

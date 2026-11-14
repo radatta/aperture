@@ -7,6 +7,9 @@ import type { TowerState } from './model.ts';
 import { HISTORY_H, layout } from './layout.ts';
 import { compose, feedItems, nextMerge, since, waveItems, wants, type Ui } from './panels.ts';
 
+// the gh fields only the web tower reads (prs.ts)
+const NO_GH = { sha: null, mergeSha: null, url: null, draft: false };
+
 const NOW = '2026-11-08T06:10:00Z';
 // glyphs width() would mis-measure: controls, CJK, emoji (the fixtures carry all three)
 const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\u{1f000}-\u{1faff}]/u;
@@ -117,7 +120,7 @@ describe('panels', () => {
     expect(f).toMatch(/bench +2 runs · 1 red · 22:05 waiting/);
     expect(f).toMatch(/suites 24h 10 · 3 failed/);
     expect(f).toMatch(/heavy now +test \(alpha\)/);
-    expect(f).toMatch(/gh +0s ago · 1 open/);
+    expect(f).toMatch(/gh +0s ago · 2 open/); // PRs 41 and 42 (fixtures/prs.json; 42 is the web tower's checks-running case)
   });
 
   it('the feed is newest first and keeps only what changed', () => {
@@ -208,6 +211,7 @@ describe('panels', () => {
       state: 'MERGED',
       mergedAt: 1,
       createdAt: null,
+      ...NO_GH,
     };
     const reopened = {
       number: 51,
@@ -216,6 +220,7 @@ describe('panels', () => {
       state: 'OPEN',
       mergedAt: null,
       createdAt: null,
+      ...NO_GH,
     };
     const withPr = (pr: number | null): TowerState => ({
       ...state,
@@ -250,6 +255,7 @@ describe('panels', () => {
             state: 'OPEN',
             mergedAt: null,
             createdAt: null,
+            ...NO_GH,
           },
         ],
       },

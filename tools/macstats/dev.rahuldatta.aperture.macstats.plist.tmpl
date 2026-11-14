@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by tools/macstats/install.sh into ~/Library/LaunchAgents/. The @…@ fields are absolute paths. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.rahuldatta.aperture.macstats</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@SCRIPT@</string>
+    <string>@OUT@</string>
+    <string>@STATE@</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>15</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MACSTATS_VERSION</key>
+    <string>@VERSION@</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+  <key>ExitTimeOut</key>
+  <integer>10</integer>
+</dict>
+</plist>

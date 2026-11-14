@@ -24,6 +24,10 @@ describe('prs', () => {
         state: 'OPEN',
         mergedAt: null,
         createdAt: null,
+        sha: null,
+        mergeSha: null,
+        url: null,
+        draft: false,
       },
       {
         number: 40,
@@ -32,6 +36,10 @@ describe('prs', () => {
         state: 'MERGED',
         mergedAt: Date.parse('2026-11-08T03:00:00Z'),
         createdAt: Date.parse('2026-11-07T20:00:00Z'),
+        sha: null,
+        mergeSha: null,
+        url: null,
+        draft: false,
       },
     ]);
     expect(() => parsePrs('{}')).toThrow(/not an array/);
@@ -69,5 +77,33 @@ describe('prs', () => {
     release();
     await a;
     expect(calls).toBe(1);
+  });
+});
+
+describe('the fields the web tower reads', () => {
+  it('head and merge shas, a GitHub url, draft', () => {
+    const [p] = parsePrs(
+      JSON.stringify([
+        {
+          number: 9,
+          headRefName: 'x',
+          state: 'MERGED',
+          headRefOid: 'a'.repeat(40),
+          mergeCommit: { oid: 'b'.repeat(40) },
+          url: 'https://github.com/radatta/aperture/pull/9',
+          isDraft: true,
+        },
+      ]),
+    );
+    expect(p).toMatchObject({
+      sha: 'a'.repeat(40),
+      mergeSha: 'b'.repeat(40),
+      url: 'https://github.com/radatta/aperture/pull/9',
+      draft: true,
+    });
+    const [q] = parsePrs(
+      JSON.stringify([{ number: 9, headRefOid: 'zz', mergeCommit: null, url: 'javascript:x' }]),
+    );
+    expect(q).toMatchObject({ sha: null, mergeSha: null, url: null, draft: false });
   });
 });

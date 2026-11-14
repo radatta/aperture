@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "branch": "india-branch",
+  "session": "india",
+  "phase": "dev",
+  "step": "waiting on Rahul",
+  "phaseSince": "2026-11-08T05:00:00Z",
+  "sha": null,
+  "pr": null,
+  "slot": null,
+  "needs": {
+    "what": "admit the branch to dev",
+    "link": null,
+    "cmd": "cd /Users/rahuldatta/Coding/Personal/aperture && gh api -X PUT repos/radatta/aperture/environments/dev/deployment-branch-policies",
+    "unblocks": "india's dev test"
+  },
+  "updatedAt": "2026-11-08T06:00:00Z"
+}

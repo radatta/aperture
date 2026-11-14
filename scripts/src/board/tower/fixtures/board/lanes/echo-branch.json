@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "branch": "echo-branch",
+  "session": "echo",
+  "phase": "review",
+  "step": "round 2 of 3",
+  "phaseSince": "2026-11-08T05:30:00Z",
+  "sha": null,
+  "pr": null,
+  "slot": null,
+  "needs": null,
+  "updatedAt": "2026-11-08T06:00:00Z"
+}

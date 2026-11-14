@@ -44,6 +44,12 @@ export default tseslint.config(
     },
   },
 
+  // The web tower's page script (scripts/src/board/tower/web/app.js): a classic browser script, no build.
+  {
+    files: ['scripts/src/board/tower/web/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+  },
+
   // Browser app (React)
   {
     files: ['app/**/*.{ts,tsx}'],

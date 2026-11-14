@@ -4,6 +4,7 @@
 #   board.sh hub              the hub session (hub.json, docs/ops/HUB.md) and whether the board has it live
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
 #   board.sh sampler start|restart|stop|status
+#   board.sh tower start|restart|stop|status   (the web tower on :6183, docs/ops/TOWER.md)
 #   board.sh gc
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -198,6 +199,45 @@ cmd_sampler() {
   esac
 }
 
+# --- web tower lifecycle (docs/ops/TOWER.md) ---
+
+# Running = the pidfile's process is alive and is the tower's node (the server writes it only once it has bound
+# the port). Never by name, never by a lock an inherited fd could keep held (kill-by-PID rule).
+tower_pid() {
+  local p; p=$(cat "$TOWER_PID" 2>/dev/null) || return 1
+  [[ "$p" =~ ^[0-9]+$ ]] && sb_alive "$p" && [ "$(sb_comm "$p")" = node ] \
+    && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q 'tower/web/main.ts' && printf '%s' "$p"
+}
+
+cmd_tower() {
+  local p i
+  case "${1:-status}" in
+    start)
+      p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:6183"; return 0; }
+      sb_init_dirs
+      APERTURE_TOWER_PID="$TOWER_PID" setsid nohup bash "$SB_SCRIPTS/tower-web.sh" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
+      # "started" only once the server has bound the port and written its pid (≤ 3 s; node starts in ~0.3 s)
+      for ((i = 0; i < 30; i++)); do
+        p=$(tower_pid) && { echo "tower: started (pid $p) — http://localhost:6183, log $BOARD_DIR/tower.log"; return 0; }
+        sleep 0.1
+      done
+      echo "tower: did not start — see $BOARD_DIR/tower.log" >&2
+      return 1 ;;
+    stop|restart)
+      if p=$(tower_pid); then
+        kill "$p" && echo "tower: stopped $p"
+        for ((i = 0; i < 25; i++)); do sb_alive "$p" || break; sleep 0.2; done
+        sb_alive "$p" && { echo "tower: $p still running" >&2; return 1; }
+      fi
+      [ "$1" = restart ] && cmd_tower start
+      return 0 ;;
+    status)
+      if p=$(tower_pid); then echo "tower: running (pid $p) — http://localhost:6183"
+      else echo "tower: stopped — board.sh tower start"; return 1; fi ;;
+    *) echo "usage: board.sh tower start|restart|stop|status" >&2; return 2 ;;
+  esac
+}
+
 # --- housekeeping ---
 
 cmd_gc() {
@@ -230,7 +270,8 @@ case "${1:-status}" in
   end) cmd_end ;;
   note) shift; cmd_note "$@" ;;
   sampler) shift; cmd_sampler "$@" ;;
+  tower) shift; cmd_tower "$@" ;;
   hub) cmd_hub ;;
   gc) cmd_gc ;;
-  *) sed -n '2,7p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,8p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

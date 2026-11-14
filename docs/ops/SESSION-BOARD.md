@@ -23,6 +23,7 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 | How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)                                                                                 |
 | Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                                                                                                        |
 | The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                                                                                                          |
+| The web tower                     | http://localhost:6183 · `board.sh tower start\|restart\|stop\|status` (`docs/ops/TOWER.md`)                                                                                                                                                                                    |
 | Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                                                                                                         |
 
 Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
@@ -483,8 +484,8 @@ PNG (headless Chromium from `~/pw`, else ImageMagick, whose SVG renderer drops b
 the real board instead. `tower.sh --once <cols>x<rows>` prints one frame without a terminal; `--no-gh` skips
 `gh pr list` (live, the minute's `devlock.sh` peek still runs; `--fixtures` skips both).
 
-**A web page later.** Everything under `tower/` except `screen.ts`, `main.ts` and the ANSI rendering is
-terminal-free (`source.ts` → `TowerState` in `model.ts`), so a page would reuse the data half as is.
+**The web tower.** http://localhost:6183 reuses the data half (`source.ts` → `TowerState`) with its own
+derivation and lane files: `docs/ops/TOWER.md`. This terminal tower stays as its fallback.
 
 ## Script-shape rules (COI monitor)
 

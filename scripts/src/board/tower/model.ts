@@ -44,10 +44,12 @@ export type Session = {
 
 export type Lock = {
   branch: string | null; // null = free
+  sha?: string | null; // the holder's dispatched sha (the web tower matches its deploy-dev run)
   session: string | null;
   expiresAt: number | null;
   asOf: number | null; // cache time
   failed: boolean; // the last refresh failed
+  bad?: string | null; // the cache or its holder is unreadable: the web tower says so, never "free"
 };
 
 export type Gauges = {
