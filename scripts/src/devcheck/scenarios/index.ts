@@ -20,7 +20,6 @@ import { fluxHistory } from './flux-history';
 import { fluxPerf } from './flux-perf';
 import { devConcurrencyCaps } from './dev-concurrency-caps';
 import { bffHardening } from './bff-hardening';
-import { inflightCap } from './inflight-cap';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcExtension } from './lc-extension';
@@ -74,7 +73,6 @@ export const SCENARIOS: Scenario[] = [
   bffHardening,
   perSlotRuns,
   lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
-  inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];
 

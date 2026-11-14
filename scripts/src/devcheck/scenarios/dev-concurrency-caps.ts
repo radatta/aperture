@@ -104,7 +104,7 @@ export const devConcurrencyCaps: Scenario = {
       'over-cap-throttles',
       'A burst past a cap gets a 429, and the app’s client retries it',
       'app/src/data/httpClient.test.ts',
-      'a 429 re-enters the queue while it waits to retry',
+      'retries a write on a 429, then succeeds',
       'a 429 past the cap depends on how Lambda schedules a 20-wide burst, not reproducible on demand, and flooding dev is what the caps exist to bound',
     ),
     {

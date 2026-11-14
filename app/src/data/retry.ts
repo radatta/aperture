@@ -18,8 +18,9 @@ export const retryDelayMs = (attempt: number, rand: () => number = Math.random) 
 export const MAX_RETRIES = BACKOFF_MS.length;
 
 // A 429 means Lambda refused to start the function (the account's concurrency limit), so the call never
-// ran: retrying is safe for every method, writes included. The BFF never answers 429 itself, and nothing in
-// front of it rate-limits. The http client retries these (httpClient.ts).
+// ran: retrying is safe for every method, writes included. No RPC the app calls gets a 429 from the BFF
+// itself (only the ingest and place-read routes answer one, lambdas/src/index.ts), and nothing in front of
+// it rate-limits. The http client retries these (httpClient.ts).
 export const isThrottle = (e: unknown) => e instanceof ApiError && e.status === 429;
 // The backend's `Not found: <id>` (mustTask/mustSession), a 400 whose text the http client keeps, as the
 // stub's throw is: the row the call named isn't there any more.

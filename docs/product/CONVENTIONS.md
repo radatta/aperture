@@ -170,10 +170,8 @@ on screen and says nothing. A field whose value didn't load is disabled, not emp
 save over what you were never shown (Intent, capacity, the category picker). A label resolver that can't say it
 per item (CategoryTag) marks the gap (a "—" pill), and the page's own error line, where the page has one, carries the Retry. Retries:
 the http client retries a **429** for every call, writes included (`app/src/data/retry.ts`: Lambda refused to
-start, so the call never ran; the BFF never answers 429 itself), with the backoff set there — and keeps at most
-**8 calls in flight** (`httpClient.ts` → `MAX_IN_FLIGHT`, FIFO; a 429's backoff holds no slot and re-queues at the
-back; a slot lapses after 15 s, the BFF's own timeout, so a stalled connection never blocks the queue), under the
-BFF's reserved concurrency on dev (`docs/ops/CI-BOT.md` → Compute). The query layer
+start, so the call never ran; no RPC the app calls gets a 429 from the BFF itself), with the backoff set there; there is no
+client-side cap on calls in flight. The query layer
 retries a **5xx or a dropped connection on reads only**, because a write that may have landed must show its
 error, not run twice. A Pomodoro call that fails says so on its row in the dock, and a failed `stop()` rejects
 and keeps the timer. Reads run with `networkMode: 'always'`, so offline they fail and say so instead of pausing
