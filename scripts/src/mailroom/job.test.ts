@@ -3,7 +3,7 @@ import { ID_RE, makeId, makeOpenPrJob, sha256, validateJob, visible } from './jo
 import { buildJob, loadCases } from './fixtures.ts';
 
 const NOW = Date.parse('2026-11-01T20:45:12Z');
-const { base, simBase, cases } = loadCases();
+const { base, simBase, clipBase, cases } = loadCases();
 const shared = cases.filter((c) => 'ts' in c);
 
 describe('validateJob mirrors the Mac runner (tools/mailroom/testdata/jobs.jsonl)', () => {
@@ -28,7 +28,11 @@ describe('validateJob mirrors the Mac runner (tools/mailroom/testdata/jobs.jsonl
   });
 
   it.each(shared.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    const { job, stem } = buildJob(c.kind === 'sim' ? simBase : base, c, NOW);
+    const { job, stem } = buildJob(
+      c.kind === 'sim' ? simBase : c.kind === 'clip' ? clipBase : base,
+      c,
+      NOW,
+    );
     expect(validateJob(job, stem, NOW)).toBe(c.ts);
   });
 });

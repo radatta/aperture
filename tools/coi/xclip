@@ -1,0 +1,120 @@
+#!/bin/bash
+# xclip, for the COI container: Ctrl+V of an image in Claude Code pastes the Mac's clipboard image, through the Mac
+# mailroom's `clip` job (docs/ops/MAILROOM.md → The clip job; Mac side: tools/mailroom/jobs/clip.sh). Linked from
+# ~/.local/bin/xclip, ahead of /usr/bin on PATH, by tools/coi/tmux-restore.sh links.
+#
+# Claude Code (2.1.322) asks two things on Ctrl+V, and only these are answered:
+#   xclip -selection clipboard -t TARGETS -o     → ask the Mac (≤ 15 s, ≤ 32 s once it took the job), keep the
+#                                                  PNG, print "image/png"
+#   xclip -selection clipboard -t image/png -o   → print the kept PNG once (≤ 10 s old), then drop it
+# Everything else — text reads, the primary selection, copy (stdin), bmp — exits 1 with no output. Text never
+# crosses, and nothing passes through to the real xclip (which has no display here anyway).
+set -uo pipefail
+umask 077
+
+HJ="${XCLIP_SHIM_HOSTJOBS:-/workspace/.hostjobs}"
+WAIT_MS="${XCLIP_SHIM_WAIT_MS:-15000}"
+GRACE_MS="${XCLIP_SHIM_GRACE_MS:-17000}" # once the Mac took the job: its read (≤ 10 s) + banner (≤ 5 s), jobs/clip.sh
+KEEP_S=10
+BUSY_S=30 # a job whose heartbeat is younger than this, with no result yet, holds the runner (it drains one at a time)
+MAX_BYTES=16777216
+CACHE="${XCLIP_SHIM_CACHE:-${XDG_RUNTIME_DIR:-/tmp}/xclip-shim-$(id -u)}"
+LOG="${XCLIP_SHIM_LOG:-$HOME/.cache/xclip-shim/log}"
+PANE="${TMUX_PANE:-nopane}"
+PANE="${PANE//[^A-Za-z0-9]/}" # tmux's "%12" → "12": one kept image per pane, so two sessions never cross
+KEPT="$CACHE/${PANE:-nopane}.png"
+
+log() { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s %s %s\n' "$(date -u +%FT%TZ)" "${PANE:-nopane}" "$*" >>"$LOG" 2>/dev/null; return 0; }
+no() { log "$1"; exit 1; }
+ms() { date +%s%3N; }
+age_s() { echo $(($(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0))); }
+
+# The cache dir: ours, 0700, not a link.
+cache_ok() {
+  [ -d "$CACHE" ] || mkdir -m 700 "$CACHE" 2>/dev/null || return 1
+  [ ! -L "$CACHE" ] && [ -O "$CACHE" ] && [ "$(stat -c %a "$CACHE")" = 700 ]
+}
+
+# A clip.png nobody collected (an answer after its shim gave up) goes after 30 s; a clip job's leftovers after an hour.
+sweep() {
+  local d
+  find "$HJ/results" -mindepth 2 -maxdepth 2 -path '*-clip-*/clip.png' -type f -mmin +0.5 -delete 2>/dev/null
+  find "$HJ/staging" -maxdepth 1 -name '*-clip-*.withdrawn.json' -type f -mmin +60 -delete 2>/dev/null
+  while IFS= read -r -d '' d; do
+    rm -f -- "$d/result.json" "$d/clip.png" && rmdir -- "$d" 2>/dev/null
+  done < <(find "$HJ/results" -mindepth 1 -maxdepth 1 -name '*-clip-*' -type d -mmin +60 -print0 2>/dev/null)
+  return 0
+}
+
+targets() {
+  local id job t0 r st rs png size cap took=""
+  cache_ok || no "refused: cache dir $CACHE is not ours"
+  rm -f -- "$KEPT"
+  for d in "$HJ" "$HJ/inbox" "$HJ/results"; do
+    if [ -L "$d" ] || [ ! -d "$d" ]; then no "no mailroom: $d is missing or a link"; fi
+  done
+  sweep
+  # The runner is busy with a long job (a sim run, up to 10 min): don't queue a paste behind it.
+  for p in "$HJ"/results/*/progress.json; do
+    [ -f "$p" ] || continue
+    if [ ! -e "$(dirname "$p")/result.json" ] && [ "$(age_s "$p")" -lt "$BUSY_S" ]; then
+      no "busy: $(basename "$(dirname "$p")") is running"
+    fi
+  done
+  id="$(date -u +%Y%m%dT%H%M%SZ)-clip-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ "$id" =~ ^[0-9]{8}T[0-9]{6}Z-clip-[a-z0-9]{4}$ ]] || no "could not make a job id"
+  job="$(jq -cn --arg id "$id" '{v: 1, id: $id, job: "clip", submittedAt: (now | floor | todate), expiresInMin: 1, params: {}}')"
+  mkdir -p "$HJ/staging" && (set -C && printf '%s' "$job" >"$HJ/staging/$id.json") && mv -- "$HJ/staging/$id.json" "$HJ/inbox/$id.json" ||
+    no "could not queue $id"
+  t0="$(ms)"
+  cap="$WAIT_MS"
+  r="$HJ/results/$id/result.json"
+  until [ -f "$r" ] && jq -e --arg id "$id" '.id == $id' "$r" >/dev/null 2>&1; do
+    if [ $(($(ms) - t0)) -ge "$cap" ]; then
+      if mv -- "$HJ/inbox/$id.json" "$HJ/staging/$id.withdrawn.json" 2>/dev/null; then
+        no "$id no answer in $((WAIT_MS / 1000)) s — withdrawn (Mac asleep or mailroom not installed)"
+      fi
+      # The Mac took it: wait out its read, so the answer is collected (and its clip.png deleted) rather than left.
+      if [ -z "$took" ]; then took=1; cap=$((WAIT_MS + GRACE_MS)); continue; fi
+      no "$id no answer in $((cap / 1000)) s though the Mac took it"
+    fi
+    sleep 0.1
+  done
+  st="$(jq -r .status "$r")"
+  rs="$(jq -r '.reason // "-"' "$r")"
+  png="$HJ/results/$id/clip.png"
+  if [ "$st" != served ]; then no "$id $st $rs"; fi
+  if [ -L "$png" ] || [ ! -f "$png" ]; then no "$id served but clip.png is missing or a link"; fi
+  # Copy first, then check the copy: the shared file could change between a check and a read.
+  (set -C && head -c $((MAX_BYTES + 1)) -- "$png" >"$KEPT") || {
+    rm -f -- "$KEPT" "$png"
+    no "$id could not keep the image"
+  }
+  rm -f -- "$png" # the screenshot shouldn't sit in the shared folder
+  size="$(stat -c %s "$KEPT")"
+  if [ "$size" -gt "$MAX_BYTES" ] || [ "$(head -c 8 "$KEPT" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
+    rm -f -- "$KEPT"
+    no "$id served a file that is not a PNG within the cap"
+  fi
+  log "$id served $size bytes in $(($(ms) - t0)) ms"
+  printf 'TARGETS\nimage/png\n'
+}
+
+png() {
+  cache_ok || no "refused: cache dir $CACHE is not ours"
+  if [ -L "$KEPT" ] || [ ! -f "$KEPT" ]; then no "image/png asked with nothing kept"; fi
+  if [ "$(age_s "$KEPT")" -gt "$KEEP_S" ]; then
+    rm -f -- "$KEPT"
+    no "image/png asked after the kept image went stale"
+  fi
+  cat -- "$KEPT" && rm -f -- "$KEPT"
+}
+
+# Exactly five arguments, each as Claude Code passes them.
+if [ "$#" = 5 ] && [ "$1" = -selection ] && [ "$2" = clipboard ] && [ "$3" = -t ] && [ "$5" = -o ]; then
+  case "$4" in
+    TARGETS) targets; exit 0 ;;
+    image/png) png; exit $? ;;
+  esac
+fi
+no "refused: xclip $*"

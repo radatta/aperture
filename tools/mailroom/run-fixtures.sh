@@ -3,7 +3,8 @@
 # .hostjobs, with `curl` and `security` replaced by exported shell functions (no stub files — a process command
 # line holding a path ending in the curl name trips COI's Sigma rule; docs/ops/COI-INCIDENTS.md → Incident H).
 # `sim` cases stub axe, xcrun, open, pgrep, caffeinate and xcodebuild the same way, answering from a per-case tape
-# of {m: argv substring, rc, n: uses (0 = any), out} rules, first match wins; short sleeps return at once.
+# of {m: argv substring, rc, n: uses (0 = any), out} rules, first match wins; short sleeps return at once. `clip`
+# cases stub osascript from the same tape: a JXA read (`-l JavaScript`) that answers 0 writes a PNG to its path argv.
 # Bash 3.2 + jq, so it runs in the container (vitest: scripts/src/mailroom/runner-fixtures.test.ts) and on the Mac.
 set -uo pipefail
 # On the Mac, run as launchd will: Apple's /bin/bash 3.2 and the system tools, not Homebrew's.
@@ -101,14 +102,31 @@ open() { sim_stub open "$@"; }
 pgrep() { sim_stub pgrep "$@"; }
 caffeinate() { sim_stub caffeinate "$@"; }
 xcodebuild() { sim_stub xcodebuild "$@"; }
+# The JXA read gets its script on stdin (what it may ask is pinned statically); answer from the tape, and on 0 write
+# the image to argv's OUT ($4):
+# a PNG, or what the answer's "write" names (gif: wrong magic; big: one byte over the 16 MiB cap).
+osascript() {
+  local out rc=0
+  out="$(sim_stub osascript "$@" </dev/null)" || rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out"
+  if [ "$rc" = 0 ] && [ "${1:-}" = -l ]; then
+    case "$out" in
+      *'"write":"gif"'*) printf 'GIF89a-fixture' >"$4" ;;
+      *'"write":"big"'*) head -c 16777217 /dev/zero >"$4" ;;
+      *) printf '\211PNG\r\n\032\nfixture-image' >"$4" ;;
+    esac
+  fi
+  return "$rc"
+}
 sleep() { if [ "${1%%.*}" -ge 20 ] 2>/dev/null; then command sleep "$1"; fi; }
-export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild sleep
+export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osascript sleep
 
 ok() { pass=$((pass + 1)); echo "ok - $1"; }
 bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed 's/^/    /' "$3"; }
 
 base="$(head -1 "$CASES" | jq -c .base)"
 simbase="$(head -1 "$CASES" | jq -c .simBase)"
+clipbase="$(head -1 "$CASES" | jq -c .clipBase)"
 defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 deftape="$(sed -n 2p "$CASES" | jq -c .defaultTape)"
 
@@ -136,6 +154,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   now="$(date +%s)"
   cbase="$base"
   [ "$kind" != sim ] || cbase="$simbase"
+  [ "$kind" != clip ] || cbase="$clipbase"
 
   # The job: base ⊕ patch, minus unset paths, submittedAt relative to now, bodySha256 computed when "auto".
   { IFS= read -r job; read -r id; read -r file; read -r sha_auto; } <<<"$(jq -r --argjson base "$cbase" --argjson now "$now" '. as $c | ($base * ($c.patch // {}))
@@ -185,6 +204,11 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       mv "$hj/staging/x" "$hj/staging/mine"; ln "$hj/staging/mine" "$hj/inbox/$file" ;;
     results-symlink)
       mkdir "$T/elsewhere"; rmdir "$hj/results"; ln -s "$T/elsewhere" "$hj/results"
+      mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    clip-state=*) # {ago: [seconds before now, one per serve], cc, n} → the clip job's private state; |junk adds junk
+      cs="${setup#clip-state=}"
+      jq -c --argjson now "$now" --arg junk "${cs##*|}" '{serves: ([.ago[] | $now - .] + if $junk == "junk" then ["9999999999", null, {}] else [] end),
+        cc: (if $junk == "junk" then "41" else .cc end), n}' <<<"${cs%%|*}" >"$st/clip.json"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
     build-y=*) printf '%s\n' "${setup#build-y=}" >"$st/sim-build-y"; mv "$hj/staging/x" "$hj/inbox/$file" ;; # readBuild's last y
     "") mv "$hj/staging/x" "$hj/inbox/$file" ;;
@@ -245,7 +269,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       "$hj/results/$rid/result.json" >/dev/null 2>&1 || why="a step note isn't $notes_j"
   fi
   # sim cases: tool calls in order (substrings), calls that must not happen, password reads/typings, artifacts.
-  if [ -z "$why" ] && [ "$kind" = sim ]; then
+  if [ -z "$why" ] && { [ "$kind" = sim ] || [ "$kind" = clip ]; }; then
     last=0
     while IFS= read -r want; do
       [ -n "$want" ] || continue
@@ -273,6 +297,14 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -z "$why" ] && [ -n "$f" ] || continue
       [ -f "$hj/results/$rid/$f" ] || why="no results/$rid/$f"
     done < <(jq -r '.files // [] | .[]' <<<"$c")
+  fi
+  # clip cases: the private state after the run ({cc, n, serves: how many}). What the JXA may ask the pasteboard is
+  # pinned statically (runner-fixtures.test.ts).
+  if [ -z "$why" ] && [ "$kind" = clip ]; then
+    cs="$(jq -c '.clipState // empty' <<<"$c")"
+    if [ -n "$cs" ] && ! jq -e --argjson e "$cs" '{cc, n, serves: (.serves | length)} == $e' "$st/clip.json" >/dev/null 2>&1; then
+      why="clip state $(cat "$st/clip.json" 2>/dev/null || echo missing), want $cs"
+    fi
   fi
   if [ -z "$why" ] && [ "$setup" = symlink ] && [ "$(cat "$T/outside.txt")" != secret ]; then
     why="the symlink target was touched"

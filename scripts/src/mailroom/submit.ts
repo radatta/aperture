@@ -57,7 +57,7 @@ export interface Result {
   v: 1;
   id: string;
   job: string;
-  status: 'opened' | 'exists' | 'rejected' | 'error' | 'expired';
+  status: 'opened' | 'exists' | 'served' | 'rejected' | 'error' | 'expired';
   reason: string | null;
   startedAt: string;
   finishedAt: string;
@@ -67,6 +67,13 @@ export interface Result {
   tokenExpiresAt?: string;
   tokenWarning?: 'TOKEN_EXPIRING';
   pr?: { number: number; url: string; headSha: string; author: string };
+  clip?: {
+    bytes: number;
+    sha256: string;
+    changeCount: number;
+    source: 'png' | 'tiff';
+    frontmost: string;
+  };
 }
 
 // `.hostjobs/` at the main checkout's root, shared by every worktree (same anchor as the bot's secretsDir()).
