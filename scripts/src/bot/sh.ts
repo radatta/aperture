@@ -12,6 +12,7 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): string 
     return execFileSync(cmd, args, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 256 << 20, // a big commit's diff (a lockfile, a regenerated fixture) passes 1 MiB
       env: opts.env ?? process.env,
       cwd: opts.cwd,
     }).trim();

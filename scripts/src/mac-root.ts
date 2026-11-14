@@ -30,7 +30,10 @@ export function macRootFile(): string | null {
 export function readMacRoot(file = macRootFile()): string | null {
   if (!file) return null;
   try {
-    const v = readFileSync(file, 'utf8').trim().replace(/\/+$/, '');
+    // One line, an optional final newline, one trailing / dropped — the rule .claude/hooks/load-context.sh repeats.
+    const v = readFileSync(file, 'utf8')
+      .replace(/\r?\n$/, '')
+      .replace(/\/$/, '');
     return VALID.test(v) && !v.split('/').includes('..') ? v : null;
   } catch {
     return null;

@@ -87,7 +87,7 @@ Full detail in `docs/product/CONVENTIONS.md`. The load-bearing ones:
 - **Workspace packages resolve from source.** `packages/shared` exports `./src/index.ts`; app and lambdas import it directly and their bundler transpiles it — no build step in the dev/test loop. (`shared` still emits a gitignored `dist/` only to satisfy TS project references; nothing imports it.)
 - **One test runner: Vitest.** jsdom env for `app/`, **node env for `lambdas/`** so tests match the Lambda's prod runtime exactly.
 - **Dates/times via a shared helper** — never inline `Date` math or raw ISO strings in a component.
-- **No personal identifiers in anything tracked, a commit or PR text** — prose says "the maintainer", the Mac path is `<mac-repo>`, and `identifiers.json` holds the rest; a test, the commit hook and `open-pr` enforce it (`docs/ops/IDENTIFIERS.md`).
+- **No personal identifiers in anything tracked, a commit or PR text** — prose says "the maintainer", the Mac path is `<mac-repo>`, and `identifiers.json` holds the rest; a test, the commit hook, `pnpm bot push` and `open-pr` enforce it (`docs/ops/IDENTIFIERS.md`).
 
 ## Architecture
 

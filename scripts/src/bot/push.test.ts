@@ -10,6 +10,7 @@ const onBranch = (branch: string, extra: [string, string | (() => string)][] = [
     ['git rev-parse --verify -q refs/remotes/origin/', 'a'.repeat(40)],
     ['git rev-parse --short HEAD', 'abc1234'],
     ...extra,
+    ['git rev-list --merges', ''],
     ['git rev-list', ''],
     ['git push', ''],
     ['git fetch', ''],
@@ -35,6 +36,7 @@ describe('bot push', () => {
     ]) {
       const { run, calls } = fakeRun([
         ['git symbolic-ref', 'feat'],
+        ['git rev-list --merges', ''],
         ['git rev-list', `${'1'.repeat(40)}\n`],
         ['git show -s', message!],
         ['git -c core.quotePath=false show', diff!],
@@ -50,6 +52,26 @@ describe('bot push', () => {
     const { run, calls } = onBranch(b);
     expect(() => push(run, 't', { afterRebase: false }, quiet)).toThrow(/deploy branch/);
     expect(calls.some((c) => c.args[0] === 'push')).toBe(false);
+  });
+
+  it('refuses a branch with merge commits, and a branch named for the maintainer', () => {
+    const merges = fakeRun([
+      ['git symbolic-ref', 'feat'],
+      ['git rev-list --merges', `${'2'.repeat(40)}\n`],
+      ['git rev-list', `${'2'.repeat(40)}\n`],
+    ]);
+    expect(() => push(merges.run, 't', { afterRebase: false }, quiet)).toThrow(
+      /merge commits — rebase/,
+    );
+    const named = fakeRun([
+      ['git symbolic-ref', `${IDS.maintainer.name.split(' ')[0]!.toLowerCase()}-notes`],
+      ['git rev-list --merges', ''],
+      ['git rev-list', ''],
+    ]);
+    expect(() => push(named.run, 't', { afterRebase: false }, quiet)).toThrow(
+      /the branch name name/,
+    );
+    expect([...merges.calls, ...named.calls].some((c) => c.args[0] === 'push')).toBe(false);
   });
 
   it('refuses detached HEAD', () => {

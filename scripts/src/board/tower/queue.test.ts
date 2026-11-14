@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { IDS } from '../../identifiers.ts';
 import { parseQueue, planAt, queueAgeTone, staleFollowups } from './queue.ts';
 
 const example = readFileSync(
@@ -86,11 +87,19 @@ describe('parseQueue', () => {
     });
   });
 
-  it('says so when the to-dos sit under a key it does not know (the old per-person key)', () => {
-    const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","someone":["merge PR 41"]}');
+  it('says so when the to-dos sit under the old per-person key; other extra lists pass', () => {
+    const old = IDS.maintainer.name.split(' ')[0]!.toLowerCase();
+    const q = parseQueue(
+      JSON.stringify({
+        v: 1,
+        updatedAt: '2026-11-08T06:00:00Z',
+        [old]: ['merge PR 41'],
+        mergeOrder: ['a'],
+      }),
+    );
     expect(q.data!.maintainer).toEqual([]);
     expect(q.problems).toEqual([
-      'unknown list "someone" — the to-dos are "maintainer" now (docs/ops/TOWER.md)',
+      'the to-dos sit under an old key — rename it to "maintainer" (docs/ops/TOWER.md)',
     ]);
   });
 

@@ -1,5 +1,6 @@
 // queue.json: the hub's hand-kept dev queue, the maintainer's to-dos and the wave checklist (schema v1:
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
+import { findIdentifiers } from '../../identifiers.ts';
 import { clean, parseTime } from './fmt.ts';
 
 export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building', 'ready', 'needs-you'] as const;
@@ -134,11 +135,14 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   if (updatedAt === null)
     return { status: 'bad', data: prev, unread: 'all', problems: ['updatedAt is not an ISO time'] };
 
-  // A list under a key this schema doesn't know is said, never skipped: the per-person to-dos were renamed to
-  // `maintainer`, and a file still on the old key would drop them from NEEDS YOU without a word. Other extras pass.
+  // The per-person to-dos were renamed to `maintainer`: a file still on the old key (the maintainer's name, which
+  // the identifier rules know without this file spelling it) would drop them from NEEDS YOU without a word. Any
+  // other extra key — the hub's own `mergeOrder` among them — passes.
   for (const k of Object.keys(raw))
-    if (!QUEUE_KEYS.includes(k) && Array.isArray(raw[k]))
-      problems.push(`unknown list "${k}" — the to-dos are "maintainer" now (docs/ops/TOWER.md)`);
+    if (!QUEUE_KEYS.includes(k) && findIdentifiers(k).some((h) => h.kind === 'name'))
+      problems.push(
+        `the to-dos sit under an old key — rename it to "maintainer" (docs/ops/TOWER.md)`,
+      );
 
   const devQueue: Lane[] = [];
   let unread: 'all' | string[] = [];

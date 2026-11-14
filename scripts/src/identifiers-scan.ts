@@ -30,26 +30,43 @@ function headerPath(raw: string): string {
   return p === '/dev/null' ? '' : p.replace(/^b\//, '');
 }
 
+// The `b/` side of a `diff --git a/… b/…` line: the last quoted token, else what follows the last ` b/`.
+function gitLinePath(l: string): string {
+  const q = /("(?:[^"\\]|\\.)*")$/.exec(l);
+  if (q) return headerPath(q[1]!);
+  const i = l.lastIndexOf(' b/');
+  return i < 0 ? '' : l.slice(i + 3);
+}
+
 export function scanDiff(diff: string, rules = identifierRules()): string[] {
   const out: string[] = [];
   let path = '';
   let line = 0;
-  let inHeader = false; // between `diff --git` and the first @@: only there is `+++ ` a header
+  // Between `diff --git` and the first @@ (or the next file): only there is `+++ ` a header. A rename, a binary or
+  // an empty new file has no `+++`, so its name comes from the `diff --git` line (or `rename to`/`copy to`); a
+  // deleted file's name doesn't count — removing it is the fix.
+  let header: { b: string; plus: string | null; deleted: boolean } | null = null;
+  const endHeader = () => {
+    if (!header) return;
+    path = header.plus ?? (header.deleted ? '' : header.b);
+    const named = path ? findIdentifiers(path, rules) : [];
+    if (named.length) out.push(named.map((h) => `${path} (its path) ${h.kind}`).join('\n'));
+    header = null;
+  };
   for (const l of diff.split('\n')) {
     if (l.startsWith('diff --git ')) {
-      inHeader = true;
+      endHeader();
+      header = { b: gitLinePath(l), plus: null, deleted: false };
       path = '';
       continue;
     }
-    if (inHeader) {
-      if (l.startsWith('+++ ')) {
-        path = headerPath(l.slice(4));
-        const named = findIdentifiers(path, rules); // the file's own name
-        if (named.length) out.push(named.map((h) => `${path} (its path) ${h.kind}`).join('\n'));
-        continue;
-      }
+    if (header) {
+      if (l.startsWith('+++ ')) header.plus = headerPath(l.slice(4));
+      else if (l.startsWith('deleted file mode')) header.deleted = true;
+      else if (/^(rename|copy) to /.test(l))
+        header.b = headerPath(l.replace(/^(rename|copy) to /, ''));
       if (!l.startsWith('@@')) continue;
-      inHeader = false;
+      endHeader();
     }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
     if (hunk) {
@@ -62,6 +79,7 @@ export function scanDiff(diff: string, rules = identifierRules()): string[] {
       line++;
     }
   }
+  endHeader();
   return out;
 }
 

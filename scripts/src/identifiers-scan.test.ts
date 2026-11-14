@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { IDS, simCognitoPin } from './identifiers.ts';
 import { commitMessages, scanCommit, scanDiff, scanRange } from './identifiers-scan.ts';
@@ -58,6 +62,52 @@ describe('scanDiff', () => {
   it('a path that names the maintainer is a hit', () => {
     const p = `docs/${name.toLowerCase()}-notes.md`;
     expect(scanDiff(diff(p, 1, ['+fine']))).toEqual([`${p} (its path) name`]);
+  });
+});
+
+describe('scanDiff on real git output', () => {
+  // The flags the hook and the push use; a throwaway repo, so git's own headers are what's parsed.
+  const gd = (cwd: string) =>
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'core.quotePath=false',
+        'diff',
+        '--cached',
+        '-U0',
+        '--no-color',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--src-prefix=a/',
+        '--dst-prefix=b/',
+      ],
+      { cwd, encoding: 'utf8' },
+    );
+  const g = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+
+  it('names a renamed, a binary and an empty new file, and lets a deleted one go', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'scan-'));
+    g(dir, 'init', '-q');
+    g(dir, 'config', 'user.email', 'x@example.com');
+    g(dir, 'config', 'user.name', 'x');
+    const n = name.toLowerCase();
+    writeFileSync(join(dir, 'old.md'), 'same text\n'.repeat(5));
+    writeFileSync(join(dir, `${n}-gone.md`), 'bye\n');
+    g(dir, 'add', '.');
+    g(dir, 'commit', '-q', '-m', 'base');
+    g(dir, 'mv', 'old.md', `${n}-notes.md`);
+    writeFileSync(join(dir, `${n}.bin`), Buffer.from([0, 1, 2, 0, 255]));
+    writeFileSync(join(dir, `${n}-empty.md`), '');
+    g(dir, 'rm', '-q', `${n}-gone.md`);
+    g(dir, 'add', '.');
+    expect(scanDiff(gd(dir)).sort()).toEqual(
+      [
+        `${n}-empty.md (its path) name`,
+        `${n}-notes.md (its path) name`,
+        `${n}.bin (its path) name`,
+      ].sort(),
+    );
   });
 });
 

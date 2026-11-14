@@ -23,6 +23,8 @@ describe('readMacRoot', () => {
     ['a metacharacter', '/Volumes/host/aperture;rm'],
     ['a parent hop', '/Volumes/host/../etc'],
     ['two lines', '/Volumes/a\n/Volumes/b'],
+    ['a blank line after', '/Volumes/a\n\n'],
+    ['a leading space', ' /Volumes/a'],
   ])('refuses %s', (_why, body) => {
     expect(readMacRoot(file(_why.replace(/\W/g, '_'), body))).toBeNull();
   });

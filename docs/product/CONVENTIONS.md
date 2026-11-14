@@ -16,7 +16,7 @@ Cross-cutting rules that override defaults everywhere in this repo.
 
 ## No personal identifiers in tracked text
 
-The repo is public. No code, doc, test, fixture, commit message, PR title or PR body names the maintainer, their personal mailbox, a Mac home path, the Mac projects folder or an AWS account id: prose says **"the maintainer"**, the Mac path is `<mac-repo>`, and `identifiers.json` is the one tracked home for the public values code needs. A test, the commit hook and `pnpm mailroom open-pr` enforce it. Rules, readers and the one exception: [`docs/ops/IDENTIFIERS.md`](../ops/IDENTIFIERS.md).
+The repo is public. No code, doc, test, fixture, commit message, PR title or PR body names the maintainer, their personal mailbox, a Mac home path, the Mac projects folder or an AWS account id: prose says **"the maintainer"**, the Mac path is `<mac-repo>`, and `identifiers.json` is the one tracked home for the public values code needs. A test, the commit hook, `pnpm bot push` and `pnpm mailroom open-pr` enforce it. Rules, readers and the one exception: [`docs/ops/IDENTIFIERS.md`](../ops/IDENTIFIERS.md).
 
 ## First-principles: build it ourselves by default
 

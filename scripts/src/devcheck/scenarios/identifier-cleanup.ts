@@ -212,6 +212,17 @@ export const identifierCleanup: Scenario = {
       },
     },
     {
+      id: 'mcp-descriptions',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'The LeetCode MCP tools describe the person as “the user … their”, no name or gendered pronoun',
+      offDev: {
+        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
+        test: 'says the freshness rules and the etiquette in its description',
+        why: 'the description is a constant the deployed tools/list returns verbatim; the tracked-files guard holds it name-free',
+      },
+    },
+    {
       id: 'live-hook',
       entry: 'api',
       kind: 'nominal',

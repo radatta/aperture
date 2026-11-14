@@ -10,7 +10,8 @@
   set -euo pipefail
   INPUT=$(cat)
   COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-  [[ "$COMMAND" != *"git commit"* ]] && exit 0
+  # `git commit`, also behind git's own -C <dir> / -c <k=v> (which used to slip past every check here).
+  printf '%s' "$COMMAND" | grep -Eq 'git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+commit' || exit 0
 
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
   COMMIT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")  # also works on an unborn branch
@@ -44,7 +45,9 @@
     gd() { git -c core.quotePath=false diff -U0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$@" 2>/dev/null || true; }
     ids_diff() {
       gd --cached
-      if printf '%s' "$COMMAND" | grep -Eq 'git[[:space:]]+add|commit[[:space:]].*(-[a-zA-Z]*a[a-zA-Z]*|--all)([[:space:]]|$)'; then
+      # A `git add`/`stage` in the command, or a commit that takes the working tree (-a, --all, -i, -o); a commit
+      # naming paths takes them too and isn't detected here — the push scan is the backstop (IDENTIFIERS.md).
+      if printf '%s' "$COMMAND" | grep -Eq '(^|[[:space:];&|(])git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]]|$)'; then
         gd
         git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null |
           while IFS= read -r -d '' f; do gd --no-index -- /dev/null "$f"; done

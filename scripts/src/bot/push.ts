@@ -3,6 +3,7 @@
 // an env-configured credential helper: never argv, never .git/config. GIT_CONFIG_* outranks every config file,
 // and an empty helper value clears the inherited list (the container's read-only `gh` helper).
 import { scanRange } from '../identifiers-scan.ts';
+import { findIdentifiers } from '../identifiers.ts';
 import { REPO_URL } from './config.ts';
 import { featureBranch } from './git.ts';
 import type { Run } from './sh.ts';
@@ -40,29 +41,43 @@ export function pushArgs(branch: string, afterRebase: boolean, leaseSha: string)
 // The last stop before the branch is public (docs/ops/IDENTIFIERS.md): every commit not yet on origin/main — its
 // message and its own diff, since a branch's history is visible on its PR — carries no personal identifier. The
 // commit hook can miss what a `git add` in the same command staged; this can't.
-export function identifierHits(run: Run): string[] {
-  const shas = run('git', ['rev-list', '--reverse', 'origin/main..HEAD'])
-    .split('\n')
-    .filter(Boolean);
-  return scanRange(
-    shas.map((sha) => ({
-      sha,
-      message: run('git', ['show', '-s', '--format=%B', sha]),
-      diff: run('git', [
-        '-c',
-        'core.quotePath=false',
-        'show',
-        '--format=',
-        '-U0',
-        '--no-color',
-        '--no-ext-diff',
-        '--no-textconv',
-        '--src-prefix=a/',
-        '--dst-prefix=b/',
+export function identifierHits(run: Run, branch = ''): string[] {
+  let shas: string[];
+  try {
+    shas = run('git', ['rev-list', '--reverse', 'origin/main..HEAD']).split('\n').filter(Boolean);
+  } catch (err) {
+    throw new Error("can't list the commits to check for identifiers — `git fetch origin` first", {
+      cause: err,
+    });
+  }
+  // A merge commit's combined diff isn't scanned line by line, and the project rebases: say so instead.
+  if (run('git', ['rev-list', '--merges', 'origin/main..HEAD']).trim())
+    throw new Error(
+      'this branch has merge commits — rebase onto origin/main instead (the identifier scan reads plain commits)',
+    );
+  const named = branch ? findIdentifiers(branch).map((h) => `the branch name ${h.kind}`) : [];
+  return [
+    ...named,
+    ...scanRange(
+      shas.map((sha) => ({
         sha,
-      ]),
-    })),
-  );
+        message: run('git', ['show', '-s', '--format=%B', sha]),
+        diff: run('git', [
+          '-c',
+          'core.quotePath=false',
+          'show',
+          '--format=',
+          '-U0',
+          '--no-color',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--src-prefix=a/',
+          '--dst-prefix=b/',
+          sha,
+        ]),
+      })),
+    ),
+  ];
 }
 
 export function push(
@@ -84,7 +99,7 @@ export function push(
         `--after-rebase needs origin/${branch} to lease against — it was never pushed; use a plain \`pnpm bot push\``,
       );
   }
-  const hits = identifierHits(run);
+  const hits = identifierHits(run, branch);
   if (hits.length)
     throw new Error(
       `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md). Rebase it out of the commit that added it — a later commit removing it still leaves it in the pushed history:\n${hits.join('\n')}`,
