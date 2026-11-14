@@ -10,10 +10,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Read-only, pinned here rather than left to the repo default: ci.yml's jobs each narrow to contents: read
+# Read-only, pinned here rather than left to the repo default: ci.yml's jobs each narrow their own grants
 # already, but a new job there without its own block would otherwise inherit whatever the default grants.
+# pull-requests: read is for `check`'s secret scan, which lists the PR's commits (GET /pulls/{n}/commits).
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   ci:

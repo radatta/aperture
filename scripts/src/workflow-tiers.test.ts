@@ -38,10 +38,12 @@ describe('deploy.yml classifies per stage', () => {
       'mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot dev)',
       'mode_devb=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA" --slot devb)',
       'mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")',
-      '{ echo "mode_dev=$mode_dev"; echo "mode_devb=$mode_devb"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"',
+      '{ echo "mode_dev=$mode_dev"; echo "mode_devb=$mode_devb"; echo "mode_prod=$mode_prod"; echo "check=$check"; } >> "$GITHUB_OUTPUT"',
       'mode_dev: ${{ steps.detect.outputs.mode_dev }}',
       'mode_devb: ${{ steps.detect.outputs.mode_devb }}',
       'mode_prod: ${{ steps.detect.outputs.mode_prod }}',
+      'check=$(node scripts/src/checked-tree.ts "$GITHUB_SHA")',
+      'check: ${{ steps.detect.outputs.check }}',
     ])
       expect(lines, line).toContain(line);
     expect(lines.filter((l) => !l.startsWith('#') && l.includes('deploy-base.ts'))).toHaveLength(3);
@@ -65,23 +67,20 @@ describe('deploy.yml classifies per stage', () => {
     expect(job(deploy, 'deploy-prod')).not.toContain('mode_dev');
     // devb deploys only a shape change, and always in full; it never gates prod.
     expect(job(deploy, 'deploy-devb')).toContain(
-      "if: github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full'",
+      "github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full'",
     );
     expect(job(deploy, 'deploy-devb')).toContain('mode: full');
     expect(job(deploy, 'deploy-devb')).toContain('stage: devb');
     expect(job(deploy, 'deploy-prod')).not.toContain('deploy-devb');
-    expect(job(deploy, 'notify')).toContain(
-      'needs: [check, changes, deploy-dev, deploy-devb, deploy-prod]',
-    );
     expect(deploy).not.toContain('outputs.mode }}');
   });
 
-  it('assigns and validates both modes before writing, so a crash fails the job instead of emptying an output', () => {
+  it('assigns and validates the modes and the check plan before writing, so a crash fails the job instead of emptying an output', () => {
     const changes = job(deploy, 'changes');
     const lines = changes.split('\n').map((l) => l.trim());
     expect(lines).toContain('for mode in "$mode_dev" "$mode_devb" "$mode_prod"; do');
     expect(lines).toContain(
-      'timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full` well inside this',
+      'timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full`/`check` well inside this',
     );
     expect(lines).toContain(
       "fetch-depth: 0 # need history to diff from each stage's last deployment",
@@ -89,7 +88,12 @@ describe('deploy.yml classifies per stage', () => {
     expect(lines).toContain(
       'case "$mode" in none|app|full) ;; *) echo "::error::classifier returned \'$mode\'"; exit 1 ;; esac',
     );
+    expect(lines).toContain(
+      'case "$check" in skip|fixtures|check) ;; *) echo "::error::checked-tree returned \'$check\'"; exit 1 ;; esac',
+    );
     expect(changes.indexOf('mode_prod=$(')).toBeLessThan(changes.indexOf('for mode in'));
+    expect(changes.indexOf('check=$(')).toBeLessThan(changes.indexOf('case "$check"'));
+    expect(changes.indexOf('case "$check"')).toBeLessThan(changes.indexOf('>> "$GITHUB_OUTPUT"'));
     expect(changes.indexOf('for mode in')).toBeLessThan(changes.indexOf('>> "$GITHUB_OUTPUT"'));
     for (const unsafe of ['set +e', 'continue-on-error', '||'])
       expect(changes).not.toContain(unsafe);
@@ -100,6 +104,8 @@ describe('deploy.yml classifies per stage', () => {
       contents: 'read',
       deployments: 'read',
       actions: 'read',
+      checks: 'read',
+      'pull-requests': 'read',
     });
     expect(job(deploy, 'changes')).toContain('GITHUB_TOKEN: ${{ github.token }}');
   });
@@ -119,6 +125,8 @@ describe('the dispatched lane exercises the same lookup', () => {
     expect(verify).toContain(
       'If merged now: dev-main=$merged_dev devb=$merged_devb prod=$merged_prod',
     );
+    expect(verify).toContain('merged_check=$(node scripts/src/checked-tree.ts "$SHA")');
+    expect(verify).toContain('If merged now: check=$merged_check');
   });
 
   it('has the history to diff, and classifies a dispatch by where a move came from too', () => {
@@ -140,7 +148,50 @@ describe('the dispatched lane exercises the same lookup', () => {
       at('git merge-base --is-ancestor'),
     );
     expect(at('merged_dev=$(')).toBeGreaterThan(at('echo "mode=$mode" >> "$GITHUB_OUTPUT"'));
+    expect(at('merged_check=$(')).toBeGreaterThan(at('echo "mode=$mode" >> "$GITHUB_OUTPUT"'));
     expect(verify.match(/GITHUB_OUTPUT/g)).toHaveLength(1);
+  });
+});
+
+// A tree match skips main's check (checked-tree.ts); these pin that only `changes` saying `skip` can, that a failed
+// lookup or check deploys nothing, and that a skip upstream never reads as a failure further down.
+describe('deploy.yml skips the check only on a tree match', () => {
+  const ok =
+    "needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip'))";
+
+  it('runs the check unless `changes` printed skip, and the fixture suite alone on `fixtures`', () => {
+    const check = job(deploy, 'check');
+    expect(check).toContain('needs: [changes]');
+    expect(check).toContain("if: ${{ !cancelled() && needs.changes.outputs.check != 'skip' }}");
+    expect(check).toContain('uses: ./.github/workflows/ci.yml');
+    expect(check).toContain("fixtures_only: ${{ needs.changes.outputs.check == 'fixtures' }}");
+  });
+
+  it('deploys dev and devb only after a green check or a planned skip', () => {
+    expect(job(deploy, 'deploy-dev')).toContain(`if: \${{ !cancelled() && ${ok} }}`);
+    expect(job(deploy, 'deploy-devb')).toContain(
+      `if: \${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full' && ${ok} }}`,
+    );
+  });
+
+  it('deploys prod only after dev succeeded, with its results spelled out', () => {
+    expect(job(deploy, 'deploy-prod')).toContain('needs: [deploy-dev, changes]');
+    expect(job(deploy, 'deploy-prod')).toContain(
+      "if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.deploy-dev.result == 'success' && needs.changes.result == 'success' }}",
+    );
+  });
+
+  it('fails a main push that silently deployed nothing or had a job cancelled, and runs no notify job anywhere', () => {
+    const quiet = job(deploy, 'quiet-failure');
+    expect(quiet).toContain('needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]');
+    expect(quiet).toContain(
+      "if: ${{ always() && ((!cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure') || contains(needs.*.result, 'cancelled')) }}",
+    );
+    expect(quiet).toContain('exit 1');
+    for (const yml of [deploy, dispatch]) {
+      expect(yml).not.toMatch(/\n {2}notify:/);
+      expect(yml.toLowerCase()).not.toContain('ntfy');
+    }
   });
 });
 

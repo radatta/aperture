@@ -5,7 +5,8 @@ name: Deploy dev (dispatch)
 # (`pnpm bot deploy-dev`) dispatches this on `ref: main` — main's YAML runs and the feature commit only supplies
 # the tree — or, for a branch that changes `.github/`, on that branch, so its own workflows are what run on dev
 # (only the user can push workflow changes: the bot has no `workflows` permission). `verify` also prints what merging
-# the commit would deploy to each stage, with the same script deploy.yml's `changes` job runs.
+# the commit would deploy to each stage and whether main would skip its check, with the same scripts deploy.yml's
+# `changes` job runs.
 # Two slots in the dev account (INFRA §2): `slot` picks the stack — `dev` (slot A) or `devb` — and the bot's lock decides
 # it (refs/locks/dev or refs/locks/devb). Both run in the `dev` environment with the same role and `_DEV` secrets; the
 # call job's name tells them apart (`deploy` vs `deploy-b`), which is how the bot's currentBase reads what each serves.
@@ -52,7 +53,9 @@ jobs:
     permissions:
       contents: read
       deployments: read # the merge preview: each stage's deployment records
-      actions: read # the merge preview: the recorded job's steps
+      actions: read # the merge preview: the recorded job's steps; the PR run and its steps
+      checks: read # the merge preview: the PR head's check runs and the tested-tree annotation
+      pull-requests: read # the merge preview: the PR that owns the commit
     outputs:
       mode: ${{ steps.verify.outputs.mode }}
     steps:
@@ -119,6 +122,11 @@ jobs:
           merged_devb=$(node scripts/src/deploy-base.ts dev-main "$SHA" --slot devb)
           merged_prod=$(node scripts/src/deploy-base.ts prod "$SHA")
           echo "If merged now: dev-main=$merged_dev devb=$merged_devb prod=$merged_prod"
+          # The tree-match preview (scripts/src/checked-tree.ts): the open PR whose head is this sha, read the way main's
+          # `changes` will read the merged one. It says `skip`/`fixtures` only while the branch sits on main's head and its
+          # PR run is green — the only real-API run of the module before a merge.
+          merged_check=$(node scripts/src/checked-tree.ts "$SHA")
+          echo "If merged now: check=$merged_check"
 
   deploy:
     needs: [verify]
@@ -162,30 +170,3 @@ jobs:
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
-
-  # Same ntfy channel as deploy.yml; the bot also reports the conclusion to the session that dispatched.
-  notify:
-    needs: [verify, deploy, deploy-b]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify ntfy
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          VERIFY_RESULT: ${{ needs.verify.result }}
-          # The slot that ran; the other's job is skipped.
-          DEV_RESULT: ${{ inputs.slot == 'devb' && needs.deploy-b.result || needs.deploy.result }}
-          SLOT: ${{ inputs.slot }}
-          SHA: ${{ inputs.sha }}
-          KEY: ${{ inputs.key }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="verify=$VERIFY_RESULT $SLOT=$DEV_RESULT  $SHA"
-          if [ "$VERIFY_RESULT" = "success" ] && [ "$DEV_RESULT" = "success" ]; then
-            curl -s -H "Title: ✅ dev dispatch ok ($KEY)" -H "Priority: min" \
-              -d "$body" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
-          else
-            curl -s -H "Title: ❌ dev dispatch FAILED ($KEY)" -H "Priority: high" -H "Tags: warning" \
-              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
-          fi
