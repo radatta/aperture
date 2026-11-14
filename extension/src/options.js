@@ -30,7 +30,7 @@
   }
 
   // Not async: permissions.request must run inside the click's user gesture, before anything is awaited
-  // (Firefox and Safari reject it otherwise). It resolves true at once when the origin is already granted.
+  // (Safari rejects it otherwise). It resolves true at once when the origin is already granted.
   $('options-form').addEventListener('submit', (e) => {
     e.preventDefault();
     say('saveStatus', '');

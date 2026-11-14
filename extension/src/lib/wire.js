@@ -253,6 +253,91 @@
     return parts;
   }
 
+  // The problem doc LeetCode renders into a fresh load's __NEXT_DATA__ (debug log 8, 2026-11-10): the
+  // dehydrated questionDetail query whose question is the slug its key names; null for any other shape.
+  function pageProblem(text) {
+    const queries = obj(obj(obj(obj(parse(text))?.props)?.pageProps)?.dehydratedState)?.queries;
+    if (!Array.isArray(queries)) return null;
+    for (const entry of queries) {
+      const key = obj(entry)?.queryKey;
+      if (!Array.isArray(key) || key[0] !== 'questionDetail') continue;
+      const slug = obj(key[1])?.titleSlug;
+      const q = obj(obj(obj(entry.state)?.data)?.question);
+      if (q && typeof slug === 'string' && q.titleSlug === slug) return q;
+    }
+    return null;
+  }
+  // The fields A1 and the sitting read (content.js startBody; packages/shared/src/sittings.ts
+  // problemStatementText, problemCompanies).
+  const PROBLEM_FIELDS = [
+    'title',
+    'titleSlug',
+    'questionId',
+    'questionFrontendId',
+    'difficulty',
+    'topicTags',
+    'content',
+    'companyTagStatsV2',
+  ];
+  // What A1 can store, as packages/shared/src/sittings.ts payloadError rules it (the doc itself at depth 0):
+  // nothing nested deeper than 20, no number that isn't finite, past MAX_SAFE_INTEGER, or nonzero under 1e-130
+  // in magnitude. Those values are dropped (left out of objects, filtered out of arrays), everything else kept,
+  // so a doc can never make A1 refuse the Start. One more is dropped though A1 would take it: an own
+  // `__proto__` key (JSON.parse makes one), which assigned here would set the copy's prototype instead.
+  // `dropped` counts them all; the tests run payloadError over the output, so the two can't drift.
+  const MAX_DEPTH = 20;
+  const storableNumber = (n) =>
+    Number.isFinite(n) &&
+    Math.abs(n) <= Number.MAX_SAFE_INTEGER &&
+    (n === 0 || Math.abs(n) >= 1e-130);
+  function cleanProblem(doc) {
+    let dropped = 0;
+    const DROP = {};
+    const walk = (v, depth) => {
+      if (depth > MAX_DEPTH || (typeof v === 'number' && !storableNumber(v))) {
+        dropped++;
+        return DROP;
+      }
+      if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1)).filter((x) => x !== DROP);
+      if (v && typeof v === 'object') {
+        const out = {};
+        for (const [k, x] of Object.entries(v)) {
+          if (k === '__proto__') {
+            dropped++;
+            continue;
+          }
+          const c = walk(x, depth + 1);
+          if (c !== DROP) out[k] = c;
+        }
+        return out;
+      }
+      return v;
+    };
+    const d = obj(doc);
+    return { doc: d ? walk(d, 0) : null, dropped };
+  }
+  // A doc as the Start may carry it, cleaned to what A1 stores: whole when it fits `max` bytes, else only
+  // PROBLEM_FIELDS, else null. → {doc, fit: 'whole' | 'trimmed' | null, cleaned (values dropped)}
+  function fitProblemDetail(doc, max) {
+    const { doc: d, dropped } = cleanProblem(doc);
+    if (!d) return { doc: null, fit: null, cleaned: dropped };
+    if (bytes(JSON.stringify(d)) <= max) return { doc: d, fit: 'whole', cleaned: dropped };
+    const slim = {};
+    for (const k of PROBLEM_FIELDS) if (k in d) slim[k] = d[k];
+    return bytes(JSON.stringify(slim)) <= max
+      ? { doc: slim, fit: 'trimmed', cleaned: dropped }
+      : { doc: null, fit: null, cleaned: dropped };
+  }
+  const fitProblem = (doc, max) => fitProblemDetail(doc, max).doc;
+  // A request's GraphQL operation names, for the debug log: only text shaped as a GraphQL name (the page
+  // writes it), never variables.
+  const OP_NAME = /^[_A-Za-z][_0-9A-Za-z]{0,39}$/;
+  const opNames = (reqText) =>
+    ops(parse(reqText))
+      .map((o) => o.operationName)
+      .filter((n) => typeof n === 'string' && OP_NAME.test(n))
+      .slice(0, 5);
+
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const KINDS = [...SENDABLE, 'hint', 'problem'];
 
@@ -263,6 +348,12 @@
     createCapture,
     toEventInputs,
     splitReplay,
+    pageProblem,
+    fitProblem,
+    fitProblemDetail,
+    cleanProblem,
+    opNames,
+    PROBLEM_FIELDS,
     pathOf,
     bytes,
     SENDABLE,

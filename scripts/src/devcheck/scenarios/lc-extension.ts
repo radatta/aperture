@@ -385,6 +385,166 @@ export const lcExtension: Scenario = {
         why: `${noStep}; merge() is a pure function`,
       },
     },
+    // lc-polish: the problem doc from the page's __NEXT_DATA__, the Start overlay's scrim, the GraphQL-bodies probe.
+    {
+      id: 'ext-page-doc',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'A fresh load’s Start carries the problem doc LeetCode rendered into the page, so the sitting has its statement and companies',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a fresh load’s Start carries the statement and the companies, read as the server reads them',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, with a __NEXT_DATA__ tag shaped as debug log 8 found it`,
+      },
+    },
+    {
+      id: 'ext-page-doc-load',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Scripts that run while the page still loads (Safari’s document_start) read the doc at DOMContentLoaded',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'reads it at DOMContentLoaded when the scripts ran while the page was still loading, as in Safari',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, held at “loading” as Safari runs them`,
+      },
+    },
+    {
+      id: 'ext-page-doc-foreign',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A page doc for another problem is never used, even once the address names that problem (after Next the tag still holds the first one’s)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a page doc for another problem is ignored, even once the address names it',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-page-doc-fetched',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A doc LeetCode fetches wins over the page’s',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'LeetCode’s fetched doc wins over the page’s',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-page-doc-id',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The page doc’s question id is never trusted: a forged one still lets the sitting’s snapshots through',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'never takes a question id from the page: a forged one still lets the sitting’s snapshots through',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom; dev can’t forge LeetCode’s page`,
+      },
+    },
+    {
+      id: 'ext-page-doc-resume',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A reload fills in the doc a Start went without',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a reload fills in the doc a Start went without',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-page-doc-late',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A doc that comes while Start is still going is sent once the sitting is active',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a doc that comes while Start is still going is sent once the sitting is active',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, with Aperture’s answer held`,
+      },
+    },
+    {
+      id: 'ext-doc-fit',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The doc goes whole under 64 KB, else only the eight fields read, else not at all',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'fits a doc to the cap: whole when it fits, else the fields A1 reads, else nothing',
+        why: `${noStep}; fitProblem is a pure function`,
+      },
+    },
+    {
+      id: 'ext-scrim',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'The Start overlay’s scrim is near-solid (0.94) and blurred 20 px under both property names',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'hides the editor: near-solid, blurred under both names; its probe is logged',
+        why: `${noStep}; the CSS is checked as shipped — how Safari paints it is ext-scrim-safari`,
+      },
+    },
+    {
+      id: 'ext-graphql-probe',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Each relayed response says how the page world read it (or why it couldn’t), a few fixed words for the debug log',
+      offDev: {
+        file: 'extension/test/replay.test.ts',
+        test: 'says how it read each response, for the debug log’s probe — a few fixed words, no content',
+        why: `${noStep}; the real page-world script runs in jsdom over both transports`,
+      },
+    },
+    {
+      id: 'ext-page-doc-clean',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Any doc, however deep or odd its numbers, is cleaned to what A1’s payloadError accepts — the extension’s copy of the rule can’t drift from the server’s',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'always yields what A1’s payloadError and normalizeSittingStart accept, however hostile the doc',
+        why: `${noStep}; cleanProblem is a pure function, run against A1’s own payloadError`,
+      },
+    },
+    {
+      id: 'ext-page-doc-unstorable',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A page doc A1 couldn’t store as given never blocks the Start: it goes cleaned, every storable field kept',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a page doc A1 couldn’t store never blocks the Start: it goes cleaned, everything storable kept',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, its Start through A1’s normalizer`,
+      },
+    },
+    {
+      id: 'ext-frontend-id',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The page doc may give the display number (frontendId), digits only and up to six, never the question id',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'takes the page’s display number only as up to six digits',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-statement-safari',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'In Safari, a Start on a freshly loaded problem gives the sitting its statement and companies (get_sitting), and the debug log’s pageDoc says found and fit',
+      needsYou:
+        'Safari has no automation of extensions — the Safari pass: fresh-load a problem, Start, Done in Aperture dev, export the log',
+    },
+    {
+      id: 'ext-scrim-safari',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'In Safari, nothing of the editor is readable through the Start overlay, and the debug log’s scrim says the blur applied',
+      needsYou:
+        'only Safari’s own paint shows it (a closed shadow root on a fixed host) — the Safari pass’s first step, by eye',
+    },
     {
       id: 'ext-selectors',
       entry: 'extension',

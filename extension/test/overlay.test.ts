@@ -9,6 +9,8 @@ import {
   SITTING_ENDED_ERROR,
   isUlid,
   normalizeSittingStart,
+  problemCompanies,
+  problemStatementText,
 } from '@aperture/shared';
 import {
   FetchedResponse,
@@ -52,7 +54,13 @@ function fakeBackground(opts: { configured?: boolean } = {}) {
   const bg = {
     sittings,
     refuse: null as null | { status: number; error: string },
-    handle(msg: Msg) {
+    hold: null as null | Promise<void>, // the next Start's answer waits for it
+    handle(msg: Msg): unknown {
+      if (msg.type === 'start' && bg.hold) {
+        const h = bg.hold;
+        bg.hold = null;
+        return h.then(() => bg.handle(msg));
+      }
       if (msg.type === 'dismiss') dismissed.add(String(msg.slug));
       if (msg.type === 'dismissed?') return { dismissed: dismissed.has(String(msg.slug)) };
       if (msg.type !== 'start') return { ok: true };
@@ -107,10 +115,40 @@ afterEach(() => {
   pages.splice(0).forEach((d) => d.window.close());
 });
 
-function open(path: string, ext: ReturnType<typeof fakeExtension>) {
-  const dom = page(`https://leetcode.com${path}`, src('test/fixtures/fake-leetcode.html'));
+// `nextData`: the __NEXT_DATA__ a fresh load of LeetCode carries (it server-renders the problem doc there).
+// `loading`: the scripts run while the page still parses, as Safari's document_start does (debug log 8) — the
+// tag isn't there yet, and comes with DOMContentLoaded at `loaded()`. jsdom alone runs them at "interactive".
+function open(
+  path: string,
+  ext: ReturnType<typeof fakeExtension>,
+  opts: {
+    nextData?: unknown;
+    loading?: boolean;
+    css?: { supports(p: string, v: string): boolean };
+    lateHint?: boolean; // LeetCode names the question only on fake().sendHint()
+  } = {},
+) {
+  const tag =
+    opts.nextData === undefined
+      ? ''
+      : `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(opts.nextData).replace(/</g, '\\u003c')}</script>`;
+  let html = src('test/fixtures/fake-leetcode.html');
+  if (!opts.loading) html = html.replace('</head>', `${tag}</head>`);
+  const dom = page(`https://leetcode.com${path}`, html);
   pages.push(dom);
   const w = dom.window as unknown as Window & typeof globalThis & Record<string, unknown>;
+  let ready = 'loading';
+  if (opts.loading) {
+    Object.defineProperty(w.document, 'readyState', { get: () => ready, configurable: true });
+    // jsdom's own DOMContentLoaded (it has parsed already) never reaches the scripts: only loaded()'s does.
+    const early = (e: Event) => ready === 'loading' && e.stopImmediatePropagation();
+    w.document.addEventListener('DOMContentLoaded', early, true);
+  }
+  const loaded = () => {
+    w.document.head.insertAdjacentHTML('beforeend', tag);
+    ready = 'interactive';
+    w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
+  };
   const lc = createServer();
   const fetchFake = async (input: string | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.url, w.location.href);
@@ -123,6 +161,8 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
     });
   };
   const rootOf = shadowRoots(dom);
+  if (opts.css) (w as Record<string, unknown>).CSS = opts.css; // the browser's CSS namespace, as the page's scripts see it
+  if (opts.lateHint) w.__fakeOpts = { lateHint: true };
   run(dom, MAIN_JS, { fetch: fetchFake });
   run(dom, ISOLATED_JS, { chrome: ext.api });
   run(dom, ['test/fixtures/fake-leetcode.js']);
@@ -149,9 +189,12 @@ function open(path: string, ext: ReturnType<typeof fakeExtension>) {
       timerResetClicks: number;
       slowNext: boolean;
       finishNext: () => void;
+      fetchDoc: () => void;
+      sendHint: () => void;
       setTimer: (s: Record<string, unknown>) => void;
     };
-  return { w, phase, text, button, tap, badge, fake };
+  const style = () => root()?.querySelector('style')?.textContent ?? '';
+  return { w, phase, text, button, tap, badge, fake, style, loaded };
 }
 const messages = (ext: ReturnType<typeof fakeExtension>, type: string) =>
   (ext.sent as Msg[]).filter((m) => m.type === type);
@@ -766,4 +809,353 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => delivered.some((m) => m.events!.some((e) => e.type === 'submit')), 20_000);
     await until(() => !p.badge()?.includes('events waiting'), 3000);
   }, 75_000);
+});
+
+// The debug log's first entry of a type (Options → Debug mode on), once its 2 s flush has written it.
+type DebugEntry = { type: string } & Record<string, unknown>;
+const logged = (ext: ReturnType<typeof fakeExtension>, type: string) =>
+  until(() => (ext.local.data.debugLog as DebugEntry[] | undefined)?.find((e) => e.type === type));
+
+// The problem doc a fresh load renders into __NEXT_DATA__ (debug log 8, 2026-11-10): the statement and the
+// companies on a Start Safari never sees LeetCode fetch a doc for. Values synthetic.
+describe('the problem doc from the page', () => {
+  const SSR = {
+    title: 'Two Sum',
+    titleSlug: 'two-sum',
+    questionId: '1',
+    questionFrontendId: '1',
+    difficulty: 'Easy',
+    topicTags: [{ name: 'Array', slug: 'array' }],
+    content: '<p>Find <code>two</code> numbers.</p>',
+    companyTagStatsV2: '{"three_months":[{"name":"Acme","timesEncountered":3}]}',
+    codeSnippets: [{ lang: 'Python3', langSlug: 'python3', code: 'class Solution: pass' }],
+  };
+  const nextData = (question: Record<string, unknown>) => ({
+    props: {
+      pageProps: {
+        dehydratedState: {
+          queries: [
+            { queryKey: ['globalData', {}], state: { data: {} } },
+            {
+              queryKey: ['questionDetail', { titleSlug: question.titleSlug }],
+              state: { data: { question } },
+            },
+          ],
+        },
+      },
+    },
+  });
+  const startOf = (ext: ReturnType<typeof fakeExtension>) =>
+    messages(ext, 'start')[0]!.body as Record<string, unknown> & { problem: unknown };
+
+  it('a fresh load’s Start carries the statement and the companies, read as the server reads them', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/description/', ext, { nextData: nextData(SSR) });
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    const raw = startOf(ext).problem;
+    expect(raw).toEqual(SSR); // whole: it fits the cap
+    expect(startOf(ext)).toMatchObject({ frontendId: '1' }); // the page's, for display: no doc was fetched
+    expect(problemStatementText({ raw })).toBe('Find two numbers.');
+    expect(problemCompanies({ raw })).toEqual(['Acme']);
+    expect(ext.local.data['sitting:two-sum']).toMatchObject({ problemSent: true });
+    // The probe: sizes and shape only.
+    expect(await logged(ext, 'pageDoc')).toMatchObject({
+      when: 'load',
+      chars: expect.any(Number), // the tag's length in characters, not bytes
+      found: true,
+      match: true,
+      fit: 'whole',
+      cleaned: 0,
+    });
+  }, 20_000);
+
+  it('reads it at DOMContentLoaded when the scripts ran while the page was still loading, as in Safari', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const page = { ...SSR, title: 'Two Sum (page)' };
+    const p = open('/problems/two-sum/', ext, { nextData: nextData(page), loading: true });
+    await until(() => p.phase() === 'prompt');
+    p.loaded();
+    await until(() => p.text().includes('Two Sum (page)')); // read at load, before any Start
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext).problem).toEqual(page);
+    expect(await logged(ext, 'pageDoc')).toMatchObject({
+      when: 'load',
+      readyState: 'interactive',
+      found: true,
+    });
+  }, 20_000);
+
+  it('takes the page’s display number only as up to six digits', async () => {
+    for (const questionFrontendId of ['abc', '1234567', 12.5]) {
+      const bg = fakeBackground();
+      const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+      const p = open('/problems/two-sum/', ext, {
+        nextData: nextData({ ...SSR, questionFrontendId }),
+      });
+      await until(() => p.phase() === 'prompt');
+      p.tap('start');
+      await until(() => p.phase() === 'active', 8000);
+      expect(startOf(ext).frontendId, String(questionFrontendId)).toBeNull();
+    }
+  }, 30_000);
+
+  it('an id the page made unprintable never stalls the Start', async () => {
+    // The page's JSON parses to an own `toString: 0`, so String() of it throws inside startBody.
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext, {
+      nextData: nextData({ ...SSR, questionFrontendId: { toString: 0 } }),
+    });
+    await until(() => p.phase() === 'prompt');
+    p.w.localStorage.setItem('qd_solve_session:two-sum', '{"id":{"toString":0}}');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext)).toMatchObject({ frontendId: null, lcSolveSessionId: null });
+  }, 20_000);
+
+  it('a page doc A1 couldn’t store never blocks the Start: it goes cleaned, everything storable kept', async () => {
+    const bg = fakeBackground(); // its Start runs A1’s normalizeSittingStart, which refuses an unstorable doc
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    let nested: unknown = 'too deep';
+    for (let i = 0; i < 25; i++) nested = [nested];
+    const odd = { ...SSR, likes: 2 ** 53, acRate: 1e-200, envInfo: { nested }, hints: ['h'] };
+    const p = open('/problems/two-sum/', ext, { nextData: nextData(odd) });
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    // Through JSON: the body was built in the page's realm, whose Array isn't this one's.
+    const raw = JSON.parse(JSON.stringify(startOf(ext).problem)) as Record<string, unknown>;
+    expect(raw).toMatchObject({
+      content: SSR.content,
+      hints: ['h'],
+      envInfo: { nested: expect.any(Array) },
+    });
+    expect(raw).not.toHaveProperty('likes');
+    expect(raw).not.toHaveProperty('acRate');
+    expect(await logged(ext, 'pageDoc')).toMatchObject({ fit: 'whole', cleaned: 3 });
+  }, 20_000);
+
+  it('blank page values never block the Start: a blank solve session, blank tag links, a blank slug name', async () => {
+    // The fake background runs A1’s normalizeSittingStart, which refuses a blank required text.
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext); // no doc: the tags come from the page's links
+    await until(() => p.phase() === 'prompt');
+    p.w.localStorage.setItem('qd_solve_session:two-sum', '{"id":"   "}');
+    p.w.document.body.insertAdjacentHTML(
+      'beforeend',
+      '<a href="/tag/-"></a><a href="/tag/ "> </a>',
+    );
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext)).toMatchObject({
+      lcSolveSessionId: null,
+      topicTags: ['Array', 'Hash Table'],
+    });
+    // A slug that humanizes to nothing, with no doc and a tab title for another problem: named by the slug.
+    const bg2 = fakeBackground();
+    const ext2 = fakeExtension({ onMessage: (m) => bg2.handle(m as Msg) });
+    const q = open('/problems/-/', ext2);
+    await until(() => q.phase() === 'prompt');
+    q.tap('start');
+    await until(() => q.phase() === 'active', 8000);
+    expect(startOf(ext2)).toMatchObject({ problemSlug: '-', problemTitle: '-' });
+  }, 30_000);
+
+  it('a page doc for another problem is ignored, even once the address names it', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const forged = {
+      ...SSR,
+      title: 'Forged Name',
+      titleSlug: 'add-two-numbers',
+      content: '<p>f</p>',
+    };
+    const p = open('/problems/two-sum/', ext, { nextData: nextData(forged) });
+    await until(() => p.phase() === 'prompt' && p.text().includes('Two Sum'));
+    p.fake().slowNext = true; // no doc of its own comes for the next problem
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => p.text().includes('Add Two Numbers'));
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext)).toMatchObject({
+      problemSlug: 'add-two-numbers',
+      problemTitle: 'Add Two Numbers',
+      problem: null,
+    });
+    expect(p.text()).not.toContain('Forged Name');
+  }, 20_000);
+
+  it('LeetCode’s fetched doc wins over the page’s', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext, {
+      nextData: nextData({ ...SSR, title: 'Two Sum (page)', questionFrontendId: '77' }),
+    });
+    await until(() => p.phase() === 'prompt' && p.text().includes('Two Sum (page)'));
+    p.fake().fetchDoc();
+    await until(() => !p.text().includes('(page)'));
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext)).toMatchObject({
+      problemTitle: 'Two Sum',
+      frontendId: '1', // the fetched doc's, over the page's 77
+      problem: { title: 'Two Sum' },
+    });
+    expect(startOf(ext).problem).not.toHaveProperty('content'); // the fake server's doc has none
+  }, 20_000);
+
+  it('never takes a question id from the page: a forged one still lets the sitting’s snapshots through', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const forged = { ...SSR, questionId: '999', questionFrontendId: '999' };
+    const p = open('/problems/two-sum/', ext, { nextData: nextData(forged) });
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    // The page's number is shown (display only); its question id is never taken.
+    expect(startOf(ext)).toMatchObject({ frontendId: '999', problem: { questionId: '999' } });
+    expect([null, '1']).toContain(startOf(ext).questionId);
+    await until(
+      () => (ext.local.data['sitting:two-sum'] as { questionId?: string }).questionId === '1',
+    );
+    const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += 'return [0, 1]\n';
+    code.dispatchEvent(new p.w.Event('input'));
+    (p.w.document.querySelector('[data-e2e-locator=console-submit-button]') as HTMLElement).click();
+    await until(() => sentEvents(ext).some((e) => e.type === 'snapshot'), 6000);
+  }, 20_000);
+
+  it('a reload fills in the doc a Start went without', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(ext.local.data['sitting:two-sum']).toMatchObject({ problemSent: false });
+    const r = open('/problems/two-sum/', ext, { nextData: nextData(SSR) });
+    await until(() => r.phase() === 'active', 6000);
+    await until(() => messages(ext, 'start').some((m) => m.body!.problem));
+    expect(messages(ext, 'start').at(-1)!.body).toMatchObject({
+      problem: { content: SSR.content },
+    });
+    await until(() => (ext.local.data['sitting:two-sum'] as { problemSent?: boolean }).problemSent);
+    expect(bg.sittings).toHaveLength(1);
+  }, 20_000);
+
+  it('a fill whose binding learns the question id meanwhile still marks the doc sent', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext, {
+      nextData: nextData(SSR),
+      loading: true,
+      lateHint: true,
+    });
+    await until(() => p.phase() === 'prompt');
+    p.tap('start'); // before the page's doc is parsed, and before LeetCode names the question
+    await until(() => p.phase() === 'active', 8000);
+    const bound = () =>
+      ext.local.data['sitting:two-sum'] as { questionId?: string | null; problemSent?: boolean };
+    expect(bound()).toMatchObject({ questionId: null, problemSent: false });
+    let release = () => {};
+    bg.hold = new Promise<void>((res) => (release = res));
+    p.loaded(); // the page's doc → the fill, held
+    await until(() => messages(ext, 'start').length === 2);
+    p.fake().sendHint(); // LeetCode names the question mid-fill: the binding is rewritten
+    await until(() => bound().questionId === '1');
+    release();
+    await until(() => bound().problemSent === true);
+    expect(bound().questionId).toBe('1');
+  }, 20_000);
+
+  it('a doc that comes while Start is still going is sent once the sitting is active', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    let release = () => {};
+    bg.hold = new Promise<void>((res) => (release = res));
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => messages(ext, 'start').length === 1); // its body went without a doc
+    p.fake().fetchDoc(); // LeetCode's doc lands while Aperture is still answering
+    await new Promise((res) => setTimeout(res, 300));
+    release();
+    await until(() => p.phase() === 'active', 8000);
+    expect(startOf(ext).problem).toBeNull();
+    await until(() => messages(ext, 'start').some((m) => m.body!.problem), 6000);
+    expect(new Set(messages(ext, 'start').map((m) => m.body!.clientSittingId)).size).toBe(1);
+  }, 20_000);
+});
+
+describe('the scrim', () => {
+  it('hides the editor: near-solid, blurred under both names; its probe is logged', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const asked: string[] = [];
+    const css = { supports: (prop: string, v: string) => (asked.push(`${prop}: ${v}`), true) };
+    const p = open('/problems/two-sum/', ext, { css });
+    await until(() => p.phase() === 'prompt');
+    const scrim = p.style().match(/\.scrim \{[^}]*\}/)?.[0] ?? '';
+    expect(scrim).toContain('background: rgba(12, 14, 18, 0.94)');
+    expect(scrim).toContain('-webkit-backdrop-filter: blur(20px)');
+    expect(scrim).toMatch(/[^-]backdrop-filter: blur\(20px\)/);
+    expect(await logged(ext, 'scrim')).toMatchObject({
+      supports: { std: true, webkit: true },
+      computed: expect.any(Object),
+    });
+    expect(asked).toEqual(['backdrop-filter: blur(20px)', '-webkit-backdrop-filter: blur(20px)']);
+  });
+});
+
+describe('the debug log’s wire probe', () => {
+  // Counts the isolated world's calls to wire.opNames (the parse only the probe needs).
+  const counting = (p: ReturnType<typeof open>) => {
+    const wire = (p.w as unknown as { ApertureLC: { wire: { opNames: (t: unknown) => string[] } } })
+      .ApertureLC.wire;
+    const real = wire.opNames;
+    const calls = { n: 0 };
+    wire.opNames = (t) => (calls.n++, real(t));
+    return calls;
+  };
+  const traffic = async (p: ReturnType<typeof open>) => {
+    p.fake().fetchDoc();
+    await new Promise((res) => setTimeout(res, 300));
+  };
+
+  it('parses a request’s operation names only with Debug mode on, and logs them', async () => {
+    const off = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    const p = open('/problems/two-sum/', off);
+    await until(() => p.phase() === 'prompt');
+    const calls = counting(p);
+    await traffic(p);
+    expect(calls.n).toBe(0);
+
+    const on = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await on.local.set({ debug: true });
+    const q = open('/problems/two-sum/', on);
+    await until(() => q.phase() === 'prompt');
+    const seen = counting(q);
+    await traffic(q);
+    expect(seen.n).toBeGreaterThan(0);
+    const entry = await until(() =>
+      (on.local.data.debugLog as DebugEntry[] | undefined)?.find(
+        (e) => e.type === 'wire' && JSON.stringify(e.ops) === '["questionDetail"]',
+      ),
+    );
+    expect(entry).toMatchObject({
+      how: 'fetch:ok',
+      req: expect.any(Number),
+      res: expect.any(Number),
+    });
+  }, 20_000);
 });

@@ -22,7 +22,11 @@ let dom: JSDOM | null = null;
 afterEach(() => dom?.window.close());
 
 const ctx = { screenSlug: 'two-sum', binding: { questionId: '1', status: 'active' } };
-function loadMain(pairs: Pair[], respond?: (url: string) => Response | null) {
+function loadMain(
+  pairs: Pair[],
+  respond?: (url: string) => Response | null,
+  opts: { xhrType?: string } = {},
+) {
   dom = page('https://leetcode.com/problems/two-sum/description/');
   const w = dom.window as unknown as Window & typeof globalThis & Record<string, unknown>;
   const answer = byUrl(pairs);
@@ -80,7 +84,7 @@ function loadMain(pairs: Pair[], respond?: (url: string) => Response | null) {
       return this.s;
     }
     get responseType() {
-      return '';
+      return opts.xhrType ?? '';
     }
     get responseText() {
       return this.text;
@@ -228,5 +232,41 @@ describe('inject-main in a page', () => {
       body: T.questionDetail.reqText,
     });
     expect(await res.json()).toEqual(JSON.parse(T.questionDetail.resText));
+  });
+
+  it('says how it read each response, for the debug log’s probe — a few fixed words, no content', async () => {
+    let first = true;
+    // A Response whose body is already being read: its clone throws, as a failed one would in Safari.
+    const used = () => {
+      if (!first) return null;
+      first = false;
+      const r = new FetchedResponse(T.questionDetail.resText, {
+        status: 200,
+        url: 'https://leetcode.com/graphql/',
+      });
+      void r.text();
+      return r;
+    };
+    const m = loadMain([T.questionDetail, T.questionDetail, T.unrelated] as Pair[], used);
+    await m.post(T.questionDetail);
+    await m.post(T.questionDetail);
+    await m.post(T.unrelated);
+    await until(() => m.raws.length >= 3);
+    // Each with its body or without it, as its word says (the read one lands last).
+    expect(Object.fromEntries(m.raws.map((r) => [r.how, r.resText !== null]))).toEqual({
+      'fetch:no-clone': false,
+      'fetch:ok': true,
+      'fetch:skip': false,
+    });
+    dom!.window.close();
+
+    const x = loadMain([T.questionDetail, T.updateNote] as Pair[], undefined, { xhrType: 'json' });
+    x.xhr(T.questionDetail);
+    x.xhr(T.updateNote);
+    expect(await until(() => (x.raws.length >= 2 ? x.raws.map((r) => r.how) : null))).toEqual([
+      'xhr:type-json',
+      'xhr:skip',
+    ]);
+    expect(x.raws[0]!.resText).toBeNull();
   });
 });

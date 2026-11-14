@@ -2,7 +2,7 @@
 // Start a sitting (answered directly) and hands it events, which go through the outbox (lib/outbox.js): one
 // POST in flight, in order, retried with backoff, persisted in storage.local so a browser restart loses
 // nothing. Every outcome lands in storage.local (`status`, `sync:<slug>`) for the badge and the options page.
-// Safari/Firefox load it as an event page (manifest background.scripts, after lib/outbox.js).
+// Safari loads it as an event page (manifest background.scripts, after lib/outbox.js).
 (() => {
   'use strict';
   const api =

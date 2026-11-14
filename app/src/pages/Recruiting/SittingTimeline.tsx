@@ -45,7 +45,7 @@ export function SittingTimeline({
                 {e.verdict.total != null && ` · ${e.verdict.passed ?? 0}/${e.verdict.total}`}
               </Text>
             </div>
-            <CaseDetail detail={e.detail} />
+            <CaseDetail detail={e.detail} accepted={e.verdict.verdict === 'accepted'} />
           </li>
         ),
       )}
@@ -53,7 +53,8 @@ export function SittingTimeline({
   );
 }
 
-function CaseDetail({ detail }: { detail: JudgeDetail }) {
+// An accepted Run still carries its case: it didn't fail, so it isn't named a failing one.
+function CaseDetail({ detail, accepted }: { detail: JudgeDetail; accepted: boolean }) {
   const rows = (
     [
       ['Input', detail.input],
@@ -66,7 +67,7 @@ function CaseDetail({ detail }: { detail: JudgeDetail }) {
   return (
     <details className="mt-1">
       <summary className="cursor-pointer text-sm text-ink-muted">
-        {detail.error ? 'Error' : 'Failing case'}
+        {detail.error ? 'Error' : accepted ? 'Case' : 'Failing case'}
       </summary>
       <dl className="mt-1 flex flex-col gap-1">
         {rows.map(([k, v]) => (

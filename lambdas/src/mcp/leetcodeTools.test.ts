@@ -54,11 +54,31 @@ async function open() {
   });
   return sitting;
 }
-const snap = (code: string, at: number) => ({
+// lang is updateSyncedCode's numeric id, as the extension sends it (11 = Python3).
+const snap = (code: string, at: number, lang: string = '11') => ({
   id: ulid(),
   type: 'snapshot',
   at,
-  payload: { code, lang: 'python3' },
+  payload: { code, lang },
+});
+// A Run LeetCode calls "Accepted" (it ran) whose answers didn't match (captured 2026-11-08).
+const wrongRun = (at: number) => ({
+  id: ulid(),
+  type: 'run',
+  at,
+  payload: {
+    request: { data_input: '"abc"' },
+    result: {
+      status_code: 10,
+      status_msg: 'Accepted',
+      correct_answer: false,
+      total_correct: 0,
+      total_testcases: 3,
+      code_answer: ['3'],
+      code_output: ['debug'],
+      expected_code_answer: ['2'],
+    },
+  },
 });
 
 describe('live_sitting', () => {
@@ -175,6 +195,45 @@ describe('live_sitting', () => {
     // an older submit's.
     await doc.delete(pk(U), sk.sittingJudged(s.id, late.id));
     expect((await run()).lastSubmit).toMatchObject({ verdict: 'wrong_answer', detail: null });
+  });
+
+  it('a Run that ran but answered wrong is a wrong answer, showing its answer, not its prints', async () => {
+    const s = await open();
+    await backend.lcSittingEvents({ sittingId: s.id, events: [wrongRun(T0 + 60_000)] as never });
+    expect((await run()).lastRun).toEqual(
+      expect.objectContaining({
+        verdict: 'wrong_answer',
+        statusMsg: 'Wrong Answer',
+        passed: 0,
+        total: 3,
+        detail: { input: '"abc"', expected: '2', output: '3', error: null },
+      }),
+    );
+  });
+
+  it('a head row folded under the old rule is read past: the payload in hand decides', async () => {
+    const s = await open();
+    const r = wrongRun(T0 + 60_000);
+    await backend.lcSittingEvents({ sittingId: s.id, events: [r] as never });
+    // The head row as a pre-fix write folded it: the wrong Run stored as accepted (the summary refolds from it).
+    const row = (await doc.get(pk(U), sk.sittingHeadRow(s.id, r.id)))!;
+    const verdict = row.verdict as Record<string, unknown>;
+    await doc.put({ ...row, verdict: { ...verdict, verdict: 'accepted', statusMsg: 'Accepted' } });
+    expect((await run()).lastRun).toMatchObject({
+      verdict: 'wrong_answer',
+      statusMsg: 'Wrong Answer',
+    });
+  });
+
+  it('names the code’s language from LeetCode’s id, else the sitting’s', async () => {
+    const s = await open();
+    await backend.lcSittingEvents({ sittingId: s.id, events: [snap('a', T0 + 1_000)] as never });
+    expect((await run()).code.lang).toBe('Python3');
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [snap('b', T0 + 2_000, '999')] as never,
+    });
+    expect((await run()).code.lang).toBe('python3'); // the Start's lang
   });
 
   it('sinceVersion says whether the code moved, and every pull counts', async () => {
@@ -327,13 +386,28 @@ describe('get_sitting and list_sittings', () => {
         },
         { kind: 'codeChanged', count: 1 },
       ],
-      code: { final: 'v2', version: 2 },
+      code: { final: 'v2', version: 2, lang: 'Python3' },
       review: { insight: 'two pointers', help: 'hint', tags: ['two-pointers'] },
     });
     expect(out.review.updatedAt).toMatch(/^\d{4}-\d\d-\d\dT/); // ISO, like every other time
     expect(out.timeline[1].detail.input).toHaveLength(300);
     expect(JSON.stringify(doc.snapshot())).toBe(before);
     expect(await call('get_sitting', { id: s.id })).toMatchObject({ sitting: { id: s.id } });
+  });
+
+  it('get_sitting reads a wrong Run as one, its answer as the output', async () => {
+    const s = await open();
+    await backend.lcSittingEvents({ sittingId: s.id, events: [wrongRun(T0 + 60_000)] as never });
+    expect((await call('get_sitting')).timeline).toEqual([
+      expect.objectContaining({
+        type: 'run',
+        verdict: 'wrong_answer',
+        statusMsg: 'Wrong Answer',
+        passed: 0,
+        total: 3,
+        detail: { input: '"abc"', expected: '2', output: '3', error: null },
+      }),
+    ]);
   });
 
   it('get_sitting: nothing yet says so; a bad id is a param error; a foreign one is Not found', async () => {

@@ -75,6 +75,12 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 - **Head rows** (`lcs#<id>#hd#<ulid>`): a run's, submit's, note's or timer read's compact verdict (`headRowOf`),
   ~200 B, so the recompute stays cheap however large the payloads. The run's, submit's or note's **full
   payload** sits beside it under `lcs#<id>#jd#<ulid>`, kept forever.
+- **A Run's verdict** (`verdictOf`): LeetCode's "Accepted" (10) on a Run only says the code ran; its
+  `correct_answer: false` makes it `wrong_answer`, "Wrong Answer" in our words (with no flag, fewer passed than
+  run — an inference). An errored Run and every Submit stay as judged, so the outcome (submits only) is
+  untouched. Every read — the timeline, `get_sitting`, `live_sitting`, the draft — judges from the payload, so
+  sittings stored before the rule (2026-11-10) read right with no backfill. A Run's shown output is its answer
+  (`code_answer`), not its prints (`code_output`).
 - **Live row** (`lcs#<id>#live`): the newest code (the final code once ended — a late snapshot may still move
   it for the ten-minute grace, _Ingest_ below), the snapshot `version` live
   reads report, and **facts** folded from the replay at ingest — first/last edit, edits, longest stall,
@@ -280,11 +286,14 @@ observes calls LeetCode already made. No scraping, no polling, no automation. (I
 request of its own: the `POST` to our own backend.) That's the best ToS posture available and the reason
 this exists as an extension rather than a scheduled scraper.
 
-**The problem doc is LeetCode's own `questionDetail`, the DOM the fallback.** LeetCode doesn't fetch it on
-a fresh page load (the header is server-rendered) — only after a submit and on a navigation (2026-11-08
-capture). So Start reads title, difficulty and topic tags off the page (degrading to a slug-derived title
-and `null`s), and when a `questionDetail` for the problem arrives, a repeat Start fills the doc in. Don't
-add a fetch of our own for it: the extension stays passive.
+**The problem doc is LeetCode's own `questionDetail`, the DOM the fallback.** A fresh load carries it
+server-rendered in `__NEXT_DATA__`, and LeetCode fetches it only after a submit or on a navigation (2026-11-08
+capture; 2026-11-10 debug log). So the extension reads the page's copy, for the problem the document was
+loaded for only, as names and text — never a question id — and a fetched doc wins over it; without either,
+Start reads title, difficulty and tags off the page (degrading to a slug-derived title and `null`s). A doc
+that comes after the Start goes in a repeat Start that fills it in. How, and the 64 KB fit:
+`extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the
+extension stays passive.
 
 **The page's world is evidence, never authority** (Rahul, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
@@ -427,11 +436,12 @@ like a failed patch (`window.fetch` stays `[native code]`).
 
 ### Loading a temporary extension (layer 3)
 
-Safari: Develop → **Add Temporary Extension…** → this repo's `extension/` folder (Safari 18.4+; the
-Develop menu needs Settings → Advanced → _Show features for web developers_). Firefox: steps and the
-128+ requirement in `extension/README.md` → _Load it in Firefox_. Options: README → _Configure_.
-Temporary extensions don't survive a restart; re-add each time — acceptable for iteration, not for the
-daily driver.
+Safari: Settings → **Developer** → **Add Temporary Extension…** → this repo's `extension/` folder, then
+tick it under Extensions → _Temporary_ (the Developer tab needs Settings → Advanced → _Show features for
+web developers_; Apple, "Running your Safari web extension", checked 2026-11-13). Options: README →
+_Configure_.
+Safari drops temporary extensions on quit or after 24 h; re-add each time — acceptable for iteration,
+not for the daily driver.
 
 ### Firefox: signing via AMO (2026-09-08; retired and removed 2026-11-10)
 
@@ -476,7 +486,7 @@ things.
 
 ### Why not two permanent installs (one per stage)
 
-**Firefox:** two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
+**Firefox** (the reasoning while it ran; retired 2026-11-10): two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
 the ID _is_ the add-on's identity. That's two manifests, two names, two AMO submissions, and two signing
 rounds on every change, forever. And what it buys is two live capture paths, which is the opposite of
 what you want: real practice should land in exactly one stage. A separate profile gets the same
@@ -498,7 +508,7 @@ third one is ongoing work, and only for these events:
 | Cognito pool replaced                                                                | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never                                            |
 | Origin changes                                                                       | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08                             |
 | New browser / profile / machine                                                      | paste the token there — `storage.local` is per-profile                                                                                  |
-| Browser restart (temporary extension only)                                           | re-add it. The installed apps / signed add-on are unaffected                                                                            |
+| Browser restart (temporary extension only)                                           | re-add it. The installed apps are unaffected                                                                                            |
 | Free Apple certificate expiry (2027-09-28)                                           | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData                                                   |
 | Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |
 | Extension code change                                                                | rebuild per README → _Build it for Safari_ (prod: re-copy files first; both: redo step 4)                                               |
@@ -511,15 +521,16 @@ Lambda is the only place to recover it. Run on the Mac (the container has no AWS
 aws lambda get-function-configuration --function-name aperture-bff-<stage> --region us-west-1 --query 'Environment.Variables.DEVICE_TOKEN' --output text
 ```
 
-Storage is keyed by extension ID, so the saved token should survive a temporary→signed transition with
-the ID unchanged. Worth confirming on the first signed install rather than assuming.
+While Firefox ran (retired 2026-11-10), storage was keyed by extension ID, so the token was expected to
+survive the temporary→signed move with the ID unchanged. In Safari a Temporary Extension and the Xcode
+app are separate extensions, so each one needs the token entered in its own Options.
 
 ### The Chrome alternative (no signing)
 
 Chrome **persists unpacked extensions across restarts** (`chrome://extensions` → Developer mode → Load
-unpacked) — the one property Firefox temporary add-ons lack. It nags with a bubble but stays loaded.
+unpacked) — the one property Safari's temporary extensions lack (layer 3). It nags with a bubble but stays loaded.
 Chrome has supported `world: "MAIN"` since 111, and the code already does `browser.*` with a `chrome`
-fallback. But the Chrome path is **untested** (see Open items), so this trades one AMO upload for an
+fallback. But the Chrome path is **untested** (see Open items), so this trades the free Xcode build for an
 unknown amount of debugging. Only worth it if you already live in Chrome.
 
 ## Testing: what each surface proves

@@ -32,7 +32,9 @@
   const code = $('[data-fake=code]');
   code.value = TEMPLATE + 'pass\n';
 
-  gql('syncedCode', { lang: 11, questionId: qid });
+  // A test's switch, set before load: LeetCode names the question later, on sendHint(), not at once.
+  if (!(window.__fakeOpts && window.__fakeOpts.lateHint))
+    gql('syncedCode', { lang: 11, questionId: qid });
 
   // The editor reset asks first, in a modal LeetCode renders inside the toolbar's group (#editor), as logged.
   const toolbar = $('[data-fake=toolbar]');
@@ -267,4 +269,7 @@
     gql('questionDetail', { titleSlug: 'add-two-numbers' });
   });
   window.__fake.finishNext = () => gql('questionDetail', { titleSlug: 'add-two-numbers' });
+  // LeetCode fetching this problem's doc on its own (it does after a submit or a nav), for a test to time.
+  window.__fake.fetchDoc = () => gql('questionDetail', { titleSlug: slug });
+  window.__fake.sendHint = () => gql('syncedCode', { lang: 11, questionId: qid });
 })();
