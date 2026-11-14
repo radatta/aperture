@@ -1959,6 +1959,42 @@ export function runApiContract(
       expect((await api.getSettings()).remindDueDay).toBe(true);
     });
 
+    it('updateStory and updateSettings refuse a key outside their patch type, writing nothing', async () => {
+      const story = await api.createStory({ title: 'mine' });
+      const before = await api.listStories();
+      await expect(api.updateStory(story.id, { userId: 'mallory' } as never)).rejects.toThrow(
+        'Unknown story field: userId',
+      );
+      await expect(
+        api.updateStory(story.id, { title: 'ok', id: 'other', deletedAt: 1 } as never),
+      ).rejects.toThrow('Unknown story field: id, deletedAt');
+      // Checked before any lookup: a missing story gets the same refusal, not a Not found.
+      await expect(api.updateStory('no-such-story', { userId: 'x' } as never)).rejects.toThrow(
+        'Unknown story field: userId',
+      );
+      for (const bad of [null, [], 'title'])
+        await expect(api.updateStory(story.id, bad as never)).rejects.toThrow(
+          'story patch must be an object',
+        );
+      expect(await api.listStories()).toEqual(before);
+
+      const settings = await api.getSettings();
+      const account = { sub: 'g-other', email: 'x@example.com' };
+      await expect(api.updateSettings({ googleAccounts: [account] } as never)).rejects.toThrow(
+        'Unknown settings field: googleAccounts',
+      );
+      await expect(api.updateSettings({ deletedAt: 1 } as never)).rejects.toThrow(
+        'Unknown settings field: deletedAt',
+      );
+      await expect(api.updateSettings(null as never)).rejects.toThrow(
+        'settings patch must be an object',
+      );
+      expect(await api.getSettings()).toEqual(settings);
+      // A legal patch still lands.
+      expect((await api.updateStory(story.id, { title: 'renamed' })).title).toBe('renamed');
+      expect((await api.updateSettings({ pomodoroBreakMin: 7 })).pomodoroBreakMin).toBe(7);
+    });
+
     it('flux sets (D61): default {}, round-trips, refuses a bad count or an unknown exercise', async () => {
       expect((await api.getSettings()).fluxSets).toEqual({});
       const one = await api.updateSettings({ fluxSets: { 'chin-tuck': 3 } });

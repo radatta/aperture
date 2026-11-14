@@ -32,7 +32,7 @@ export interface RpcCall {
 // Injected dependencies that outlive a single call (the S3 presigner is built once at cold start). Kept
 // separate from RpcCall so the contract suite can supply a fake without a per-call field.
 export interface RpcDeps {
-  presigner?: Presigner;
+  presigner?: Presigner; // mints attachment URLs; ignored in testMode
   objects?: ObjectStore; // deletes attachment bytes in S3; ignored in testMode
   plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
   financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
@@ -57,7 +57,8 @@ export async function handleRpc(
     now: call.now,
     google,
     stateSecret: call.stateSecret,
-    presigner: deps.presigner,
+    // No presigner in testMode: the unconfigured one refuses, so a smoke run never mints a signed URL.
+    presigner: call.testMode ? undefined : deps.presigner,
     // testMode forces these inert too — a smoke run deletes no S3 object, reads no Plaid token or API
     // key, starts no sync, and makes no Claude call.
     objects: call.testMode ? noopObjectStore() : deps.objects,

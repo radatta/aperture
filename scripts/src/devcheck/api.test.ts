@@ -124,6 +124,7 @@ describe('createApiClient', () => {
       'listTasks',
       'placeDigestRaw',
       'probePresigned',
+      'rpcRaw',
     ]);
     expect(Object.keys(api.writes).sort()).toEqual([
       'archiveHabit',
@@ -473,6 +474,29 @@ describe('createApiClient', () => {
       expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/safeway/tasks`, {
         method: 'POST',
         headers: {},
+        redirect: 'error',
+      });
+    });
+
+    it('rpcRaw posts the body as given, with the session token or with no auth header at all', async () => {
+      const refusal = { error: 'Invalid JSON' };
+      const fetch = vi.fn<FetchLike>(async () => reply(400, refusal));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger: memLedger(), run: 'r1' });
+      expect(await api.reads.rpcRaw('getSettings', '{not json', 'jwt')).toEqual({
+        status: 400,
+        body: refusal,
+      });
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/getSettings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-aperture-authorization': 'Bearer jwt' },
+        body: '{not json',
+        redirect: 'error',
+      });
+      await api.reads.rpcRaw('getSettings', '{"testMode":true}', 'none');
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/getSettings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"testMode":true}',
         redirect: 'error',
       });
     });

@@ -671,6 +671,29 @@ export function createApiClient({
         return { status, body: text.slice(0, 200) };
       }
     },
+    // An RPC posted raw — a body string as sent (malformed on purpose, or carrying testMode), with the test
+    // user's JWT or none — returning the status and parsed body so a step can assert a refusal. Only for
+    // calls the BFF must refuse before it writes anything (bff-hardening). A 429 carrying the BFF's own
+    // `{error}` is returned as is; any other is Lambda throttling, backed off like call()'s.
+    async rpcRaw(
+      method: string,
+      rawBody: string,
+      auth: 'jwt' | 'none',
+    ): Promise<{ status: number; body: unknown }> {
+      const url = `${targetOrigin()}/api/${method}`;
+      assertDevOrigin(url);
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (auth === 'jwt') headers[AUTH_HEADER] = `Bearer ${token()}`;
+      const { status, text } = await backoff(
+        () => fetch(url, { method: 'POST', headers, body: rawBody, redirect: 'error' }),
+        (s, t) => s === 429 && !bffError(t),
+      );
+      try {
+        return { status, body: JSON.parse(text) as unknown };
+      } catch {
+        return { status, body: text.slice(0, 200) };
+      }
+    },
   };
 
   const writes = {

@@ -187,9 +187,15 @@ export interface CreateStoryInput {
   action?: string;
   result?: string;
 }
-export type StoryPatch = Partial<
-  Pick<Story, 'title' | 'competencyTags' | 'situation' | 'action' | 'result'>
->;
+// The patch keys are a runtime allowlist too: the server refuses any other key off the wire (patchKeyError).
+export const STORY_PATCH_KEYS = [
+  'title',
+  'competencyTags',
+  'situation',
+  'action',
+  'result',
+] as const satisfies readonly (keyof Story)[];
+export type StoryPatch = Partial<Pick<Story, (typeof STORY_PATCH_KEYS)[number]>>;
 
 // Task attachments: the client declares the file's shape (name/type/size) and the server mints a
 // presigned PUT scoped to exactly that size + type. The bytes go browser→S3 directly; nothing here
@@ -299,29 +305,40 @@ export interface ExportBundle {
 
 // googleAccounts is deliberately absent — the connected-account list is mutated server-side only (the
 // OAuth callback adds, disconnectGoogleAccount removes), never patched directly by the client.
-export type SettingsPatch = Partial<
-  Pick<
-    Settings,
-    | 'dayStartHour'
-    | 'pomodoroWorkMin'
-    | 'pomodoroBreakMin'
-    | 'theme'
-    | 'calendarShapeRefs'
-    | 'calendarWriteDefault'
-    | 'autoCalendar'
-    | 'dayFocusStart'
-    | 'dayEndHour'
-    | 'financeBudgetCents'
-    | 'financePaymentDay'
-    | 'fluxRollId'
-    | 'leetcodeRollId'
-    | 'fluxDisclaimerAckAt'
-    | 'fluxSets'
-    | 'remindTimed'
-    | 'remindDueDay'
-    | 'remindPlanned'
-  >
->;
+export const SETTINGS_PATCH_KEYS = [
+  'dayStartHour',
+  'pomodoroWorkMin',
+  'pomodoroBreakMin',
+  'theme',
+  'calendarShapeRefs',
+  'calendarWriteDefault',
+  'autoCalendar',
+  'dayFocusStart',
+  'dayEndHour',
+  'financeBudgetCents',
+  'financePaymentDay',
+  'fluxRollId',
+  'leetcodeRollId',
+  'fluxDisclaimerAckAt',
+  'fluxSets',
+  'remindTimed',
+  'remindDueDay',
+  'remindPlanned',
+] as const satisfies readonly (keyof Settings)[];
+export type SettingsPatch = Partial<Pick<Settings, (typeof SETTINGS_PATCH_KEYS)[number]>>;
+
+// A patch off the wire must be a plain object holding only its type's keys — a spread would otherwise
+// store whatever it carries (id, userId, deletedAt, googleAccounts…). The refusal text, or null if it's fine.
+export function patchKeyError(
+  what: string,
+  patch: unknown,
+  keys: readonly string[],
+): string | null {
+  if (typeof patch !== 'object' || patch === null || Array.isArray(patch))
+    return `${what} patch must be an object`;
+  const bad = Object.keys(patch).filter((k) => !keys.includes(k));
+  return bad.length > 0 ? `Unknown ${what} field: ${bad.join(', ')}` : null;
+}
 
 // --- Google Calendar DTOs --------------------------------------------------
 // One calendar in the picker, tagged with the account it belongs to (calendarList.list per account).

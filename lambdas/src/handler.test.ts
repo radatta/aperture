@@ -64,6 +64,32 @@ describe('handleRpc dispatch', () => {
     expect(objects.deleted).toEqual([attachment.s3Key]);
   });
 
+  it('testMode never mints a presigned URL, even with a live presigner injected', async () => {
+    const doc = new InMemoryDoc();
+    const minted: string[] = [];
+    const presigner = {
+      putUrl: async (key: string) => (minted.push(`put ${key}`), 'https://put'),
+      getUrl: async (key: string) => (minted.push(`get ${key}`), 'https://get'),
+    };
+    const call = (method: string, args: unknown[], testMode = false) =>
+      handleRpc(doc, { userId: 'local', method, args, testMode }, { presigner });
+    const task = (await call('createTask', [{ title: 'has a file' }])) as Task;
+    const input = { taskId: task.id, filename: 'a.txt', contentType: 'text/plain', size: 5 };
+    await expect(call('createAttachmentUploadUrl', [input], true)).rejects.toThrow(
+      /Attachments unavailable/,
+    );
+    expect(minted).toHaveLength(0);
+    // ...and outside testMode the same deps do reach it.
+    const { attachment } = (await call('createAttachmentUploadUrl', [input])) as {
+      attachment: Attachment;
+    };
+    expect(minted).toEqual([`put ${attachment.s3Key}`]);
+    await expect(call('getAttachmentDownloadUrl', [attachment.id], true)).rejects.toThrow(
+      /Attachments unavailable/,
+    );
+    expect(minted).toHaveLength(1);
+  });
+
   it('testMode runs the logic but persists nothing (the smoke guarantee)', async () => {
     const doc = new InMemoryDoc();
     const task = (await handleRpc(doc, {
