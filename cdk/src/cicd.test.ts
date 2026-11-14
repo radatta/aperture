@@ -447,6 +447,8 @@ describe('ApertureCicdStack OIDC trust, for a public repo', () => {
       ['githubRepo', 'acme/aperture:ref'],
       ['githubSubject', 'acme@1/aperture@?'],
       ['githubRepo', 'aperture'],
+      ['githubRepo', 'acme/${aws:username}'],
+      ['githubSubject', 'acme@1/aper ture@2'],
     ] as const)
       expect(
         () =>

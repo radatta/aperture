@@ -10,7 +10,7 @@
 //   its check runs on the PR head               by the github-actions app only — never the bot, never another app
 //   the newest suite holding any REQUIRED_CHECKS name: it must hold all, each completed + success (newest attempt)
 //   that suite's run                            pr.yml, pull_request, success, head_sha = the PR head, from this repo
-//                                                (never a fork's: its run executes the fork's own YAML)
+//                                                (the guard fails every fork run, so a green one ran other YAML)
 //   ci / check's annotations                    exactly one `tested-tree` notice on ci.yml, equal to this tree
 //   ci / check's steps                          the secret scan success; the fixture suite decides the plan:
 //                                                success → skip, skipped (the PR's paths didn't reach it) → fixtures

@@ -12,7 +12,7 @@ container                                                     GitHub            
   deploy-dev  refs/locks/dev|devb ─▶ dispatch deploy-dev.yml{sha,key,base,slot} ref=main|branch
                                    verify ─▶ deploy-stage.yml ref=sha ─ OIDC env:dev ─▶ dev or devb stacks (dev account, SCPs)
   logs        dispatch fetch-dev-logs.yml ref=main ─ OIDC env:dev-logs ─▶ aperture-github-logs-dev ─▶ dev log groups (both slots)
-                 ◀── artifact dev-logs-<key> (3 days)
+                 ◀── artifact dev-logs-<key> (1 day)
 PR + merge: the user only — opens via the mailroom (MAILROOM.md), merges (admin bypass for their own PRs); no bot bypass
 ```
 
@@ -87,7 +87,7 @@ Until dispatch was on, the user's `dev` push was guarded by the session board's 
 
 ## Dev logs
 
-`fetch-dev-logs.yml` (dispatch only, `ref: main`) runs in the **`dev-logs`** environment, assumes `aperture-github-logs-dev` and runs `scripts/aws/fetch-dev-logs.mjs`: `filter-log-events` (or Logs Insights with `--query`) per group for one window, up to 20 000 events a group, into an artifact kept 3 days.
+`fetch-dev-logs.yml` (dispatch only, `ref: main`) runs in the **`dev-logs`** environment, assumes `aperture-github-logs-dev` and runs `scripts/aws/fetch-dev-logs.mjs`: `filter-log-events` (or Logs Insights with `--query`) per group for one window, up to 20 000 events a group, into an artifact kept 1 day (public with the repo — INFRA §9 → _Public repo_).
 
 - **Dev only, three ways:** the allowlist (`scripts/src/bot/logs-spec.ts`: `bff`, `mcp`, `finance-sync`, `push-dispatch` → `/aws/lambda/aperture-<x>-dev`, and each with `-devb` → `…-devb`), checked by the CLI and again on the runner — main's copy, since the run is `ref: main`; the role reads only those eight groups (`cicd-stack.ts` `LOG_FNS` × both slots); the environment admits only `main`'s YAML.
 - **Why its own environment, not `dev`:** AWS trusts a job by its environment (`…:environment:<name>`). A job in `dev` could assume the dev **deploy** role too; `dev-logs` gives log reading its own subject that only the read-only role trusts. "Deployment branches: `main`" names which branch's workflow code may run there — not which logs it reads.

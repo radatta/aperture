@@ -10,7 +10,7 @@
 // Like workflow-permissions.ts, a narrow reader for our own 2-space layout, not a YAML parser: a shape it can't read
 // throws rather than guess.
 
-import { parseWorkflow } from './workflow-permissions';
+import { isContent, parseWorkflow } from './workflow-permissions';
 
 // The step, byte for byte, as it sits under `    steps:` (6-space list indent).
 export const GUARD_STEP = `      - name: Fork guard
@@ -44,8 +44,10 @@ export const ACTIONS = [
   'gitleaks/gitleaks-action',
 ];
 
-const isContent = (l: string) => !!l.trim() && !l.trim().startsWith('#');
+// A line minus its trailing comment, indentation kept (workflow-permissions' stripComment also trims).
 const code = (l: string) => l.replace(/(^|\s)#.*$/, '');
+// Keys this file reads by line. Any other spelling of one (quoted, `key :`, a flow mapping) is unreadable, not unseen.
+const WATCHED = 'uses|runs-on|container|services|defaults|environment|image|using';
 const WF = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 const ACTION = /^\.github\/actions\/([^/]+)\/action\.ya?ml$/;
 
@@ -130,15 +132,33 @@ export function checkForkGuard(files: Record<string, string>): string[] {
       for (const ev of ['pull_request_target', 'workflow_run'])
         if (new RegExp(`\\b${ev}\\b`).test(l)) problems.push(`${f}:${i + 1}: mentions ${ev}`);
       // A container, service image or default shell would run around the allowlist, or the guard's own shell.
-      const key = /^\s*(container|services|defaults):/.exec(c)?.[1];
+      const key = /^\s*(container|services|defaults|image):/.exec(c)?.[1];
       if (key) problems.push(`${f}:${i + 1}: ${key}: isn't allowed`);
+      const loose = new RegExp(`(?:^|[\\s{,'"])(${WATCHED})['"]?\\s*:`, 'i').exec(c)?.[1];
+      if (loose && !new RegExp(`^\\s*(?:-\\s+)?(${WATCHED}):(\\s|$)`).test(c))
+        problems.push(`${f}:${i + 1}: unreadable ${loose} line — write it as a plain block key`);
+      if (/^\s*-\s*\{/.test(c))
+        problems.push(`${f}:${i + 1}: flow mapping — write the step as a block`);
+      const using = /^\s*using:\s*(.*?)\s*$/.exec(c)?.[1];
+      if (using !== undefined && using !== 'composite')
+        problems.push(`${f}:${i + 1}: using "${using}" — local actions are composite only`);
+      // A job that skips by who triggered it shows green on a fork PR; BASH_ENV runs before the guard's own script.
+      if (/\b(github\.actor|github\.triggering_actor)\b/i.test(c))
+        problems.push(`${f}:${i + 1}: keys on github.actor — a skip by who triggered it passes`);
+      if (/^\s*(BASH_ENV|ENV)\s*:/.test(c))
+        problems.push(
+          `${f}:${i + 1}: sets ${c.trim().split(':')[0]} — bash sources it before the guard runs`,
+        );
     }
+    if (ACTION.test(f) && !/^ {2}using: composite\s*$/m.test(text))
+      problems.push(`${f}: not a composite action`);
     for (const local of localUses[f]!)
       if (!(local in files)) problems.push(`${f} uses ./${local}, which doesn't exist`);
     // Event data only ever reaches a step through the guard's env line, never an expression elsewhere. Only whole-line
     // comments are dropped: `echo "#${{ … }}"` is code, and a trailing comment that trips this is a cheap false alarm.
     const rest = text.split(GUARD_STEP).join('').split('\n').filter(isContent).join('\n');
-    if (/github\.event\b(?!_)|github\.head_ref|toJSON\(\s*github\s*\)|github\s*\[/.test(rest))
+    // Context names are case-insensitive to the runner.
+    if (/github\.event\b(?!_)|github\.head_ref|toJSON\(\s*github\s*\)|github\s*\[/i.test(rest))
       problems.push(
         `${f}: reads event data (github.event, github.head_ref, the whole github context) outside the fork guard`,
       );
@@ -192,11 +212,12 @@ export function checkForkGuard(files: Record<string, string>): string[] {
     }
   }
 
-  // A pull_request run gets no secrets from GitHub; pin that our files never ask for any either.
+  // A fork's pull_request run gets no secrets, but a same-repo one gets the repo-level ones (the `*_DEV` secrets among
+  // them): pin that nothing a pull_request run reaches asks for any, or for an OIDC token or an environment.
   for (const f of reachable) {
     const text = files[f]!.split('\n').filter(isContent).join('\n');
     for (const [what, re] of [
-      ['secrets', /\bsecrets\b/],
+      ['secrets', /\bsecrets\b/i],
       ['id-token', /\bid-token\b/],
       ['environment:', /^\s*environment:/m],
     ] as const)
