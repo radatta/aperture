@@ -26,9 +26,11 @@ validate_clip() {
 }
 
 # The read, as JXA on stdin (never a file the container can write). argv: OUT MAX FRONT_IDS SPENT_CC.
-# Prints {cc, front, source, bytes}; exit 0 written · 3 no image · 4 image listed but unreadable (privacy) ·
-# 5 over MAX · 6 not frontmost · 7 this copy already served CLIP_PER_CC times · else failed. Frontmost and the
-# repeat cap are checked before any pasteboard data is read; text types are never named.
+# Prints {cc, front, source, bytes, types}; exit 0 written · 3 no image · 4 image listed but unreadable (privacy) ·
+# 5 over MAX · 6 not frontmost · 7 this copy already served CLIP_PER_CC times · 9 text copied with the image ·
+# else failed. All of it is checked before any pasteboard data is read, and only image data is ever read. A copy
+# that also carries plain text or rich text (an Excel range, a Word or Keynote selection: apps render the text as an
+# image beside it) is refused: the text would cross as a picture.
 CLIP_JXA='ObjC.import("AppKit");
 ObjC.import("stdlib");
 function run(argv) {
@@ -47,6 +49,8 @@ function run(argv) {
   const types = ObjC.deepUnwrap(pb.types) || [];
   const source = types.includes("public.png") ? "png" : types.includes("public.tiff") ? "tiff" : "";
   if (!source) say({ cc: cc, front: front }, 3);
+  const text = ["public.utf8-plain-text", "public.utf16-plain-text", "public.plain-text", "public.rtf", "com.apple.flat-rtfd", "public.rtfd"];
+  if (types.some((t) => text.includes(t))) say({ cc: cc, front: front, types: types.slice(0, 12) }, 9);
   let data = pb.dataForType(source === "png" ? "public.png" : "public.tiff");
   if (data.isNil() || Number(data.length) === 0) say({ cc: cc, front: front, source: source }, 4);
   if (source === "tiff") {
@@ -91,20 +95,25 @@ clip_rd() {
 }
 
 # Mac-private state ($STATE/clip.json): {serves: [epoch s in the last minute], cc, n: serves of that cc}.
-clip_state() { jq -ce 'if type == "object" and (.serves | type) == "array" then . else error end' "$STATE/clip.json" 2>/dev/null || echo '{"serves":[],"cc":-1,"n":0}'; }
+# Anything else in it (a hand edit, a clock jump) reads as numbers in range or not at all, so it can't jam a cap.
+clip_state() {
+  jq -c --argjson now "$1" 'if type == "object" then . else error end
+    | {serves: [(.serves | arrays)[] | numbers | select(. > $now - 60 and . <= $now)],
+       cc: ((.cc | numbers) // -1), n: ((.n | numbers) // 0)}' "$STATE/clip.json" 2>/dev/null || echo '{"serves":[],"cc":-1,"n":0}'
+}
 
 # run_clip W PRIVATE_PREFIX RESULT_DIR → "STATUS REASON EXTRA_JSON"
 run_clip() {
   local p="$2" rd="$3" now st spent meta rc front bytes cc source sha magic size kb
   now="$(date +%s)"
-  st="$(jq -c --argjson now "$now" '.serves |= map(select(. > $now - 60))' <<<"$(clip_state)")"
+  st="$(clip_state "$now")"
   if [ "$(jq '.serves | length' <<<"$st")" -ge "$CLIP_PER_MIN" ]; then
     echo "rejected RATE_LIMITED {}"
     return 0
   fi
   spent="$(jq --argjson k "$CLIP_PER_CC" 'if .n >= $k then .cc else -1 end' <<<"$st")"
   rc=0
-  meta="$(clip_cap 20 osascript -l JavaScript - "$p.png" "$CLIP_MAX_BYTES" "$CLIP_FRONT_IDS" "$spent" <<<"$CLIP_JXA" 2>/dev/null)" || rc=$?
+  meta="$(clip_cap 10 osascript -l JavaScript - "$p.png" "$CLIP_MAX_BYTES" "$CLIP_FRONT_IDS" "$spent" <<<"$CLIP_JXA" 2>/dev/null)" || rc=$?
   front="$(jq -r '.front // "" | select(test("^[A-Za-z0-9.-]{1,100}$"))' <<<"$meta" 2>/dev/null || true)"
   case "$rc" in
     0) ;;
@@ -113,6 +122,7 @@ run_clip() {
     5) echo "rejected TOO_LARGE {}"; return 0 ;;
     6) echo "rejected NOT_FRONTMOST $(jq -cn --arg f "$front" '{frontmost: $f}')"; return 0 ;;
     7) echo "rejected REPEAT {}"; return 0 ;;
+    9) echo "rejected MIXED_TEXT $(jq -c '{types: [.types[]? | strings | select(test("^[A-Za-z0-9._-]{1,80}$"))][:12]}' <<<"$meta" 2>/dev/null || echo '{}')"; return 0 ;;
     124) echo "error TIMEOUT {}"; return 0 ;;
     *) echo "error CLIP_FAILED {}"; return 0 ;;
   esac

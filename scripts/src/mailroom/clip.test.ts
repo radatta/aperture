@@ -90,6 +90,40 @@ describe('the clip job, container side', () => {
     expect(log.join('\n')).toContain('withdrawn');
   });
 
+  it('clip-probe: taken but answered late, the image is still collected', async () => {
+    const { d, fs, copies, removed } = rig();
+    fs.onRename = (_a, b) => {
+      const m = /\/inbox\/(.+)\.json$/.exec(b);
+      if (!m?.[1]) return;
+      const id = m[1];
+      fs.files.delete(b); // the Mac took it
+      const start = d.clock.now();
+      const read = fs.read;
+      fs.read = (p) => {
+        if (p.endsWith(`${id}/result.json`) && d.clock.now() - start > 16_000)
+          return result(id, { status: 'served', reason: null });
+        return read(p);
+      };
+    };
+    expect(await clipProbe(d)).toBe(0);
+    expect(copies).toHaveLength(1);
+    expect(removed).toHaveLength(1);
+  });
+
+  it('clip-probe: a failed copy still deletes the shared image', async () => {
+    const { d, removed } = rig((id, fs) =>
+      fs.files.set(
+        `${DIR}/results/${id}/result.json`,
+        result(id, { status: 'served', reason: null }),
+      ),
+    );
+    d.copy = () => {
+      throw new Error('EACCES');
+    };
+    await expect(clipProbe(d)).rejects.toThrow('EACCES');
+    expect(removed).toHaveLength(1);
+  });
+
   it('clip-probe: no mailroom is exit 3', async () => {
     const { d } = rig();
     d.fs.dirs.clear();

@@ -35,7 +35,10 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(T, { recursive: true, force: true }));
 
-function xclip(args: string[], o: { pane?: string; waitMs?: number; stdin?: string } = {}) {
+function xclip(
+  args: string[],
+  o: { pane?: string; waitMs?: number; graceMs?: number; stdin?: string } = {},
+) {
   const child = spawn(SHIM, args, {
     env: {
       PATH: process.env.PATH,
@@ -43,6 +46,7 @@ function xclip(args: string[], o: { pane?: string; waitMs?: number; stdin?: stri
       TMUX_PANE: o.pane ?? '%1',
       XCLIP_SHIM_HOSTJOBS: hj,
       XCLIP_SHIM_WAIT_MS: String(o.waitMs ?? 10_000),
+      XCLIP_SHIM_GRACE_MS: String(o.graceMs ?? 12_000),
       XCLIP_SHIM_CACHE: join(T, 'cache'),
       XCLIP_SHIM_LOG: join(T, 'log'),
     },
@@ -125,6 +129,8 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
       ['-o'],
       [],
       [...TARGETS, '-extra'],
+      ['-selection clipboard', '-t TARGETS -o'], // the same words, split differently
+      ['-selection', 'clipboard', '-t', 'text/plain', '-o', 'x'],
     ];
     for (const a of calls) {
       const r = await xclip(a, { stdin: 'some text to copy' });
@@ -141,6 +147,56 @@ describe('tools/coi/xclip', { timeout: 30_000 }, () => {
     expect(
       readdirSync(join(hj, 'staging')).filter((f) => f.endsWith('.withdrawn.json')),
     ).toHaveLength(1);
+  });
+
+  it('an answer after the wait, once the Mac took the job, is still collected (its clip.png never left behind)', async () => {
+    const run = xclip(TARGETS, { waitMs: 800, graceMs: 8000 });
+    const id = await nextJob();
+    rmSync(join(hj, 'inbox', `${id}.json`)); // the Mac took it…
+    mkdirSync(join(hj, 'results', id));
+    await sleep(1500); // …and answers after the shim's first wait
+    writeFileSync(join(hj, 'results', id, 'clip.png'), PNG);
+    writeFileSync(
+      join(hj, 'results', id, 'result.json'),
+      JSON.stringify({ v: 1, id, job: 'clip', status: 'served', reason: null }),
+    );
+    const r = await run;
+    expect(r.code).toBe(0);
+    expect(existsSync(join(hj, 'results', id, 'clip.png'))).toBe(false);
+  });
+
+  it('the Mac took it and never answered: gives up after the grace', async () => {
+    const run = xclip(TARGETS, { waitMs: 500, graceMs: 700 });
+    const id = await nextJob();
+    rmSync(join(hj, 'inbox', `${id}.json`));
+    const r = await run;
+    expect(r.code).toBe(1);
+    expect(readdirSync(join(hj, 'staging')).filter((f) => f.includes(id))).toEqual([]);
+  });
+
+  it('sweeps an uncollected clip.png after 30 s and a clip job’s leftovers after an hour, nothing else', async () => {
+    const put = (rel: string, ageS: number, data = 'x') => {
+      const p = join(hj, rel);
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, data);
+      const t = Date.now() / 1000 - ageS;
+      utimesSync(p, t, t);
+      return p;
+    };
+    const lateLeft = put('results/20261113T000000Z-clip-aa11/clip.png', 60);
+    const fresh = put('results/20261113T000001Z-clip-bb22/clip.png', 2);
+    const oldRes = put('results/20261113T000002Z-clip-cc33/result.json', 7200);
+    const t = Date.now() / 1000 - 7200;
+    utimesSync(join(hj, 'results/20261113T000002Z-clip-cc33'), t, t);
+    const oldW = put('staging/20261113T000003Z-clip-dd44.withdrawn.json', 7200);
+    const notClip = put('results/20261113T000004Z-mac-mailroom-ee55/result.json', 7200);
+    utimesSync(join(hj, 'results/20261113T000004Z-mac-mailroom-ee55'), t, t);
+    const run = xclip(TARGETS);
+    await answer({ status: 'rejected', reason: 'NO_IMAGE' }, null);
+    await run;
+    expect([lateLeft, oldRes, oldW].map(existsSync)).toEqual([false, false, false]);
+    expect(existsSync(join(hj, 'results/20261113T000002Z-clip-cc33'))).toBe(false);
+    expect([fresh, notClip].map(existsSync)).toEqual([true, true]);
   });
 
   it('a refusal from the Mac pastes nothing', async () => {

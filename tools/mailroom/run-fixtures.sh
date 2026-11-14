@@ -102,11 +102,11 @@ open() { sim_stub open "$@"; }
 pgrep() { sim_stub pgrep "$@"; }
 caffeinate() { sim_stub caffeinate "$@"; }
 xcodebuild() { sim_stub xcodebuild "$@"; }
-# The JXA read gets its script on stdin; record it, answer from the tape, and on 0 write the image to argv's OUT ($4):
+# The JXA read gets its script on stdin (what it may ask is pinned statically); answer from the tape, and on 0 write
+# the image to argv's OUT ($4):
 # a PNG, or what the answer's "write" names (gif: wrong magic; big: one byte over the 16 MiB cap).
 osascript() {
   local out rc=0
-  if [ "${1:-}" = -l ]; then cat >>"$MAILROOM_FIXTURE_SIMCALLS.jxa"; fi
   out="$(sim_stub osascript "$@" </dev/null)" || rc=$?
   [ -z "$out" ] || printf '%s\n' "$out"
   if [ "$rc" = 0 ] && [ "${1:-}" = -l ]; then
@@ -205,8 +205,10 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     results-symlink)
       mkdir "$T/elsewhere"; rmdir "$hj/results"; ln -s "$T/elsewhere" "$hj/results"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
-    clip-state=*) # {ago: [seconds before now, one per serve], cc, n} → the clip job's private state
-      jq -c --argjson now "$now" '{serves: [.ago[] | $now - .], cc, n}' <<<"${setup#clip-state=}" >"$st/clip.json"
+    clip-state=*) # {ago: [seconds before now, one per serve], cc, n} → the clip job's private state; |junk adds junk
+      cs="${setup#clip-state=}"
+      jq -c --argjson now "$now" --arg junk "${cs##*|}" '{serves: ([.ago[] | $now - .] + if $junk == "junk" then ["9999999999", null, {}] else [] end),
+        cc: (if $junk == "junk" then "41" else .cc end), n}' <<<"${cs%%|*}" >"$st/clip.json"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
     build-y=*) printf '%s\n' "${setup#build-y=}" >"$st/sim-build-y"; mv "$hj/staging/x" "$hj/inbox/$file" ;; # readBuild's last y
     "") mv "$hj/staging/x" "$hj/inbox/$file" ;;

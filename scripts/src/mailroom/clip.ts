@@ -11,7 +11,8 @@ import type { Fs } from './submit.ts';
 
 export const CLIP_EXPIRES_MIN = 1; // the Mac refuses more than 2: a queued paste is worthless a minute later
 export const CLIP_MAX_EXPIRES_MIN = 2;
-export const CLIP_WAIT_MS = 15_000; // the shim's cap too (tools/coi/xclip)
+export const CLIP_WAIT_MS = 15_000; // the shim's caps too (tools/coi/xclip)
+export const CLIP_GRACE_MS = 12_000; // once the Mac took it: its read is capped at 10 s
 
 export interface ClipJob {
   v: 1;
@@ -42,6 +43,8 @@ export function validateClipParams(params: unknown, expiresInMin: number): 'BAD_
 
 export const CLIP_REASON_HINT = {
   NO_IMAGE: 'no image on the Mac clipboard (text is never served)',
+  MIXED_TEXT:
+    'the copy carries text as well as an image (an Excel range, a Word selection) — refused, so text never crosses as a picture; copy just the image, or take a screenshot',
   NOT_FRONTMOST: 'a terminal (iTerm2 or Terminal) must be the frontmost app on the Mac',
   REPEAT: 'this copy was already served 3 times — copy it again',
   RATE_LIMITED: 'more than 6 serves in the last minute — wait a minute',
@@ -49,7 +52,8 @@ export const CLIP_REASON_HINT = {
   PASTEBOARD_DENIED:
     'macOS listed an image but would not hand it over — allow osascript under System Settings → Privacy & Security',
   CLIP_FAILED: 'the Mac could not read or write the image',
-  TIMEOUT: 'the pasteboard read took over 20 s',
+  TIMEOUT:
+    'the pasteboard read took over 10 s — likely a macOS paste-permission prompt on the Mac: answer it, then press Ctrl+V again',
 } as const;
 
 export interface ClipDeps {
@@ -75,13 +79,22 @@ export async function clipProbe(d: ClipDeps, waitMs = CLIP_WAIT_MS): Promise<num
     }
     throw err;
   }
-  const r = await waitForResult(d.fs, d.clock, d.dir, job.id, waitMs, 200);
+  let r = await waitForResult(d.fs, d.clock, d.dir, job.id, waitMs, 200);
   if (!r) {
-    const pulled = withdraw(d.fs, d.dir, job.id);
-    d.log(
-      `clip: no answer in ${waitMs / 1000} s — ${pulled ? 'withdrawn; the Mac is asleep, not installed, or busy (a sim job)' : 'the Mac took it but has not answered'}`,
-    );
-    return 3;
+    if (withdraw(d.fs, d.dir, job.id)) {
+      d.log(
+        `clip: no answer in ${waitMs / 1000} s — withdrawn; the Mac is asleep, not installed, or busy (a sim job)`,
+      );
+      return 3;
+    }
+    // The Mac took it: wait out its read, so a late image is collected rather than left in the shared folder.
+    r = await waitForResult(d.fs, d.clock, d.dir, job.id, CLIP_GRACE_MS, 200);
+    if (!r) {
+      d.log(
+        `clip: the Mac took the job but gave no answer in ${(waitMs + CLIP_GRACE_MS) / 1000} s`,
+      );
+      return 3;
+    }
   }
   if (r.status !== 'served') {
     const hint = CLIP_REASON_HINT[r.reason as keyof typeof CLIP_REASON_HINT] ?? '';
@@ -89,8 +102,11 @@ export async function clipProbe(d: ClipDeps, waitMs = CLIP_WAIT_MS): Promise<num
     return 1;
   }
   const png = join(d.dir, 'results', job.id, 'clip.png');
-  (d.copy ?? copyFileSync)(png, d.out);
-  (d.remove ?? ((p) => rmSync(p, { force: true })))(png);
+  try {
+    (d.copy ?? copyFileSync)(png, d.out);
+  } finally {
+    (d.remove ?? ((p) => rmSync(p, { force: true })))(png);
+  }
   const c = r.clip;
   d.log(
     `clip: served ${c?.bytes ?? '?'} bytes (${c?.source ?? '?'}, ${c?.frontmost ?? '?'} in front) in ${r.durationMs} ms → ${d.out}`,

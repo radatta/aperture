@@ -4,7 +4,8 @@
 # ~/.local/bin/xclip, ahead of /usr/bin on PATH, by tools/coi/tmux-restore.sh links.
 #
 # Claude Code (2.1.322) asks two things on Ctrl+V, and only these are answered:
-#   xclip -selection clipboard -t TARGETS -o     → ask the Mac (≤ 15 s), keep the PNG, print "image/png"
+#   xclip -selection clipboard -t TARGETS -o     → ask the Mac (≤ 15 s, ≤ 27 s once it took the job), keep the
+#                                                  PNG, print "image/png"
 #   xclip -selection clipboard -t image/png -o   → print the kept PNG once (≤ 10 s old), then drop it
 # Everything else — text reads, the primary selection, copy (stdin), bmp — exits 1 with no output. Text never
 # crosses, and nothing passes through to the real xclip (which has no display here anyway).
@@ -13,6 +14,7 @@ umask 077
 
 HJ="${XCLIP_SHIM_HOSTJOBS:-/workspace/.hostjobs}"
 WAIT_MS="${XCLIP_SHIM_WAIT_MS:-15000}"
+GRACE_MS="${XCLIP_SHIM_GRACE_MS:-12000}" # once the Mac took the job: its read is capped at 10 s (jobs/clip.sh)
 KEEP_S=10
 BUSY_S=30 # a job whose heartbeat is younger than this, with no result yet, holds the runner (it drains one at a time)
 MAX_BYTES=16777216
@@ -33,13 +35,25 @@ cache_ok() {
   [ ! -L "$CACHE" ] && [ -O "$CACHE" ] && [ "$(stat -c %a "$CACHE")" = 700 ]
 }
 
+# A clip.png nobody collected (an answer after its shim gave up) goes after 30 s; a clip job's leftovers after an hour.
+sweep() {
+  local d
+  find "$HJ/results" -mindepth 2 -maxdepth 2 -path '*-clip-*/clip.png' -type f -mmin +0.5 -delete 2>/dev/null
+  find "$HJ/staging" -maxdepth 1 -name '*-clip-*.withdrawn.json' -type f -mmin +60 -delete 2>/dev/null
+  while IFS= read -r d; do
+    rm -f -- "$d/result.json" "$d/clip.png" && rmdir -- "$d" 2>/dev/null
+  done < <(find "$HJ/results" -mindepth 1 -maxdepth 1 -name '*-clip-*' -type d -mmin +60 2>/dev/null)
+  return 0
+}
+
 targets() {
-  local id job t0 r st rs png size
+  local id job t0 r st rs png size cap
   cache_ok || no "refused: cache dir $CACHE is not ours"
   rm -f -- "$KEPT"
   for d in "$HJ" "$HJ/inbox" "$HJ/results"; do
     if [ -L "$d" ] || [ ! -d "$d" ]; then no "no mailroom: $d is missing or a link"; fi
   done
+  sweep
   # The runner is busy with a long job (a sim run, up to 10 min): don't queue a paste behind it.
   for p in "$HJ"/results/*/progress.json; do
     [ -f "$p" ] || continue
@@ -53,13 +67,16 @@ targets() {
   mkdir -p "$HJ/staging" && (set -C && printf '%s' "$job" >"$HJ/staging/$id.json") && mv -- "$HJ/staging/$id.json" "$HJ/inbox/$id.json" ||
     no "could not queue $id"
   t0="$(ms)"
+  cap="$WAIT_MS"
   r="$HJ/results/$id/result.json"
   until [ -f "$r" ] && jq -e --arg id "$id" '.id == $id' "$r" >/dev/null 2>&1; do
-    if [ $(($(ms) - t0)) -ge "$WAIT_MS" ]; then
+    if [ $(($(ms) - t0)) -ge "$cap" ]; then
       if mv -- "$HJ/inbox/$id.json" "$HJ/staging/$id.withdrawn.json" 2>/dev/null; then
         no "$id no answer in $((WAIT_MS / 1000)) s — withdrawn (Mac asleep or mailroom not installed)"
       fi
-      no "$id no answer in $((WAIT_MS / 1000)) s — the Mac took it"
+      # The Mac took it: wait out its read, so the answer is collected (and its clip.png deleted) rather than left.
+      if [ "$cap" = "$WAIT_MS" ]; then cap=$((WAIT_MS + GRACE_MS)); continue; fi
+      no "$id no answer in $((cap / 1000)) s though the Mac took it"
     fi
     sleep 0.1
   done
@@ -89,8 +106,11 @@ png() {
   cat -- "$KEPT" && rm -f -- "$KEPT"
 }
 
-case "$*" in
-  "-selection clipboard -t TARGETS -o") targets ;;
-  "-selection clipboard -t image/png -o") png ;;
-  *) no "refused: xclip $*" ;;
-esac
+# Exactly five arguments, each as Claude Code passes them.
+if [ "$#" = 5 ] && [ "$1" = -selection ] && [ "$2" = clipboard ] && [ "$3" = -t ] && [ "$5" = -o ]; then
+  case "$4" in
+    TARGETS) targets; exit 0 ;;
+    image/png) png; exit $? ;;
+  esac
+fi
+no "refused: xclip $*"

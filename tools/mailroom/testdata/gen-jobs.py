@@ -800,7 +800,9 @@ clipbase = {'v': 1, 'id': '20261113T231500Z-clip-ab12', 'job': 'clip', 'submitte
 JXA = '-l JavaScript - '
 BANNER = 'display notification'
 def RD(rc, **meta): return {'m': JXA, 'rc': rc, 'out': {'cc': 41, 'front': 'com.googlecode.iterm2', **meta}}
-def cc_(name, **k): c(name, kind='clip', **k)
+def cc_(name, **k):
+    if k.get('expect', {}).get('status') == 'served': k.setdefault('ts', None)  # validateJob passes it too
+    c(name, kind='clip', **k)
 def crej(name, reason, ts=True, **k):
     if ts: k['ts'] = reason
     cc_(name, expect={'status': 'rejected', 'reason': reason}, simExcludes=['osascript'], **k)
@@ -840,6 +842,13 @@ cc_('clip: a written file without PNG magic is CLIP_FAILED', tape=[RD(0, source=
 cc_('clip: a report without a changeCount is CLIP_FAILED', tape=[{'m': JXA, 'rc': 0, 'out': {'source': 'png', 'bytes': 21}}], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
 cc_('clip: a read that fails otherwise is CLIP_FAILED', tape=[RD(8)], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
 cc_('clip: a banner that fails still serves', tape=[RD(0, source='png', bytes=21), {'m': BANNER, 'rc': 1}], expect=SERVED, files=['clip.png'])
+cc_('clip: a 2-minute life is the longest taken', patch={'expiresInMin': 2}, tape=[RD(0, source='png', bytes=21)], expect=SERVED)
+cc_('clip: an image copied with plain or rich text is MIXED_TEXT, naming the types', tape=[RD(9, types=['public.png', 'public.utf8-plain-text', 'bad type!'])],
+    expect={'status': 'rejected', 'reason': 'MIXED_TEXT', 'types': ['public.png', 'public.utf8-plain-text']}, simExcludes=[BANNER])
+cc_('clip: junk in the private state counts as nothing, never jamming a cap', setup='clip-state=' + json.dumps({'ago': [], 'cc': 41, 'n': 3}) + '|junk',
+    tape=[RD(0, source='png', bytes=21)], expect=SERVED, simIncludes=['com.googlecode.iterm2 com.apple.Terminal -1'], clipState={'cc': 41, 'n': 1, 'serves': 1})
+cc_('clip: serve times in the future (a clock jump) are dropped', setup='clip-state=' + json.dumps({'ago': [-500, -400, -300, -200, -100, -50], 'cc': 40, 'n': 1}),
+    tape=[RD(0, source='png', bytes=21)], expect=SERVED, clipState={'cc': 41, 'n': 1, 'serves': 1})
 crej('clip: any param is BAD_PARAM', 'BAD_PARAM', patch={'params': {'path': '/etc/passwd'}})
 crej('clip: a life over 2 min is BAD_PARAM', 'BAD_PARAM', patch={'expiresInMin': 5})
 crej('clip: params that are not an object are BAD_PARAM', 'BAD_PARAM', patch={'params': ['x']})
