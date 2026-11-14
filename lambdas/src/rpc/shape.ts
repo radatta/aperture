@@ -147,18 +147,6 @@ export const oneOf = <T>(what: string, key: string, variants: Record<string, Any
     { obj: true, name: what },
   );
 
-// A plain object of string keys (at most `max`), each value checked; key membership is the domain's.
-export const record = <T>(c: AnyCheck, max: number, keyMax = 64): Check<T> =>
-  check((v, p) => {
-    if (!isPlainObject(v)) fail(`${label(p)} must be an object`);
-    const keys = Object.keys(v as object);
-    if (keys.length > max) fail(`${label(p)} is limited to ${max} entries`);
-    for (const k of keys) {
-      if (k.length > keyMax) fail(`${label(p)} has a key over ${keyMax} characters`);
-      c.run((v as Record<string, unknown>)[k], at(label(p), k));
-    }
-  });
-
 // A value whose shape a domain normalizer owns, with its own messages (normalizeSittingReview,
 // parsePushInput, fluxSetError…). With `keys`, a plain object must hold only those top-level keys — what the
 // normalizer reads; anything else is the normalizer's to refuse. `object: true` is for a normalizer that

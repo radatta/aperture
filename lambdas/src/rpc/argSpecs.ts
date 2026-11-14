@@ -48,14 +48,20 @@ export const ID_MAX = 128; // ULIDs are 26; Plaid ids ~37; Google subs ~21
 export const CALENDAR_ID_MAX = 256; // group calendar ids run ~90
 export const KEY_MAX = 64; // day keys, clock times, enum-ish strings a domain rule owns
 export const NAME_MAX = 200; // a habit, roll, category, account or file name
-// Free prose, and titles: no title has a domain cap, and real callers fill one with long text (an idea
-// made a task, an unparsed capture line, a calendar block's "Parent · Part"). 4× TASK_NOTES_MAX; three
-// story fields stay under DynamoDB's 400 KB.
+// Free prose, and titles typed fresh (a series, a story). 4× TASK_NOTES_MAX; three story fields stay under
+// DynamoDB's 400 KB.
 export const TEXT_MAX = 20_000;
-// What a capture line can become as sent: a log entry, an idea, a task title (an unparsed line saves raw).
-// The capture field has no maxLength, so this sits far out — near DynamoDB's 400 KB item at 3 bytes a
-// character — and only stops a body nothing types.
+// What a capture line can become as sent: a log entry or an idea. The capture field has no maxLength, so
+// this sits far out and only stops a body nothing types (one field near 300 KB at 3 bytes a character).
 export const CAPTURE_MAX = 100_000;
+// A task title, typed or copied in (an idea made a task, an unparsed capture line saves raw). Lower than
+// CAPTURE_MAX because the task row can hold it twice — its synced event's title (gcalSeen) is the
+// "Parent · Part" block title — and the row must stay under 400 KB. A body bound, not a guarantee.
+export const TASK_TITLE_MAX = 40_000;
+// Where a task title is copied with a few words added: a split's titles (`… (cont.)`), and a calendar
+// block's "Parent · Part" (two titles and a separator).
+export const SPLIT_TITLE_MAX = TASK_TITLE_MAX + NAME_MAX;
+export const BLOCK_TITLE_MAX = 2 * TASK_TITLE_MAX + NAME_MAX;
 export const FILENAME_MAX = 1024; // the raw file name; sanitizeFilename trims it to 200
 export const BATCH_MAX = 2000; // createTasks inputs, setFinanceBucket ids; RPC_BODY_MAX bounds them too
 export const CALENDAR_REFS_MAX = 50;
@@ -84,7 +90,7 @@ const calendarRef = obj<CalendarRef>('calendar', {
 const capOpts = opt(obj<{ capMin?: number }>('options', { capMin: opt(minutes) }));
 
 const taskInput = obj<CreateTaskInput>('task', {
-  title: str(CAPTURE_MAX),
+  title: str(TASK_TITLE_MAX),
   categoryId: opt(nullable(str(ID_MAX))),
   estimateMin: opt(nullable(minutes)),
   bufferMin: opt(nullable(minutes)),
@@ -123,8 +129,6 @@ const rule = oneOf<RecurrenceRule>('rule', 'kind', {
   }),
 });
 
-// A create/update pair spec'd as one object, every field optional: which ones a create needs is the
-// domain's rule (its 'needs label and isWork' refusal).
 // A create/update pair spec'd as one object, every field optional: which ones a create needs is the
 // domain's rule (its 'needs label and isWork' refusal). Typed by the update's fields, so a new one fails
 // typecheck here; the create must carry no field the update lacks.
@@ -202,7 +206,7 @@ export const RPC_ARGS = {
     id,
     obj('due', { dueDay: nullable(str(KEY_MAX)), dueTime: opt(nullable(str(KEY_MAX))) }),
   ],
-  setTaskTitle: [id, named('title', str(CAPTURE_MAX))],
+  setTaskTitle: [id, named('title', str(TASK_TITLE_MAX))],
   setTaskNotes: [id, named('notes', nullable(str(TEXT_MAX)))],
   setTaskReflection: [id, named('reflection', nullable(str(TEXT_MAX)))],
   transitionTask: [id, named('to', strOf<TaskStatus>(KEY_MAX))],
@@ -215,13 +219,13 @@ export const RPC_ARGS = {
     id,
     obj('split', {
       finish: lit('done', 'keep'),
-      title: opt(str(TEXT_MAX)),
+      title: opt(str(SPLIT_TITLE_MAX)),
       estimateMin: opt(nullable(minutes)),
       bufferMin: opt(nullable(minutes)),
       actualMin: opt(minutes),
-      parentTitle: opt(str(TEXT_MAX)),
+      parentTitle: opt(str(SPLIT_TITLE_MAX)),
       followUp: obj('followUp', {
-        title: str(TEXT_MAX),
+        title: str(SPLIT_TITLE_MAX),
         estimateMin: nullable(minutes),
         bufferMin: opt(nullable(minutes)),
       }),
@@ -389,7 +393,7 @@ export const RPC_ARGS = {
       taskId: str(ID_MAX),
       accountSub: str(ID_MAX),
       calendarId: str(CALENDAR_ID_MAX),
-      title: str(TEXT_MAX),
+      title: str(BLOCK_TITLE_MAX),
       startMs: num,
       endMs: num,
     }),

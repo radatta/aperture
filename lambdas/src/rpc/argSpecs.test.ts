@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { API_METHODS } from '@aperture/shared';
+import { API_METHODS, blockTitle } from '@aperture/shared';
 import type { ApiMethod } from '@aperture/shared';
-import { CAPTURE_MAX, RPC_ARGS, TEXT_MAX, checkArgs } from './argSpecs';
+import { CAPTURE_MAX, RPC_ARGS, TASK_TITLE_MAX, TEXT_MAX, checkArgs } from './argSpecs';
 import type { ArgSpecs } from './argSpecs';
 import { ShapeError, obj, opt, str } from './shape';
 
@@ -110,7 +110,8 @@ describe('the RPC argument specs', () => {
   });
 
   it('passes the long titles real callers send: an idea made a task, an unparsed capture line', () => {
-    passes('createTask', [{ title: 'i'.repeat(CAPTURE_MAX) }]);
+    passes('createTask', [{ title: 'i'.repeat(TASK_TITLE_MAX) }]);
+    passes('createLogEntry', ['l'.repeat(CAPTURE_MAX), '2026-11-13']);
     passes('createLogEntry', ['l'.repeat(25_000), '2026-11-13']); // a long paste into the capture bar
     passes('createIdea', ['l'.repeat(25_000)]);
     passes('parseTask', ['l'.repeat(25_000)]); // saved raw past PARSE_TEXT_MAX
@@ -118,6 +119,31 @@ describe('the RPC argument specs', () => {
     passes('createTasks', [[{ title: 'c'.repeat(2500) }]]);
     passes('createAttachmentUploadUrl', [
       { taskId: 't', filename: 'f'.repeat(255), contentType: 'image/png', size: 1 },
+    ]);
+  });
+
+  it('passes a longest title wherever it is copied: a split, a calendar block', () => {
+    const title = 't'.repeat(TASK_TITLE_MAX);
+    // SplitForm: a standalone task's parent takes its title; the rest is `<title> (cont.)`.
+    passes('splitTask', [
+      'id',
+      {
+        finish: 'keep',
+        parentTitle: title,
+        title,
+        followUp: { title: `${title} (cont.)`, estimateMin: null },
+      },
+    ]);
+    // AddToCalendarForm and MCP's create_calendar_event: a part's block is "Parent · Part".
+    passes('insertCalendarEvent', [
+      {
+        taskId: 't',
+        accountSub: 'a',
+        calendarId: 'c',
+        title: blockTitle({ title }, 'p'.repeat(TASK_TITLE_MAX)),
+        startMs: 1,
+        endMs: 2,
+      },
     ]);
   });
 
@@ -208,7 +234,7 @@ describe('the RPC argument specs', () => {
         [{ taskId: 't', accountSub: 'a', calendarId: 'c', title: { t: 1 }, startMs: 1, endMs: 2 }],
         /title must be text/,
       ],
-      ['createTask', [{ title: 't'.repeat(CAPTURE_MAX + 1) }], /title is limited to 100000/],
+      ['createTask', [{ title: 't'.repeat(TASK_TITLE_MAX + 1) }], /title is limited to 40000/],
       [
         'createTasks',
         [[{ title: 'ok' }, { title: 'x', userId: 'm' }]],

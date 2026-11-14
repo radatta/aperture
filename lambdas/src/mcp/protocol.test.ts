@@ -126,10 +126,10 @@ describe('handleMcpMessage', () => {
       } as ToolContext);
     const text = async (dispatch: ToolContext['dispatch']) =>
       ((await call(dispatch))?.result as { content: { text: string }[] }).content[0]!.text;
-    const long = { name: 'create_task', arguments: { title: 't'.repeat(100_001) } };
+    const long = { name: 'create_task', arguments: { title: 't'.repeat(40_001) } };
     const refused = await handleMcpMessage(req('tools/call', long), makeCtx());
     expect((refused?.result as { content: { text: string }[] }).content[0]!.text).toBe(
-      'title is limited to 100000 characters',
+      'title is limited to 40000 characters',
     );
     expect(await text(() => Promise.reject(new TypeError('secret detail')))).toBe('Internal error');
     const aws = Object.assign(new Error('arn:aws:dynamodb secret'), {

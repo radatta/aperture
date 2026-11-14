@@ -12,7 +12,6 @@ import {
   oneOf,
   opt,
   owned,
-  record,
   str,
 } from './shape';
 import type { Check } from './shape';
@@ -126,14 +125,6 @@ describe('shape checks', () => {
     refuses(c, { kind: 'a', n: 1 }, /^Unknown rule field: n$/, '');
     refuses(c, { kind: 'b' }, /^n is required$/, '');
     refuses(c, 'a', /^rule must be an object$/, '');
-  });
-
-  it('record: string keys up to a cap, each value checked', () => {
-    const c = record<unknown>(int, 2) as Check<unknown>;
-    expect(run(c, { a: 1, b: 2 })).not.toThrow();
-    refuses(c, { a: 1, b: 2, c: 3 }, 'x is limited to 2 entries');
-    refuses(c, { a: 'x' }, 'x.a must be a whole number');
-    refuses(c, { ['k'.repeat(65)]: 1 }, /key over 64/);
   });
 
   it('owned: passes anything to its normalizer, refusing only keys off its list on a plain object', () => {

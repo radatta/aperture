@@ -7,9 +7,11 @@
 import { noConsoleErrors, type Row, type Scenario } from '../scenario';
 import type { Ctx } from '../scenario';
 
-// Mirror argSpecs.ts's TEXT_MAX (prose) and CAPTURE_MAX (titles): drift fails this scenario's max rows loudly.
+// Mirror argSpecs.ts's TEXT_MAX (prose), CAPTURE_MAX (a log entry, an idea) and TASK_TITLE_MAX: drift fails
+// this scenario's max rows loudly.
 const TEXT_MAX = 20_000;
 const CAPTURE_MAX = 100_000;
+const TASK_TITLE_MAX = 40_000;
 const BODY_MAX = 1024 * 1024; // RPC_BODY_MAX
 
 const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
@@ -143,6 +145,11 @@ export const bffShapes: Scenario = {
       'push-legal-passes',
       'nominal',
       'A legal subscription passes the check (an off-list endpoint is refused by the push rule)',
+    ),
+    api(
+      'capture-max-ok',
+      'nominal',
+      'A task title at its cap (40 000) and a log entry at the capture cap (100 000) save and read back',
     ),
     api(
       'optional-args',
@@ -516,6 +523,31 @@ export const bffShapes: Scenario = {
       },
     },
     {
+      id: 'capture-max',
+      title: 'A task title and a log entry at their caps save and read back',
+      entry: 'api',
+      proves: ['capture-max-ok'],
+      async run(ctx) {
+        const head = titleOf(ctx, 'max');
+        const title = `${head} ${'t'.repeat(TASK_TITLE_MAX - head.length - 1)}`;
+        const text = `${head} ${'l'.repeat(CAPTURE_MAX - head.length - 1)}`;
+        const task = await ctx.api.writes.createTask({ title });
+        const entry = await ctx.api.writes.createLogEntry(text, ctx.dates.today);
+        try {
+          if ((await ctx.api.reads.getTask(task.id))?.title !== title)
+            throw new Error('the task at the title cap read back changed');
+          const back = (await ctx.api.reads.listLogEntries(ctx.dates.today)).find(
+            (e) => e.id === entry.id,
+          );
+          if (back?.text !== text)
+            throw new Error('the log entry at the capture cap read back changed');
+        } finally {
+          await ctx.api.writes.deleteTask(task.id);
+          await ctx.api.writes.deleteLogEntry(entry.id);
+        }
+      },
+    },
+    {
       id: 'optional-args',
       title: 'Optional arguments left out or null still answer',
       entry: 'api',
@@ -561,9 +593,9 @@ export const bffShapes: Scenario = {
       entry: 'mcp',
       proves: ['mcp-refusal', 'mcp-ok'],
       async run(ctx) {
-        const long = `${titleOf(ctx, 'mcp long')} ${'x'.repeat(CAPTURE_MAX)}`;
+        const long = `${titleOf(ctx, 'mcp long')} ${'x'.repeat(TASK_TITLE_MAX)}`;
         const refused = await ctx.mcp.writes.createTaskExpectingRefusal({ title: long });
-        if (!refused.isError || refused.text !== 'title is limited to 100000 characters')
+        if (!refused.isError || refused.text !== 'title is limited to 40000 characters')
           throw new Error(
             `create_task with a title over the cap answered ${refused.text.slice(0, 120)}`,
           );
