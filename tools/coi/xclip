@@ -86,7 +86,10 @@ targets() {
   if [ "$st" != served ]; then no "$id $st $rs"; fi
   if [ -L "$png" ] || [ ! -f "$png" ]; then no "$id served but clip.png is missing or a link"; fi
   # Copy first, then check the copy: the shared file could change between a check and a read.
-  (set -C && head -c $((MAX_BYTES + 1)) -- "$png" >"$KEPT") || no "$id could not keep the image"
+  (set -C && head -c $((MAX_BYTES + 1)) -- "$png" >"$KEPT") || {
+    rm -f -- "$KEPT" "$png"
+    no "$id could not keep the image"
+  }
   rm -f -- "$png" # the screenshot shouldn't sit in the shared folder
   size="$(stat -c %s "$KEPT")"
   if [ "$size" -gt "$MAX_BYTES" ] || [ "$(head -c 8 "$KEPT" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then

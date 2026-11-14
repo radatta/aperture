@@ -2,7 +2,16 @@
 // path is tools/coi/xclip (bash, no node start); this is the job's contract mirrored for validateJob, and
 // `pnpm mailroom clip-probe`, the same round trip by hand. Mac side: tools/mailroom/jobs/clip.sh. docs/ops/MAILROOM.md
 // → The clip job.
-import { copyFileSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Clock } from '../bot/dispatch.ts';
 import { isoSeconds, makeId } from './ids.ts';
@@ -57,12 +66,30 @@ export const CLIP_REASON_HINT = {
 } as const;
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-// A regular file (not a link) with PNG magic, as the shim checks; the out dir is made if missing.
+const MAX_BYTES = 16 * 1024 * 1024; // jobs/clip.sh → CLIP_MAX_BYTES
+// As the shim checks: one open that refuses a link, then a regular file within the cap with PNG magic — and the bytes
+// written are the ones checked. The out dir is made if missing.
 function copyPng(from: string, to: string): void {
-  if (!lstatSync(from).isFile()) throw new Error(`${from} is not a regular file`);
-  if (!readFileSync(from).subarray(0, 8).equals(PNG_MAGIC)) throw new Error(`${from} is not a PNG`);
-  mkdirSync(dirname(to), { recursive: true });
-  copyFileSync(from, to);
+  let fd: number;
+  try {
+    fd = openSync(from, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ELOOP')
+      throw new Error(`${from} is not a regular file`, { cause: err });
+    throw err;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new Error(`${from} is not a regular file`);
+    if (st.size > MAX_BYTES) throw new Error(`${from} is over 16 MiB`);
+    const buf = Buffer.alloc(st.size);
+    const n = readSync(fd, buf, 0, st.size, 0);
+    if (!buf.subarray(0, Math.min(n, 8)).equals(PNG_MAGIC)) throw new Error(`${from} is not a PNG`);
+    mkdirSync(dirname(to), { recursive: true });
+    writeFileSync(to, buf.subarray(0, n), { mode: 0o600 });
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export interface ClipDeps {
