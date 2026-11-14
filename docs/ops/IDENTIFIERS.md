@@ -2,6 +2,8 @@
 
 The repo is public with its real history (old commits keep what they had; history rewrites and PR-body edits were ruled out). Going forward, nothing tracked — code, docs, tests, fixtures — and no commit message, PR title or PR body carries a personal identifier. This doc is their one home; everything else points here.
 
+What else stays out of public text — bio, money, school, family, quotes, real names — is [PUBLIC-CONTENT.md](PUBLIC-CONTENT.md).
+
 ## The two tiers
 
 | Tier                     | What                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Where it may appear                                                                                        |
