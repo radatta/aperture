@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "branch": "bravo-branch",
+  "session": "bravo",
+  "phase": "dev",
+  "step": "devcheck full",
+  "phaseSince": "2026-11-08T05:52:00Z",
+  "sha": null,
+  "pr": null,
+  "slot": "dev",
+  "needs": null,
+  "updatedAt": "2026-11-08T06:00:00Z"
+}

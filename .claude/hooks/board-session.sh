@@ -14,6 +14,8 @@ IFS=$'\x1f' read -r SID CWD < <(printf '%s' "$INPUT" | jq -r '[.session_id // ""
 PID=$(sb_claude_pid "$PPID") || exit 0
 bash "$B/board.sh" register --pid "$PID" --sid "$SID" --cwd "${CWD:-$(pwd)}" >/dev/null 2>&1 || exit 0
 flock -n "$SAMPLER_LOCK" true 2>/dev/null && bash "$B/board.sh" sampler start >/dev/null 2>&1
+# the web tower (docs/ops/TOWER.md), always the main checkout's code, never a worktree's
+[ -x /workspace/scripts/board/tower-web.sh ] && flock -n "$TOWER_LOCK" true 2>/dev/null && bash /workspace/scripts/board/board.sh tower start >/dev/null 2>&1
 
 branch=$(jq -r '.branch // empty' "$BOARD_DIR/sessions/$PID.json" 2>/dev/null)
 {

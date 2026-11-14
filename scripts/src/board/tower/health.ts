@@ -103,7 +103,7 @@ export type Costs = {
 };
 
 export function sumCosts(text: string, month: string): Omit<Costs, 'state' | 'at' | 'error'> {
-  const r = JSON.parse(text.replace(/^﻿/, '')) as { ResultsByTime?: unknown };
+  const r = JSON.parse(text.replace(/^\uFEFF/, '')) as { ResultsByTime?: unknown };
   if (!r || !Array.isArray(r.ResultsByTime)) throw new Error('no ResultsByTime');
   const byAccount: Record<string, number> = {};
   let total = 0;

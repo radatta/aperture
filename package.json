@@ -21,6 +21,7 @@
     "ios-probe": "pnpm --filter @aperture/scripts ios-probe",
     "sim-bench:plans": "pnpm --filter @aperture/scripts sim-bench:plans",
     "sim-bench:seed": "pnpm --filter @aperture/scripts sim-bench:seed",
+    "board": "node scripts/src/board/cli.ts",
     "bot": "node scripts/src/bot/cli.ts",
     "mailroom": "node scripts/src/mailroom/cli.ts",
     "vapid-keys": "node scripts/src/vapid-keys.ts"

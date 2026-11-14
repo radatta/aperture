@@ -119,5 +119,25 @@
       "what": "Open the dev freeze for delta-branch",
       "kind": "rahul"
     }
+  ],
+  "followups": [
+    {
+      "id": "F1",
+      "what": "stale one: due now, open, a day and a half old",
+      "owner": "lane",
+      "after": "now",
+      "status": "open",
+      "source": "fixture",
+      "since": "2026-11-06T18:00:00Z"
+    },
+    {
+      "id": "F2",
+      "what": "not due yet",
+      "owner": "dispatch",
+      "after": "wave 4",
+      "status": "open",
+      "source": "fixture",
+      "since": "2026-11-01"
+    }
   ]
 }

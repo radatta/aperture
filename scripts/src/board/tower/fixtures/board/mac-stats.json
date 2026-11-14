@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "t": "2026-11-08T06:08:00Z",
+  "host": "mac",
+  "agentVersion": "fixture",
+  "memTotalMiB": 36864,
+  "mem": {
+    "freeMiB": 1124,
+    "activeMiB": 8192,
+    "inactiveMiB": 4096,
+    "wiredMiB": 3072,
+    "compressedMiB": 4096,
+    "usedMiB": 15360,
+    "freePct": 3,
+    "pressure": "warn"
+  },
+  "swap": {
+    "totalMiB": 2048,
+    "usedMiB": 1024
+  },
+  "load": [
+    3.21,
+    2.75,
+    2.4
+  ],
+  "cpus": 12,
+  "vm": {
+    "pid": 512,
+    "rssMiB": 22528,
+    "comm": "com.apple.Virtualization.VirtualMachine"
+  }
+}

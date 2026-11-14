@@ -5,7 +5,23 @@
     "headRefName": "charlie-branch",
     "state": "OPEN",
     "mergedAt": null,
-    "createdAt": "2026-11-08T04:30:00Z"
+    "createdAt": "2026-11-08T04:30:00Z",
+    "headRefOid": "4444444444444444444444444444444444444444",
+    "url": "https://github.com/radatta/aperture/pull/41",
+    "isDraft": false,
+    "mergeCommit": null
+  },
+  {
+    "number": 42,
+    "title": "Hotel: checks still running",
+    "headRefName": "hotel-branch",
+    "state": "OPEN",
+    "mergedAt": null,
+    "createdAt": "2026-11-08T05:40:00Z",
+    "headRefOid": "5555555555555555555555555555555555555555",
+    "url": "https://github.com/radatta/aperture/pull/42",
+    "isDraft": false,
+    "mergeCommit": null
   },
   {
     "number": 40,
@@ -13,7 +29,13 @@
     "headRefName": "alpha-branch",
     "state": "MERGED",
     "mergedAt": "2026-11-08T03:55:00Z",
-    "createdAt": "2026-11-06T20:00:00Z"
+    "createdAt": "2026-11-06T20:00:00Z",
+    "headRefOid": "3333333333333333333333333333333333333333",
+    "url": "https://github.com/radatta/aperture/pull/40",
+    "isDraft": false,
+    "mergeCommit": {
+      "oid": "dddddddddddddddddddddddddddddddddddddddd"
+    }
   },
   {
     "number": 39,

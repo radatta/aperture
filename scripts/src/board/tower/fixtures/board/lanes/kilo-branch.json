@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "branch": "kilo-branch",
+  "session": "kilo",
+  "phase": "parked",
+  "step": "until wave 4",
+  "phaseSince": "2026-11-06T20:00:00Z",
+  "sha": null,
+  "pr": null,
+  "slot": null,
+  "needs": null,
+  "updatedAt": "2026-11-06T20:00:00Z"
+}

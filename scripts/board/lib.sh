@@ -19,6 +19,8 @@ LIMITS_JSON="${APERTURE_LIMITS_JSON:-$SB_SCRIPTS/limits.json}"
 # The sampler singleton (one per container) and where it records its pid; tests point both elsewhere.
 SAMPLER_LOCK="${APERTURE_SAMPLER_LOCK:-/tmp/aperture-sampler.lock}"
 SAMPLER_PID="${APERTURE_SAMPLER_PID:-/tmp/aperture-sampler.pid}"
+TOWER_LOCK="${APERTURE_TOWER_LOCK:-/tmp/aperture-tower.lock}" # the web tower server (docs/ops/TOWER.md)
+TOWER_PID="${APERTURE_TOWER_PID:-/tmp/aperture-tower.pid}"
 
 sb_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 sb_today() { date -u +%Y-%m-%d; }

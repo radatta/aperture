@@ -106,7 +106,7 @@ export type Inputs = {
   runs: Cached<GhRun[]>; // the newest runs: main Deploy + deploy-dev dispatches
   checks: (sha: string) => Checks | null;
   files: (sha: string) => { files: string[] | null; error: string | null } | null;
-  minutes: Cached<Minutes | null> | null;
+  minutes: { state: Cached<Minutes | null> } | null;
   mac: MacRead;
   aws: Costs;
   tests: number;

@@ -4,6 +4,7 @@
 #   board.sh hub              the hub session (hub.json, docs/ops/HUB.md) and whether the board has it live
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
 #   board.sh sampler start|restart|stop|status
+#   board.sh tower start|restart|stop|status   (the web tower on :6183, docs/ops/TOWER.md)
 #   board.sh gc
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -198,6 +199,39 @@ cmd_sampler() {
   esac
 }
 
+# --- web tower lifecycle (docs/ops/TOWER.md) ---
+
+tower_running() { ! flock -n "$TOWER_LOCK" true 2>/dev/null; }
+
+cmd_tower() {
+  case "${1:-status}" in
+    start)
+      tower_running && { echo "tower: already running (pid $(cat "$TOWER_PID" 2>/dev/null)) — http://localhost:6183"; return 0; }
+      sb_init_dirs
+      setsid nohup bash "$SB_SCRIPTS/tower-web.sh" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
+      local i
+      for ((i = 0; i < 20; i++)); do
+        tower_running && { echo "tower: started (pid $(cat "$TOWER_PID" 2>/dev/null)) — http://localhost:6183, log $BOARD_DIR/tower.log"; return 0; }
+        sleep 0.1
+      done
+      echo "tower: did not start — see $BOARD_DIR/tower.log" >&2
+      return 1 ;;
+    stop|restart)
+      local p i
+      p=$(cat "$TOWER_PID" 2>/dev/null)
+      # By the recorded PID only, and only while it holds the lock as node (never by name: kill-by-pid rule).
+      if [ -n "$p" ] && tower_running && [ "$(sb_comm "$p")" = node ]; then kill "$p" && echo "tower: stopped $p"; fi
+      for ((i = 0; i < 25; i++)); do tower_running || break; sleep 0.2; done
+      if tower_running; then echo "tower: still running — see $TOWER_PID" >&2; return 1; fi
+      [ "$1" = restart ] && cmd_tower start
+      return 0 ;;
+    status)
+      if tower_running; then echo "tower: running (pid $(cat "$TOWER_PID" 2>/dev/null)) — http://localhost:6183"
+      else echo "tower: stopped — board.sh tower start"; return 1; fi ;;
+    *) echo "usage: board.sh tower start|restart|stop|status" >&2; return 2 ;;
+  esac
+}
+
 # --- housekeeping ---
 
 cmd_gc() {
@@ -230,7 +264,8 @@ case "${1:-status}" in
   end) cmd_end ;;
   note) shift; cmd_note "$@" ;;
   sampler) shift; cmd_sampler "$@" ;;
+  tower) shift; cmd_tower "$@" ;;
   hub) cmd_hub ;;
   gc) cmd_gc ;;
-  *) sed -n '2,7p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,8p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
