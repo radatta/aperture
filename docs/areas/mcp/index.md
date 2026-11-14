@@ -119,14 +119,14 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   Edits made in Google come back via the app's pull ([calendar → Two-way sync](../calendar/index.md)) —
   `list_tasks` does **not** pull, so it shows what the app last pulled; a task Google changed carries
   `gcalPulled` (`{at, note}` — what changed, or what Google changed that Aperture kept).
-- **Places** ([tasks/places.md](../tasks/places.md)): `place` (a slug — `Safeway` or `@safeway` is normalised —
+- **Places** ([tasks/places.md](../tasks/places.md)): `place` (a slug — `Grocer` or `@grocer` is normalised —
   or `null`) rides on `create_task`, `create_tasks` and `update_task`; an unknown place is refused, and so is a
   place change on a finished task (its place is history — places.md D3) and a `place` on a part that isn't its
   parent's (a part follows its parent; naming the parent's own place is a no-op). `update_task` applies
   `parentId` before `place`, so attaching a part and naming a different place is refused after the attach
   ("already applied: parentId"). An errand
   isn't calibration, so `complete_task` takes `actualMin` as optional there (recorded if given). Voice: "add
-  shampoo to my Safeway list" → `list_places` → `create_task {place}`.
+  batteries to my Grocer list" → `list_places` → `create_task {place}`.
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`
   (`notes: null` or `""` clears; an update replaces the whole note). They're checked before any dispatch,
   so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of
@@ -230,8 +230,8 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   the page still lands in its sitting. Its one write is the pull's own count on that sitting ("Claude watched
   live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
   `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final
-  code, his review — and `list_sittings` lists heads with `reviewed` and his tags; both only read. No MCP write
-  for reviews: they're his words, typed in the app.
+  code, the user's review — and `list_sittings` lists heads with `reviewed` and the user's tags; both only read. No MCP write
+  for reviews: they're the user's own words, typed in the app.
 
 ## Claude Code's standing approvals and the dev ledger
 
@@ -447,8 +447,8 @@ the model as the only UI — so:
   no arguments; "what did I spend at Amazon?" → `list_finance_transactions {merchant: "amazon"}` and its
   `totalUsd`. Nothing finance-related is
   writable from here.
-- **Flux by voice is a question too:** "how's my neck rehab going this week?" → `list_flux_sets {from, to}`
-  and its `summary`; "did I do my neck exercises today?" → the same with `from = to = today` and its
+- **Flux by voice is a question too:** "how's Flux going this week?" → `list_flux_sets {from, to}`
+  and its `summary`; "did I do my Flux sets today?" → the same with `from = to = today` and its
   `daySummary` line.
 - **LeetCode by voice:** "what am I working on?" / "why is my submit failing?" → `live_sitting`, pulled at most
   once per turn; "how did that sitting go?" → `get_sitting` with no id; "what did I do this week?" →

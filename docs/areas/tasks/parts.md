@@ -5,7 +5,7 @@
 When something is due is often very different from when you work on it, and the work often comes in parts. A pset due Tuesday, done as three chunks across Monday and Tuesday, is really two things: the **deliverable** (due when it's actually due, done when submitted) and the **work** (blocks on do-days, each with an estimate and an actual). A **parent** is the deliverable; its **parts** are the work.
 
 ```
-P2 · CSCI 198 · due Tue 11:59p · 1/3 · est 3h      ← parent: the deadline, category, notes
+P2 · CS 101 · due Tue 11:59p · 1/3 · est 3h        ← parent: the deadline, category, notes
  ├─ Part 1 · Mon · done 50m (est 45)               ← parts: ordinary tasks — planned,
  ├─ Part 2 · Tue · planned 60m                        worked, measured on their own
  └─ Part 3 · Tue · planned 75m

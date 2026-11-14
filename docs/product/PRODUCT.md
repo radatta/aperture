@@ -9,7 +9,7 @@ Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
 
 **One line:** Aperture is the single aperture my whole digital life passes through — the place I plan, do, capture, and later look back through.
 
-**Who it's for:** me, specifically. A student now, full-time SWE next year, currently interning. Motivated and ambitious, prone to tunnel vision, and aware that emotions can run the show in hard moments. Trying to notice that more and be more mindful _without_ sacrificing output — and to find a real work/life balance that comes from wanting it, not from forcing it and resenting it.
+**Who it's for:** one person, specifically. Motivated and ambitious, prone to tunnel vision. Trying to be more mindful _without_ sacrificing output — and to find a real work/life balance that comes from wanting it, not from forcing it and resenting it.
 
 **The job it does:** get everything out of my head and into one trusted place, so I'm less stressed, scope my time honestly, and can look back weeks/months later and see patterns I can't see in the moment.
 
@@ -38,7 +38,7 @@ Stay ambitious and productive **and** get more mindful/balanced — with a hard 
 ### v1 usage model
 
 - **Anchors: morning + night** (guaranteed touchpoints). The home should have a distinct **morning mode** (plan/intent) and **night mode** (log/reflect).
-- **Daytime: aspirational now, growing.** During the internship, daytime use is light; at school in a few months it becomes easy → design daytime capture as frictionless-but-optional, ready to scale up.
+- **Daytime: aspirational now, growing.** Daytime use starts light and is expected to grow → design daytime capture as frictionless-but-optional, ready to scale up.
 - Goal: minimum morning + night; ideally ≥1 daytime touch, trending to several.
 
 ---
@@ -83,7 +83,7 @@ _Amended 2026-10-12:_ Task mode parses natural language with Claude Haiku ([quic
 
 Plus, once a bank is connected, a single **finance line** (budget left · N to sort) — a line, not an element (see 4b).
 
-### ⚙️ Daytime — do + capture (light now, grows at school)
+### ⚙️ Daytime — do + capture (light now, growing)
 
 1. Capture bar (prominent)
 2. **Right now** — the **Big 3** (top of today's plan) with the in-progress task as a **hero** showing a calm **count-up vs its estimate**; the rest of today falls to a lighter "Also today" lane. Pomodoro focus starts from the hero. Finishing returns a gentle "what's next?", never an auto-advance.
@@ -97,7 +97,7 @@ Plus, once a bank is connected, a single **finance line** (budget left · N to s
 3. Habits check — mark today's
 4. One reflection prompt — single rotating question, non-cringe, fully skippable
 
-Plus the **finance line** only while charges wait to be sorted ("N charges to sort", see 4b), and a **Flux line** only on a day with neck-rehab sets ("Flux · 2 sets rotation, 1 upper trap", linking to its History — [flux](../areas/flux/index.md) D51). Lines, not elements.
+Plus the **finance line** only while charges wait to be sorted ("N charges to sort", see 4b), and a **Flux line** only on a day with Flux sets ("Flux · 2 sets rotation, 1 upper trap", linking to its History — [flux](../areas/flux/index.md) D51). Lines, not elements.
 
 ### Deliberately kept off the daily home
 
@@ -120,7 +120,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
    - **Calibration at two levels:** each part, and the whole job (the parent's lock vs Σ its parts — a missing part shows up there).
 4. **Done** — **actual time** recorded, plus an optional **reflection** line (what went well, what to do differently — [reflection](../areas/tasks/reflection.md)) → estimate-vs-actual delta captured, with its why. `cancelled` tasks are excluded from calibration. **Nothing finishes without both numbers** ([integrity](../areas/calibration/integrity.md)): a task finished unscoped gets its estimate at Done, in hindsight, and is marked as such. Starting one unscoped is a nudge, never a wall. An errand is checked off, not measured.
 
-**Recurring tasks** — a task can recur (simple rules: daily / weekdays / weekly / every-N), with a **cadence**: each occurrence is planned on its day and due a set number of days later ("pre-lab every Tuesday, due Wednesday"), and the series can **end** on a date (the quarter's last lab). Each occurrence is its own instance with its own estimate/actual → its own calibration point; unplanning one defers it, never duplicates it. Distinct from **habits** (recurring _behaviors_, no estimate). Design: [areas/tasks/recurring.md](../areas/tasks/recurring.md).
+**Recurring tasks** — a task can recur (simple rules: daily / weekdays / weekly / every-N), with a **cadence**: each occurrence is planned on its day and due a set number of days later ("a weekly report every Tuesday, due Wednesday"), and the series can **end** on a date (the term's last week). Each occurrence is its own instance with its own estimate/actual → its own calibration point; unplanning one defers it, never duplicates it. Distinct from **habits** (recurring _behaviors_, no estimate). Design: [areas/tasks/recurring.md](../areas/tasks/recurring.md).
 
 **Actual-time measurement — hybrid:** on "done," prompt for one number, **prefilled from any pomodoro time tracked, editable.** Works even on days no timer ran, so calibration data stays complete. An honest manual guess still calibrates fine.
 
@@ -132,19 +132,19 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 
 - **Interstitial log** — timestamped, append-only, one day per page. Light edit allowed (fix a typo); **no backdating** in v1. The durable reflection substrate.
 - **Pomodoro** — configurable work/break (default 25/5), tied to the current task; sessions accrue time + category to the task and prefill its "actual." Minimal.
-- **Habits** — weekly-cadence ("3×/week"), calendar view, marked in the night check. **No consecutive-streak, no guilt** — a miss is just a miss, repair-friendly. **Habits may hold non-work items** ("call home 1×/week") — this is the gentle, non-policing way non-work life gets a presence (weekly + repair-friendly keeps it supportive, not a scold).
+- **Habits** — weekly-cadence ("3×/week"), calendar view, marked in the night check. **No consecutive-streak, no guilt** — a miss is just a miss, repair-friendly. **Habits may hold non-work items** ("call a friend 1×/week") — this is the gentle, non-policing way non-work life gets a presence (weekly + repair-friendly keeps it supportive, not a scold).
 - **Rolls** — deadline-free ongoing _efforts_ you keep returning to (LeetCode daily, study, work on Aperture). Each has a **forgiving momentum "contact sheet"** — a dot grid that only fills; a gap is a fainter dot, **never a resetting streak, red, or score**. A "rep" is a completed _task_ tagged to the roll (derived, never a stored counter), so calibration rides ongoing effort too. The morning picker drops a rep onto today's plan, where it flows into the daytime Right-now lane. Distinct from Habits (a _timed task_ vs a _binary check_). Full design: **[home/rolls.md](../areas/home/rolls.md)**.
-- **Flux** — guided neck exercises with live range-of-motion feedback from the front camera (a port of flux-track-2). Tracking runs on-device; no video ever leaves it. **Not a medical device** — angles are relative to a per-session neutral. A session counts as a **Roll rep** (the Roll is picked in Settings), so neck work rides calibration with no new machinery. Off the daily home. Full design: **[flux/](../areas/flux/index.md)**.
+- **Flux** — guided neck exercises with live range-of-motion feedback from the front camera (a port of flux-track-2). Tracking runs on-device; no video ever leaves it. **Not a medical device** — angles are relative to a per-session neutral. A session counts as a **Roll rep** (the Roll is picked in Settings), so Flux sessions ride calibration with no new machinery. Off the daily home. Full design: **[flux/](../areas/flux/index.md)**.
 - **Quick-capture inbox** — where Idea-mode captures land; triage each into task / log / note / discard.
 - **Recruiting** — a two-tab hub for interview prep.
   - _Attempts_ — LeetCode attempt capture. Every submission is recorded, **accepted and wrong**, by a browser extension; there's no authoring here. The list shows a derived per-problem attempt count ("attempt 2 of 2"), so the wrong→accepted arc is the visible unit — the same estimate-vs-reality move as calibration, applied to problem-solving. **No streaks, and a wrong answer is never red** — accepted reads positive, everything else reads "attention." Full design: **[recruiting/](../areas/recruiting/index.md)**.
   - _Stories_ — a **behavioral story bank**: ~8–12 STAR stories tagged by competency. The one place the app is structured-at-entry, on purpose — a story is a slowly-tightened artifact you reuse across interviews, not a fleeting capture. Full design: **[recruiting/story-bank.md](../areas/recruiting/story-bank.md)**.
   - Deliberately off the daily home; it's a review surface, not a ritual one.
-- **Finances** — where the money went this billing period. Bank of America syncs in (Plaid) and every
-  charge gets sorted into **Parents pay · Budget · I pay**; only Budget counts against the per-period
-  budget ($600). Money out that isn't spending (moving money into investments, a cash withdrawal) goes to **Not
+- **Finances** — where the money went this billing period. A bank syncs in (Plaid) and every
+  charge gets sorted into **Covered · Budget · I pay**; only Budget counts against the per-period
+  budget. Money out that isn't spending (a transfer to an outside account, a cash withdrawal) goes to **Not
   spending**, in no total. You mark the card payment that ends a period, link refunds to the charges they
-  reverse, and teach it rules ("always put Uber in I pay"). Sorting is a batch pass (keys 1–4), not a per-charge
+  reverse, and teach it rules ("always put <merchant> in I pay"). Sorting is a batch pass (keys 1–4), not a per-charge
   chore. The home gets **one line, never a card** — budget left + what's waiting to sort in the morning,
   the sort count at night — because Morning is at its ≤5-element cap. Full design:
   **[finances/](../areas/finances/index.md)**.

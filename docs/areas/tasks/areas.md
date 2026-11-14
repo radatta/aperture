@@ -4,7 +4,7 @@
 
 An **area** is the part of life a category belongs to — **School · Aperture · Recruiting · Personal** — set
 once in Settings. It is the axis orthogonal to category: categories are already project-shaped (Aperture,
-ECEN 21, CSEN 146, Studying), and the area is what groups them when the question is "how is my time split
+CS 101, MATH 200, Studying), and the area is what groups them when the question is "how is my time split
 across my life", not "which course". Its first job: the Backlog shows the **life backlog**, with Aperture
 work folded away behind a chip, and Home's "+ Add" counts only life tasks. The weekly balance and PR-D can
 split time by area next. One half of the "Suggested tasks" decision (the Park half); the Suggest half is its

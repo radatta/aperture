@@ -153,7 +153,7 @@ One task per line. A line is:   <title>[ | <tokens>]
              due:<YYYY-MM-DD>  real calendar date, ISO   e.g. due:2026-09-25
              due:<YYYY-MM-DD>@<HH:MM>  + a 24h deadline time   e.g. due:2026-09-25@17:00
              notes:"<text>"    quoted; \n = a newline    e.g. notes:"Ch. 4\nq6: use the lemma"
-             @<place>          a place's link word       e.g. @safeway  (an errand — places.md)
+             @<place>          a place's link word       e.g. @grocer   (an errand — places.md)
 ```
 
 The `notes:"…"` value is the task's notes (light markdown — see [notes.md](notes.md)). Inside the
@@ -183,10 +183,10 @@ Good paste:
 
 ```
 email coach
-finish 214 pset | ~90 #"Deep Work" due:2026-09-25@17:00
+finish the pset | ~90 #"Deep Work" due:2026-09-25@17:00
 book flight | due:2026-10-02
 review the RFC | ~45 #Admin
-read ch. 4 | ~30 notes:"q1–8\n- q6: use the lemma\nhttps://example.edu/pset4"
+read ch. 4 | ~30 notes:"q1–8\n- q6: use the lemma\nhttps://example.org/pset4"
 ```
 
 The category labels are shown live in the dialog header — read the valid set off the screen.

@@ -1,7 +1,6 @@
 # Finances — the three-bucket budget over Plaid
 
-`/finances`: every charge on the Bank of America card and accounts, sorted into **Parents pay · Budget ·
-I pay**, against a **$600 budget per billing period**. A port of penny-pilot's budget, synced through
+`/finances`: every charge on the linked bank's cards and accounts, sorted into **Covered · Budget · I pay**, against a **budget per billing period** (a Setting). A port of an earlier budget app, synced through
 **Plaid Trial** ($0). This doc is the design record and the one home for the sync-status contract, the
 Plaid facts we rely on, and the operator checklist. Built on `feature/finances-page`, 2026-09.
 
@@ -11,9 +10,9 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   previous period, with search and a "Sort into" brush — below) and **Rules** — real routes, like Recruiting. It's an AppNav link, not a dock item (one
   dock, [CONVENTIONS](../../product/CONVENTIONS.md)).
 - **Home:** one line, never a card (why: [PRODUCT §4b](../../product/PRODUCT.md#4b-the-lighter-modules)).
-  Morning: "$X left of $600 · N to sort"; Night: "N charges to sort", only when non-zero
+  Morning: "$X left of $<budget> · N to sort"; Night: "N charges to sort", only when non-zero
   (`pages/Home/FinanceGlance.tsx`). Nothing until a bank is connected.
-- **Settings:** budget per period (default $600) and card payment day (default 20).
+- **Settings:** budget per period and card payment day (defaults: `FINANCE_DEFAULT_BUDGET_CENTS` and `FINANCE_DEFAULT_PAYMENT_DAY` in `finance.ts`).
 - **Header:** budget left, the period and its day, and a nudge to mark a detected card payment — a newer
   payment on a marked period, or on the payment-day fallback the last one (when a card is linked).
 
@@ -45,9 +44,9 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 
 ## 2. Buckets and money
 
-- Buckets `parents_pay` / `budget` / `i_pay` (keys **1 / 2 / 3** on a focused Sort group). Only **Budget**
+- Buckets `parents_pay` (shown as **Covered**; the stored key keeps its original name) / `budget` / `i_pay` (keys **1 / 2 / 3** on a focused Sort group). Only **Budget**
   counts against the budget; the other two are tracked, not limited.
-- **Not spending** (`not_spending`, key **4**) is for money out that isn't spending — a brokerage deposit,
+- **Not spending** (`not_spending`, key **4**) is for money out that isn't spending — a transfer to an outside account,
   a cash withdrawal, a top-up of a payment app. Sorting a row there takes it out of the queue and out of every
   total (`summarizePeriod` skips it; the overview's `buckets` stay the three spending ones). It's a stored
   bucket value, not a flag, so rules, **Always** and pending→posted carry it like the others. Real data
@@ -83,7 +82,7 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 
 - A refund (card credit, or a checking/savings deposit) is linked to the charge it reverses; it then takes
   the charge's bucket and period, nets against it, and leaves the sort queue. An unlinked deposit is
-  income, outside the budget. That includes **someone paying you back** — e.g. a family member covering a
+  income, outside the budget. That includes **someone paying you back** — e.g. a friend paying back their share of a
   bill: Plaid tags it a transfer (`TRANSFER_IN`) because it comes from an account you haven't linked, and
   linking it to the bill nets the bill out.
 - `refundLinkError` (run by both the stub and the server; the suggestions filter with its
@@ -127,14 +126,13 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 pattern wins (`applyRules`, also matched against the digit-stripped `merchantKey`). New rows get rules at
 sync time. Ticking **Always** while sorting saves the rule and sorts every currently-unsorted match (skipping
 linked refunds and period marks). A rule never re-sorts a charge you sorted by hand. A rule can target Not
-spending ("always the brokerage"); retargeting a rule doesn't re-sort rows it already sorted.
+spending ("always that transfer"); retargeting a rule doesn't re-sort rows it already sorted.
 
 ## 6. Sync
 
 One Lambda, `aperture-finance-sync-<stage>` (`lambdas/src/financeSync.ts` → `finance/sync.ts`), invoked
 async by the BFF after a sync request (Refresh, or the popup's Try again), connect or reconnect, and by
-EventBridge Scheduler at **5:15a, 3:15p and
-8:15p Pacific**. Items run in parallel under one deadline. Per item:
+EventBridge Scheduler three times a day (the cron and its time zone: `cdk/src/lib/finance-sync.ts`). Items run in parallel under one deadline. Per item:
 
 1. **Lock:** a CAS on the item's sync-state row; the `lockedUntil` value is the owner token, checked on
    every renew and at finish. A run that finds it held exits; its request stays stamped.
@@ -237,15 +235,14 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   for a pull. `amount` is positive for money out.
 - **Pending → posted:** the pending id arrives in `removed`; the posted row arrives with a new id and
   `pending_transaction_id`.
-- **Bank of America:** `ins_127989`, OAuth. BofA hosts its own account picker — tick checking, savings
-  and the card. Deposit history ~18 months; card = current cycle + 11 previous. Consent lasts 12 months;
+- **The linked bank:** OAuth. It hosts its own account picker — tick every account (checking, savings, card). Deposit history ~18 months; card = current cycle + 11 previous. Consent lasts 12 months;
   `PENDING_DISCONNECT` a week before, then `ITEM_LOGIN_REQUIRED` → reconnect.
-- **Seen on the first real BofA sync (2026-09-28):** a card payment arrives as a pair whose descriptors
+- **Seen on the first real sync:** a card payment arrives as a pair whose descriptors
   share one confirmation code — card side money in (category `TRANSFER_IN_ACCOUNT_TRANSFER`), checking
   side money out (`LOAN_PAYMENTS_CREDIT_CARD_PAYMENT`). Purchases are positive on the card, refunds negative, and the card's
-  `current` balance is what's owed — no flip needed. BofA **does** send pending rows. Still unmeasured:
+  `current` balance is what's owed — no flip needed. The bank **does** send pending rows. Still unmeasured:
   refresh latency and how long NOT_READY lasts after linking. (Sandbox's canned "AUTOMATIC PAYMENT" is
-  money out on the card — Sandbox data, not BofA's shape.) Consequence (inferred, not yet seen): only the
+  money out on the card — Sandbox data, not that bank's shape.) Consequence (inferred, not yet seen): only the
   checking side carries the card-payment category, so a card side that can't pair — checking hidden or
   unlinked, or the two posted more than 3 days apart — reads as a **refund** and lands in Sort. Mark it as
   the period start, or teach the payment hint `TRANSFER_IN_ACCOUNT_TRANSFER` on a credit account.
@@ -278,7 +275,7 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **The schedule is gated on `DEVICE_USER_ID_<STAGE>`** (the same GitHub secret the LeetCode ingest uses):
   unset means no scheduled sync (devb, a local synth — dev and prod CI refuse to deploy without it); wrong means it syncs an empty partition. See
   [recruiting/](../recruiting/index.md) → Operator setup.
-- **Linking:** from a Safari tab. Tick every account in BofA's picker; add a missed one later with the
+- **Linking:** from a Safari tab. Tick every account in the bank's picker; add a missed one later with the
   bank's **⋯ → Add or remove accounts** (update mode), never a second Connect.
 - **First-sync sign check:** a known card purchase is an expense (money out), the card payment shows as a
   pair (card side money in, checking side money out), a known refund is money in, and the card balance is

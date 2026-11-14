@@ -132,7 +132,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **finance** — Plaid-synced bank data: `financeItems` (a bank login), `financeSyncStates` (per item: cursor, lock, request/refresh stamps), `financeAccounts`, `financeTransactions`, `financeRules` (ULID ids). Transaction fields are Plaid-owned (amount, date, merchant…) except the **user-owned** ones a sync never overwrites: `bucket · bucketSetBy · periodOverride · note · refundOfId · startsPeriod`. Design: [finances/](../areas/finances/index.md).
 
-**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` (default 60000), `financePaymentDay` (default 20), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc.
+**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
 
