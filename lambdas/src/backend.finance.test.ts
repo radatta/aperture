@@ -259,9 +259,9 @@ describe('finance backend', () => {
       dayStartHour: 4,
     });
     const s = await api.getSettings();
-    expect([s.financeBudgetCents, s.financePaymentDay]).toEqual([60000, 20]);
+    expect([s.financeBudgetCents, s.financePaymentDay]).toEqual([50000, 1]);
     const o = await api.getFinanceOverview({ today: todayKey(4, now()) });
-    expect(o.leftCents).toBe(60000);
+    expect(o.leftCents).toBe(50000);
   });
 
   it('testMode on REAL data: nothing reaches Plaid, nothing is written, nothing is invoked', async () => {

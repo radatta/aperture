@@ -15,6 +15,7 @@ import {
   describeHits,
   findIdentifiers,
   identifierRules,
+  projectsFolder,
   simCognitoPin,
 } from './identifiers.ts';
 
@@ -85,10 +86,9 @@ describe('rules', () => {
     expect(kinds(IDS.email.devTestUser)).toEqual([]);
   });
 
-  it('blocks a concrete home path and the projects folder, not placeholders', () => {
+  it('blocks a concrete home path, not placeholders', () => {
     const home = ['', 'Users', 'someone', 'repo'].join('/');
     expect(kinds(`cd ${home}`)).toEqual(['home-path']);
-    expect(kinds(`~/${['Coding', 'Personal'].join('/')}/x`)).toEqual(['projects-folder']);
     for (const ok of [
       '/Users/<you>/repo',
       '/Users/$USER/x',
@@ -99,27 +99,41 @@ describe('rules', () => {
       expect(kinds(ok), ok).toEqual([]);
   });
 
+  const root = ['', 'Users', 'someone', 'Alpha', 'Beta', 'repo'].join('/');
+  const folderKinds = (s: string, r: string | null = root) =>
+    findIdentifiers(s, identifierRules(IDS, r)).map((h) => h.kind);
+
   it("blocks the projects folder's first name under a home prefix, alone", () => {
-    const top = ['Cod', 'ing'].join('');
     for (const hit of [
-      `~/${top}/x`,
-      `$HOME/${top}`,
-      `\${HOME}/${top}/a`,
-      `"~\\/${top}\\/x"`,
-      `~/${top.toLowerCase()} `,
-      `"$HOME"/${top}/x`,
-      `\${HOME:-/tmp}/${top}`,
-      `~/${top}/Personal/x`, // the full form too: still one hit
+      '~/Alpha/x',
+      '$HOME/Alpha',
+      '${HOME}/Alpha/a',
+      '"~\\/Alpha\\/x"',
+      '~/alpha ',
+      '"$HOME"/Alpha/x',
+      '${HOME:-/tmp}/Alpha',
+      '~/Alpha/Beta/x', // the full form too: still one hit
     ])
-      expect(kinds(hit), hit).toEqual(['projects-folder']);
+      expect(folderKinds(hit), hit).toEqual(['projects-folder']);
     for (const ok of [
-      `~/${top}Guide`,
-      `docs/${top}/x`,
-      `$HOMEX/${top}`,
-      `/home/u/${top}`,
+      '~/AlphaGuide',
+      'docs/Alpha/x',
+      '$HOMEX/Alpha',
+      '/home/u/Alpha',
       '~/<other-project>',
     ])
-      expect(kinds(ok), ok).toEqual([]);
+      expect(folderKinds(ok), ok).toEqual([]);
+  });
+
+  it('builds the projects-folder rule from the Mac root, and has none without it', () => {
+    expect(folderKinds('~/Alpha/Beta/x')).toEqual(['projects-folder']);
+    expect(folderKinds('alpha\\beta')).toEqual(['projects-folder']);
+    expect(folderKinds('Beta/x')).toEqual([]);
+    expect(projectsFolder(root)).toEqual(['Alpha', 'Beta']);
+    for (const none of [null, ['', 'Users', 'someone', 'repo'].join('/'), '/Volumes/host/aperture'])
+      expect(projectsFolder(none), String(none)).toBeNull();
+    expect(identifierRules(IDS, null).map(([k]) => k)).not.toContain('projects-folder');
+    expect(folderKinds('~/Alpha/x', null)).toEqual([]);
   });
 
   it('blocks the dev account id on digit boundaries only', () => {

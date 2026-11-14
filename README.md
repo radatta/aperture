@@ -1,8 +1,8 @@
 # Aperture
 
-A personal life-OS PWA — one place for everything digital about me. Web-first, installable, multi-device.
+A personal life-OS PWA — one place for everything digital in one person's life. Web-first, installable, multi-device.
 
-Aperture exists to make me **calmer and more honest with myself**, not just to log more output. Its #1 job is a morning + night ritual (glance, plan, reflect), with the signature move being **calibration** — surfacing the gap between what I _thought_ a task would take and what it _actually_ took, so I stop under-scoping my own life.
+Aperture exists to make its user **calmer and more honest about their time**, not just to log more output. Its #1 job is a morning + night ritual (glance, plan, reflect), with the signature move being **calibration** — surfacing the gap between what a task was _estimated_ to take and what it _actually_ took, so under-scoping gets caught instead of repeated.
 
 Not a mood tracker, not a habit-shaming app, not a productivity cult. Balance is invited, never policed.
 

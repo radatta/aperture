@@ -44,7 +44,8 @@ so the literal never sits in the repo for the CI secret scanner to flag.
 personal-identifier block), and "stage_ids" stages that config; "write" puts a file in the tree unstaged
 (at "write_path"); "stage_path" names the staged file (default staged.txt). {ID_NAME}, {ID_MAILBOX},
 {ID_HOME}, {ID_FOLDER}, {ID_DEV_ACCOUNT} and {ID_DOMAIN} in "stage" or "cmd" expand from identifiers.json, so this file
-carries no identifier itself (docs/ops/IDENTIFIERS.md).
+carries no identifier itself (docs/ops/IDENTIFIERS.md); {ID_FOLDER} is synthetic, matching the throwaway repo's own
+.local/mac-root.
 """
 
 import fcntl
@@ -64,7 +65,7 @@ _IDS = json.loads((REPO_ROOT / "identifiers.json").read_text(encoding="utf-8"))
 ID_PLACEHOLDERS = {
     "{ID_NAME}": _IDS["maintainer"]["name"].split()[0],
     "{ID_MAILBOX}": _IDS["email"]["contact"].split("@")[0],
-    "{ID_FOLDER}": "Coding" + "/" + "Personal",
+    "{ID_FOLDER}": "Alpha" + "/" + "Beta",
     "{ID_HOME}": "/" + "Users/someone/repo",
     "{ID_DEV_ACCOUNT}": _IDS["aws"]["devAccountId"],
     "{ID_DOMAIN}": _IDS["domains"]["dev"],
@@ -240,8 +241,14 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
         shutil.copy2(REPO_ROOT / "identifiers.json", pathlib.Path(repo) / "identifiers.json")
         src = pathlib.Path(repo) / "scripts" / "src"
         src.mkdir(parents=True)
-        for name in ("identifiers.ts", "identifiers-scan.ts"):
+        for name in ("identifiers.ts", "identifiers-scan.ts", "mac-root.ts"):
             shutil.copy2(REPO_ROOT / "scripts" / "src" / name, src / name)
+        # A synthetic Mac root, so the projects-folder rule exists here ({ID_FOLDER}); excluded, not committed.
+        local = pathlib.Path(repo) / ".local"
+        local.mkdir()
+        (local / "mac-root").write_text("/" + "Users/someone/Alpha/Beta/repo\n", encoding="utf-8")
+        with open(pathlib.Path(repo) / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
+            f.write(".local/\n")
         if case.get("stage_ids"):
             subprocess.run(["git", "-C", repo, "add", "identifiers.json"], check=True)
     if "stage" in case:

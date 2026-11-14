@@ -350,6 +350,19 @@ describe('computeFinancePeriod', () => {
     const p = computeFinancePeriod({ today: '2026-03-05', accounts: [], txns: [], paymentDay: 31 });
     expect(p.start).toBe('2026-03-01'); // day after Feb 28
   });
+  it('payment day 1: the period starts on the 2nd, and the 1st closes it', () => {
+    const at = (today: string) =>
+      computeFinancePeriod({ today, accounts: [], txns: [], paymentDay: 1 });
+    const nov1 = at('2026-11-01');
+    expect([nov1.start, nov1.dayCount]).toEqual(['2026-10-02', 31]);
+    expect(nov1.previous).toEqual({ start: '2026-09-02', end: '2026-10-01' });
+    const nov2 = at('2026-11-02');
+    expect([nov2.start, nov2.dayCount]).toEqual(['2026-11-02', 1]);
+    expect(nov2.previous).toEqual({ start: '2026-10-02', end: '2026-11-01' });
+    const mar1 = at('2026-03-01');
+    expect([mar1.start, mar1.dayCount]).toEqual(['2026-02-02', 28]);
+    expect(mar1.previous).toEqual({ start: '2026-01-02', end: '2026-02-01' });
+  });
 });
 
 const payments = [

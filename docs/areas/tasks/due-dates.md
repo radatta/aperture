@@ -81,7 +81,7 @@ _Rejected:_ a due-date field at capture. It would be convenient occasionally and
 `dueDay` is editable at **any** status and never touches `estimateLockedMin`.
 _Why:_ `estimateLockedMin` is the calibration anchor — it freezes on first exit from planning precisely
 so the predict-vs-actual gap stays honest. A deadline moving is not a scope change; conflating the two
-would corrupt calibration data every time a professor pushed a due date.
+would corrupt calibration data every time someone else pushed a due date.
 _Rejected:_ treating a due-date edit like an estimate edit (locked after planning).
 
 **D4 — A dedicated in-progress surface, because "editable at any status" has nowhere to live otherwise.**

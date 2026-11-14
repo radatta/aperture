@@ -89,10 +89,10 @@ describe('Finances page', () => {
     expect(within(accounts).queryByText(/Plaid Saving/)).toBeNull();
   });
 
-  it('shows "$X left of $600" and the unsorted count', async () => {
+  it('shows "$X left of $500" and the unsorted count', async () => {
     renderApp({ api: await linked(), path: '/finances' });
-    expect(await screen.findByText('$600 left')).toBeTruthy();
-    expect(screen.getByText('of $600 budget')).toBeTruthy();
+    expect(await screen.findByText('$500 left')).toBeTruthy();
+    expect(screen.getByText('of $500 budget')).toBeTruthy();
     expect(screen.getByText(/since your .* payment/)).toBeTruthy();
     expect(screen.getByRole('link', { name: /to sort ·/ })).toBeTruthy();
   });
@@ -132,7 +132,7 @@ describe('Finances page', () => {
     await waitFor(() =>
       expect(screen.getByRole('link', { name: /to sort ·/ }).textContent).not.toBe(before),
     );
-    expect(screen.getByText('$600 left')).toBeTruthy();
+    expect(screen.getByText('$500 left')).toBeTruthy();
     const all = await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' });
     expect(all.find((t) => t.id === 'fx-brokerage')!.bucket).toBe('not_spending');
   });
@@ -218,7 +218,7 @@ describe('Finances page', () => {
     const api = await linked();
     await api.setFinanceBucket({ ids: ['fx-rent'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
-    expect(await screen.findByText('$200 over')).toBeTruthy(); // $800.00 of rent in Budget
+    expect(await screen.findByText('$300 over')).toBeTruthy(); // $800.00 of rent in Budget
     await user.click((await findRows(/Example Payer/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Money in: Example Payer/ });
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
@@ -226,7 +226,7 @@ describe('Finances page', () => {
     expect(within(dialog).getByText(/\$0\.50 more than what's left of the charge/)).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: /Link to Example Landlord/ }));
     expect(await within(dialog).findByText(/Only \$800\.00 of it counts/)).toBeTruthy();
-    expect(await screen.findByText('$600 left')).toBeTruthy();
+    expect(await screen.findByText('$500 left')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Done' }));
     const row = document.querySelector<HTMLElement>('[data-txn-id="fx-reimburse"]')!;
     expect(within(row).getByText(/counts \$800\.00/)).toBeTruthy();
@@ -248,12 +248,12 @@ describe('Finances page', () => {
     const target = txns.find((t) => t.merchantName === 'Chipotle')!;
     await api.setFinanceBucket({ ids: [target.id], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
-    expect(await screen.findByText('$590 left')).toBeTruthy(); // $600 - $10.00
+    expect(await screen.findByText('$490 left')).toBeTruthy(); // $500 - $10.00
     const row = (await findRows(/Chipotle/))[0]!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
     await user.click(within(dialog).getByRole('radio', { name: 'Last period' }));
-    expect(await screen.findByText('$600 left')).toBeTruthy();
+    expect(await screen.findByText('$500 left')).toBeTruthy();
   });
 
   it('shows the reconnect banner when the bank needs a login', async () => {
@@ -276,7 +276,7 @@ describe('Finances page', () => {
     const api = await linked();
     await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
-    expect(await screen.findByText('$570 left')).toBeTruthy(); // $600 − $30.00
+    expect(await screen.findByText('$470 left')).toBeTruthy(); // $500 − $30.00
     const refundRow = (await findRows(/Amazon.*\+\$30\.00/))[0]!;
     await user.click(refundRow);
     const dialog = await screen.findByRole('dialog', { name: /Refund: Amazon/ });
@@ -286,12 +286,12 @@ describe('Finances page', () => {
     await user.click(best);
     expect(await within(dialog).findByText(/it follows the charge/)).toBeTruthy();
     expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
-    expect(await screen.findByText('$600 left')).toBeTruthy(); // netted
+    expect(await screen.findByText('$500 left')).toBeTruthy(); // netted
     expect(await screen.findByText(/refunded \$30\.00/)).toBeTruthy(); // the charge's row
 
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     expect(await within(dialog).findByRole('radiogroup', { name: 'Bucket' })).toBeTruthy();
-    expect(await screen.findByText('$570 left')).toBeTruthy();
+    expect(await screen.findByText('$470 left')).toBeTruthy();
   });
 
   it('under latency, Link and Unlink hand focus to the next button while it’s busy, and a busy click does nothing', async () => {
@@ -393,7 +393,7 @@ describe('Finances page', () => {
     const user = userEvent.setup();
     const api = await linkedBare();
     renderApp({ api, path: '/finances/all' });
-    expect(await screen.findByText(/using your payment day \(the 20th\)/)).toBeTruthy();
+    expect(await screen.findByText(/using your payment day \(the 1st\)/)).toBeTruthy();
     expect(
       await screen.findByText(/Looks like you paid the card on .* \(\+\$650\.00\)/),
     ).toBeTruthy();
@@ -441,7 +441,7 @@ describe('Finances page', () => {
     const api = await linked();
     await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
-    expect(await screen.findByText('$545 left')).toBeTruthy(); // $600 − $55.00
+    expect(await screen.findByText('$445 left')).toBeTruthy(); // $500 − $55.00
     const refundRow = (await findRows(/Safeway.*\+\$55\.00/))[0]!;
     await user.click(refundRow);
     const dialog = await screen.findByRole('dialog', { name: /^Money in: Safeway/ });
@@ -449,7 +449,7 @@ describe('Finances page', () => {
     await user.click(
       (await within(dialog).findAllByRole('button', { name: /Link to Safeway/ }))[0]!,
     );
-    expect(await screen.findByText('$600 left')).toBeTruthy();
+    expect(await screen.findByText('$500 left')).toBeTruthy();
     expect(await screen.findByText(/refunded \$55\.00/)).toBeTruthy();
   });
 
@@ -863,7 +863,7 @@ describe('Refund link search', () => {
     const api = await linked();
     await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
-    expect(await screen.findByText('$545 left')).toBeTruthy(); // $600 − $55.00
+    expect(await screen.findByText('$445 left')).toBeTruthy(); // $500 − $55.00
     await user.click((await findRows(/Example Payer/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Money in: Example Payer/ });
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
@@ -871,7 +871,7 @@ describe('Refund link search', () => {
     await user.type(searchBox(dialog), 'SAFEWAY');
     await user.click(within(dialog).getByRole('button', { name: /Link to Safeway/ }));
     expect(await within(dialog).findByText(/Only \$55\.00 of it counts/)).toBeTruthy();
-    expect(await screen.findByText('$600 left')).toBeTruthy();
+    expect(await screen.findByText('$500 left')).toBeTruthy();
   });
 
   it('Escape clears the search and brings the suggestions back without taking focus from the box', async () => {
@@ -1353,7 +1353,7 @@ describe('Finance glance on the home', () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/' });
     await user.click(await screen.findByRole('button', { name: 'Morning' }));
-    expect(await screen.findByText(/\$600 left of \$600 · \d+ to sort/)).toBeTruthy();
+    expect(await screen.findByText(/\$500 left of \$500 · \d+ to sort/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Night' }));
     expect(await screen.findByText(/\d+ charges to sort/)).toBeTruthy();
   });

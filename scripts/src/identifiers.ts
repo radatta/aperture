@@ -1,12 +1,15 @@
 // The repo's public identifiers — `identifiers.json` at the root, their one tracked home (docs/ops/IDENTIFIERS.md) —
 // and the one rule set that keeps the personal ones out of everything else: tracked files
 // (tracked-identifiers.test.ts), commits (.claude/hooks/precommit-guard.sh, via identifiers-scan.ts) and PR titles
-// and bodies (mailroom/open-pr.ts). Every pattern is built from the config, so no rule spells an identifier itself.
+// and bodies (mailroom/open-pr.ts). Every pattern is built from the config or the gitignored .local/mac-root, so no
+// rule spells an identifier itself.
 // Read at runtime, never imported: the file sits outside every package's rootDir. Imports stay node: only, so the
 // bot CLI and the hook still load this under plain node.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { macRootFile, readMacRoot } from './mac-root.ts';
 
 export interface Identifiers {
   maintainer: { name: string; github: string };
@@ -43,7 +46,7 @@ export const cognitoHost = (slot: 'dev' | 'devb', ids = IDS): string =>
   `aperture-${slot}-${ids.aws.devAccountId}.auth.${ids.aws.region}.amazoncognito.com`;
 
 // What may never appear outside the config: the maintainer's name, the personal mailbox, a concrete Mac home path,
-// the Mac's projects folder, and the AWS account ids (public-prep's scan, 2026-11-13): dev's by its id, prod's by its
+// the Mac's projects folder (derived from .local/mac-root; no rule without it), and the AWS account ids (public-prep's scan, 2026-11-13): dev's by its id, prod's by its
 // id's sha256, since the prod id is in no tracked file at all — not even the config.
 export type IdentifierKind =
   'name' | 'personal-email' | 'home-path' | 'projects-folder' | 'account-id' | 'prod-account-id';
@@ -61,12 +64,26 @@ const accountIds = (l: string) => [...l.matchAll(ACCOUNT_IDS)].map((m) => m[0].r
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const test = (re: RegExp) => (l: string) => re.test(l);
 const SEP = '\\\\?[/\\\\]'; // a slash, JSON-escaped or not, or a backslash
-const [TOP, SUB] = ['Coding', 'Personal'];
-const FOLDER = new RegExp(`${TOP}${SEP}${SUB}`, 'i');
 // ~, $HOME or ${HOME} (a :- default too), quoted or not.
-const HOME_FOLDER = new RegExp(`(?:~|\\$HOME|\\$\\{HOME(?::-[^}]*)?\\})"?${SEP}${TOP}\\b`, 'i');
+const HOME = '(?:~|\\$HOME|\\$\\{HOME(?::-[^}]*)?\\})"?';
 
-export function identifierRules(ids = IDS): IdentifierRule[] {
+// '/Users/<name>/<a>/<b>/<repo>' → ['<a>', '<b>']: the folders between the home and the repo. Fewer than two, or a
+// root outside /Users → null: one generic word would match everywhere.
+export function projectsFolder(root: string | null): string[] | null {
+  const segs = root?.split('/') ?? [];
+  if (segs[0] !== '' || segs[1] !== 'Users') return null;
+  const folder = segs.slice(3, -1).filter(Boolean);
+  return folder.length >= 2 ? folder : null;
+}
+
+// Read once per process: findIdentifiers() builds the rules per call, and the tower calls it in a loop.
+let localRoot: string | null | undefined;
+const localMacRoot = (): string | null =>
+  localRoot === undefined
+    ? (localRoot = readMacRoot(macRootFile(dirname(fileURLToPath(import.meta.url)))))
+    : localRoot;
+
+export function identifierRules(ids = IDS, root: string | null = localMacRoot()): IdentifierRule[] {
   // Whole words only, so the domain (the name run together) and the GitHub login don't match.
   const words = ids.maintainer.name.split(/\s+/).filter((w) => w.length >= 3);
   // A personal mailbox's local part, before any +alias: blocks every alias of it, not just one address.
@@ -81,12 +98,18 @@ export function identifierRules(ids = IDS): IdentifierRule[] {
     ]);
   if (locals.length)
     rules.push(['personal-email', test(new RegExp(locals.map(escape).join('|'), 'i'))]);
+  // Case-sensitive: an API's /users/me is no Mac home. JSON's escaped slashes count too.
+  rules.push(['home-path', test(/\\?\/Users\\?\/(?!Shared(?![\w.-]))[A-Za-z0-9_][\w.-]*/)]);
+  // Only where the Mac root is known (the container's hook, bot push, open-pr): CI and a fresh clone have no rule. The
+  // whole folder counts anywhere; its first folder alone under a home prefix (~, $HOME, ${HOME}). One rule, so a line
+  // holding both hits once.
+  const folder = projectsFolder(root);
+  if (folder) {
+    const whole = new RegExp(folder.map(escape).join(SEP), 'i');
+    const underHome = new RegExp(`${HOME}${SEP}${escape(folder[0]!)}\\b`, 'i');
+    rules.push(['projects-folder', (l) => whole.test(l) || underHome.test(l)]);
+  }
   rules.push(
-    // Case-sensitive: an API's /users/me is no Mac home. JSON's escaped slashes count too.
-    ['home-path', test(/\\?\/Users\\?\/(?!Shared(?![\w.-]))[A-Za-z0-9_][\w.-]*/)],
-    // The folder's name is generic, so it's spelled here, not in the config — either way it's in a tracked file. Its
-    // first folder alone counts under a home prefix (~, $HOME, ${HOME}); one rule, so a line holding both hits once.
-    ['projects-folder', (l) => FOLDER.test(l) || HOME_FOLDER.test(l)],
     ['account-id', (l) => accountIds(l).includes(ids.aws.devAccountId)],
     [
       'prod-account-id',

@@ -736,7 +736,7 @@ function FinancesSection() {
         {budgetError && (
           <div role="alert" className="mt-2">
             <Text id="fin-budget-error" size="xs" tone="danger">
-              Enter a dollar amount, like 600 or 600.00.
+              Enter a dollar amount, like 500 or 500.00.
             </Text>
           </div>
         )}

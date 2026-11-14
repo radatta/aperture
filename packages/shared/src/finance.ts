@@ -203,8 +203,8 @@ export interface RequestFinanceSyncResult {
 }
 
 // --- Constants -------------------------------------------------------------
-export const FINANCE_DEFAULT_BUDGET_CENTS = 60_000;
-export const FINANCE_DEFAULT_PAYMENT_DAY = 20;
+export const FINANCE_DEFAULT_BUDGET_CENTS = 50_000;
+export const FINANCE_DEFAULT_PAYMENT_DAY = 1;
 export const FINANCE_REFRESH_COOLDOWN_MS = 5 * 60_000;
 export const FINANCE_REFRESH_POLL_MS = 20_000;
 export const FINANCE_REFRESH_POLL_MAX_MS = 4 * 60_000;

@@ -214,6 +214,17 @@ export const identifierCleanup: Scenario = {
       },
     },
     {
+      id: 'projects-folder-local',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The projects-folder rule comes from .local/mac-root, never a tracked literal; no rule without the file',
+      offDev: {
+        file: GUARD,
+        test: 'builds the projects-folder rule from the Mac root, and has none without it',
+        why: 'a container-side file; dev has none',
+      },
+    },
+    {
       id: 'mcp-descriptions',
       entry: 'mcp',
       kind: 'nominal',

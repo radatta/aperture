@@ -59,8 +59,8 @@ describe('stub finances', () => {
 
     const upgraded = createStubClient({ seed: false, storageKey: key });
     const settings = await upgraded.getSettings();
-    expect(settings.financeBudgetCents).toBe(60000);
-    expect(settings.financePaymentDay).toBe(20);
+    expect(settings.financeBudgetCents).toBe(50000);
+    expect(settings.financePaymentDay).toBe(1);
     expect('financeCycleDay' in settings).toBe(false);
     expect((await upgraded.getFinanceOverview({ today: todayKey(4) })).items).toEqual([]);
     const [old] = await upgraded.listFinanceTransactions({ from: '2026-01-01', to: '2026-01-01' });

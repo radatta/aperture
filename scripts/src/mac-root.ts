@@ -11,12 +11,14 @@ export const MAC_ROOT_NOTE = `(${MAC_PLACEHOLDER} is the Mac repo path; this che
 // An absolute path that is safe unquoted in a `cd …` line: no spaces, no shell metacharacters, no `..`.
 const VALID = /^\/[\w./-]+$/;
 
-export function macRootFile(): string | null {
+// `cwd` anchors git to a checkout other than the process's own (identifiers.ts passes its own directory).
+export function macRootFile(cwd?: string): string | null {
   try {
     const common = execFileSync(
       'git',
       ['rev-parse', '--path-format=absolute', '--git-common-dir'],
       {
+        cwd,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       },

@@ -141,7 +141,7 @@ describe('get_finance_overview', () => {
       count: o.buckets.budget.count,
     });
     expect(r.toSort).toEqual({ count: o.unsortedCount, totalUsd: o.unsortedCents / 100 });
-    expect(r.settings).toEqual({ budgetUsd: 600, paymentDay: 20 });
+    expect(r.settings).toEqual({ budgetUsd: 500, paymentDay: 1 });
     expect(r.period).toMatchObject({
       start: o.period.start,
       day: o.period.dayCount,

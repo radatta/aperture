@@ -1929,8 +1929,8 @@ export function runApiContract(
       const updated = await api.updateSettings({ dayStartHour: 5, pomodoroWorkMin: 50 });
       expect(updated.dayStartHour).toBe(5);
       expect(updated.pomodoroWorkMin).toBe(50);
-      expect(s.financeBudgetCents).toBe(60000);
-      expect(s.financePaymentDay).toBe(20);
+      expect(s.financeBudgetCents).toBe(50000);
+      expect(s.financePaymentDay).toBe(1);
       const fin = await api.updateSettings({ financeBudgetCents: 45000 });
       expect(fin.financeBudgetCents).toBe(45000);
       expect(s.autoCalendar).toBe(true);
@@ -2349,8 +2349,8 @@ export function runApiContract(
       expect(o.accounts).toEqual([]);
       expect(o.period.source).toBe('payment_day');
       expect(o.period.lastPaymentDate).toBeNull();
-      expect(o.budgetCents).toBe(60000);
-      expect(o.leftCents).toBe(60000);
+      expect(o.budgetCents).toBe(50000);
+      expect(o.leftCents).toBe(50000);
       expect(o.unsortedCount).toBe(0);
       expect(o.sync.lastSyncedAt).toBeNull();
       expect([o.sync.lastError, o.sync.lastErrorAt]).toEqual([null, null]);
@@ -2382,7 +2382,7 @@ export function runApiContract(
       const total = chipotle.reduce((n, t) => n + t.rawAmountCents, 0);
       const after = await api.getFinanceOverview({ today: finToday() });
       expect(after.spentCents).toBe(total);
-      expect(after.leftCents).toBe(60000 - total);
+      expect(after.leftCents).toBe(50000 - total);
       expect(after.unsortedCount).toBe(o.unsortedCount - chipotle.length);
 
       // Push one charge into the previous period → it leaves the current total.
@@ -2666,7 +2666,7 @@ export function runApiContract(
       const linked = await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
       expect(linked.refundOfId).toBe('fx-rent');
       const after = await api.getFinanceOverview({ today: finToday() });
-      expect([after.spentCents, after.leftCents]).toEqual([0, 60000]);
+      expect([after.spentCents, after.leftCents]).toEqual([0, 50000]);
       expect(after.unsortedCount).toBe(before.unsortedCount);
       const view = deriveFinanceView(
         after,

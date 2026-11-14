@@ -7,32 +7,32 @@ Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
 
 ## 1. Identity
 
-**One line:** Aperture is the single aperture my whole digital life passes through — the place I plan, do, capture, and later look back through.
+**One line:** Aperture is the single aperture a person's whole digital life passes through — the place to plan, do, capture, and later look back through.
 
-**Who it's for:** one person, specifically. Motivated and ambitious, prone to tunnel vision. Trying to be more mindful _without_ sacrificing output — and to find a real work/life balance that comes from wanting it, not from forcing it and resenting it.
+**Who it's for:** one person at a time — someone motivated and ambitious who can lose the wider view when deep in work. They want to be more mindful _without_ sacrificing output — a work/life balance that comes from wanting it, not from forcing it and resenting it.
 
-**The job it does:** get everything out of my head and into one trusted place, so I'm less stressed, scope my time honestly, and can look back weeks/months later and see patterns I can't see in the moment.
+**The job it does:** get everything out of the user's head and into one trusted place, so there is less to carry, time gets scoped honestly, and weeks or months later the patterns that are invisible in the moment can be seen.
 
 ### The core tension it must hold
 
-Stay ambitious and productive **and** get more mindful/balanced — with a hard rule: **balance can't be enforced by guilt.** If the app ever makes "call a friend" or "rest" feel like a chore I'm failing at, it has broken its own premise. Non-work life is invited, never policed.
+Stay ambitious and productive **and** get more mindful/balanced — with a hard rule: **balance can't be enforced by guilt.** If the app ever makes "call a friend" or "rest" feel like a chore being failed, it has broken its own premise. Non-work life is invited, never policed.
 
-### Why the past versions failed (design against these)
+### Why trackers like this fail (design against these)
 
-1. **Inconsistency, not features.** The functionality existed; I fell back into keeping the task list in my head and stopped doing morning/night journaling. → **The #1 job of v1 is to earn a daily ritual without relying on willpower.** No guilt-streaks (I'd rebel or feel bad); the pull has to be that the home is genuinely worth opening.
-2. **Bland UI.** Pre-AI, all effort went to function, it looked like shit, nothing invited me back. → Smooth, quiet, considered UI is a v1 requirement, not polish-later.
+1. **Inconsistency, not features.** A tracker can have every feature and still lose to habit: the task list drifts back into the user's head and the morning/night check-in lapses. → **The #1 job of v1 is to earn a daily ritual without relying on willpower.** No guilt-streaks (they invite rebellion or bad feeling); the pull has to be that the home is genuinely worth opening.
+2. **Bland UI.** When all the effort goes to function, nothing about the app invites a return. → Smooth, quiet, considered UI is a v1 requirement, not polish-later.
 
-### Two things my own words define
+### Two premises that define the product
 
-1. **The bar to beat is my own memory.** Keeping tasks in my head "works" for completion — so Aperture's value prop is _not_ "get more done." It's **less stress + honest scoping.** That reframes success: the win is a calmer head and realistic plans, not a higher task count.
-2. **I chronically under-scope and don't buffer (self-aware overconfident).** → Tasks should capture **estimate vs actual time**, and the app should quietly show me my own estimation bias over time. This is the decision-journal / calibration idea aimed at my single biggest weakness — and it's the most _me_ version of "mindfulness": data about my own overconfidence, not a mood emoji.
+1. **The bar to beat is the user's own memory.** Keeping tasks in one's head "works" for completion — so Aperture's value prop is _not_ "get more done." It's **less stress + honest scoping.** That reframes success: the win is a calmer head and realistic plans, not a higher task count.
+2. **People under-scope and don't buffer — overconfident even when they know it.** → Tasks should capture **estimate vs actual time**, and the app should quietly show the user their own estimation bias over time. This is the decision-journal / calibration idea aimed at the planning fallacy — and it's the product's version of "mindfulness": data about one's own overconfidence, not a mood emoji.
 
 ### Derived design principles
 
-- **Earn the open.** Every surface answers "why am I glad I opened this," or it's cut.
-- **Frictionless capture beats rich capture.** Getting a thought in must cost near-zero, or I'll keep it in my head.
+- **Earn the open.** Every surface answers "why is the user glad they opened this," or it's cut.
+- **Frictionless capture beats rich capture.** Getting a thought in must cost near-zero, or the thought stays in the user's head.
 - **Invite, don't police** non-work life. Balance is surfaced gently, never scored or streak-shamed.
-- **Reflect me back to myself** — estimation bias, past entries, patterns — as _evidence_, not judgment.
+- **Reflect the user back to themselves** — estimation bias, past entries, patterns — as _evidence_, not judgment.
 - **Quiet, field-notebook aesthetic.** Closer to a terminal or a good notebook than a pastel app.
 
 ### v1 usage model
@@ -45,7 +45,7 @@ Stay ambitious and productive **and** get more mindful/balanced — with a hard 
 
 ## 2. The capture mechanic
 
-**Governing principle: capture raw and fast, enrich later.** The instant capture asks for a decision (category, estimate, due date) it costs more than remembering — and I go back to keeping it in my head. Capture takes a bare thought; structure is added later, in a calmer pass.
+**Governing principle: capture raw and fast, enrich later.** The instant capture asks for a decision (category, estimate, due date) it costs more than remembering — and the thought goes back to being kept in the user's head. Capture takes a bare thought; structure is added later, in a calmer pass.
 
 ### The model
 
@@ -126,7 +126,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 
 **Rollover:** an unfinished planned task rolls back to backlog — no penalty, but repeated rollovers stay visible as an honest signal, never a scold.
 
-**Calibration payoff:** per-task delta shows in the night review; an aggregate estimate/actual ratio + trend is meaningful only after weeks of data (present early, but honestly sparse). The buffer suggestion starts flat (e.g. +25%) and later personalizes to my measured bias.
+**Calibration payoff:** per-task delta shows in the night review; an aggregate estimate/actual ratio + trend is meaningful only after weeks of data (present early, but honestly sparse). The buffer suggestion starts flat (e.g. +25%) and later personalizes to the user's measured bias.
 
 ### 4b. The lighter modules
 
@@ -188,6 +188,6 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 5. **Quarterly / annual cadence** — v1 has the daily loop only.
 6. **Calendar integration** — v1's "hours available" was a manual daily capacity number, not calendar-derived. Since built: **[calendar/](../areas/calendar/index.md)**.
 7. **Offline data editing** — v1 is online-first (DynamoDB is the source of truth, so multi-device sync is automatic — laptop + phone share one store). Full offline editing + a sync-on-reconnect write queue is deferred.
-8. **Deeper reflection modules** — decision journal, commonplace book, intentions-as-module, values, future-self letters. The task-estimation calibration already delivers the "data about my own overconfidence" hit in v1.
+8. **Deeper reflection modules** — decision journal, commonplace book, intentions-as-module, values, future-self letters. The task-estimation calibration already delivers the "data about one's own overconfidence" hit in v1.
 
 **Never:** XP / badges / levels · guilt-streaks · daily policing of non-work life · storing mood as a number.

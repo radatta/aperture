@@ -42,7 +42,7 @@ Lambda spawn identical occurrences: `seriesDueOn` (the rule within `[anchorDate,
 
 - **D1. Cadence = a day offset, no series due _time_.** A timed task is never planned
   ([lenses.md](lenses.md) D13), so a timed series would land its occurrences in Backlog, not on Tuesday's
-  plan — the opposite of what a cadence is for; and Canvas treats 11:59pm as all-day anyway. Later, if
+  plan — the opposite of what a cadence is for; and the course site treats 11:59pm as all-day anyway. Later, if
   wanted: a `dueTime` on the series spawns timed occurrences unplanned.
 - **D2. `until` ends spawning, not the row.** Past `until` the series stays `active` and its row reads
   "ended Nov 30" with Stop still offered — the user sees it ran out and retires it when ready, rather than a
@@ -130,6 +130,6 @@ the server refuses as a param error resolves its `intent` with a `refused` line 
 - Editing a series' cadence from its row (the API takes `id` + the fields; MCP has no `update_series`).
   Note for whoever builds it: `upsertSeries` is replace-all — an edit sends every field, since an omitted
   `dueOffsetDays` or `until` resets to `null` (like `active ?? true`).
-- Canvas import (`01M472W1SC8MRN4E90TQAXTG7C`): an imported assignment and a cadence occurrence would be
-  duplicates — cadences are for what Canvas doesn't list.
+- Course-site import (`01M472W1SC8MRN4E90TQAXTG7C`): an imported assignment and a cadence occurrence would be
+  duplicates — cadences are for what the course site doesn't list.
 - PR-D3's exam-prep template (`01M2XZFVQJ8YNE333DJQAN4PDM`) can now use `until`.
