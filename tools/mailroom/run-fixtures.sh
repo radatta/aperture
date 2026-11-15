@@ -132,6 +132,7 @@ bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed '
 base="$(head -1 "$CASES" | jq -c .base)"
 simbase="$(head -1 "$CASES" | jq -c .simBase)"
 clipbase="$(head -1 "$CASES" | jq -c .clipBase)"
+editbase="$(head -1 "$CASES" | jq -c .editBase)"
 defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 deftape="$(sed -n 2p "$CASES" | jq -c .defaultTape)"
 
@@ -146,11 +147,12 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     IFS= read -r name; read -r kind; read -r setup; read -r raw; read -r no_token; read -r no_simpw; read -r no_simpw_read
     read -r want_rc; read -r want_left; read -r no_result; read -r calls_type; read -r has_post; read -r has_md; read -r want_pw
     read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j; read -r lane; read -r locks_j
+    read -r has_pb; read -r pb_j
   } <<<"$(jq -r '[.name, (.kind // "open-pr"), (.setup // ""), (if has("raw") then "1" else "" end),
     (.noToken // false), (.noSimPassword // false), (.noSimPasswordRead // false), (.exit // 0), (.inboxLeft // 0),
     (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
     (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson),
-    (.lane // ""), (.locks | tojson)] | .[]' <<<"$c")"
+    (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson)] | .[]' <<<"$c")"
   T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state dir" # the Mac's is under Application Support: a space in every state path
@@ -161,6 +163,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   cbase="$base"
   [ "$kind" != sim ] || cbase="$simbase"
   [ "$kind" != clip ] || cbase="$clipbase"
+  [ "$kind" != edit-pr ] || cbase="$editbase"
 
   # The job: base ⊕ patch, minus unset paths, submittedAt relative to now, bodySha256 computed when "auto".
   { IFS= read -r job; read -r id; read -r file; read -r sha_auto; } <<<"$(jq -r --argjson base "$cbase" --argjson now "$now" '. as $c | ($base * ($c.patch // {}))
@@ -269,9 +272,13 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$got" = "$want" ] || why="calls $got, want $want"
     if grep -qv ' auth=ok leak=0$' "$T/calls"; then why="a call without the header-file token, or with it on argv"; fi
   fi
-  # The exact request body of a call: "post" for POST …/pulls, "md" for POST /markdown.
-  for k in post md; do
-    case "$k" in post) has="$has_post"; body_j="$post_j"; route='^POST /repos/radatta/aperture/pulls ' ;; md) has="$has_md"; body_j="$md_j"; route='^POST /markdown ' ;; esac
+  # The exact request body of a call: "post" for POST …/pulls, "md" for POST /markdown, "patchBody" for edit-pr's PATCH.
+  for k in post md pb; do
+    case "$k" in
+      post) has="$has_post"; body_j="$post_j"; route='^POST /repos/radatta/aperture/pulls ' ;;
+      md) has="$has_md"; body_j="$md_j"; route='^POST /markdown ' ;;
+      pb) has="$has_pb"; body_j="$pb_j"; route='^PATCH /repos/radatta/aperture/pulls/' ;;
+    esac
     [ -z "$why" ] && [ "$has" = true ] || continue
     idx="$(grep -n "$route" "$T/calls" | head -1 | cut -d: -f1)"
     sent="$( [ -z "$idx" ] || cat "$T/calls.$((idx - 1)).data" 2>/dev/null || true)"

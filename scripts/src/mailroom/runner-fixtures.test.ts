@@ -100,8 +100,11 @@ describe('mailroom runner', () => {
       `SIM_W=${SIM_W}`, // the validators' bounds (sim.ts) follow the device profile
       `SIM_H=${SIM_H}`,
       'SIM_AX_CAP=8 ax describe-ui --point', // a point read's cap: a hung one costs 8 s, not ax's 30
+      // F91: every lock the drain holds is touched (a hand run holds lock-fast too), never just the slow lane's
+      'sim_touch() { for l in ${HELD:-lock}; do touch "${STATE:-.}/$l" 2>/dev/null || true; done; }',
     ])
       expect(sim).toContain(pin);
+    expect(sim).not.toMatch(/touch "\$\{?STATE(:-\.)?\}?\/lock"/);
     const secretsDir = ['.sec', 'rets'].join(''); // spelled apart: the repo's hooks guard the literal
     for (const banned of [
       'curl',
@@ -160,7 +163,7 @@ describe('mailroom runner', () => {
       'CLIP_MAX_BYTES=16777216',
       'CLIP_PER_CC=3',
       'CLIP_PER_MIN=6',
-      'CLIP_BANNER=1',
+      'CLIP_BANNER=0', // no notification per serve (MAILROOM.md → The clip job)
       'elif .expiresInMin > 2 then "BAD_PARAM"',
     ])
       expect(clip).toContain(pin);
@@ -188,18 +191,45 @@ describe('mailroom runner', () => {
     ]);
   });
 
-  it('calls GitHub only at api.github.com, with five fixed method + path pairs, one write', () => {
+  // open-pr.sh holds the start both PR jobs share (mr_begin: the token, GET /user, the branch ref) and the render
+  // check (mr_render); each job adds its own lookup and its one write, after the render.
+  it('calls GitHub only at api.github.com: five fixed method + path pairs per PR job, one write each', () => {
     const src = code();
     expect(src).toContain('MR_API="https://api.github.com"');
-    expect(
-      [...src.matchAll(/\bmr_call (\S+) ("[^"]+"|\S+)/g)].map((m) => `${m[1]} ${m[2]}`),
-    ).toEqual([
+    const job = (n: string) =>
+      readFileSync(`${TOOLS_DIR}jobs/${n}`, 'utf8')
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n');
+    const calls = (t: string) =>
+      [...t.matchAll(/\bmr_call (\S+) ("[^"]+"|\S+)/g)].map((m) => `${m[1]} ${m[2]}`);
+    const LIST = 'GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$MR_BRANCH&state=open"';
+    const open = job('open-pr.sh');
+    const edit = job('edit-pr.sh');
+    expect(calls(open)).toEqual([
       'GET /user',
-      'GET "/repos/$MR_REPO/git/ref/heads/$branch"',
-      'GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$branch&state=open"',
+      'GET "/repos/$MR_REPO/git/ref/heads/$MR_BRANCH"',
       'POST /markdown',
+      LIST,
       'POST "/repos/$MR_REPO/pulls"',
     ]);
+    expect(calls(edit)).toEqual([LIST, 'PATCH "/repos/$MR_REPO/pulls/$n"']);
+    expect(calls(src)).toHaveLength(7); // no other job calls GitHub
+    for (const [t, fn, write] of [
+      [open, 'run_open_pr() {', 'mr_call POST "/repos/$MR_REPO/pulls"'],
+      [edit, 'run_edit_pr() {', 'mr_call PATCH'],
+    ] as const) {
+      const body = t.slice(t.indexOf(fn));
+      const at = ['mr_begin "$w" "$2" || return 0', `mr_call ${LIST}`, 'mr_render "$w"', write].map(
+        (x) => body.indexOf(x),
+      );
+      expect(at.every((x) => x >= 0)).toBe(true);
+      expect([...at].sort((a, b) => a - b)).toEqual(at); // begin → lookup → render → write
+    }
+    // edit-pr's write carries the text only, and only for a PR whose number the Mac read itself.
+    expect(edit).toContain(`jq -c '.params | if has("title") then {title, body} else {body} end'`);
+    expect(edit).toContain('n="$(jq -r .number <<<"$pr")"');
+    expect(edit).not.toMatch(/\.params\.(number|state|base|draft)/);
     expect(src).toContain('MR_REPO="radatta/aperture"');
     expect(src.match(/\bcurl\b/g)).toHaveLength(1);
   });

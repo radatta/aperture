@@ -6,9 +6,10 @@ import { REPO_SLUG, describeHits, findIdentifiers } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
 import type { Clock } from '../bot/dispatch.ts';
 import { featureBranch, requirePushed } from '../bot/git.ts';
+import { iosFiles } from '../bot/ios-routing.ts';
 import type { Run } from '../bot/sh.ts';
 import { BRANCH_RE, REASON_HINT, makeOpenPrJob, validateJob } from './job.ts';
-import type { Job } from './job.ts';
+import type { EditJob, Job } from './job.ts';
 import { NotInstalled, lastSeen, submit, waitForResult, withdraw } from './submit.ts';
 import type { Fs, Result } from './submit.ts';
 
@@ -40,16 +41,21 @@ export interface Deps {
   log: (s: string) => void;
 }
 
-const handOff = (d: Deps, branch: string, title: string) =>
-  `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md${MAC_NOTE}`;
+// What to say when the Mac can't be reached: the user's own command, and, when the Mac took the job but sent nothing,
+// what may still happen and how to check before running it.
+export interface Fallback {
+  line: string;
+  late: string;
+}
+const openFallback = (d: Deps, branch: string, title: string): Fallback => ({
+  line: `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md${MAC_NOTE}`,
+  late: `it may still open the PR. Check before opening it by hand: gh pr list --head ${branch}; then, only if none:`,
+});
 
-function unreachable(d: Deps, why: string, branch: string, title: string, late = false): number {
+function unreachable(d: Deps, why: string, fb: Fallback, late = false): number {
   if (late) {
     d.log(
-      `MAC_UNREACHABLE: the Mac took the job but sent no result yet — it may still open the PR.`,
-    );
-    d.log(
-      `Check before opening it by hand: gh pr list --head ${branch}; then, only if none:\n  ${handOff(d, branch, title)}`,
+      `MAC_UNREACHABLE: the Mac took the job but sent no result yet — ${fb.late}\n  ${fb.line}`,
     );
     return EXIT.unreachable;
   }
@@ -61,37 +67,35 @@ function unreachable(d: Deps, why: string, branch: string, title: string, late =
   d.log(
     `MAC_UNREACHABLE: ${why} (${seen.installedAt ? `installed ${seen.installedAt}` : 'never installed'}; ${age}).`,
   );
-  d.log(`Open it by hand on the Mac:\n  ${handOff(d, branch, title)}`);
+  d.log(`Do it by hand on the Mac:\n  ${fb.line}`);
   return EXIT.unreachable;
 }
 
 // Submit, wait, and withdraw on timeout: the Mac's result, or the exit code for an unreachable Mac. `waitMs` is
 // what is left of the budget, so wait + grace never outlasts the caller's timeout.
-async function deliver(d: Deps, job: Job, waitMs: number, title: string): Promise<Result | number> {
-  const branch = job.params.branch;
+export async function deliver(
+  d: Deps,
+  job: Job | EditJob,
+  waitMs: number,
+  fb: Fallback,
+): Promise<Result | number> {
   // Too little left to wait for an answer: don't queue a job the caller's timeout would orphan.
   if (waitMs < MIN_WAIT_MS)
-    return unreachable(
-      d,
-      'the pre-submit checks used up the wait budget; nothing was queued',
-      branch,
-      title,
-    );
+    return unreachable(d, 'the pre-submit checks used up the wait budget; nothing was queued', fb);
   try {
     submit(d.fs, d.dir, job);
   } catch (err) {
-    if (err instanceof NotInstalled) return unreachable(d, err.message, branch, title);
+    if (err instanceof NotInstalled) return unreachable(d, err.message, fb);
     throw err;
   }
   d.log(`submitted ${job.id}; waiting up to ${Math.round(waitMs / 1000)} s for the Mac`);
   const r = await waitForResult(d.fs, d.clock, d.dir, job.id, waitMs);
   if (r) return r;
   if (withdraw(d.fs, d.dir, job.id))
-    return unreachable(d, `no result in ${Math.round(waitMs / 1000)} s`, branch, title);
+    return unreachable(d, `no result in ${Math.round(waitMs / 1000)} s`, fb);
   d.log('the Mac picked the job up late; waiting for it to finish');
   return (
-    (await waitForResult(d.fs, d.clock, d.dir, job.id, GRACE_MS)) ??
-    unreachable(d, '', branch, title, true)
+    (await waitForResult(d.fs, d.clock, d.dir, job.id, GRACE_MS)) ?? unreachable(d, '', fb, true)
   );
 }
 
@@ -100,7 +104,14 @@ const MIN_WAIT_MS = 10_000;
 // The PR's first line when the head commit's newest devcheck ran without the iPhone checks (Mac asleep, Device Hub
 // down, …): never a quiet "needs you". Plain ⚠ — the emoji form carries U+FE0F, which BAD_TEXT refuses.
 const IOS_BANNER_MARK = 'iPhone checks did not run';
-export function iosBanner(fs: Fs, root: string, sha: string): string | null {
+// The reason is matched by its code, the prefix before any " — " note (a devb run records "SIM_SLOT_A_ONLY — …"). A
+// devb run of a branch touching no iOS paths (`iosChanged`, bot/ios-routing.ts) skipped nothing: no banner (F98).
+export function iosBanner(
+  fs: Fs,
+  root: string,
+  sha: string,
+  iosChanged: () => string[] = () => [],
+): string | null {
   const dir = join(root, 'localNotes', 'devcheck');
   for (const run of fs.list(dir).sort().reverse()) {
     let r: {
@@ -116,16 +127,33 @@ export function iosBanner(fs: Fs, root: string, sha: string): string | null {
     if (at.length < 7 || !(sha.startsWith(at) || at.startsWith(sha))) continue;
     const u = r.ios?.unavailable;
     if (!u) return null;
-    const reason = /^[A-Z_/()0-9.]{1,40}$/.test(u.reason) ? u.reason : 'SIM_UNAVAILABLE';
+    const reason =
+      /^[A-Z][A-Z_/()0-9.]{0,39}(?![A-Z_/()0-9.])/.exec(u.reason)?.[0] ?? 'SIM_UNAVAILABLE';
+    const slotB = reason === 'SIM_SLOT_A_ONLY';
+    if (slotB) {
+      let touches = true; // a diff that can't be read counts as touching: the banner, never a quiet skip
+      try {
+        touches = iosChanged().length > 0;
+      } catch {
+        // keep the banner
+      }
+      if (!touches) return null;
+    }
     const asleep = /^MAC_(UNREACHABLE|STALLED)/.test(reason);
-    return `> ⚠ **${IOS_BANNER_MARK}** (${reason}${asleep ? ', Mac asleep?' : ''}): ${u.rows ? `${u.rows} iOS row${u.rows === 1 ? '' : 's'} untested` : 'its iOS steps didn’t finish'}. Rerun the devcheck ${asleep ? 'with the Mac awake' : 'once the sim is fixed (IOS-CHECK.md → Failures)'} before merging a UI change.`;
+    const rerun = asleep
+      ? 'with the Mac awake'
+      : slotB
+        ? 'on slot A (`pnpm bot deploy-dev` routes an iOS branch there)'
+        : 'once the sim is fixed (IOS-CHECK.md → Failures)';
+    return `> ⚠ **${IOS_BANNER_MARK}** (${reason}${asleep ? ', Mac asleep?' : ''}): ${u.rows ? `${u.rows} iOS row${u.rows === 1 ? '' : 's'} untested` : 'its iOS steps didn’t finish'}. Rerun the devcheck ${rerun} before merging a UI change.`;
   }
   return null;
 }
-const budget = (d: Deps, startMs: number, waitMs: number) => waitMs - (d.clock.now() - startMs);
+export const budget = (d: Deps, startMs: number, waitMs: number) =>
+  waitMs - (d.clock.now() - startMs);
 
 // Warnings every result can carry: an expiring token, an installed runner older than the repo's.
-function warnings(d: Deps, r: Result): void {
+export function warnings(d: Deps, r: Result): void {
   if (r.tokenWarning)
     d.log(
       `TOKEN_EXPIRING: the mailroom token expires ${r.tokenExpiresAt} — regenerate it in GitHub, then:\n  ${RENEW_LINE}`,
@@ -137,25 +165,24 @@ function warnings(d: Deps, r: Result): void {
     );
 }
 
-function refuse(d: Deps, job: Job, reason: keyof typeof REASON_HINT): number {
+export function refuse(d: Deps, job: Job | EditJob, reason: keyof typeof REASON_HINT): number {
   d.log(`refused before submit: ${reason} — ${REASON_HINT[reason]}`);
   if (reason === 'BAD_PARAM' && !BRANCH_RE.test(job.params.branch))
     d.log(`branch \`${job.params.branch}\` is not mailroom-safe`);
   return EXIT.failed;
 }
 
-export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<number> {
-  const start = d.clock.now();
-  const branch = featureBranch(d.run);
-  const sha = requirePushed(d.run, branch);
+// The body as sent: localNotes/pr-<branch>.md, after the iOS banner when the head's devcheck skipped the iPhone.
+// Null, the refusal logged, when the title or body names a personal identifier. The repo is public
+// (docs/ops/IDENTIFIERS.md): refused here, container-side, before anything is submitted or a hand-off line printed —
+// never a Mac job reason. open-pr and edit-pr both build their text here.
+export function prBody(d: Deps, branch: string, sha: string, title: string): string | null {
   const bodyPath = join(d.root, 'localNotes', `pr-${branch}.md`);
   const written = d.fs.read(bodyPath);
   if (written === null) throw new Error(`${bodyPath} is missing — write the PR body first`);
-  const banner = written.includes(IOS_BANNER_MARK) ? null : iosBanner(d.fs, d.root, sha);
-  if (banner) d.log(banner.slice(2));
-  const body = banner ? `${banner}\n\n${written}` : written;
-  // The repo is public: no personal identifier in a PR's title or body (docs/ops/IDENTIFIERS.md). Refused here,
-  // container-side, before anything is submitted or a hand-off line printed — never a Mac job reason.
+  const banner = written.includes(IOS_BANNER_MARK)
+    ? null
+    : iosBanner(d.fs, d.root, sha, () => iosFiles(d.run));
   const hits = [
     describeHits(findIdentifiers(title), 'title'),
     describeHits(findIdentifiers(banner ?? ''), 'the iPhone-checks banner'),
@@ -165,8 +192,22 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
     d.log(
       `refused before submit: PERSONAL_IDENTIFIER — the PR text names a personal identifier (docs/ops/IDENTIFIERS.md); reword:\n${hits.join('\n')}`,
     );
-    return EXIT.failed;
+    return null;
   }
+  if (banner) d.log(banner.slice(2));
+  return banner ? `${banner}\n\n${written}` : written;
+}
+
+// After a push to an open PR, its text is updated the same way: `pnpm mailroom edit-pr` (edit-pr.ts).
+const editHint = (title: string) =>
+  `to update its body (and title) after a push: pnpm mailroom edit-pr [--title "${title}"]`;
+
+export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<number> {
+  const start = d.clock.now();
+  const branch = featureBranch(d.run);
+  const sha = requirePushed(d.run, branch);
+  const body = prBody(d, branch, sha, title);
+  if (body === null) return EXIT.failed;
   const job = makeOpenPrJob({ branch, sha, title, body }, d.clock.now());
   const bad = validateJob(job, job.id, d.clock.now());
   if (bad) return refuse(d, job, bad);
@@ -186,14 +227,14 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
       '.[0].url // ""',
     ]);
     if (url) {
-      d.log(`exists ${url}`);
+      d.log(`exists ${url} — ${editHint(title)}`);
       return EXIT.ok;
     }
   } catch {
     // no GitHub from here right now
   }
 
-  const r = await deliver(d, job, budget(d, start, waitMs), title);
+  const r = await deliver(d, job, budget(d, start, waitMs), openFallback(d, branch, title));
   if (typeof r === 'number') return r;
   warnings(d, r);
   if ((r.status === 'opened' || r.status === 'exists') && r.pr) {
@@ -210,8 +251,14 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
       return EXIT.failed;
     }
     d.log(`${r.status} ${r.pr.url} (author ${r.pr.author})`);
+    if (r.status === 'exists') d.log(editHint(title));
     return EXIT.ok;
   }
+  return failed(d, r);
+}
+
+// A refusal or error from the Mac: its code, and what to do about the ones the lane can fix.
+export function failed(d: Deps, r: Result): number {
   d.log(`${r.status}: ${r.reason}`);
   if (r.reason?.startsWith('TOKEN_'))
     d.log(
@@ -235,7 +282,12 @@ export async function probe(d: Deps, waitMs = WAIT_MS): Promise<number> {
   );
   const bad = validateJob(job, job.id, d.clock.now());
   if (bad) return refuse(d, job, bad);
-  const r = await deliver(d, job, budget(d, start, waitMs), 'Mailroom probe');
+  const r = await deliver(
+    d,
+    job,
+    budget(d, start, waitMs),
+    openFallback(d, branch, 'Mailroom probe'),
+  );
   if (typeof r === 'number') return r;
   warnings(d, r);
   const ok = r.status === 'rejected' && r.reason === 'HEAD_MISMATCH';

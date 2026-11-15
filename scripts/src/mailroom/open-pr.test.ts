@@ -36,6 +36,7 @@ function setup(
     offline?: boolean;
     mac?: (job: { id: string; params: { bodySha256: string } }) => Partial<Result> | 'late' | null;
     inbox?: boolean;
+    diff?: string; // the branch's files vs origin/main (iOS paths decide a devb run's banner)
   } = {},
 ) {
   const fs = memFs(opts.inbox === false ? [] : [`${HJ}/inbox`]);
@@ -44,6 +45,7 @@ function setup(
     ['git symbolic-ref', 'mac-mailroom'],
     ['git rev-parse HEAD', SHA],
     ['git ls-remote', opts.pushed === false ? '' : `${SHA}\trefs/heads/mac-mailroom`],
+    ['git diff', opts.diff ?? ''],
     [
       'gh pr list',
       () => {
@@ -114,10 +116,15 @@ describe('openPr: the iPhone-checks banner', () => {
   const report = (fs: ReturnType<typeof memFs>, run: string, r: object) =>
     fs.files.set(`${ROOT}/localNotes/devcheck/${run}/report.json`, JSON.stringify(r));
   const NOT_RUN = { reason: 'MAC_UNREACHABLE', rows: 14 };
-  const sent = async (prep: (fs: ReturnType<typeof memFs>) => void, body?: string) => {
+  const sent = async (
+    prep: (fs: ReturnType<typeof memFs>) => void,
+    body?: string,
+    diff?: string,
+  ) => {
     let job: { params: { body: string; bodySha256: string } } | undefined;
     const { d, fs } = setup({
       body,
+      diff,
       mac: (j) => {
         job = j as unknown as typeof job;
         return opened(j);
@@ -182,6 +189,46 @@ describe('openPr: the iPhone-checks banner', () => {
       '(SIM_UNAVAILABLE): 1 iOS row untested. Rerun the devcheck once the sim is fixed',
     );
   });
+
+  // F98: a devb run records "SIM_SLOT_A_ONLY — …", which once fell back to a misleading SIM_UNAVAILABLE banner.
+  const SLOT_B = {
+    reason: 'SIM_SLOT_A_ONLY — the Simulator is set up for dev (slot A) only; this run is on devb',
+    rows: 0,
+  };
+  it('a devb run of a branch touching no iOS paths skipped nothing: no banner', async () => {
+    const p = await sent(
+      (fs) =>
+        report(fs, '2026-11-04T11-00-00-full', { expectedSha: SHA, ios: { unavailable: SLOT_B } }),
+      undefined,
+      'docs/ops/MAILROOM.md\nscripts/src/mailroom/edit-pr.ts',
+    );
+    expect(p.body).toBe(BODY);
+  });
+
+  it('a devb run of a branch touching iOS paths names the code and slot A', async () => {
+    const p = await sent(
+      (fs) =>
+        report(fs, '2026-11-04T11-00-00-full', {
+          expectedSha: SHA,
+          ios: { unavailable: { ...SLOT_B, rows: 3 } },
+        }),
+      undefined,
+      'app/src/modules/capture/CaptureBar.tsx',
+    );
+    expect(p.body.split('\n')[0]).toBe(
+      '> ⚠ **iPhone checks did not run** (SIM_SLOT_A_ONLY): 3 iOS rows untested. Rerun the devcheck on slot A (`pnpm bot deploy-dev` routes an iOS branch there) before merging a UI change.',
+    );
+  });
+
+  it('matches any reason by its code before a " — " note', async () => {
+    const p = await sent((fs) =>
+      report(fs, '2026-11-04T11-00-00-full', {
+        expectedSha: SHA,
+        ios: { unavailable: { reason: 'MAC_UNREACHABLE — no result in 60 s', rows: 2 } },
+      }),
+    );
+    expect(p.body.split('\n')[0]).toContain('(MAC_UNREACHABLE, Mac asleep?): 2 iOS rows untested');
+  });
 });
 
 describe('openPr', () => {
@@ -232,7 +279,9 @@ describe('openPr', () => {
   it('short-circuits an already-open PR without a job', async () => {
     const { d, fs, logs } = setup({ existing: PR.url, mac: opened });
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
-    expect(logs).toEqual([`exists ${PR.url}`]);
+    expect(logs).toEqual([
+      `exists ${PR.url} — to update its body (and title) after a push: pnpm mailroom edit-pr [--title "Mac mailroom opens PRs"]`,
+    ]);
     expect(fs.files.size).toBe(1);
   });
 

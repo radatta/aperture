@@ -57,7 +57,7 @@ export interface Result {
   v: 1;
   id: string;
   job: string;
-  status: 'opened' | 'exists' | 'served' | 'rejected' | 'error' | 'expired';
+  status: 'opened' | 'exists' | 'edited' | 'served' | 'rejected' | 'error' | 'expired';
   reason: string | null;
   startedAt: string;
   finishedAt: string;

@@ -1,5 +1,6 @@
-// The mailroom's job contract, container side: build an `open-pr` job and check any job with the same rules, in
-// the same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh; a `sim` job's plan: sim.ts; a `clip` job: clip.ts). The runner is the authority; this is
+// The mailroom's job contract, container side: build an `open-pr` or `edit-pr` job and check any job with the same
+// rules, in the same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh, jobs/edit-pr.sh; a `sim`
+// job's plan: sim.ts; a `clip` job: clip.ts). The runner is the authority; this is
 // the early, fixable copy, and tools/mailroom/testdata/jobs.jsonl drives both (job.test.ts). docs/ops/MAILROOM.md.
 import { createHash } from 'node:crypto';
 import { REPO_SLUG } from '../identifiers.ts';
@@ -8,11 +9,12 @@ import { isoSeconds, makeId } from './ids.ts';
 import { SIM_REASON_HINT, validateSimParams } from './sim.ts';
 import type { SimReason } from './sim.ts';
 
-export const JOBS = ['open-pr', 'sim', 'clip'] as const;
+export const JOBS = ['open-pr', 'sim', 'clip', 'edit-pr'] as const;
 export const EXPIRES_IN_MIN = 20;
 export const MAX_BODY_BYTES = 65536;
 const ENVELOPE_KEYS = ['v', 'id', 'job', 'submittedAt', 'expiresInMin', 'params'];
 const PARAM_KEYS = ['body', 'bodySha256', 'branch', 'sha', 'title'];
+const EDIT_KEYS = ['body', 'bodySha256', 'branch', 'sha']; // edit-pr: + an optional title
 const PROTECTED = ['main', 'master', 'dev'];
 
 export const ID_RE = /^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,48}$/;
@@ -57,6 +59,12 @@ export interface Job {
   expiresInMin: number;
   params: OpenPrParams;
 }
+// edit-pr: no title leaves the PR's own. The Mac finds the PR from the branch; the container never names a number.
+export type EditPrParams = Omit<OpenPrParams, 'title'> & { title?: string };
+export interface EditJob extends Omit<Job, 'job' | 'params'> {
+  job: 'edit-pr';
+  params: EditPrParams;
+}
 
 export const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 export { isoSeconds, makeId } from './ids.ts';
@@ -70,6 +78,21 @@ export function makeOpenPrJob(
     v: 1,
     id,
     job: 'open-pr',
+    submittedAt: isoSeconds(nowMs),
+    expiresInMin: EXPIRES_IN_MIN,
+    params: { ...p, bodySha256: sha256(p.body) },
+  };
+}
+
+export function makeEditPrJob(
+  p: Omit<EditPrParams, 'bodySha256'>,
+  nowMs: number,
+  id = makeId(`edit-${p.branch}`, nowMs), // never …Z-ios-…: the fast lane's
+): EditJob {
+  return {
+    v: 1,
+    id,
+    job: 'edit-pr',
     submittedAt: isoSeconds(nowMs),
     expiresInMin: EXPIRES_IN_MIN,
     params: { ...p, bodySha256: sha256(p.body) },
@@ -128,14 +151,18 @@ export function validateJob(job: unknown, stem: string, nowMs: number): Reason |
   if (at > nowMs + 300_000 || at + exp * 60_000 < nowMs) return 'EXPIRED';
   if (job.job === 'sim') return validateSimParams(job.params);
   if (job.job === 'clip') return validateClipParams(job.params, exp);
+  return validatePrParams(job.params, job.job === 'edit-pr');
+}
 
-  const p = job.params;
-  if (!isObj(p) || !sameKeys(p, PARAM_KEYS)) return 'BAD_PARAM';
+// open-pr's params, or edit-pr's (`edit`: the title may be absent), as jobs/open-pr.sh's OPEN_PR_JQ checks them.
+function validatePrParams(p: unknown, edit: boolean): Reason | null {
+  if (!isObj(p) || !(sameKeys(p, PARAM_KEYS) || (edit && sameKeys(p, EDIT_KEYS))))
+    return 'BAD_PARAM';
   if (!str(p.branch) || !BRANCH_RE.test(p.branch) || PROTECTED.includes(p.branch))
     return 'BAD_PARAM';
   if (!str(p.sha) || !SHA_RE.test(p.sha)) return 'BAD_PARAM';
-  if (!str(p.title) || !TITLE_RE.test(p.title)) return 'BAD_PARAM';
-  if (XREF_RE.test(p.title)) return 'XREF';
+  if ('title' in p && (!str(p.title) || !TITLE_RE.test(p.title))) return 'BAD_PARAM';
+  if ('title' in p && str(p.title) && XREF_RE.test(p.title)) return 'XREF';
   if (!str(p.body)) return 'BAD_PARAM';
   const bytes = Buffer.byteLength(p.body, 'utf8');
   if (bytes < 1 || bytes > MAX_BODY_BYTES) return 'BAD_PARAM';

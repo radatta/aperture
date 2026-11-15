@@ -810,9 +810,10 @@ def crej(name, reason, ts=True, **k):
     cc_(name, expect={'status': 'rejected', 'reason': reason}, simExcludes=['osascript'], **k)
 CLIP_SHA = '3064001f9933ee70c48b14f22ec2c487a2c1e205167f7eeed4e9fe1e088a458e'  # the stub's PNG
 SERVED = {'status': 'served', 'reason': None, 'job': 'clip'}
-cc_('clip: a PNG on the clipboard with iTerm in front is served, logged, bannered', tape=[RD(0, source='png', bytes=21)],
+# No banner per serve: the maintainer's choice, 2026-11-13 (CLIP_BANNER=0); the Mac log line is the record.
+cc_('clip: a PNG on the clipboard with iTerm in front is served and logged, with no banner', tape=[RD(0, source='png', bytes=21)],
     expect={**SERVED, 'clip': {'bytes': 21, 'sha256': CLIP_SHA, 'changeCount': 41, 'source': 'png', 'frontmost': 'com.googlecode.iterm2'}},
-    files=['clip.png'], simIncludes=['osascript ' + JXA, BANNER], clipState={'cc': 41, 'n': 1, 'serves': 1})
+    files=['clip.png'], simIncludes=['osascript ' + JXA], simExcludes=[BANNER], clipState={'cc': 41, 'n': 1, 'serves': 1})
 cc_('clip: a TIFF-only clipboard is served as PNG', tape=[RD(0, source='tiff', bytes=21)],
     expect={**SERVED, 'clip': {'bytes': 21, 'sha256': CLIP_SHA, 'changeCount': 41, 'source': 'tiff', 'frontmost': 'com.googlecode.iterm2'}},
     files=['clip.png'], clipState={'cc': 41, 'n': 1, 'serves': 1})
@@ -843,7 +844,6 @@ cc_('clip: a written file over the cap is TOO_LARGE, not served', tape=[RD(0, so
 cc_('clip: a written file without PNG magic is CLIP_FAILED', tape=[RD(0, source='png', bytes=14, write='gif')], expect={'status': 'error', 'reason': 'CLIP_FAILED'}, simExcludes=[BANNER])
 cc_('clip: a report without a changeCount is CLIP_FAILED', tape=[{'m': JXA, 'rc': 0, 'out': {'source': 'png', 'bytes': 21}}], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
 cc_('clip: a read that fails otherwise is CLIP_FAILED', tape=[RD(8)], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
-cc_('clip: a banner that fails still serves', tape=[RD(0, source='png', bytes=21), {'m': BANNER, 'rc': 1}], expect=SERVED, files=['clip.png'])
 cc_('clip: a 2-minute life is the longest taken', patch={'expiresInMin': 2}, tape=[RD(0, source='png', bytes=21)], expect=SERVED)
 cc_('clip: an image copied with plain or rich text is MIXED_TEXT, naming the types', tape=[RD(9, types=['public.png', 'public.utf8-plain-text', 'bad type!'])],
     expect={'status': 'rejected', 'reason': 'MIXED_TEXT', 'types': ['public.png', 'public.utf8-plain-text']}, simExcludes=[BANNER])
@@ -894,8 +894,64 @@ c('lanes: an open-pr for a branch named ios-… runs in the slow lane', lane='sl
 cc_('lanes: at most 5 per drain, counting only the lane\'s own (6 clips + 2 sims → 5 answered, 3 left)', lane='fast', setup='mixed',
     tape=[RD(0, source='png', bytes=21)], inboxLeft=3, simExcludes=NOSIM)
 
+# ================================================================================================= edit-pr job ===
+# The default edit API: one open PR from this repo's branch, by the owner, onto main, at the job's sha; the PATCH
+# answers with the stored body. Cases override routes as for open-pr.
+import hashlib
+ebody = 'Updated after the round-2 fixes. BODYMARK\n\nStill fine: `@types/node`.\n'
+ebase = {'v': 1, 'id': '20261114T010000Z-edit-mac-mailroom-3kx9', 'job': 'edit-pr', 'submittedAt': 'now', 'expiresInMin': 20,
+         'params': {'branch': 'mac-mailroom', 'sha': A, 'title': 'Mac mailroom edits PRs as the user', 'body': ebody, 'bodySha256': 'auto'}}
+PATCHK = f'PATCH {R}/pulls/90'
+EPR = {**PR, 'base': {'ref': 'main'}, 'head': {'sha': A, 'repo': {'full_name': 'radatta/aperture'}}}
+EAPI = {LIST: {'status': 200, 'body': [EPR]}, PATCHK: {'status': 200, 'body': {**EPR, 'body': ebody}}}
+EALL = ['GET /user', REF, LIST, MD, PATCHK]
+ESHA = hashlib.sha256(ebody.encode()).hexdigest()
+EDITED = {'status': 'edited', 'reason': None, 'pr': PRR, 'bodySha256': ESHA}
+def ec(name, api=None, **k): c(name, kind='edit-pr', api={**EAPI, **(api or {})}, **k)
+def erej(name, reason, ts=True, **k):
+    if ts:
+        k['ts'] = reason
+    ec(name, expect={'status': 'rejected', 'reason': reason}, calls=[], **k)
+
+ec('edit-pr: replaces the title and body of the one open PR, nothing else', ts=None, expect=EDITED, calls=EALL,
+   patchBody={'title': ebase['params']['title'], 'body': ebody},
+   md={'text': ebase['params']['title'] + '\n\n' + ebody, 'mode': 'gfm', 'context': 'radatta/aperture'})
+ec('edit-pr: no title sends the body alone and renders it alone', ts=None, unset=[['params', 'title']], expect=EDITED, calls=EALL,
+   patchBody={'body': ebody}, md={'text': ebody, 'mode': 'gfm', 'context': 'radatta/aperture'})
+ec('edit-pr: no open PR is NO_PR, no write', api={LIST: {'status': 200, 'body': []}}, expect={'status': 'rejected', 'reason': 'NO_PR'}, calls=EALL[:3])
+ec('edit-pr: two open PRs is MANY_PRS, no write', api={LIST: {'status': 200, 'body': [EPR, {**EPR, 'number': 91}]}},
+   expect={'status': 'rejected', 'reason': 'MANY_PRS'}, calls=EALL[:3])
+ec('edit-pr: a PR by another author is WRONG_AUTHOR, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'user': {'login': 'someone-else'}}]}},
+   expect={'status': 'error', 'reason': 'WRONG_AUTHOR'}, calls=EALL[:3])
+ec('edit-pr: a PR onto another base is WRONG_BASE, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'base': {'ref': 'dev'}}]}},
+   expect={'status': 'rejected', 'reason': 'WRONG_BASE'}, calls=EALL[:3])
+ec('edit-pr: a PR whose head moved is HEAD_MISMATCH, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'head': {**EPR['head'], 'sha': 'b' * 40}}]}},
+   expect={'status': 'rejected', 'reason': 'HEAD_MISMATCH'}, calls=EALL[:3])
+ec('edit-pr: a PR from another repo is HEAD_MISMATCH, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'head': {'sha': A, 'repo': {'full_name': 'evil/aperture'}}}]}},
+   expect={'status': 'rejected', 'reason': 'HEAD_MISMATCH'}, calls=EALL[:3])
+ec('edit-pr: a branch pushed past the job is HEAD_MISMATCH before the PR lookup', api={REF: {'status': 200, 'body': {'object': {'sha': 'b' * 40}}}},
+   expect={'status': 'rejected', 'reason': 'HEAD_MISMATCH'}, calls=EALL[:2])
+ec('edit-pr: a PR list that is not a list is API_FAILED', api={LIST: {'status': 200, 'body': {'message': 'odd'}}}, expect={'status': 'error', 'reason': 'API_FAILED'}, calls=EALL[:3])
+ec('edit-pr: a mention in the rendered text is MENTION, no write', api={MD: {'status': 200, 'body': MENTION_HTML}}, expect={'status': 'rejected', 'reason': 'MENTION'}, calls=EALL[:4])
+ec('edit-pr: a refused PATCH is API_FAILED', api={PATCHK: {'status': 422, 'body': {'message': 'Validation Failed'}}}, expect={'status': 'error', 'reason': 'API_FAILED'}, calls=EALL)
+ec('edit-pr: a PATCH answering for another PR is API_FAILED', api={PATCHK: {'status': 200, 'body': {**EPR, 'number': 91, 'html_url': 'https://github.com/radatta/aperture/pull/91'}}},
+   expect={'status': 'error', 'reason': 'API_FAILED'}, calls=EALL)
+ec('edit-pr: the result hashes the body GitHub stored, not the one sent', api={PATCHK: {'status': 200, 'body': {**EPR, 'body': 'other'}}},
+   expect={**EDITED, 'bodySha256': hashlib.sha256(b'other').hexdigest()}, calls=EALL)
+ec('edit-pr: no Keychain token is TOKEN_MISSING, no call', noToken=True, expect={'status': 'error', 'reason': 'TOKEN_MISSING'}, calls=[])
+erej('edit-pr: a title without a body is BAD_PARAM', 'BAD_PARAM', unset=[['params', 'body']])
+erej('edit-pr: an extra param (state) is BAD_PARAM', 'BAD_PARAM', patch={'params': {'state': 'closed'}})
+erej('edit-pr: a PR number from the container is BAD_PARAM', 'BAD_PARAM', patch={'params': {'number': 90}})
+erej('edit-pr: a title with a double quote is BAD_PARAM', 'BAD_PARAM', patch=T('Fix "quoted" thing'))
+erej('edit-pr: branch main is BAD_PARAM', 'BAD_PARAM', patch={'params': {'branch': 'main'}})
+erej('edit-pr: a wrong bodySha256 is BAD_PARAM', 'BAD_PARAM', ts=False, patch={'params': {'bodySha256': '0' * 64}})
+erej('edit-pr: a mention in the body is MENTION before any call', 'MENTION', patch=B('thanks @octocat'))
+erej('edit-pr: a hash ref in the body is HASH_REF', 'HASH_REF', patch=B('fixes #12'))
+erej('edit-pr: a cross-repo link in the title is XREF', 'XREF', patch=T('See https://github.com/cli/cli/issues/1'))
+ec('lanes: an edit-pr edits while the slow lock is held', lane='fast', setup='lock', expect=EDITED, calls=EALL, locks=['lock'])
+
 with open(out, 'w') as f:
-    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase}) + '\n')
+    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase, 'editBase': ebase}) + '\n')
     f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')
     for x in C:
         f.write(json.dumps(x, ensure_ascii=True) + '\n')

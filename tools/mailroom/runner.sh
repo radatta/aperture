@@ -17,10 +17,10 @@ STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]}"
 LANE="${3:-all}"
 case "$LANE" in slow | fast | all) ;; *) echo "usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]" >&2; exit 1 ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
-JOBS="open-pr sim clip" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
+JOBS="open-pr sim clip edit-pr" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
 SLOW_JOBS="sim"         # run only holding lock (slow lane): they drive the Simulator
 FAST_JOBS="clip"        # run only holding lock-fast (fast lane): they keep state (clip.json's caps)
-SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-' # the slow lane takes entries named so (sim.ts's ids); open-pr may run in either
+SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-' # the slow lane takes entries named so (sim.ts's ids); open-pr/edit-pr may run in either
 MAX_FILE=73728 # 72 KiB per job file
 MAX_PER_DRAIN=5 # per lane, counting only the entries this lane takes
 ID_RE='^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,48}$'

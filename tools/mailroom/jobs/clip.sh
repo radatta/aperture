@@ -9,7 +9,7 @@ CLIP_FRONT_IDS="com.googlecode.iterm2 com.apple.Terminal" # bundle ids that may 
 CLIP_MAX_BYTES=16777216 # 16 MiB of PNG
 CLIP_PER_CC=3 # serves per copied image (the pasteboard's changeCount): two sessions and a retry
 CLIP_PER_MIN=6
-CLIP_BANNER=1 # a macOS notification per serve: the visible tell of a paste nobody pressed
+CLIP_BANNER=0 # 1 = a macOS notification per serve; off by the maintainer's choice (2026-11-13): the log line is the record
 
 # A job is {} params and a short life: a queued paste is worthless a minute later.
 CLIP_JQ='try (
