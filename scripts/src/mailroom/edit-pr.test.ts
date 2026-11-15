@@ -3,6 +3,7 @@ import { fakeClock, fakeRun } from '../bot/fakes.ts';
 import { editPr } from './edit-pr.ts';
 import { sha256 } from './job.ts';
 import { memFs } from './fakes.ts';
+import { IDS } from '../identifiers.ts';
 import { EXIT } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
 import type { Result } from './submit.ts';
@@ -165,5 +166,23 @@ describe('editPr', () => {
     expect(logs.join('\n')).toMatch(
       /gh pr edit mac-mailroom --body-file localNotes\/pr-mac-mailroom\.md --title "New title here"$/m,
     );
+  });
+
+  it('refuses a personal identifier in the title or body before anything is queued or handed over', async () => {
+    const first = IDS.maintainer.name.split(' ')[0]!;
+    const home = ['', 'Users', 'someone', 'repo'].join('/');
+    for (const [title, body, where] of [
+      [`Asked by ${first}`, undefined, 'title:1 name'],
+      [undefined, `fine\n\ncd ${home} && x`, 'pr-mac-mailroom.md:3 home-path'],
+    ] as const) {
+      const { d, fs, logs, sent } = setup({ mac: edited, body });
+      expect(await editPr(d, title)).toBe(EXIT.failed);
+      expect(sent).toEqual([]);
+      expect([...fs.files.keys()].some((k) => k.includes('/inbox/'))).toBe(false);
+      const out = logs.join('\n');
+      expect(out).toContain('PERSONAL_IDENTIFIER');
+      expect(out).toContain(where);
+      expect(out).not.toContain('gh pr edit');
+    }
   });
 });
