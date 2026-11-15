@@ -570,6 +570,9 @@ describe('the overlay on a LeetCode problem', () => {
         sittingId: 'S-old',
         clientSittingId: 'C',
         clientStartedAt: 1,
+        questionId: null,
+        title: 'Two Sum',
+        problemSent: false,
       },
       'sync:two-sum': { sittingId: 'S-old', status: 'ended', at: 1 },
     });
@@ -596,6 +599,8 @@ describe('the overlay on a LeetCode problem', () => {
     p.tapPill(); // the first tab's pill: the binding is there now, so it resumes, not prompts
     await until(() => p.phase() === 'active', 6000);
     expect(p.pill()).toBeNull();
+    // Forgotten on this way too: once that sitting ends, the next visit prompts.
+    await until(() => messages(ext, 'undismiss').length === 2);
     const ids = messages(ext, 'start').map((m) => m.body!.clientSittingId);
     expect(ids).toHaveLength(2); // the other tab's Start, then this tab's resume of the same sitting
     expect(new Set(ids).size).toBe(1);
@@ -692,7 +697,9 @@ describe('the overlay on a LeetCode problem', () => {
     expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not the old count
     expect(await logged(ext, 'timer')).toMatchObject({
       status: 'pause',
+      resumeClicked: true,
       resumed: true,
+      via: 'running',
       reset: true,
       started: true,
     });
@@ -723,6 +730,11 @@ describe('the overlay on a LeetCode problem', () => {
     expect(p.text()).toContain('Continue without the timer');
     expect(p.text()).toContain('LeetCode’s timer wasn’t restarted'); // the hint never says it didn’t start
     expect(timerState(p)).toMatchObject({ status: 'running' });
+    p.tap('retry'); // still wrong in Options: fails again, the old count still running — and says so
+    // The Retry's own failure (no "after resuming": the clock already ran), still saying so.
+    await until(() => p.phase() === 'failed' && !p.text().includes('after resuming'), 6000);
+    expect(p.text()).toContain('(timerReset) — its clock is running again.');
+    expect(p.fake()).toMatchObject({ timerResumes: 1, timerPauses: 0 });
     await ext.local.remove('selectors');
     await settle(100);
     p.tap('retry');
@@ -747,6 +759,37 @@ describe('the overlay on a LeetCode problem', () => {
       'didn’t ask to confirm its reset (timerResetConfirm) — its clock is running again.',
     );
     expect(timerState(p)).toMatchObject({ status: 'running' });
+  }, 20_000);
+
+  it('says nothing of a running clock once it was reset, or when Resume only opened the pop-up', async () => {
+    // Resumed, reset to idle, then no Start to be found: the clock is idle, not running.
+    const reset = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      selectors: { timerStart: '#gone', timerOpen: '#gone' },
+    });
+    expect(reset.p.phase()).toBe('failed');
+    expect(reset.p.text()).toContain('Couldn’t find LeetCode’s timer (timerOpen).');
+    expect(reset.p.text()).not.toContain('running again');
+    expect(timerState(reset.p)).toMatchObject({ status: 'idle' });
+    // Resume opened the pop-up and its Reset never lands: still paused. The debug path says which.
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    Object.assign(p.fake(), { pausedNoReset: true, resumeOpensPopup: true });
+    p.fake().setTimer(PAUSED_COUNTDOWN());
+    p.fake().resetInert = true;
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'failed', 8000);
+    expect(p.text()).toContain('LeetCode’s timer didn’t reset.');
+    expect(p.text()).not.toContain('running again');
+    expect(timerState(p)).toMatchObject({ status: 'pause' });
+    expect(await logged(ext, 'timer')).toMatchObject({
+      resumeClicked: true,
+      resumed: false,
+      via: 'popup',
+    });
   }, 20_000);
 
   it('with timerResume off, missing, or pointed at something that doesn’t resume, says so and clicks nothing more', async () => {

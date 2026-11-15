@@ -840,10 +840,21 @@ export const lcExtension: Scenario = {
       id: 'ext-timer-resume-said',
       entry: 'extension',
       kind: 'edge',
-      what: 'Any failure after a resume, not only a missing Reset, says LeetCode’s clock is running again',
+      what: 'While the clock a Start resumed still runs, any failure says so, on a Retry too',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'says the clock is running again on any failure after a resume, not only a missing Reset',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-timer-resume-quiet',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Once the resumed clock was reset, or when Resume only opened the pop-up, a failure says nothing of a running clock; the debug path says which way Resume went',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'says nothing of a running clock once it was reset, or when Resume only opened the pop-up',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
