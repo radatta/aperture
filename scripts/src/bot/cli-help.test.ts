@@ -17,7 +17,7 @@ vi.mock('./token.ts', async (orig) => ({
 }));
 
 const { FLAGS, USAGE, main } = await import('./cli.ts');
-const { commands, usageFor } = await import('./help.ts');
+const { commands, usageFor, usageKeys } = await import('./help.ts');
 const { run } = await import('./sh.ts');
 const { loadConfig } = await import('./config.ts');
 const { mintToken } = await import('./token.ts');
@@ -79,9 +79,12 @@ describe('pnpm bot … refuses what it does not know', () => {
     [['lock', 'frob']],
     [['lock', 'release', '--slot', 'devb']],
     [['logs', '--group', 'bff']],
+    [['push', '--after-rebase', 'main']], // a bare flag swallowing a word would run a lease-less push
+    [['lock', 'acquire', '--slot']],
+    [['lock', 'wait', '--max']],
   ])('%j → exit 2, nothing run', async (argv) => {
     expect(await main(argv)).toBe(2);
-    expect(err[0]).toMatch(/unknown|unexpected/);
+    expect(err[0]).toMatch(/unknown|unexpected|takes no value|needs a value/);
     untouched();
   });
 });
@@ -104,7 +107,6 @@ describe('the guard lets real invocations through', () => {
 
 describe('the flag table', () => {
   it('covers every command USAGE names, and names no command USAGE lacks', () => {
-    const keys = Object.keys(FLAGS).map((k) => k.split(' ')[0]);
-    expect([...new Set(keys)].sort()).toEqual(commands(USAGE).sort());
+    expect(Object.keys(FLAGS).sort()).toEqual(usageKeys(USAGE).sort());
   });
 });

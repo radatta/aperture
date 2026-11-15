@@ -1,10 +1,10 @@
 // `--help` / `-h` and unknown arguments stop before anything runs (bot/help.ts): no stdin read (decide-heavy would
 // block on a terminal), no file read or write.
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { commands, usageFor } from '../bot/help.ts';
+import { commands, usageFor, usageKeys } from '../bot/help.ts';
 import { FLAGS, USAGE, main } from './cli.ts';
 import { LANE_USAGE } from './tower/lanes.ts';
 
@@ -25,7 +25,8 @@ describe('board cli … --help', () => {
   it('overlap --help with real arguments writes nothing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'board-help-'));
     expect(main(['overlap', dir, dir, '--help'], noStdin)).toBe(usageFor(USAGE, 'overlap'));
-    expect(() => main(['report', join(dir, 'overlap.json'), '--help'], noStdin)).not.toThrow();
+    expect(existsSync(join(dir, 'overlap.json'))).toBe(false);
+    rmSync(dir, { recursive: true });
   });
 
   it('lane keeps its own usage for -h and --help; help lane gets the board line', () => {
@@ -42,18 +43,20 @@ describe('board cli … refuses what it does not know', () => {
     [['report', '/x', '--jsn']],
     [['staleness', 'a', 'b', 'c']],
     [['overlap', '-n', 'a']],
+    [['report', '/x', '--json=1']],
   ])('%j → throws (exit 2), nothing read', (argv) => {
-    expect(() => main(argv, noStdin)).toThrow(/unknown|unexpected/);
+    expect(() => main(argv, noStdin)).toThrow(/unknown|unexpected|takes no value|needs a value/);
     expect(noStdin).not.toHaveBeenCalled();
   });
 
   it('lets real invocations through', () => {
     const dir = mkdtempSync(join(tmpdir(), 'board-help-'));
     expect(JSON.parse(main(['barriers', dir, '7', '--json'], noStdin))).toBeTruthy();
+    rmSync(dir, { recursive: true });
     expect(() => main(['decide-heavy'], noStdin)).toThrow('read stdin');
   });
 
   it('the flag table covers every command USAGE names, and no other', () => {
-    expect(Object.keys(FLAGS).sort()).toEqual(commands(USAGE).sort());
+    expect(Object.keys(FLAGS).sort()).toEqual(usageKeys(USAGE).sort());
   });
 });

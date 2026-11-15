@@ -1,24 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { parseArgs } from './cli.ts';
-import { cliGuard, commands, usageFor } from './help.ts';
+import { cliGuard, commands, usageFor, usageKeys } from './help.ts';
 import type { Spec } from './help.ts';
 
 const USAGE = `pnpm tool <command>   (-h / --help on any command)
-  go [--fast]        do it
+  go [--fast] [--to X] do it
                      — a continuation line
   lock status        read
   lock wait [--any]  block`;
 const TABLE: Record<string, Spec> = {
-  go: { flags: ['fast'] },
+  go: { flags: ['to'], bare: ['fast'] },
   'lock status': { flags: [] },
-  'lock wait': { flags: ['any'] },
+  'lock wait': { bare: ['any'] },
 };
 const guard = (...argv: string[]) => cliGuard(argv, USAGE, TABLE, parseArgs);
 
 describe('usageFor', () => {
   it("prints a command's lines with their continuations, under the head", () => {
     expect(usageFor(USAGE, 'go')).toBe(
-      'pnpm tool go\n  go [--fast]        do it\n                     — a continuation line',
+      'pnpm tool go\n  go [--fast] [--to X] do it\n                     — a continuation line',
     );
     expect(usageFor(USAGE, 'lock')?.split('\n')).toHaveLength(3);
     expect(usageFor(USAGE, 'nope')).toBeNull();
@@ -26,6 +26,16 @@ describe('usageFor', () => {
 
   it('lists the commands a usage names, once each', () => {
     expect(commands(USAGE)).toEqual(['go', 'lock']);
+  });
+
+  it('names each subcommand as its FLAGS key, splitting a|b', () => {
+    expect(usageKeys(USAGE)).toEqual(['go', 'lock status', 'lock wait']);
+    expect(usageKeys('h\n  lock renew|release   x\n  stale <a> <b>\n  logs [--since]')).toEqual([
+      'lock renew',
+      'lock release',
+      'stale',
+      'logs',
+    ]);
   });
 });
 
@@ -65,6 +75,8 @@ describe('cliGuard: refusals', () => {
     [['lock'], 'unknown lock subcommand ""'],
     [['lock', 'frob'], 'unknown lock subcommand "frob"'],
     [['lock', 'status', '--any'], 'lock status: unknown flag --any'],
+    [['go', '--fast', 'now'], 'go: --fast takes no value'],
+    [['go', '--to'], 'go: --to needs a value'],
   ])('%j → exit 2: %s', (argv, why) => {
     const v = guard(...argv);
     expect(v?.code).toBe(2);
@@ -73,6 +85,7 @@ describe('cliGuard: refusals', () => {
 
   it('lets known commands with known flags through, and leaves unknown commands to main', () => {
     expect(guard('go', '--fast')).toBeNull();
+    expect(guard('go', '--fast', '--to', 'x')).toBeNull();
     expect(guard('lock', 'wait', '--any')).toBeNull();
     expect(guard()).toBeNull();
     expect(guard('frob', '--x')).toBeNull();

@@ -1,10 +1,5 @@
-// Board CLI for the decisions that deserve tests (docs/ops/SESSION-BOARD.md). Called by scripts/board/*.sh:
-//   node scripts/src/board/cli.ts decide-heavy   < {limits, liveLimits, live, slots, req} → HeavyDecision
-//   node scripts/src/board/cli.ts staleness <limits.json> <historyDir>                    → warning lines
-//   node scripts/src/board/cli.ts overlap <repo> <boardDir>                              → writes <boardDir>/overlap.json
-//   node scripts/src/board/cli.ts report <historyDir> [days] [--json]                     → usage by mix + job peaks
-//   node scripts/src/board/cli.ts barriers <historyDir> [days] [--json]                   → how limiting the cap is
-//   pnpm board lane <phase> [--step …] [--needs … --link|--cmd …] | --clear               → this lane's status file
+// Board CLI for the decisions that deserve tests (docs/ops/SESSION-BOARD.md), called by scripts/board/*.sh and
+// `pnpm board lane`; the commands are in USAGE below.
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
@@ -37,12 +32,12 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
 export const FLAGS: Record<string, Spec> = {
-  'decide-heavy': { flags: [] },
-  staleness: { flags: [], args: 2 },
-  overlap: { flags: [], args: 2 },
-  report: { flags: ['json'], args: 2 },
-  barriers: { flags: ['json'], args: 2 },
-  lane: null,
+  'decide-heavy': {},
+  staleness: { args: 2 },
+  overlap: { args: 2 },
+  report: { bare: ['json'], args: 2 },
+  barriers: { bare: ['json'], args: 2 },
+  lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
 };
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.

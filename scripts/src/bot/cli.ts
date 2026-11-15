@@ -55,13 +55,13 @@ export const USAGE = `pnpm bot <command>   (-h / --help on any command: its usag
 
 // Every command's allowed flags (and positionals past it); anything else refuses before it runs (bot/help.ts).
 export const FLAGS: Record<string, Spec> = {
-  push: { flags: ['after-rebase'] },
-  'deploy-dev': { flags: [] },
-  'lock status': { flags: [] },
+  push: { bare: ['after-rebase'] },
+  'deploy-dev': {},
+  'lock status': {},
   'lock acquire': { flags: ['slot'] },
-  'lock renew': { flags: [] },
-  'lock release': { flags: [] },
-  'lock wait': { flags: ['max', 'any', 'slot'] },
+  'lock renew': {},
+  'lock release': {},
+  'lock wait': { flags: ['max', 'slot'], bare: ['any'] },
   logs: { flags: ['since', 'start', 'end', 'groups', 'filter', 'query'] },
 };
 

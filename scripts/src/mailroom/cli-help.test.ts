@@ -26,7 +26,7 @@ vi.mock('./clip.ts', async (orig) => ({
 }));
 
 const { FLAGS, USAGE, main } = await import('./cli.ts');
-const { commands, usageFor } = await import('../bot/help.ts');
+const { commands, usageFor, usageKeys } = await import('../bot/help.ts');
 const fakes = [
   (await import('../bot/sh.ts')).run,
   (await import('./submit.ts')).hostjobsDir,
@@ -77,9 +77,11 @@ describe('pnpm mailroom … refuses what it does not know', () => {
     [['sim-shutdown', '--sign-in']],
     [['probe', 'now']],
     [['clip-probe', '-o', 'x.png']],
+    [['sim-probe', '--sign-in', 'x']],
+    [['open-pr', '--title']],
   ])('%j → exit 2, nothing run', async (argv) => {
     expect(await main(argv)).toBe(2);
-    expect(err[0]).toMatch(/unknown|unexpected/);
+    expect(err[0]).toMatch(/unknown|unexpected|takes no value|needs a value/);
     untouched();
   });
 });
@@ -98,7 +100,6 @@ describe('the guard lets real invocations through', () => {
 
 describe('the flag table', () => {
   it('covers every command USAGE names, and names no command USAGE lacks', () => {
-    const keys = Object.keys(FLAGS).map((k) => k.split(' ')[0]);
-    expect([...new Set(keys)].sort()).toEqual(commands(USAGE).sort());
+    expect(Object.keys(FLAGS).sort()).toEqual(usageKeys(USAGE).sort());
   });
 });

@@ -29,8 +29,8 @@ export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its
 export const FLAGS: Record<string, Spec> = {
   'open-pr': { flags: ['title', 'wait'] },
   probe: { flags: ['wait'] },
-  'sim-probe': { flags: ['sign-in'] },
-  'sim-shutdown': { flags: [] },
+  'sim-probe': { bare: ['sign-in'] },
+  'sim-shutdown': {},
   'clip-probe': { flags: ['out', 'wait'] },
 };
 
