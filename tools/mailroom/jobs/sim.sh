@@ -263,6 +263,9 @@ sim_tree() {
   done
   return 1
 }
+# Is tree $1 the web app in front?
+sim_tree_web() { jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$1" >/dev/null 2>&1; }
+
 # Not in front is the row's failure; an unreadable tree is the sim's (needs you).
 sim_in_app() {
   local t
@@ -608,7 +611,7 @@ sim_op_launch() {
         sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
         return 1
       fi
-      [ -z "$t" ] || sim_trial_tap 0 # the app came up: the icon tap landed
+      [ -z "$t" ] || ! sim_tree_web "$t" || sim_trial_tap 0 # the app came up: the icon tap landed
       sim_fail LANDMARK "neither Home nor the sign-in card after launch$SIM_DRAFT_TRY"
       return 1
     fi
@@ -618,6 +621,8 @@ sim_op_launch() {
         # to four taps. In the app, the page can draw offset from its accessibility frames after a kill: at 10, nudge it.
         # An unreadable tree does neither.
         t="$(sim_tree)" || t=""
+        # the app in front: the counted icon tap landed, whatever this poll then does (a relaunch's tap isn't counted)
+        [ -z "$t" ] || ! sim_tree_web "$t" || sim_trial_tap 0
         if [ -n "$t" ] && sim_tree_home "$t"; then
           sim_trial_tap 1
           sim_tap_el "$SIM_ICON" || return 1
@@ -1012,15 +1017,18 @@ sim_op_absent() {
 
 sim_op_tap() {
   local cx cy e via
+  via="$(jq -r '.via // ""' <<<"$1")"
+  [ -z "$via" ] || { SIM_VIA="$via" SIM_TRIAL=1 SIM_TOP=tap; }
   sim_find "$1" || return 1
+  if [ -n "$via" ]; then
+    sim_tap_still "$(jq -r .label <<<"$1")" "$(jq -r '.role // ""' <<<"$1")" || return 1
+    # a field whose keyboard is already up would count as landed with nothing showing it did
+    case "$(jq -r '.role // ""' <<<"$SIM_HIT")" in AXTextArea | AXTextField) if sim_kb_up; then SIM_TUN=kbup; fi ;; esac
+  fi
+  # on the element about to be tapped (the stillness read can have replaced find's)
   if jq -e --argjson deny "$SIM_DENY" '((.label // "") | ascii_downcase | sub("^ +"; "") | sub(" +$"; "")) as $l | $deny | any(. as $d | $l == $d or ($l | startswith($d + " ")))' <<<"$SIM_HIT" >/dev/null; then
     sim_fail DENIED "the match is a write button; not tapped"
     return 1
-  fi
-  via="$(jq -r '.via // ""' <<<"$1")"
-  if [ -n "$via" ]; then
-    SIM_VIA="$via" SIM_TRIAL=1 SIM_TOP=tap
-    sim_tap_still "$(jq -r .label <<<"$1")" "$(jq -r '.role // ""' <<<"$1")" || return 1
   fi
   # A toggle already on is left alone: tapping it can only turn it off.
   if [ "$(jq -r '.selects // false' <<<"$1")" = true ] && [ "$(jq -r '.value // ""' <<<"$SIM_HIT")" = 1 ]; then
@@ -1254,13 +1262,14 @@ sim_trial_tap() {
   local d="$1" un="${2:-}"
   [ -z "$SIM_TUN" ] || { d=null un="$SIM_TUN"; }
   SIM_TDONE=1
-  sim_trial "$SIM_TOP" 1 "$d" "${SIM_TMS:-0}" "$un"
+  sim_trial "$SIM_TOP" 1 "$d" "${SIM_TMS:-null}" "$un" # no tap sent (already, or a failure before it): no time
   if [ "$d" = null ]; then SIM_TNOTE="; via $SIM_VIA, uncounted ($un)"; else SIM_TNOTE="; via $SIM_VIA, drops $d"; fi
 }
 
 # A trial tap goes where its target holds still: its centre is read until two reads 1 s apart give the same frame (at
 # most 3), so a tap on a dock still settling (PR 156: taps at y 374 and 402 on a dock that settles at 464) isn't counted
-# as a drop. Never still, or gone from its centre: tapped as a devcheck would, and uncounted.
+# as a drop. Never still, or gone from its centre: tapped where it was last seen, uncounted (moving). A read that
+# hangs: tapped there too, uncounted (unread), where a devcheck would just tap.
 sim_tap_still() {
   local label="$1" role="$2" f cx cy e k
   f="$(jq -c '.frame // {}' <<<"$SIM_HIT")"
@@ -1269,7 +1278,7 @@ sim_tap_still() {
     read -r cx cy < <(jq -r '"\(((.x // 0) + (.w // 0) / 2) | floor) \(((.y // 0) + (.h // 0) / 2) | floor)"' <<<"$f")
     rm -f "$SIM_P.unread"
     e="$(sim_point "$cx" "$cy")" || return 1
-    sim_hung_err "checking \"$label\" holds still" && return 1
+    if sim_hung; then SIM_TUN=unread; return 0; fi # no answer isn't a moving target, and a devcheck would just tap
     sim_match "$e" "$label" "$role" || { SIM_TUN=moving; return 0; }
     SIM_HIT="$e"
     [ "$(jq -c '.frame // {}' <<<"$e")" != "$f" ] || return 0

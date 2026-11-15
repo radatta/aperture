@@ -801,14 +801,34 @@ serr('sim: a failed icon batch is AXE_FAILED, its line uncounted with that reaso
 spass('sim: a launch without via writes no trial.jsonl', [L], filesAbsent=[TRIAL], simExcludes=['batch --tap-style'])
 # a field tap via: the keyboard is its read-back
 def FV(via): return [L, {'op': 'tap', 'label': 'Capture', 'near': {'x': 220, 'y': 895}, 'role': 'AXTextArea', 'via': via}]
-spass('sim: a field tap via that brings the keyboard is counted 0', FV('hid'), tape=[pt(198, 895, CAPTURE, n=1)],
+KBDOWN = lambda n=1: pt(221, 856, {}, n=n)  # the keyboard down: before the tap (the kbup check), and after a dropped one
+spass('sim: a field tap via that brings the keyboard is counted 0', FV('hid'), tape=[pt(198, 895, CAPTURE, n=1), KBDOWN()],
       notes={'1': 'via hid, drops 0'}, simCount={'tap -x 198 -y 895': 1, 'hid=500': 1}, fileHas=[[TRIAL, '"op":"tap","via":"hid","n":1,"drops":0']])
 spass('sim: a field tap via that brings no keyboard, the field still there, is counted 1 and tapped again', FV('tap'),
-      tape=[pt(198, 895, CAPTURE, n=2), pt(221, 856, {}, n=2)], notes={'1': 'tapped again (no keyboard after the first); via tap, drops 1'},
+      tape=[pt(198, 895, CAPTURE, n=2), KBDOWN(3)], notes={'1': 'tapped again (no keyboard after the first); via tap, drops 1'},
       simCount={'tap -x 198 -y 895': 2}, fileHas=[[TRIAL, '"drops":1']], fileLines=[[TRIAL, 2]])
 spass('sim: a field tap via whose spot then reads something else is uncounted (gone)', FV('tap'),
-      tape=[pt(198, 895, CAPTURE, n=1), pt(221, 856, {}, n=2), pt(198, 895, el('AXButton', 'space', '', 100, 880, 240, 40))],
+      tape=[pt(198, 895, CAPTURE, n=1), KBDOWN(3), pt(198, 895, el('AXButton', 'space', '', 100, 880, 240, 40))],
       notes={'1': 'via tap, uncounted (gone)'}, fileHas=[[TRIAL, '"un":"gone"']])
+spass('sim: a field whose keyboard is already up before the tap is uncounted (kbup)', FV('tap'), tape=[pt(198, 895, CAPTURE, n=1)],
+      notes={'1': 'via tap, uncounted (kbup)'}, fileHas=[[TRIAL, '"un":"kbup"']], fileLines=[[TRIAL, 2]])
+# review round 1: a hung stillness read, a find that fails, a stale tree at the end of launch, a relaunch's tap
+spass('sim: a hung stillness read is tapped anyway, uncounted (unread), not AX_TIMEOUT', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), {'m': '--point 200,605', 'rc': 124, 'n': 1}], notes={'1': 'via tap, uncounted (unread)'},
+      simCount={CTAP: 1}, fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"unread"'], [TRIAL, '"sendMs":']], fileLines=[[TRIAL, 2]])
+sfail('sim: a trial tap whose find misses leaves its line, uncounted (MISS), no time', 'MISS', CV('tap'), tape=[pt(200, 600, {})],
+      simCount={CTAP: 0}, fileHas=[[TRIAL, '"drops":null,"sendMs":null,"un":"MISS"']], fileLines=[[TRIAL, 2]])
+STALE = [{'role': 'AXApplication', 'AXLabel': 'Spotlight', 'frame': FULL, 'children': []}]
+sfail('sim: a stale tree (no app, no pill) at the end of launch counts nothing, then LANDMARK', 'LANDMARK', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(STALE)], simCount={ICONTAP: 1},
+      fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"LANDMARK"']], fileLines=[[TRIAL, 2]])
+spass('sim: a launch via that relaunches an app left mid-typing counts its first icon tap, landed', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'},
+      simCount={'simctl terminate ' + U: 1, ICONTAP: 2}, fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a relaunch whose own icon tap drops still counts the first tap, landed (one line, a 0)', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}, n=6), pt(220, 530, {}, n=6), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}, dtree(tree(), 6), dtree(tree('SpringBoard'), 1)],
+      notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'}, simCount={ICONTAP: 3},
+      fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
 # selects: a toggle must read on ("1") after the tap
 SEG, SEGON = el('AXCheckBox', 'Task', '0', 72, 450, 49, 28), el('AXCheckBox', 'Task', '1', 72, 450, 49, 28)
 def SV(via=None): return [L, {'op': 'tap', 'label': 'Task', 'near': {'x': 96, 'y': 464}, 'radius': 10, 'role': 'AXCheckBox', 'selects': True, **({'via': via} if via else {})}]
