@@ -29,6 +29,7 @@ import {
 import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
 import { fetchLogs } from './logs.ts';
+import { pruneBranches } from './prune.ts';
 import { push } from './push.ts';
 import { runCommand } from './run.ts';
 import { run } from './sh.ts';
@@ -47,7 +48,8 @@ const USAGE = `pnpm bot <command>
                                  --any (default 45 min, at most 55); exit 75 if still held — run it in the background
   logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,bff-devb,…] [--filter P] [--query Q]
   run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
-  run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs`;
+  run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs
+  prune-branches [--dry-run]     delete local branches whose PR merged at exactly their tip (end of wave)`;
 
 // `--slot` names a slot; anything else is misuse. Undefined when the flag is absent.
 export function parseSlot(v: string | undefined): Slot | undefined {
@@ -250,6 +252,9 @@ export async function main(argv: string[]): Promise<number> {
         flags.failed === 'true',
         console.log,
       );
+    case 'prune-branches':
+      pruneBranches(run, flags['dry-run'] === 'true', console.log);
+      return 0;
     case 'logs': {
       const t = await token(PERMS.logs);
       await fetchLogs(run, makeApi(t), t, clock, flags, root());
