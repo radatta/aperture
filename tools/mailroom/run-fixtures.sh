@@ -17,7 +17,9 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 # docs/ops/IDENTIFIERS.md): filled here from sim.sh's own pin, so a case's host always matches the runner it tests.
 DEV_ACCOUNT="$(sed -n "s/^SIM_COGNITO_RE='^aperture-dev-\([0-9]*\).*/\1/p" "$HERE/jobs/sim.sh")"
 [ -n "$DEV_ACCOUNT" ] || { echo "run-fixtures: no SIM_COGNITO_RE pin in jobs/sim.sh" >&2; exit 2; }
-CASES="$(mktemp)"
+# A template under $TMPDIR, as everywhere here: the mktemp wrapper below isn't defined yet (it explains why).
+CASES="$(mktemp "${TMPDIR:-/tmp}/rf-cases.XXXXXXXX")" && [ -n "$CASES" ] || { echo "run-fixtures: no temp file for the cases" >&2; exit 2; }
+trap 'rm -f -- "$CASES"' EXIT
 sed "s/@DEV_ACCOUNT@/$DEV_ACCOUNT/g" "$HERE/testdata/jobs.jsonl" >"$CASES"
 export MAILROOM_FIXTURE_TOKEN="fixture-token-5f3a9c"
 export MAILROOM_FIXTURE_PW="FIXTUREPW-9d41"
@@ -33,7 +35,8 @@ curl() {
     case "$1" in
       -D) hdr="$2"; shift 2 ;;
       -o) out="$2"; shift 2 ;;
-      -w | --max-time) shift 2 ;;
+      -w | --max-time | --max-filesize | --proto-redir) shift 2 ;;
+      -L) shift ;;
       -X) method="$2"; shift 2 ;;
       --data-binary) data="${2#@}"; shift 2 ;;
       -H)
@@ -124,14 +127,31 @@ osascript() {
   return "$rc"
 }
 sleep() { if [ "${1%%.*}" -ge 20 ] 2>/dev/null; then command sleep "$1"; fi; }
-export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osascript sleep
+# macOS mktemp ignores TMPDIR without a template (it asks confstr for the user's temp dir), and under the fixtures
+# job's sandbox only $TMPDIR is writable: every temp path here, and in the jobs the cases run, goes under $TMPDIR.
+mktemp() {
+  local a
+  for a in "$@"; do case "$a" in -*) ;; *) command mktemp "$@"; return ;; esac; done
+  command mktemp "$@" "${TMPDIR:-/tmp}/rf.XXXXXXXX"
+}
+export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osascript sleep mktemp
+# A fresh temp dir by its real path, or the suite stops: an unchecked empty one is the cwd (bash 3.2's `cd ""` is a
+# no-op), which the caller's cleanup then deletes.
+tmpdir_real() { local d; d="$(mktemp -d)" && [ -n "$d" ] && (cd "$d" && pwd -P); }
+bail() { echo "Bail out! $1"; exit 1; }
+# Stdin to stdout through bash's own writes. Under the fixtures job's sandbox the suite's stdout is a file outside its
+# temp dir: bash's writes to it pass, but the Mac's `cat` (and so possibly sed) is refused on it ("cat: stdout:
+# Operation not permitted"), which lost every case line from the job's log. External tools write to pipes only.
+emit() { local l; while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l"; done; }
 
 ok() { pass=$((pass + 1)); echo "ok - $1"; }
-bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed 's/^/    /' "$3"; }
+bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed 's/^/    /' "$3" | emit; }
 
 base="$(head -1 "$CASES" | jq -c .base)"
 simbase="$(head -1 "$CASES" | jq -c .simBase)"
 clipbase="$(head -1 "$CASES" | jq -c .clipBase)"
+editbase="$(head -1 "$CASES" | jq -c .editBase)"
+fxbase="$(head -1 "$CASES" | jq -c .fixturesBase)"
 defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 deftape="$(sed -n 2p "$CASES" | jq -c .defaultTape)"
 
@@ -146,12 +166,13 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     IFS= read -r name; read -r kind; read -r setup; read -r raw; read -r no_token; read -r no_simpw; read -r no_simpw_read
     read -r want_rc; read -r want_left; read -r no_result; read -r calls_type; read -r has_post; read -r has_md; read -r want_pw
     read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j; read -r lane; read -r locks_j
+    read -r has_pb; read -r pb_j; read -r fx_script; read -r sb_fail
   } <<<"$(jq -r '[.name, (.kind // "open-pr"), (.setup // ""), (if has("raw") then "1" else "" end),
     (.noToken // false), (.noSimPassword // false), (.noSimPasswordRead // false), (.exit // 0), (.inboxLeft // 0),
     (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
     (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson),
-    (.lane // ""), (.locks | tojson)] | .[]' <<<"$c")"
-  T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
+    (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson), (.fxScript // "" | @json), (if .sandboxFails then "1" else "" end)] | .[]' <<<"$c")"
+  T="$(tmpdir_real)" || bail "no temp dir for $name" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state dir" # the Mac's is under Application Support: a space in every state path
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
@@ -161,6 +182,19 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   cbase="$base"
   [ "$kind" != sim ] || cbase="$simbase"
   [ "$kind" != clip ] || cbase="$clipbase"
+  [ "$kind" != edit-pr ] || cbase="$editbase"
+  [ "$kind" != fixtures ] || cbase="$fxbase"
+  # The fixtures job runs sandbox-exec and tar by name, through env -i: stub files on PATH, not functions. sandbox-exec
+  # records its profile and runs the rest; tar unpacks the case's fxScript as the archive's run-fixtures.sh.
+  mkdir "$T/bin"
+  printf '%s\n' '#!/bin/bash' 'printf "sandbox-exec %s\n" "$*" >>"$MAILROOM_FIXTURE_SIMCALLS"' \
+    'cat "$2" >>"$MAILROOM_FIXTURE_SIMCALLS.sb"' 'shift 2' \
+    '[ -z "$MAILROOM_FIXTURE_SB_FAIL" ] || [ "$1" != /usr/bin/true ] || exit 65' 'exec "$@"' >"$T/bin/sandbox-exec"
+  printf '%s\n' '#!/bin/bash' 'printf "tar %s\n" "$*" >>"$MAILROOM_FIXTURE_SIMCALLS"' 'd=""' \
+    'while [ $# -gt 0 ]; do [ "$1" != -C ] || d="$2"; shift; done' \
+    '[ -n "$MAILROOM_FIXTURE_FX" ] || exit 1' 'mkdir -p "$d/tools/mailroom"' \
+    'printf "%s" "$MAILROOM_FIXTURE_FX" >"$d/tools/mailroom/run-fixtures.sh"' >"$T/bin/tar"
+  chmod +x "$T/bin/sandbox-exec" "$T/bin/tar"
 
   # The job: base ⊕ patch, minus unset paths, submittedAt relative to now, bodySha256 computed when "auto".
   { IFS= read -r job; read -r id; read -r file; read -r sha_auto; } <<<"$(jq -r --argjson base "$cbase" --argjson now "$now" '. as $c | ($base * ($c.patch // {}))
@@ -229,6 +263,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
         cc: (if $junk == "junk" then "41" else .cc end), n}' <<<"${cs%%|*}" >"$st/clip.json"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
     build-y=*) printf '%s\n' "${setup#build-y=}" >"$st/sim-build-y"; mv "$hj/staging/x" "$hj/inbox/$file" ;; # readBuild's last y
+    no-tmp) mv "$hj/staging/x" "$hj/inbox/$file" ;; # the runner's TMPDIR is missing (below): mktemp fails
     "") mv "$hj/staging/x" "$hj/inbox/$file" ;;
     *) bad "$name" "unknown setup $setup"; continue ;;
   esac
@@ -237,7 +272,9 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$no_token" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
     [ "$no_simpw" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
     [ "$no_simpw_read" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
-    MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
+    [ "$setup" = no-tmp ] && export TMPDIR="$T/no-such-dir"
+    PATH="$T/bin:$PATH" MAILROOM_FIXTURE_FX="$(jq -r . <<<"$fx_script")" MAILROOM_FIXTURE_SB_FAIL="$sb_fail" \
+      MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
       MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st" ${lane:+"$lane"}
   ) >"$T/out" 2>&1
   rc=$?
@@ -269,9 +306,13 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$got" = "$want" ] || why="calls $got, want $want"
     if grep -qv ' auth=ok leak=0$' "$T/calls"; then why="a call without the header-file token, or with it on argv"; fi
   fi
-  # The exact request body of a call: "post" for POST …/pulls, "md" for POST /markdown.
-  for k in post md; do
-    case "$k" in post) has="$has_post"; body_j="$post_j"; route='^POST /repos/radatta/aperture/pulls ' ;; md) has="$has_md"; body_j="$md_j"; route='^POST /markdown ' ;; esac
+  # The exact request body of a call: "post" for POST …/pulls, "md" for POST /markdown, "patchBody" for edit-pr's PATCH.
+  for k in post md pb; do
+    case "$k" in
+      post) has="$has_post"; body_j="$post_j"; route='^POST /repos/radatta/aperture/pulls ' ;;
+      md) has="$has_md"; body_j="$md_j"; route='^POST /markdown ' ;;
+      pb) has="$has_pb"; body_j="$pb_j"; route='^PATCH /repos/radatta/aperture/pulls/' ;;
+    esac
     [ -z "$why" ] && [ "$has" = true ] || continue
     idx="$(grep -n "$route" "$T/calls" | head -1 | cut -d: -f1)"
     sent="$( [ -z "$idx" ] || cat "$T/calls.$((idx - 1)).data" 2>/dev/null || true)"
@@ -282,6 +323,8 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     got="$(cd "$st" && find . -mindepth 1 -maxdepth 1 -name 'lock*' -type d | sed 's|^\./||' | sort | jq -Rsc 'split("\n") | map(select(. != ""))')"
     [ "$got" = "$(jq -c 'sort' <<<"$locks_j")" ] || why="locks left $got, want $locks_j"
   fi
+  # A failed mktemp must never leave the job working in (and then deleting) the runner's cwd, the inbox.
+  if [ -z "$why" ] && [ "$setup" = no-tmp ] && [ ! -d "$hj/inbox" ]; then why="the inbox was deleted"; fi
   if [ -z "$why" ] && [ "$setup" = hardlink ] && [ ! -f "$hj/staging/mine" ]; then why="the hard-linked original went missing"; fi
   if [ -z "$why" ] && grep -rq -e "$MAILROOM_FIXTURE_TOKEN" -e BODYMARK -e "$MAILROOM_FIXTURE_PW" "$T/out" "$hj/results/" 2>/dev/null; then
     why="the token, the test user's password or body text reached the log or a result"
@@ -292,7 +335,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       "$hj/results/$rid/result.json" >/dev/null 2>&1 || why="a step note isn't $notes_j"
   fi
   # sim cases: tool calls in order (substrings), calls that must not happen, password reads/typings, artifacts.
-  if [ -z "$why" ] && { [ "$kind" = sim ] || [ "$kind" = clip ]; }; then
+  if [ -z "$why" ] && { [ "$kind" = sim ] || [ "$kind" = clip ] || [ "$kind" = fixtures ]; }; then
     last=0
     while IFS= read -r want; do
       [ -n "$want" ] || continue
@@ -321,6 +364,21 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -f "$hj/results/$rid/$f" ] || why="no results/$rid/$f"
     done < <(jq -r '.files // [] | .[]' <<<"$c")
   fi
+  # fixtures cases: lines the sandbox profile must hold, and the log tail the job kept.
+  if [ -z "$why" ] && [ "$kind" = fixtures ]; then
+    while IFS= read -r want; do
+      [ -z "$why" ] && [ -n "$want" ] || continue
+      grep -q -F -x -- "$want" "$T/simcalls.sb" 2>/dev/null || why="the profile has no line \"$want\""
+    done < <(jq -r '.sbIncludes // [] | .[]' <<<"$c")
+    while IFS= read -r want; do
+      [ -z "$why" ] && [ -n "$want" ] || continue
+      grep -q -F -- "$want" "$hj/results/$rid/fixtures.log" 2>/dev/null || why="fixtures.log lacks \"$want\""
+    done < <(jq -r '.logIncludes // [] | .[]' <<<"$c")
+    while IFS= read -r nope; do
+      [ -z "$why" ] && [ -n "$nope" ] || continue
+      if grep -q -F -- "$nope" "$hj/results/$rid/fixtures.log" 2>/dev/null; then why="fixtures.log holds \"$nope\""; fi
+    done < <(jq -r '.logExcludes // [] | .[]' <<<"$c")
+  fi
   # clip cases: the private state after the run ({cc, n, serves: how many}). What the JXA may ask the pasteboard is
   # pinned statically (runner-fixtures.test.ts).
   if [ -z "$why" ] && [ "$kind" = clip ]; then
@@ -341,7 +399,7 @@ if [ -z "${MAILROOM_FIXTURE_JOBS:-}" ]; then
   MAILROOM_FIXTURE_JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
   [ "$MAILROOM_FIXTURE_JOBS" -le 4 ] 2>/dev/null || MAILROOM_FIXTURE_JOBS=4
 fi
-OUTD="$(mktemp -d)"
+OUTD="$(tmpdir_real)" || bail "no temp dir for the shards"
 trap 'rm -r -f -- "$OUTD" "$CASES"' EXIT
 s=0
 while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do
@@ -350,7 +408,7 @@ while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do
 done
 wait
 s=0
-while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do cat "$OUTD/$s"; s=$((s + 1)); done
+while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do emit <"$OUTD/$s"; s=$((s + 1)); done
 pass="$(cat "$OUTD"/* | grep -c '^ok - ' || true)"
 failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 
@@ -363,11 +421,37 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
   [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ]
 ) && ok "sim_cap kills a command at its cap" || bad "sim_cap kills a command at its cap" "it did not return 124 promptly"
 
+# fx_cap kills the fixtures suite's whole tree at its cap (the suite backgrounds its shards), not just its parent.
+# Its tree ignores TERM (KILL can't be), and a child it leaves behind after a normal exit is killed with the group.
+(
+  unset -f pgrep sleep
+  . "$HERE/jobs/fixtures.sh"
+  STATE="$(tmpdir_real)" || exit 1 # the cap touches the drain's locks: never ./lock in the caller's directory
+  trap 'rm -r -f -- "$STATE" ${f:+"$f"}' EXIT
+  HELD=" lock"
+  f="$(mktemp)" && [ -n "$f" ] || exit 1
+  tree() { trap '' TERM; command sleep 30 & echo $! >"$f"; command sleep 30; }
+  started=$(date +%s)
+  fx_cap 1 tree
+  rc=$?
+  command sleep 0.2
+  [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ] && ! kill -0 "$(cat "$f")" 2>/dev/null || exit 1
+  left() { command sleep 30 & echo $! >"$f"; }
+  fx_cap 5 left
+  rc=$?
+  command sleep 0.2
+  [ "$rc" = 0 ] && ! kill -0 "$(cat "$f")" 2>/dev/null && [ ! -e ./lock ] && [ -e "$STATE/lock" ] || exit 1
+  # As the runner calls it: inside a command substitution (run_<job>'s), where bash 3.2 must still make the group.
+  out="$(fx_cap 1 tree >/dev/null 2>&1; echo "$?")"
+  command sleep 0.2
+  [ "$out" = 124 ] && ! kill -0 "$(cat "$f")" 2>/dev/null
+) && ok "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" || bad "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" "a wrong code, a slow return, or a child survived"
+
 # Lanes, for real: a slow drain inside a 20 s sim op, a second slow drain, and a fast drain beside it — as launchd's
 # two agents would run them.
 lanes_check() {
   local L hj st now a b cl pa i rc
-  L="$(cd "$(mktemp -d)" && pwd -P)"
+  L="$(tmpdir_real)" || bail "no temp dir for the lanes checks"
   hj="$L/hj"; st="$L/state dir"
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
   : >"$L/calls"; : >"$L/simcalls"
@@ -417,7 +501,7 @@ lanes_check() {
   # takes it (the slow), it passes, nothing is parked or refused, and the fast drain never touches it.
   local k fails=""
   for k in 1 2 3 4 5 6 7 8 9 10; do
-    L="$(cd "$(mktemp -d)" && pwd -P)"
+    L="$(tmpdir_real)" || bail "no temp dir for the lanes race"
     hj="$L/hj"; st="$L/state dir"
     mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
     : >"$L/calls"; : >"$L/simcalls"
@@ -433,7 +517,7 @@ lanes_check() {
       [ -n "$(ls -A "$hj/inbox")" ] || [ "$(find "$hj/results" -name result.json | wc -l | tr -d ' ')" != 1 ] ||
       grep -q 'could not be moved out' "$L/out"; then # a vanished entry is skipped, never chased
       fails="$fails $k"
-      sed 's/^/    /' "$L/out"
+      sed 's/^/    /' "$L/out" | emit
     fi
     rm -r -f -- "$L"
   done
@@ -441,7 +525,7 @@ lanes_check() {
   else bad "lanes: slow and fast drains started together on one sim: only the slow takes it (10 runs)" "failed runs:$fails"; fi
 }
 lanes_check
-LANES_CHECKS=5
+LANES_CHECKS=6 # five lanes checks, plus fx_cap
 
 cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2 + 1 + LANES_CHECKS))"
 echo "# $pass passed, $failed failed, of $cases cases"

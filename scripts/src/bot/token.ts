@@ -15,6 +15,7 @@ export const PERMS = {
   lockRead: { contents: 'read' }, // lock status / lock wait
   deployDev: { contents: 'write', actions: 'write' },
   logs: { actions: 'write', contents: 'read' }, // contents: the dev locks, for the held slot's default groups
+  run: { actions: 'write' }, // cancel/rerun a PR check run (run.ts reads the run first and refuses any other)
 } as const satisfies Record<string, Permissions>;
 
 export async function mintToken(

@@ -29,7 +29,9 @@ import {
 import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
 import { fetchLogs } from './logs.ts';
+import { pruneBranches } from './prune.ts';
 import { push } from './push.ts';
+import { runCommand } from './run.ts';
 import { run } from './sh.ts';
 import { PERMS, mintToken } from './token.ts';
 import type { Permissions } from './token.ts';
@@ -44,7 +46,10 @@ const USAGE = `pnpm bot <command>
   lock wait [--max MIN] [--any | --slot devb]
                                  block until another branch's lock frees or expires — slot A by default, either with
                                  --any (default 45 min, at most 55); exit 75 if still held — run it in the background
-  logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,bff-devb,…] [--filter P] [--query Q]`;
+  logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,bff-devb,…] [--filter P] [--query Q]
+  run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
+  run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs
+  prune-branches [--dry-run]     delete local branches whose PR merged at exactly their tip (end of wave)`;
 
 // `--slot` names a slot; anything else is misuse. Undefined when the flag is absent.
 export function parseSlot(v: string | undefined): Slot | undefined {
@@ -237,6 +242,37 @@ export async function main(argv: string[]): Promise<number> {
         console.error(USAGE);
         return 2;
       }
+      return 0;
+    }
+    case 'run': {
+      // Checked before the actions: write token is minted: only rerun's bare --failed, and no extra arguments.
+      const odd = Object.entries(flags).filter(([k, v]) => k !== 'failed' || v !== 'true');
+      if (
+        odd.length ||
+        (sub !== 'cancel' && sub !== 'rerun') ||
+        (sub === 'cancel' && flags.failed !== undefined) ||
+        positional.length !== 3 ||
+        !/^[1-9][0-9]{0,19}$/.test(positional[2] ?? '')
+      ) {
+        console.error(`run takes cancel|rerun <run-id> [--failed]\n${USAGE}`);
+        return 2;
+      }
+      return runCommand(
+        makeApi(await token(PERMS.run)),
+        sub,
+        positional[2],
+        flags.failed === 'true',
+        console.log,
+      );
+    }
+    case 'prune-branches': {
+      // A destructive command: anything but a bare --dry-run is a usage error, never a real delete.
+      const odd = Object.entries(flags).filter(([k, v]) => k !== 'dry-run' || v !== 'true');
+      if (odd.length || positional.length > 1) {
+        console.error(`prune-branches takes only --dry-run\n${USAGE}`);
+        return 2;
+      }
+      pruneBranches(run, flags['dry-run'] === 'true', console.log);
       return 0;
     }
     case 'logs': {

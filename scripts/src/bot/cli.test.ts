@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseSlot, tellingWhoToTell } from './cli.ts';
+import { main, parseSlot, tellingWhoToTell } from './cli.ts';
 import { LockHeld } from './lock.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
@@ -94,5 +94,28 @@ describe('the CLI under plain node', () => {
       encoding: 'utf8',
     });
     expect(out).toMatch(/^pnpm bot <command>/);
+  });
+});
+
+describe('prune-branches flags', () => {
+  it.each([['--dry-run=1'], ['--dryrun'], ['--dry-run', 'x'], ['--force'], ['extra']])(
+    'refuses %s as a usage error, before any git call or delete',
+    async (...args) => {
+      expect(await main(['prune-branches', ...args])).toBe(2);
+    },
+  );
+});
+
+describe('run flags', () => {
+  it.each([
+    ['cancel', '42', '--falied'],
+    ['rerun', '42', '--failed=1'],
+    ['rerun', '42', 'extra'],
+    ['rerun'],
+    ['cancel', 'x42'],
+    ['foo', '42'],
+    ['cancel', '42', '--failed'],
+  ])('refuses %s %s %s as a usage error, before any token is minted', async (...args) => {
+    expect(await main(['run', ...args])).toBe(2);
   });
 });

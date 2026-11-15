@@ -15,7 +15,7 @@ export interface Case {
   raw?: string;
   file?: string;
   setup?: string;
-  kind?: 'sim' | 'clip';
+  kind?: 'sim' | 'clip' | 'edit-pr' | 'fixtures';
   lane?: 'slow' | 'fast'; // runner.sh's third argument; none = both lanes
   ts?: string | null;
 }
@@ -30,15 +30,29 @@ export function deepMerge(a: unknown, b: unknown): unknown {
   return out;
 }
 
-export function loadCases(): { base: Obj; simBase: Obj; clipBase: Obj; cases: Case[] } {
-  const lines = readFileSync(`${TOOLS_DIR}testdata/jobs.jsonl`, 'utf8').trim().split('\n');
-  const { base, simBase, clipBase } = JSON.parse(lines[0] ?? '{}') as {
-    base: Obj;
-    simBase: Obj;
-    clipBase: Obj;
-  };
-  return { base, simBase, clipBase, cases: lines.slice(2).map((l) => JSON.parse(l) as Case) };
+export interface Bases {
+  base: Obj;
+  simBase: Obj;
+  clipBase: Obj;
+  editBase: Obj;
+  fixturesBase: Obj;
 }
+export function loadCases(): Bases & { cases: Case[] } {
+  const lines = readFileSync(`${TOOLS_DIR}testdata/jobs.jsonl`, 'utf8').trim().split('\n');
+  const bases = JSON.parse(lines[0] ?? '{}') as Bases;
+  return { ...bases, cases: lines.slice(2).map((l) => JSON.parse(l) as Case) };
+}
+// The base a case patches, as run-fixtures.sh picks it.
+export const baseFor = (b: Bases, c: Case): Obj =>
+  c.kind === 'sim'
+    ? b.simBase
+    : c.kind === 'clip'
+      ? b.clipBase
+      : c.kind === 'edit-pr'
+        ? b.editBase
+        : c.kind === 'fixtures'
+          ? b.fixturesBase
+          : b.base;
 
 // The case's job and the inbox file stem it would be dropped under.
 export function buildJob(base: Obj, c: Case, nowMs: number): { job: unknown; stem: string } {

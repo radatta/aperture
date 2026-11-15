@@ -176,7 +176,7 @@ How long these jobs take on a given Mac, and what the machine goes through meanw
 
 ## Proving the Mac side (a PR that changes `jobs/sim.sh`)
 
-Mac bash is outside lint and typecheck, so its proof is the fixtures plus a real run: on the Mac, the fixture suite from GitHub's tarball at the sha under `/bin/bash` 3.2, (cases run in shards, `MAILROOM_FIXTURE_JOBS`: MAILROOM.md → _Tests_), then `install.sh --ref <sha>` (MAILROOM.md → _Install_), then from the container `pnpm mailroom sim-probe` (add `--sign-in` if it reports signed out; give the Bash call a 300 s timeout) and a full devcheck, each step finished before the next starts (nothing heavy beside a sim job: _Runtime_). The fixtures stub `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` as exported shell functions answering from a per-case tape (MAILROOM.md → _Tests_).
+Mac bash is outside lint and typecheck, so its proof is the fixtures plus a real run: on the Mac, the fixture suite from GitHub's tarball at the sha under `/bin/bash` 3.2 (`pnpm mailroom fixtures --sha <sha>`, sandboxed in the slow lane: MAILROOM.md → _The fixtures job_; a branch touching `install.sh` or the plist runs it by hand, _Trial_ step 2; cases run in shards, `MAILROOM_FIXTURE_JOBS`: MAILROOM.md → _Tests_), then `install.sh --ref <sha>` (MAILROOM.md → _Install_), then from the container `pnpm mailroom sim-probe` (add `--sign-in` if it reports signed out; give the Bash call a 300 s timeout) and a full devcheck, each step finished before the next starts (nothing heavy beside a sim job: _Runtime_). The fixtures stub `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` as exported shell functions answering from a per-case tape (MAILROOM.md → _Tests_).
 
 ## Security
 

@@ -73,6 +73,9 @@ anything a session was refused goes back to its user, not to a peer.
 touch <area>; whichever merges second rebases — agree an order.`
 - **After every merge to main,** tell each in-flight branch to read the merged PR and rebase
   (CLAUDE.md → _Claude behavior_).
+- **End of a wave,** on the user's word: `pnpm bot prune-branches --dry-run`, then without `--dry-run`. What it deletes and
+  keeps, with the reason: CI-BOT.md → _Commands_. A branch admitted to the `dev` environment still needs the user's removal command (CLAUDE.md
+  → _Cleanup_).
 - **Relay** to the user what they ask for, not every message.
 
 ## Lock etiquette

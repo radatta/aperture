@@ -810,9 +810,10 @@ def crej(name, reason, ts=True, **k):
     cc_(name, expect={'status': 'rejected', 'reason': reason}, simExcludes=['osascript'], **k)
 CLIP_SHA = '3064001f9933ee70c48b14f22ec2c487a2c1e205167f7eeed4e9fe1e088a458e'  # the stub's PNG
 SERVED = {'status': 'served', 'reason': None, 'job': 'clip'}
-cc_('clip: a PNG on the clipboard with iTerm in front is served, logged, bannered', tape=[RD(0, source='png', bytes=21)],
+# No banner per serve: the maintainer's choice, 2026-11-13 (CLIP_BANNER=0); the Mac log line is the record.
+cc_('clip: a PNG on the clipboard with iTerm in front is served and logged, with no banner', tape=[RD(0, source='png', bytes=21)],
     expect={**SERVED, 'clip': {'bytes': 21, 'sha256': CLIP_SHA, 'changeCount': 41, 'source': 'png', 'frontmost': 'com.googlecode.iterm2'}},
-    files=['clip.png'], simIncludes=['osascript ' + JXA, BANNER], clipState={'cc': 41, 'n': 1, 'serves': 1})
+    files=['clip.png'], simIncludes=['osascript ' + JXA], simExcludes=[BANNER], clipState={'cc': 41, 'n': 1, 'serves': 1})
 cc_('clip: a TIFF-only clipboard is served as PNG', tape=[RD(0, source='tiff', bytes=21)],
     expect={**SERVED, 'clip': {'bytes': 21, 'sha256': CLIP_SHA, 'changeCount': 41, 'source': 'tiff', 'frontmost': 'com.googlecode.iterm2'}},
     files=['clip.png'], clipState={'cc': 41, 'n': 1, 'serves': 1})
@@ -843,7 +844,6 @@ cc_('clip: a written file over the cap is TOO_LARGE, not served', tape=[RD(0, so
 cc_('clip: a written file without PNG magic is CLIP_FAILED', tape=[RD(0, source='png', bytes=14, write='gif')], expect={'status': 'error', 'reason': 'CLIP_FAILED'}, simExcludes=[BANNER])
 cc_('clip: a report without a changeCount is CLIP_FAILED', tape=[{'m': JXA, 'rc': 0, 'out': {'source': 'png', 'bytes': 21}}], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
 cc_('clip: a read that fails otherwise is CLIP_FAILED', tape=[RD(8)], expect={'status': 'error', 'reason': 'CLIP_FAILED'})
-cc_('clip: a banner that fails still serves', tape=[RD(0, source='png', bytes=21), {'m': BANNER, 'rc': 1}], expect=SERVED, files=['clip.png'])
 cc_('clip: a 2-minute life is the longest taken', patch={'expiresInMin': 2}, tape=[RD(0, source='png', bytes=21)], expect=SERVED)
 cc_('clip: an image copied with plain or rich text is MIXED_TEXT, naming the types', tape=[RD(9, types=['public.png', 'public.utf8-plain-text', 'bad type!'])],
     expect={'status': 'rejected', 'reason': 'MIXED_TEXT', 'types': ['public.png', 'public.utf8-plain-text']}, simExcludes=[BANNER])
@@ -894,8 +894,121 @@ c('lanes: an open-pr for a branch named ios-… runs in the slow lane', lane='sl
 cc_('lanes: at most 5 per drain, counting only the lane\'s own (6 clips + 2 sims → 5 answered, 3 left)', lane='fast', setup='mixed',
     tape=[RD(0, source='png', bytes=21)], inboxLeft=3, simExcludes=NOSIM)
 
+# ================================================================================================= edit-pr job ===
+# The default edit API: one open PR from this repo's branch, by the owner, onto main, at the job's sha; the PATCH
+# answers with the stored body. Cases override routes as for open-pr.
+import hashlib
+ebody = 'Updated after the round-2 fixes. BODYMARK\n\nStill fine: `@types/node`.\n'
+ebase = {'v': 1, 'id': '20261114T010000Z-edit-mac-mailroom-3kx9', 'job': 'edit-pr', 'submittedAt': 'now', 'expiresInMin': 20,
+         'params': {'branch': 'mac-mailroom', 'sha': A, 'title': 'Mac mailroom edits PRs as the user', 'body': ebody, 'bodySha256': 'auto'}}
+PATCHK = f'PATCH {R}/pulls/90'
+EPR = {**PR, 'base': {'ref': 'main'}, 'head': {'sha': A, 'repo': {'full_name': 'radatta/aperture'}}}
+EAPI = {LIST: {'status': 200, 'body': [EPR]}, PATCHK: {'status': 200, 'body': {**EPR, 'body': ebody}}}
+EALL = ['GET /user', REF, LIST, MD, PATCHK]
+ESHA = hashlib.sha256(ebody.encode()).hexdigest()
+EDITED = {'status': 'edited', 'reason': None, 'pr': PRR, 'bodySha256': ESHA}
+def ec(name, api=None, **k): c(name, kind='edit-pr', api={**EAPI, **(api or {})}, **k)
+def erej(name, reason, ts=True, **k):
+    if ts:
+        k['ts'] = reason
+    ec(name, expect={'status': 'rejected', 'reason': reason}, calls=[], **k)
+
+ec('edit-pr: replaces the title and body of the one open PR, nothing else', ts=None, expect=EDITED, calls=EALL,
+   patchBody={'title': ebase['params']['title'], 'body': ebody},
+   md={'text': ebase['params']['title'] + '\n\n' + ebody, 'mode': 'gfm', 'context': 'radatta/aperture'})
+ec('edit-pr: no title sends the body alone and renders it alone', ts=None, unset=[['params', 'title']], expect=EDITED, calls=EALL,
+   patchBody={'body': ebody}, md={'text': ebody, 'mode': 'gfm', 'context': 'radatta/aperture'})
+ec('edit-pr: no open PR is NO_PR, no write', api={LIST: {'status': 200, 'body': []}}, expect={'status': 'rejected', 'reason': 'NO_PR'}, calls=EALL[:3])
+ec('edit-pr: two open PRs is MANY_PRS, no write', api={LIST: {'status': 200, 'body': [EPR, {**EPR, 'number': 91}]}},
+   expect={'status': 'rejected', 'reason': 'MANY_PRS'}, calls=EALL[:3])
+ec('edit-pr: a PR by another author is WRONG_AUTHOR, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'user': {'login': 'someone-else'}}]}},
+   expect={'status': 'error', 'reason': 'WRONG_AUTHOR'}, calls=EALL[:3])
+ec('edit-pr: a PR onto another base is WRONG_BASE, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'base': {'ref': 'dev'}}]}},
+   expect={'status': 'rejected', 'reason': 'WRONG_BASE'}, calls=EALL[:3])
+ec('edit-pr: a PR whose head moved is HEAD_MISMATCH, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'head': {**EPR['head'], 'sha': 'b' * 40}}]}},
+   expect={'status': 'rejected', 'reason': 'HEAD_MISMATCH'}, calls=EALL[:3])
+ec('edit-pr: a PR from another repo is HEAD_MISMATCH, no write', api={LIST: {'status': 200, 'body': [{**EPR, 'head': {'sha': A, 'repo': {'full_name': 'evil/aperture'}}}]}},
+   expect={'status': 'rejected', 'reason': 'HEAD_MISMATCH'}, calls=EALL[:3])
+ec('edit-pr: a branch pushed past the job is HEAD_MISMATCH before the PR lookup', api={REF: {'status': 200, 'body': {'object': {'sha': 'b' * 40}}}},
+   expect={'status': 'rejected', 'reason': 'HEAD_MISMATCH'}, calls=EALL[:2])
+ec('edit-pr: a PR list that is not a list is API_FAILED', api={LIST: {'status': 200, 'body': {'message': 'odd'}}}, expect={'status': 'error', 'reason': 'API_FAILED'}, calls=EALL[:3])
+ec('edit-pr: a mention in the rendered text is MENTION, no write', api={MD: {'status': 200, 'body': MENTION_HTML}}, expect={'status': 'rejected', 'reason': 'MENTION'}, calls=EALL[:4])
+ec('edit-pr: a refused PATCH is API_FAILED', api={PATCHK: {'status': 422, 'body': {'message': 'Validation Failed'}}}, expect={'status': 'error', 'reason': 'API_FAILED'}, calls=EALL)
+ec('edit-pr: a PATCH answering for another PR is API_FAILED', api={PATCHK: {'status': 200, 'body': {**EPR, 'number': 91, 'html_url': 'https://github.com/radatta/aperture/pull/91'}}},
+   expect={'status': 'error', 'reason': 'API_FAILED'}, calls=EALL)
+ec('edit-pr: the result hashes the body GitHub stored, not the one sent', api={PATCHK: {'status': 200, 'body': {**EPR, 'body': 'other'}}},
+   expect={**EDITED, 'bodySha256': hashlib.sha256(b'other').hexdigest()}, calls=EALL)
+ec('edit-pr: no Keychain token is TOKEN_MISSING, no call', noToken=True, expect={'status': 'error', 'reason': 'TOKEN_MISSING'}, calls=[])
+erej('edit-pr: a title without a body is BAD_PARAM', 'BAD_PARAM', unset=[['params', 'body']])
+erej('edit-pr: an extra param (state) is BAD_PARAM', 'BAD_PARAM', patch={'params': {'state': 'closed'}})
+erej('edit-pr: a PR number from the container is BAD_PARAM', 'BAD_PARAM', patch={'params': {'number': 90}})
+erej('edit-pr: a title with a double quote is BAD_PARAM', 'BAD_PARAM', patch=T('Fix "quoted" thing'))
+erej('edit-pr: branch main is BAD_PARAM', 'BAD_PARAM', patch={'params': {'branch': 'main'}})
+erej('edit-pr: a wrong bodySha256 is BAD_PARAM', 'BAD_PARAM', ts=False, patch={'params': {'bodySha256': '0' * 64}})
+erej('edit-pr: a mention in the body is MENTION before any call', 'MENTION', patch=B('thanks @octocat'))
+erej('edit-pr: a hash ref in the body is HASH_REF', 'HASH_REF', patch=B('fixes #12'))
+erej('edit-pr: a cross-repo link in the title is XREF', 'XREF', patch=T('See https://github.com/cli/cli/issues/1'))
+ec('lanes: an edit-pr edits while the slow lock is held', lane='fast', setup='lock', expect=EDITED, calls=EALL, locks=['lock'])
+
+# ================================================================================================ fixtures job ===
+# The default API: a diff of one runner file, and a tarball (the tar stub unpacks the case's fxScript as the archive's
+# run-fixtures.sh); sandbox-exec is a stub that records its profile and runs the rest.
+fxbase = {'v': 1, 'id': '20261114T020000Z-fx-aaaaaaaaaaaa-3kx9', 'job': 'fixtures', 'submittedAt': 'now', 'expiresInMin': 20, 'params': {'sha': A}}
+CMP = f'GET {R}/compare/main...{A}'
+TGZ = f'GET {R}/tarball/{A}'
+FXAPI = {CMP: {'status': 200, 'body': {'files': [{'filename': 'tools/mailroom/runner.sh'}]}}, TGZ: {'status': 200, 'body': 'TARBALL'}}
+FXALL = ['GET /user', CMP, TGZ]
+def suite(*lines, rc=0): return '#!/bin/bash\n' + ''.join(f'echo {json.dumps(l, ensure_ascii=False)}\n' for l in lines) + f'exit {rc}\n'
+OK2 = suite('ok - a', 'ok - b', '# 2 passed, 0 failed, of 2 cases')
+PROFILE = ['(version 1)', '(allow default)', '(deny network*)', '(deny file-write*)',
+           '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))',
+           '(deny appleevent-send)', '(deny job-creation)', '(deny signal)', '(allow signal (target same-sandbox))']  # each line present; the whole profile, in order: runner-fixtures.test.ts
+NOFX = ['sandbox-exec', 'tar ']
+def fc(name, api=None, **k): c(name, kind='fixtures', api={**FXAPI, **(api or {})}, **k)
+FXPASS = {'status': 'pass', 'reason': None, 'job': 'fixtures', 'fixtures': {'passed': 2, 'failed': 0, 'cases': 2, 'failing': []}}
+
+fc('fixtures: a passing suite runs sandboxed, unpacked sandboxed, in a clean environment', ts=None, fxScript=OK2, expect=FXPASS, calls=FXALL,
+   # in order: the unpack's sandbox-exec line, tar itself, then the suite's sandbox-exec line (only sandbox-exec says env -i)
+   simIncludes=['sandbox-exec -f', 'tar -xzf', '/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME='],
+   sbIncludes=PROFILE, logIncludes=['# 2 passed, 0 failed, of 2 cases'])
+fc("fixtures: the suite sees no variable of the runner's (no token, no fixture env)", fxScript='#!/bin/bash\nenv\necho "ok - x"\necho "# 1 passed, 0 failed, of 1 cases"\n',
+   expect={'status': 'pass', 'fixtures': {'passed': 1, 'failed': 0, 'cases': 1, 'failing': []}}, calls=FXALL,
+   logIncludes=['PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL=C'], logExcludes=['MAILROOM_FIXTURE_', 'BASH_FUNC_', 'HJ=', 'STATE=', 'MR_'])
+fc('fixtures: a failing case is fail FIXTURES_FAILED, named', fxScript=suite('ok - a', 'not ok - lanes: a clip: wrote 0 results', '# 1 passed, 1 failed, of 2 cases', rc=1),
+   expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': 1, 'failed': 1, 'cases': 2, 'failing': ['lanes: a clip: wrote 0 results'], 'exit': 1}}, calls=FXALL)
+fc('fixtures: a shortfall (a shard lost) fails even on exit 0', fxScript=suite('ok - a', '# 1 passed, 0 failed, of 2 cases'),
+   expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': 1, 'failed': 0, 'cases': 2, 'failing': [], 'exit': 0}}, calls=FXALL)
+fc('fixtures: no summary line fails', fxScript=suite('ok - a'),
+   expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': None, 'failed': None, 'cases': None, 'failing': [], 'exit': 0}}, calls=FXALL)
+fc('fixtures: at most 20 failing names, odd characters replaced', fxScript=suite(*[f'not ok - c{i} \u00e9: x' for i in range(25)], '# 0 passed, 25 failed, of 25 cases', rc=1),
+   expect={'status': 'fail', 'fixtures': {'passed': 0, 'failed': 25, 'cases': 25, 'failing': [f'c{i} ?: x' for i in range(20)], 'exit': 1}}, calls=FXALL)
+fc('fixtures: a diff touching install.sh is TOUCHES_INSTALL, nothing fetched or run', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'tools/mailroom/install.sh'}]}}},
+   fxScript=OK2, expect={'status': 'rejected', 'reason': 'TOUCHES_INSTALL'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: a plist template renamed away is TOUCHES_INSTALL', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'x.txt', 'previous_filename': 'tools/mailroom/x.plist.tmpl'}]}}},
+   fxScript=OK2, expect={'status': 'rejected', 'reason': 'TOUCHES_INSTALL'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: 300 files (GitHub cuts the list there) is DIFF_TOO_LARGE', api={CMP: {'status': 200, 'body': {'files': [{'filename': f'f{i}'} for i in range(300)]}}},
+   fxScript=OK2, expect={'status': 'rejected', 'reason': 'DIFF_TOO_LARGE'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: a compare without a file list is API_FAILED', api={CMP: {'status': 200, 'body': {'status': 'identical'}}}, fxScript=OK2,
+   expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: an unknown sha is HEAD_MISSING', api={CMP: {'status': 404, 'body': {}}}, fxScript=OK2, expect={'status': 'rejected', 'reason': 'HEAD_MISSING'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: a tarball refused is TOKEN_FORBIDDEN, nothing run', api={TGZ: {'status': 404, 'body': {}}}, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_FORBIDDEN'}, calls=FXALL, simExcludes=NOFX)
+fc('fixtures: an archive without run-fixtures.sh is API_FAILED, nothing run', expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL, simExcludes=['/bin/bash '])
+fc('fixtures: a profile this macOS will not compile is SANDBOX_FAILED, nothing unpacked or run', sandboxFails=True, fxScript=OK2,
+   expect={'status': 'error', 'reason': 'SANDBOX_FAILED'}, calls=FXALL, simIncludes=['sandbox-exec -f'], simExcludes=['tar ', '/usr/bin/env -i'])
+fc('fixtures: no temp dir is API_FAILED, nothing run, the inbox kept', setup='no-tmp', fxScript=OK2, expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL, simExcludes=NOFX)
+fc('fixtures: no Keychain token is TOKEN_MISSING, no call', noToken=True, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_MISSING'}, calls=[], simExcludes=NOFX)
+fc('fixtures: an extra param is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'branch': 'x'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
+fc('fixtures: a short sha is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'sha': 'abc1234'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
+fc('fixtures: a sha with a trailing newline is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'sha': A + '\n'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
+fc('lanes: the slow lane runs a fixtures job named …Z-fx-…', lane='slow', fxScript=OK2, expect=FXPASS, calls=FXALL)
+fc('lanes: the fast lane leaves a fixtures job named …Z-fx-… queued', lane='fast', fxScript=OK2, noResult=True, inboxLeft=1, calls=[], simExcludes=NOFX)
+fc('lanes: a fixtures job not named …Z-fx-… is refused, never run in the fast lane', lane='fast', patch={'id': '20261114T020000Z-other-3kx9'}, fxScript=OK2,
+   expect={'status': 'rejected', 'reason': 'BAD_FILE'}, calls=[], simExcludes=NOFX)
+cc_('lanes: a clip named …Z-fx-… is refused, never run in the slow lane', lane='slow', patch={'id': '20261114T020100Z-fx-clip-ab12'},
+    expect={'status': 'rejected', 'reason': 'BAD_FILE'}, simExcludes=['osascript'])
+
 with open(out, 'w') as f:
-    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase}) + '\n')
+    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase, 'editBase': ebase, 'fixturesBase': fxbase}) + '\n')
     f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')
     for x in C:
         f.write(json.dumps(x, ensure_ascii=True) + '\n')

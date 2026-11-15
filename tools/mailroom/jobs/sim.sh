@@ -145,14 +145,16 @@ sim_cap() {
   return "$rc"
 }
 
-# Every tool call refreshes the lock (runner.sh takes one older than 15 min as stale, and a second drain would drive this
-# sim) and stops at the job's deadline: .late becomes TIMEOUT in the run loop, however deep the op is.
+# Every tool call refreshes the drain's locks (runner.sh takes a lock older than 15 min, or a fast one older than 5, as
+# stale, and a second drain would drive this sim) and stops at the job's deadline: .late becomes TIMEOUT in the run loop,
+# however deep the op is. A hand run (no lane) holds both locks, so both are touched (F91); HELD is runner.sh's list.
 sim_late() {
   [ -n "${SIM_DEADLINE:-}" ] || return 1
   [ "$(date +%s)" -ge "$SIM_DEADLINE" ] || return 1
   : >"$SIM_P.late"
 }
-sim_tick() { touch "${STATE:-.}/lock" 2>/dev/null || true; }
+sim_touch() { for l in ${HELD:-lock}; do touch "${STATE:-.}/$l" 2>/dev/null || true; done; }
+sim_tick() { sim_touch; }
 ax() {
   local cap="${SIM_AX_CAP:-30}" left
   sim_tick
@@ -1424,7 +1426,7 @@ run_sim() {
       status=error
     else
       sim_progress "$i" "$n" "$op"
-      touch "$STATE/lock" 2>/dev/null || true # a long job must not look like a stale lock
+      sim_touch # a long job must not look like a stale lock
       SIM_NOTE=""
       if sim_lazy_ready "$op" && "sim_op_$op" "$opj"; then
         status=pass

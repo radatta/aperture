@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # The `open-pr` job: open a ready PR on radatta/aperture from a pushed feature branch, as the user, with their
-# PR-only fine-grained token from Keychain. Sourced by runner.sh. Five fixed calls, one write:
+# PR-only fine-grained token from Keychain. Sourced by runner.sh; jobs/edit-pr.sh reuses its constants and mr_* helpers.
+# Five fixed calls, one write:
 #   GET /user · GET /repos/radatta/aperture/git/ref/heads/<branch> · GET …/pulls?head=radatta:<branch>&state=open
 #   · POST /markdown (read-only: GitHub renders the body, and a mention or foreign issue link refuses it) · POST …/pulls
 # Params and checks mirror scripts/src/mailroom/job.ts (the fixtures run both). Design: docs/ops/MAILROOM.md.
@@ -13,7 +14,8 @@ MR_KEYCHAIN="aperture-mailroom-gh" # the ONLY token source: the Mac Keychain, ne
 # A link to another repo's issue, PR or discussion (GitHub posts a cross-reference there).
 MR_XREF='[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]/(?!radatta/aperture/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull|discussions)/[0-9]'
 
-# Prints a reason code, or nothing when the params are good.
+# Prints a reason code, or nothing when the params are good. $edit: an edit-pr job's params, where the title is optional
+# (absent = leave the PR's title as it is) and the body never is.
 OPEN_PR_JQ='
   def visible:
     gsub("(^|\n)(?<f>`{3,})[^`\n]*\n[\\s\\S]*?\n\\k<f>`*[ \t]*(?=\n|$)"; "\n")
@@ -28,12 +30,14 @@ OPEN_PR_JQ='
       or ($c >= 917760 and $c <= 917999));
   try (
     .params as $p
-    | if ($p | type) != "object" or ($p | keys) != ["body","bodySha256","branch","sha","title"] then "BAD_PARAM"
+    | if ($p | type) != "object" or (($p | keys) != ["body","bodySha256","branch","sha","title"]
+      and (($edit | not) or ($p | keys) != ["body","bodySha256","branch","sha"])) then "BAD_PARAM"
     elif ($p.branch | type) != "string" or ($p.branch | whole("^[a-z0-9][a-z0-9-]{0,62}$") | not)
       or (["main","master","dev"] | index($p.branch)) != null then "BAD_PARAM"
     elif ($p.sha | type) != "string" or ($p.sha | whole("^[0-9a-f]{40}$") | not) then "BAD_PARAM"
-    elif ($p.title | type) != "string" or ($p.title | whole("^[A-Za-z0-9][A-Za-z0-9 .,:;()/+_&'"'"'-]{3,99}$") | not) then "BAD_PARAM"
-    elif ($p.title | test($xref)) then "XREF"
+    elif ($p | has("title")) and (($p.title | type) != "string"
+      or ($p.title | whole("^[A-Za-z0-9][A-Za-z0-9 .,:;()/+_&'"'"'-]{3,99}$") | not)) then "BAD_PARAM"
+    elif ($p | has("title")) and ($p.title | test($xref)) then "XREF"
     elif ($p.body | type) != "string" or ($p.body | utf8bytelength) < 1 or ($p.body | utf8bytelength) > 65536 then "BAD_PARAM"
     elif ($p.bodySha256 | type) != "string" or ($p.bodySha256 | whole("^[0-9a-f]{64}$") | not) then "BAD_PARAM"
     elif ($p.body | hidden_chars) or ($p.body | test("&#|&[A-Za-z][A-Za-z0-9]*;")) then "BAD_TEXT"
@@ -65,9 +69,12 @@ RENDER_JQ='
     end
   end'
 
-validate_open_pr() {
+validate_open_pr() { mr_validate "$1" false; }
+
+# mr_validate W EDIT — the params check plus the body's hash (open-pr and edit-pr share both).
+mr_validate() {
   local w="$1" reason
-  reason="$(jq -r --arg xref "$MR_XREF" "$OPEN_PR_JQ" "$w" 2>/dev/null)" || reason="BAD_PARAM"
+  reason="$(jq -r --arg xref "$MR_XREF" --argjson edit "$2" "$OPEN_PR_JQ" "$w" 2>/dev/null)" || reason="BAD_PARAM"
   if [ -z "$reason" ] && [ "$(jq -j .params.body "$w" | sha256)" != "$(jq -r .params.bodySha256 "$w")" ]; then
     reason="BAD_PARAM" # the body changed in transit, or the container hashed something else
   fi
@@ -77,12 +84,15 @@ validate_open_pr() {
 
 # mr_call METHOD PATH [DATA_FILE] — one GitHub call; sets MR_HTTP and MR_RC, the body lands in $MR_P.resp and the
 # headers in $MR_P.hdr. The token goes in through a process-substituted header file built right on the curl line
-# (the tools/raycast idiom), so it is never on an argv.
+# (the tools/raycast idiom), so it is never on an argv. MR_FOLLOW=1 follows a redirect (the fixtures job's tarball:
+# curl drops the Authorization header on the hop to another host, whose URL carries its own grant), MR_MAX_TIME
+# overrides the 30 s cap, and no response may exceed 64 MiB.
 mr_call() {
-  local data=()
+  local data=() follow=()
   [ -z "${3:-}" ] || data=(--data-binary "@$3" -H 'Content-Type: application/json')
+  [ "${MR_FOLLOW:-}" != 1 ] || follow=(-L --proto-redir =https)
   MR_RC=0
-  MR_HTTP="$(curl -sS --max-time 30 -D "$MR_P.hdr" -o "$MR_P.resp" -w '%{http_code}' -X "$1" \
+  MR_HTTP="$(curl -sS --max-time "${MR_MAX_TIME:-30}" --max-filesize 67108864 ${follow[@]+"${follow[@]}"} -D "$MR_P.hdr" -o "$MR_P.resp" -w '%{http_code}' -X "$1" \
     -H @<(printf 'Authorization: Bearer %s\n' "$MR_TOKEN") \
     -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
     -H 'User-Agent: aperture-mailroom' ${data[@]+"${data[@]}"} "$MR_API$2" 2>/dev/null)" || MR_RC=$?
@@ -115,7 +125,7 @@ mr_expiry() {
 mr_emit() {
   local status="$1" reason="$2" pr="${3:-null}"
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg sha "$MR_BODY_SHA" --argjson exp "$MR_EXPIRY_JSON" \
-    --argjson pr "$pr" '{bodySha256: $sha} + $exp + (if $pr == null then {} else {pr: $pr} end)')"
+    --argjson pr "$pr" '(if $sha == "" then {} else {bodySha256: $sha} end) + $exp + (if $pr == null then {} else {pr: $pr} end)')"
 }
 
 # The PR fields from a PR object on stdin, or nothing if any field isn't what GitHub would return for this repo.
@@ -127,43 +137,64 @@ mr_pr_json() {
     | {number, url: .html_url, headSha: .head.sha, author: .user.login}' 2>/dev/null || true
 }
 
-run_open_pr() {
-  local w="$1" fail branch sha got pr
-  MR_P="$2"
-  MR_EXPIRY_JSON='{}'
-  MR_BODY_SHA="$(jq -j .params.body "$w" | sha256)"
-  branch="$(jq -r .params.branch "$w")"
-  sha="$(jq -r .params.sha "$w")"
-
+# mr_whoami — the token from Keychain (MR_P set), then GET /user: the token's owner, and its expiry. 0 to go on; 1 once it
+# has emitted the result. Every job that calls GitHub starts here: the one Keychain read of the mailroom token.
+mr_whoami() {
+  local fail
   MR_TOKEN="$(security find-generic-password -s "$MR_KEYCHAIN" -w 2>/dev/null || true)"
-  if [ -z "$MR_TOKEN" ]; then mr_emit error TOKEN_MISSING; return 0; fi
-
+  if [ -z "$MR_TOKEN" ]; then mr_emit error TOKEN_MISSING; return 1; fi
   mr_call GET /user
   fail="$(mr_failure 200)"
   [ -n "$fail" ] || mr_expiry
-  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
-  if [ "$(jq -r '.login // ""' "$MR_P.resp" 2>/dev/null)" != "$MR_OWNER" ]; then mr_emit error WRONG_AUTHOR; return 0; fi
+  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 1; fi
+  if [ "$(jq -r '.login // ""' "$MR_P.resp" 2>/dev/null)" != "$MR_OWNER" ]; then mr_emit error WRONG_AUTHOR; return 1; fi
+  return 0
+}
 
-  mr_call GET "/repos/$MR_REPO/git/ref/heads/$branch"
-  if [ "$MR_RC" = 0 ] && [ "$MR_HTTP" = 404 ]; then mr_emit rejected HEAD_MISSING; return 0; fi
+# mr_begin W PRIVATE_PREFIX — the start every PR job shares: mr_whoami, then the branch's ref (pushed, at the job's sha). 0 to go on; 1 once it has emitted the job's result.
+mr_begin() {
+  local w="$1" fail got
+  MR_P="$2"
+  MR_EXPIRY_JSON='{}'
+  MR_BODY_SHA="$(jq -j .params.body "$w" | sha256)"
+  MR_BRANCH="$(jq -r .params.branch "$w")"
+  MR_SHA="$(jq -r .params.sha "$w")"
+
+  mr_whoami || return 1
+
+  mr_call GET "/repos/$MR_REPO/git/ref/heads/$MR_BRANCH"
+  if [ "$MR_RC" = 0 ] && [ "$MR_HTTP" = 404 ]; then mr_emit rejected HEAD_MISSING; return 1; fi
   fail="$(mr_failure 200)"
-  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
+  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 1; fi
   got="$(jq -r '.object.sha // ""' "$MR_P.resp" 2>/dev/null || true)"
-  if [ "$got" != "$sha" ]; then mr_emit rejected HEAD_MISMATCH; return 0; fi
+  if [ "$got" != "$MR_SHA" ]; then mr_emit rejected HEAD_MISMATCH; return 1; fi
+  return 0
+}
 
-  mr_call GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$branch&state=open"
+# mr_render W [PR_JSON] — GitHub's own renderer has the last word on what the title (when the job has one) and body
+# link; the jq checks are the fast pass. 0 when clean; 1 once it has emitted the result (PR_JSON rides along).
+mr_render() {
+  local fail
+  jq -c --arg ctx "$MR_REPO" '{text: ((if .params | has("title") then .params.title + "\n\n" else "" end) + .params.body),
+    mode: "gfm", context: $ctx}' "$1" >"$MR_P.md"
+  mr_call POST /markdown "$MR_P.md"
+  fail="$(mr_failure 200)"
+  [ -n "$fail" ] || fail="$(jq -Rsr --arg xref "$MR_XREF" "$RENDER_JQ" "$MR_P.resp" 2>/dev/null || echo API_FAILED)"
+  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail" "${2:-null}"; return 1; fi
+  return 0
+}
+
+run_open_pr() {
+  local w="$1" fail pr
+  mr_begin "$w" "$2" || return 0
+
+  mr_call GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$MR_BRANCH&state=open"
   fail="$(mr_failure 200)"
   if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
   pr="$(jq -c '.[0] // empty' "$MR_P.resp" 2>/dev/null | mr_pr_json)"
   if [ -n "$pr" ]; then mr_emit exists - "$pr"; return 0; fi
 
-  # GitHub's own renderer has the last word on what the title + body link (the jq checks above are the fast pass).
-  jq -c --arg ctx "$MR_REPO" '{text: (.params.title + "\n\n" + .params.body), mode: "gfm", context: $ctx}' "$w" >"$MR_P.md"
-  mr_call POST /markdown "$MR_P.md"
-  fail="$(mr_failure 200)"
-  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
-  fail="$(jq -Rsr --arg xref "$MR_XREF" "$RENDER_JQ" "$MR_P.resp" 2>/dev/null || echo API_FAILED)"
-  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
+  mr_render "$w" || return 0
 
   jq -c --arg base main '{title: .params.title, head: .params.branch, base: $base, body: .params.body,
     draft: false, maintainer_can_modify: false}' "$w" >"$MR_P.post"

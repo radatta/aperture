@@ -76,7 +76,10 @@ describe('mailroom runner', () => {
     const src = code();
     expect(src).toContain('MR_KEYCHAIN="aperture-mailroom-gh"');
     expect(src).toContain('SIM_KEYCHAIN="aperture-devcheck-dev"');
+    // The fixtures job's sandbox profile names the Keychain only to deny it (jobs/fixtures.sh → fx_profile).
     expect(src.match(/\bsecurity\b[^\n]*/g)).toEqual([
+      'security.agent"))\' \\',
+      'security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))\'',
       'security find-generic-password -s "$MR_KEYCHAIN" -w 2>/dev/null || true)"',
       'security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \\',
       `security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" -w 2>/dev/null | tr -d '\\n' | ax type --stdin >/dev/null 2>&1; then`,
@@ -100,8 +103,11 @@ describe('mailroom runner', () => {
       `SIM_W=${SIM_W}`, // the validators' bounds (sim.ts) follow the device profile
       `SIM_H=${SIM_H}`,
       'SIM_AX_CAP=8 ax describe-ui --point', // a point read's cap: a hung one costs 8 s, not ax's 30
+      // F91: every lock the drain holds is touched (a hand run holds lock-fast too), never just the slow lane's
+      'sim_touch() { for l in ${HELD:-lock}; do touch "${STATE:-.}/$l" 2>/dev/null || true; done; }',
     ])
       expect(sim).toContain(pin);
+    expect(sim).not.toMatch(/touch "\$\{?STATE(:-\.)?\}?\/lock"/);
     const secretsDir = ['.sec', 'rets'].join(''); // spelled apart: the repo's hooks guard the literal
     for (const banned of [
       'curl',
@@ -160,7 +166,7 @@ describe('mailroom runner', () => {
       'CLIP_MAX_BYTES=16777216',
       'CLIP_PER_CC=3',
       'CLIP_PER_MIN=6',
-      'CLIP_BANNER=1',
+      'CLIP_BANNER=0', // no notification per serve (MAILROOM.md → The clip job)
       'elif .expiresInMin > 2 then "BAD_PARAM"',
     ])
       expect(clip).toContain(pin);
@@ -188,20 +194,114 @@ describe('mailroom runner', () => {
     ]);
   });
 
-  it('calls GitHub only at api.github.com, with five fixed method + path pairs, one write', () => {
+  // open-pr.sh holds the start both PR jobs share (mr_begin: the token, GET /user, the branch ref) and the render
+  // check (mr_render); each job adds its own lookup and its one write, after the render.
+  it('calls GitHub only at api.github.com: five fixed method + path pairs per PR job, one write each', () => {
     const src = code();
     expect(src).toContain('MR_API="https://api.github.com"');
-    expect(
-      [...src.matchAll(/\bmr_call (\S+) ("[^"]+"|\S+)/g)].map((m) => `${m[1]} ${m[2]}`),
-    ).toEqual([
+    const job = (n: string) =>
+      readFileSync(`${TOOLS_DIR}jobs/${n}`, 'utf8')
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n');
+    const calls = (t: string) =>
+      [...t.matchAll(/\bmr_call (\S+) ("[^"]+"|\S+)/g)].map((m) => `${m[1]} ${m[2]}`);
+    const LIST = 'GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$MR_BRANCH&state=open"';
+    const open = job('open-pr.sh');
+    const edit = job('edit-pr.sh');
+    expect(calls(open)).toEqual([
       'GET /user',
-      'GET "/repos/$MR_REPO/git/ref/heads/$branch"',
-      'GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$branch&state=open"',
+      'GET "/repos/$MR_REPO/git/ref/heads/$MR_BRANCH"',
       'POST /markdown',
+      LIST,
       'POST "/repos/$MR_REPO/pulls"',
     ]);
+    expect(calls(edit)).toEqual([LIST, 'PATCH "/repos/$MR_REPO/pulls/$n"']);
+    // fixtures reads only: the compare (the install check) and the tarball, after mr_whoami.
+    expect(calls(job('fixtures.sh'))).toEqual([
+      'GET "/repos/$MR_REPO/compare/main...$sha"',
+      'GET "/repos/$MR_REPO/tarball/$sha"',
+    ]);
+    expect(calls(src)).toHaveLength(9); // no other job calls GitHub
+    for (const [t, fn, write] of [
+      [open, 'run_open_pr() {', 'mr_call POST "/repos/$MR_REPO/pulls"'],
+      [edit, 'run_edit_pr() {', 'mr_call PATCH'],
+    ] as const) {
+      const body = t.slice(t.indexOf(fn));
+      const at = ['mr_begin "$w" "$2" || return 0', `mr_call ${LIST}`, 'mr_render "$w"', write].map(
+        (x) => body.indexOf(x),
+      );
+      expect(at.every((x) => x >= 0)).toBe(true);
+      expect([...at].sort((a, b) => a - b)).toEqual(at); // begin → lookup → render → write
+    }
+    // edit-pr's write carries the text only, and only for a PR whose number the Mac read itself.
+    expect(edit).toContain(`jq -c '.params | if has("title") then {title, body} else {body} end'`);
+    expect(edit).toContain('n="$(jq -r .number <<<"$pr")"');
+    expect(edit).not.toMatch(/\.params\.(number|state|base|draft)/);
     expect(src).toContain('MR_REPO="radatta/aperture"');
     expect(src.match(/\bcurl\b/g)).toHaveLength(1);
+  });
+
+  // The one job that runs code that isn't merged main (MAILROOM.md → The fixtures job): every tool it runs on that code goes
+  // through sandbox-exec, the suite in a clean environment and under the cap, and the profile takes network, writes,
+  // home folders and the Keychain away.
+  it('the fixtures job: sandboxed, clean environment, capped, no install change', () => {
+    const fx = readFileSync(`${TOOLS_DIR}jobs/fixtures.sh`, 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
+    for (const pin of [
+      'FX_TIMEOUT=600',
+      "FX_INSTALL_RE='^tools/mailroom/(install\\.sh|[^/]*\\.plist\\.tmpl)$'",
+      'if [ "$n" -ge 300 ]; then mr_emit rejected DIFF_TOO_LARGE; return 0; fi',
+      "if ! command -v sandbox-exec >/dev/null 2>&1; then printf 'error SANDBOX_MISSING {}\\n'; return 0; fi",
+      'exec sandbox-exec -f "$MR_P.sb" tar -xzf "$1/src.tgz" -C "$1/src" --strip-components 1',
+      'if ! fx_cap 120 fx_unpack "$t" >/dev/null 2>&1',
+      'fx_cap "$FX_TIMEOUT" fx_suite "$t" >"$MR_P.out" 2>&1 </dev/null || rc=$?',
+      'ulimit -f 1048576',
+      'kill -KILL -- "-$pid"',
+      'exec sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin',
+      'if ! [[ "$t" =~ ^/[A-Za-z0-9/._-]+$ ]]; then',
+    ])
+      expect(fx).toContain(pin);
+    // tar and bash run only inside sandbox-exec: no line starts either as a command on its own.
+    const runs = fx
+      .split('\n')
+      .filter((l) => /(?:^|[;&|(]|\bthen|\bdo|!)\s*(?:\/bin\/|\/usr\/bin\/)?(bash|tar)\s/.test(l));
+    expect(runs.filter((l) => !l.includes('sandbox-exec -f "$MR_P.sb"'))).toEqual([]);
+    expect(fx.match(/\bsandbox-exec -f "\$MR_P\.sb" \S+/g)).toEqual([
+      'sandbox-exec -f "$MR_P.sb" tar', // the unpack
+      'sandbox-exec -f "$MR_P.sb" /usr/bin/env', // the suite, under fx_cap
+      'sandbox-exec -f "$MR_P.sb" /usr/bin/true)', // the preflight: a profile this macOS won't compile is SANDBOX_FAILED
+    ]);
+    for (const banned of ['eval ', 'sh -c', 'bash -c', 'source ', '. "$t'])
+      expect(fx).not.toContain(banned);
+  });
+
+  // The whole profile, rendered by fx_profile, in order (SBPL: the last matching rule wins), for a temp dir /T.
+  it('the fixtures sandbox profile, exactly', () => {
+    const out = execFileSync(
+      'bash',
+      ['-c', '. "$1"; fx_profile /T', '_', `${TOOLS_DIR}jobs/fixtures.sh`],
+      {
+        encoding: 'utf8',
+      },
+    );
+    expect(out.trim().split('\n')).toEqual([
+      '(version 1)',
+      '(allow default)',
+      '(deny network*)',
+      '(deny file-write*)',
+      '(allow file-write* (subpath "/T") (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))',
+      '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))',
+      '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.security.agent"))',
+      '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb") (global-name "com.apple.coreservices.appleevents") (global-name "com.apple.pasteboard.1") (global-name "com.apple.CoreSimulator.CoreSimulatorService"))',
+      '(deny appleevent-send)',
+      '(deny job-creation)',
+      '(deny signal)',
+      '(allow signal (target same-sandbox))',
+      '(deny process-exec (literal "/usr/bin/security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))',
+    ]);
   });
 
   it('installs only what GitHub holds at a commit, reading nothing from the shared folder', () => {
@@ -234,14 +334,14 @@ describe('mailroom runner', () => {
     expect(src).toContain('TOKEN="$(security find-generic-password -s "$KEYCHAIN" -w');
   });
 
-  // Two launchd agents on one inbox (MAILROOM.md → Lanes): only sim is slow, each lane has its own lock, and the one
+  // Two launchd agents on one inbox (MAILROOM.md → Lanes): only sim and fixtures are slow, each lane has its own lock, and the one
   // template renders a valid agent per lane.
-  it('lanes: sim alone is slow, a lock per lane, two agents from one template', () => {
+  it('lanes: sim and fixtures are slow, a lock per lane, two agents from one template', () => {
     const runner = readFileSync(`${TOOLS_DIR}runner.sh`, 'utf8');
     for (const pin of [
-      'SLOW_JOBS="sim"',
+      'SLOW_JOBS="sim fixtures"',
       'FAST_JOBS="clip"',
-      "SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-'",
+      "SLOW_RE='^[0-9]{8}T[0-9]{6}Z-(ios|fx)-'",
       'slow) take_lock lock 15 || exit 0 ;;',
       'fast) take_lock lock-fast 5 || exit 0 ;;',
       'all) { take_lock lock 15 && take_lock lock-fast 5; } || exit 0 ;;',

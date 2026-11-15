@@ -7,6 +7,8 @@ import { parseArgs } from '../bot/cli.ts';
 import type { Clock } from '../bot/dispatch.ts';
 import { run } from '../bot/sh.ts';
 import { clipProbe } from './clip.ts';
+import { editPr } from './edit-pr.ts';
+import { fixturesJob } from './fixtures-job.ts';
 import { EXIT, openPr, probe } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
 import { simCommand } from './sim.ts';
@@ -14,6 +16,8 @@ import { hostjobsDir, nodeFs, repoRunnerVersion } from './submit.ts';
 
 const USAGE = `pnpm mailroom <command>
   open-pr --title "<title>" [--wait <seconds>]   open this pushed branch's PR as the user, from their Mac
+  edit-pr [--title "<title>"] [--wait <seconds>] after a push: its open PR's body (and title) from localNotes/pr-<branch>.md
+  fixtures [--sha <sha>]                         run a pushed commit's mailroom fixtures on the Mac, sandboxed (minutes)
   probe [--wait <seconds>]                       the whole path with a zero sha — stops before any write
   sim-probe [--sign-in]                          boot the Mac's iOS sim, launch the web app, screenshot (≤ 5 min)
   sim-shutdown                                   shut the Mac's iOS sim down
@@ -49,8 +53,20 @@ export async function main(argv: string[]): Promise<number> {
         return EXIT.usage;
       }
       return openPr(deps(), flags.title, waitMs);
+    case 'edit-pr':
+      if (flags.title === 'true' || flags.title === '') {
+        console.error(`--title needs a value (leave it out to keep the PR's title)\n${USAGE}`);
+        return EXIT.usage;
+      }
+      return editPr(deps(), flags.title, waitMs);
     case 'probe':
       return probe(deps(), waitMs);
+    case 'fixtures':
+      if (flags.sha === 'true') {
+        console.error(`--sha needs a value\n${USAGE}`);
+        return EXIT.usage;
+      }
+      return fixturesJob(deps(), flags.sha);
     case 'sim-probe':
     case 'sim-shutdown':
       return simCommand(

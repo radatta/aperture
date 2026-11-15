@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { ID_RE, makeId, makeOpenPrJob, sha256, validateJob, visible } from './job.ts';
-import { buildJob, loadCases } from './fixtures.ts';
+import {
+  ID_RE,
+  makeEditPrJob,
+  makeFixturesJob,
+  makeId,
+  makeOpenPrJob,
+  sha256,
+  validateJob,
+  visible,
+} from './job.ts';
+import { baseFor, buildJob, loadCases } from './fixtures.ts';
 
 const NOW = Date.parse('2026-11-01T20:45:12Z');
-const { base, simBase, clipBase, cases } = loadCases();
+const bases = loadCases();
+const { cases } = bases;
 const shared = cases.filter((c) => 'ts' in c);
 
 describe('validateJob mirrors the Mac runner (tools/mailroom/testdata/jobs.jsonl)', () => {
@@ -28,11 +38,7 @@ describe('validateJob mirrors the Mac runner (tools/mailroom/testdata/jobs.jsonl
   });
 
   it.each(shared.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    const { job, stem } = buildJob(
-      c.kind === 'sim' ? simBase : c.kind === 'clip' ? clipBase : base,
-      c,
-      NOW,
-    );
+    const { job, stem } = buildJob(baseFor(bases, c), c, NOW);
     expect(validateJob(job, stem, NOW)).toBe(c.ts);
   });
 });
@@ -67,6 +73,29 @@ describe('job building', () => {
       expect(j(b)).toMatch(ID_RE);
       expect(j(b)).not.toMatch(/^\d{8}T\d{6}Z-ios-/);
     }
+  });
+
+  it('an edit-pr job passes with or without a title, and is never named like a sim', () => {
+    const p = { branch: 'ios-probe-check', sha: 'a'.repeat(40), body: 'New body.' };
+    for (const job of [makeEditPrJob(p, NOW), makeEditPrJob({ ...p, title: 'A new title' }, NOW)]) {
+      expect(validateJob(job, job.id, NOW)).toBeNull();
+      expect(job.id).toMatch(/^\d{8}T\d{6}Z-edit-ios-probe-check-[0-9a-f]{4}$/);
+      expect(job.params.bodySha256).toBe(sha256('New body.'));
+    }
+    // An open-pr's params must carry a title; only edit-pr may leave it out.
+    const noTitle = { ...makeEditPrJob(p, NOW), job: 'open-pr' };
+    expect(validateJob(noTitle, noTitle.id, NOW)).toBe('BAD_PARAM');
+  });
+
+  it('a fixtures job is named …Z-fx-… (the slow lane), and an open-pr for an fx- branch is not', () => {
+    const job = makeFixturesJob('a'.repeat(40), NOW);
+    expect(validateJob(job, job.id, NOW)).toBeNull();
+    expect(job.id).toMatch(/^\d{8}T\d{6}Z-fx-aaaaaaaaaaaa-[0-9a-f]{4}$/);
+    const pr = makeOpenPrJob(
+      { branch: 'fx-thing', sha: 'a'.repeat(40), title: 'T', body: 'b' },
+      NOW,
+    );
+    expect(pr.id).toMatch(/Z-pr-fx-thing-/);
   });
 
   it('wait plus grace stays under the Bash tool timeout', async () => {
