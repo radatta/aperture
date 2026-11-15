@@ -30,6 +30,7 @@ import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
 import { fetchLogs } from './logs.ts';
 import { push } from './push.ts';
+import { runCommand } from './run.ts';
 import { run } from './sh.ts';
 import { PERMS, mintToken } from './token.ts';
 import type { Permissions } from './token.ts';
@@ -44,7 +45,9 @@ const USAGE = `pnpm bot <command>
   lock wait [--max MIN] [--any | --slot devb]
                                  block until another branch's lock frees or expires — slot A by default, either with
                                  --any (default 45 min, at most 55); exit 75 if still held — run it in the background
-  logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,bff-devb,…] [--filter P] [--query Q]`;
+  logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,bff-devb,…] [--filter P] [--query Q]
+  run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
+  run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs`;
 
 // `--slot` names a slot; anything else is misuse. Undefined when the flag is absent.
 export function parseSlot(v: string | undefined): Slot | undefined {
@@ -239,6 +242,14 @@ export async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
+    case 'run':
+      return runCommand(
+        makeApi(await token(PERMS.run)),
+        sub,
+        positional[2],
+        flags.failed === 'true',
+        console.log,
+      );
     case 'logs': {
       const t = await token(PERMS.logs);
       await fetchLogs(run, makeApi(t), t, clock, flags, root());
