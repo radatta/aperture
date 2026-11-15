@@ -2,7 +2,7 @@
 // (relative path, size, sha256; a symlink by its target). start.ts and end.ts reach the disk only through this.
 import { createHash } from 'node:crypto';
 import {
-  cpSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -11,6 +11,7 @@ import {
   readlinkSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -34,10 +35,26 @@ export function digest(root: string, ignore: string[] = []): Map<string, string>
   return out;
 }
 
+// An unreadable tree (a broken entry on the shared mount) is never "the same".
 export function sameTree(a: string, b: string, ignore: string[] = []): boolean {
-  const x = digest(a, ignore);
-  const y = digest(b, ignore);
-  return x.size === y.size && [...x].every(([k, v]) => y.get(k) === v);
+  try {
+    const x = digest(a, ignore);
+    const y = digest(b, ignore);
+    return x.size === y.size && [...x].every(([k, v]) => y.get(k) === v);
+  } catch {
+    return false;
+  }
+}
+
+// Our own walk, not cpSync: on the /workspace virtiofs mount (shared with the Mac) cpSync leaves zero-byte,
+// write-only files the container can't read or remove (seen 2026-11-15); copyFileSync works there.
+function copyTree(src: string, dst: string): void {
+  const st = lstatSync(src);
+  if (st.isSymbolicLink()) symlinkSync(readlinkSync(src), dst);
+  else if (st.isDirectory()) {
+    mkdirSync(dst);
+    for (const f of readdirSync(src)) copyTree(join(src, f), join(dst, f));
+  } else copyFileSync(src, dst);
 }
 
 // Copies src to dst (which must not exist), then compares; a mismatch removes nothing and throws.
@@ -45,7 +62,7 @@ export function archiveTree(src: string, dst: string): number {
   if (existsSync(dst)) throw new Error(`${dst} exists`);
   if (!lstatSync(src).isDirectory()) throw new Error(`${src} is not a directory`);
   mkdirSync(dirname(dst), { recursive: true });
-  cpSync(src, dst, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+  copyTree(src, dst);
   const want = digest(src);
   const got = digest(dst);
   const bad = [...want].filter(([k, v]) => got.get(k) !== v).map(([k]) => k);

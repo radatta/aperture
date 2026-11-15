@@ -47,6 +47,18 @@ describe('archiveTree', () => {
   });
 });
 
+describe('archive on the shared mount', () => {
+  it('never uses cpSync (it breaks files on the /workspace virtiofs mount)', () => {
+    const src = readFileSync(new URL('archive.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/import \{[^}]*\bcpSync\b[^}]*\} from 'node:fs'/);
+  });
+
+  it('an unreadable tree is never the same', () => {
+    const { root, src } = tree();
+    expect(sameTree(src, join(root, 'missing'))).toBe(false);
+  });
+});
+
 describe('sameTree', () => {
   it('sees a changed byte, an extra file and a missing one; ignores named top-level files', () => {
     const { root, src } = tree();
