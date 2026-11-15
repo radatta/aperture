@@ -62,5 +62,9 @@
       "who": "hotel"
     },
     { "what": "PR check on charlie-branch", "kind": "ci" }
+  ],
+  "mergeOrder": [
+    { "branch": "charlie-branch", "pr": 41, "note": "lands first" },
+    { "branch": "hotel-branch", "pr": null }
   ]
 }

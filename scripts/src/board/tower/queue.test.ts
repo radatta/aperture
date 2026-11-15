@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { IDS } from '../../identifiers.ts';
-import { parseQueue, planAt, queueAgeTone, staleFollowups } from './queue.ts';
+import { firedAt, parseQueue, planAt, queueAgeTone, sinceTime, staleFollowups } from './queue.ts';
 
 const example = readFileSync(
   join(import.meta.dirname, '../../../board/queue.example.json'),
@@ -83,7 +83,15 @@ describe('parseQueue', () => {
     const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","extra":true}');
     expect(q).toMatchObject({
       status: 'ok',
-      data: { devQueue: [], maintainer: [], wave: null, deadRows: null, plan: [], followups: [] },
+      data: {
+        devQueue: [],
+        maintainer: [],
+        wave: null,
+        deadRows: null,
+        plan: [],
+        followups: [],
+        mergeOrder: [],
+      },
     });
   });
 
@@ -95,9 +103,11 @@ describe('parseQueue', () => {
         updatedAt: '2026-11-08T06:00:00Z',
         [old]: ['merge PR 41'],
         mergeOrder: ['a'],
+        notes: ['an unknown list'],
       }),
     );
     expect(q.data!.maintainer).toEqual([]);
+    expect(q.data!.mergeOrder).toEqual([{ branch: 'a', pr: null, note: null }]); // a bare branch name
     expect(q.problems).toEqual([
       'the to-dos sit under an old key — rename it to "maintainer" (docs/ops/TOWER.md)',
     ]);
@@ -296,5 +306,92 @@ describe('unread devQueue lanes (round 4)', () => {
   it('an unreadable file is all unread, its last good data kept; a clean file has no unread', () => {
     expect(parseQueue('{nope').unread).toBe('all');
     expect(parseQueue(JSON.stringify({ ...base, devQueue: [] })).unread).toBeUndefined();
+  });
+});
+
+describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
+  const q = (extra: object) =>
+    parseQueue(JSON.stringify({ v: 1, updatedAt: '2026-11-14T08:00:00Z', ...extra }));
+  it('mergeOrder keeps file order; pr and note are optional', () => {
+    const r = q({ mergeOrder: [{ branch: 'b', pr: 7, note: 'first' }, { branch: 'a' }] });
+    expect(r).toMatchObject({ status: 'ok', problems: [] });
+    expect(r.data!.mergeOrder).toEqual([
+      { branch: 'b', pr: 7, note: 'first' },
+      { branch: 'a', pr: null, note: null },
+    ]);
+  });
+  it('a bad mergeOrder is a problem, never a throw; a duplicate keeps the first', () => {
+    expect(q({ mergeOrder: 'x' })).toMatchObject({ problems: ['mergeOrder is not an array'] });
+    expect(q({ mergeOrder: 'x' }).data!.mergeOrder).toEqual([]);
+    const r = q({ mergeOrder: [{ pr: 3 }, null, { branch: 'a', pr: 1 }, { branch: 'a', pr: 2 }] });
+    expect(r.problems).toEqual([
+      'mergeOrder[0]: no branch',
+      'mergeOrder[1]: no branch',
+      'mergeOrder[3]: duplicate branch a',
+    ]);
+    expect(r.data!.mergeOrder).toEqual([{ branch: 'a', pr: 1, note: null }]);
+    expect(r.unread).toBeUndefined(); // never touches the holds
+  });
+  it('a bare-date since is the end of that local day; an ISO time is itself', () => {
+    expect(sinceTime('2026-11-13')).toEqual({
+      at: new Date(2026, 10, 14).getTime() - 1,
+      day: '11-13',
+    });
+    expect(sinceTime('2026-11-13T05:00:00Z')).toEqual({
+      at: Date.parse('2026-11-13T05:00:00Z'),
+      day: null,
+    });
+    expect(sinceTime(null)).toEqual({ at: null, day: null });
+    for (const bad of ['2026-13-01', '2026-11-99', '2026-02-31'])
+      expect(sinceTime(bad)).toEqual({ at: null, day: null }); // a problem, never a rolled-over date
+    const f = q({
+      followups: [
+        { id: 'F1', what: 'w', owner: 'lane', after: 'now', status: 'open', since: '2026-11-13' },
+      ],
+    });
+    expect(f.data!.followups[0]).toMatchObject({
+      since: new Date(2026, 10, 14).getTime() - 1,
+      sinceDay: '11-13',
+    });
+  });
+  it('a trigger fires on a merged branch or PR (plus an offset), or once its date begins; free text never', () => {
+    const now = new Date(2026, 10, 14, 1, 0).getTime();
+    const merged = [{ branch: 'tower-web', number: 160, mergedAt: now - 86400e3 }];
+    expect(firedAt('tower-web', merged, now)).toBe(now - 86400e3);
+    expect(firedAt('tower-web merge', merged, now)).toBe(now - 86400e3);
+    expect(firedAt('tower-web merges (with F51)', merged, now)).toBe(now - 86400e3);
+    expect(firedAt('tower-web merge + 1 week', merged, now)).toBe(now + 6 * 86400e3);
+    expect(firedAt('PR 160', merged, now)).toBe(now - 86400e3);
+    expect(firedAt('lc-polish merge', merged, now)).toBeNull(); // not merged
+    expect(firedAt('2026-11-20', merged, now)).toBe(new Date(2026, 10, 20).getTime());
+    expect(firedAt('2026-11-14 ~19:30 PT (board-limits)', merged, now)).toBe(
+      new Date(2026, 10, 14, 19, 30).getTime(),
+    );
+    expect(firedAt('2026-11-14 (after a trial)', merged, now)).toBe(
+      new Date(2026, 10, 14).getTime(),
+    );
+    expect(firedAt('Sat 11-14 (flip day)', merged, now)).toBe(new Date(2026, 10, 14).getTime());
+    expect(firedAt('11-01', merged, now)).toBe(new Date(2026, 10, 1).getTime()); // two weeks back: this year
+    // written in December for early January: next year's, not eleven months ago
+    expect(firedAt('01-05 (new year)', merged, new Date(2026, 11, 20).getTime())).toBe(
+      new Date(2027, 0, 5).getTime(),
+    );
+    // written in early January for late December: last year's (fired), not eleven months away
+    expect(firedAt('Mon 12-29 (year end)', merged, new Date(2027, 0, 3).getTime())).toBe(
+      new Date(2026, 11, 29).getTime(),
+    );
+    expect(firedAt('2026-11-14T09:00:00Z', merged, now)).toBe(Date.parse('2026-11-14T09:00:00Z'));
+    for (const a of [
+      'wave 4',
+      'repo goes public',
+      'lane deploy-log-mask (before the flip)',
+      'next CI lane',
+      '1-2 days after tower merge',
+      '2-3 merges',
+      '13-40',
+      '2026-02-31',
+      '2026-11-14 ~25:00',
+    ])
+      expect(firedAt(a, merged, now)).toBeNull();
   });
 });

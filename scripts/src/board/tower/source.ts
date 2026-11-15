@@ -103,6 +103,7 @@ type LockFile = {
   holder?: { branch?: string; sha?: string; expiresAt?: string } | null;
   t?: string;
   failedAt?: string | null;
+  failedWhy?: string | null;
   unreadable?: boolean;
 };
 
@@ -286,6 +287,7 @@ export class Source {
       expiresAt,
       asOf: f.t && Number.isFinite(Date.parse(f.t)) ? Date.parse(f.t) : null, // garbled → unknown, never fresh
       failed: !!f.failedAt,
+      failedWhy: f.failedAt && typeof f.failedWhy === 'string' ? clean(f.failedWhy) : null,
       bad: f.unreadable
         ? 'lock cache unreadable'
         : f.holder && !branch

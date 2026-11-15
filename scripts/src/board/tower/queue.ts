@@ -47,7 +47,27 @@ export type Followup = {
   status: string;
   source: string | null;
   since: number | null;
+  sinceDay?: string | null; // `since` was a bare date (MM-DD): the page shows the day, not a timer
 };
+
+// A `since` the hub writes as a bare date (2026-11-13) means some time that local day: read as its end, so an age
+// is never overstated (as UTC midnight it read a follow-up raised that evening as 32 h old). Anything else is an
+// ISO time.
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+// A local time from its parts, or null when they aren't a real one (2026-02-31 and 13-40 don't roll over).
+function local(y: number, mo: number, d: number, h = 0, mi = 0): number | null {
+  const t = new Date(y, mo - 1, d, h, mi);
+  return t.getFullYear() === y && t.getMonth() === mo - 1 && t.getDate() === d && h < 24 && mi < 60
+    ? t.getTime()
+    : null;
+}
+export function sinceTime(x: unknown): { at: number | null; day: string | null } {
+  const m = typeof x === 'string' ? DAY.exec(x) : null;
+  if (!m) return { at: parseTime(x), day: null };
+  const start = local(+m[1]!, +m[2]!, +m[3]!);
+  if (start === null) return { at: null, day: null };
+  return { at: new Date(+m[1]!, +m[2]! - 1, +m[3]! + 1).getTime() - 1, day: `${m[2]}-${m[3]}` };
+}
 
 // STALE: open, due now (`after: "now"`), and older than 24 h. One definition; localNotes/board/pq-check.ts imports it.
 export const STALE_MS = 24 * 3600e3;
@@ -65,7 +85,49 @@ const QUEUE_KEYS = [
   'proofs',
   'plan',
   'followups',
+  'mergeOrder',
 ];
+
+// An open follow-up whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`, `PR <n>`,
+// optionally `+ N day(s)|week(s)` and a trailing `(…)`), or a real date that has begun (`2026-11-20 …`, at its
+// `~HH:MM` when it gives one; `Sat 11-14 …`, zero-padded, the nearest such date: one over half a year back is next
+// year's). Exact shapes only: free text (`wave 4`, `1-2 days after …`) never fires. → when it fired.
+const AFTER_REF =
+  /^(?:PR (\d+)|([a-z0-9][a-z0-9-]*))(?: merges?)?(?: \+ (\d+) (day|week)s?)?(?: \(.*\))?$/;
+const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:(?:T| ~?)(\d{1,2}):(\d{2}))?(?=$|[ (~])/;
+const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{2})-(\d{2})(?=$|[ (])/;
+export type Merged = { branch: string; number: number; mergedAt: number };
+export function firedAt(after: string, merged: Merged[], now: number): number | null {
+  const iso = planAt(after.split(/[ (]/)[0]); // a whole ISO date-time (`2026-11-20T09:00Z`), as the plan takes it
+  if (iso !== null) return iso;
+  let m = AFTER_ISO.exec(after);
+  if (m) return local(+m[1]!, +m[2]!, +m[3]!, +(m[4] ?? 0), +(m[5] ?? 0));
+  m = AFTER_MD.exec(after);
+  if (m) {
+    const y = new Date(now).getFullYear();
+    const at = local(y, +m[1]!, +m[2]!);
+    if (at === null) return null;
+    const half = 183 * 86400e3; // the nearest such date: over half a year off is the next or the last year's
+    return now - at > half
+      ? local(y + 1, +m[1]!, +m[2]!)
+      : at - now > half
+        ? local(y - 1, +m[1]!, +m[2]!)
+        : at;
+  }
+  const r = AFTER_REF.exec(after);
+  const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));
+  if (!r || !pr) return null;
+  return pr.mergedAt + (r[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0);
+}
+export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
+  fu.flatMap((f) => {
+    if (f.status !== 'open' || f.after === 'now') return [];
+    const at = firedAt(f.after, merged, now);
+    return at !== null && at <= now ? [{ ...f, firedAt: at }] : [];
+  });
+
+// dispatch's landing order for the lanes in flight (NEXT): file order is the order.
+export type MergeOrderItem = { branch: string; pr: number | null; note: string | null };
 
 export type QueueData = {
   updatedAt: number;
@@ -75,6 +137,7 @@ export type QueueData = {
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
   followups: Followup[];
+  mergeOrder: MergeOrderItem[];
 };
 
 // A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
@@ -137,7 +200,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
 
   // The per-person to-dos were renamed to `maintainer`: a file still on the old key (the maintainer's name, which
   // the identifier rules know without this file spelling it) would drop them from NEEDS YOU without a word. Any
-  // other extra key — the hub's own `mergeOrder` among them — passes.
+  // other extra key passes.
   for (const k of Object.keys(raw))
     if (!QUEUE_KEYS.includes(k) && findIdentifiers(k).some((h) => h.kind === 'name'))
       problems.push(
@@ -244,14 +307,26 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       return void problems.push(`followups[${i}]: owner ${JSON.stringify(f.owner)}`);
     if (ids.has(id)) problems.push(`followups[${i}]: duplicate id ${id}`);
     ids.add(id);
-    const since = parseTime(f.since);
+    const { at: since, day: sinceDay } = sinceTime(f.since);
     if (since === null) problems.push(`followups[${i}]: since is not a date`); // kept: never STALE, so say so
-    followups.push({ id, what, owner, after, status, source: str(f.source), since });
+    followups.push({ id, what, owner, after, status, source: str(f.source), since, sinceDay });
+  });
+
+  const mergeOrder: MergeOrderItem[] = [];
+  if (raw.mergeOrder !== undefined && !Array.isArray(raw.mergeOrder))
+    problems.push('mergeOrder is not an array');
+  arr(raw.mergeOrder).forEach((x, i) => {
+    const o = (typeof x === 'string' ? { branch: x } : x) as Record<string, unknown>; // a bare branch name is fine too
+    const branch = str(o?.branch);
+    if (!branch) return void problems.push(`mergeOrder[${i}]: no branch`);
+    if (mergeOrder.some((e) => e.branch === branch))
+      return void problems.push(`mergeOrder[${i}]: duplicate branch ${branch}`);
+    mergeOrder.push({ branch, pr: int(o.pr), note: str(o.note) });
   });
 
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups },
+    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups, mergeOrder },
     problems,
     ...(unread.length ? { unread } : {}),
   };

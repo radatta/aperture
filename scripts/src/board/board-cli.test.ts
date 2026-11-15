@@ -10,7 +10,7 @@ import {
   readdirSync,
   rmSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -317,6 +317,105 @@ describe('devlock.sh', () => {
     ghLock(''); // GitHub is back and says free
     devlock(['refresh']);
     expect(cache().holder).toEqual(holder); // within the minute: not asked again
+  });
+
+  it('one caller’s failed peek never holds back another caller, and records why and who', () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const holder = { branch: 'flux', sha: SHA, expiresAt: iso(20 * 60_000) };
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: old, source: 'peek', holder }),
+    );
+    const as = (caller: string, source?: string) =>
+      spawnSync('bash', [join(boardDir, 'devlock.sh'), 'refresh'], {
+        env: {
+          ...env,
+          APERTURE_DEVLOCK_CALLER: caller,
+          APERTURE_DEVLOCK_SOURCE: source ?? `file:${join(tmp, 'gh-lock')}`,
+        },
+        encoding: 'utf8',
+      });
+    as('status', `file:${join(tmp, 'missing')}`);
+    expect(cache()).toMatchObject({
+      t: old,
+      holder,
+      failedWhy: 'source file missing',
+      failedBy: 'status',
+    });
+    ghLock('');
+    as('status'); // the same caller, inside its minute: not asked again
+    expect(cache().holder).toEqual(holder);
+    as('tower'); // another caller asks, and its good read clears the failure
+    expect(cache()).toEqual({ v: 1, t: expect.any(String), source: 'peek', holder: null });
+  });
+
+  it('in an outage each caller keeps its own minute, however their failures interleave', () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: old, source: 'peek', holder: null }),
+    );
+    const as = (caller: string, source: string) =>
+      spawnSync('bash', [join(boardDir, 'devlock.sh'), 'refresh'], {
+        env: { ...env, APERTURE_DEVLOCK_CALLER: caller, APERTURE_DEVLOCK_SOURCE: source },
+        encoding: 'utf8',
+      });
+    const down = `file:${join(tmp, 'missing')}`;
+    as('tower', down);
+    as('status', down);
+    expect(cache().failedFor).toEqual({ tower: expect.any(String), status: expect.any(String) });
+    ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(20 * 60_000) }); // back up, but…
+    as('tower', `file:${join(tmp, 'gh-lock')}`); // …the tower failed under a minute ago: not asked
+    expect(cache().holder).toBeNull();
+    expect(cache().failedBy).toBe('status');
+  });
+
+  it('says why when GitHub refuses, and asks with HOME set when the caller has none (the tmux status bar)', () => {
+    // git and gh stand-ins first on PATH: git records the HOME it saw, then answers as told
+    const bin = join(tmp, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      join(bin, 'git'),
+      `#!/bin/bash\necho "\${HOME:-unset}" >"${join(tmp, 'git-home')}"\n` +
+        `[ -f "${join(tmp, 'git-fail')}" ] && { cat "${join(tmp, 'git-fail')}" >&2; exit 128; }\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    const noHome = { ...env };
+    delete noHome.HOME;
+    const run = () =>
+      spawnSync('bash', [join(boardDir, 'devlock.sh'), 'refresh', '--max-age', '0'], {
+        env: { ...noHome, PATH: `${bin}:${env.PATH}`, APERTURE_DEVLOCK_CALLER: 'status' },
+        encoding: 'utf8',
+      });
+    const failWith = (line: string) => {
+      writeFileSync(join(tmp, 'git-fail'), `warning: noise\n${line}\n`);
+      writeFileSync(
+        join(tmp, 'board/devlock.json'),
+        JSON.stringify({ v: 1, t: iso(-10 * 60_000), source: 'peek', holder: null }),
+      );
+      run();
+      return cache();
+    };
+    expect(failWith('fatal: Could not read from remote repository.')).toMatchObject({
+      failedWhy: 'ls-remote: fatal: Could not read from remote repository.',
+      failedBy: 'status',
+    });
+    // the reason reaches a page that leaves the box: a URL's credentials never do
+    const why = failWith(
+      "fatal: unable to access 'https://x-access-token:tok@github.com/o/r/'",
+    ).failedWhy;
+    expect(why).toBe("ls-remote: fatal: unable to access 'https://github.com/o/r/'");
+    expect(failWith("fatal: unable to access 'https://u:p@ss@github.com/o/r/'").failedWhy).toBe(
+      "ls-remote: fatal: unable to access 'https://github.com/o/r/'",
+    );
+    rmSync(join(tmp, 'git-fail'));
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: iso(-10 * 60_000), source: 'peek', holder: null }),
+    );
+    run();
+    expect(readFileSync(join(tmp, 'git-home'), 'utf8').trim()).toBe(userInfo().homedir);
+    expect(cache()).toEqual({ v: 1, t: expect.any(String), source: 'peek', holder: null });
   });
 
   it('skips the fetch while the cache is fresh', () => {

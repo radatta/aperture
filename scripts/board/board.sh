@@ -128,7 +128,7 @@ board_json() {
 
 cmd_status() {
   local dl
-  bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 30 >/dev/null 2>&1
+  APERTURE_DEVLOCK_CALLER=status bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 30 >/dev/null 2>&1
   dl=$(bash "$SB_SCRIPTS/devlock.sh" line 2>/dev/null)
   board_json | jq -r --arg dl "${dl:-dev lock: unknown}" '
     def gib: . / 1024 | . * 10 | round / 10 | tostring;
@@ -201,26 +201,40 @@ cmd_sampler() {
 
 # --- web tower lifecycle (docs/ops/TOWER.md) ---
 
-# Running = the pidfile's process is alive and is the tower's node (the server writes it only once it has bound
-# the port). Never by name, never by a lock an inherited fd could keep held (kill-by-PID rule).
+# Running = the tower's node, found by its pidfile (written once the server has bound the port) or, when that's
+# gone (/tmp cleaned), by the port's listener — and then the pidfile is written back. Either way the pid must be a
+# live node running tower/web/main.ts. Never by name, never by a lock an inherited fd could keep held (kill-by-PID).
+_is_tower() {
+  [[ "$1" =~ ^[0-9]+$ ]] && sb_alive "$1" && [ "$(sb_comm "$1")" = node ] \
+    && tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -q 'tower/web/main.ts'
+}
+# A proof server (`--fixtures`, `--once`) is a tower too, but never the board's: the fallback doesn't claim one.
+_is_board_tower() { _is_tower "$1" && ! tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -qE -- ' --(fixtures|once)( |$)'; }
+# The pid listening on the tower's port, if any (whatever it is).
+_port_pid() { ss -ltnpH "sport = :$TOWER_PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -n 1; }
 tower_pid() {
-  local p; p=$(cat "$TOWER_PID" 2>/dev/null) || return 1
-  [[ "$p" =~ ^[0-9]+$ ]] && sb_alive "$p" && [ "$(sb_comm "$p")" = node ] \
-    && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q 'tower/web/main.ts' && printf '%s' "$p"
+  local p; p=$(cat "$TOWER_PID" 2>/dev/null)
+  _is_tower "$p" && { printf '%s' "$p"; return 0; }
+  p=$(_port_pid)
+  _is_board_tower "$p" || return 1
+  { printf '%s\n' "$p" >"$TOWER_PID"; } 2>/dev/null
+  printf '%s' "$p"
 }
 
 cmd_tower() {
   local p i
   case "${1:-status}" in
     start)
-      p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:6183"; return 0; }
+      p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:$TOWER_PORT"; return 0; }
       sb_init_dirs
-      APERTURE_TOWER_PID="$TOWER_PID" setsid nohup bash "$SB_SCRIPTS/tower-web.sh" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
+      APERTURE_TOWER_PID="$TOWER_PID" setsid nohup bash "$SB_SCRIPTS/tower-web.sh" --port "$TOWER_PORT" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
       # "started" only once the server has bound the port and written its pid (≤ 3 s; node starts in ~0.3 s)
       for ((i = 0; i < 30; i++)); do
-        p=$(tower_pid) && { echo "tower: started (pid $p) — http://localhost:6183, log $BOARD_DIR/tower.log"; return 0; }
+        p=$(tower_pid) && { echo "tower: started (pid $p) — http://localhost:$TOWER_PORT, log $BOARD_DIR/tower.log"; return 0; }
         sleep 0.1
       done
+      p=$(_port_pid)
+      [ -n "$p" ] && { echo "tower: did not start — port $TOWER_PORT is held by pid $p ($(sb_comm "$p")), not the tower" >&2; return 1; }
       echo "tower: did not start — see $BOARD_DIR/tower.log" >&2
       return 1 ;;
     stop|restart)
@@ -232,7 +246,7 @@ cmd_tower() {
       [ "$1" = restart ] && cmd_tower start
       return 0 ;;
     status)
-      if p=$(tower_pid); then echo "tower: running (pid $p) — http://localhost:6183"
+      if p=$(tower_pid); then echo "tower: running (pid $p) — http://localhost:$TOWER_PORT"
       else echo "tower: stopped — board.sh tower start"; return 1; fi ;;
     *) echo "usage: board.sh tower start|restart|stop|status" >&2; return 2 ;;
   esac

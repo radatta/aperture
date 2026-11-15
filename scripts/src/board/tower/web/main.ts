@@ -123,10 +123,12 @@ export function sparkBuckets(pts: [number, number | null][], now: number): (numb
   return out;
 }
 
-const localMidnight = (now: number) => {
+// Where DONE TODAY begins: local midnight, but before noon it reaches back 12 h, so last night's merges stay in
+// view through the morning (at 00:10, six merges from 23:00 had vanished) and age out by noon. No reset cliff.
+export const dayStart = (now: number) => {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
-  return d.getTime();
+  return Math.min(d.getTime(), now - 12 * 3600e3);
 };
 
 export function build(a: Args) {
@@ -192,6 +194,21 @@ export function build(a: Args) {
     // not a checkout
   }
   const macHist: { t: number; usedMiB: number; totalMiB: number }[] = [];
+  const startedAt = clock();
+  // The Mac series, on the server's own 5 s tick (the agent writes every 15 s): read when a page polls, it had an
+  // hour's gap for every hour no page was open, which read as a Mac outage.
+  function sample(now: number): MacRead {
+    const mac = readMacStats(macPath, now);
+    if (mac.stats && macHist.at(-1)?.t !== mac.stats.t) {
+      macHist.push({
+        t: mac.stats.t,
+        usedMiB: mac.stats.mem.usedMiB,
+        totalMiB: mac.stats.memTotalMiB,
+      });
+      while (macHist.length && macHist[0]!.t < now - 24 * 3600e3) macHist.shift();
+    }
+    return mac;
+  }
   // Is the Mac installer on origin/main yet (the install line fetches it from there)? Fixtures: yes. Re-checked
   // every 10 min with a local git read (the fetch that moves origin/main is the sessions'; no network here).
   let ready: { at: number; ok: boolean } | null = null;
@@ -225,19 +242,11 @@ export function build(a: Args) {
 
   function view(
     history: boolean,
-  ): View & { history?: unknown; sparks: Record<string, (number | null)[]> } {
+  ): View & { history?: unknown; sparks: Record<string, (number | null)[]>; startedAt: number } {
     const now = clock();
     const tower = source.refresh(now);
     const lanes = readLanes(paths.boardDir);
-    const mac: MacRead = readMacStats(macPath, now);
-    if (mac.stats && macHist.at(-1)?.t !== mac.stats.t) {
-      macHist.push({
-        t: mac.stats.t,
-        usedMiB: mac.stats.mem.usedMiB,
-        totalMiB: mac.stats.memTotalMiB,
-      });
-      while (macHist.length && macHist[0]!.t < now - 24 * 3600e3) macHist.shift();
-    }
+    const mac = sample(now);
     const inputs: Inputs = {
       now,
       version,
@@ -255,7 +264,7 @@ export function build(a: Args) {
       testCap: testCap(paths.limits),
       macInstall: MAC_INSTALL,
       macInstallReady: installReady(now),
-      midnight: localMidnight(now),
+      dayStart: dayStart(now),
     };
     const v = derive(inputs);
     const sparks = {
@@ -268,17 +277,18 @@ export function build(a: Args) {
         now,
       ),
     };
-    if (!history) return { ...v, sparks };
+    if (!history) return { ...v, sparks, startedAt };
     return {
       ...v,
       sparks,
+      startedAt,
       history: {
         container: tower.points.map((p) => [p.t, p.anon, p.cpu]),
         mac: macHist.map((m) => [m.t, m.usedMiB, m.totalMiB]),
       },
     };
   }
-  return { poll, view, clock, paths };
+  return { poll, view, sample, clock, paths };
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -286,7 +296,7 @@ function refreshDevlock() {
   execFile(
     'bash',
     [join(REPO, 'scripts/board/devlock.sh'), 'refresh', '--max-age', '50'],
-    { timeout: 30000 },
+    { timeout: 30000, env: { ...process.env, APERTURE_DEVLOCK_CALLER: 'tower' } },
     () => undefined,
   );
 }
@@ -312,7 +322,10 @@ async function run(a: Args) {
   const pidFile = process.env.APERTURE_TOWER_PID;
   if (pidFile && !a.fixtures) writeFileSync(pidFile, `${process.pid}\n`);
   void t.poll(t.clock());
-  setInterval(() => void t.poll(t.clock()), TICK_MS);
+  setInterval(() => {
+    void t.poll(t.clock());
+    t.sample(t.clock());
+  }, TICK_MS);
   if (!a.fixtures) {
     refreshDevlock();
     setInterval(refreshDevlock, DEVLOCK_MS);

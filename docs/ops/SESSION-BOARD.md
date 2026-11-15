@@ -176,7 +176,7 @@ by the next acquire and by `gc`.
 
 `board.sh status`, the SessionStart hook and the status line's `dev:` show the real `refs/locks/dev`
 (`docs/ops/CI-BOT.md` → _Dev lock_), from one cache, `board/devlock.json`
-(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?}`); slot B's
+(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?, failedWhy?, failedBy?, failedFor?}`); slot B's
 `refs/locks/devb` has its own, `board/devlock.devb.json`, the same shape (_Dev slots_). `devlock.sh line` prints
 slot A as before, then ` · devb: free` / `· devb: <branch> (<session>) until HH:MM` once slot B has a cache; the
 status line's `dev:` and `board.sh json` still read slot A only. Two writers, each for both files:
@@ -185,8 +185,16 @@ status line's `dev:` and `board.sh json` still read slot A only. Two writers, ea
   one `git ls-remote origin refs/locks/dev refs/locks/devb` for both slots, then `gh api …/git/tags/<sha>` for each held slot's holder — each call under
   `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
   the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
-  `failedAt`, and the next peek waits a minute after it; a peek that finds the bot wrote while it was asking keeps
-  the bot's write. No bot key, no token
+  `failedAt`, `failedWhy` (git's last error line, any URL userinfo stripped, `timed out after N s`, or the tag
+  read), `failedBy` (the caller: `status`, `sampler`, `tower`, `hook` via `APERTURE_DEVLOCK_CALLER`, else its
+  parent's process name) and `failedFor` (each caller's last failure); a good read writes the cache afresh,
+  without them. The minute's wait after a failure is that caller's own (`failedFor[caller]`), however callers'
+  failures interleave: another caller still asks (an older cache with only `failedAt` holds every caller for the
+  minute). One broken caller —
+  the COI tmux status bar, whose `#()` jobs ran with no `HOME`, so git lost `~/.gitconfig`'s https rewrite and
+  credential helper and fell back to SSH (2026-11-14) — once stamped `failedAt` every minute and kept every
+  other caller from ever refreshing. `lib.sh` now sets a missing `HOME` from the passwd entry (`HOME=~`) for every
+  board script. A peek that finds the bot wrote while it was asking keeps the bot's write. No bot key, no token
   mint, no node.
 - **The bot** (`scripts/src/bot/lock-cache.ts`) writes it on every `pnpm bot lock …`, `lock wait` poll and
   `deploy-dev` lock change.
@@ -457,9 +465,15 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
   "proofs": { "deadRows": { "since": "<ISO>", "target": 12, "excludedRuns": ["<run id>"] } },
   "plan": [
     { "at": "<ISO, optional>", "what": "", "kind": "dev | merge | maintainer | ci", "who": "" }
-  ]
+  ],
+  "mergeOrder": [{ "branch": "", "pr": 41, "note": "<optional>" }]
 }
 ```
+
+`mergeOrder` is the hub's landing order for the lanes in flight, first to land first (an entry may be a bare branch name); the web tower's NEXT shows
+it (TOWER.md → _Panels_). Entries with no `branch`, a duplicate branch, or a field that isn't an array are named as
+problems; the tower drops the bad entries and holds nothing on them. A bare-date `since` (`2026-11-13`, in
+`maintainer[]` and `followups[]`) means some time that local day and is read as its end, so an age is never overstated.
 
 A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `ready` (`READY`) is a PR whose check is green, waiting on the maintainer's merge; `needs-you` (`YOU`)
 is blocked on a maintainer step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't

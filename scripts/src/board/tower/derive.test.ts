@@ -107,6 +107,8 @@ function inputs(
     mac?: MacRead;
     followups?: NonNullable<TowerState['queue']['data']>['followups'];
     maintainer?: { text: string; since: string | null }[];
+    mergeOrder?: NonNullable<TowerState['queue']['data']>['mergeOrder'];
+    plan?: NonNullable<TowerState['queue']['data']>['plan'];
   } = {},
 ): Inputs {
   const tower = {
@@ -127,8 +129,9 @@ function inputs(
         maintainer: over.maintainer ?? [],
         wave: null,
         deadRows: null,
-        plan: [],
+        plan: over.plan ?? [],
         followups: over.followups ?? [],
+        mergeOrder: over.mergeOrder ?? [],
       },
     },
     prs: { list: over.prs ?? [], at: NOW - MIN, error: null },
@@ -154,7 +157,7 @@ function inputs(
     testCap: 4,
     macInstall: 'cd /x && install',
     macInstallReady: true,
-    midnight: Date.parse('2026-11-13T08:00:00Z'),
+    dayStart: Date.parse('2026-11-13T08:00:00Z'),
   };
 }
 const green = { [sha('e')]: [run(), run({ id: 2, name: 'Secret scan' })] };
@@ -304,6 +307,153 @@ describe('deployFor', () => {
   });
   it('only main push runs named Deploy count', () => {
     expect(deployFor(sha('1'), [run({ name: 'PR', sha: sha('1') })])).toBeNull();
+  });
+  it('rides the first later run that was not cancelled too, not the newest (PR 166: 281, not 283)', () => {
+    const runs = [
+      dep(sha('1'), NOW - 9 * MIN, { conclusion: 'cancelled', number: 280 }),
+      dep(sha('2'), NOW - 8 * MIN, { conclusion: 'cancelled', number: 280.5 }),
+      dep(sha('3'), NOW - 7 * MIN, { conclusion: 'success', number: 281 }),
+      dep(sha('4'), NOW - 2 * MIN, { status: 'in_progress', conclusion: null, number: 283 }),
+    ];
+    expect(deployFor(sha('1'), runs)).toMatchObject({ run: { number: 281 } });
+    expect(deployFor(sha('2'), runs)).toMatchObject({ run: { number: 281 } });
+  });
+});
+
+describe('the accuracy audit (2026-11-14)', () => {
+  it('NEXT shows the landing order, each entry with its lane row; landed entries drop out', () => {
+    const v = derive(
+      inputs({
+        prs: [
+          pr({ number: 40, branch: 'alpha', state: 'MERGED', mergedAt: NOW - 3 * 86400e3 }),
+          pr({ number: 51, branch: 'bravo' }),
+        ],
+        lanes: [file({ branch: 'echo', step: 'round 1' })],
+        mergeOrder: [
+          { branch: 'alpha', pr: 40, note: null },
+          { branch: 'echo', pr: null, note: 'lands first' },
+          { branch: 'bravo', pr: 51, note: null },
+          { branch: 'ghost', pr: null, note: null }, // no file, PR or queue entry: still shown
+        ],
+      }),
+    );
+    expect(v.next.order.map((o) => [o.branch, o.row.label, o.note])).toEqual([
+      ['echo', 'BUILDING', 'lands first'],
+      ['bravo', 'PR (no checks seen)', null],
+      ['ghost', 'NOT STARTED', null],
+    ]);
+    // NEXT only: a lane that hasn't started never shows in NOW
+    expect(v.active.map((r) => r.branch)).not.toContain('ghost');
+    expect(derive(inputs()).next.order).toEqual([]);
+  });
+
+  it('a queue lane that needs you is a NEEDS YOU item, in its own words', () => {
+    const v = derive(
+      inputs({
+        devQueue: [queueLane({ branch: 'kilo', state: 'needs-you', waitingOn: 'clear auto-3' })],
+      }),
+    );
+    expect(v.needs).toEqual([
+      expect.objectContaining({ kind: 'lane', what: 'kilo: clear auto-3', branch: 'kilo' }),
+    ]);
+    // a lane file's own ask is not repeated
+    const w = derive(
+      inputs({
+        lanes: [
+          file({
+            branch: 'kilo',
+            needs: { what: 'push it', link: null, cmd: 'x', unblocks: null },
+          }),
+        ],
+      }),
+    );
+    expect(w.needs.filter((n) => n.branch === 'kilo')).toHaveLength(1);
+  });
+
+  it("YOU NEXT counts the rest; the maintainer's undated plan steps follow", () => {
+    const plan = [
+      { at: null, what: 'Flip the repo public', kind: 'maintainer' as const, who: null },
+      { at: null, what: 'Land in order', kind: 'dev' as const, who: null },
+      { at: NOW - 3 * 3600e3, what: 'Long past', kind: 'maintainer' as const, who: null },
+      { at: null, what: 'Install the trial', kind: 'maintainer' as const, who: null },
+    ];
+    const v = derive(
+      inputs({
+        plan,
+        maintainer: [
+          { text: 'a', since: null },
+          { text: 'b', since: null },
+        ],
+      }),
+    );
+    expect(v.next).toMatchObject({
+      maintainer: 'a',
+      more: 1,
+      plan: ['Flip the repo public', 'Install the trial'],
+    });
+    expect(derive(inputs({ plan })).next).toMatchObject({
+      maintainer: 'Flip the repo public',
+      more: 0,
+      plan: ['Install the trial'],
+    });
+    // a timed step counts within 2 h of now either way, sorted ahead of the undated (plan[] is by `at`); tomorrow
+    // evening's never jumps them
+    const timed = [
+      { at: NOW + 3600e3, what: 'In an hour', kind: 'maintainer' as const, who: null },
+      { at: NOW + 3 * 3600e3, what: 'Tomorrow evening', kind: 'maintainer' as const, who: null },
+      ...plan,
+    ];
+    expect(derive(inputs({ plan: timed })).next).toMatchObject({
+      maintainer: 'In an hour',
+      plan: ['Flip the repo public', 'Install the trial'],
+    });
+  });
+
+  it('a bare-date since is the end of that local day, shown as the day', () => {
+    const v = derive(inputs({ maintainer: [{ text: 'a', since: '2026-11-13' }] }));
+    expect(v.needs[0]).toMatchObject({
+      since: new Date(2026, 10, 14).getTime() - 1,
+      sinceDay: '11-13',
+    });
+  });
+
+  it('a follow-up whose trigger has happened is SLIPPING, whatever its age', () => {
+    const f = (id: string, after: string) => ({
+      id,
+      what: `do ${id}`,
+      owner: 'lane',
+      after,
+      status: 'open',
+      source: null,
+      since: NOW - MIN,
+    });
+    const v = derive(
+      inputs({
+        prs: [pr({ number: 41, branch: 'alpha', state: 'MERGED', mergedAt: NOW - 3600e3 })],
+        followups: [
+          f('F1', 'alpha merge'),
+          f('F2', 'wave 4'),
+          f('F3', 'alpha merge + 1 week'),
+          f('F4', 'PR 41'),
+        ],
+      }),
+    );
+    expect(
+      v.slipping.filter((s) => s.kind === 'fired').map((s) => [s.what, s.since, s.after]),
+    ).toEqual([
+      ['F1: do F1', NOW - 3600e3, 'alpha merge'],
+      ['F4: do F4', NOW - 3600e3, 'PR 41'],
+    ]);
+  });
+
+  it('a building lane whose file has not moved in 2 h is quiet; under it, or another state, is not', () => {
+    const at = (age: number, phase: LaneFile['phase'] = 'build') =>
+      derive(inputs({ lanes: [file({ phase, updatedAt: NOW - age })] })).active[0]!.quiet;
+    expect(at(121 * MIN)).toBe(true);
+    expect(at(119 * MIN)).toBe(false);
+    expect(
+      derive(inputs({ lanes: [file({ phase: 'parked', updatedAt: NOW - 5 * 3600e3 })] })).active,
+    ).toEqual([]);
   });
 });
 
@@ -520,6 +670,12 @@ describe('round 1: a failed, stale or missing source never reads as good', () =>
       /^refresh failed, last read \d\d:\d\d$/,
     );
     expect(lockRead(lock(null, { asOf: NOW - 301000 }), NOW).why).toMatch(/^cache stale/);
+    expect(
+      lockRead(
+        lock(null, { failed: true, failedWhy: 'ls-remote: denied', asOf: NOW - 301000 }),
+        NOW,
+      ).why,
+    ).toMatch(/^refresh failed \(ls-remote: denied\), last read \d\d:\d\d$/);
     // a failed refresh after a read under 5 min old: the read stands (devlock.sh's rule)
     expect(lockRead(lock('x', { failed: true }), NOW).state).toBe('live');
     expect(lockRead(lock('x', { expiresAt: null }), NOW).why).toBe('holder expiry unreadable');
