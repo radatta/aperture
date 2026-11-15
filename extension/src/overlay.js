@@ -2,8 +2,8 @@
 // Both live in closed shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
 // hydration never touches them, and no page script can read their state, their text or Aperture's words —
 // whether the overlay and the badge show is all the page can see. The badge host also carries the pill a
-// dismissed problem shows (Start a sitting), under the same click rule as the overlay's buttons. Their styles are inline in the root, so neither side's
-// CSS leaks into the other. A button acts only on a real click (isTrusted) on an overlay that is really
+// dismissed problem shows (Start a sitting), under the same click rule as the overlay's buttons. Their
+// styles are inline in the root, so neither side's CSS leaks into the other. A button acts only on a real click (isTrusted) on an overlay that is really
 // showing: the host the last child of <html>, its style ours, nothing on it or <html> fading or moving it —
 // checked at the click, and the host is put back and kept last on every poll. What that can't see (a page
 // element in the browser's top layer, painted over the overlay but letting clicks through) is residual.
@@ -153,6 +153,7 @@
         // Not open: Aperture refused, and nothing was touched.
         // Past the reset and its confirm, only LeetCode's timer is missing: the editor was cleared.
         const cleared = state.step === 'timer';
+        // Resumed then failed, the reason itself says LeetCode's clock is running: the hint mustn't say it isn't.
         if (state.open)
           row.append(
             btn(
@@ -170,7 +171,7 @@
               'p',
               { class: 'hint' },
               cleared
-                ? 'The sitting is open in Aperture and the editor was cleared; LeetCode’s timer didn’t start.'
+                ? 'The sitting is open in Aperture and the editor was cleared; LeetCode’s timer wasn’t restarted.'
                 : 'The sitting is open in Aperture; the editor wasn’t cleared.',
             ),
           );

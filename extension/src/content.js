@@ -530,7 +530,11 @@
     async timer() {
       const path = {};
       try {
-        return await timerStep(path);
+        const r = await timerStep(path);
+        // Resumed, then failed: LeetCode's clock runs on from its old count — say so, whichever step it was.
+        return r !== true && path.resumed
+          ? `${r.replace(/\.$/, '')} — its clock is running again.`
+          : r;
       } finally {
         debug.log('timer', path); // every exit: a failed Safari run is where the path matters most
       }
@@ -565,16 +569,18 @@
         if (!sel.timerResume)
           return 'LeetCode’s paused timer shows no Reset, and its Resume isn’t configured (Options → Selectors).';
         const resume = q(sel.timerResume);
-        if (!resume) return 'Couldn’t find LeetCode’s timer reset (timerReset).';
+        if (!resume)
+          return 'Couldn’t find LeetCode’s timer reset (timerReset) or its Resume (timerResume).';
         resume.click();
-        path.resumed = true;
+        path.resumeClicked = true;
         // Running now, or its pop-up asking to reset (then that is confirmed below).
         const going = () => q(timerResetConfirm) || (read() || {}).running;
         if (!(await waitFor(going, 1500))) return 'LeetCode’s timer didn’t resume.';
+        path.resumed = true; // from here a failure leaves its clock running (STEP.timer says so)
         confirm = q(timerResetConfirm);
         if (!confirm) r = await waitFor(() => q(timerReset), 1500);
         if (!confirm && !r)
-          return 'Couldn’t find LeetCode’s timer reset (timerReset) after resuming it — its clock is running again.';
+          return 'Couldn’t find LeetCode’s timer reset (timerReset) after resuming it.';
       }
       if (!confirm) {
         if (!r) return 'Couldn’t find LeetCode’s timer reset (timerReset).';
@@ -762,15 +768,18 @@
     dismiss: () => act({ type: 'dismiss' }),
     reopen: () => reopen(),
   });
-  // The pill on a dismissed problem. A sitting opened for it meanwhile (another tab) resumes instead of
-  // prompting: the nav reads the binding.
+  // The pill on a dismissed problem. A sitting still open for it (opened meanwhile in another tab) resumes
+  // instead of prompting: the nav reads the binding. One already over (by bindingStatus's rule) prompts.
   async function reopen() {
     const slug = screenSlug;
     const still = () => state.phase === 'hidden' && state.slug === slug && screenSlug === slug;
     if (!slug || !still()) return;
-    const got = await local.get([`sitting:${slug}`]).catch(() => null);
+    const got = await local.get([`sitting:${slug}`, `sync:${slug}`]).catch(() => null);
     if (!still()) return;
-    if (got && got[`sitting:${slug}`]) return navTo(slug);
+    const b = got && got[`sitting:${slug}`];
+    const s = got && got[`sync:${slug}`];
+    const over = b && s && s.sittingId === b.sittingId && s.status && s.status !== 'active';
+    if (b && !over) return navTo(slug);
     act({ type: 'reopen' });
   }
   // A retryable failure on this problem keeps the id and sends this click's time; if the first try had in

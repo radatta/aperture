@@ -556,7 +556,30 @@ describe('the overlay on a LeetCode problem', () => {
     expect(messages(ext, 'undismiss')).toHaveLength(1);
   }, 20_000);
 
-  it('never shows the pill over an open sitting; one opened in another tab meanwhile resumes on the pill', async () => {
+  it('a pill over a binding Aperture already ended prompts, rather than doing nothing', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('look');
+    await until(() => !!p.pill());
+    // Another tab's sitting, already over by the background's word, its binding not yet cleared.
+    await ext.local.set({
+      'sitting:two-sum': {
+        slug: 'two-sum',
+        sittingId: 'S-old',
+        clientSittingId: 'C',
+        clientStartedAt: 1,
+      },
+      'sync:two-sum': { sittingId: 'S-old', status: 'ended', at: 1 },
+    });
+    p.tapPill();
+    await until(() => p.phase() === 'prompt');
+    await until(() => messages(ext, 'undismiss').length === 1);
+    expect(messages(ext, 'start')).toEqual([]);
+  }, 20_000);
+
+  it('shows no pill in a tab whose sitting is open; one opened in another tab meanwhile resumes on the pill', async () => {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     const p = open('/problems/two-sum/', ext);
@@ -696,8 +719,9 @@ describe('the overlay on a LeetCode problem', () => {
       selectors: { timerReset: '#gone' },
     });
     expect(p.phase()).toBe('failed');
-    expect(p.text()).toContain('after resuming it — its clock is running again');
+    expect(p.text()).toContain('after resuming it — its clock is running again.');
     expect(p.text()).toContain('Continue without the timer');
+    expect(p.text()).toContain('LeetCode’s timer wasn’t restarted'); // the hint never says it didn’t start
     expect(timerState(p)).toMatchObject({ status: 'running' });
     await ext.local.remove('selectors');
     await settle(100);
@@ -713,7 +737,19 @@ describe('the overlay on a LeetCode problem', () => {
     });
   }, 20_000);
 
-  it('with timerResume off, or pointed at something that doesn’t resume, says so and clicks nothing more', async () => {
+  it('says the clock is running again on any failure after a resume, not only a missing Reset', async () => {
+    const { p } = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      selectors: { timerResetConfirm: '#gone' },
+    });
+    expect(p.phase()).toBe('failed');
+    expect(p.text()).toContain(
+      'didn’t ask to confirm its reset (timerResetConfirm) — its clock is running again.',
+    );
+    expect(timerState(p)).toMatchObject({ status: 'running' });
+  }, 20_000);
+
+  it('with timerResume off, missing, or pointed at something that doesn’t resume, says so and clicks nothing more', async () => {
     const off = await startOn(PAUSED_COUNTDOWN(), {
       pausedNoReset: true,
       selectors: { timerResume: null },
@@ -721,6 +757,12 @@ describe('the overlay on a LeetCode problem', () => {
     expect(off.p.phase()).toBe('failed');
     expect(off.p.text()).toContain('its Resume isn’t configured');
     expect(off.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
+    const missing = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      selectors: { timerResume: '#gone' },
+    });
+    expect(missing.p.text()).toContain('timer reset (timerReset) or its Resume (timerResume).');
+    expect(missing.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
     const inert = await startOn(PAUSED_COUNTDOWN(), {
       pausedNoReset: true,
       selectors: { timerResume: '[role="button"][aria-label="Hide"]' },
@@ -1050,6 +1092,34 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => delivered.some((m) => m.events!.some((e) => e.type === 'submit')), 20_000);
     await until(() => !p.badge()?.includes('events waiting'), 3000);
   }, 75_000);
+
+  it('stuck hand-offs’ warning takes the pill’s place, and the pill comes back once they land', async () => {
+    const bg = fakeBackground();
+    let refuse = true;
+    const ext = fakeExtension({
+      onMessage: (m) => {
+        const msg = m as Msg;
+        if (msg.type === 'enqueue' && refuse) throw new Error(TAB_NOT_FOUND);
+        return bg.handle(msg);
+      },
+    });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    submitClick(p);
+    await until(() => p.badge()?.includes('events waiting'), 20_000);
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => p.phase() === 'prompt' && p.text().includes('Add Two Numbers'));
+    p.tap('look');
+    await settle(300);
+    expect(p.pill()).toBeNull();
+    expect(p.badge()).toContain('events waiting');
+    refuse = false;
+    trustedFocus(p.w);
+    await until(() => !!p.pill(), 25_000);
+    expect(p.pill()!.textContent).toBe('Aperture · Start a sitting');
+  }, 60_000);
 });
 
 // The debug log's first entry of a type (Options → Debug mode on), once its 2 s flush has written it.
@@ -1436,7 +1506,28 @@ describe('the problem doc LeetCode fetches', () => {
     const run = async (fetchAway: boolean) => {
       const bg = fakeBackground();
       const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-      const p = open('/problems/two-sum/', ext, { lateHint: true }); // LeetCode never names the question
+      // LeetCode never names the question; the page's own doc does, and must never be the source.
+      const pageDoc = {
+        title: 'Two Sum',
+        titleSlug: 'two-sum',
+        questionId: '1',
+        difficulty: 'Easy',
+      };
+      const nextData = {
+        props: {
+          pageProps: {
+            dehydratedState: {
+              queries: [
+                {
+                  queryKey: ['questionDetail', { titleSlug: 'two-sum' }],
+                  state: { data: { question: pageDoc } },
+                },
+              ],
+            },
+          },
+        },
+      };
+      const p = open('/problems/two-sum/', ext, { lateHint: true, nextData });
       await until(() => p.phase() === 'prompt');
       p.tap('start');
       await until(() => p.phase() === 'active', 8000);
