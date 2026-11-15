@@ -5,6 +5,8 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../bot/cli.ts';
 import type { Clock } from '../bot/dispatch.ts';
+import { cliGuard, emit } from '../bot/help.ts';
+import type { Spec } from '../bot/help.ts';
 import { run } from '../bot/sh.ts';
 import { clipProbe } from './clip.ts';
 import { editPr } from './edit-pr.ts';
@@ -14,7 +16,7 @@ import type { Deps } from './open-pr.ts';
 import { simCommand } from './sim.ts';
 import { hostjobsDir, nodeFs, repoRunnerVersion } from './submit.ts';
 
-const USAGE = `pnpm mailroom <command>
+export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its usage; nothing runs)
   open-pr --title "<title>" [--wait <seconds>]   open this pushed branch's PR as the user, from their Mac
   edit-pr [--title "<title>"] [--wait <seconds>] after a push: its open PR's body (and title) from localNotes/pr-<branch>.md
   fixtures [--sha <sha>]                         run a pushed commit's mailroom fixtures on the Mac, sandboxed (minutes)
@@ -23,12 +25,25 @@ const USAGE = `pnpm mailroom <command>
   sim-shutdown                                   shut the Mac's iOS sim down
   clip-probe [--out <png>] [--wait <seconds>]    fetch the Mac clipboard's image, as tools/coi/xclip does on Ctrl+V`;
 
+// Every command's allowed flags; anything else refuses before it runs (bot/help.ts).
+export const FLAGS: Record<string, Spec> = {
+  'open-pr': { flags: ['title', 'wait'] },
+  'edit-pr': { flags: ['title', 'wait'] },
+  fixtures: { flags: ['sha'] },
+  probe: { flags: ['wait'] },
+  'sim-probe': { bare: ['sign-in'] },
+  'sim-shutdown': {},
+  'clip-probe': { flags: ['out', 'wait'] },
+};
+
 const clock: Clock = {
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
 
 export async function main(argv: string[]): Promise<number> {
+  const guard = cliGuard(argv, USAGE, FLAGS, parseArgs);
+  if (guard) return emit(guard);
   const { positional, flags } = parseArgs(argv);
   const [cmd] = positional;
   const waitMs = flags.wait ? Number(flags.wait) * 1000 : undefined;

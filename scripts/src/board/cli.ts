@@ -1,10 +1,5 @@
-// Board CLI for the decisions that deserve tests (docs/ops/SESSION-BOARD.md). Called by scripts/board/*.sh:
-//   node scripts/src/board/cli.ts decide-heavy   < {limits, liveLimits, live, slots, req} → HeavyDecision
-//   node scripts/src/board/cli.ts staleness <limits.json> <historyDir>                    → warning lines
-//   node scripts/src/board/cli.ts overlap <repo> <boardDir>                              → writes <boardDir>/overlap.json
-//   node scripts/src/board/cli.ts report <historyDir> [days] [--json]                     → usage by mix + job peaks
-//   node scripts/src/board/cli.ts barriers <historyDir> [days] [--json]                   → how limiting the cap is
-//   pnpm board lane <phase> [--step …] [--needs … --link|--cmd …] | --clear               → this lane's status file
+// Board CLI for the decisions that deserve tests (docs/ops/SESSION-BOARD.md), called by scripts/board/*.sh and
+// `pnpm board lane`; the commands are in USAGE below.
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
@@ -22,8 +17,36 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
+import { cliGuard, isHelp } from '../bot/help.ts';
+import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { LANE_USAGE, parseLaneArgs, writeLane } from './tower/lanes.ts';
+
+export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on any command: its usage; nothing runs)
+  decide-heavy                          stdin {limits, liveLimits, live, slots, req} → HeavyDecision
+  staleness <limits.json> <historyDir>  warning lines
+  overlap <repo> <boardDir>             writes <boardDir>/overlap.json
+  report <historyDir> [days] [--json]   usage by mix + job peaks
+  barriers <historyDir> [days] [--json] how limiting the cap is
+  lane <phase> [--step …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)`;
+
+// Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
+export const FLAGS: Record<string, Spec> = {
+  'decide-heavy': {},
+  staleness: { args: 2 },
+  overlap: { args: 2 },
+  report: { bare: ['json'], args: 2 },
+  barriers: { bare: ['json'], args: 2 },
+  lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
+};
+
+// Board flags are bare (--json); lane, the one with values, is skipped by the guard.
+const bareFlags = (argv: string[]) => ({
+  positional: argv.filter((a) => !a.startsWith('--')),
+  flags: Object.fromEntries(
+    argv.filter((a) => a.startsWith('--')).map((a) => [a.slice(2), 'true']),
+  ),
+});
 
 const cgroup = process.env.APERTURE_CGROUP_DIR ?? '/sys/fs/cgroup';
 
@@ -92,6 +115,10 @@ function worktrees(repo: string): Tree[] {
 
 export function main(argv: string[], stdin: () => string): string {
   const [cmd, ...rest] = argv;
+  // lane keeps its own, fuller usage (LANE_USAGE) and flag parsing
+  const guard = cmd === 'lane' ? null : cliGuard(argv, USAGE, FLAGS, bareFlags);
+  if (guard?.code === 0) return guard.out;
+  if (guard) throw new Error(guard.out);
   const args = rest.filter((a) => !a.startsWith('--')); // flags (--json) are read separately, never as positionals
   const now = new Date();
   switch (cmd) {
@@ -141,7 +168,7 @@ export function main(argv: string[], stdin: () => string): string {
     }
     case 'lane': {
       // docs/ops/TOWER.md → Lane files: the branch and sha come from git, never from an argument
-      if (rest.includes('--help') || rest.length === 0) return LANE_USAGE;
+      if (rest.some(isHelp) || rest.length === 0) return LANE_USAGE;
       let a;
       try {
         a = parseLaneArgs(rest);

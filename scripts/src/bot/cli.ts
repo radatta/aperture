@@ -11,6 +11,8 @@ import { loadConfig } from './config.ts';
 import { deployDev } from './deploy-dev.ts';
 import type { Clock } from './dispatch.ts';
 import { featureBranch, requirePushed } from './git.ts';
+import { cliGuard, emit } from './help.ts';
+import type { Spec } from './help.ts';
 import { iosFiles } from './ios-routing.ts';
 import {
   LockHeld,
@@ -36,7 +38,7 @@ import { run } from './sh.ts';
 import { PERMS, mintToken } from './token.ts';
 import type { Permissions } from './token.ts';
 
-const USAGE = `pnpm bot <command>
+export const USAGE = `pnpm bot <command>   (-h / --help on any command: its usage; nothing runs)
   push [--after-rebase]          push the current feature branch as the bot (--after-rebase: lease on the last push)
   deploy-dev                     take a dev slot's lock (the one this branch holds, else dev, else devb) + deploy
                                  this pushed commit there; the lock stays held for the devcheck
@@ -50,6 +52,21 @@ const USAGE = `pnpm bot <command>
   run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
   run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs
   prune-branches [--dry-run]     delete local branches whose PR merged at exactly their tip (end of wave)`;
+
+// Every command's allowed flags (and positionals past it); anything else refuses before it runs (bot/help.ts).
+export const FLAGS: Record<string, Spec> = {
+  push: { bare: ['after-rebase'] },
+  'deploy-dev': {},
+  'lock status': {},
+  'lock acquire': { flags: ['slot'] },
+  'lock renew': {},
+  'lock release': {},
+  'lock wait': { flags: ['max', 'slot'], bare: ['any'] },
+  logs: { flags: ['since', 'start', 'end', 'groups', 'filter', 'query'] },
+  'run cancel': { args: 1 },
+  'run rerun': { bare: ['failed'], args: 1 },
+  'prune-branches': { bare: ['dry-run'] },
+};
 
 // `--slot` names a slot; anything else is misuse. Undefined when the flag is absent.
 export function parseSlot(v: string | undefined): Slot | undefined {
@@ -176,6 +193,8 @@ const tellCtx = (dir: string | null): TellContext => ({
 });
 
 export async function main(argv: string[]): Promise<number> {
+  const guard = cliGuard(argv, USAGE, FLAGS, parseArgs);
+  if (guard) return emit(guard);
   const { positional, flags } = parseArgs(argv);
   const [cmd, sub] = positional;
   switch (cmd) {
