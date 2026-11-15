@@ -529,30 +529,19 @@
     },
     async timer() {
       const path = {};
-      const b = binding; // the sitting this step is for, even if a nav lands mid-step
       try {
-        const r = await timerStep(path);
-        // Clicked Resume: whether the clock ran is read at the failure below (LeetCode may write its state
-        // after showing the pop-up). Reset since: whatever runs now is not the old count.
-        if (path.resumeClicked && b) resumedFor = b.sittingId;
-        if (path.reset) resumedFor = null;
-        // This sitting's Start resumed LeetCode's paused clock and it still runs on from its old count (not
-        // reset since, not merely its pop-up opened) — say so, on this try or a Retry.
-        const st = readTimer();
-        const old = r !== true && b && resumedFor === b.sittingId && st && st.running;
-        return old ? `${r.replace(/\.$/, '')} — its clock is running again.` : r;
+        return await timerStep(path);
       } finally {
         debug.log('timer', path); // every exit: a failed Safari run is where the path matters most
       }
     },
   };
   // LeetCode's controls differ by its timer's state, so the step reads the state, not a fixed click list:
-  // running or paused → its Reset, then the pop-up's Reset; then the pop-up's Start (still showing after a
-  // reset, else the idle opener first) in whichever mode LeetCode last used. A paused clock with no Reset (a
-  // pause LeetCode restored on load showed only Hide and Resume, debug log 10a) is resumed first: running, it
-  // has its Reset. At most five clicks, no loop on page state, and a Retry picks up from wherever a half-done
-  // try left it. `path` records the way it took.
-  let resumedFor = null; // the sitting whose Start resumed LeetCode's paused clock
+  // running or paused → its Reset; then, if LeetCode asks (the pop-up of the toolbar logged 2026-11-10), the
+  // pop-up's Reset — the toolbar logged 2026-11-14 resets straight to idle; then Start (the pop-up's, still
+  // showing after a reset, or the toolbar's own, else the idle opener first) in whichever mode LeetCode last
+  // used. At most four clicks, no loop on page state, and a Retry picks up from wherever a half-done try left
+  // it. `path` records the way it took.
   function readTimer() {
     try {
       return timer.parseTimerState(localStorage.getItem(timer.KEY), Date.now());
@@ -567,43 +556,26 @@
     const before = readTimer();
     path.status = clip(before && before.status, 20);
     path.mode = clip(before && before.mode, 20);
+    const idle = () => !timer.needsReset(readTimer());
     let settle = 0;
     if (timer.needsReset(before)) {
       let confirm = q(timerResetConfirm); // a Retry may find LeetCode's pop-up still open and asking
-      let r = confirm ? null : q(timerReset);
-      if (!confirm && !r && timer.paused(before)) {
-        // Off in Options (null): fail here, having clicked nothing.
-        if (!sel.timerResume)
-          return 'LeetCode’s paused timer shows no Reset, and its Resume isn’t configured (Options → Selectors).';
-        const resume = q(sel.timerResume);
-        if (!resume)
-          return 'Couldn’t find LeetCode’s timer reset (timerReset) or its Resume (timerResume).';
-        resume.click();
-        path.resumeClicked = true;
-        // Running now, or its pop-up asking to reset (then that is confirmed below).
-        const going = () => q(timerResetConfirm) || (readTimer() || {}).running;
-        if (!(await waitFor(going, 1500))) return 'LeetCode’s timer didn’t resume.';
-        // Which it did: ran the clock (a failure from here leaves it running — STEP.timer says so) or opened
-        // the pop-up, the clock still paused. The Safari probe reads this.
-        path.resumed = !!(readTimer() || {}).running;
-        path.via = path.resumed ? 'running' : 'popup';
-        confirm = q(timerResetConfirm);
-        if (!confirm) r = await waitFor(() => q(timerReset), 1500);
-        if (!confirm && !r)
-          return 'Couldn’t find LeetCode’s timer reset (timerReset) after resuming it.';
-      }
       if (!confirm) {
+        const r = q(timerReset);
         if (!r) return 'Couldn’t find LeetCode’s timer reset (timerReset).';
         r.click();
-        confirm = await waitFor(() => q(timerResetConfirm), 1500);
-        if (!confirm)
-          return 'LeetCode’s timer didn’t ask to confirm its reset (timerResetConfirm).';
+        // Asked to confirm (its pop-up), or reset already (no pop-up).
+        const next = await waitFor(() => q(timerResetConfirm) || (idle() && 'idle'), 1500);
+        if (!next) return 'LeetCode’s timer didn’t ask to confirm its reset (timerResetConfirm).';
+        confirm = next === 'idle' ? null : next;
       }
-      confirm.click();
-      if (!(await waitFor(() => !timer.needsReset(readTimer()), 1500)))
-        return 'LeetCode’s timer didn’t reset.';
+      if (confirm) {
+        confirm.click();
+        path.confirmed = true;
+        if (!(await waitFor(idle, 1500))) return 'LeetCode’s timer didn’t reset.';
+      }
       path.reset = true;
-      settle = 1000; // the pop-up swaps its Reset for Start
+      settle = 1000; // the pop-up swaps its Reset for Start; the toolbar its Reset for Start
     }
     let start = await waitFor(() => q(timerStart), settle);
     if (!start) {

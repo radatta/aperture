@@ -22,12 +22,9 @@
     resetInert: false, // a test's switch: the pop-up's Reset does nothing (LeetCode never goes idle)
     stickyPopup: false, // a test's switch: an outside click doesn't dismiss the pop-up
     timerResetClicks: 0, // clicks on the widget's own Reset control (the one that opens the pop-up)
-    timerResumes: 0, // clicks on Resume (the paused clock's digits)
-    timerPauses: 0, // clicks on Pause
-    // A test's switch: a paused clock shows Hide and Resume but no Reset until resumed — a pause LeetCode
-    // restored on load (debug log 10a, 2026-11-13).
-    pausedNoReset: false,
-    resumeOpensPopup: false, // a test's switch: Resume opens the pop-up on its Reset instead of resuming
+    // A test's switch, set before the timer renders: the toolbar logged 2026-11-13/14 (debug logs 10a, 11) —
+    // Reset a plain <button> that resets straight to idle (no pop-up), and the idle clock's own Start.
+    toolbar2: false,
   });
   // A test's switch, set before load: GraphQL goes as Safari sends it (debug log 9) — an XHR whose
   // responseType is 'blob', read back with FileReader.
@@ -183,23 +180,19 @@
     timerBox.innerHTML = '';
     // The controls layer, always mounted (pointer-events off while idle on LeetCode; reachable by querySelector).
     const layer = document.createElement('div');
-    const noReset = status === 'pause' && fake.pausedNoReset;
+    if (fake.toolbar2) return renderToolbar2(st, status, elapsed);
     layer.innerHTML =
       '<div role="button" aria-label="Hide">⌃</div>' +
       `<div role="button" aria-label="${status === 'pause' ? 'Resume' : 'Pause'}" data-fake="toggle">${Math.round(elapsed / 1000)}s</div>` +
-      (noReset ? '' : '<div role="button" aria-label="Reset" data-fake="timer-reset">↺</div>');
+      '<div role="button" aria-label="Reset" data-fake="timer-reset">↺</div>';
     timerBox.append(layer);
-    layer.querySelector('[data-fake=timer-reset]')?.addEventListener('click', () => {
+    layer.querySelector('[data-fake=timer-reset]').addEventListener('click', () => {
       fake.timerResetClicks++;
       openPopup('reset');
     });
     layer.querySelector('[data-fake=toggle]').addEventListener('click', () => {
       const cur = readTimer();
       if (!cur || cur.status === 'idle') return;
-      if (cur.status === 'pause') fake.timerResumes++;
-      else fake.timerPauses++;
-      if (cur.status === 'pause' && fake.resumeOpensPopup) return openPopup('reset');
-      if (cur.status === 'pause') fake.pausedNoReset = false; // running, it has its Reset
       if (cur.status === 'pause')
         writeTimer({
           ...cur,
@@ -228,6 +221,45 @@
       else openPopup(status === 'idle' ? 'start' : 'reset');
     });
     timerBox.append(opener);
+  }
+  // The 2026-11-14 toolbar: Hide, the clock's Start / Pause / Resume (its digits), and a Reset button.
+  function renderToolbar2(st, status, elapsed) {
+    const mode = (st && st.mode) || 'forward';
+    const label = status === 'idle' ? 'Start' : status === 'pause' ? 'Resume' : 'Pause';
+    const layer = document.createElement('div');
+    layer.innerHTML =
+      '<div role="button" aria-label="Hide">⌃</div>' +
+      `<div role="button" aria-label="${label}" data-fake="toggle">${Math.round(elapsed / 1000)}s</div>` +
+      '<div><button type="button" aria-label="Reset" data-fake="timer-reset">↻</button>' +
+      '<button type="button" aria-label="More actions">⋮</button></div>';
+    timerBox.append(layer);
+    layer.querySelector('[data-fake=timer-reset]').addEventListener('click', () => {
+      fake.timerResetClicks++;
+      if (fake.resetInert) return;
+      fake.timerResets++;
+      writeTimer(idle(mode));
+    });
+    layer.querySelector('[data-fake=toggle]').addEventListener('click', () => {
+      const cur = readTimer() || idle(mode);
+      if (cur.status === 'idle') {
+        fake.timerStarts++;
+        return writeTimer({ ...idle(cur.mode), startTimestamp: Date.now(), status: 'running' });
+      }
+      if (cur.status === 'pause')
+        return writeTimer({
+          ...cur,
+          status: 'running',
+          pauseMs: null,
+          startTimestamp: Date.now() - (cur.pauseMs || 0),
+        });
+      writeTimer({
+        ...cur,
+        status: 'pause',
+        isUserPaused: true,
+        startTimestamp: null,
+        pauseMs: Date.now() - cur.startTimestamp,
+      });
+    });
   }
   fake.setTimer = (st) => writeTimer(st);
   render();

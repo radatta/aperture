@@ -230,10 +230,7 @@ function open(
       resetInert: boolean;
       stickyPopup: boolean;
       timerResetClicks: number;
-      timerResumes: number;
-      timerPauses: number;
-      pausedNoReset: boolean;
-      resumeOpensPopup: boolean;
+      toolbar2: boolean;
       slowNext: boolean;
       finishNext: () => void;
       fetchDoc: () => void;
@@ -641,8 +638,7 @@ describe('the overlay on a LeetCode problem', () => {
       selectors?: Record<string, unknown>;
       resetCloses?: boolean;
       debug?: boolean;
-      pausedNoReset?: boolean; // read when the widget renders: set before the seed
-      resumeOpensPopup?: boolean;
+      toolbar2?: boolean; // read when the widget renders: set before the seed
     } = {},
   ) {
     const bg = fakeBackground();
@@ -650,8 +646,7 @@ describe('the overlay on a LeetCode problem', () => {
     if (opts.selectors) await ext.local.set({ selectors: opts.selectors });
     if (opts.debug) await ext.local.set({ debug: true });
     const p = open('/problems/two-sum/', ext);
-    if (opts.pausedNoReset) p.fake().pausedNoReset = true;
-    if (opts.resumeOpensPopup) p.fake().resumeOpensPopup = true;
+    if (opts.toolbar2) p.fake().toolbar2 = true;
     if (seed) p.fake().setTimer(seed);
     if (opts.resetCloses) p.fake().resetCloses = true;
     await until(() => p.phase() === 'prompt');
@@ -671,7 +666,6 @@ describe('the overlay on a LeetCode problem', () => {
         timerResets: 1,
         timerStarts: 1,
         timerOpens: 0,
-        timerResumes: 0, // Reset was there: nothing resumed
         strays: 0,
       });
       const t = timerState(p)!;
@@ -680,157 +674,65 @@ describe('the overlay on a LeetCode problem', () => {
     }
   }, 30_000);
 
-  // Debug log 10a (2026-11-13): a pause LeetCode restored on load shows Hide and Resume, and no Reset.
-  it('resumes a paused timer that shows no Reset, then resets and restarts it', async () => {
-    const { p, ext } = await startOn(PAUSED_COUNTDOWN(), { pausedNoReset: true, debug: true });
+  // The toolbar LeetCode shows since 2026-11-13 (debug logs 10a, 11): Reset a plain button that resets with no
+  // pop-up, and Start the idle clock's own control.
+  it('on LeetCode’s current toolbar, restarts a paused or running timer: its Reset button, no pop-up, then its own Start', async () => {
+    for (const [seed, mode] of [
+      [PAUSED_COUNTDOWN(), 'reverse'],
+      [RUNNING_STOPWATCH(), 'forward'],
+    ] as const) {
+      const { p, ext } = await startOn(seed, { toolbar2: true, debug: true });
+      expect(p.phase()).toBe('active');
+      expect(p.fake()).toMatchObject({
+        timerResetClicks: 1,
+        timerResets: 1,
+        timerStarts: 1,
+        timerOpens: 0,
+        strays: 0,
+      });
+      const t = timerState(p)!;
+      expect(t).toMatchObject({ mode, status: 'running' });
+      expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not the old count
+      expect(await logged(ext, 'timer')).toMatchObject({ reset: true, started: true });
+      expect(await logged(ext, 'timer')).not.toHaveProperty('confirmed'); // nothing asked
+    }
+  }, 30_000);
+
+  it('on LeetCode’s current toolbar, starts an idle timer from its own Start, with no reset and no opener', async () => {
+    const { p } = await startOn(
+      { ...RUNNING_STOPWATCH(), status: 'idle', startTimestamp: null },
+      { toolbar2: true },
+    );
     expect(p.phase()).toBe('active');
-    expect(p.fake()).toMatchObject({
-      timerResumes: 1,
-      timerResetClicks: 1,
-      timerResets: 1,
-      timerStarts: 1,
-      timerPauses: 0,
-      strays: 0,
-    });
-    const t = timerState(p)!;
-    expect(t).toMatchObject({ mode: 'reverse', status: 'running' });
-    expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not the old count
-    expect(await logged(ext, 'timer')).toMatchObject({
-      status: 'pause',
-      resumeClicked: true,
-      resumed: true,
-      via: 'running',
-      reset: true,
-      started: true,
-    });
+    expect(p.fake()).toMatchObject({ timerResetClicks: 0, timerOpens: 0, timerStarts: 1 });
+    expect(timerState(p)).toMatchObject({ status: 'running' });
   }, 20_000);
 
-  it('confirms the pop-up when Resume opens it asking to reset, with no click on the widget’s Reset', async () => {
-    const { p } = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
-      resumeOpensPopup: true,
-    });
-    expect(p.phase()).toBe('active');
-    expect(p.fake()).toMatchObject({
-      timerResumes: 1,
-      timerResetClicks: 0,
-      timerResets: 1,
-      timerStarts: 1,
-      strays: 0,
-    });
-  }, 20_000);
-
-  it('says the reset is missing after resuming, and a Retry neither resumes again nor pauses', async () => {
+  it('on LeetCode’s current toolbar, names a missing Reset, and a Reset that never lands; a fixed selector works on Retry', async () => {
     const { p, ext } = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
+      toolbar2: true,
       selectors: { timerReset: '#gone' },
     });
     expect(p.phase()).toBe('failed');
-    expect(p.text()).toContain('after resuming it — its clock is running again.');
-    expect(p.text()).toContain('Continue without the timer');
-    expect(p.text()).toContain('LeetCode’s timer wasn’t restarted'); // the hint never says it didn’t start
-    expect(timerState(p)).toMatchObject({ status: 'running' });
-    p.tap('retry'); // still wrong in Options: fails again, the old count still running — and says so
-    // The Retry's own failure (no "after resuming": the clock already ran), still saying so.
-    await until(() => p.phase() === 'failed' && !p.text().includes('after resuming'), 6000);
-    expect(p.text()).toContain('(timerReset) — its clock is running again.');
-    expect(p.fake()).toMatchObject({ timerResumes: 1, timerPauses: 0 });
+    expect(p.text()).toContain('Couldn’t find LeetCode’s timer reset (timerReset).');
+    expect(p.fake()).toMatchObject({ timerResetClicks: 0, timerStarts: 0 });
     await ext.local.remove('selectors');
     await settle(100);
     p.tap('retry');
     await until(() => p.phase() === 'active', 8000);
-    expect(p.fake()).toMatchObject({
-      timerResumes: 1,
-      timerPauses: 0,
-      timerResetClicks: 1,
-      timerResets: 1,
-      timerStarts: 1,
-      strays: 0,
-    });
-  }, 20_000);
-
-  it('says the clock is running again on any failure after a resume, not only a missing Reset', async () => {
-    const { p } = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
-      selectors: { timerResetConfirm: '#gone' },
-    });
-    expect(p.phase()).toBe('failed');
-    expect(p.text()).toContain(
-      'didn’t ask to confirm its reset (timerResetConfirm) — its clock is running again.',
-    );
-    expect(timerState(p)).toMatchObject({ status: 'running' });
-  }, 20_000);
-
-  it('says nothing of a running clock once it was reset, or when Resume only opened the pop-up', async () => {
-    // Resumed, reset to idle, then no Start to be found: the clock is idle, not running.
-    const reset = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
-      selectors: { timerStart: '#gone', timerOpen: '#gone' },
-    });
-    expect(reset.p.phase()).toBe('failed');
-    expect(reset.p.text()).toContain('Couldn’t find LeetCode’s timer (timerOpen).');
-    expect(reset.p.text()).not.toContain('running again');
-    expect(timerState(reset.p)).toMatchObject({ status: 'idle' });
-    // The user starts LeetCode's clock by hand, and a Retry fails at the confirm: a fresh clock, not the
-    // old count — still nothing said of it.
-    await reset.ext.local.set({ selectors: { timerResetConfirm: '#gone' } });
-    reset.p.fake().setTimer({
-      ...PAUSED_COUNTDOWN(),
-      status: 'running',
-      pauseMs: null,
-      startTimestamp: Date.now(),
-    });
-    await settle(100);
-    reset.p.tap('retry');
-    await until(
-      () => reset.p.phase() === 'failed' && reset.p.text().includes('(timerResetConfirm)'),
-      6000,
-    );
-    expect(reset.p.text()).not.toContain('running again');
-    // Resume opened the pop-up and its Reset never lands: still paused. The debug path says which.
+    expect(p.fake()).toMatchObject({ timerResetClicks: 1, timerResets: 1, timerStarts: 1 });
+    // Neither a pop-up nor idle after the click: said, and no Start clicked.
     const bg = fakeBackground();
-    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
-    await ext.local.set({ debug: true });
-    const p = open('/problems/two-sum/', ext);
-    Object.assign(p.fake(), { pausedNoReset: true, resumeOpensPopup: true });
-    p.fake().setTimer(PAUSED_COUNTDOWN());
-    p.fake().resetInert = true;
-    await until(() => p.phase() === 'prompt');
-    p.tap('start');
-    await until(() => p.phase() === 'failed', 8000);
-    expect(p.text()).toContain('LeetCode’s timer didn’t reset.');
-    expect(p.text()).not.toContain('running again');
-    expect(timerState(p)).toMatchObject({ status: 'pause' });
-    expect(await logged(ext, 'timer')).toMatchObject({
-      resumeClicked: true,
-      resumed: false,
-      via: 'popup',
-    });
-  }, 20_000);
-
-  it('with timerResume off, missing, or pointed at something that doesn’t resume, says so and clicks nothing more', async () => {
-    const off = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
-      selectors: { timerResume: null },
-    });
-    expect(off.p.phase()).toBe('failed');
-    expect(off.p.text()).toContain('its Resume isn’t configured');
-    expect(off.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
-    const missing = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
-      selectors: { timerResume: '#gone' },
-    });
-    expect(missing.p.text()).toContain('timer reset (timerReset) or its Resume (timerResume).');
-    expect(missing.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
-    const inert = await startOn(PAUSED_COUNTDOWN(), {
-      pausedNoReset: true,
-      selectors: { timerResume: '[role="button"][aria-label="Hide"]' },
-    });
-    expect(inert.p.phase()).toBe('failed');
-    expect(inert.p.text()).toContain('LeetCode’s timer didn’t resume.');
-    expect(inert.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
-    expect(timerState(inert.p)).toMatchObject({ status: 'pause' });
-  }, 20_000);
+    const ext2 = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const q = open('/problems/two-sum/', ext2);
+    Object.assign(q.fake(), { toolbar2: true, resetInert: true });
+    q.fake().setTimer(PAUSED_COUNTDOWN());
+    await until(() => q.phase() === 'prompt');
+    q.tap('start');
+    await until(() => q.phase() === 'failed', 8000);
+    expect(q.text()).toContain('didn’t ask to confirm its reset (timerResetConfirm)');
+    expect(q.fake()).toMatchObject({ timerResetClicks: 1, timerResets: 0, timerStarts: 0 });
+  }, 30_000);
 
   it('opens an idle timer under either name', async () => {
     const forward = await startOn({ ...RUNNING_STOPWATCH(), status: 'idle', startTimestamp: null });

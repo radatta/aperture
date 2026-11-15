@@ -103,10 +103,8 @@ describe('timer', () => {
       isUserPaused: true,
       alertMinute: 10,
     });
-    expect(timer.paused(read(restored))).toBe(true);
     expect(timer.needsReset(read(restored))).toBe(true);
-    for (const j of [idle, running, resumed]) expect(timer.paused(read(j))).toBe(false);
-    expect(timer.paused(null)).toBe(false);
+    expect(read(restored)).toMatchObject({ running: false, elapsedMs: 174953 });
   });
 });
 
@@ -122,7 +120,6 @@ describe('selectors', () => {
     const m = selectors.merge({
       editorReset: '#r',
       timerStart: null,
-      timerResume: null, // a click key: null turns the paused-timer fallback off
       timerClicks: ['#a'],
       bogus: 'x',
       dialog: 7,
@@ -131,13 +128,23 @@ describe('selectors', () => {
     expect(m).toMatchObject({
       editorReset: '#r',
       timerStart: null,
-      timerResume: null,
       dialog: selectors.DEFAULTS.dialog,
       lang: selectors.DEFAULTS.lang,
     });
     expect(m).not.toHaveProperty('bogus');
     expect(m).not.toHaveProperty('timerClicks');
     expect(selectors.merge('{bad json')).toEqual({ ...selectors.DEFAULTS });
+    // Both of LeetCode's timer toolbars: the 2026-11-10 one (debug logs 2–5) and the 2026-11-13/14 one (10a, 11).
+    const bar = new JSDOM(
+      '<!doctype html><body>' +
+        '<div id="old"><div role="button" aria-label="Reset">r</div></div>' +
+        '<div id="new"><button type="button" aria-label="Reset">r</button>' +
+        '<div role="button" aria-label="Start">00:45:00</div></div>' +
+        '<button aria-label="Restart">debugger</button></body>',
+    ).window.document;
+    const resets = [...bar.querySelectorAll(selectors.DEFAULTS.timerReset)].map((e) => e.tagName);
+    expect(resets).toEqual(['DIV', 'BUTTON']); // never the debugger's Restart
+    expect(bar.querySelector(selectors.DEFAULTS.timerStart)?.textContent).toBe('00:45:00');
     expect(selectors.merge([])).toEqual({ ...selectors.DEFAULTS });
   });
 });
