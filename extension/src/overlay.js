@@ -154,7 +154,6 @@
         // Not open: Aperture refused, and nothing was touched.
         // Past the reset and its confirm, only LeetCode's timer is missing: the editor was cleared.
         const cleared = state.step === 'timer';
-        // Resumed then failed, the reason itself says LeetCode's clock is running: the hint mustn't say it isn't.
         if (state.open)
           row.append(
             btn(

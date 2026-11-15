@@ -711,10 +711,10 @@ export const lcExtension: Scenario = {
       id: 'ext-timer-toolbar2-idle',
       entry: 'extension',
       kind: 'edge',
-      what: 'On LeetCode’s current toolbar, an idle timer starts from its own Start, with no reset and no opener',
+      what: 'On LeetCode’s current toolbar, an idle timer starts from its own Start, with no reset',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'on LeetCode’s current toolbar, starts an idle timer from its own Start, with no reset and no opener',
+        test: 'on LeetCode’s current toolbar, starts an idle timer from its own Start, with no reset',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, on the fake’s model of the 2026-11-14 toolbar`,
       },
     },

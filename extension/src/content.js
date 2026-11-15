@@ -564,9 +564,10 @@
         const r = q(timerReset);
         if (!r) return 'Couldn’t find LeetCode’s timer reset (timerReset).';
         r.click();
-        // Asked to confirm (its pop-up), or reset already (no pop-up).
-        const next = await waitFor(() => q(timerResetConfirm) || (idle() && 'idle'), 1500);
-        if (!next) return 'LeetCode’s timer didn’t ask to confirm its reset (timerResetConfirm).';
+        // Asked to confirm (its pop-up), or reset already (no pop-up; ~0.6 s in debug log 11).
+        const next = await waitFor(() => q(timerResetConfirm) || (idle() && 'idle'), 3000);
+        if (!next)
+          return 'LeetCode’s timer didn’t reset or ask to confirm (timerReset, timerResetConfirm).';
         confirm = next === 'idle' ? null : next;
       }
       if (confirm) {
@@ -575,7 +576,7 @@
         if (!(await waitFor(idle, 1500))) return 'LeetCode’s timer didn’t reset.';
       }
       path.reset = true;
-      settle = 1000; // the pop-up swaps its Reset for Start; the toolbar its Reset for Start
+      settle = 1000; // the pop-up swaps its Reset for Start; the toolbar's clock turns Start
     }
     let start = await waitFor(() => q(timerStart), settle);
     if (!start) {

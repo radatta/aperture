@@ -231,6 +231,7 @@ function open(
       stickyPopup: boolean;
       timerResetClicks: number;
       toolbar2: boolean;
+      resetDelayMs: number;
       slowNext: boolean;
       finishNext: () => void;
       fetchDoc: () => void;
@@ -639,6 +640,7 @@ describe('the overlay on a LeetCode problem', () => {
       resetCloses?: boolean;
       debug?: boolean;
       toolbar2?: boolean; // read when the widget renders: set before the seed
+      resetDelayMs?: number;
     } = {},
   ) {
     const bg = fakeBackground();
@@ -647,6 +649,7 @@ describe('the overlay on a LeetCode problem', () => {
     if (opts.debug) await ext.local.set({ debug: true });
     const p = open('/problems/two-sum/', ext);
     if (opts.toolbar2) p.fake().toolbar2 = true;
+    if (opts.resetDelayMs) p.fake().resetDelayMs = opts.resetDelayMs;
     if (seed) p.fake().setTimer(seed);
     if (opts.resetCloses) p.fake().resetCloses = true;
     await until(() => p.phase() === 'prompt');
@@ -681,7 +684,7 @@ describe('the overlay on a LeetCode problem', () => {
       [PAUSED_COUNTDOWN(), 'reverse'],
       [RUNNING_STOPWATCH(), 'forward'],
     ] as const) {
-      const { p, ext } = await startOn(seed, { toolbar2: true, debug: true });
+      const { p, ext } = await startOn(seed, { toolbar2: true, debug: true, resetDelayMs: 600 });
       expect(p.phase()).toBe('active');
       expect(p.fake()).toMatchObject({
         timerResetClicks: 1,
@@ -698,7 +701,7 @@ describe('the overlay on a LeetCode problem', () => {
     }
   }, 30_000);
 
-  it('on LeetCode’s current toolbar, starts an idle timer from its own Start, with no reset and no opener', async () => {
+  it('on LeetCode’s current toolbar, starts an idle timer from its own Start, with no reset', async () => {
     const { p } = await startOn(
       { ...RUNNING_STOPWATCH(), status: 'idle', startTimestamp: null },
       { toolbar2: true },
@@ -730,7 +733,7 @@ describe('the overlay on a LeetCode problem', () => {
     await until(() => q.phase() === 'prompt');
     q.tap('start');
     await until(() => q.phase() === 'failed', 8000);
-    expect(q.text()).toContain('didn’t ask to confirm its reset (timerResetConfirm)');
+    expect(q.text()).toContain('didn’t reset or ask to confirm (timerReset, timerResetConfirm)');
     expect(q.fake()).toMatchObject({ timerResetClicks: 1, timerResets: 0, timerStarts: 0 });
   }, 30_000);
 
@@ -836,7 +839,7 @@ describe('the overlay on a LeetCode problem', () => {
       selectors: { timerResetConfirm: '#gone' },
     });
     expect(p.phase()).toBe('failed');
-    expect(p.text()).toContain('didn’t ask to confirm its reset (timerResetConfirm)');
+    expect(p.text()).toContain('didn’t reset or ask to confirm (timerReset, timerResetConfirm)');
     expect(p.text()).toContain('Continue without the timer');
     const open = () => p.w.document.querySelector('#radix-_r_c_[data-state="open"] button');
     expect(open()?.textContent).toMatch(/^Reset /); // LeetCode's pop-up is still asking

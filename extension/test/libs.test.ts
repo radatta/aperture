@@ -145,6 +145,11 @@ describe('selectors', () => {
     const resets = [...bar.querySelectorAll(selectors.DEFAULTS.timerReset)].map((e) => e.tagName);
     expect(resets).toEqual(['DIV', 'BUTTON']); // never the debugger's Restart
     expect(bar.querySelector(selectors.DEFAULTS.timerStart)?.textContent).toBe('00:45:00');
+    const popup = new JSDOM(
+      '<!doctype html><body><div role="dialog" id="radix-_r_c_" data-state="open">' +
+        '<button class="relative font-medium bg-sd-primary">Start Timer</button></div></body>',
+    ).window.document;
+    expect(popup.querySelector(selectors.DEFAULTS.timerStart)?.textContent).toBe('Start Timer');
     expect(selectors.merge([])).toEqual({ ...selectors.DEFAULTS });
   });
 });

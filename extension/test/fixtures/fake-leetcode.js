@@ -25,6 +25,7 @@
     // A test's switch, set before the timer renders: the toolbar logged 2026-11-13/14 (debug logs 10a, 11) —
     // Reset a plain <button> that resets straight to idle (no pop-up), and the idle clock's own Start.
     toolbar2: false,
+    resetDelayMs: 0, // a test's switch: toolbar2's Reset lands this late (about 600 ms in debug log 11)
   });
   // A test's switch, set before load: GraphQL goes as Safari sends it (debug log 9) — an XHR whose
   // responseType is 'blob', read back with FileReader.
@@ -179,8 +180,8 @@
       : 0;
     timerBox.innerHTML = '';
     // The controls layer, always mounted (pointer-events off while idle on LeetCode; reachable by querySelector).
-    const layer = document.createElement('div');
     if (fake.toolbar2) return renderToolbar2(st, status, elapsed);
+    const layer = document.createElement('div');
     layer.innerHTML =
       '<div role="button" aria-label="Hide">⌃</div>' +
       `<div role="button" aria-label="${status === 'pause' ? 'Resume' : 'Pause'}" data-fake="toggle">${Math.round(elapsed / 1000)}s</div>` +
@@ -237,7 +238,8 @@
       fake.timerResetClicks++;
       if (fake.resetInert) return;
       fake.timerResets++;
-      writeTimer(idle(mode));
+      if (fake.resetDelayMs) setTimeout(() => writeTimer(idle(mode)), fake.resetDelayMs);
+      else writeTimer(idle(mode));
     });
     layer.querySelector('[data-fake=toggle]').addEventListener('click', () => {
       const cur = readTimer() || idle(mode);
