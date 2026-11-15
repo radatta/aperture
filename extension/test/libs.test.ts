@@ -92,6 +92,19 @@ describe('timer', () => {
     for (const j of [running, paused, resumed])
       expect(read(j)!.elapsedMs).toBe(lcTimerState(JSON.parse(j), now)!.elapsedMs);
     expect(read(resumed)!.elapsedMs).toBe(5400);
+    // Debug log 10a (2026-11-13): a countdown paused in an earlier page load, restored on this one.
+    const restored = JSON.stringify({
+      mode: 'reverse',
+      startTimestamp: null,
+      pauseMs: 174953,
+      endMs: 2700000,
+      lastUsedEndMs: 2700000,
+      status: 'pause',
+      isUserPaused: true,
+      alertMinute: 10,
+    });
+    expect(timer.needsReset(read(restored))).toBe(true);
+    expect(read(restored)).toMatchObject({ running: false, elapsedMs: 174953 });
   });
 });
 
@@ -121,6 +134,22 @@ describe('selectors', () => {
     expect(m).not.toHaveProperty('bogus');
     expect(m).not.toHaveProperty('timerClicks');
     expect(selectors.merge('{bad json')).toEqual({ ...selectors.DEFAULTS });
+    // Both of LeetCode's timer toolbars: the 2026-11-10 one (debug logs 2–5) and the 2026-11-13/14 one (10a, 11).
+    const bar = new JSDOM(
+      '<!doctype html><body>' +
+        '<div id="old"><div role="button" aria-label="Reset">r</div></div>' +
+        '<div id="new"><button type="button" aria-label="Reset">r</button>' +
+        '<div role="button" aria-label="Start">00:45:00</div></div>' +
+        '<button aria-label="Restart">debugger</button></body>',
+    ).window.document;
+    const resets = [...bar.querySelectorAll(selectors.DEFAULTS.timerReset)].map((e) => e.tagName);
+    expect(resets).toEqual(['DIV', 'BUTTON']); // never the debugger's Restart
+    expect(bar.querySelector(selectors.DEFAULTS.timerStart)?.textContent).toBe('00:45:00');
+    const popup = new JSDOM(
+      '<!doctype html><body><div role="dialog" id="radix-_r_c_" data-state="open">' +
+        '<button class="relative font-medium bg-sd-primary">Start Timer</button></div></body>',
+    ).window.document;
+    expect(popup.querySelector(selectors.DEFAULTS.timerStart)?.textContent).toBe('Start Timer');
     expect(selectors.merge([])).toEqual({ ...selectors.DEFAULTS });
   });
 });
@@ -135,5 +164,12 @@ describe('the manifest', () => {
       expect(src(f), `${f} drifted — pnpm -F @aperture/extension sync-page`).toBe(
         src(f.replace('src/page/', 'src/lib/')),
       );
+  });
+
+  // Just looking's way back is the in-page pill, not a toolbar click (Safari tucks extension icons away).
+  it('has no toolbar action', () => {
+    const manifest = JSON.parse(src('manifest.json')) as Record<string, unknown>;
+    for (const k of ['action', 'browser_action', 'page_action'])
+      expect(manifest).not.toHaveProperty(k);
   });
 });

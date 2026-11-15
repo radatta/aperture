@@ -23,8 +23,12 @@
     timerOpen: '[role="button"][aria-label="Stopwatch"],[role="button"][aria-label="Timer"]',
     // The pop-up's Start Stopwatch / Start Timer, and its Reset Stopwatch / Reset Timer — in an OPEN pop-up only:
     // a click on our overlay dismisses it (Radix), and while it animates out it is still there, `data-state="closed"`.
-    timerStart: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-primary',
-    timerReset: '[role="button"][aria-label="Reset"]',
+    // The toolbar logged 2026-11-14 (debug log 11) has its own Start instead: the idle clock's control.
+    timerStart:
+      '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-primary,[role="button"][aria-label="Start"]',
+    // A [role=button] div on the 2026-11-10 toolbar; a plain <button> on the one logged 2026-11-13/14, where it
+    // resets with no pop-up (debug logs 10a, 11).
+    timerReset: '[role="button"][aria-label="Reset"],button[aria-label="Reset"]',
     timerResetConfirm: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-secondary',
     lang: '[data-e2e-locator="lang-selector-button"]',
   });

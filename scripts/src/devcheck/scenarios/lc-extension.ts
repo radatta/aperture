@@ -697,12 +697,182 @@ export const lcExtension: Scenario = {
         'only Safari’s own paint shows it (a closed shadow root on a fixed host) — the Safari pass’s first step, by eye',
     },
     {
+      id: 'ext-timer-toolbar2',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'On LeetCode’s current toolbar (Reset a plain button, no confirm pop-up), a paused or running timer is reset and started fresh from its own Start',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'on LeetCode’s current toolbar, restarts a paused or running timer: its Reset button, no pop-up, then its own Start',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, on the fake’s model of the 2026-11-14 toolbar`,
+      },
+    },
+    {
+      id: 'ext-timer-toolbar2-idle',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'On LeetCode’s current toolbar, an idle timer starts from its own Start, with no reset',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'on LeetCode’s current toolbar, starts an idle timer from its own Start, with no reset',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, on the fake’s model of the 2026-11-14 toolbar`,
+      },
+    },
+    {
+      id: 'ext-timer-toolbar2-missing',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'On LeetCode’s current toolbar, a missing Reset is named and a fixed selector works on Retry; a Reset that never lands clicks no Start',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'on LeetCode’s current toolbar, names a missing Reset, and a Reset that never lands; a fixed selector works on Retry',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, on the fake’s model of the 2026-11-14 toolbar`,
+      },
+    },
+    {
+      id: 'ext-timer-paused-safari',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'In Safari on LeetCode’s current toolbar, Start over a paused countdown (after a reload too), a running one, and a stopwatch reaches a fresh running clock',
+      needsYou:
+        'only LeetCode’s real page has its toolbar, and its stopwatch mode was never logged on the current one — the Safari pass: pause, reload, Start; a stopwatch, Start; export the log',
+    },
+    {
+      id: 'ext-reopen',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'After Just looking, the pill at the bottom right brings the prompt back for that problem',
+      offDev: {
+        file: 'scripts/src/lc-e2e/extension.test.ts',
+        test: 'resumes a reload mid-sitting with no overlay and no reset, and re-prompts on SPA navigation where a second Start is refused',
+        why: `${noStep}; the Chrome E2E clicks the pill at its real coordinates after a refused Start’s Just looking`,
+      },
+    },
+    {
+      id: 'ext-reopen-forget',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The pill forgets the dismissal: a reload then prompts, and Start works',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'after Just looking, the pill brings the prompt back and forgets the dismissal; Start then works',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-reopen-trust',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A page script’s click on the pill, or a trusted one on a host the page covered or restyled, does nothing',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'ignores a page script’s click on the pill, and a trusted one on a host the page tampered with',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-reopen-nav',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The pill survives a reload, isn’t on the next problem, is back on return, isn’t on a list; reopen then Just looking gives it again',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'the pill survives a reload and is the dismissed problem’s alone: not on Next, back on return, not on a list',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-reopen-sitting',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'No pill in a tab whose sitting is open; a sitting opened in another tab meanwhile resumes on the pill instead of prompting',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'shows no pill in a tab whose sitting is open; one opened in another tab meanwhile resumes on the pill',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-reopen-state',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The reducer’s reopen goes from a dismissed problem to the prompt, forgetting the dismissal, and is ignored in every other phase',
+      offDev: {
+        file: 'extension/test/overlay-state.test.ts',
+        test: 'reopens a dismissed problem at the pill, forgetting the dismissal, and only there',
+        why: `${noStep}; the reducer is pure`,
+      },
+    },
+    {
+      id: 'ext-undismiss',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The background forgets only that problem’s dismissal',
+      offDev: {
+        file: 'extension/test/background.test.ts',
+        test: 'answers Start directly, says when it isn’t configured, and remembers Just looking for the session until the pill',
+        why: `${noStep}; the real background runs in a vm`,
+      },
+    },
+    {
+      id: 'ext-no-action',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The manifest has no toolbar action: the way back is the in-page pill',
+      offDev: {
+        file: 'extension/test/libs.test.ts',
+        test: 'has no toolbar action',
+        why: `${noStep}; a manifest check`,
+      },
+    },
+    {
+      id: 'ext-reopen-ended',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The pill over a binding Aperture already ended prompts, rather than doing nothing',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a pill over a binding Aperture already ended prompts, rather than doing nothing',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-reopen-stuck',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Stuck hand-offs’ warning takes the pill’s place, and the pill comes back once they land',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'stuck hand-offs’ warning takes the pill’s place, and the pill comes back once they land',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-reopen-safari',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'In Safari, the pill paints bottom-right over nothing of LeetCode’s, and a click brings the prompt back',
+      needsYou:
+        'only Safari’s own paint and LeetCode’s real layout show it — the Safari pass: Just looking, look at the corner, click the pill',
+    },
+    {
+      id: 'ext-doc-nav-id',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A sitting started before LeetCode named the question learns its id, on coming back, from the doc fetched while away',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'learns a sitting’s question id from the doc kept while away, on coming back',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
       id: 'ext-selectors',
       entry: 'extension',
       kind: 'nominal',
       what: 'The shipped selectors find LeetCode’s real reset, its confirm and its timer’s controls, from a running timer and from an idle one',
       needsYou:
-        'real Safari sittings on leetcode.com — from a running countdown, an idle one, a never-opened problem and a narrow pane, with the debug log exported (extension/README.md → LeetCode’s controls): only LeetCode’s real page has them',
+        'real Safari sittings on leetcode.com — from a running countdown, an idle one, one paused before a reload, a never-opened problem and a narrow pane, with the debug log exported (extension/README.md → LeetCode’s controls): only LeetCode’s real page has them',
     },
     {
       id: 'ext-start-safari',

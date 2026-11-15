@@ -68,11 +68,11 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
       `(host, sel) => { const r = (${ROOT})(host); const el = r && r.querySelector(sel); return el ? el.textContent : null; }`,
       [host, sel],
     );
-  // A trusted click at the button's centre, as a user's.
-  const click = async (ap: string) => {
+  // A trusted click at the button's centre, as a user's — the overlay's, or the badge host's pill.
+  const click = async (ap: string, host = 'aperture-lc-overlay') => {
     const at = await inIsolated<{ x: number; y: number } | null>(
-      `(ap) => { const r = (${ROOT})('aperture-lc-overlay'); const b = r && r.querySelector('[data-ap=' + ap + ']'); if (!b) return null; const q = b.getBoundingClientRect(); return { x: q.left + q.width / 2, y: q.top + q.height / 2 }; }`,
-      [ap],
+      `(ap, host) => { const r = (${ROOT})(host); const b = r && r.querySelector('[data-ap=' + ap + ']'); if (!b) return null; const q = b.getBoundingClientRect(); return { x: q.left + q.width / 2, y: q.top + q.height / 2 }; }`,
+      [ap, host],
     );
     if (!at) throw new Error(`no ${ap} button`);
     await page.mouse!.click(at.x, at.y);
@@ -264,6 +264,17 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     // Refused before any click: the editor is untouched.
     expect(await page.evaluate<{ resets: number }>('window.__fake')).toMatchObject({ resets: 0 });
     expect((await rpc<Sitting[]>('listSittings')).length).toBe(before.length);
+
+    // Just looking, then the pill at its real place (bottom-right, a fixed child of a zero-size host): the
+    // prompt again.
+    await click('look');
+    await until(async () => (await phase()) === 'hidden');
+    expect(await textOf('aperture-lc-badge', '[data-ap=reopen]')).toBe(
+      'Aperture · Start a sitting',
+    );
+    await click('reopen', 'aperture-lc-badge');
+    await until(async () => (await phase()) === 'prompt');
+    expect(await textOf('aperture-lc-badge', '[data-ap=reopen]')).toBeNull();
   }, 60_000);
 
   // Safari sends LeetCode's GraphQL as blob XHRs (debug log 9); Chromium's real XHR and Blob prove the read.

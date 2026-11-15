@@ -537,23 +537,26 @@
     },
   };
   // LeetCode's controls differ by its timer's state, so the step reads the state, not a fixed click list:
-  // running or paused → its Reset, then the pop-up's Reset; then the pop-up's Start (still showing after a
-  // reset, else the idle opener first) in whichever mode LeetCode last used. At most four clicks, no loop on
-  // page state, and a Retry picks up from wherever a half-done try left it. `path` records the way it took.
+  // running or paused → its Reset; then, if LeetCode asks (the pop-up of the toolbar logged 2026-11-10), the
+  // pop-up's Reset — the toolbar logged 2026-11-14 resets straight to idle; then Start (the pop-up's, still
+  // showing after a reset, or the toolbar's own, else the idle opener first) in whichever mode LeetCode last
+  // used. At most four clicks, no loop on page state, and a Retry picks up from wherever a half-done try left
+  // it. `path` records the way it took.
+  function readTimer() {
+    try {
+      return timer.parseTimerState(localStorage.getItem(timer.KEY), Date.now());
+    } catch {
+      return null;
+    }
+  }
   async function timerStep(path) {
     const { timerOpen, timerStart, timerReset, timerResetConfirm } = sel;
     if (!timerOpen || !timerStart || !timerReset || !timerResetConfirm)
       return 'LeetCode’s timer isn’t configured (Options → Selectors).';
-    const read = () => {
-      try {
-        return timer.parseTimerState(localStorage.getItem(timer.KEY), Date.now());
-      } catch {
-        return null;
-      }
-    };
-    const before = read();
+    const before = readTimer();
     path.status = clip(before && before.status, 20);
     path.mode = clip(before && before.mode, 20);
+    const idle = () => !timer.needsReset(readTimer());
     let settle = 0;
     if (timer.needsReset(before)) {
       let confirm = q(timerResetConfirm); // a Retry may find LeetCode's pop-up still open and asking
@@ -561,15 +564,19 @@
         const r = q(timerReset);
         if (!r) return 'Couldn’t find LeetCode’s timer reset (timerReset).';
         r.click();
-        confirm = await waitFor(() => q(timerResetConfirm), 1500);
-        if (!confirm)
-          return 'LeetCode’s timer didn’t ask to confirm its reset (timerResetConfirm).';
+        // Asked to confirm (its pop-up), or reset already (no pop-up; ~0.6 s in debug log 11).
+        const next = await waitFor(() => q(timerResetConfirm) || (idle() && 'idle'), 3000);
+        if (!next)
+          return 'LeetCode’s timer didn’t reset or ask to confirm (timerReset, timerResetConfirm).';
+        confirm = next === 'idle' ? null : next;
       }
-      confirm.click();
-      if (!(await waitFor(() => !timer.needsReset(read()), 1500)))
-        return 'LeetCode’s timer didn’t reset.';
+      if (confirm) {
+        confirm.click();
+        path.confirmed = true;
+        if (!(await waitFor(idle, 1500))) return 'LeetCode’s timer didn’t reset.';
+      }
       path.reset = true;
-      settle = 1000; // the pop-up swaps its Reset for Start
+      settle = 1000; // the pop-up swaps its Reset for Start; the toolbar's clock turns Start
     }
     let start = await waitFor(() => q(timerStart), settle);
     if (!start) {
@@ -582,7 +589,7 @@
     }
     start.click();
     path.started = true;
-    const fresh = () => timer.startedFresh(read());
+    const fresh = () => timer.startedFresh(readTimer());
     return (await waitFor(fresh, 1500)) ? true : 'LeetCode’s timer didn’t start.';
   }
 
@@ -742,7 +749,26 @@
     retry: () => begin('retry'),
     continue: () => act({ type: 'continue' }),
     dismiss: () => act({ type: 'dismiss' }),
+    reopen: () => reopen(),
   });
+  // The pill on a dismissed problem. A sitting still open for it (opened meanwhile in another tab) resumes
+  // instead of prompting: the nav reads the binding. One already over (by bindingStatus's rule) prompts.
+  async function reopen() {
+    const slug = screenSlug;
+    const still = () => state.phase === 'hidden' && state.slug === slug && screenSlug === slug;
+    if (!slug || !still()) return;
+    const got = await local.get([`sitting:${slug}`, `sync:${slug}`]).catch(() => null);
+    if (!still()) return;
+    const b = got && got[`sitting:${slug}`];
+    const s = got && got[`sync:${slug}`];
+    const over = b && s && s.sittingId === b.sittingId && s.status && s.status !== 'active';
+    if (b && !over) {
+      // Forgotten here too: once that sitting ends, the next visit prompts rather than showing the pill.
+      send({ type: 'undismiss', slug }).catch(() => {});
+      return navTo(slug);
+    }
+    act({ type: 'reopen' });
+  }
   // A retryable failure on this problem keeps the id and sends this click's time; if the first try had in
   // fact landed, the server resumes that sitting and keeps its own (first) time.
   function begin(type) {
@@ -771,6 +797,8 @@
       else if (e.do === 'resume') resume();
       else if (e.do === 'rememberDismiss')
         send({ type: 'dismiss', slug: state.slug }).catch(() => {});
+      else if (e.do === 'forgetDismiss')
+        send({ type: 'undismiss', slug: state.slug }).catch(() => {});
       else if (e.do === 'clearBinding') clearBinding();
     }
   }
@@ -783,9 +811,9 @@
     paintBadge();
   }
   let badgeTone = '';
-  function setBadge(text, tone) {
+  function setBadge(text, tone, action) {
     badgeTone = tone || '';
-    view.setBadge(text, badgeTone);
+    view.setBadge(text, badgeTone, action);
   }
   const ago = (ms) =>
     ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s ago` : `${Math.round(ms / 60_000)}m ago`;
@@ -799,6 +827,9 @@
         'bad',
       );
     if (state.phase === 'ended') return setBadge('Aperture · Sitting ended in Aperture', '');
+    // Hidden with a slug is a dismissed problem (overlay-state): its way back.
+    if (state.phase === 'hidden' && state.slug && state.slug === screenSlug)
+      return setBadge('Aperture · Start a sitting', '', 'reopen');
     if (state.phase !== 'active' || !binding) return setBadge(null);
     const now = Date.now();
     const mins = Math.max(0, Math.floor((now - binding.clientStartedAt) / 60_000));
@@ -845,12 +876,17 @@
     binding = null;
     sync = null;
     lastTimerRaw = null;
+    paintBadge(); // the last problem's pill or badge goes now, not after the reads below
     if (!slug) return act({ type: 'nav', slug: null });
     const got = await local.get([`sitting:${slug}`, `sync:${slug}`]);
     if (screenSlug !== slug) return;
     binding = got[`sitting:${slug}`] || null;
     sync = got[`sync:${slug}`] || null;
     if (binding && bindingStatus() !== 'active') await clearBinding();
+    // A sitting started before LeetCode named the question learns its id from the doc fetched while away
+    // (onProblem keeps an off-screen doc but learns nothing from it). The fetched doc wins, as on the hint path.
+    const keptId = binding && binding.questionId == null && scalar(problems.get(slug)?.questionId);
+    if (keptId) learnQuestionId(slug, keptId);
     const dismissed = binding
       ? false
       : !!((await send({ type: 'dismissed?', slug }).catch(() => null)) || {}).dismissed;
