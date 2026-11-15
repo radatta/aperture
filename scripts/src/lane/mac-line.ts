@@ -32,12 +32,17 @@ export function macLine(
 export function parseAdmission(text: string | null, branch: string): Admission {
   if (text === null) return { kind: 'unknown' };
   try {
-    const r = JSON.parse(text) as { branch_policies?: { id?: unknown; name?: unknown }[] };
+    const r = JSON.parse(text) as {
+      total_count?: unknown;
+      branch_policies?: { id?: unknown; name?: unknown }[];
+    };
     if (!Array.isArray(r?.branch_policies)) return { kind: 'unknown' };
     const hit = r.branch_policies.find((p) => p?.name === branch);
-    return hit && Number.isInteger(hit.id)
-      ? { kind: 'id', id: hit.id as number }
-      : { kind: 'none' };
+    if (hit && Number.isInteger(hit.id)) return { kind: 'id', id: hit.id as number };
+    // past the first page (100): not seen is not "not admitted"
+    if (typeof r.total_count === 'number' && r.total_count > r.branch_policies.length)
+      return { kind: 'unknown' };
+    return { kind: 'none' };
   } catch {
     return { kind: 'unknown' };
   }

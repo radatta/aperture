@@ -56,5 +56,11 @@ describe('parseAdmission', () => {
     expect(parseAdmission(null, 'b')).toEqual({ kind: 'unknown' });
     expect(parseAdmission('not json', 'b')).toEqual({ kind: 'unknown' });
     expect(parseAdmission('{}', 'b')).toEqual({ kind: 'unknown' });
+    // past the first page: not seen is unknown, never "not admitted"
+    const paged = '{"total_count":131,"branch_policies":[{"id":5,"name":"main"}]}';
+    expect(parseAdmission(paged, 'b')).toEqual({ kind: 'unknown' });
+    expect(
+      parseAdmission('{"total_count":1,"branch_policies":[{"id":5,"name":"main"}]}', 'b'),
+    ).toEqual({ kind: 'none' });
   });
 });

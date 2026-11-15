@@ -92,6 +92,7 @@ Without `--force-abandon`, it goes ahead only when all of these hold:
 `--force-abandon "<reason>"`, on the user's word, skips only those gates. In both modes it refuses when:
 
 - the worktree has uncommitted files (never forced)
+- its `localNotes/` holds a top-level `mac-cleanup.txt` or `lane-end.txt`, which the archive record would overwrite
 - the branch holds a live dev lock (`pnpm bot lock release` first)
 
 Then:
@@ -106,8 +107,9 @@ Then:
 4. Closes the window **by its recorded id only**, before the record that names it goes. That happens only when the
    tmux server's pid and start time match the record and the window still carries the lane's name. Otherwise it
    closes nothing and says why; a failed close is reported, never a failed end. A window is never looked up by name.
-   Run from the lane's own window, the close is delayed 90 s (`tmux run-shell -d 90`) so the session can still send
-   `[merged]`.
+   It closes at once only when the command provably runs in another window; in the lane's own window, or when it
+   can't tell (no `TMUX_PANE`), the close is delayed 90 s (`tmux run-shell -d 90`), so the kill can't cut the run off
+   and the session can still send `[merged]`.
 5. Clears the board lane and the lifecycle record.
 6. **Prints the maintainer's Mac line, never runs it** (below).
 
@@ -116,7 +118,8 @@ A rerun after the worktree is gone skips steps 1–3 and prints the line again.
 **The Mac line.** One `&&` chain from `cd <mac-repo>`:
 
 - first, for a branch admitted to the `dev` environment (`docs/ops/CI-BOT.md` → workflow changes), the admission's
-  DELETE by its id, which the command read, plus the listing that shows it went. When the read failed, it uses
+  DELETE by its id, which the command read (100 a page), plus the listing that shows it went. When the read failed,
+  or the branch wasn't on the page and more exist, it uses
   CI-BOT.md's by-name form instead, which removes nothing for a branch that was never admitted. It goes first because
   it is the security half, and a failed delete would stop the chain.
 - then `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse), left out when the branch is

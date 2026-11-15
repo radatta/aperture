@@ -197,7 +197,7 @@ export function windowCheck(d: Deps, r: Lifecycle | null): { id: string } | { wh
   if (pid !== r.tmuxServerPid || start !== r.tmuxServerStart)
     return { why: `the tmux server restarted since ${r.windowId} was recorded` };
   if (id !== r.windowId || name !== r.branch)
-    return { why: `${r.windowId} is now named ${name ?? '?'}, not ${r.branch}` };
+    return { why: `${r.windowId} is now named ${name || '?'}, not ${r.branch}` };
   return { id: r.windowId };
 }
 

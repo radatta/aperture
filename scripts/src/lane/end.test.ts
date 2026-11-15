@@ -227,7 +227,7 @@ describe('lane end: gates', () => {
       ]),
     );
     expect(end(t.d, args())).toBe(0);
-    expect(t.calls.some((c) => c.line.includes('created=%3E%3D2026-11-14T01%3A00%3A00.000Z'))).toBe(
+    expect(t.calls.some((c) => c.line.includes('created=%3E%3D2026-11-14T01%3A00%3A00Z'))).toBe(
       true,
     );
   });
@@ -265,7 +265,7 @@ describe('lane end: gates', () => {
 });
 
 describe('lane end: the nominal run', () => {
-  it('archives and checks, removes, clears, prints, then closes the window by id, last', () => {
+  it('archives and checks, removes, closes the window by id, clears, prints', () => {
     const w = world();
     lane(w);
     const t = deps(w, script());
@@ -465,6 +465,86 @@ describe('lane end: the nominal run', () => {
     expect(readFileSync(join(w.main, 'localNotes/archive', B, 'mac-cleanup.txt'), 'utf8')).toBe(
       line,
     );
+    expect(t2.out()).toContain(`\n  ${line.trim()}`);
     expect(effects(t2.calls)).toEqual([]);
+  });
+
+  it('closes the window before the record that names it goes', () => {
+    const w = world();
+    lane(w);
+    const t = deps(w, script());
+    const lc = join(w.board, 'lifecycle', `${B}.json`);
+    let killedFirst: boolean | null = null;
+    const rm = t.d.fs.rm;
+    t.d.fs = {
+      ...t.d.fs,
+      rm: (p) => {
+        if (p === lc) killedFirst = t.calls.some((c) => c.line.startsWith('tmux kill-window'));
+        rm(p);
+      },
+    };
+    expect(end(t.d, args())).toBe(0);
+    expect(killedFirst).toBe(true);
+  });
+
+  it('cannot tell its own window (no TMUX_PANE): the close is delayed, never at once', () => {
+    const w = world();
+    lane(w);
+    const t = deps(w, script(), { tmuxPane: null });
+    expect(end(t.d, args())).toBe(0);
+    expect(effects(t.calls).at(-1)).toBe('tmux run-shell -b -d 90 -C kill-window -t @9');
+    expect(t.calls.some((c) => c.line.startsWith('tmux kill-window'))).toBe(false);
+  });
+
+  it('refuses a diverged local head even with the worktree gone', () => {
+    const w = world();
+    lane(w);
+    const t = deps(
+      w,
+      script([
+        ['git rev-parse --verify --quiet refs/heads/', 'e'.repeat(40)],
+        ['git fetch origin pull/42/head', ''],
+        ['git merge-base --is-ancestor', fail()],
+      ]),
+    );
+    const real = t.d.fs.exists;
+    t.d.fs = { ...t.d.fs, exists: (p) => !p.endsWith(`.claude/worktrees/${B}`) && real(p) };
+    expect(end(t.d, args())).toBe(3);
+    expect(t.out()).toMatch(/has commits PR 42's merged head/);
+  });
+
+  it('a failed GitHub read is exit 1 (retry), never a refusal', () => {
+    for (const over of [
+      [['gh pr view', fail('HTTP 502')]],
+      [
+        ['git rev-parse --verify --quiet refs/heads/', 'e'.repeat(40)],
+        ['git fetch origin pull/42/head', fail('network')],
+      ],
+    ] as [string, Answer][][]) {
+      const w = world();
+      lane(w);
+      const t = deps(w, script(over));
+      expect(end(t.d, args())).toBe(1);
+      expect(t.out()).not.toMatch(/they would go with the branch/);
+    }
+  });
+
+  it("refuses when the lane's localNotes holds a file the archive record would overwrite", () => {
+    const w = world();
+    lane(w, { 'lane-end.txt': 'mine\n' });
+    const t = deps(w, script());
+    expect(end(t.d, args())).toBe(3);
+    expect(t.out()).toMatch(/localNotes\/lane-end.txt would be overwritten/);
+    expect(effects(t.calls)).toEqual([]);
+  });
+
+  it('with no localNotes, a rerun reuses its own archive', () => {
+    const w = world();
+    lane(w, {});
+    const t = deps(w, script([['git worktree remove', fail('locked')]]));
+    expect(end(t.d, args())).toBe(1);
+    const t2 = deps(w, script());
+    expect(end(t2.d, args())).toBe(0);
+    expect(existsSync(join(w.main, 'localNotes/archive', `${B}.1`))).toBe(false);
   });
 });

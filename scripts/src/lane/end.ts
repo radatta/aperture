@@ -42,7 +42,8 @@ const refuse = (d: Deps, msg: string, code: number = EXIT.refused) => {
 };
 const short = (s: string) => s.slice(0, 7);
 
-function readPr(d: Deps, b: string): Pr | string {
+// A refusal (no PR: exit 3) or a failed read (exit 1: retry) as { msg, code }.
+function readPr(d: Deps, b: string): Pr | { msg: string; code: number } {
   let text: string;
   try {
     text = d.run(
@@ -55,13 +56,13 @@ function readPr(d: Deps, b: string): Pr | string {
   } catch (err) {
     const m = (err as Error).message;
     return /no pull requests found/i.test(m)
-      ? `no PR for ${b}`
-      : `gh pr view failed: ${m.split('\n')[0]}`;
+      ? { msg: `no PR for ${b} (or --force-abandon "<reason>")`, code: EXIT.refused }
+      : { msg: `gh pr view failed: ${m.split('\n')[0]}`, code: EXIT.failed };
   }
   try {
     return JSON.parse(text) as Pr;
   } catch {
-    return `gh pr view printed no JSON`;
+    return { msg: 'gh pr view printed no JSON', code: EXIT.failed };
   }
 }
 
@@ -83,7 +84,9 @@ function deployGate(
       const own = mainRuns(d, `head_sha=${sha}&event=push&per_page=100`);
       hit = deployFor(sha, own);
       if (hit && hit.via === null && hit.run.conclusion === 'cancelled' && hit.run.createdAt) {
-        const since = encodeURIComponent(`>=${new Date(hit.run.createdAt).toISOString()}`);
+        // GitHub's documented date form has no fractional seconds
+        const at = new Date(hit.run.createdAt).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const since = encodeURIComponent(`>=${at}`);
         const later = mainRuns(d, `branch=main&event=push&per_page=100&created=${since}`);
         hit = deployFor(sha, [...own, ...later.filter((r) => r.sha !== sha)]) ?? hit;
       }
@@ -118,10 +121,11 @@ function deployGate(
 
 // The local branch holds nothing the PR lacks: its head is the PR's, or an ancestor of it (the PR's head moved on
 // GitHub, e.g. "Update branch"). The PR head is fetched into FETCH_HEAD only.
-function headCovered(d: Deps, head: string, pr: Pr): boolean {
+function headCovered(d: Deps, head: string, pr: Pr): boolean | 'fetch-failed' {
   if (head === pr.headRefOid) return true;
   const at = d.env.mainRoot;
-  if (tryRun(d, 'git', ['fetch', 'origin', `pull/${pr.number}/head`], at) === null) return false;
+  if (tryRun(d, 'git', ['fetch', 'origin', `pull/${pr.number}/head`], at) === null)
+    return 'fetch-failed';
   return tryRun(d, 'git', ['merge-base', '--is-ancestor', head, pr.headRefOid], at) !== null;
 }
 
@@ -165,13 +169,16 @@ export function end(d: Deps, a: EndArgs): number {
   let why: string;
   if (a.abandon === null) {
     const pr = readPr(d, b);
-    if (typeof pr === 'string') return refuse(d, `${pr} (or --force-abandon "<reason>")`);
+    if ('msg' in pr) return refuse(d, pr.msg, pr.code);
     if (pr.state !== 'MERGED')
       return refuse(
         d,
         `PR ${pr.number} is ${pr.state === 'CLOSED' ? 'closed unmerged' : pr.state} (or --force-abandon "<reason>")`,
       );
-    if (head && !headCovered(d, head, pr))
+    const covered = head ? headCovered(d, head, pr) : true;
+    if (covered === 'fetch-failed')
+      return refuse(d, `could not fetch PR ${pr.number}'s head to compare`, EXIT.failed);
+    if (head && !covered)
       return refuse(
         d,
         `local ${b} (${short(head)}) has commits PR ${pr.number}'s merged head (${short(pr.headRefOid)}) lacks: they would go with the branch`,
@@ -194,7 +201,10 @@ export function end(d: Deps, a: EndArgs): number {
     return refuse(d, `${b} holds the ${lock} lock: pnpm bot lock release from the worktree first`);
 
   const adm = parseAdmission(
-    tryRun(d, 'gh', ['api', `repos/${e.slug}/environments/dev/deployment-branch-policies`]),
+    tryRun(d, 'gh', [
+      'api',
+      `repos/${e.slug}/environments/dev/deployment-branch-policies?per_page=100`,
+    ]),
     b,
   );
   const lc = lifecyclePath(e, b);
@@ -209,8 +219,14 @@ export function end(d: Deps, a: EndArgs): number {
   if (hasTree) {
     const src = `${wt}/localNotes`;
     const has = d.fs.exists(src);
+    const own = OWN_FILES.filter((f) => d.fs.exists(`${src}/${f}`));
+    if (own.length)
+      return refuse(d, `localNotes/${own[0]} would be overwritten in the archive: rename it first`);
     const base = archivePath(e, b);
-    const fits = (p: string) => d.fs.exists(p) && has && d.fs.sameTree(src, p, OWN_FILES);
+    // An archive fits when it holds this localNotes; with no localNotes, when it holds only this command's files.
+    const fits = (p: string) =>
+      d.fs.exists(p) &&
+      (has ? d.fs.sameTree(src, p, OWN_FILES) : d.fs.list(p).every((f) => OWN_FILES.includes(f)));
     if (dest && !fits(dest)) dest = null; // localNotes changed since: a fresh copy
     if (!dest && d.fs.exists(base) && !d.fs.exists(`${base}/lane-end.txt`) && fits(base))
       dest = base;
@@ -249,11 +265,13 @@ export function end(d: Deps, a: EndArgs): number {
   let closed: string;
   if ('why' in win) closed = `window not closed (${win.why}): close it yourself`;
   else {
+    // At once only when this provably runs in another window; in its own, or when that can't be told, delayed, so
+    // a kill can't cut this run off before the record goes and the line is printed.
     const self = e.tmuxPane
       ? tryRun(d, 'tmux', ['display', '-p', '-t', e.tmuxPane, '#{window_id}'])
       : null;
     try {
-      if (self === win.id) {
+      if (self === null || self === win.id) {
         d.run('tmux', [
           'run-shell',
           '-b',
@@ -262,7 +280,10 @@ export function end(d: Deps, a: EndArgs): number {
           '-C',
           `kill-window -t ${win.id}`,
         ]);
-        closed = `this is the lane's own window: it closes in ${SELF_CLOSE_SEC} s; send [merged] to the hub now`;
+        closed =
+          self === null
+            ? `window ${win.id} closes in ${SELF_CLOSE_SEC} s (this may be it: send [merged] to the hub now)`
+            : `this is the lane's own window: it closes in ${SELF_CLOSE_SEC} s; send [merged] to the hub now`;
       } else {
         d.run('tmux', ['kill-window', '-t', win.id]);
         closed = `closed window ${win.id}`;

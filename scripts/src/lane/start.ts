@@ -94,7 +94,9 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
   if (tryRun(d, 'git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], e.mainRoot) !== null)
     return refuse(d, `branch ${b} already exists (local)`);
-  if (d.run('git', ['ls-remote', '--heads', 'origin', b], { cwd: e.mainRoot }).trim())
+  if (
+    d.run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${b}`], { cwd: e.mainRoot }).trim()
+  )
     return refuse(d, `branch ${b} already exists (on origin)`);
   const wt = worktreePath(e, b);
   const trees = parseWorktrees(
@@ -182,7 +184,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
       undo.push({
         what: `branch ${b}`,
         fn: () => {
-          d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot });
+          d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot }); // repo-wide, but only drops dead admin dirs
           d.run('git', ['branch', '-d', b], { cwd: e.mainRoot });
         },
       });

@@ -402,6 +402,27 @@ describe('lane start: rollback', () => {
     expect(t.calls.some((c) => c.line.startsWith('tmux new-window'))).toBe(false);
   });
 
+  it('a failed window record write rolls back the window too', async () => {
+    const w = world();
+    const t = deps(w, script(w));
+    const real = t.d.fs.write;
+    t.d.fs = {
+      ...t.d.fs,
+      write: (p, s) => {
+        if (p.includes('/lifecycle/') && s.includes('"@9"')) throw new Error('EACCES');
+        real(p, s);
+      },
+    };
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.out()).toMatch(/could not record the window: EACCES/);
+    const undo = t.calls.map((c) => c.line).slice(-3);
+    expect(undo).toEqual([
+      'tmux kill-window -t @9',
+      `git worktree remove .claude/worktrees/${B}`,
+      `git branch -d ${B}`,
+    ]);
+  });
+
   it('never deletes a branch with the force form', async () => {
     const w = world();
     const t = deps(w, script(w, [['pnpm install', fail()]]));
