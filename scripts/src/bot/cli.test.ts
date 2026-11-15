@@ -113,6 +113,8 @@ describe('run flags', () => {
     ['rerun', '42', 'extra'],
     ['rerun'],
     ['cancel', 'x42'],
+    ['foo', '42'],
+    ['cancel', '42', '--failed'],
   ])('refuses %s %s %s as a usage error, before any token is minted', async (...args) => {
     expect(await main(['run', ...args])).toBe(2);
   });

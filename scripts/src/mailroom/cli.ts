@@ -54,8 +54,8 @@ export async function main(argv: string[]): Promise<number> {
       }
       return openPr(deps(), flags.title, waitMs);
     case 'edit-pr':
-      if (flags.title === 'true') {
-        console.error(`--title needs a value\n${USAGE}`);
+      if (flags.title === 'true' || flags.title === '') {
+        console.error(`--title needs a value (leave it out to keep the PR's title)\n${USAGE}`);
         return EXIT.usage;
       }
       return editPr(deps(), flags.title, waitMs);

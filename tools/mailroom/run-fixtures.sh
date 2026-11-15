@@ -417,7 +417,11 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
   fx_cap 5 left
   rc=$?
   command sleep 0.2
-  [ "$rc" = 0 ] && ! kill -0 "$(cat "$f")" 2>/dev/null && [ ! -e ./lock ] && [ -e "$STATE/lock" ]
+  [ "$rc" = 0 ] && ! kill -0 "$(cat "$f")" 2>/dev/null && [ ! -e ./lock ] && [ -e "$STATE/lock" ] || exit 1
+  # As the runner calls it: inside a command substitution (run_<job>'s), where bash 3.2 must still make the group.
+  out="$(fx_cap 1 tree >/dev/null 2>&1; echo "$?")"
+  command sleep 0.2
+  [ "$out" = 124 ] && ! kill -0 "$(cat "$f")" 2>/dev/null
 ) && ok "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" || bad "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" "a wrong code, a slow return, or a child survived"
 
 # Lanes, for real: a slow drain inside a 20 s sim op, a second slow drain, and a fast drain beside it — as launchd's

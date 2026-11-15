@@ -249,6 +249,8 @@ export async function main(argv: string[]): Promise<number> {
       const odd = Object.entries(flags).filter(([k, v]) => k !== 'failed' || v !== 'true');
       if (
         odd.length ||
+        (sub !== 'cancel' && sub !== 'rerun') ||
+        (sub === 'cancel' && flags.failed !== undefined) ||
         positional.length !== 3 ||
         !/^[1-9][0-9]{0,19}$/.test(positional[2] ?? '')
       ) {

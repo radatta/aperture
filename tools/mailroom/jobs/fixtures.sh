@@ -117,8 +117,8 @@ run_fixtures() {
   rc=0
   fx_cap "$FX_TIMEOUT" fx_suite "$t" >"$MR_P.out" 2>&1 </dev/null || rc=$?
   rm -r -f -- "$t"
-  # The log tail, printable ASCII only, written as results are: a pinned cwd, noclobber, never through a planted link.
-  tail -n "$FX_LOG_LINES" "$MR_P.out" | LC_ALL=C tr -cd '\11\12\40-\176' >"$MR_P.log" 2>/dev/null || true
+  # The log tail (at most 256 KiB, then 400 lines), printable ASCII only, written as results are: a pinned cwd, noclobber, never through a planted link.
+  tail -c 262144 "$MR_P.out" | tail -n "$FX_LOG_LINES" | LC_ALL=C tr -cd '\11\12\40-\176' >"$MR_P.log" 2>/dev/null || true
   (
     cd "$rd" && [ "$(pwd -P)" = "$rd" ] || exit 1
     set -C
