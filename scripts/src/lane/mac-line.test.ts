@@ -1,0 +1,54 @@
+import { describe, expect, it } from 'vitest';
+import { findIdentifiers } from '../identifiers.ts';
+import { MAC_PLACEHOLDER } from '../mac-root.ts';
+import { macLine, parseAdmission } from './mac-line.ts';
+
+const ROOT = '/mac/repo';
+const P = 'repos/o/r/environments/dev/deployment-branch-policies';
+
+// Outside single quotes, no zsh glob or history character may appear.
+const unquoted = (line: string) => line.replace(/'[^']*'/g, "''");
+
+describe('macLine', () => {
+  it('not admitted: the branch delete only', () => {
+    expect(macLine(ROOT, 'b', { kind: 'none' }, 'o/r')).toBe(`cd ${ROOT} && git branch -D b`);
+  });
+
+  it('admitted: the delete by id, then the listing that shows it went', () => {
+    expect(macLine(ROOT, 'b', { kind: 'id', id: 31 }, 'o/r')).toBe(
+      `cd ${ROOT} && git branch -D b && GH_PAGER=cat gh api -X DELETE '${P}/31' && GH_PAGER=cat gh api '${P}' --jq '.branch_policies[].name'`,
+    );
+  });
+
+  it('unknown: the by-name removal', () => {
+    const l = macLine(ROOT, 'b', { kind: 'unknown' }, 'o/r');
+    expect(l).toContain(
+      `--jq '.branch_policies[] | select(.name=="b") | .id' | GH_PAGER=cat xargs -I'{}' gh api -X DELETE '${P}/{}'`,
+    );
+  });
+
+  it.each(['none', 'id', 'unknown'] as const)('%s: one line, starts with cd, zsh-safe', (kind) => {
+    const l = macLine(ROOT, 'some-lane', kind === 'id' ? { kind, id: 1 } : { kind }, 'o/r');
+    expect(l).not.toMatch(/\n/);
+    expect(l.startsWith(`cd ${ROOT} && `)).toBe(true);
+    expect(unquoted(l)).not.toMatch(/[?*[\]<!{}]/);
+  });
+
+  it('the placeholder root carries no identifier', () => {
+    const l = macLine(MAC_PLACEHOLDER, 'b', { kind: 'none' }, 'o/r');
+    expect(l).toBe(`cd ${MAC_PLACEHOLDER} && git branch -D b`);
+    expect(findIdentifiers(l)).toEqual([]);
+  });
+});
+
+describe('parseAdmission', () => {
+  it('finds the id by exact name; none when absent; unknown when unreadable', () => {
+    const t =
+      '{"branch_policies":[{"id":5,"name":"main"},{"id":9,"name":"b"},{"id":10,"name":"bb"}]}';
+    expect(parseAdmission(t, 'b')).toEqual({ kind: 'id', id: 9 });
+    expect(parseAdmission(t, 'c')).toEqual({ kind: 'none' });
+    expect(parseAdmission(null, 'b')).toEqual({ kind: 'unknown' });
+    expect(parseAdmission('not json', 'b')).toEqual({ kind: 'unknown' });
+    expect(parseAdmission('{}', 'b')).toEqual({ kind: 'unknown' });
+  });
+});

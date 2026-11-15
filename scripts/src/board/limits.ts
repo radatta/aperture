@@ -21,6 +21,8 @@ export type Limits = {
   // rewrites `classes`, never this). `test`: 2 since 2026-11-13, from the 2026-11-08 bench (2 suites
   // measured safe at 4 workers; 3+ unmeasured, estimated near the hard line). Was 4, from the 2026-10-13 edge.
   concurrency?: Record<string, number>;
+  // At most this many active lanes (policy; `pnpm lane start` enforces it, docs/ops/LANES.md).
+  lanes?: { maxActive: number };
   classes: Record<string, ClassCost>;
 };
 
@@ -42,6 +44,8 @@ export function parseLimits(raw: unknown): Limits {
   for (const [cls, n] of Object.entries(l.concurrency ?? {}))
     if (!Number.isInteger(n) || n < 1)
       throw new Error(`limits.json: concurrency.${cls} must be a positive integer`);
+  if (l.lanes !== undefined && !(Number.isInteger(l.lanes?.maxActive) && l.lanes.maxActive >= 1))
+    throw new Error('limits.json: lanes.maxActive must be a positive integer');
   return l;
 }
 

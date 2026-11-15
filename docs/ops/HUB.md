@@ -12,6 +12,10 @@ and a worktree keeps the old name until it rebases. `board.sh hub` prints the na
 SessionStart hook injects that line into every session; in the hub's own session it injects
 "You are the hub — read /workspace/localNotes/roadmap.md before anything else" instead (also after a compaction).
 
+**`dispatch` is the only hub.** There is no second hub and no relay session. Every other window is a **lane**: one
+branch, one worktree, one Claude session, all named after the branch, started with `pnpm lane start` and ended with
+`pnpm lane end` (`docs/ops/LANES.md`). A side job goes to a background agent, never a new window.
+
 ## Checkpoints
 
 A feature session sends one short `SendMessage` to the hub at each of these. The first line is a one-line
@@ -26,7 +30,7 @@ preview the user sees, so the tag and branch go first.
 | _Blocked anyway_                                      | `[blocked] <branch> — <what>; needs <the user \| resource>.`                                                                                  |
 | Phase 10, after `pnpm mailroom open-pr`               | `[pr-open] <branch> — "<title>" <url>. Devcheck: <n proven / n off dev / n needs you \| no feature rows>. Needs the user: <list \| nothing>.` |
 | Phase 10, mailroom `MAC_UNREACHABLE` or a token error | `[pr-ready] <branch> — "<title>"`, the same facts, and that the user has the hand-off line.                                                   |
-| Phase 11, after cleanup                               | `[merged] <branch> — cleaned up. Follow-ups: <list \| none>. Decisions: <roadmap-relevant \| none>.`                                          |
+| Phase 11, after `pnpm lane end`                       | `[merged] <branch> — cleaned up. Follow-ups: <list \| none>. Decisions: <roadmap-relevant \| none>.`                                          |
 
 Each checkpoint, and each phase change between them, is also `pnpm board lane <phase> …` from the worktree
 (`docs/ops/TOWER.md` → _Lane files_): the web tower reads those files, never the messages.
@@ -55,6 +59,9 @@ anything a session was refused goes back to its user, not to a peer.
 
 ## The hub's duties
 
+- **Lanes.** The hub starts each lane from `/workspace` with its kickoff file:
+  `pnpm lane start <branch> --kickoff /workspace/localNotes/kickoffs/<branch>.md`. It keeps active lanes under the
+  cap (`limits.json` `lanes.maxActive`); a refused start names who is active.
 - **Roadmap.** The hub alone writes `/workspace/localNotes/roadmap.md`; feature sessions message it and never edit
   it. Read it before anything else; update it on every checkpoint. Its sections, in this order: _the user's
   remaining hand steps_; _In flight_ (a table: branch, session, worktree, what, state, with the dev lock holder

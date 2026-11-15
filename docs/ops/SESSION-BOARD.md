@@ -218,6 +218,8 @@ a 6th concurrent suite timed out (_Results_). On 2026-11-13 the cap became 2, wi
 `{ maxWorkers: 4 }`, and `classes.test` was re-measured at that cap and `classes.ui` against a local check (the 2026-11-13 check in _Results_); the other classes and
 `measuredAt` still date from 2026-10-13. Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
+`lanes.maxActive` (5) is the lane cap `pnpm lane start` enforces: a policy key, top-level like `concurrency`. What
+counts as active: `docs/ops/LANES.md` → _Start_.
 
 ## Hooks
 
