@@ -105,3 +105,15 @@ describe('prune-branches flags', () => {
     },
   );
 });
+
+describe('run flags', () => {
+  it.each([
+    ['cancel', '42', '--falied'],
+    ['rerun', '42', '--failed=1'],
+    ['rerun', '42', 'extra'],
+    ['rerun'],
+    ['cancel', 'x42'],
+  ])('refuses %s %s %s as a usage error, before any token is minted', async (...args) => {
+    expect(await main(['run', ...args])).toBe(2);
+  });
+});

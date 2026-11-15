@@ -149,12 +149,12 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     IFS= read -r name; read -r kind; read -r setup; read -r raw; read -r no_token; read -r no_simpw; read -r no_simpw_read
     read -r want_rc; read -r want_left; read -r no_result; read -r calls_type; read -r has_post; read -r has_md; read -r want_pw
     read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j; read -r lane; read -r locks_j
-    read -r has_pb; read -r pb_j; read -r fx_script
+    read -r has_pb; read -r pb_j; read -r fx_script; read -r sb_fail
   } <<<"$(jq -r '[.name, (.kind // "open-pr"), (.setup // ""), (if has("raw") then "1" else "" end),
     (.noToken // false), (.noSimPassword // false), (.noSimPasswordRead // false), (.exit // 0), (.inboxLeft // 0),
     (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
     (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson),
-    (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson), (.fxScript // "" | @json)] | .[]' <<<"$c")"
+    (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson), (.fxScript // "" | @json), (if .sandboxFails then "1" else "" end)] | .[]' <<<"$c")"
   T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state dir" # the Mac's is under Application Support: a space in every state path
@@ -171,7 +171,8 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   # records its profile and runs the rest; tar unpacks the case's fxScript as the archive's run-fixtures.sh.
   mkdir "$T/bin"
   printf '%s\n' '#!/bin/bash' 'printf "sandbox-exec %s\n" "$*" >>"$MAILROOM_FIXTURE_SIMCALLS"' \
-    'cat "$2" >>"$MAILROOM_FIXTURE_SIMCALLS.sb"' 'shift 2' 'exec "$@"' >"$T/bin/sandbox-exec"
+    'cat "$2" >>"$MAILROOM_FIXTURE_SIMCALLS.sb"' 'shift 2' \
+    '[ -z "$MAILROOM_FIXTURE_SB_FAIL" ] || [ "$1" != /usr/bin/true ] || exit 65' 'exec "$@"' >"$T/bin/sandbox-exec"
   printf '%s\n' '#!/bin/bash' 'printf "tar %s\n" "$*" >>"$MAILROOM_FIXTURE_SIMCALLS"' 'd=""' \
     'while [ $# -gt 0 ]; do [ "$1" != -C ] || d="$2"; shift; done' \
     '[ -n "$MAILROOM_FIXTURE_FX" ] || exit 1' 'mkdir -p "$d/tools/mailroom"' \
@@ -253,7 +254,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$no_token" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
     [ "$no_simpw" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
     [ "$no_simpw_read" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
-    PATH="$T/bin:$PATH" MAILROOM_FIXTURE_FX="$(jq -r . <<<"$fx_script")" \
+    PATH="$T/bin:$PATH" MAILROOM_FIXTURE_FX="$(jq -r . <<<"$fx_script")" MAILROOM_FIXTURE_SB_FAIL="$sb_fail" \
       MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
       MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st" ${lane:+"$lane"}
   ) >"$T/out" 2>&1

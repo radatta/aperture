@@ -23,6 +23,8 @@ const HINTS: Record<string, string> = {
   MANY_PRS:
     'more than one open PR from this branch — close the extra one on github.com, then retry',
   WRONG_BASE: 'the open PR targets another base than main — fix it on github.com, then retry',
+  UNKNOWN_JOB:
+    'the installed runner predates edit-pr — reinstall from main (MAILROOM.md → Install), or run the gh pr edit line by hand',
 };
 
 const editFallback = (d: Deps, branch: string, title?: string): Fallback => ({

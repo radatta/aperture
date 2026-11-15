@@ -95,10 +95,7 @@ describe('fixturesJob', () => {
   });
 
   it('refuses a branch touching install.sh or the plist before submitting, as the Mac would', async () => {
-    for (const f of [
-      'tools/mailroom/install.sh',
-      'tools/mailroom/dev.rahuldatta.aperture.mailroom.plist.tmpl',
-    ]) {
+    for (const f of ['tools/mailroom/install.sh', 'tools/mailroom/x.plist.tmpl']) {
       const { d, logs, sent } = setup({ diff: f, mac: () => ({ status: 'pass' }) });
       expect(await fixturesJob(d)).toBe(EXIT.failed);
       expect(logs[0]).toMatch(/TOUCHES_INSTALL/);

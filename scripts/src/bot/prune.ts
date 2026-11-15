@@ -4,12 +4,20 @@
 // go. It reads PRs with the container's read-only gh, never the bot token, and deletes with a compare-and-delete
 // (`git update-ref -d <ref> <tip>`), so a tip that moves meanwhile is refused. Everything else is kept, with the
 // reason (docs/ops/CI-BOT.md → Commands; CLAUDE.md → the one sanctioned branch delete).
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { PROTECTED } from './config.ts';
 import type { Run } from './sh.ts';
 
 export type Read = (path: string) => string | null; // null when missing
+export type List = (dir: string) => string[]; // [] when missing
+const listFs: List = (d) => {
+  try {
+    return readdirSync(d);
+  } catch {
+    return [];
+  }
+};
 const readFs: Read = (p) => {
   try {
     return readFileSync(p, 'utf8');
@@ -37,7 +45,11 @@ export const PR_LIMIT = 1000; // gh's page; a branch whose PR is older than that
 
 // The branch → tip map of refs/heads, and the branches some worktree has checked out — or is rebasing or bisecting,
 // which `git worktree list` shows as detached, so its git dir's state files name the branch instead.
-function locals(run: Run, read: Read): { tips: Map<string, string>; checkedOut: Set<string> } {
+function locals(
+  run: Run,
+  read: Read,
+  list: List,
+): { tips: Map<string, string>; checkedOut: Set<string> } {
   const tips = new Map<string, string>();
   for (const line of run('git', [
     'for-each-ref',
@@ -49,28 +61,22 @@ function locals(run: Run, read: Read): { tips: Map<string, string>; checkedOut: 
       tips.set(ref.slice('refs/heads/'.length), sha);
   }
   const checkedOut = new Set<string>();
-  for (const line of run('git', ['worktree', 'list', '--porcelain']).split('\n')) {
+  for (const line of run('git', ['worktree', 'list', '--porcelain']).split('\n'))
     if (line.startsWith('branch refs/heads/'))
       checkedOut.add(line.slice('branch refs/heads/'.length));
-    if (!line.startsWith('worktree ')) continue;
-    let gitDir: string;
-    try {
-      gitDir = run('git', [
-        '-C',
-        line.slice('worktree '.length),
-        'rev-parse',
-        '--absolute-git-dir',
-      ]);
-    } catch {
-      continue; // a worktree whose dir is gone: `git worktree prune` territory, and it holds no branch
-    }
+  // The state files live in each worktree's git dir: the common dir for the main checkout, worktrees/<n>/ for the rest,
+  // read straight from the common dir so a worktree whose folder moved or went missing still counts.
+  const common = run('git', ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  for (const gitDir of [
+    common,
+    ...list(join(common, 'worktrees')).map((n) => join(common, 'worktrees', n)),
+  ])
     for (const f of ['rebase-merge/head-name', 'rebase-apply/head-name', 'BISECT_START']) {
       const name = read(join(gitDir, f))
         ?.trim()
         .replace(/^refs\/heads\//, '');
       if (name) checkedOut.add(name);
     }
-  }
   return { tips, checkedOut };
 }
 
@@ -97,8 +103,9 @@ export function pruneBranches(
   dryRun: boolean,
   log: (s: string) => void,
   read: Read = readFs,
+  list: List = listFs,
 ): Verdict[] {
-  const { tips, checkedOut } = locals(run, read);
+  const { tips, checkedOut } = locals(run, read, list);
   const prs = JSON.parse(
     run('gh', [
       'pr',

@@ -9,7 +9,9 @@ import type { Deps } from './open-pr.ts';
 import { NotInstalled, lastSeen, submit, waitForResult, withdraw } from './submit.ts';
 
 export const PICKUP_MS = 15 * 60_000; // the slow lane may be in a sim run; the job expires at 20 min anyway
-export const RUN_MS = (600 + 150 + 60) * 1000; // FX_TIMEOUT + the fetch + grace
+// The Mac's worst case after pickup: GET /user 30 + compare 30 + tarball 120 + unpack 120 (+10 kill wait) + the suite
+// 600 (+10), and 60 s of grace.
+export const RUN_MS = (30 + 30 + 120 + 130 + 610 + 60) * 1000;
 const SHA_RE = /^[0-9a-f]{40}$/;
 // The Mac refuses these (TOUCHES_INSTALL): an install change is proven by the user's trial install, never by a job.
 const INSTALL_RE = /^tools\/mailroom\/(install\.sh|[^/]*\.plist\.tmpl)$/;
@@ -20,6 +22,8 @@ const HINTS: Record<string, string> = {
   DIFF_TOO_LARGE:
     'over 300 changed files: GitHub cuts the compare list there, so the install check can’t be made',
   SANDBOX_MISSING: 'sandbox-exec is missing on the Mac — the job never runs unsandboxed',
+  SANDBOX_FAILED:
+    'the sandbox profile did not compile on this macOS — fix fx_profile (MAILROOM.md → The fixtures job); the job never runs unsandboxed',
   HEAD_MISSING: 'GitHub has no such commit — `pnpm bot push` first',
   UNKNOWN_JOB:
     'the installed runner predates the fixtures job — reinstall from main, or run the suite by hand (MAILROOM.md → Trial step 2)',

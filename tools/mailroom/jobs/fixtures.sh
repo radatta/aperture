@@ -22,7 +22,8 @@ validate_fixtures() {
 
 # fx_cap SECONDS CMD… — run CMD in its own process group, touching the drain's locks as it goes. Past the cap the whole
 # group is stopped, then killed (a TERM can be ignored; KILL can't), and 124 is returned. After a normal exit the group
-# is killed too, so nothing the suite backgrounded outlives it. The wait for the dead group is bounded.
+# is killed too. A child that leaves the group (its own setpgid) escapes both, but stays sandboxed, and the profile lets
+# it signal only the sandbox's own processes. The wait for the dead group is bounded.
 fx_cap() {
   local cap="$1" pid end l rc=0 i
   shift
@@ -56,15 +57,15 @@ fx_profile() {
     '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))' \
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.security.agent"))' \
     '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb") (global-name "com.apple.coreservices.appleevents") (global-name "com.apple.pasteboard.1") (global-name "com.apple.CoreSimulator.CoreSimulatorService"))' \
-    '(deny appleevent-send)' '(deny job-creation)' \
+    '(deny appleevent-send)' '(deny job-creation)' '(deny signal)' '(allow signal (target same-sandbox))' \
     '(deny process-exec (literal "/usr/bin/security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))'
 }
 
 # The two sandboxed steps, each in $t (the inbox is under /Users, which the profile can't read) with a file-size limit
-# (ulimit -f, 512-byte blocks: 1 GiB), so a commit of compressible files can't fill the Mac's disk.
-fx_unpack() { (cd "$1" && ulimit -f 2097152 && exec sandbox-exec -f "$MR_P.sb" tar -xzf "$1/src.tgz" -C "$1/src" --strip-components 1); }
+# (ulimit -f, bash's 1024-byte blocks: 1 GiB), so a commit of compressible files can't fill the Mac's disk.
+fx_unpack() { (cd "$1" && ulimit -f 1048576 && exec sandbox-exec -f "$MR_P.sb" tar -xzf "$1/src.tgz" -C "$1/src" --strip-components 1); }
 fx_suite() {
-  (cd "$1" && ulimit -f 2097152 && exec sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  (cd "$1" && ulimit -f 1048576 && exec sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
     HOME="$1/home" TMPDIR="$1/tmp" LC_ALL=C /bin/bash "$1/src/tools/mailroom/run-fixtures.sh")
 }
 
@@ -123,11 +124,14 @@ run_fixtures() {
     set -C
     cat -- "$MR_P.log" >./fixtures.log
   ) 2>/dev/null || true
+  # Only the summary and the failing lines are parsed (the output can be up to the 1 GiB limit; jq never holds it).
+  { grep -a -E '^# [0-9]+ passed, [0-9]+ failed, of [0-9]+ cases$' "$MR_P.out" | tail -n 1
+    grep -a '^not ok - ' "$MR_P.out" | head -n "$FX_MAX_FAILING" | cut -c1-200; } >"$MR_P.sum" 2>/dev/null || true
   out="$(jq -Rsc --argjson max "$FX_MAX_FAILING" 'split("\n") as $l
     | ([$l[] | capture("^# (?<p>[0-9]+) passed, (?<f>[0-9]+) failed, of (?<c>[0-9]+) cases$")] | last) as $sum
     | {passed: ($sum.p // null | if . then tonumber else null end), failed: ($sum.f // null | if . then tonumber else null end),
        cases: ($sum.c // null | if . then tonumber else null end),
-       failing: [$l[] | select(startswith("not ok - ")) | .[9:] | gsub("[^A-Za-z0-9 ._:,()/+-]"; "?") | .[0:120]][0:$max]}' "$MR_P.out" 2>/dev/null || echo '{}')"
+       failing: [$l[] | select(startswith("not ok - ")) | .[9:] | gsub("[^A-Za-z0-9 ._:,()/+-]"; "?") | .[0:120]][0:$max]}' "$MR_P.sum" 2>/dev/null || echo '{}')"
   if [ "$rc" = 124 ]; then printf 'error TIMEOUT %s\n' "$(jq -c '{fixtures: .}' <<<"$out")"; return 0; fi
   if [ "$rc" = 0 ] && jq -e '.failed == 0 and .passed != null and .passed == .cases and .passed > 0' <<<"$out" >/dev/null 2>&1; then
     printf 'pass - %s\n' "$(jq -c '{fixtures: .}' <<<"$out")"

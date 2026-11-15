@@ -132,14 +132,14 @@ Claude handles branches, commits, and PR bodies. **Allowed** git commands:
 - `git add`, `git commit`, `git stash`
 - `pnpm bot push` — the one way Claude pushes: the current feature branch, as the bot. After a rebase, `pnpm bot push --after-rebase` (a lease on the last push). A branch that changes `.github/workflows/` is the user's to push — the bot has no `workflows` permission (_PR bodies_)
 - `pnpm bot run cancel <run-id>` / `pnpm bot run rerun <run-id> [--failed]` — the lane's own PR check run only (a superseded one, or a real flake): the bot refuses any other run (`docs/ops/CI-BOT.md` → _Commands_). A rerun spends Actions minutes, so not for a red the branch caused
-- `pnpm bot prune-branches [--dry-run]` — the wave-end branch cleanup (`docs/ops/HUB.md` → _The hub's duties_): deletes each local branch whose PR merged at exactly its tip, and keeps every other with the reason
+- `pnpm bot prune-branches [--dry-run]` — the wave-end branch cleanup (`docs/ops/HUB.md` → _The hub's duties_; what it deletes: `docs/ops/CI-BOT.md` → _Commands_)
 - `git fetch`, `git rebase origin/main`, `git mv`
 - `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only at _Feature workflow_ → _Cleanup_
 
 **Hard-blocked (never):**
 
 - **Any commit or push on `main` or `dev`** — branch first. These are deploy branches; a commit/push there is a deploy.
-- Force-push (`-f` / `--force` / `--force-with-lease`, `--all`/`--mirror`), `git push origin --delete`, `git reset --hard`, `git clean -f`, `git branch -D`. `pnpm bot push --after-rebase` is the one sanctioned lease, and `pnpm bot prune-branches` the one sanctioned branch delete: only a local branch whose one PR merged at exactly its local tip, never checked out (`docs/ops/CI-BOT.md` → _Commands_).
+- Force-push (`-f` / `--force` / `--force-with-lease`, `--all`/`--mirror`), `git push origin --delete`, `git reset --hard`, `git clean -f`, `git branch -D`. `pnpm bot push --after-rebase` is the one sanctioned lease, and `pnpm bot prune-branches` the one sanctioned branch delete (what it deletes and keeps: `docs/ops/CI-BOT.md` → _Commands_).
 - **`.secrets/`** — never read, print, copy or search it, by any tool: it holds the bot's private key. The bot CLI reads it in-process; hooks deny Bash and Read/Grep/Glob on it.
 - `gh pr merge` / `gh pr review` — approving and merging are the user's.
 - `rm -rf`, and raw HTTP against `api.github.com` (use `gh`; the one exception is the bot CLI's in-process `fetch`, `scripts/src/bot/api.ts`).

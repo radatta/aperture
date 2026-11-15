@@ -100,7 +100,7 @@ function repo(prs: unknown[], updateRef: () => string = () => '') {
         'branch refs/heads/here',
       ].join('\n'),
     ],
-    ['git -C', '/g/worktrees/x'],
+    ['git rev-parse --path-format=absolute --git-common-dir', '/g'],
     ['gh pr list', JSON.stringify(prs)],
     ['git update-ref', updateRef],
   ]);
@@ -131,11 +131,17 @@ describe('pruneBranches', () => {
   });
 
   it.each(['rebase-merge/head-name', 'rebase-apply/head-name', 'BISECT_START'])(
-    'keeps a branch a worktree is in the middle of (%s), though worktree list shows it detached',
+    'keeps a branch a worktree is in the middle of (%s), though worktree list shows it detached, even with its folder gone',
     (f) => {
       const { run, calls } = repo(PRS);
       const read = (p: string) => (p === `/g/worktrees/x/${f}` ? 'refs/heads/done-lane\n' : null);
-      const out = pruneBranches(run, false, () => {}, read);
+      const out = pruneBranches(
+        run,
+        false,
+        () => {},
+        read,
+        (d) => (d === '/g/worktrees' ? ['x'] : []),
+      );
       expect(out.find((v) => v.branch === 'done-lane')).toMatchObject({ deleted: false });
       expect(calls.some((c) => c.args[0] === 'update-ref')).toBe(false);
     },

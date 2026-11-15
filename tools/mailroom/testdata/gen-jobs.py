@@ -962,7 +962,7 @@ def suite(*lines, rc=0): return '#!/bin/bash\n' + ''.join(f'echo {json.dumps(l, 
 OK2 = suite('ok - a', 'ok - b', '# 2 passed, 0 failed, of 2 cases')
 PROFILE = ['(version 1)', '(allow default)', '(deny network*)', '(deny file-write*)',
            '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))',
-           '(deny appleevent-send)', '(deny job-creation)']  # each line present; the whole profile, in order: runner-fixtures.test.ts
+           '(deny appleevent-send)', '(deny job-creation)', '(deny signal)', '(allow signal (target same-sandbox))']  # each line present; the whole profile, in order: runner-fixtures.test.ts
 NOFX = ['sandbox-exec', 'tar ']
 def fc(name, api=None, **k): c(name, kind='fixtures', api={**FXAPI, **(api or {})}, **k)
 FXPASS = {'status': 'pass', 'reason': None, 'job': 'fixtures', 'fixtures': {'passed': 2, 'failed': 0, 'cases': 2, 'failing': []}}
@@ -984,7 +984,7 @@ fc('fixtures: at most 20 failing names, odd characters replaced', fxScript=suite
    expect={'status': 'fail', 'fixtures': {'passed': 0, 'failed': 25, 'cases': 25, 'failing': [f'c{i} ?: x' for i in range(20)], 'exit': 1}}, calls=FXALL)
 fc('fixtures: a diff touching install.sh is TOUCHES_INSTALL, nothing fetched or run', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'tools/mailroom/install.sh'}]}}},
    fxScript=OK2, expect={'status': 'rejected', 'reason': 'TOUCHES_INSTALL'}, calls=FXALL[:2], simExcludes=NOFX)
-fc('fixtures: a plist template renamed away is TOUCHES_INSTALL', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'x.txt', 'previous_filename': 'tools/mailroom/dev.rahuldatta.aperture.mailroom.plist.tmpl'}]}}},
+fc('fixtures: a plist template renamed away is TOUCHES_INSTALL', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'x.txt', 'previous_filename': 'tools/mailroom/x.plist.tmpl'}]}}},
    fxScript=OK2, expect={'status': 'rejected', 'reason': 'TOUCHES_INSTALL'}, calls=FXALL[:2], simExcludes=NOFX)
 fc('fixtures: 300 files (GitHub cuts the list there) is DIFF_TOO_LARGE', api={CMP: {'status': 200, 'body': {'files': [{'filename': f'f{i}'} for i in range(300)]}}},
    fxScript=OK2, expect={'status': 'rejected', 'reason': 'DIFF_TOO_LARGE'}, calls=FXALL[:2], simExcludes=NOFX)
@@ -993,6 +993,8 @@ fc('fixtures: a compare without a file list is API_FAILED', api={CMP: {'status':
 fc('fixtures: an unknown sha is HEAD_MISSING', api={CMP: {'status': 404, 'body': {}}}, fxScript=OK2, expect={'status': 'rejected', 'reason': 'HEAD_MISSING'}, calls=FXALL[:2], simExcludes=NOFX)
 fc('fixtures: a tarball refused is TOKEN_FORBIDDEN, nothing run', api={TGZ: {'status': 404, 'body': {}}}, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_FORBIDDEN'}, calls=FXALL, simExcludes=NOFX)
 fc('fixtures: an archive without run-fixtures.sh is API_FAILED, nothing run', expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL, simExcludes=['/bin/bash '])
+fc('fixtures: a profile this macOS will not compile is SANDBOX_FAILED, nothing unpacked or run', sandboxFails=True, fxScript=OK2,
+   expect={'status': 'error', 'reason': 'SANDBOX_FAILED'}, calls=FXALL, simIncludes=['sandbox-exec -f'], simExcludes=['tar ', '/usr/bin/env -i'])
 fc('fixtures: no Keychain token is TOKEN_MISSING, no call', noToken=True, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_MISSING'}, calls=[], simExcludes=NOFX)
 fc('fixtures: an extra param is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'branch': 'x'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
 fc('fixtures: a short sha is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'sha': 'abc1234'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])

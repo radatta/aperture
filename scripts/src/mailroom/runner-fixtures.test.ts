@@ -258,7 +258,7 @@ describe('mailroom runner', () => {
       'exec sandbox-exec -f "$MR_P.sb" tar -xzf "$1/src.tgz" -C "$1/src" --strip-components 1',
       'if ! fx_cap 120 fx_unpack "$t" >/dev/null 2>&1',
       'fx_cap "$FX_TIMEOUT" fx_suite "$t" >"$MR_P.out" 2>&1 </dev/null || rc=$?',
-      'ulimit -f 2097152',
+      'ulimit -f 1048576',
       'kill -KILL -- "-$pid"',
       'exec sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin',
       'if ! [[ "$t" =~ ^/[A-Za-z0-9/._-]+$ ]]; then',
@@ -298,6 +298,8 @@ describe('mailroom runner', () => {
       '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb") (global-name "com.apple.coreservices.appleevents") (global-name "com.apple.pasteboard.1") (global-name "com.apple.CoreSimulator.CoreSimulatorService"))',
       '(deny appleevent-send)',
       '(deny job-creation)',
+      '(deny signal)',
+      '(allow signal (target same-sandbox))',
       '(deny process-exec (literal "/usr/bin/security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))',
     ]);
   });

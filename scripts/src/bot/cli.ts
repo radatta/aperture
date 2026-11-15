@@ -244,7 +244,17 @@ export async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
-    case 'run':
+    case 'run': {
+      // Checked before the actions: write token is minted: only rerun's bare --failed, and no extra arguments.
+      const odd = Object.entries(flags).filter(([k, v]) => k !== 'failed' || v !== 'true');
+      if (
+        odd.length ||
+        positional.length !== 3 ||
+        !/^[1-9][0-9]{0,19}$/.test(positional[2] ?? '')
+      ) {
+        console.error(`run takes cancel|rerun <run-id> [--failed]\n${USAGE}`);
+        return 2;
+      }
       return runCommand(
         makeApi(await token(PERMS.run)),
         sub,
@@ -252,6 +262,7 @@ export async function main(argv: string[]): Promise<number> {
         flags.failed === 'true',
         console.log,
       );
+    }
     case 'prune-branches': {
       // A destructive command: anything but a bare --dry-run is a usage error, never a real delete.
       const odd = Object.entries(flags).filter(([k, v]) => k !== 'dry-run' || v !== 'true');
