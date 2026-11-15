@@ -9,7 +9,7 @@ import { isoSeconds, makeId } from './ids.ts';
 import { SIM_REASON_HINT, validateSimParams } from './sim.ts';
 import type { SimReason } from './sim.ts';
 
-export const JOBS = ['open-pr', 'sim', 'clip', 'edit-pr'] as const;
+export const JOBS = ['open-pr', 'sim', 'clip', 'edit-pr', 'fixtures'] as const;
 export const EXPIRES_IN_MIN = 20;
 export const MAX_BODY_BYTES = 65536;
 const ENVELOPE_KEYS = ['v', 'id', 'job', 'submittedAt', 'expiresInMin', 'params'];
@@ -72,7 +72,7 @@ export { isoSeconds, makeId } from './ids.ts';
 export function makeOpenPrJob(
   p: Omit<OpenPrParams, 'bodySha256'>,
   nowMs: number,
-  id = makeId(p.branch.startsWith('ios-') ? `pr-${p.branch}` : p.branch, nowMs), // …Z-ios-… is a sim's: the slow lane
+  id = makeId(/^(ios|fx)-/.test(p.branch) ? `pr-${p.branch}` : p.branch, nowMs), // …Z-ios-…, …Z-fx-…: the slow lane's
 ): Job {
   return {
     v: 1,
@@ -96,6 +96,22 @@ export function makeEditPrJob(
     submittedAt: isoSeconds(nowMs),
     expiresInMin: EXPIRES_IN_MIN,
     params: { ...p, bodySha256: sha256(p.body) },
+  };
+}
+
+// fixtures: run the suite at a pushed commit on the Mac (jobs/fixtures.sh). Named …Z-fx-…: the slow lane's.
+export interface FixturesJob extends Omit<Job, 'job' | 'params'> {
+  job: 'fixtures';
+  params: { sha: string };
+}
+export function makeFixturesJob(sha: string, nowMs: number): FixturesJob {
+  return {
+    v: 1,
+    id: makeId(`fx-${sha.slice(0, 12)}`, nowMs),
+    job: 'fixtures',
+    submittedAt: isoSeconds(nowMs),
+    expiresInMin: EXPIRES_IN_MIN,
+    params: { sha },
   };
 }
 
@@ -151,6 +167,12 @@ export function validateJob(job: unknown, stem: string, nowMs: number): Reason |
   if (at > nowMs + 300_000 || at + exp * 60_000 < nowMs) return 'EXPIRED';
   if (job.job === 'sim') return validateSimParams(job.params);
   if (job.job === 'clip') return validateClipParams(job.params, exp);
+  if (job.job === 'fixtures') {
+    const p = job.params;
+    return isObj(p) && sameKeys(p, ['sha']) && str(p.sha) && SHA_RE.test(p.sha)
+      ? null
+      : 'BAD_PARAM';
+  }
   return validatePrParams(job.params, job.job === 'edit-pr');
 }
 

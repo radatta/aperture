@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ID_RE,
   makeEditPrJob,
+  makeFixturesJob,
   makeId,
   makeOpenPrJob,
   sha256,
@@ -84,6 +85,17 @@ describe('job building', () => {
     // An open-pr's params must carry a title; only edit-pr may leave it out.
     const noTitle = { ...makeEditPrJob(p, NOW), job: 'open-pr' };
     expect(validateJob(noTitle, noTitle.id, NOW)).toBe('BAD_PARAM');
+  });
+
+  it('a fixtures job is named …Z-fx-… (the slow lane), and an open-pr for an fx- branch is not', () => {
+    const job = makeFixturesJob('a'.repeat(40), NOW);
+    expect(validateJob(job, job.id, NOW)).toBeNull();
+    expect(job.id).toMatch(/^\d{8}T\d{6}Z-fx-aaaaaaaaaaaa-[0-9a-f]{4}$/);
+    const pr = makeOpenPrJob(
+      { branch: 'fx-thing', sha: 'a'.repeat(40), title: 'T', body: 'b' },
+      NOW,
+    );
+    expect(pr.id).toMatch(/Z-pr-fx-thing-/);
   });
 
   it('wait plus grace stays under the Bash tool timeout', async () => {

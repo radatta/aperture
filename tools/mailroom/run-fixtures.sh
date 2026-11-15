@@ -33,7 +33,8 @@ curl() {
     case "$1" in
       -D) hdr="$2"; shift 2 ;;
       -o) out="$2"; shift 2 ;;
-      -w | --max-time) shift 2 ;;
+      -w | --max-time | --max-filesize | --proto-redir) shift 2 ;;
+      -L) shift ;;
       -X) method="$2"; shift 2 ;;
       --data-binary) data="${2#@}"; shift 2 ;;
       -H)
@@ -133,6 +134,7 @@ base="$(head -1 "$CASES" | jq -c .base)"
 simbase="$(head -1 "$CASES" | jq -c .simBase)"
 clipbase="$(head -1 "$CASES" | jq -c .clipBase)"
 editbase="$(head -1 "$CASES" | jq -c .editBase)"
+fxbase="$(head -1 "$CASES" | jq -c .fixturesBase)"
 defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 deftape="$(sed -n 2p "$CASES" | jq -c .defaultTape)"
 
@@ -147,12 +149,12 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     IFS= read -r name; read -r kind; read -r setup; read -r raw; read -r no_token; read -r no_simpw; read -r no_simpw_read
     read -r want_rc; read -r want_left; read -r no_result; read -r calls_type; read -r has_post; read -r has_md; read -r want_pw
     read -r expect_j; read -r want_calls; read -r post_j; read -r md_j; read -r notes_j; read -r lane; read -r locks_j
-    read -r has_pb; read -r pb_j
+    read -r has_pb; read -r pb_j; read -r fx_script
   } <<<"$(jq -r '[.name, (.kind // "open-pr"), (.setup // ""), (if has("raw") then "1" else "" end),
     (.noToken // false), (.noSimPassword // false), (.noSimPasswordRead // false), (.exit // 0), (.inboxLeft // 0),
     (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
     (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson),
-    (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson)] | .[]' <<<"$c")"
+    (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson), (.fxScript // "" | @json)] | .[]' <<<"$c")"
   T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state dir" # the Mac's is under Application Support: a space in every state path
@@ -164,6 +166,17 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   [ "$kind" != sim ] || cbase="$simbase"
   [ "$kind" != clip ] || cbase="$clipbase"
   [ "$kind" != edit-pr ] || cbase="$editbase"
+  [ "$kind" != fixtures ] || cbase="$fxbase"
+  # The fixtures job runs sandbox-exec and tar by name, through env -i: stub files on PATH, not functions. sandbox-exec
+  # records its profile and runs the rest; tar unpacks the case's fxScript as the archive's run-fixtures.sh.
+  mkdir "$T/bin"
+  printf '%s\n' '#!/bin/bash' 'printf "sandbox-exec %s\n" "$*" >>"$MAILROOM_FIXTURE_SIMCALLS"' \
+    'cat "$2" >>"$MAILROOM_FIXTURE_SIMCALLS.sb"' 'shift 2' 'exec "$@"' >"$T/bin/sandbox-exec"
+  printf '%s\n' '#!/bin/bash' 'printf "tar %s\n" "$*" >>"$MAILROOM_FIXTURE_SIMCALLS"' 'd=""' \
+    'while [ $# -gt 0 ]; do [ "$1" != -C ] || d="$2"; shift; done' \
+    '[ -n "$MAILROOM_FIXTURE_FX" ] || exit 1' 'mkdir -p "$d/tools/mailroom"' \
+    'printf "%s" "$MAILROOM_FIXTURE_FX" >"$d/tools/mailroom/run-fixtures.sh"' >"$T/bin/tar"
+  chmod +x "$T/bin/sandbox-exec" "$T/bin/tar"
 
   # The job: base ⊕ patch, minus unset paths, submittedAt relative to now, bodySha256 computed when "auto".
   { IFS= read -r job; read -r id; read -r file; read -r sha_auto; } <<<"$(jq -r --argjson base "$cbase" --argjson now "$now" '. as $c | ($base * ($c.patch // {}))
@@ -240,7 +253,8 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$no_token" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
     [ "$no_simpw" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
     [ "$no_simpw_read" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
-    MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
+    PATH="$T/bin:$PATH" MAILROOM_FIXTURE_FX="$(jq -r . <<<"$fx_script")" \
+      MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
       MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st" ${lane:+"$lane"}
   ) >"$T/out" 2>&1
   rc=$?
@@ -299,7 +313,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       "$hj/results/$rid/result.json" >/dev/null 2>&1 || why="a step note isn't $notes_j"
   fi
   # sim cases: tool calls in order (substrings), calls that must not happen, password reads/typings, artifacts.
-  if [ -z "$why" ] && { [ "$kind" = sim ] || [ "$kind" = clip ]; }; then
+  if [ -z "$why" ] && { [ "$kind" = sim ] || [ "$kind" = clip ] || [ "$kind" = fixtures ]; }; then
     last=0
     while IFS= read -r want; do
       [ -n "$want" ] || continue
@@ -327,6 +341,17 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -z "$why" ] && [ -n "$f" ] || continue
       [ -f "$hj/results/$rid/$f" ] || why="no results/$rid/$f"
     done < <(jq -r '.files // [] | .[]' <<<"$c")
+  fi
+  # fixtures cases: lines the sandbox profile must hold, and the log tail the job kept.
+  if [ -z "$why" ] && [ "$kind" = fixtures ]; then
+    while IFS= read -r want; do
+      [ -z "$why" ] && [ -n "$want" ] || continue
+      grep -q -F -x -- "$want" "$T/simcalls.sb" 2>/dev/null || why="the profile has no line \"$want\""
+    done < <(jq -r '.sbIncludes // [] | .[]' <<<"$c")
+    while IFS= read -r want; do
+      [ -z "$why" ] && [ -n "$want" ] || continue
+      grep -q -F -- "$want" "$hj/results/$rid/fixtures.log" 2>/dev/null || why="fixtures.log lacks \"$want\""
+    done < <(jq -r '.logIncludes // [] | .[]' <<<"$c")
   fi
   # clip cases: the private state after the run ({cc, n, serves: how many}). What the JXA may ask the pasteboard is
   # pinned statically (runner-fixtures.test.ts).
@@ -369,6 +394,19 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
   rc=$?
   [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ]
 ) && ok "sim_cap kills a command at its cap" || bad "sim_cap kills a command at its cap" "it did not return 124 promptly"
+
+# fx_cap kills the fixtures suite's whole tree at its cap (the suite backgrounds its shards), not just its parent.
+(
+  unset -f pgrep sleep
+  . "$HERE/jobs/fixtures.sh"
+  f="$(mktemp)"
+  tree() { command sleep 30 & echo $! >"$f"; command sleep 30; }
+  started=$(date +%s)
+  fx_cap 1 tree
+  rc=$?
+  command sleep 0.2
+  [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ] && ! kill -0 "$(cat "$f")" 2>/dev/null
+) && ok "fx_cap kills a command's whole tree at its cap" || bad "fx_cap kills a command's whole tree at its cap" "it did not return 124 promptly, or a child survived"
 
 # Lanes, for real: a slow drain inside a 20 s sim op, a second slow drain, and a fast drain beside it — as launchd's
 # two agents would run them.
@@ -448,7 +486,7 @@ lanes_check() {
   else bad "lanes: slow and fast drains started together on one sim: only the slow takes it (10 runs)" "failed runs:$fails"; fi
 }
 lanes_check
-LANES_CHECKS=5
+LANES_CHECKS=6 # five lanes checks, plus fx_cap
 
 cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2 + 1 + LANES_CHECKS))"
 echo "# $pass passed, $failed failed, of $cases cases"

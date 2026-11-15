@@ -84,12 +84,15 @@ mr_validate() {
 
 # mr_call METHOD PATH [DATA_FILE] — one GitHub call; sets MR_HTTP and MR_RC, the body lands in $MR_P.resp and the
 # headers in $MR_P.hdr. The token goes in through a process-substituted header file built right on the curl line
-# (the tools/raycast idiom), so it is never on an argv.
+# (the tools/raycast idiom), so it is never on an argv. MR_FOLLOW=1 follows a redirect (the fixtures job's tarball:
+# curl drops the Authorization header on the hop to another host, whose URL carries its own grant), MR_MAX_TIME
+# overrides the 30 s cap, and no response may exceed 64 MiB.
 mr_call() {
-  local data=()
+  local data=() follow=()
   [ -z "${3:-}" ] || data=(--data-binary "@$3" -H 'Content-Type: application/json')
+  [ "${MR_FOLLOW:-}" != 1 ] || follow=(-L --proto-redir =https)
   MR_RC=0
-  MR_HTTP="$(curl -sS --max-time 30 -D "$MR_P.hdr" -o "$MR_P.resp" -w '%{http_code}' -X "$1" \
+  MR_HTTP="$(curl -sS --max-time "${MR_MAX_TIME:-30}" --max-filesize 67108864 ${follow[@]+"${follow[@]}"} -D "$MR_P.hdr" -o "$MR_P.resp" -w '%{http_code}' -X "$1" \
     -H @<(printf 'Authorization: Bearer %s\n' "$MR_TOKEN") \
     -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
     -H 'User-Agent: aperture-mailroom' ${data[@]+"${data[@]}"} "$MR_API$2" 2>/dev/null)" || MR_RC=$?
@@ -122,7 +125,7 @@ mr_expiry() {
 mr_emit() {
   local status="$1" reason="$2" pr="${3:-null}"
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg sha "$MR_BODY_SHA" --argjson exp "$MR_EXPIRY_JSON" \
-    --argjson pr "$pr" '{bodySha256: $sha} + $exp + (if $pr == null then {} else {pr: $pr} end)')"
+    --argjson pr "$pr" '(if $sha == "" then {} else {bodySha256: $sha} end) + $exp + (if $pr == null then {} else {pr: $pr} end)')"
 }
 
 # The PR fields from a PR object on stdin, or nothing if any field isn't what GitHub would return for this repo.
@@ -134,8 +137,21 @@ mr_pr_json() {
     | {number, url: .html_url, headSha: .head.sha, author: .user.login}' 2>/dev/null || true
 }
 
-# mr_begin W PRIVATE_PREFIX — the start every PR job shares: the token from Keychain, GET /user (the token's owner, and
-# its expiry), then the branch's ref (pushed, at the job's sha). 0 to go on; 1 once it has emitted the job's result.
+# mr_whoami — the token from Keychain (MR_P set), then GET /user: the token's owner, and its expiry. 0 to go on; 1 once it
+# has emitted the result. Every job that calls GitHub starts here: the one Keychain read of the mailroom token.
+mr_whoami() {
+  local fail
+  MR_TOKEN="$(security find-generic-password -s "$MR_KEYCHAIN" -w 2>/dev/null || true)"
+  if [ -z "$MR_TOKEN" ]; then mr_emit error TOKEN_MISSING; return 1; fi
+  mr_call GET /user
+  fail="$(mr_failure 200)"
+  [ -n "$fail" ] || mr_expiry
+  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 1; fi
+  if [ "$(jq -r '.login // ""' "$MR_P.resp" 2>/dev/null)" != "$MR_OWNER" ]; then mr_emit error WRONG_AUTHOR; return 1; fi
+  return 0
+}
+
+# mr_begin W PRIVATE_PREFIX — the start every PR job shares: mr_whoami, then the branch's ref (pushed, at the job's sha). 0 to go on; 1 once it has emitted the job's result.
 mr_begin() {
   local w="$1" fail got
   MR_P="$2"
@@ -144,14 +160,7 @@ mr_begin() {
   MR_BRANCH="$(jq -r .params.branch "$w")"
   MR_SHA="$(jq -r .params.sha "$w")"
 
-  MR_TOKEN="$(security find-generic-password -s "$MR_KEYCHAIN" -w 2>/dev/null || true)"
-  if [ -z "$MR_TOKEN" ]; then mr_emit error TOKEN_MISSING; return 1; fi
-
-  mr_call GET /user
-  fail="$(mr_failure 200)"
-  [ -n "$fail" ] || mr_expiry
-  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 1; fi
-  if [ "$(jq -r '.login // ""' "$MR_P.resp" 2>/dev/null)" != "$MR_OWNER" ]; then mr_emit error WRONG_AUTHOR; return 1; fi
+  mr_whoami || return 1
 
   mr_call GET "/repos/$MR_REPO/git/ref/heads/$MR_BRANCH"
   if [ "$MR_RC" = 0 ] && [ "$MR_HTTP" = 404 ]; then mr_emit rejected HEAD_MISSING; return 1; fi

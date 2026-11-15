@@ -6,8 +6,8 @@
 # Xcode's simctl. Design: docs/ops/MAILROOM.md, docs/ops/IOS-CHECK.md.
 #
 #   runner.sh <hostjobs-dir> <state-dir> [slow|fast]   paths absolute; the plists pass them (install.sh renders two)
-# Two launchd agents drain the one inbox: the slow lane takes the sim jobs (named …Z-ios-…), the fast lane everything
-# else, so a clip or an open-pr never waits behind a sim run. No lane = both locks, one drain of everything (a hand run).
+# Two launchd agents drain the one inbox: the slow lane takes the sim and fixtures jobs (named …Z-ios-…, …Z-fx-…), the
+# fast lane everything else, so a clip or an open-pr never waits behind a sim run. No lane = both locks, one drain of everything (a hand run).
 set -euo pipefail
 umask 077
 export LC_ALL=C # deterministic globs and regexes, as under launchd
@@ -17,10 +17,10 @@ STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]}"
 LANE="${3:-all}"
 case "$LANE" in slow | fast | all) ;; *) echo "usage: runner.sh <hostjobs-dir> <state-dir> [slow|fast]" >&2; exit 1 ;; esac
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
-JOBS="open-pr sim clip edit-pr" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
-SLOW_JOBS="sim"         # run only holding lock (slow lane): they drive the Simulator
+JOBS="open-pr sim clip edit-pr fixtures" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
+SLOW_JOBS="sim fixtures" # run only holding lock (slow lane): they drive the Simulator, or run for minutes
 FAST_JOBS="clip"        # run only holding lock-fast (fast lane): they keep state (clip.json's caps)
-SLOW_RE='^[0-9]{8}T[0-9]{6}Z-ios-' # the slow lane takes entries named so (sim.ts's ids); open-pr/edit-pr may run in either
+SLOW_RE='^[0-9]{8}T[0-9]{6}Z-(ios|fx)-' # the slow lane takes entries named so (sim.ts's, fixtures-job.ts's ids); open-pr/edit-pr may run in either
 MAX_FILE=73728 # 72 KiB per job file
 MAX_PER_DRAIN=5 # per lane, counting only the entries this lane takes
 ID_RE='^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,48}$'
@@ -236,7 +236,7 @@ for entry in ./*; do
     continue
   fi
   job="$(jq -r .job "$w")"
-  if ! job_lane_ok "$job"; then # a sim not named …Z-ios-…, or a clip that is: never from the container's own code
+  if ! job_lane_ok "$job"; then # a sim or fixtures job not named so, or a clip that is: never from the container's own code
     rm -f -- "$w"
     log "$stem $job job in the $LANE lane"
     result "$stem" rejected BAD_FILE "$started"

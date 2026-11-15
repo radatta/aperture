@@ -57,7 +57,8 @@ export interface Result {
   v: 1;
   id: string;
   job: string;
-  status: 'opened' | 'exists' | 'edited' | 'served' | 'rejected' | 'error' | 'expired';
+  status:
+    'opened' | 'exists' | 'edited' | 'served' | 'pass' | 'fail' | 'rejected' | 'error' | 'expired';
   reason: string | null;
   startedAt: string;
   finishedAt: string;
@@ -67,6 +68,13 @@ export interface Result {
   tokenExpiresAt?: string;
   tokenWarning?: 'TOKEN_EXPIRING';
   pr?: { number: number; url: string; headSha: string; author: string };
+  fixtures?: {
+    passed: number | null;
+    failed: number | null;
+    cases: number | null;
+    failing: string[];
+    exit?: number;
+  };
   clip?: {
     bytes: number;
     sha256: string;

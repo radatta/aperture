@@ -15,7 +15,7 @@ export interface Case {
   raw?: string;
   file?: string;
   setup?: string;
-  kind?: 'sim' | 'clip' | 'edit-pr';
+  kind?: 'sim' | 'clip' | 'edit-pr' | 'fixtures';
   lane?: 'slow' | 'fast'; // runner.sh's third argument; none = both lanes
   ts?: string | null;
 }
@@ -35,6 +35,7 @@ export interface Bases {
   simBase: Obj;
   clipBase: Obj;
   editBase: Obj;
+  fixturesBase: Obj;
 }
 export function loadCases(): Bases & { cases: Case[] } {
   const lines = readFileSync(`${TOOLS_DIR}testdata/jobs.jsonl`, 'utf8').trim().split('\n');
@@ -49,7 +50,9 @@ export const baseFor = (b: Bases, c: Case): Obj =>
       ? b.clipBase
       : c.kind === 'edit-pr'
         ? b.editBase
-        : b.base;
+        : c.kind === 'fixtures'
+          ? b.fixturesBase
+          : b.base;
 
 // The case's job and the inbox file stem it would be dropped under.
 export function buildJob(base: Obj, c: Case, nowMs: number): { job: unknown; stem: string } {

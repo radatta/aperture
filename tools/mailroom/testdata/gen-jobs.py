@@ -950,8 +950,62 @@ erej('edit-pr: a hash ref in the body is HASH_REF', 'HASH_REF', patch=B('fixes #
 erej('edit-pr: a cross-repo link in the title is XREF', 'XREF', patch=T('See https://github.com/cli/cli/issues/1'))
 ec('lanes: an edit-pr edits while the slow lock is held', lane='fast', setup='lock', expect=EDITED, calls=EALL, locks=['lock'])
 
+# ================================================================================================ fixtures job ===
+# The default API: a diff of one runner file, and a tarball (the tar stub unpacks the case's fxScript as the archive's
+# run-fixtures.sh); sandbox-exec is a stub that records its profile and runs the rest.
+fxbase = {'v': 1, 'id': '20261114T020000Z-fx-aaaaaaaaaaaa-3kx9', 'job': 'fixtures', 'submittedAt': 'now', 'expiresInMin': 20, 'params': {'sha': A}}
+CMP = f'GET {R}/compare/main...{A}'
+TGZ = f'GET {R}/tarball/{A}'
+FXAPI = {CMP: {'status': 200, 'body': {'files': [{'filename': 'tools/mailroom/runner.sh'}]}}, TGZ: {'status': 200, 'body': 'TARBALL'}}
+FXALL = ['GET /user', CMP, TGZ]
+def suite(*lines, rc=0): return '#!/bin/bash\n' + ''.join(f'echo {json.dumps(l, ensure_ascii=False)}\n' for l in lines) + f'exit {rc}\n'
+OK2 = suite('ok - a', 'ok - b', '# 2 passed, 0 failed, of 2 cases')
+PROFILE = ['(version 1)', '(allow default)', '(deny network*)', '(deny file-write*)', '(deny file-read* (subpath "/Users") (subpath "/Volumes"))',
+           '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.security.agent"))',
+           '(deny process-exec (literal "/usr/bin/security"))']
+NOFX = ['sandbox-exec', 'tar ']
+def fc(name, api=None, **k): c(name, kind='fixtures', api={**FXAPI, **(api or {})}, **k)
+FXPASS = {'status': 'pass', 'reason': None, 'job': 'fixtures', 'fixtures': {'passed': 2, 'failed': 0, 'cases': 2, 'failing': []}}
+
+fc('fixtures: a passing suite runs sandboxed, unpacked sandboxed, in a clean environment', ts=None, fxScript=OK2, expect=FXPASS, calls=FXALL,
+   # in order: the unpack's sandbox-exec line, tar itself, then the suite's sandbox-exec line (only sandbox-exec says env -i)
+   simIncludes=['sandbox-exec -f', 'tar -xzf', '/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME='],
+   sbIncludes=PROFILE, logIncludes=['# 2 passed, 0 failed, of 2 cases'])
+fc("fixtures: the suite sees no variable of the runner's (no token, no fixture env)", fxScript='#!/bin/bash\nenv\necho "ok - x"\necho "# 1 passed, 0 failed, of 1 cases"\n',
+   expect={'status': 'pass', 'fixtures': {'passed': 1, 'failed': 0, 'cases': 1, 'failing': []}}, calls=FXALL,
+   logIncludes=['PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL=C'])
+fc('fixtures: a failing case is fail FIXTURES_FAILED, named', fxScript=suite('ok - a', 'not ok - lanes: a clip: wrote 0 results', '# 1 passed, 1 failed, of 2 cases', rc=1),
+   expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': 1, 'failed': 1, 'cases': 2, 'failing': ['lanes: a clip: wrote 0 results'], 'exit': 1}}, calls=FXALL)
+fc('fixtures: a shortfall (a shard lost) fails even on exit 0', fxScript=suite('ok - a', '# 1 passed, 0 failed, of 2 cases'),
+   expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': 1, 'failed': 0, 'cases': 2, 'failing': [], 'exit': 0}}, calls=FXALL)
+fc('fixtures: no summary line fails', fxScript=suite('ok - a'),
+   expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': None, 'failed': None, 'cases': None, 'failing': [], 'exit': 0}}, calls=FXALL)
+fc('fixtures: at most 20 failing names, odd characters replaced', fxScript=suite(*[f'not ok - c{i} \u00e9: x' for i in range(25)], '# 0 passed, 25 failed, of 25 cases', rc=1),
+   expect={'status': 'fail', 'fixtures': {'passed': 0, 'failed': 25, 'cases': 25, 'failing': [f'c{i} ?: x' for i in range(20)], 'exit': 1}}, calls=FXALL)
+fc('fixtures: a diff touching install.sh is TOUCHES_INSTALL, nothing fetched or run', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'tools/mailroom/install.sh'}]}}},
+   fxScript=OK2, expect={'status': 'rejected', 'reason': 'TOUCHES_INSTALL'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: a plist template renamed away is TOUCHES_INSTALL', api={CMP: {'status': 200, 'body': {'files': [{'filename': 'x.txt', 'previous_filename': 'tools/mailroom/dev.rahuldatta.aperture.mailroom.plist.tmpl'}]}}},
+   fxScript=OK2, expect={'status': 'rejected', 'reason': 'TOUCHES_INSTALL'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: 300 files (GitHub cuts the list there) is DIFF_TOO_LARGE', api={CMP: {'status': 200, 'body': {'files': [{'filename': f'f{i}'} for i in range(300)]}}},
+   fxScript=OK2, expect={'status': 'rejected', 'reason': 'DIFF_TOO_LARGE'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: a compare without a file list is API_FAILED', api={CMP: {'status': 200, 'body': {'status': 'identical'}}}, fxScript=OK2,
+   expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: an unknown sha is HEAD_MISSING', api={CMP: {'status': 404, 'body': {}}}, fxScript=OK2, expect={'status': 'rejected', 'reason': 'HEAD_MISSING'}, calls=FXALL[:2], simExcludes=NOFX)
+fc('fixtures: a tarball refused is TOKEN_FORBIDDEN, nothing run', api={TGZ: {'status': 404, 'body': {}}}, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_FORBIDDEN'}, calls=FXALL, simExcludes=NOFX)
+fc('fixtures: an archive without run-fixtures.sh is API_FAILED, nothing run', expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL, simExcludes=['/bin/bash '])
+fc('fixtures: no Keychain token is TOKEN_MISSING, no call', noToken=True, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_MISSING'}, calls=[], simExcludes=NOFX)
+fc('fixtures: an extra param is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'branch': 'x'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
+fc('fixtures: a short sha is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'sha': 'abc1234'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
+fc('fixtures: a sha with a trailing newline is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'sha': A + '\n'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
+fc('lanes: the slow lane runs a fixtures job named …Z-fx-…', lane='slow', fxScript=OK2, expect=FXPASS, calls=FXALL)
+fc('lanes: the fast lane leaves a fixtures job named …Z-fx-… queued', lane='fast', fxScript=OK2, noResult=True, inboxLeft=1, calls=[], simExcludes=NOFX)
+fc('lanes: a fixtures job not named …Z-fx-… is refused, never run in the fast lane', lane='fast', patch={'id': '20261114T020000Z-other-3kx9'}, fxScript=OK2,
+   expect={'status': 'rejected', 'reason': 'BAD_FILE'}, calls=[], simExcludes=NOFX)
+cc_('lanes: a clip named …Z-fx-… is refused, never run in the slow lane', lane='slow', patch={'id': '20261114T020100Z-fx-clip-ab12'},
+    expect={'status': 'rejected', 'reason': 'BAD_FILE'}, simExcludes=['osascript'])
+
 with open(out, 'w') as f:
-    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase, 'editBase': ebase}) + '\n')
+    f.write(json.dumps({'base': base, 'simBase': simbase, 'clipBase': clipbase, 'editBase': ebase, 'fixturesBase': fxbase}) + '\n')
     f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')
     for x in C:
         f.write(json.dumps(x, ensure_ascii=True) + '\n')
