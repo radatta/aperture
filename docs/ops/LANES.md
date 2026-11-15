@@ -99,8 +99,9 @@ Then:
 
 1. Copies the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/` and compares the two trees by path,
    size and sha256 (a symlink by its target). A mismatch exits 1 with nothing removed. An existing archive is never
-   overwritten: it is reused only when it is this lane's (recorded) or an unclaimed copy (no `lane-end.txt`) that
-   matches; anything else goes to `<branch>.<n>/`. The destination goes into the lifecycle record, so a rerun writes
+   overwritten: it is reused only when it is this lane's (recorded) and still matches, or an unclaimed copy (no
+   `lane-end.txt`) that matches; with no `localNotes`, the recorded one is kept and an unclaimed one fits when it
+   holds only this command's two files; anything else goes to `<branch>.<n>/`. The destination goes into the lifecycle record, so a rerun writes
    to this lane's archive, never an older same-name lane's.
 2. Writes `mac-cleanup.txt` (the Mac line) and `lane-end.txt` (PR, merge sha, or the abandon reason) into the archive.
 3. Runs `git worktree remove` (never forced; a refusal stops here, and a rerun resumes).

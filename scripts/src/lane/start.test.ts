@@ -230,6 +230,7 @@ describe('lane start: the nominal run', () => {
     const install = t.calls.find((c) => c.line === 'pnpm install')!;
     expect(install.cwd).toBe(wt);
     expect(install.env?.CI).toBe('true');
+    expect(t.calls.map((c) => c.line)).toContain(`git ls-remote --heads origin refs/heads/${B}`);
     expect(t.calls.find((c) => c.line.startsWith('git worktree add'))!.cwd).toBe(w.main);
     expect(readFileSync(join(wt, 'localNotes/kickoff.md'), 'utf8')).toBe(
       '[kickoff] new-lane — do the thing\n',

@@ -38,7 +38,8 @@ export function parseAdmission(text: string | null, branch: string): Admission {
     };
     if (!Array.isArray(r?.branch_policies)) return { kind: 'unknown' };
     const hit = r.branch_policies.find((p) => p?.name === branch);
-    if (hit && Number.isInteger(hit.id)) return { kind: 'id', id: hit.id as number };
+    if (hit)
+      return Number.isInteger(hit.id) ? { kind: 'id', id: hit.id as number } : { kind: 'unknown' };
     // past the first page (100): not seen is not "not admitted"
     if (typeof r.total_count === 'number' && r.total_count > r.branch_policies.length)
       return { kind: 'unknown' };

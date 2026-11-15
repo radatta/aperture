@@ -227,7 +227,7 @@ export function end(d: Deps, a: EndArgs): number {
     const fits = (p: string) =>
       d.fs.exists(p) &&
       (has ? d.fs.sameTree(src, p, OWN_FILES) : d.fs.list(p).every((f) => OWN_FILES.includes(f)));
-    if (dest && !fits(dest)) dest = null; // localNotes changed since: a fresh copy
+    if (dest && has && !fits(dest)) dest = null; // localNotes changed since: a fresh copy
     if (!dest && d.fs.exists(base) && !d.fs.exists(`${base}/lane-end.txt`) && fits(base))
       dest = base;
     try {

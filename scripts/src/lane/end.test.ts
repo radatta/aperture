@@ -283,6 +283,9 @@ describe('lane end: the nominal run', () => {
       `git worktree remove .claude/worktrees/${B}`,
       'tmux kill-window -t @9',
     ]);
+    expect(t.calls.map((c) => c.line)).toContain(
+      'gh api repos/owner/repo/environments/dev/deployment-branch-policies?per_page=100',
+    );
     expect(t.calls.at(-1)!.line).toBe('tmux kill-window -t @9');
     expect(existsSync(join(w.board, 'lanes', `${B}.json`))).toBe(false);
     expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
@@ -536,6 +539,7 @@ describe('lane end: the nominal run', () => {
     expect(end(t.d, args())).toBe(3);
     expect(t.out()).toMatch(/localNotes\/lane-end.txt would be overwritten/);
     expect(effects(t.calls)).toEqual([]);
+    expect(existsSync(join(w.main, 'localNotes/archive', B))).toBe(false);
   });
 
   it('with no localNotes, a rerun reuses its own archive', () => {
