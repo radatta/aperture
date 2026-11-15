@@ -352,6 +352,10 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -z "$why" ] && [ -n "$want" ] || continue
       grep -q -F -- "$want" "$hj/results/$rid/fixtures.log" 2>/dev/null || why="fixtures.log lacks \"$want\""
     done < <(jq -r '.logIncludes // [] | .[]' <<<"$c")
+    while IFS= read -r nope; do
+      [ -z "$why" ] && [ -n "$nope" ] || continue
+      if grep -q -F -- "$nope" "$hj/results/$rid/fixtures.log" 2>/dev/null; then why="fixtures.log holds \"$nope\""; fi
+    done < <(jq -r '.logExcludes // [] | .[]' <<<"$c")
   fi
   # clip cases: the private state after the run ({cc, n, serves: how many}). What the JXA may ask the pasteboard is
   # pinned statically (runner-fixtures.test.ts).
@@ -396,17 +400,24 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 ) && ok "sim_cap kills a command at its cap" || bad "sim_cap kills a command at its cap" "it did not return 124 promptly"
 
 # fx_cap kills the fixtures suite's whole tree at its cap (the suite backgrounds its shards), not just its parent.
+# Its tree ignores TERM (KILL can't be), and a child it leaves behind after a normal exit is killed with the group.
 (
   unset -f pgrep sleep
   . "$HERE/jobs/fixtures.sh"
+  STATE="$(mktemp -d)" HELD=" lock" # the cap touches the drain's locks: never ./lock in the caller's directory
   f="$(mktemp)"
-  tree() { command sleep 30 & echo $! >"$f"; command sleep 30; }
+  tree() { trap '' TERM; command sleep 30 & echo $! >"$f"; command sleep 30; }
   started=$(date +%s)
   fx_cap 1 tree
   rc=$?
   command sleep 0.2
-  [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ] && ! kill -0 "$(cat "$f")" 2>/dev/null
-) && ok "fx_cap kills a command's whole tree at its cap" || bad "fx_cap kills a command's whole tree at its cap" "it did not return 124 promptly, or a child survived"
+  [ "$rc" = 124 ] && [ $(($(date +%s) - started)) -lt 10 ] && ! kill -0 "$(cat "$f")" 2>/dev/null || exit 1
+  left() { command sleep 30 & echo $! >"$f"; }
+  fx_cap 5 left
+  rc=$?
+  command sleep 0.2
+  [ "$rc" = 0 ] && ! kill -0 "$(cat "$f")" 2>/dev/null && [ ! -e ./lock ] && [ -e "$STATE/lock" ]
+) && ok "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" || bad "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" "a wrong code, a slow return, or a child survived"
 
 # Lanes, for real: a slow drain inside a 20 s sim op, a second slow drain, and a fast drain beside it — as launchd's
 # two agents would run them.

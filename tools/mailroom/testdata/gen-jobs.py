@@ -960,9 +960,9 @@ FXAPI = {CMP: {'status': 200, 'body': {'files': [{'filename': 'tools/mailroom/ru
 FXALL = ['GET /user', CMP, TGZ]
 def suite(*lines, rc=0): return '#!/bin/bash\n' + ''.join(f'echo {json.dumps(l, ensure_ascii=False)}\n' for l in lines) + f'exit {rc}\n'
 OK2 = suite('ok - a', 'ok - b', '# 2 passed, 0 failed, of 2 cases')
-PROFILE = ['(version 1)', '(allow default)', '(deny network*)', '(deny file-write*)', '(deny file-read* (subpath "/Users") (subpath "/Volumes"))',
-           '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.security.agent"))',
-           '(deny process-exec (literal "/usr/bin/security"))']
+PROFILE = ['(version 1)', '(allow default)', '(deny network*)', '(deny file-write*)',
+           '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))',
+           '(deny appleevent-send)', '(deny job-creation)']  # each line present; the whole profile, in order: runner-fixtures.test.ts
 NOFX = ['sandbox-exec', 'tar ']
 def fc(name, api=None, **k): c(name, kind='fixtures', api={**FXAPI, **(api or {})}, **k)
 FXPASS = {'status': 'pass', 'reason': None, 'job': 'fixtures', 'fixtures': {'passed': 2, 'failed': 0, 'cases': 2, 'failing': []}}
@@ -973,7 +973,7 @@ fc('fixtures: a passing suite runs sandboxed, unpacked sandboxed, in a clean env
    sbIncludes=PROFILE, logIncludes=['# 2 passed, 0 failed, of 2 cases'])
 fc("fixtures: the suite sees no variable of the runner's (no token, no fixture env)", fxScript='#!/bin/bash\nenv\necho "ok - x"\necho "# 1 passed, 0 failed, of 1 cases"\n',
    expect={'status': 'pass', 'fixtures': {'passed': 1, 'failed': 0, 'cases': 1, 'failing': []}}, calls=FXALL,
-   logIncludes=['PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL=C'])
+   logIncludes=['PATH=/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL=C'], logExcludes=['MAILROOM_FIXTURE_', 'BASH_FUNC_', 'HJ=', 'STATE=', 'MR_'])
 fc('fixtures: a failing case is fail FIXTURES_FAILED, named', fxScript=suite('ok - a', 'not ok - lanes: a clip: wrote 0 results', '# 1 passed, 1 failed, of 2 cases', rc=1),
    expect={'status': 'fail', 'reason': 'FIXTURES_FAILED', 'fixtures': {'passed': 1, 'failed': 1, 'cases': 2, 'failing': ['lanes: a clip: wrote 0 results'], 'exit': 1}}, calls=FXALL)
 fc('fixtures: a shortfall (a shard lost) fails even on exit 0', fxScript=suite('ok - a', '# 1 passed, 0 failed, of 2 cases'),

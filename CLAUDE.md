@@ -132,7 +132,7 @@ Claude handles branches, commits, and PR bodies. **Allowed** git commands:
 - `git add`, `git commit`, `git stash`
 - `pnpm bot push` — the one way Claude pushes: the current feature branch, as the bot. After a rebase, `pnpm bot push --after-rebase` (a lease on the last push). A branch that changes `.github/workflows/` is the user's to push — the bot has no `workflows` permission (_PR bodies_)
 - `pnpm bot run cancel <run-id>` / `pnpm bot run rerun <run-id> [--failed]` — the lane's own PR check run only (a superseded one, or a real flake): the bot refuses any other run (`docs/ops/CI-BOT.md` → _Commands_). A rerun spends Actions minutes, so not for a red the branch caused
-- `pnpm bot prune-branches [--dry-run]` — at the end of a wave, by the hub: deletes each local branch whose PR merged at exactly its tip, and keeps every other with the reason
+- `pnpm bot prune-branches [--dry-run]` — the wave-end branch cleanup (`docs/ops/HUB.md` → _The hub's duties_): deletes each local branch whose PR merged at exactly its tip, and keeps every other with the reason
 - `git fetch`, `git rebase origin/main`, `git mv`
 - `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only at _Feature workflow_ → _Cleanup_
 

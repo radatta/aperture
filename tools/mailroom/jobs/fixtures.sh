@@ -20,40 +20,52 @@ validate_fixtures() {
       else empty end) catch "BAD_PARAM"' "$1" 2>/dev/null || printf 'BAD_PARAM'
 }
 
-# fx_kill_tree PID — TERM a process and everything under it (the suite backgrounds its shards).
-fx_kill_tree() {
-  local c
-  for c in $(pgrep -P "$1" 2>/dev/null); do fx_kill_tree "$c"; done
-  kill -TERM "$1" 2>/dev/null || true
-}
-
-# fx_cap SECONDS CMD… — run CMD, touching the drain's locks as it goes; past the cap, kill its tree and return 124.
+# fx_cap SECONDS CMD… — run CMD in its own process group, touching the drain's locks as it goes. Past the cap the whole
+# group is stopped, then killed (a TERM can be ignored; KILL can't), and 124 is returned. After a normal exit the group
+# is killed too, so nothing the suite backgrounded outlives it. The wait for the dead group is bounded.
 fx_cap() {
-  local cap="$1" pid end l
+  local cap="$1" pid end l rc=0 i
   shift
+  set -m
   "$@" &
   pid=$!
+  set +m
   end=$(($(date +%s) + cap))
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$(date +%s)" -ge "$end" ]; then
-      fx_kill_tree "$pid"
+      kill -STOP -- "-$pid" 2>/dev/null || true
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
       wait "$pid" 2>/dev/null || true
       return 124
     fi
     for l in ${HELD:-lock}; do touch "${STATE:-.}/$l" 2>/dev/null || true; done
     sleep 1
   done
-  wait "$pid"
+  wait "$pid" || rc=$?
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  return "$rc"
 }
 
-# The profile: everything else stays allowed (Apple's tools run as usual), then network, writes, the home folders and
-# the Keychain are taken away. Later rules win in SBPL. $1 is the run's real temp dir, checked to need no quoting.
+# The profile: everything else stays allowed (Apple's tools run as usual), then network, writes, home-folder reads, the
+# Keychain and the services that would run work outside the sandbox are taken away. Later rules win in SBPL. $1 is the
+# run's real temp dir, checked to need no quoting. The suite stubs every tool it drives, so it needs none of these.
 fx_profile() {
   printf '%s\n' '(version 1)' '(allow default)' '(deny network*)' '(deny file-write*)' \
     "(allow file-write* (subpath \"$1\") (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/fd/\"))" \
-    '(deny file-read* (subpath "/Users") (subpath "/Volumes"))' \
+    '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))' \
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.security.agent"))' \
-    '(deny process-exec (literal "/usr/bin/security"))'
+    '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb") (global-name "com.apple.coreservices.appleevents") (global-name "com.apple.pasteboard.1") (global-name "com.apple.CoreSimulator.CoreSimulatorService"))' \
+    '(deny appleevent-send)' '(deny job-creation)' \
+    '(deny process-exec (literal "/usr/bin/security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))'
+}
+
+# The two sandboxed steps, each in $t (the inbox is under /Users, which the profile can't read) with a file-size limit
+# (ulimit -f, 512-byte blocks: 1 GiB), so a commit of compressible files can't fill the Mac's disk.
+fx_unpack() { (cd "$1" && ulimit -f 2097152 && exec sandbox-exec -f "$MR_P.sb" tar -xzf "$1/src.tgz" -C "$1/src" --strip-components 1); }
+fx_suite() {
+  (cd "$1" && ulimit -f 2097152 && exec sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    HOME="$1/home" TMPDIR="$1/tmp" LC_ALL=C /bin/bash "$1/src/tools/mailroom/run-fixtures.sh")
 }
 
 run_fixtures() {
@@ -85,21 +97,27 @@ run_fixtures() {
   if ! [[ "$t" =~ ^/[A-Za-z0-9/._-]+$ ]]; then rm -r -f -- "$t"; mr_emit error API_FAILED; return 0; fi
   mkdir -p "$t/src" "$t/home" "$t/tmp"
   fx_profile "$t" >"$MR_P.sb"
-  # Unpacked inside the sandbox too: the archive's own entries can write only under $t. The state dir is under /Users,
-  # which the sandbox can't read, so the archive moves into $t first.
+  # A profile this macOS won't compile (or no working sandbox) is its own code, so a first trial can tell it apart.
+  if ! (cd "$t" && sandbox-exec -f "$MR_P.sb" /usr/bin/true) >/dev/null 2>&1; then
+    rm -r -f -- "$t"
+    mr_emit error SANDBOX_FAILED
+    return 0
+  fi
+  # The state dir is under /Users, which the sandbox can't read, so the archive moves into $t first.
   mv -- "$MR_P.resp" "$t/src.tgz"
-  if ! sandbox-exec -f "$MR_P.sb" tar -xzf "$t/src.tgz" -C "$t/src" --strip-components 1 >/dev/null 2>&1 ||
-    [ ! -f "$t/src/tools/mailroom/run-fixtures.sh" ]; then
+  if ! fx_cap 120 fx_unpack "$t" >/dev/null 2>&1 || [ ! -f "$t/src/tools/mailroom/run-fixtures.sh" ]; then
     rm -r -f -- "$t"
     mr_emit error API_FAILED
     return 0
   fi
 
+  # The output goes to a file the runner made outside $t (its work dir, under /Users: the sandbox can neither open nor
+  # replace it), and nothing below reads a path inside $t, which the suite controls.
   rc=0
-  fx_cap "$FX_TIMEOUT" sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$t/home" \
-    TMPDIR="$t/tmp" LC_ALL=C /bin/bash "$t/src/tools/mailroom/run-fixtures.sh" >"$t/out" 2>&1 </dev/null || rc=$?
+  fx_cap "$FX_TIMEOUT" fx_suite "$t" >"$MR_P.out" 2>&1 </dev/null || rc=$?
+  rm -r -f -- "$t"
   # The log tail, printable ASCII only, written as results are: a pinned cwd, noclobber, never through a planted link.
-  tail -n "$FX_LOG_LINES" "$t/out" | LC_ALL=C tr -cd '\11\12\40-\176' >"$MR_P.log" 2>/dev/null || true
+  tail -n "$FX_LOG_LINES" "$MR_P.out" | LC_ALL=C tr -cd '\11\12\40-\176' >"$MR_P.log" 2>/dev/null || true
   (
     cd "$rd" && [ "$(pwd -P)" = "$rd" ] || exit 1
     set -C
@@ -109,8 +127,7 @@ run_fixtures() {
     | ([$l[] | capture("^# (?<p>[0-9]+) passed, (?<f>[0-9]+) failed, of (?<c>[0-9]+) cases$")] | last) as $sum
     | {passed: ($sum.p // null | if . then tonumber else null end), failed: ($sum.f // null | if . then tonumber else null end),
        cases: ($sum.c // null | if . then tonumber else null end),
-       failing: [$l[] | select(startswith("not ok - ")) | .[9:] | gsub("[^A-Za-z0-9 ._:,()/+-]"; "?") | .[0:120]][0:$max]}' "$t/out" 2>/dev/null || echo '{}')"
-  rm -r -f -- "$t"
+       failing: [$l[] | select(startswith("not ok - ")) | .[9:] | gsub("[^A-Za-z0-9 ._:,()/+-]"; "?") | .[0:120]][0:$max]}' "$MR_P.out" 2>/dev/null || echo '{}')"
   if [ "$rc" = 124 ]; then printf 'error TIMEOUT %s\n' "$(jq -c '{fixtures: .}' <<<"$out")"; return 0; fi
   if [ "$rc" = 0 ] && jq -e '.failed == 0 and .passed != null and .passed == .cases and .passed > 0' <<<"$out" >/dev/null 2>&1; then
     printf 'pass - %s\n' "$(jq -c '{fixtures: .}' <<<"$out")"

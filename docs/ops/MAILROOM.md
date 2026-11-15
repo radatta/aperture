@@ -234,27 +234,30 @@ When the Mac doesn't answer, the CLI prints the user's line: `gh pr edit <branch
 
 A `tools/mailroom/` branch's trial starts with its fixture suite on the Mac, under `/bin/bash` 3.2, since the container's bash 5 hid a real bug (MIXED_TEXT, PR 170). The user used to paste that line. Now `pnpm mailroom fixtures` asks the Mac to run it. Params: `{sha}`.
 
-**This is the one job that runs code that isn't merged main:** bot-pushed, unreviewed bash. The same happened before, whenever the line was pasted without reading the branch. The job (`jobs/fixtures.sh`) bounds it like this:
+**This is the one job that runs code that isn't merged main:** unreviewed bash at whatever sha the container names, usually a bot push (once the repo is public, GitHub serves a fork's commit through it too). The same happened before, whenever the line was pasted without reading the branch. The job (`jobs/fixtures.sh`) bounds it like this:
 
 - **No install change.** `GET …/compare/main...<sha>` first. A diff that touches `install.sh` or a plist template (renames included) is `TOUCHES_INSTALL`. A list GitHub cut at 300 files is `DIFF_TOO_LARGE`, because the check can't be made. Both are refused before anything is fetched, and such a branch's suite stays the user's, by hand (_Trial_ step 2).
 - **From GitHub at the sha, never the shared folder.** `GET …/tarball/<sha>` (Contents: read) is followed to GitHub's archive host. curl drops the token header on that hop, because the redirect URL carries its own short-lived grant. The archive is capped at 64 MiB and 120 s, and unpacked into a fresh temp dir outside the mount.
-- **Under `sandbox-exec`**, for both the unpack and the run. The profile (`fx_profile`) allows everything, then takes away:
+- **Under `sandbox-exec`**, for both the unpack and the run, each started inside the temp dir. The profile (`fx_profile`, pinned line by line in `runner-fixtures.test.ts`) allows everything, then takes away:
   - all network;
   - every write but the run's own temp dir, `/dev/null`, `/dev/zero` and `/dev/fd`;
-  - every read under `/Users` and `/Volumes`, so no home folder, the shared one and the runner's own state included;
-  - the Keychain daemons and `/usr/bin/security`.
+  - every read under `/Users`, `/Volumes` and `/System/Volumes/Data/Users`, so no home folder, the shared one and the runner's own state included;
+  - the Keychain daemons and `/usr/bin/security`;
+  - the ways to hand work to a process outside the sandbox: LaunchServices and `open`, Apple Events and `osascript`, launchd job creation and `launchctl`, the pasteboard, CoreSimulator and `xcrun`, and `defaults`. The suite stubs every tool it drives, so it needs none of them.
 
-  So the suite can't send anything anywhere, or read a secret or a personal file and write it into the log the container reads. `sandbox-exec` is deprecated but still on macOS. A Mac without it is `SANDBOX_MISSING`: the job never runs unsandboxed.
+  A preflight runs `/usr/bin/true` under the profile first: a profile this macOS won't compile is `SANDBOX_FAILED`, and a Mac without `sandbox-exec` is `SANDBOX_MISSING`. The job never runs unsandboxed. `sandbox-exec` is deprecated but still on macOS.
 
-- **A clean environment** (`env -i`, the system `PATH`, `HOME` and `TMPDIR` inside the temp dir), stdin closed, and a 10-minute cap (`FX_TIMEOUT`) that kills the suite's whole process tree, since its shards run in the background.
+- **The output** goes to a file the runner made in its own work dir, which the sandbox can neither read nor replace. Nothing after the run reads a path inside the temp dir, which the suite controls.
+
+- **A clean environment** (`env -i`, the system `PATH`, `HOME` and `TMPDIR` inside the temp dir), stdin closed, a 1 GiB file-size limit (`ulimit -f`), and caps: 2 min for the unpack, 10 for the suite (`FX_TIMEOUT`). `fx_cap` runs each in its own process group. Past the cap it stops the group and then kills it, since a TERM can be ignored. After a normal exit it kills the group too, so nothing the suite backgrounded outlives it.
 - **The slow lane** runs it (`SLOW_JOBS`, ids `…Z-fx-…`): a fixture suite never runs beside a sim job, which slows the sim's reads (IOS-CHECK.md → _Runtime_). The cap touches the lane's locks as it waits.
 
-| Status     | Reason codes, and what they mean                                                                                                                      |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pass`     | none. `fixtures: {passed, failed, cases, failing: []}`: the summary line said 0 failed, and every case passed                                         |
-| `fail`     | `FIXTURES_FAILED`: any failure, a shortfall, a non-zero exit or no summary line. `failing` holds up to 20 names (ASCII), `exit` the suite's code      |
-| `rejected` | `TOUCHES_INSTALL`, `DIFF_TOO_LARGE`, `HEAD_MISSING` (no such commit), `BAD_PARAM`                                                                     |
-| `error`    | `SANDBOX_MISSING`, `TIMEOUT` (the 10-min cap), `API_FAILED` (an archive without `run-fixtures.sh`, or a compare without a file list), and the token's |
+| Status     | Reason codes, and what they mean                                                                                                                                                                          |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pass`     | none. `fixtures: {passed, failed, cases, failing: []}`: the summary line said 0 failed, and every case passed                                                                                             |
+| `fail`     | `FIXTURES_FAILED`: any failure, a shortfall, a non-zero exit or no summary line. `failing` holds up to 20 names (ASCII), `exit` the suite's code                                                          |
+| `rejected` | `TOUCHES_INSTALL`, `DIFF_TOO_LARGE`, `HEAD_MISSING` (no such commit), `BAD_PARAM`                                                                                                                         |
+| `error`    | `SANDBOX_MISSING`, `SANDBOX_FAILED` (the profile didn't compile here), `TIMEOUT` (the 10-min cap), `API_FAILED` (an archive without `run-fixtures.sh`, or a compare without a file list), and the token's |
 
 The last 400 lines of the suite's output, printable ASCII only, go to `results/<id>/fixtures.log`, written as results are.
 
@@ -327,6 +330,7 @@ The read is JXA fed to `osascript -l JavaScript -` on stdin from a constant, cap
 
 Residual risks:
 
+- The `fixtures` job runs unreviewed code on the Mac under a deny-list profile (`(allow default)`, then the denials above). A Mach or XPC service the list doesn't name could still do work outside the sandbox. A deny-default profile is the follow-up, once a trial shows what the suite needs. The trial probes each named channel (_Trial_).
 - The `clip` job lets the container read the clipboard's image on request, by design. Bounded by the gates above, but a compromised container can still take the image currently on the clipboard while a terminal is in front, up to 3 times. The Mac log records each serve; no banner shows it (off by the maintainer's choice, 2026-11-13).
 - A credential with the user's identity sits in the Mac Keychain. That's the same posture as the Raycast prod token.
 - The token can also comment on or review PRs opened by others. None exist on this repo.

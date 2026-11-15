@@ -252,9 +252,16 @@ export async function main(argv: string[]): Promise<number> {
         flags.failed === 'true',
         console.log,
       );
-    case 'prune-branches':
+    case 'prune-branches': {
+      // A destructive command: anything but a bare --dry-run is a usage error, never a real delete.
+      const odd = Object.entries(flags).filter(([k, v]) => k !== 'dry-run' || v !== 'true');
+      if (odd.length || positional.length > 1) {
+        console.error(`prune-branches takes only --dry-run\n${USAGE}`);
+        return 2;
+      }
       pruneBranches(run, flags['dry-run'] === 'true', console.log);
       return 0;
+    }
     case 'logs': {
       const t = await token(PERMS.logs);
       await fetchLogs(run, makeApi(t), t, clock, flags, root());

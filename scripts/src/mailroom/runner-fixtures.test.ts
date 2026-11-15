@@ -79,7 +79,7 @@ describe('mailroom runner', () => {
     // The fixtures job's sandbox profile names the Keychain only to deny it (jobs/fixtures.sh → fx_profile).
     expect(src.match(/\bsecurity\b[^\n]*/g)).toEqual([
       'security.agent"))\' \\',
-      'security"))\'',
+      'security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))\'',
       'security find-generic-password -s "$MR_KEYCHAIN" -w 2>/dev/null || true)"',
       'security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \\',
       `security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" -w 2>/dev/null | tr -d '\\n' | ax type --stdin >/dev/null 2>&1; then`,
@@ -255,11 +255,12 @@ describe('mailroom runner', () => {
       "FX_INSTALL_RE='^tools/mailroom/(install\\.sh|[^/]*\\.plist\\.tmpl)$'",
       'if [ "$n" -ge 300 ]; then mr_emit rejected DIFF_TOO_LARGE; return 0; fi',
       "if ! command -v sandbox-exec >/dev/null 2>&1; then printf 'error SANDBOX_MISSING {}\\n'; return 0; fi",
-      'sandbox-exec -f "$MR_P.sb" tar -xzf "$t/src.tgz" -C "$t/src" --strip-components 1',
-      'fx_cap "$FX_TIMEOUT" sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$t/home"',
-      "'(deny network*)' '(deny file-write*)'",
-      '(deny file-read* (subpath "/Users") (subpath "/Volumes"))',
-      '(deny process-exec (literal "/usr/bin/security"))',
+      'exec sandbox-exec -f "$MR_P.sb" tar -xzf "$1/src.tgz" -C "$1/src" --strip-components 1',
+      'if ! fx_cap 120 fx_unpack "$t" >/dev/null 2>&1',
+      'fx_cap "$FX_TIMEOUT" fx_suite "$t" >"$MR_P.out" 2>&1 </dev/null || rc=$?',
+      'ulimit -f 2097152',
+      'kill -KILL -- "-$pid"',
+      'exec sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin',
       'if ! [[ "$t" =~ ^/[A-Za-z0-9/._-]+$ ]]; then',
     ])
       expect(fx).toContain(pin);
@@ -271,9 +272,34 @@ describe('mailroom runner', () => {
     expect(fx.match(/\bsandbox-exec -f "\$MR_P\.sb" \S+/g)).toEqual([
       'sandbox-exec -f "$MR_P.sb" tar', // the unpack
       'sandbox-exec -f "$MR_P.sb" /usr/bin/env', // the suite, under fx_cap
+      'sandbox-exec -f "$MR_P.sb" /usr/bin/true)', // the preflight: a profile this macOS won't compile is SANDBOX_FAILED
     ]);
     for (const banned of ['eval ', 'sh -c', 'bash -c', 'source ', '. "$t'])
       expect(fx).not.toContain(banned);
+  });
+
+  // The whole profile, rendered by fx_profile, in order (SBPL: the last matching rule wins), for a temp dir /T.
+  it('the fixtures sandbox profile, exactly', () => {
+    const out = execFileSync(
+      'bash',
+      ['-c', '. "$1"; fx_profile /T', '_', `${TOOLS_DIR}jobs/fixtures.sh`],
+      {
+        encoding: 'utf8',
+      },
+    );
+    expect(out.trim().split('\n')).toEqual([
+      '(version 1)',
+      '(allow default)',
+      '(deny network*)',
+      '(deny file-write*)',
+      '(allow file-write* (subpath "/T") (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))',
+      '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))',
+      '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.security.agent"))',
+      '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb") (global-name "com.apple.coreservices.appleevents") (global-name "com.apple.pasteboard.1") (global-name "com.apple.CoreSimulator.CoreSimulatorService"))',
+      '(deny appleevent-send)',
+      '(deny job-creation)',
+      '(deny process-exec (literal "/usr/bin/security") (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/pbpaste") (literal "/usr/bin/pbcopy") (literal "/usr/bin/xcrun") (literal "/usr/bin/defaults"))',
+    ]);
   });
 
   it('installs only what GitHub holds at a commit, reading nothing from the shared folder', () => {
