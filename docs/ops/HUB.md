@@ -12,7 +12,7 @@ and a worktree keeps the old name until it rebases. `board.sh hub` prints the na
 SessionStart hook injects that line into every session; in the hub's own session it injects
 "You are the hub — read /workspace/localNotes/roadmap.md before anything else" instead (also after a compaction).
 
-**`dispatch` is the only hub.** There is no second hub and no relay session. Every other window is a **lane**: one
+**There is one hub** (`dispatch` today): no second hub and no relay session. Every other window is a **lane**: one
 branch, one worktree, one Claude session, all named after the branch, started with `pnpm lane start` and ended with
 `pnpm lane end` (`docs/ops/LANES.md`). A side job goes to a background agent, never a new window.
 

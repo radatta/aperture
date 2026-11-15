@@ -20,7 +20,7 @@ function script(w: World, over: [string, Answer][] = [], trees: string[] = []): 
     ['git show-ref', fail()],
     ['git ls-remote', ''],
     ['git worktree list --porcelain', porcelain(w.main, trees)],
-    ['tmux list-windows', '@1 dispatch\n@2 other'],
+    ['tmux list-windows', '@1\tdispatch\n@2\tother window'],
     ['git rev-parse origin/main', SHA],
     ['git rev-parse HEAD', SHA],
     [
@@ -33,7 +33,7 @@ function script(w: World, over: [string, Answer][] = [], trees: string[] = []): 
       },
     ],
     ['pnpm install', ''],
-    ['tmux new-window', '@9 %9'],
+    ['tmux new-window', '@9\t%9'],
     ['tmux send-keys', ''],
     ['git worktree remove', ''],
     ['git branch -d', ''],
@@ -143,7 +143,7 @@ describe('lane start: refusals change nothing', () => {
     [
       'a same-name window',
       {},
-      [['tmux list-windows', `@1 dispatch\n@5 ${B}`]],
+      [['tmux list-windows', `@1\tdispatch\n@5\t${B}`]],
       /window named new-lane exists \(@5\)/,
       3,
       () => {},
@@ -221,9 +221,9 @@ describe('lane start: the nominal run', () => {
     expect(await start(t.d, args({ kickoff: kick }))).toBe(0);
     const wt = join(w.main, '.claude/worktrees', B);
     expect(mutated(t.calls)).toEqual([
-      `git worktree add --no-track -b ${B} .claude/worktrees/${B} origin/main`,
+      `git worktree add --no-track -b ${B} .claude/worktrees/${B} ${SHA}`,
       'pnpm install',
-      `tmux new-window -d -P -F #{window_id} #{pane_id} -t $0: -n ${B} -c ${wt}`,
+      `tmux new-window -d -P -F #{window_id}\t#{pane_id} -t $0: -n ${B} -c ${wt}`,
       `tmux send-keys -t %9 -l -- claude -n ${B} '${KICKOFF_PROMPT}'`,
       'tmux send-keys -t %9 Enter',
     ]);
@@ -264,7 +264,7 @@ describe('lane start: the nominal run', () => {
       ]),
     );
     expect(await start(t.d, args({ skipPermissions: true }))).toBe(0);
-    expect(mutated(t.calls)[0]).toBe('git switch --detach origin/main');
+    expect(mutated(t.calls)[0]).toBe(`git switch --detach ${SHA}`);
     expect(t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1)).toBe(
       `claude -n ${B} --dangerously-skip-permissions`,
     );
@@ -353,6 +353,53 @@ describe('lane start: rollback', () => {
     expect(t.out()).toMatch(
       /left behind: worktree .*new-lane \(git worktree remove failed|left behind: worktree .*\(locked\)/,
     );
+  });
+
+  it('a failed worktree add that left its branch at the base takes the branch back', async () => {
+    const w = world();
+    const t = deps(
+      w,
+      script(w, [
+        ['git worktree add', fail('checkout failed')],
+        ['git rev-parse --verify --quiet refs/heads/', SHA],
+        ['git worktree prune', ''],
+      ]),
+    );
+    expect(await start(t.d, args())).toBe(1);
+    const tail = t.calls.map((c) => c.line).slice(-2);
+    expect(tail).toEqual(['git worktree prune', `git branch -d ${B}`]);
+    expect(t.out()).toMatch(/rolled back: nothing left behind/);
+  });
+
+  it('a failed worktree add whose branch is not at the base leaves that branch alone', async () => {
+    const w = world();
+    const t = deps(
+      w,
+      script(w, [
+        ['git worktree add', fail()],
+        ['git rev-parse --verify --quiet refs/heads/', 'f'.repeat(40)],
+      ]),
+    );
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.calls.some((c) => c.line.startsWith('git branch'))).toBe(false);
+  });
+
+  it('a failed kickoff copy rolls back', async () => {
+    const w = world();
+    const kick = join(w.root, 'k.md');
+    writeFileSync(kick, 'kickoff\n');
+    const t = deps(w, script(w));
+    const real = t.d.fs.write;
+    t.d.fs = {
+      ...t.d.fs,
+      write: (p, s) => {
+        if (p.endsWith('kickoff.md')) throw new Error('ENOSPC');
+        real(p, s);
+      },
+    };
+    expect(await start(t.d, args({ kickoff: kick }))).toBe(1);
+    expect(t.out()).toMatch(/could not copy the kickoff: ENOSPC/);
+    expect(t.calls.some((c) => c.line.startsWith('tmux new-window'))).toBe(false);
   });
 
   it('never deletes a branch with the force form', async () => {

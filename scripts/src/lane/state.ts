@@ -161,6 +161,7 @@ export type Lifecycle = {
   baseSha: string | null;
   kickoff: string | null;
   overCap: string | null;
+  archive: string | null; // where `lane end` archived localNotes, so a rerun writes there
   startedAt: string;
 };
 
@@ -186,12 +187,13 @@ export function windowCheck(d: Deps, r: Lifecycle | null): { id: string } | { wh
       '-p',
       '-t',
       r.windowId,
-      '#{pid} #{start_time} #{window_id} #{window_name}',
+      '#{pid}\t#{start_time}\t#{window_id}\t#{window_name}',
     ]);
   } catch {
     return { why: `window ${r.windowId} is gone` };
   }
-  const [pid, start, id, name] = got.split(' ');
+  const [pid, start, id, ...rest] = got.split('\t');
+  const name = rest.join('\t'); // a window name may hold a tab
   if (pid !== r.tmuxServerPid || start !== r.tmuxServerStart)
     return { why: `the tmux server restarted since ${r.windowId} was recorded` };
   if (id !== r.windowId || name !== r.branch)

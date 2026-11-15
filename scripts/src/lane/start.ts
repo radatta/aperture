@@ -52,7 +52,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     if (!kickoff || !kickoff.trim() || kickoff.length > KICKOFF_MAX)
       return refuse(d, `--kickoff ${a.kickoff}: missing, empty or over 256 KiB`, EXIT.usage);
   }
-  if (a.overCap === 'true' || a.overCap === '')
+  if (a.overCap !== null && (a.overCap === 'true' || !a.overCap.trim()))
     return refuse(d, '--over-cap wants a reason', EXIT.usage);
   if (e.cwdTop !== e.mainRoot)
     return refuse(d, `run it from ${e.mainRoot}: the lifecycle always runs main's code`);
@@ -90,7 +90,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   try {
     d.run('git', ['fetch', 'origin'], { cwd: e.mainRoot });
   } catch (err) {
-    return refuse(d, `git fetch failed: ${(err as Error).message}`, EXIT.failed);
+    return refuse(d, `git fetch failed (nothing changed): ${(err as Error).message}`, EXIT.failed);
   }
   if (tryRun(d, 'git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], e.mainRoot) !== null)
     return refuse(d, `branch ${b} already exists (local)`);
@@ -104,10 +104,11 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     return refuse(d, `.claude/worktrees/${b} already exists`);
   if (d.fs.exists(lifecyclePath(e, b)))
     return refuse(d, `a lifecycle record for ${b} exists: pnpm lane end ${b} first`);
-  const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id} #{window_name}']);
-  const same = windows.split('\n').find((l) => l.split(' ')[1] === b);
+  // Tab-separated: a window name may hold spaces.
+  const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}']);
+  const same = windows.split('\n').find((l) => l.slice(l.indexOf('\t') + 1) === b);
   if (same)
-    return refuse(d, `a window named ${b} exists (${same.split(' ')[0]}): names are addresses`);
+    return refuse(d, `a window named ${b} exists (${same.split('\t')[0]}): names are addresses`);
   const active = activeLanes(d, trees);
   const cap = laneCap(d);
   if (active.length >= cap && a.overCap === null)
@@ -147,6 +148,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     baseSha: null,
     kickoff: a.kickoff,
     overCap: a.overCap,
+    archive: null,
     startedAt: new Date(d.clock.now()).toISOString(),
   };
   const lc = lifecyclePath(e, b);
@@ -154,20 +156,39 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
   undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });
 
+  // One sha for every step: another session's fetch moving origin/main mid-start can't split the base.
+  let base: string;
   try {
-    const base = d.run('git', ['rev-parse', 'origin/main'], { cwd: e.mainRoot });
+    base = d.run('git', ['rev-parse', 'origin/main'], { cwd: e.mainRoot });
     rec.baseSha = base;
     if (d.run('git', ['rev-parse', 'HEAD'], { cwd: e.mainRoot }) !== base)
-      d.run('git', ['switch', '--detach', 'origin/main'], { cwd: e.mainRoot });
-    d.run(
-      'git',
-      ['worktree', 'add', '--no-track', '-b', b, `.claude/worktrees/${b}`, 'origin/main'],
-      { cwd: e.mainRoot },
-    );
+      d.run('git', ['switch', '--detach', base], { cwd: e.mainRoot });
   } catch (err) {
+    return rollback(`could not detach the main checkout at origin/main: ${(err as Error).message}`);
+  }
+  try {
+    d.run('git', ['worktree', 'add', '--no-track', '-b', b, `.claude/worktrees/${b}`, base], {
+      cwd: e.mainRoot,
+    });
+  } catch (err) {
+    // git makes the -b branch before the checkout and keeps it when the checkout fails: take it back if it is ours.
+    const made = tryRun(
+      d,
+      'git',
+      ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`],
+      e.mainRoot,
+    );
+    if (made === base)
+      undo.push({
+        what: `branch ${b}`,
+        fn: () => {
+          d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot });
+          d.run('git', ['branch', '-d', b], { cwd: e.mainRoot });
+        },
+      });
     return rollback(`worktree add failed: ${(err as Error).message}`);
   }
-  // The safe delete: the branch sits at origin/main, so -d never refuses (and never loses work).
+  // The safe delete: the branch sits at the main checkout's HEAD, so -d never refuses (and never loses work).
   undo.push({
     what: `branch ${b}`,
     fn: () => d.run('git', ['branch', '-d', b], { cwd: e.mainRoot }),
@@ -190,7 +211,11 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     const tail = (err as Error).message.split('\n').slice(-15).join('\n');
     return rollback(`pnpm install failed:\n${tail}`);
   }
-  if (kickoff !== null) d.fs.write(`${wt}/localNotes/kickoff.md`, kickoff);
+  try {
+    if (kickoff !== null) d.fs.write(`${wt}/localNotes/kickoff.md`, kickoff);
+  } catch (err) {
+    return rollback(`could not copy the kickoff: ${(err as Error).message}`);
+  }
 
   let ids: string[];
   try {
@@ -200,7 +225,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
         '-d',
         '-P',
         '-F',
-        '#{window_id} #{pane_id}',
+        '#{window_id}\t#{pane_id}',
         '-t',
         `${tmuxSession}:`,
         '-n',
@@ -208,7 +233,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
         '-c',
         wt,
       ])
-      .split(' ');
+      .split('\t');
   } catch (err) {
     return rollback(`tmux new-window failed: ${(err as Error).message}`);
   }
@@ -221,7 +246,11 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   });
   rec.windowId = windowId;
   rec.paneId = paneId;
-  d.fs.write(lc, lifecycleText(rec));
+  try {
+    d.fs.write(lc, lifecycleText(rec));
+  } catch (err) {
+    return rollback(`could not record the window: ${(err as Error).message}`);
+  }
 
   try {
     d.run('tmux', [

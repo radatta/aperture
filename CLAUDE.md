@@ -113,7 +113,7 @@ Same-origin `/api/*` via CloudFront (no CORS); the Function URL is auth `NONE`, 
 
 ### One worktree per feature — `/workspace` stays on main
 
-`/workspace` is always detached at `origin/main`; no feature work happens there. Every feature starts with one command from `/workspace`, usually the hub's: `pnpm lane start <branch> [--kickoff <file>]` (`docs/ops/LANES.md`). It runs the steps below, then opens the lane's tmux window running Claude named `<branch>` (the kickoff its first message) and writes its board lane: one lane = one branch = one worktree = one session. By hand only when the command can't run:
+`/workspace` is always detached at `origin/main`; no feature work happens there. Every feature starts with `pnpm lane start <branch> [--kickoff <file>]` from `/workspace`, usually the hub's (`docs/ops/LANES.md`): the steps below, plus the lane's window and session named `<branch>`. By hand only when it can't run:
 
 1. `git fetch`, then `git switch --detach origin/main` in `/workspace`.
 2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree` would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.

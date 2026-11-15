@@ -64,7 +64,7 @@ function script(over: [string, Answer][] = []): [string, Answer][] {
   return [
     ...over,
     ['gh pr view', pr()],
-    ['git rev-parse refs/heads/', HEAD],
+    ['git rev-parse --verify --quiet refs/heads/', HEAD],
     ['gh api repos/owner/repo/actions/runs?branch=main', runs(run({}))],
     ['gh api repos/owner/repo/actions/runs?head_sha=', runs()],
     ['git status --porcelain', ''],
@@ -72,7 +72,7 @@ function script(over: [string, Answer][] = []): [string, Answer][] {
       'gh api repos/owner/repo/environments/dev/deployment-branch-policies',
       '{"branch_policies":[{"id":5,"name":"main"}]}',
     ],
-    ['tmux display -p -t @9', `111 222 @9 ${B}`],
+    ['tmux display -p -t @9', `111\t222\t@9\t${B}`],
     ['tmux display -p -t %1', '@1'],
     ['git worktree remove', ''],
     ['tmux kill-window', ''],
@@ -107,9 +107,23 @@ describe('lane end: gates', () => {
     [
       'a local head that is not the merged one',
       {},
-      [['git rev-parse refs/heads/', 'e'.repeat(40)]],
-      /local old-lane \(eeeeeee\) is not PR 42's merged head/,
+      [
+        ['git rev-parse --verify --quiet refs/heads/', 'e'.repeat(40)],
+        ['git fetch origin pull/42/head', ''],
+        ['git merge-base --is-ancestor', fail()],
+      ],
+      /local old-lane \(eeeeeee\) has commits PR 42's merged head \(ccccccc\) lacks/,
       3,
+    ],
+    [
+      'a merge with no deploy run yet, minutes old',
+      {},
+      [
+        ['gh pr view', pr({ mergedAt: '2026-10-13T19:58:00Z' })],
+        ['gh api repos/owner/repo/actions/runs?branch', runs()],
+      ],
+      /not found yet \(merged minutes ago\)/,
+      75,
     ],
     [
       'a running deploy',
@@ -197,6 +211,41 @@ describe('lane end: gates', () => {
     expect(end(t.d, args())).toBe(0);
   });
 
+  it('an old merge whose own run was cancelled: followed through the runs created since', () => {
+    const w = world();
+    lane(w);
+    const later = run({ id: 8, head_sha: 'f'.repeat(40), created_at: '2026-11-14T02:00:00Z' });
+    const t = deps(
+      w,
+      script([
+        [
+          'gh api repos/owner/repo/actions/runs?branch=main&event=push&per_page=100&created=',
+          runs(later),
+        ],
+        ['gh api repos/owner/repo/actions/runs?branch', runs()],
+        ['gh api repos/owner/repo/actions/runs?head_sha=', runs(run({ conclusion: 'cancelled' }))],
+      ]),
+    );
+    expect(end(t.d, args())).toBe(0);
+    expect(t.calls.some((c) => c.line.includes('created=%3E%3D2026-11-14T01%3A00%3A00.000Z'))).toBe(
+      true,
+    );
+  });
+
+  it('a local head behind the PR head (updated on GitHub) is covered: it goes on', () => {
+    const w = world();
+    lane(w);
+    const t = deps(
+      w,
+      script([
+        ['git rev-parse --verify --quiet refs/heads/', 'e'.repeat(40)],
+        ['git fetch origin pull/42/head', ''],
+        ['git merge-base --is-ancestor', ''],
+      ]),
+    );
+    expect(end(t.d, args())).toBe(0);
+  });
+
   it('--force-abandon skips only the PR and deploy gates', () => {
     const w = world();
     lane(w);
@@ -242,6 +291,50 @@ describe('lane end: the nominal run', () => {
     expect(t.calls.some((c) => c.line.startsWith('tmux list-windows'))).toBe(false);
   });
 
+  it('a branch already gone: the line keeps the admission removal and drops the delete', () => {
+    const w = world();
+    lane(w);
+    const t = deps(
+      w,
+      script([
+        ['git rev-parse --verify --quiet refs/heads/', fail()],
+        ['gh api repos/owner/repo/environments', `{"branch_policies":[{"id":31,"name":"${B}"}]}`],
+      ]),
+    );
+    expect(end(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(/DELETE '.*\/31'/);
+    expect(t.out()).not.toMatch(/branch -D/);
+    expect(t.out()).toMatch(/already gone: no delete in the line/);
+  });
+
+  it('a failed window kill still ends the lane: exit 0, and says so', () => {
+    const w = world();
+    lane(w);
+    const t = deps(w, script([['tmux kill-window', fail("can't find window: @9")]]));
+    expect(end(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(/window not closed \(can't find window: @9\)/);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+  });
+
+  it("never writes into an older same-name lane's archive, on the run or a rerun", () => {
+    const w = world();
+    lane(w);
+    const old = join(w.main, 'localNotes/archive', B);
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, 'plan.md'), 'the plan\n'); // identical notes, but another lane's end claimed it
+    mkdirSync(join(old, 'shots'));
+    writeFileSync(join(old, 'shots/a.png'), 'png');
+    writeFileSync(join(old, 'lane-end.txt'), 'the older lane\n');
+    const t = deps(w, script([['git worktree remove', fail('locked')]]));
+    expect(end(t.d, args())).toBe(1);
+    expect(readFileSync(join(old, 'lane-end.txt'), 'utf8')).toBe('the older lane\n');
+    expect(existsSync(join(`${old}.1`, 'lane-end.txt'))).toBe(true);
+    const t2 = deps(w, script());
+    expect(end(t2.d, args())).toBe(0);
+    expect(readFileSync(join(old, 'lane-end.txt'), 'utf8')).toBe('the older lane\n');
+    expect(existsSync(join(`${old}.2`))).toBe(false);
+  });
+
   it('chains the admission removal for an admitted branch', () => {
     const w = world();
     lane(w);
@@ -253,7 +346,7 @@ describe('lane end: the nominal run', () => {
     );
     expect(end(t.d, args())).toBe(0);
     expect(t.out()).toMatch(
-      /git branch -D old-lane && GH_PAGER=cat gh api -X DELETE 'repos\/owner\/repo\/environments\/dev\/deployment-branch-policies\/31'/,
+      /cd \/mac\/repo && GH_PAGER=cat gh api -X DELETE 'repos\/owner\/repo\/environments\/dev\/deployment-branch-policies\/31' && .*--jq '\.branch_policies\[\]\.name' && git branch -D old-lane\n/,
     );
   });
 
@@ -278,14 +371,14 @@ describe('lane end: the nominal run', () => {
   const noKill: [string, [string, Answer][], RegExp, (w: World) => void][] = [
     [
       'a restarted tmux server',
-      [['tmux display -p -t @9', `999 222 @9 ${B}`]],
+      [['tmux display -p -t @9', `999\t222\t@9\t${B}`]],
       /tmux server restarted/,
       () => {},
     ],
     [
       'a renamed window',
-      [['tmux display -p -t @9', '111 222 @9 someone-else']],
-      /now named someone-else/,
+      [['tmux display -p -t @9', '111\t222\t@9\tsomeone else']],
+      /now named someone else/,
       () => {},
     ],
     ['a gone window', [['tmux display -p -t @9', fail()]], /@9 is gone/, () => {}],
