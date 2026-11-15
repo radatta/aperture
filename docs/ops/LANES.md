@@ -123,8 +123,12 @@ A rerun after the worktree is gone skips steps 1–3 and prints the line again.
   or the branch wasn't on the page and more exist, it uses
   CI-BOT.md's by-name form instead, which removes nothing for a branch that was never admitted. It goes first because
   it is the security half, and a failed delete would stop the chain.
-- then `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse), left out when the branch is
-  already gone (the repo is the Mac's own, through the mount). With neither, nothing is printed.
+- then, **for an abandoned lane only**, `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d`
+  refuse), left out when the branch is already gone (the repo is the Mac's own, through the mount). A merged lane's
+  branch goes at the end of the wave, when the hub runs `pnpm bot prune-branches` (`docs/ops/CI-BOT.md` →
+  _Commands_). That deletes only a branch whose merged PR's head is its exact tip, so it keeps an abandoned one.
+
+With neither, nothing is printed, and `mac-cleanup.txt` says so.
 
 It is zsh-safe: every word with `? * [ < ! { }` is single-quoted (the one exception is the `<mac-repo>` placeholder,
 printed with its note when `.local/mac-root` is missing), and gh runs as `GH_PAGER=cat gh`. The command

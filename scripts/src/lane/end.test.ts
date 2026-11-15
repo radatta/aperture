@@ -273,9 +273,7 @@ describe('lane end: the nominal run', () => {
     const arch = join(w.main, 'localNotes/archive', B);
     expect(readFileSync(join(arch, 'plan.md'), 'utf8')).toBe('the plan\n');
     expect(readFileSync(join(arch, 'shots/a.png'), 'utf8')).toBe('png');
-    expect(readFileSync(join(arch, 'mac-cleanup.txt'), 'utf8')).toBe(
-      `cd /mac/repo && git branch -D ${B}\n`,
-    );
+    expect(readFileSync(join(arch, 'mac-cleanup.txt'), 'utf8')).toMatch(/^# nothing for the Mac: /);
     expect(readFileSync(join(arch, 'lane-end.txt'), 'utf8')).toMatch(
       /PR 42 merged as d{40}; main's deploy green/,
     );
@@ -289,7 +287,9 @@ describe('lane end: the nominal run', () => {
     expect(t.calls.at(-1)!.line).toBe('tmux kill-window -t @9');
     expect(existsSync(join(w.board, 'lanes', `${B}.json`))).toBe(false);
     expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
-    expect(t.out()).toMatch(/printed, not run.*\n {2}cd \/mac\/repo && git branch -D old-lane/);
+    expect(t.out()).toMatch(/nothing for the Mac: /);
+    expect(t.out()).toMatch(/goes at the end of the wave: the hub runs pnpm bot prune-branches/);
+    expect(t.out()).not.toMatch(/branch -D/);
     expect(t.calls.some((c) => c.line.includes('branch -D'))).toBe(false);
     expect(t.calls.some((c) => c.line.startsWith('tmux list-windows'))).toBe(false);
   });
@@ -338,6 +338,17 @@ describe('lane end: the nominal run', () => {
     expect(existsSync(join(`${old}.2`))).toBe(false);
   });
 
+  it('an abandoned lane keeps the branch delete: prune-branches keeps a branch with no merged PR', () => {
+    const w = world();
+    lane(w);
+    const t = deps(w, script());
+    expect(end(t.d, args({ abandon: 'superseded' }))).toBe(0);
+    expect(readFileSync(join(w.main, 'localNotes/archive', B, 'mac-cleanup.txt'), 'utf8')).toBe(
+      `cd /mac/repo && git branch -D ${B}\n`,
+    );
+    expect(t.out()).not.toMatch(/prune-branches/);
+  });
+
   it('chains the admission removal for an admitted branch', () => {
     const w = world();
     lane(w);
@@ -349,7 +360,7 @@ describe('lane end: the nominal run', () => {
     );
     expect(end(t.d, args())).toBe(0);
     expect(t.out()).toMatch(
-      /cd \/mac\/repo && GH_PAGER=cat gh api -X DELETE 'repos\/owner\/repo\/environments\/dev\/deployment-branch-policies\/31' && .*--jq '\.branch_policies\[\]\.name' && git branch -D old-lane\n/,
+      /cd \/mac\/repo && GH_PAGER=cat gh api -X DELETE 'repos\/owner\/repo\/environments\/dev\/deployment-branch-policies\/31' && .*--jq '\.branch_policies\[\]\.name'\n/,
     );
   });
 
@@ -457,10 +468,14 @@ describe('lane end: the nominal run', () => {
   it('a rerun after the worktree is gone resumes and prints the same line', () => {
     const w = world();
     lane(w);
-    const t = deps(w, script());
+    const admitted: [string, Answer] = [
+      'gh api repos/owner/repo/environments',
+      `{"branch_policies":[{"id":31,"name":"${B}"}]}`,
+    ];
+    const t = deps(w, script([admitted]));
     expect(end(t.d, args())).toBe(0);
     const line = readFileSync(join(w.main, 'localNotes/archive', B, 'mac-cleanup.txt'), 'utf8');
-    const t2 = deps(w, script());
+    const t2 = deps(w, script([admitted]));
     // the fake remove leaves the directory: hide it, as the real remove would have taken it
     const real = t2.d.fs.exists;
     t2.d.fs = { ...t2.d.fs, exists: (p) => !p.endsWith(`.claude/worktrees/${B}`) && real(p) };

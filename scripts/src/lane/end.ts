@@ -20,6 +20,8 @@ import {
 import type { Deps, Lifecycle } from './state.ts';
 
 export const SELF_CLOSE_SEC = 90;
+const NOTHING =
+  'no dev admission to remove, and the branch is pruned at the end of the wave or already gone';
 // Written into the archive by this command, so a rerun's compare leaves them out.
 export const OWN_FILES = ['mac-cleanup.txt', 'lane-end.txt'];
 
@@ -210,7 +212,9 @@ export function end(d: Deps, a: EndArgs): number {
   const lc = lifecyclePath(e, b);
   const rec = readLifecycle(d, b);
   const win = windowCheck(d, rec);
-  const line = macLine(e.macRoot, b, head !== null, adm, e.slug);
+  // A merged branch goes at the end of the wave (`pnpm bot prune-branches`, which deletes only a merged PR's exact
+  // head); an abandoned one has no merged PR, so prune keeps it and its delete is the maintainer's.
+  const line = macLine(e.macRoot, b, head !== null && a.abandon !== null, adm, e.slug);
 
   // 1. Archive. The destination is kept in the lifecycle record, so a rerun writes to this lane's own archive and
   // never to an older same-name lane's. An existing archive is reused only when it is this lane's (recorded) or a
@@ -240,7 +244,7 @@ export function end(d: Deps, a: EndArgs): number {
       }
       d.fs.write(lc, lifecycleText({ ...(rec ?? bareRecord(b, wt, d)), archive: dest }));
       // 2. The record and the Mac line, in the archive.
-      d.fs.write(`${dest}/mac-cleanup.txt`, `${line}\n`);
+      d.fs.write(`${dest}/mac-cleanup.txt`, `${line || `# nothing for the Mac: ${NOTHING}`}\n`);
       d.fs.write(
         `${dest}/lane-end.txt`,
         `${b}: ${why}\nended ${new Date(d.clock.now()).toISOString()}\n`,
@@ -303,12 +307,14 @@ export function end(d: Deps, a: EndArgs): number {
 
   // 6. The maintainer's line: printed, never run. Relay it by SendMessage or point at mac-cleanup.txt.
   d.log(`lane ${b}: ended (${why})`);
-  if (!line) d.log('nothing for the Mac: the branch is gone and no dev admission is left');
+  if (!line) d.log(`nothing for the Mac: ${NOTHING}`);
   else
     d.log(
       `the maintainer's Mac line (printed, not run${dest ? `; also in ${dest}/mac-cleanup.txt` : ''}):\n  ${line}${e.macNote ? `\n  ${e.macNote}` : ''}`,
     );
   if (head === null) d.log('  (the local branch is already gone: no delete in the line)');
+  else if (a.abandon === null)
+    d.log('  (the local branch goes at the end of the wave: the hub runs pnpm bot prune-branches)');
   if (adm.kind === 'unknown')
     d.log('  (dev admission unknown: the line removes it by name if there is one)');
   d.log(closed);
