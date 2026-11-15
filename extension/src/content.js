@@ -529,13 +529,17 @@
     },
     async timer() {
       const path = {};
+      const b = binding; // the sitting this step is for, even if a nav lands mid-step
       try {
         const r = await timerStep(path);
-        if (path.resumed && binding) resumedFor = binding.sittingId;
+        // Clicked Resume: whether the clock ran is read at the failure below (LeetCode may write its state
+        // after showing the pop-up). Reset since: whatever runs now is not the old count.
+        if (path.resumeClicked && b) resumedFor = b.sittingId;
+        if (path.reset) resumedFor = null;
         // This sitting's Start resumed LeetCode's paused clock and it still runs on from its old count (not
         // reset since, not merely its pop-up opened) — say so, on this try or a Retry.
         const st = readTimer();
-        const old = r !== true && binding && resumedFor === binding.sittingId && st && st.running;
+        const old = r !== true && b && resumedFor === b.sittingId && st && st.running;
         return old ? `${r.replace(/\.$/, '')} — its clock is running again.` : r;
       } finally {
         debug.log('timer', path); // every exit: a failed Safari run is where the path matters most
@@ -560,8 +564,7 @@
     const { timerOpen, timerStart, timerReset, timerResetConfirm } = sel;
     if (!timerOpen || !timerStart || !timerReset || !timerResetConfirm)
       return 'LeetCode’s timer isn’t configured (Options → Selectors).';
-    const read = readTimer;
-    const before = read();
+    const before = readTimer();
     path.status = clip(before && before.status, 20);
     path.mode = clip(before && before.mode, 20);
     let settle = 0;
@@ -578,11 +581,11 @@
         resume.click();
         path.resumeClicked = true;
         // Running now, or its pop-up asking to reset (then that is confirmed below).
-        const going = () => q(timerResetConfirm) || (read() || {}).running;
+        const going = () => q(timerResetConfirm) || (readTimer() || {}).running;
         if (!(await waitFor(going, 1500))) return 'LeetCode’s timer didn’t resume.';
         // Which it did: ran the clock (a failure from here leaves it running — STEP.timer says so) or opened
         // the pop-up, the clock still paused. The Safari probe reads this.
-        path.resumed = !!(read() || {}).running;
+        path.resumed = !!(readTimer() || {}).running;
         path.via = path.resumed ? 'running' : 'popup';
         confirm = q(timerResetConfirm);
         if (!confirm) r = await waitFor(() => q(timerReset), 1500);
@@ -597,7 +600,7 @@
           return 'LeetCode’s timer didn’t ask to confirm its reset (timerResetConfirm).';
       }
       confirm.click();
-      if (!(await waitFor(() => !timer.needsReset(read()), 1500)))
+      if (!(await waitFor(() => !timer.needsReset(readTimer()), 1500)))
         return 'LeetCode’s timer didn’t reset.';
       path.reset = true;
       settle = 1000; // the pop-up swaps its Reset for Start
@@ -613,7 +616,7 @@
     }
     start.click();
     path.started = true;
-    const fresh = () => timer.startedFresh(read());
+    const fresh = () => timer.startedFresh(readTimer());
     return (await waitFor(fresh, 1500)) ? true : 'LeetCode’s timer didn’t start.';
   }
 

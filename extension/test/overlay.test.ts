@@ -771,6 +771,22 @@ describe('the overlay on a LeetCode problem', () => {
     expect(reset.p.text()).toContain('Couldn’t find LeetCode’s timer (timerOpen).');
     expect(reset.p.text()).not.toContain('running again');
     expect(timerState(reset.p)).toMatchObject({ status: 'idle' });
+    // The user starts LeetCode's clock by hand, and a Retry fails at the confirm: a fresh clock, not the
+    // old count — still nothing said of it.
+    await reset.ext.local.set({ selectors: { timerResetConfirm: '#gone' } });
+    reset.p.fake().setTimer({
+      ...PAUSED_COUNTDOWN(),
+      status: 'running',
+      pauseMs: null,
+      startTimestamp: Date.now(),
+    });
+    await settle(100);
+    reset.p.tap('retry');
+    await until(
+      () => reset.p.phase() === 'failed' && reset.p.text().includes('(timerResetConfirm)'),
+      6000,
+    );
+    expect(reset.p.text()).not.toContain('running again');
     // Resume opened the pop-up and its Reset never lands: still paused. The debug path says which.
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });

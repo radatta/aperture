@@ -722,7 +722,7 @@ export const lcExtension: Scenario = {
       id: 'ext-timer-resume-retry',
       entry: 'extension',
       kind: 'edge',
-      what: 'No Reset even after resuming: the overlay says the clock is running again; a Retry neither resumes twice nor pauses it',
+      what: 'No Reset even after resuming: the overlay says the clock is running again, and says so again on a Retry that fails; a Retry neither resumes twice nor pauses it',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'says the reset is missing after resuming, and a Retry neither resumes again nor pauses',
@@ -840,7 +840,7 @@ export const lcExtension: Scenario = {
       id: 'ext-timer-resume-said',
       entry: 'extension',
       kind: 'edge',
-      what: 'While the clock a Start resumed still runs, any failure says so, on a Retry too',
+      what: 'While the clock a Start resumed still runs, any failure says so, not only a missing Reset',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'says the clock is running again on any failure after a resume, not only a missing Reset',
