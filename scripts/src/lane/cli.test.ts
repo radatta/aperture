@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { deps, world } from './fakes.ts';
-import { USAGE, main } from './cli.ts';
+import { usageKeys } from '../bot/help.ts';
+import { FLAGS, USAGE, main } from './cli.ts';
 
 const never = () => {
   throw new Error('deps must not be built');
@@ -16,9 +17,32 @@ describe('lane cli', () => {
     expect(await main(['start', 'a', '--force'], never)).toBe(2);
     expect(await main(['end', 'a', '--kickoff', 'x'], never)).toBe(2);
     expect(await main(['status', 'x'], never)).toBe(2);
-    expect(await main(['start', 'a', '--kickoff'], () => deps(world(), []).d)).toBe(2);
+    expect(await main(['start', 'a', '--kickoff'], never)).toBe(2);
     expect(err.mock.calls.flat().join('\n')).toMatch(/unknown command "nuke"/);
     err.mockRestore();
+  });
+
+  it('help anywhere on the line prints usage and runs nothing (bot/help.ts cliGuard)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    for (const argv of [
+      ['start', 'x', '--help'],
+      ['end', 'x', '-h'],
+      ['help', 'status'],
+    ])
+      expect(await main(argv, never), argv.join(' ')).toBe(0);
+    expect(log.mock.calls.flat().join('\n')).toMatch(/pnpm lane end/);
+    log.mockRestore();
+  });
+
+  it('a bare flag swallowing a word, or a value flag without one, is refused', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await main(['start', 'x', '--skip-permissions', 'y'], never)).toBe(2);
+    expect(await main(['end', 'x', '--force-abandon'], never)).toBe(2);
+    err.mockRestore();
+  });
+
+  it('every usage command has a flags entry', () => {
+    expect(usageKeys(USAGE).sort()).toEqual(Object.keys(FLAGS).sort());
   });
 
   it('--help prints the usage and exits 0', async () => {

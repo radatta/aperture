@@ -5,6 +5,8 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../bot/cli.ts';
+import { cliGuard, emit } from '../bot/help.ts';
+import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { run } from '../bot/sh.ts';
 import { readLanes, writeLane } from '../board/tower/lanes.ts';
@@ -97,38 +99,27 @@ export function status(d: Deps): number {
   return EXIT.ok;
 }
 
+// Each command's flags (bot/help.ts cliGuard): help or a stray argument runs nothing.
+export const FLAGS: Record<string, Spec> = {
+  start: { flags: ['kickoff', 'over-cap'], bare: ['skip-permissions'], args: 1 },
+  end: { flags: ['force-abandon'], args: 1 },
+  status: { args: 0 },
+};
+
 export async function main(argv: string[], deps: () => Deps = realDeps): Promise<number> {
+  const guard = cliGuard(argv, USAGE, FLAGS, parseArgs);
+  if (guard) return emit(guard);
   const [cmd, ...rest] = argv;
-  const { positional, flags } = parseArgs(rest);
-  const known: Record<string, string[]> = {
-    start: ['kickoff', 'skip-permissions', 'over-cap'],
-    end: ['force-abandon'],
-    status: [],
-  };
-  if (cmd === '--help' || 'help' in flags) {
-    console.log(USAGE);
-    return EXIT.ok;
-  }
-  if (!cmd || !(cmd in known)) {
+  if (!cmd || !(cmd in FLAGS)) {
     console.error(cmd ? `unknown command "${cmd}"\n${USAGE}` : USAGE);
     return EXIT.usage;
   }
-  const extra = Object.keys(flags).filter((k) => !known[cmd]!.includes(k));
-  if (extra.length || positional.length > (cmd === 'status' ? 0 : 1)) {
-    console.error(
-      `lane: unexpected ${extra.length ? `--${extra[0]}` : `argument ${positional.at(-1)}`}\n${USAGE}`,
-    );
-    return EXIT.usage;
-  }
+  const { positional, flags } = parseArgs(rest);
   const d = deps();
   if (cmd === 'status') return status(d);
   if (cmd === 'end')
     return end(d, { branch: positional[0], abandon: flag(flags, 'force-abandon') });
   const kickoff = flag(flags, 'kickoff');
-  if (kickoff === 'true') {
-    console.error('lane: --kickoff wants a file');
-    return EXIT.usage;
-  }
   return start(d, {
     branch: positional[0],
     kickoff: kickoff === null ? null : resolve(d.env.invokedIn, kickoff),
