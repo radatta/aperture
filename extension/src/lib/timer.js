@@ -39,6 +39,8 @@
   // Whether Start has to reset LeetCode's timer before starting it: any state but idle (running, paused, or one
   // never seen, like a countdown that ran out). No state at all is a timer never used: idle.
   const needsReset = (state) => !!state && state.status !== 'idle';
+  // Paused: Start may have to resume it to reach its Reset (content.js timerStep).
+  const paused = (state) => !!state && state.status === 'pause';
 
-  return { KEY, HEARTBEAT_KEY, parseTimerState, startedFresh, needsReset };
+  return { KEY, HEARTBEAT_KEY, parseTimerState, startedFresh, needsReset, paused };
 });

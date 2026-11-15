@@ -87,6 +87,7 @@ function fakeBackground(opts: { configured?: boolean } = {}) {
         return h.then(() => bg.handle(msg));
       }
       if (msg.type === 'dismiss') dismissed.add(String(msg.slug));
+      if (msg.type === 'undismiss') dismissed.delete(String(msg.slug));
       if (msg.type === 'dismissed?') return { dismissed: dismissed.has(String(msg.slug)) };
       if (msg.type !== 'start') return { ok: true };
       if (opts.configured === false)
@@ -213,6 +214,10 @@ function open(
     rootOf(w.document.querySelector('aperture-lc-badge'))?.querySelector('[data-ap=badge]')
       ?.textContent;
   const tap = (ap: string) => trustedClick(button(ap)!);
+  const badgeHost = () => w.document.querySelector('aperture-lc-badge') as HTMLElement | null;
+  const pill = () =>
+    (rootOf(badgeHost())?.querySelector('[data-ap=reopen]') ?? null) as HTMLButtonElement | null;
+  const tapPill = () => trustedClick(pill()!);
   const fake = () =>
     w.__fake as {
       resets: number;
@@ -225,6 +230,10 @@ function open(
       resetInert: boolean;
       stickyPopup: boolean;
       timerResetClicks: number;
+      timerResumes: number;
+      timerPauses: number;
+      pausedNoReset: boolean;
+      resumeOpensPopup: boolean;
       slowNext: boolean;
       finishNext: () => void;
       fetchDoc: () => void;
@@ -232,7 +241,7 @@ function open(
       setTimer: (s: Record<string, unknown>) => void;
     };
   const style = () => root()?.querySelector('style')?.textContent ?? '';
-  return { w, phase, text, button, tap, badge, fake, style, loaded };
+  return { w, phase, text, button, tap, badge, fake, style, loaded, pill, tapPill, badgeHost };
 }
 const messages = (ext: ReturnType<typeof fakeExtension>, type: string) =>
   (ext.sent as Msg[]).filter((m) => m.type === type);
@@ -469,6 +478,107 @@ describe('the overlay on a LeetCode problem', () => {
     expect(messages(ext, 'enqueue')).toEqual([]);
     expect(messages(ext, 'start')).toEqual([]);
   });
+  it('after Just looking, the pill brings the prompt back and forgets the dismissal; Start then works', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    expect(p.pill()).toBeNull();
+    p.tap('look');
+    await until(() => !!p.pill());
+    expect(p.pill()!.textContent).toBe('Aperture · Start a sitting');
+    expect(p.badge()).toBeUndefined(); // the pill, not the status badge
+    p.tapPill();
+    await until(() => p.phase() === 'prompt');
+    expect(p.pill()).toBeNull();
+    await until(() => messages(ext, 'undismiss').length === 1);
+    expect(messages(ext, 'undismiss')[0]).toMatchObject({ slug: 'two-sum' });
+    expect(await logged(ext, 'pill')).toMatchObject({ trusted: true, ok: true });
+    // A reload now prompts: the dismissal is gone.
+    const again = open('/problems/two-sum/', ext);
+    await until(() => again.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    expect(p.pill()).toBeNull();
+    expect(p.badge()).toContain('Aperture · ');
+  }, 20_000);
+
+  it('ignores a page script’s click on the pill, and a trusted one on a host the page tampered with', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('look');
+    await until(() => !!p.pill());
+    p.pill()!.click(); // not isTrusted
+    // Something stacked after the host, and a host restyled: both checked at the click, before the poll.
+    const cover = p.w.document.createElement('div');
+    p.w.document.documentElement.appendChild(cover);
+    p.tapPill();
+    cover.remove();
+    p.badgeHost()!.setAttribute('style', 'opacity: 0.01');
+    p.tapPill();
+    await settle(300);
+    expect(p.phase()).toBe('hidden');
+    expect(messages(ext, 'undismiss')).toEqual([]);
+    await settle(600); // the poll puts the host back: a real click works again
+    p.tapPill();
+    await until(() => p.phase() === 'prompt');
+  }, 20_000);
+
+  it('the pill survives a reload and is the dismissed problem’s alone: not on Next, back on return, not on a list', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('look');
+    await until(() => !!p.pill());
+    const r = open('/problems/two-sum/', ext); // a reload: still dismissed this browser session
+    await until(() => !!r.pill());
+    expect(r.phase()).toBe('hidden');
+    (r.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => r.phase() === 'prompt' && r.text().includes('Add Two Numbers'));
+    expect(r.pill()).toBeNull();
+    r.w.history.pushState({}, '', '/problems/two-sum/');
+    await until(() => !!r.pill());
+    expect(r.phase()).toBe('hidden');
+    r.w.history.pushState({}, '', '/problemset/');
+    await until(() => !r.pill());
+    // Repeat: reopen, Just looking again, the pill again.
+    r.w.history.pushState({}, '', '/problems/two-sum/');
+    await until(() => !!r.pill());
+    r.tapPill();
+    await until(() => r.phase() === 'prompt');
+    r.tap('look');
+    await until(() => !!r.pill());
+    expect(messages(ext, 'dismiss')).toHaveLength(2);
+    expect(messages(ext, 'undismiss')).toHaveLength(1);
+  }, 20_000);
+
+  it('never shows the pill over an open sitting; one opened in another tab meanwhile resumes on the pill', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('look');
+    await until(() => !!p.pill());
+    const other = open('/problems/two-sum/', ext); // a second tab, still dismissed: the pill there too
+    await until(() => !!other.pill());
+    other.tapPill();
+    await until(() => other.phase() === 'prompt');
+    other.tap('start');
+    await until(() => other.phase() === 'active', 8000);
+    expect(other.pill()).toBeNull();
+    p.tapPill(); // the first tab's pill: the binding is there now, so it resumes, not prompts
+    await until(() => p.phase() === 'active', 6000);
+    expect(p.pill()).toBeNull();
+    const ids = messages(ext, 'start').map((m) => m.body!.clientSittingId);
+    expect(ids).toHaveLength(2); // the other tab's Start, then this tab's resume of the same sitting
+    expect(new Set(ids).size).toBe(1);
+    expect(bg.sittings).toHaveLength(1);
+  }, 20_000);
+
   // LeetCode's timer as the debug log recorded it: a countdown left paused, a stopwatch left running, idle.
   const NOW = () => Date.now();
   const PAUSED_COUNTDOWN = () => ({
@@ -499,13 +609,21 @@ describe('the overlay on a LeetCode problem', () => {
     } | null;
   async function startOn(
     seed: Record<string, unknown> | null,
-    opts: { selectors?: Record<string, unknown>; resetCloses?: boolean; debug?: boolean } = {},
+    opts: {
+      selectors?: Record<string, unknown>;
+      resetCloses?: boolean;
+      debug?: boolean;
+      pausedNoReset?: boolean; // read when the widget renders: set before the seed
+      resumeOpensPopup?: boolean;
+    } = {},
   ) {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     if (opts.selectors) await ext.local.set({ selectors: opts.selectors });
     if (opts.debug) await ext.local.set({ debug: true });
     const p = open('/problems/two-sum/', ext);
+    if (opts.pausedNoReset) p.fake().pausedNoReset = true;
+    if (opts.resumeOpensPopup) p.fake().resumeOpensPopup = true;
     if (seed) p.fake().setTimer(seed);
     if (opts.resetCloses) p.fake().resetCloses = true;
     await until(() => p.phase() === 'prompt');
@@ -521,12 +639,97 @@ describe('the overlay on a LeetCode problem', () => {
     ] as const) {
       const { p } = await startOn(seed);
       expect(p.phase()).toBe('active');
-      expect(p.fake()).toMatchObject({ timerResets: 1, timerStarts: 1, timerOpens: 0, strays: 0 });
+      expect(p.fake()).toMatchObject({
+        timerResets: 1,
+        timerStarts: 1,
+        timerOpens: 0,
+        timerResumes: 0, // Reset was there: nothing resumed
+        strays: 0,
+      });
       const t = timerState(p)!;
       expect(t).toMatchObject({ mode, status: 'running' }); // the mode LeetCode last used, kept
       expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not resumed
     }
   }, 30_000);
+
+  // Debug log 10a (2026-11-13): a pause LeetCode restored on load shows Hide and Resume, and no Reset.
+  it('resumes a paused timer that shows no Reset, then resets and restarts it', async () => {
+    const { p, ext } = await startOn(PAUSED_COUNTDOWN(), { pausedNoReset: true, debug: true });
+    expect(p.phase()).toBe('active');
+    expect(p.fake()).toMatchObject({
+      timerResumes: 1,
+      timerResetClicks: 1,
+      timerResets: 1,
+      timerStarts: 1,
+      timerPauses: 0,
+      strays: 0,
+    });
+    const t = timerState(p)!;
+    expect(t).toMatchObject({ mode: 'reverse', status: 'running' });
+    expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not the old count
+    expect(await logged(ext, 'timer')).toMatchObject({
+      status: 'pause',
+      resumed: true,
+      reset: true,
+      started: true,
+    });
+  }, 20_000);
+
+  it('confirms the pop-up when Resume opens it asking to reset, with no click on the widget’s Reset', async () => {
+    const { p } = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      resumeOpensPopup: true,
+    });
+    expect(p.phase()).toBe('active');
+    expect(p.fake()).toMatchObject({
+      timerResumes: 1,
+      timerResetClicks: 0,
+      timerResets: 1,
+      timerStarts: 1,
+      strays: 0,
+    });
+  }, 20_000);
+
+  it('says the reset is missing after resuming, and a Retry neither resumes again nor pauses', async () => {
+    const { p, ext } = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      selectors: { timerReset: '#gone' },
+    });
+    expect(p.phase()).toBe('failed');
+    expect(p.text()).toContain('after resuming it — its clock is running again');
+    expect(p.text()).toContain('Continue without the timer');
+    expect(timerState(p)).toMatchObject({ status: 'running' });
+    await ext.local.remove('selectors');
+    await settle(100);
+    p.tap('retry');
+    await until(() => p.phase() === 'active', 8000);
+    expect(p.fake()).toMatchObject({
+      timerResumes: 1,
+      timerPauses: 0,
+      timerResetClicks: 1,
+      timerResets: 1,
+      timerStarts: 1,
+      strays: 0,
+    });
+  }, 20_000);
+
+  it('with timerResume off, or pointed at something that doesn’t resume, says so and clicks nothing more', async () => {
+    const off = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      selectors: { timerResume: null },
+    });
+    expect(off.p.phase()).toBe('failed');
+    expect(off.p.text()).toContain('its Resume isn’t configured');
+    expect(off.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
+    const inert = await startOn(PAUSED_COUNTDOWN(), {
+      pausedNoReset: true,
+      selectors: { timerResume: '[role="button"][aria-label="Hide"]' },
+    });
+    expect(inert.p.phase()).toBe('failed');
+    expect(inert.p.text()).toContain('LeetCode’s timer didn’t resume.');
+    expect(inert.p.fake()).toMatchObject({ timerResumes: 0, timerResets: 0, timerStarts: 0 });
+    expect(timerState(inert.p)).toMatchObject({ status: 'pause' });
+  }, 20_000);
 
   it('opens an idle timer under either name', async () => {
     const forward = await startOn({ ...RUNNING_STOPWATCH(), status: 'idle', startTimestamp: null });
@@ -1227,6 +1430,32 @@ describe('the problem doc LeetCode fetches', () => {
     p.tap('start');
     await until(() => p.phase() === 'active', 8000);
     expect(lastStart(ext)).toMatchObject({ problemSlug: 'two-sum', questionId: '1' });
+  }, 30_000);
+
+  it('learns a sitting’s question id from the doc kept while away, on coming back', async () => {
+    const run = async (fetchAway: boolean) => {
+      const bg = fakeBackground();
+      const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+      const p = open('/problems/two-sum/', ext, { lateHint: true }); // LeetCode never names the question
+      await until(() => p.phase() === 'prompt');
+      p.tap('start');
+      await until(() => p.phase() === 'active', 8000);
+      const bound = () => ext.local.data['sitting:two-sum'] as { questionId?: string | null };
+      expect(bound()).toMatchObject({ questionId: null });
+      next(p);
+      await until(() => p.text().includes('Add Two Numbers'));
+      if (fetchAway) await docFetch(p, 'two-sum'); // kept by its own slug, learned from nothing yet
+      await settle(200);
+      expect(bound().questionId).toBeNull();
+      p.w.history.pushState({}, '', '/problems/two-sum/'); // back, in the same load
+      await until(() => p.phase() === 'active', 6000);
+      return bound;
+    };
+    const learned = await run(true);
+    await until(() => learned().questionId === '1');
+    const none = await run(false);
+    await settle(300);
+    expect(none().questionId).toBeNull();
   }, 30_000);
 
   it('with GraphQL over blob XHRs, a Next’d problem’s Start has its doc and a Submit its details', async () => {

@@ -109,6 +109,25 @@ describe('overlay state', () => {
     expect(run([{ type: 'nav', slug: null }]).state.phase).toBe('hidden');
   });
 
+  it('reopens a dismissed problem at the pill, forgetting the dismissal, and only there', () => {
+    const reopen = { type: 'reopen' };
+    let r = run([...prompt, { type: 'dismiss' }, reopen]);
+    expect(r.state).toMatchObject({ phase: 'prompt', slug: 'two-sum' });
+    expect(r.effects).toEqual([{ do: 'forgetDismiss' }]);
+    r = run([{ type: 'nav', slug: 'two-sum', binding: null, dismissed: true }, reopen]);
+    expect(r).toMatchObject({ state: { phase: 'prompt' }, effects: [{ do: 'forgetDismiss' }] });
+    // No problem on screen, or anything but hidden: ignored.
+    const noSlug = run([{ type: 'nav', slug: null }]).state;
+    const resuming = run([
+      { type: 'nav', slug: 'two-sum', binding: { status: 'active' }, dismissed: false },
+    ]).state;
+    const active = run([{ type: 'resumed', active: true }], resuming).state;
+    const ended = run([{ type: 'ended' }], active).state;
+    const promptState = run(prompt).state;
+    for (const s of [noSlug, promptState, resuming, active, ended])
+      expect(reduce(s, reopen)).toEqual({ state: s, effects: [] });
+  });
+
   it('ignores actions that don’t fit the phase', () => {
     const s = run(prompt).state;
     expect(run([{ type: 'stepOk', step: 'timer' }], s).state).toEqual(s);

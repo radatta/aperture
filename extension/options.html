@@ -167,9 +167,10 @@
       Where LeetCode's reset, its confirm and its timer controls are, as JSON over the built-in
       defaults (keys: <code>editorReset</code>, <code>resetConfirm</code>, <code>dialog</code>,
       <code>timerOpen</code>, <code>timerStart</code>, <code>timerReset</code>,
-      <code>timerResetConfirm</code>, <code>lang</code>), each a CSS selector. <code>null</code> on
-      a click key (the reset, its confirm, the four timer keys) turns that step off. Empty means the
-      defaults.
+      <code>timerResetConfirm</code>, <code>timerResume</code>, <code>lang</code>), each a CSS
+      selector. <code>null</code> on a click key (the reset, its confirm, the four timer keys) turns
+      that step off; on <code>timerResume</code> it only stops Start resuming a paused timer that
+      shows no Reset. Empty means the defaults.
     </p>
     <textarea id="selectors" spellcheck="false" placeholder="{}"></textarea>
     <div class="row">

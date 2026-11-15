@@ -2,7 +2,7 @@
 // effects (the server Start, then the clicks) and feeds their outcome back as actions; overlay.js paints it.
 // The server goes first: a Start Aperture refuses never touches the editor. `open` says the sitting exists.
 //   hidden ─nav(problem)→ prompt ─start→ starting(send → reset → confirm → timer) → active
-//   prompt ─dismiss→ hidden (remembered for the slug, this browser session)
+//   prompt ─dismiss→ hidden (remembered for the slug, this browser session) ─reopen (the pill)→ prompt
 //   starting ─stepFail→ failed:
 //     not open (the send failed) ─retry→ starting(send) | ─dismiss→ hidden
 //     open (a click failed)      ─retry→ starting(that step, or an earlier one) | ─continue→ active
@@ -73,6 +73,14 @@
         return {
           state: at(state, { phase: 'hidden', step: null, reason: null }),
           effects: [{ do: 'rememberDismiss' }],
+        };
+      case 'reopen':
+        // The pill a dismissed problem shows: back to the prompt, the dismissal forgotten. Hidden with a slug
+        // is only ever a dismissed problem (nav with no sitting, or dismiss); an open sitting resumes instead.
+        if (state.phase !== 'hidden' || !state.slug) return same(state);
+        return {
+          state: at(state, { phase: 'prompt', step: null, reason: null }),
+          effects: [{ do: 'forgetDismiss' }],
         };
       case 'resumed':
         if (state.phase !== 'resuming') return same(state);

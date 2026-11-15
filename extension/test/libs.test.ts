@@ -92,6 +92,21 @@ describe('timer', () => {
     for (const j of [running, paused, resumed])
       expect(read(j)!.elapsedMs).toBe(lcTimerState(JSON.parse(j), now)!.elapsedMs);
     expect(read(resumed)!.elapsedMs).toBe(5400);
+    // Debug log 10a (2026-11-13): a countdown paused in an earlier page load, restored on this one.
+    const restored = JSON.stringify({
+      mode: 'reverse',
+      startTimestamp: null,
+      pauseMs: 174953,
+      endMs: 2700000,
+      lastUsedEndMs: 2700000,
+      status: 'pause',
+      isUserPaused: true,
+      alertMinute: 10,
+    });
+    expect(timer.paused(read(restored))).toBe(true);
+    expect(timer.needsReset(read(restored))).toBe(true);
+    for (const j of [idle, running, resumed]) expect(timer.paused(read(j))).toBe(false);
+    expect(timer.paused(null)).toBe(false);
   });
 });
 
@@ -107,6 +122,7 @@ describe('selectors', () => {
     const m = selectors.merge({
       editorReset: '#r',
       timerStart: null,
+      timerResume: null, // a click key: null turns the paused-timer fallback off
       timerClicks: ['#a'],
       bogus: 'x',
       dialog: 7,
@@ -115,6 +131,7 @@ describe('selectors', () => {
     expect(m).toMatchObject({
       editorReset: '#r',
       timerStart: null,
+      timerResume: null,
       dialog: selectors.DEFAULTS.dialog,
       lang: selectors.DEFAULTS.lang,
     });
@@ -135,5 +152,12 @@ describe('the manifest', () => {
       expect(src(f), `${f} drifted — pnpm -F @aperture/extension sync-page`).toBe(
         src(f.replace('src/page/', 'src/lib/')),
       );
+  });
+
+  // Just looking's way back is the in-page pill, not a toolbar click (Safari tucks extension icons away).
+  it('has no toolbar action', () => {
+    const manifest = JSON.parse(src('manifest.json')) as Record<string, unknown>;
+    for (const k of ['action', 'browser_action', 'page_action'])
+      expect(manifest).not.toHaveProperty(k);
   });
 });

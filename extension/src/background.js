@@ -215,6 +215,11 @@
     if (session) await session.set({ [`dismissed:${slug}`]: true });
     else memSession.set(slug, true);
   }
+  // The pill after Just looking: asked again from here on.
+  async function undismiss(slug) {
+    if (session) await session.remove(`dismissed:${slug}`);
+    else memSession.delete(slug);
+  }
   async function isDismissed(slug) {
     if (session) return !!(await session.get(`dismissed:${slug}`))[`dismissed:${slug}`];
     return memSession.has(slug);
@@ -244,6 +249,9 @@
         return { ok: true };
       case 'dismiss':
         await dismiss(String(msg.slug));
+        return { ok: true };
+      case 'undismiss':
+        await undismiss(String(msg.slug));
         return { ok: true };
       case 'dismissed?':
         return { dismissed: await isDismissed(String(msg.slug)) };

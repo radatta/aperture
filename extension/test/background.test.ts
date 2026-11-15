@@ -196,7 +196,7 @@ describe('background', () => {
     expect(sync.status).toBeUndefined();
   });
 
-  it('answers Start directly, says when it isn’t configured, and remembers Just looking for the session', async () => {
+  it('answers Start directly, says when it isn’t configured, and remembers Just looking for the session until the pill', async () => {
     const { ext, calls, send } = setup(() => ({
       status: 200,
       body: { sitting: { id: 'S' }, resumed: false },
@@ -216,6 +216,14 @@ describe('background', () => {
     expect(await send({ type: 'dismissed?', slug: 'two-sum' })).toEqual({ dismissed: true });
     expect(ext.session.data['dismissed:two-sum']).toBe(true);
     expect(ext.local.data['dismissed:two-sum']).toBeUndefined();
+    // The pill takes it back, for that problem only.
+    await send({ type: 'dismiss', slug: 'add-two-numbers' });
+    expect(await send({ type: 'undismiss', slug: 'two-sum' })).toEqual({ ok: true });
+    expect(await send({ type: 'dismissed?', slug: 'two-sum' })).toEqual({ dismissed: false });
+    expect(await send({ type: 'dismissed?', slug: 'add-two-numbers' })).toEqual({
+      dismissed: true,
+    });
+    expect(ext.session.data['dismissed:two-sum']).toBeUndefined();
   });
 
   it('answers an enqueue it couldn’t store with {ok: false} and the error, so the content script retries it', async () => {

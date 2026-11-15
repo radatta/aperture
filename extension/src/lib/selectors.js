@@ -25,6 +25,9 @@
     // a click on our overlay dismisses it (Radix), and while it animates out it is still there, `data-state="closed"`.
     timerStart: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-primary',
     timerReset: '[role="button"][aria-label="Reset"]',
+    // A paused clock's Resume (its digits): Start clicks it only when the paused toolbar shows no Reset (a
+    // pause restored on load, debug log 10a, 2026-11-13). Null turns that fallback off, not the timer step.
+    timerResume: '[role="button"][aria-label="Resume"]',
     timerResetConfirm: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-secondary',
     lang: '[data-e2e-locator="lang-selector-button"]',
   });
@@ -37,6 +40,7 @@
     'timerStart',
     'timerReset',
     'timerResetConfirm',
+    'timerResume',
   ];
 
   // Overrides from storage (an object, or its JSON text) over the defaults: each key a non-empty string, or null

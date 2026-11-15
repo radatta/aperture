@@ -1,7 +1,8 @@
 // The overlay and the badge — painting only (the decisions are lib/overlay-state.js, the actions content.js).
 // Both live in closed shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
 // hydration never touches them, and no page script can read their state, their text or Aperture's words —
-// whether the overlay shows is all the page can see. Their styles are inline in the root, so neither side's
+// whether the overlay and the badge show is all the page can see. The badge host also carries the pill a
+// dismissed problem shows (Start a sitting), under the same click rule as the overlay's buttons. Their styles are inline in the root, so neither side's
 // CSS leaks into the other. A button acts only on a real click (isTrusted) on an overlay that is really
 // showing: the host the last child of <html>, its style ours, nothing on it or <html> fading or moving it —
 // checked at the click, and the host is put back and kept last on every poll. What that can't see (a page
@@ -36,6 +37,7 @@
     .badge { position: fixed; right: 12px; bottom: 12px; font-size: 12px; padding: 6px 10px; border-radius: 999px;
       background: rgba(28,29,33,.88); color: #f4f4f6; box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: min(460px, calc(100vw - 24px)); }
     .badge.warn { background: #8a5a00; } .badge.bad { background: #b3261e; }
+    .pill { border: 0; cursor: pointer; font-weight: 600; }
     @media (prefers-color-scheme: dark) {
       .card { background: #1d1f24; color: #ececf0; } .kicker, .meta, .hint { color: #a3a5ae; }
       .secondary { color: #ececf0; border-color: #4a4c55; } .err { color: #ff8a80; } .primary { background: #2f8f62; }
@@ -204,16 +206,35 @@
       });
     }
 
-    // text null hides it; tone: '' | 'warn' | 'bad'
-    function setBadge(text, tone) {
-      badge.body.replaceChildren();
+    // text null hides it; tone: '' | 'warn' | 'bad'; action 'reopen' makes it the pill, a button.
+    // An unchanged repaint keeps the nodes: a pill rebuilt between mousedown and mouseup would lose the click.
+    let painted = null;
+    function setBadge(text, tone, action) {
       badgeShown = !!text;
       badge.el.setAttribute('style', styleOf(badgeShown, false));
       order();
+      const key = JSON.stringify([text || null, tone || '', action || null]);
+      if (key === painted) return;
+      painted = key;
+      badge.body.replaceChildren();
       if (!text) return;
-      badge.body.append(
-        node('div', { class: `badge ${tone || ''}`, 'data-ap': 'badge', role: 'status' }, text),
+      if (action !== 'reopen')
+        return badge.body.append(
+          node('div', { class: `badge ${tone || ''}`, 'data-ap': 'badge', role: 'status' }, text),
+        );
+      const pill = node(
+        'button',
+        { class: 'badge pill', 'data-ap': 'reopen', type: 'button' },
+        text,
       );
+      pill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ok = e.isTrusted && genuine(badge.el, styleOf(true, false));
+        // A probe: a click Safari's checks refuse would otherwise do nothing, silently.
+        if (debug) debug.log('pill', { trusted: e.isTrusted, ok });
+        if (ok) on.reopen();
+      });
+      badge.body.append(pill);
     }
     // LeetCode may rebuild <html>'s children; the content script's poll calls this to put them back.
     // The shown one last (the overlay over the badge), as soon as either changes and on every poll.
