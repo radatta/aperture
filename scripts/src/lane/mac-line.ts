@@ -1,5 +1,5 @@
-// The maintainer's one Mac line at a lane's end: the branch force-delete (hard-blocked for Claude) plus, for a branch
-// admitted to the `dev` environment, the admission removal (docs/ops/CI-BOT.md → workflow changes). One `&&` chain,
+// The maintainer's one Mac line at a lane's end: the branch force-delete (hard-blocked for Claude) when the caller asks
+// for it, plus, for a branch admitted to the `dev` environment, the admission removal (docs/ops/CI-BOT.md → workflow changes). One `&&` chain,
 // zsh-safe: every word with ? * [ < ! { } single-quoted, gh unpaged. Printed and written to a file, never run, and
 // never handed to a child process (a Bash hook denies the force-delete text on a command line). The admission removal
 // goes first: it is the security half, and a failed delete (the branch already gone on the Mac) would stop the chain.

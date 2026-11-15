@@ -83,8 +83,8 @@ Without `--force-abandon`, it goes ahead only when all of these hold:
 
 - `gh pr view <branch>` is `MERGED`
 - the local branch holds nothing the PR lacks: its head is the PR's, or an ancestor of it (the PR head moved on
-  GitHub, fetched into `FETCH_HEAD` to check). Checked with or without the worktree, since the printed line deletes
-  the branch.
+  GitHub, fetched into `FETCH_HEAD` to check). Checked with or without the worktree, so `end` never drops a worktree whose
+  branch holds work the PR lacks.
 - main's `Deploy` push run for the merge commit is green. A run cancelled by a later merge is followed to the newer
   run (`deployFor`, `tower/derive.ts`); an older merge is looked up by its sha, then through the runs created since.
   Still running exits 75, and so does no run within 10 min of the merge; failed or not found exits 3.
@@ -123,10 +123,11 @@ A rerun after the worktree is gone skips steps 1–3 and prints the line again.
   or the branch wasn't on the page and more exist, it uses
   CI-BOT.md's by-name form instead, which removes nothing for a branch that was never admitted. It goes first because
   it is the security half, and a failed delete would stop the chain.
-- then, **for an abandoned lane only**, `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d`
-  refuse), left out when the branch is already gone (the repo is the Mac's own, through the mount). A merged lane's
-  branch goes at the end of the wave, when the hub runs `pnpm bot prune-branches` (`docs/ops/CI-BOT.md` →
-  _Commands_). That deletes only a branch whose merged PR's head is its exact tip, so it keeps an abandoned one.
+- then `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse) **for any branch the hub's
+  wave-end `pnpm bot prune-branches` would keep** (`docs/ops/CI-BOT.md` → _Commands_): `end` asks prune's own rule
+  (`verdict`, `bot/prune.ts`). Prune deletes only a branch with one merged PR whose head is its exact tip, so the delete
+  is printed for an abandoned lane, a tip behind the PR head, a name reused across PRs, or an unreadable PR list. It is
+  left out when the branch is already gone (the repo is the Mac's own, through the mount).
 
 With neither, nothing is printed, and `mac-cleanup.txt` says so.
 

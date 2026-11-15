@@ -28,8 +28,8 @@ export function digest(root: string, ignore: string[] = []): Map<string, string>
       if (rel) out.set(rel, 'dir');
       for (const f of readdirSync(abs).sort())
         if (!(rel === '' && ignore.includes(f))) walk(rel ? join(rel, f) : f);
-    } else
-      out.set(rel, `${st.size}:${createHash('sha256').update(readFileSync(abs)).digest('hex')}`);
+    } else if (!st.isFile()) throw new Error(`${abs}: not a file, directory or symlink`);
+    else out.set(rel, `${st.size}:${createHash('sha256').update(readFileSync(abs)).digest('hex')}`);
   };
   walk('');
   return out;
@@ -54,7 +54,9 @@ function copyTree(src: string, dst: string): void {
   else if (st.isDirectory()) {
     mkdirSync(dst);
     for (const f of readdirSync(src)) copyTree(join(src, f), join(dst, f));
-  } else copyFileSync(src, dst);
+  } else if (!st.isFile())
+    throw new Error(`${src}: not a file, directory or symlink`); // a FIFO would block a read
+  else copyFileSync(src, dst);
 }
 
 // Copies src to dst (which must not exist), then compares; a mismatch removes nothing and throws.

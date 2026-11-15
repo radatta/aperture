@@ -32,6 +32,18 @@ const run = (o: object) => ({
   ...o,
 });
 const runs = (...r: object[]) => JSON.stringify({ workflow_runs: r });
+// `gh pr list --head <b>` for prune's verdict: by default one merged PR at the local tip (prune takes the branch)
+const prs = (...p: object[]) =>
+  JSON.stringify(
+    p.map((x) => ({
+      number: 42,
+      state: 'MERGED',
+      headRefName: 'old-lane',
+      headRefOid: 'c'.repeat(40),
+      isCrossRepository: false,
+      ...x,
+    })),
+  );
 
 function lane(
   w: World,
@@ -64,6 +76,7 @@ function script(over: [string, Answer][] = []): [string, Answer][] {
   return [
     ...over,
     ['gh pr view', pr()],
+    ['gh pr list --head', prs({})],
     ['git rev-parse --verify --quiet refs/heads/', HEAD],
     ['gh api repos/owner/repo/actions/runs?branch=main', runs(run({}))],
     ['gh api repos/owner/repo/actions/runs?head_sha=', runs()],
@@ -341,13 +354,42 @@ describe('lane end: the nominal run', () => {
   it('an abandoned lane keeps the branch delete: prune-branches keeps a branch with no merged PR', () => {
     const w = world();
     lane(w);
-    const t = deps(w, script());
+    const t = deps(w, script([['gh pr list --head', '[]']]));
     expect(end(t.d, args({ abandon: 'superseded' }))).toBe(0);
     expect(readFileSync(join(w.main, 'localNotes/archive', B, 'mac-cleanup.txt'), 'utf8')).toBe(
       `cd /mac/repo && git branch -D ${B}\n`,
     );
-    expect(t.out()).not.toMatch(/prune-branches/);
+    expect(t.out()).toMatch(/prune-branches would keep it: no PR from it/);
   });
+
+  const kept: [string, [string, Answer][], RegExp][] = [
+    [
+      'a local tip behind the PR head',
+      [
+        ['git rev-parse --verify --quiet refs/heads/', 'e'.repeat(40)],
+        ['git fetch origin pull/42/head', ''],
+        ['git merge-base --is-ancestor', ''],
+      ],
+      /the local tip eeeeeee isn't PR 42's head/,
+    ],
+    [
+      'a name reused across two merged PRs',
+      [['gh pr list --head', prs({ number: 7, headRefOid: 'a'.repeat(40) }, {})]],
+      /2 PRs from it \(7, 42\)/,
+    ],
+    ['an unreadable PR list', [['gh pr list --head', fail()]], /its PRs could not be read/],
+  ];
+  for (const [name, over, why] of kept)
+    it(`a merged lane prune would keep (${name}) gets its delete in the line`, () => {
+      const w = world();
+      lane(w);
+      const t = deps(w, script(over));
+      expect(end(t.d, args())).toBe(0);
+      expect(readFileSync(join(w.main, 'localNotes/archive', B, 'mac-cleanup.txt'), 'utf8')).toBe(
+        `cd /mac/repo && git branch -D ${B}\n`,
+      );
+      expect(t.out()).toMatch(why);
+    });
 
   it('chains the admission removal for an admitted branch', () => {
     const w = world();

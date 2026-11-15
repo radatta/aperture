@@ -3,6 +3,7 @@
 // maintainer's Mac line and close the lane's window, last and by id only. A rerun resumes (docs/ops/LANES.md → End).
 import { deployFor } from '../board/tower/derive.ts';
 import { parseRuns } from '../board/tower/gh.ts';
+import { verdict } from '../bot/prune.ts';
 import type { GhRun } from '../board/tower/gh.ts';
 import { macLine, parseAdmission } from './mac-line.ts';
 import {
@@ -131,6 +132,29 @@ function headCovered(d: Deps, head: string, pr: Pr): boolean | 'fetch-failed' {
   return tryRun(d, 'git', ['merge-base', '--is-ancestor', head, pr.headRefOid], at) !== null;
 }
 
+function pruneVerdict(d: Deps, b: string, head: string): { deleted: boolean; why: string } | null {
+  const text = tryRun(
+    d,
+    'gh',
+    [
+      'pr',
+      'list',
+      '--head',
+      b,
+      '--state',
+      'all',
+      '--json',
+      'number,state,headRefName,headRefOid,isCrossRepository',
+    ],
+    d.env.mainRoot,
+  );
+  try {
+    return text === null ? null : verdict(b, head, JSON.parse(text), false);
+  } catch {
+    return null;
+  }
+}
+
 function heldLock(d: Deps, b: string): string | null {
   for (const [slot, f] of [
     ['dev', 'devlock.json'],
@@ -161,7 +185,7 @@ export function end(d: Deps, a: EndArgs): number {
 
   const wt = worktreePath(e, b);
   const hasTree = d.fs.exists(wt);
-  // Checked with or without the worktree: the printed line deletes this branch.
+  // Checked with or without the worktree: end must never drop a worktree whose branch holds work the PR lacks.
   const head = tryRun(
     d,
     'git',
@@ -212,9 +236,11 @@ export function end(d: Deps, a: EndArgs): number {
   const lc = lifecyclePath(e, b);
   const rec = readLifecycle(d, b);
   const win = windowCheck(d, rec);
-  // A merged branch goes at the end of the wave (`pnpm bot prune-branches`, which deletes only a merged PR's exact
-  // head); an abandoned one has no merged PR, so prune keeps it and its delete is the maintainer's.
-  const line = macLine(e.macRoot, b, head !== null && a.abandon !== null, adm, e.slug);
+  // Whether the wave-end `pnpm bot prune-branches` will take this branch, by prune's own rule (bot/prune.ts verdict),
+  // so the two can't drift: a merged PR at exactly this tip. Anything prune keeps (abandoned, a tip behind the PR head,
+  // a name reused across PRs, or an unreadable PR list) gets its delete in the maintainer's line.
+  const prune = head === null ? null : pruneVerdict(d, b, head);
+  const line = macLine(e.macRoot, b, head !== null && !prune?.deleted, adm, e.slug);
 
   // 1. Archive. The destination is kept in the lifecycle record, so a rerun writes to this lane's own archive and
   // never to an older same-name lane's. An existing archive is reused only when it is this lane's (recorded) or a
@@ -313,8 +339,12 @@ export function end(d: Deps, a: EndArgs): number {
       `the maintainer's Mac line (printed, not run${dest ? `; also in ${dest}/mac-cleanup.txt` : ''}):\n  ${line}${e.macNote ? `\n  ${e.macNote}` : ''}`,
     );
   if (head === null) d.log('  (the local branch is already gone: no delete in the line)');
-  else if (a.abandon === null)
+  else if (prune?.deleted)
     d.log('  (the local branch goes at the end of the wave: the hub runs pnpm bot prune-branches)');
+  else
+    d.log(
+      `  (pnpm bot prune-branches would keep it: ${prune?.why ?? 'its PRs could not be read'})`,
+    );
   if (adm.kind === 'unknown')
     d.log('  (dev admission unknown: the line removes it by name if there is one)');
   d.log(closed);

@@ -6,6 +6,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -51,6 +52,12 @@ describe('archive on the shared mount', () => {
   it('never uses cpSync (it breaks files on the /workspace virtiofs mount)', () => {
     const src = readFileSync(new URL('archive.ts', import.meta.url), 'utf8');
     expect(src).not.toMatch(/import \{[^}]*\bcpSync\b[^}]*\} from 'node:fs'/);
+  });
+
+  it('refuses a FIFO instead of blocking on it', () => {
+    const { root, src } = tree();
+    execFileSync('mkfifo', [join(src, 'pipe')]);
+    expect(() => archiveTree(src, join(root, 'dst'))).toThrow(/not a file, directory or symlink/);
   });
 
   it('an unreadable tree is never the same', () => {
