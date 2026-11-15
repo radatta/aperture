@@ -258,8 +258,8 @@ describe('mailroom runner', () => {
       'sandbox-exec -f "$MR_P.sb" tar -xzf "$t/src.tgz" -C "$t/src" --strip-components 1',
       'fx_cap "$FX_TIMEOUT" sandbox-exec -f "$MR_P.sb" /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$t/home"',
       "'(deny network*)' '(deny file-write*)'",
-      '(deny file-read* (subpath \"/Users\") (subpath \"/Volumes\"))',
-      '(deny process-exec (literal \"/usr/bin/security\"))',
+      '(deny file-read* (subpath "/Users") (subpath "/Volumes"))',
+      '(deny process-exec (literal "/usr/bin/security"))',
       'if ! [[ "$t" =~ ^/[A-Za-z0-9/._-]+$ ]]; then',
     ])
       expect(fx).toContain(pin);
