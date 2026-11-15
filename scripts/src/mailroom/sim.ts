@@ -35,6 +35,9 @@ export const ROLES = [
 // How keys/erase send their taps: tap (the default), or the input-gap trial's others (IOS-CHECK.md → Input-gap trial).
 export const VIAS = ['tap', 'post', 'hid', 'batch', 'batch15'] as const;
 export type Via = (typeof VIAS)[number];
+// How a trial's tap or launch sends its taps (IOS-CHECK.md → Input-gap trial): tap, the hid wait, or a batch's lead sleep.
+export const TAP_VIAS = ['tap', 'hid', 'batch'] as const;
+export type TapVia = (typeof TAP_VIAS)[number];
 // The app's write buttons, refused for `tap` at validation (lowercased, trimmed: an entry, or an entry and a space) — and again at run time
 // on the element actually matched. A belt: the boundary is the dev test user's own partition.
 export const TAP_DENY = [
@@ -75,13 +78,24 @@ interface Where {
 // With scan only, on its line (x within 20, y in its range): read first, then the scan as before (find/tap).
 type Hint = { x: number; y: number };
 export type IosOp =
-  | { op: 'launch' | 'signIn' | 'blur' | 'shutdown' }
+  | { op: 'signIn' | 'blur' | 'shutdown' }
+  | { op: 'launch'; via?: TapVia } // via: a trial's icon taps, the first one counted
   | { op: 'readBuild'; stay?: true } // stay: end on Settings, no trip back Home
   | { op: 'kill'; method: 'terminate' | 'switcher' | 'reboot' }
   | { op: 'nav'; tab: Tab }
   | ({ op: 'find'; label: string; as: string; hint?: Hint } & Where)
   | ({ op: 'absent'; label: string } & Where) // passes only when that find would miss
-  | ({ op: 'tap'; label: string; as?: string; closes?: true; hint?: Hint } & Where) // closes: the element must be gone after the tap
+  // closes: the element must be gone after the tap; selects: the toggle must read on. via (a trial's) needs one of those,
+  // or a field's role, for its read-back
+  | ({
+      op: 'tap';
+      label: string;
+      as?: string;
+      closes?: true;
+      selects?: true;
+      via?: TapVia;
+      hint?: Hint;
+    } & Where)
   | { op: 'expect'; signedIn: true }
   | { op: 'expect'; as: string; valueIs: string }
   | { op: 'expect'; as: string; labelIs: string }
@@ -198,6 +212,7 @@ const scanEnds = (o: Obj) => {
 // a trial's way of sending; it counts drops only through a read-back, so it needs `in`
 const via = (o: Obj) =>
   !('via' in o) || ('in' in o && (VIAS as readonly unknown[]).includes(o.via));
+const tvia = (o: Obj) => !('via' in o) || (TAP_VIAS as readonly unknown[]).includes(o.via);
 
 function where(o: Obj): boolean {
   if ('near' in o === 'scan' in o) return false;
@@ -239,11 +254,12 @@ function where(o: Obj): boolean {
 function opOk(o: unknown): boolean {
   if (!isObj(o) || typeof o.op !== 'string') return false;
   switch (o.op) {
-    case 'launch':
     case 'signIn':
     case 'blur':
     case 'shutdown':
       return keysOk(o, ['op'], []);
+    case 'launch':
+      return keysOk(o, ['op'], ['via']) && tvia(o);
     case 'readBuild':
       return keysOk(o, ['op'], ['stay']) && (!('stay' in o) || o.stay === true);
     case 'kill':
@@ -270,10 +286,21 @@ function opOk(o: unknown): boolean {
       );
     case 'tap':
       return (
-        keysOk(o, ['op', 'label'], ['near', 'scan', 'hint', 'radius', 'role', 'as', 'closes']) &&
+        keysOk(
+          o,
+          ['op', 'label'],
+          ['near', 'scan', 'hint', 'radius', 'role', 'as', 'closes', 'selects', 'via'],
+        ) &&
         lbl(o.label) &&
         (!('as' in o) || asName(o.as)) &&
         (!('closes' in o) || o.closes === true) &&
+        (!('selects' in o) || (o.selects === true && !('closes' in o))) &&
+        tvia(o) &&
+        (!('via' in o) ||
+          'closes' in o ||
+          'selects' in o ||
+          o.role === 'AXTextArea' ||
+          o.role === 'AXTextField') &&
         where(o)
       );
     case 'expect':

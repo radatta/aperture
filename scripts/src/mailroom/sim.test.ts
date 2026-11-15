@@ -245,6 +245,25 @@ describe('validateSimParams', () => {
     expect(via({ op: 'find', label: 'x', near: { x: 1, y: 1 }, as: 'a' }, 'batch', false)).toBe(
       'BAD_OP',
     );
+    // a trial's tap/launch `via` is tap, hid or batch; a tap's needs its read-back (closes, selects, or a field)
+    const one = (op: object) => validateSimParams({ ...params, steps: [op] });
+    const btn = { op: 'tap', label: 'Cancel', near: { x: 1, y: 1 }, role: 'AXButton' };
+    for (const v of ['tap', 'hid', 'batch']) {
+      expect(one({ op: 'launch', via: v })).toBeNull();
+      expect(one({ ...btn, closes: true, via: v })).toBeNull();
+      expect(one({ ...btn, role: 'AXCheckBox', selects: true, via: v })).toBeNull();
+      expect(one({ ...btn, role: 'AXTextArea', via: v })).toBeNull();
+    }
+    expect(one({ op: 'launch' })).toBeNull();
+    expect(one({ op: 'launch', via: 'post' })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'batch15' })).toBe('BAD_OP');
+    expect(one({ op: 'launch', as: 'x' })).toBe('BAD_OP');
+    expect(one({ ...btn, closes: true, via: 'post' })).toBe('BAD_OP');
+    expect(one({ ...btn, via: 'tap' })).toBe('BAD_OP'); // no read-back to count with
+    expect(one({ ...btn, role: 'AXTextField', via: 'hid' })).toBeNull();
+    expect(one({ ...btn, selects: true })).toBeNull();
+    expect(one({ ...btn, selects: false })).toBe('BAD_OP');
+    expect(one({ ...btn, selects: true, closes: true })).toBe('BAD_OP');
     // the first bad op decides: a malformed op before a denied tap is BAD_OP
     expect(
       validateSimParams({
