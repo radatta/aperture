@@ -94,7 +94,8 @@ run_fixtures() {
   if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
 
   # A fresh dir outside the shared folder, by its real path (the profile matches resolved paths: /private/var/…).
-  t="$(cd "$(mktemp -d)" && pwd -P)" || { mr_emit error API_FAILED; return 0; }
+  # Checked before the cd: bash 3.2's `cd ""` is a no-op, so a failed mktemp would make $t the cwd, then delete it.
+  t="$(mktemp -d)" && [ -n "$t" ] && t="$(cd "$t" && pwd -P)" || { mr_emit error API_FAILED; return 0; }
   if ! [[ "$t" =~ ^/[A-Za-z0-9/._-]+$ ]]; then rm -r -f -- "$t"; mr_emit error API_FAILED; return 0; fi
   mkdir -p "$t/src" "$t/home" "$t/tmp"
   fx_profile "$t" >"$MR_P.sb"

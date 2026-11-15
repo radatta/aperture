@@ -995,6 +995,7 @@ fc('fixtures: a tarball refused is TOKEN_FORBIDDEN, nothing run', api={TGZ: {'st
 fc('fixtures: an archive without run-fixtures.sh is API_FAILED, nothing run', expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL, simExcludes=['/bin/bash '])
 fc('fixtures: a profile this macOS will not compile is SANDBOX_FAILED, nothing unpacked or run', sandboxFails=True, fxScript=OK2,
    expect={'status': 'error', 'reason': 'SANDBOX_FAILED'}, calls=FXALL, simIncludes=['sandbox-exec -f'], simExcludes=['tar ', '/usr/bin/env -i'])
+fc('fixtures: no temp dir is API_FAILED, nothing run, the inbox kept', setup='no-tmp', fxScript=OK2, expect={'status': 'error', 'reason': 'API_FAILED'}, calls=FXALL, simExcludes=NOFX)
 fc('fixtures: no Keychain token is TOKEN_MISSING, no call', noToken=True, fxScript=OK2, expect={'status': 'error', 'reason': 'TOKEN_MISSING'}, calls=[], simExcludes=NOFX)
 fc('fixtures: an extra param is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'branch': 'x'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])
 fc('fixtures: a short sha is BAD_PARAM', ts='BAD_PARAM', patch={'params': {'sha': 'abc1234'}}, expect={'status': 'rejected', 'reason': 'BAD_PARAM'}, calls=[])

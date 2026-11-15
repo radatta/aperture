@@ -17,7 +17,9 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 # docs/ops/IDENTIFIERS.md): filled here from sim.sh's own pin, so a case's host always matches the runner it tests.
 DEV_ACCOUNT="$(sed -n "s/^SIM_COGNITO_RE='^aperture-dev-\([0-9]*\).*/\1/p" "$HERE/jobs/sim.sh")"
 [ -n "$DEV_ACCOUNT" ] || { echo "run-fixtures: no SIM_COGNITO_RE pin in jobs/sim.sh" >&2; exit 2; }
-CASES="$(mktemp)"
+# A template under $TMPDIR, as everywhere here: the mktemp wrapper below isn't defined yet (it explains why).
+CASES="$(mktemp "${TMPDIR:-/tmp}/rf-cases.XXXXXXXX")" && [ -n "$CASES" ] || { echo "run-fixtures: no temp file for the cases" >&2; exit 2; }
+trap 'rm -f -- "$CASES"' EXIT
 sed "s/@DEV_ACCOUNT@/$DEV_ACCOUNT/g" "$HERE/testdata/jobs.jsonl" >"$CASES"
 export MAILROOM_FIXTURE_TOKEN="fixture-token-5f3a9c"
 export MAILROOM_FIXTURE_PW="FIXTUREPW-9d41"
@@ -125,7 +127,18 @@ osascript() {
   return "$rc"
 }
 sleep() { if [ "${1%%.*}" -ge 20 ] 2>/dev/null; then command sleep "$1"; fi; }
-export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osascript sleep
+# macOS mktemp ignores TMPDIR without a template (it asks confstr for the user's temp dir), and under the fixtures
+# job's sandbox only $TMPDIR is writable: every temp path here, and in the jobs the cases run, goes under $TMPDIR.
+mktemp() {
+  local a
+  for a in "$@"; do case "$a" in -*) ;; *) command mktemp "$@"; return ;; esac; done
+  command mktemp "$@" "${TMPDIR:-/tmp}/rf.XXXXXXXX"
+}
+export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osascript sleep mktemp
+# A fresh temp dir by its real path, or the suite stops: an unchecked empty one is the cwd (bash 3.2's `cd ""` is a
+# no-op), which the caller's cleanup then deletes.
+tmpdir_real() { local d; d="$(mktemp -d)" && [ -n "$d" ] && (cd "$d" && pwd -P); }
+bail() { echo "Bail out! $1"; exit 1; }
 
 ok() { pass=$((pass + 1)); echo "ok - $1"; }
 bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed 's/^/    /' "$3"; }
@@ -155,7 +168,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     (.noResult // false), ((.calls // []) | type), has("post"), has("md"), (.pwTyped // 0),
     (.expect | tojson), ((.calls // []) | tojson), (.post | tojson), (.md | tojson), ((.notes // {}) | tojson),
     (.lane // ""), (.locks | tojson), has("patchBody"), (.patchBody | tojson), (.fxScript // "" | @json), (if .sandboxFails then "1" else "" end)] | .[]' <<<"$c")"
-  T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
+  T="$(tmpdir_real)" || bail "no temp dir for $name" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state dir" # the Mac's is under Application Support: a space in every state path
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
@@ -246,6 +259,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
         cc: (if $junk == "junk" then "41" else .cc end), n}' <<<"${cs%%|*}" >"$st/clip.json"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
     build-y=*) printf '%s\n' "${setup#build-y=}" >"$st/sim-build-y"; mv "$hj/staging/x" "$hj/inbox/$file" ;; # readBuild's last y
+    no-tmp) mv "$hj/staging/x" "$hj/inbox/$file" ;; # the runner's TMPDIR is missing (below): mktemp fails
     "") mv "$hj/staging/x" "$hj/inbox/$file" ;;
     *) bad "$name" "unknown setup $setup"; continue ;;
   esac
@@ -254,6 +268,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     [ "$no_token" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
     [ "$no_simpw" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
     [ "$no_simpw_read" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
+    [ "$setup" = no-tmp ] && export TMPDIR="$T/no-such-dir"
     PATH="$T/bin:$PATH" MAILROOM_FIXTURE_FX="$(jq -r . <<<"$fx_script")" MAILROOM_FIXTURE_SB_FAIL="$sb_fail" \
       MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
       MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st" ${lane:+"$lane"}
@@ -304,6 +319,8 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
     got="$(cd "$st" && find . -mindepth 1 -maxdepth 1 -name 'lock*' -type d | sed 's|^\./||' | sort | jq -Rsc 'split("\n") | map(select(. != ""))')"
     [ "$got" = "$(jq -c 'sort' <<<"$locks_j")" ] || why="locks left $got, want $locks_j"
   fi
+  # A failed mktemp must never leave the job working in (and then deleting) the runner's cwd, the inbox.
+  if [ -z "$why" ] && [ "$setup" = no-tmp ] && [ ! -d "$hj/inbox" ]; then why="the inbox was deleted"; fi
   if [ -z "$why" ] && [ "$setup" = hardlink ] && [ ! -f "$hj/staging/mine" ]; then why="the hard-linked original went missing"; fi
   if [ -z "$why" ] && grep -rq -e "$MAILROOM_FIXTURE_TOKEN" -e BODYMARK -e "$MAILROOM_FIXTURE_PW" "$T/out" "$hj/results/" 2>/dev/null; then
     why="the token, the test user's password or body text reached the log or a result"
@@ -378,7 +395,7 @@ if [ -z "${MAILROOM_FIXTURE_JOBS:-}" ]; then
   MAILROOM_FIXTURE_JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
   [ "$MAILROOM_FIXTURE_JOBS" -le 4 ] 2>/dev/null || MAILROOM_FIXTURE_JOBS=4
 fi
-OUTD="$(mktemp -d)"
+OUTD="$(tmpdir_real)" || bail "no temp dir for the shards"
 trap 'rm -r -f -- "$OUTD" "$CASES"' EXIT
 s=0
 while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do
@@ -405,8 +422,10 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 (
   unset -f pgrep sleep
   . "$HERE/jobs/fixtures.sh"
-  STATE="$(mktemp -d)" HELD=" lock" # the cap touches the drain's locks: never ./lock in the caller's directory
-  f="$(mktemp)"
+  STATE="$(tmpdir_real)" || exit 1 # the cap touches the drain's locks: never ./lock in the caller's directory
+  trap 'rm -r -f -- "$STATE" ${f:+"$f"}' EXIT
+  HELD=" lock"
+  f="$(mktemp)" && [ -n "$f" ] || exit 1
   tree() { trap '' TERM; command sleep 30 & echo $! >"$f"; command sleep 30; }
   started=$(date +%s)
   fx_cap 1 tree
@@ -428,7 +447,7 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 # two agents would run them.
 lanes_check() {
   local L hj st now a b cl pa i rc
-  L="$(cd "$(mktemp -d)" && pwd -P)"
+  L="$(tmpdir_real)" || bail "no temp dir for the lanes checks"
   hj="$L/hj"; st="$L/state dir"
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
   : >"$L/calls"; : >"$L/simcalls"
@@ -478,7 +497,7 @@ lanes_check() {
   # takes it (the slow), it passes, nothing is parked or refused, and the fast drain never touches it.
   local k fails=""
   for k in 1 2 3 4 5 6 7 8 9 10; do
-    L="$(cd "$(mktemp -d)" && pwd -P)"
+    L="$(tmpdir_real)" || bail "no temp dir for the lanes race"
     hj="$L/hj"; st="$L/state dir"
     mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
     : >"$L/calls"; : >"$L/simcalls"
