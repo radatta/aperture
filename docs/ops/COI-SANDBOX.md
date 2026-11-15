@@ -12,6 +12,29 @@ Built + verified on an Apple-silicon Mac, 2026-08-10/11.
 
 ---
 
+## Rules that bite
+
+Five rules that break a session otherwise, each with its home:
+
+1. **Leave cleanly:** `Ctrl+D` (or `/exit`) leaves Claude Code, then `exit` leaves `coi shell` — that
+   exit is the save (it exports the session). An abrupt kill leaves the local terminal with mouse
+   reporting on (COI-INCIDENTS → _Symptom: your prompt fills with `35;97;27M`-style garbage_). To step
+   away, detach and leave the container running; `coi shutdown` **deletes** the container — not part of
+   a normal day (_Start here_ → 4).
+2. **Unattended runs need AC power, and `caffeinate` is not enough** — the lid sleeps the Mac
+   regardless, and a flat battery hibernates it. COI-INCIDENTS §B.2 (the lid) + _Third kill mechanism:
+   a flat battery_; the lid-open / clamshell / Amphetamine options table is under _Run_ below.
+3. **`node_modules` is shared with the host** — a native-binding error from `vite` usually means the
+   other platform installed last, not a port clash. `CLAUDE.md` → Commands; COI-INCIDENTS → _Related:
+   the shared `node_modules` hazard_.
+4. **Ports are split by owner:** `5173+` is the Mac, `6173+` is a container (_Ports_ below).
+5. **Some command text kills or pauses the container** — reverse-shell shapes and a slash right before
+   `curl`/`wget`, anywhere in a Bash line or a Grep pattern, even inside a string; separately, a remote
+   `:8080` connection.
+   The list: `CLAUDE.md` → Commands; the mechanism: COI-INCIDENTS → Incidents F and H.
+
+---
+
 ## Start here — the four things you ever do
 
 You are always doing exactly one of these. There are three layers (Mac → Lima VM → container) and
@@ -20,7 +43,7 @@ almost every mistake is running a command at the wrong one.
 **Container name for this repo is `coi-<hash>-1`** — the hash is derived from the workspace path,
 so it's stable. `incus list` prints it; substitute it wherever this doc writes `coi-<hash>-1`.
 
-### 1. I want to use Claude
+### 1. Use Claude
 
 ```bash
 # ── on the Mac ──  (<mac-repo>: the Mac repo path, in the gitignored .local/mac-root of the main checkout)
@@ -103,7 +126,7 @@ disk, which quietly costs you sessions on the next VM rebuild.
 > project. If something needs to survive rebuilds, it belongs in the image (`[container.build]`, see
 > _Deferred_) or on the repo mount — never in a container-local dotfile.
 
-### 2. I want to debug at the VM layer
+### 2. Debug at the VM layer
 
 Container won't start, ports are wrong, `~/.coi/` looks off, a session didn't come back:
 
@@ -359,7 +382,7 @@ name isn't verified here).
 
 Full write-up: [COI-INCIDENTS.md → Incident F](COI-INCIDENTS.md).
 
-### 3. I want to debug inside the container, without Claude
+### 3. Debug inside the container, without Claude
 
 A shell in the box, bypassing COI entirely — the right tool when `coi shell` itself is what's
 misbehaving:
@@ -374,7 +397,7 @@ Then the usual: `paste -d/ /sys/fs/cgroup/pids.{current,max}` (want `.../4096`),
 
 To relaunch Claude this way instead of `bash`, add the token env var — see _Ops notes → Resume_.
 
-### 4. I'm done
+### 4. Done for now
 
 ```bash
 # ── in the container ──

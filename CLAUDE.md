@@ -1,6 +1,6 @@
 # Aperture
 
-A personal life-OS PWA — one place for everything digital about me. Web-first, installable, multi-device. Its #1 job is a morning + night ritual (glance, plan, reflect); the signature move is **calibration** — surfacing the gap between what a task was _estimated_ to take and what it _actually_ took.
+A personal life-OS PWA — one place for everything digital in one person's life. Web-first, installable, multi-device. Its #1 job is a morning + night ritual (glance, plan, reflect); the signature move is **calibration** — surfacing the gap between what a task was _estimated_ to take and what it _actually_ took.
 
 Product is the source of truth: `docs/product/PRODUCT.md`. Full doc map: `docs/index.md`.
 
