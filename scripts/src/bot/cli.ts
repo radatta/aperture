@@ -63,6 +63,9 @@ export const FLAGS: Record<string, Spec> = {
   'lock release': {},
   'lock wait': { flags: ['max', 'slot'], bare: ['any'] },
   logs: { flags: ['since', 'start', 'end', 'groups', 'filter', 'query'] },
+  'run cancel': { args: 1 },
+  'run rerun': { bare: ['failed'], args: 1 },
+  'prune-branches': { bare: ['dry-run'] },
 };
 
 // `--slot` names a slot; anything else is misuse. Undefined when the flag is absent.

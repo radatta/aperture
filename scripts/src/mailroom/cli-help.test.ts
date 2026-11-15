@@ -16,6 +16,8 @@ vi.mock('./open-pr.ts', async (orig) => ({
   openPr: vi.fn(reached),
   probe: vi.fn(reached),
 }));
+vi.mock('./edit-pr.ts', () => ({ editPr: vi.fn(reached) }));
+vi.mock('./fixtures-job.ts', () => ({ fixturesJob: vi.fn(reached) }));
 vi.mock('./sim.ts', async (orig) => ({
   ...(await orig<typeof import('./sim.ts')>()),
   simCommand: vi.fn(reached),
@@ -34,6 +36,8 @@ const fakes = [
   (await import('./open-pr.ts')).probe,
   (await import('./sim.ts')).simCommand,
   (await import('./clip.ts')).clipProbe,
+  (await import('./edit-pr.ts')).editPr,
+  (await import('./fixtures-job.ts')).fixturesJob,
 ];
 
 let out: string[];
@@ -79,6 +83,9 @@ describe('pnpm mailroom … refuses what it does not know', () => {
     [['clip-probe', '-o', 'x.png']],
     [['sim-probe', '--sign-in', 'x']],
     [['open-pr', '--title']],
+    [['edit-pr', '--body', 'x']],
+    [['fixtures', '--wait', '30']],
+    [['fixtures', '--sha']],
   ])('%j → exit 2, nothing run', async (argv) => {
     expect(await main(argv)).toBe(2);
     expect(err[0]).toMatch(/unknown|unexpected|takes no value|needs a value/);
@@ -92,6 +99,10 @@ describe('the guard lets real invocations through', () => {
     [['probe', '--wait', '5']],
     [['sim-probe', '--sign-in']],
     [['sim-shutdown']],
+    [['edit-pr']],
+    [['edit-pr', '--title', 'a new title', '--wait', '30']],
+    [['fixtures']],
+    [['fixtures', '--sha', 'a'.repeat(40)]],
     [['clip-probe', '--out', 'x.png', '--wait', '5']],
   ])('%j reaches main', async (argv) => {
     await expect(main(argv)).rejects.toThrow(REACHED);

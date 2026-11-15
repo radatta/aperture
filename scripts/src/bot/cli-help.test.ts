@@ -16,11 +16,16 @@ vi.mock('./token.ts', async (orig) => ({
   mintToken: vi.fn(reached),
 }));
 
+vi.mock('./run.ts', () => ({ runCommand: vi.fn(reached) }));
+vi.mock('./prune.ts', () => ({ pruneBranches: vi.fn(reached) }));
+
 const { FLAGS, USAGE, main } = await import('./cli.ts');
 const { commands, usageFor, usageKeys } = await import('./help.ts');
 const { run } = await import('./sh.ts');
 const { loadConfig } = await import('./config.ts');
 const { mintToken } = await import('./token.ts');
+const { runCommand } = await import('./run.ts');
+const { pruneBranches } = await import('./prune.ts');
 
 let out: string[];
 let err: string[];
@@ -37,7 +42,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 const untouched = () => {
-  for (const f of [run, loadConfig, mintToken, fetch]) expect(f).not.toHaveBeenCalled();
+  for (const f of [run, loadConfig, mintToken, fetch, runCommand, pruneBranches])
+    expect(f).not.toHaveBeenCalled();
 };
 
 // Every command and subcommand the table knows, plus every command USAGE names.
@@ -82,6 +88,11 @@ describe('pnpm bot … refuses what it does not know', () => {
     [['push', '--after-rebase', 'main']], // a bare flag swallowing a word would run a lease-less push
     [['lock', 'acquire', '--slot']],
     [['lock', 'wait', '--max']],
+    [['run', 'cancel', '123', '--failed']],
+    [['run', 'rerun', '123', '456']],
+    [['run', 'rerun', '--failed', '123']], // --failed would swallow the run id
+    [['prune-branches', '--dry-run', 'x']], // a destructive command: a swallowed word must never mean a real delete
+    [['prune-branches', 'now']],
   ])('%j → exit 2, nothing run', async (argv) => {
     expect(await main(argv)).toBe(2);
     expect(err[0]).toMatch(/unknown|unexpected|takes no value|needs a value/);
@@ -100,6 +111,10 @@ describe('the guard lets real invocations through', () => {
     [['lock', 'renew']],
     [['logs', '--since', '30m', '--groups', 'bff,mcp', '--filter', 'ERROR', '--query', 'q']],
     [['logs', '--start', '2026-11-14T00:00:00Z', '--end', '2026-11-14T01:00:00Z']],
+    [['run', 'cancel', '123']],
+    [['run', 'rerun', '123', '--failed']],
+    [['prune-branches', '--dry-run']],
+    [['prune-branches']],
   ])('%j reaches main', async (argv) => {
     await expect(main(argv)).rejects.toThrow(REACHED);
   });

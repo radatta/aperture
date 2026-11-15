@@ -28,6 +28,8 @@ export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its
 // Every command's allowed flags; anything else refuses before it runs (bot/help.ts).
 export const FLAGS: Record<string, Spec> = {
   'open-pr': { flags: ['title', 'wait'] },
+  'edit-pr': { flags: ['title', 'wait'] },
+  fixtures: { flags: ['sha'] },
   probe: { flags: ['wait'] },
   'sim-probe': { bare: ['sign-in'] },
   'sim-shutdown': {},
