@@ -139,9 +139,13 @@ export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osas
 # no-op), which the caller's cleanup then deletes.
 tmpdir_real() { local d; d="$(mktemp -d)" && [ -n "$d" ] && (cd "$d" && pwd -P); }
 bail() { echo "Bail out! $1"; exit 1; }
+# Stdin to stdout through bash's own writes. Under the fixtures job's sandbox the suite's stdout is a file outside its
+# temp dir: bash's writes to it pass, but the Mac's `cat` (and so possibly sed) is refused on it ("cat: stdout:
+# Operation not permitted"), which lost every case line from the job's log. External tools write to pipes only.
+emit() { local l; while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l"; done; }
 
 ok() { pass=$((pass + 1)); echo "ok - $1"; }
-bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed 's/^/    /' "$3"; }
+bad() { failed=$((failed + 1)); echo "not ok - $1: $2"; [ -z "${3:-}" ] || sed 's/^/    /' "$3" | emit; }
 
 base="$(head -1 "$CASES" | jq -c .base)"
 simbase="$(head -1 "$CASES" | jq -c .simBase)"
@@ -404,7 +408,7 @@ while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do
 done
 wait
 s=0
-while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do cat "$OUTD/$s"; s=$((s + 1)); done
+while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do emit <"$OUTD/$s"; s=$((s + 1)); done
 pass="$(cat "$OUTD"/* | grep -c '^ok - ' || true)"
 failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 
@@ -513,7 +517,7 @@ lanes_check() {
       [ -n "$(ls -A "$hj/inbox")" ] || [ "$(find "$hj/results" -name result.json | wc -l | tr -d ' ')" != 1 ] ||
       grep -q 'could not be moved out' "$L/out"; then # a vanished entry is skipped, never chased
       fails="$fails $k"
-      sed 's/^/    /' "$L/out"
+      sed 's/^/    /' "$L/out" | emit
     fi
     rm -r -f -- "$L"
   done
