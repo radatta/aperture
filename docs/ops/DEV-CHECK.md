@@ -64,9 +64,9 @@ per slot: the env file
 (`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
 scope (`config.ts` → `SLOT_TARGETS`). So is the run lock (`run.lock` for `dev`, `run.devb.lock`; `config.ts` → `runLockFile`): two
 sessions can each run one devcheck at once, one per slot — each slot's functions have their own reservations
-(CI-BOT.md → Compute), and each run sweeps only its own slot's ledger and table. Two at once stay well inside the kill
+(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. Two at once stay well inside the kill
 alarms: a full run is ~95–106k Lambda ms and peaks near 810 calls a minute (measured 2026-11-13; the arithmetic is
-CI-BOT.md → Compute). On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
+CI-BOT.md → _Dev deploy blast radius_ → Compute). On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
 touches iOS paths the reason says to release devb and `deploy-dev` again, which sends such a branch to dev
 (CI-BOT.md → _Dev slots_). The `dev-slot-b` scenario's
 rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its

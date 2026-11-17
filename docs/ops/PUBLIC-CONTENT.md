@@ -1,6 +1,6 @@
 # Public content — what GitHub-bound text may say
 
-The repo is public. Everything that reaches GitHub passes this one gate: code, docs, tests, fixtures, comments, commit messages, PR titles and bodies, and report text pasted into a PR. Hard identifiers (name, mailbox, paths, account ids) and their regex guard live in [IDENTIFIERS.md](IDENTIFIERS.md); this doc is the judgment half. The `code-reviewer` agent screens every diff against it, and the author scans the PR title, body and report before `open-pr`.
+The repo is public. Everything that reaches GitHub passes this one gate: code, docs, tests, fixtures, comments, commit messages, PR titles and bodies, and report text pasted into a PR — and what never waits for a PR (_Also public_, below). Hard identifiers (name, mailbox, paths, account ids) and their regex guard live in [IDENTIFIERS.md](IDENTIFIERS.md); this doc is the judgment half. The `code-reviewer` agent screens every diff against it, and the author scans the PR title, body and report before `open-pr`.
 
 ## Never
 
@@ -20,13 +20,23 @@ The repo is public. Everything that reaches GitHub passes this one gate: code, d
 - **Paraphrase, not quotes.** A decision keeps its date and its reason, not its wording.
 - **Obviously synthetic fixtures.** The Plaid sandbox bank, round or patterned amounts, generic stores ("Grocery Store"), `example.com` addresses. A value that could be real reads as real.
 
+## Also public, the moment it's pushed or dispatched
+
+No PR has to exist. The Never list covers these too:
+
+- **Branch names and commit text**: public on the first `pnpm bot push`; an amend or force-push doesn't recall them.
+- **Run names**: `deploy-dev <sha> <key>` and `dev-logs <key>`; the key starts with the branch name (sanitised and cut to 60 characters; `logs` from a detached checkout).
+- **Dispatch inputs**: `pnpm bot logs` sends `--groups`, `--filter` and `--query` as workflow inputs, and the run shows them. Dev logs hold test-user data only, but the filter string is the author's: never a real name, mailbox or amount.
+- **Lock-tag messages**: `refs/locks/dev` and `refs/locks/devb` are annotated tags anyone can fetch; the message carries the branch name.
+- **Artifact names**: `dev-logs-<key>`. The artifact itself is downloadable by any signed-in user for its 1 day ([INFRA.md](../arch/INFRA.md) §9 → _Public repo_).
+
 ## Fine as is (decided 2026-11-14 — don't scrub, don't flag)
 
 Device names, models and viewport sizes · Flux's exercise framing and wording · the finances doc's Plaid and bank technical notes (account types, history depth, dates) · exact timestamps in incident and handoff docs · the identifiers in `identifiers.json` (name, the Gmail as contact and alerts, domain) · the `parents_pay` stored key · `School` and `Recruiting` as area names · the AWS ids as IDENTIFIERS.md places them.
 
 ## A finding
 
-`path:line — <category> — <what to write instead>`. Never repeat the offending text: findings get pasted into reports and PRs. A commit message or PR body is cited as `commit <sha7> subject` or `localNotes/pr-<branch>.md:line`. A Never hit in a commit message needs the commit reworded before the push, since a branch's history is public on its PR: `git commit --amend -m …` for the last commit; an older one needs a rebase, then `pnpm bot push --after-rebase` (IDENTIFIERS.md → the push recipe). Lines the diff didn't add are out of scope; at most one "pre-existing" note.
+`path:line — <category> — <what to write instead>`. Never repeat the offending text: findings get pasted into reports and PRs. A commit message or PR body is cited as `commit <sha7> subject` or `localNotes/pr-<branch>.md:line`. A Never hit in a commit message needs the commit reworded before the push, since a branch's history is public from its first push: `git commit --amend -m …` for the last commit; an older one needs a rebase, then `pnpm bot push --after-rebase` (IDENTIFIERS.md → the push recipe). Lines the diff didn't add are out of scope; at most one "pre-existing" note.
 
 ## What enforces it
 
