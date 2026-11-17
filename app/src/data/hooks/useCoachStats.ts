@@ -25,6 +25,7 @@ export function useSetFocusPattern() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (pattern: PatternId | null) => api.setCoachFocus(pattern),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.coach() }),
+    // Settled, not success: a failed write may still have landed (a 5xx), so the focus is read again either way.
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.coach() }),
   });
 }

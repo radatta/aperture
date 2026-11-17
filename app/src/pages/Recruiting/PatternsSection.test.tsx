@@ -5,6 +5,7 @@ import { addDays, NEETCODE_150, PATTERNS, todayKey } from '@aperture/shared';
 import type { CoachStats } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
+import { ApiError } from '../../data/retry';
 import { fmtRate, patternRows } from './patternsHelpers';
 
 // Synthetic fixtures only: catalog slugs and made-up outcomes.
@@ -93,6 +94,21 @@ describe('Patterns tab', () => {
       'Nothing unseen is left in Graphs. Nothing changed.',
     );
     expect(row('Arrays & Hashing').getAttribute('aria-current')).toBe('true');
+    // Shown in the row it was asked from, so it's on screen where the click was.
+    expect(within(row('Graphs')).getByRole('alert')).toBeTruthy();
+  });
+
+  it('a write that may have landed (a 5xx) never claims nothing changed', async () => {
+    const api = freshApi();
+    vi.spyOn(api, 'setCoachFocus').mockRejectedValue(
+      new ApiError('setCoachFocus failed (500)', 500),
+    );
+    const user = userEvent.setup();
+    renderApp({ api, path: '/recruiting/patterns' });
+    await user.click(await screen.findByRole('button', { name: 'Set as focus, Graphs' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Couldn’t confirm the focus change — it may have saved; the focus line shows what stands.',
+    );
   });
 
   it('a failed stats read shows the error with Retry, never an empty ranking', async () => {

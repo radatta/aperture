@@ -461,7 +461,18 @@ export const lcCoach: Scenario = {
       id: 'patterns-small-counts',
       entry: 'ui',
       kind: 'edge',
-      what: 'Every practised row reads the server’s first-try count; a percentage joins only from 5 tries',
+      what: 'A practised pattern under 5 tries reads its count only (“First try 0 of 1”), no percentage',
+    },
+    {
+      id: 'patterns-pct',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'From 5 tries a percentage joins the count (“3 of 5 (60%)”)',
+      offDev: {
+        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
+        test: 'a pattern with 2 tries shows counts and no percentage; 5 or more adds one',
+        why: 'same path as patterns-table (proven on dev): the format is fmtRate’s pure branch on the same render and BFF read; the test user never reaches 5 first tries in one pattern',
+      },
     },
     {
       id: 'patterns-focus-refused',
@@ -894,9 +905,13 @@ export const lcCoach: Scenario = {
         if (shown !== want) fail(`${shown} pattern rows, want ${want}`);
         const today = await ctx.api.reads.getCoachToday();
         await focusRow(today.focus.pattern).waitFor();
-        // Every practised row reads the server's count; a percentage only from 5 tries.
+        // Every practised roadmap row reads the server's count; a percentage only from 5 tries. This run's off-plan
+        // sitting (an Array-tagged problem) guarantees one row under 5.
         let pct = 0;
-        for (const p of stats.patterns.filter((x) => x.pattern !== 'other')) {
+        const practised = stats.patterns.filter((x) => x.pattern !== 'other');
+        if (!practised.length)
+          fail('no practised roadmap pattern to check: the off-plan sitting didn’t count');
+        for (const p of practised) {
           const { hit, of } = p.firstTry;
           const text = (await row(p.pattern).textContent()) ?? '';
           const base = `First try ${hit} of ${of}`;
@@ -906,7 +921,9 @@ export const lcCoach: Scenario = {
             fail(`${p.pattern}: a percentage under 5 tries`);
           if (of >= 5) pct += 1;
         }
-        ctx.log(`${stats.patterns.length} practised pattern(s), ${pct} with a percentage`);
+        ctx.log(
+          `${practised.length} practised roadmap pattern(s) checked, ${pct} with a percentage`,
+        );
         await ctx.ui.settle();
         await ctx.shot('patterns');
 

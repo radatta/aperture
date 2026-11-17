@@ -218,8 +218,7 @@ beside them): all 18 roadmap patterns in the order the focus ranks them (`getCoa
 tries first; an untried pattern scores as a coin flip), then any practised to the end of its list ("All seen"),
 then `other` — problems outside the roadmap — last and only once something lands there. The day's focus is marked
 (`getCoachToday().focus`, the plan's own focus); every other ranked pattern has **Set as focus**
-(`setCoachFocus`), and an override shows **Back to the coach's pick** (`setCoachFocus(null)`). Either write hands
-keyboard focus to the Focus card. A refused write says why inline; a failed read is a `LoadError` with Retry.
+(`setCoachFocus`), and an override shows **Back to the coach's pick** (`setCoachFocus(null)`). Set moves keyboard focus to the new focus row, Back to the Focus card. A failed write says why in the row it came from: a refusal "Nothing changed", a 5xx "may have saved"; a failed read is a `LoadError` with Retry.
 
 Per pattern, over counted attempts only (test sittings never count), from `coachStats` plus `patternDetail`; the
 same fields ride `coach_stats` (rates with `pct`):

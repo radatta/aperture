@@ -8,6 +8,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { useCoachFocus, useCoachStats, useSetFocusPattern } from '../../data/hooks/useCoachStats';
+import { isTransientRead } from '../../data/retry';
 import { cx } from '../../lib/cx';
 import { fmtRate, MIN_PCT, patternRows } from './patternsHelpers';
 
@@ -58,14 +59,7 @@ export function PatternsSection() {
         onClear={() => pick(null)}
         pending={set.isPending}
       />
-      {set.isError && (
-        <div role="alert">
-          <Text as="p" tone="danger" size="sm">
-            {sentence(set.error instanceof Error ? set.error.message : 'Couldn’t set the focus')}{' '}
-            Nothing changed.
-          </Text>
-        </div>
-      )}
+      {set.isError && set.variables === null && <WriteError error={set.error} />}
       {s.attempts === 0 ? (
         <EmptyState title="Nothing to rank yet.">
           Patterns fill in as you practise: each sitting or logged attempt counts toward its
@@ -101,6 +95,7 @@ export function PatternsSection() {
             pending={set.isPending && set.variables === r.pattern}
             disabled={set.isPending || !current}
             onPick={() => pick(r.pattern)}
+            error={set.isError && set.variables === r.pattern ? set.error : null}
           />
         ))}
       </ol>
@@ -156,6 +151,7 @@ function PatternRow({
   pending,
   disabled,
   onPick,
+  error,
 }: {
   pattern: PatternId;
   rank: number | null;
@@ -164,6 +160,7 @@ function PatternRow({
   pending: boolean;
   disabled: boolean;
   onPick: () => void;
+  error: unknown;
 }) {
   const name = PATTERN_NAMES[pattern];
   const nameId = `pattern-${pattern}`;
@@ -203,6 +200,7 @@ function PatternRow({
         ) : null}
       </div>
       <div className="flex flex-col gap-1 pl-8">
+        {error !== null && <WriteError error={error} />}
         {stat ? (
           <PatternStats stat={stat} onTeal={isFocus} />
         ) : (
@@ -231,6 +229,21 @@ function Metrics({ parts }: { parts: (string | false)[] }) {
 // A server reason as a sentence: the refusal's text carries no closing stop.
 const sentence = (msg: string) => (/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`);
 
+// A focus write that failed, shown where it was asked for (the row, or above for Back) so it's on screen. A
+// refusal (a 400, or the stub's throw) wrote nothing; a 5xx or a dropped connection may have landed, so it says
+// so and the focus line, read again, shows what stands.
+function WriteError({ error }: { error: unknown }) {
+  return (
+    <div role="alert">
+      <Text as="p" tone="danger" size="sm">
+        {isTransientRead(error)
+          ? 'Couldn’t confirm the focus change — it may have saved; the focus line shows what stands.'
+          : `${sentence(error instanceof Error ? error.message : 'Couldn’t set the focus')} Nothing changed.`}
+      </Text>
+    </div>
+  );
+}
+
 // On the focus row's teal fill, teal text falls under 4.5:1, so a clean run reads in ink there.
 function PatternStats({ stat, onTeal }: { stat: PatternStat; onTeal: boolean }) {
   const causes = (Object.entries(stat.causes) as [CauseTag, number][]).sort((a, b) => b[1] - a[1]);
@@ -252,7 +265,7 @@ function PatternStats({ stat, onTeal }: { stat: PatternStat; onTeal: boolean }) 
         <Metrics
           parts={[
             `${stat.problems} ${stat.problems === 1 ? 'problem' : 'problems'}`,
-            `re-solve ${fmtRate(stat.resolve)}`,
+            stat.resolve.of > 0 && `re-solve ${fmtRate(stat.resolve)}`,
             spt !== null && `${spt} ${spt === 1 ? 'submit' : 'submits'} a try`,
             stat.runBeforeSubmit.of > 0 && `ran first ${fmtRate(stat.runBeforeSubmit)}`,
             stat.traced.of > 0 && `traced ${fmtRate(stat.traced)}`,
