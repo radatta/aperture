@@ -287,20 +287,21 @@ function VoidControl({ sitting }: { sitting: Sitting }) {
   const voided = sitting.review?.test === true;
   return (
     <div className="flex flex-col gap-2">
-      {voided && (
-        <Text as="p" size="sm" className="rounded-xl border border-line bg-panel px-3 py-2">
-          Doesn’t count — left out of the plan, stats and re-solves.
-        </Text>
-      )}
+      {/* The button first, the notice under it: a tap never pushes the button down behind the dock. */}
       <Button
         variant="quiet"
         size="sm"
-        className="self-start"
+        className="min-h-11 self-start"
         aria-disabled={v.isPending || undefined}
         onClick={() => !v.isPending && v.mutate({ id: sitting.id, test: !voided })}
       >
         {voided ? 'Count it again' : 'Doesn’t count'}
       </Button>
+      {voided && (
+        <Text as="p" size="sm" className="rounded-xl border border-line bg-panel px-3 py-2">
+          Doesn’t count — left out of the plan, stats and re-solves.
+        </Text>
+      )}
       {v.isError && (
         <p role="alert" className="text-xs text-danger">
           Couldn’t change that — {(v.error as Error).message || 'try again'}.

@@ -789,3 +789,38 @@ describe('void and Claude’s notes', () => {
     expect(screen.getByLabelText<HTMLInputElement>('One-liner')).toBeTruthy();
   });
 });
+
+describe('void keeps the review form’s suggestions', () => {
+  it('a sitting with no review keeps its suggested help and cause after Doesn’t count', async () => {
+    const user = userEvent.setup();
+    const api = createStubClient({ seed: false, storageKey: `sit-${Math.random()}` });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const { sitting } = await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZY',
+      problemSlug: 'valid-anagram',
+      problemTitle: 'Valid Anagram',
+      difficulty: 'Easy',
+      lang: 'python3',
+      startedAt: Date.now(),
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    });
+    // A failed first Submit with no Run before it: the form suggests No trace.
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: '01HZZZZZZZZZZZZZZZZZZZZZZX',
+          type: 'submit',
+          at: Date.now(),
+          payload: { result: { status_code: 11, status_msg: 'Wrong Answer' } },
+        },
+      ],
+    });
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText(/· suggested/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Doesn’t count' }));
+    expect(await screen.findByText(/Doesn’t count — left out of the plan/)).toBeTruthy();
+    expect(screen.getByText(/· suggested/)).toBeTruthy();
+  });
+});

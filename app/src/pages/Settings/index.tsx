@@ -912,11 +912,11 @@ function LeetcodeSection() {
             <Text size="sm">Plan mode</Text>
           </legend>
           {PLAN_MODE_OPTIONS.map((o) => (
-            <label key={o.value} className="flex items-start gap-2">
+            <label key={o.value} className="flex min-h-11 items-start gap-2 py-1">
               <input
                 type="radio"
                 name="coach-plan-mode"
-                className="mt-1"
+                className="mt-1 accent-teal"
                 value={o.value}
                 checked={(settings.coachPlanMode ?? 'auto') === o.value}
                 onChange={() => update.mutate({ coachPlanMode: o.value })}
@@ -953,7 +953,7 @@ const PLAN_MODE_OPTIONS: { value: CoachPlanMode; label: string; hint: string }[]
   {
     value: 'catch-up',
     label: 'Catch-up',
-    hint: 'Re-solves fill every slot but one new; no stretch.',
+    hint: 'Re-solves fill every slot but one new; no stretch. Fewer slots when fewer are due.',
   },
 ];
 
