@@ -100,14 +100,14 @@ LeetCode tags (`patternOfTags`), else `other`. The user's own problem history ne
 
 `lambdas/src/mcp/coachTools.ts` ([mcp](../mcp/index.md) → _Tools_):
 
-| Tool                                         | Kind   | Over                                                                     |
-| -------------------------------------------- | ------ | ------------------------------------------------------------------------ |
-| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note |
-| `live_sitting`                               | (read) | gains `slot`: kind (or `off-plan`), reason, cap, `overCap`, the rules    |
-| `mark_peeked {slug \| sittingId, day?}`      | write  | that day's sitting's review → help `solution`; none → a peek attempt     |
-| `set_cause_tag {sittingId?, cause, peeked?}` | write  | `patchSittingReview`; no id → the newest ended sitting                   |
-| `swap_slot {slug, action, toSlug?}`          | write  | `setCoachSlot`; a swap with no target → the next easier unseen problem   |
-| `log_attempt {attempts[]}`                   | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration)                   |
+| Tool                                         | Kind   | Over                                                                                                                                            |
+| -------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note                                                                        |
+| `live_sitting`                               | (read) | gains `slot` (kind or `off-plan`, reason, cap, `overCap`, the rules) and `trace` (`summary.coach.trace`, [index.md](index.md) → _Coach events_) |
+| `mark_peeked {slug \| sittingId, day?}`      | write  | that day's sitting's review → help `solution`; none → a peek attempt                                                                            |
+| `set_cause_tag {sittingId?, cause, peeked?}` | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                          |
+| `swap_slot {slug, action, toSlug?}`          | write  | `setCoachSlot`; a swap with no target → the next easier unseen problem                                                                          |
+| `log_attempt {attempts[]}`                   | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration)                                                                                          |
 
 Every write's description opens with the same ask-first sentence and says what it returns to read back. Leave all
 four on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
@@ -124,8 +124,7 @@ reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
 
 The app's Today card and review toggles, `coach_stats` and the remaining reads, the pattern dashboard, mocks, the
 history import, and countdown mode — each its own PR. `CoachToday.mode`, `target` and `arm` are already in the
-shape, and the gaps and cap are parameters, so countdown mode and an A/B arm add rather than change. The trace
-state from the extension's trace card joins `live_sitting` once that event contract lands.
+shape, and the gaps and cap are parameters, so countdown mode and an A/B arm add rather than change.
 
 ## Files
 

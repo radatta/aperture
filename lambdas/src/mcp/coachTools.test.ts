@@ -281,6 +281,7 @@ describe('live_sitting slot', () => {
     t = T0 + 31 * 60_000;
     const out = await call('live_sitting');
     expect(out.slot).toMatchObject({ kind: 'new', capMin: 30, overCap: true });
+    expect(out.trace).toBeNull(); // no coach event from the extension yet
     expect(out.slot.rules).toMatch(/hint ladder/);
   });
   it('a failed coach read never fails the live pull: slot is null', async () => {
