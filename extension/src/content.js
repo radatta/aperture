@@ -505,54 +505,60 @@
 
   // ---- the binding ----
   const sameSitting = (x, y) => !!x && !!y && x.slug === y.slug && x.sittingId === y.sittingId;
-  async function saveBinding(b) {
+  // Every binding write in this tab goes through one queue, in order: a patch's read-then-write can't straddle a
+  // clear or a whole write made after it. Each still changes the in-memory binding at once. A storage call
+  // that never answers (the extension gone) stalls the writes behind it — and adoption, below — for good.
+  let writes = Promise.resolve();
+  let writesPending = 0;
+  // The caller sees its own write's failure (a Start whose binding didn't save fails); the queue goes on.
+  function queueWrite(fn) {
+    writesPending++;
+    const done = writes.then(fn).finally(() => writesPending--);
+    writes = done.catch(() => {});
+    return done;
+  }
+  function saveBinding(b) {
     binding = b;
-    await local.set({ [`sitting:${b.slug}`]: b });
+    return queueWrite(() => local.set({ [`sitting:${b.slug}`]: b }));
+  }
+  function clearBinding() {
+    const slug = (binding && binding.slug) || screenSlug;
+    binding = null;
+    sync = null;
+    return slug
+      ? queueWrite(() => local.remove([`sitting:${slug}`, `sync:${slug}`]))
+      : Promise.resolve();
   }
   // Two tabs on one problem each hold the binding in memory, so a whole-object write from one would undo what
   // the other wrote (F181). A change is a patch instead: applied here at once, then merged into what storage
-  // holds now — only while that is still this sitting, so a cleared or replaced binding never comes back. The
-  // patches go one at a time; the other tab adopts the result (adoptBinding). Not atomic across tabs (no
-  // compare-and-set in storage.local), but the window is one read and one write, and patches touch
-  // different fields.
+  // holds now — only while that is still this sitting, so within a tab a cleared or replaced binding never
+  // comes back. The other tab adopts the result (adoptBinding). Across tabs it isn't atomic (storage.local has
+  // no compare-and-set): the window is one read and one write, and patches touch different fields.
   const mergeBinding = (b, patch) => ({
     ...b,
     ...patch,
     ...(patch.coach ? { coach: { ...(b.coach || {}), ...patch.coach } } : {}),
   });
-  let patching = Promise.resolve();
-  let patchesPending = 0;
   function patchBinding(patch) {
     if (!binding) return Promise.resolve();
     const { slug, sittingId } = binding;
     binding = mergeBinding(binding, patch);
-    patchesPending++;
-    patching = patching
-      .then(async () => {
-        const key = `sitting:${slug}`;
-        const stored = (await local.get(key))[key];
-        if (!stored || stored.sittingId !== sittingId) return;
-        const next = mergeBinding(stored, patch);
-        await local.set({ [key]: next });
-        // The last patch in line carries every earlier one (each merged into the last one's write).
-        if (patchesPending === 1 && binding && binding.slug === slug && binding.sittingId === sittingId)
-          binding = next;
-      })
-      .catch(() => {})
-      .finally(() => patchesPending--);
-    return patching;
+    return queueWrite(async () => {
+      const key = `sitting:${slug}`;
+      const stored = (await local.get(key))[key];
+      if (!stored || stored.sittingId !== sittingId) return;
+      const next = mergeBinding(stored, patch);
+      await local.set({ [key]: next });
+      // The last write in line carries every earlier one (each merged into the last one's write).
+      if (writesPending === 1 && binding && binding.slug === slug && binding.sittingId === sittingId)
+        binding = next;
+    }).catch(() => {}); // a failed patch keeps its value in memory only, as a failed whole write did
   }
   // Another tab's write to this sitting's binding (a change event, or the 5 s reread when Safari drops it):
-  // taken as is while none of this tab's own patches is in line.
+  // taken as is while none of this tab's own writes is in line.
   function adoptBinding(next) {
-    if (!next || !binding || patchesPending || !sameSitting(next, binding)) return;
+    if (!next || !binding || writesPending || !sameSitting(next, binding)) return;
     binding = next;
-  }
-  async function clearBinding() {
-    const slug = (binding && binding.slug) || screenSlug;
-    binding = null;
-    sync = null;
-    if (slug) await local.remove([`sitting:${slug}`, `sync:${slug}`]);
   }
 
   // ---- Start: the server → LeetCode's reset → its confirm → its timer (a refusal touches nothing) ----
@@ -701,10 +707,12 @@
           title: s.problemTitle,
           problemSent: !!body.problem,
         };
-        await local.set({
-          [`sitting:${slug}`]: b,
-          [`sync:${slug}`]: { sittingId: s.id, status: 'active', at: Date.now() },
-        });
+        await queueWrite(() =>
+          local.set({
+            [`sitting:${slug}`]: b,
+            [`sync:${slug}`]: { sittingId: s.id, status: 'active', at: Date.now() },
+          }),
+        );
         if (stale()) {
           // Back on this problem already (A → B → A mid-send), read before this landed: read it again.
           if (screenSlug === slug && !binding) navTo(slug);
@@ -905,7 +913,7 @@
         send({ type: 'dismiss', slug: state.slug }).catch(() => {});
       else if (e.do === 'forgetDismiss')
         send({ type: 'undismiss', slug: state.slug }).catch(() => {});
-      else if (e.do === 'clearBinding') clearBinding();
+      else if (e.do === 'clearBinding') clearBinding().catch(() => {});
     }
   }
   function paint() {
@@ -1041,7 +1049,8 @@
   let ownLogChanges = 0;
   let loadedVersion = null; // the build this page's scripts came from (README → Versions)
   try {
-    loadedVersion = String(api.runtime.getManifest().version).slice(0, 20);
+    const v = api.runtime.getManifest().version;
+    if (typeof v === 'string') loadedVersion = v.slice(0, 20);
   } catch {}
   debug.log('oc.reg', { pageId, readyState: document.readyState, v: loadedVersion });
   api.storage.onChanged.addListener((changes, area) => {

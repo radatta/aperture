@@ -18,6 +18,7 @@ import {
   MAIN_JS,
   fakeExtension,
   fakeXHR,
+  manifest,
   page,
   run,
   shadowRoots,
@@ -720,8 +721,16 @@ describe('the overlay on a LeetCode problem', () => {
       const t = timerState(p)!;
       expect(t).toMatchObject({ mode, status: 'running' });
       expect(Date.now() - t.startTimestamp!).toBeLessThan(5000); // started just now, not the old count
-      expect(await logged(ext, 'timer')).toMatchObject({ reset: true, started: true });
+      // The probe records the mode Start ended in: a running stopwatch stays a stopwatch (F154).
+      expect(await logged(ext, 'timer')).toMatchObject({
+        reset: true,
+        started: true,
+        mode,
+        modeAfter: mode,
+        statusAfter: 'running',
+      });
       expect(await logged(ext, 'timer')).not.toHaveProperty('confirmed'); // nothing asked
+      expect(await logged(ext, 'oc.reg')).toMatchObject({ v: manifest.version }); // the build the page loaded
     }
   }, 30_000);
 
@@ -1774,12 +1783,17 @@ describe('the resubmit note, and no trace card', () => {
     expect(coachEvents(ext).some((k) => k.kind === 'nudge-shown')).toBe(false);
   };
 
-  it('a page script’s click() on Submit gets no note; nor does a page marking <html> with the selector', async () => {
+  it('a page script’s click() on Submit gets no note; nor does a page marking <html>, or our badge, with the selector', async () => {
     const { p, ext } = await failedOnce();
     p.submitBtn().click();
     await until(() => p.fake().submits === 2, 6000);
     p.w.document.documentElement.setAttribute('data-e2e-locator', 'console-submit-button');
     trustedClick(p.w.document.querySelector('[data-fake=code]')!); // anywhere on the page
+    // Our own badge host dressed as LeetCode's Submit: a click on it is never one (view.owns).
+    const host = p.badgeHost()!;
+    host.setAttribute('data-e2e-locator', 'console-submit-button');
+    host.setAttribute('role', 'button');
+    trustedClick(host);
     await noNote(p, ext);
   }, 30_000);
 
@@ -1837,7 +1851,7 @@ describe('the resubmit note, and no trace card', () => {
   }, 30_000);
 
   // F181: each tab holds the binding in memory; a write is a patch merged into what storage holds now.
-  it('two tabs on one sitting: one learns the question id while the other fills the doc; storage keeps both', async () => {
+  it('two tabs on one sitting: one learns the question id, then the other fills the doc; storage keeps both', async () => {
     const { p: a, ext, bg } = await sitting({ lateHint: true });
     const b = open('/problems/two-sum/', ext, { lateHint: true }); // a second tab, resuming
     await until(() => b.phase() === 'active', 6000);
@@ -1876,7 +1890,7 @@ describe('the resubmit note, and no trace card', () => {
     expect(bound(ext)).toMatchObject({ questionId: '1', problemSent: true });
   }, 30_000);
 
-  it('a patch never brings back a binding another tab cleared', async () => {
+  it('a patch never brings back a binding another tab cleared before it read', async () => {
     const { p: a, ext } = await sitting({ lateHint: true });
     await settle(3500);
     // The sitting ended and another tab cleared the binding, unheard by this one.
@@ -1884,6 +1898,33 @@ describe('the resubmit note, and no trace card', () => {
     a.fake().sendHint();
     await settle(3000);
     expect(ext.local.data['sitting:two-sum']).toBeUndefined();
+  }, 30_000);
+
+  it('a sitting that ends while a patch is reading stays cleared: the tab’s writes go in order', async () => {
+    const { p: a, ext } = await sitting({ lateHint: true });
+    await settle(3500);
+    const { sittingId } = bound(ext);
+    // The patch's read answers with the binding as it was, but only once the end has been handled.
+    const realGet = ext.local.get.bind(ext.local);
+    let release = () => {};
+    const held = new Promise<void>((res) => (release = res));
+    let reads = 0;
+    ext.local.get = (async (keys?: string | string[] | null) => {
+      const out = await realGet(keys);
+      if (keys === 'sitting:two-sum') {
+        reads++;
+        await held;
+      }
+      return out;
+    }) as typeof ext.local.get;
+    a.fake().sendHint(); // learnQuestionId: a patch, its read now held
+    await until(() => reads === 1);
+    await ext.local.set({ 'sync:two-sum': { sittingId, status: 'ended', at: Date.now() } });
+    await until(() => a.badge()?.includes('Sitting ended in Aperture'));
+    release();
+    await settle(1000);
+    expect(ext.local.data['sitting:two-sum']).toBeUndefined();
+    expect(ext.local.data['sync:two-sum']).toBeUndefined();
   }, 30_000);
 
   it('a hint during a reload’s resume doesn’t leave the page stuck resuming', async () => {

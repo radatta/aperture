@@ -16,7 +16,8 @@
   // The build Safari runs (manifest.json); the app's Settings compares it with the one it was built from.
   let version = null;
   try {
-    version = String(api.runtime.getManifest().version);
+    const v = api.runtime.getManifest().version;
+    if (typeof v === 'string') version = v;
   } catch {}
   $('version').textContent = version ? `Version ${version}` : 'Version unknown';
 
