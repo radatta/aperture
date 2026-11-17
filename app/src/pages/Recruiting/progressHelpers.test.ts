@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { fmtPastDay, parseFilters, parsePattern, parseView, reSolveText } from './progressHelpers';
+import { fmtPastDay } from '@aperture/shared';
+import { parseFilters, parsePattern, parseView, reSolveText } from './progressHelpers';
 
 const TODAY = '2026-11-17';
 const st = (o: object) => ({

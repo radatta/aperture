@@ -298,7 +298,7 @@ export function createMcpClient({
   const refusedBeforeWrite = (err: unknown) =>
     (err instanceof McpRpcError && err.code === PARAM_ERROR) ||
     (err instanceof Error &&
-      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read)/.test(
+      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read|A solve from before the coach)/.test(
         err.message,
       ));
   // A write may only touch a row this harness created, through its own kind's methods — as api.ts.

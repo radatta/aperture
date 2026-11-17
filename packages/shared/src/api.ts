@@ -660,7 +660,7 @@ export interface ApiClient {
   // the call to the worker; idempotent, so a second reader (the app and the thread at once) just reads. Returns the
   // plan after the claim (`pending` while the worker runs).
   startCoachPick(): Promise<CoachToday>;
-  listProblemRecords(): Promise<ProblemRecord[]>; // every problem with a counted attempt, newest first
+  listProblemRecords(): Promise<ProblemRecord[]>; // every problem with a counted or history-only attempt, newest first
   // How practice is going (coachStats): first tries, re-solves, causes, per ISO week and per pattern. from/to
   // optional day keys; to defaults to the user's today.
   getCoachStats(range?: CoachStatsRange): Promise<CoachStats>;

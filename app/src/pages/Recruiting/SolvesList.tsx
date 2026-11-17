@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router';
-import { CAUSE_NAMES, PATTERN_NAMES, PATTERNS } from '@aperture/shared';
+import { fmtPastDay, CAUSE_NAMES, PATTERN_NAMES, PATTERNS } from '@aperture/shared';
 import type { PatternId, ProblemRecord } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -9,7 +9,6 @@ import { cx } from '../../lib/cx';
 import {
   DIFFICULTIES,
   firstTryText,
-  fmtPastDay,
   matchesSolve,
   reSolveText,
   SOLVE_STATUSES,

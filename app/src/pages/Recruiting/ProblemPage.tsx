@@ -4,7 +4,9 @@ import {
   catalogProblem,
   CAUSE_NAMES,
   COACH_PARAMS,
+  fmtPastDay,
   isProblemSlug,
+  listsOf,
   PATTERN_NAMES,
   problemStatus,
   sittingProblemUrl,
@@ -18,7 +20,7 @@ import { useCoachToday } from '../../data/hooks/useCoach';
 import { useProblemRecords } from '../../data/hooks/useCoachProgress';
 import { useSettings } from '../../data/hooks/useSettings';
 import { cx } from '../../lib/cx';
-import { fmtPastDay, reSolveText, solveTag, stateTone, STATE_LABEL } from './progressHelpers';
+import { reSolveText, solveTag, stateTone, STATE_LABEL } from './progressHelpers';
 
 // One problem's page (docs/areas/recruiting/coach.md → The Progress tab): what it is, where it stands, and every try
 // newest first — minutes against the cap, help, cause, the logged note, and its sittings. Back returns to Progress
@@ -72,7 +74,7 @@ export function ProblemPage() {
   const pattern = r?.pattern ?? cat!.pattern;
   const difficulty = r?.difficulty ?? cat?.difficulty ?? null;
   const st = problemStatus(r, today);
-  const lists = r?.lists ?? (cat ? ['neetcode150' as const] : []);
+  const lists = r?.lists ?? listsOf(slug);
   const reSolve = reSolveText(st, today);
   return (
     <article className="flex max-w-3xl flex-col gap-3">
@@ -150,10 +152,11 @@ function Tries({ record, today }: { record: ProblemRecord; today: string }) {
 }
 function TryRow({ t, today }: { t: ProblemTry; today: string }) {
   const peeked = t.help === 'solution';
-  const word = t.historical ? 'Solved before' : peeked ? 'Peeked' : OUTCOME[t.outcome];
+  const word = t.historical ? 'Before the coach' : peeked ? 'Peeked' : OUTCOME[t.outcome];
   const tone = t.historical ? 'muted' : t.outcome === 'clean' ? 'teal' : 'gold';
   const over = t.minutes !== null && t.minutes > COACH_PARAMS.capMin;
   const bits = [
+    t.historical && OUTCOME[t.outcome],
     t.minutes !== null && (
       <span key="m" className={cx(over && 'font-semibold text-gold')}>
         {t.minutes} min{over ? `, over the ${COACH_PARAMS.capMin} min cap` : ''}
@@ -162,9 +165,6 @@ function TryRow({ t, today }: { t: ProblemTry; today: string }) {
     t.help === 'hint' && 'a hint',
     peeked && 'read the solution',
     t.cause && CAUSE_NAMES[t.cause],
-    t.historical &&
-      !(t.outcome === 'solved' || t.outcome === 'clean') &&
-      `went: ${OUTCOME[t.outcome].toLowerCase()}`,
   ].filter(Boolean);
   return (
     <li className="relative flex flex-col gap-0.5 pb-4 pl-5">
@@ -188,7 +188,7 @@ function TryRow({ t, today }: { t: ProblemTry; today: string }) {
         <Tag tone={tone}>{word}</Tag>
         {t.historical && (
           <Text size="xs" tone="muted">
-            history only: not in the re-solve queue, the stats or the focus
+            history only: never due, never a first try
           </Text>
         )}
       </span>

@@ -1,18 +1,12 @@
 import { useRef } from 'react';
 import { Link, useLocation } from 'react-router';
-import { PATTERN_NAMES, PROGRESS_STAGES, sittingProblemUrl } from '@aperture/shared';
+import { fmtPastDay, PATTERN_NAMES, PROGRESS_STAGES, sittingProblemUrl } from '@aperture/shared';
 import type { Coverage, PatternCoverage, PatternId, ProblemCell } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
-import { useWide } from '../../data/hooks/useCoachProgress';
+import { useWide } from '../../lib/useWide';
 import { cx } from '../../lib/cx';
-import {
-  fmtPastDay,
-  patternCardName,
-  reSolveText,
-  STATE_LABEL,
-  triesText,
-} from './progressHelpers';
+import { patternCardName, reSolveText, STATE_LABEL, triesText } from './progressHelpers';
 
 // The Progress map (docs/areas/recruiting/coach.md → The Progress tab): the roadmap's 18 patterns in our own five
 // stages, each a column (one under another on a phone) with its meter and a card per pattern; a card's squares are
@@ -93,7 +87,7 @@ export function ProgressMap({
               className="flex min-w-0 flex-col gap-2"
             >
               <div className="flex flex-col gap-1.5">
-                <div className="flex items-baseline justify-between gap-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2">
                   <Text
                     as="h3"
                     id={headId}
@@ -371,8 +365,12 @@ function ProblemList({
   return (
     <div role="table" aria-label="Problems" className="flex flex-col">
       <div role="row" className={cx('hidden border-b border-line pb-1.5', ROW)}>
-        {['Problem', 'Difficulty', 'Status', 'Tries', 'Last tried', 'Re-solve', ''].map((h, i) => (
-          <span key={i} role="columnheader" className="text-xs text-ink-muted">
+        {['Problem', 'Difficulty', 'Status', 'Tries', 'Last tried', 'Re-solve', 'Link'].map((h) => (
+          <span
+            key={h}
+            role="columnheader"
+            className={cx('text-xs text-ink-muted', h === 'Link' && 'sr-only')}
+          >
             {h}
           </span>
         ))}
@@ -445,6 +443,7 @@ function ProblemList({
 }
 
 function OffList({ cov, today }: { cov: Coverage; today: string }) {
+  const back = useLocation().search;
   return (
     <details className="rounded-2xl border border-line bg-panel p-3">
       <summary className="cursor-pointer text-sm">
@@ -462,6 +461,7 @@ function OffList({ cov, today }: { cov: Coverage; today: string }) {
           >
             <Link
               to={`/recruiting/progress/${r.slug}`}
+              state={{ back }}
               className="text-sm font-medium text-ink underline decoration-line-strong underline-offset-[3px]"
             >
               {r.title}

@@ -1,4 +1,10 @@
-import { fmtSpokenDay, isPatternId, PATTERN_NAMES, problemStatus } from '@aperture/shared';
+import {
+  fmtPastDay,
+  fmtSpokenDay,
+  isPatternId,
+  PATTERN_NAMES,
+  problemStatus,
+} from '@aperture/shared';
 import type {
   Difficulty,
   PatternCoverage,
@@ -35,13 +41,6 @@ export const STATE_LABEL: Record<ProblemState, string> = {
 export const stateTone = (s: ProblemState): 'teal' | 'gold' | 'muted' =>
   s === 'clean' ? 'teal' : s === 'solved' || s === 'peeked' || s === 'not-yet' ? 'gold' : 'muted';
 
-// A past day said as a person would; another year names it.
-export function fmtPastDay(day: string, today: string): string {
-  const said = fmtSpokenDay(day, today);
-  return day.slice(0, 4) === today.slice(0, 4) || said === 'yesterday'
-    ? said
-    : `${said}, ${day.slice(0, 4)}`;
-}
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // The re-solve line: due, next, graduated, or out of the queue (history only); null when untried.

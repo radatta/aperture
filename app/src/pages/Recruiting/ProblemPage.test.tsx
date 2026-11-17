@@ -50,7 +50,8 @@ describe('Problem page', () => {
     expect(within(tries[0]!).getByText('34 min, over the 30 min cap')).toBeTruthy();
     expect(within(tries[0]!).getByText(/a hint · Boundary/)).toBeTruthy();
     expect(within(tries[1]!).getByText('Peeked')).toBeTruthy();
-    expect(within(tries[2]!).getByText('Solved before')).toBeTruthy();
+    expect(within(tries[2]!).getByText('Before the coach')).toBeTruthy();
+    expect(within(tries[2]!).getByText('Solved')).toBeTruthy();
     expect(within(tries[2]!).getByText('Note: did it in school')).toBeTruthy();
     expect(within(tries[2]!).getByText(/history only/)).toBeTruthy();
   });

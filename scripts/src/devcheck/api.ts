@@ -357,6 +357,7 @@ export interface DevCoachSlot {
   sittingId: string | null;
   outcome: string | null;
   swappedFrom: string | null;
+  alternatives?: { slug: string }[];
   aiWhy?: string | null; // the AI pick's "why today"; null on a rule slot
 }
 // The plan's view of the day's AI pick (packages/shared/src/coach.ts CoachAiView).

@@ -1286,6 +1286,16 @@ describe('history-only solves', () => {
     expect(() =>
       normalizeCoachAttempt({ slug: 'two-sum', outcome: 'solved', historical: 'yes' }, TODAY),
     ).toThrow(/historical must be true or false/);
+    // Dated before today: default yesterday; today refused, so it reads as seen before today's plan.
+    expect(
+      normalizeCoachAttempt({ slug: 'two-sum', outcome: 'solved', historical: true }, TODAY).day,
+    ).toBe(day(-1));
+    expect(() =>
+      normalizeCoachAttempt(
+        { slug: 'two-sum', outcome: 'solved', historical: true, day: TODAY },
+        TODAY,
+      ),
+    ).toThrow(/dated before today/);
   });
 
   it('a peek and a history-only peek on one day are two rows', () => {

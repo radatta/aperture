@@ -1,28 +1,34 @@
+import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import { capTimes, COACH_PARAMS, fmtMonthShortDay, progressWeeks } from '@aperture/shared';
 import type { CapTimes, ProblemRecord, ProgressWeek, Rate } from '@aperture/shared';
 import { Text } from '../../components/Text';
+import { useWide } from '../../lib/useWide';
 import { MIN_PCT } from './patternsHelpers';
 
 // Trends (docs/areas/recruiting/coach.md → The Progress tab): four inline-SVG charts over live tries, the last 12
 // ISO weeks. A rate bar under MIN_PCT tries is drawn hollow, so one lucky week doesn't read like a full one. Each
 // chart's aria-label lists its values; each mark's <title> is its hover tooltip. Per pattern lives on Patterns.
 
-const W = 540;
+// The drawing's width: wide on a desktop card, narrower on a phone so the 11px labels stay near 11px on screen.
+const WIDE_W = 540;
+const NARROW_W = 380;
+const ChartW = createContext(WIDE_W);
 const H = 180;
 const L = 30; // left gutter for the y labels
 const B = 22; // bottom gutter for the week labels
 const T = 16;
 const BW = 22;
-const xOf = (i: number, n: number) => L + (i + 0.5) * ((W - L - 4) / n);
+const xOf = (i: number, n: number, W: number) => L + (i + 0.5) * ((W - L - 4) / n);
 const weekLabel = (w: ProgressWeek) => fmtMonthShortDay(w.start);
 
 function XAxis({ weeks }: { weeks: ProgressWeek[] }) {
+  const W = useContext(ChartW);
   return weeks.map((w, i) =>
-    i % 2 === 0 || i === weeks.length - 1 ? (
+    i % (W < WIDE_W ? 3 : 2) === 0 || i === weeks.length - 1 ? (
       <text
         key={w.week}
-        x={xOf(i, weeks.length)}
+        x={xOf(i, weeks.length, W)}
         y={H - 6}
         textAnchor="middle"
         className="fill-ink-muted text-[11px]"
@@ -41,6 +47,7 @@ function Grid({
   y: (v: number) => number;
   fmt: (v: number) => string;
 }) {
+  const W = useContext(ChartW);
   return ticks.map((v) => (
     <g key={v}>
       <line x1={L} x2={W} y1={y(v)} y2={y(v)} className="stroke-line" />
@@ -52,6 +59,7 @@ function Grid({
 }
 
 function ProblemsAWeek({ weeks }: { weeks: ProgressWeek[] }) {
+  const W = useContext(ChartW);
   const totals = weeks.map((w) => w.clean + w.solved + w.failed);
   const max = Math.max(4, ...totals);
   const step = Math.ceil(max / 2);
@@ -70,7 +78,7 @@ function ProblemsAWeek({ weeks }: { weeks: ProgressWeek[] }) {
     >
       <Grid ticks={[0, step, top]} y={y} fmt={String} />
       {weeks.map((w, i) => {
-        const x = xOf(i, n) - BW / 2;
+        const x = xOf(i, n, W) - BW / 2;
         let base = 0;
         const segs: [number, string][] = [
           [w.clean, 'fill-teal'],
@@ -103,7 +111,7 @@ function ProblemsAWeek({ weeks }: { weeks: ProgressWeek[] }) {
             })}
             {i === n - 1 && base > 0 && (
               <text
-                x={xOf(i, n)}
+                x={xOf(i, n, W)}
                 y={y(base) - 6}
                 textAnchor="middle"
                 className="fill-ink text-[11px] font-semibold"
@@ -128,6 +136,7 @@ function RateBars({
   pick: (w: ProgressWeek) => Rate;
   what: string;
 }) {
+  const W = useContext(ChartW);
   const y = (v: number) => H - B - v * (H - B - T);
   const n = weeks.length;
   const label = `${what} a week: ${weeks
@@ -150,7 +159,7 @@ function RateBars({
         return (
           <g key={w.week}>
             <rect
-              x={xOf(i, n) - BW / 2 + (hollow ? 0.75 : 0)}
+              x={xOf(i, n, W) - BW / 2 + (hollow ? 0.75 : 0)}
               y={t}
               width={BW - (hollow ? 1.5 : 0)}
               height={Math.max(2, y(0) - t)}
@@ -162,7 +171,7 @@ function RateBars({
             </rect>
             {i === lastWith && (
               <text
-                x={xOf(i, n)}
+                x={xOf(i, n, W)}
                 y={t - 6}
                 textAnchor="middle"
                 className="fill-ink text-[11px] font-semibold"
@@ -179,6 +188,7 @@ function RateBars({
 }
 
 function CapChart({ c }: { c: CapTimes }) {
+  const W = useContext(ChartW);
   const rowH = 24;
   const lx = 70;
   const max = Math.max(1, ...c.bins.map((b) => b.n));
@@ -273,81 +283,88 @@ export function ProgressTrends({
   const active = weeks.filter((w) => w.clean + w.solved + w.failed > 0).length;
   const firsts = weeks.some((w) => w.firstTry.of > 0);
   const resolves = weeks.some((w) => w.resolve.of > 0);
-  const cap = capTimes(records, COACH_PARAMS);
+  const cap = capTimes(records, today);
+  const narrow = !useWide('(min-width: 640px)');
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      <ChartCard title="Problems a week">
-        {active < 2 ? (
-          <Text size="sm" tone="muted">
-            Two weeks of practice draws this. So far:{' '}
-            {weeks.reduce((n, w) => n + w.clean + w.solved + w.failed, 0)} tries in the last 12
-            weeks.
-          </Text>
-        ) : (
-          <>
-            <ul aria-label="Key" className="flex flex-wrap gap-3">
-              {(
-                [
-                  ['bg-teal', 'Clean'],
-                  ['bg-gold', 'Solved'],
-                  ['border-[1.5px] border-gold', 'Not yet'],
-                ] as const
-              ).map(([c, l]) => (
-                <li key={l} className="flex items-center gap-1.5">
-                  <Swatch cls={c} />
-                  <Text size="xs" tone="muted">
-                    {l}
-                  </Text>
-                </li>
-              ))}
-            </ul>
-            <ProblemsAWeek weeks={weeks} />
-          </>
-        )}
-      </ChartCard>
-      <ChartCard
-        title={`Time against the ${cap.capMin} min cap`}
-        note={
-          cap.timed ? (
+    <ChartW value={narrow ? NARROW_W : WIDE_W}>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <ChartCard title="Problems a week">
+          {active < 2 ? (
+            <Text size="sm" tone="muted">
+              Two weeks of practice draws this. So far:{' '}
+              {weeks.reduce((n, w) => n + w.clean + w.solved + w.failed, 0)} tries in the last 12
+              weeks.
+            </Text>
+          ) : (
             <>
-              <span className="font-semibold text-ink">
-                {cap.inside} of {cap.timed}
-              </span>{' '}
-              inside {cap.capMin} min · median {cap.medianMin} min
+              <ul aria-label="Key" className="flex flex-wrap gap-3">
+                {(
+                  [
+                    ['bg-teal', 'Clean'],
+                    ['bg-gold', 'Solved'],
+                    ['border-[1.5px] border-gold', 'Not yet'],
+                  ] as const
+                ).map(([c, l]) => (
+                  <li key={l} className="flex items-center gap-1.5">
+                    <Swatch cls={c} />
+                    <Text size="xs" tone="muted">
+                      {l}
+                    </Text>
+                  </li>
+                ))}
+              </ul>
+              <ProblemsAWeek weeks={weeks} />
             </>
-          ) : undefined
-        }
-      >
-        {cap.timed ? (
-          <CapChart c={cap} />
-        ) : (
-          <Text size="sm" tone="muted">
-            Timed tries draw this: a sitting, or a logged attempt with minutes.
-          </Text>
-        )}
-      </ChartCard>
-      <ChartCard
-        title="First tries that were clean"
-        note={`All patterns. A hollow bar is a week under ${MIN_PCT} first tries.`}
-      >
-        {firsts ? (
-          <RateBars weeks={weeks} pick={(w) => w.firstTry} what="First tries clean" />
-        ) : (
-          <Text size="sm" tone="muted">
-            No first tries in the last 12 weeks.
-          </Text>
-        )}
-      </ChartCard>
-      <ChartCard title="Re-solves that were clean">
-        {resolves ? (
-          <RateBars weeks={weeks} pick={(w) => w.resolve} what="Re-solves clean" />
-        ) : (
-          <Text size="sm" tone="muted">
-            No re-solves yet. The first comes due {COACH_PARAMS.gaps.peeked[0]} to{' '}
-            {COACH_PARAMS.gaps.clean[0]} days after a try.
-          </Text>
-        )}
-      </ChartCard>
-    </div>
+          )}
+        </ChartCard>
+        <ChartCard
+          title={`Time against the ${cap.capMin} min cap`}
+          note={
+            cap.timed ? (
+              <>
+                <span className="font-semibold text-ink">
+                  {cap.inside} of {cap.timed}
+                </span>{' '}
+                inside {cap.capMin} min · median {cap.medianMin} min
+              </>
+            ) : undefined
+          }
+        >
+          {cap.timed ? (
+            <CapChart c={cap} />
+          ) : (
+            <Text size="sm" tone="muted">
+              Timed tries draw this: a sitting, or a logged attempt with minutes.
+            </Text>
+          )}
+        </ChartCard>
+        <ChartCard
+          title="First tries that were clean"
+          note={
+            firsts
+              ? `All patterns. A hollow bar is a week under ${MIN_PCT} first tries.`
+              : undefined
+          }
+        >
+          {firsts ? (
+            <RateBars weeks={weeks} pick={(w) => w.firstTry} what="First tries clean" />
+          ) : (
+            <Text size="sm" tone="muted">
+              No first tries in the last 12 weeks.
+            </Text>
+          )}
+        </ChartCard>
+        <ChartCard title="Re-solves that were clean">
+          {resolves ? (
+            <RateBars weeks={weeks} pick={(w) => w.resolve} what="Re-solves clean" />
+          ) : (
+            <Text size="sm" tone="muted">
+              No re-solves yet. The first comes due {COACH_PARAMS.gaps.peeked[0]} to{' '}
+              {COACH_PARAMS.gaps.clean[0]} days after a try.
+            </Text>
+          )}
+        </ChartCard>
+      </div>
+    </ChartW>
   );
 }

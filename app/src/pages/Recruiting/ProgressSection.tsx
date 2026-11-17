@@ -60,8 +60,10 @@ export function ProgressSection() {
   const onFilters = (f: SolveFilters) =>
     set({ pattern: f.pattern, status: f.status, difficulty: f.difficulty });
 
+  // Wider than the app's column on a desktop (the map's five stages and the tables need the room); the header, tabs
+  // and dock stay in the column.
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 lg:ml-[calc(50%-min(36rem,calc(50vw-1.25rem)))] lg:w-[min(72rem,calc(100vw-2.5rem))]">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-6">
         <Text as="p" size="sm" tone="muted" className="flex flex-wrap gap-x-1.5">
           <Part first>

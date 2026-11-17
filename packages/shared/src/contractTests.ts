@@ -4457,6 +4457,17 @@ export function runApiContract(
             { slug: 'two-sum', outcome: 'solved', day: '2013-11-01', historical: true },
           ]),
         ).rejects.toThrow(/last 10 years/);
+        await expect(
+          api.logCoachAttempts([
+            { slug: 'two-sum', outcome: 'solved', day: TODAY, historical: true },
+          ]),
+        ).rejects.toThrow(/dated before today/);
+        const [y] = await api.logCoachAttempts([
+          { slug: 'two-sum', outcome: 'solved', historical: true },
+        ]);
+        expect(y!.day).toBe('2023-11-13'); // no day: yesterday, so it reads as seen before today's plan
+        expect((await api.getCoachToday()).slots.map((x) => x.slug)).not.toContain('two-sum');
+        await api.deleteCoachAttempt(y!.id);
         await api.deleteCoachAttempt(h!.id);
         expect(await api.listProblemRecords()).toEqual([]);
         expect((await api.getCoachToday()).slots[0]!.slug).toBe('contains-duplicate');

@@ -1357,12 +1357,15 @@ export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAtte
   const cause = r.cause ?? null;
   if (cause !== null && !isCauseTag(cause))
     throw new Error(`cause must be one of ${CAUSE_TAGS.join(', ')}`);
-  const day = r.day ?? today;
-  if (typeof day !== 'string' || !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
-  if (day > today) throw new Error('day must not be after today');
   if (r.historical !== undefined && typeof r.historical !== 'boolean')
     throw new Error('historical must be true or false');
   const historical = r.historical === true;
+  // A solve from before the coach is dated before today (default yesterday): the plan reads it as already seen.
+  const day = r.day ?? (historical ? addDays(today, -1) : today);
+  if (typeof day !== 'string' || !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
+  if (day > today) throw new Error('day must not be after today');
+  if (historical && day >= today)
+    throw new Error('A solve from before the coach is dated before today');
   const back = historical ? ATTEMPT_HISTORY_DAYS : ATTEMPT_BACKDATE_DAYS;
   if (day < addDays(today, -back))
     throw new Error(

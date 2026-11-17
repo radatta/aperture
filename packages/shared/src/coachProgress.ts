@@ -1,6 +1,6 @@
 // The Progress tab's folds (docs/areas/recruiting/coach.md → The Progress tab): pure, over problem records
 // (listProblemRecords) and a problem list (catalogs.ts), so the app derives the map, the solves and the trends with
-// no RPC of its own. "Done" is accepted in a live try, or a history-only solve that was accepted.
+// no RPC of its own. "Done" is accepted on any try, live or history-only; the status shows the newest live try.
 
 import { CATALOGS } from './catalogs';
 import type { CatalogId } from './catalogs';
@@ -11,8 +11,9 @@ import { PATTERNS } from './neetcode150';
 import type { CatalogProblem, PatternId } from './neetcode150';
 
 // --- One problem's status ---
-// untried; earlier = only history-only solves (accepted); else the newest live try's: clean, solved, peeked (the
-// solution read), not-yet (never accepted, no peek). A history-only problem never accepted reads not-yet.
+// untried; earlier = only history-only solves, one accepted; else the newest live try's: clean, solved, peeked (the
+// solution read), not-yet (not accepted, no peek). A history-only problem never accepted reads not-yet. Done is
+// accepted on any try, so a failed re-solve shows in the square (gold) but never takes a solved problem off the count.
 export type ProblemState = 'untried' | 'earlier' | 'clean' | 'solved' | 'peeked' | 'not-yet';
 export interface ProblemStatus {
   state: ProblemState;
@@ -45,7 +46,7 @@ export function problemStatus(r: ProblemRecord | null, today: string): ProblemSt
   const open = s && !s.graduated ? s.dueDay : null;
   return {
     state,
-    done: state === 'clean' || state === 'solved' || state === 'earlier',
+    done: r.tries.some((t) => t.outcome !== 'failed'),
     dueSince: open && open <= today ? open : null,
     nextDue: open && open > today ? open : null,
     graduated: !!s?.graduated,
@@ -194,7 +195,7 @@ export function progressWeeks(
   return out;
 }
 
-// --- Time against the cap: live tries with minutes ---
+// --- Time against the cap: live tries with minutes, the same `weeks` ISO weeks as progressWeeks ---
 export interface CapBin {
   label: string;
   n: number;
@@ -209,11 +210,16 @@ export interface CapTimes {
 }
 export function capTimes(
   records: readonly ProblemRecord[],
+  today: string,
+  weeks = 12,
   params: CoachParams = COACH_PARAMS,
 ): CapTimes {
   const cap = params.capMin;
+  const from = addDays(mondayOf(today), -7 * (weeks - 1));
   const mins = records
-    .flatMap((r) => r.tries.filter((t) => !t.historical && t.minutes !== null))
+    .flatMap((r) =>
+      r.tries.filter((t) => !t.historical && t.minutes !== null && t.day >= from && t.day <= today),
+    )
     .map((t) => t.minutes!)
     .sort((a, b) => a - b);
   const edges: [string, number, number, boolean][] = [

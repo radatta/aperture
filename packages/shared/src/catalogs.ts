@@ -33,4 +33,4 @@ for (const id of CATALOG_IDS)
     LISTS_BY_SLUG.set(p.slug, [...(LISTS_BY_SLUG.get(p.slug) ?? []), id]);
   }
 export const catalogProblem = (slug: string): CatalogProblem | null => BY_SLUG.get(slug) ?? null;
-export const listsOf = (slug: string): CatalogId[] => LISTS_BY_SLUG.get(slug) ?? [];
+export const listsOf = (slug: string): CatalogId[] => [...(LISTS_BY_SLUG.get(slug) ?? [])];

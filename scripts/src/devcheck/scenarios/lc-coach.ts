@@ -84,11 +84,22 @@ const PROGRESS_PICKS = [
     patternName: 'Advanced Graphs',
   },
 ];
+// NeetCode 150's LeetCode Premium problems (public list facts; neetcode150.ts marks them `premium`).
+const PREMIUM_SLUGS = [
+  'encode-and-decode-strings',
+  'walls-and-gates',
+  'number-of-connected-components-in-an-undirected-graph',
+  'graph-valid-tree',
+  'alien-dictionary',
+  'meeting-rooms',
+  'meeting-rooms-ii',
+];
 const DESKTOP = { width: 1512, height: 860 }; // the 14" MacBook Pro's Safari content area
 // What the progress steps share: the pick, its history-only attempt id, and the plan and stats before it.
 const progress = {
   pick: null as (typeof PROGRESS_PICKS)[number] | null,
   id: '',
+  paperId: '',
   note: '',
   planBefore: null as DevCoachToday | null,
   statsBefore: 0,
@@ -96,6 +107,7 @@ const progress = {
 const progressState = () => ({
   pick: progress.pick ?? fail('no history-only pick — the progress-mcp step failed'),
   id: progress.id,
+  paperId: progress.paperId,
   note: progress.note,
   planBefore: progress.planBefore ?? fail('no plan read before the history-only solve'),
   statsBefore: progress.statsBefore,
@@ -571,7 +583,7 @@ export const lcCoach: Scenario = {
       id: 'progress-history-bad',
       entry: 'mcp',
       kind: 'edge',
-      what: 'historical "yes", a historical day 11 years back and a live day 61 days back are refused with a reason; nothing written',
+      what: 'historical "yes", a historical day 11 years back or today, and a live day 61 days back are refused with a reason; nothing written',
     },
     {
       id: 'progress-history-delete',
@@ -628,10 +640,16 @@ export const lcCoach: Scenario = {
       what: 'Settings › LeetCode “I have LeetCode Premium” saves off and on, each surviving a reload',
     },
     {
+      id: 'premium-off',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'With Premium switched off in Settings, no unseen pick in today’s plan is a Premium problem: no new or stretch slot, no alternative',
+    },
+    {
       id: 'premium-picks',
       entry: 'api',
       kind: 'nominal',
-      what: 'With Premium on, the plan picks a Premium problem in its turn; off, never',
+      what: 'With Premium on, the plan picks a Premium problem in its turn',
       offDev: {
         file: 'packages/shared/src/coach.test.ts',
         test: 'on: a Premium problem is picked in its turn',
@@ -705,14 +723,31 @@ export const lcCoach: Scenario = {
       },
     },
     {
-      id: 'progress-same-day',
+      id: 'progress-mixed',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A history-only solve on a problem with a live try (this run’s logged one): get_problem lists the history try first, flagged, and the live schedule stays as it was',
+    },
+    {
+      id: 'progress-swap-seen',
       entry: 'api',
       kind: 'edge',
-      what: 'A history-only solve logged on a day with a sitting leaves that day’s outcome and schedule alone',
+      what: 'A swap counts a history-only problem as seen and known, and its default target honours Premium',
       offDev: {
         file: 'packages/shared/src/coach.test.ts',
-        test: 'a history-only piece on a day with a live try leaves that day’s outcome and schedule alone',
-        why: 'same write path as progress-history (proven on dev); the fold is pure and the contract test runs it on the stub and the backend',
+        test: 'count as seen and known for a swap',
+        why: 'mcp-swap runs setCoachSlot on dev; history and Premium only change the sets slotChangeInputs builds, a pure helper the stub and the Lambda share',
+      },
+    },
+    {
+      id: 'progress-focus-room',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Setting the focus counts history-only problems as seen and, with Premium on, Premium problems as room',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'on: easier picks and the room check count Premium problems',
+        why: 'floor-focus and patterns-set-focus run setCoachFocus on dev; the room check is the pure focusRoomError over the same input',
       },
     },
   ],
@@ -1761,10 +1796,10 @@ export const lcCoach: Scenario = {
       title:
         'log_attempt historical: the schema, three refusals, then a history-only solve 400 days back',
       entry: 'mcp',
-      proves: ['progress-schema', 'progress-history-bad', 'progress-history'],
+      proves: ['progress-schema', 'progress-history-bad', 'progress-history', 'progress-mixed'],
       async run(ctx) {
-        // A catalog problem this account hasn't touched, logged as solved before (400 days back): the run's only
-        // write here, ledgered by id, deleted at the end of the step (and by cleanup if the step fails first).
+        // A catalog problem this account hasn't touched, logged as solved before (400 days back), ledgered by id:
+        // progress-undo deletes it, and cleanup does if a step fails first.
         const records = await ctx.api.reads.listProblemRecords();
         const pick =
           PROGRESS_PICKS.find((p) => !records.some((r) => r.slug === p.slug)) ??
@@ -1803,6 +1838,11 @@ export const lcCoach: Scenario = {
           /last 10 years/,
         );
         await refused(
+          'a historical day of today',
+          { slug: pick.slug, outcome: 'solved', historical: true, day: today() },
+          /dated before today/,
+        );
+        await refused(
           'a live day 61 days back',
           { slug: pick.slug, outcome: 'solved', day: addDays(today(), -61) },
           /last 60 days/,
@@ -1825,6 +1865,25 @@ export const lcCoach: Scenario = {
         const read = await ctx.mcp.reads.getProblem({ slug: pick.slug });
         if (!read.tries?.some((t) => t.historical === true && t.attemptIds.includes(logged.id)))
           fail(`get_problem's tries lack the history-only one: ${JSON.stringify(read.tries)}`);
+        // The mixed branch: a history-only solve on this run's logged problem, which has a live try today.
+        const paper = slugOf(ctx, 'paper');
+        const liveBefore =
+          (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper && r.schedule) ??
+          fail(`no live record with a schedule on ${paper}`);
+        const mixed = await ctx.mcp.writes.logAttempt([
+          { slug: paper, outcome: 'failed', historical: true, day: addDays(today(), -400) },
+        ]);
+        progress.paperId =
+          mixed.attempts[0]?.id ?? fail('the mixed history-only solve stored nothing');
+        const both = await ctx.mcp.reads.getProblem({ slug: paper });
+        const flags = (both.tries ?? []).map((t) => `${t.historical === true}:${t.outcome}`);
+        if (flags[0] !== 'true:failed' || flags.slice(1).some((f) => f.startsWith('true')))
+          fail(`get_problem's tries, oldest first: ${flags.join(', ')}`);
+        const liveAfter = (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper);
+        if (JSON.stringify(liveAfter?.schedule) !== JSON.stringify(liveBefore.schedule))
+          fail(
+            `the live schedule moved: ${JSON.stringify([liveBefore.schedule, liveAfter?.schedule])}`,
+          );
         progress.pick = pick;
         progress.id = logged.id;
         progress.note = note;
@@ -1872,6 +1931,7 @@ export const lcCoach: Scenario = {
         'progress-390',
         'progress-load-error',
         'premium-toggle',
+        'premium-off',
       ],
       async run(ctx) {
         const { pick, note } = progressState();
@@ -2029,6 +2089,15 @@ export const lcCoach: Scenario = {
           await ctx.page.reload();
           if (await box().isChecked()) fail('LeetCode Premium off didn’t survive a reload');
           await ctx.shot('premium-off');
+          // Off, no unseen pick is a Premium problem: no new or stretch slot, no alternative. (A Premium problem
+          // already tried may still come back as a re-solve.)
+          const off = await ctx.api.reads.getCoachToday();
+          const offered = off.slots.flatMap((x) => [
+            ...(x.kind === 'new' || x.kind === 'stretch' ? [x.slug] : []),
+            ...(x.alternatives ?? []).map((a) => a.slug),
+          ]);
+          const hit = offered.filter((x) => PREMIUM_SLUGS.includes(x));
+          if (hit.length) fail(`Premium off, yet the plan offers ${hit.join(', ')}`);
           await box().click();
           for (let i = 0; (await ctx.api.reads.getSettings()).leetcodePremium !== true; i++)
             if (i > 20) fail('LeetCode Premium on never saved');
@@ -2046,9 +2115,11 @@ export const lcCoach: Scenario = {
       entry: 'mcp',
       proves: ['progress-history-delete'],
       async run(ctx) {
-        const { pick, id } = progressState();
+        const { pick, id, paperId } = progressState();
         const gone = await ctx.mcp.writes.deleteAttempt(id);
         if (!gone.deleted) fail(`delete_attempt on the history-only id: ${JSON.stringify(gone)}`);
+        if (paperId && !(await ctx.mcp.writes.deleteAttempt(paperId)).deleted)
+          fail('delete_attempt on the mixed history-only id deleted nothing');
         if ((await ctx.api.reads.listProblemRecords()).some((r) => r.slug === pick.slug))
           fail('the history-only problem still has a record after delete_attempt');
       },

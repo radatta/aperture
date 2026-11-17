@@ -30,8 +30,8 @@ day rows; no stored count can drift.
   value replaces it (a null cause clears it; `mergeReview`), so the app form's Save never wipes a peek or a cause set
   over MCP. `patchSittingReview` is the
   coach's partial write.
-- **History-only solves** (`CoachAttempt.historical`, logged with `log_attempt`'s `historical: true`, up to 10 years
-  back): a solve from before the coach. It never reaches `attemptsOf`; `historyAttemptsOf` folds them by day the same
+- **History-only solves** (`CoachAttempt.historical`, logged with `log_attempt`'s `historical: true`, dated before
+  today — yesterday when no day is given — and up to 10 years back): a solve from before the coach. It never reaches `attemptsOf`; `historyAttemptsOf` folds them by day the same
   way. A problem with one is _seen_ (never a new or stretch pick, never "unseen" for the focus ranking or the room
   check; swapped in, it's a re-solve) and gets a record (`ProblemRecord.historical`, its tries flagged), but no
   schedule, no first try (a later live try on it is a re-solve in the stats), and no part of momentum, active days
@@ -320,15 +320,17 @@ the `coach` query prefix, which a task write and a review save invalidate.
 
 `/recruiting/progress` (`ProgressSection.tsx`, `ProgressMap.tsx`, `SolvesList.tsx`, `ProgressTrends.tsx`; helpers in
 `progressHelpers.ts`, folds in `coachProgress.ts`, tests beside them): how much of the list is done, what's left,
-and every solve. Patterns says how well; Progress says how much, and never repeats a per-pattern rate. It reads
+and every solve. On a wide screen the tab runs wider than the app's column (up to 72rem), since five stage columns
+and the tables need the room; the header, tabs and dock stay in the column. Patterns says how well; Progress says how much, and never repeats a per-pattern rate. It reads
 `listProblemRecords()` (hook `useCoachProgress.ts`, under the `coach` prefix) and the day's plan for today and the
 focus marker; the list is static shared data, so there is no RPC of its own. The view (`?view=map|solves|trends`),
 the open pattern (`?open=`), Left only (`?left=1`) and the Solves filters (`?pattern= &status= &difficulty=`) live in
 the URL, so a reload or Back keeps them.
 
 - **Status** (`problemStatus`): from the newest live try — clean, solved, peeked (the solution read) or not yet
-  (never accepted); a problem with only history-only solves reads _Solved before_ (or not yet, if none was
-  accepted); untried otherwise. **Done** is clean, solved or solved before. Due since / next due / graduated come
+  (not accepted); a problem with only history-only solves reads _Solved before_ (or not yet, if none was
+  accepted); untried otherwise. **Done** is accepted on any try, live or history-only, so a failed re-solve shows in
+  its square but never takes a solved problem off the count. Due since / next due / graduated come
   from the schedule. Teal for clean, gold for the rest that went somewhere, muted for history, never red; a due
   re-solve is never "overdue".
 - **The map** (`coverage` against `DEFAULT_CATALOG`, `PROGRESS_STAGES`): a summary line (done, tried, not tried,
@@ -343,14 +345,14 @@ the URL, so a reload or Back keeps them.
 - **Solves**: every touched problem, the newest try first: pattern, difficulty, status, first try, tries, last
   cause, last tried, re-solve. Filters by pattern, status (incl. re-solve due, graduated, solved before) and
   difficulty; no match offers Clear filters.
-- **Trends** (`progressWeeks`, `capTimes`), live tries only, the last 12 ISO weeks: problems a week (clean / solved
+- **Trends** (`progressWeeks`, `capTimes`), live tries only, the last 12 ISO weeks (all four cards): problems a week (clean / solved
   / not yet), first tries clean and re-solves clean a week (a week under 5 tries hollow), and minutes a try against
   the 30-minute cap (`capMin`) with the median. A try's minutes: a sitting's to its first accept (both on the
   extension's clock), else its length once ended; a logged try's as given. Each card says what it needs when
   there isn't enough yet.
 - **A problem's page** (`/recruiting/progress/:slug`, `ProblemPage.tsx`): its lists, status and re-solve, then
   every try newest first — minutes (over the cap in gold), help, cause, the logged note, its sittings — a
-  history-only one marked. ← Progress returns to the view and filters it came from. A slug on no list and never
+  history-only one tagged _Before the coach_ with its outcome. ← Progress returns to the view and filters it came from. A slug on no list and never
   tried says so.
 - A failed records read is a `LoadError` with Retry, never an empty map; a failed plan read still draws the map,
   with one line saying no pattern is marked. Settings → LeetCode's **I have LeetCode Premium** re-reads the coach.

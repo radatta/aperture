@@ -102,13 +102,18 @@ describe('problemStatus', () => {
         .state,
     ).toBe('not-yet');
   });
-  it('the newest live try wins over history and over an earlier accept', () => {
+  it('the newest live try sets the state; an accept on any try keeps it done', () => {
     const r = rec('two-sum', [
       { on: day(-300), outcome: 'clean', historical: true },
       { on: day(-5), outcome: 'clean' },
       { on: day(-1), outcome: 'failed' },
     ]);
-    expect(problemStatus(r, TODAY)).toMatchObject({ state: 'not-yet', done: false });
+    expect(problemStatus(r, TODAY)).toMatchObject({ state: 'not-yet', done: true });
+    const never = rec('two-sum', [
+      { on: day(-5), outcome: 'failed' },
+      { on: day(-1), outcome: 'failed', help: 'solution' },
+    ]);
+    expect(problemStatus(never, TODAY)).toMatchObject({ state: 'peeked', done: false });
   });
   it('due since, next due and graduated from the schedule', () => {
     const r = (s: ProblemRecord['schedule']) =>
@@ -196,24 +201,28 @@ describe('progressWeeks', () => {
 });
 
 describe('capTimes', () => {
-  it('bins live minutes around the cap; history and untimed tries stay out', () => {
-    const c = capTimes([
-      rec('two-sum', [
-        { on: day(-3), outcome: 'clean', minutes: 8 },
-        { on: day(-2), outcome: 'clean', minutes: 30 },
-        { on: day(-1), outcome: 'solved', minutes: 31 },
-        { on: TODAY, outcome: 'failed', minutes: null },
-      ]),
-      rec('valid-anagram', [
-        { on: day(-900), outcome: 'solved', minutes: 5, historical: true },
-        { on: day(-1), outcome: 'failed', minutes: 75 },
-      ]),
-    ]);
+  it('bins live minutes around the cap; history, untimed and pre-window tries stay out', () => {
+    const c = capTimes(
+      [
+        rec('two-sum', [
+          { on: day(-3), outcome: 'clean', minutes: 8 },
+          { on: day(-2), outcome: 'clean', minutes: 30 },
+          { on: day(-1), outcome: 'solved', minutes: 31 },
+          { on: TODAY, outcome: 'failed', minutes: null },
+        ]),
+        rec('valid-anagram', [
+          { on: day(-900), outcome: 'solved', minutes: 5, historical: true },
+          { on: day(-200), outcome: 'solved', minutes: 9 },
+          { on: day(-1), outcome: 'failed', minutes: 75 },
+        ]),
+      ],
+      TODAY,
+    );
     expect(c).toMatchObject({ capMin: 30, timed: 4, inside: 2, medianMin: 31 });
     expect(c.bins.map((b) => b.n)).toEqual([1, 0, 1, 1, 0, 1]);
     expect(c.bins.map((b) => b.over)).toEqual([false, false, false, true, true, true]);
   });
   it('nothing timed: no median', () => {
-    expect(capTimes([])).toMatchObject({ timed: 0, inside: 0, medianMin: null });
+    expect(capTimes([], TODAY)).toMatchObject({ timed: 0, inside: 0, medianMin: null });
   });
 });
