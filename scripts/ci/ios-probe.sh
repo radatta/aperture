@@ -245,8 +245,53 @@ s_safari() {
   return 2 # soft: Safari is up without the text, so go on; the evidence shows why
 }
 
-# Share → Add to Home Screen → Add. iOS 26 Safari puts Share behind its "…" page menu; both shapes are tried, and
-# every screen on the way is kept (a2hs-*), so a miss shows exactly what was offered.
+# pixel <x pt> <y pt>: "r g b" there on a fresh simctl screenshot (3x). The share sheet runs in another process and
+# is absent from AXe's tree (runs 2-3), so its arrival is read from pixels: light grey over the dark page.
+pixel() {
+  local png="$WORK/px.png"
+  cap 30 xcrun simctl io "$U" screenshot "$png" >/dev/null 2>&1 || return 1
+  python3 - "$png" "$(($1 * 3))" "$(($2 * 3))" <<'PNG'
+import struct, sys, zlib
+path, x, y = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+d = open(path, 'rb').read(); i = 8; idat = b''
+while i < len(d):
+    ln = struct.unpack('>I', d[i:i + 4])[0]; t = d[i + 4:i + 8]; c = d[i + 8:i + 8 + ln]
+    if t == b'IHDR': w, h, bd, ct = struct.unpack('>IIBB', c[:10])
+    if t == b'IDAT': idat += c
+    i += 12 + ln
+raw = zlib.decompress(idat); bpp = 4 if ct == 6 else 3; st = w * bpp; prev = bytearray(st); p = 0
+for r in range(y + 1):
+    f = raw[p]; line = bytearray(raw[p + 1:p + 1 + st]); p += 1 + st
+    for k in range(st):
+        a = line[k - bpp] if k >= bpp else 0; b = prev[k]; cc = prev[k - bpp] if k >= bpp else 0
+        if f == 1: line[k] = (line[k] + a) & 255
+        elif f == 2: line[k] = (line[k] + b) & 255
+        elif f == 3: line[k] = (line[k] + (a + b) // 2) & 255
+        elif f == 4:
+            pa, pb, pc = abs(b - cc), abs(a - cc), abs(a + b - 2 * cc)
+            line[k] = (line[k] + (a if pa <= pb and pa <= pc else (b if pb <= pc else cc))) & 255
+    prev = line
+print(*prev[x * bpp:x * bpp + 3])
+PNG
+}
+# light: every channel over 150 (the sheet reads ~184,196,191; the page ~47,66,60)
+light() {
+  local r g b
+  read -r r g b <<<"$(pixel "$1" "$2")" || return 1
+  [ "${r:-0}" -gt 150 ] && [ "${g:-0}" -gt 150 ] && [ "${b:-0}" -gt 150 ]
+}
+# Raw point reads, kept for the report: does AXe's --point see the share sheet at all?
+dump_points() {
+  local tag="$1" pt
+  shift
+  for pt in "$@"; do ax describe-ui --point "$pt" >"$OUT/point-$tag-${pt/,/x}.json" 2>&1 || true; done
+}
+
+# Measured on runs 2-3 screenshots (pt): the collapsed sheet's View More, and Add to Home Screen once expanded.
+PT_VIEW_MORE="366 855"
+PT_A2HS="158 654"
+# Share → View More → Add to Home Screen → Add. iOS 26 Safari puts Share in its … menu; every screen on the way is
+# kept (a2hs-*), so a miss shows exactly what was offered.
 s_a2hs() {
   local i hit y x
   # iOS 26 Safari: Share sits in the … menu (AXButton "More", right of the address bar); "Page Menu" is the left one
@@ -254,37 +299,51 @@ s_a2hs() {
   sleep 1
   evidence a2hs-menu tree
   tap_label '^Share$' AXButton 4 || return 1
-  # The share sheet is another process: absent from the full tree, so point reads find its rows (run 2's shot:
-  # "Add to Home Screen" at about x 157, y 655). It took ~60 s to draw on a busy runner.
-  hit=""
-  for i in $(seq 1 15); do
-    late && break
-    sleep 3
-    if hit="$(scan_text 'Add to Home Screen' 300 920 150)"; then break; fi
-    hit=""
-    [ "$i" = 6 ] && evidence a2hs-share-wait
+  for i in $(seq 1 30); do
+    late && return 1
+    if light 100 800; then break; fi
+    [ "$i" = 30 ] && { note "no share sheet in the pixels after 30 looks"; return 1; }
+    sleep 2
   done
-  [ -n "$hit" ] || { note "no Add to Home Screen row by point reads"; evidence a2hs-share tree; return 1; }
-  y="${hit%% *}"
-  note "Add to Home Screen row at y $y on poll $i ($hit)"
-  evidence a2hs-share
-  tap_at 150 "$y" || return 1
-  sleep 3
-  evidence a2hs-sheet tree
-  # The Add sheet's confirm: in the tree if it's Safari's own, else by point reads along its top bar
-  if tap_label '^Add$' AXButton 3; then :
+  note "share sheet drawn by look $i"
+  sleep 2
+  evidence a2hs-sheet-collapsed
+  dump_points sheet 366,855 52,855 220,630
+  # View More expands the action list: by point read if that sees it, else at the measured point
+  if hit="$(scan_text 'View More' 820 900 366)"; then
+    note "View More by point read ($hit)"
+    tap_at 366 "${hit%% *}" || return 1
   else
-    for x in 400 390 380 410 370; do
-      if hit="$(scan_text 'Add' 60 140 "$x")"; then
-        note "Add by point read at $x,${hit%% *} ($hit)"
-        tap_at "$x" "${hit%% *}" || return 1
-        break
-      fi
-      hit=""
-    done
-    [ -n "$hit" ] || return 1
+    note "View More not in point reads: tapped at the measured $PT_VIEW_MORE"
+    read -r x y <<<"$PT_VIEW_MORE"
+    tap_at "$x" "$y" || return 1
   fi
   sleep 3
+  evidence a2hs-sheet-expanded
+  dump_points expanded 158,654 220,654 158,610 158,700
+  if hit="$(scan_text 'Add to Home Screen' 300 920 158)"; then
+    note "Add to Home Screen by point read ($hit)"
+    tap_at 158 "${hit%% *}" || return 1
+  else
+    note "Add to Home Screen not in point reads: tapped at the measured $PT_A2HS"
+    read -r x y <<<"$PT_A2HS"
+    tap_at "$x" "$y" || return 1
+  fi
+  sleep 4
+  evidence a2hs-add-sheet tree
+  dump_points addsheet 400,90 380,90 400,110 60,90
+  # The Add sheet's confirm: in the tree if it's Safari's own, else by point reads along its top bar
+  if tap_label '^Add$' AXButton 3; then sleep 3; return 0; fi
+  for x in 400 390 380 410 370; do
+    if hit="$(scan_text 'Add' 50 160 "$x")"; then
+      note "Add by point read at $x,${hit%% *} ($hit)"
+      tap_at "$x" "${hit%% *}" || return 1
+      sleep 3
+      return 0
+    fi
+  done
+  note "no Add by tree or point reads; see the a2hs-add-sheet shot"
+  return 1
 }
 
 # The icon on the Home Screen: press Home, look on each page (scroll-left between), as sim.sh → sim_find_icon.
