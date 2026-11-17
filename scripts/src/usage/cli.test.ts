@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commands, usageFor, usageKeys } from '../bot/help.ts';
 import { FLAGS, USAGE, main, newestRowTs, parseArgs, statuslineScript } from './cli.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
-import { fitModel, scheduledResets } from './model.ts';
+import { fitModel, hoursTo100, scheduledResets } from './model.ts';
 import { parseMeter } from './meter.ts';
 
 let tmp: string;
@@ -99,6 +99,14 @@ describe('fit model', () => {
     };
     expect(scheduledResets(rows, manual)).toEqual(['2026-01-08T09:00:00.000Z']);
     expect(scheduledResets(rows, { ...manual, resets: ['2026-01-08T09:30:00Z'] })).toEqual([]);
+  });
+
+  it('counts hours to 100 from the last tick, crediting at most one point of progress since', () => {
+    const h = 3_600_000;
+    expect(hoursTo100(96, 0, 6, 0)).toBeCloseTo(4 / 6);
+    expect(hoursTo100(96, 0, 6, h / 12)).toBeCloseTo(4 / 6 - 1 / 12);
+    expect(hoursTo100(96, 0, 6, h)).toBeCloseTo(3 / 6); // an hour without a tick: one point at most
+    expect(hoursTo100(100, 0, 6, 0)).toBe(0);
   });
 
   it('recovers k from live ticks and the calls between them', () => {

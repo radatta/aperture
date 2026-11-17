@@ -176,13 +176,18 @@ export function costDeltas(rows: MeterRow[]): { ts: number; sid: string; d: numb
 export function burn(
   window: Point[],
   now: number,
-): { pct: number; perHour: number | null; since: number } | null {
+): { pct: number; at: number; perHour: number | null; since: number } | null {
   const last = window.at(-1);
   if (!last) return null;
   const t = window.filter((p) => p.src === 'tick');
   const recent = t.filter((p) => p.ts >= now - 3_600_000);
   const span = recent.length >= 2 ? recent : t.slice(-3);
   const [a, b] = [span[0], span.at(-1)];
-  if (!a || !b || a === b) return { pct: last.p, perHour: null, since: last.ts };
-  return { pct: last.p, perHour: (b.p - a.p) / ((b.ts - a.ts) / 3_600_000), since: a.ts };
+  if (!a || !b || a === b) return { pct: last.p, at: last.ts, perHour: null, since: last.ts };
+  return {
+    pct: last.p,
+    at: last.ts,
+    perHour: (b.p - a.p) / ((b.ts - a.ts) / 3_600_000),
+    since: a.ts,
+  };
 }

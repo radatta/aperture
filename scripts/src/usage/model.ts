@@ -75,6 +75,12 @@ export function scheduledResets(rows: MeterRow[], manual: Manual | null): string
   return out.sort();
 }
 
+// From the newest reading: the meter has moved on since it ticked, by up to one point (it would have ticked again).
+export function hoursTo100(pct: number, at: number, perHour: number, now: number): number {
+  const since = Math.min(Math.max(0, now - at) / 3_600_000, 1 / perHour);
+  return Math.max(0, (100 - pct) / perHour - since);
+}
+
 export interface FitModel {
   inferredResets: string[];
   history: { obs: (Obs & Interval)[]; fit: Fit | null; unc: Uncertainty | null; kOnly: Fit | null };
@@ -155,7 +161,7 @@ export function fitModel(o: {
       pct: b?.pct ?? null,
       pctPerHour,
       quPerHour,
-      hoursTo100: b && pctPerHour ? Math.max(0, 100 - b.pct) / pctPerHour : null,
+      hoursTo100: b && pctPerHour ? hoursTo100(b.pct, b.at, pctPerHour, o.now) : null,
       since: b?.since ?? null,
     },
     coverage: { from: q.first, to: q.last },
