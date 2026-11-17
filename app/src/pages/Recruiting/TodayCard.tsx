@@ -316,14 +316,13 @@ function SlotRow({
             rel="noreferrer"
             className={cx(
               'font-medium underline-offset-2 hover:underline',
-              s.status === 'skipped' ? 'text-ink-subtle line-through' : 'text-ink',
+              s.status === 'skipped' ? 'text-ink-subtle' : 'text-ink',
             )}
           >
-            {s.title}
-            {/* A no-break space keeps ↗ on its title's last line; inline-block keeps a skip's strike off it. */}
+            {/* The strike sits on the title alone; a no-break space keeps ↗ on its last line. */}
+            <span className={cx(s.status === 'skipped' && 'line-through')}>{s.title}</span>
             <span aria-hidden className="text-ink-subtle">
-              {'\u00A0'}
-              <span className="inline-block">↗</span>
+              {'\u00A0↗'}
             </span>
           </a>
         </div>
