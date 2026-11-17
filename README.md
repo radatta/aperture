@@ -73,6 +73,8 @@ identity ([`docs/arch/TECH.md`](docs/arch/TECH.md) §1).
 
 Built and in daily use. What's shipped and what's still open is the block at the top of [`docs/index.md`](docs/index.md); CI (`.github/workflows/`) is the test status: on every PR, and on a push to `main` unless a green PR run already checked that tree.
 
+It is one person's project, public to read. Pull requests and issues are closed to outside contributors, and it isn't turnkey: the infrastructure is built for one person's AWS accounts and domains, so a fork needs its own. Security reports: [`SECURITY.md`](SECURITY.md).
+
 ## Develop
 
 Requires **Node 22** (see `.nvmrc`) and **pnpm** — its version comes from `packageManager` in `package.json`, via corepack (`corepack enable pnpm`).

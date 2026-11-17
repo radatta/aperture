@@ -2,11 +2,11 @@
 
 Seven additions to the pipeline + runtime ops, chosen from a wider research pass as the ones worth doing for a **single-operator, cost-sensitive** personal project. Everything here is **$0 at single-user scale** (see cost table). This doc is the implementation plan — grounded in the current repo — to be executed item by item.
 
-> Scope note: Aperture is a personal project. Nothing here references any other project. The recipient email was a `<FILL: personal email>` placeholder at planning time, filled 2026-08-10 with the personal address (see Open items).
+> Scope note: Aperture is a personal project. Nothing here references any other project. The alert recipient is the maintainer's alerts email (Open items).
 
 ## Decisions (locked)
 
-- **Alarms (#5) + budget (#7) channel:** email via SNS, to the operator's **GitHub-account email** (`<FILL: personal email>`). Simplest, zero new infra; these fire rarely so inbox delivery is fine.
+- **Alarms (#5) + budget (#7) channel:** email via SNS, to the maintainer's alerts email. Simplest, zero new infra; these fire rarely so inbox delivery is fine.
 - **Deploy notifications (#1):** ntfy.sh, on **both `main` and `dev`** pushes (`main` only since `dev-cutover` retired the `dev` branch). Success = quiet (min priority), failure = prominent (high priority). Subscribed from a **desktop browser** (no phone). **Removed at `ci-minutes-trim` (2026-11, the user's call):** the `notify` jobs are gone and the `NTFY_TOPIC` secret is deleted at that branch's cleanup; failed runs reach the merger through GitHub's Actions notifications (INFRA §9 → _No ntfy_).
 - **Budget (#7):** `$1` actual warn / `$5` forecast hard.
 
@@ -21,15 +21,15 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 | #   | Item                        | Cost | Why                                                                               |
 | --- | --------------------------- | ---- | --------------------------------------------------------------------------------- |
-| 1   | Deploy notifications (ntfy) | $0   | Public ntfy free; `curl` runs in existing CI minutes                              |
+| 1   | Deploy notifications (ntfy) | $0   | Public ntfy free (removed 2026-11)                                                |
 | 2   | cdk-nag                     | $0   | Build-time only, no AWS calls                                                     |
-| 3   | gitleaks                    | $0   | Free for personal repos; CI minutes                                               |
-| 4   | Dependabot                  | $0   | GitHub-native, runs off GitHub infra (not your Actions minutes)                   |
+| 3   | gitleaks                    | $0   | Free for personal repos                                                           |
+| 4   | Dependabot                  | $0   | GitHub-native, runs off GitHub infra                                              |
 | 5   | CloudWatch alarms           | $0   | ≤10 alarms free org-wide (prod 5 + dev account 5); SNS email 1,000/month free     |
 | 6   | Post-deploy synthetic check | $0   | `curl` in CI; extra Lambda/CloudFront hits are free-tier / fractions of a cent    |
 | 7   | Budget                      | $0   | Notification-only budgets free & unlimited (anomaly monitor dropped — see item 7) |
 
-**The only things that would cost money are deliberately out of scope:** auto-remediating "budget actions" ($0.10/day), CloudWatch Synthetics canaries (~$10/mo), and any alarm past the 10-free tier. GitHub Actions free private-repo tier is 2,000 min/month — these add ~a couple minutes per run.
+**The only things that would cost money are deliberately out of scope:** auto-remediating "budget actions" ($0.10/day), CloudWatch Synthetics canaries (~$10/mo), and any alarm past the 10-free tier.
 
 ## Repo realities discovered (deviations from the naive plan)
 
@@ -43,13 +43,9 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 6. **`deploy.yml` triggers on `push` only** (not `pull_request`), so Dependabot's restricted-secret context is a non-issue (#4). Prod is `if: github.ref == 'refs/heads/main'`, so it is **skipped** on dev-branch pushes (retired at `dev-cutover`; the `if:` stays) — item 1's notify job must treat `skipped` as not-a-failure.
 7. **Versions:** `cdk-nag` latest is **3.0.2** (confirmed via `npm show`) — the v3 **validation-plugin** API, not the classic `Aspects.of(app).add(...)`; confirm the exact call in the current README before writing. `gitleaks/gitleaks-action` current tag confirmed **`v3`** (v3.0.0, Node 24) via the GitHub releases API — pinned.
 
-## Manual prerequisites (operator, by hand — all done 2026-08-10, see Open items)
+## Manual prerequisites (operator — all done 2026-08-10)
 
-- [ ] Create an ntfy topic (a long, unguessable name) and subscribe to it in a desktop browser at `https://ntfy.sh/<topic>`.
-- [ ] Add GitHub repo **secret** `NTFY_TOPIC` = the topic name (it's the only access control on the public instance → secret, not a var).
-- [ ] Fill `<FILL: personal email>` in the alarm construct(s) and the billing stack, then **confirm the SNS email subscription** (one confirmation email per SNS topic — **two** if the CloudFront alarm uses its own us-east-1 topic; see item 5).
-- [ ] Flip the AWS **root**-user "IAM access to Billing and Cost Management" toggle **before** deploying the billing stack (item 7). Independent of IAM policy — the OIDC roles cannot do this.
-- [ ] Hand-deploy the billing stack once: `cdk deploy ApertureBilling -c billing=true` (mirrors the one-off `ApertureCicd` deploy; the pipeline never touches it).
+History: the by-hand list was an ntfy topic and its `NTFY_TOPIC` secret (both gone: ntfy was removed 2026-11, and GitHub's own failed-run notification covers it — INFRA §9 → _No ntfy_), the alert email in the alarm and billing stacks and its SNS confirmation (one per topic; item 5), the root billing-access toggle before the billing stack (item 7 — the OIDC roles can't flip it), and that stack's one hand-deploy (`cdk deploy ApertureBilling -c billing=true`, like the one-off `ApertureCicd`; the pipeline never touches it). Closure: _Open items_.
 
 **Unrelated to the seven, same by-hand list:** the LeetCode-capture extension needs GitHub **secrets** `DEVICE_TOKEN_DEV` / `DEVICE_TOKEN_PROD` (the `_PROD` one in the `prod` environment) and `DEVICE_USER_ID_DEV` / `DEVICE_USER_ID_PROD` (secrets too since `deploy-log-quiet`; the `_PROD` one in the `prod` environment) — why, and how each fails when unset (both loudly: the token at synth, the user id in `Validate mode`): **[recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup)**.
 
@@ -57,7 +53,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 1. **#3 gitleaks** — isolated, CI-only, zero infra.
 2. **#4 Dependabot** — config-only.
-3. **#1 ntfy notify** — workflow-only; needs the ntfy topic + secret.
+3. **#1 ntfy notify** — workflow-only (removed 2026-11).
 4. **#6 health check** — adds the Lambda route + `FunctionUrl` output + publish-script change + workflow steps. Do before #5 so the output/route surface is settled.
 5. **#5 CloudWatch alarms** — biggest CDK change (new construct + SNS).
 6. **#2 cdk-nag** — wire the harness anytime, but run the **definitive suppression pass last**, after #5/#6 constructs exist, so one pass covers the SNS topic, alarms, and health route.
@@ -67,13 +63,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 ## Item 1 — Deploy notifications via ntfy.sh
 
-**File:** `.github/workflows/deploy.yml` (modify).
-
-- New `notify` job: `needs: [deploy-dev, deploy-prod]`, `if: always()`, default permissions only (ntfy topic ≠ AWS cred → keyless).
-- Outcome logic from `needs.deploy-dev.result` / `needs.deploy-prod.result`: **failure** if either is `failure`; `skipped` (prod on a dev push, before `dev-cutover`) and `cancelled` are **not** failures.
-- Success → `curl -H "Priority: min" -H "Title: Aperture deploy ok" -d "<ref> <sha>" https://ntfy.sh/${{ secrets.NTFY_TOPIC }}`
-- Failure → `curl -H "Priority: high" -H "Tags: warning" -H "Title: Aperture deploy FAILED" -d "<ref> <sha> — <run url>" ...`
-- Body uses `${{ github.ref_name }}` + `${{ github.sha }}` so one topic serves both branches.
+Removed at `ci-minutes-trim` (2026-11): a keyless `notify` job in `deploy.yml` posted each run's outcome to an ntfy topic, quiet on success and high priority on failure. GitHub's own Actions notification to the run's actor replaced it (INFRA §9 → _No ntfy_).
 
 ## Item 2 — cdk-nag (AwsSolutions pack only)
 
@@ -97,7 +87,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 - `actions/checkout@v7` with `fetch-depth: 0` (full history), then `gitleaks/gitleaks-action@<verified-tag>`. No license key for a personal repo.
 - False positives → `.gitleaksignore` fingerprints. Repo already keeps secrets out of git (`.secrets/`, `cdk-outputs.*.json` gitignored; origin secret injected via env), so findings should be rare.
   - **Prefer a secret-value allowlist in `.gitleaks.toml`** (default rules kept via `[extend] useDefault`). A fingerprint pins commit + line, so it stops matching once the PR is squash-merged. First entry (2026-09-28): the RPC name `exchangePlaidPublicToken` is exactly 24 alphanumerics, which trips `plaid-client-id`. 2026-11-08: RFC 8291 Appendix A's published Web Push `auth_secret` test vector, used by the push tests, trips `generic-api-key`. Every entry is an exact, anchored value, never a pattern, so a near-miss still fails.
-  - **GitGuardian** (the GitHub App, a required PR check) is a second scanner. `.gitguardian.yaml` mirrors the allowlist, but only ggshield reads it. The App follows its dashboard: a false positive is closed there as Ignored (Test credential or False positive), and an ignored incident isn't raised again.
+  - **GitGuardian** (the GitHub App; a required PR check until the public flip, still installed — INFRA §9 → _Public repo_) is a second scanner. `.gitguardian.yaml` mirrors the allowlist, but only ggshield reads it. The App follows its dashboard: a false positive is closed there as Ignored (Test credential or False positive), and an ignored incident isn't raised again.
 - **Dependency to justify first** (it's a GitHub Action, not npm, but still a supply-chain surface — pin by tag/SHA).
 
 ## Item 4 — Dependabot (scoped)
@@ -112,7 +102,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 **Files:** new `cdk/src/lib/monitoring.ts` (a `Construct`); `app-stack.ts` (instantiate prod-only, pass the `fn` ref); `cdk/src/stacks.test.ts` (assert alarms/topic present under prod, absent under dev). CloudFront alarm: see decision below.
 
-- **Lambda alarms (us-west-1)** in a `Monitoring` construct inside `ApertureAppStack`, gated `if (stage === 'prod')`. New us-west-1 SNS `Topic` + `EmailSubscription('<FILL: personal email>')`. Three alarms, all `treatMissingData: NOT_BREACHING` (low traffic → metric gaps):
+- **Lambda alarms (us-west-1)** in a `Monitoring` construct inside `ApertureAppStack`, gated `if (stage === 'prod')`. New us-west-1 SNS `Topic` + `EmailSubscription(<the maintainer's alerts email>)`. Three alarms, all `treatMissingData: NOT_BREACHING` (low traffic → metric gaps):
   - `fn.metricErrors()` ≥ 1
   - `fn.metricThrottles()` ≥ 1
   - `fn.metricDuration({ statistic: 'p99' })` ≥ ~12000ms (80% of the 15s timeout at `app-stack.ts:46`)
@@ -146,8 +136,8 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 **Files:** new `cdk/src/lib/billing-stack.ts`; `aperture.ts` (instantiate only under a `-c billing=true` context flag, mirroring the `ApertureCicd` gate).
 
 - Deploy once by hand: `cdk deploy ApertureBilling -c billing=true`. The per-stage pipeline never touches it.
-- `CfnBudget`: monthly `COST`, `$1` actual → warn, `$5` **forecast** → hard warn; EMAIL subscriber `<FILL: personal email>`. Budgets are global — deploy this stack in `us-east-1` by convention (document the choice).
-- `CfnAnomalyMonitor` (`DIMENSIONAL`, `SERVICE`) + `CfnAnomalySubscription` (`IMMEDIATE`, EMAIL `<FILL: personal email>`). Free, ML-based.
+- `CfnBudget`: monthly `COST`, `$1` actual → warn, `$5` **forecast** → hard warn; EMAIL subscriber: the maintainer's alerts email. Budgets are global — deploy this stack in `us-east-1` by convention (document the choice).
+- `CfnAnomalyMonitor` (`DIMENSIONAL`, `SERVICE`) + `CfnAnomalySubscription` (`IMMEDIATE`, EMAIL, the maintainer's alerts email). Free, ML-based.
 - **Root-toggle prerequisite** (see checklist): creating a budget needs the root-user billing-access toggle, independent of IAM policy — which is exactly why this is a separate hand-deploy and must not enter the pipeline. Console-setup is a fine fallback if the CDK deploy is a hassle.
 - **⚠️ Anomaly monitor dropped (2026-08-10).** The first hand-deploy failed: `AWS::CE::AnomalyMonitor` → `CREATE_FAILED / AlreadyExists`. AWS auto-creates a default account-wide `SERVICE`-dimension anomaly monitor and permits **only one monitor per dimension**, so our `CfnAnomalyMonitor` (also `DIMENSIONAL/SERVICE`) collides. Fix: removed both `CfnAnomalyMonitor` + `CfnAnomalySubscription` from the stack — the `$1/$5` budget is the sole cost guard, which is plenty at single-user scale. If an anomaly email is ever wanted, attach a free alert subscription to the **existing default monitor** in the console (Cost Management → Cost Anomaly Detection → Alert subscriptions); no IaC. The `AlreadyExists` (vs `AccessDenied`) also confirmed the root billing toggle was correctly enabled.
 

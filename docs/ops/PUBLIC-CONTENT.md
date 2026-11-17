@@ -1,6 +1,6 @@
 # Public content — what GitHub-bound text may say
 
-The repo is public. Everything that reaches GitHub passes this one gate: code, docs, tests, fixtures, comments, commit messages, PR titles and bodies, and report text pasted into a PR. Hard identifiers (name, mailbox, paths, account ids) and their regex guard live in [IDENTIFIERS.md](IDENTIFIERS.md); this doc is the judgment half. The `code-reviewer` agent screens every diff against it, and the author scans the PR title, body and report before `open-pr`.
+The repo is public. Everything that reaches GitHub passes this one gate: code, docs, tests, fixtures, comments, commit messages, PR titles and bodies, and report text pasted into a PR — and what never waits for a PR (_Also public_, below). Hard identifiers (name, mailbox, paths, account ids) and their regex guard live in [IDENTIFIERS.md](IDENTIFIERS.md); this doc is the judgment half. The `code-reviewer` agent screens every diff against it, and the author scans the PR title, body and report before `open-pr`.
 
 ## Never
 
@@ -19,6 +19,16 @@ The repo is public. Everything that reaches GitHub passes this one gate: code, d
 - **Product voice, not first person.** Describe who a feature is for, not who asked.
 - **Paraphrase, not quotes.** A decision keeps its date and its reason, not its wording.
 - **Obviously synthetic fixtures.** The Plaid sandbox bank, round or patterned amounts, generic stores ("Grocery Store"), `example.com` addresses. A value that could be real reads as real.
+
+## Also public, the moment it's pushed or dispatched
+
+No PR has to exist. The Never list covers these too:
+
+- **Branch names and commit text**: public on the first `pnpm bot push`; an amend or force-push doesn't recall them.
+- **Run names**: `deploy-dev <sha> <key>` and `dev-logs <key>`; the key starts with the branch name.
+- **Dispatch inputs**: `pnpm bot logs` sends `--groups`, `--filter` and `--query` as workflow inputs, and the run shows them. Dev logs hold test-user data only, but the filter string is the author's: never a real name, mailbox or amount.
+- **Lock-tag messages**: `refs/locks/dev` and `refs/locks/devb` are annotated tags anyone can fetch; the message carries the branch name.
+- **Artifact names**: `dev-logs-<key>`. The artifact itself is downloadable by any signed-in user for its 1 day ([INFRA.md](../arch/INFRA.md) §9 → _Public repo_).
 
 ## Fine as is (decided 2026-11-14 — don't scrub, don't flag)
 

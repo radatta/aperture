@@ -19,6 +19,7 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 | G   | 2026-09-07 config-iteration afternoon: session forks on every `--resume`; container-local dotfiles (git identity, mise shadowing) | 2026-09-07             | `--fork-session` on every resume (not COI's doing); `~/.gitconfig` + mise pins live on the rootfs and evaporate per container                                                                                   |
 | H   | Container paused by a Bash line containing `/curl`                                                                                | 2026-10-09, 2026-10-13 | Sigma download-and-execute rule; the Bash wrapper supplies its `/tmp/` + `sh -c` clauses, so `/curl`/`/wget` text alone matches                                                                                 |
 | I   | VM unusable for every session: one search at 12.2 GB RSS                                                                          | 2026-11-14             | a `git grep -o -i -E` with wide `.{0,N}` padding at the repo root; regex blow-up on long lines (_inference_), not a COI detector                                                                                |
+| J   | Zero-byte, write-only files on `/workspace` the container can't read or remove                                                    | 2026-11-15             | Node's `fs.cpSync` writing onto the virtiofs mount shared with the Mac; `copyFileSync` works there. Mechanism not investigated                                                                                  |
 
 ---
 
@@ -1302,3 +1303,27 @@ _Inference_ (not reproduced — rerunning it is the incident):
 ## Fix
 
 A search-load arm in `.claude/hooks/coi-reverse-shell-guard.sh` (rule in `_search-load.sh`, cases in `testdata/reverse-shell-fixtures.jsonl`) — deliberately a hook, not prompt text: built-in Plan/Explore agents never read `CLAUDE.md`. It refuses (1) `.{M,N}`, `.{M,}` or `.{N}` padding with a bound >= 20 in a grep or git grep pattern that reads files (piped command output passes; rg is exempt, since Rust's regex engine runs in linear time with bounded memory — documented — which is also why the Grep tool's rg needs no arm), and (2) an ignore-blind recursive search — `grep -r`, `rg -u`/`--no-ignore`, `git grep --no-index`/`--untracked` — on a checkout root, home, `/` or the worktrees dir. The refusal names the safe form: `timeout 60 nice -n 10 rg <pattern> <dirs> | head -500`, `-C` for context. Not refused, on the measurement above: plain `git grep` and plain `rg` at the root. Not covered (an accident guard, not a wall): `find … -exec grep`, a `bash -c` body or `$(cat <<EOF …)` heredoc, quoted paths, wrapper options with values (`timeout -s KILL`, `sudo -u x`), a bare `cd`/`cd ~` before `.`, a glob like `*`, padding spelled `[^x]{0,80}`, and commands over 8,000 characters. Padding anywhere in a command that also runs a search counts, even outside the search.
+
+---
+
+# Incident J — `fs.cpSync` onto `/workspace` leaves files the container can't touch
+
+**2026-11-15.** Not a COI verdict: no pause, no kill. Found by the first smoke run of `pnpm lane end` (PR 181), whose archive step copied a worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/` with Node's `fs.cpSync`.
+
+## What was seen
+
+- The archive failed with `EACCES`; `lane end` refused and removed nothing.
+- The files `cpSync` had created on `/workspace` were zero bytes and write-only. The container could not read or remove them, `sudo` included; they need a `chmod` and `rm` from the Mac.
+- `copyFileSync` works on the same mount (probed there before the fix merged).
+
+Not captured: the exact error line, the files' mode bits, the options `cpSync` was called with.
+
+## Mechanism
+
+_Inference_, not investigated: `cpSync` creates the destination along a different path from `copyFileSync`, and something on that path maps badly across virtiofs to the Mac's file ownership. Which call is unknown.
+
+_Inference_: only a destination on the mount is affected. Reading from `/workspace` is fine; the tree's three other `cpSync` callers (`scripts/src/lc-e2e/chrome-build.ts`, `scripts/src/board/macstats-fixtures.test.ts`, `scripts/src/board/tower/web/server.test.ts`) all copy into `mkdtemp(tmpdir())`, the container's own `/tmp`, and have never shown it.
+
+## Fix
+
+`scripts/src/lane/archive.ts` copies with its own walk (`mkdirSync`, `copyFileSync`, `symlinkSync`), its tree compare treats an unreadable tree as different, and `archive.test.ts` fails if the file imports `cpSync`. Rule: never `cpSync` to a destination under `/workspace`.
