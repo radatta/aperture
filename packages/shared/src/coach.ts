@@ -1255,7 +1255,20 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     unreviewed,
     unnoted,
     ai,
-    planMode: pools.planMode,
+    planMode: dayMode(pools.planMode, ai?.status === 'ok' ? row?.ai : undefined),
+  };
+}
+// A stored AI pick holds its day (one pick a day): the day's mix is the one it kept, and a setting changed since
+// applies from tomorrow — the line says so, so it never reads Catch-up over a stretch slot.
+function dayMode(view: CoachPlanModeView, ai: CoachDayAi | undefined): CoachPlanModeView {
+  if (!ai) return view;
+  const kept = ai.mode ?? 'balanced';
+  if (kept === view.mode) return view;
+  const name = (m: CoachPlanModeView['mode']) => (m === 'catch-up' ? 'Catch-up' : 'Balanced');
+  return {
+    ...view,
+    mode: kept,
+    line: `${name(kept)}: ${view.due} due · today’s pick; ${name(view.mode)} from tomorrow`,
   };
 }
 

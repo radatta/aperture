@@ -389,6 +389,7 @@ export type CoachPickResult =
       note: string | null;
       focus: CoachDayAi['focus'];
       filled?: number; // slots the rules filled (logged, not stored)
+      mode?: CoachPickContext['planMode']['mode']; // the mix it kept, stored on the day
       oldestDue: string | null;
       model: string | null;
       usage: CoachDayAi['usage'];
@@ -424,7 +425,15 @@ export function settleAiRow(
     ...cur,
     ai:
       res.ok && !late
-        ? { ...cur.ai, ...common, status: 'ok', picks: res.picks, note: res.note, focus: res.focus }
+        ? {
+            ...cur.ai,
+            ...common,
+            status: 'ok',
+            picks: res.picks,
+            note: res.note,
+            focus: res.focus,
+            ...(res.mode ? { mode: res.mode } : {}),
+          }
         : {
             ...cur.ai,
             ...common,
@@ -449,6 +458,7 @@ export function pickResultOf(
         note: v.note,
         focus: v.focus,
         filled: v.filled,
+        mode: ctx.planMode.mode,
         ...meta,
         oldestDue: ctx.oldestDue,
       }

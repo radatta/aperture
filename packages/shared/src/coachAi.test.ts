@@ -574,6 +574,32 @@ describe('the plan mode in the pick', () => {
     expect(validateCoachPick(standInCoachPick(ctx), ctx).ok).toBe(true);
   });
 
+  it('a settled pick stores the mix it kept; a setting changed since applies from tomorrow, and the line says so', () => {
+    const res = pickResultOf(standInCoachPick(ctx), ctx, { model: 'm', usage: null, ms: 0 });
+    expect(res).toMatchObject({ ok: true, mode: 'catch-up' });
+    // Picked under balanced (no mode stored: a pick from before), the setting now catch-up.
+    const picks = ctx.rules
+      .slice(0, 4)
+      .map((slug) => ({ slug, kind: 're-solve' as const, why: 'x' }));
+    const t = planDay(
+      input({ attempts: TEN, days: [dayRow(TODAY, ai({ picks }))], planMode: 'catch-up' }),
+    );
+    expect(t.ai?.status).toBe('ok');
+    expect(t.planMode).toMatchObject({
+      setting: 'catch-up',
+      mode: 'balanced',
+      line: 'Balanced: 10 due · today’s pick; Catch-up from tomorrow',
+    });
+    const same = planDay(
+      input({
+        attempts: TEN,
+        days: [dayRow(TODAY, ai({ picks, mode: 'catch-up' }))],
+        planMode: 'catch-up',
+      }),
+    );
+    expect(same.planMode.line).toBe('Catch-up: 10 due');
+  });
+
   it("carries Claude's notes on recent sittings, null when none", () => {
     expect(ctxOf().recent.every((r) => r.claudeNotes === null)).toBe(true);
   });

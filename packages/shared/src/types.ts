@@ -606,6 +606,8 @@ export interface CoachDayAi {
   note: string | null;
   focus: { from: PatternId; to: PatternId; why: string } | null;
   oldestDue: string | null; // the oldest due re-solve when picked — tomorrow's guardrail reads it
+  // The plan mode's mix the pick kept (coach.md → Plan mode); absent on picks from before it, which were balanced.
+  mode?: 'balanced' | 'catch-up';
   reason: CoachAiReason | null;
   detail: string | null; // a guardrail code or an HTTP status, never model text
   usage: { input: number; output: number } | null;

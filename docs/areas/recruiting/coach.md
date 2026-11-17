@@ -157,7 +157,9 @@ the one line the Today card and `leetcode_today` show ("Catch-up: 31 due · auto
 
 The AI pick keeps the mix: in catch-up `coachPickContext` offers no stretch, says `planMode`, and
 `validateCoachPick` refuses (`mix`) more than one new, any stretch, or fewer re-solves than the rules' plan. A pick
-already stored keeps its day if the setting changes mid-day (one pick a day).
+already stored keeps its day if the setting changes mid-day (one pick a day): the pick stores the mix it kept
+(`CoachDayAi.mode`; absent reads balanced), the day's `planMode` reports that mix, and the line says the new setting
+applies from tomorrow ("Balanced: 3 due · today’s pick; Catch-up from tomorrow").
 
 ## Claude's notes
 
