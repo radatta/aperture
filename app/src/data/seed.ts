@@ -27,7 +27,6 @@ import {
 import type {
   Area,
   BaseEntity,
-  CauseTag,
   Category,
   CompetencyTag,
   Habit,
@@ -820,43 +819,6 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     'class Solution:\n    def lengthOfLongestSubstring(self, s):\n        left = 0\n        ...',
     [4, 26, 35],
   );
-
-  // Coach attempts logged off the extension over the last three weeks (logCoachAttempts' shape), so the Patterns
-  // tab ranks something real: two patterns going well, Two Pointers missing first tries, one re-solve.
-  const logged: [
-    dAgo: number,
-    slug: string,
-    outcome: 'clean' | 'solved' | 'failed',
-    cause?: CauseTag,
-  ][] = [
-    [18, 'contains-duplicate', 'clean'],
-    [17, 'valid-anagram', 'clean'],
-    [16, 'valid-palindrome', 'clean'],
-    [15, 'valid-parentheses', 'clean'],
-    [11, 'binary-search', 'clean'],
-    [10, 'group-anagrams', 'solved', 'boundary'],
-    [9, '3sum', 'failed', 'off-by-one'],
-    [8, 'two-sum-ii-input-array-is-sorted', 'clean'],
-    [6, 'min-stack', 'solved', 'api-slip'],
-    [5, 'valid-anagram', 'clean'],
-    [4, 'container-with-most-water', 'solved', 'no-trace'],
-  ];
-  for (const [dAgo, slug, outcome, cause] of logged) {
-    const at = nowMs - dAgo * DAY - 2 * HOUR;
-    store.coachAttempts.push({
-      ...mk(at),
-      slug,
-      title: null,
-      day: dayKey(at, START_HOUR),
-      at,
-      outcome,
-      help: 'none',
-      cause: cause ?? null,
-      minutes: 25,
-      note: null,
-      source: 'manual',
-    });
-  }
 
   // Flux sets — three weeks of neck work so History's rows and trends aren't judged empty: rotation every
   // other day with a slowly rising peak, chin tuck, upper-trap pairs on both sides, a few joint-position
