@@ -851,7 +851,8 @@ sfail('sim: a stale tree (no app, no pill) at the end of launch counts nothing, 
       fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"LANDMARK"']], fileLines=[[TRIAL, 2]])
 spass('sim: a launch via that relaunches an app left mid-typing counts its first icon tap, landed', [{'op': 'launch', 'via': 'tap'}],
       tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'},
-      simCount={'simctl terminate ' + U: 1, ICONTAP: 2}, fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+      simCount={'simctl terminate ' + U: 1, ICONTAP: 2}, fileLines=[[TRIAL, 2]],
+      fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":0'], [TRIAL, '"taps":[{"d":0,"hid":null,"frontMs":'], [TRIAL, '},{"d":null,"hid":null}]']])  # the relaunch's tap: a window, no look
 spass('sim: a relaunch whose own icon tap drops still counts the first tap, landed (one line, a 0)', [{'op': 'launch', 'via': 'tap'}],
       tape=[pt(220, 895, {}, n=6), pt(220, 530, {}, n=6), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}, dtree(tree(), 7), dtree(tree('SpringBoard'), 1)],
       notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'}, simCount={ICONTAP: 3},
@@ -888,9 +889,14 @@ spass('sim: a no-service line just after the tap (inside its 1 s slack, at the f
 spass('sim: a log that says it lost messages is no count (loss): every hid null', LV(),
       tape=[{'m': 'tap -x 371 -y 247', 'log': HEARD}, {'m': 'log stream', 'out': '{"timestamp":"2026-11-16 18:00:00.000000-0800","eventType":"lossEvent","eventMessage":"lost 12 messages"}'}],
       fileHas=[[TRIAL, '"why":"loss"'], [TRIAL, '"hid":null']])
-spass('sim: a find\'s dropped home press during a reset adds to the launch\'s "home pressed", the reset\'s own press doesn\'t', [L],
-      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 3), dtree(APPFRONT, 1), dtree(tree('SpringBoard'), 2)],
+spass('sim: a dropped home press in the first find still counts after a reset\'s find (the launch\'s whole), the reset\'s own press doesn\'t', [L],
+      tape=[dtree(tree(), 1), dtree(APPFRONT, 1), dtree(tree(), 2), dtree(tree('SpringBoard'), 3), dtree(tree('SpringBoard'), 2)],
       notes={'0': 'home pressed 2 times; icon tapped 2 times, Home pressed before each retap'})
+spass('sim: inside a trial launch only icon taps open a tap window: a leftover draft\'s taps and Done aren\'t icon taps', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, el('AXStaticText', '', 'wkbpxa', 25, 884, 346, 22), n=4), pt(221, 856, {}, n=1), pt(221, 856, SPACE, n=1), pt(221, 856, {})],
+      fileHas=[['trial.jsonl', '"taps":[{"d":0,"hid":null,"frontMs":']], fileLacks=[['trial.jsonl', '},{']])
+serr('sim: a hung read looking for Done again after the first tap is AX_TIMEOUT, not BLUR', 'AX_TIMEOUT', [L, {'op': 'blur'}],
+     tape=[{'m': '--point 395,602', 'n': 1}, pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), HANG('--point 395,')], simCount={'tap -x 395 -y 575': 1})
 spass('sim: a -0800 timestamp is the same instant', LV(),
       tape=[{'m': 'tap -x 371 -y 247', 'n': 1, 'log': {**NOSVC, 'timestamp': '@NOW8@'}}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":1']])
 spass('sim: a sim log that died is no count: every hid null, the header says died', LV(), tape=[{'m': 'log stream', 'rc': 1}],
