@@ -1068,7 +1068,10 @@
     if (area && area !== 'local') return; // Safari has passed no area name (WebKit bug 281644)
     if (changes.selectors) sel = selLib.merge(changes.selectors.newValue);
     if (Object.values(coachLib.KEYS).some((k) => changes[k]))
-      local.get(Object.values(coachLib.KEYS)).then((got) => (coachOn = coachLib.settingsOf(got)), () => {});
+      local.get(Object.values(coachLib.KEYS)).then(
+        (got) => (coachOn = coachLib.settingsOf(got)),
+        () => {},
+      );
     if (changes.status) status = changes.status.newValue || null;
     const k = screenSlug && `sync:${screenSlug}`;
     if (k && changes[k]) learnSync(changes[k].newValue);

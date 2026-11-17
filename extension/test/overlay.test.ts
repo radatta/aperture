@@ -221,6 +221,7 @@ function open(
   const fake = () =>
     w.__fake as {
       resets: number;
+      submits: number;
       timerStarts: number;
       timerResets: number;
       timerOpens: number;
@@ -242,7 +243,8 @@ function open(
   // The coach's trace card (its own host) and its opener (on the badge's).
   const cardRoot = () => rootOf(w.document.querySelector('aperture-lc-coach'));
   const card = () => cardRoot()?.querySelector('[role=dialog]') ?? null;
-  const field = (k: string) => cardRoot()?.querySelector(`[data-ap=trace-${k}]`) as HTMLTextAreaElement;
+  const field = (k: string) =>
+    cardRoot()?.querySelector(`[data-ap=trace-${k}]`) as HTMLTextAreaElement;
   const tapCard = (ap: string) => trustedClick(cardRoot()!.querySelector(`[data-ap=${ap}]`)!);
   const opener = () => rootOf(badgeHost())?.querySelector('[data-ap=trace-open]') ?? null;
   const submitBtn = () =>
@@ -1696,7 +1698,9 @@ describe('the trace card and the resubmit note', () => {
     });
     // The trace goes ahead of the submit; nothing untraced follows.
     const types = sentEvents(ext).map((e) => e.type);
-    expect(types.indexOf('coach', types.indexOf('coach') + 1)).toBeLessThan(types.indexOf('submit'));
+    expect(types.indexOf('coach', types.indexOf('coach') + 1)).toBeLessThan(
+      types.indexOf('submit'),
+    );
     await settle(4000);
     expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'trace']);
     expect(ext.local.data['sitting:two-sum']).toMatchObject({
@@ -1754,7 +1758,12 @@ describe('the trace card and the resubmit note', () => {
     const heard: string[] = [];
     p.w.document.addEventListener('keydown', (e) => heard.push(e.key), true);
     field.dispatchEvent(
-      new p.w.KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, composed: true }),
+      new p.w.KeyboardEvent('keydown', {
+        key: 'Enter',
+        metaKey: true,
+        bubbles: true,
+        composed: true,
+      }),
     );
     expect(heard).toEqual([]);
     await settle(3500); // the 3 s batch

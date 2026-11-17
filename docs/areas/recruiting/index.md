@@ -313,6 +313,13 @@ that comes after the Start goes in a repeat Start that fills it in. How, and the
 `extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the
 extension stays passive.
 
+**The Submit hold is the one place the extension stands between the user and LeetCode's UI** (the
+maintainer, 2026-11-16: hold once, re-click). The first real Submit click of a sitting is swallowed so the trace
+card can ask for three hand-traced inputs; no request is made, altered or re-issued, and the user clicks Submit
+again. The extension never clicks Submit — an automated submit was rejected. It fails open (a keyboard submit,
+a missing selector or the hold off pass untouched and are logged `untraced-submit`), and each part is off-able
+in Options. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
+
 **The page's world is evidence, never authority** (the maintainer, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
 an overlay that is really showing; a page message can only add events to the sitting the extension itself

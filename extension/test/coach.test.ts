@@ -12,8 +12,16 @@ describe('settings', () => {
     expect(ON).toEqual({ trace: true, hold: true, nudge: true });
     expect(coach.settingsOf({})).toEqual(ON);
     expect(coach.settingsOf({ coachTrace: 'no', coachHold: 0 })).toEqual(ON); // only `false` turns one off
-    expect(coach.settingsOf({ coachHold: false })).toEqual({ trace: true, hold: false, nudge: true });
-    expect(coach.settingsOf({ coachTrace: false })).toEqual({ trace: false, hold: false, nudge: true });
+    expect(coach.settingsOf({ coachHold: false })).toEqual({
+      trace: true,
+      hold: false,
+      nudge: true,
+    });
+    expect(coach.settingsOf({ coachTrace: false })).toEqual({
+      trace: false,
+      hold: false,
+      nudge: true,
+    });
     expect(coach.settingsOf({ coachNudge: false }).nudge).toBe(false);
     expect(coach.configPayload(coach.settingsOf({ coachTrace: false }))).toEqual({
       kind: 'config',

@@ -315,11 +315,19 @@
       if (!open) return;
       Object.assign(keys, { seen: 0, prevented: 0, inputs: 0 });
       const fields = {};
-      const panel = node('div', { class: 'panel', role: 'dialog', 'aria-label': 'Trace before you submit' });
+      const panel = node('div', {
+        class: 'panel',
+        role: 'dialog',
+        'aria-label': 'Trace before you submit',
+      });
       panel.append(
         node('p', { class: 'kicker' }, 'Aperture · before you submit'),
         node('h1', {}, 'Trace 3 inputs by hand'),
-        node('p', { class: 'meta' }, 'Walk your code over each, line by line. A word or two is enough.'),
+        node(
+          'p',
+          { class: 'meta' },
+          'Walk your code over each, line by line. A word or two is enough.',
+        ),
       );
       for (const [k, label] of TRACE_FIELDS) {
         const id = `ap-trace-${k}`;
@@ -333,15 +341,32 @@
         if (!(e.isTrusted && genuine(card.el, styleOf(true, false)))) return;
         fn();
       };
-      const traced = node('button', { class: 'primary', 'data-ap': 'trace', type: 'button' }, 'Traced');
-      traced.addEventListener('click', act(() => on.trace(values())));
-      const skip = node('button', { class: 'secondary', 'data-ap': 'skip', type: 'button' }, 'Skip');
-      skip.addEventListener('click', act(() => on.skip()));
+      const traced = node(
+        'button',
+        { class: 'primary', 'data-ap': 'trace', type: 'button' },
+        'Traced',
+      );
+      traced.addEventListener(
+        'click',
+        act(() => on.trace(values())),
+      );
+      const skip = node(
+        'button',
+        { class: 'secondary', 'data-ap': 'skip', type: 'button' },
+        'Skip',
+      );
+      skip.addEventListener(
+        'click',
+        act(() => on.skip()),
+      );
       panel.append(
         node('div', { class: 'row' }, traced, skip),
         node('p', { class: 'hint' }, 'Then click Submit again — Aperture never submits for you.'),
       );
       card.body.append(panel);
+      try {
+        fields.empty.focus({ preventScroll: true }); // straight to typing, out of LeetCode's editor
+      } catch {}
       function values() {
         const out = {};
         for (const [k] of TRACE_FIELDS) out[k] = fields[k].value;
