@@ -1310,6 +1310,8 @@ A search-load arm in `.claude/hooks/coi-reverse-shell-guard.sh` (rule in `_searc
 
 **2026-11-15.** Not a COI verdict: no pause, no kill. Found by the first smoke run of `pnpm lane end` (PR 181), whose archive step copied a worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/` with Node's `fs.cpSync`.
 
+_`pnpm lane` is `pnpm lanes` since PR 184 (pnpm's built-in `lane` shadowed the script); this record keeps the name used then._
+
 ## What was seen
 
 - The archive failed with `EACCES`; `lane end` refused and removed nothing.

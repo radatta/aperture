@@ -48,6 +48,16 @@ export interface Deps {
   clock: Clock;
   log: (s: string) => void;
   env: Env;
+  syncMain: () => string; // board/sync-main.ts: the main checkout to origin/main, the tower restarted if stale; throws
+}
+
+// Both lifecycle commands end here: a failure warns and never changes the command's outcome.
+export function syncMainSoft(d: Deps): void {
+  try {
+    d.log(d.syncMain());
+  } catch (err) {
+    d.log(`warning: sync-main failed (retry: pnpm board sync-main): ${(err as Error).message}`);
+  }
 }
 
 export const worktreePath = (e: Env, b: string) => `${e.mainRoot}/.claude/worktrees/${b}`;

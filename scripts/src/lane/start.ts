@@ -1,5 +1,5 @@
 // `pnpm lanes start <branch>`: the worktree off origin/main, its install, a tmux window running Claude named after the
-// branch with the kickoff as its first message, and the board lane. Refuses before changing anything; a failure
+// branch with the kickoff as its first message, the board lane, then sync-main. Refuses before changing anything; a failure
 // midway rolls back what it made (docs/ops/LANES.md → Start).
 import {
   EXIT,
@@ -12,6 +12,7 @@ import {
   lifecycleText,
   nameProblem,
   parseWorktrees,
+  syncMainSoft,
   tryRun,
   worktreePath,
 } from './state.ts';
@@ -273,6 +274,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
         ? `, session ${b} confirmed`
         : `; session name not confirmed: look at window ${windowId}`),
   );
+  syncMainSoft(d); // last: the main checkout moved above, and a slow fetch here can't hold back the line before
   return EXIT.ok;
 }
 

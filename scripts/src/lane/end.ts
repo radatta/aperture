@@ -1,6 +1,6 @@
 // `pnpm lanes end <branch>`: once the PR is merged and main's deploy for it is green (or `--force-abandon "<reason>"`),
 // archive the worktree's localNotes and check the copy, remove the worktree, clear the board lane, print the
-// maintainer's Mac line and close the lane's window, last and by id only. A rerun resumes (docs/ops/LANES.md → End).
+// maintainer's Mac line, close the lane's window by id only, and sync main (board sync-main). A rerun resumes (docs/ops/LANES.md → End).
 import { deployFor } from '../board/tower/derive.ts';
 import { parseRuns } from '../board/tower/gh.ts';
 import { verdict } from '../bot/prune.ts';
@@ -14,6 +14,7 @@ import {
   lifecycleText,
   nameProblem,
   readLifecycle,
+  syncMainSoft,
   tryRun,
   windowCheck,
   worktreePath,
@@ -348,6 +349,9 @@ export function end(d: Deps, a: EndArgs): number {
   if (adm.kind === 'unknown')
     d.log('  (dev admission unknown: the line removes it by name if there is one)');
   d.log(closed);
+  // 7. Main to origin/main (the merge just landed) and the tower restarted if stale. Last: in the lane's own window
+  // the delayed kill can only cut this off, never the record removal or the line.
+  syncMainSoft(d);
   return EXIT.ok;
 }
 

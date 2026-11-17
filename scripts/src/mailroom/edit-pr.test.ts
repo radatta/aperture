@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fakeClock, fakeRun } from '../bot/fakes.ts';
-import { editPr } from './edit-pr.ts';
+import { editFallback, editPr } from './edit-pr.ts';
 import { sha256 } from './job.ts';
 import { memFs } from './fakes.ts';
 import { IDS } from '../identifiers.ts';
@@ -164,7 +164,7 @@ describe('editPr', () => {
     const { d, logs } = setup({ mac: () => null });
     expect(await editPr(d, 'New title here')).toBe(EXIT.unreachable);
     expect(logs.join('\n')).toMatch(
-      /gh pr edit mac-mailroom --body-file localNotes\/pr-mac-mailroom\.md --title "New title here"$/m,
+      /gh pr edit mac-mailroom --body-file localNotes\/pr-mac-mailroom\.md --title 'New title here'$/m,
     );
   });
 
@@ -185,4 +185,15 @@ describe('editPr', () => {
       expect(out).not.toContain('gh pr edit');
     }
   });
+});
+
+// Validation refuses these before a line is printed (BRANCH_RE, TITLE_RE); the builder quotes them anyway.
+it('the gh pr edit line single-quotes a hostile branch and title', () => {
+  const d = { root: ROOT } as Deps;
+  expect(editFallback(d, 'a b', `x' && rm y; echo '`).line).toContain(
+    `gh pr edit 'a b' --body-file 'localNotes/pr-a b.md' --title 'x'\\'' && rm y; echo '\\'''`,
+  );
+  expect(editFallback(d, 'plain').line).toMatch(
+    /gh pr edit plain --body-file localNotes\/pr-plain\.md$/m,
+  );
 });

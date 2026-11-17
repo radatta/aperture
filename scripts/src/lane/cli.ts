@@ -9,6 +9,7 @@ import { cliGuard, emit } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { run } from '../bot/sh.ts';
+import { syncMain } from '../board/sync-main.ts';
 import { readLanes, writeLane } from '../board/tower/lanes.ts';
 import { REPO_SLUG } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
@@ -79,6 +80,7 @@ function realDeps(): Deps {
       slug: REPO_SLUG,
       procDir: '/proc',
     },
+    syncMain: () => syncMain((c, a, cwd) => run(c, a, { cwd }), mainRoot),
   };
 }
 

@@ -181,6 +181,7 @@ describe('lane end: gates', () => {
       expect(t.out()).toMatch(msg);
       expect(effects(t.calls)).toEqual([]);
       expect(existsSync(join(w.main, 'localNotes/archive', B))).toBe(false);
+      expect(t.sync.calls).toBe(0);
     });
 
   it('refuses while the branch holds a live dev lock', () => {
@@ -305,6 +306,33 @@ describe('lane end: the nominal run', () => {
     expect(t.out()).not.toMatch(/branch -D/);
     expect(t.calls.some((c) => c.line.includes('branch -D'))).toBe(false);
     expect(t.calls.some((c) => c.line.startsWith('tmux list-windows'))).toBe(false);
+    expect(t.sync.calls).toBe(1);
+  });
+
+  it('syncs main last, after the Mac line and the window close', () => {
+    const w = world();
+    lane(w);
+    const t = deps(w, script());
+    expect(end(t.d, args())).toBe(0);
+    const out = t.out();
+    expect(out.indexOf('closed window @9')).toBeGreaterThan(out.indexOf('nothing for the Mac'));
+    expect(out.indexOf('main checkout: already at')).toBeGreaterThan(
+      out.indexOf('closed window @9'),
+    );
+    expect(out.trimEnd().endsWith('tower: restart not needed (serving aaaaaaa)')).toBe(true);
+  });
+
+  it('a sync-main failure only warns: exit 0, the lane still ended', () => {
+    const w = world();
+    lane(w);
+    const t = deps(w, script());
+    t.sync.fail = 'git fetch failed — nothing moved: network';
+    expect(end(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(
+      /warning: sync-main failed \(retry: pnpm board sync-main\): git fetch failed — nothing moved/,
+    );
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+    expect(effects(t.calls).at(-1)).toBe('tmux kill-window -t @9');
   });
 
   it('a branch already gone: the line keeps the admission removal and drops the delete', () => {
@@ -422,6 +450,7 @@ describe('lane end: the nominal run', () => {
     expect(end(t.d, args())).toBe(0);
     expect(effects(t.calls).at(-1)).toBe('tmux run-shell -b -d 90 -C kill-window -t @9');
     expect(t.out()).toMatch(/closes in 90 s; send \[merged\]/);
+    expect(t.sync.calls).toBe(1);
   });
 
   const noKill: [string, [string, Answer][], RegExp, (w: World) => void][] = [
@@ -501,6 +530,7 @@ describe('lane end: the nominal run', () => {
     expect(end(t.d, args())).toBe(1);
     expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(true);
     expect(t.calls.some((c) => c.line.startsWith('tmux kill-window'))).toBe(false);
+    expect(t.sync.calls).toBe(0);
 
     const t2 = deps(w, script());
     expect(end(t2.d, args())).toBe(0);

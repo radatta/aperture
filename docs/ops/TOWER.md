@@ -30,9 +30,10 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 | `scripts/board/tower-web.sh --once`                    | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
-and never from a worktree. After a merge, `pnpm board sync-main` moves `/workspace` and restarts the tower only if
-its code changed. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
-file (a merge synced by hand, or `pnpm lanes start` detaching `/workspace`), the sources chip reads "behind main" and
+and never from a worktree. `pnpm lanes start` and `pnpm lanes end` finish with sync-main, so a merge followed by
+either needs nothing by hand; after a merge no lane command follows, run `pnpm board sync-main`. It never starts a
+stopped tower: that is `board.sh tower start`. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
+file (a checkout moved by hand, or a sync-main whose restart failed), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
