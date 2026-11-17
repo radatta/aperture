@@ -411,6 +411,9 @@ export function legacyAttempts(
       runFirst: null,
       traced: null,
       lastError: last.verdict !== 'accepted' ? { verdict: last.verdict, statusMsg: null } : null,
+      minutes: null, // the capture kept no clock
+      note: null,
+      historical: false,
       sittingIds: [],
       attemptIds: [],
       sources: ['legacy'],
@@ -1767,7 +1770,7 @@ export function slotChangeInputs(ci: CoachInput): {
 } {
   const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today, moreOf(ci));
   const scope = coachScope(ci);
-  const seen = seenBefore(all, scope, ci.today, moreOf(ci));
+  const seen = seenBefore(all, scope, ci.today);
   const tried = new Set([...all.map((a) => a.slug), ...scope.history.keys()]);
   return { seen, known: (slug) => !!catalogProblem(slug) || tried.has(slug) };
 }

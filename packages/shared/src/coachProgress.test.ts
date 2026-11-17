@@ -25,6 +25,7 @@ const tryOf = (t: T): ProblemTry => ({
   historical: t.historical ?? false,
   sittingIds: [],
   attemptIds: [],
+  sources: ['manual'],
 });
 // A record shaped as problemRecords builds it, enough for these folds.
 function rec(slug: string, tries: T[], schedule: ProblemRecord['schedule'] = null): ProblemRecord {

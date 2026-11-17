@@ -546,8 +546,8 @@ export interface CoachAttempt extends BaseEntity {
 // The plan's slot mix (coach.md → Plan mode): balanced is one of each kind; catch-up fills with re-solves; auto
 // switches between them on the due count, with hysteresis.
 export type CoachPlanMode = 'auto' | 'balanced' | 'catch-up';
-// A legacy (day, slug) group's stored void state (coach.md → Legacy history): `void: false` lifts the default
-// exclusion (LEGACY_TEST_DEFAULTS), `void: true` excludes any group. id = `<day>#<slug>`.
+// A legacy (day, slug) group's stored void state (coach.md → Legacy history): every group counts until `void: true`;
+// `void: false` counts it again. id = `<day>#<slug>`.
 export interface CoachVoid extends BaseEntity {
   day: string;
   slug: string;

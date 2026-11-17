@@ -359,7 +359,7 @@ export function ProgressTrends({
             <RateBars weeks={weeks} pick={(w) => w.resolve} what="Re-solves clean" />
           ) : (
             <Text size="sm" tone="muted">
-              No re-solves yet. The first comes due {COACH_PARAMS.gaps.peeked[0]} to{' '}
+              No re-solves yet. The first comes due {COACH_PARAMS.gaps.retry[0]} to{' '}
               {COACH_PARAMS.gaps.clean[0]} days after a try.
             </Text>
           )}
