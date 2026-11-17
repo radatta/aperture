@@ -42,6 +42,7 @@ const state = {
   t0: 0, // this machine's clock just before Start
   pullBefore: 0, // around the live pull, the last activity
   pullAfter: 0,
+  mcpEnd: 0, // the end MCP read, before any app read wrote it
   closed: null as DevSitting | null,
   back: null as DevSitting | null,
 };
@@ -52,7 +53,8 @@ const head = async (ctx: Ctx) => {
 
 export const sittingAutoClose: Scenario = {
   id: 'sitting-auto-close',
-  title: 'An idle LeetCode sitting closes itself at its last activity + 5 min, says so, and reopens',
+  title:
+    'An idle LeetCode sitting closes itself at its last activity + 5 min, says so, and reopens',
   tiers: ['full'],
   slowPaths: ['scripts/src/devcheck/scenarios/sitting-auto-close.ts'],
   rows: [
@@ -72,13 +74,13 @@ export const sittingAutoClose: Scenario = {
       id: 'idle-closes',
       entry: 'api',
       kind: 'nominal',
-      what: '45 min after the last activity the next read closes it, closedBy idle, ending 5 min after that activity; its rep stays in progress',
+      what: '45 min after the last activity the app’s next read closes it, closedBy idle, ending 5 min after that activity; its rep stays in progress',
     },
     {
       id: 'idle-mcp',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'get_sitting, list_sittings and live_sitting name it closed by idle',
+      what: 'get_sitting, list_sittings and live_sitting read it closed by idle at its end before anything wrote it (MCP reads write nothing)',
     },
     {
       id: 'rep-minutes',
@@ -181,7 +183,8 @@ export const sittingAutoClose: Scenario = {
       entry: 'extension',
       kind: 'nominal',
       what: 'In Safari, a keystroke on the problem after 45 min away reopens the sitting',
-      needsYou: 'needs the Safari extension and a real 45-min pause on the Mac — your next real sitting after merge',
+      needsYou:
+        'needs the Safari extension and a real 45-min pause on the Mac — your next real sitting after merge',
     },
   ],
   steps: [
@@ -191,7 +194,10 @@ export const sittingAutoClose: Scenario = {
       proves: ['fresh-untouched'],
       title: 'Link a fresh roll, Start, send a snapshot; the list and the detail read it open',
       async run(ctx) {
-        const roll = await ctx.api.writes.upsertRoll({ name: `${titleOf(ctx)} roll`, estimateMin: 45 });
+        const roll = await ctx.api.writes.upsertRoll({
+          name: `${titleOf(ctx)} roll`,
+          estimateMin: 45,
+        });
         state.rollId = roll.id;
         await ctx.api.writes.linkLeetcodeRoll(roll.id);
         state.t0 = Date.now();
@@ -238,45 +244,55 @@ export const sittingAutoClose: Scenario = {
       },
     },
     {
-      id: 'idle-closes',
-      entry: 'api',
-      cost: 'slow',
-      proves: ['idle-closes'],
-      title: 'Past 45 min since the pull, the list closes it at the pull + 5 min; its rep stays in progress',
-      async run(ctx) {
-        await sleepUntil(state.pullAfter + IDLE_MS + SKEW_MS);
-        const row = (await ctx.api.reads.listSittings()).find((x) => x.id === state.id);
-        if (row?.status !== 'abandoned' || row.closedBy !== 'idle' || row.endedAt === null)
-          throw new Error(`not closed by idle: ${JSON.stringify(row)}`);
-        const lo = state.pullBefore + TAIL_MS - SKEW_MS;
-        const hi = state.pullAfter + TAIL_MS + SKEW_MS;
-        if (row.endedAt < lo || row.endedAt > hi)
-          throw new Error(`ended at ${row.endedAt}, outside the pull + 5 min (${lo}–${hi})`);
-        state.closed = row;
-        const rep = await ctx.api.reads.getTask(state.rep);
-        if (rep?.status !== 'in_progress') throw new Error(`rep: ${JSON.stringify(rep)}`);
-        const later = await head(ctx);
-        if (later.endedAt !== row.endedAt) throw new Error('a later read moved the end');
-      },
-    },
-    {
       id: 'idle-mcp',
       entry: 'mcp',
       cost: 'slow',
       proves: ['idle-mcp'],
-      title: 'get_sitting, list_sittings and live_sitting name it closed by idle',
+      title:
+        'Past 45 min since the pull, get_sitting, list_sittings and live_sitting read it closed by idle at the pull + 5 min (writing nothing)',
       async run(ctx) {
-        if (!state.closed) throw new Error('not closed — the idle-closes step failed');
-        const one = await ctx.mcp.reads.getSitting({ id: state.id });
-        if (one.sitting?.closedBy !== 'idle' || one.sitting.minutes !== minutesOf(state.closed))
-          throw new Error(`get_sitting: ${JSON.stringify(one.sitting)}`);
+        await sleepUntil(state.pullAfter + IDLE_MS + SKEW_MS);
+        const one = (await ctx.mcp.reads.getSitting({ id: state.id })).sitting;
+        const end = one?.endedAt ? Date.parse(one.endedAt) : NaN;
+        const lo = state.pullBefore + TAIL_MS - SKEW_MS;
+        const hi = state.pullAfter + TAIL_MS + SKEW_MS;
+        if (one?.closedBy !== 'idle' || one.status !== 'abandoned' || !(end >= lo && end <= hi))
+          throw new Error(`get_sitting: ${JSON.stringify(one)} (end ${lo}–${hi})`);
+        state.mcpEnd = end;
         const row = (await ctx.mcp.reads.listSittings({ limit: 10 })).sittings.find(
           (x) => x.id === state.id,
         );
         if (row?.closedBy !== 'idle') throw new Error(`list_sittings: ${JSON.stringify(row)}`);
         const live = await ctx.mcp.reads.liveSitting();
-        if (live.active || live.lastSitting?.id !== state.id || live.lastSitting.closedBy !== 'idle')
+        if (
+          live.active ||
+          live.lastSitting?.id !== state.id ||
+          live.lastSitting.closedBy !== 'idle'
+        )
           throw new Error(`live_sitting: ${JSON.stringify(live)}`);
+      },
+    },
+    {
+      id: 'idle-closes',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['idle-closes'],
+      title:
+        'The app’s read writes the same close: closedBy idle at the end MCP read; its rep stays in progress',
+      async run(ctx) {
+        if (!state.mcpEnd) throw new Error('no end read — the idle-mcp step failed');
+        const row = (await ctx.api.reads.listSittings()).find((x) => x.id === state.id);
+        if (row?.status !== 'abandoned' || row.closedBy !== 'idle' || row.endedAt !== state.mcpEnd)
+          throw new Error(`not closed at ${state.mcpEnd}: ${JSON.stringify(row)}`);
+        state.closed = row;
+        const rep = await ctx.api.reads.getTask(state.rep);
+        if (rep?.status !== 'in_progress') throw new Error(`rep: ${JSON.stringify(rep)}`);
+        const later = await head(ctx);
+        if (later.endedAt !== row.endedAt) throw new Error('a later read moved the end');
+        // MCP's minutes were the stored head's too.
+        const one = (await ctx.mcp.reads.getSitting({ id: state.id })).sitting;
+        if (one?.minutes !== minutesOf(row))
+          throw new Error(`get_sitting minutes: ${one?.minutes}`);
       },
     },
     {
@@ -284,7 +300,8 @@ export const sittingAutoClose: Scenario = {
       entry: 'ui',
       cost: 'slow',
       proves: ['label-and-button', 'rep-minutes', 'list-and-home'],
-      title: 'The sitting’s page says it closed, with Reopen, at 440, 390 and desktop; Done starts on its minutes',
+      title:
+        'The sitting’s page says it closed, with Reopen, at 440, 390 and desktop; Done starts on its minutes',
       async run(ctx) {
         if (!state.closed) throw new Error('not closed — the idle-closes step failed');
         const minutes = String(minutesOf(state.closed));
@@ -321,20 +338,26 @@ export const sittingAutoClose: Scenario = {
         await ctx.page.getByRole('button', { name: 'Mark rep done' }).click();
         const actual = ctx.page.getByLabel('Actual (min)');
         if ((await actual.inputValue()) !== minutes)
-          throw new Error(`Done starts on ${await actual.inputValue()}, not the sitting’s ${minutes}`);
+          throw new Error(
+            `Done starts on ${await actual.inputValue()}, not the sitting’s ${minutes}`,
+          );
         await ctx.shot('closed-done-form');
         await ctx.page.getByRole('button', { name: 'Cancel' }).click();
 
         await ctx.ui.goto('/recruiting');
         const row = ctx.page
           .getByRole('region', { name: 'All sittings' })
-          .getByRole('link', { name: new RegExp(titleOf(ctx).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) });
+          .getByRole('link', {
+            name: new RegExp(titleOf(ctx).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+          });
         await row.waitFor({ timeout: 15_000 });
         const text = (await row.textContent()) ?? '';
         if (!/closed automatically/.test(text) || /dropped/.test(text))
           throw new Error(`list row: ${text}`);
         await ctx.ui.goto('/');
-        const link = ctx.page.getByRole('link', { name: 'LeetCode sitting closed automatically →' });
+        const link = ctx.page.getByRole('link', {
+          name: 'LeetCode sitting closed automatically →',
+        });
         await link.first().waitFor({ timeout: 15_000 });
         if (!(await link.first().getAttribute('href'))?.endsWith(state.id))
           throw new Error('Home’s link goes elsewhere');
@@ -346,7 +369,8 @@ export const sittingAutoClose: Scenario = {
       entry: 'ui',
       cost: 'slow',
       proves: ['reopen'],
-      title: 'Reopen: End sitting is back, the gap leaves its minutes, live_sitting reads it active',
+      title:
+        'Reopen: End sitting is back, the gap leaves its minutes, live_sitting reads it active',
       async run(ctx) {
         if (!state.closed?.endedAt) throw new Error('not closed — the idle-closes step failed');
         await ctx.ui.goto(`/recruiting/sittings/${state.id}`);
@@ -358,7 +382,12 @@ export const sittingAutoClose: Scenario = {
         const back = await head(ctx);
         const gap = back.idleMs ?? 0;
         const want = before - state.closed.endedAt;
-        if (back.status !== 'active' || back.closedBy || back.endedAt !== null || Math.abs(gap - want) > 2 * SKEW_MS)
+        if (
+          back.status !== 'active' ||
+          back.closedBy ||
+          back.endedAt !== null ||
+          Math.abs(gap - want) > 2 * SKEW_MS
+        )
           throw new Error(`reopened: ${JSON.stringify(back)} (gap ≈ ${want})`);
         state.back = back;
         const live = await ctx.mcp.reads.liveSitting();
@@ -375,7 +404,11 @@ export const sittingAutoClose: Scenario = {
       async run(ctx) {
         if (!state.back) throw new Error('not reopened — the reopen step failed');
         const again = await ctx.api.writes.reopenSitting(state.id);
-        if (again.status !== 'active' || again.reopenedAt !== state.back.reopenedAt || again.idleMs !== state.back.idleMs)
+        if (
+          again.status !== 'active' ||
+          again.reopenedAt !== state.back.reopenedAt ||
+          again.idleMs !== state.back.idleMs
+        )
           throw new Error(`second reopen: ${JSON.stringify(again)}`);
       },
     },
@@ -386,7 +419,8 @@ export const sittingAutoClose: Scenario = {
       async run(ctx) {
         if (state.rep) await ctx.api.writes.finishTask(state.rep, 'cancelled');
         await ctx.api.writes.linkLeetcodeRoll(null);
-        if (state.id && (await head(ctx)).status === 'active') throw new Error('still open after Drop');
+        if (state.id && (await head(ctx)).status === 'active')
+          throw new Error('still open after Drop');
       },
     },
   ],

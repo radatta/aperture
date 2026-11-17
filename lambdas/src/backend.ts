@@ -140,6 +140,7 @@ import {
   sittingRepTitle,
   mayBeIdle,
   idleEnd,
+  idleCloseAt,
   idleClosedSitting,
   reopenedSitting,
   finishIdleClosed,
@@ -1303,15 +1304,14 @@ export class BackendClient implements ApiClient {
   // Every read of sittings, Start and events run this first. Free below mayBeIdle; past it, the two activity stamps
   // and the rep (consistent) decide (idleEnd). `persist` false (an MCP read, a smoke run) answers the closed view
   // and writes nothing — the next app read, Start or event writes the same end. Persisted, it ends as endSitting
-  // ends one: refold, a CAS only an unchanged open head passes (a reopen or fresher activity since wins), then the
-  // gate — released only from a claim no newer than the close, so a reopen's fresh claim survives. Reads at once
-  // write one close. Returns the head as it stands.
+  // ends one: refold, a CAS only an open head not reopened since passes (fresher activity wins only through its
+  // own path reopening it — the accepted race in the doc), then the gate — released only from a claim no later than
+  // the end, so a reopen's claim survives. Reads at once write one close. Returns the head as it stands.
   private async closeIdle(s: Sitting, now: number, persist = !this.idlePeek): Promise<Sitting> {
     if (!mayBeIdle(s, now)) return s;
-    const [activity, rep] = await Promise.all([
-      this.repo.getSittingActivity(s.id),
-      this.repo.getTask(s.repTaskId, { consistent: true }),
-    ]);
+    const activity = await this.repo.getSittingActivity(s.id);
+    if (idleCloseAt(s, activity, now) === null) return s; // a long sitting still in use: no rep read
+    const rep = await this.repo.getTask(s.repTaskId, { consistent: true });
     const end = idleEnd(s, rep ?? undefined, activity, now);
     if (!end) return s;
     if (!persist)
@@ -1331,8 +1331,10 @@ export class BackendClient implements ApiClient {
       now,
       { consistent: true },
     );
-    if (!wrote) return head; // another call closed it first, or it came back meanwhile
-    await this.releaseStartGate(s.id, now, now);
+    if (!wrote) return head; // another call closed it first, or it was reopened meanwhile
+    // Only a claim no later than the end is the one this close ends: the Start's, before its last activity. A
+    // reopen's claim comes 40+ min after it, so a release racing a reopen (any clock skew) leaves the gate held.
+    await this.releaseStartGate(s.id, now, at);
     console.log(
       JSON.stringify({ event: 'lc_sitting_idle_close', sittingId: s.id, idleMs: now - at }),
     );
@@ -1402,7 +1404,7 @@ export class BackendClient implements ApiClient {
             s.id,
             [],
             now,
-          )!,
+          ),
       },
     );
     const head = await this.repo.casUpdate(

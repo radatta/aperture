@@ -7,9 +7,17 @@ import { IDLE_RECHECK_MS, useIdleRecheck } from './useSittings';
 describe('useIdleRecheck', () => {
   const M = 60_000;
   const open = { status: 'active', startedAt: 0, reopenedAt: null } as unknown as Sitting;
-  const run = (s: Sitting | null, fetchedAt: number, now: number, fetching = false) => {
+  const run = (
+    s: Sitting | null,
+    fetchedAt: number,
+    now: number,
+    fetching = false,
+    failedAt = 0,
+  ) => {
     const refetch = vi.fn();
-    const { result } = renderHook(() => useIdleRecheck(s, fetchedAt, now, fetching, refetch));
+    const { result } = renderHook(() =>
+      useIdleRecheck(s, { fetchedAt, failedAt, fetching, refetch }, now),
+    );
     return { stale: result.current, refetch };
   };
   it('refetches an old cache of a sitting that may be idle, and says to wait', () => {
@@ -23,5 +31,10 @@ describe('useIdleRecheck', () => {
     expect(run({ ...open, status: 'abandoned' } as Sitting, 0, 99 * M).stale).toBe(false);
     expect(run(null, 0, 99 * M).stale).toBe(false);
     expect(run(open, 0, 99 * M, true).refetch).not.toHaveBeenCalled();
+  });
+  it('a failed re-read stops the wait and the retries until a read lands', () => {
+    const r = run(open, 0, 99 * M, false, 98 * M);
+    expect(r.stale).toBe(false);
+    expect(r.refetch).not.toHaveBeenCalled();
   });
 });

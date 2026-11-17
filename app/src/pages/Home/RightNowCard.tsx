@@ -170,7 +170,7 @@ export function RightNowCard() {
   // A LeetCode rep with its sitting open shows, and Done starts on, the sitting's minutes, Start to now — what
   // the sitting's own End offers — not the focus timer's; closed by idle, its minutes stopped at the close.
   const now = useNow();
-  const heroSitting = useOpenSittingFor(hero, now);
+  const { sitting: heroSitting, waiting: heroWaiting } = useOpenSittingFor(hero, now);
   const heroMin = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
   const heroTimer = hero
     ? timers.find((t) => t.session.kind === 'work' && t.session.taskId === hero.id)
@@ -245,9 +245,10 @@ export function RightNowCard() {
               <Button
                 size="sm"
                 // A LeetCode rep's open sitting not read yet: wait, or Done would start on the wrong minutes.
-                aria-disabled={heroSitting === undefined || undefined}
+                // One that may have closed by idle since it was read: wait for the re-read (useIdleRecheck).
+                aria-disabled={heroSitting === undefined || heroWaiting || undefined}
                 onClick={async () => {
-                  if (heroSitting === undefined) return;
+                  if (heroSitting === undefined || heroWaiting) return;
                   const elapsed = heroMin; // captured before the timer stops
                   // A stop that didn't land keeps the timer; its row in the bar below says so, and the
                   // Actual form waits until the time is really saved.
@@ -471,7 +472,7 @@ function RepDoneForm(props: {
 // are read, the task's own.
 function useRepSitting(t: Task) {
   const now = useNow();
-  const sitting = useOpenSittingFor(t, now) ?? null;
+  const sitting = useOpenSittingFor(t, now).sitting ?? null;
   return {
     sitting,
     min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin,

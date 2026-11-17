@@ -81,10 +81,11 @@ by the next read, never by a scheduled job ($0, no new resource).
   (the Recruiting list, Home, `list_sittings`, `get_day`, the coach tools), `getSitting` (`get_sitting`),
   `pullLiveSitting` (before the pull counts), the coach's reads (`leetcode_today`, `coach_stats`), Start, events,
   and a rep's Done or Drop. Below the line (`mayBeIdle`, the head's own times) it costs nothing; past it, three
-  consistent gets (the two stamps and the rep). The close is a CAS that only an unchanged open head passes, so reads
-  at once write one close, and a reopen or newer activity since wins; its gate release frees only a claim no newer
-  than the close (`releaseStart`'s `claimedBy`), so a reopen racing it keeps the gate. Accepted race: a snapshot
-  landing between the activity read and the CAS doesn't stop the close; the next event reopens it.
+  consistent gets (the two stamps, then the rep once it's idle). The close is a CAS only an open head not reopened
+  since passes, so reads at once write one close; fresher activity wins through its own path (an event or Start runs
+  this first, then reopens). Its gate release frees only a claim no later than the end (`releaseStart`'s
+  `claimedBy`) — a reopen's claim comes 40+ min after it — so a reopen racing the release keeps the gate. Accepted
+  race: a snapshot landing between the activity read and the CAS doesn't stop the close; the next event reopens it.
 - **MCP reads stay free.** Through `/mcp` (`RpcCall.idlePeek`) and on a smoke run, a read answers the closed view —
   the same end — and writes nothing; the app's next read, a Start or an event writes it. So CLAUDE.md's MCP rules
   hold: reads write nothing, `live_sitting` writes only its count (and none on an idle sitting). An MCP write that
@@ -107,8 +108,8 @@ by the next read, never by a scheduled job ($0, no new resource).
 - **Done on its rep afterwards** turns it `done`, its end and `closedBy` kept; Drop leaves it abandoned. Unnoticed
   until the Done, it ends `done` at the idle end (as its rep, above).
 - **The app never prefills from a stale head**: a page or Home left open holds the sitting as cached. Once a cached
-  open head is past the line and older than 30 s (`useIdleRecheck`), it's read again and Done waits for it, so a
-  morning's tab never prefills the hours since. A sitting a later Start took the rep from offers neither Reopen nor
+  open head is past the line and older than 30 s (`useIdleRecheck`), it's read again and Done waits for it (the
+  cached head still shows; a failed re-read stops the wait), so a morning's tab never prefills the hours since. A sitting a later Start took the rep from offers neither Reopen nor
   the rep's Done on its page; Home links a rep to its newest sitting closed by idle however old (the rep is still in
   progress, and its minutes are that sitting's).
 

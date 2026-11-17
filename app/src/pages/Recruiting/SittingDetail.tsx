@@ -39,10 +39,20 @@ import { SittingTimeline } from './SittingTimeline';
 // Reopen and the rep's Done (its minutes stopped at the close) while the rep is still in progress.
 export function SittingDetail() {
   const { id = '' } = useParams();
-  const { data, isPending, isError, error, refetch, dataUpdatedAt, isFetching } = useSitting(id);
+  const q = useSitting(id);
+  const { data, isPending, isError, error, refetch } = q;
   const now = useNow();
   // A page left open: its cached head may have closed by idle since — read again before End sitting prefills.
-  const stale = useIdleRecheck(data?.sitting, dataUpdatedAt, now, isFetching, refetch);
+  const stale = useIdleRecheck(
+    data?.sitting,
+    {
+      fetchedAt: q.dataUpdatedAt,
+      failedAt: q.errorUpdatedAt,
+      fetching: q.isFetching,
+      refetch,
+    },
+    now,
+  );
   const missing = isError && /Not found/.test(String(error?.message));
   if (!data)
     return (
@@ -66,10 +76,10 @@ export function SittingDetail() {
 function Loaded({ detail, now, stale }: { detail: Detail; now: number; stale: boolean }) {
   const { sitting, live, events, problem, liveReads } = detail;
   // A later sitting took its rep (a Start on another problem attached it): this one's rep is that one's now.
+  // Unknown until the list is read: neither is offered meanwhile (or on a failed read).
   const { data: all } = useSittings();
-  const superseded = !!all?.some(
-    (x) => x.repTaskId === sitting.repTaskId && x.startedAt > sitting.startedAt,
-  );
+  const superseded =
+    !all || all.some((x) => x.repTaskId === sitting.repTaskId && x.startedAt > sitting.startedAt);
   const idleOpen = isIdleClosed(sitting) && sitting.status === 'abandoned' && !superseded;
   const outcome = sittingOutcome(sitting, now);
   const m = sittingMetrics(sitting);

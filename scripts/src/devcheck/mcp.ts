@@ -176,6 +176,7 @@ export interface DevSittingRead {
     status: string;
     closedBy?: 'idle' | null;
     minutes?: number;
+    endedAt?: string | null;
     submitCount: number;
     liveReads: number;
   } | null;
