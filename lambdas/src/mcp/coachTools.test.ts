@@ -418,6 +418,15 @@ describe('get_problem', () => {
       expect.objectContaining({ id: s.id, day: '2026-11-05', submits: 1, accepted: false }),
     ]);
   });
+  it('a logged problem off the roadmap, with no sitting: its record, difficulty null', async () => {
+    await call('log_attempt', {
+      attempts: [{ slug: 'some-synthetic-problem', outcome: 'clean', day: '2026-11-05' }],
+    });
+    const out = await call('get_problem', { slug: 'some-synthetic-problem' });
+    expect(out.problem).toMatchObject({ onRoadmap: false, patternId: 'other', difficulty: null });
+    expect(out.record).toMatchObject({ attempts: 1, firstOutcome: 'clean' });
+    expect(out.sittings).toEqual([]);
+  });
   it('a problem whose only sitting is a test is record: null, with that sitting listed', async () => {
     const s = await ended('some-synthetic-problem', TODAY, false);
     await backend.patchSittingReview(s.id, { test: true });

@@ -565,13 +565,24 @@ export const COACH_TOOLS: Tool[] = [
         );
       const t = now(ctx);
       const sittings = mine.map((s) => problemSitting(s, t));
-      const pattern = r?.pattern ?? cat?.pattern ?? patternOfTags(mine[0]!.topicTags);
+      // The record's own fields first (a logged problem off the roadmap has a null difficulty, and no sitting),
+      // then the catalog's, then the newest uncounted sitting's.
+      const s0 = mine[0];
+      const src = r
+        ? { title: r.title, pattern: r.pattern, difficulty: r.difficulty }
+        : cat
+          ? { title: cat.title, pattern: cat.pattern, difficulty: cat.difficulty }
+          : {
+              title: s0!.problemTitle,
+              pattern: patternOfTags(s0!.topicTags),
+              difficulty: s0!.difficulty,
+            };
       const problem = {
         slug,
-        title: r?.title ?? cat?.title ?? mine[0]!.problemTitle,
-        pattern: PATTERN_NAMES[pattern],
-        patternId: pattern,
-        difficulty: r?.difficulty ?? cat?.difficulty ?? mine[0]!.difficulty,
+        title: src.title,
+        pattern: PATTERN_NAMES[src.pattern],
+        patternId: src.pattern,
+        difficulty: src.difficulty,
         onRoadmap: !!cat,
         url: sittingProblemUrl(slug),
       };
