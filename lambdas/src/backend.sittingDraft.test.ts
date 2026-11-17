@@ -86,7 +86,7 @@ describe('draftSittingReview', () => {
     const { data } = anthropic.draftCalls[0]!;
     expect(data).toMatchObject({
       problem: { title: 'Two Sum', difficulty: 'Easy', tags: ['Array'] },
-      signals: { accepted: true, ranBeforeFirstSubmit: false, trace: null },
+      signals: { accepted: true, ended: false, ranBeforeFirstSubmit: false, trace: null }, // still open
       judged: [
         {
           type: 'submit',
@@ -191,6 +191,7 @@ describe('draftSittingReview', () => {
     });
     expect(anthropic.draftCalls[0]!.data.signals).toEqual({
       accepted: false,
+      ended: false,
       ranBeforeFirstSubmit: true,
       trace: null,
     });

@@ -142,6 +142,15 @@ describe('createMcpClient', () => {
     ]);
   });
 
+  it('set_focus_pattern refused at the param check resolves the record it made', async () => {
+    const ledger = memLedger();
+    const fetch = vi.fn<FetchLike>(async () =>
+      http(200, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad pattern' } }),
+    );
+    await expect(client(fetch, ledger).writes.setFocusPattern('graph')).rejects.toThrow();
+    expect(ledger.entries.map((x) => x.op)).toEqual(['created', 'deleted']);
+  });
+
   it('reads a place’s list by slug, and passes place on create_task', async () => {
     const digest = { place: 'Shop', slug: 'shop', count: 1, titles: ['a'], text: 'Shop · 1 — a' };
     const fetch = server({

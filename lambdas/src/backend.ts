@@ -1179,7 +1179,7 @@ export class BackendClient implements ApiClient {
     if (!events.some((e) => e.type === 'run' || e.type === 'submit'))
       return { ok: false, reason: 'nothing-to-draft' };
     const out = await this.anthropic.sittingReviewDraft({
-      data: sittingDraftData(sitting, events, live?.code ?? null),
+      data: sittingDraftData(sitting, events, live?.code ?? null, this.now()),
       timeoutMs: SITTING_DRAFT_TIMEOUT_MS,
     });
     if (!out.ok) return { ok: false, reason: out.reason };
@@ -1282,8 +1282,12 @@ export class BackendClient implements ApiClient {
   }
   async getCoachStats(range?: CoachStatsRange): Promise<CoachStats> {
     const r = normalizeStatsRange(range);
-    const ci = await this.coachInput();
-    return coachStats(attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today), ci.today, r);
+    const ci = await this.coachInput(undefined, true); // read right after a log or a delete, as the tools do
+    return coachStats(
+      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+      ci.today,
+      r,
+    );
   }
   // Today's row, changed by `fn` against the plan as it stands with the row's freshest copy; created on first use.
   private async changeCoachDay(

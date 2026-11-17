@@ -195,7 +195,7 @@ const problemSitting = (s: Sitting, at: number) => ({
 const pct = (r: Rate) => (r.of >= STATS_PCT_MIN ? Math.round((100 * r.hit) / r.of) : null);
 const rateView = (r: Rate) => ({ ...r, pct: pct(r) });
 const STATS_PCT_MIN = 5; // under this many tries a rate is only a count
-const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried. \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top: the next pattern the plan would hold. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock scores are not in this yet.`;
+const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried. \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top as of now, whatever the range: the plan's next pick unless it is the pattern just held or they set one. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock scores are not in this yet.`;
 const statsView = (s: CoachStats) => ({
   from: s.from,
   to: s.to,
@@ -224,7 +224,7 @@ const statsView = (s: CoachStats) => ({
     peeked: p.peeked,
     causes: p.causes,
   })),
-  weakest: s.patterns.find((p) => p.rank === 1)?.pattern ?? null,
+  weakest: s.weakest && { pattern: PATTERN_NAMES[s.weakest], patternId: s.weakest },
   note: STATS_NOTE,
 });
 const storyView = (s: Story) => ({
@@ -643,7 +643,7 @@ export const COACH_TOOLS: Tool[] = [
     description: [
       ASK_FIRST,
       `Sets the pattern the plan holds from today (their pick over the engine\u2019s), for ${COACH_PARAMS.blockDays} active days; after that the engine picks again. \`pattern\` is a pattern id (${PATTERN_LIST}); null clears their pick and gives the choice back to the engine. Refused when the pattern has no untried roadmap problem left.`,
-      'Setting the pattern already held keeps its day. Returns the focus as the plan now reads it (pattern, day N of 3, why) — read it back.',
+      `Setting the pattern already held keeps its day. Returns the focus as the plan now reads it (pattern, day N of ${COACH_PARAMS.blockDays}, why) — read it back.`,
     ].join(' '),
     inputSchema: {
       type: 'object',

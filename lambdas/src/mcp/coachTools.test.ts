@@ -444,7 +444,7 @@ describe('coach_stats', () => {
       problems: 2,
       firstTry: { hit: 1, of: 2, pct: null },
       resolve: { hit: 1, of: 1, pct: null },
-      weakest: 'two-pointers',
+      weakest: { pattern: 'Two Pointers', patternId: 'two-pointers' },
     });
     expect(out.patterns[0]).toMatchObject({
       pattern: 'Two Pointers',

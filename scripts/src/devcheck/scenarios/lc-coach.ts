@@ -1190,9 +1190,18 @@ export const lcCoach: Scenario = {
         const one = await ctx.mcp.reads.coachStats({ from: d(-40), to: d(-40) });
         if (one.to !== d(-40) || one.weeks.length !== 1 || one.firstTry.hit < 1)
           fail(`a one-day range: ${JSON.stringify(one).slice(0, 300)}`);
-        const stories = await ctx.mcp.reads.listStories();
-        if (!Array.isArray(stories.stories) || (!stories.stories.length && !stories.note))
-          fail(`list_stories: ${JSON.stringify(stories).slice(0, 200)}`);
+        const story = await ctx.api.writes.createStory(titleOf(ctx, 'story'));
+        await ctx.api.writes.updateStory(story.id, {
+          situation: `devcheck ${ctx.nonce}`,
+          competencyTags: ['ownership'],
+        });
+        const listed = (await ctx.mcp.reads.listStories()).stories.find((x) => x.id === story.id);
+        if (
+          listed?.title !== titleOf(ctx, 'story') ||
+          listed.situation !== `devcheck ${ctx.nonce}` ||
+          listed.competencies.join() !== 'ownership'
+        )
+          fail(`list_stories: ${JSON.stringify(listed)}`);
       },
     },
     {
@@ -1239,6 +1248,15 @@ export const lcCoach: Scenario = {
         );
         await expectParamError('set_focus_pattern graph', () =>
           ctx.mcp.writes.setFocusPattern('graph'),
+        );
+        await expectParamError('coach_stats from after to', () =>
+          ctx.mcp.reads.coachStats({ from: today(), to: addDays(today(), -1) }),
+        );
+        await expectParamError('coach_stats from monday', () =>
+          ctx.mcp.reads.coachStats({ from: 'monday' }),
+        );
+        await expectParamError('get_problem Two Sum', () =>
+          ctx.mcp.reads.getProblem({ slug: 'Two Sum' }),
         );
         await expectParamError('list_problems limit 0', () =>
           ctx.mcp.reads.listProblems({ limit: 0 }),

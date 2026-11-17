@@ -889,7 +889,14 @@ describe('stats', () => {
           rank: 2, // ties the untried patterns, first in the roadmap order
         },
       ],
+      weakest: 'two-pointers',
     });
+  });
+  it('weakest is the ranking’s top even with no row in range: all clean so far → an untried pattern', () => {
+    const s = coachStats(attemptsOf([clean('two-sum', day(-2))], [], NOW), TODAY);
+    expect(s.patterns.map((p) => p.pattern)).toEqual(['arrays-hashing']);
+    expect(s.patterns[0]!.rank).toBeGreaterThan(1); // 1 of 1 clean: the strongest
+    expect(s.weakest).toBe('two-pointers');
   });
   it('a range never turns a re-solve into a first try', () => {
     const s = coachStats(all(), TODAY, { from: TODAY });

@@ -17,13 +17,13 @@ describe('sittingDraftUserContent', () => {
   it('carries the data as JSON', () => {
     const out = sittingDraftUserContent({
       problem: { title: 'Two Sum', difficulty: 'Easy', tags: [] },
-      signals: { accepted: false, ranBeforeFirstSubmit: null, trace: null },
+      signals: { accepted: false, ended: true, ranBeforeFirstSubmit: null, trace: null },
       judged: [],
       firstSubmitCode: null,
       finalCode: 'x',
     });
     expect(out).toBe(
-      'Data: {"problem":{"title":"Two Sum","difficulty":"Easy","tags":[]},"signals":{"accepted":false,"ranBeforeFirstSubmit":null,"trace":null},"judged":[],"firstSubmitCode":null,"finalCode":"x"}',
+      'Data: {"problem":{"title":"Two Sum","difficulty":"Easy","tags":[]},"signals":{"accepted":false,"ended":true,"ranBeforeFirstSubmit":null,"trace":null},"judged":[],"firstSubmitCode":null,"finalCode":"x"}',
     );
   });
 });

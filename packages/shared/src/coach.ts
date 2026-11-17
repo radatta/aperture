@@ -872,6 +872,7 @@ export interface CoachStats {
   untagged: number; // attempts that went wrong (not clean) with no cause tag
   weeks: { week: string; attempts: number; firstTry: Rate; resolve: Rate }[]; // ISO weeks in range, oldest first
   patterns: PatternStat[]; // those with an attempt in range: weakest first (rank), then the roadmap order
+  weakest: PatternId | null; // the ranking's top now, whatever the range (it may have no row in `patterns`)
 }
 export interface CoachStatsRange {
   from?: string;
@@ -907,9 +908,8 @@ export function coachStats(
   const from = range.from ?? null;
   const to = range.to ?? today;
   const seen = new Set<string>();
-  const ranks = new Map(
-    rankPatterns(attempts, addDays(today, 1)).map((r, i) => [r.pattern, i + 1]),
-  );
+  const ranked = rankPatterns(attempts, addDays(today, 1));
+  const ranks = new Map(ranked.map((r, i) => [r.pattern, i + 1]));
   const out: CoachStats = {
     from,
     to,
@@ -923,6 +923,7 @@ export function coachStats(
     untagged: 0,
     weeks: [],
     patterns: [],
+    weakest: ranked[0]?.pattern ?? null,
   };
   const pats = new Map<PatternId, PatternStat & { slugs: Set<string> }>();
   const weeks = new Map<string, CoachStats['weeks'][number]>();

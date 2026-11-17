@@ -337,7 +337,10 @@ export function createMcpClient({
     getProblem: (args: Record<string, unknown>) => data<DevProblemRead>('get_problem', args),
     coachStats: (args: Record<string, unknown> = {}) => data<DevCoachStats>('coach_stats', args),
     listStories: () =>
-      data<{ stories: { id: string; title: string }[]; note?: string }>('list_stories', {}),
+      data<{
+        stories: { id: string; title: string; situation: string; competencies: string[] }[];
+        note?: string;
+      }>('list_stories', {}),
   };
 
   const writes = {
@@ -544,10 +547,17 @@ export function createMcpClient({
     // The focus override, as api.ts's setCoachFocus: recorded before setting it, resolved when cleared.
     async setFocusPattern(pattern: unknown): Promise<DevFocusSet> {
       const id = coachFocusId(run);
-      const sets = typeof pattern === 'string';
-      if (sets && !pendingIds(ledger.read()).includes(id))
-        ledger.append({ run, op: 'created', id, via: COACH_FOCUS_VIA, title: pattern });
-      const out = await data<DevFocusSet>('set_focus_pattern', { pattern });
+      const fresh = typeof pattern === 'string' && !pendingIds(ledger.read()).includes(id);
+      if (fresh) ledger.append({ run, op: 'created', id, via: COACH_FOCUS_VIA, title: pattern });
+      let out: DevFocusSet;
+      try {
+        out = await data<DevFocusSet>('set_focus_pattern', { pattern });
+      } catch (err) {
+        // Refused at the param check: nothing was set, so the record this call made resolves now.
+        if (fresh && err instanceof McpRpcError && err.code === PARAM_ERROR)
+          ledger.append({ run, op: 'deleted', id });
+        throw err;
+      }
       if (pattern === null && ledger.has(id)) ledger.append({ run, op: 'deleted', id });
       return out;
     },
