@@ -1110,17 +1110,18 @@ const saveY = () => {
     // no storage (private mode): a reload starts at the top
   }
 };
-function applyOpen() {
+// `start`: the page just loaded. Opened at a hash (a reload), the glance's place is the one saved before it.
+function applyOpen(start = false) {
   const was = openId;
   openId = hashPanel();
   if (openId === was) return;
   if (!was) {
-    glanceY = window.scrollY;
-    // the glance's place, for a reload: closing after one still lands where the glance was
+    // the glance's place, kept for a reload: closing after one still lands where the glance was
     try {
-      sessionStorage.setItem('tower:y:', String(glanceY));
+      if (start) glanceY = Number(sessionStorage.getItem('tower:y:')) || 0;
+      else sessionStorage.setItem('tower:y:', String((glanceY = window.scrollY)));
     } catch {
-      // no storage: closing after a reload starts at the top
+      if (!start) glanceY = window.scrollY; // no storage: closing after a reload starts at the top
     }
   }
   if (openId) document.body.dataset.open = openId;
@@ -1218,8 +1219,8 @@ for (const id of ['needs', 'now', 'next', 'done']) {
   h.title = `expand (key ${PANELS.indexOf(id) + 1})`;
   h.addEventListener('click', () => openPanel(id));
 }
-window.addEventListener('popstate', applyOpen);
-window.addEventListener('hashchange', applyOpen);
+window.addEventListener('popstate', () => applyOpen());
+window.addEventListener('hashchange', () => applyOpen());
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.repeat) return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName ?? '')) return;
@@ -1229,7 +1230,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('pagehide', saveY);
 history.scrollRestoration = 'manual'; // the page restores its own scroll (below), once the first render is in
-applyOpen();
+applyOpen(true);
 tick().then(() => {
   let y = 0;
   try {

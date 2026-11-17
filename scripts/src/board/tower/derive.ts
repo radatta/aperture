@@ -806,6 +806,17 @@ export function derive(i: Inputs): View {
       p.kind === 'maintainer' && !p.done && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
   );
   const first = needs[0]?.what ?? mine[0]?.what ?? null;
+  const ask = nextAsk(
+    table.rows,
+    rows
+      .filter((r) => nowStates.includes(r.state))
+      .map((r) => ({
+        branch: r.branch,
+        eta: files.get(r.branch)?.eta ?? null,
+        prOpen: prs.some((p) => p.branch === r.branch && p.state === 'OPEN'),
+      })),
+    i.now,
+  );
   const next = {
     order: order
       .map((o) => ({ ...o, row: byBranch.get(o.branch) ?? orderRow(o, i, prs, files, queued) }))
@@ -822,23 +833,16 @@ export function derive(i: Inputs): View {
     more: Math.max(0, needs.length - 1),
     nowIndex: table.nowIndex,
     soon: planSoon(
-      table.rows.filter((r) => r.what !== first),
+      // the rows YOU NEXT and NEXT ASK already show aren't repeated
+      table.rows.filter(
+        (r) => r.what !== first && !(ask?.source === 'plan' && r.what === ask.what),
+      ),
       i.now,
     ),
     table: table.rows,
     notes: q?.planNotes ?? [],
     planAt: q?.planAt ?? null,
-    ask: nextAsk(
-      table.rows,
-      rows
-        .filter((r) => nowStates.includes(r.state))
-        .map((r) => ({
-          branch: r.branch,
-          eta: files.get(r.branch)?.eta ?? null,
-          prOpen: prs.some((p) => p.branch === r.branch && p.state === 'OPEN'),
-        })),
-      i.now,
-    ),
+    ask,
   };
 
   const done = prs

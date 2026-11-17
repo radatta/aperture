@@ -1113,6 +1113,13 @@ describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, for
     expect(r.eta).toMatchObject({ late: true, source: 'measured' });
     expect(row(inputs(), { file: f, pr: pr() }).eta!.late).toBe(false);
     expect(row(inputs(), { file: file() })).toMatchObject({ steps: null, eta: null });
+    // off the track: merged or cleanup has done every step; parked or blocked none, its time "so far"
+    const states = (phase: LaneFile['phase']) =>
+      row(inputs(), { file: { ...f, phase, eta: null } }).steps!.map((s) => s.state);
+    expect(states('merged')).toEqual(['done', 'done', 'done']);
+    expect(states('cleanup')).toEqual(['done', 'done', 'done']);
+    expect(states('parked')).toEqual(['todo', 'todo', 'todo']);
+    expect(states('blocked')).toEqual(['todo', 'todo', 'todo']);
   });
 
   it('NEXT: the plan table with struck and slipping rows, the notes, the next ask; heads for the strip', () => {
@@ -1164,6 +1171,15 @@ describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, for
     });
     expect(v.heads.next).toMatch(/^ask ~\d\d:\d\d$/);
     expect(derive(inputs()).heads.next).toBe('0 to land');
+    // a plan row that is the next ask isn't repeated in the glance below it
+    const only = derive(
+      inputs({
+        plan: [{ at: NOW + 20 * MIN, what: 'talk', kind: 'maintainer', who: null }],
+        maintainer: [{ text: 'a', since: null }],
+      }),
+    ).next;
+    expect(only.ask).toMatchObject({ what: 'talk', source: 'plan' });
+    expect(only.soon).toEqual([]);
   });
 
   it('gh PRs says how many fork PRs the newest 40 dropped; ok stays ok, a failure keeps its own detail', () => {

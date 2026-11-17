@@ -8,6 +8,7 @@ export type PlanRow = PlanItem & {
   due: number | null; // when the row should be finished: its eta's end, else its time
   deltaMin: number | null; // a finished row's actual less its due, whole minutes (+ late, − early)
   slip: number | null; // the lane's ETA end, when it falls after the row's due: amber "now HH:MM"
+  slipLo: number | null; // that ETA's start: the next ask's window
   overdue: boolean; // not finished, its due passed, and no lane ETA still ahead to say when instead
 };
 export type PlanPr = { state: string; mergedAt: number | null } | null;
@@ -37,11 +38,12 @@ export function planTable(
     const doneAt = p.doneAt ?? (merged ? pr!.mergedAt : null);
     const due = p.eta?.to ?? p.at;
     let slip: number | null = null;
+    let slipLo: number | null = null;
     // an open PR means the lane's part is done: what's left is the maintainer's, not a slip
     if (!done && p.lane && due !== null && pr?.state !== 'OPEN') {
       const e = etaOf(p.lane);
       const r: Range | null | undefined = p.kind === 'merge' ? e?.pr : (e?.next ?? e?.pr);
-      if (r && r.hi > due) slip = r.hi;
+      if (r && r.hi > due) [slipLo, slip] = [r.lo, r.hi];
     }
     return {
       ...p,
@@ -50,6 +52,7 @@ export function planTable(
       due,
       deltaMin: doneAt !== null && due !== null ? Math.round((doneAt - due) / 60e3) : null,
       slip,
+      slipLo,
       // a slip whose time has passed too (the lane went quiet) is late, not "now <a past time>"
       overdue: !done && due !== null && due < now && (slip === null || slip < now),
     };
@@ -85,7 +88,7 @@ export function nextAsk(
   for (const r of rows) {
     if (r.done || (r.kind !== 'maintainer' && r.kind !== 'merge') || r.due === null) continue;
     if (r.slip === null && r.due < now) continue; // passed and nothing says when: the overdue row says so
-    const lo = r.slip ?? r.eta?.from ?? r.at ?? r.due;
+    const lo = r.slipLo ?? r.eta?.from ?? r.at ?? r.due;
     const hi = r.slip ?? r.due;
     asks.push({
       lo: Math.min(lo, hi),

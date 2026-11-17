@@ -504,8 +504,9 @@ The plan-table fields (the web tower's NEXT, TOWER.md → _Expand_) are all opti
 before. `you` is what the row costs the maintainer; `eta` is the window the row finishes in (`at` stays its start,
 its sort key and the statusline's time), `measured` from board history or a `guess`; `lane` names the lane whose ETA
 the row waits on, so the tower can mark it slipping; `done` strikes it (`true`, or the ISO time it finished, which
-the expanded view sets against its due as est vs actual). A `done` row leaves the PLAN panel and the next merge, so
-the statusline's `next-merge.sh` (the hub's) skips it too: its jq `select` adds `((.done // false) == false)`. `planAt` is when the hub last rewrote the plan; `planNotes` its
+the expanded view sets against its due as est vs actual). A `done` row leaves the PLAN panel and the next merge; the
+statusline's `next-merge.sh` (the hub's) should skip it too, with `((.done // false) == false)` in its jq `select`
+(a follow-up of the hub's), else the two can name different next merges. `planAt` is when the hub last rewrote the plan; `planNotes` its
 notes on the whole. A bad value in any of them (a loose time, `to` before `from`, an unknown `source`, a `done` that
 is neither, a `lane` that isn't a branch name, a `planNotes` that isn't a list of text) is named as a problem and
 dropped; the row stays. The hub rewrites them at every lane ETA report.

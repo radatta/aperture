@@ -186,8 +186,9 @@ describe('nextAsk', () => {
       noPr,
       NOW,
     );
+    // the ask is the lane's window, not a moment
     expect(nextAsk(rows, [], NOW)).toMatchObject({
-      lo: T('20:05'),
+      lo: T('19:40'),
       hi: T('20:05'),
       what: 'merge y',
       branch: 'y',

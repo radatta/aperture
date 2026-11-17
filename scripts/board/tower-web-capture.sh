@@ -210,6 +210,8 @@ async function expandPass(b, name) {
   // in-page state (not a reload's: that starts the page afresh) comes back with the glance
   if (!(await page.locator('.slot').first().evaluate((e) => e.classList.contains('open'))))
     fails.push(`${tag}: a slot card opened on the glance closed across the expand`);
+  await page.evaluate(() => scrollTo(0, 300)); // the glance's place, which closing after a reload returns to
+  const gy = (await state()).y;
   await page.keyboard.press('3');
   await want('key 3', 'next');
   await page.evaluate(() => scrollTo(0, 120));
@@ -221,7 +223,8 @@ async function expandPass(b, name) {
   if (Math.abs(s2.y - y1) > 2) fails.push(`${tag}: a reload lost the scroll ${y1} → ${s2.y}`);
   await page.keyboard.press('Escape');
   await page.waitForSelector('#meta .ver', { state: 'attached' });
-  await want('Esc after a reload', null);
+  const s3 = await want('Esc after a reload', null);
+  if (Math.abs(s3.y - gy) > 2) fails.push(`${tag}: Esc after a reload lost the glance's place ${gy} → ${s3.y}`);
   await page.keyboard.press('3');
   await want('key 3', 'next');
   await page.keyboard.press('2');
