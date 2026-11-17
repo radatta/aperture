@@ -265,6 +265,7 @@ import type {
   SittingEventsInput,
   SittingEventsResult,
   SittingReplayChunk,
+  SittingSummary,
   SittingStartInput,
   SittingStartResult,
   ReviewDraft,
@@ -1084,12 +1085,7 @@ export class BackendClient implements ApiClient {
             );
       if (written) fresh.add(e.id);
     }
-    const traced = await this.traceCommentRow(
-      sittingId,
-      events,
-      sitting.summary.firstJudgedAt,
-      now,
-    );
+    const traced = await this.traceCommentRow(sittingId, events, sitting.summary, now);
     let status = sitting.status;
     if (events.some((e) => isHeadEvent(e.type)) || traced)
       status = (await this.refoldHead(sittingId, now)).status;
@@ -1113,15 +1109,17 @@ export class BackendClient implements ApiClient {
   private async traceCommentRow(
     sittingId: string,
     events: readonly { id: string; type: string; at: number; payload?: unknown }[],
-    judgedAt: number | null | undefined,
+    summary: SittingSummary,
     now: number,
   ): Promise<boolean> {
+    const judgedAt = summary.firstJudgedAt;
     const snaps = events.filter(
       (e) => e.type === 'snapshot' && (judgedAt == null || e.at < judgedAt),
     );
     if (!snaps.length) return false;
     const rows = await this.repo.listSittingHeadRows(sittingId);
-    if (rows.some((r) => r.type === 'trace-comment')) return false;
+    // Already written: refold only if the summary hasn't taken it yet (a call that died before its refold).
+    if (rows.some((r) => r.type === 'trace-comment')) return summary.commentTrace !== 'traced';
     const judged = [...rows, ...events].filter((x) => x.type === 'run' || x.type === 'submit');
     const cut = Math.min(...judged.map((x) => x.at));
     const hit = snaps

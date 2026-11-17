@@ -115,7 +115,7 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
       <FocusLine today={today} />
       {/* The plan mode in one line (coach.md → Plan mode): what the mix is today and why. */}
       <Text size="xs" tone="muted" data-testid="plan-mode">
-        {today.planMode.line}
+        {today.planMode?.line}
       </Text>
 
       {ai?.status === 'ok' && ai.focusChange && (

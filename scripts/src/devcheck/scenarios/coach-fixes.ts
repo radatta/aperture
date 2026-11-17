@@ -203,7 +203,7 @@ export const coachFixes: Scenario = {
       id: 'void-mcp',
       entry: 'mcp',
       kind: 'nominal',
-      what: '“That one was a test” — set_void on a counted sitting: it leaves get_problem, coach_stats and leetcode_today, and nextDue falls back to the logged try',
+      what: '“That one was a test” — set_void on a counted sitting: it leaves get_problem, coach_stats and leetcode_today, nextDue falls back to the logged try, and list_sittings reads it unreviewed (a void alone is no review)',
     },
     {
       id: 'unvoid-mcp',
@@ -215,7 +215,18 @@ export const coachFixes: Scenario = {
       id: 'void-ui',
       entry: 'ui',
       kind: 'nominal',
-      what: 'SittingDetail “Doesn’t count”: the notice shows and survives a reload, the Today card drops it and the sittings list marks it; “Count it again” brings it back',
+      what: 'SittingDetail “Doesn’t count”: the notice shows and survives a reload, the Today card drops it and the sittings list marks it (no reviewed dot); “Count it again” brings it back',
+    },
+    {
+      id: 'void-suggestions',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A sitting with no review keeps the form’s suggested help and cause after Doesn’t count',
+      offDev: {
+        file: 'app/src/pages/Recruiting/SittingDetail.test.tsx',
+        test: 'a sitting with no review keeps its suggested help and cause after Doesn’t count',
+        why: 'same path as void-ui (proven on dev): the form reads the stored review the void writes; dev’s void sitting carries a review word only by chance of its timeline, so the suggestion is pinned by the jsdom test',
+      },
     },
     {
       id: 'void-schedule',
@@ -348,17 +359,6 @@ export const coachFixes: Scenario = {
       what: 'set_claude_notes in one call on an accepted, an unaccepted and an abandoned sitting; get_sitting and get_problem read them back',
     },
     {
-      id: 'notes-idle',
-      entry: 'mcp',
-      kind: 'edge',
-      what: 'An idle-closed sitting takes notes',
-      offDev: {
-        file: 'lambdas/src/mcp/coachFixesTools.test.ts',
-        test: 'takes an abandoned sitting, refuses an open one, and writes nothing on a refusal',
-        why: 'same path as notes-batch (proven on dev): an idle-closed sitting is an ended one to setSittingClaudeNotes’ open check, like the abandoned one notes-batch writes; dev would need a 45-minute idle wait',
-      },
-    },
-    {
       id: 'notes-ui',
       entry: 'ui',
       kind: 'nominal',
@@ -414,10 +414,21 @@ export const coachFixes: Scenario = {
       id: 'legacy-two-sum',
       entry: 'api',
       kind: 'edge',
-      what: 'Legacy two-sum is left out by default; a stored void: false lifts it; a logged two-sum the same day still counts',
+      what: 'Legacy two-sum is left out by default; a stored void: false lifts it',
       offDev: {
         file: 'packages/shared/src/coachFixes.test.ts',
         test: 'two-sum is test data by default; a stored void: false lifts it, a void: true drops any group',
+        why: legacyWhy,
+      },
+    },
+    {
+      id: 'legacy-two-sum-logged',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A logged two-sum on a legacy day still counts: the default touches legacy pieces only',
+      offDev: {
+        file: 'packages/shared/src/coachFixes.test.ts',
+        test: 'the default never touches a logged two-sum, even on a legacy day',
         why: legacyWhy,
       },
     },
@@ -498,6 +509,11 @@ export const coachFixes: Scenario = {
         // The sitting's clean re-solve no longer counts: the log alone schedules it, due D0+3.
         if (v.nextDue?.dueDay !== d(-2) || v.nextDue.track !== 'clean')
           fail(`nextDue after the void: ${JSON.stringify(v.nextDue)}, want ${d(-2)} clean`);
+        // A review that only voids is no review.
+        const row = (await ctx.mcp.reads.listSittings({ limit: 50 })).sittings.find(
+          (x) => x.id === id,
+        );
+        if (!row || row.reviewed) fail(`list_sittings after the void: ${JSON.stringify(row)}`);
         const after = await counted();
         if (
           after.attempts !== 1 ||
@@ -550,6 +566,8 @@ export const coachFixes: Scenario = {
         await listRow().waitFor({ timeout: 15_000 });
         if (!((await listRow().textContent()) ?? '').includes(VOID_BUTTON))
           fail('the sittings list doesn’t mark it “Doesn’t count”');
+        if (await listRow().getByRole('img', { name: 'reviewed' }).count())
+          fail('the sittings list shows a reviewed dot on a void-only review');
         await ctx.shot('coach-fixes-void-card');
 
         await ctx.ui.goto(`/recruiting/sittings/${id}`);

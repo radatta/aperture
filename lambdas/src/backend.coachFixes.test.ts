@@ -116,6 +116,28 @@ describe('the trace comment row', () => {
     expect((await traceRows()).map((x) => x.id)).toEqual([a.id]);
   });
 
+  it('a retry after the row was written but before its refold still folds it', async () => {
+    const { backend, sitting, repo } = await opened();
+    const a = snap(TRACE, T0 + 2000);
+    await backend.lcSittingEvents({ sittingId: sitting.id, events: [submit(T0 + 5000)] });
+    expect((await backend.getSitting(sitting.id)).sitting.summary.commentTrace).toBe('none');
+    // A late batch with the earlier snapshot wrote its row, then died before the refold.
+    await repo.putSittingTraceRowIfAbsent(
+      {
+        id: a.id,
+        sittingId: sitting.id,
+        type: 'trace-comment',
+        at: a.at,
+        verdict: null,
+        timer: null,
+        deletedAt: null,
+      },
+      { userId: 'u1', createdAt: T0, updatedAt: T0 },
+    );
+    await backend.lcSittingEvents({ sittingId: sitting.id, events: [a] });
+    expect((await backend.getSitting(sitting.id)).sitting.summary.commentTrace).toBe('traced');
+  });
+
   it('is never written for a snapshot after the first judged event, even in the same batch', async () => {
     const { backend, sitting, traceRows } = await opened();
     await backend.lcSittingEvents({

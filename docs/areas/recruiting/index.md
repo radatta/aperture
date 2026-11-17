@@ -163,7 +163,7 @@ extension that sends none — so readers take `summary.coach ?? null`.
 
 **The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
 the code itself is the only traced/untraced source (the card is going: extension-tidy removes it; nothing here reads
-it). At ingest (`lcSittingEvents`), the earliest fresh snapshot before the sitting's first judged event (stored or in
+it). At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in
 the same batch) whose code holds a trace comment becomes the server's own head row — type `trace-comment` (never an
 extension event), at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`). The rule
 (`traceComment.ts`, no model): a block is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or

@@ -1166,13 +1166,13 @@ class StubClient implements ApiClient {
   // sitting.
   private traceCommentRows(
     sittingId: string,
-    fresh: readonly { id: string; type: string; at: number; payload?: unknown }[],
+    events: readonly { id: string; type: string; at: number; payload?: unknown }[],
   ) {
     const rows = this.alive(this.store.sittingHeadRows).filter((x) => x.sittingId === sittingId);
     if (rows.some((x) => x.type === 'trace-comment')) return [];
-    const judged = [...rows, ...fresh].filter((x) => x.type === 'run' || x.type === 'submit');
+    const judged = [...rows, ...events].filter((x) => x.type === 'run' || x.type === 'submit');
     const cut = Math.min(...judged.map((x) => x.at));
-    const hit = fresh
+    const hit = events
       .filter((e) => e.type === 'snapshot' && e.at < cut)
       .sort((a, b) => a.at - b.at)
       .find((e) => traceCommentIn(snapshotCode(e.payload) ?? ''));

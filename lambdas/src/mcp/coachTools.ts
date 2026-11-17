@@ -503,6 +503,10 @@ export const COACH_TOOLS: Tool[] = [
       const legacy: { day: string; slug: string; void: boolean }[] = [];
       for (const raw of targets) {
         const t = (raw ?? {}) as Record<string, unknown>;
+        const extra = Object.keys(t).filter(
+          (k) => !['sittingId', 'day', 'slug', 'void'].includes(k),
+        );
+        if (extra.length) throw new RpcParamError(`Unknown target field: ${extra.join(', ')}`);
         if (typeof t.void !== 'boolean')
           throw new RpcParamError('each target needs "void": true or false');
         if (t.sittingId !== undefined) {
@@ -521,12 +525,12 @@ export const COACH_TOOLS: Tool[] = [
           legacy.push({ day, slug: t.slug, void: t.void });
         }
       }
-      // Every sitting must exist before anything is written; the legacy days are checked by setCoachVoids, which
-      // writes nothing on a refusal — and it runs before the sitting writes.
-      const heads = sittings.length ? ((await ctx.dispatch('listSittings', [])) as Sitting[]) : [];
+      // Every sitting must exist before anything is written (a consistent read each, so one started seconds ago is
+      // found); the legacy days are checked by setCoachVoids, which writes nothing on a refusal — and runs first.
       for (const x of sittings)
-        if (!heads.some((h) => h.id === x.id))
+        await (ctx.dispatch('getSitting', [x.id]) as Promise<unknown>).catch(() => {
           throw new Error(`No sitting ${x.id} — list_sittings gives the ids`);
+        });
       const groups = legacy.length
         ? ((await ctx.dispatch('setCoachVoids', [legacy])) as LegacyGroup[])
         : [];
