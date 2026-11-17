@@ -323,6 +323,13 @@ srej('sim: an unknown job field is BAD_JSON', 'BAD_JSON', patch={'device': 'iPho
 # --- the sim can't run it: error, so the devcheck says "needs you" ---
 serr('sim: no axe is AXE_MISSING', 'AXE_MISSING', tape=[{'m': 'axe --version', 'rc': 127}], simExcludes=['describe-ui', 'bootstatus'], ts=None)
 serr('sim: another axe version is AXE_VERSION', 'AXE_VERSION(1.7.0)', tape=[{'m': 'axe --version', 'out': '1.7.0'}], simExcludes=['describe-ui'])
+# AXe 2.0.4 is on trial beside 1.8.0 (2.0.0 fixed AXe issue 71): each pinned exactly, whatever words --version wraps it in
+spass('sim: axe 2.0.4 is accepted, and the result says which ran', tape=[{'m': 'axe --version', 'out': '2.0.4'}], expect={'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '2.0.4', 'xcode': 'Xcode 27.2'}})
+spass('sim: an --version that says "axe 2.0.4" is 2.0.4', tape=[{'m': 'axe --version', 'out': 'axe 2.0.4'}], expect={'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '2.0.4', 'xcode': 'Xcode 27.2'}})
+spass('sim: "version v1.8.0" is 1.8.0', tape=[{'m': 'axe --version', 'out': 'version v1.8.0'}], expect={'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '1.8.0', 'xcode': 'Xcode 27.2'}})
+serr('sim: a newer axe (2.0.5) is AXE_VERSION until a trial pins it', 'AXE_VERSION(2.0.5)', tape=[{'m': 'axe --version', 'out': '2.0.5'}], simExcludes=['describe-ui'])
+serr('sim: a pre-release of a pinned version is AXE_VERSION', 'AXE_VERSION(1.8.0)', tape=[{'m': 'axe --version', 'out': '1.8.0-beta'}], simExcludes=['describe-ui'])
+serr('sim: a version with a prefix of a pin (1.8) is AXE_VERSION', 'AXE_VERSION(1.8)', tape=[{'m': 'axe --version', 'out': '1.8'}], simExcludes=['describe-ui'])
 serr('sim: no aperture-devcheck sim is SIM_MISSING', 'SIM_MISSING', tape=[{'m': 'simctl list devices -j', 'out': {'devices': {}}}])
 serr('sim: two aperture-devcheck sims is SIM_AMBIGUOUS', 'SIM_AMBIGUOUS', tape=[{'m': 'simctl list devices -j', 'out': dev(n=2)}])
 serr('sim: a sim of another device type is PROFILE_MISMATCH, nothing tapped', 'PROFILE_MISMATCH',

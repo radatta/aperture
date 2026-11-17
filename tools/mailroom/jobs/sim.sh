@@ -2,11 +2,11 @@
 # The `sim` job: drive the iOS Simulator on this Mac through a short, allowlisted plan of ops, inside the Aperture
 # web app on the Home Screen of the dedicated `aperture-devcheck` sim, signed in as the dev test user. Sourced by
 # runner.sh. The plan is DATA: SIM_JQ validates all of it before any simctl/axe call, and each op runs a fixed recipe
-# below (AXe 1.8.0 for taps, typing and accessibility reads; simctl for boot, kill and prefs). Mirrors
+# below (AXe, 1.8.0 or 2.0.4, for taps, typing and accessibility reads; simctl for boot, kill and prefs). Mirrors
 # scripts/src/mailroom/sim.ts (the fixtures run both). Design, hazards and reason codes: docs/ops/IOS-CHECK.md.
 
 SIM_NAME="aperture-devcheck"
-SIM_AXE_VERSION="1.8.0"
+SIM_AXE_VERSIONS="1.8.0 2.0.4" # each exactly; 2.0.4 is on trial (IOS-CHECK.md → Setup) until it's the only one
 SIM_TERMINATE_ID="com.apple.webapp"
 SIM_HUB_ID="com.apple.dt.Devices"
 SIM_EMAIL="devcheck@dev.aperture.rahuldatta.dev"
@@ -418,9 +418,14 @@ sim_arm() {
 sim_ready() {
   local v i
   if [ -z "$SIM_AXE_OK" ]; then
-    v="$(sim_cap 30 axe --version 2>/dev/null | tr -d '[:space:]')" || v=""
-    [ -n "$v" ] || { sim_err SIM_UNAVAILABLE AXE_MISSING "axe not found (brew install cameroncooke/axe/axe)"; return 1; }
-    [ "$v" = "$SIM_AXE_VERSION" ] || { sim_err SIM_UNAVAILABLE "AXE_VERSION($(printf '%s' "$v" | tr -cd '0-9.' | cut -c1-12))" "want axe $SIM_AXE_VERSION"; return 1; }
+    v="$(sim_cap 30 axe --version 2>/dev/null)" || v=""
+    [ -n "$(printf '%s' "$v" | tr -d '[:space:]')" ] || { sim_err SIM_UNAVAILABLE AXE_MISSING "axe not found (brew install cameroncooke/axe/axe)"; return 1; }
+    # the number alone: trimmed, one leading word `axe`, `version` or `v` dropped (any case); then an exact pin
+    v="$(printf '%s' "$v" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed -E 's/^([Aa][Xx][Ee]|[Vv][Ee][Rr][Ss][Ii][Oo][Nn])[[:space:]]+//' | sed -E 's/^[Vv]([0-9])/\1/')"
+    case " $SIM_AXE_VERSIONS " in
+      *" $v "*) SIM_AXE_VERSION="$v" ;;
+      *) sim_err SIM_UNAVAILABLE "AXE_VERSION($(printf '%s' "$v" | tr -cd '0-9.' | cut -c1-12))" "want axe ${SIM_AXE_VERSIONS// / or }"; return 1 ;;
+    esac
     SIM_AXE_OK=1
     SIM_XCODE="$(sim_cap 30 xcodebuild -version 2>/dev/null | head -2 | tr '\n' ' ' | tr -cd 'A-Za-z0-9. ' | sed 's/ *$//' | cut -c1-40)" || SIM_XCODE=""
   fi
@@ -1811,7 +1816,7 @@ run_sim() {
   SIM_RD="$3"
   sim_rd "$w" plan.json || true # what ran, beside what it found
   SIM_SHA="$(jq -r .params.sha "$w")"
-  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN="" SIM_RB_STAY=false
+  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_AXE_VERSION="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN="" SIM_RB_STAY=false
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0 SIM_KB_WROTE="" SIM_KB_SET=""
   SIM_ST="" SIM_RS="" SIM_DT="" SIM_VIA=tap SIM_OPI=0 SIM_TRIAL="" SIM_TDONE="" SIM_TMS="" SIM_TNOTE="" SIM_TUN="" SIM_TOP=""
   SIM_TK=0 SIM_TW0=0 SIM_TW1=0 SIM_TAPS=1 SIM_RESETS=0 SIM_SETTLE=1 SIM_HID_TRIED="" SIM_HID_PID="" SIM_HID_ALIVE=""
