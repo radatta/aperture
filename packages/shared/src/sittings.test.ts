@@ -977,6 +977,8 @@ describe('idle close', () => {
     expect(() => reclaimStart(held, 'A', [closed, open], T)).toThrow(SITTING_ACTIVE_ERROR);
     expect(() => reclaimStart(held, 'A', [closed], T)).toThrow(SITTING_ACTIVE_ERROR);
     expect(reclaimStart(held, 'A', [closed], T + 2 * M)?.openSittingId).toBe('A');
+  });
+});
 
 describe('the trace comment fold (commentTrace)', () => {
   const judged = (type: 'run' | 'submit', id: string, at: number) =>

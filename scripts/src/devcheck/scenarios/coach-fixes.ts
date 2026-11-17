@@ -359,6 +359,17 @@ export const coachFixes: Scenario = {
       what: 'set_claude_notes in one call on an accepted, an unaccepted and an abandoned sitting; get_sitting and get_problem read them back',
     },
     {
+      id: 'notes-idle',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'An idle-closed sitting takes notes: set_claude_notes writes the idle close first, as the app would',
+      offDev: {
+        file: 'lambdas/src/mcp/coachFixesTools.test.ts',
+        test: 'an idle-closed sitting takes notes: the write closes it as the app would, then saves',
+        why: 'dev would need a 45-minute idle wait (sitting-auto-close’s slow tier); the write path is notes-batch’s, proven on dev, after closeIdle',
+      },
+    },
+    {
       id: 'notes-ui',
       entry: 'ui',
       kind: 'nominal',

@@ -1471,7 +1471,7 @@ class StubClient implements ApiClient {
     const now = this.now();
     // Every sitting checked before any write: all or nothing.
     for (const n of list) {
-      const s = this.mustFind(this.store.sittings, n.sittingId);
+      const s = this.closeIdle(this.mustFind(this.store.sittings, n.sittingId), now); // backend parity
       if (isSittingOpen(s, now)) throw new Error(CLAUDE_NOTES_OPEN_ERROR);
     }
     return list.map((n) =>

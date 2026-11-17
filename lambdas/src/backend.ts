@@ -1765,8 +1765,9 @@ export class BackendClient implements ApiClient {
   async setSittingClaudeNotes(items: ClaudeNotesInput[]): Promise<Sitting[]> {
     const list = normalizeClaudeNotes(items);
     const now = this.now();
+    // An idle sitting is ended (the close is written here, as any write's read would): Claude reads it closed.
     for (const n of list)
-      if (isSittingOpen(await this.mustSitting(n.sittingId), now))
+      if (isSittingOpen(await this.closeIdle(await this.mustSitting(n.sittingId), now, true), now))
         throw new Error(CLAUDE_NOTES_OPEN_ERROR);
     const out: Sitting[] = [];
     for (const n of list)

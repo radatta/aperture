@@ -215,6 +215,23 @@ describe('set_claude_notes', () => {
   });
 });
 
+describe('set_claude_notes on an idle sitting', () => {
+  it('an idle-closed sitting takes notes: the write closes it as the app would, then saves', async () => {
+    // Started 2 h ago with no events and no pulls: idle past the 45-minute line, its head still active.
+    const s = await ended('climbing-stairs', TODAY, false, true);
+    const idle = { ...s, id: ulid(), clientSittingId: ulid(), startedAt: T0 - 2 * 3600_000 };
+    await repo.putSittingIfAbsent(idle);
+    const out = await call('set_claude_notes', {
+      notes: [{ sittingId: idle.id, text: 'Stopped after the first failing case; no trace.' }],
+    });
+    expect(out.saved).toMatchObject([{ sittingId: idle.id }]);
+    expect(await repo.getSitting(idle.id)).toMatchObject({
+      closedBy: 'idle',
+      claudeNotes: { text: 'Stopped after the first failing case; no trace.' },
+    });
+  });
+});
+
 describe('the peek and off-catalog fields', () => {
   it('log_attempt: help solution with no outcome is one call onto the retry track', async () => {
     const out = await call('log_attempt', {
