@@ -3,6 +3,7 @@ import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
 import { PlaceTokenStore } from './ddb/placeTokens';
+import { ScopedTokenStore } from './ddb/scopedTokens';
 import { PushRegistry } from './ddb/pushRegistry';
 import { noPublicKey } from './push/publicKey';
 import type { PublicKeyReader } from './push/publicKey';
@@ -69,6 +70,7 @@ export async function handleRpc(
     financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
     anthropic: call.testMode ? noopAnthropic() : (deps.anthropic ?? noopAnthropic()),
     placeTokens: new PlaceTokenStore(doc, writes), // the same writes: a smoke run mints nothing
+    scopedTokens: new ScopedTokenStore(doc, writes), // likewise
     pushRegistry: new PushRegistry(doc, writes), // likewise: a smoke subscribe registers no one
     pushPublicKey: call.testMode ? noPublicKey : (deps.pushPublicKey ?? noPublicKey),
   });

@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { SK_END } from './DocClient';
-import { gsi1, pk, placeTokenPk, PLACE_TOKEN_SK, PUSH_PK, pushSk, sk } from './keys';
+import {
+  gsi1,
+  pk,
+  placeTokenPk,
+  PLACE_TOKEN_SK,
+  PUSH_PK,
+  pushSk,
+  scopedTokenPk,
+  SCOPED_TOKEN_SK,
+  sk,
+} from './keys';
 
 describe('single-table keys', () => {
   it('partitions per user', () => {
@@ -55,6 +65,20 @@ describe('single-table keys', () => {
     expect(placeTokenPk('ab12')).toBe('placetoken#ab12');
     expect(placeTokenPk('ab12').startsWith(pk(''))).toBe(false);
     expect(PLACE_TOKEN_SK).toBe('placetoken');
+  });
+
+  it('keys scoped tokens per user and their lookup outside every user partition', () => {
+    expect(sk.stoken('01T')).toBe('stoken#01T');
+    expect(sk.stoken('01T').startsWith(sk.stokenPrefix())).toBe(true);
+    // No other kind's prefix pulls a token row, and the token prefix pulls no other kind's rows.
+    for (const prefix of [sk.settings(), sk.seriesPrefix(), sk.storyPrefix(), sk.sessionPrefix()])
+      expect(sk.stoken('01T').startsWith(prefix)).toBe(false);
+    for (const key of [sk.settings(), sk.series('x'), sk.story('x'), sk.session('d', 'x')])
+      expect(key.startsWith(sk.stokenPrefix())).toBe(false);
+    expect(scopedTokenPk('ab12')).toBe('stoken#ab12');
+    expect(scopedTokenPk('ab12').startsWith(pk(''))).toBe(false);
+    expect(scopedTokenPk('ab12').startsWith(placeTokenPk(''))).toBe(false);
+    expect(SCOPED_TOKEN_SK).toBe('stoken');
   });
 
   it('keys the calibration GSI on done + raw completion time', () => {

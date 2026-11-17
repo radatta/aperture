@@ -108,6 +108,8 @@ import {
   PLACE_FINISHED_ERROR,
   PLACE_PART_ERROR,
   PLACE_TOKEN_PREFIX,
+  SCOPED_TOKEN_PREFIX,
+  scopedTokenNameError,
   placeDigestOf,
   PUSH_DEVICE_ID_LEN,
   PUSH_NO_DEVICE_ERROR,
@@ -198,6 +200,8 @@ import type {
   Place,
   PlaceDigest,
   PlaceTokenStatus,
+  ScopedTokenInfo,
+  TokenScope,
   PomodoroSession,
   PushDevice,
   PushPollerHealth,
@@ -294,6 +298,25 @@ interface StubPlaceToken {
   createdAt: number;
 }
 
+// 32 random bytes, base64url — the backend's token shape, so the Settings reveal reads the same.
+function randomTokenBody(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+// A scoped device token (capture.ts), plaintext here like the place token. The stub has no capture route, so
+// nothing ever uses one: lastUsedAt stays null and usedToday 0. Revoke deletes it (no tombstone: a credential).
+interface StubScopedToken {
+  id: string;
+  scope: TokenScope;
+  name: string;
+  token: string;
+  createdAt: number;
+}
+
 export interface Store {
   logEntries: LogEntry[];
   tasks: Task[];
@@ -308,6 +331,7 @@ export interface Store {
   categories: Category[];
   places: Place[];
   placeToken: StubPlaceToken | null; // a credential: never exported
+  scopedTokens: StubScopedToken[]; // credentials: never exported
   pushSubs: PushSub[]; // credentials (endpoint + keys): never exported
   pushHealth: PushPollerHealth; // the poller's heartbeat, which only Send test moves here: not user data
   sittings: Sitting[];
@@ -349,6 +373,7 @@ export function emptyStore(): Store {
     categories: [],
     places: [],
     placeToken: null,
+    scopedTokens: [],
     pushSubs: [],
     pushHealth: NO_POLLER_RUN,
     sittings: [],
@@ -2043,14 +2068,8 @@ class StubClient implements ApiClient {
   async getPlaceTokenStatus(): Promise<PlaceTokenStatus> {
     return this.placeTokenStatus();
   }
-  // 32 random bytes, base64url — the backend's shape, so the Settings reveal reads the same.
   async rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }> {
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const b64 = btoa(String.fromCharCode(...bytes))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-    const token = `${PLACE_TOKEN_PREFIX}${b64}`;
+    const token = `${PLACE_TOKEN_PREFIX}${randomTokenBody()}`;
     // A singleton credential, not a collection — set directly, like ensureSettings.
     this.store.placeToken = { token, createdAt: this.now() };
     this.persist();
@@ -2058,6 +2077,36 @@ class StubClient implements ApiClient {
   }
   async revokePlaceToken(): Promise<void> {
     this.store.placeToken = null;
+    this.persist();
+  }
+
+  // --- Scoped device tokens (capture.ts) ---------------------------------
+  private scopedInfo(t: StubScopedToken): ScopedTokenInfo {
+    const { id, scope, name, createdAt } = t;
+    return { id, scope, name, hint: t.token.slice(-4), createdAt, lastUsedAt: null, usedToday: 0 };
+  }
+  async listScopedTokens(scope: TokenScope): Promise<ScopedTokenInfo[]> {
+    return this.store.scopedTokens.filter((t) => t.scope === scope).map((t) => this.scopedInfo(t));
+  }
+  async mintScopedToken(
+    scope: TokenScope,
+    name: string,
+  ): Promise<{ token: string; info: ScopedTokenInfo }> {
+    const err = scopedTokenNameError(name, await this.listScopedTokens(scope));
+    if (err) throw new Error(err);
+    const row: StubScopedToken = {
+      id: this.ulid(),
+      scope,
+      name: name.trim(),
+      token: `${SCOPED_TOKEN_PREFIX[scope]}${randomTokenBody()}`,
+      createdAt: this.now(),
+    };
+    this.store.scopedTokens.push(row);
+    this.persist();
+    return { token: row.token, info: this.scopedInfo(row) };
+  }
+  async revokeScopedToken(id: string): Promise<void> {
+    this.store.scopedTokens = this.store.scopedTokens.filter((t) => t.id !== id);
     this.persist();
   }
 
@@ -2805,6 +2854,7 @@ class StubClient implements ApiClient {
       Exclude<
         keyof Store,
         | 'placeToken'
+        | 'scopedTokens'
         | 'pushSubs'
         | 'pushHealth'
         | 'fluxNotes'

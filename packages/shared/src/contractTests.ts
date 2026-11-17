@@ -14,6 +14,7 @@ import {
   PLACE_TOKEN_PREFIX,
   placeUnknownError,
 } from './places';
+import { SCOPED_TOKEN_PREFIX, SCOPED_TOKENS_MAX } from './capture';
 import {
   deriveFinanceView,
   FINANCE_REFRESH_COOLDOWN_MS,
@@ -3092,6 +3093,48 @@ export function runApiContract(
       expect((await api.exportData()).places.map((p) => p.slug)).toEqual(['grocer']);
       await api.revokePlaceToken();
       expect((await api.getPlaceTokenStatus()).active).toBe(false);
+    });
+
+    it('scoped tokens: named, shown once, capped per scope, revocable, never exported', async () => {
+      expect(await api.listScopedTokens('capture')).toEqual([]);
+      const a = await api.mintScopedToken('capture', ' iPhone ');
+      expect(a.token.startsWith(SCOPED_TOKEN_PREFIX.capture)).toBe(true);
+      expect(a.token).toMatch(/^apc_[A-Za-z0-9_-]{43}$/);
+      expect(a.info).toEqual({
+        id: a.info.id,
+        scope: 'capture',
+        name: 'iPhone',
+        hint: a.token.slice(-4),
+        createdAt: clock,
+        lastUsedAt: null,
+        usedToday: 0,
+      });
+      advance(1000);
+      const b = await api.mintScopedToken('capture', 'Raycast');
+      expect(b.token).not.toBe(a.token);
+      expect(b.info.id).not.toBe(a.info.id);
+      await expect(api.mintScopedToken('capture', 'IPHONE')).rejects.toThrow('already called');
+      await expect(api.mintScopedToken('capture', '  ')).rejects.toThrow('needs a name');
+      await expect(api.mintScopedToken('capture', 'x'.repeat(41))).rejects.toThrow('at most 40');
+      expect(await api.listScopedTokens('capture')).toEqual([a.info, b.info]);
+
+      for (let i = 2; i < SCOPED_TOKENS_MAX; i++) {
+        advance(1);
+        await api.mintScopedToken('capture', `t${i}`);
+      }
+      await expect(api.mintScopedToken('capture', 'one more')).rejects.toThrow(
+        `At most ${SCOPED_TOKENS_MAX}`,
+      );
+      const data = JSON.stringify(await api.exportData());
+      expect(data).not.toContain(a.token);
+      expect(data).not.toContain(b.token);
+
+      await api.revokeScopedToken(a.info.id);
+      await api.revokeScopedToken(a.info.id); // already gone: a no-op
+      const left = await api.listScopedTokens('capture');
+      expect(left.map((t) => t.name)).toEqual(['Raycast', 't2', 't3', 't4']);
+      // The name and the slot are free again.
+      expect((await api.mintScopedToken('capture', 'iPhone')).info.name).toBe('iPhone');
     });
 
     it('reminders: subscribing the same endpoint twice is one device; unsubscribe removes it', async () => {

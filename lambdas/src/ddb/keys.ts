@@ -7,13 +7,19 @@
 // hash before any userId is known — it carries the userId instead. Never read by a user's queries
 // (they all start `u#`), never exported.
 //
-// The second: `push`, the reminder poller's (reminders.md). `user#<uid>` lists who has a device to ping
+// Likewise `stoken#<sha256hex> / stoken`: a scoped device token's lookup row (capture.md → Token) — found by
+// hash alone, it names the user and the token's id; the token itself lives in the user's partition
+// (`stoken#<id>`), which is the authority.
+//
+// The third: `push`, the reminder poller's (reminders.md). `user#<uid>` lists who has a device to ping
 // (written on the first subscribe, removed with the last unsubscribe — the poller runs per user without a
 // fixed user id), and `health` is the poller's heartbeat. Derived, never client-set, never exported.
 
 export const pk = (userId: string) => `u#${userId}`;
 export const placeTokenPk = (hash: string) => `placetoken#${hash}`;
 export const PLACE_TOKEN_SK = 'placetoken';
+export const scopedTokenPk = (hash: string) => `stoken#${hash}`;
+export const SCOPED_TOKEN_SK = 'stoken';
 export const PUSH_PK = 'push';
 export const pushSk = {
   user: (userId: string) => `user#${userId}`,
@@ -109,6 +115,9 @@ export const sk = {
   place: (id: string) => `place#${id}`,
   placePrefix: () => `place#`,
   ptoken: () => `ptoken`,
+  // Scoped device tokens (capture.md): one row per live token — name, hash, counters. Revoke deletes it.
+  stoken: (id: string) => `stoken#${id}`,
+  stokenPrefix: () => `stoken#`,
 
   idea: (id: string) => `idea#${id}`,
   ideaPrefix: () => `idea#`,

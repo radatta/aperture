@@ -6,6 +6,7 @@ import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { PlaceTokenStore } from './ddb/placeTokens';
+import { ScopedTokenStore } from './ddb/scopedTokens';
 import { PushRegistry } from './ddb/pushRegistry';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
@@ -52,6 +53,7 @@ runApiContract('lambda (direct)', (now) => {
     presigner: fakePresigner(),
     objects: fakeObjectStore(),
     placeTokens: new PlaceTokenStore(doc, liveWrites(doc)),
+    scopedTokens: new ScopedTokenStore(doc, liveWrites(doc)),
     pushRegistry: new PushRegistry(doc, liveWrites(doc)),
     pushPublicKey,
     ...financeDeps(doc, now),

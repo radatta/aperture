@@ -52,6 +52,7 @@ import type {
   SittingStartResult,
 } from './sittings';
 import type { PlaceDigest, PlaceTokenStatus, UpsertPlaceInput } from './places';
+import type { ScopedTokenInfo, TokenScope } from './capture';
 import type { PushDevice, PushStatus, SubscribePushInput } from './reminders';
 import type {
   CreateLinkTokenInput,
@@ -553,6 +554,13 @@ export interface ApiClient {
   getPlaceTokenStatus(): Promise<PlaceTokenStatus>;
   rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }>;
   revokePlaceToken(): Promise<void>;
+  // Scoped device tokens (capture.ts) — named, at most SCOPED_TOKENS_MAX live per scope, each good for its
+  // scope's one route and no RPC method. mint returns the plaintext exactly once (the server keeps only its
+  // hash) and refuses a name scopedTokenNameError rejects; revoke kills it at once (an unknown id is a
+  // no-op). list is the scope's live tokens, oldest first.
+  listScopedTokens(scope: TokenScope): Promise<ScopedTokenInfo[]>;
+  mintScopedToken(scope: TokenScope, name: string): Promise<{ token: string; info: ScopedTokenInfo }>;
+  revokeScopedToken(id: string): Promise<void>;
 
   // Settings
   getSettings(): Promise<Settings>;

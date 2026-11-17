@@ -27,6 +27,7 @@ import { useRolls } from '../../data/hooks/useRolls';
 import { useVoice } from '../../modules/flux/useVoice';
 import { VoicePicker } from '../../modules/flux/VoicePicker';
 import { NotificationsSection } from './NotificationsSection';
+import { CaptureTokensSection } from './CaptureTokensSection';
 import { PlacesSection } from './PlacesSection';
 import {
   useConnectGoogle,
@@ -53,6 +54,7 @@ export function SettingsPage() {
       )}
       <CategoriesSection />
       <PlacesSection />
+      <CaptureTokensSection />
       <CalendarSection />
       <NotificationsSection />
       <PreferencesSection />

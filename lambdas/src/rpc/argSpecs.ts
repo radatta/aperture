@@ -3,7 +3,7 @@
 // edge) with the wrong shape is a ShapeError — a 400 naming the problem — never a TypeError deep in a
 // handler or a nested object stored as sent. The `satisfies` keeps this table in lockstep with ApiClient:
 // a new method, a changed arity or a new input field without a check here fails typecheck.
-import { COMPETENCY_TAGS } from '@aperture/shared';
+import { COMPETENCY_TAGS, TOKEN_SCOPES } from '@aperture/shared';
 import type {
   ApiClient,
   ApiMethod,
@@ -347,6 +347,10 @@ export const RPC_ARGS = {
   getPlaceTokenStatus: [],
   rotatePlaceToken: [],
   revokePlaceToken: [],
+  // Scoped tokens — the name is scopedTokenNameError's (blank, length, clash, the per-scope limit).
+  listScopedTokens: [named('scope', lit(...TOKEN_SCOPES))],
+  mintScopedToken: [named('scope', lit(...TOKEN_SCOPES)), named('name', str(NAME_MAX))],
+  revokeScopedToken: [id],
 
   // Settings — fluxSets is fluxSetsError's (exercise ids and counts, with its own messages).
   getSettings: [],
