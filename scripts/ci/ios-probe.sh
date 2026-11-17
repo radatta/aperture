@@ -21,7 +21,7 @@ SIM_NAME=ios-probe
 X_MID=220 # 440 pt wide, as the 18 Pro Max the Mac profiles
 W=440
 H=956
-BUDGET=900 # seconds of probe before every loop gives up, inside the job's 20 min (setup takes ~2)
+BUDGET=1000 # seconds of probe before every loop gives up, inside the job's 20 min (setup takes ~2)
 
 # The workflow asks which cache mode is set before it restores anything.
 if [ "${1:-}" = cache-mode ]; then echo "$CACHE"; exit 0; fi
@@ -61,7 +61,7 @@ cap() {
 }
 ax() { cap 30 "$AXE" "$@" --udid "$U"; }
 NOTE=""
-note() { NOTE="${NOTE:+$NOTE; }$*"; log "  note: $*"; }
+note() { local m; m="$(printf '%s' "$*" | tr '\n|' ' /')"; NOTE="${NOTE:+$NOTE; }$m"; log "  note: $m"; }
 
 # Evidence for one moment: a simctl screenshot (no AXe needed) and AXe's full tree.
 evidence() {
@@ -223,10 +223,16 @@ s_safari() {
     sleep 2
     t="$(tree)" || continue
     app="$(front_app "$t")"
-    # a first-run sheet in Safari (none known on iOS 26; seen once is a finding): dismiss it
-    if [ -n "$(find_el "$t" '^(Continue|Not Now)$' AXButton)" ]; then note "dismissed a first-run sheet"; tap_label '^(Continue|Not Now)$' AXButton 1 || true; continue; fi
     [ "$app" = Safari ] || continue
-    if s="$(scan_text 'Sign in')"; then note "Safari up, page shows Sign in at y ${s%% *} after $((i * 2)) s"; return 0; fi
+    # iOS 26's first-run tip ("View Bookmarks, Share Menu, and Open Tabs") lays a full-screen "dismiss popup" group
+    # over the page, so every point read lands on it (run 1): close it first
+    if [ -n "$(find_el "$t" '^dismiss popup$')" ]; then
+      note "closed Safari's first-run tip after $((i * 2)) s"
+      tap_label '^Close$' AXButton 1 || true
+      continue
+    fi
+    [ -f "$OUT/point-530.json" ] || ax describe-ui --point "$X_MID,530" >"$OUT/point-530.json" 2>&1 || true
+    if s="$(scan_text 'Sign in' 400 700)"; then note "Safari up, page shows Sign in at y ${s%% *} after $((i * 2)) s"; return 0; fi
   done
   note "front app '$app'; no Sign in text in 60 s"
   [ "$app" = Safari ] || return 1
@@ -237,15 +243,13 @@ s_safari() {
 # every screen on the way is kept (a2hs-*), so a miss shows exactly what was offered.
 s_a2hs() {
   local t i
-  if tap_label '^Share$' AXButton 2; then :
-  elif tap_label '^(More|Page Menu|Tab Options|Show More|More Options)$' AXButton 3; then
-    evidence a2hs-menu
-    sleep 1
-    t="$(tree)"
-    if [ -z "$(find_el "$t" '^Add to Home Screen$')" ]; then tap_label '^Share' '' 4 || return 1; fi
-  else
-    return 1
-  fi
+  # iOS 26 Safari: Share sits in the … menu (AXButton "More", right of the address bar); "Page Menu" is the left one
+  tap_label '^More$' AXButton 3 || return 1
+  sleep 1
+  evidence a2hs-menu
+  t="$(tree)" || return 1
+  note "… menu: $(labels "$t" | cut -c1-400)"
+  if [ -z "$(find_el "$t" '^Add to Home Screen$')" ]; then tap_label '^Share' '' 4 || return 1; fi
   sleep 2
   evidence a2hs-share
   for i in 1 2 3 4; do
@@ -304,7 +308,7 @@ s_launch() {
       continue
     fi
     [ "$app" != Safari ] || continue
-    if s="$(scan_text 'Sign in')"; then note "front app '$app' (the Mac's iOS 27 reads 'Web'), Sign in at y ${s%% *} after $((i * 2)) s"; return 0; fi
+    if s="$(scan_text 'Sign in' 400 700)"; then note "front app '$app' (the Mac's iOS 27 reads 'Web'), Sign in at y ${s%% *} after $((i * 2)) s"; return 0; fi
   done
   note "front app '$app'; no Sign in card in 40 s"
   return 1
