@@ -162,7 +162,55 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
     ['call at 5.30pm', { title: 'call', dueTime: '17:30' }, 'call'],
     ['call 5-6pm', { title: 'call', dueTime: '18:00' }, 'call'],
     ['move standup to 5pm', { dueDay: TODAY, dueTime: '17:00' }, 'move standup to 5pm'],
-    ['push dinner to 8pm', { title: 'push dinner', dueTime: '20:00' }, 'push dinner'],
+    ['push dinner to 8pm', { title: 'push dinner', dueTime: '20:00' }, 'push dinner to 8pm'],
+    ['move standup to 5pm', { title: 'move standup to', dueTime: '17:00' }, 'move standup to 5pm'],
+    // Review round 2: a day word naming another day, phrasal "on", a clock as a noun, compound durations, the
+    // second-clock guard, a recapitalized title, a model that rolled a past clock itself.
+    ['call mom the day after tomorrow', { title: 'call mom', dueDay: '2026-11-19' }, 'call mom'],
+    ['submit report this coming friday', { title: 'submit report', dueDay: FRI }, 'submit report'],
+    [
+      'decide what to work on tomorrow',
+      { title: 'decide what to work on', dueDay: '2026-11-18' },
+      'decide what to work on',
+    ],
+    [
+      'focus on tomorrow 9am',
+      { title: 'focus on', dueDay: '2026-11-18', dueTime: '09:00' },
+      'focus on',
+    ],
+    [
+      'turn the heating on 7am',
+      { title: 'turn the heating on', dueTime: '07:00' },
+      'turn the heating on',
+    ],
+    ['prep notes for the 3pm', { dueTime: '15:00' }, 'prep notes for the 3pm'],
+    ['read for an hour and a half', { title: 'read', estimateMin: 90 }, 'read'],
+    ['stretch 1 hour and 30 minutes', { title: 'stretch', estimateMin: 90 }, 'stretch'],
+    [
+      'tidy the garage 2h and 30m',
+      { title: 'tidy the garage', estimateMin: 150 },
+      'tidy the garage',
+    ],
+    [
+      'move standup at 3pm to 5pm',
+      { dueDay: TODAY, dueTime: '15:00' },
+      'move standup at 3pm to 5pm',
+    ],
+    [
+      'move standup at 3pm to 5pm',
+      { dueDay: TODAY, dueTime: '17:00' },
+      'move standup at 3pm to 5pm',
+    ],
+    [
+      'call the bank typed at 1 am',
+      { title: 'Call The Bank Typed', dueTime: '01:00' },
+      'call the bank typed',
+    ],
+    [
+      'call the bank typed at 1 am',
+      { title: 'call the bank', dueDay: '2026-11-18', dueTime: '01:00' },
+      'call the bank typed',
+    ],
     [
       'buy cake 🎂 for sam typed at 6 pm',
       { title: 'buy cake for sam', dueTime: '18:00' },
@@ -210,6 +258,13 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
     expect(
       title(
         'remind me tomorrow at 9 am to water the ferns done',
+        { title: 'remind me tomorrow at 9 am to water the ferns done', dueDay: '2026-11-18' },
+        true,
+      ),
+    ).toBe('water the ferns done');
+    expect(
+      title(
+        'remind me tomorrow at 9 am to water the ferns done',
         { title: 'water the ferns', dueDay: '2026-11-18' },
         true,
       ),
@@ -237,7 +292,7 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
 });
 
 describe('keepTitleWords', () => {
-  const none = { meta: [], tail: [], lead: null };
+  const none = { meta: [], tail: [], lead: [] };
   it('stands when nothing changes or the words are reordered', () => {
     expect(keepTitleWords('fix  the bug', 'fix  the bug', none)).toBe('fix  the bug');
     expect(keepTitleWords('fix the bug', 'the bug fix', none)).toBe('the bug fix');
@@ -249,6 +304,6 @@ describe('keepTitleWords', () => {
   });
   it('never puts back a lone dash, and never leaves the title blank', () => {
     expect(keepTitleWords('fix - it', 'fix it', none)).toBe('fix it');
-    expect(keepTitleWords('5pm', '5pm', { meta: [], tail: [[0, 3]], lead: null })).toBe('5pm');
+    expect(keepTitleWords('5pm', '5pm', { meta: [], tail: [[0, 3]], lead: [] })).toBe('5pm');
   });
 });

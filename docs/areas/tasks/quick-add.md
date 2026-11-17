@@ -141,13 +141,18 @@ and kept a due phrase it had used ("finish slides before 3pm" due 15:00; a dangl
 stripped "aperture," with no category set — the prompt's own example. The model's title is lined up, in order,
 against the typed words; then:
 
-- **A word the parse didn't use goes back**, in place, as typed. The parse used a clock (when a time was set), a
-  day word or the date it named (when a day was), a duration (when an estimate was), a lone "due", and the leading
-  category word (when the parse set that category) — each with the word that leads it ("before", "due by", "this",
-  "~"); on a spoken line also the spoken time, "tonight", "morning" and a leading "remind me to".
+- **A word the parse didn't use goes back**, in place, as typed — and a word the model only recapitalized takes
+  the user's casing again. The parse used a clock (when a time was set), "today" / "tomorrow" when they name the
+  due day ("the day after tomorrow" doesn't) or the date it named, a day part ("morning", "this afternoon"), a
+  duration whole ("an hour and a half"), a lone "due", and the leading category word (when the parse set that
+  category) — each with the word that leads it ("before", "due by", "this coming", "around", "~"); on a spoken
+  line also the said time and a leading "remind me … to". A clock the task is about ("move standup to 5pm", "prep
+  notes for the 3pm") isn't the due's: its words stay.
 - **A due phrase the parse used leaves the title** when it ends it and is the line's one stated clock, equal to the
   due time: "before 3pm", "until 5pm", a bare "6pm", with a day beside it or with its own connector ("today 3pm",
-  "5pm friday", "due by friday 9am"), and a connector its going leaves dangling. A clock mid-title ("watch 9pm
+  "5pm friday", "due by friday 9am"), and an at/by/before/until it leaves dangling — never "on" or "to" ("turn
+  the heating on 7am", "decide what to work on tomorrow" keep theirs). A spoken "remind me … to" leaves even when
+  the model kept it. A clock mid-title ("watch 9pm
   show", "the 3pm meeting"), a leading one ("3pm meeting prep"), a day the task is about ("prep for this friday
   5pm") and a day with no clock ("pay rent today") stay. Before/until never fill a time: only the model's own does.
 - **A leading category word leaves only when it names the category the parse set** — exactly its label, with

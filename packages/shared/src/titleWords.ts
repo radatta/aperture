@@ -8,7 +8,7 @@ export type Range = readonly [start: number, end: number];
 export interface TitleMeta {
   meta: readonly Range[]; // words the parse used: the model may drop them
   tail: readonly Range[]; // a due phrase the parse used: taken out when it ends the title
-  lead: Range | null; // the category word and its separator, when the parse set that category: taken out
+  lead: readonly Range[]; // a lead-in the parse used ("aperture,", a spoken "remind me … to"): taken out
 }
 
 interface Token {
@@ -19,8 +19,9 @@ interface Token {
 }
 
 const EDGE = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu;
-// Left dangling at the end of a title once the phrase after it went: "send invoice until".
-const CONNECTOR = new Set(['at', 'by', 'before', 'until', 'till', 'due', 'on', '@']);
+// Left dangling at the end of a title once the due phrase after it went: "send invoice until". Not "on" or "to":
+// "turn the heating on 7am", "decide what to work on tomorrow" keep theirs.
+const CONNECTOR = new Set(['at', 'by', 'before', 'until', 'till', 'due', '@']);
 
 function tokens(text: string): Token[] {
   return [...text.matchAll(/\S+/g)].map((m) => {
@@ -40,11 +41,12 @@ const touches = (t: Token, rs: readonly Range[]) =>
 
 // The model's title with every dropped word the parse didn't use put back and any due phrase it did use taken out.
 // The model's own string stands when nothing changes, or when its title isn't the line's words in order
-// (reworded, reordered) — then there's nothing to line up.
+// (reworded, reordered) — then there's nothing to line up. A word it only recapitalized is the user's again.
 export function keepTitleWords(line: string, title: string, m: TitleMeta): string {
   const words = tokens(line);
   const kept = new Array<boolean>(words.length).fill(false);
   let at = 0;
+  let recased = false;
   for (const t of tokens(title)) {
     let i = at;
     while (i < words.length && !same(words[i]!, t)) i++;
@@ -54,8 +56,10 @@ export function keepTitleWords(line: string, title: string, m: TitleMeta): strin
     }
     kept[i] = true;
     at = i + 1;
+    if (t.raw !== words[i]!.raw && t.raw.toLowerCase() === words[i]!.raw.toLowerCase())
+      recased = true;
   }
-  let changed = false;
+  let changed = recased;
   words.forEach((w, i) => {
     if (kept[i] || w.key === '' || touches(w, m.meta)) return;
     kept[i] = changed = true;
@@ -64,20 +68,16 @@ export function keepTitleWords(line: string, title: string, m: TitleMeta): strin
     kept[i] = false;
     changed = true;
   };
-  const lead = m.lead;
-  if (lead) words.forEach((w, i) => kept[i] && w.start >= lead[0] && w.end <= lead[1] && drop(i));
+  words.forEach(
+    (w, i) => kept[i] && m.lead.some(([s, e]) => w.start >= s && w.end <= e) && drop(i),
+  );
   // From the end: a due phrase the parse used, then a connector its going left behind ("until", "at").
   for (let i = words.length - 1; i >= 0; i--) {
     if (!kept[i]) continue;
     const w = words[i]!;
     const next = words[i + 1];
     if (inside(w, m.tail)) drop(i);
-    else if (
-      CONNECTOR.has(w.key || w.raw) &&
-      next &&
-      !kept[i + 1] &&
-      touches(next, [...m.meta, ...m.tail])
-    )
+    else if (CONNECTOR.has(w.key || w.raw) && next && !kept[i + 1] && touches(next, m.tail))
       drop(i);
     else if (w.key === '')
       continue; // a dash before the phrase: the rebuild trims it

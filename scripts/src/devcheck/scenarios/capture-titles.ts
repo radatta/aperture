@@ -16,6 +16,7 @@ interface Sample {
   title: string;
   untimed?: string[];
   category?: true;
+  typed?: true; // the capture route with no voice flag: Raycast's body
 }
 
 const verbatim = (m: string): Sample[] => [
@@ -61,14 +62,40 @@ const dueOut: Sample[] = [
     untimed: ['email the team about the 3pm meeting'],
   },
 ];
-// Spoken (the Shortcut's body): the lead-in, the said time and the day go; every other word stays.
-const spoken: Sample[] = [
-  { line: 'remind me to call the bank typed at 5 PM', title: 'call the bank typed' },
-  { line: 'remind me tomorrow at 9 am to water the ferns done', title: 'water the ferns done' },
-  { line: 'remind me at 5 to email the landlord sent', title: 'email the landlord sent' },
-  { line: 'call the plumber asap tonight', title: 'call the plumber asap' },
-  { line: 'stretch typed in 20 minutes', title: 'stretch typed' },
-  { line: 'remind me to book the vet note tomorrow morning', title: 'book the vet note' },
+// Through the capture route — spoken (the Shortcut's body: the lead-in, the said time and the day go) and typed
+// (Raycast's) — every other word stays. Real tasks, so each carries the run's marker.
+const captured = (m: string): Sample[] => [
+  {
+    line: `remind me to devcheck ${m} call the bank typed at 5 PM`,
+    title: `devcheck ${m} call the bank typed`,
+  },
+  {
+    line: `remind me tomorrow at 9 am to devcheck ${m} water the ferns done`,
+    title: `devcheck ${m} water the ferns done`,
+  },
+  {
+    line: `remind me at 5 to devcheck ${m} email the landlord sent`,
+    title: `devcheck ${m} email the landlord sent`,
+  },
+  {
+    line: `devcheck ${m} call the plumber asap tonight`,
+    title: `devcheck ${m} call the plumber asap`,
+  },
+  { line: `devcheck ${m} stretch typed in 20 minutes`, title: `devcheck ${m} stretch typed` },
+  {
+    line: `remind me to devcheck ${m} book the vet note tomorrow morning`,
+    title: `devcheck ${m} book the vet note`,
+  },
+  {
+    line: `devcheck ${m} water the ferns done by 5 pm`,
+    title: `devcheck ${m} water the ferns done`,
+    typed: true,
+  },
+  {
+    line: `devcheck ${m} book the vet note at 11 am`,
+    title: `devcheck ${m} book the vet note`,
+    typed: true,
+  },
 ];
 // Long enough that the model moves the rest to notes: the title is the model's, never grown by the guard.
 const OVERFLOW = `plan the garden makeover typed at 9 am: ${'compost bins, raised beds, drip lines, mulch, trellis, '.repeat(5)}and a bench`;
@@ -183,7 +210,7 @@ export const captureTitles: Scenario = {
       id: 'mcp-parse',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'parse_task (Raycast’s route) gives the same titles',
+      what: 'parse_task (the MCP tool agents parse with) gives the same titles',
     },
     {
       id: 'review',
@@ -209,6 +236,12 @@ export const captureTitles: Scenario = {
       },
     },
     {
+      id: 'capture-typed',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A typed line through the capture route (Raycast’s body) keeps every title word',
+    },
+    {
       id: 'spoken',
       entry: 'api',
       kind: 'nominal',
@@ -219,7 +252,8 @@ export const captureTitles: Scenario = {
       entry: 'raycast',
       kind: 'nominal',
       what: 'The Raycast hotkey saves the same title',
-      needsYou: 'Raycast runs on the Mac',
+      needsYou:
+        'the hotkey script runs on the Mac; its server path (a typed capture) is the capture-typed row',
     },
   ],
   steps: [
@@ -303,28 +337,32 @@ export const captureTitles: Scenario = {
     {
       id: 'api-spoken',
       entry: 'api',
-      proves: ['spoken'],
+      proves: ['spoken', 'capture-typed'],
       cost: 'slow',
       title:
-        'Spoken lines through the capture route: every title word kept, the lead-in and time gone',
+        'Spoken and typed lines through the capture route: every title word kept, the lead-in and time gone',
       async run(ctx) {
         // Two tokens: a re-ask of the same text on one would answer the first capture (the 60 s duplicate guard).
-        const minted = [
-          await ctx.api.writes.mintScopedToken(`devcheck ${ctx.nonce} titles`),
-          await ctx.api.writes.mintScopedToken(`devcheck ${ctx.nonce} titles 2`),
-        ];
+        const minted: { token: string; info: { id: string } }[] = [];
         try {
-          const fails = await sample(ctx, 'spoken', spoken, async (s, attempt) => {
-            const got = await ctx.api.writes.captureRaw(minted[attempt]!.token, {
-              text: s.line,
-              voice: true,
-            });
-            const r = got.body as DevCaptureResult;
-            if (got.status !== 200 || !r?.id) return `HTTP ${got.status}: ${r?.say ?? ''}`;
-            if (r.raw) return `saved as typed: ${r.say}`;
-            const title = (await ctx.api.reads.getTask(r.id))?.title;
-            return title === s.title ? null : `“${title}”, want “${s.title}”`;
-          });
+          for (const n of ['titles', 'titles 2'])
+            minted.push(await ctx.api.writes.mintScopedToken(`devcheck ${ctx.nonce} ${n}`));
+          const fails = await sample(
+            ctx,
+            'capture route',
+            captured(marker(ctx.nonce)),
+            async (s, attempt) => {
+              const got = await ctx.api.writes.captureRaw(
+                minted[attempt]!.token,
+                s.typed ? { text: s.line } : { text: s.line, voice: true },
+              );
+              const r = got.body as DevCaptureResult;
+              if (got.status !== 200 || !r?.id) return `HTTP ${got.status}: ${r?.say ?? ''}`;
+              if (r.raw) return `saved as typed: ${r.say}`;
+              const title = (await ctx.api.reads.getTask(r.id))?.title;
+              return title === s.title ? null : `“${title}”, want “${s.title}”`;
+            },
+          );
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
         } finally {
           for (const t of minted)
@@ -343,8 +381,8 @@ export const captureTitles: Scenario = {
           const r = await ctx.api.reads.parseTask(s.line);
           if (!r.ok) return `the parse failed (${r.reason})`;
           if (!r.input.notes) return `no notes, title “${r.input.title}”`;
-          // The model cuts its title near the prompt's 80; a guard that put dropped words back would run past it.
-          return r.input.title.length <= 100 ? null : `the title grew to ${r.input.title.length}`;
+          // The model cuts its title at the prompt's 80; a guard that put dropped words back would run past it.
+          return r.input.title.length <= 80 ? null : `the title grew to ${r.input.title.length}`;
         };
         const fails = await sample(ctx, 'overflow', [{ line: OVERFLOW, title: '' }], ok);
         if (fails.length) throw new Error(fails.join('; '));

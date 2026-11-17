@@ -4,7 +4,7 @@
 // contract, the validator for Haiku's untrusted JSON, and the flow (grammar bypass → model → validate).
 // Design record: docs/areas/tasks/quick-add.md.
 
-import { addDays, isDayKey, isTimeKey, weekdayOf } from './dates';
+import { addDays, isDayKey, isTimeKey, USER_TIME_ZONE, weekdayOf, zonedDayTime } from './dates';
 import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
@@ -290,7 +290,9 @@ const CLOCK_LEAD = new RegExp(
   'i',
 );
 const DAY_LEAD =
-  /(?:(?:\bdue\s+)?\b(?:by|on|before|until|till)\s+|\bdue\s+)?(?:\b(?:this|next|the)\s+)?$/i;
+  /(?:(?:\bdue\s+)?\b(?:by|on|before|until|till)\s+|\bdue\s+)?(?:\b(?:this|next|the|coming)\s+)*$/i;
+// "today" / "tomorrow" take no "on" or "this": "decide what to work on tomorrow" keeps its "on".
+const REL_DAY_LEAD = /(?:(?:\bdue\s+)?\b(?:by|before|until|till)\s+|\bdue\s+)?$/i;
 const EST_LEAD = new RegExp(String.raw`(?:\bfor\s+)?${ABOUT}$`, 'i');
 // A range grows to the whole words it touches ("5 p" of "5 p.m.", "30pm" of "5.30pm"), then takes its leader.
 function led(line: string, [s, e]: Range, lead: RegExp): Range {
@@ -305,6 +307,10 @@ const DAY_PARTS =
   /\b(?:(?:this|tomorrow|in the)\s+)?(?:morning|afternoon|evening|night)\b|\btonight\b/gi;
 // A clock or day the task is about, not when it's due: "move standup to 5pm", "prep for this friday 5pm".
 const OBJECT_OF = /\b(?:to|for|of|about|from|than)\s+$/i;
+// A clock used as a noun is the task's too: "prep notes for the 3pm", "skip my 9am".
+const CLOCK_OBJECT = /\b(?:to|for|of|about|from|than|the|my|our|your|that)\s+$/i;
+// The rest of a compound duration: "an hour and a half", "1 hour and 30 minutes", "2h and 30m".
+const MORE_DURATION = /^\s+and\s+(?:a\s+half|\d+\s*(?:m|mins?|minutes?))\b/i;
 // A spoken line's lead-in, and the "to" / "that" / "about" after it once the time is said: "remind me tomorrow to …".
 const REMIND = /^\s*remind me\b/i;
 const REMIND_JOIN = /^\s*(?:to|that|about)\b/i;
@@ -336,30 +342,52 @@ function titleMeta(
     if (said) clocks.push(said);
     clocks.push(...rangesOf(line, DAY_PARTS));
   }
+  if (input.dueTime && !clocks.length) return null;
   // A clock the task is about isn't the due's: "move standup to 5pm" keeps "to 5pm".
   const due = clocks
     .map((r) => led(line, r, CLOCK_LEAD))
-    .filter((r) => !OBJECT_OF.test(line.slice(0, r[0])));
-  if (input.dueTime && !due.length) return null;
+    .filter((r) => !CLOCK_OBJECT.test(line.slice(0, r[0])));
+  // The words for the due day, led: "today" / "tomorrow" only when they name it ("the day after tomorrow" doesn't),
+  // a weekday or date the parse's day matches. On voice, "today" goes with a said time whatever the day.
   const days: Range[] = [];
   const dayKnown = (d: unknown): d is string => str(d) && isDayKey(d);
+  const parsedDays = [...new Set([input.dueDay, modelDay].filter(dayKnown))];
+  const calToday = zonedDayTime(ctx.now, USER_TIME_ZONE).day;
+  const named = (word: string) =>
+    (TOMORROW_WORD.test(word)
+      ? [addDays(ctx.today, 1), addDays(calToday, 1)]
+      : [ctx.today, calToday, addDays(ctx.today, 1)]
+    ).some((d) => parsedDays.includes(d));
   if (input.dueDay || (ctx.voice && input.dueTime)) {
-    days.push(...rangesOf(line, DAY_WORDS));
-    for (const d of new Set([input.dueDay, modelDay].filter(dayKnown)))
-      days.push(...dateRanges(line, d));
+    for (const m of line.matchAll(DAY_WORDS))
+      if (named(m[0]) || (ctx.voice && input.dueTime))
+        days.push(led(line, [m.index, m.index + m[0].length], REL_DAY_LEAD));
+    for (const d of parsedDays)
+      days.push(...dateRanges(line, d).map((r) => led(line, r, DAY_LEAD)));
   }
   // A day with no words for it is the model's reading of a phrase no list knows — unless it's the day a bare
-  // clock lands on ("call 9am": today, rolled or not).
-  const clockDay = input.dueTime != null && (modelDay == null || modelDay === ctx.today);
+  // clock lands on ("call 9am": today, or tomorrow when the model rolled a past one itself).
+  const clockDay =
+    input.dueTime != null &&
+    (modelDay == null ||
+      modelDay === ctx.today ||
+      modelDay === addDays(ctx.today, 1) ||
+      modelDay === calToday);
   if (input.dueDay && !days.length && !clockDay) return null;
-  const meta: Range[] = [...due, ...days.map((r) => led(line, r, DAY_LEAD))];
+  const meta: Range[] = [...due, ...days];
   if (input.dueDay) meta.push(...rangesOf(line, DAY_PARTS)); // "tomorrow morning", typed with no clock
-  if (input.estimateMin) meta.push(...rangesOf(line, DURATIONS).map((r) => led(line, r, EST_LEAD)));
+  if (input.estimateMin)
+    for (const r of rangesOf(line, DURATIONS)) {
+      const more = MORE_DURATION.exec(line.slice(r[1]));
+      meta.push(led(line, [r[0], r[1] + (more?.[0].length ?? 0)], EST_LEAD));
+    }
   if (input.dueDay || input.dueTime) meta.push(...rangesOf(line, /\bdue\b/gi));
+  const lead: Range[] = [];
   if (ctx.voice) {
     const remind = REMIND.exec(line);
     if (remind) {
-      // Past the lead-in and any said time or day after it: a joining "to" is the lead-in's too.
+      // Past the lead-in and any said time or day after it: a joining "to" is the lead-in's too, and the whole
+      // run goes from the title even when the model kept it ("remind me tomorrow at 9 am to …").
       let at = remind[0].length;
       for (;;) {
         const next = meta.find(([s, e]) => e > at && /^\s*$/.test(line.slice(at, s)));
@@ -368,17 +396,17 @@ function titleMeta(
       }
       const join = REMIND_JOIN.exec(line.slice(at));
       meta.push([0, remind[0].length], ...(join ? [[at, at + join[0].length] as const] : []));
+      lead.push(join ? [0, at + join[0].length] : [0, remind[0].length]);
     }
   }
   // The category word: the model may drop it; with a separator after it ("aperture, …") it always goes.
-  let lead: Range | null = null;
   if (categoryLabel) {
     const label = escapeRe(categoryLabel.trim()).replace(/\s+/g, '\\s+');
     const word = new RegExp(`^\\s*${label}(?![\\p{L}\\p{N}])`, 'iu').exec(line);
     if (word) {
       const sep = /^(?:\s*[,:]|\s+[-–—]+(?=\s))/.exec(line.slice(word[0].length));
       meta.push([0, word[0].length + (sep?.[0].length ?? 0)]);
-      if (sep) lead = [0, word[0].length + sep[0].length];
+      if (sep) lead.push([0, word[0].length + sep[0].length]);
     }
   }
   return { meta, tail: dueTail(line, input, days), lead };
@@ -395,15 +423,13 @@ function dueTail(line: string, input: CreateTaskInput, days: readonly Range[]): 
   // A second stated clock ("move standup at 3pm to 5pm") makes this one no surer than the other.
   if (spokenTimeIn(line.slice(0, said[0]) + line.slice(said[1]))?.kind === 'clock') return [];
   const clock = led(line, said, CLOCK_LEAD);
-  if (OBJECT_OF.test(line.slice(0, clock[0]))) return [];
+  if (CLOCK_OBJECT.test(line.slice(0, clock[0]))) return [];
   const near = (a: Range, b: Range) =>
     /^\s*$/.test(line.slice(Math.min(a[1], b[1]), Math.max(a[0], b[0])));
   // "this friday" alone isn't a connector, and a day the task is about stays: "prep for this friday 5pm".
   const own = (d: Range) => /^(?:due|by|on|before|until|till)\b/i.test(line.slice(d[0]));
   const day = input.dueDay
-    ? days
-        .map((d) => led(line, d, DAY_LEAD))
-        .filter((d) => (near(d, clock) || own(d)) && !OBJECT_OF.test(line.slice(0, d[0])))
+    ? days.filter((d) => (near(d, clock) || own(d)) && !OBJECT_OF.test(line.slice(0, d[0])))
     : [];
   return [clock, ...day];
 }
