@@ -31,8 +31,8 @@ describe('dev logs request', () => {
     for (const name of Object.values(LOG_GROUPS)) expect(name).toMatch(/-devb?$/);
   });
 
-  it('covers four functions on each dev slot, slot B keyed with -devb', () => {
-    const fns = ['bff', 'mcp', 'finance-sync', 'push-dispatch'];
+  it('covers five functions on each dev slot, slot B keyed with -devb', () => {
+    const fns = ['bff', 'mcp', 'finance-sync', 'push-dispatch', 'coach-worker'];
     expect(Object.keys(LOG_GROUPS).sort()).toEqual([...fns, ...fns.map((f) => `${f}-devb`)].sort());
     expect(req({ groups: 'bff-devb,push-dispatch' }).groupNames).toEqual([
       '/aws/lambda/aperture-bff-devb',

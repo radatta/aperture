@@ -38,7 +38,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 
 **Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route BFF Lambda (§4; the others: _Beyond the BFF_, below) · CDK (§3) · custom domain (§8).
 
-**Beyond the BFF** (each in INFRA — §1, §3, §4 or §10 — and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
+**Beyond the BFF** (each in INFRA — §1, §3, §4 or §10 — and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the coach worker (the LeetCode coach's AI pick, [recruiting/coach](../areas/recruiting/coach.md)), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
 
 **Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1 — bar per-feature crash-safety outboxes since: capture's (`app/src/modules/capture/captureOutbox.ts`), Flux sets' ([flux](../areas/flux/index.md)) and the extension's ([recruiting](../areas/recruiting/index.md)).
 
@@ -269,10 +269,10 @@ aperture/
                        #   rpc/ (argSpecs, shape, failure), ddb/ (keys, repo, writes, mapping, DocClient),
                        #   anthropic/ (the gated Haiku gateway + prompts), google/, plaid/, s3/, mcp/,
                        #   push/ (service.ts: reminder devices + Send test; the poller's sender) + pushDispatch.ts,
-                       #   finance/ + financeSync.ts (the sync Lambda), kill/ (the dev account's kill switch),
+                       #   finance/ + financeSync.ts (the sync Lambda), coachWorker.ts (the coach's AI pick), kill/ (the dev account's kill switch),
                        #   local/ (the devcheck:local server, LOCAL-CHECK), util/
   cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing, org, dev-guard stacks;
-                       #   monitoring, finance-sync, push-dispatch constructs), config/
+                       #   monitoring, finance-sync, push-dispatch, coach-worker constructs), config/
   extension/           # MV3 web extension (Safari) — LeetCode sittings. No runtime deps,
                        #   bundler or build step; a workspace member for its tests only (vitest, jsdom)
   packages/shared/     # shared TS types + contract across app + lambda (also ulid, dates, machines, contractTests)

@@ -48,7 +48,7 @@ export const USAGE = `pnpm bot <command>   (-h / --help on any command: its usag
   lock wait [--max MIN] [--any | --slot devb]
                                  block until another branch's lock frees or expires — slot A by default, either with
                                  --any (default 45 min, at most 55); exit 75 if still held — run it in the background
-  logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,bff-devb,…] [--filter P] [--query Q]
+  logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,coach-worker,bff-devb,…] [--filter P] [--query Q]
   run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
   run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs
   prune-branches [--dry-run]     delete local branches whose PR merged at exactly their tip (end of wave)`;

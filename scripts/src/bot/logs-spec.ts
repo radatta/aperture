@@ -9,10 +9,12 @@ export const LOG_GROUPS = {
   mcp: '/aws/lambda/aperture-mcp-dev',
   'finance-sync': '/aws/lambda/aperture-finance-sync-dev',
   'push-dispatch': '/aws/lambda/aperture-push-dispatch-dev',
+  'coach-worker': '/aws/lambda/aperture-coach-worker-dev',
   'bff-devb': '/aws/lambda/aperture-bff-devb',
   'mcp-devb': '/aws/lambda/aperture-mcp-devb',
   'finance-sync-devb': '/aws/lambda/aperture-finance-sync-devb',
   'push-dispatch-devb': '/aws/lambda/aperture-push-dispatch-devb',
+  'coach-worker-devb': '/aws/lambda/aperture-coach-worker-devb',
 } as const;
 export type LogGroup = keyof typeof LOG_GROUPS;
 

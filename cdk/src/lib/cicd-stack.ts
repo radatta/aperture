@@ -18,7 +18,7 @@ export interface CicdStackProps extends StackProps {
 }
 
 // The dev Lambdas whose logs `pnpm bot logs` reads, on each dev slot (scripts/src/bot/logs-spec.ts lists the same).
-export const LOG_FNS = ['bff', 'mcp', 'finance-sync', 'push-dispatch'] as const;
+export const LOG_FNS = ['bff', 'mcp', 'finance-sync', 'push-dispatch', 'coach-worker'] as const;
 
 const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com';
 const GITHUB_OIDC_URL = `https://${GITHUB_OIDC_HOST}`;
