@@ -228,7 +228,7 @@ PK = push / SK = user#<userId> · health
 **Routes (React Router):**
 
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /recruiting (+ /recruiting/sittings/:id, /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId, /flux/history) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode sittings + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /recruiting (+ /recruiting/sittings/:id, /recruiting/patterns, /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId, /flux/history) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode sittings, the coach's patterns + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route (hidden on a Flux exercise view, `/flux/:exerciseId`, through the route's `handle.hideCapture`).
 

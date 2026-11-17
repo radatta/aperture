@@ -102,7 +102,15 @@ export interface DevCoachStats {
   firstTry: DevRate;
   resolve: DevRate;
   weeks: { week: string; attempts: number }[];
-  patterns: { patternId: string; rank: number | null; attempts: number }[];
+  patterns: {
+    patternId: string;
+    rank: number | null;
+    attempts: number;
+    submitsPerTry?: number | null; // the Patterns tab's detail
+    runBeforeSubmit?: DevRate;
+    traced?: DevRate;
+    weeks?: { week: string; firstTry: DevRate }[];
+  }[];
   note: string;
 }
 export interface DevFocusSet {

@@ -877,6 +877,10 @@ describe('stats', () => {
           peeked: 1,
           causes: {},
           rank: 1,
+          submitsPerTry: null, // a logged peek carries no submit, run or trace
+          runBeforeSubmit: { hit: 0, of: 0 },
+          traced: { hit: 0, of: 0 },
+          weeks: [{ week: '2026-W46', firstTry: { hit: 0, of: 1 } }],
         },
         {
           pattern: 'arrays-hashing',
@@ -887,10 +891,19 @@ describe('stats', () => {
           peeked: 0,
           causes: { boundary: 1 },
           rank: 2, // ties the untried patterns, first in the roadmap order
+          submitsPerTry: 1,
+          runBeforeSubmit: { hit: 0, of: 3 },
+          traced: { hit: 0, of: 0 },
+          weeks: [{ week: '2026-W46', firstTry: { hit: 1, of: 2 } }], // today's is a re-solve
         },
       ],
       weakest: 'two-pointers',
+      ranking: expect.arrayContaining(['two-pointers', 'arrays-hashing']),
     });
+    expect(coachStats(all(), TODAY).ranking.slice(0, 2)).toEqual([
+      'two-pointers',
+      'arrays-hashing',
+    ]);
   });
   it('weakest is the ranking’s top even with no row in range: all clean so far → an untried pattern', () => {
     const s = coachStats(attemptsOf([clean('two-sum', day(-2))], [], NOW), TODAY);
@@ -1019,5 +1032,122 @@ describe('review merge (setSittingReview keeps what the coach set)', () => {
   it('a review with only the cause survives an empty form save', () => {
     const r = patchReview(null, { cause: 'off-by-one' }, 5);
     expect(mergeReview(r, null, 6)).toMatchObject({ cause: 'off-by-one' });
+  });
+});
+
+describe('pattern detail (the Patterns tab)', () => {
+  const tp = NEETCODE_150.filter((c) => c.pattern === 'two-pointers').map((c) => c.slug);
+  const st = NEETCODE_150.filter((c) => c.pattern === 'stack').map((c) => c.slug);
+  const withRuns = (s: Sitting, runsBeforeFirstSubmit: number) => ({
+    ...s,
+    summary: { ...s.summary, runs: runsBeforeFirstSubmit, runsBeforeFirstSubmit },
+  });
+  const withTrace = (s: Sitting, trace: 'traced' | 'partial' | 'skipped' | 'none') => ({
+    ...s,
+    summary: { ...s.summary, coach: { config: null, trace, nudges: 0 } },
+  });
+  const statsOf = (sittings: Sitting[], manualRows: CoachAttempt[] = [], range = {}) =>
+    coachStats(attemptsOf(sittings, manualRows, NOW, undefined, TODAY), TODAY, range);
+  const pat = (s: ReturnType<typeof statsOf>, p: string) =>
+    s.patterns.find((x) => x.pattern === p)!;
+
+  it('submits a try, run-before-submit and trace rate over the attempts with the data', () => {
+    const s = statsOf([
+      withTrace(
+        withRuns(sit({ slug: tp[0]!, on: day(-5), submits: ['wrong_answer', 'accepted'] }), 2),
+        'traced',
+      ),
+      withTrace(withRuns(sit({ slug: tp[1]!, on: day(-4), submits: ['accepted'] }), 0), 'skipped'),
+      sit({ slug: tp[2]!, on: day(-3), minutes: 20 }), // never submitted: no submit, run or trace data
+    ]);
+    expect(pat(s, 'two-pointers')).toMatchObject({
+      problems: 3,
+      attempts: 3,
+      submitsPerTry: 1.5,
+      runBeforeSubmit: { hit: 1, of: 2 },
+      traced: { hit: 1, of: 2 },
+    });
+  });
+
+  it('a partial trace or an untraced submit is a miss; no coach data, or the card off, counts nowhere', () => {
+    const none = withTrace(clean(tp[3]!, day(-1)), 'none');
+    const off = {
+      ...none,
+      summary: {
+        ...none.summary,
+        coach: {
+          config: { trace: false, hold: false, nudge: true },
+          trace: 'none' as const,
+          nudges: 0,
+        },
+      },
+    };
+    const s = statsOf([
+      withTrace(clean(tp[0]!, day(-3)), 'partial'),
+      withTrace(clean(tp[1]!, day(-2)), 'none'),
+      clean(tp[2]!, day(-1)),
+      off,
+    ]);
+    expect(pat(s, 'two-pointers').traced).toEqual({ hit: 0, of: 2 });
+  });
+
+  it('a re-solve’s submits are its own try; a logged piece earlier the same day keeps the sitting’s run and trace', () => {
+    const s = statsOf(
+      [
+        clean(st[0]!, day(-9)),
+        withTrace(withRuns(sit({ slug: st[0]!, on: day(-2), submits: ['accepted'] }), 1), 'traced'),
+      ],
+      [{ ...manual(st[0]!, day(-2), 'solved'), at: zonedEpoch(day(-2), '08:00', USER_TIME_ZONE) }],
+    );
+    expect(pat(s, 'stack')).toMatchObject({
+      attempts: 2,
+      submitsPerTry: 1,
+      runBeforeSubmit: { hit: 1, of: 2 },
+      traced: { hit: 1, of: 1 },
+    });
+  });
+
+  it('per-week first tries, oldest first; a re-solve is not a first try', () => {
+    const s = statsOf([
+      clean(st[0]!, '2026-11-02'),
+      failed(st[1]!, '2026-11-03'),
+      clean(st[1]!, '2026-11-10'), // re-solve: not in the week's first tries
+      clean(st[2]!, '2026-11-11'),
+    ]);
+    expect(pat(s, 'stack').weeks).toEqual([
+      { week: '2026-W45', firstTry: { hit: 1, of: 2 } },
+      { week: '2026-W46', firstTry: { hit: 1, of: 1 } },
+    ]);
+  });
+
+  it('manual attempts and peek seeds count as tries but carry no submit, run or trace data', () => {
+    const s = statsOf(
+      [],
+      [manual(tp[0]!, day(-2), 'clean'), manual(tp[1]!, day(-1), 'failed', 'solution')],
+    );
+    expect(pat(s, 'two-pointers')).toMatchObject({
+      attempts: 2,
+      submitsPerTry: null,
+      runBeforeSubmit: { hit: 0, of: 0 },
+      traced: { hit: 0, of: 0 },
+    });
+  });
+
+  it('test sittings never count, and the range bounds every field', () => {
+    const s = statsOf(
+      [
+        withRuns(clean(tp[0]!, day(-10)), 1),
+        withRuns(sit({ slug: tp[1]!, on: day(-2), submits: ['accepted'], test: true }), 1),
+        withRuns(failed(tp[2]!, day(-1)), 0),
+      ],
+      [],
+      { from: day(-3) },
+    );
+    expect(pat(s, 'two-pointers')).toMatchObject({
+      attempts: 1,
+      submitsPerTry: 1,
+      runBeforeSubmit: { hit: 0, of: 1 },
+      weeks: [{ week: expect.any(String), firstTry: { hit: 0, of: 1 } }],
+    });
   });
 });

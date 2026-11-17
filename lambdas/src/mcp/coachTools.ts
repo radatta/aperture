@@ -224,6 +224,11 @@ const statsView = (s: CoachStats) => ({
     resolve: rateView(p.resolve),
     peeked: p.peeked,
     causes: p.causes,
+    // The Patterns tab's detail (patternDetail): every try in range, re-solves too.
+    submitsPerTry: p.submitsPerTry,
+    runBeforeSubmit: rateView(p.runBeforeSubmit),
+    traced: rateView(p.traced),
+    weeks: p.weeks.map((w) => ({ week: w.week, firstTry: rateView(w.firstTry) })),
   })),
   weakest: s.weakest && { pattern: PATTERN_NAMES[s.weakest], patternId: s.weakest },
   note: STATS_NOTE,
@@ -621,7 +626,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'coach_stats',
     description: [
-      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus).',
+      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits per try, how often a Run came before the first Submit, how often all three trace inputs were in at the first Submit (card on only), and its first tries per week. The run and trace rates cover only attempts with captured data.',
       'Optional `from` / `to` (YYYY-MM-DD, inclusive; `to` defaults to their today). Test sittings never count. `note` says how to read it.',
       'Read-only.',
     ].join(' '),

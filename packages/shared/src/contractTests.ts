@@ -4176,6 +4176,56 @@ export function runApiContract(
         await api.deleteCoachAttempt(ulid());
         expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['happy-number']);
       });
+
+      it('stats carry the Patterns tab’s detail: submits a try, run first, traced, weekly first tries', async () => {
+        // valid-palindrome: traced, ran, a wrong submit, then an accept. 3sum: trace skipped, accepted at once.
+        const coach = (at: number, payload: unknown): SittingEventInput => ({
+          id: ulid(),
+          type: 'coach',
+          at,
+          payload,
+        });
+        for (const [slug, events] of [
+          [
+            'valid-palindrome',
+            [
+              coach(LC_T0 + 1000, {
+                kind: 'trace',
+                inputs: { empty: '""', boundary: '"a"', normal: '"ab a"' },
+              }),
+              lcJudged('run', 10, 'Accepted', LC_T0 + 2000, 3, 3),
+              lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 3000, 1, 3),
+              lcJudged('submit', 10, 'Accepted', LC_T0 + 4000, 3, 3),
+            ],
+          ],
+          [
+            '3sum',
+            [
+              coach(LC_T0 + 1000, { kind: 'trace-skip' }),
+              lcJudged('submit', 10, 'Accepted', LC_T0 + 2000, 3, 3),
+            ],
+          ],
+        ] as const) {
+          const { sitting } = await startSitting(api, { problemSlug: slug, problemTitle: slug });
+          await api.lcSittingEvents({ sittingId: sitting.id, events: [...events] });
+          advance(20 * 60_000);
+          await api.setTaskActual(sitting.repTaskId, 20);
+          await api.transitionTask(sitting.repTaskId, 'done');
+        }
+        const stats = await api.getCoachStats();
+        expect(stats.patterns.find((p) => p.pattern === 'two-pointers')).toMatchObject({
+          problems: 2,
+          attempts: 2,
+          firstTry: { hit: 1, of: 2 },
+          submitsPerTry: 1.5,
+          runBeforeSubmit: { hit: 1, of: 2 },
+          traced: { hit: 1, of: 2 },
+          weeks: [{ week: '2023-W46', firstTry: { hit: 1, of: 2 } }],
+        });
+        // One miss in two shrinks to (1+1)/(2+2) = 0.5, an untried pattern's score: the roadmap order breaks the tie.
+        expect(stats.ranking.slice(0, 2)).toEqual(['arrays-hashing', 'two-pointers']);
+        expect(stats.ranking).toHaveLength(18);
+      });
     });
 
     describe('flux week note', () => {
