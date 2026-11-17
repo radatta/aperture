@@ -32,8 +32,11 @@ day rows; no stored count can drift.
 
 ## Attempts and outcomes
 
-One attempt = one problem on one user day: that day's sittings and manual attempts on it fold into one — the last
-one's outcome, the most help taken (a peek sticks). An open sitting is not an attempt yet.
+One attempt = one problem on one user day: that day's sittings and manual attempts on it fold into one, judged
+as one first try — clean only when the earliest piece with a submit was a first-submit accept and no help was
+taken all day; accepted anywhere → solved; else failed. The most help taken wins (a peek sticks). An open sitting is
+not an attempt yet, except one from before today (left open overnight), which counts on its own day. A peek counts
+even on a sitting under 3 minutes.
 
 | Outcome  | Means                                     |
 | -------- | ----------------------------------------- |
@@ -46,14 +49,15 @@ one's outcome, the most help taken (a peek sticks). An open sitting is not an at
 `resolveState`, gaps as a parameter (`COACH_PARAMS`): clean `[3, 7, 14]`, peeked `[1, 3, 7, 14]`, the last step
 due within a further 7 days.
 
-| From      | Event                     | To                                       |
-| --------- | ------------------------- | ---------------------------------------- |
-| none      | first `clean` or `solved` | clean track, step 0, due +3              |
-| none      | first `failed`            | peeked track, step 0, due +1             |
-| any step  | re-solve `clean`          | step + 1; past the last → `graduated`    |
-| any step  | re-solve `solved`         | same step, due = that day + the same gap |
-| any step  | re-solve `failed`         | peeked track, step 0, due +1             |
-| graduated | anything                  | dormant (countdown mode will re-arm it)  |
+| From      | Event                     | To                                             |
+| --------- | ------------------------- | ---------------------------------------------- |
+| none      | first `clean` or `solved` | clean track, step 0, due +3                    |
+| none      | first `failed`            | peeked track, step 0, due +1                   |
+| any step  | re-solve `clean`          | step + 1; past the last → `graduated`          |
+| any step  | re-solve `solved`         | same step, due = that day + the same gap       |
+| any step  | re-solve `failed`         | peeked track, step 0, due +1                   |
+| graduated | `clean` or `solved`       | dormant (countdown mode will re-arm it)        |
+| graduated | `failed`                  | peeked track, step 0, due +1 (it didn't stick) |
 
 Only a first-try accept advances: first-try accuracy is the gap being trained. A due item is "due" from its day on
 — never "overdue", never a count.
@@ -68,20 +72,21 @@ deterministic, so a read writes nothing; `focus.why` says why.
 
 ## The day's plan
 
-`planDay`, from state as of the start of the user's day (their zone, `dayStartHour`), so it holds still all day:
+`planDay`, from everything before the user's day (their zone, `dayStartHour`), so it holds still all day:
 
 1. **carry-over** — the last active day's unaccepted, unpeeked problem, if within 2 days; it leaves the re-solve
-   list for the day.
+   and due lists for the day.
 2. **new** — the focus pattern's first unseen catalog problem; one swapped out in the last 3 days goes to the back.
 3. **re-solve** — the oldest due, other patterns first (the interleave), the peeked track first on a tie.
 4. **stretch** — an unseen focus-pattern problem one difficulty up from the new pick, else an unseen Medium from
    the next-ranked pattern.
 
 One of each; an empty kind lets the next kind take a second (stretch wraps to new). At most 2 a kind, 4 in all,
-never padded. **Floor:** the oldest due re-solve, else the carry-over, else the new pick. Then the day's changes
+never padded. **Floor:** the oldest due re-solve, else the carry-over, else the new pick (`floor.kind` says which). Then the day's changes
 apply, and today's sittings and attempts mark each slot `in-progress` or `done`. **A sitting is linked to its slot
 by slug on read**, never stamped, so a swap after a Start still reads right; a sitting on any other problem is
-`offPlan` and leaves the queue alone. A slot is a rep only once the extension's Start runs (one open rep per roll,
+`offPlan` and leaves the queue alone. A swap never takes another slot's problem or engine pick, and "Another"
+never offers back the pick it replaced. A slot is a rep only once the extension's Start runs (one open rep per roll,
 [rolls](../home/rolls.md) D6).
 
 ## The catalog

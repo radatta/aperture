@@ -100,13 +100,15 @@ const asDifficulty = (v: string | null): Difficulty | null =>
   v === 'Easy' || v === 'Medium' || v === 'Hard' ? v : null;
 
 // --- Attempts: one problem on one user day ---
-// Test sittings never count: a sitting under minPracticeMin with no accepted submit, or one the user flagged.
+// Test sittings never count: a sitting under minPracticeMin with no accepted submit and no peek, or one the user
+// flagged.
 export function countsAsPractice(
   s: Pick<Sitting, 'startedAt' | 'endedAt' | 'summary' | 'review'>,
   now: number,
   params: CoachParams = COACH_PARAMS,
 ): boolean {
   if (s.review?.test === true) return false;
+  if (s.review?.help === 'solution') return true; // a quick peek is still a peek
   const end = s.endedAt ?? Math.min(now, s.startedAt + SITTING_INGEST_WINDOW_MS);
   const ms = sittingElapsedMs({ startedAt: s.startedAt, endedAt: end }, now);
   return s.summary.firstAcceptedAt !== null || ms >= params.minPracticeMin * 60_000;
@@ -184,8 +186,9 @@ export interface Attempt {
   sources: ('sitting' | CoachAttempt['source'])[];
 }
 const HELP_RANK: Record<HelpLevel, number> = { none: 0, hint: 1, solution: 2 };
-// Same-day pieces on one problem fold into one attempt: the last one's outcome, its help the most taken (a
-// peek sticks), counts summed.
+// Same-day pieces on one problem fold into one attempt, judged as one first try: clean only when the earliest
+// piece with a submit was a first-submit accept and no help was taken all day; accepted anywhere → solved; else
+// failed. The most help taken wins (a peek sticks); counts are summed.
 function foldDay(parts: Attempt[]): Attempt {
   const sorted = [...parts].sort((a, b) => a.at - b.at);
   const last = sorted[sorted.length - 1]!;
@@ -195,12 +198,13 @@ function foldDay(parts: Attempt[]): Attempt {
   );
   const accepted = sorted.some((p) => p.accepted);
   const first = sorted.find((p) => p.firstSubmitAccepted !== null);
+  const outcome = outcomeOf(accepted, first?.firstSubmitAccepted === true, help);
   return {
     ...last,
     title: sorted.find((p) => p.sources.includes('sitting'))?.title ?? last.title,
     pattern: sorted.find((p) => p.pattern !== 'other')?.pattern ?? last.pattern,
     difficulty: sorted.find((p) => p.difficulty)?.difficulty ?? null,
-    outcome: help === 'solution' ? 'failed' : last.outcome,
+    outcome,
     help,
     cause: [...sorted].reverse().find((p) => p.cause)?.cause ?? null,
     accepted,
@@ -212,17 +216,19 @@ function foldDay(parts: Attempt[]): Attempt {
     sources: [...new Set(sorted.flatMap((p) => p.sources))],
   };
 }
-// Every counted attempt, oldest first. An open sitting is not an attempt yet (it's today's `in-progress`).
+// Every counted attempt, oldest first. An open sitting is not an attempt yet (it's today's `in-progress`) — except
+// one from before `today`: a sitting left open overnight counts on its own day, so the day's plan doesn't move
+// when a later Start ends it.
 export function attemptsOf(
   sittings: readonly Sitting[],
   manual: readonly CoachAttempt[],
   now: number,
   params: CoachParams = COACH_PARAMS,
+  today?: string,
 ): Attempt[] {
+  const settled = (s: Sitting) => !isSittingOpen(s, now) || (today !== undefined && s.day < today);
   const parts = [
-    ...sittings
-      .filter((s) => !isSittingOpen(s, now) && countsAsPractice(s, now, params))
-      .map(sittingAttempt),
+    ...sittings.filter((s) => settled(s) && countsAsPractice(s, now, params)).map(sittingAttempt),
     ...manual.filter((a) => a.deletedAt === null).map(manualAttempt),
   ];
   const groups = new Map<string, Attempt[]>();
@@ -458,6 +464,7 @@ export interface CoachToday {
   focus: CoachFocusState;
   slots: CoachSlot[];
   floor: {
+    kind: SlotKind; // what the floor problem is: a due re-solve, the carry-over, or the new pick
     slug: string;
     title: string;
     reason: string;
@@ -491,6 +498,9 @@ const dayStartHhmm = (h: number) => `${String(h).padStart(2, '0')}:00`;
 const dayStartAt = (day: string, h: number) => zonedEpoch(day, dayStartHhmm(h), USER_TIME_ZONE);
 const pickable = (c: CatalogProblem, seen: ReadonlySet<string>) => !c.premium && !seen.has(c.slug);
 
+// Every problem on the plan: each slot's, and each engine pick a swap replaced.
+const slotProblems = (slots: readonly Pick<CoachSlot, 'slug' | 'swappedFrom'>[]) =>
+  new Set(slots.flatMap((s) => (s.swappedFrom ? [s.slug, s.swappedFrom] : [s.slug])));
 // Unseen catalog problems in `pattern` no harder than `than` (easier first, then catalog order) — a slot's
 // "Another", and swap_slot's default.
 export function easierIn(
@@ -529,7 +539,9 @@ const shortDay = (day: string, today: string) => (day === addDays(today, -1) ? '
 // most 2 a kind and 4 in all, never padded. Then the day's changes, then today's sittings and attempts.
 export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): CoachToday {
   const { today, now, dayStartHour: h } = input;
-  const all = attemptsOf(input.sittings, input.attempts, now, params).filter((a) => a.day <= today);
+  const all = attemptsOf(input.sittings, input.attempts, now, params, today).filter(
+    (a) => a.day <= today,
+  );
   const before = all.filter((a) => a.day < today);
   const records = problemRecords(before, params);
   const seen = new Set(records.map((r) => r.slug));
@@ -566,10 +578,12 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
         (a.schedule!.track === b.schedule!.track ? 0 : a.schedule!.track === 'peeked' ? -1 : 1) ||
         a.slug.localeCompare(b.slug),
     );
+  // The carry-over leaves the re-solve list (and the due list) for the day: it's already a slot.
+  const dueNow = due.filter((r) => !carrySlugs.has(r.slug));
   const resolve = [
-    ...due.filter((r) => r.pattern !== focus.pattern),
-    ...due.filter((r) => r.pattern === focus.pattern),
-  ].filter((r) => !carrySlugs.has(r.slug));
+    ...dueNow.filter((r) => r.pattern !== focus.pattern),
+    ...dueNow.filter((r) => r.pattern === focus.pattern),
+  ];
   // stretch
   const up = fresh[0] ? UP[fresh[0].difficulty] : 'Medium';
   const next = ranks.find((r) => r.pattern !== focus.pattern)?.pattern;
@@ -664,7 +678,9 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   // Today's sittings and attempts, linked to a slot by slug on read.
   const todays = input.sittings.filter((s) => s.day === today && s.review?.test !== true);
   const doneToday = all.filter((a) => a.day === today);
-  const taken = new Set(slots.map((s) => s.slug));
+  // A slot's alternatives skip every slot's problem and every engine pick a swap replaced, so "Another" never
+  // offers back what was just swapped out.
+  const taken = slotProblems(slots);
   slots = slots.map((s) => {
     const sitting = todays
       .filter((x) => x.problemSlug === s.slug)
@@ -683,17 +699,20 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     };
   });
 
-  const floorPick =
-    due[0] ??
-    (carry[0] && { slug: carry[0].slug }) ??
-    (fresh[0] && { slug: fresh[0].slug }) ??
-    null;
+  const floorPick: { kind: SlotKind; slug: string } | null = dueNow[0]
+    ? { kind: 're-solve', slug: dueNow[0].slug }
+    : carry[0]
+      ? { kind: 'carry-over', slug: carry[0].slug }
+      : fresh[0]
+        ? { kind: 'new', slug: fresh[0].slug }
+        : null;
   const floor = floorPick
     ? {
+        kind: floorPick.kind,
         slug: floorPick.slug,
         title: titleOf(floorPick.slug),
-        reason: due[0]
-          ? `The oldest due re-solve (due since ${due[0].schedule!.dueDay}); this alone counts as showing up`
+        reason: dueNow[0]
+          ? `The oldest due re-solve (due since ${dueNow[0].schedule!.dueDay}); this alone counts as showing up`
           : carry[0]
             ? 'Finish the carry-over; this alone counts as showing up'
             : 'One new problem; this alone counts as showing up',
@@ -732,7 +751,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     slots,
     floor,
     offPlan,
-    due: due.map((r) => queueItem(r, h)),
+    due: dueNow.map((r) => queueItem(r, h)),
     next48h: queued
       .filter((r) => r.schedule!.dueDay > today && r.schedule!.dueDay <= in48)
       .sort((a, b) => a.schedule!.dueDay.localeCompare(b.schedule!.dueDay))
@@ -868,7 +887,10 @@ export function applySlotChange(
 ): CoachSlotChange[] {
   if (!isProblemSlug(input.slug)) throw new Error('slug must be a LeetCode problem slug');
   if (!SLOT_ACTIONS.includes(input.action)) throw new Error('action must be swap, skip or restore');
-  const slot = today.slots.find((s) => s.slug === input.slug || s.swappedFrom === input.slug);
+  // The slot showing that problem now; else the one whose engine pick it was.
+  const slot =
+    today.slots.find((s) => s.slug === input.slug) ??
+    today.slots.find((s) => s.swappedFrom === input.slug);
   if (!slot) throw new Error(`No slot today is on ${input.slug}`);
   const from = slot.swappedFrom ?? slot.slug;
   const rest = changes.filter((c) => !(c.kind === slot.kind && c.from === from));
@@ -877,8 +899,7 @@ export function applySlotChange(
     return [...rest, { kind: slot.kind, action: 'skip', from, to: null, at: now }];
   let to = input.toSlug;
   if (to === undefined) {
-    const taken = new Set(today.slots.map((s) => s.slug));
-    const easier = easierIn(slot.pattern, slot.difficulty, seen, taken)[0];
+    const easier = easierIn(slot.pattern, slot.difficulty, seen, slotProblems(today.slots))[0];
     if (!easier)
       throw new Error(
         `No unseen problem left in ${PATTERN_NAMES[slot.pattern]} at or under ${slot.difficulty ?? 'Hard'}; pass toSlug`,
@@ -889,11 +910,20 @@ export function applySlotChange(
   if (to === from) return rest;
   if (!known(to))
     throw new Error(`Unknown problem: ${to} — not in the catalog and never attempted`);
-  if (today.slots.some((s) => s.slug === to && s !== slot))
+  // Another slot's problem, or another slot's engine pick (a swap target there would make two slots answer to
+  // one slug).
+  if (today.slots.some((s) => s !== slot && (s.slug === to || s.swappedFrom === to)))
     throw new Error(`${to} is already one of today's slots`);
   return [...rest, { kind: slot.kind, action: 'swap', from, to, at: now }];
 }
 
+// Whether setting `pattern` again changes nothing: the stored override names it and still holds (its block hasn't
+// run out). Once the engine has moved on, the same pattern re-stamps from today.
+export function focusHolds(ci: CoachInput, cur: CoachFocus, pattern: PatternId): boolean {
+  if (cur.deletedAt !== null || cur.pattern !== pattern) return false;
+  const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
+  return focusOn(all, cur, ci.today).source === 'override';
+}
 // The focus override's input: a roadmap pattern, or null to clear.
 export function normalizeFocusPattern(v: unknown): PatternId | null {
   if (v === null) return null;

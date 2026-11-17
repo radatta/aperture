@@ -117,6 +117,8 @@ import {
   normalizeFocusPattern,
   normalizeCoachAttempts,
   peekOf,
+  focusHolds,
+  COACH_PARAMS,
   draftMistakes,
   normalizeSittingEvents,
   normalizeSittingStart,
@@ -1295,7 +1297,7 @@ export class BackendClient implements ApiClient {
   }
   async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
     return this.changeCoachDay((cur, ci) => {
-      const all = attemptsOf(ci.sittings, ci.attempts, ci.now);
+      const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
       const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
       const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
       const changes = applySlotChange(planDay(ci), cur.changes, input, known, seen, ci.now);
@@ -1309,21 +1311,33 @@ export class BackendClient implements ApiClient {
   // The override starts today; the same pattern again keeps its day (a repeat is one state). null clears it.
   async setCoachFocus(pattern: PatternId | null): Promise<CoachFocus | null> {
     const p = normalizeFocusPattern(pattern);
-    const { dayStartHour } = await this.ensureSettings();
-    const now = this.now();
-    const cur = await this.repo.getCoachFocus({ consistent: true });
+    const ci = await this.coachInput(undefined, true);
+    const shape = this.repo.coachFocusShape();
     if (p === null) {
-      if (cur) await this.repo.putCoachFocus({ ...cur, deletedAt: now, updatedAt: now });
+      if (!ci.focus) return null;
+      await this.repo.casUpdate(
+        shape,
+        'focus',
+        (cur) => (cur.deletedAt === null ? { ...cur, deletedAt: ci.now } : null),
+        ci.now,
+        { allowDeleted: true },
+      );
       return null;
     }
-    if (cur?.pattern === p) return cur;
-    return this.repo.putCoachFocus({
-      ...this.baseAt(now),
+    const fresh: CoachFocus = {
+      ...this.baseAt(ci.now),
       id: 'focus',
       pattern: p,
-      sinceDay: dayKeyInZone(now, USER_TIME_ZONE, dayStartHour),
+      sinceDay: ci.today,
       source: 'override',
-    });
+    };
+    return this.repo.casUpdate(
+      shape,
+      'focus',
+      (cur) => (focusHolds(ci, cur, p) ? null : { ...fresh, createdAt: cur.createdAt }),
+      ci.now,
+      { allowDeleted: true, create: () => fresh },
+    );
   }
   // A peek (help `solution`) already logged for that problem and day is returned, not logged twice.
   async logCoachAttempts(inputs: CoachAttemptInput[]): Promise<CoachAttempt[]> {
@@ -1334,21 +1348,34 @@ export class BackendClient implements ApiClient {
     const out: CoachAttempt[] = [];
     for (const n of list) {
       const dup = n.help === 'solution' && peekOf(stored, n);
-      out.push(
-        dup ||
-          (await this.repo.putCoachAttempt({
-            ...this.baseAt(now),
-            ...n,
-            at: now,
-            source: n.help === 'solution' ? 'peek-seed' : 'manual',
-          })),
-      );
+      if (dup) {
+        out.push(dup);
+        continue;
+      }
+      const row = await this.repo.putCoachAttempt({
+        ...this.baseAt(now),
+        ...n,
+        at: now,
+        source: n.help === 'solution' ? 'peek-seed' : 'manual',
+      });
+      stored.push(row); // a second peek on it in the same list is the same peek
+      out.push(row);
     }
     return out;
   }
   async deleteCoachAttempt(id: string): Promise<void> {
-    const a = await this.repo.getCoachAttempt(id, { consistent: true });
-    if (a) await this.repo.putCoachAttempt({ ...a, deletedAt: this.now(), updatedAt: this.now() });
+    const now = this.now();
+    try {
+      await this.repo.casUpdate(
+        this.repo.coachAttemptShape(id),
+        id,
+        (cur) => (cur.deletedAt === null ? { ...cur, deletedAt: now } : null),
+        now,
+        { allowDeleted: true },
+      );
+    } catch (err) {
+      if (!(err instanceof Error && err.message.startsWith('Not found'))) throw err; // idempotent
+    }
   }
 
   // --- Flux sets (D47) ---

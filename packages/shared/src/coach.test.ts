@@ -186,13 +186,15 @@ describe('outcomes', () => {
       ),
     ).toEqual([]);
   });
-  it('folds one problem’s same-day pieces into one attempt: the last outcome, a peek sticks', () => {
+  it('folds one problem’s same-day pieces into one first try: a fail then a clean redo is solved, a peek sticks', () => {
     const a = failed('two-sum', day(-1));
     const b = clean('two-sum', day(-1));
     b.startedAt = a.startedAt + 3600_000;
     b.endedAt = b.startedAt + 60_000 * 20;
     const [one] = attemptsOf([a, b], [], NOW);
-    expect(one).toMatchObject({ outcome: 'clean', accepted: true, submits: 2 });
+    expect(one).toMatchObject({ outcome: 'solved', accepted: true, submits: 2 });
+    const [cleanFirst] = attemptsOf([clean('two-sum', day(-1))], [], NOW);
+    expect(cleanFirst!.outcome).toBe('clean');
     const peek = manual('two-sum', day(-1), 'failed', 'solution');
     const [stuck] = attemptsOf([a, b], [peek], NOW);
     expect(stuck).toMatchObject({ outcome: 'failed', help: 'solution' });
@@ -200,6 +202,12 @@ describe('outcomes', () => {
   });
   it('an open sitting is not an attempt yet', () => {
     expect(attemptsOf([sit({ slug: 'two-sum', on: TODAY, open: true })], [], NOW)).toEqual([]);
+  });
+  it('a quick peek still counts: under 3 minutes, never accepted, the solution read', () => {
+    const quick = sit({ slug: 'two-sum', on: day(-1), minutes: 2, help: 'solution' });
+    expect(countsAsPractice(quick, NOW)).toBe(true);
+    const [r] = listRecords({ now: NOW, sittings: [quick], attempts: [] });
+    expect(r).toMatchObject({ peeked: true, schedule: { track: 'peeked', dueDay: TODAY } });
   });
 });
 
@@ -257,6 +265,16 @@ describe('resolveState — every transition', () => {
     const last = s(['2026-11-01', 'clean'], ['2026-11-04', 'clean'], ['2026-11-11', 'clean']);
     expect(last).toMatchObject({ step: 2, dueDay: '2026-11-25', dueBy: '2026-12-02' });
   });
+  it('a graduated problem that fails again restarts the peeked track', () => {
+    const g = s(
+      ['2026-11-01', 'clean'],
+      ['2026-11-04', 'clean'],
+      ['2026-11-11', 'clean'],
+      ['2026-11-25', 'clean'],
+      ['2026-12-01', 'failed'],
+    );
+    expect(g).toMatchObject({ graduated: false, track: 'peeked', step: 0, dueDay: '2026-12-02' });
+  });
   it('a graduated problem stays dormant', () => {
     const g = s(
       ['2026-11-01', 'clean'],
@@ -300,8 +318,16 @@ describe('planDay', () => {
     const t = planDay(input({ sittings: [failed('valid-anagram', day(-1))] }));
     expect(t.slots[0]).toMatchObject({ kind: 'carry-over', slug: 'valid-anagram' });
     expect(t.slots.filter((s) => s.slug === 'valid-anagram')).toHaveLength(1);
-    expect(t.due.map((q) => q.slug)).toEqual(['valid-anagram']);
-    expect(t.floor?.slug).toBe('valid-anagram');
+    expect(t.due).toEqual([]); // it's a slot today, not a due re-solve too
+    expect(t.floor).toMatchObject({ slug: 'valid-anagram', kind: 'carry-over' });
+  });
+  it('yesterday’s sitting left open overnight counts on its day, so the plan is the same before and after it ends', () => {
+    const open = sit({ slug: 'valid-anagram', on: day(-1), submits: ['wrong_answer'], open: true });
+    open.startedAt = zonedEpoch(day(-1), '22:00', USER_TIME_ZONE); // still inside its 24 h window at NOW
+    const ended = { ...open, status: 'done' as const, endedAt: open.startedAt + 20 * 60_000 };
+    const a = planDay(input({ sittings: [open] }));
+    expect(a.slots[0]).toMatchObject({ kind: 'carry-over', slug: 'valid-anagram' });
+    expect(planDay(input({ sittings: [ended] })).slots).toEqual(a.slots);
   });
   it('a carry-over older than 2 days is just a due re-solve', () => {
     const t = planDay(input({ sittings: [failed('valid-anagram', day(-3))] }));
@@ -479,6 +505,88 @@ describe('slot changes', () => {
     expect(
       applySlotChange(after, changes, { slug: swapped.slug, action: 'restore' }, known, seen, NOW),
     ).toEqual([]);
+  });
+  it('“Another” after a swap never offers back the pick it replaced', () => {
+    const first = t.slots[0]!; // contains-duplicate (Easy)
+    expect(first.alternatives.map((a) => a.slug)).not.toContain(first.slug);
+    const row = (changes: CoachDay['changes']): CoachDay => ({
+      id: TODAY,
+      userId: 'u',
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+      day: TODAY,
+      floor: false,
+      changes,
+    });
+    const once = applySlotChange(
+      t,
+      [],
+      { slug: first.slug, action: 'swap', toSlug: 'product-of-array-except-self' },
+      known,
+      seen,
+      NOW,
+    );
+    const after = planDay(input({ days: [row(once)] }));
+    const swappedIn = after.slots[0]!;
+    expect(swappedIn).toMatchObject({
+      slug: 'product-of-array-except-self',
+      swappedFrom: first.slug,
+    });
+    expect(swappedIn.alternatives.map((a) => a.slug)).not.toContain(first.slug);
+    // The easiest unseen Arrays problem not on the plan — never the replaced pick, first in catalog order.
+    const twice = applySlotChange(
+      after,
+      once,
+      { slug: swappedIn.slug, action: 'swap' },
+      known,
+      seen,
+      NOW,
+    );
+    expect(twice).toEqual([expect.objectContaining({ from: first.slug, to: 'two-sum' })]);
+  });
+  it('a swap target that is another slot’s engine pick is refused; a slug matches the slot showing it first', () => {
+    const [a, b] = [t.slots[0]!, t.slots[2]!];
+    const swapA = applySlotChange(
+      t,
+      [],
+      { slug: a.slug, action: 'swap', toSlug: 'two-sum' },
+      known,
+      seen,
+      NOW,
+    );
+    const row: CoachDay = {
+      id: TODAY,
+      userId: 'u',
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+      day: TODAY,
+      floor: false,
+      changes: swapA,
+    };
+    const after = planDay(input({ days: [row] }));
+    expect(() =>
+      applySlotChange(
+        after,
+        swapA,
+        { slug: b.slug, action: 'swap', toSlug: a.slug },
+        known,
+        seen,
+        NOW,
+      ),
+    ).toThrow(/already/);
+    const skipTwoSum = applySlotChange(
+      after,
+      swapA,
+      { slug: 'two-sum', action: 'skip' },
+      known,
+      seen,
+      NOW,
+    );
+    expect(skipTwoSum).toEqual([
+      expect.objectContaining({ kind: a.kind, action: 'skip', from: a.slug }),
+    ]);
   });
   it('the same swap twice is one change; skip replaces it', () => {
     const s = t.slots[0]!.slug;

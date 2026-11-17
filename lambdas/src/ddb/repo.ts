@@ -420,6 +420,20 @@ export class Repo {
     const a = it ? toEntity<CoachAttempt>(it) : null;
     return a && a.deletedAt === null ? a : null;
   }
+  coachAttemptShape(id: string): CasShape<CoachAttempt> {
+    return {
+      sk: sk.coachAttempt(id),
+      read: (i) => toEntity<CoachAttempt>(i),
+      toItem: (a) => entityItem(this.userId, sk.coachAttempt(id), a),
+    };
+  }
+  coachFocusShape(): CasShape<CoachFocus> {
+    return {
+      sk: sk.coachFocus(),
+      read: (i) => toEntity<CoachFocus>(i),
+      toItem: (f) => entityItem(this.userId, sk.coachFocus(), f),
+    };
+  }
   async putCoachAttempt(a: CoachAttempt): Promise<CoachAttempt> {
     await this.writes.put(entityItem(this.userId, sk.coachAttempt(a.id), a));
     return a;

@@ -1,4 +1,5 @@
 import {
+  addDays,
   CAUSE_TAGS,
   COACH_PARAMS,
   isCauseTag,
@@ -91,14 +92,18 @@ export function slotOfSitting(
   at: number,
 ) {
   if (!today) return null;
+  // A slot's problem, else the floor's (it's on the plan too), else off the plan.
   const slot = today.slots.find((s) => s.slug === sitting.problemSlug);
+  const floor = today.floor?.slug === sitting.problemSlug ? today.floor : null;
+  const kind = slot?.kind ?? floor?.kind ?? 'off-plan';
   const capMin = slot?.capMin ?? COACH_PARAMS.capMin;
   return {
-    kind: slot?.kind ?? 'off-plan',
-    reason: slot?.reason ?? 'Not one of today’s slots',
+    kind,
+    floor: !slot && !!floor,
+    reason: slot?.reason ?? floor?.reason ?? 'Not one of today’s slots',
     capMin,
     overCap: sittingMinutes(sitting, at) >= capMin,
-    rules: `${SLOT_RULES[slot?.kind ?? 'off-plan']} ${SOLUTION_RULE}`,
+    rules: `${SLOT_RULES[kind]} ${SOLUTION_RULE}`,
   };
 }
 
@@ -108,6 +113,12 @@ const nextDue = (records: ProblemRecord[], slug: string) => {
     ? { dueDay: r.schedule.dueDay, track: r.schedule.track }
     : null;
 };
+// A peek on a sitting still open isn't an attempt yet: the re-solve it will schedule, from the sitting's day.
+const peekDue = (day: string) => ({
+  dueDay: addDays(day, COACH_PARAMS.gaps.peeked[0]!),
+  track: 'peeked' as const,
+  once: 'the sitting ends',
+});
 const optDay = (v: unknown, name: string) => {
   if (v !== undefined && (typeof v !== 'string' || !isDayKey(v)))
     throw new RpcParamError(`"${name}" must be an ISO date (YYYY-MM-DD)`);
@@ -169,6 +180,7 @@ export const COACH_TOOLS: Tool[] = [
         throw new RpcParamError('"day" goes with "slug" only');
       let wrote: { sittingId: string } | { attemptId: string };
       let target: string;
+      let onDay: string;
       if (sittingId !== undefined) {
         const s = (await ctx.dispatch('patchSittingReview', [
           sittingId,
@@ -176,10 +188,12 @@ export const COACH_TOOLS: Tool[] = [
         ])) as Sitting;
         wrote = { sittingId: s.id };
         target = s.problemSlug;
+        onDay = s.day;
       } else {
         const on = day ?? ((await ctx.dispatch('getCoachToday', [])) as CoachToday).day;
         const sittings = (await ctx.dispatch('listSittings', [{ from: on, to: on }])) as Sitting[];
         const s = sittings.find((x) => x.problemSlug === slug);
+        onDay = on;
         if (s) {
           await ctx.dispatch('patchSittingReview', [s.id, { help: 'solution' }]);
           wrote = { sittingId: s.id };
@@ -192,7 +206,12 @@ export const COACH_TOOLS: Tool[] = [
         target = slug as string;
       }
       const records = (await ctx.dispatch('listProblemRecords', [])) as ProblemRecord[];
-      return { slug: target, peeked: true, ...wrote, nextDue: nextDue(records, target) };
+      return {
+        slug: target,
+        peeked: true,
+        ...wrote,
+        nextDue: nextDue(records, target) ?? peekDue(onDay),
+      };
     },
   },
   {

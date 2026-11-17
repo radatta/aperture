@@ -139,6 +139,8 @@ import {
   normalizeFocusPattern,
   normalizeCoachAttempts,
   peekOf,
+  focusHolds,
+  COACH_PARAMS,
   normalizeSittingStart,
   draftMistakes,
   timelineOf,
@@ -1184,7 +1186,7 @@ class StubClient implements ApiClient {
   }
   async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
     return this.changeCoachDay((cur, ci) => {
-      const all = attemptsOf(ci.sittings, ci.attempts, ci.now);
+      const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
       const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
       const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
       const changes = applySlotChange(planDay(ci), cur.changes, input, known, seen, ci.now);
@@ -1203,9 +1205,10 @@ class StubClient implements ApiClient {
       if (cur) this.writes.softDelete(this.store.coachFocus, cur.id);
       return null;
     }
-    if (cur?.pattern === p) return cur;
+    if (cur && focusHolds(ci, cur, p)) return cur;
     return this.writes.put(this.store.coachFocus, {
       ...this.baseAt(ci.now),
+      ...(cur ? { createdAt: cur.createdAt } : {}),
       id: 'focus',
       pattern: p,
       sinceDay: ci.today,

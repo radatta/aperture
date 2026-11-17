@@ -4049,6 +4049,30 @@ export function runApiContract(
         expect((await api.exportData()).coachFocus).toBeNull();
       });
 
+      it('picking the same pattern again after the engine moved on re-stamps it from today', async () => {
+        const today = TODAY;
+        clock -= 3 * 86_400_000;
+        expect(await api.setCoachFocus('graphs')).toMatchObject({ sinceDay: addDays(today, -3) });
+        clock += 3 * 86_400_000;
+        await api.logCoachAttempts(
+          [-3, -2, -1].map((n) => ({
+            slug: 'two-sum',
+            outcome: 'clean' as const,
+            day: addDays(today, n),
+          })),
+        );
+        expect((await api.getCoachToday()).focus).toMatchObject({ source: 'engine' });
+        expect(await api.setCoachFocus('graphs')).toMatchObject({
+          pattern: 'graphs',
+          sinceDay: today,
+        });
+        expect((await api.getCoachToday()).focus).toMatchObject({
+          pattern: 'graphs',
+          day: 1,
+          source: 'override',
+        });
+      });
+
       it('manual attempts log, count, and delete idempotently; a bad list writes nothing', async () => {
         const [a] = await api.logCoachAttempts([
           { slug: 'merge-intervals', outcome: 'clean', day: '2023-11-13' },
@@ -4069,6 +4093,12 @@ export function runApiContract(
           { slug: 'insert-interval', outcome: 'failed', help: 'solution' },
         ]);
         expect(p2!.id).toBe(p1!.id); // a peek logged twice is one
+        const pair = await api.logCoachAttempts([
+          { slug: 'meeting-rooms-iii', outcome: 'failed', help: 'solution' },
+          { slug: 'meeting-rooms-iii', outcome: 'failed', help: 'solution' },
+        ]);
+        expect(pair[1]!.id).toBe(pair[0]!.id); // …in one list too
+        await api.deleteCoachAttempt(pair[0]!.id);
         expect(p1!.source).toBe('peek-seed');
         await expect(
           api.logCoachAttempts([

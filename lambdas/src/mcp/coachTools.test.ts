@@ -283,6 +283,19 @@ describe('live_sitting slot', () => {
     expect(out.slot).toMatchObject({ kind: 'new', capMin: 30, overCap: true });
     expect(out.slot.rules).toMatch(/hint ladder/);
   });
+  it('a failed coach read never fails the live pull: slot is null', async () => {
+    await start('contains-duplicate');
+    const inner = ctx.dispatch;
+    ctx.dispatch = (method, args) =>
+      method === 'getCoachToday' ? Promise.reject(new Error('boom')) : inner(method, args);
+    const out = await call('live_sitting');
+    expect(out).toMatchObject({ active: true, slot: null });
+  });
+  it('mark_peeked on the open sitting says when the re-solve will be due', async () => {
+    await start('contains-duplicate');
+    const out = await call('mark_peeked', { slug: 'contains-duplicate' });
+    expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'peeked' });
+  });
   it('an off-plan problem is off-plan, under the cap', async () => {
     await start('network-delay-time');
     t = T0 + 5 * 60_000;
