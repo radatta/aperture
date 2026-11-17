@@ -222,7 +222,7 @@ const problemSitting = (s: Sitting, at: number) => ({
 const pct = (r: Rate) => (r.of >= STATS_PCT_MIN ? Math.round((100 * r.hit) / r.of) : null);
 const rateView = (r: Rate) => ({ ...r, pct: pct(r) });
 const STATS_PCT_MIN = 5; // under this many tries a rate is only a count
-const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried. \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top as of now, whatever the range: the plan's next pick unless it is the pattern just held or they set one. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock scores are not in this yet.`;
+const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried, or any day after a solve from before the coach (log_attempt historical). \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top as of now, whatever the range: the plan's next pick unless it is the pattern just held or they set one. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock scores are not in this yet.`;
 const statsView = (s: CoachStats) => ({
   from: s.from,
   to: s.to,
@@ -468,7 +468,7 @@ export const COACH_TOOLS: Tool[] = [
       ASK_FIRST,
       `Logs practice done outside the extension — on paper, in an editor, in a mock — so the plan and the re-solve queue count it. Each attempt: \`slug\`, \`outcome\` (clean = right first time, no help; solved = got there with a hint or a few tries; failed = didn't, or read the solution), optional \`help\` (${HELP_LEVELS.join('/')}), \`cause\`, \`minutes\`, \`note\`, \`day\` (default today, up to ${ATTEMPT_BACKDATE_DAYS} days back). Up to ${LOG_ATTEMPTS_MAX} at once.`,
       'It counts toward momentum and the queue; it does not touch their Roll or calibration. Returns the stored attempts and each problem’s next due day — read them back.',
-      `\`historical: true\` is for solves from before the coach ("I did these last year"): \`day\` up to ${ATTEMPT_HISTORY_DAYS / 365} years back (a guess is fine; before today; omitted = yesterday). They light up the Progress map as solved before and mark the problem seen, so it is never offered as new; they never enter the re-solve queue or momentum, and never count as a first try: a later live try on that problem counts as a re-solve in the stats and the focus ranking. Use \`solved\` when they don't remember how it went. \`delete_attempt\` undoes one.`,
+      `\`historical: true\` is for solves from before the coach ("I did these last year"): \`day\` up to ${ATTEMPT_HISTORY_DAYS / 365} years back (a guess is fine; before today; omitted = yesterday — when the problem already has a try with the coach, pass a day before that try). They light up the Progress map as solved before and mark the problem seen, so it is never offered as new; they never enter the re-solve queue or momentum, and never count as a first try: a later live try on that problem counts as a re-solve in the stats and the focus ranking. Use \`solved\` when they don't remember how it went. \`delete_attempt\` undoes one.`,
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -526,7 +526,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'list_problems',
     description: [
-      'Every problem they have tried (on LeetCode with the extension, or logged), newest first — the history and the re-solve queue ("what\u2019s due?", "which Two Pointers problems have I peeked?"). Each row: title, slug, pattern, difficulty, days tried, the first and the last outcome (clean / solved / failed), ever accepted, peeked, the newest cause tag, the re-solve state (track, step of N, due day; null due day once graduated; null for a problem with only solves from before the coach), and `historical` (those solves: count, first and last day).',
+      'Every problem they have tried (on LeetCode with the extension, or logged), newest first — the history and the re-solve queue ("what\u2019s due?", "which Two Pointers problems have I peeked?"). Each row: title, slug, pattern, difficulty, days tried (live tries; solves from before the coach are in `historical`), the first and the last outcome (clean / solved / failed), ever accepted, peeked, the newest cause tag, the re-solve state (track, step of N, due day; null due day once graduated; null for a problem with only solves from before the coach), and `historical` (those solves: count, first and last day).',
       `Filters: \`pattern\` (a pattern id: ${PATTERN_LIST}, other), \`due\` (true: due today or earlier; false: not due), \`peeked\`; \`limit\` 1–${PROBLEMS_LIMIT_MAX} (default 30). With \`due: true\` the oldest due comes first. \`get_problem\` reads one in full.`,
       'Read-only.',
     ].join(' '),

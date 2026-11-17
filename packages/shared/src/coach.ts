@@ -1155,10 +1155,9 @@ const bump = (r: Rate, hit: boolean) => {
   r.of += 1;
   if (hit) r.hit += 1;
 };
-// A first try is the problem's first attempt ever, with no history-only solve dated before it (so a range never turns a
-// re-solve into a first try); every
-// later day on it is a re-solve. Clean is the only hit for both — the gap is first-try accuracy. `to` defaults
-// to today; the ranking is as of now (today's attempts in).
+// A first try is the problem's first attempt ever, with no history-only solve dated before it (so a range never
+// turns a re-solve into a first try); every later day on it is a re-solve. Clean is the only hit for both — the gap
+// is first-try accuracy. `to` defaults to today; the ranking is as of now (today's attempts in).
 export function coachStats(
   attempts: readonly Attempt[],
   today: string,

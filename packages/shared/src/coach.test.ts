@@ -1336,6 +1336,32 @@ describe('history-only solves', () => {
 
 describe('LeetCode Premium', () => {
   const AH = NEETCODE_150.filter((c) => c.pattern === 'arrays-hashing');
+  it('on: a swap’s default target may be a Premium problem; off, there is none', () => {
+    const prem = AH.find((c) => c.premium)!;
+    // The slot: another problem at the Premium one's level; everything else in the pattern already seen.
+    const slot = AH.find((c) => !c.premium && c.difficulty === prem.difficulty)!;
+    const seen = new Set(AH.filter((c) => !c.premium && c.slug !== slot.slug).map((c) => c.slug));
+    const today = {
+      slots: [
+        {
+          kind: 'new',
+          slug: slot.slug,
+          pattern: 'arrays-hashing',
+          difficulty: slot.difficulty,
+          swappedFrom: null,
+        },
+      ],
+    } as unknown as ReturnType<typeof planDay>;
+    const known = (slug: string) => NEETCODE_150.some((c) => c.slug === slug);
+    const swap = { slug: slot.slug, action: 'swap' as const };
+    expect(applySlotChange(today, [], swap, known, seen, NOW, true)).toEqual([
+      expect.objectContaining({ action: 'swap', from: slot.slug, to: prem.slug }),
+    ]);
+    expect(() => applySlotChange(today, [], swap, known, seen, NOW)).toThrow(
+      /No unseen problem left/,
+    );
+  });
+
   const premiumIdx = AH.findIndex((c) => c.premium);
   const before = AH.slice(0, premiumIdx).map((c, i) => clean(c.slug, day(-40 + i)));
   const focus = focusRow('arrays-hashing', day(-1));

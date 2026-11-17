@@ -681,7 +681,7 @@ export const lcCoach: Scenario = {
       id: 'progress-empty',
       entry: 'ui',
       kind: 'edge',
-      what: 'An account with no practice: the whole list not tried, every pattern a card, Solves says none yet',
+      what: 'An account with no practice: the whole list not tried, every pattern a card',
       offDev: {
         file: 'app/src/pages/Recruiting/ProgressSection.test.tsx',
         test: 'an empty account: the whole list untried, five stages, every pattern a card',
@@ -718,7 +718,7 @@ export const lcCoach: Scenario = {
       offDev: {
         file: 'app/src/pages/Recruiting/ProblemPage.test.tsx',
         test: 'a long history lists every try',
-        why: 'same path as progress-problem (proven on dev); live tries are capped at 60 days back, so 40 would crowd the dev account’s plan',
+        why: 'same path as progress-problem (proven on dev): one records read, a longer list',
       },
     },
     {
@@ -756,8 +756,8 @@ export const lcCoach: Scenario = {
       what: 'With Premium on, a swap’s default target (the next easier unseen problem) may be a Premium one',
       offDev: {
         file: 'packages/shared/src/coach.test.ts',
-        test: 'on: easier picks and the room check count Premium problems',
-        why: 'mcp-swap runs setCoachSlot on dev; the default target is the pure easierIn with the Premium flag, shared by the stub and the Lambda',
+        test: 'on: a swap’s default target may be a Premium problem; off, there is none',
+        why: 'mcp-swap runs setCoachSlot on dev; the default target is the pure applySlotChange with the Premium flag, shared by the stub and the Lambda',
       },
     },
     {
