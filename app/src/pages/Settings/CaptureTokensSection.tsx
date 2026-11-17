@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AUTH_HEADER,
   CAPTURE_SAY,
@@ -87,6 +87,13 @@ function MintToken({
   const full = tokens.length >= SCOPED_TOKENS_MAX;
   // Said as you type (or at once when the list is full), never after a round trip.
   const problem = trimmed || full ? scopedTokenNameError(trimmed, tokens) : null;
+  // The message renders under the field — with the field just above the bottom dock, behind it. Bring it
+  // into view each time it changes, or a disabled Make token reads as doing nothing.
+  const message = error ?? problem;
+  const messageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (message) messageRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [message]);
 
   async function make() {
     // A second Enter while the first mint is out would mint a twin whose plaintext is never shown.
@@ -124,10 +131,10 @@ function MintToken({
           Make token
         </Button>
       </div>
-      <div role="alert">
-        {(problem || error) && (
+      <div role="alert" ref={messageRef}>
+        {message && (
           <Text as="p" size="xs" tone="danger" className="mt-2">
-            {error ?? problem}
+            {message}
           </Text>
         )}
       </div>
@@ -141,7 +148,7 @@ function tokenLine(t: ScopedTokenInfo): string {
     `created ${fmtDateTime(t.createdAt)}`,
     t.lastUsedAt !== null ? `last used ${fmtDateTime(t.lastUsedAt)}` : 'never used',
     `${t.usedToday}\u00a0today`, // never "0" on one line and "today" on the next
-  ].join(' · ');
+  ].join('\u00a0· '); // a wrap never starts a line with the dot
 }
 
 function TokenRow({ token }: { token: ScopedTokenInfo }) {

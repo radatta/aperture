@@ -41,6 +41,8 @@ describe('Settings › Capture: tokens', () => {
 
   it('refuses a clashing name and a full list as you type, before sending', async () => {
     const api = stub();
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
     await api.mintScopedToken('capture', 'iPhone');
     const mint = vi.spyOn(api, 'mintScopedToken');
     const user = userEvent.setup();
@@ -48,6 +50,9 @@ describe('Settings › Capture: tokens', () => {
     await screen.findByText('iPhone');
     await user.type(screen.getByLabelText('New token for'), 'iphone');
     expect(screen.getByText('Another token is already called “iPhone”')).toBeTruthy();
+    // Brought into view: under the field, it could sit behind the bottom dock.
+    expect(scrolled).toHaveBeenCalled();
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; // jsdom has none
     expect(
       screen.getByRole<HTMLButtonElement>('button', { name: 'Make capture token' }).disabled,
     ).toBe(true);
