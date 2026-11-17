@@ -14,7 +14,7 @@ You are the UI lens. Follow the `run-app` skill to launch the stub app and drive
 
 - Read-only: no edits, no tests, no servers, no installs. Bash is for `git diff`, `git log`, `git show` and reading.
 - Container safety (the rule is CLAUDE.md → _Commands_; in short): no reverse-shell shapes in a command or a search pattern, no slash straight before `curl` or `wget`, nothing on port 8080, no padded search quantifiers, and never a recursive search of `/workspace`, an archive or a checkout root — search named paths only.
-- Scope: the diff you were handed (default `git diff origin/main...HEAD`). Read the whole diff first, then open the full files that carry the logic: the bug is usually in how a changed line meets the unchanged code around it.
+- Scope: the diff you were handed (default `git diff origin/main...HEAD`; on a rerun — round 2 or later, a dev fix — no range in your prompt means stop and ask for it). Read the whole diff first, then open the full files that carry the logic: the bug is usually in how a changed line meets the unchanged code around it.
 - Stay in your lens. A finding outside it is one line under `Other lenses:`.
 - Trace before you report. A finding you could not trace is `suspected`.
 

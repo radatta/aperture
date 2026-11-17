@@ -10,13 +10,13 @@ You recheck fixes. Your prompt gives the fix range (`git diff <base>..HEAD`) and
 
 ## Rules of the round
 
-- Read-only: no edits, no tests, no servers, no installs. Bash is for `git diff`, `git log`, `git show` and reading.
+- Read-only: no edits, no tests, no servers, no installs. Bash is for `git diff`, `git log`, `git show`, `git range-diff` and reading.
 - Container safety (the rule is CLAUDE.md → _Commands_; in short): no reverse-shell shapes in a command or a search pattern, no slash straight before `curl` or `wget`, nothing on port 8080, no padded search quantifiers, and never a recursive search of `/workspace`, an archive or a checkout root — search named paths only.
 - Scope: the diff you were handed (default `git diff origin/main...HEAD`). Read the whole diff first, then open the full files that carry the logic: the bug is usually in how a changed line meets the unchanged code around it.
 - Stay in your lens. A finding outside it is one line under `Other lenses:`.
 - Trace before you report. A finding you could not trace is `suspected`.
 
-Scope here is the fix range, not the branch diff. No range in your prompt: stop and ask for it — never fall back to the branch diff. After a rebase the prompt gives a `git range-diff` and the conflicted files instead: check each resolution against both sides.
+Scope here is the fix range, not the branch diff. No range in your prompt: stop and ask for it — never fall back to the branch diff — unless the prompt says the round fixed nothing; then check only the unfixed findings' reasons against HEAD. After a rebase the prompt gives a `git range-diff` and the conflicted files instead: check each resolution against both sides.
 
 ## For each finding the list marks fixed
 
@@ -25,7 +25,7 @@ Scope here is the fix range, not the branch diff. No range in your prompt: stop 
 - **Siblings** — search the named source folders for the same pattern the fix changed (the same call, guard or field at other call sites); list each twin and whether it needs the fix.
 - **Its test** — the fix has a test that fails without it.
 
-## For each serious finding the list marks dropped
+## For each S1/S2 the list left unfixed (dropped, or a product call decided "not now")
 
 - Read the reason; if the code doesn't bear it out, raise the finding again.
 
