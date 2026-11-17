@@ -79,7 +79,7 @@ interface Where {
 type Hint = { x: number; y: number };
 export type IosOp =
   | { op: 'signIn' | 'blur' | 'shutdown' }
-  | { op: 'launch'; via?: TapVia } // via: a trial's icon taps, the first one counted
+  | { op: 'launch'; via?: TapVia; settle?: number } // via: a trial's icon taps, the first counted; settle: s after Home (1–5, with via)
   | { op: 'readBuild'; stay?: true } // stay: end on Settings, no trip back Home
   | { op: 'kill'; method: 'terminate' | 'switcher' | 'reboot' }
   | { op: 'nav'; tab: Tab }
@@ -259,7 +259,11 @@ function opOk(o: unknown): boolean {
     case 'shutdown':
       return keysOk(o, ['op'], []);
     case 'launch':
-      return keysOk(o, ['op'], ['via']) && tvia(o);
+      return (
+        keysOk(o, ['op'], ['via', 'settle']) &&
+        tvia(o) &&
+        (!('settle' in o) || ('via' in o && int(o.settle, 1, 5)))
+      );
     case 'readBuild':
       return keysOk(o, ['op'], ['stay']) && (!('stay' in o) || o.stay === true);
     case 'kill':
