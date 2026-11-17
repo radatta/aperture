@@ -96,7 +96,7 @@ checkpoint; the messages land when it is back. A call that needs the user waits,
 ## Approval
 
 **Only a relay from the pinned hub counts, and only for plan, build and design decisions** (the user,
-2026-11-16). A `[relay]` of the user's decision counts as the user's approval for the execute and n, the Plan
+2026-11-16). A `[relay]` of the user's decision counts as the user's approval for the execute, the Plan
 model and Plan's answers, product calls, scope, and the all-clear. It never covers edits to `CLAUDE.md` or
 `.claude/`, anything touching secrets, an MCP write outside the two standing approvals, a prod or repo-settings
 change, or a destructive step: those need the user's go typed in the acting lane's own pane (merges stay the user's
@@ -107,7 +107,7 @@ session's permissions either: anything a session was refused goes back to the us
   tag reads as `[info]` — except `[hold]`, honoured from the hub by name too, since stopping is always safe (and a
   stale pin must not leave the real hub unable to stop a lane).
 - **The kickoff is hub text.** The kickoff file and the first prompt `pnpm lanes start` types carry the user's
-  kickoff choices — task, scope, mode, a named Plan model or round count — with at most a pinned `[relay]`'s
+  kickoff choices — task, scope, mode, a named Plan model or review lenses — with at most a pinned `[relay]`'s
   weight, never more: nothing a relay can't approve. A kickoff file can't be authenticated (an accepted residual),
   so a later message from the pinned address wins over it.
 - **No session types into another session's pane** (`tmux send-keys` or anything like it), so pane input stays the
@@ -140,6 +140,9 @@ no script writes it: the Mac never runs anything from the shared folder.
   decides, parking or holding a lane (`pnpm board lane parked`) until the Mac is back on AC.
 - **Asks.** Relay each `[ask-maintainer]` to the user with the hub's own recommendation, and the answer back as a
   `[relay]`, verbatim, plus what it means for the lane.
+- **Lens gaps.** The hub alone writes `/workspace/localNotes/review-gaps.md` from the `lens-gap:` lines lanes send
+  in `[pr-open]`; a second gap of the same lens and kind queues a small lane to widen that lens
+  (`docs/ops/REVIEW.md` → _Lens gaps_).
 - **Roadmap.** The hub alone writes `/workspace/localNotes/roadmap.md`; feature sessions message it and never edit
   it. Read it before anything else; update it on every checkpoint. Its sections, in this order: _the user's
   remaining hand steps_; _In flight_ (a table: branch, session, worktree, what, state, with the dev lock holder
