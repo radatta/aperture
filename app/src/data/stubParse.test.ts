@@ -96,6 +96,7 @@ describe('stub parseTask', () => {
     };
     expect(await day('essay due tonight 2:30am')).toEqual(['2026-10-31', '02:30', '2026-10-30']);
     expect(await day('essay due tomorrow 1am')).toEqual(['2026-10-31', '01:00', '2026-10-30']);
+    // A written day stays as written, past or not (the maintainer, 2026-11-17).
     expect(await day('essay due today 9am')).toEqual(['2026-10-30', '09:00', '2026-10-30']);
   });
 

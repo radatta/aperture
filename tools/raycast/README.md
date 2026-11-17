@@ -43,8 +43,9 @@ Haiku only sets what you stated — it never invents an estimate — and moves e
 "Today" follows the app's day start (Settings, 4am by default), so `due tmw` typed at 1am means the day
 after the one you're still in. A grammar line (space, pipe, space — `memo | ~30 #Admin`) skips the
 model and takes the strict [bulk-add grammar](../../docs/areas/tasks/bulk-add.md). A time with no day
-(`call dentist 4pm`) means today — Raycast keeps the typed rules; the spoken ones (a past time rolls
-forward) are the Siri Shortcut's ([capture.md → Time rules](../../docs/areas/tasks/capture.md#4-time-rules)).
+(`call dentist 4pm`) means its next occurrence — today, or tomorrow once 4pm has passed — as for the Siri
+Shortcut, while a day you write stays as written (`today 9am` at 3pm is overdue); its other spoken rules (a bare "at 5", "tonight", "in 20 minutes") are the Shortcut's
+([capture.md → Time rules](../../docs/areas/tasks/capture.md#4-time-rules)).
 A due **time** also puts the task on Google Calendar (auto-sync). The same line again within a minute is
 answered "Already added", not saved twice. The toast shows what was **saved** (the server's copy), so a
 wrong guess is visible at once:

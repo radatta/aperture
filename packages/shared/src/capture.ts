@@ -64,8 +64,8 @@ export const CAPTURE_BODY_MAX = 16_384;
 
 export interface CaptureRequest {
   text: string;
-  // Spoken: the voice time rules apply ("at 5" = the next 5 o'clock, a past time rolls forward). Absent
-  // (Raycast) = the typed rules, exactly as the capture bar.
+  // Spoken: the voice time rules apply ("at 5" = the next 5 o'clock, "tonight", "in 20 minutes"). Absent
+  // (Raycast) = the typed rules, exactly as the capture bar. Both roll a past clock with no day forward.
   voice?: boolean;
 }
 

@@ -17,6 +17,7 @@ const ctx = {
   places: [{ slug: 'grocer', name: 'Grocer' }],
   today: '2026-10-12',
   dayStartHour: 4,
+  now: Date.UTC(2026, 9, 12, 15, 0), // Monday 2026-10-12, 08:00 in LA
 };
 const fields = (over: Record<string, unknown> = {}) => ({
   title: 'fix login bug',
@@ -54,13 +55,19 @@ describe('validateParsedTask', () => {
     });
   });
 
-  it('a small-hours clock on today is tonight’s — the next date; other days stay', () => {
-    const due = (over: Record<string, unknown>, line?: string) =>
-      validateParsedTask(fields(over), line ? { ...ctx, line } : ctx)?.input.dueDay;
-    expect(due({ dueDay: '2026-10-12', dueTime: '02:30' })).toBe('2026-10-13');
-    expect(due({ dueTime: '02:30' }, 'essay 2:30am')).toBe('2026-10-13');
-    expect(due({ dueDay: '2026-10-13', dueTime: '01:00' })).toBe('2026-10-13');
-    expect(due({ dueDay: '2026-10-12', dueTime: '09:00' })).toBe('2026-10-12');
+  it('a clock lands on its next occurrence; a later day stays', () => {
+    const due = (over: Record<string, unknown>, line?: string) => {
+      const i = validateParsedTask(fields(over), line ? { ...ctx, line } : ctx)!.input;
+      return [i.dueDay, i.dueTime];
+    };
+    // 08:00: a small-hours clock on today is tonight's, a clock still ahead stays today, a past one rolls.
+    expect(due({ dueDay: '2026-10-12', dueTime: '02:30' })).toEqual(['2026-10-13', '02:30']);
+    expect(due({ dueTime: '02:30' }, 'essay 2:30am')).toEqual(['2026-10-13', '02:30']);
+    expect(due({ dueDay: '2026-10-12', dueTime: '09:00' })).toEqual(['2026-10-12', '09:00']);
+    expect(due({ dueDay: '2026-10-12', dueTime: '07:00' })).toEqual(['2026-10-13', '07:00']);
+    expect(due({ dueDay: '2026-10-13', dueTime: '01:00' })).toEqual(['2026-10-13', '01:00']);
+    // A past day the model read ("monday" as last Monday) rolls like any past clock.
+    expect(due({ dueDay: '2026-10-05', dueTime: '09:00' })).toEqual(['2026-10-12', '09:00']);
   });
 
   it('returns null for a blank, missing or non-string title, or a non-object', () => {
@@ -353,7 +360,8 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       ...ctx,
       today: '2026-11-16',
       line,
-      voice: { now },
+      now,
+      voice: true,
     })!;
 
   it('takes the time from the words, not the model', () => {
@@ -376,7 +384,8 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
         ...ctx,
         today: '2026-11-16',
         line,
-        voice: { now: late },
+        now: late,
+        voice: true,
       })!.input;
     expect(v('call mum at 5')).toMatchObject({ dueDay: '2026-11-17', dueTime: '05:00' });
     expect(v('call mum tomorrow at 5')).toMatchObject({ dueDay: '2026-11-17', dueTime: '17:00' });
@@ -386,7 +395,8 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
         ...ctx,
         today: '2026-11-16',
         line,
-        voice: { now: late },
+        now: late,
+        voice: true,
       })!.input;
     expect(later('dentist on Christmas Eve at 9am')).toMatchObject({
       dueDay: '2026-12-24',
@@ -397,7 +407,8 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       ...ctx,
       today: '2026-11-16',
       line: 'dentist on the eve at 9am',
-      voice: { now: Date.UTC(2026, 10, 16, 16, 0) }, // 08:00 LA
+      now: Date.UTC(2026, 10, 16, 16, 0), // 08:00 LA
+      voice: true,
     })!.input;
     expect(eve).toMatchObject({ dueDay: '2026-11-17', dueTime: '09:00' });
     expect(
@@ -405,7 +416,8 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
         ...ctx,
         today: '2026-11-16',
         line: 'call mum in 2 days at 5 pm',
-        voice: { now: late },
+        now: late,
+        voice: true,
       })!.input,
     ).toMatchObject({ dueDay: '2026-11-18', dueTime: '17:00' });
   });
@@ -471,6 +483,7 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       validateParsedTask(fields({ title: 'call the bank', ...over }), {
         ...ctx,
         today: '2026-11-16',
+        now,
         line,
       })!;
     // The dev miss (2026-11-16): today, no time, for "at 6 pm".
@@ -482,7 +495,7 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       dueTime: '18:00',
     });
     expect(typed('move the 3pm to 5pm', { dueTime: '17:00' }).input.dueTime).toBe('17:00');
-    // Words the model kept in its title weren't the due time: nothing filled.
+    // Words the model kept in its title weren't the due time — unless they're an at/by clock (next test).
     expect(typed('watch 9pm show', { title: 'watch 9pm show' }).input.dueTime).toBeUndefined();
     expect(
       typed('move the 3pm to 5pm', { title: 'move the 3pm to 5pm' }).input.dueTime,
@@ -491,12 +504,309 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(typed('call the bank at 6', {}).input.dueTime).toBeUndefined();
   });
 
-  it('typed lines keep the 2026-10-09 rule: a past clock lands today', () => {
+  it('typed lines roll a past clock forward, as spoken ones do (the maintainer, 2026-11-17)', () => {
     const v = validateParsedTask(fields({ title: 'call', dueTime: '09:00' }), {
       ...ctx,
       today: '2026-11-16',
+      now: Date.UTC(2026, 10, 16, 23, 0), // 15:00 LA
       line: 'call 9am',
     })!;
-    expect(v.input).toMatchObject({ dueDay: '2026-11-16', dueTime: '09:00' });
+    expect(v.input).toMatchObject({ dueDay: '2026-11-17', dueTime: '09:00' });
+  });
+
+  // Dev, 2026-11-17: a typed "…call the bank typed at 1 am" came back unchanged, with no day and no time.
+  it('an at/by clock the model kept in its title fills and leaves the title', () => {
+    const run = (line: string, over: Record<string, unknown>, voice = false) =>
+      validateParsedTask(fields({ title: line, ...over }), {
+        ...ctx,
+        today: '2026-11-16',
+        now, // 06:00 LA
+        line,
+        voice,
+      })!;
+    for (const voice of [false, true]) {
+      expect(run('call the bank at 1 am', {}, voice)).toMatchObject({
+        input: { title: 'call the bank', dueDay: '2026-11-17', dueTime: '01:00' },
+        dropped: [],
+      });
+      expect(run('call the bank by 5PM.', {}, voice).input).toMatchObject({
+        title: 'call the bank',
+        dueDay: '2026-11-16',
+        dueTime: '17:00',
+      });
+      expect(run('At noon, call mum', {}, voice).input).toMatchObject({
+        title: 'call mum',
+        dueTime: '12:00',
+      });
+      expect(run('pay rent due at 13:00 sharp', {}, voice).input).toMatchObject({
+        title: 'pay rent sharp',
+        dueTime: '13:00',
+      });
+    }
+    // The model's own same time, words kept: the phrase still leaves, so the title doesn't depend on the model.
+    expect(run('call the bank at 7 pm', { dueTime: '19:00' }).input.title).toBe('call the bank');
+    // A different model time stands, and the words stay.
+    expect(run('move standup at 3pm to 5pm', { dueTime: '17:00' }).input).toMatchObject({
+      title: 'move standup at 3pm to 5pm',
+      dueTime: '17:00',
+    });
+    // Only the phrase: the title stays whole rather than going blank.
+    expect(run('at 9am', {}).input).toMatchObject({ title: 'at 9am', dueTime: '09:00' });
+  });
+
+  it('a clock not phrased as a due gets no time when the model kept it', () => {
+    const run = (line: string, voice: boolean) =>
+      validateParsedTask(fields({ title: line }), {
+        ...ctx,
+        today: '2026-11-16',
+        now,
+        line,
+        voice,
+      })!.input;
+    for (const voice of [false, true])
+      for (const line of [
+        'watch 9pm show',
+        'email the team about the 3pm meeting',
+        'move the 3pm to 5pm',
+        'look at one of the leases',
+        'look at 5 options', // a bare hour: never an at/by clock
+        'move standup at 3pm to 5pm', // two stated clocks: the at/by one isn't taken on its own
+      ])
+        expect(run(line, voice), `${line} (${voice ? 'voice' : 'typed'})`).toEqual({ title: line });
+  });
+});
+
+// The maintainer, 2026-11-17: every clock lands on its next occurrence, typed or spoken, at any hour — the small
+// hours (app day still yesterday, dayStartHour 4) included.
+describe('validateParsedTask — the small hours', () => {
+  // 2026-11-17 in LA (UTC-8); the app day is 11-16 before 04:00.
+  const at = (h: number, m: number) => Date.UTC(2026, 10, 17, h + 8, m);
+  const appDay = (h: number) => (h < 4 ? '2026-11-16' : '2026-11-17');
+  const cases: [string, number, number, Record<string, [string, string]>][] = [
+    // now, then each clock's landing
+    [
+      '00:30',
+      0,
+      30,
+      {
+        '1 am': ['2026-11-17', '01:00'],
+        '12 am': ['2026-11-18', '00:00'],
+        '9am': ['2026-11-17', '09:00'],
+      },
+    ],
+    [
+      '01:35',
+      1,
+      35,
+      {
+        '1 am': ['2026-11-18', '01:00'],
+        '12 am': ['2026-11-18', '00:00'],
+        '9am': ['2026-11-17', '09:00'],
+      },
+    ],
+    [
+      '02:01',
+      2,
+      1,
+      {
+        '1 am': ['2026-11-18', '01:00'],
+        '12 am': ['2026-11-18', '00:00'],
+        '9am': ['2026-11-17', '09:00'],
+      },
+    ],
+    [
+      '03:59',
+      3,
+      59,
+      {
+        '1 am': ['2026-11-18', '01:00'],
+        '12 am': ['2026-11-18', '00:00'],
+        '9am': ['2026-11-17', '09:00'],
+      },
+    ],
+    [
+      '04:00',
+      4,
+      0,
+      {
+        '1 am': ['2026-11-18', '01:00'],
+        '12 am': ['2026-11-18', '00:00'],
+        '9am': ['2026-11-17', '09:00'],
+      },
+    ],
+    [
+      '23:30',
+      23,
+      30,
+      {
+        '1 am': ['2026-11-18', '01:00'],
+        '12 am': ['2026-11-18', '00:00'],
+        '9am': ['2026-11-18', '09:00'],
+      },
+    ],
+  ];
+  const hhmm: Record<string, string> = { '1 am': '01:00', '12 am': '00:00', '9am': '09:00' };
+  it('typed and spoken agree at every small-hours clock', () => {
+    for (const [label, h, m, want] of cases) {
+      const today = appDay(h);
+      const calendar = '2026-11-17';
+      for (const [said, landing] of Object.entries(want)) {
+        const line = `call the bank at ${said}`;
+        const run = (over: Record<string, unknown>, voice: boolean) => {
+          const i = validateParsedTask(fields({ title: 'call the bank', ...over }), {
+            ...ctx,
+            today,
+            now: at(h, m),
+            line,
+            voice,
+          })!.input;
+          return [i.dueDay, i.dueTime];
+        };
+        const why = `${said} at ${label}`;
+        // The model's answers seen on dev: the time on the app day, on the calendar day, none with the
+        // words kept, or none at all.
+        for (const day of [null, today, calendar])
+          expect(
+            run({ dueDay: day, dueTime: hhmm[said] }, false),
+            `${why}, typed, model day ${day}`,
+          ).toEqual(landing);
+        expect(run({ title: line }, false), `${why}, typed, kept`).toEqual(landing);
+        expect(run({}, false), `${why}, typed, missed`).toEqual(landing);
+        expect(run({}, true), `${why}, spoken`).toEqual(landing);
+        expect(run({ title: line }, true), `${why}, spoken, kept`).toEqual(landing);
+      }
+    }
+  });
+});
+
+// The maintainer, 2026-11-17 (Q3): a day the typed line names stays as written; only a clock with no day word
+// rolls. Spoken lines keep their own rules ("today at 5 am" rolls, above).
+describe('validateParsedTask — a day the typed line names', () => {
+  // 2026-11-17 (a Tuesday) in LA (UTC-8); the app day is 11-16 before the day start.
+  const at = (h: number, m: number) => Date.UTC(2026, 10, 17, h + 8, m);
+  const typed = (line: string, over: Record<string, unknown>, h: number, m: number, start = 4) => {
+    const i = validateParsedTask(fields({ title: 'pay rent', ...over }), {
+      ...ctx,
+      today: h < start ? '2026-11-16' : '2026-11-17',
+      dayStartHour: start,
+      now: at(h, m),
+      line,
+    })!.input;
+    return [i.dueDay, i.dueTime];
+  };
+  const day = (d: string, t: string) => ({ dueDay: d, dueTime: t });
+
+  it('a written day stays as written, even past; a small-hours clock on today is its night', () => {
+    // 15:00: today 9am is overdue, not tomorrow's; a past date stays.
+    expect(typed('pay rent today 9am', day('2026-11-17', '09:00'), 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+    expect(typed('pay rent nov 10 9am', day('2026-11-10', '09:00'), 15, 0)).toEqual([
+      '2026-11-10',
+      '09:00',
+    ]);
+    // 02:01, the app's today still 11-16: "today 1am" is its night's 01:00 — the one just gone.
+    expect(typed('pay rent today 1am', day('2026-11-16', '01:00'), 2, 1)).toEqual([
+      '2026-11-17',
+      '01:00',
+    ]);
+    // 15:00: "today 2:30am" is tonight's.
+    expect(typed('pay rent today 2:30am', day('2026-11-17', '02:30'), 15, 0)).toEqual([
+      '2026-11-18',
+      '02:30',
+    ]);
+    // 00:30: "tomorrow 1am", read against the app's 11-16, is 11-17.
+    expect(typed('pay rent tomorrow 1am', day('2026-11-17', '01:00'), 0, 30)).toEqual([
+      '2026-11-17',
+      '01:00',
+    ]);
+    // "today" is the app's day whatever day the model read: at 02:01, 9am is the app day's — overdue.
+    expect(typed('pay rent today 9am', day('2026-11-17', '09:00'), 2, 1)).toEqual([
+      '2026-11-16',
+      '09:00',
+    ]);
+    // "tonight" names today too: 9pm at 22:00 is overdue, 2:30am typed at 3pm the coming night's.
+    expect(typed('pay rent tonight 9pm', day('2026-11-17', '21:00'), 22, 0)).toEqual([
+      '2026-11-17',
+      '21:00',
+    ]);
+    expect(typed('pay rent tonight 2:30am', day('2026-11-17', '02:30'), 15, 0)).toEqual([
+      '2026-11-18',
+      '02:30',
+    ]);
+    // A written date stays — a small-hours clock on today's date, an ISO date, m/d, the weekday itself.
+    expect(typed('pay rent nov 17 2am', day('2026-11-17', '02:00'), 15, 0)).toEqual([
+      '2026-11-17',
+      '02:00',
+    ]);
+    expect(typed('pay rent 2026-11-10 9am', day('2026-11-10', '09:00'), 15, 0)).toEqual([
+      '2026-11-10',
+      '09:00',
+    ]);
+    expect(typed('pay rent 11/10 9am', day('2026-11-10', '09:00'), 15, 0)).toEqual([
+      '2026-11-10',
+      '09:00',
+    ]);
+    expect(typed('pay rent tue 9am', day('2026-11-17', '09:00'), 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+  });
+
+  it('"today" and "tomorrow" come from the words when the model read no day', () => {
+    expect(typed('pay rent today 9am', { dueTime: '09:00' }, 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+    expect(typed('pay rent tomorrow 9am', { dueTime: '09:00' }, 15, 0)).toEqual([
+      '2026-11-18',
+      '09:00',
+    ]);
+    // The whole line kept, no day, no time: the at-clock fills, the day is the words'.
+    expect(typed('pay rent today at 9am', { title: 'pay rent today at 9am' }, 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+    const kept = validateParsedTask(
+      fields({ title: 'pay rent today at 9am', dueDay: '2026-11-17' }),
+      {
+        ...ctx,
+        today: '2026-11-17',
+        now: at(15, 0),
+        line: 'pay rent today at 9am',
+      },
+    )!.input;
+    expect(kept).toMatchObject({ title: 'pay rent today', dueDay: '2026-11-17', dueTime: '09:00' });
+  });
+
+  it('a day start other than 4: "today" is the app day that start makes', () => {
+    // Midnight start: "today 1am" at 02:01 is today's 01:00, gone.
+    expect(typed('pay rent today 1am', day('2026-11-17', '01:00'), 2, 1, 0)).toEqual([
+      '2026-11-17',
+      '01:00',
+    ]);
+    // 6am start: "today 5am" typed at 15:00 is the coming night's.
+    expect(typed('pay rent today 5am', day('2026-11-17', '05:00'), 15, 0, 6)).toEqual([
+      '2026-11-18',
+      '05:00',
+    ]);
+  });
+
+  it('no day of its own: the clock rolls, whatever day the model put on it', () => {
+    expect(typed('pay rent 9am', day('2026-11-17', '09:00'), 15, 0)).toEqual([
+      '2026-11-18',
+      '09:00',
+    ]);
+    // Day-ish words that name no day: the model's "today" for a bare clock still rolls.
+    for (const line of [
+      'may need to call the bank 9am',
+      'call Jan at 9am',
+      '2nd interview 9am',
+      'month-end close 9am',
+      'day trip prep 9am',
+      'sat down with the plan 9am', // 11-17 is a Tuesday
+    ])
+      expect(typed(line, day('2026-11-17', '09:00'), 15, 0), line).toEqual(['2026-11-18', '09:00']);
   });
 });

@@ -34,7 +34,7 @@ through to the JWT path.
   `/api/*`, so a new header or a `?token=` would be stripped.
 - **Body:** JSON `{text, voice?}`. `text` is trimmed, 1–2,500 characters; the body is at most 16 KiB.
   `voice: true` (the Shortcut; `"true"` as text is taken too) applies the voice time rules (§4); absent
-  (Raycast) keeps the typed rules, exactly as the capture bar.
+  (Raycast) keeps the typed rules, exactly as the capture bar. Both roll a past clock with no day forward.
 - **Order:** 405 non-POST → 413 body too large → 401 token → 422 other path, bad JSON, empty or over-long
   text (only after auth, never counted) → 429 daily cap → 200.
 - **200:** `{id, say, detail, raw, duplicate, due}` — `say` the sentence to speak, `detail` the typed
@@ -118,8 +118,10 @@ Per token, per UTC day — guards, not UX:
 
 ## 4. Time rules
 
-Voice only (`voice: true`); typed quick-add keeps its rules, including the 2026-10-09 "a time with no day
-lands today, even if past". The decisions (the maintainer, 2026-11-16):
+Rule 2 — a past clock rolls forward — and the at/by fill below hold for typed quick add too (the app, Raycast,
+`parse_task`; the maintainer, 2026-11-17, [quick-add](quick-add.md)): a typed clock with no day lands where a
+spoken one would, while a day the typed line names stays as written ("today 9am" at 3pm is overdue). The bare hour, the day-parts and the delay are voice only (`voice: true`). The decisions (the
+maintainer, 2026-11-16):
 
 1. A bare "at N" is the next N o'clock, wrapping: 2 AM + "at 5" → 5 AM; 6 AM + "at 5" → 5 PM.
 2. A spoken time already past rolls forward to its next occurrence, and `say` names the day.
@@ -135,11 +137,13 @@ Two checks keep the grammar honest:
 
 - **The model's title is the cross-check.** A time applies only when the model took its words out of the
   title: "look at one of the leases", "email the team about the 3pm meeting" or "read John 3:16" keep their
-  words, so they get no time. A delay ("in 20 minutes") is a time whatever the model did with its title.
+  words, so they get no time. A delay ("in 20 minutes") is a time whatever the model did with its title, and so
+  is a stated clock after "at" / "by" ("call the bank at 1 am") when it's the line's only stated clock; it then
+  leaves the title — the model once returned that line unchanged with no time (2026-11-17).
 - **A stated clock the model missed is filled from the words** — typed lines too (Raycast, the app's quick
   add): the 2026-11-16 dev check saw "call the bank at 6 pm" come back with today and no time. Only when the
-  model took those words out of its title ("watch 9pm show" kept them: no time); a different time from the
-  model stands.
+  model took those words out of its title, or they're an at/by clock ("watch 9pm show" kept them: no time); a
+  different time from the model stands.
 - **A clock the grammar can't read is the model's** ("at quarter past five"): with no grammar match the model
   gets the typed prompt, and a clock it returns is taken and rolled forward like any stated time — but only
   when the line has a digit or an hour word in it, so an invented time is still dropped.
@@ -222,6 +226,9 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
 - **No "Test" button in Settings** — it would need the plaintext; the phone run is the test.
 - **Recipe, not an importable shortcut** — `shortcuts sign` is unverified, and a file must never embed the
   token.
+- **2026-11-17 (the maintainer):** typed lines roll a past clock with no day as spoken ones do (a day they
+  name stays as written), and a stated clock after
+  "at" / "by" is the due time even when the model kept it in its title — [quick-add's decision log](quick-add.md).
 
 ## 8. Build record
 

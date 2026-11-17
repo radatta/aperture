@@ -139,7 +139,7 @@ describe('backend parseTask', () => {
     expect(anthropic.calls.map((c) => c.timeoutMs)).toEqual([6_000, 8_000]);
   });
 
-  it('after midnight, “tonight 2:30am” is the coming night — the next date, still today’s', async () => {
+  it('after midnight, “tonight 2:30am” is its next occurrence — the next date, still today’s', async () => {
     const { b, anthropic } = makeBackend(zonedEpoch('2026-10-31', '00:22', USER_TIME_ZONE));
     anthropic.next = { ok: true, fields: fields({ dueDay: '2026-10-30', dueTime: '02:30' }) };
     expect(await b.parseTask('essay due tonight 2:30am')).toMatchObject({
@@ -150,6 +150,25 @@ describe('backend parseTask', () => {
     anthropic.next = { ok: true, fields: fields({ dueDay: '2026-10-31', dueTime: '02:30' }) };
     expect(await b.parseTask('essay due tonight 2:30am')).toMatchObject({
       input: { dueDay: '2026-10-31' },
+    });
+  });
+
+  it('a past clock rolls to its next occurrence, against the server clock', async () => {
+    const { b, anthropic } = makeBackend(zonedEpoch('2026-11-16', '15:00', USER_TIME_ZONE));
+    anthropic.next = { ok: true, fields: fields({ dueDay: '2026-11-16', dueTime: '09:00' }) };
+    expect(await b.parseTask('call mum 9am')).toMatchObject({
+      input: { dueDay: '2026-11-17', dueTime: '09:00' },
+      today: '2026-11-16',
+    });
+  });
+
+  it("a typed 'today' small-hours clock is the night of the user's own day start", async () => {
+    const { b, anthropic } = makeBackend(zonedEpoch('2026-11-17', '15:00', USER_TIME_ZONE));
+    await b.updateSettings({ dayStartHour: 6 });
+    anthropic.next = { ok: true, fields: fields({ dueDay: '2026-11-17', dueTime: '05:00' }) };
+    // 5am is before a 6am start: tonight's. A start the server didn't pass on (4) would keep it today.
+    expect(await b.parseTask('pay rent today 5am')).toMatchObject({
+      input: { dueDay: '2026-11-18', dueTime: '05:00' },
     });
   });
 });

@@ -1557,8 +1557,10 @@ class StubClient implements ApiClient {
       .filter((c) => c.active)
       .map(({ id, label }) => ({ id, label }));
     const places = this.alive(this.store.places).map(({ slug, name }) => ({ slug, name }));
-    const today = todayKey(this.dayStartHour(), this.now());
-    const ctx = { categories, places, today, dayStartHour: this.dayStartHour() };
+    const now = this.now();
+    // `today` is the browser's; the clock rolls in USER_TIME_ZONE (spokenTime.ts) — one zone for an LA user.
+    const today = todayKey(this.dayStartHour(), now);
+    const ctx = { categories, places, today, dayStartHour: this.dayStartHour(), now };
     return runQuickParse(text, ctx, async (line) =>
       takeStubParseFailure()
         ? { ok: false, reason: 'unavailable', detail: 'stub failNextParse' }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { zonedEpoch } from './dates';
-import { resolveSpoken, spokenTimeIn, withoutRelative } from './spokenTime';
+import { dueClock, resolveSpoken, spokenTimeIn, withoutRelative } from './spokenTime';
 
 const LA = 'America/Los_Angeles';
 const MON = '2026-11-16'; // a Monday
@@ -205,5 +205,44 @@ describe('resolveSpoken — the voice rules', () => {
     // 2026-11-01 falls back at 2am: 1:30 happens twice; an hour from the first is the second.
     expect(said('in an hour', '2026-11-01', '01:30')).toBe('2026-11-01 01:30');
     expect(said('at 5', '2026-11-01', '01:00')).toBe('2026-11-01 05:00');
+  });
+});
+
+describe('dueClock — a stated clock phrased as a due', () => {
+  const said = (line: string) => spokenTimeIn(line)!.said;
+  const strip = (line: string, title = line) => dueClock(line, title, said(line))?.title ?? null;
+  it('at / by / due at / due by, any case and spacing, takes the phrase out of the title', () => {
+    expect(strip('call the bank at 1 am')).toBe('call the bank');
+    expect(strip('call the bank at 1am')).toBe('call the bank');
+    expect(strip('call the bank AT 1 AM')).toBe('call the bank');
+    expect(strip('call the bank by 5 p.m.')).toBe('call the bank');
+    expect(strip('call the bank at 1 am.')).toBe('call the bank');
+    expect(strip('pay rent due by midnight, then sleep')).toBe('pay rent, then sleep');
+    expect(strip('At noon, call mum')).toBe('call mum');
+    expect(strip('submit at 17:30')).toBe('submit');
+    // The model wrote the clock its own way: the line decides, the title strips what it can.
+    expect(strip('call the bank at 1am', 'call the bank at 1 am')).toBe('call the bank');
+    expect(strip('call the bank at 1 am', 'call the bank')).toBe('call the bank');
+    expect(strip('call the bank at 5 p.m.', 'call the bank at 5 PM')).toBe('call the bank');
+    expect(strip('call the bank at 5pm', 'call the bank at 5 p.m.')).toBe('call the bank');
+    // A title the model already cleaned is left exactly as it wrote it.
+    expect(strip('.env cleanup at 5pm', '.env cleanup')).toBe('.env cleanup');
+    expect(strip('--force flag docs by noon', '--force flag docs ,')).toBe('--force flag docs ,');
+    // Words kept: only the join is tidied, never the title's own leading punctuation.
+    expect(strip('.env cleanup at 5pm')).toBe('.env cleanup');
+    expect(strip('--force flag docs by noon')).toBe('--force flag docs');
+    expect(strip('-- call the bank, at 1 am, then lunch')).toBe('-- call the bank, then lunch');
+    expect(strip('fix login - by 5pm')).toBe('fix login');
+    expect(strip('At 5pm - call mum')).toBe('call mum');
+  });
+  it('a clock not after at/by is not a due; a phrase that is the whole title leaves it whole', () => {
+    expect(strip('watch 9pm show')).toBeNull();
+    expect(strip('email the team about the 3pm meeting')).toBeNull();
+    expect(strip('move the 3pm to 5pm')).toBeNull();
+    expect(strip('the cat 1 am wake-up')).toBeNull();
+    // A second stated clock: which is the due is the model's call.
+    expect(strip('move standup at 3pm to 5pm')).toBeNull();
+    expect(strip('call at 9am about the 3pm meeting')).toBeNull();
+    expect(strip('at 9am')).toBe('at 9am');
   });
 });

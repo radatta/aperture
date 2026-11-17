@@ -1625,8 +1625,9 @@ export class BackendClient implements ApiClient {
     ]);
     const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
     const places = alivePlaces.map(({ slug, name }) => ({ slug, name }));
-    const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
-    const ctx = { categories, places, today, dayStartHour: settings.dayStartHour };
+    const now = this.now();
+    const today = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
+    const ctx = { categories, places, today, dayStartHour: settings.dayStartHour, now };
     return runQuickParse(text, ctx, (line) =>
       this.anthropic.parseTask({ text: line, today, categories, timeoutMs: parseBudgetMs(line) }),
     );
@@ -2660,7 +2661,8 @@ export class BackendClient implements ApiClient {
         places,
         today: appToday,
         dayStartHour: settings.dayStartHour,
-        ...(voice ? { voice: { now } } : {}),
+        now,
+        voice,
       };
       const parsed = await runQuickParse(line, ctx, async (l) => {
         if (!(await claimParse(this.scopedTokens, auth, now)))

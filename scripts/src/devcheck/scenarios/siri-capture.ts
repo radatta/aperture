@@ -14,14 +14,7 @@ import type { DevCaptureResult, DevScopedToken } from '../api';
 import { targetOrigin } from '../config';
 import type { PwRequest } from '../pw-types';
 import { methodOf } from '../recorder';
-import {
-  hidingSecret,
-  laDay,
-  needsYou,
-  noConsoleErrors,
-  type Ctx,
-  type Scenario,
-} from '../scenario';
+import { hidingSecret, laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 // The slice of @aperture/shared the scenario reads. scripts doesn't depend on shared, so its source is loaded at
 // run time (tsx transpiles it) — the same rules and texts the Lambda runs, never a copy that could drift.
@@ -128,6 +121,11 @@ export const untilLaMidnight = (ms: number): number => {
   return (24 * 60 - hour * 60 - minute) * MIN - (ms % MIN);
 };
 export const untilUtcMidnight = (ms: number): number => 24 * HOUR - (ms % (24 * HOUR));
+// How long until the app's day start (dayStartHour:00 LA) — a Review across it drops its preview (CaptureBar).
+export const untilDayStart =
+  (dayStartHour: number) =>
+  (ms: number): number =>
+    (untilLaMidnight(ms) + dayStartHour * HOUR) % (24 * HOUR) || 24 * HOUR;
 // A row whose answer names a day (or counts toward a UTC day) never starts within 2 min of that midnight:
 // it waits it out.
 // Waits out a midnight closer than `need` (how long the step runs, with margin) — a counter reset mid-step
@@ -140,7 +138,7 @@ async function clearOfMidnight(
 ) {
   const left = until(Date.now());
   if (left >= need) return;
-  ctx.log(`waiting ${Math.ceil(left / SEC) + 5} s for ${which} midnight to pass`);
+  ctx.log(`waiting ${Math.ceil(left / SEC) + 5} s for ${which} to pass`);
   await sleep(left + 5 * SEC);
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -294,9 +292,6 @@ async function expectDue(
   want: { day: string; time: string }[],
   t0: number,
   t1: number,
-  // Spoken lines only: the voice prompt takes the time out of the title. The typed prompt doesn't promise
-  // it (a dev run, 2026-11-16, kept "at 7 pm" — typed quick add's own behaviour, a follow-up).
-  voice = true,
 ): Promise<{ day: string; time: string; at: number }> {
   if (r.raw)
     throw new Error(
@@ -312,14 +307,15 @@ async function expectDue(
     throw new Error(
       `the answer says ${JSON.stringify(due)}, the task holds ${task.dueDay} ${task.dueTime}`,
     );
-  if (!task.title.includes(marker(ctx.nonce)) || (voice && TIME_WORDS.test(task.title)))
+  if (!task.title.includes(marker(ctx.nonce)) || TIME_WORDS.test(task.title))
     throw new Error(`the title is “${task.title}” — the nonce kept, the spoken time taken out`);
   const whens = [t0, t1].map((t) => S.captureWhen(due, laDay(new Date(t)), laDay(new Date(t))));
   if (!r.say.startsWith('Added: ') || !whens.some((w) => w && r.say.endsWith(`, ${w}.`)))
     throw new Error(`say is “${r.say}”, expected it to end “, ${whens[0]}.”`);
   return { ...due, time: due.time, at: S.zonedEpoch(due.day, due.time, S.USER_TIME_ZONE) };
 }
-// What the voice rules give for `text` with no named day, at each end of the call.
+// What the time rules give for `text` with no named day, at each end of the call — typed and spoken alike since
+// 2026-11-17.
 const spokenWant = (S: Shared, text: string, t0: number, t1: number) => {
   const spoken = S.spokenTimeIn(text);
   if (!spoken) throw new Error(`the scenario's line has no spoken time: ${text}`);
@@ -422,7 +418,64 @@ export const siriCapture: Scenario = {
       id: 'typed',
       entry: 'api',
       kind: 'nominal',
-      what: 'A typed line (no voice flag — Raycast’s body) keeps the typed rules: a clock an hour ago lands today, not tomorrow',
+      what: 'A typed line (no voice flag — Raycast’s body) gets the spoken answer: a clock an hour ago rolls to tomorrow, said “tomorrow”, at any hour',
+    },
+    {
+      id: 'typed-ahead',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A typed clock three hours ahead lands on its next occurrence, not a day late',
+    },
+    {
+      id: 'typed-named-day',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A typed “tomorrow at <clock>” keeps the day it names',
+    },
+    {
+      id: 'typed-today',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A typed “today at <a clock an hour ago>” stays on the app’s day (its small hours that day’s night) — overdue, not rolled to tomorrow',
+    },
+    {
+      id: 'typed-bar',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The capture bar’s Review (a real parse, the app’s own route): a clock an hour ago previews on its next occurrence, the clock out of the title; nothing saved',
+    },
+    {
+      id: 'typed-small-hours',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Typed and spoken at 00:30, 01:35, 02:01, 03:59, 04:00 and 23:30: “1 am”, “12 am” and “9am” land on their next occurrence, whatever day the model read',
+      offDev: {
+        file: 'packages/shared/src/quickParse.test.ts',
+        test: 'typed and spoken agree at every small-hours clock',
+        why: 'needs an injected clock — each small-hours minute can’t be waited for on dev',
+      },
+    },
+    {
+      id: 'kept-clock',
+      entry: 'api',
+      kind: 'edge',
+      what: 'An “at 1 am” the model left in its title still sets the time and leaves the title, typed or spoken',
+      offDev: {
+        file: 'packages/shared/src/quickParse.test.ts',
+        test: 'an at/by clock the model kept in its title fills and leaves the title',
+        why: 'the model decides whether it keeps the words (1 in 10 on dev, 2026-11-17) — it can’t be made to',
+      },
+    },
+    {
+      id: 'not-due-clock',
+      entry: 'api',
+      kind: 'edge',
+      what: '“watch 9pm show”, “the 3pm meeting”, “move the 3pm to 5pm”, “look at one of the leases” and a second clock (“move standup at 3pm to 5pm”) kept in the title get no time',
+      offDev: {
+        file: 'packages/shared/src/quickParse.test.ts',
+        test: 'a clock not phrased as a due gets no time when the model kept it',
+        why: 'whether the model keeps those words is its call — dev can’t produce the case on demand',
+      },
     },
     {
       id: 'relative',
@@ -842,7 +895,7 @@ export const siriCapture: Scenario = {
         'A natural line with a clock three hours ahead: parsed in time, due as the voice rules say',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the plumber')} at ${aheadClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the spoken line');
@@ -854,36 +907,126 @@ export const siriCapture: Scenario = {
       entry: 'api',
       proves: ['typed'],
       title:
-        'A typed line (no voice flag): a clock an hour ago lands today, as the capture bar does',
+        'A typed line (no voice flag): a clock an hour ago rolls to tomorrow, as a spoken one does',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const t0 = Date.now();
+        const text = `${line(ctx, 'call the bank typed')} at ${rollClock(laClock(t0).hour)}`;
+        const r = await capture(ctx, tokenB, text, 'the typed line', { voice: false });
+        const due = await expectSpokenDue(ctx, S, text, r, t0, Date.now());
+        if (due.day !== S.addDays(laDay(new Date(t0)), 1))
+          throw new Error(`landed ${due.day}, not tomorrow`);
+        if (!/\btomorrow\b/.test(r.say)) throw new Error(`say doesn’t say tomorrow: ${r.say}`);
+      },
+    },
+    {
+      id: 'api-typed-ahead',
+      entry: 'api',
+      proves: ['typed-ahead'],
+      title: 'A typed clock three hours ahead lands on its next occurrence',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const t0 = Date.now();
+        const text = `${line(ctx, 'call the plumber typed')} at ${aheadClock(laClock(t0).hour)}`;
+        const r = await capture(ctx, tokenB, text, 'the typed line ahead', { voice: false });
+        await expectSpokenDue(ctx, S, text, r, t0, Date.now());
+      },
+    },
+    {
+      id: 'api-typed-named-day',
+      entry: 'api',
+      proves: ['typed-named-day'],
+      title: 'A typed “tomorrow at <clock>” keeps the day it names',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const { dayStartHour } = await ctx.api.reads.getSettings();
+        const t0 = Date.now();
+        // A daytime clock: "tomorrow at 1 am" said at 22:00 could be read as the night after tomorrow.
+        const text = `${line(ctx, 'call the dentist typed')} tomorrow at 5 pm`;
+        const r = await capture(ctx, tokenB, text, 'the typed named day', { voice: false });
+        // A named day stays as written (2026-11-17): "tomorrow" is the app's today + 1 (dayStartHour).
+        const t1 = Date.now();
+        const want = [t0, t1].map((now) => ({
+          day: S.addDays(S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour), 1),
+          time: '17:00',
+        }));
+        await expectDue(ctx, S, r, want, t0, t1);
+      },
+    },
+    {
+      id: 'api-typed-today',
+      entry: 'api',
+      proves: ['typed-today'],
+      title: 'A typed “today at <a clock an hour ago>” stays on the app’s day, not rolled',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        await clearOfMidnight(ctx, untilDayStart(dayStartHour), 'the day start');
         const t0 = Date.now();
         const clock = rollClock(laClock(t0).hour);
         const hhmm = (S.spokenTimeIn(`at ${clock}`) as { hhmm?: string } | null)?.hhmm;
         if (!hhmm) throw new Error(`“at ${clock}” isn’t a stated clock`);
-        // The typed rule (quickParse.ts): a clock with no day lands on the app's today — a small-hours one on
-        // the night after it (due.ts nightDueDay).
-        const typedWant = (now: number) => {
+        const text = `${line(ctx, 'pay the gas bill typed')} today at ${clock}`;
+        const r = await capture(ctx, tokenB, text, 'the typed today', { voice: false });
+        const t1 = Date.now();
+        // The app's today, its small hours on that day's night (due.ts nightDueDay) — never rolled forward.
+        const want = [t0, t1].map((now) => {
           const app = S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour);
           return { day: S.nightDueDay(app, hhmm, app, dayStartHour), time: hhmm };
-        };
-        // In the day-start hour every clock an hour back is a small-hours one, filed under tonight — where the
-        // voice rule rolls it too, so this hour can't tell the two apart.
-        if (typedWant(t0).day !== laDay(new Date(t0)))
-          needsYou(
-            `at ${dayStartHour}:xx (the day start) a clock an hour back is filed under tonight — rerun after ${dayStartHour + 1}:00`,
-            { stepOnly: true },
-          );
-        const text = `${line(ctx, 'call the bank typed')} at ${clock}`;
-        const r = await capture(ctx, tokenB, text, 'the typed line', { voice: false });
+        });
+        // Kept and rolled differ in every hour but the day start's (a start after midnight): there tonight's 3 am
+        // is both, so the row proves nothing that hour.
+        await expectDue(ctx, S, r, want, t0, t1);
+      },
+    },
+    {
+      id: 'ui-typed-bar',
+      entry: 'ui',
+      proves: ['typed-bar'],
+      title:
+        'Capture bar › Review, a real parse: a clock an hour ago previews on its next occurrence',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        await clearOfMidnight(ctx, untilDayStart(dayStartHour), 'the day start');
+        await ctx.ui.goto('/tasks');
+        await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
+        const field = ctx.page.locator('textarea[aria-label="Capture task"]');
+        const created = ctx.createdIds().length;
+        const t0 = Date.now();
+        const text = `${line(ctx, 'call the bank bar')} at ${rollClock(laClock(t0).hour)}`;
+        await field.fill(text);
+        // The app's parse route (JWT parseTask), not /api/capture: armed before the press.
+        const parsed = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
+          timeout: 15_000,
+        });
+        await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
+        const res = await parsed;
         const t1 = Date.now();
-        const due = await expectDue(ctx, S, r, [typedWant(t0), typedWant(t1)], t0, t1, false);
-        if (!/\btoday\b/.test(r.say)) throw new Error(`say doesn’t say today: ${r.say}`);
-        const voiced = spokenWant(S, text, t0, t1);
-        if (voiced.some((v) => v.day === due.day && v.time === due.time))
-          throw new Error('the typed line got the voice rule’s answer');
+        if (res.status() !== 200) throw new Error(`parseTask answered ${res.status()}`);
+        const r = (await res.json()) as {
+          ok?: boolean;
+          input?: { title?: string; dueDay?: string; dueTime?: string };
+        };
+        if (!r.ok || !r.input) throw new Error(`the parse failed: ${JSON.stringify(r)}`);
+        const { title = '', dueDay, dueTime } = r.input;
+        const want = spokenWant(S, text, t0, t1);
+        if (!want.some((w) => w.day === dueDay && w.time === dueTime))
+          throw new Error(`previewed ${dueDay} ${dueTime}, expected ${JSON.stringify(want[0])}`);
+        if (!title.includes(marker(ctx.nonce)) || TIME_WORDS.test(title))
+          throw new Error(`the title is “${title}” — the nonce kept, the clock taken out`);
+        await ctx.page
+          .getByRole('button', { name: 'Save reviewed task' })
+          .waitFor({ timeout: 10_000 });
+        await ctx.shot('review');
+        await field.fill(''); // the line goes unsaved
+        await sleep(2 * SEC); // a create in flight reaches the ledger only with its response
+        if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
       },
     },
     {
@@ -931,7 +1074,7 @@ export const siriCapture: Scenario = {
       title: 'A stated clock an hour ago rolls to tomorrow, said “tomorrow”',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the bank')} at ${rollClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the past clock');
@@ -1104,7 +1247,7 @@ export const siriCapture: Scenario = {
         'A fresh token: 200 captures of one grammar line, then the 201st → 429 with the spoken limit',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 3 * MIN); // the cap's day is UTC
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC midnight', 3 * MIN); // the cap's day is UTC
         await withToken(ctx, nameC(ctx), async (token, info) => {
           const text = `${line(ctx, 'cap')} | ~5`;
           const day = new Date().toISOString().slice(0, 10);
@@ -1160,7 +1303,7 @@ export const siriCapture: Scenario = {
         'A fresh token: 50 distinct spoken lines (real parses), then the 51st saves as typed, “daily parse limit reached”',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 7 * MIN); // the parse cap's day is UTC too
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC midnight', 7 * MIN); // the parse cap's day is UTC too
         await withToken(ctx, nameD(ctx), async (token) => {
           const day = new Date().toISOString().slice(0, 10);
           const at = aheadClock(laClock(Date.now()).hour);

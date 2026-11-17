@@ -4,7 +4,7 @@
 // contract, the validator for Haiku's untrusted JSON, and the flow (grammar bypass → model → validate).
 // Design record: docs/areas/tasks/quick-add.md.
 
-import { isDayKey, isTimeKey } from './dates';
+import { addDays, isDayKey, isTimeKey, weekdayOf } from './dates';
 import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
@@ -12,6 +12,7 @@ import type { CreateTaskInput } from './api';
 import type { Category } from './types';
 import {
   DAY_WORD,
+  dueClock,
   resolveSpoken,
   spokenTimeIn,
   withoutRelative,
@@ -61,12 +62,13 @@ export type ParseCategory = Pick<Category, 'id' | 'label'>;
 export interface ParseContext {
   categories: readonly ParseCategory[]; // active only
   places: readonly PlaceRef[]; // alive — a known `@slug` word is taken before the model sees the line
-  today: string;
-  dayStartHour: number; // the day start `today` was resolved with — a small-hours clock is tonight's
+  today: string; // the app's today (dayStartHour)
+  dayStartHour: number; // the day start `today` was resolved with — a small-hours clock on it is its night's
+  now: number; // a clock with no day of its own lands on its next occurrence after this (spokenTime.ts)
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
-  // A spoken line (voice capture, capture.md): its time comes from the words, resolved against `now` by
-  // spokenTime.ts — the model's dueTime is ignored, a past time rolls forward. Absent: the typed rules.
-  voice?: { now: number };
+  // A spoken line (voice capture, capture.md): its time comes from the words — the model's dueTime is
+  // ignored. Absent: the typed rules (the model's clock, or one stated outright).
+  voice?: boolean;
 }
 
 // A clock the user actually wrote: "4pm", "9:30am", "4 p", "16:00", "noon", "midnight". A model has read
@@ -100,6 +102,59 @@ const str = (v: unknown): v is string => typeof v === 'string';
 // null as "given" and rejects it, so a grammar line's nulls would turn a good parse into a raw save.
 const present = (input: CreateTaskInput): CreateTaskInput =>
   Object.fromEntries(Object.entries(input).filter(([, v]) => v != null)) as CreateTaskInput;
+
+const TODAY_WORD = /\b(today|tdy|tonight)\b/i;
+const TOMORROW_WORD = /\b(tomorrow|tmrw?|tmw)\b/i;
+const MONTH_WORDS = [
+  'jan(uary)?',
+  'feb(ruary)?',
+  'mar(ch)?',
+  'apr(il)?',
+  'may',
+  'june?',
+  'july?',
+  'aug(ust)?',
+  'sept?(ember)?',
+  'oct(ober)?',
+  'nov(ember)?',
+  'dec(ember)?',
+];
+const WEEKDAY_WORDS = [
+  'sun(day)?',
+  'mon(day)?',
+  'tue(s|sday)?',
+  'wed(nesday)?',
+  'thu(r|rs|rsday)?',
+  'fri(day)?',
+  'sat(urday)?',
+];
+// Whether the typed words name this very day: its weekday, its month and day, "m/d" or "YYYY-MM-DD" — never a
+// day word on its own ("may need to…", "2nd interview", "month-end"), which the model's "today" for a bare clock
+// would otherwise freeze.
+function wordsNameDate(line: string, day: string): boolean {
+  if (line.includes(day)) return true;
+  const [, m, d] = day.split('-').map(Number) as [number, number, number];
+  const month = MONTH_WORDS[m - 1]!;
+  const dd = `0?${d}(st|nd|rd|th)?`;
+  return [
+    `\\b${WEEKDAY_WORDS[weekdayOf(day)]}\\b`,
+    `\\b0?${m}/0?${d}(/\\d{2,4})?\\b`,
+    `\\b${month}\\.?\\s*${dd}\\b`,
+    `\\b${dd}\\s+(of\\s+)?${month}\\b`,
+  ].some((re) => new RegExp(re, 'i').test(line));
+}
+// The day a typed line names (the maintainer, 2026-11-17): "today" / "tonight" is the app's today (its small
+// hours that day's night), "tomorrow" the day after — from the words, whatever day the model read; any other day
+// only when the words name the model's. Null: no day of its own, so the clock rolls.
+function wordsDay(
+  line: string,
+  modelDay: string | null,
+  today: string,
+): { day: string; today: boolean } | null {
+  if (TODAY_WORD.test(line)) return { day: today, today: true };
+  if (TOMORROW_WORD.test(line)) return { day: addDays(today, 1), today: false };
+  return modelDay && wordsNameDate(line, modelDay) ? { day: modelDay, today: false } : null;
+}
 
 // Keep each field the server would accept; a bad one is dropped and named. The model's JSON is untrusted
 // (structured outputs can't carry numeric or calendar constraints), so this takes `unknown`. Returns null
@@ -135,55 +190,67 @@ export function validateParsedTask(
     else dropped.push('dropped due day');
   }
 
+  // A clock lands on its next occurrence after now, typed or spoken (the maintainer, 2026-11-17): "1 am" at
+  // 02:01 is tomorrow's 01:00, "9am" at 3pm tomorrow's. A day the model gave counts only when it's after the
+  // calendar's today (resolveSpoken) — except a day a typed line names, below.
+  const line = ctx.line;
+  const spoken = line === undefined ? null : spokenTimeIn(line);
+  const keptWords = (t: SpokenTime) => title.toLowerCase().includes(t.said.toLowerCase());
+  // A stated clock phrased as a due ("at 1 am", "by 5pm") is the due time even when the model kept it in its
+  // title — seen on dev, 2026-11-17, "…at 1 am" back unchanged with no time. The phrase leaves the title.
+  const due = spoken?.kind === 'clock' ? dueClock(line!, title, spoken.said) : null;
+  const clock = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
+  const resolve = (t: SpokenTime) => {
+    const r = resolveSpoken(t, input.dueDay ?? null, {
+      now: ctx.now,
+      today: ctx.today,
+      dayInWords: DAY_WORD.test(line ?? ''),
+    });
+    input.dueDay = r.day;
+    input.dueTime = r.time;
+  };
   // Spoken: the time is the words', never the model's (spokenTime.ts) — and with it the day, when the words
   // were relative or the time had already passed. A day the model gave stays only as "the day named".
   if (ctx.voice) {
-    const spoken = spokenTimeIn(ctx.line ?? '');
     // The model kept the words in its title: it read them as part of the task, not a time ("look at one
-    // of the leases", "email the team about the 3pm meeting"). A delay ("in 20 minutes") is a time whatever
-    // the model did with its title.
-    const kept =
-      !!spoken &&
-      spoken.kind !== 'relative' &&
-      title.toLowerCase().includes(spoken.said.toLowerCase());
-    const clock = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
-    const resolve = (t: SpokenTime) => {
-      const r = resolveSpoken(t, input.dueDay ?? null, {
-        now: ctx.voice!.now,
-        today: ctx.today,
-        dayInWords: DAY_WORD.test(ctx.line ?? ''),
-      });
-      input.dueDay = r.day;
-      input.dueTime = r.time;
-    };
-    if (spoken && !kept) resolve(spoken);
+    // of the leases", "email the team about the 3pm meeting") — unless they were an at/by clock. A delay
+    // ("in 20 minutes") is a time whatever the model did with its title.
+    const kept = !!spoken && spoken.kind !== 'relative' && keptWords(spoken);
+    if (spoken && (!kept || due)) {
+      resolve(spoken);
+      if (due) input.title = due.title;
+    }
     // Words the grammar can't read ("quarter past five"): the model was given the typed prompt, which
     // sets a clock only when one was said — taken, and rolled forward like any stated time.
     // A line with no number or hour word in it had no clock to read: a time there is one the model made up.
-    else if (!spoken && str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(ctx.line ?? ''))
+    else if (!spoken && str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(line ?? ''))
       resolve({ said: '', kind: 'clock', hhmm: clock });
     else if (p.dueTime != null) dropped.push('dropped due time');
   }
-  // A time with no day means today (a product call); a small-hours clock on today means tonight
-  // (nightDueDay); a time whose day was dropped is dropped too.
-  // The model missing a clock the line states outright ("call the bank at 6 pm" back with no time — seen on
-  // dev, 2026-11-16) is filled in from the words — only when the model took those words out of its title
-  // (kept there, "watch 9pm show" or "move the 3pm to 5pm", they weren't the due time). A different time from
-  // the model stands.
+  // Typed: the model's clock when the line states one; a time whose day was dropped is dropped too. A clock
+  // the line states outright that the model missed ("call the bank at 6 pm" back with no time, dev 2026-11-16)
+  // is filled from the words — when the model took them out of its title, or they're an at/by clock. Kept
+  // otherwise ("watch 9pm show", "move the 3pm to 5pm"), they weren't the due time. A different model time
+  // stands.
   else {
-    const t = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
-    const stated = ctx.line === undefined || CLOCK_IN_LINE.test(ctx.line);
+    const stated = line === undefined || CLOCK_IN_LINE.test(line);
     const dayKept = input.dueDay != null || p.dueDay == null;
-    const words = ctx.line === undefined ? null : spokenTimeIn(ctx.line);
-    const time =
-      p.dueTime != null && str(t) && isTimeKey(t) && stated
-        ? t
-        : words?.kind === 'clock' && !title.toLowerCase().includes(words.said.toLowerCase())
-          ? words.hhmm
-          : null;
+    const modelTime = p.dueTime != null && str(clock) && isTimeKey(clock) && stated ? clock : null;
+    const words = spoken?.kind === 'clock' ? spoken : null;
+    const time = modelTime ?? (words && (due || !keptWords(words)) ? words.hhmm : null);
     if (time && dayKept) {
-      input.dueTime = time;
-      input.dueDay = nightDueDay(input.dueDay ?? ctx.today, time, ctx.today, ctx.dayStartHour);
+      // A day the typed line names stays as written (the maintainer, 2026-11-17): "pay rent today 9am" at 3pm is
+      // overdue, "nov 10 9am" is Nov 10. A small-hours clock on the app's today is that day's night — "today
+      // 1am" at 02:01 is the 01:00 just gone (nightDueDay). Only a clock with no day word rolls.
+      const named = line === undefined ? null : wordsDay(line, input.dueDay ?? null, ctx.today);
+      if (named) {
+        input.dueTime = time;
+        input.dueDay = named.today
+          ? nightDueDay(named.day, time, ctx.today, ctx.dayStartHour)
+          : named.day;
+      } else resolve({ said: '', kind: 'clock', hhmm: time });
+      // The same line keeps the same title whatever the model did with the phrase.
+      if (due && time === words?.hhmm) input.title = due.title;
     } else if (p.dueTime != null) dropped.push('dropped due time');
   }
 
