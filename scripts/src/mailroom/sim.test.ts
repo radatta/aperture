@@ -258,6 +258,14 @@ describe('validateSimParams', () => {
     expect(one({ op: 'launch', via: 'post' })).toBe('BAD_OP');
     expect(one({ op: 'launch', via: 'batch15' })).toBe('BAD_OP');
     expect(one({ op: 'launch', as: 'x' })).toBe('BAD_OP');
+    // settle: the wait after a trial launch's home presses, 1–5 s, only with via
+    expect(one({ op: 'launch', via: 'tap', settle: 3 })).toBeNull();
+    expect(one({ op: 'launch', via: 'batch', settle: 1 })).toBeNull();
+    expect(one({ op: 'launch', settle: 3 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: 0 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: 6 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: 1.5 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: '3' })).toBe('BAD_OP');
     expect(one({ ...btn, closes: true, via: 'post' })).toBe('BAD_OP');
     expect(one({ ...btn, via: 'tap' })).toBe('BAD_OP'); // no read-back to count with
     expect(one({ ...btn, role: 'AXTextField', via: 'hid' })).toBeNull();

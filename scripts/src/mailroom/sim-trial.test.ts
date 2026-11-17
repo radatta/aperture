@@ -3,6 +3,11 @@ import { fakeClock } from '../bot/fakes.ts';
 import { DOCK, MODE_ROW } from '../devcheck/ios.ts';
 import { memFs } from './fakes.ts';
 import {
+  ICON_LAUNCHES,
+  ICON_ROUNDS,
+  iconPlan,
+  tapSummary,
+  tapTable,
   KEY_ROUNDS,
   MODE_SCAN,
   TAP_ROUNDS,
@@ -414,5 +419,205 @@ describe('simTrial', () => {
     const h = harness((job) => result(job));
     expect(await simTrial(h.d, 'Idle Mac', h.runner)).toBe(2);
     expect(h.jobs).toHaveLength(0);
+  });
+});
+
+describe('iconPlan (--icon)', () => {
+  it('is ten trial launches a job, settle alternating 1 and 3, the first arm flipped each round', () => {
+    for (let r = 0; r < ICON_ROUNDS; r++) {
+      const p = iconPlan(r, r === ICON_ROUNDS - 1);
+      expect(validateSimParams(p)).toBeNull();
+      expect(p.shutdown).toBe(r === ICON_ROUNDS - 1);
+      const ls = p.steps.filter((s) => s.op === 'launch');
+      expect(ls).toHaveLength(ICON_LAUNCHES);
+      expect(p.steps.filter((s) => s.op === 'signIn')).toHaveLength(0);
+      const settles = ls.map((s) => (s.op === 'launch' ? s.settle : 0));
+      expect(settles[0]).toBe(r % 2 ? 3 : 1);
+      for (let k = 1; k < settles.length; k++) expect(settles[k]).not.toBe(settles[k - 1]);
+      for (const s of ls) expect(s).toMatchObject({ via: 'tap' });
+      p.steps.forEach((s, i) => {
+        if (s.op === 'launch' && i) expect(p.steps[i - 1]).toEqual({ op: 'wait', s: 3 });
+      });
+    }
+    // across the trial, each arm gets the same count
+    const all = Array.from({ length: ICON_ROUNDS }, (_, r) => iconPlan(r, false).steps).flat();
+    expect(all.filter((s) => s.op === 'launch' && s.settle === 1)).toHaveLength(30);
+    expect(all.filter((s) => s.op === 'launch' && s.settle === 3)).toHaveLength(30);
+  });
+});
+
+describe('the icon attribution', () => {
+  const p = iconPlan(0, false);
+  const launches = p.steps.flatMap((s, i) => (s.op === 'launch' ? [{ s, i }] : []));
+  // one line per launch: the first tap dropped where `drop(k)`, the retap landed; hid per tap from `hid(k, tap)`
+  const raw = (
+    hdr: object | null,
+    drop: (k: number) => boolean,
+    hid: (k: number, t: number) => number | null,
+  ) =>
+    [
+      JSON.stringify({ load: { start: '-', end: '-' }, ...(hdr ? { hid: hdr } : {}) }),
+      ...launches.map(({ s, i }, k) =>
+        JSON.stringify({
+          i,
+          op: 'launch',
+          via: 'tap',
+          n: 1,
+          drops: drop(k) ? 1 : 0,
+          sendMs: 20,
+          settle: s.op === 'launch' ? s.settle : 1,
+          taps: drop(k)
+            ? [
+                { d: 1, hid: hid(k, 0) },
+                { d: 0, hid: hid(k, 1), frontMs: 1500 },
+              ]
+            : [{ d: 0, hid: hid(k, 0), frontMs: 1200 }],
+          hidOther: 0,
+        }),
+      ),
+    ].join('\n');
+  const round = (text: string) => {
+    const t = parseTrial(text);
+    return {
+      round: 0,
+      id: 'x',
+      load: t.load,
+      hid: t.hid,
+      cells: joinTrial(p.steps, t.lines).cells,
+      retried: [],
+      bad: t.bad,
+    };
+  };
+  it('attributes each dropped tap: no service, no such line, unread', () => {
+    const r = round(
+      raw(
+        { ok: true, lines: 40, noSvc: 1 },
+        (k) => k < 3,
+        (k, t) => (k === 0 && t === 0 ? 1 : 0),
+      ),
+    );
+    expect(r.bad).toBe(0);
+    const s = tapSummary([r]);
+    const s1 = s.find((x) => x.target === 'icon s1');
+    const s3 = s.find((x) => x.target === 'icon s3');
+    // launches 0 and 2 are s1, 1 is s3: drops at k 0, 1, 2
+    expect(s1).toMatchObject({
+      sent: 7,
+      landed: 5,
+      dropped: 2,
+      noService: 1,
+      noSuchLine: 1,
+      unproven: 0,
+      unread: 0,
+      frontMs: 1200,
+    });
+    expect(s3).toMatchObject({ sent: 6, dropped: 1, noService: 0, noSuchLine: 1 });
+    const out = tapTable([r]).join('\n');
+    expect(out).toMatch(/^icon s1 +7 +5 +2 +0 +1200 +1 \/ 1 \/ 0 \/ 0/m);
+    expect(out).toContain('round 0 capture: ok, 40 dtuhidd line(s), 1 no-service');
+  });
+  it('a zero from a capture that never heard dtuhidd is unproven, never "no such line"', () => {
+    const s = tapSummary([
+      round(
+        raw(
+          { ok: true, lines: 0, noSvc: 0 },
+          (k) => k === 0,
+          () => 0,
+        ),
+      ),
+    ]);
+    expect(s.find((x) => x.target === 'icon s1')).toMatchObject({
+      dropped: 1,
+      noSuchLine: 0,
+      unproven: 1,
+    });
+  });
+  it('a capture that died leaves the drops unread', () => {
+    const r = round(
+      raw(
+        { ok: false, why: 'died', lines: 0, noSvc: 0 },
+        (k) => k === 0,
+        () => null,
+      ),
+    );
+    expect(tapSummary([r]).find((x) => x.target === 'icon s1')).toMatchObject({ unread: 1 });
+    expect(tapTable([r]).join('\n')).toContain('capture: not trusted (died)');
+  });
+  it('strict lines: a malformed tap record, a bad settle or a header without why is bad', () => {
+    const base = { i: 0, op: 'launch', via: 'tap', n: 1, drops: 0, sendMs: 1, settle: 1 };
+    const bad = (o: object) => parseTrial(JSON.stringify(o)).bad;
+    expect(bad({ ...base, taps: [{ d: 0, hid: 0 }] })).toBe(0);
+    expect(bad({ ...base, taps: [{ d: 2, hid: 0 }] })).toBe(1);
+    expect(bad({ ...base, taps: [{ d: 0, hid: -1 }] })).toBe(1);
+    expect(bad({ ...base, taps: [{ d: 0, hid: 0, note: 'x' }] })).toBe(1);
+    expect(bad({ ...base, taps: [] })).toBe(1);
+    expect(bad({ ...base, settle: 9 })).toBe(1);
+    expect(bad({ ...base, hidOther: -2 })).toBe(1);
+    expect(bad({ load: { start: '-', end: '-' }, hid: { ok: false, lines: 0, noSvc: 0 } })).toBe(1);
+    // a line whose settle isn't its step's is not that step's line
+    const shifted = parseTrial(
+      raw(
+        null,
+        () => false,
+        () => 0,
+      ).replace('"settle":1', '"settle":3'),
+    ).lines;
+    expect(joinTrial(p.steps, shifted).bad).toBe(1);
+  });
+});
+
+describe('simTrial --icon', () => {
+  it('runs the icon plan and exits 1 when a drop has no trustworthy cause', async () => {
+    const fs = memFs([`${HJ}/inbox`]);
+    const logs: string[] = [];
+    const jobs: SimJob[] = [];
+    const d = { fs, clock: fakeClock(), dir: HJ, log: (s: string) => logs.push(s) };
+    const write = (job: SimJob, hdr: object) => {
+      fs.mkdirp(`${HJ}/results/${job.id}`);
+      const lines = job.params.steps.flatMap((s, i) =>
+        s.op === 'launch'
+          ? [
+              JSON.stringify({
+                i,
+                op: 'launch',
+                via: 'tap',
+                n: 1,
+                drops: i === 0 ? 1 : 0,
+                sendMs: 9,
+                settle: s.settle,
+                taps:
+                  i === 0
+                    ? [
+                        { d: 1, hid: 0 },
+                        { d: 0, hid: 0, frontMs: 900 },
+                      ]
+                    : [{ d: 0, hid: 0, frontMs: 800 }],
+                hidOther: 0,
+              }),
+            ]
+          : [],
+      );
+      fs.writeNew(
+        `${HJ}/results/${job.id}/trial.jsonl`,
+        [JSON.stringify({ load: { start: '-', end: '-' }, hid: hdr }), ...lines].join('\n'),
+      );
+    };
+    const runner = (hdr: object) => async (_: unknown, job: SimJob) => {
+      jobs.push(job);
+      write(job, hdr);
+      return result(job);
+    };
+    // a capture that heard dtuhidd: every drop attributed, exit 0
+    expect(
+      await simTrial(d, 'icon', runner({ ok: true, lines: 12, noSvc: 0 }), undefined, 'icon'),
+    ).toBe(0);
+    expect(jobs[0]?.params).toEqual(iconPlan(0, false));
+    expect(logs.join('\n')).toContain('every icon tap');
+    // one that never did: the drops are unproven, exit 1
+    logs.length = 0;
+    expect(
+      await simTrial(d, 'icon2', runner({ ok: true, lines: 0, noSvc: 0 }), undefined, 'icon'),
+    ).toBe(1);
+    expect(logs.join('\n')).toContain('without a trustworthy cause');
   });
 });
