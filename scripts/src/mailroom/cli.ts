@@ -25,9 +25,10 @@ export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its
   sim-probe [--sign-in]                          boot the Mac's iOS sim, launch the web app, screenshot (≤ 5 min)
   sim-shutdown                                   shut the Mac's iOS sim down
   clip-probe [--out <png>] [--wait <seconds>]    fetch the Mac clipboard's image, as tools/coi/xclip does on Ctrl+V
-  sim-trial --tag <idle|loaded|…> [--round N] [--keys]
+  sim-trial --tag <idle|loaded|…> [--round N] [--keys | --icon]
                                                  the input-gap trial: first-tap drops per target and way of tapping (~40 min;
-                                                 one round ~6); --keys: per keys/erase variant instead (~15 min)`;
+                                                 one round ~6); --keys: per keys/erase variant instead (~15 min); --icon: icon
+                                                 taps only, 1 s vs 3 s after Home, drops attributed by the sim's log (~22 min)`;
 
 // Every command's allowed flags; anything else refuses before it runs (bot/help.ts).
 export const FLAGS: Record<string, Spec> = {
@@ -38,7 +39,7 @@ export const FLAGS: Record<string, Spec> = {
   'sim-probe': { bare: ['sign-in'] },
   'sim-shutdown': {},
   'clip-probe': { flags: ['out', 'wait'] },
-  'sim-trial': { flags: ['tag', 'round'], bare: ['keys'] },
+  'sim-trial': { flags: ['tag', 'round'], bare: ['keys', 'icon'] },
 };
 
 const clock: Clock = {
@@ -106,13 +107,17 @@ export async function main(argv: string[]): Promise<number> {
         },
         waitMs,
       );
-    case 'sim-trial': // --keys with a value is refused by the guard (FLAGS: bare)
+    case 'sim-trial': // --keys or --icon with a value is refused by the guard (FLAGS: bare)
+      if (flags.keys === 'true' && flags.icon === 'true') {
+        console.error(`--keys and --icon are two trials: pick one\n${USAGE}`);
+        return EXIT.usage;
+      }
       return simTrial(
         { fs: nodeFs, clock, dir: hostjobsDir(run), log: (s) => console.log(s) },
         flags.tag ?? '',
         undefined,
         flags.round === undefined ? undefined : Number(flags.round),
-        flags.keys === 'true' ? 'keys' : 'taps',
+        flags.keys === 'true' ? 'keys' : flags.icon === 'true' ? 'icon' : 'taps',
       );
     case 'help':
     case undefined:

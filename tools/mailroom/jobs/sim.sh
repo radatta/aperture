@@ -28,7 +28,7 @@ SIM_YS_SUBMIT="454 444 464 434 474 424 414"    # the form's submit button
 SIM_Y_NEVER=588                                # Save Password's "Never for This Website"
 SIM_PT_SPACE="221 856"                         # the soft keyboard's space bar
 SIM_X_DONE=395                                 # the keyboard accessory bar's Done
-SIM_YS_ACCESSORY="575 565 585 555 595 545 605" # that bar, nearest first
+SIM_YS_ACCESSORY="602 575 565 585 555 595 545 605" # that bar: its measured centre first (575 and 565 can sit on the dock's Focus behind it)
 SIM_Y_NAV=168                                  # the nav row (page scrolled to the top)
 SIM_XS_NAV="38 88 136 205 276 332 380 268 395" # tab centres: seven unscrolled, then Finances/Inbox/Settings swiped
 SIM_X_BUILD=57                                 # Settings' build stamp, page scrolled to the bottom
@@ -65,7 +65,7 @@ SIM_JQ='
   def opok:
     . as $o | type == "object" and (.op | type) == "string" and
     if (["signIn","blur","shutdown"] | index($o.op)) != null then keysok(["op"]; [])
-    elif .op == "launch" then keysok(["op"]; ["via"]) and tvia
+    elif .op == "launch" then keysok(["op"]; ["via","settle"]) and tvia and (if has("settle") then has("via") and (.settle | int(1; 5)) else true end)
     elif .op == "readBuild" then keysok(["op"]; ["stay"]) and (if has("stay") then .stay == true else true end)
     elif .op == "kill" then keysok(["op","method"]; []) and (.method == "terminate" or .method == "switcher" or .method == "reboot")
     elif .op == "nav" then keysok(["op","tab"]; []) and (.tab | type == "string") and ($tabs | index($o.tab)) != null
@@ -285,6 +285,7 @@ sim_tap_el() {
     return 1
   fi
   [ -z "${SIM_TRIAL:-}" ] || [ -n "${SIM_TMS:-}" ] || t0="$(sim_ms)"
+  [ -z "${SIM_TRIAL:-}" ] || SIM_TW0="$(sim_ms)"
   case "${SIM_TRIAL:+$SIM_VIA}" in
     hid)
       export AXE_HID_STABILIZATION_MS=500
@@ -294,6 +295,7 @@ sim_tap_el() {
     *) ax tap -x "$cx" -y "$cy" --tap-style physical ${2:+--pre-delay "$2"} >/dev/null 2>&1 || rc=$? ;;
   esac
   [ -z "$t0" ] || SIM_TMS=$(($(sim_ms) - t0))
+  [ -z "${SIM_TRIAL:-}" ] || sim_tap_window
   [ "$rc" = 0 ] || sim_err SIM_UNAVAILABLE AXE_FAILED "tap failed"
 }
 
@@ -478,10 +480,10 @@ sim_icon_count() {
     | select((.frame.width // 0) > 0 and (.frame.height // 0) > 0 and (.frame.x // -1) >= 0 and (.frame.x + .frame.width) <= $w and (.frame.y // -1) >= 0 and (.frame.y + .frame.height) <= $h)] | length' <<<"$1" 2>/dev/null
 }
 sim_find_icon() {
-  local t page app="" i e prev="" scrolled=""
+  local t page app="" i e prev="" scrolls=0
   SIM_ICON=""
   SIM_PRESSES=1 # the caller's
-  for i in 1 2 3 4 5 6; do
+  for i in 1 2 3 4 5 6 7 8; do
     t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
     page="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
     case "$page" in
@@ -497,12 +499,16 @@ sim_find_icon() {
         sleep 1
         ;;
       "Page 1 of 2")
+        # a scroll AXe reported done can be one iOS dropped: page 1 on a fresh read means scroll again (3 in all; 2 s
+        # each, so a slow page turn isn't scrolled past page 2 into the App Library)
         prev=""
-        if [ -z "$scrolled" ]; then
+        if [ "$scrolls" -lt 3 ]; then
           ax gesture scroll-left --screen-width "$SIM_W" --screen-height "$SIM_H" >/dev/null 2>&1 || true
-          scrolled=1
+          scrolls=$((scrolls + 1))
+          sleep 2
+        else
+          break
         fi
-        sleep 1
         ;;
       "")
         # No Home Screen: a press AXe reported done can be one iOS never got (job …192707Z…-relaunch-bd33 left the app
@@ -521,6 +527,10 @@ sim_find_icon() {
   done
   if [ -z "$page" ] && [ "$app" = Web ]; then
     sim_fail HOME_PRESS_DROPPED "the app is still in front after $SIM_PRESSES home presses AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+    return 1
+  fi
+  if [ "$page" = "Page 1 of 2" ] && [ "$scrolls" -ge 3 ]; then
+    sim_fail ICON_SCROLL_DROPPED "still Home Screen page 1 after 3 scrolls AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
     return 1
   fi
   if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "no page pill, ${app:-no app} in front after $SIM_PRESSES home presses; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
@@ -572,17 +582,69 @@ sim_clear_draft() {
   SIM_DRAFT_TRY=" (a leftover draft in the bar; $n deletes didn't bring Home's bar back)"
 }
 
-# A trial's `via` sends the icon taps its way and counts the first: still the Home Screen at a read-back is a drop.
-sim_op_launch() {
-  local i s t e clean="" taps=1 again="" cleared="" o="${1:-}" via
-  SIM_AGAIN_DEAD="" SIM_DRAFT_DEL="" SIM_DRAFT_TRY=""
-  [ -n "$o" ] || o='{}' # signIn's reboot and expectBuild's relaunch call it bare
-  via="$(jq -r '.via // ""' <<<"$o")"
-  [ -z "$via" ] || { SIM_VIA="$via" SIM_TRIAL=1 SIM_TOP=launch; }
-  sim_ready || return 1
-  ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+# The icon tap, read back at once (the 11-16 trial: four taps on the icon over 150 s, each ignored, read back only at the
+# polls): 1 s after the tap, and again 1 s later. The web app in front is landed. The Home Screen both times is a drop:
+# Home is pressed, the icon found again and tapped (a reset SpringBoard, not the same tap again), four taps in all, and
+# still the Home Screen 3 s after the fourth is ICON_TAP_DROPPED. Anything else (a tree that won't read, a stale one) is
+# left to the landmark polls. Prints web, home or unknown.
+sim_icon_look() {
+  local t v=unknown
+  sleep 1
+  t="$(sim_tree)" || t=""
+  if [ -n "$t" ] && sim_tree_web "$t"; then
+    v=web
+  elif [ -n "$t" ] && sim_tree_home "$t"; then
+    sleep 1
+    t="$(sim_tree)" || t=""
+    if [ -n "$t" ] && sim_tree_web "$t"; then v=web; elif [ -n "$t" ] && sim_tree_home "$t"; then v=home; fi
+  fi
+  printf '%s' "$v"
+}
+sim_icon_land() {
+  local v
+  while :; do
+    v="$(sim_icon_look)"
+    sim_tap_mark "$v"
+    case "$v" in
+      web) sim_trial_tap 0; return 0 ;;
+      home) sim_trial_tap 1 ;;
+      *) return 0 ;;
+    esac
+    if [ "$SIM_TAPS" -ge 4 ]; then
+      sleep 2
+      v="$(sim_icon_look)"
+      [ "$v" = home ] || return 0
+      sim_fail ICON_TAP_DROPPED "still the Home Screen after $SIM_TAPS icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+      return 1
+    fi
+    sim_icon_reset || return 1
+  done
+}
+# Home pressed, the icon found again, tapped: one more of launch's four.
+sim_icon_reset() {
+  ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
   sim_find_icon || return 1
   sim_tap_el "$SIM_ICON" || return 1
+  SIM_TAPS=$((SIM_TAPS + 1)) SIM_RESETS=$((SIM_RESETS + 1))
+}
+
+# A trial's `via` sends the icon taps its way and counts the first: the Home Screen at both looks is a drop. Its
+# `settle` is the wait after each home press (1 s otherwise).
+sim_op_launch() {
+  local i s t e clean="" again="" cleared="" o="${1:-}" via
+  SIM_AGAIN_DEAD="" SIM_DRAFT_DEL="" SIM_DRAFT_TRY="" SIM_TAPS=1 SIM_RESETS=0 SIM_SETTLE=1
+  [ -n "$o" ] || o='{}' # signIn's reboot and expectBuild's relaunch call it bare
+  via="$(jq -r '.via // ""' <<<"$o")"
+  if [ -n "$via" ]; then
+    SIM_VIA="$via" SIM_TRIAL=1 SIM_TOP=launch
+    SIM_SETTLE="$(jq -r '.settle // 1 | floor' <<<"$o")"
+  fi
+  sim_ready || return 1
+  sim_hid_start
+  ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
+  sim_find_icon || return 1
+  sim_tap_el "$SIM_ICON" || return 1
+  sim_icon_land || return 1
   i=0
   while :; do
     rm -f "$SIM_P.unread"
@@ -592,7 +654,8 @@ sim_op_launch() {
       SIM_SIGNED="$s"
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
       [ "${SIM_PRESSES:-1}" -le 1 ] || SIM_NOTE="$SIM_NOTE; home pressed $SIM_PRESSES times"
-      [ "$taps" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $taps times"
+      [ "$SIM_TAPS" -le 1 ] || SIM_NOTE="$SIM_NOTE; icon tapped $SIM_TAPS times"
+      [ "$SIM_RESETS" = 0 ] || SIM_NOTE="$SIM_NOTE, Home pressed before each retap"
       [ -z "${SIM_KB_SET:-}" ] || SIM_NOTE="$SIM_NOTE; pinned the keyboard prefs ($SIM_KB_SET off)"
       [ -z "$again" ] || SIM_NOTE="$SIM_NOTE; relaunched (it resumed mid-typing, keyboard up$SIM_AGAIN_DEAD)"
       [ -z "$SIM_DRAFT_DEL" ] || SIM_NOTE="$SIM_NOTE; deleted a leftover draft in the bar ($SIM_DRAFT_DEL deletes)"
@@ -608,7 +671,7 @@ sim_op_launch() {
       # Still the Home Screen after every tap is AXe's taps dropped (job …223625Z…-relaunch-07aa), not the app.
       if t="$(sim_tree)" && sim_tree_home "$t"; then
         sim_trial_tap 1
-        sim_fail ICON_TAP_DROPPED "still the Home Screen after $taps icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+        sim_fail ICON_TAP_DROPPED "still the Home Screen after $SIM_TAPS icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
         return 1
       fi
       [ -z "$t" ] || ! sim_tree_web "$t" || sim_trial_tap 0 # the app came up: the icon tap landed
@@ -625,12 +688,15 @@ sim_op_launch() {
         [ -z "$t" ] || ! sim_tree_web "$t" || sim_trial_tap 0
         if [ -n "$t" ] && sim_tree_home "$t"; then
           sim_trial_tap 1
-          sim_tap_el "$SIM_ICON" || return 1
-          taps=$((taps + 1))
+          if [ "$SIM_TAPS" -ge 4 ]; then
+            sim_fail ICON_TAP_DROPPED "still the Home Screen after $SIM_TAPS icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+            return 1
+          fi
+          sim_icon_reset || return 1
         elif [ -z "$again" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
           && sim_kb_up; then
           sim_launch_again || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's relaunch of an app left mid-typing)"; return 1; }
-          again=1 i=0 clean="" taps=1
+          again=1 i=0 clean="" SIM_TAPS=1
           sleep 2
           continue
         elif [ -z "$cleared" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
@@ -999,6 +1065,50 @@ sim_op_nav() {
   sim_tap_el "$SIM_HIT" || return 1
   sleep 2
   SIM_NOTE="on $tab$how"
+  # The tap is read back on the page (job …004656Z…-trial-quiet-4: "on Tasks (fast)" and the page was still Home)
+  if [ -z "$(sim_nav_mark "$tab")" ]; then
+    SIM_NOTE="$SIM_NOTE; page not confirmed (no landmark for this tab)"
+    return 0
+  fi
+  sim_nav_on "$tab"; rc=$?
+  [ "$rc" != 1 ] || return 1
+  [ "$rc" != 0 ] || return 0
+  sleep 2
+  sim_nav_on "$tab"; rc=$?
+  [ "$rc" != 1 ] || return 1
+  if [ "$rc" = 0 ]; then SIM_NOTE="$SIM_NOTE; the page came up late"; return 0; fi
+  # still not there: one more tap, from the top of the page (the full path)
+  sim_to_top
+  rm -f "$SIM_P.unread"
+  sim_nav_probe "$tab"; rc=$?
+  [ "$rc" != 1 ] || return 1
+  if [ "$rc" != 0 ]; then
+    sim_hung_err "looking for the $tab tab again" && return 1
+    sim_fail NAV_UNCONFIRMED "tapped the $tab tab, the page never showed its landmark, and the tab wasn't there to tap again"
+    return 1
+  fi
+  sim_tap_el "$SIM_HIT" || return 1
+  sleep 2
+  sim_nav_on "$tab"; rc=$?
+  [ "$rc" != 1 ] || return 1
+  if [ "$rc" = 0 ]; then SIM_NOTE="on $tab; tapped again (the page wasn't $tab after the first tap)"; return 0; fi
+  sim_fail NAV_UNCONFIRMED "tapped the $tab tab twice and its page landmark never showed: iOS dropped the input, or the landmark moved; rerun the step"
+}
+
+# A tab's page landmark, for nav's read-back: label|role|x|ys. Only Tasks has one a point read can trust (Bulk add at
+# its header's right); the app has one header for every page, and Home's content changes with the hour.
+sim_nav_mark() { case "$1" in Tasks) echo "Bulk add|AXButton|369|232 212 252" ;; *) echo "" ;; esac; }
+# 0 the tab's landmark is there, 2 it isn't, 1 the probe budget or a hung read (AX_TIMEOUT)
+sim_nav_on() {
+  local label role x ys y e
+  IFS='|' read -r label role x ys <<<"$(sim_nav_mark "$1")"
+  rm -f "$SIM_P.unread"
+  for y in $ys; do
+    e="$(sim_point "$x" "$y")" || return 1
+    if sim_match "$e" "$label" "$role"; then return 0; fi
+  done
+  sim_hung_err "checking the $1 page" && return 1
+  return 2
 }
 
 sim_op_find() {
@@ -1266,6 +1376,79 @@ sim_trial_tap() {
   if [ "$d" = null ]; then SIM_TNOTE="; via $SIM_VIA, uncounted ($un)"; else SIM_TNOTE="; via $SIM_VIA, drops $d"; fi
 }
 
+# A trial tap's window, for the drop attribution at the job's end: op, tap number in it, start and end (ms).
+sim_tap_window() {
+  SIM_TK=$((SIM_TK + 1)) SIM_TW1="$(sim_ms)"
+  jq -cn --argjson i "$SIM_OPI" --argjson k "$SIM_TK" --argjson a "$SIM_TW0" --argjson b "$SIM_TW1" '{i: $i, k: $k, t0: $a, t1: $b}' >>"$SIM_P.taps"
+}
+# A trial icon tap's verdict (web, home or unknown) and, landed, how long after the tap the app was in front.
+sim_tap_mark() {
+  [ -n "$SIM_TRIAL" ] && [ "$SIM_TK" -gt 0 ] || return 0
+  jq -cn --argjson i "$SIM_OPI" --argjson k "$SIM_TK" --arg v "$1" --argjson now "$(sim_ms)" --argjson t1 "$SIM_TW1" \
+    '{i: $i, k: $k, d: (if $v == "web" then 0 elif $v == "home" then 1 else null end)} + (if $v == "web" then {frontMs: ($now - $t1)} else {} end)' >>"$SIM_P.taps"
+}
+
+# Drop attribution (IOS-CHECK.md → Icon trial): during a trial job the sim's own log is streamed, and at the end each
+# tap is given the guest's "No active service" lines (AXe issue 71: the touch reached a HID service with no session)
+# logged inside its window. Only counts are kept; the stream's text is deleted. --timeout is the belt for a kill that
+# doesn't reach the guest's process.
+sim_hid_start() {
+  [ -n "$SIM_TRIAL" ] && [ -z "$SIM_HID_TRIED" ] || return 0
+  SIM_HID_TRIED=1
+  : >"$SIM_P.hid"
+  xcrun simctl spawn "$SIM_U" log stream --level debug --style ndjson --timeout 11m \
+    --predicate 'eventMessage CONTAINS "No active service" OR process == "dtuhidd"' >"$SIM_P.hid" 2>/dev/null &
+  SIM_HID_PID=$!
+}
+sim_hid_stop() {
+  local w
+  [ -n "$SIM_HID_PID" ] || return 0
+  sleep 2 # the last tap's lines
+  if kill -0 "$SIM_HID_PID" 2>/dev/null; then SIM_HID_ALIVE=1; fi
+  kill -TERM "$SIM_HID_PID" 2>/dev/null || true
+  (command sleep 5; kill -KILL "$SIM_HID_PID" 2>/dev/null) &
+  w=$!
+  wait "$SIM_HID_PID" 2>/dev/null || true
+  kill "$w" 2>/dev/null || true
+}
+# The trial lines with their taps (verdict, the guest's no-service count, time to front), each launch's settle and the
+# op's other no-service lines; the header's hid says whether the counts can be trusted (ok) and why not. A count it
+# can't stand behind is null, never 0.
+sim_trial_out() {
+  local ok=false why=""
+  if [ -n "$SIM_HID_TRIED" ]; then
+    if [ -z "$SIM_HID_ALIVE" ]; then why=died; else ok=true; fi
+  fi
+  [ -e "$SIM_P.taps" ] || : >"$SIM_P.taps"
+  [ -e "$SIM_P.spans" ] || : >"$SIM_P.spans"
+  [ -e "$SIM_P.hid" ] || : >"$SIM_P.hid"
+  jq -c -n --arg a "$1" --arg b "$(sim_load)" --argjson tried "$([ -n "$SIM_HID_TRIED" ] && echo true || echo false)" \
+    --argjson ok "$ok" --arg why "$why" --rawfile hid "$SIM_P.hid" --slurpfile taps "$SIM_P.taps" --slurpfile spans "$SIM_P.spans" \
+    --slurpfile tr "$SIM_P.trial" --slurpfile plan "$2" '
+    def ms: capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})[ T](?<t>[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<f>[0-9]+))?(?<z>[+-][0-9]{2}:?[0-9]{2})$") as $c
+      | (($c.d + "T" + $c.t + "Z") | fromdateiso8601) * 1000 + ((($c.f // "0") + "000")[0:3] | tonumber)
+        - (($c.z | sub(":"; "")) as $z | (($z[1:3] | tonumber) * 60 + ($z[3:5] | tonumber)) * 60000 * (if $z[0:1] == "-" then -1 else 1 end));
+    ($hid | split("\n") | map(select(length > 0 and (startswith("Filtering") | not)))
+      | map(try (fromjson | {t: (.timestamp | ms), no: ((.eventMessage // "") | contains("No active service"))}) catch null)) as $ev
+    | ($ok and ($ev | all(. != null))) as $good
+    | ($ev | map(select(. != null and .no) | .t)) as $no
+    | ($taps | map(select(has("t0")))) as $win
+    | ($taps | map(select(has("d")))) as $ver
+    | (if $tried then {load: {start: $a, end: $b}, hid: ({ok: $good, lines: ($ev | length), noSvc: ($no | length)}
+        + (if $good then {} elif $why != "" then {why: $why} else {why: "badline"} end))} else {load: {start: $a, end: $b}} end),
+      ($tr[] | . as $l
+        | ($win | map(select(.i == $l.i)) | sort_by(.k)) as $w
+        | if ($l.op == "tap" or $l.op == "launch") and ($w | length) > 0 then
+            . + (if $l.op == "launch" then {settle: ($plan[0].params.steps[$l.i].settle // 1)} else {} end)
+              + {taps: [$w[] | . as $x | ($ver | map(select(.i == $x.i and .k == $x.k)) | last) as $v
+                  | {d: ($v.d // null), hid: (if $good then ($no | map(select(. >= $x.t0 and . <= $x.t1 + 1000)) | length) else null end)}
+                    + (if $v.frontMs then {frontMs: $v.frontMs} else {} end)]}
+              + (($spans | map(select(.i == $l.i)) | first) as $s
+                  | {hidOther: (if $good and $s then ($no | map(. as $t | select($t >= $s.s and $t <= $s.e + 1000
+                      and ($w | all($t < .t0 or $t > .t1 + 1000)))) | length) else null end)})
+          else . end)'
+}
+
 # A trial tap goes where its target holds still: its centre is read until two reads 1 s apart give the same frame (at
 # most 3), so a tap on a dock still settling (PR 156: taps at y 374 and 402 on a dock that settles at 464) isn't counted
 # as a drop. Never still, or gone from its centre: tapped where it was last seen, uncounted (moving). A read that
@@ -1409,8 +1592,18 @@ sim_erased_read() {
   e="$(sim_point "$2" "$3")" || return 1
   sim_hung_err "reading the erased field" && return 1
   SIM_ERASED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
-  jq -e --argjson r "$1" '(.role // "") != "" and (.role // "") == ($r.role // "")
-    and (($r.label // "") == "" or ((.label // "") | ascii_downcase) == (($r.label // "") | ascii_downcase))' <<<"$e" >/dev/null 2>&1 || return 0
+  if ! jq -e --argjson r "$1" '(.role // "") != "" and (.role // "") == ($r.role // "")
+    and (($r.label // "") == "" or ((.label // "") | ascii_downcase) == (($r.label // "") | ascii_downcase))' <<<"$e" >/dev/null 2>&1; then
+    # A field holding text reads as an unlabelled run of that text (smoke round 2026-11-17: Bulk add's field holding
+    # "f" read AXStaticText "f"): inside the field's recorded frame, it is the field, with that many letters left.
+    if jq -e --argjson r "$1" '(.role // "") == "AXStaticText" and (.label // "") == "" and (.value // "") != ""
+      and (((.frame.x // 0) + (.frame.w // 0) / 2) as $cx | ((.frame.y // 0) + (.frame.h // 0) / 2) as $cy | ($r.frame // {}) as $f
+        | ($f.w // 0) > 0 and $cx >= $f.x and $cx <= ($f.x + $f.w) and $cy >= $f.y and $cy <= ($f.y + $f.h))' <<<"$e" >/dev/null 2>&1; then
+      SIM_ERASED_FIELD=1
+      SIM_LEFT="$(jq -r '(.value // "") | length | if . > 24 then 24 else . end' <<<"$e")"
+    fi
+    return 0
+  fi
   SIM_ERASED_FIELD=1
   if jq -e --argjson r "$1" '(.value // "") == "" or (.value // "") == ($r.value // "")' <<<"$e" >/dev/null 2>&1; then
     SIM_ERASED_OK=1
@@ -1448,7 +1641,7 @@ sim_op_erase() {
       [ "$SIM_LEFT" -le "$left" ] || left="$SIM_LEFT" # the most either look saw: the centre can hit another element
     fi
     [ "$left" -ge 1 ] || left=1
-    if [ -n "$via" ] && [ "$rounds" = 0 ] && [ -n "$found" ]; then
+    if [ -n "$via" ] && [ "$rounds" = 0 ] && [ -n "$found" ] && { [ -n "$SIM_ERASED_OK" ] || [ "$left" -le "$n" ]; }; then
       drops=0
       [ -n "$SIM_ERASED_OK" ] || drops="$left"
       sim_trial erase "$n" "$drops" "$ms"
@@ -1480,7 +1673,7 @@ sim_op_erase() {
 
 # Done is a tap like any other: the keyboard must be gone afterwards (one retap), or the next op aims at a moved page.
 sim_op_blur() {
-  local rc
+  local rc at f1 again=""
   sim_accessory_top >/dev/null; rc=$?
   [ "$rc" != 1 ] || return 1
   if [ "$rc" != 0 ]; then
@@ -1488,20 +1681,31 @@ sim_op_blur() {
     SIM_NOTE="no keyboard to dismiss"
     return 0
   fi
+  at="$(jq -r '"\((.frame.x // 0) + (.frame.w // 0) / 2 | floor),\((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$SIM_HIT")"
+  f1="$(jq -c '.frame // {}' <<<"$SIM_HIT")"
   sim_tap_el "$SIM_HIT" || return 1
   sleep 1
-  SIM_NOTE="keyboard dismissed"
+  SIM_NOTE="keyboard dismissed (Done at $at)"
   if sim_kb_up; then
     sleep 1
     # Done again only where it is now: a keyboard that went down late leaves a page button at the old spot.
     sim_accessory_top >/dev/null; rc=$?
     [ "$rc" != 1 ] || return 1
     if [ "$rc" = 0 ]; then
+      [ "$(jq -c '.frame // {}' <<<"$SIM_HIT")" != "$f1" ] || again=1
       sim_tap_el "$SIM_HIT" || return 1
       sleep 1
-      SIM_NOTE="keyboard dismissed on the second tap"
+      SIM_NOTE="keyboard dismissed on the second tap (Done at $at)"
     fi
-    if sim_kb_up; then sim_fail BLUR "the keyboard stayed up after Done"; return 1; fi
+    if sim_kb_up; then
+      # which it was decides the next step: Done still where it was is input iOS dropped; Done gone is something else
+      if [ -n "$again" ]; then
+        sim_fail BLUR "the keyboard stayed up after 2 Done taps at $at, Done read at the same frame both times: iOS dropped the input; rerun the step, don't debug the app"
+      else
+        sim_fail BLUR "the keyboard stayed up after Done at $at, and Done wasn't there to tap again"
+      fi
+      return 1
+    fi
   fi
   [ ! -e "$SIM_P.over" ] && [ ! -e "$SIM_P.late" ] || return 1 # a read refused for the budget is no answer
   sim_hung_err "checking the keyboard went down" && return 1
@@ -1610,6 +1814,7 @@ run_sim() {
   SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE="" SIM_TYPED="" SIM_TYPED_OK="" SIM_RB_AGAIN="" SIM_RB_STAY=false
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_READY="" SIM_SHOTS=0 SIM_KB_WROTE="" SIM_KB_SET=""
   SIM_ST="" SIM_RS="" SIM_DT="" SIM_VIA=tap SIM_OPI=0 SIM_TRIAL="" SIM_TDONE="" SIM_TMS="" SIM_TNOTE="" SIM_TUN="" SIM_TOP=""
+  SIM_TK=0 SIM_TW0=0 SIM_TW1=0 SIM_TAPS=1 SIM_RESETS=0 SIM_SETTLE=1 SIM_HID_TRIED="" SIM_HID_PID="" SIM_HID_ALIVE=""
   load0="$(sim_load)"
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"
@@ -1618,6 +1823,7 @@ run_sim() {
   : >"$SIM_P.builds"
   : >"$SIM_P.shots"
   : >"$SIM_P.trial"
+  rm -f -- "$SIM_P.taps" "$SIM_P.spans" "$SIM_P.hid"
   started="$(date +%s)"
   budget="$(jq -r '.params.timeoutSec | floor' "$w")"
   SIM_DEADLINE=$((started + budget))
@@ -1636,7 +1842,7 @@ run_sim() {
       continue
     fi
     t0="$(sim_ms)"
-    SIM_TRIAL="" SIM_TDONE="" SIM_TMS="" SIM_TNOTE="" SIM_TUN="" SIM_TOP=""
+    SIM_TRIAL="" SIM_TDONE="" SIM_TMS="" SIM_TNOTE="" SIM_TUN="" SIM_TOP="" SIM_TK=0
     if [ $(($(date +%s) - started)) -gt "$budget" ]; then
       SIM_ST=error SIM_RS=TIMEOUT SIM_DT="" SIM_NOTE="over the ${budget} s budget"
       status=error
@@ -1656,6 +1862,7 @@ run_sim() {
     fi
     # a trial op that ended before any read-back still leaves its line: uncounted, with why
     if [ -n "$SIM_TRIAL" ]; then
+      jq -cn --argjson i "$i" --argjson s "$t0" --argjson e "$(sim_ms)" '{i: $i, s: $s, e: $e}' >>"$SIM_P.spans"
       if [ "$status" = pass ]; then sim_trial_tap null unrecorded; else sim_trial_tap null "${SIM_DT:-${SIM_RS:-unread}}"; fi
       SIM_NOTE="$SIM_NOTE$SIM_TNOTE"
     fi
@@ -1664,15 +1871,17 @@ run_sim() {
     if [ "$status" != pass ]; then reason="${SIM_RS:-SIM_UNAVAILABLE}"; detail="$SIM_DT"; fi
     i=$((i + 1))
   done
+  sim_hid_stop # before any shutdown: the stream dies with the sim
   # The rows already passed; a sim that wouldn't shut down says so in `booted` (the container's finish() asks again).
   if [ "$status" = pass ] && [ -n "$SIM_U" ] && [ "$(jq -r .params.shutdown "$w")" = true ] && [ "$SIM_BOOTED" != off ]; then
     if sim_shutdown; then SIM_BOOTED=off; fi
   fi
   kill "$caf" 2>/dev/null || true
   if [ -s "$SIM_P.trial" ]; then
-    { jq -cn --arg a "$load0" --arg b "$(sim_load)" '{load: {start: $a, end: $b}}'; cat "$SIM_P.trial"; } >"$SIM_P.trialout"
+    sim_trial_out "$load0" "$w" >"$SIM_P.trialout" || { jq -cn '{bad: "the trial lines could not be joined"}'; } >"$SIM_P.trialout"
     sim_rd "$SIM_P.trialout" trial.jsonl || true
   fi
+  rm -f -- "$SIM_P.hid" # only counts leave the job
   printf '%s %s %s\n' "$status" "$reason" "$(jq -cn --arg detail "$detail" --arg name "$SIM_NAME" --arg udid "$SIM_U" \
     --arg rt "$SIM_RUNTIME" --arg axe "$SIM_AXE_VERSION" --arg xcode "$SIM_XCODE" --arg booted "$SIM_BOOTED" --arg signed "$SIM_SIGNED" \
     --slurpfile steps "$SIM_P.steps" --slurpfile reads "$SIM_P.reads" \

@@ -141,9 +141,38 @@ export function tapPlan(round: number, last: boolean): SimParams {
   return { ...BASE, shutdown: last, steps };
 }
 
-export type TrialKind = 'taps' | 'keys';
-const PLANS = { taps: tapPlan, keys: keysPlan } as const;
-const ROUNDS = { taps: TAP_ROUNDS, keys: KEY_ROUNDS } as const;
+// The icon trial (`--icon`): ten launches a job, each after a home press and a settle of 1 s or 3 s (alternating, the
+// first flipped each round), counting the first icon tap's drops and attributing every dropped one by the sim's own log
+// (IOS-CHECK.md → Icon trial). No sign-in: launch takes either landmark.
+export const ICON_ROUNDS = 6;
+export const ICON_LAUNCHES = 10;
+export const SETTLES = [1, 3] as const;
+export function iconPlan(round: number, last: boolean): SimParams {
+  const steps: IosOp[] = [];
+  for (let k = 0; k < ICON_LAUNCHES; k++) {
+    if (k) steps.push({ op: 'wait', s: 3 });
+    steps.push({ op: 'launch', via: 'tap', settle: at(SETTLES, k + round) });
+  }
+  return { ...BASE, shutdown: last, steps };
+}
+
+export type TrialKind = 'taps' | 'keys' | 'icon';
+const PLANS = { taps: tapPlan, keys: keysPlan, icon: iconPlan } as const;
+const ROUNDS = { taps: TAP_ROUNDS, keys: KEY_ROUNDS, icon: ICON_ROUNDS } as const;
+
+// One tap of a trial op, at the job's end: its verdict (0 landed, 1 dropped, null unknown), the guest's "No active
+// service" lines in its window (null: the capture can't be trusted), and how soon a landed one put the app in front.
+export interface TapRecord {
+  d: 0 | 1 | null;
+  hid: number | null;
+  frontMs?: number;
+}
+export interface HidHeader {
+  ok: boolean;
+  why?: string;
+  lines: number;
+  noSvc: number;
+}
 
 // A runner line: drops null is a read-back that couldn't tell, `un` says why (moving, moved, gone, already, notfield,
 // unrecorded, or the op's failure).
@@ -155,6 +184,9 @@ interface TrialLine {
   drops: number | null;
   sendMs: number | null; // null: no tap went out (already, or a failure before it)
   un?: string;
+  settle?: number;
+  taps?: TapRecord[];
+  hidOther?: number | null;
 }
 // What a via step came to: counted, uncounted (why), or not run (the round ended before it).
 export interface TrialCell {
@@ -165,11 +197,13 @@ export interface TrialCell {
   drops: number | null;
   un?: string;
   sendMs: number | null;
+  taps?: TapRecord[];
 }
 export interface TrialRound {
   round: number;
   id: string;
   load: { start: string; end: string } | null;
+  hid?: HidHeader | null;
   cells: TrialCell[];
   retried: number[]; // step indexes whose note says a read-back sent more (retyped, deleted … more, tapped again)
   bad: number; // lines that aren't a well-formed count, or a second line for one step
@@ -187,7 +221,32 @@ export interface TrialRow {
 }
 
 const OPS = ['keys', 'erase', 'tap', 'launch'];
+const okCount = (x: unknown) => x === null || (Number.isInteger(x) && (x as number) >= 0);
+const okTap = (x: unknown): boolean => {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
+  const o = x as Record<string, unknown>;
+  return (
+    Object.keys(o).every((k) => ['d', 'hid', 'frontMs'].includes(k)) &&
+    (o.d === 0 || o.d === 1 || o.d === null) &&
+    okCount(o.hid) &&
+    (!('frontMs' in o) || (typeof o.frontMs === 'number' && o.frontMs >= 0))
+  );
+};
+const okHid = (x: unknown): boolean => {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
+  const o = x as Record<string, unknown>;
+  return (
+    typeof o.ok === 'boolean' &&
+    Number.isInteger(o.lines) &&
+    Number.isInteger(o.noSvc) &&
+    (o.ok || (typeof o.why === 'string' && o.why !== ''))
+  );
+};
 const okLine = (o: Record<string, unknown>): boolean =>
+  (!('settle' in o) ||
+    (Number.isInteger(o.settle) && (o.settle as number) >= 1 && (o.settle as number) <= 5)) &&
+  (!('taps' in o) || (Array.isArray(o.taps) && o.taps.length > 0 && o.taps.every(okTap))) &&
+  (!('hidOther' in o) || okCount(o.hidOther)) &&
   Number.isInteger(o.i) &&
   OPS.includes(o.op as string) &&
   typeof o.via === 'string' &&
@@ -202,16 +261,27 @@ const okLine = (o: Record<string, unknown>): boolean =>
 // bad: lines that aren't a well-formed count (a count it can't read is never a zero)
 export function parseTrial(raw: string | null): {
   load: TrialRound['load'];
+  hid: HidHeader | null;
   lines: TrialLine[];
   bad: number;
 } {
-  const out = { load: null as TrialRound['load'], lines: [] as TrialLine[], bad: 0 };
+  const out = {
+    load: null as TrialRound['load'],
+    hid: null as HidHeader | null,
+    lines: [] as TrialLine[],
+    bad: 0,
+  };
   for (const l of (raw ?? '').split('\n')) {
     if (!l.trim()) continue;
     try {
       const o = JSON.parse(l) as Record<string, unknown>;
-      if (o.load && typeof o.load === 'object') out.load = o.load as TrialRound['load'];
-      else if (okLine(o)) out.lines.push(o as unknown as TrialLine);
+      if (o.load && typeof o.load === 'object') {
+        out.load = o.load as TrialRound['load'];
+        if ('hid' in o) {
+          if (okHid(o.hid)) out.hid = o.hid as HidHeader;
+          else out.bad++;
+        }
+      } else if (okLine(o)) out.lines.push(o as unknown as TrialLine);
       else out.bad++;
     } catch {
       out.bad++;
@@ -221,7 +291,7 @@ export function parseTrial(raw: string | null): {
 }
 
 export const targetOf = (s: IosOp): string =>
-  s.op === 'launch' ? 'icon' : s.op === 'tap' ? s.label : s.op;
+  s.op === 'launch' ? `icon${s.settle ? ` s${s.settle}` : ''}` : s.op === 'tap' ? s.label : s.op;
 
 const viaOf = (s: IosOp): Via | undefined =>
   'via' in s && typeof s.via === 'string' ? (s.via as Via) : undefined;
@@ -250,7 +320,8 @@ export function joinTrial(
       mine.length !== 1 ||
       mine[0]?.op !== s.op ||
       mine[0]?.via !== via ||
-      mine[0]?.n !== nOf(s)
+      mine[0]?.n !== nOf(s) ||
+      (s.op === 'launch' && (mine[0]?.settle ?? 1) !== (s.settle ?? 1))
     ) {
       if (mine.length) bad += mine.length;
       const un = failed?.i === i ? (result?.detail ?? result?.reason ?? 'failed') : 'not run';
@@ -260,6 +331,7 @@ export function joinTrial(
     const l = mine[0];
     const cell: TrialCell = { i, target, via, n: l.n, drops: l.drops, sendMs: l.sendMs };
     if (l.un) cell.un = l.un;
+    if (l.taps) cell.taps = l.taps;
     const next = steps.findIndex((x, k) => k > i && x.op !== 'wait');
     if (
       s.op === 'tap' &&
@@ -353,6 +425,64 @@ export function trialTable(tag: string, rounds: TrialRound[]): string[] {
   return out;
 }
 
+// Every icon tap, the reset retaps too, with each dropped one attributed: `no service` (the guest logged that its HID
+// service had no session inside the tap's window: AXe issue 71), `no such line` (the capture worked and saw nothing),
+// `unproven` (a 0 from a capture that never showed it hears dtuhidd at all, anywhere in the trial), `unread` (no
+// trustworthy count). Unproven and unread are never read as a 0.
+export interface TapSummary {
+  target: string;
+  sent: number;
+  landed: number;
+  dropped: number;
+  unknown: number;
+  frontMs: number | null;
+  noService: number;
+  noSuchLine: number;
+  unproven: number;
+  unread: number;
+}
+export function tapSummary(rounds: TrialRound[]): TapSummary[] {
+  const proven = rounds.some((r) => r.hid?.ok && r.hid.lines > 0);
+  const targets = [
+    ...new Set(rounds.flatMap((r) => r.cells.filter((c) => c.taps).map((c) => c.target))),
+  ];
+  return targets.map((target) => {
+    const ts = rounds.flatMap((r) =>
+      r.cells.filter((c) => c.target === target).flatMap((c) => c.taps ?? []),
+    );
+    const dropped = ts.filter((x) => x.d === 1);
+    return {
+      target,
+      sent: ts.length,
+      landed: ts.filter((x) => x.d === 0).length,
+      dropped: dropped.length,
+      unknown: ts.filter((x) => x.d === null).length,
+      frontMs: median(ts.flatMap((x) => (x.d === 0 && x.frontMs !== undefined ? [x.frontMs] : []))),
+      noService: dropped.filter((x) => (x.hid ?? 0) >= 1).length,
+      noSuchLine: dropped.filter((x) => x.hid === 0 && proven).length,
+      unproven: dropped.filter((x) => x.hid === 0 && !proven).length,
+      unread: dropped.filter((x) => x.hid === null).length,
+    };
+  });
+}
+export function tapTable(rounds: TrialRound[]): string[] {
+  const rows = tapSummary(rounds);
+  if (!rows.length) return [];
+  const pad = (s: string | number, n: number) => String(s).padEnd(n);
+  return [
+    'every icon tap (first tries and the reset retaps):',
+    `${pad('target', 13)}${pad('sent', 6)}${pad('landed', 8)}${pad('dropped', 9)}${pad('unknown', 9)}${pad('frontMs', 9)}dropped: no service / no such line / unproven / unread`,
+    ...rows.map(
+      (r) =>
+        `${pad(r.target, 13)}${pad(r.sent, 6)}${pad(r.landed, 8)}${pad(r.dropped, 9)}${pad(r.unknown, 9)}${pad(r.frontMs ?? '-', 9)}${r.noService} / ${r.noSuchLine} / ${r.unproven} / ${r.unread}`,
+    ),
+    ...rounds.map(
+      (r) =>
+        `  round ${r.round} capture: ${r.hid ? (r.hid.ok ? `ok, ${r.hid.lines} dtuhidd line(s), ${r.hid.noSvc} no-service` : `not trusted (${r.hid.why})`) : 'none'}`,
+    ),
+  ];
+}
+
 const retriedSteps = (r: SimResult | undefined) =>
   (r?.steps ?? [])
     .filter((s) => /retyped|deleted .*more|tapped again|icon tapped \d+ times/.test(s.note ?? ''))
@@ -411,6 +541,7 @@ export async function simTrial(
       round,
       id: job.id,
       load: t.load,
+      hid: t.hid,
       cells: joined.cells,
       retried: retriedSteps(result),
       bad: t.bad + joined.bad,
@@ -424,6 +555,15 @@ export async function simTrial(
     if (stop) break;
   }
   for (const l of trialTable(tag, rounds)) d.log(l);
+  for (const l of tapTable(rounds)) d.log(l);
+  // the icon trial's point is the cause: a drop it can't attribute is a gap, said and not passed
+  const blind = tapSummary(rounds).reduce((a, s) => a + s.unread + s.unproven, 0);
+  if (kind === 'icon' && blind) {
+    d.log(
+      `${blind} dropped tap(s) without a trustworthy cause (unread or unproven): see each round's capture line`,
+    );
+    code = Math.max(code, 1);
+  }
   const open = rounds.flatMap((r) => r.cells.filter((c) => c.drops === null));
   if (open.length) {
     d.log(
