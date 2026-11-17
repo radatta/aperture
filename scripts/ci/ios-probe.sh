@@ -15,9 +15,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card" ;;
-    2) echo "restore card" ;;
-    *) echo "restore card" ;;
+    1) echo "restore rows" ;;
+    2) echo "seed rows" ;;
+    *) echo "restore rows" ;;
   esac
 }
 KEY="ios-probe-dev-26.5-v2" # the cached device; bump to re-save (cache keys are immutable)
@@ -224,9 +224,15 @@ s_restore() {
   u="$(basename "$d")"
   note "cache holds $u ($(du -sh "$d" | cut -f1))"
   du -sk "$d"/data/* "$d"/data/Library/* "$d"/data/Containers/*/* 2>/dev/null | sort -rn | head -25 >"$OUT/device-du.txt" || true
+  mkdir -p "$DEVICES"
   mv "$d" "$DEVICES/$u" || { note "move into the set failed"; return 1; }
-  killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-  sleep 1
+  # On a fresh runner nothing has started CoreSimulator yet, so its first start reads the set with the device in
+  # it; only a service already up is restarted (run 8: the forced restart took 17–70 s).
+  if pgrep -f CoreSimulatorService >/dev/null 2>&1; then
+    note "CoreSimulator was already up: restarted"
+    killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+    sleep 1
+  fi
   if xcrun simctl list devices -j | jq -e --arg u "$u" '[.devices[][] | select(.udid == $u)] | length == 1' >/dev/null; then
     U="$u"
     note "registered by a service restart"
