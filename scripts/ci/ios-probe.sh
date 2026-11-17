@@ -8,7 +8,7 @@
 set -uo pipefail
 
 RUNS=3      # shards above this exit at once: the workflow's matrix is fixed at 3, this is the knob
-CACHE=off   # off | save (tar the device after Add to Home Screen) | use (restore it, skip Add to Home Screen)
+CACHE=measure # off | measure (tar the device, size only) | save (tar it into the cache) | use (restore it, skip Add to Home Screen)
 ORIGIN=https://devb.aperture.rahuldatta.dev
 FALLBACK=https://aperture.rahuldatta.dev # read only, the sign-in card; used only when devb doesn't answer
 DEVICE_TYPE=com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max
@@ -218,7 +218,16 @@ s_origin() {
 
 s_safari() {
   local t i s err app=""
-  for i in 1 2 3; do # run 2: one shard's first openurl failed 10 s after boot
+  # Safari's cold launch outlasts openurl's own ~10 s timeout on a busy runner (runs 2-4: NSPOSIXErrorDomain 60, three
+  # in a row once), so Safari is launched first and openurl only navigates it.
+  cap 120 xcrun simctl launch "$U" com.apple.mobilesafari >/dev/null 2>&1 || note "Safari launch didn't confirm in 120 s"
+  for i in $(seq 1 15); do
+    late && break
+    t="$(tree)" || continue
+    [ "$(front_app "$t")" = Safari ] && { note "Safari in front on look $i"; break; }
+    sleep 2
+  done
+  for i in 1 2 3; do
     if err="$(cap 60 xcrun simctl openurl "$U" "$ORIGIN/" 2>&1)"; then break; fi
     note "openurl try $i failed: $(head -c 200 <<<"$err")"
     [ "$i" = 3 ] && return 1
@@ -363,7 +372,9 @@ find_icon() {
     page="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t")"
     e="$(find_el "$t" "^$APP_NAME\$" AXButton)"
     if [ -n "$e" ]; then ICON="$e"; note "icon on '${page:-no page pill}' at ${e%% A*}"; return 0; fi
-    ax gesture scroll-left --screen-width 440 --screen-height 956 >/dev/null 2>&1 || true
+    # run 4: four gesture scrolls in a row dropped (still page 1), so tries alternate with a plain swipe
+    if [ $((i % 2)) = 1 ]; then ax gesture scroll-left --screen-width "$W" --screen-height "$H" >/dev/null 2>&1 || true
+    else ax swipe --start-x 400 --start-y 480 --end-x 60 --end-y 480 --duration 0.4 >/dev/null 2>&1 || true; fi
     sleep 2
   done
   note "no $APP_NAME icon; last tree had: $(labels "$t" | cut -c1-300)"
@@ -399,7 +410,8 @@ s_cache_save() {
   tar czf "$CACHE_DIR/device.tgz" -C "$HOME/Library/Developer/CoreSimulator/Devices" "$U" || return 1
   printf '%s %s\n' "$U" "$RUNTIME" >"$CACHE_DIR/meta"
   note "device dir $(du -sh "$d" | cut -f1), tarball $(du -sh "$CACHE_DIR/device.tgz" | cut -f1)"
-  if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "cache=save" >>"$GITHUB_OUTPUT"; fi
+  # measure: the size and the tar's time only; no cache entry (a GB-scale one could evict main's caches)
+  if [ "$CACHE" = save ] && [ -n "${GITHUB_OUTPUT:-}" ]; then echo "cache=save" >>"$GITHUB_OUTPUT"; fi
   return 0
 }
 # Restore a cached device in place of create + Add to Home Screen; CoreSimulator rescans its set on restart.
@@ -453,5 +465,5 @@ if [ "$CACHE" != use ]; then
 fi
 step home-screen-icon s_icon
 step launch-to-sign-in s_launch
-if [ "$CACHE" = save ] && [ "$SHARD" = 1 ]; then step cache-save s_cache_save; fi # one fixed cache entry
+if { [ "$CACHE" = save ] || [ "$CACHE" = measure ]; } && [ "$SHARD" = 1 ]; then step cache-save s_cache_save; fi # one fixed entry
 [ -z "$FAILED" ]
