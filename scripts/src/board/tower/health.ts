@@ -129,7 +129,7 @@ function parsePower(p: unknown): Power {
 }
 
 // The Mac's throttle state for HEALTH, `board.sh status` and `pnpm lanes status` (docs/ops/HUB.md → lanes on battery).
-// Red (alerts) on Low Power Mode, battery under 20%, a CPU limit under 100%, or a recorded warning level other than 0.
+// Red (alerts) on Low Power Mode, battery under 20%, a CPU limit under 100%, or a numeric warning level other than 0.
 export const BATTERY_LOW_PCT = 20;
 export const LANES_THROTTLED = 3; // the advice: at most this many lanes on battery under 30% or with Low Power Mode
 export const BATTERY_ADVISE_PCT = 30;

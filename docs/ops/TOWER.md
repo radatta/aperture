@@ -77,7 +77,7 @@ From the top:
    - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge". A second
      line is the power: "AC 82% charging (0:40 to full) · no thermal limit". It is red, and so is the tile, on Low
      Power Mode, on battery under 20%, on a CPU speed or scheduler limit under 100%, or on a recorded thermal or
-     performance warning level other than 0. The details add the ≤ 3 lanes advice (HUB.md → _The hub's duties_). An
+     performance warning level that is a number other than 0 (one it can't read shows as "unreadable", not red). The details add the ≤ 3 lanes advice (HUB.md → _The hub's duties_). An
      agent older than the power fields shows no line, never red, and NEEDS YOU carries its reinstall.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
