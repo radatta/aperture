@@ -1111,7 +1111,11 @@ describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, for
       { phase: 'pr', lo: 10, hi: 20, source: 'guess', spentMin: 0, state: 'todo' },
     ]);
     expect(r.eta).toMatchObject({ late: true, source: 'measured' });
-    expect(row(inputs(), { file: f, pr: pr() }).eta!.late).toBe(false);
+    // its PR open (a re-test on dev with the lock, say): the PR window is spent, none shows
+    expect(row(inputs(), { file: f, pr: pr() }).eta).toMatchObject({ pr: null, late: false });
+    expect(
+      row(inputs({ lock: lock('echo') }), { file: { ...f, phase: 'dev' }, pr: pr() }),
+    ).toMatchObject({ state: 'TESTING', eta: { pr: null } });
     expect(row(inputs(), { file: file() })).toMatchObject({ steps: null, eta: null });
     // off the track: merged or cleanup has done every step; parked or blocked none, its time "so far"
     const states = (phase: LaneFile['phase']) =>

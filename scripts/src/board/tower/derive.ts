@@ -364,14 +364,13 @@ function laneSteps(file: LaneFile | null, now: number, pr: Pr | null) {
   });
   return { steps, eta: lateEta(file, now, pr) };
 }
-const lateEta = (file: LaneFile | null, now: number, pr: Pr | null) =>
-  file?.eta
-    ? {
-        ...file.eta,
-        late:
-          !!file.eta.pr && file.eta.pr.hi < now && pr?.state !== 'OPEN' && pr?.state !== 'MERGED',
-      }
-    : null;
+// once its PR is open or merged, the lane's PR window is spent: none shows (a re-test on dev included)
+function lateEta(file: LaneFile | null, now: number, pr: Pr | null) {
+  if (!file?.eta) return null;
+  const spent = pr?.state === 'OPEN' || pr?.state === 'MERGED';
+  const prEta = spent ? null : file.eta.pr;
+  return { ...file.eta, pr: prEta, late: !!prEta && prEta.hi < now };
+}
 
 export function laneRow(c: Ctx, i: Inputs): LaneRow {
   const { branch, file, queue, pr } = c;
