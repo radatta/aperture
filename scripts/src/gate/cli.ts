@@ -34,19 +34,20 @@ export function parseArgs(argv: string[]): Opts | string {
   return o;
 }
 
-const lines = (s: string) => s.split('\n').filter(Boolean);
+// -z everywhere: without it git quotes a non-ASCII path, which then matches no rule and no package.
+const fields = (s: string) => s.split('\0').filter(Boolean);
 
 // The branch's changes against the merge-base: committed + staged + unstaged in one diff (--no-renames: a move is a
 // delete and an add), plus untracked files. Every test file the planner may name, tracked or new.
 export function readDiff(run: Run, base: string): { changes: Change[]; testFiles: string[] } {
   const mb = run('git', ['merge-base', base, 'HEAD']);
-  const changes = lines(run('git', ['diff', '--name-status', '--no-renames', mb])).map((l) => {
-    const [status, path] = l.split('\t');
-    return { path: path!, deleted: status === 'D' };
-  });
-  const untracked = lines(run('git', ['ls-files', '--others', '--exclude-standard']));
+  const diff = fields(run('git', ['diff', '--name-status', '--no-renames', '-z', mb]));
+  const changes: Change[] = [];
+  for (let i = 0; i + 1 < diff.length; i += 2)
+    changes.push({ path: diff[i + 1]!, deleted: diff[i] === 'D' });
+  const untracked = fields(run('git', ['ls-files', '-z', '--others', '--exclude-standard']));
   for (const path of untracked) changes.push({ path, deleted: false });
-  const testFiles = [...lines(run('git', ['ls-files'])), ...untracked].filter(isTest);
+  const testFiles = [...fields(run('git', ['ls-files', '-z'])), ...untracked].filter(isTest);
   return { changes, testFiles };
 }
 
@@ -87,7 +88,9 @@ export function steps(p: Plan, root: string, opts: Pick<Opts, 'full'>): Step[] {
           'vitest',
           'related',
           '--run',
-          '--passWithNoTests',
+          // A named test always matches itself, so zero files then means a path or include drift: fail loudly.
+          // Changed modules alone may reach no test, which is fine.
+          `--passWithNoTests=${pp.tests.length ? 'false' : 'true'}`,
           ...files,
         ],
         env: {
@@ -135,11 +138,18 @@ export function describePlan(
 
 export type Exec = (step: Step, heavy: string, root: string) => number;
 
+// The caller's VITEST_MAX_WORKERS is dropped: heavy.sh sets the container cap, and a step sets its own (scripts: 2).
+export const stepEnv = (inherited: NodeJS.ProcessEnv, step: Step): NodeJS.ProcessEnv => {
+  const env = { ...inherited, ...step.env };
+  if (!('VITEST_MAX_WORKERS' in step.env)) delete env.VITEST_MAX_WORKERS;
+  return env;
+};
+
 const spawnExec: Exec = (step, heavy, root) => {
   const r = spawnSync(heavy, ['--', ...step.argv], {
     cwd: root,
     stdio: 'inherit',
-    env: { ...process.env, ...step.env },
+    env: stepEnv(process.env, step),
   });
   return r.status ?? 128 + 15;
 };

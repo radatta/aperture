@@ -31,7 +31,9 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
    | Per full package: `pnpm --filter <pkg> test` (the whole repo: `pnpm test`) | `test` (the cap applies)                        |
 
    The exit code is the first failing step's; later steps still run. 75 means `heavy.sh` gave up on the cap, which is
-   a failure, never a pass.
+   a failure, never a pass. A fast run that names tests fails if it selects no file at all (a path or include drift,
+   since a named test always matches itself). The caller's `VITEST_MAX_WORKERS` is dropped: `heavy.sh` sets the
+   container cap, and scripts pins its own 2.
 
 `--full` runs the whole suite, e.g. to reproduce a red Branch run. `--dry-run` prints the plan and runs nothing.
 
@@ -42,7 +44,8 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
 **A change that runs the whole suite:**
 
 - **Every package** (`REPO_FULL`): the lockfile, the workspace file, the root `package.json`, `.nvmrc`/`.npmrc`, the
-  root tsconfigs, the eslint config, `heavy.sh`/`lib.sh`/`limits.json`, and the gate itself.
+  root tsconfigs, the eslint config, `heavy.sh`/`lib.sh`/`limits.json`, `identifiers.json` (cdk and scripts read it
+  at import time, behind a cast `tsc` can't check), and the gate itself.
 - **One package** (`PACKAGE_FULL`): its `package.json`, tsconfigs and vitest/vite config, and the app's test setup.
 - **Everything, also:** an empty or unreadable diff, or more than `MAX_CHANGED` (150) changed paths.
 
@@ -56,7 +59,9 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
   - `extension/` runs every extension test plus `lc-e2e`, because `test/load.ts` reads the extension's `.js` from
     disk.
 - **A changed module** runs `vitest related` in its own package and in every package that imports it (`reaches`).
-  Every package but `scripts` reaches `packages/shared`. Its sibling `x.test.ts` also runs by name.
+  Every package but `scripts` reaches `packages/shared`. Its sibling `x.test.ts` also runs by name. `scripts` imports
+  no package statically; the scripts code that loads lambdas or shared source at runtime comes in by rule (the smoke
+  test's `argSpecs.ts`, siri-capture's shared helpers, deploy-base's header pins).
 - **The mailroom fixture suite** runs exactly when CI's own rule says so (`fixture-inputs.ts`).
 - **`ALWAYS_RUN`**: the repo-wide scanners any path can break (tracked identifiers, fixture inputs, the devcheck
   coverage matrix, the tower's import walk).
@@ -66,11 +71,19 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
 - A path outside every package that no rule names runs every test any rule names by file.
 - A file in a package that neither a rule nor the graph can see runs that package's whole suite.
 
-**A deleted module** widens nothing. Its importers either changed, so they are in `related`, or no longer typecheck,
-and `tsc -b` runs in full every gate.
+**A deleted code module** (`.ts`/`.js` family) widens nothing. Its importers either changed, so they are in
+`related`, or no longer typecheck, and `tsc -b` runs in full every gate. A deleted stylesheet or JSON no rule claims
+runs its package: an ambient declaration can still type its import.
 
-**Adding a test that reads files, raw-imports or spawns:** name it in an `INPUT_RULES` entry (what it reads),
-`ALWAYS_RUN`, or `SELF_CONTAINED` (temp dirs or same-area only, with why). The completeness test fails until you do.
+**Adding code that reads files, imports by a computed path (`import(x)`, `new URL('../…')`) or spawns:**
+
+- A test: name it in an `INPUT_RULES` entry (what it reads), `ALWAYS_RUN`, or `SELF_CONTAINED` (temp dirs or
+  same-area only, with why).
+- Any other module: list it in `MODULE_READERS` with what it reads. A tracked input also needs a rule that runs its
+  importers' tests; naming the module in a rule's `tests` does that, since `vitest related` runs a module's importers.
+  Runtime-only state (the board dir, git, `gh`) needs none.
+
+The completeness test scans tracked and untracked files, so it fails before the first commit until you do.
 
 ## The full suite on GitHub
 
@@ -81,6 +94,7 @@ and `tsc -b` runs in full every gate.
   - Exit 0: green.
   - Exit 1: red, cancelled or failed. It names the jobs.
   - Exit 75: still running, or no run yet.
+  - Exit 2: a bad argument, or `git`/`gh` failed, which is no verdict. `--wait` retries `gh` until its timeout.
 - Once a PR is open, a push starts both runs. The lane cancels the Branch twin with `pnpm bot run cancel <id>`, and
   reruns a real flake with `pnpm bot run rerun <id> --failed` (CI-BOT.md → _Commands_).
 
@@ -89,7 +103,8 @@ and `tsc -b` runs in full every gate.
 **The replay.** The 25 merged PRs 174–198 produced 59 failing-test observations across 22 lanes, mined from the
 lanes' own transcripts and archives (0 of the 30 CI runs on those branches failed). Under these rules:
 
-- 57 of the 59 are selected: 42 named by a rule or the diff, 7 through the graph, 8 by a repo-wide fallback.
+- 57 of the 59 are selected: 42 named by a rule or the diff, 7 through the graph, 8 by a repo-wide fallback (the
+  same after review round 1's wider rules).
 - The 2 not selected are load-flake timeouts.
 - 0 real failures missed.
 
@@ -113,6 +128,13 @@ The record lives in the lane archive, `faster-lanes/replay/` and `gate-replay/`.
 | `scripts/board`          | 54        | 37 s |
 | Extension                | 25        | 62 s |
 | A shared contract change | 153       | 69 s |
+
+**Speed knobs** (adopted only if ≥15% faster and stable, at equal strictness):
+
+- ESLint `--concurrency`: not adopted. Under ~1 concurrent suite, cold `auto` ran 15–34 s against 33–37 s off, and
+  warm runs (a lane's usual case, ~10 s off) swung 5.6–31 s.
+- `isolate: false` for `packages/shared`: declined. Its suite is ~5 s, and the flag weakens isolation.
+- TypeScript 7's native `tsc`: not measured, because the board held 2 full suites throughout. Left to its own lane.
 
 ## What is weaker (accepted by the maintainer, 2026-11-17)
 

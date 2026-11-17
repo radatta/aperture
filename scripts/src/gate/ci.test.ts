@@ -54,7 +54,7 @@ describe('main', () => {
 
   it('reads HEAD, names the failed jobs of a red run', async () => {
     const { run } = fakeRun([
-      ['git rev-parse HEAD', SHA],
+      ['git rev-parse --verify HEAD^{commit}', SHA],
       [`gh run list --commit ${SHA}`, list([r({ conclusion: 'failure' })])],
       [
         'gh run view 1 --json jobs',
@@ -81,6 +81,7 @@ describe('main', () => {
   it('--wait polls until the run finishes', async () => {
     let n = 0;
     const { run } = fakeRun([
+      [`git rev-parse --verify ${SHA}`, SHA],
       [
         `gh run list --commit ${SHA}`,
         () => list([n++ < 2 ? r({ status: 'in_progress', conclusion: '' }) : r({})]),
@@ -99,7 +100,10 @@ describe('main', () => {
   });
 
   it('--wait gives up at the timeout with 75; without --wait one look', async () => {
-    const { run } = fakeRun([[`gh run list --commit ${SHA}`, list([])]]);
+    const { run } = fakeRun([
+      [`git rev-parse --verify ${SHA}`, SHA],
+      [`gh run list --commit ${SHA}`, list([])],
+    ]);
     const slept: number[] = [];
     expect(
       await main(
@@ -118,6 +122,65 @@ describe('main', () => {
         () => {},
       ),
     ).toBe(75);
+  });
+
+  it('an abbreviated sha is resolved to the full one before gh sees it', async () => {
+    const { run, calls } = fakeRun([
+      [`git rev-parse --verify ${SHA.slice(0, 7)}^{commit}`, SHA],
+      [`gh run list --commit ${SHA}`, list([r({})])],
+    ]);
+    expect(
+      await main(
+        ['--sha', SHA.slice(0, 7)],
+        run,
+        async () => {},
+        () => {},
+      ),
+    ).toBe(0);
+    expect(calls.at(-1)!.args).toContain(SHA);
+  });
+
+  it('gh failing is no verdict (2), never red; --wait retries it', async () => {
+    let n = 0;
+    const { run } = fakeRun([
+      [`git rev-parse --verify ${SHA}`, SHA],
+      [
+        `gh run list --commit ${SHA}`,
+        () => {
+          if (n++ < 1) throw new Error('gh: could not resolve host');
+          return list([r({})]);
+        },
+      ],
+    ]);
+    const out: string[] = [];
+    expect(
+      await main(
+        ['--wait', '--sha', SHA],
+        run,
+        async () => {},
+        (l) => out.push(l),
+      ),
+    ).toBe(0);
+    expect(out[0]).toMatch(/gh failed \(gh: could not resolve host\): retrying/);
+    const down = fakeRun([
+      [`git rev-parse --verify ${SHA}`, SHA],
+      [
+        `gh run list`,
+        () => {
+          throw new Error('gh: not logged in');
+        },
+      ],
+    ]);
+    const lines: string[] = [];
+    expect(
+      await main(
+        ['--sha', SHA],
+        down.run,
+        async () => {},
+        (l) => lines.push(l),
+      ),
+    ).toBe(2);
+    expect(lines).toEqual(['gate:ci — gh failed: gh: not logged in']);
   });
 
   it('refuses a bad flag or sha, and --help runs nothing', async () => {

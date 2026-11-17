@@ -162,7 +162,7 @@ export function ticks(
 }
 
 // Jobs that hold a heavy slot (heavy.sh: test-file and other take none).
-const SLOT = new Set(['test', 'ui', 'typecheck', 'lint', 'build', 'dev']);
+const SLOT = new Set(['test', 'test-fast', 'ui', 'typecheck', 'lint', 'build', 'dev']);
 
 export type ConcRow = { bin: string; runs: number; failed: number; p50Sec: number | null };
 

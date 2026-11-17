@@ -48,6 +48,8 @@ export function matches(pattern: string, path: string): boolean {
   return new RegExp(`^${re}$`).test(path);
 }
 
+const CODE_EXT = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+
 export const pkgOf = (path: string): Pkg | undefined =>
   PACKAGES.find((p) => path.startsWith(`${p.dir}/`));
 
@@ -136,9 +138,10 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
     if (isTest(path)) {
       if (!deleted) addTest(path, 'changed');
     } else if (deleted) {
-      // A deleted module's importers either changed (so they're in `related`) or no longer typecheck (tsc -b runs in
-      // full every gate). A deleted file something reads from disk is a rule's input, so `claimed` ran its tests.
-      if (!claimed && !MODULE_EXT.test(path))
+      // A deleted code module's importers either changed (so they're in `related`) or no longer typecheck (tsc -b runs
+      // in full every gate). Not so a deleted .css/.json: an ambient declaration can still type its import. A deleted
+      // file something reads from disk is a rule's input, so `claimed` ran its tests.
+      if (!claimed && !CODE_EXT.test(path))
         fullPkg(pkg.dir, `${path}: deleted, and no rule or import graph sees it`);
     } else if (owner) {
       // handled above

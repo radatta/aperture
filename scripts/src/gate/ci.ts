@@ -8,7 +8,8 @@ import { run as execRun, type Run } from '../bot/sh.ts';
 export const USAGE = `pnpm gate:ci [--wait] [--sha <sha>] [--timeout <s>]
   the GitHub CI verdict for <sha> (default HEAD): the PR run if there is one, else the Branch push run.
   --wait     poll every 30 s until it finishes (default timeout 1500 s)
-  Exit: 0 green · 1 red, cancelled or failed (names the jobs) · 75 still running, or no run yet (not pushed?)`;
+  Exit: 0 green · 1 red, cancelled or failed (names the jobs) · 75 still running, or no run yet (not pushed?)
+        · 2 a bad argument, or git/gh failed (no verdict; --wait retries gh until its timeout)`;
 
 export interface GhRun {
   databaseId: number;
@@ -85,10 +86,23 @@ export async function main(
       timeoutSec = Number(argv[++i]);
     else return (log(`unknown argument ${JSON.stringify(a)}\n${USAGE}`), 2);
   }
-  sha ||= run('git', ['rev-parse', 'HEAD']);
+  const msg = (err: unknown) => (err as Error).message.split('\n')[0];
+  try {
+    // The full sha: `gh run list --commit` matches the whole sha, so an abbreviation would find no run.
+    sha = run('git', ['rev-parse', '--verify', `${sha || 'HEAD'}^{commit}`]);
+  } catch (err) {
+    return (log(`gate:ci — not a commit here: ${msg(err)}`), 2);
+  }
   for (let waited = 0; ; waited += 30) {
-    const v = check(run, sha);
-    if (v.code !== 75 || !wait || waited >= timeoutSec) return (log(v.line), v.code);
+    let v: Verdict | undefined;
+    try {
+      v = check(run, sha);
+    } catch (err) {
+      // gh down or unauthenticated is no verdict, never red.
+      if (!wait || waited >= timeoutSec) return (log(`gate:ci — gh failed: ${msg(err)}`), 2);
+      log(`gate:ci — gh failed (${msg(err)}): retrying in 30 s`);
+    }
+    if (v && (v.code !== 75 || !wait || waited >= timeoutSec)) return (log(v.line), v.code);
     await sleep(30_000);
   }
 }

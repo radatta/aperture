@@ -195,6 +195,11 @@ describe('failuresByConcurrency', () => {
     expect(rows[3]!.p50Sec).toBeNull();
   });
 
+  it('counts a gate:fast run (test-fast) as an overlapping slot job', () => {
+    const rows = failuresByConcurrency([job(100, 60), job(110, 30, 'test-fast')], T0);
+    expect(rows.map((r) => r.runs)).toEqual([0, 1, 0, 0]);
+  });
+
   it('ignores suites before the window', () => {
     expect(failuresByConcurrency([job(-100, 10, 'test', 1)], T0)[0]!.runs).toBe(0);
   });

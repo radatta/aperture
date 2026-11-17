@@ -43,6 +43,10 @@ export const REPO_FULL: FullRule[] = [
     why: 'how every gate step is run and budgeted',
   },
   {
+    match: ['identifiers.json'],
+    why: 'read at import time by cdk (config/identifiers.ts) and scripts (identifiers.ts), behind a cast tsc can’t check',
+  },
+  {
     match: ['scripts/src/gate/'],
     why: 'the gate itself: a change to it is never judged by itself',
   },
@@ -80,6 +84,16 @@ export const INPUT_RULES: InputRule[] = [
     inputs: ['lambdas/src/'],
     tests: ['scripts/src/lc-e2e/extension.test.ts'],
     why: 'lc-e2e runs the extension against the local BFF, with no import edge to it',
+  },
+  {
+    inputs: ['lambdas/src/', 'packages/shared/src/'],
+    tests: ['scripts/src/smoke.test.ts'],
+    why: 'imports lambdas/src/rpc/argSpecs.ts by path at runtime (and so everything it imports)',
+  },
+  {
+    inputs: ['packages/shared/src/'],
+    tests: ['scripts/src/devcheck/scenarios/siri-capture.ts'],
+    why: 'loadShared imports shared’s dates/due/spokenTime/capture by URL; naming the module runs its importers',
   },
   {
     inputs: ['app/src/**/*.tsx', 'app/src/**/*.ts'],
@@ -131,6 +145,11 @@ export const INPUT_RULES: InputRule[] = [
     why: 'read stage.ts as text',
   },
   {
+    inputs: ['packages/shared/src/rpc.ts'],
+    tests: ['scripts/src/deploy-base.test.ts'],
+    why: 'reads rpc.ts as text (the header names it pins)',
+  },
+  {
     inputs: ['packages/shared/src/coach.ts'],
     tests: ['scripts/src/devcheck/api.test.ts'],
     why: 'reads coach.ts as text',
@@ -172,8 +191,13 @@ export const INPUT_RULES: InputRule[] = [
   },
   {
     inputs: ['tools/mailroom/'],
-    tests: ['scripts/src/mailroom/submit.test.ts'],
-    why: 'pins the repo runner version',
+    tests: ['scripts/src/mailroom/', 'scripts/src/mailroom/submit.test.ts'],
+    why: 'submit pins the repo runner version; mailroom/fixtures.ts and sim-bench-seed.ts read its testdata and bench plans',
+  },
+  {
+    inputs: ['scripts/board/hub.json'],
+    tests: ['scripts/src/bot/'],
+    why: 'bot/cli.ts and bot/lock.ts read the hub’s name from it',
   },
   {
     inputs: ['tools/coi/xclip'],
@@ -201,11 +225,6 @@ export const INPUT_RULES: InputRule[] = [
     inputs: ['.claude/', 'CLAUDE.md', 'README.md', 'LICENSE.md', 'SECURITY.md'],
     tests: [],
     why: 'read by no test but the always-run scanners (hooks run their own fixtures, not vitest)',
-  },
-  {
-    inputs: ['identifiers.json'],
-    tests: ['scripts/src/identifiers.test.ts'],
-    why: 'reads the real identifiers',
   },
   // Same-area tests: a scripts area's tests spawn its CLIs and read its files, so a change anywhere in the area runs
   // all of them (cheaper than one rule per spawn, and it keeps new spawns covered).
@@ -247,8 +266,84 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/mailroom/clip.test.ts': 'temp dir',
   'scripts/src/vapid-keys.test.ts': 'spawns its sibling vapid-keys.ts',
   'scripts/src/root-scripts.test.ts': 'reads the root package.json, a REPO_FULL trigger',
+  'scripts/src/identifiers.test.ts': 'reads identifiers.json, a REPO_FULL trigger',
   'extension/test/load.ts':
     'helper: its importers are the extension tests, all run by the extension/ rule',
+};
+
+// Non-test modules that read files, import by a computed path or spawn: a test that imports one inherits its reads,
+// and the graph sees only the import. Each says what it reads and what runs its importers' tests when that changes;
+// runtime state no tracked file feeds needs no rule. rules.test.ts fails on a new one until it's listed here (the
+// gate's own files are exempt: any change to them is REPO_FULL).
+const RUNTIME = 'runtime state only (no tracked input)';
+const STACK_ENTRY =
+  'lambdas/src entry paths for esbuild, which the stack tests skip (aws:cdk:bundling-stacks: [])';
+export const MODULE_READERS: Record<string, string> = {
+  'app/pwa/identityPages.ts':
+    'app/pages/*.html (the app/pages/ rule) and identifiers.json (REPO_FULL)',
+  'app/src/modules/flux/engine/tracker.ts': 'a method named spawn: no process, no file',
+  'app/vite.config.ts': 'app/pages and identifiers.json for the build; itself PACKAGE_FULL',
+  'cdk/src/bin/aperture.ts': 'the cdk app entry: gitignored secret files; no test imports it',
+  'cdk/src/config/ciSecrets.ts': 'gitignored secret files',
+  'cdk/src/config/identifiers.ts': 'identifiers.json (REPO_FULL)',
+  'cdk/src/lib/app-stack.ts': STACK_ENTRY,
+  'cdk/src/lib/coach-worker.ts': STACK_ENTRY,
+  'cdk/src/lib/finance-sync.ts': STACK_ENTRY,
+  'cdk/src/lib/org-stack.ts': STACK_ENTRY,
+  'cdk/src/lib/push-dispatch.ts': STACK_ENTRY,
+  'scripts/aws/fetch-dev-logs.mjs': 'the aws CLI at run time; no test imports it',
+  'scripts/aws/fetch-stack-outputs.mjs': 'the aws CLI at deploy time; no test imports it',
+  'scripts/aws/health-check.mjs': 'cdk outputs and app/dist at deploy time; no test imports it',
+  'scripts/aws/publish-frontend.mjs': 'cdk outputs and app/dist at deploy time; no test imports it',
+  'scripts/src/board/cli.ts': `${RUNTIME}: board dir, cgroup, git; limits.json is REPO_FULL`,
+  'scripts/src/board/main-lock.ts': `${RUNTIME}: a flock file`,
+  'scripts/src/board/sessions.ts': `${RUNTIME}: the board dir`,
+  'scripts/src/board/sync-main.ts': `${RUNTIME}: git on /workspace`,
+  'scripts/src/board/tower/behind.ts': `${RUNTIME}: a git dir's HEAD`,
+  'scripts/src/board/tower/gh.ts': `${RUNTIME}: gh`,
+  'scripts/src/board/tower/health.ts': `${RUNTIME}: board and log files`,
+  'scripts/src/board/tower/jsonl.ts': `${RUNTIME}: transcript files`,
+  'scripts/src/board/tower/lanes.ts': `${RUNTIME}: lane files`,
+  'scripts/src/board/tower/main.ts': `${RUNTIME}: gh, or a --fixtures dir its tests pass`,
+  'scripts/src/board/tower/prs.ts': `${RUNTIME}: gh`,
+  'scripts/src/board/tower/source.ts': `${RUNTIME}: board and localNotes files`,
+  'scripts/src/board/tower/web/main.ts': `${RUNTIME}: lane files, /proc, --fixtures; limits.json is REPO_FULL`,
+  'scripts/src/board/tower/web/server.ts': 'its own web/ dir (the board same-area rule)',
+  'scripts/src/bot/cli.ts': 'scripts/board/hub.json (its rule runs the bot tests)',
+  'scripts/src/bot/config.ts': 'the gitignored bot env file and key',
+  'scripts/src/bot/lock-cache.ts': `${RUNTIME}: localNotes/board`,
+  'scripts/src/bot/logs.ts': `${RUNTIME}: fetched log files`,
+  'scripts/src/bot/prune.ts': `${RUNTIME}: worktree dirs`,
+  'scripts/src/bot/sh.ts': `${RUNTIME}: git and gh`,
+  'scripts/src/cdk-diff-summary.ts': 'spawns cdk diff at deploy time',
+  'scripts/src/checked-tree.ts': `${RUNTIME}: git`,
+  'scripts/src/classify-changes.ts': 'stdin',
+  'scripts/src/commit-identity.ts': 'stdin',
+  'scripts/src/deploy-base.ts': `${RUNTIME}: git diff`,
+  'scripts/src/devcheck/browser.ts': 'the installed playwright package (the lockfile is REPO_FULL)',
+  'scripts/src/devcheck/config.ts': `${RUNTIME}: git and a gitignored env file`,
+  'scripts/src/devcheck/ledger.ts': `${RUNTIME}: the ledger file`,
+  'scripts/src/devcheck/local/run-local.ts': `${RUNTIME}: git diff and the scenario files (same area)`,
+  'scripts/src/devcheck/local/server.ts':
+    'spawns lambdas/src/local/serve.ts (lc-e2e runs it, by the lambdas/src/ rule)',
+  'scripts/src/devcheck/login.ts': `${RUNTIME}: a storage-state file`,
+  'scripts/src/devcheck/run.ts': `${RUNTIME}: a pid lock and the scenario files (same area)`,
+  'scripts/src/devcheck/scenarios/per-slot-runs.ts': `${RUNTIME}: the branch's git diff`,
+  'scripts/src/devcheck/scenarios/siri-capture.ts': 'packages/shared/src (its rule)',
+  'scripts/src/fixture-inputs.ts': 'stdin',
+  'scripts/src/identifiers-scan.ts': 'stdin',
+  'scripts/src/identifiers.ts': 'identifiers.json (REPO_FULL)',
+  'scripts/src/ios-probe/run.ts': `${RUNTIME}: Simulator results and git`,
+  'scripts/src/lane/archive.ts': `${RUNTIME}: the dirs it archives`,
+  'scripts/src/lc-e2e/chrome-build.ts': 'extension/ (its rule runs lc-e2e)',
+  'scripts/src/mac-root.ts': 'the gitignored .local/mac-root',
+  'scripts/src/mailroom/fixtures.ts': 'tools/mailroom/testdata (its rule runs the mailroom tests)',
+  'scripts/src/mailroom/sim-bench-seed.ts':
+    'tools/mailroom/bench/plans.json (its rule runs the mailroom tests)',
+  'scripts/src/mailroom/submit.ts': 'job files at run time; tools/mailroom/jobs (its rule)',
+  'scripts/src/mask-function-url.ts':
+    'the aws CLI and workflow files at deploy time (the .github/ rule runs its test)',
+  'scripts/src/smoke.ts': 'the aws CLI at deploy time',
 };
 
 // The mailroom fixture suite keeps CI's own rule (fixture-inputs.ts): it runs exactly when one of its inputs changed.

@@ -58,6 +58,7 @@ describe('plan', () => {
     ['pnpm-lock.yaml'],
     ['package.json'],
     ['tsconfig.base.json'],
+    ['identifiers.json'],
     ['eslint.config.js'],
     ['scripts/board/heavy.sh'],
     ['scripts/src/gate/plan.ts'],
@@ -89,7 +90,14 @@ describe('plan', () => {
     const p = plan(ch('packages/shared/src/coach.ts'), TESTS);
     for (const d of ['packages/shared', 'app', 'lambdas', 'cdk', 'extension'])
       expect(pkg(p, d).related, d).toEqual(['packages/shared/src/coach.ts']);
-    expect(pkg(p, 'scripts').related).toEqual([]); // scripts never imports shared
+    // scripts has no static import of shared: its runtime readers of shared come by rule, not by the graph
+    expect(pkg(p, 'scripts').related).toEqual([]);
+    expect(pkg(p, 'scripts').tests).toEqual(
+      expect.arrayContaining([
+        'scripts/src/smoke.test.ts',
+        'scripts/src/devcheck/scenarios/siri-capture.ts',
+      ]),
+    );
     const a = plan(ch('app/src/pages/Home/HomeCard.tsx'), TESTS);
     expect(pkg(a, 'app').related).toEqual(['app/src/pages/Home/HomeCard.tsx']);
     expect(pkg(a, 'lambdas').related).toEqual([]);
@@ -177,6 +185,8 @@ describe('plan', () => {
     const m = plan([del('app/src/pages/Home/Old.tsx')], TESTS);
     expect(fullPkgs(m)).toEqual([]);
     expect(fullPkgs(plan([del('app/public/old.txt')], TESTS))).toEqual(['app']);
+    // a deleted stylesheet or JSON: an ambient declaration can still type its import, so tsc can't vouch for it
+    expect(fullPkgs(plan([del('app/src/pages/Home/old.css')], TESTS))).toEqual(['app']);
     const t = plan([del('app/src/pages/Home/Home.test.tsx')], TESTS);
     expect(pkg(t, 'app').tests).not.toContain('app/src/pages/Home/Home.test.tsx');
     // a deleted file a rule reads from disk: the rule's tests run, nothing wider
