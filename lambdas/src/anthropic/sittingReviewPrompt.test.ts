@@ -17,23 +17,35 @@ describe('sittingDraftUserContent', () => {
   it('carries the data as JSON', () => {
     const out = sittingDraftUserContent({
       problem: { title: 'Two Sum', difficulty: 'Easy', tags: [] },
+      signals: { accepted: false, ranBeforeFirstSubmit: null, trace: null },
       judged: [],
       firstSubmitCode: null,
       finalCode: 'x',
     });
     expect(out).toBe(
-      'Data: {"problem":{"title":"Two Sum","difficulty":"Easy","tags":[]},"judged":[],"firstSubmitCode":null,"finalCode":"x"}',
+      'Data: {"problem":{"title":"Two Sum","difficulty":"Easy","tags":[]},"signals":{"accepted":false,"ranBeforeFirstSubmit":null,"trace":null},"judged":[],"firstSubmitCode":null,"finalCode":"x"}',
     );
   });
 });
 
 describe('sittingDraftOutputSchema', () => {
-  it('is one required list of strings, nothing else', () => {
+  it('is a required list of strings and a required cause tag or null, nothing else', () => {
     expect(sittingDraftOutputSchema()).toEqual({
       type: 'object',
       additionalProperties: false,
-      required: ['mistakes'],
-      properties: { mistakes: { type: 'array', items: { type: 'string' } } },
+      required: ['mistakes', 'cause'],
+      properties: {
+        mistakes: { type: 'array', items: { type: 'string' } },
+        cause: {
+          anyOf: [
+            {
+              type: 'string',
+              enum: ['no-trace', 'api-slip', 'boundary', 'off-by-one', 'quit-early'],
+            },
+            { type: 'null' },
+          ],
+        },
+      },
     });
   });
 });

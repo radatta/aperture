@@ -81,10 +81,12 @@ describe('draftSittingReview', () => {
     expect(await b.draftSittingReview(sitting.id)).toEqual({
       ok: true,
       mistakes: ['Submit 1: [3,3] → []'],
+      cause: null, // no cause in the answer: no proposal
     });
     const { data } = anthropic.draftCalls[0]!;
     expect(data).toMatchObject({
       problem: { title: 'Two Sum', difficulty: 'Easy', tags: ['Array'] },
+      signals: { accepted: true, ranBeforeFirstSubmit: false, trace: null },
       judged: [
         {
           type: 'submit',
@@ -155,8 +157,54 @@ describe('draftSittingReview', () => {
     expect(await b.draftSittingReview(sitting.id)).toEqual({
       ok: true,
       mistakes: [`${'z'.repeat(159)}…`, ...six.slice(0, 4)],
+      cause: null,
     });
     expect(JSON.stringify(doc.snapshot())).toBe(before); // a draft writes nothing
+  });
+
+  it('the cause tag passes through as a proposal; one that isn’t a tag drops to null and keeps the lines', async () => {
+    const { anthropic, b, doc, sitting } = await setup();
+    await b.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: ulid(),
+          type: 'run',
+          at: T0 + 60_000,
+          payload: {
+            request: { data_input: '[]' },
+            result: { status_code: 10, correct_answer: true },
+          },
+        } as SittingEventInput,
+        submit(T0 + 2 * 60_000, 11, 'Wrong Answer', 'x', { last_testcase: '[]' }),
+      ],
+    });
+    const before = JSON.stringify(doc.snapshot());
+    anthropic.nextDraft = {
+      ok: true,
+      fields: { mistakes: ['Submit 1: [] → 0'], cause: 'boundary' },
+    };
+    expect(await b.draftSittingReview(sitting.id)).toEqual({
+      ok: true,
+      mistakes: ['Submit 1: [] → 0'],
+      cause: 'boundary',
+    });
+    expect(anthropic.draftCalls[0]!.data.signals).toEqual({
+      accepted: false,
+      ranBeforeFirstSubmit: true,
+      trace: null,
+    });
+    for (const cause of ['careless', 3, ['boundary']]) {
+      anthropic.nextDraft = { ok: true, fields: { mistakes: ['a'], cause } };
+      expect(await b.draftSittingReview(sitting.id)).toEqual({
+        ok: true,
+        mistakes: ['a'],
+        cause: null,
+      });
+    }
+    // The proposal is never saved: the review stays empty until the user saves one.
+    expect(JSON.stringify(doc.snapshot())).toBe(before);
+    expect((await b.getSitting(sitting.id)).sitting.review ?? null).toBeNull();
   });
 
   it('a bad shape is refused and nothing is written', async () => {

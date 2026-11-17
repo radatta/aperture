@@ -111,6 +111,8 @@ import {
   normalizeReviewPatch,
   planDay,
   listRecords,
+  coachStats,
+  normalizeStatsRange,
   attemptsOf,
   catalogProblem,
   applySlotChange,
@@ -121,6 +123,7 @@ import {
   focusRoomError,
   COACH_PARAMS,
   draftMistakes,
+  draftCause,
   normalizeSittingEvents,
   normalizeSittingStart,
   planSittingStart,
@@ -138,6 +141,8 @@ import type {
   CoachFocus,
   CoachInput,
   CoachSlotInput,
+  CoachStats,
+  CoachStatsRange,
   CoachToday,
   PatternId,
   ProblemRecord,
@@ -1163,7 +1168,8 @@ export class BackendClient implements ApiClient {
     );
   }
   // Claude's draft of mistake lines: one model call over the judged runs and submits and the two codes, its
-  // answer made fit (draftMistakes: first 5, each cut to 160; not a list of text → bad-shape). Writes nothing; nothing judged yet → no call at all.
+  // answer made fit (draftMistakes: first 5, each cut to 160; not a list of text → bad-shape; a cause that isn't a
+  // tag → null, the lines kept). Writes nothing; nothing judged yet → no call at all.
   async draftSittingReview(id: string): Promise<ReviewDraft> {
     const sitting = await this.mustSitting(id);
     const [events, live] = await Promise.all([
@@ -1182,7 +1188,7 @@ export class BackendClient implements ApiClient {
       console.log(JSON.stringify({ event: 'lc_review_draft_rejected', sittingId: id }));
       return { ok: false, reason: 'bad-shape' };
     }
-    return { ok: true, mistakes };
+    return { ok: true, mistakes, cause: draftCause((out.fields as { cause?: unknown }).cause) };
   }
   async deleteSitting(id: string): Promise<void> {
     const s = await this.repo.getSitting(id, { consistent: true });
@@ -1273,6 +1279,11 @@ export class BackendClient implements ApiClient {
       sittings: ci.sittings,
       attempts: ci.attempts,
     });
+  }
+  async getCoachStats(range?: CoachStatsRange): Promise<CoachStats> {
+    const r = normalizeStatsRange(range);
+    const ci = await this.coachInput();
+    return coachStats(attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today), ci.today, r);
   }
   // Today's row, changed by `fn` against the plan as it stands with the row's freshest copy; created on first use.
   private async changeCoachDay(

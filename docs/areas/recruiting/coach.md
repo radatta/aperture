@@ -177,3 +177,31 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
   problem. A failed read is one visible line, never silence.
 - A review or task write in the app (a rep's Done included) invalidates the `coach` query prefix. The
   extension's writes don't reach the app's cache: the card catches up when it next mounts with data over 30 s old (a later visit).
+
+## The history, stats and story reads, and two more writes
+
+Added beside _Over MCP_'s table, in `coachTools.ts`; all six writes stay on **Ask**:
+
+| Tool                                              | Kind  | Over                                                                                                                       |
+| ------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
+| `list_problems {pattern?, due?, peeked?, limit?}` | read  | `listProblemRecords`; `due: true` is the re-solve queue (due today or earlier), oldest first; limit ≤ 100, default 30      |
+| `get_problem {slug}`                              | read  | one record, its `tries` (each day's outcome, help, cause, sitting and logged-attempt ids) and its sittings; untried → null |
+| `coach_stats {from?, to?}`                        | read  | `getCoachStats`, rates with a `pct` only from 5 tries, `weakest`, and a note on how to read it                             |
+| `list_stories`                                    | read  | `listStories`: the STAR story bank, for behavioral mocks                                                                   |
+| `set_focus_pattern {pattern \| null}`             | write | `setCoachFocus`, then the focus as the plan reads it; `other` refused                                                      |
+| `delete_attempt {id}`                             | write | `deleteCoachAttempt`, after finding the id among the live logged attempts; none → `deleted: false`, nothing written        |
+
+**Stats** (`coachStats`, RPC `getCoachStats(range?)`): over the counted attempts, so test sittings never count. A
+first try is a problem's first attempt ever, so a range never turns a re-solve into one; every later day on it is
+a re-solve. Clean is the only hit for both — the gap is first-try accuracy. Per ISO week (the trend) and per
+pattern, weakest first by the focus ranking as of now (`rank`; null once the pattern has nothing untried). Also
+active days, peeks, the cause mix and `untagged` (went wrong, no cause). The pattern dashboard grows `PatternStat`
+additively.
+
+### The draft's cause
+
+The review draft's one Haiku call also proposes the cause (`ReviewDraft.cause`, a tag or null): the prompt gives
+each tag's meaning and three signals beside the cases — accepted at all, a Run before the first Submit, the
+extension's trace state ([index.md](index.md) → _Review and the Claude draft_). No extra call; about 20 more output
+tokens, so the ≈ $0.0003 a draft stands. A stray value is null and keeps the lines. The stub stands in with a
+fixed rule: a failed first Submit with no Run before it proposes `no-trace`, else nothing.

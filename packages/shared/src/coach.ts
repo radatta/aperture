@@ -3,7 +3,15 @@
 // here writes; `today` is recomputed on every read, and the day's plan reads only what happened before the day,
 // so it holds still all day.
 
-import { addDays, daysBetween, fmtSpokenDay, isDayKey, USER_TIME_ZONE, zonedEpoch } from './dates';
+import {
+  addDays,
+  daysBetween,
+  fmtSpokenDay,
+  isDayKey,
+  isoWeekKey,
+  USER_TIME_ZONE,
+  zonedEpoch,
+} from './dates';
 import { NEETCODE_150, PATTERNS, PATTERN_NAMES, isPatternId } from './neetcode150';
 import type { CatalogProblem, Difficulty, PatternId } from './neetcode150';
 import {
@@ -143,6 +151,7 @@ export function sittingAttempt(s: Sitting): Attempt {
         ? { verdict: last.verdict, statusMsg: last.statusMsg }
         : null,
     sittingIds: [s.id],
+    attemptIds: [],
     sources: ['sitting'],
   };
 }
@@ -164,6 +173,7 @@ export function manualAttempt(a: CoachAttempt): Attempt {
     runs: 0,
     lastError: null,
     sittingIds: [],
+    attemptIds: [a.id],
     sources: [a.source],
   };
 }
@@ -183,6 +193,7 @@ export interface Attempt {
   runs: number;
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
   sittingIds: string[]; // newest first
+  attemptIds: string[]; // the logged attempts' (CoachAttempt) ids, newest first
   sources: ('sitting' | CoachAttempt['source'])[];
 }
 const HELP_RANK: Record<HelpLevel, number> = { none: 0, hint: 1, solution: 2 };
@@ -213,6 +224,7 @@ function foldDay(parts: Attempt[]): Attempt {
     runs: sorted.reduce((n, p) => n + p.runs, 0),
     lastError: [...sorted].reverse().find((p) => p.submits || p.runs)?.lastError ?? null,
     sittingIds: sorted.flatMap((p) => p.sittingIds).reverse(),
+    attemptIds: sorted.flatMap((p) => p.attemptIds).reverse(),
     sources: [...new Set(sorted.flatMap((p) => p.sources))],
   };
 }
@@ -315,6 +327,15 @@ export interface ProblemRecord {
   schedule: ResolveState | null;
   historical: null; // the history import's, later
   sittingIds: string[]; // newest first, ≤ 10
+  tries: ProblemTry[]; // every attempt, oldest first — get_problem's history, and delete_attempt's ids
+}
+export interface ProblemTry {
+  day: string;
+  outcome: AttemptOutcome;
+  help: HelpLevel;
+  cause: CauseTag | null;
+  sittingIds: string[];
+  attemptIds: string[];
 }
 export function problemRecords(
   attempts: readonly Attempt[],
@@ -353,12 +374,21 @@ export function problemRecords(
         .flatMap((a) => a.sittingIds)
         .reverse()
         .slice(0, 10),
+      tries: list.map((a) => ({
+        day: a.day,
+        outcome: a.outcome,
+        help: a.help,
+        cause: a.cause,
+        sittingIds: a.sittingIds,
+        attemptIds: a.attemptIds,
+      })),
     };
   });
 }
 
 // --- Focus: one pattern held for blockDays active days ---
 const PATTERN_ORDER = new Map<PatternId, number>(PATTERNS.map((p, i) => [p, i]));
+const orderOf = (p: PatternId) => PATTERN_ORDER.get(p) ?? PATTERNS.length; // 'other' last
 interface Ranked {
   pattern: PatternId;
   misses: number;
@@ -812,6 +842,144 @@ export function listRecords(
   return problemRecords(
     attemptsOf(input.sittings, input.attempts, input.now, COACH_PARAMS, input.today),
   ).sort((a, b) => b.lastDay.localeCompare(a.lastDay) || a.slug.localeCompare(b.slug));
+}
+
+// --- Stats (coach_stats; the Patterns tab grows it): counts over counted attempts, derived on read ---
+export interface Rate {
+  hit: number;
+  of: number;
+}
+export interface PatternStat {
+  pattern: PatternId;
+  problems: number; // with an attempt in range
+  attempts: number;
+  firstTry: Rate; // first tries ever, in range, that were clean
+  resolve: Rate; // repeat attempts (a later day), in range, that were clean
+  peeked: number; // attempts that read the solution
+  causes: Partial<Record<CauseTag, number>>;
+  rank: number | null; // its place in the focus ranking now (1 = weakest); null once nothing unseen is left
+}
+export interface CoachStats {
+  from: string | null; // the range asked, inclusive; null = from the first attempt
+  to: string;
+  activeDays: number;
+  problems: number;
+  attempts: number;
+  firstTry: Rate;
+  resolve: Rate;
+  peeked: number;
+  causes: Partial<Record<CauseTag, number>>;
+  untagged: number; // attempts that went wrong (not clean) with no cause tag
+  weeks: { week: string; attempts: number; firstTry: Rate; resolve: Rate }[]; // ISO weeks in range, oldest first
+  patterns: PatternStat[]; // those with an attempt in range: weakest first (rank), then the roadmap order
+}
+export interface CoachStatsRange {
+  from?: string;
+  to?: string;
+}
+// The range's input: day keys, both optional, from ≤ to.
+export function normalizeStatsRange(v: unknown): CoachStatsRange {
+  if (v === undefined || v === null) return {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error('range must be an object');
+  const r = v as Record<string, unknown>;
+  for (const k of Object.keys(r))
+    if (k !== 'from' && k !== 'to') throw new Error(`Unknown range field: ${k}`);
+  for (const k of ['from', 'to'] as const)
+    if (r[k] !== undefined && (typeof r[k] !== 'string' || !isDayKey(r[k])))
+      throw new Error(`${k} must be an ISO date (YYYY-MM-DD)`);
+  if (typeof r.from === 'string' && typeof r.to === 'string' && r.from > r.to)
+    throw new Error('from must not be after to');
+  return r as CoachStatsRange;
+}
+const blankRate = (): Rate => ({ hit: 0, of: 0 });
+const bump = (r: Rate, hit: boolean) => {
+  r.of += 1;
+  if (hit) r.hit += 1;
+};
+// A first try is the problem's first attempt ever (so a range never turns a re-solve into a first try); every
+// later day on it is a re-solve. Clean is the only hit for both — the gap is first-try accuracy. `to` defaults
+// to today; the ranking is as of now (today's attempts in).
+export function coachStats(
+  attempts: readonly Attempt[],
+  today: string,
+  range: CoachStatsRange = {},
+): CoachStats {
+  const from = range.from ?? null;
+  const to = range.to ?? today;
+  const seen = new Set<string>();
+  const ranks = new Map(
+    rankPatterns(attempts, addDays(today, 1)).map((r, i) => [r.pattern, i + 1]),
+  );
+  const out: CoachStats = {
+    from,
+    to,
+    activeDays: 0,
+    problems: 0,
+    attempts: 0,
+    firstTry: blankRate(),
+    resolve: blankRate(),
+    peeked: 0,
+    causes: {},
+    untagged: 0,
+    weeks: [],
+    patterns: [],
+  };
+  const pats = new Map<PatternId, PatternStat & { slugs: Set<string> }>();
+  const weeks = new Map<string, CoachStats['weeks'][number]>();
+  const days = new Set<string>();
+  const slugs = new Set<string>();
+  for (const a of attempts) {
+    const first = !seen.has(a.slug);
+    seen.add(a.slug);
+    if ((from !== null && a.day < from) || a.day > to) continue;
+    const clean = a.outcome === 'clean';
+    const p =
+      pats.get(a.pattern) ??
+      pats
+        .set(a.pattern, {
+          pattern: a.pattern,
+          problems: 0,
+          attempts: 0,
+          firstTry: blankRate(),
+          resolve: blankRate(),
+          peeked: 0,
+          causes: {},
+          rank: ranks.get(a.pattern) ?? null,
+          slugs: new Set(),
+        })
+        .get(a.pattern)!;
+    const wk = isoWeekKey(a.day);
+    const w =
+      weeks.get(wk) ??
+      weeks
+        .set(wk, { week: wk, attempts: 0, firstTry: blankRate(), resolve: blankRate() })
+        .get(wk)!;
+    days.add(a.day);
+    slugs.add(a.slug);
+    p.slugs.add(a.slug);
+    for (const x of [out, p, w]) {
+      x.attempts += 1;
+      bump(first ? x.firstTry : x.resolve, clean);
+    }
+    if (a.help === 'solution') {
+      out.peeked += 1;
+      p.peeked += 1;
+    }
+    if (a.cause) {
+      out.causes[a.cause] = (out.causes[a.cause] ?? 0) + 1;
+      p.causes[a.cause] = (p.causes[a.cause] ?? 0) + 1;
+    } else if (!clean) out.untagged += 1;
+  }
+  out.activeDays = days.size;
+  out.problems = slugs.size;
+  out.weeks = [...weeks.values()].sort((a, b) => a.week.localeCompare(b.week));
+  out.patterns = [...pats.values()]
+    .map(({ slugs: s, ...p }) => ({ ...p, problems: s.size }))
+    .sort(
+      (a, b) =>
+        (a.rank ?? Infinity) - (b.rank ?? Infinity) || orderOf(a.pattern) - orderOf(b.pattern),
+    );
+  return out;
 }
 
 // --- Writes' inputs ---

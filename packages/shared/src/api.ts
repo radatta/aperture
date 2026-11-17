@@ -45,6 +45,8 @@ import type { Area } from './areas';
 import type {
   CoachAttemptInput,
   CoachSlotInput,
+  CoachStats,
+  CoachStatsRange,
   CoachToday,
   ProblemRecord,
   SittingReviewPatch,
@@ -647,6 +649,9 @@ export interface ApiClient {
   // Day-scoped writes act on the user's day as the server reads it (their zone, dayStartHour).
   getCoachToday(day?: string): Promise<CoachToday>; // no day → the user's today
   listProblemRecords(): Promise<ProblemRecord[]>; // every problem with a counted attempt, newest first
+  // How practice is going (coachStats): first tries, re-solves, causes, per ISO week and per pattern. from/to
+  // optional day keys; to defaults to the user's today.
+  getCoachStats(range?: CoachStatsRange): Promise<CoachStats>;
   // One slot change today (applySlotChange): swap (no toSlug → the next easier unseen problem in its pattern),
   // skip, or restore; returns the day's plan after it.
   setCoachSlot(input: CoachSlotInput): Promise<CoachToday>;

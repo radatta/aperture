@@ -3930,6 +3930,35 @@ export function runApiContract(
         expect(await api.listProblemRecords()).toEqual([]);
       });
 
+      it('stats: first tries and re-solves, clean as the hit, per week and pattern; a bad range refused', async () => {
+        expect(await api.getCoachStats()).toMatchObject({ attempts: 0, weeks: [], patterns: [] });
+        await finished('two-sum', true);
+        await finished('3sum', false);
+        await api.logCoachAttempts([{ slug: 'two-sum', day: '2023-11-10', outcome: 'failed' }]);
+        const s = await api.getCoachStats();
+        expect(s).toMatchObject({
+          from: null,
+          to: TODAY,
+          activeDays: 2,
+          problems: 2,
+          attempts: 3,
+          firstTry: { hit: 0, of: 2 }, // two-sum's first try was the logged fail
+          resolve: { hit: 1, of: 1 },
+          untagged: 2,
+          weeks: [{ week: '2023-W45' }, { week: '2023-W46' }],
+        });
+        expect(s.patterns.map((p) => p.pattern).sort()).toEqual(['arrays-hashing', 'two-pointers']);
+        expect(await api.getCoachStats({ from: TODAY })).toMatchObject({
+          attempts: 2,
+          firstTry: { hit: 0, of: 1 },
+          resolve: { hit: 1, of: 1 },
+        });
+        await expect(api.getCoachStats({ from: TODAY, to: '2023-11-01' })).rejects.toThrow(
+          /not be after/,
+        );
+        await expect(api.getCoachStats({ from: 'soon' })).rejects.toThrow(/ISO date/);
+      });
+
       it('the user’s day turns at dayStartHour in their zone', async () => {
         clock = Date.parse('2023-11-15T11:30:00Z'); // 03:30 in Los Angeles
         expect((await api.getCoachToday()).day).toBe('2023-11-14');

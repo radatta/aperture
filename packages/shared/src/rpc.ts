@@ -96,6 +96,7 @@ export const API_METHODS = [
   'patchSittingReview',
   'getCoachToday',
   'listProblemRecords',
+  'getCoachStats',
   'setCoachSlot',
   'setCoachFloor',
   'setCoachFocus',
