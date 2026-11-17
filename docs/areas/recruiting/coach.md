@@ -274,7 +274,7 @@ Added beside _Over MCP_'s table, in `coachTools.ts`; all six writes stay on **As
 | `delete_attempt {id}`                             | write | `deleteCoachAttempt`, after finding the id among the live logged attempts; none → `deleted: false`, nothing written        |
 
 **Stats** (`coachStats`, RPC `getCoachStats(range?)`): over the counted attempts, so test sittings never count. A
-first try is a problem's first attempt ever, so a range never turns a re-solve into one; every later day on it is
+first try is a problem's first attempt ever, with no history-only solve dated before it, so a range never turns a re-solve into one; every later day on it is
 a re-solve. Clean is the only hit for both — the gap is first-try accuracy. Per ISO week (the trend) and per
 pattern, weakest first by the focus ranking as of now (`rank`; null once the pattern has nothing untried). Also
 active days, peeks, the cause mix and `untagged` (went wrong, no cause). The pattern dashboard grows `PatternStat`
@@ -307,7 +307,7 @@ same fields ride `coach_stats` (rates with `pct`):
 
 | Field             | Counts                                                                                                                                        |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `firstTry`        | the problem's first attempt ever, clean                                                                                                       |
+| `firstTry`        | the problem's first attempt ever (none after a history-only solve), clean                                                                     |
 | `resolve`         | any later-day attempt, clean (derived from history, so no slot stamp)                                                                         |
 | `submitsPerTry`   | captured submits ÷ attempts with one (a re-solve is its own try), to 1 decimal; logged attempts carry none                                    |
 | `runBeforeSubmit` | attempts with a captured submit whose first submit had a Run before it                                                                        |

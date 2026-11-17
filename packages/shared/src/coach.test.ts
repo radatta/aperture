@@ -15,6 +15,7 @@ import {
   normalizeReviewPatch,
   normalizeStatsRange,
   outcomeOf,
+  patternDetail,
   planDay,
   patternOfTags,
   peekOf,
@@ -1257,6 +1258,13 @@ describe('history-only solves', () => {
       firstTry: { of: 0 },
       resolve: { hit: 1, of: 1 },
     });
+    expect(
+      rankPatterns(live, TODAY, scope2).find((r) => r.pattern === 'arrays-hashing'),
+    ).toMatchObject({
+      of: 0,
+    });
+    expect(patternDetail(live, null, TODAY, scope).get('arrays-hashing')!.weeks).toHaveLength(1);
+    expect(patternDetail(live, null, TODAY, scope2).get('arrays-hashing')!.weeks).toEqual([]);
   });
 
   it('mark a problem seen for the focus ranking without counting as a first try', () => {

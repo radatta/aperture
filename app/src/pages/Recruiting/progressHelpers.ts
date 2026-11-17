@@ -55,15 +55,18 @@ export function reSolveText(st: ProblemStatus, today: string): string | null {
   return null;
 }
 const liveTries = (r: ProblemRecord) => r.tries.filter((t) => !t.historical);
+// Every try, history-only ones too (as the problem's page lists them); only history: "before the coach".
 export function triesText(r: ProblemRecord): string {
-  const n = liveTries(r).length;
-  if (!n) return 'before the coach';
-  return `${n} ${n === 1 ? 'try' : 'tries'}${r.historical ? ' and before the coach' : ''}`;
+  if (!liveTries(r).length) return 'before the coach';
+  const n = r.tries.length;
+  return `${n} ${n === 1 ? 'try' : 'tries'}`;
 }
-// The first live try: what the gap is measured on. A history-only problem has none.
+// The first live try: what the gap is measured on. None when a history-only solve came before it (that try was a
+// re-solve, as the stats count it) or there is no live try.
 export function firstTryText(r: ProblemRecord): string {
   const t = liveTries(r)[0];
-  return !t ? '–' : t.outcome === 'failed' ? 'not yet' : t.outcome;
+  if (!t || (r.historical && r.historical.firstDay < t.day)) return '–';
+  return t.outcome === 'failed' ? 'not yet' : t.outcome;
 }
 export const lastTriedText = (r: ProblemRecord, today: string) => cap(fmtPastDay(r.lastDay, today));
 

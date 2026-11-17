@@ -1,6 +1,6 @@
 // The Progress tab's folds (docs/areas/recruiting/coach.md → The Progress tab): pure, over problem records
 // (listProblemRecords) and a problem list (catalogs.ts), so the app derives the map, the solves and the trends with
-// no RPC of its own. "Done" is accepted on any try, live or history-only; the status shows the newest live try.
+// no RPC of its own. "Done" is a clean or solved try, live or history-only; the status shows the newest live try.
 
 import { CATALOGS } from './catalogs';
 import type { CatalogId } from './catalogs';
@@ -12,8 +12,9 @@ import type { CatalogProblem, PatternId } from './neetcode150';
 
 // --- One problem's status ---
 // untried; earlier = only history-only solves, one accepted; else the newest live try's: clean, solved, peeked (the
-// solution read), not-yet (not accepted, no peek). A history-only problem never accepted reads not-yet. Done is
-// accepted on any try, so a failed re-solve shows in the square (gold) but never takes a solved problem off the count.
+// solution read), not-yet (not accepted, no peek). A history-only problem never accepted reads not-yet. Done is a
+// clean or solved try (a peek never counts), so a failed re-solve shows in the square (gold) but never takes a solved
+// problem off the count.
 export type ProblemState = 'untried' | 'earlier' | 'clean' | 'solved' | 'peeked' | 'not-yet';
 export interface ProblemStatus {
   state: ProblemState;

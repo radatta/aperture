@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { parseFilters, parsePattern, parseView, reSolveText } from './progressHelpers';
+import type { ProblemRecord } from '@aperture/shared';
+import {
+  firstTryText,
+  triesText,
+  parseFilters,
+  parsePattern,
+  parseView,
+  reSolveText,
+} from './progressHelpers';
 
 const TODAY = '2026-11-17';
 const st = (o: object) => ({
@@ -39,5 +47,34 @@ describe('progress helpers', () => {
     expect(reSolveText(st({ graduated: true }), TODAY)).toBe('Graduated: no more re-solves');
     expect(reSolveText(st({ state: 'earlier' }), TODAY)).toBe('Not in the re-solve queue');
     expect(reSolveText(st({ state: 'untried', done: false }), TODAY)).toBeNull();
+  });
+  it('tries count every try; the first try is none after a history-only solve', () => {
+    const t = (day: string, outcome: 'clean' | 'solved' | 'failed', historical = false) => ({
+      day,
+      outcome,
+      help: 'none' as const,
+      cause: null,
+      minutes: null,
+      note: null,
+      historical,
+      sittingIds: [],
+      attemptIds: [],
+    });
+    const rec = (tries: ReturnType<typeof t>[]) => {
+      const old = tries.filter((x) => x.historical);
+      return {
+        tries,
+        historical: old.length
+          ? { tries: old.length, firstDay: old[0]!.day, lastDay: old[old.length - 1]!.day }
+          : null,
+      } as unknown as ProblemRecord;
+    };
+    const historyFirst = rec([t('2025-01-01', 'solved', true), t('2026-11-10', 'clean')]);
+    expect(triesText(historyFirst)).toBe('2 tries');
+    expect(firstTryText(historyFirst)).toBe('–');
+    const liveFirst = rec([t('2026-11-01', 'clean'), t('2026-11-16', 'solved', true)]);
+    expect(firstTryText(liveFirst)).toBe('clean');
+    expect(triesText(rec([t('2025-01-01', 'solved', true)]))).toBe('before the coach');
+    expect(firstTryText(rec([t('2026-11-01', 'failed')]))).toBe('not yet');
   });
 });

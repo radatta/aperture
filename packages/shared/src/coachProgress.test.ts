@@ -102,7 +102,7 @@ describe('problemStatus', () => {
         .state,
     ).toBe('not-yet');
   });
-  it('the newest live try sets the state; an accept on any try keeps it done', () => {
+  it('the newest live try sets the state; a clean or solved try keeps it done', () => {
     const r = rec('two-sum', [
       { on: day(-300), outcome: 'clean', historical: true },
       { on: day(-5), outcome: 'clean' },
@@ -197,6 +197,19 @@ describe('progressWeeks', () => {
     const last = w[10]!;
     expect(last).toMatchObject({ failed: 1, firstTry: { hit: 0, of: 1 }, resolve: { of: 0 } });
     expect(now).toMatchObject({ clean: 2, firstTry: { of: 0 }, resolve: { hit: 2, of: 2 } });
+  });
+  it('a history-only solve dated after the first live try leaves it a first try', () => {
+    const w = progressWeeks(
+      [
+        rec('contains-duplicate', [
+          { on: day(-20), outcome: 'clean' },
+          { on: day(-1), outcome: 'solved', historical: true },
+        ]),
+      ],
+      TODAY,
+    );
+    expect(w.reduce((n, x) => n + x.firstTry.of, 0)).toBe(1);
+    expect(w.reduce((n, x) => n + x.resolve.of, 0)).toBe(0);
   });
 });
 

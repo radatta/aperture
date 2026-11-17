@@ -575,7 +575,7 @@ export const lcCoach: Scenario = {
       id: 'progress-history',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'log_attempt historical: true, 400 days back: stored as history with no next due; get_problem shows the try as historical; the map reads it Solved before',
+      what: 'log_attempt historical: true, 400 days back: stored as history with no next due; get_problem shows the try as historical',
     },
     {
       id: 'progress-history-neighbours',
@@ -742,7 +742,7 @@ export const lcCoach: Scenario = {
       id: 'progress-swap-seen',
       entry: 'api',
       kind: 'edge',
-      what: 'A swap counts a history-only problem as seen and known, and its default target honours Premium',
+      what: 'A swap counts a history-only problem as seen and known',
       offDev: {
         file: 'packages/shared/src/coach.test.ts',
         test: 'count as seen and known for a swap',
@@ -750,13 +750,35 @@ export const lcCoach: Scenario = {
       },
     },
     {
-      id: 'progress-focus-room',
+      id: 'progress-swap-premium',
       entry: 'api',
       kind: 'edge',
-      what: 'Setting the focus counts history-only problems as seen and, with Premium on, Premium problems as room',
+      what: 'With Premium on, a swap’s default target (the next easier unseen problem) may be a Premium one',
       offDev: {
         file: 'packages/shared/src/coach.test.ts',
         test: 'on: easier picks and the room check count Premium problems',
+        why: 'mcp-swap runs setCoachSlot on dev; the default target is the pure easierIn with the Premium flag, shared by the stub and the Lambda',
+      },
+    },
+    {
+      id: 'progress-focus-room',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With Premium on, setting the focus counts Premium problems as room',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'on: easier picks and the room check count Premium problems',
+        why: 'floor-focus and patterns-set-focus run setCoachFocus on dev; the room check is the pure focusRoomError over the same input',
+      },
+    },
+    {
+      id: 'progress-focus-room-history',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Setting the focus counts history-only problems as seen: a pattern with nothing else unseen is refused',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'mark a problem seen for the focus ranking without counting as a first try',
         why: 'floor-focus and patterns-set-focus run setCoachFocus on dev; the room check is the pure focusRoomError over the same input',
       },
     },

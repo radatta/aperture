@@ -22,7 +22,7 @@ import type { SolveFilters } from './progressHelpers';
 // Your solves (docs/areas/recruiting/coach.md → The Progress tab): every problem tried, the newest try first, with
 // three filters kept in the URL. A row opens the problem's page. Untried problems are the map's.
 const ROW =
-  'xl:grid xl:grid-cols-[minmax(0,1fr)_8rem_4.5rem_7rem_4.5rem_4rem_6rem_7.5rem_minmax(0,10rem)] xl:items-baseline xl:gap-3';
+  'xl:grid xl:grid-cols-[minmax(0,1fr)_8rem_4.5rem_7rem_4.5rem_5.5rem_6rem_7.5rem_minmax(0,10rem)] xl:items-baseline xl:gap-3';
 const TAG: Record<'teal' | 'gold' | 'muted', string> = {
   teal: 'bg-teal-soft text-teal',
   gold: 'bg-gold-soft text-gold',

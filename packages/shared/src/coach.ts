@@ -288,7 +288,7 @@ export function attemptsOf(
 }
 // The history-only solves (logged with `historical`), folded by day the same way, oldest first. They never reach
 // attemptsOf: a remembered result isn't a measured try, so they only mark a problem seen and show on Progress.
-export function historyAttemptsOf(manual: readonly CoachAttempt[]): Attempt[] {
+function historyAttemptsOf(manual: readonly CoachAttempt[]): Attempt[] {
   return foldDays(
     manual.filter((a) => a.deletedAt === null && a.historical === true).map(manualAttempt),
   );
@@ -473,7 +473,7 @@ export interface CoachScope {
   premium: boolean;
   history: ReadonlyMap<string, string>;
 }
-export const NO_SCOPE: CoachScope = { premium: false, history: new Map() };
+const NO_SCOPE: CoachScope = { premium: false, history: new Map() };
 export function coachScope(ci: Pick<CoachInput, 'attempts' | 'premium'>): CoachScope {
   const history = new Map<string, string>();
   for (const a of historyAttemptsOf(ci.attempts))
@@ -1155,7 +1155,8 @@ const bump = (r: Rate, hit: boolean) => {
   r.of += 1;
   if (hit) r.hit += 1;
 };
-// A first try is the problem's first attempt ever (so a range never turns a re-solve into a first try); every
+// A first try is the problem's first attempt ever, with no history-only solve dated before it (so a range never turns a
+// re-solve into a first try); every
 // later day on it is a re-solve. Clean is the only hit for both — the gap is first-try accuracy. `to` defaults
 // to today; the ranking is as of now (today's attempts in).
 export function coachStats(
@@ -1256,7 +1257,7 @@ export interface PatternDetail {
   weeks: { week: string; firstTry: Rate }[]; // ISO weeks in range with a first try, oldest first
 }
 // Every attempt in range counts toward the first three (a re-solve too); `weeks` counts first tries only, by
-// coachStats' rule — the problem's first attempt ever.
+// coachStats' rule — the problem's first attempt ever, with no history-only solve dated before it.
 export function patternDetail(
   attempts: readonly Attempt[],
   from: string | null,
