@@ -25,7 +25,9 @@ export function fitLines(m: FitModel): string[] {
     const u = a.unc;
     out.push(
       `- **k = ${f1(a.fit.k, 4)} %/QU** (≈ ${f1(perPt(a.fit.k))} QU per point), λ = ${f1(a.fit.lambda, 2)} %/h${a.fit.lambdaFixed ? ' (held at 0: too few intervals or ΔQU and Δt move together)' : ''}, from ${a.fit.n} intervals.`,
-      `- ${u?.method === 'bootstrap' ? 'Bootstrap' : u?.method === 'leave-one-out' ? 'Leave-one-out range' : 'No interval'}: k 80% ${f1(u?.k80?.lo, 4)}–${f1(u?.k80?.hi, 4)}, 95% ${f1(u?.k95?.lo, 4)}–${f1(u?.k95?.hi, 4)}.`,
+      !u || u.method === 'none'
+        ? '- No interval: too few intervals to resample.'
+        : `- ${u.method === 'bootstrap' ? 'Bootstrap' : 'Leave-one-out range'}: k 80% ${f1(u.k80?.lo, 4)}–${f1(u.k80?.hi, 4)}, 95% ${f1(u.k95?.lo, 4)}–${f1(u.k95?.hi, 4)}${u.zeroShare > 0 ? `; ${f1(u.zeroShare * 100, 0)}% of resamples gave k = 0 (left out of k's spread)` : ''}.`,
       `- With λ = 0 (all movement charged to agent work, the upper bound): k = ${f1(a.kOnly?.k, 4)} (≈ ${f1(perPt(a.kOnly?.k))} QU per point).`,
     );
     if (m.inferredResets.length)
@@ -50,7 +52,7 @@ export function fitLines(m: FitModel): string[] {
     out.push('| Interval | ΔP | ΔQU | Δt h | QU/pt | Source |', '|---|---|---|---|---|---|');
     for (const o of [...m.history.obs, ...m.live.obs])
       out.push(
-        `| ${clock(o.t0)} → ${clock(o.t1)} | ${o.dP} | ${f1(o.dQU)} | ${f1(o.dT, 2)} | ${f1(o.dQU / o.dP)} | ${o.src} |`,
+        `| ${clock(o.t0)} → ${clock(o.t1)} | ${f1(o.dP, Number.isInteger(o.dP) ? 0 : 1)} | ${f1(o.dQU)} | ${f1(o.dT, 2)} | ${f1(o.dQU / o.dP)} | ${o.src} |`,
       );
     out.push('');
   }
@@ -58,7 +60,9 @@ export function fitLines(m: FitModel): string[] {
   out.push(
     '## Burn now',
     '',
-    `- Meter ${b.pct ?? '–'}% · ${f1(b.pctPerHour, 2)} %/h · ${f1(b.quPerHour)} QU in the last hour · ~${f1(b.hoursTo100)} h to 100%.`,
+    b.resetAt !== null
+      ? `- The meter reset at ${clock(b.resetAt)} (PT) and no session has reported since: no current reading.`
+      : `- Meter ${b.pct ?? '–'}% · ${f1(b.pctPerHour, 2)} %/h${b.since !== null ? ` (ticks since ${clock(b.since)})` : ' (from k × QU/h)'} · ${f1(b.quPerHour)} QU in the last hour · ~${f1(b.hoursTo100)} h to 100%.`,
     `- Calls table covers ${clock(m.coverage.from)} → ${clock(m.coverage.to)} (PT); ${m.live.windows} meter window(s) in the log, ${m.live.stragglers} stale readings ignored.`,
     '',
   );
@@ -68,6 +72,7 @@ export function fitLines(m: FitModel): string[] {
 // One line for a status bar or the tower.
 export function boardLine(m: FitModel): string {
   const b = m.burn;
+  if (b.resetAt !== null) return `usage reset ${clock(b.resetAt)} · no reading since`;
   if (b.pct === null) return 'usage –';
   const parts = [`usage ${b.pct}%`];
   if (b.pctPerHour) parts.push(`${f1(b.pctPerHour)}%/h`);
@@ -98,7 +103,7 @@ export function reportLines(m: ReportModel, now: number): string[] {
   for (const t of m.types)
     out.push(
       t.n
-        ? `| ${t.type} | ${t.n} | ${qu(t.median)} | ${t.n >= 9 ? qu(t.p80) : '–'} | ${qu(t.min)}–${qu(t.max)} | ${pctStr(t.pctMedian)} | ${t.n >= 9 ? pctStr(t.pctP80) : '–'} |`
+        ? `| ${t.type} | ${t.n} | ${qu(t.n >= 9 ? t.median : t.rawMedian)} | ${t.n >= 9 ? qu(t.p80) : '–'} | ${qu(t.min)}–${qu(t.max)} | ${pctStr(t.pctMedian)} | ${t.n >= 9 ? pctStr(t.pctP80) : '–'} |`
         : `| ${t.type} | 0 | no PRs | | | | |`,
     );
   out.push('');

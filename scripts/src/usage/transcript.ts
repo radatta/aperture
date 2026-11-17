@@ -12,6 +12,7 @@ export interface Call extends Tokens {
   fast: boolean;
   unsplit: boolean; // cache writes had no 5m/1h split, all counted as 5m
   lane?: string; // the lane the row itself was in (lanes.ts rowLane)
+  foreign?: boolean; // the row's sessionId isn't its file's: a copy a fork carried over
 }
 
 // The phases `pnpm board lane` accepts: the tower's own list, so a new phase parses here too.
@@ -44,6 +45,7 @@ export interface Marker {
 
 export interface Parsed {
   call?: Call;
+  sid?: string; // the row's own sessionId
   markers: Marker[];
   name?: string;
   cwd?: string;
@@ -153,7 +155,11 @@ export function parseLine(line: Buffer | string): Parsed | null {
   const ts = Date.parse(String(row.timestamp));
   if (!Number.isFinite(ts)) return null;
   const msg = (row.message ?? {}) as Record<string, unknown>;
-  const out: Parsed = { markers: [], cwd: typeof row.cwd === 'string' ? row.cwd : undefined };
+  const out: Parsed = {
+    markers: [],
+    cwd: typeof row.cwd === 'string' ? row.cwd : undefined,
+    sid: typeof row.sessionId === 'string' ? row.sessionId : undefined,
+  };
   const lane = rowLane(row.cwd, row.gitBranch);
   const content = Array.isArray(msg.content) ? msg.content : [];
   for (const b of content)
@@ -207,6 +213,7 @@ export function mergeCall(a: Call, b: Call): Call {
     fast: a.fast || b.fast,
     unsplit: a.unsplit && b.unsplit,
     ...((a.lane ?? b.lane) ? { lane: a.lane ?? b.lane } : {}),
+    ...(a.foreign && b.foreign ? { foreign: true } : {}),
   };
 }
 

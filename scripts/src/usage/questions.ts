@@ -124,6 +124,9 @@ export function concurrency(
     const d = ptDay(h * 3_600_000);
     days.set(d, [...(days.get(d) ?? []), set.size]);
   }
+  // a day with merges but no lane call (the work was the day before) still counts its merges
+  for (const r of rows)
+    if (r.mergedAt >= since && !days.has(ptDay(r.mergedAt))) days.set(ptDay(r.mergedAt), []);
   const stats: DayStat[] = [...days]
     .sort((x, y) => x[0].localeCompare(y[0]))
     .map(([day, ns]) => {
@@ -132,11 +135,11 @@ export function concurrency(
       const withQU = merged.filter((r) => r.qu > 0);
       return {
         day,
-        meanLanes: laneHours / ns.length,
-        maxLanes: Math.max(...ns),
+        meanLanes: ns.length ? laneHours / ns.length : 0,
+        maxLanes: ns.length ? Math.max(...ns) : 0,
         laneHours,
         merged: merged.length,
-        perLaneHour: merged.length / laneHours,
+        perLaneHour: laneHours ? merged.length / laneHours : NaN,
         quPerPR: withQU.length ? withQU.reduce((x, r) => x + r.qu, 0) / withQU.length : null,
       };
     });
@@ -150,10 +153,11 @@ export function concurrency(
         Date.parse(e.t) >= since,
     );
     if (js.length < 5) return [];
-    const x = js.map((e) => (e.mix?.working ?? 0) + (e.mix?.heavy ?? 0));
+    const x = js.map((e) => e.mix?.working ?? 0);
     const y = js.map((e) => Math.log(e.wallSec!));
     return [{ cls, n: js.length, pctPerLane: (Math.exp(slope(x, y)) - 1) * 100 }];
   });
+  const worked = stats.filter((d) => d.laneHours > 0);
   return {
     days: stats,
     rhoMerged: spearman(
@@ -161,8 +165,8 @@ export function concurrency(
       stats.map((d) => d.merged),
     ),
     rhoPerLaneHour: spearman(
-      stats.map((d) => d.meanLanes),
-      stats.map((d) => d.perLaneHour),
+      worked.map((d) => d.meanLanes),
+      worked.map((d) => d.perLaneHour),
     ),
     slowdown,
   };

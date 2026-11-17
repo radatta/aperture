@@ -83,7 +83,9 @@ The transcript store sits on the container's root disk, and COI pauses the conta
 - Only `assistant`, `custom-title` and `agent-name` rows are parsed; the rest are skipped on a byte search.
 - **Dedupe:** one request is logged on 2–10 rows. Calls are keyed by message id (else request id) with each token
   field's max. Input and cache counts are exact; output is a lower bound whichever row is kept. A message id seen in
-  two files (a forked session) is counted once, owned by the subagent file over its parent.
+  two files is counted once: owned by the file whose session wrote the row (a forked copy carries the original's
+  `sessionId`, unverified on a real fork), then by a subagent's own file over its parent's, then by the earlier
+  sighting.
 - **Markers:** each call's tool uses become enum-only markers for the phases: an explicit `pnpm board lane <phase>`,
   a Plan or `code-reviewer` spawn, a source/test/docs/notes edit, a full `pnpm typecheck|lint|test` (no file
   argument), `devcheck:local`, `devcheck`, `bot push|deploy-dev`, `mailroom open-pr`, `git commit`. A command counts
@@ -110,8 +112,10 @@ tick, ΔP is exact.
 
 History comes from `localNotes/usage/manual-readings.json`: `{ readings: [{ at, pct, approx? }], resets: [at] }`,
 `at` as ISO with offset. A manual reading counts as ±½ point (variance 1/12, or 1/3 if `approx`); a reset is an exact
-zero. The weekly resets that `resets_at` implies (every 7 days back from it) are added to the history's resets, so no
-interval spans one; the report lists those it inferred.
+zero. The weekly resets that `resets_at` implies are added to the history's resets, so no interval spans one: every 7
+days back from the oldest `resets_at` in the log, and just `R − 7 days` for each newer one (a manual reset can move it
+off the schedule). The report lists those it inferred. Once `resets_at` has passed with no fresh reading since, `fit`
+and `line` say the meter reset instead of showing last week's numbers.
 
 ## Fit
 
@@ -157,7 +161,8 @@ post.
 
 ## PR table and types
 
-Merged PRs come from `gh pr list --search merged:>=<since>` (read-only token, at most 1000, and the report says when
+Merged PRs come from `gh pr list --search merged:>=<since − 60 days>` (the lookback keeps a reused branch's earlier
+PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000, and the report says when
 it hit that), cached an hour per `--since` in `cache/prs.json`; a failed read falls back to the cache and says so. A PR's calls are its branch's from the previous PR on that branch (or the start) to its merge.
 For the last PR on a branch, the window runs 6 hours past the merge, which covers cleanup and the deploy watch. Each
 row lists:
@@ -179,7 +184,8 @@ row lists:
 
 Per type, the model works on **ln QU**. Each type's mean is shrunk toward the overall mean (empirical Bayes; needs 3+
 types with 2+ PRs each), and the spread is pooled across types. It reports the median, P80 = exp(θ + 0.84·s), and in
-percent via k, with k's spread added in. **With fewer than 9 PRs a type shows min / median / max, not a P80.** The
+percent via k, with k's spread added in. **With fewer than 9 PRs a type shows min / median / max (the plain median),
+not a P80.** The
 hub's QU over the PR window is overhead: shown per merged PR and kept out of the type medians. So are ad hoc
 main-checkout sessions and lanes with no merged PR.
 
@@ -188,7 +194,8 @@ main-checkout sessions and lanes with no merged PR.
 - **Do review rounds 3–4 find real issues?** Each round's window runs from its first review marker to the next round,
   the first local/dev/PR step, or the merge. Per round index, the report gives:
   - QU;
-  - the share of rounds with a source edit (a fix was made);
+  - the share of rounds with a source edit in the lane's own session (a fix was made; a fix handed to a subagent
+    isn't seen);
   - what the lane's archived report says about that round (real bugs or clean). That is parsed heuristically from
     prose, and the report says how many reports it could read.
 - **Do more lanes give more merged PRs, or just more slowdown?** Concurrency is the number of lanes with a call in the

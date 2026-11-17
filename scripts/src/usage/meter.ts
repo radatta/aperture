@@ -97,7 +97,8 @@ export function ticks(readings: Reading[]): { windows: Point[][]; stragglers: nu
       resetsAt !== null && r.resetsAt !== null && Math.abs(r.resetsAt - resetsAt) > HOUR_S;
     const dropped = env >= 0 && r.pct <= env - RESET_DROP;
     if (moved || dropped || env < 0) {
-      if ((moved || dropped) && resetsAt !== null && r.resetsAt !== resetsAt) old.add(resetsAt);
+      // only a resets_at that really moved retires the old one; a drop with jitter keeps the window's own value live
+      if (moved && resetsAt !== null) old.add(resetsAt);
       if (cur.length) windows.push(cur);
       cur = [];
       env = -1;

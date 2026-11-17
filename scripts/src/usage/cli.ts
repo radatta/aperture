@@ -123,7 +123,7 @@ export function ptMidnight(day: string): number {
     timeZone: 'America/Los_Angeles',
     timeZoneName: 'shortOffset',
   })
-    .formatToParts(utc + 12 * 3_600_000)
+    .formatToParts(utc + 8 * 3_600_000) // 00:00 PST / 01:00 PDT: the day's own offset, change days included
     .find((p) => p.type === 'timeZoneName')?.value;
   const h = Number(/GMT([+-]\d+)/.exec(name ?? '')?.[1] ?? -8);
   return utc - h * 3_600_000;

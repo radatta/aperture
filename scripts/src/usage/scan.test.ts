@@ -182,6 +182,15 @@ describe('scan', () => {
     expect(l.calls.map((c) => c.id)).toEqual(['m1', 'm2', 'm3']);
   });
 
+  it("gives a copied row to the file whose session wrote it, not the fork's", async () => {
+    // the fork (SID2's file) starts earlier and carries SID's row with SID's sessionId
+    const early = { sid: SID2, ts: '2026-01-05T08:00:00.000Z' };
+    write(`${P}/${SID2}.jsonl`, row('m0', 1, early) + row('m1', 1, { sid: SID }));
+    write(`${P}/${SID}.jsonl`, row('m1', 1, { sid: SID }));
+    await run();
+    expect(loadCache(cache).calls.find((c) => c.id === 'm1')!.file).toBe(`${P}/${SID}.jsonl`);
+  });
+
   it('gives a forked copy of a session to the file that started first', async () => {
     const at = (h: number) => ({ ts: `2026-01-05T${String(h).padStart(2, '0')}:00:00.000Z` });
     write(`${P}/${SID2}.jsonl`, row('m0', 1, at(11)) + row('m1', 1, at(12)));

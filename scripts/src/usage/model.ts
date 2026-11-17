@@ -60,17 +60,24 @@ const WEEK_MS = 7 * 86_400_000;
 
 // Weekly resets the log's resets_at implies, back over the manual readings' span: an interval across one would
 // difference across a reset. Added to the manual resets unless one is listed within an hour.
+// Only the oldest resets_at steps back week by week: a newer one (a manual reset can move it off the schedule)
+// marks just its own window's start, never weeks before it.
 export function scheduledResets(rows: MeterRow[], manual: Manual | null): string[] {
   const known = (manual?.resets ?? []).map((r) => Date.parse(r));
   const firstReading = Math.min(...(manual?.readings ?? []).map((r) => Date.parse(r.at)));
+  const ats = [...new Set(rows.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])))].sort(
+    (a, b) => a - b,
+  );
+  const cands: number[] = [];
+  ats.forEach((at, i) => {
+    if (i) cands.push(at - WEEK_MS);
+    else for (let t = at - WEEK_MS; t > firstReading; t -= WEEK_MS) cands.push(t);
+  });
   const out: string[] = [];
-  for (const at of new Set(rows.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])))) {
-    for (let t = at - WEEK_MS; t > firstReading; t -= WEEK_MS)
-      if (
-        !known.some((k) => Math.abs(k - t) < 3_600_000) &&
-        !out.includes(new Date(t).toISOString())
-      )
-        out.push(new Date(t).toISOString());
+  for (const t of cands) {
+    const iso = new Date(t).toISOString();
+    if (t > firstReading && !known.some((k) => Math.abs(k - t) < 3_600_000) && !out.includes(iso))
+      out.push(iso);
   }
   return out.sort();
 }
@@ -97,7 +104,8 @@ export interface FitModel {
     pctPerHour: number | null;
     quPerHour: number | null;
     hoursTo100: number | null;
-    since: number | null;
+    since: number | null; // the rate's ticks start here
+    resetAt: number | null; // the window's resets_at has passed with no fresh reading since: the numbers are stale
   };
   coverage: { from: number | null; to: number | null }; // the calls table's span; intervals outside it are dropped
 }
@@ -142,7 +150,12 @@ export function fitModel(o: {
   const callQU = span ? q.between(span[0], span[1]) : 0;
 
   const lastWindow = windows.at(-1) ?? [];
-  const b = burn(lastWindow, o.now);
+  const fresh = freshReadings(o.rows);
+  const newest = fresh.at(-1);
+  const resetAtMs = newest?.resetsAt ? newest.resetsAt * 1000 : null;
+  const resetAt =
+    resetAtMs !== null && o.now > resetAtMs && newest!.ts < resetAtMs ? resetAtMs : null;
+  const b = resetAt === null ? burn(lastWindow, o.now) : null;
   const k = all.fit?.k ?? null;
   const quPerHour = q.last !== null ? q.between(o.now - 3_600_000, o.now) : null;
   const pctPerHour = b?.perHour ?? (k !== null && quPerHour !== null ? k * quPerHour : null);
@@ -163,6 +176,7 @@ export function fitModel(o: {
       quPerHour,
       hoursTo100: b && pctPerHour ? hoursTo100(b.pct, b.at, pctPerHour, o.now) : null,
       since: b?.since ?? null,
+      resetAt,
     },
     coverage: { from: q.first, to: q.last },
   };
@@ -177,6 +191,7 @@ export interface TypeRow {
   p80: number;
   pctMedian: number | null;
   pctP80: number | null;
+  rawMedian: number;
 }
 export interface ReportModel {
   fit: FitModel;
@@ -227,9 +242,10 @@ export function reportModel(o: {
     n: g.n,
     min: g.min,
     median: g.median,
+    rawMedian: g.rawMedian,
     max: g.max,
     p80: g.p80,
-    pctMedian: k !== null && g.n ? g.median * k : null,
+    pctMedian: k !== null && g.n ? (g.n >= 9 ? g.median : g.rawMedian) * k : null,
     pctP80: k !== null && g.n ? Math.exp(Math.log(g.median * k) + 0.8416 * sdPct) : null,
   }));
   const phaseShare = PHASES.map((phase) => {

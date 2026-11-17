@@ -110,6 +110,13 @@ describe('phase timeline', () => {
       { ts: min(12), qu: 1 },
     ];
     expect(agreement(lead, calls)).toEqual({ agree: 1, total: 1 });
+    // a first marker that maps to no phase (parked) doesn't start the comparison
+    const parked = [
+      mk(1, 'lane-phase', { phase: 'parked' }),
+      mk(10, 'lane-phase', { phase: 'plan' }),
+      mk(11, 'plan'),
+    ];
+    expect(agreement(parked, calls)).toEqual({ agree: 1, total: 1 });
   });
 });
 
@@ -346,6 +353,17 @@ describe('measure-first questions', () => {
           deletions: 1,
           files: [],
         },
+        // merged two days on, with no lane call that day: its merge still counts
+        {
+          number: 2,
+          title: '',
+          branch: 'l2',
+          mergedAt: min(2 * 24 * 60),
+          changedFiles: 1,
+          additions: 1,
+          deletions: 1,
+          files: [],
+        },
       ],
       0,
     );
@@ -365,6 +383,13 @@ describe('measure-first questions', () => {
         maxLanes: 2,
         laneHours: 2,
         merged: 1,
+      }),
+      expect.objectContaining({
+        day: '2026-01-07',
+        meanLanes: 0,
+        laneHours: 0,
+        merged: 1,
+        perLaneHour: NaN,
       }),
     ]);
     expect(c.slowdown).toEqual([{ cls: 'lint', n: 6, pctPerLane: expect.closeTo(10, 6) }]);

@@ -1003,7 +1003,8 @@ fails regardless. Use `gh run list` / `gh run view` — same information, Action
   failure modes_, evidence in
   [COI-INCIDENTS.md → Incident B](COI-INCIDENTS.md#incident-b--a-13-hour-unattended-run-died-and-left-the-terminal-broken).
 - **A restart can drop `statusLine` from `~/.claude/settings.json`.** COI re-seeds the container's user settings at
-  setup (seen 10-26 and 11-05; the seed's source is still unknown), and with the key gone the status line, the board
+  setup (seen 10-26 and 11-05; the 11-05 recurrence came with a full Mac copy, so whether that copy is the seed is
+  disputed), and with the key gone the status line, the board
   one-liner and the usage meter log all stop without an error. `~/.claude/statusline-command.sh` itself survives.
   `pnpm usage doctor` notices; the restore is in [USAGE-METER.md → Install](USAGE-METER.md#install).
 - **Night profile needs `[monitoring.nft] enabled = false`.** The nft monitor **hardcodes**

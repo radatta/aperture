@@ -78,6 +78,16 @@ describe('meter series', () => {
       [99],
       [1, 2],
     ]);
+    // a drop (manual reset) whose resets_at jittered by seconds keeps reading the new window
+    const jitter = log([
+      { ts: at(0), pct: 99, cost: 1, resetsAt: R1 },
+      { ts: at(1), pct: 100, cost: 2, resetsAt: R1 },
+      { ts: at(2), pct: 0, cost: 3, resetsAt: R1 + 2 },
+      { ts: at(3), pct: 1, cost: 4, resetsAt: R1 },
+      { ts: at(4), pct: 2, cost: 5, resetsAt: R1 + 2 },
+    ]);
+    const jw = ticks(freshReadings(jitter)).windows;
+    expect(jw.map((x) => x.map((p) => p.p))).toEqual([[100], [0, 1, 2]]);
     // a manual reset that leaves resets_at alone shows as a drop of 10+
     const drop = log([
       { ts: at(0), pct: 99, cost: 1 },

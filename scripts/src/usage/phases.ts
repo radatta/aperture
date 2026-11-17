@@ -124,7 +124,11 @@ export function agreement(
   if (!markers.some((m) => m.kind === 'lane-phase')) return null;
   const explicit = timeline(markers.filter((m) => m.kind === 'lane-phase'));
   const heuristic = timeline(markers.filter((m) => m.kind !== 'lane-phase'));
-  const from = Math.min(...markers.filter((m) => m.kind === 'lane-phase').map((m) => m.ts));
+  const from = Math.min(
+    ...markers
+      .filter((m) => m.kind === 'lane-phase' && m.phase && EXPLICIT[m.phase])
+      .map((m) => m.ts),
+  );
   let agree = 0;
   let total = 0;
   for (const c of calls) {

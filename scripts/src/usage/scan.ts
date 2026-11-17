@@ -147,7 +147,7 @@ export async function scan(o: ScanOpts): Promise<ScanResult> {
       if (!p) continue;
       if (p.name) s.name = p.name;
       if (p.cwd && !s.cwd) s.cwd = p.cwd;
-      if (p.call) merger.add(p.call);
+      if (p.call) merger.add(p.sid && p.sid !== f.ref.sid ? { ...p.call, foreign: true } : p.call);
       for (const m of p.markers) {
         const k = markerKey(m);
         if (seen.has(k)) continue;

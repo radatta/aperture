@@ -28,8 +28,13 @@ export const ghText: GhText = (args) =>
   );
 
 export const PR_LIMIT = 1000;
-// Merged on or after `since` (YYYY-MM-DD): the search bounds the list by date, so the limit is a ceiling the report
-// warns about, not a silent cut.
+// The search starts LOOKBACK_DAYS before `since`: a PR merged just before it on the same branch name still bounds the
+// next PR's window (prs.ts drops it from the table). The date bound makes the limit a ceiling the report warns about.
+export const LOOKBACK_DAYS = 60;
+export const searchFrom = (since: string) =>
+  new Date(Date.parse(`${since}T00:00:00Z`) - LOOKBACK_DAYS * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 export const prArgs = (since: string) => [
   'pr',
   'list',
@@ -38,7 +43,7 @@ export const prArgs = (since: string) => [
   '--state',
   'merged',
   '--search',
-  `merged:>=${since}`,
+  `merged:>=${searchFrom(since)}`,
   '--limit',
   String(PR_LIMIT),
   '--json',

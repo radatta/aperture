@@ -109,13 +109,14 @@ export interface Uncertainty {
   k80?: Interval2;
   k95?: Interval2;
   lambda80?: Interval2;
-  sdLnK: number; // for combining with a PR type's log-spread
+  sdLnK: number; // for combining with a PR type's log-spread (over the resamples with k > 0)
+  zeroShare: number; // resamples where k came out 0, left out of sdLnK
 }
 
 // Resample intervals with replacement (B draws, fixed seed); with under 5 intervals the bootstrap is meaningless,
 // so report the leave-one-out range instead.
 export function uncertainty(obs: Obs[], fit: (o: Obs[]) => Fit, B = 2000, seed = 7): Uncertainty {
-  if (obs.length < 2) return { method: 'none', sdLnK: NaN };
+  if (obs.length < 2) return { method: 'none', sdLnK: NaN, zeroShare: 0 };
   const ks: number[] = [];
   const ls: number[] = [];
   if (obs.length < 5) {
@@ -131,6 +132,7 @@ export function uncertainty(obs: Obs[], fit: (o: Obs[]) => Fit, B = 2000, seed =
       k95: r,
       lambda80: { lo: Math.min(...ls), hi: Math.max(...ls) },
       sdLnK: sdLn(ks),
+      zeroShare: ks.filter((k) => k <= 0).length / ks.length,
     };
   }
   const rand = rng(seed);
@@ -146,6 +148,7 @@ export function uncertainty(obs: Obs[], fit: (o: Obs[]) => Fit, B = 2000, seed =
     k95: { lo: pct(ks, 0.025), hi: pct(ks, 0.975) },
     lambda80: { lo: pct(ls, 0.1), hi: pct(ls, 0.9) },
     sdLnK: sdLn(ks),
+    zeroShare: ks.filter((k) => k <= 0).length / ks.length,
   };
 }
 

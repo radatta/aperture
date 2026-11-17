@@ -8,6 +8,7 @@ import { FLAGS, USAGE, main, newestRowTs, parseArgs, ptMidnight, statuslineScrip
 import { mergedPRs, PR_LIMIT } from './gh.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
 import { fitModel, hoursTo100, scheduledResets } from './model.ts';
+import { boardLine } from './report.ts';
 import { parseMeter } from './meter.ts';
 
 let tmp: string;
@@ -91,6 +92,9 @@ describe('since and merged PRs', () => {
   it('puts --since at Pacific midnight in either offset', () => {
     expect(new Date(ptMidnight('2026-01-10')).toISOString()).toBe('2026-01-10T08:00:00.000Z');
     expect(new Date(ptMidnight('2026-07-10')).toISOString()).toBe('2026-07-10T07:00:00.000Z');
+    // the change days: midnight is still on the old offset
+    expect(new Date(ptMidnight('2026-11-01')).toISOString()).toBe('2026-11-01T07:00:00.000Z');
+    expect(new Date(ptMidnight('2026-03-08')).toISOString()).toBe('2026-03-08T08:00:00.000Z');
     expect(ptMidnight('last-tuesday')).toBeNaN();
   });
 
@@ -114,7 +118,7 @@ describe('since and merged PRs', () => {
     };
     const cache = join(tmp, 'c');
     const a = await mergedPRs(cache, { since: '2026-01-01', now: 0, gh });
-    expect(calls[0]).toContain('merged:>=2026-01-01');
+    expect(calls[0]).toContain('merged:>=2025-11-02'); // 60 days back: a reused branch's earlier PR
     expect(a).toMatchObject({ note: null, prs: [{ number: 1, branch: 'b', files: ['a.ts'] }] });
     expect((await mergedPRs(cache, { since: '2026-01-01', now: 60_000, gh })).prs).toHaveLength(1);
     expect(calls).toHaveLength(1); // cached
@@ -154,6 +158,17 @@ describe('fit model', () => {
     };
     expect(scheduledResets(rows, manual)).toEqual(['2026-01-08T09:00:00.000Z']);
     expect(scheduledResets(rows, { ...manual, resets: ['2026-01-08T09:30:00Z'] })).toEqual([]);
+    // a newer resets_at a manual reset moved off schedule marks only its own window's start
+    const moved = parseMeter(
+      [
+        meterRow({ ts: '2026-01-13T10:00:00Z', resetsAt }),
+        meterRow({ ts: '2026-01-14T10:00:00Z', resetsAt: resetsAt + 3 * 86400 }),
+      ].join('\n'),
+    ).rows;
+    expect(scheduledResets(moved, manual)).toEqual([
+      '2026-01-08T09:00:00.000Z',
+      '2026-01-11T09:00:00.000Z',
+    ]);
   });
 
   it('counts hours to 100 from the last tick, crediting at most one point of progress since', () => {
@@ -181,6 +196,23 @@ describe('fit model', () => {
     expect(f.burn.pct).toBe(62);
     expect(f.burn.pctPerHour).toBeCloseTo(6, 6);
     expect(f.live.logRatio).toBeCloseTo(1, 1);
+  });
+});
+
+describe('stale meter after a reset', () => {
+  it('says the meter reset once resets_at passed with no fresh reading', () => {
+    const resetsAt = Date.parse('2026-01-05T12:00:00Z') / 1000;
+    const meter = [0, 1, 2]
+      .map((i) => meterRow({ ts: `2026-01-05T10:0${i}:00Z`, pct: 90 + i, cost: i, resetsAt }))
+      .join('\n');
+    const f = fitModel({
+      rows: parseMeter(meter).rows,
+      manual: null,
+      calls: [],
+      now: Date.parse('2026-01-05T13:00:00Z'),
+    });
+    expect(f.burn).toMatchObject({ resetAt: resetsAt * 1000, pct: null });
+    expect(boardLine(f)).toMatch(/^usage reset .* no reading since$/);
   });
 });
 

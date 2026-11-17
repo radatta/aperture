@@ -49,7 +49,7 @@ export interface Index {
 }
 
 // Bump when transcript.ts extracts something new or different: the next scan rereads every file.
-export const PARSER = 5;
+export const PARSER = 6;
 
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -127,9 +127,12 @@ export function loadShards(shards: Shard[]): Loaded {
         continue;
       }
       dupes++;
-      const [r, pr] = [rank(sh.s.kind), rank(prev.s.kind)];
-      const better =
-        r < pr || (r === pr && (c.ts < prev.c.ts || (c.ts === prev.c.ts && first < prev.first)));
+      // the file whose session wrote the row (not a fork's copy), then the subagent's own file, then the earlier
+      const own = (x: Call) => (x.foreign ? 1 : 0);
+      const key = (x: Call, k: Kind, f: number) => [own(x), rank(k), x.ts, f];
+      const [a, b] = [key(c, sh.s.kind, first), key(prev.c, prev.s.kind, prev.first)];
+      const i = a.findIndex((v, j) => v !== b[j]);
+      const better = i >= 0 && a[i]! < b[i]!;
       if (better) best.set(c.id, { c, s: sh.s, first });
     }
   }
