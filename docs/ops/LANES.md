@@ -62,11 +62,11 @@ Then it runs these steps, each registering an undo:
 10. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a
     session named `<branch>` in the worktree. This only warns.
 11. Runs sync-main in-process (`docs/ops/TOWER.md` → _Run it_): `/workspace` to `origin/main` again, and the tower
-    restarted when its code is stale. The session is live by then, so a failure only warns and rolls nothing back.
+    restarted when its code is stale. A failure only warns.
 
 A failure in steps 1–8 runs the undos in reverse (kill the window by id, `git worktree remove`, the safe
 `git branch -d`, which works because the branch is still at the main checkout's HEAD, and drop the record), then names anything
-left behind. The script never force-deletes. Steps 9–10 never roll back a live session. Because the install is in
+left behind. The script never force-deletes. Steps 9–11 never roll back a live session. Because the install is in
 it, a caller gives it a **600 s timeout** or runs it in the background.
 
 **By hand**, only when `lanes start` can't run:
@@ -132,8 +132,9 @@ Then:
    and the session can still send `[merged]`.
 5. Clears the board lane and the lifecycle record.
 6. **Prints the maintainer's Mac line, never runs it** (below).
-7. Runs sync-main in-process (`docs/ops/TOWER.md` → _Run it_): `/workspace` to the merge, and the tower restarted when
-   its code changed. Last, so the delayed close in the lane's own window can only cut this short; a failure only warns.
+7. Runs sync-main in-process (`docs/ops/TOWER.md` → _Run it_): `/workspace` to `origin/main`, and the tower restarted
+   when its code changed. A failure only warns. It runs last, so the delayed close in the lane's own window can cut
+   only this short; a cut mid-restart can leave the tower stopped (`board.sh tower start`).
 
 A rerun after the worktree is gone skips steps 1–3 and prints the line again.
 

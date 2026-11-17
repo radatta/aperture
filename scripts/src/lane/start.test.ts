@@ -287,10 +287,9 @@ describe('lane start: the nominal run', () => {
     const t = deps(w, script(w));
     expect(await start(t.d, args())).toBe(0);
     expect(t.sync.calls).toBe(1);
-    const out = t.out();
-    expect(out.indexOf('main checkout: already at')).toBeGreaterThan(
-      out.indexOf(`lane ${B}: started`),
-    );
+    expect(t.sync.ran.at(-1)).toBe('tmux send-keys -t %9 Enter');
+    expect(t.sync.logged.at(-1)).toMatch(new RegExp(`^lane ${B}: started in window @9`));
+    expect(t.out().trimEnd().endsWith('tower: restart not needed (serving aaaaaaa)')).toBe(true);
   });
 
   it('a sync-main failure only warns: exit 0, nothing rolled back', async () => {

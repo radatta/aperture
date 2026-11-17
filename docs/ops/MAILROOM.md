@@ -120,8 +120,8 @@ Exit codes: 1 is a refusal or failure, printing the code and the renewal line fo
 cd <Mac worktree> && gh pr create --title '…' --body-file localNotes/pr-<branch>.md
 ```
 
-Every variable word in it goes through `shq` (`scripts/src/shq.ts`: single quotes, `'` as `'\''`), so the line pastes
-cleanly into zsh whatever the title rule lets through. On exit 3 or a token error, the user gets that line: from a lane, as an `[ask-maintainer]` to the hub, in either mode (FEATURE-WORKFLOW.md → _Talking to the user_). `edit-pr`'s `MAC_UNREACHABLE` prints the matching `gh pr edit` line, which goes the same way.
+Every variable word goes through `shq` (`scripts/src/shq.ts`), so the line pastes cleanly into zsh whatever the title
+rule lets through. On exit 3 or a token error, the user gets that line: from a lane, as an `[ask-maintainer]` to the hub, in either mode (FEATURE-WORKFLOW.md → _Talking to the user_). `edit-pr`'s `MAC_UNREACHABLE` prints the matching `gh pr edit` line, which goes the same way.
 
 A branch that changes `.github/workflows/` can't be pushed by the bot (no `workflows` permission), so the user's line then also starts with `git push -u origin <branch>` — after a rebase, `git push --force-with-lease -u origin <branch>` (FEATURE-WORKFLOW.md → phase 8).
 

@@ -445,7 +445,8 @@ like a failed patch (`window.fetch` stays `[native code]`).
 
 ### Loading a temporary extension (layer 3)
 
-Only in the "Aperture Dev" profile, where it takes the dev app's place. Safari: Settings → **Developer** → **Add Temporary Extension…** → this repo's `extension/` folder, then
+Only in the "Aperture Dev" profile, in the dev app's place: untick the dev app while it is loaded, and tick it
+again after. Safari: Settings → **Developer** → **Add Temporary Extension…** → this repo's `extension/` folder, then
 tick it under Extensions → _Temporary_ (the Developer tab needs Settings → Advanced → _Show features for
 web developers_; Apple, "Running your Safari web extension", checked 2026-11-13). Options: README →
 _Configure_.

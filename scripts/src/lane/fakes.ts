@@ -62,7 +62,12 @@ export function deps(w: World, answers: [string, Answer][], over: Partial<Deps['
   const { run, calls } = fakeRun(answers);
   const logs: string[] = [];
   const clock = fakeClock();
-  const sync = { calls: 0, fail: null as string | null };
+  const sync = {
+    calls: 0,
+    fail: null as string | null,
+    ran: [] as string[],
+    logged: [] as string[],
+  };
   const d: Deps = {
     run,
     fs: realFs,
@@ -84,6 +89,8 @@ export function deps(w: World, answers: [string, Answer][], over: Partial<Deps['
     },
     syncMain: () => {
       sync.calls++;
+      sync.ran = calls.map((c) => c.line); // what had run, and been said, when main was synced
+      sync.logged = [...logs];
       if (sync.fail !== null) throw new Error(sync.fail);
       return 'main checkout: already at aaaaaaa\ntower: restart not needed (serving aaaaaaa)';
     },

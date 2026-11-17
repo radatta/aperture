@@ -314,12 +314,12 @@ describe('lane end: the nominal run', () => {
     lane(w);
     const t = deps(w, script());
     expect(end(t.d, args())).toBe(0);
-    const out = t.out();
-    expect(out.indexOf('closed window @9')).toBeGreaterThan(out.indexOf('nothing for the Mac'));
-    expect(out.indexOf('main checkout: already at')).toBeGreaterThan(
-      out.indexOf('closed window @9'),
-    );
-    expect(out.trimEnd().endsWith('tower: restart not needed (serving aaaaaaa)')).toBe(true);
+    expect(t.sync.ran).toContain('tmux kill-window -t @9');
+    expect(t.sync.ran).toContain(`git worktree remove .claude/worktrees/${B}`);
+    const before = t.sync.logged.join('\n');
+    expect(before).toMatch(/nothing for the Mac: /);
+    expect(before).toMatch(/closed window @9$/);
+    expect(t.out().trimEnd().endsWith('tower: restart not needed (serving aaaaaaa)')).toBe(true);
   });
 
   it('a sync-main failure only warns: exit 0, the lane still ended', () => {
