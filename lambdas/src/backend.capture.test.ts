@@ -110,11 +110,11 @@ describe('captureForToken — a spoken line', () => {
     const typed = await capture(token, 'call the bank at 6 pm', false);
     expect(typed.due).toEqual({ day: '2026-11-16', time: '18:00' });
     expect(typed.say).toBe('Added: call the bank, today 6 PM.');
-    // Spoken, with the model keeping the clock in its title: still a time, rolled forward.
-    anthropic.next = { ok: true, fields: fields({ title: 'call the vet at 6 pm' }) };
+    // Spoken: the time comes from the words, not the model, so the same miss can't happen there.
+    anthropic.next = { ok: true, fields: fields({ title: 'call the vet' }) };
     const spoken = await capture(token, 'call the vet at 6 pm');
     expect(spoken.due).toEqual({ day: '2026-11-17', time: '18:00' });
-    expect(spoken.say).toBe('Added: call the vet at 6 pm, tomorrow 6 PM.');
+    expect(spoken.say).toBe('Added: call the vet, tomorrow 6 PM.');
   });
 
   it('a failed or timed-out parse saves the line as typed and says so', async () => {

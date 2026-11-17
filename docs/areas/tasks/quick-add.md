@@ -138,7 +138,8 @@ autonomous build:
 - **A clock stated outright fills a time the model missed.** The voice-capture dev check saw a typed "call the
   bank at 6 pm" come back with today and no time. When the model returns no time and the line states a clock
   outright (am/pm, noon, midnight, a 24-hour time — `spokenTimeIn`'s `clock`), `validateParsedTask` takes it,
-  on today per the typed rule. A different time from the model stands. Covers the app, Raycast and
+  on today per the typed rule — only when the model took those words out of its title ("watch 9pm show" kept
+  them: they weren't the due time). A different time from the model stands. Covers the app, Raycast and
   `parse_task` alike ([capture → Time rules](capture.md#4-time-rules)).
 
 ## Decision log (2026-10-31)

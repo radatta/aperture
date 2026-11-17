@@ -455,11 +455,15 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(voice('stretch 20 minutes in an hour', { estimateMin: 20 }).input.estimateMin).toBe(20);
   });
 
-  it('a stated clock the model kept in its title still applies', () => {
-    expect(voice('call the bank at 6 pm', { title: 'call the bank at 6 pm' }).input).toMatchObject({
-      dueDay: '2026-11-16',
-      dueTime: '18:00',
-    });
+  it('a stated clock the model kept in its title was not the time; a delay always is', () => {
+    expect(
+      voice('email the team about the 3pm meeting', {
+        title: 'email the team about the 3pm meeting',
+      }).input.dueTime,
+    ).toBeUndefined();
+    expect(voice('stretch in 20 minutes', { title: 'stretch in 20 minutes' }).input.dueTime).toBe(
+      '06:20',
+    );
   });
 
   it('typed: a stated clock the model missed is filled from the words; a different one stands', () => {
@@ -478,6 +482,11 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       dueTime: '18:00',
     });
     expect(typed('move the 3pm to 5pm', { dueTime: '17:00' }).input.dueTime).toBe('17:00');
+    // Words the model kept in its title weren't the due time: nothing filled.
+    expect(typed('watch 9pm show', { title: 'watch 9pm show' }).input.dueTime).toBeUndefined();
+    expect(
+      typed('move the 3pm to 5pm', { title: 'move the 3pm to 5pm' }).input.dueTime,
+    ).toBeUndefined();
     // Nothing stated outright: nothing filled.
     expect(typed('call the bank at 6', {}).input.dueTime).toBeUndefined();
   });

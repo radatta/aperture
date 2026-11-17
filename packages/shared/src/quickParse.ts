@@ -140,11 +140,12 @@ export function validateParsedTask(
   if (ctx.voice) {
     const spoken = spokenTimeIn(ctx.line ?? '');
     // The model kept the words in its title: it read them as part of the task, not a time ("look at one
-    // of the leases", "email the morning team"). Only for words that could be either — a stated clock
-    // ("6 pm", "noon") or a delay ("in 20 minutes") is a time whatever the model did with its title.
-    const unambiguous = spoken?.kind === 'clock' || spoken?.kind === 'relative';
+    // of the leases", "email the team about the 3pm meeting"). A delay ("in 20 minutes") is a time whatever
+    // the model did with its title.
     const kept =
-      !!spoken && !unambiguous && title.toLowerCase().includes(spoken.said.toLowerCase());
+      !!spoken &&
+      spoken.kind !== 'relative' &&
+      title.toLowerCase().includes(spoken.said.toLowerCase());
     const clock = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const resolve = (t: SpokenTime) => {
       const r = resolveSpoken(t, input.dueDay ?? null, {
@@ -166,8 +167,9 @@ export function validateParsedTask(
   // A time with no day means today (a product call); a small-hours clock on today means tonight
   // (nightDueDay); a time whose day was dropped is dropped too.
   // The model missing a clock the line states outright ("call the bank at 6 pm" back with no time — seen on
-  // dev, 2026-11-16) is filled in from the words; a different time from the model stands ("move the 3pm to
-  // 5pm" isn't the first clock's).
+  // dev, 2026-11-16) is filled in from the words — only when the model took those words out of its title
+  // (kept there, "watch 9pm show" or "move the 3pm to 5pm", they weren't the due time). A different time from
+  // the model stands.
   else {
     const t = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const stated = ctx.line === undefined || CLOCK_IN_LINE.test(ctx.line);
@@ -176,7 +178,7 @@ export function validateParsedTask(
     const time =
       p.dueTime != null && str(t) && isTimeKey(t) && stated
         ? t
-        : words?.kind === 'clock'
+        : words?.kind === 'clock' && !title.toLowerCase().includes(words.said.toLowerCase())
           ? words.hhmm
           : null;
     if (time && dayKept) {
