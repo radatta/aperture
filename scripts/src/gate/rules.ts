@@ -222,6 +222,7 @@ export const ALWAYS_RUN = [
   'scripts/src/fixture-inputs.test.ts', // the hook fixtures' runtime modules, .github/ and docs
   'scripts/src/devcheck/scenarios/index.test.ts', // coverage matrices against app/lambdas/docs paths
   'scripts/src/board/tower/behind.test.ts', // the tower's import walk against TOWER_PATHS
+  'scripts/src/gate/rules.test.ts', // these rules against the tree: a lane's new file-reading test must register
 ];
 
 // Graph-blind by API, but every input is the test's own temp dir or an imported module: no rule needed.
