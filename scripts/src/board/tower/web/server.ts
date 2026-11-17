@@ -1,7 +1,8 @@
 // The web tower's HTTP surface (docs/ops/TOWER.md): these read-only routes and nothing else.
 //   GET /            the page          GET /app.js      its script
 //   GET /icon.svg    its icon          GET /apple-touch-icon.png (and -precomposed, which iOS probes)  180 px
-//   GET /favicon-32.png, /favicon-64.png, /favicon.ico (both sizes)  the tab icon: Safari skips the SVG one
+//   GET /favicon.svg, /favicon-32.png, /favicon-64.png, /favicon.ico (both sizes)  the tab icon, bolder for 16 px;
+//     Safari skips the SVG one
 //   GET /api/state   the View as JSON  (?history=1 adds the chart series)
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -13,6 +14,7 @@ const STATIC: Record<string, [string, string]> = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/icon.svg': ['icon.svg', 'image/svg+xml'],
+  '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/apple-touch-icon.png': ['apple-touch-icon.png', 'image/png'],
   '/apple-touch-icon-precomposed.png': ['apple-touch-icon.png', 'image/png'],
   '/favicon-32.png': ['favicon-32.png', 'image/png'],

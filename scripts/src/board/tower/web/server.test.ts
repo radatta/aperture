@@ -52,10 +52,10 @@ describe('the HTTP surface', () => {
     expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
   });
 
-  it('serves the radar icon: a 180 px PNG at the paths iOS probes, the SVG as the favicon', async () => {
+  it('serves the radar icons: a 180 px PNG at the paths iOS probes, a bolder SVG as the favicon', async () => {
     const page = await (await fetch(`${base}/`)).text();
     expect(page).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />');
-    expect(page).toContain('<link rel="icon" href="/icon.svg" type="image/svg+xml" />');
+    expect(page).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />');
     for (const p of ['/apple-touch-icon.png', '/apple-touch-icon-precomposed.png']) {
       const r = await fetch(`${base}${p}`);
       expect(r.status).toBe(200);
@@ -75,7 +75,7 @@ describe('the HTTP surface', () => {
       const png = Buffer.from(await (await fetch(`${base}${p}`)).arrayBuffer());
       expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([px, px]);
     }
-    expect(page.indexOf('/favicon-32.png')).toBeLessThan(page.indexOf('/icon.svg'));
+    expect(page.indexOf('/favicon-32.png')).toBeLessThan(page.indexOf('/favicon.svg'));
     const ico = await fetch(`${base}/favicon.ico`);
     expect(ico.status).toBe(200);
     expect(ico.headers.get('content-type')).toBe('image/x-icon');
@@ -84,6 +84,10 @@ describe('the HTTP surface', () => {
     const svg = await fetch(`${base}/icon.svg`);
     expect(svg.headers.get('content-type')).toBe('image/svg+xml');
     expect(await svg.text()).toMatch(/^<svg [^>]*viewBox="0 0 180 180"/);
+    // the tab icon is its own, drawn on a 32 grid so its strokes survive 16 px; the Home Screen keeps icon.svg
+    const fav = await fetch(`${base}/favicon.svg`);
+    expect(fav.headers.get('content-type')).toBe('image/svg+xml');
+    expect(await fav.text()).toMatch(/^<svg [^>]*viewBox="0 0 32 32"/);
   });
 
   it('/api/state is the View; ?history=1 asks for the series', async () => {
@@ -160,7 +164,11 @@ describe('--once on the fixtures', () => {
     expect(v.slipping.map((s: V) => s.kind)).toEqual(['followup', 'parked', 'quiet']);
     expect(v.health.mac.state).toBe('stale');
     expect(v.health.aws.total).toBeCloseTo(0.35);
-    expect(v.sources.find((s: V) => s.name === 'Actions minutes').state).toBe('missing');
+    // fixtures/prs.json has a fork's open PR on echo-branch's name: no lane, slot or row picks it up
+    expect(JSON.stringify(v)).not.toContain('/pull/43');
+    // the Actions-minutes estimate is gone (public repo, free runners): no tile, no source row
+    expect(v.health.actions).toBeUndefined();
+    expect(v.sources.some((s: V) => /actions minutes/i.test(s.name))).toBe(false);
     expect(v.problems).toEqual([]);
   });
 });

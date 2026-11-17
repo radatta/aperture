@@ -150,7 +150,6 @@ function inputs(
     checks: (s) =>
       over.checks?.[s] ? { runs: over.checks[s]!, at: NOW - MIN, error: null } : null,
     files: (s) => (over.files?.[s] ? { files: over.files[s]!, error: null } : null),
-    minutes: null,
     mac: over.mac ?? mac,
     aws,
     tests: 1,
@@ -372,7 +371,7 @@ describe('the accuracy audit (2026-11-14)', () => {
 
   it("YOU NEXT counts the rest; the maintainer's undated plan steps follow", () => {
     const plan = [
-      { at: null, what: 'Flip the repo public', kind: 'maintainer' as const, who: null },
+      { at: null, what: 'Rotate the test key', kind: 'maintainer' as const, who: null },
       { at: null, what: 'Land in order', kind: 'dev' as const, who: null },
       { at: NOW - 3 * 3600e3, what: 'Long past', kind: 'maintainer' as const, who: null },
       { at: null, what: 'Install the trial', kind: 'maintainer' as const, who: null },
@@ -389,10 +388,10 @@ describe('the accuracy audit (2026-11-14)', () => {
     expect(v.next).toMatchObject({
       maintainer: 'a',
       more: 1,
-      plan: ['Flip the repo public', 'Install the trial'],
+      plan: ['Rotate the test key', 'Install the trial'],
     });
     expect(derive(inputs({ plan })).next).toMatchObject({
-      maintainer: 'Flip the repo public',
+      maintainer: 'Rotate the test key',
       more: 0,
       plan: ['Install the trial'],
     });
@@ -405,7 +404,7 @@ describe('the accuracy audit (2026-11-14)', () => {
     ];
     expect(derive(inputs({ plan: timed })).next).toMatchObject({
       maintainer: 'In an hour',
-      plan: ['Flip the repo public', 'Install the trial'],
+      plan: ['Rotate the test key', 'Install the trial'],
     });
   });
 
@@ -642,7 +641,6 @@ describe('sources: every source with its age; failed is failed, never empty', ()
       'gh PRs',
       'gh runs',
       'gh checks',
-      'Actions minutes',
       'Mac stats',
       'AWS costs',
       'lane files',
@@ -651,7 +649,6 @@ describe('sources: every source with its age; failed is failed, never empty', ()
     expect(s['dev lock']).toMatchObject({ state: 'failed', detail: 'refresh failing' });
     expect(s['gh PRs']).toMatchObject({ state: 'failed', detail: 'HTTP 502' });
     expect(s['gh runs']!.state).toBe('stale');
-    expect(s['Actions minutes']!.state).toBe('missing');
     // a failed PR read keeps the last list: the lanes still show
     expect(derive(i).active.map((r) => r.branch)).toEqual(['echo']);
   });

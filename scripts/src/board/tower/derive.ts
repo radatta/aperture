@@ -3,8 +3,7 @@
 // Truth comes from locks, PRs and Actions runs; lane files add the phase, the step and what the maintainer must do.
 import { SHAPE_PATHS } from '../../deploy-base.ts';
 import { hhmm } from './fmt.ts';
-import type { Checks, Cached, GhRun, Minutes } from './gh.ts';
-import { ACTIONS_INCLUDED_MIN } from './gh.ts';
+import type { Checks, Cached, GhRun } from './gh.ts';
 import type { Costs, MacRead } from './health.ts';
 import type { LaneFile, LaneProblem, Needs } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
@@ -91,14 +90,6 @@ export type Health = {
   } | null;
   mac: MacRead;
   macReady: boolean; // the installer is on main (else the Mac tile says it installs at merge)
-  actions: {
-    minutes: number;
-    of: number;
-    counted: number;
-    total: number;
-    month: string;
-    capped: boolean;
-  } | null;
   aws: Costs;
 };
 export type View = {
@@ -151,7 +142,6 @@ export type Inputs = {
   runs: Cached<GhRun[]>; // the newest runs: main Deploy + deploy-dev dispatches
   checks: (sha: string) => Checks | null;
   files: (sha: string) => { files: string[] | null; error: string | null } | null;
-  minutes: { state: Cached<Minutes | null> } | null;
   mac: MacRead;
   aws: Costs;
   tests: number;
@@ -170,7 +160,6 @@ export const STALE = {
   queue: 7200,
   lane: 7200,
   laneQuiet: 86400,
-  minutes: 7200,
 };
 const PARKED = /^PARKED/i; // dispatch's word for a parked lane, at the start of its waitingOn
 const RUN_FRESH_MS = 2 * 3600e3; // a ledger run with no end older than this is an orphan, not in flight
@@ -836,7 +825,6 @@ export function derive(i: Inputs): View {
   ];
 
   const g = t.gauges;
-  const m = i.minutes?.state.value ?? null;
   return {
     v: 1,
     now: i.now,
@@ -864,16 +852,6 @@ export function derive(i: Inputs): View {
         : null,
       mac: i.mac,
       macReady: i.macInstallReady,
-      actions: m
-        ? {
-            minutes: m.minutes,
-            capped: m.capped,
-            of: ACTIONS_INCLUDED_MIN,
-            counted: m.counted,
-            total: m.total,
-            month: m.month,
-          }
-        : null,
       aws: i.aws,
     },
     slipping,
@@ -976,15 +954,6 @@ export function sources(i: Inputs): SourceRow[] {
             detail: `${open.length} open PRs`,
           },
   );
-  if (i.minutes) {
-    const s = i.minutes.state;
-    const m = s.value;
-    const r = gh('Actions minutes', s, i.now, STALE.minutes);
-    if (m && m.counted < m.total && r.state === 'ok')
-      r.detail = `estimate, ${m.counted} of ${m.total} runs counted`;
-    else if (m && r.state === 'ok') r.detail = 'estimate from job times';
-    out.push(r);
-  } else out.push({ name: 'Actions minutes', state: 'missing', at: null, detail: 'gh off' });
   const mac = i.mac;
   out.push({
     name: 'Mac stats',
@@ -1031,13 +1000,8 @@ export function sources(i: Inputs): SourceRow[] {
   return out;
 }
 
-function gh(
-  name: string,
-  c: { at: number | null; error: string | null },
-  now: number,
-  lim = STALE.gh,
-): SourceRow {
+function gh(name: string, c: { at: number | null; error: string | null }, now: number): SourceRow {
   if (c.error) return { name, state: 'failed', at: c.at, detail: c.error };
   if (c.at === null) return { name, state: 'missing', at: null, detail: 'not read yet' };
-  return { name, state: (now - c.at) / 1000 > lim ? 'stale' : 'ok', at: c.at, detail: null };
+  return { name, state: (now - c.at) / 1000 > STALE.gh ? 'stale' : 'ok', at: c.at, detail: null };
 }

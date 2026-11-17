@@ -18,7 +18,6 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
   every 60 s  gh: pr list · newest 100 Actions runs · files per new head
               checks per open PR head (every 60 s while running, 2 min once all finished)
               devlock.sh refresh (the lock caches)
-  hourly      Actions minutes estimate (job times; cached in localNotes/board/tower/actions-runs.json)
                                                  localNotes/board/mac-stats.json ◀── launchd agent, every 15 s
 ```
 
@@ -34,7 +33,7 @@ and never from a worktree. After a merge that changes it, run `board.sh tower re
 header shows the commit it serves. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -67,10 +66,6 @@ From the top:
    - **CONTAINER**: memory against soft and hard (a last-hour sparkline), CPU, live `test` slots against
      `limits.json`.
    - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge".
-   - **ACTIONS**: an **estimate**, job times each rounded up to a minute, against the plan's 3,000, with a bar. The
-     container token can't read billing (403). It's the UTC month, listed one UTC day at a time. A filtered listing
-     stops at 1,000 runs, so a day that reaches it makes the figure a lower bound (`≥`, amber). It counts a run's
-     latest attempt only; re-runs keep their run id.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
    - lane `needs` items, with the link or a copy button for the one-line Mac command (the phone says "on the Mac"
@@ -122,16 +117,18 @@ From the top:
   text one tap away; every row and slot card opens on a tap, and stays open across polls.
   `short()` never cuts inside `( )` or `[ ]`.
 - The header stays one line: the time without "as of", the commit in SOURCES (`serving <sha>, started HH:MM`).
-- The health strip is two columns: TODAY | AWS, CONTAINER | MAC, ACTIONS full width; sparklines sit in the flow,
+- The health strip is two columns: TODAY | AWS, CONTAINER | MAC; sparklines sit in the flow,
   never over the numbers.
 - Mac-only copy buttons become an "on the Mac" label.
-- Home Screen metas: `viewport-fit=cover` with safe-area padding, `theme-color` per scheme,
+- Home Screen metas: `viewport-fit=cover` with safe-area padding (the header: the top inset plus 8 px, so it clears the status bar), `theme-color` per scheme,
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
   added, so a re-add picks them up.
-- The tab icon is the same radar as PNGs, linked before the SVG because Safari's tab skips an SVG icon (it showed a
-  letter monogram): `favicon-32.png` and `favicon-64.png` (`rsvg-convert -w 32 -h 32 …`), and `favicon.ico` holding
-  both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.
+- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (one ring, a
+  sweep, a blip on a disc); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
+  before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
+  `favicon-64.png` (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico`
+  holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
@@ -148,17 +145,16 @@ phone.
 
 Freshness limits (`derive.ts` `STALE`):
 
-| Source          | Stale after                      |
-| --------------- | -------------------------------- |
-| sampler         | 90 s                             |
-| lock caches     | 5 min                            |
-| gh              | 3 min                            |
-| a PR's checks   | 5 min                            |
-| queue.json      | 2 h                              |
-| a lane file     | amber at 2 h, SLIPPING at 24 h   |
-| Actions minutes | 2 h                              |
-| Mac stats       | 60 s, then silent (red) at 5 min |
-| AWS costs       | 3 days                           |
+| Source        | Stale after                      |
+| ------------- | -------------------------------- |
+| sampler       | 90 s                             |
+| lock caches   | 5 min                            |
+| gh            | 3 min                            |
+| a PR's checks | 5 min                            |
+| queue.json    | 2 h                              |
+| a lane file   | amber at 2 h, SLIPPING at 24 h   |
+| Mac stats     | 60 s, then silent (red) at 5 min |
+| AWS costs     | 3 days                           |
 
 ## Lane states
 

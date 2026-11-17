@@ -618,54 +618,6 @@ function health(v) {
     );
   }
 
-  const ms = src('Actions minutes');
-  const a = h.actions;
-  if (!a)
-    box.append(
-      tile(
-        'h:a',
-        'ACTIONS',
-        ms?.state === 'failed' ? 'failed' : 'counting…',
-        ms?.detail ?? 'first estimate within the hour',
-        ms?.state === 'failed' ? 'c-bad' : 'c-dim',
-        [],
-      ),
-    );
-  else {
-    const srcBad = ms?.state === 'ok' ? null : ms?.state === 'stale' ? 'c-hold' : 'c-bad';
-    const cc =
-      srcBad ??
-      (a.minutes > a.of ? 'c-bad' : a.capped || a.minutes > a.of * 0.8 ? 'c-hold' : 'c-good');
-    const bar = el('div', 'bar');
-    const fill = el('span');
-    fill.style.width = `${Math.min(100, (a.minutes / a.of) * 100).toFixed(1)}%`;
-    bar.append(fill);
-    box.append(
-      tile(
-        'h:a',
-        'ACTIONS',
-        [
-          `${a.capped ? '≥' : '≈'}${a.minutes.toLocaleString()}`,
-          ` / ${(a.of / 1000).toFixed(0)}k min`,
-        ],
-        srcBad ? `estimate ${ms.state}` : `${a.month} UTC · estimate`,
-        cc,
-        [
-          [
-            'how',
-            'job times, each rounded up to a minute (billing is unreadable to the container)',
-          ],
-          [
-            'counted',
-            `${a.counted} of ${a.total} runs${a.capped ? ' · a day hit the 1,000-run cap: lower bound' : ''}`,
-          ],
-          ['as of', ms?.at ? `${hhmm(ms.at)} (${ago(ms.at, v.now)} ago)` : '—'],
-        ],
-        bar,
-      ),
-    );
-  }
-
   const w = h.aws;
   const acct = Object.entries(w.byAccount)
     .map(([k, x]) => `${k} $${x.toFixed(2)}`)

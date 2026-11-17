@@ -21,5 +21,6 @@ nohup.out
 .local/
 
 .claude/worktrees
+.codex/
 
 .metals

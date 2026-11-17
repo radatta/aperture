@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PrCache, parsePrs } from './prs.ts';
+import { GH_ARGS, PrCache, parsePrs } from './prs.ts';
 
 const json = JSON.stringify([
   { number: 41, title: 'Open one\n🚀', headRefName: 'a', state: 'OPEN', mergedAt: null },
@@ -43,6 +43,16 @@ describe('prs', () => {
       },
     ]);
     expect(() => parsePrs('{}')).toThrow(/not an array/);
+  });
+
+  it("drops a fork's PR, so its head branch name can't stand for a lane", () => {
+    const rows = JSON.stringify([
+      { number: 7, title: 'from a fork', headRefName: 'a', state: 'OPEN', isCrossRepository: true },
+      { number: 6, title: 'ours', headRefName: 'a', state: 'OPEN', isCrossRepository: false },
+      { number: 5, title: 'field absent', headRefName: 'b', state: 'OPEN' },
+    ]);
+    expect(parsePrs(rows).map((p) => p.number)).toEqual([6, 5]);
+    expect(GH_ARGS.at(-1)!.split(',')).toContain('isCrossRepository');
   });
 
   it('fetches at most once a minute and keeps the last list on a failure', async () => {

@@ -1,15 +1,10 @@
 // The web tower's GitHub reads, all through the container's read-only `gh` (docs/ops/TOWER.md → Panels): Actions
-// runs once a minute, each open PR's checks by head sha, a PR's files once per head sha, and the month's Actions
-// minutes as an hourly estimate. Every cache keeps its last good value, the time it got it and the last error: a
-// failed read shows as failed, never empty.
+// runs once a minute, each open PR's checks by head sha and a PR's files once per head sha. Every cache keeps its
+// last good value, the time it got it and the last error: a failed read shows as failed, never empty.
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { clean, parseTime } from './fmt.ts';
 import { REPO_SLUG } from '../../identifiers.ts';
 export { REPO_SLUG };
-
-export const ACTIONS_INCLUDED_MIN = 3000; // the account's plan: the page says "of 3,000 (plan)"
 
 export type GhRun = {
   id: number;
@@ -174,105 +169,9 @@ export class ChecksCache {
   }
 }
 
-// Actions minutes this month, ESTIMATED: the container token can't read billing (403), so each run's jobs are
-// summed, each job rounded up to a whole minute (GitHub's per-job rounding), cached per run on disk. The month is
-// UTC (GitHub's billing month). Listed one UTC day at a time: a filtered listing stops at 1,000 results, so a day
-// that reaches it makes the estimate a lower bound (`capped`), never a quiet undercount.
-export type Minutes = {
-  month: string;
-  minutes: number;
-  counted: number;
-  total: number;
-  capped: boolean;
-};
-type MinutesFile = { v: 1; month: string; runs: Record<string, number> };
-export const LISTING_CAP = 1000;
-
 const pad = (n: number) => String(n).padStart(2, '0');
+// UTC month key, for the AWS costs read
 export const monthKey = (now: number) => {
   const d = new Date(now);
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
 };
-
-export function jobMinutes(text: string): number {
-  const raw = JSON.parse(text) as { jobs?: { started_at?: unknown; completed_at?: unknown }[] };
-  if (!raw || !Array.isArray(raw.jobs)) throw new Error('jobs: no jobs array');
-  let m = 0;
-  for (const j of raw.jobs) {
-    const a = parseTime(j.started_at);
-    const b = parseTime(j.completed_at);
-    if (a !== null && b !== null && b > a) m += Math.ceil((b - a) / 60000);
-  }
-  return m;
-}
-
-export class MinutesCache {
-  private file: string;
-  private gh: GhText;
-  private perCycle: number;
-  private data: MinutesFile;
-  constructor(file: string, gh: GhText, perCycle = 100) {
-    this.file = file;
-    this.gh = gh;
-    this.perCycle = perCycle;
-    this.data = { v: 1, month: '', runs: {} };
-    try {
-      const d = JSON.parse(readFileSync(file, 'utf8')) as MinutesFile;
-      if (d?.v === 1 && d.runs && typeof d.runs === 'object') this.data = d;
-    } catch {
-      // first run
-    }
-  }
-
-  // Lists this month's completed runs day by day (paged), then fetches jobs for up to `perCycle` uncounted ones.
-  // A failure mid-way throws (the poller keeps the last good estimate), but what was counted is saved first.
-  async load(now: number): Promise<Minutes> {
-    const month = monthKey(now);
-    if (this.data.month !== month) this.data = { v: 1, month, runs: {} };
-    const ids: number[] = [];
-    let capped = false;
-    for (let day = 1; day <= new Date(now).getUTCDate(); day++) {
-      const date = `${month}-${pad(day)}`;
-      let n = 0;
-      for (let page = 1; page <= 10; page++) {
-        const runs = parseRuns(
-          await this.gh([
-            'api',
-            `repos/${REPO_SLUG}/actions/runs?created=${date}&status=completed&per_page=100&page=${page}`,
-          ]),
-        );
-        ids.push(...runs.map((r) => r.id));
-        n += runs.length;
-        if (runs.length < 100) break;
-      }
-      if (n >= LISTING_CAP) capped = true;
-    }
-    const todo = ids.filter((id) => !(String(id) in this.data.runs));
-    try {
-      for (const id of todo.slice(0, this.perCycle))
-        this.data.runs[String(id)] = jobMinutes(
-          await this.gh(['api', `repos/${REPO_SLUG}/actions/runs/${id}/jobs?per_page=100`]),
-        );
-    } finally {
-      this.save();
-    }
-    const counted = ids.filter((id) => String(id) in this.data.runs);
-    return {
-      month,
-      minutes: counted.reduce((n, id) => n + this.data.runs[String(id)]!, 0),
-      counted: counted.length,
-      total: ids.length,
-      capped,
-    };
-  }
-
-  private save() {
-    mkdirSync(dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp.${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(this.data) + '\n');
-    renameSync(tmp, this.file);
-  }
-}
-
-export const minutesPoller = (cache: MinutesCache, clock: () => number, everyMs = 3600000) =>
-  new Poller<Minutes | null>(null, () => cache.load(clock()), everyMs);

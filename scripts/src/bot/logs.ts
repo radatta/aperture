@@ -4,6 +4,7 @@
 // Actions minutes are the real budget (docs/ops/CI-BOT.md → Dev logs).
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { findIdentifiers, identifierRules, type IdentifierRule } from '../identifiers.ts';
 import type { Api } from './api.ts';
 import { REPO_SLUG } from './config.ts';
 import type { Clock, Run } from './dispatch.ts';
@@ -49,6 +50,23 @@ export function checkLoopGuard(file: string, nowMs: number, max = MAX_FETCHES_PE
   }
 }
 
+// A workflow run's inputs are public on a public repo, so the free-text flags are scanned before anything is spent:
+// a hit refuses naming the flag and the kind, never the value (docs/ops/IDENTIFIERS.md).
+export function refuseIdentifiers(
+  args: Pick<LogsArgs, 'filter' | 'query' | 'groups'>,
+  rules: IdentifierRule[] = identifierRules(),
+): void {
+  for (const flag of ['filter', 'query', 'groups'] as const) {
+    const v = args[flag];
+    if (!v) continue;
+    const kinds = [...new Set(findIdentifiers(v, rules).map((h) => h.kind))];
+    if (kinds.length)
+      throw new Error(
+        `PERSONAL_IDENTIFIER — --${flag} names a personal identifier (${kinds.join(', ')}); a workflow run's inputs are public (docs/ops/IDENTIFIERS.md). Reword it; nothing was dispatched.`,
+      );
+  }
+}
+
 // No --groups: the slot this branch holds a lock on (slot B's groups carry `-devb`), else slot A's. A lock read that
 // fails says so and reads slot A's — never silently another slot's logs as this branch's.
 export async function defaultGroups(
@@ -78,7 +96,9 @@ export async function fetchLogs(
   args: LogsArgs,
   root: string,
   log: (s: string) => void = console.log,
+  rules?: IdentifierRule[],
 ): Promise<string> {
+  refuseIdentifiers(args, rules); // before the request is parsed, the ledger written or a run dispatched
   const now = clock.now();
   const end = args.end ?? new Date(now).toISOString();
   const start =
