@@ -152,7 +152,7 @@ describe('mailroom runner', () => {
     expect(sim).not.toMatch(/(^|[\s;(|&])\/[a-z/]+\/(axe|xcrun|security|open)\b/m);
     expect(sim.match(/(?<!--arg |want |")\baxe\s[^\n]*/g)).toEqual([
       'axe "$@" --udid "$SIM_U"',
-      'axe --version 2>/dev/null | tr -d \'[:space:]\')" || v=""',
+      'axe --version 2>/dev/null)" || v=""', // read whole, then its number alone (the 2.0.4 pin)
     ]);
   });
 
