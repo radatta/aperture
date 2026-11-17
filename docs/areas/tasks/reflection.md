@@ -50,6 +50,7 @@ on the Done form, and read back beside the estimate-vs-actual delta, so the numb
   - It joins the form's one Save (which keeps the modal open) and the dirty guard, only while being edited.
 - **Night review** (Home → Today in review): one muted, italic, truncated line of plain text (markers
   dropped, `notesPlainText`) under each done task's delta bar or no-estimate row. Nothing when there's none.
+  An errand isn't listed there (places.md D3), so its reflection reads in the task modal and over MCP only.
 - **MCP** ([mcp/index.md](../mcp/index.md)):
   - `complete_task {…, reflection?}` saves it with the actual.
   - `update_task {…, reflection}` replaces or clears it.

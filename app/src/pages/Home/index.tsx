@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { contributesCalibration, dayKey, rollupParts, todayKey } from '@aperture/shared';
+import {
+  contributesCalibration,
+  dayKey,
+  isCalibrated,
+  rollupParts,
+  todayKey,
+} from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
@@ -281,11 +287,16 @@ function ReviewCard({ today }: { today: string }) {
   const logFailed = logQ.isError && logQ.data === undefined;
   const tasksFailed = tasksQ.isError && tasksQ.data === undefined;
   const recent = entries.slice(-3).reverse();
-  // Every task finished today is listed. A calibration point (done + locked) gets its estimate-vs-actual
-  // bar — a part on its own, and a parent marked done as the rollup of its parts (parts.ts); a task
-  // finished without an estimate gets a plain row.
+  // Every task finished today is listed, errands aside: a placed task is checked off on its list, never
+  // measured (places.md D3). A calibration point (done + locked) gets its estimate-vs-actual bar — a part
+  // on its own, and a parent marked done as the rollup of its parts (parts.ts); a task finished without an
+  // estimate gets a plain row.
   const doneToday = tasks.filter(
-    (t) => t.status === 'done' && t.completedAt != null && dayKey(t.completedAt, start) === today,
+    (t) =>
+      t.status === 'done' &&
+      isCalibrated(t) &&
+      t.completedAt != null &&
+      dayKey(t.completedAt, start) === today,
   );
   const label = (t: (typeof tasks)[number]) => rollupLabel(t.title, rollupParts(tasks, t.id));
 

@@ -96,7 +96,7 @@ Plus, once a bank is connected, a single **finance line** (budget left · N to s
 ### 🌙 Night — log + reflect (the honest mirror)
 
 1. Capture bar (Log mode)
-2. **Today in review** — the latest log entries, every task finished today with its **estimate vs actual** side by side (and its reflection line), then **Still open — when?** for what's left ([lenses](../areas/tasks/lenses.md))
+2. **Today in review** — the latest log entries, every task finished today, errands aside, with its **estimate vs actual** side by side (and its reflection line), then **Still open — when?** for what's left ([lenses](../areas/tasks/lenses.md))
 3. Habits check — mark today's
 4. One reflection prompt — single rotating question, non-cringe, fully skippable
 

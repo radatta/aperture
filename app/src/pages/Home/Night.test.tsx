@@ -239,7 +239,7 @@ describe('night: today in review', () => {
     const skipped = await api.createTask({ title: 'skipped', parentId: parent.id });
     await api.transitionTask(skipped.id, 'cancelled'); // dropped: not one of the rollup's parts
     await api.transitionTask(parent.id, 'done');
-    const loose = await api.createTask({ title: 'quick errand', estimateMin: 10 });
+    const loose = await api.createTask({ title: 'quick fix', estimateMin: 10 });
     await api.transitionTask(loose.id, 'in_progress');
     await api.setTaskActual(loose.id, 10);
     await api.transitionTask(loose.id, 'done');
@@ -251,8 +251,52 @@ describe('night: today in review', () => {
     // finished thing, both parts, and the parent's rollup (its lock vs what its parts took).
     expect(screen.getAllByRole('img', { name: /actual against/ })).toHaveLength(4);
     expect(screen.getByText('big essay · 2 parts')).toBeTruthy();
-    expect(screen.getByText('quick errand')).toBeTruthy();
+    expect(screen.getByText('quick fix')).toBeTruthy();
     expect(screen.getByText('no estimate')).toBeTruthy();
+  });
+
+  // An errand (a placed task) is checked off on its list, never measured: no bar, no "no estimate" row.
+  async function checkOff(api: ApiClient, id: string) {
+    await api.transitionTask(id, 'in_progress');
+    return api.transitionTask(id, 'done');
+  }
+
+  it('a checked-off errand is left out, with or without an estimate', async () => {
+    const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });
+    await onToday(api, 'finished thing', 'done', 0);
+    const { slug } = await api.upsertPlace({ name: 'Market' });
+    const milk = await api.createTask({ title: 'milk', place: slug });
+    const soap = await api.createTask({ title: 'soap', place: slug, estimateMin: 15 });
+    const party = await api.createTask({ title: 'party', place: slug });
+    const candles = await api.createTask({ title: 'candles', parentId: party.id });
+    expect(candles.place).toBe(slug); // a part follows its parent's place
+    await checkOff(api, milk.id);
+    expect((await checkOff(api, soap.id)).estimateLockedMin).toBe(15);
+    await checkOff(api, candles.id);
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    expect(await screen.findByText('finished thing')).toBeTruthy();
+    for (const title of ['milk', 'soap', 'candles', 'party'])
+      expect(screen.queryByText(title)).toBeNull();
+    expect(screen.queryByText('no estimate')).toBeNull();
+    expect(screen.getAllByRole('img', { name: /actual against/ })).toHaveLength(1);
+  });
+
+  it('a day of only errands shows no Done today section', async () => {
+    const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });
+    await onToday(api, 'still to do', 'planned', 0);
+    const { slug } = await api.upsertPlace({ name: 'Market' });
+    const milk = await api.createTask({ title: 'milk', place: slug });
+    await checkOff(api, milk.id);
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    // The open plan row renders from the same tasks read the Done today list filters.
+    await screen.findByText('Still open — when?');
+    expect(screen.getByText('still to do')).toBeTruthy();
+    expect(screen.queryByText(/Done today/)).toBeNull();
+    expect(screen.queryByText('milk')).toBeNull();
   });
 });
 

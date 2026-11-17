@@ -127,6 +127,8 @@ Answers from 2026-11-03 (branch `localNotes/decisions.md` has the full log).
   task's place is history (round 1, 2026-11-04): `setTaskPlace` refuses a done/cancelled task, and deleting a place
   "off any list" leaves finished errands on the old slug — otherwise clearing it would turn a checked-off errand
   (estimate locked, actual 0) into a calibration point. Moving to another place or renaming still rewrites them.
+  The same predicate keeps a checked-off errand out of Home's night "Done today · estimate vs actual" (2026-11-17):
+  the Places list is where a check-off shows.
 - **D4 Places is its own lens** listing every open errand per store (revised 2026-11-04 from "exactly one lens"):
   it must match the Shortcut's list; a dated or started errand also shows in Week/Today, never in Backlog.
 - **D5 One-tap check-off with "Add again"**, not a confirm step.
