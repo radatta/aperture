@@ -1152,6 +1152,7 @@ export const siriCapture: Scenario = {
         const S = await loadShared();
         await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 7 * MIN); // the parse cap's day is UTC too
         await withToken(ctx, nameD(ctx), async (token) => {
+          const day = new Date().toISOString().slice(0, 10);
           const at = aheadClock(laClock(Date.now()).hour);
           // One at a time: each is a real model call. A raw save on the way (a missed deadline) still spent its
           // claim, so it counts like a parse — only the 51st must be refused one.
@@ -1180,7 +1181,7 @@ export const siriCapture: Scenario = {
             !r.say.startsWith('Added as typed')
           )
             throw new Error(
-              `parse ${n}: ${JSON.stringify(r)}${untilUtcMidnight(Date.now()) > 23 * 60 * MIN ? ' (the UTC day rolled)' : ''}`,
+              `parse ${n}: ${JSON.stringify(r)}${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
             );
         });
       },

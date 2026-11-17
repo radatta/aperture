@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AUTH_HEADER, CAPTURE_SAY, SCOPED_TOKENS_MAX } from '@aperture/shared';
@@ -107,6 +107,11 @@ describe('Settings › Capture: tokens', () => {
 
   it('a refused mint says why and keeps the typed name', async () => {
     const api = stub();
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    onTestFinished(() => {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    });
     vi.spyOn(api, 'mintScopedToken').mockRejectedValueOnce(
       new Error('mintScopedToken failed (503)'),
     );
@@ -116,6 +121,8 @@ describe('Settings › Capture: tokens', () => {
     await user.type(screen.getByLabelText('New token for'), 'iPhone');
     await user.click(screen.getByRole('button', { name: 'Make capture token' }));
     expect(await screen.findByText('mintScopedToken failed (503)')).toBeTruthy();
+    // It can sit behind the bottom dock: brought into view like the as-you-type messages.
+    expect(scrolled).toHaveBeenCalled();
     expect((screen.getByLabelText('New token for') as HTMLInputElement).value).toBe('iPhone');
     expect(screen.queryByLabelText('Capture token')).toBeNull();
   });

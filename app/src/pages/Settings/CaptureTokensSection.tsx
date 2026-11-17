@@ -93,10 +93,10 @@ function MintToken({
   const message = error ?? problem;
   const messageRef = useRef<HTMLDivElement>(null);
   const reveal = () => messageRef.current?.scrollIntoView?.({ block: 'nearest' });
-  const typed = useRef(false);
+  const acted = useRef(false);
   useEffect(() => {
-    if (typed.current && message) reveal();
-    typed.current = false;
+    if (acted.current && message) reveal();
+    acted.current = false;
   });
 
   async function make() {
@@ -109,6 +109,7 @@ function MintToken({
       onMinted(r.token);
       mint.reset(); // with the hook's gcTime 0, the plaintext leaves the mutation cache: the reveal holds the one copy
     } catch (e) {
+      acted.current = true; // a refusal after Make token comes into view too
       setError(errText(e)); // the typed name stays
     }
   }
@@ -120,7 +121,7 @@ function MintToken({
           label="New token for"
           value={name}
           onChange={(e) => {
-            typed.current = true;
+            acted.current = true;
             setName(e.target.value);
             setError(null);
           }}

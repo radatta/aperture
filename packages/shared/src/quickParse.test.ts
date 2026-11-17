@@ -392,6 +392,14 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       dueDay: '2026-12-24',
       dueTime: '09:00',
     });
+    // Said the day before, with the clock still ahead: the model's tomorrow stands for a stated clock.
+    const eve = validateParsedTask(fields({ dueDay: '2026-11-17' }), {
+      ...ctx,
+      today: '2026-11-16',
+      line: 'dentist on the eve at 9am',
+      voice: { now: Date.UTC(2026, 10, 16, 16, 0) }, // 08:00 LA
+    })!.input;
+    expect(eve).toMatchObject({ dueDay: '2026-11-17', dueTime: '09:00' });
     expect(
       validateParsedTask(fields({ dueDay: '2026-11-18' }), {
         ...ctx,

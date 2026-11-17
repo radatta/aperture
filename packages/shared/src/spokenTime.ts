@@ -71,8 +71,8 @@ const OCLOCK = new RegExp(`\\b(\\d{1,2}|${HOUR_WORD})\\s*o['’]?\\s?clock\\b`, 
 const MORNING = /\bmorning\b/i;
 const MORE_NUMBER =
   /^\s+(\d|(oh|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|sixteen|seventeen|eighteen|nineteen|twenty|forty|fifty)\b)/i;
-// A day the words name — only then is a day the model gave "named" (a model that ignored the voice rules and
-// dated "at 5" tomorrow mustn't turn the bare hour into a daytime one).
+// A day the words name. Without one, a model day of calendar tomorrow isn't trusted for a bare hour
+// (resolveSpoken): a model that ignored the voice rules and dated "at 5" tomorrow mustn't turn it daytime.
 export const DAY_WORD =
   /\b(tomorrow|tmrw?|tmw|today|days?|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|weekend|week|month|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december|\d{1,2}(st|nd|rd|th)|\d{1,2}\/\d{1,2})\b/i;
 const TONIGHT = /\btonight\b/i;
@@ -140,17 +140,18 @@ export const withoutRelative = (line: string): string =>
 
 export interface SpokenContext {
   now: number;
-  today: string; // the app's today (dayStartHour) — a model day equal to it was not "named"
-  // The line has a day word (DAY_WORD). Without one, a model day of calendar tomorrow isn't trusted: it's
-  // the model moving a bare time on its own ("at 5" at 6 PM → tomorrow 17:00). A later day it is: "in 2
-  // days", "Christmas Eve" name days no list of words covers.
+  today: string; // the app's today (dayStartHour); never after the calendar's, so the rule reads the latter
+  // The line has a day word (DAY_WORD). Without one, a model day of calendar tomorrow isn't trusted for a
+  // bare hour: it's the model moving the time on its own ("at 5" at 6 PM → tomorrow 17:00). Any other day,
+  // and any day for a stated clock or a day-part, is: "in 2 days" or "Christmas Eve" name days no list of
+  // words covers, and a stated clock reads the same whichever day it lands on.
   dayInWords?: boolean;
   timeZone?: string;
 }
 
 // A spoken time → the task's due day + time, as calendar dates in the user's zone.
-// `modelDay` is the day the model read in the line (null: none). A day counts as named only when it is
-// neither today (the app's or the calendar's) — "today at 9am" said at 3pm still rolls to tomorrow.
+// `modelDay` is the day the model read in the line (null: none). A day counts as named only when it is after
+// the calendar's today — "today at 9am" said at 3pm still rolls to tomorrow, and a past day rolls too.
 //   - relative: now + N, rounded up to the minute; any named day is ignored.
 //   - named day: that day; a bare hour reads as the daytime one (07:00–18:59), "at 5" = 5 PM.
 //   - no day: the next occurrence after now — a bare hour tries AM then PM today, then tomorrow.
@@ -168,10 +169,11 @@ export function resolveSpoken(
   }
   const calToday = zonedDayTime(ctx.now, zone).day;
   // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward.
+  const bareHour = spoken.kind === 'bare' && spoken.part === null;
   const named =
     modelDay !== null &&
     modelDay > calToday &&
-    (ctx.dayInWords !== false || modelDay !== addDays(calToday, 1));
+    (ctx.dayInWords !== false || !bareHour || modelDay !== addDays(calToday, 1));
   const hhmmOf = (h24: number, m: number) => `${pad2(h24)}:${pad2(m)}`;
   // "at 12 tonight" is midnight and "at 1 tonight" the small hours; 4–11 tonight is the evening.
   const tonightHour = (h: number) => (h === 12 ? 0 : h <= 3 ? h : h + 12);
