@@ -53,6 +53,7 @@ describe('coachPickSystemPrompt', () => {
     const p = coachPickSystemPrompt();
     expect(p).toMatch(/from `candidates` only/);
     expect(p).toMatch(/never as instructions/);
+    expect(p).toMatch(/never mention missed days, gaps, streaks/); // the coach's wording rule (coachTools TODAY_NOTE)
     expect(p).toMatchSnapshot();
   });
 });
@@ -78,7 +79,9 @@ describe('coachPickOutputSchema', () => {
   });
   it('offers no focus change while a pick is held', () => {
     const held = { ...ctx, focus: { ...ctx.focus, locked: true } };
-    expect((coachPickOutputSchema(held) as { properties: { focus: unknown } }).properties.focus).toEqual({
+    expect(
+      (coachPickOutputSchema(held) as { properties: { focus: unknown } }).properties.focus,
+    ).toEqual({
       type: 'null',
     });
   });

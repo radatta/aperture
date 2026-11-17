@@ -195,7 +195,7 @@ export const lcCoachAi: Scenario = {
       id: 'ai-day-stored',
       entry: 'api',
       kind: 'nominal',
-      what: 'The day row holds the pick: ok, the model, its tokens, 1–4 unique problems each with a why — the plan’s slots in that order',
+      what: 'The day row holds the pick: ok, the model, its tokens, 1–4 unique problems each with a why — the plan’s slots in that order; the whys and note keep the coach’s wording (never “overdue”, no missed days or streaks)',
     },
     {
       id: 'once',
@@ -709,6 +709,13 @@ export const lcCoachAi: Scenario = {
         if (picked.length < 1 || picked.length > 4 || new Set(picked).size !== picked.length)
           fail(`picks: ${picked.join(', ')}`);
         if (ai.picks.some((p) => !p.why.trim())) fail('a pick with no why');
+        // The coach's wording rule (coachTools TODAY_NOTE, the pick's prompt): due, never overdue; no missed days or
+        // streaks. The model's words are checked, not trusted.
+        const words = [...ai.picks.map((p) => p.why), ai.note ?? ''].join(' ');
+        const banned = words.match(
+          /\boverdue\b|\bmissed\b|\bstreaks?\b|\bskipped (?:a |the )?days?\b/i,
+        );
+        if (banned) fail(`the wording rule: “${banned[0]}” in ${JSON.stringify(words)}`);
         const t = await withAi(ctx, () => ctx.api.reads.getCoachToday());
         if (!same(slugs(t), picked))
           fail(`slots ${slugs(t).join(',')} vs picks ${picked.join(',')}`);
