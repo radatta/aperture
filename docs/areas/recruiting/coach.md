@@ -67,14 +67,17 @@ Only a first-try accept advances: first-try accuracy is the gap being trained. A
 Per pattern, a shrunk first-try miss rate `(misses + 1) / (first tries + 2)`, ties by the roadmap order; a
 pattern with no unseen catalog problem drops out. A pattern holds 3 active days. From the anchor (the override's
 day, else the first counted attempt) each block of 3 active days takes the top-ranked pattern as of its first
-day, never the previous block's. Block 0 is the override, else the top-ranked as of the anchor. The replay is
+day, never the previous block's. Block 0 is the override, else the top-ranked as of the anchor. An override on a
+pattern with nothing unseen left is refused; the same pattern again keeps its day while it holds, and re-stamps
+from today once the engine has moved on. The replay is
 deterministic, so a read writes nothing; `focus.why` says why.
 
 ## The day's plan
 
 `planDay`, from everything before the user's day (their zone, `dayStartHour`), so it holds still all day:
 
-1. **carry-over** — the last active day's unaccepted, unpeeked problem, if within 2 days; it leaves the re-solve
+1. **carry-over** — the last active day's newest unaccepted, unpeeked problem, if within 2 days (one; any other
+   stays a due re-solve); it leaves the re-solve
    and due lists for the day.
 2. **new** — the focus pattern's first unseen catalog problem; one swapped out in the last 3 days goes to the back.
 3. **re-solve** — the oldest due, other patterns first (the interleave), the peeked track first on a tie.

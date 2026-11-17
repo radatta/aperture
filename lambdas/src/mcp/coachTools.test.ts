@@ -112,6 +112,12 @@ describe('leetcode_today', () => {
       outcome: 'clean',
     });
   });
+  it('turns its day at dayStartHour in the user’s zone', async () => {
+    t = Date.parse('2026-11-10T11:30:00Z'); // 03:30 in Los Angeles
+    expect((await call('leetcode_today')).day).toBe('2026-11-09');
+    t = Date.parse('2026-11-10T12:30:00Z'); // 04:30
+    expect((await call('leetcode_today')).day).toBe('2026-11-10');
+  });
   it('refuses a bad day', async () => {
     await expect(call('leetcode_today', { day: 'today' })).rejects.toBeInstanceOf(RpcParamError);
   });
@@ -293,6 +299,12 @@ describe('live_sitting slot', () => {
     expect(out).toMatchObject({ active: true, slot: null });
   });
   it('mark_peeked on the open sitting says when the re-solve will be due', async () => {
+    await start('contains-duplicate');
+    const out = await call('mark_peeked', { slug: 'contains-duplicate' });
+    expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'peeked' });
+  });
+  it('mark_peeked on an open sitting on a problem with history reads the peek’s due day, not the old schedule', async () => {
+    await ended('contains-duplicate', '2026-11-05', true, T0 - 4 * 86_400_000); // clean track, due 11-08
     await start('contains-duplicate');
     const out = await call('mark_peeked', { slug: 'contains-duplicate' });
     expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'peeked' });

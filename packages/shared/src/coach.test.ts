@@ -4,6 +4,7 @@ import {
   attemptsOf,
   countsAsPractice,
   focusOn,
+  focusRoomError,
   listRecords,
   normalizeCoachAttempt,
   normalizeFocusPattern,
@@ -200,6 +201,21 @@ describe('outcomes', () => {
     expect(stuck).toMatchObject({ outcome: 'failed', help: 'solution' });
     expect(attemptsOf([a, b], [peek], NOW)).toHaveLength(1);
   });
+  it('a manual solved, then a first-submit accept the same day, is solved — not clean', () => {
+    const [one] = attemptsOf(
+      [clean('two-sum', day(-1))],
+      [manual('two-sum', day(-1), 'solved')],
+      NOW,
+    );
+    // the manual piece is logged at 20:00, after the 10:00 sitting: the earliest submitting piece is the sitting
+    expect(one!.outcome).toBe('clean');
+    const early = {
+      ...manual('two-sum', day(-1), 'solved'),
+      at: zonedEpoch(day(-1), '08:00', USER_TIME_ZONE),
+    };
+    const [two] = attemptsOf([clean('two-sum', day(-1))], [early], NOW);
+    expect(two!.outcome).toBe('solved');
+  });
   it('an open sitting is not an attempt yet', () => {
     expect(attemptsOf([sit({ slug: 'two-sum', on: TODAY, open: true })], [], NOW)).toEqual([]);
   });
@@ -328,6 +344,18 @@ describe('planDay', () => {
     const a = planDay(input({ sittings: [open] }));
     expect(a.slots[0]).toMatchObject({ kind: 'carry-over', slug: 'valid-anagram' });
     expect(planDay(input({ sittings: [ended] })).slots).toEqual(a.slots);
+  });
+  it('two unfinished yesterday: one is the carry-over, the other stays a due re-solve', () => {
+    const a = failed('valid-anagram', day(-1));
+    const b = failed('group-anagrams', day(-1));
+    b.startedAt = a.startedAt + 3600_000;
+    b.endedAt = b.startedAt + 20 * 60_000;
+    const t = planDay(input({ sittings: [a, b] }));
+    expect(t.slots.filter((x) => x.kind === 'carry-over').map((x) => x.slug)).toEqual([
+      'group-anagrams',
+    ]);
+    expect(t.due.map((q) => q.slug)).toEqual(['valid-anagram']);
+    expect(t.slots.some((x) => x.slug === 'valid-anagram' && x.kind === 're-solve')).toBe(true);
   });
   it('a carry-over older than 2 days is just a due re-solve', () => {
     const t = planDay(input({ sittings: [failed('valid-anagram', day(-3))] }));
@@ -460,6 +488,12 @@ describe('focus', () => {
     );
     expect(after.pattern).not.toBe('backtracking');
     expect(after).toMatchObject({ day: 1, source: 'engine' });
+  });
+  it('refuses an override on a pattern with nothing unseen left', () => {
+    const tries = NEETCODE_150.filter((c) => c.pattern === 'tries');
+    const ci = input({ sittings: tries.map((c, i) => clean(c.slug, day(-10 + i))) });
+    expect(focusRoomError(ci, 'tries')).toMatch(/Nothing unseen/);
+    expect(focusRoomError(ci, 'graphs')).toBeNull();
   });
   it('ranks by the shrunk miss rate, ties in roadmap order, exhausted patterns out', () => {
     const r = rankPatterns(attemptsOf([failed('valid-palindrome', day(-1))], [], NOW), TODAY);

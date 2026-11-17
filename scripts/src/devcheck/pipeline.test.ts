@@ -578,6 +578,21 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       restoreCoachSlot: async () => {
         throw new Error('unused');
       },
+      patchSittingReviewToUnknown: async () => {
+        throw new Error('unused');
+      },
+      clearCoachFloor: async () => {
+        throw new Error('unused');
+      },
+      clearCoachFocus: async () => {
+        throw new Error('unused');
+      },
+      setCoachFloor: async () => {
+        throw new Error('unused');
+      },
+      setCoachFocus: async () => {
+        throw new Error('unused');
+      },
       restoreReminderToggles: async () => {
         const on = { remindTimed: true, remindDueDay: true, remindPlanned: true };
         reminderWrites.push(on);

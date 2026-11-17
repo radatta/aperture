@@ -173,7 +173,7 @@ export const COACH_TOOLS: Tool[] = [
       const day = optDay(args.day, 'day');
       const { slug } = args;
       if ((sittingId === undefined) === (slug === undefined))
-        throw new RpcParamError('pass "slug" or "sittingId", not both');
+        throw new RpcParamError('pass exactly one of "slug" or "sittingId"');
       if (slug !== undefined && !isProblemSlug(slug))
         throw new RpcParamError('"slug" must be a LeetCode problem slug (lowercase, dashes)');
       if (sittingId !== undefined && day !== undefined)
@@ -181,6 +181,7 @@ export const COACH_TOOLS: Tool[] = [
       let wrote: { sittingId: string } | { attemptId: string };
       let target: string;
       let onDay: string;
+      let open = false; // a peek on an open sitting isn't an attempt until it ends: say when it will be due
       if (sittingId !== undefined) {
         const s = (await ctx.dispatch('patchSittingReview', [
           sittingId,
@@ -189,12 +190,15 @@ export const COACH_TOOLS: Tool[] = [
         wrote = { sittingId: s.id };
         target = s.problemSlug;
         onDay = s.day;
+        open = isSittingOpen(s, now(ctx));
       } else {
         const on = day ?? ((await ctx.dispatch('getCoachToday', [])) as CoachToday).day;
         const sittings = (await ctx.dispatch('listSittings', [{ from: on, to: on }])) as Sitting[];
-        const s = sittings.find((x) => x.problemSlug === slug);
+        // A sitting flagged as a test never counts, so the peek goes on an attempt instead.
+        const s = sittings.find((x) => x.problemSlug === slug && x.review?.test !== true);
         onDay = on;
         if (s) {
+          open = isSittingOpen(s, now(ctx));
           await ctx.dispatch('patchSittingReview', [s.id, { help: 'solution' }]);
           wrote = { sittingId: s.id };
         } else {
@@ -210,7 +214,7 @@ export const COACH_TOOLS: Tool[] = [
         slug: target,
         peeked: true,
         ...wrote,
-        nextDue: nextDue(records, target) ?? peekDue(onDay),
+        nextDue: (!open && nextDue(records, target)) || peekDue(onDay),
       };
     },
   },

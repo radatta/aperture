@@ -232,9 +232,10 @@ export class Repo {
   // head row under `hd#` (what the summary reads) and its full payload under `jd#`; a timer read is only its row.
   // `expiresAt` (epoch s) marks the raw bulk for DynamoDB's TTL — the one row kind stamped on prod.
   async putSittingEventIfAbsent(e: SittingEvent, expiresAt: number | null): Promise<boolean> {
-    if (!isHeadEvent(e.type))
+    const { type } = e;
+    if (!isHeadEvent(type))
       return this.putChildIfAbsent(sk.sittingEvent(e.sittingId, e.id), e, expiresAt);
-    const row = headRowOf(e.sittingId, e as Parameters<typeof headRowOf>[1]);
+    const row = headRowOf(e.sittingId, { id: e.id, type, at: e.at, payload: e.payload });
     const fresh = await this.putChildIfAbsent(
       sk.sittingHeadRow(e.sittingId, e.id),
       { ...row, userId: e.userId, createdAt: e.createdAt, updatedAt: e.updatedAt },

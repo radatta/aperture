@@ -528,6 +528,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           t.slots.some((x) => x.swappedFrom === slug || (x.slug === slug && x.status === 'skipped'))
         );
       }
+      case 'coachFloor': {
+        const t = await client.reads.getCoachToday();
+        return t.day === id.slice(id.lastIndexOf(':') + 1) && t.floor?.on === true;
+      }
+      case 'coachFocus':
+        return (await client.reads.getCoachToday()).focus.source === 'override';
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
@@ -586,6 +592,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'coachSlot':
         await client.writes.restoreCoachSlot(id);
+        return true;
+      case 'coachFloor':
+        await client.writes.clearCoachFloor(id);
+        return true;
+      case 'coachFocus':
+        await client.writes.clearCoachFocus(id);
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

@@ -373,7 +373,8 @@ export const emptyLiveFields = (sittingId: string) => ({
 });
 
 // Whether an event folds into the head (and so costs a head write) or only into the live row.
-export const isHeadEvent = (type: SittingEventType | 'replay') =>
+// A type guard: past it, the type is a HeadEventType (headRowOf's input) with no cast.
+export const isHeadEvent = (type: SittingEventType | 'replay'): type is HeadEventType =>
   type === 'run' || type === 'submit' || type === 'note' || type === 'timer' || type === 'coach';
 
 // An unreadable judge result still counts — as 'other' — so it holds its place in the order.

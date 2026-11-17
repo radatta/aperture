@@ -118,6 +118,7 @@ import {
   normalizeCoachAttempts,
   peekOf,
   focusHolds,
+  focusRoomError,
   COACH_PARAMS,
   draftMistakes,
   normalizeSittingEvents,
@@ -1262,12 +1263,15 @@ export class BackendClient implements ApiClient {
   async getCoachToday(day?: string): Promise<CoachToday> {
     return planDay(await this.coachInput(day));
   }
+  // Consistent: the coach tools read it right after a write (a peek, a logged attempt) to say what's due next.
   async listProblemRecords(): Promise<ProblemRecord[]> {
-    const [sittings, attempts] = await Promise.all([
-      this.repo.listSittings(),
-      this.repo.listCoachAttempts(),
-    ]);
-    return listRecords({ now: this.now(), sittings, attempts });
+    const ci = await this.coachInput(undefined, true);
+    return listRecords({
+      now: ci.now,
+      today: ci.today,
+      sittings: ci.sittings,
+      attempts: ci.attempts,
+    });
   }
   // Today's row, changed by `fn` against the plan as it stands with the row's freshest copy; created on first use.
   private async changeCoachDay(
@@ -1324,6 +1328,8 @@ export class BackendClient implements ApiClient {
       );
       return null;
     }
+    const room = focusRoomError(ci, p);
+    if (room && !(ci.focus && focusHolds(ci, ci.focus, p))) throw new Error(room);
     const fresh: CoachFocus = {
       ...this.baseAt(ci.now),
       id: 'focus',

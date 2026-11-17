@@ -23,7 +23,7 @@ import {
 } from './api';
 import { assertDevOrigin, targetOrigin } from './config';
 import { DevcheckError } from './errors';
-import type { Ledger } from './ledger';
+import { pendingIds, type Ledger } from './ledger';
 
 // What live_sitting answers (lambdas/src/mcp/leetcodeTools.ts) — the fields the scenario reads.
 export interface DevJudged {
@@ -55,6 +55,7 @@ export interface DevLiveSitting {
     problem: { slug: string };
   } | null;
   slot?: DevLiveSlot | null;
+  trace?: string | null;
 }
 
 // What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
@@ -231,6 +232,14 @@ export function createMcpClient({
     }
   }
 
+  // A coach write the server refused before writing: a param error, or a normalizer's refusal (normalizeCoachAttempt
+  // checks the whole list before any row). Any other error may follow a write, so its intent stays open.
+  const refusedBeforeWrite = (err: unknown) =>
+    (err instanceof McpRpcError && err.code === PARAM_ERROR) ||
+    (err instanceof Error &&
+      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read)/.test(
+        err.message,
+      ));
   // A write may only touch a row this harness created, through its own kind's methods — as api.ts.
   function assertLedger(id: string, kind: LedgerKind): void {
     if (!ledger.has(id) || ledgerKind(ledger.read(), id) !== kind)
@@ -446,8 +455,9 @@ export function createMcpClient({
       try {
         out = await data<DevPeeked>('mark_peeked', args);
       } catch (err) {
-        ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
-        throw err;
+        if (refusedBeforeWrite(err))
+          ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        throw err; // anything else may have written: the intent stays open, reported as an orphan
       }
       // On a sitting there is no attempt: the intent resolves as a refusal (nothing of its kind was made).
       if (out.attemptId)
@@ -455,6 +465,9 @@ export function createMcpClient({
       else ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
       return out;
     },
+    // mark_peeked on an id that isn't the user's: must be refused, so nothing can be written (lc-coach ownership).
+    markPeekedUnknown: (unknownId: string) =>
+      data<DevPeeked>('mark_peeked', { sittingId: unknownId }),
     async setCauseTag(
       args: Record<string, unknown>,
     ): Promise<{ sittingId: string; review: unknown }> {
@@ -476,7 +489,7 @@ export function createMcpClient({
         ledger.append({ run, op: 'deleted', id });
         return t;
       }
-      if (!ledger.has(id))
+      if (!pendingIds(ledger.read()).includes(id))
         ledger.append({ run, op: 'created', id, via: COACH_SLOT_VIA, title: origin });
       return data<DevCoachToday>('swap_slot', args);
     },
@@ -489,7 +502,8 @@ export function createMcpClient({
       try {
         out = await data<{ attempts: DevLoggedAttempt[] }>('log_attempt', { attempts });
       } catch (err) {
-        ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        if (refusedBeforeWrite(err))
+          ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
         throw err;
       }
       for (const a of out.attempts)

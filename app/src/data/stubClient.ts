@@ -140,6 +140,7 @@ import {
   normalizeCoachAttempts,
   peekOf,
   focusHolds,
+  focusRoomError,
   COACH_PARAMS,
   normalizeSittingStart,
   draftMistakes,
@@ -1031,7 +1032,7 @@ class StubClient implements ApiClient {
     this.writes.insertMany(
       this.store.sittingHeadRows,
       stored.flatMap((e) =>
-        e.type !== 'snapshot' && e.type !== 'submitDetails' && isHeadEvent(e.type)
+        isHeadEvent(e.type)
           ? [
               {
                 ...row(e),
@@ -1170,7 +1171,12 @@ class StubClient implements ApiClient {
   }
   async listProblemRecords(): Promise<ProblemRecord[]> {
     const ci = this.coachInput();
-    return listRecords({ now: ci.now, sittings: ci.sittings, attempts: ci.attempts });
+    return listRecords({
+      now: ci.now,
+      today: ci.today,
+      sittings: ci.sittings,
+      attempts: ci.attempts,
+    });
   }
   private changeCoachDay(fn: (cur: CoachDay, ci: CoachInput) => CoachDay): CoachToday {
     const ci = this.coachInput();
@@ -1206,6 +1212,8 @@ class StubClient implements ApiClient {
       return null;
     }
     if (cur && focusHolds(ci, cur, p)) return cur;
+    const room = focusRoomError(ci, p);
+    if (room) throw new Error(room);
     return this.writes.put(this.store.coachFocus, {
       ...this.baseAt(ci.now),
       ...(cur ? { createdAt: cur.createdAt } : {}),

@@ -159,7 +159,7 @@ export function manualAttempt(a: CoachAttempt): Attempt {
     help: a.help,
     cause: a.cause,
     accepted: a.outcome !== 'failed',
-    firstSubmitAccepted: a.outcome === 'clean' ? true : null,
+    firstSubmitAccepted: a.outcome === 'clean', // a manual solved or failed was no first-try accept
     submits: 0,
     runs: 0,
     lastError: null,
@@ -554,7 +554,10 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   const lastActive = before.length ? before[before.length - 1]!.day : null;
   const carry =
     lastActive && daysBetween(lastActive, today) <= params.carryOverDays
-      ? before.filter((a) => a.day === lastActive && !a.accepted && a.help !== 'solution').reverse()
+      ? before
+          .filter((a) => a.day === lastActive && !a.accepted && a.help !== 'solution')
+          .reverse()
+          .slice(0, 1) // one carry-over (no kind spills into it); any other stays a due re-solve
       : [];
   const carrySlugs = new Set(carry.map((a) => a.slug));
   // new
@@ -767,10 +770,13 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
 }
 
 // Every problem the user has a record on, newest first, from all counted attempts (today's too).
-export function listRecords(input: Omit<CoachInput, 'today' | 'days' | 'focus' | 'dayStartHour'>) {
-  return problemRecords(attemptsOf(input.sittings, input.attempts, input.now)).sort(
-    (a, b) => b.lastDay.localeCompare(a.lastDay) || a.slug.localeCompare(b.slug),
-  );
+// `today`: a sitting left open overnight counts on its day, as the plan counts it.
+export function listRecords(
+  input: Omit<CoachInput, 'today' | 'days' | 'focus' | 'dayStartHour'> & { today?: string },
+) {
+  return problemRecords(
+    attemptsOf(input.sittings, input.attempts, input.now, COACH_PARAMS, input.today),
+  ).sort((a, b) => b.lastDay.localeCompare(a.lastDay) || a.slug.localeCompare(b.slug));
 }
 
 // --- Writes' inputs ---
@@ -923,6 +929,17 @@ export function focusHolds(ci: CoachInput, cur: CoachFocus, pattern: PatternId):
   if (cur.deletedAt !== null || cur.pattern !== pattern) return false;
   const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
   return focusOn(all, cur, ci.today).source === 'override';
+}
+// An override on a pattern with nothing unseen left would leave no new slot: refused.
+export function focusRoomError(ci: CoachInput, pattern: PatternId): string | null {
+  const seen = new Set(
+    attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today)
+      .filter((a) => a.day < ci.today)
+      .map((a) => a.slug),
+  );
+  return NEETCODE_150.some((c) => c.pattern === pattern && pickable(c, seen))
+    ? null
+    : `Nothing unseen is left in ${PATTERN_NAMES[pattern]} — pick another pattern`;
 }
 // The focus override's input: a roadmap pattern, or null to clear.
 export function normalizeFocusPattern(v: unknown): PatternId | null {

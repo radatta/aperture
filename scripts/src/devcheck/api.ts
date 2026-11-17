@@ -371,6 +371,7 @@ export interface DevCoachAttempt {
 }
 export interface DevProblemRecord {
   slug: string;
+  sittingIds: string[];
   peeked: boolean;
   schedule: { track: string; dueDay: string; graduated: boolean } | null;
 }
@@ -449,6 +450,12 @@ export const COACH_ATTEMPT_VIA = 'coach:attempt';
 export const COACH_SLOT_VIA = 'coach:slot';
 export const coachSlotId = (run: string, day: string, slug: string): string =>
   `coach-slot:${run}:${day}:${slug}`;
+// The floor choice and the focus override have no id either: `coach-floor:<run>:<day>` exists while that day is today
+// and its floor is on (removing turns it off); `coach-focus:<run>` while an override holds (removing clears it).
+export const COACH_FLOOR_VIA = 'coach:floor';
+export const COACH_FOCUS_VIA = 'coach:focus';
+export const coachFloorId = (run: string, day: string): string => `coach-floor:${run}:${day}`;
+export const coachFocusId = (run: string): string => `coach-focus:${run}`;
 export const coachSlotOf = (id: string): { day: string; slug: string } => {
   const [day = '', slug = ''] = id.split(':').slice(-2);
   return { day, slug };
@@ -531,7 +538,9 @@ export type LedgerKind =
   | 'lcRollLink'
   | 'scopedToken'
   | 'coachAttempt'
-  | 'coachSlot';
+  | 'coachSlot'
+  | 'coachFloor'
+  | 'coachFocus';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
@@ -547,6 +556,8 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === LC_ROLL_LINK_VIA) return 'lcRollLink';
   if (via === COACH_ATTEMPT_VIA) return 'coachAttempt';
   if (via === COACH_SLOT_VIA) return 'coachSlot';
+  if (via === COACH_FLOOR_VIA) return 'coachFloor';
+  if (via === COACH_FOCUS_VIA) return 'coachFocus';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_MARK_VIA) return 'financeMark';
@@ -1079,6 +1090,31 @@ export function createApiClient({
     // The same for a review: aimed at an id that isn't the user's, so it must be refused (rev-ownership).
     setSittingReviewToUnknown: (unknownId: string, review: DevSittingReview) =>
       call<unknown>('setSittingReview', [unknownId, review]),
+    // The coach's review patch aimed at an id that isn't the user's: must be refused (lc-coach ownership).
+    patchSittingReviewToUnknown: (unknownId: string, patch: { cause: string }) =>
+      call<unknown>('patchSittingReview', [unknownId, patch]),
+    // Today's floor choice: recorded before turning it on (coachFloorId), resolved when turned off.
+    async setCoachFloor(day: string, on: boolean): Promise<DevCoachToday> {
+      const id = coachFloorId(run, day);
+      if (on && !pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: COACH_FLOOR_VIA, title: 'floor' });
+      const t = await call<DevCoachToday>('setCoachFloor', [on]);
+      if (!on && ledger.has(id)) ledger.append({ run, op: 'deleted', id });
+      return t;
+    },
+    // The focus override: recorded before setting it (coachFocusId), resolved when cleared.
+    async setCoachFocus(
+      pattern: string | null,
+    ): Promise<{ pattern: string; sinceDay: string } | null> {
+      const id = coachFocusId(run);
+      if (pattern !== null && !pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: COACH_FOCUS_VIA, title: pattern });
+      const f = await call<{ pattern: string; sinceDay: string } | null>('setCoachFocus', [
+        pattern,
+      ]);
+      if (pattern === null && ledger.has(id)) ledger.append({ run, op: 'deleted', id });
+      return f;
+    },
     // A rep's finish, which ends its sitting (Done needs the actual first: setTaskActual).
     async finishTask(id: string, to: 'done' | 'cancelled'): Promise<DevTask> {
       assertLedgerTask(id);
@@ -1098,6 +1134,14 @@ export function createApiClient({
       await call<null>('deleteCoachAttempt', [id]);
     },
     // Cleanup's removal of a slot change: restore it, today only (coachSlotId).
+    async clearCoachFloor(id: string): Promise<void> {
+      assertLedger(id, 'coachFloor');
+      await call<DevCoachToday>('setCoachFloor', [false]);
+    },
+    async clearCoachFocus(id: string): Promise<void> {
+      assertLedger(id, 'coachFocus');
+      await call<null>('setCoachFocus', [null]);
+    },
     async restoreCoachSlot(id: string): Promise<void> {
       assertLedger(id, 'coachSlot');
       const { slug } = coachSlotOf(id);
