@@ -1,8 +1,10 @@
 name: iOS probe
 
-# A feasibility probe, on the ios-ci-probe branch only (never main, never a PR, never a fork): can a hosted macOS
-# runner boot an iPhone sim, drive it with AXe, add dev slot B to the Home Screen and launch it to its sign-in card?
-# No secrets. Every knob and step lives in scripts/ci/ios-probe.sh, so the probe iterates by pushing that file.
+# A feasibility probe, on the ios-ci-probe branch only (never main, never a PR, never a fork): how fast can a hosted
+# macOS runner go from cold to a real iOS devcheck row (the Home Screen app, signed in as the dev test user)? Every
+# knob and step lives in scripts/ci/ios-probe.sh, so the probe iterates by pushing that file. The one secret, the dev
+# test user's password, comes from the ios-probe environment (branch policy: ios-ci-probe only) and is typed into
+# the sim through `axe type --stdin`, never argv; the device is cached only before sign-in.
 on:
   push:
     branches: [ios-ci-probe]
@@ -17,7 +19,8 @@ permissions:
 jobs:
   probe:
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 45
+    environment: ios-probe
     strategy:
       fail-fast: false
       matrix:
@@ -37,22 +40,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - id: mode
-        run: echo "cache=$(bash scripts/ci/ios-probe.sh cache-mode)" >> "$GITHUB_OUTPUT"
-      - if: steps.mode.outputs.cache == 'use'
+      - id: keys # the script names this shard's cache keys (restore=… / save=…, either empty)
+        run: bash scripts/ci/ios-probe.sh cache-keys >> "$GITHUB_OUTPUT"
+        env:
+          IOS_PROBE_SHARD: ${{ matrix.shard }}
+      - if: steps.keys.outputs.restore != ''
         uses: actions/cache/restore@v6
         with:
           path: .ios-probe-cache
-          key: ios-probe-device-v1
+          key: ${{ steps.keys.outputs.restore }}
       - id: probe
         run: bash scripts/ci/ios-probe.sh
         env:
           IOS_PROBE_SHARD: ${{ matrix.shard }}
-      - if: always() && steps.probe.outputs.cache == 'save'
+          DEVCHECK_PASSWORD: ${{ secrets.DEVCHECK_PASSWORD }}
+      - if: always() && steps.probe.outputs.cache == 'save' && steps.keys.outputs.save != ''
         uses: actions/cache/save@v6
         with:
           path: .ios-probe-cache
-          key: ios-probe-device-v1 # one fixed entry (shard 1 saves); delete it after the probe
+          key: ${{ steps.keys.outputs.save }}
       - if: always()
         uses: actions/upload-artifact@v7
         with:

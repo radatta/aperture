@@ -1,32 +1,54 @@
 #!/usr/bin/env bash
-# The iOS CI probe: can a GitHub-hosted macOS runner do what the Mac's `sim` job does up to sign-in
-# (tools/mailroom/jobs/sim.sh, docs/ops/IOS-CHECK.md)? Boots an iPhone sim, installs AXe at the Mac's pin, opens
-# Safari at the dev slot B origin, adds it to the Home Screen through AXe, launches that app and stops at the Sign in
-# card. No secrets, no sign-in. Run by .github/workflows/ios-probe.yml (the ios-ci-probe branch only); every knob is
-# here, so the probe iterates by pushing this file. Writes ios-probe-out/: steps.tsv (step, pass|fail|skip, ms, note),
-# shots/, trees/ (AXe's accessibility trees), log.txt, summary.md. bash 3.2-safe (macOS /bin/bash).
+# The iOS CI probe: how fast can a GitHub-hosted macOS runner go from cold to a real iOS devcheck row, proving the
+# same things the Mac's `sim` job does (tools/mailroom/jobs/sim.sh, docs/ops/IOS-CHECK.md)? It gets an iPhone sim
+# with dev on its Home Screen (cold: Safari → Add to Home Screen through AXe; restore: the device a `save` run cached,
+# signed out; seed: a fresh device given the webclip files Safari wrote), launches the Home Screen app to its Sign in
+# card, and with the dev test user's password (the ios-probe environment) runs ios-standalone's own plans through
+# sim.sh's run_sim. Run by .github/workflows/ios-probe.yml (the ios-ci-probe branch only); every knob is here, so the
+# probe iterates by pushing this file. Writes ios-probe-out/: steps.tsv (step, pass|fail|soft|skip, ms, note), shots/,
+# trees/, log.txt, summary.md; after sign-in only rows.tsv (op, status, ms: no shots, reads or notes leave the runner).
+# bash 3.2-safe (macOS /bin/bash).
 set -uo pipefail
 
-RUNS=3      # shards above this exit at once: the workflow's matrix is fixed at 3, this is the knob
-CACHE=measure # off | measure (tar the device, size only) | save (tar it into the cache) | use (restore it, skip Add to Home Screen)
-ORIGIN=https://devb.aperture.rahuldatta.dev
-FALLBACK=https://aperture.rahuldatta.dev # read only, the sign-in card; used only when devb doesn't answer
+RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, this is the knob
+# Each shard's variant, "<source> <after>": source cold | restore | seed; after card (stop at the Sign in card) |
+# save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
+variant() {
+  case "$SHARD" in
+    1) echo "cold save" ;;
+    2) echo "cold card" ;;
+    *) echo "cold card" ;;
+  esac
+}
+KEY="ios-probe-dev-26.5-v2" # the cached device; bump to re-save (cache keys are immutable)
+ORIGIN=https://dev.aperture.rahuldatta.dev # slot A: sim.sh's Cognito host and test user are slot A's
+FALLBACK=https://aperture.rahuldatta.dev # read only, the sign-in card; used only when dev doesn't answer
 DEVICE_TYPE=com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max
-RUNTIMES="26.5 26.4 26.2" # newest first; the first that boots wins
-AXE_VER=1.8.0             # the Mac's pin (IOS-CHECK.md → Setup)
+RUNTIME_ID=com.apple.CoreSimulator.SimRuntime.iOS-26-5 # booted on all 15 phase-1 jobs
+AXE_VER=1.8.0                                           # the Mac's pin (IOS-CHECK.md → Setup)
 AXE_SHA=7b76340b72e90d0f211bc7c4636f15009076eff07acef2f2b632b175debd8834
 AXE_URL="https://github.com/cameroncooke/AXe/releases/download/v$AXE_VER/AXe-macOS-v$AXE_VER-universal.tar.gz"
-APP_NAME=Aperture # apple-mobile-web-app-title (app/index.html)
-SIM_NAME=ios-probe
-X_MID=220 # 440 pt wide, as the 18 Pro Max the Mac profiles
+APP_NAME=Aperture        # apple-mobile-web-app-title (app/index.html)
+SIM_NAME=aperture-devcheck # the name sim.sh resolves the device by
+ROW_JOBS="launch capture relaunch" # ios-standalone's jobs (plans.json) that need no seeded tasks
+X_MID=220                # 440 pt wide, as the 18 Pro Max the Mac profiles
 W=440
 H=956
-BUDGET=1000 # seconds of probe before every loop gives up, inside the job's 20 min (setup takes ~2)
-
-# The workflow asks which cache mode is set before it restores anything.
-if [ "${1:-}" = cache-mode ]; then echo "$CACHE"; exit 0; fi
+BUDGET=2400 # seconds of probe before every loop gives up, inside the job's 45 min
 
 SHARD="${IOS_PROBE_SHARD:-1}"
+read -r SRC AFTER <<<"$(variant)"
+# Only a rows shard holds the password, and only as an unexported shell variable: no child process inherits it.
+PW=""
+[ "$AFTER" != rows ] || PW="${DEVCHECK_PASSWORD:-}"
+unset DEVCHECK_PASSWORD
+# The workflow asks for this shard's cache keys before it restores anything.
+if [ "${1:-}" = cache-keys ]; then
+  if [ "$SRC" = restore ]; then echo "restore=$KEY"; else echo "restore="; fi
+  if [ "$AFTER" = save ]; then echo "save=$KEY"; else echo "save="; fi
+  exit 0
+fi
+if [ "${1:-}" = cache-mode ]; then echo off; exit 0; fi # the phase-1 workflow's question
 OUT="${IOS_PROBE_OUT:-$PWD/ios-probe-out}"
 CACHE_DIR="${IOS_PROBE_CACHE_DIR:-$PWD/.ios-probe-cache}"
 WORK="${RUNNER_TEMP:-/tmp}/ios-probe"
@@ -70,6 +92,7 @@ evidence() {
   N=$((N + 1))
   tag="$(printf '%02d' "$N")-$1"
   [ -n "$U" ] || return 0
+  [ -z "${SIGNIN_RAN:-}" ] || return 0 # nothing from a signed-in screen leaves the runner
   cap 30 xcrun simctl io "$U" screenshot "$OUT/shots/$tag.png" >/dev/null 2>&1 || log "  screenshot failed ($tag)"
   if [ -n "$AXE" ] && [ -n "${2:-}" ]; then ax describe-ui >"$OUT/trees/$tag.json" 2>/dev/null || log "  tree failed ($tag)"; fi
 }
@@ -178,25 +201,62 @@ s_axe_install() {
   note "axe --version: $(head -1 <<<"$v")"
 }
 
-# Newest listed runtime first; one that won't boot is deleted and the next tried.
-s_boot() {
-  local v rid list
-  list="$(xcrun simctl list runtimes -j)"
-  for v in $RUNTIMES; do
-    rid="$(jq -r --arg v "$v" '[.runtimes[] | select(.platform == "iOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))][0].identifier // empty' <<<"$list")"
-    [ -n "$rid" ] || { note "iOS $v not on the image"; continue; }
-    U="$(xcrun simctl create "$SIM_NAME" "$DEVICE_TYPE" "$rid" 2>>"$OUT/log.txt")" || { note "create on $v failed"; U=""; continue; }
-    if cap 240 xcrun simctl bootstatus "$U" -b >>"$OUT/log.txt" 2>&1; then
-      RUNTIME="$v"
-      note "booted iOS $v ($rid), udid $U"
-      return 0
-    fi
-    note "boot on iOS $v failed or took over 240 s"
-    xcrun simctl shutdown "$U" >/dev/null 2>&1 || true
-    xcrun simctl delete "$U" >/dev/null 2>&1 || true
-    U=""
-  done
-  return 1
+DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
+BOOT_PID=""
+# The boot starts here, before env and AXe, and runs beside them (option 2); s_boot_wait collects it.
+boot_start() {
+  (cap 400 xcrun simctl bootstatus "$U" -b >"$WORK/boot.log" 2>&1; echo "$?" >"$WORK/boot.rc") &
+  BOOT_PID=$!
+}
+s_create() {
+  U="$(xcrun simctl create "$SIM_NAME" "$DEVICE_TYPE" "$RUNTIME_ID" 2>>"$OUT/log.txt")" || { note "create failed"; U=""; return 1; }
+  RUNTIME=26.5
+  note "created $U"
+  [ "$SRC" != seed ] || seed_webclip || return 1
+  boot_start
+}
+# The cached device (a `save` run's, signed out, shut down): moved into CoreSimulator's set, which reads it after a
+# service restart. If the set won't list it, its data goes into a fresh device of the same type instead.
+s_restore() {
+  local d u
+  d="$(find "$CACHE_DIR/device" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)"
+  [ -n "$d" ] || { note "no cached device ($KEY) restored"; return 1; }
+  u="$(basename "$d")"
+  note "cache holds $u ($(du -sh "$d" | cut -f1))"
+  mv "$d" "$DEVICES/$u" || { note "move into the set failed"; return 1; }
+  killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+  sleep 1
+  if xcrun simctl list devices -j | jq -e --arg u "$u" '[.devices[][] | select(.udid == $u)] | length == 1' >/dev/null; then
+    U="$u"
+    note "registered by a service restart"
+  else
+    note "not listed after a service restart: its data into a fresh device"
+    U="$(xcrun simctl create "$SIM_NAME" "$DEVICE_TYPE" "$RUNTIME_ID" 2>>"$OUT/log.txt")" || return 1
+    mv "$DEVICES/$U/data" "$WORK/fresh-data" && mv "$DEVICES/$u/data" "$DEVICES/$U/data" || return 1
+    mv "$DEVICES/$u" "$WORK/restored-shell" # its device.plist names aperture-devcheck too: out of the set
+  fi
+  RUNTIME=26.5
+  boot_start
+}
+s_boot_wait() {
+  wait "$BOOT_PID" 2>/dev/null || true
+  local rc
+  rc="$(cat "$WORK/boot.rc" 2>/dev/null || echo 1)"
+  grep -v '^\s' "$WORK/boot.log" >>"$OUT/log.txt" 2>/dev/null || true
+  [ "$rc" = 0 ] || { note "bootstatus exited $rc"; return 1; }
+  note "booted iOS $RUNTIME, udid $U ($(grep -c 'Data Migration' "$WORK/boot.log" 2>/dev/null || echo 0) migration lines)"
+}
+
+# Seed (option 3): the files Safari's Add to Home Screen wrote, captured by a cold run's export, copied into a fresh
+# device's data before its first boot. Not built yet: run 6 captures what they are.
+seed_webclip() { note "seed: no captured webclip yet"; return 1; }
+# What Add to Home Screen changed in the device (paths since the marker), and the WebClips and SpringBoard state.
+export_webclip() {
+  local d="$DEVICES/$U/data"
+  mkdir -p "$OUT/seed"
+  find "$d" -newer "$WORK/a2hs.marker" -type f 2>/dev/null | sed "s|^$d/||" | grep -v -e '^Library/Caches/' -e '/Caches/' | head -300 >"$OUT/seed/changed.txt"
+  (cd "$d" && tar czf "$OUT/seed/webclip.tgz" Library/WebClips Library/SpringBoard 2>/dev/null) || true
+  note "export: $(wc -l <"$OUT/seed/changed.txt" | tr -d ' ') files changed, webclip.tgz $(du -h "$OUT/seed/webclip.tgz" 2>/dev/null | cut -f1)"
 }
 
 # AXe on a fresh boot: the full tree reads, a point read answers, AXe's own screenshot works.
@@ -211,8 +271,10 @@ s_axe_ready() {
 s_origin() {
   local code
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$ORIGIN/")" || code=000
-  if [ "${code:0:1}" = 2 ] || [ "${code:0:1}" = 3 ]; then note "devb answered $code"; return 0; fi
-  note "devb answered $code; falling back to the prod origin (read only, the sign-in card)"
+  if [ "${code:0:1}" = 2 ] || [ "${code:0:1}" = 3 ]; then note "$ORIGIN answered $code"; return 0; fi
+  # save and rows need dev itself: a prod icon cached under the dev key, or a sign-in at the wrong Cognito
+  [ "$AFTER" = card ] || { note "$ORIGIN answered $code: no fallback for a $AFTER shard"; return 1; }
+  note "$ORIGIN answered $code; falling back to the prod origin (read only, the sign-in card)"
   ORIGIN="$FALLBACK"
 }
 
@@ -303,6 +365,7 @@ PT_A2HS="158 654"
 # kept (a2hs-*), so a miss shows exactly what was offered.
 s_a2hs() {
   local i hit y x
+  touch "$WORK/a2hs.marker"
   # iOS 26 Safari: Share sits in the … menu (AXButton "More", right of the address bar); "Page Menu" is the left one
   tap_label '^More$' AXButton 3 || return 1
   sleep 1
@@ -402,37 +465,128 @@ s_launch() {
   return 1
 }
 
-# Part 2: the booted device's data, after Add to Home Screen, as a tarball the workflow caches.
-s_cache_save() {
-  local d="$HOME/Library/Developer/CoreSimulator/Devices/$U"
-  xcrun simctl shutdown "$U" >/dev/null 2>&1 || true
-  mkdir -p "$CACHE_DIR"
-  tar czf "$CACHE_DIR/device.tgz" -C "$HOME/Library/Developer/CoreSimulator/Devices" "$U" || return 1
-  printf '%s %s\n' "$U" "$RUNTIME" >"$CACHE_DIR/meta"
-  note "device dir $(du -sh "$d" | cut -f1), tarball $(du -sh "$CACHE_DIR/device.tgz" | cut -f1)"
-  # measure: the size and the tar's time only; no cache entry (a GB-scale one could evict main's caches)
-  if [ "$CACHE" = save ] && [ -n "${GITHUB_OUTPUT:-}" ]; then echo "cache=save" >>"$GITHUB_OUTPUT"; fi
-  return 0
+# --- after the Sign in card ----------------------------------------------------------------------------------------
+
+REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
+SIGNIN_RAN=""
+CARD_MS=""
+# sim.sh's own keyboard prefs (IOS-CHECK.md → Keyboard): the soft-keyboard pair, then every pinned key, so a device
+# saved with them boots ready and sim.sh's readiness has nothing to reboot for.
+kb_prefs() {
+  local off on k
+  read -r off <<<"$(bash -c 'source "$1"; echo "$SIM_KB_OFF"' _ "$REPO/tools/mailroom/jobs/sim.sh")"
+  read -r on <<<"$(bash -c 'source "$1"; echo "$SIM_KB_ON"' _ "$REPO/tools/mailroom/jobs/sim.sh")"
+  for k in HardwareKeyboardLastSeen AutomaticMinimizationEnabled $off; do
+    xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences "$k" -bool false >/dev/null 2>&1 || return 1
+  done
+  for k in $on; do xcrun simctl spawn "$U" defaults write com.apple.keyboard.preferences "$k" -bool true >/dev/null 2>&1 || return 1; done
 }
-# Restore a cached device in place of create + Add to Home Screen; CoreSimulator rescans its set on restart.
-s_cache_use() {
-  [ -f "$CACHE_DIR/device.tgz" ] || { note "no cached device restored"; return 1; }
-  read -r U RUNTIME <"$CACHE_DIR/meta"
-  tar xzf "$CACHE_DIR/device.tgz" -C "$HOME/Library/Developer/CoreSimulator/Devices" || return 1
-  killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-  sleep 2
-  xcrun simctl list devices | grep -q "$U" || { note "CoreSimulator didn't list the restored device"; return 1; }
-  cap 240 xcrun simctl bootstatus "$U" -b >>"$OUT/log.txt" 2>&1 || { note "restored device didn't boot"; return 1; }
-  note "restored $U (iOS $RUNTIME) and booted it"
+# Option 1: the signed-out device (Safari's tip closed, dev on the Home Screen, keyboard prefs pinned) shut down and
+# cloned into the cache dir, which the workflow saves under $KEY. Never after a sign-in: no token is ever cached.
+s_save() {
+  local t
+  [ -z "$SIGNIN_RAN" ] && [ -z "$PW" ] || { note "refused: a sign-in ran, or this shard holds the password"; return 1; }
+  [ "$ORIGIN" = https://dev.aperture.rahuldatta.dev ] || { note "refused: the icon isn't dev's"; return 1; }
+  kb_prefs && note "keyboard prefs written" || note "keyboard prefs not written"
+  xcrun simctl shutdown "$U" >/dev/null 2>&1 || { note "shutdown failed"; return 1; }
+  mkdir -p "$CACHE_DIR/device"
+  t=$(now_ms)
+  if ! cp -c -R "$DEVICES/$U" "$CACHE_DIR/device/$U" 2>/dev/null; then # no APFS clone: a plain copy, never into a partial one
+    [ ! -e "$CACHE_DIR/device/$U" ] || mv "$CACHE_DIR/device/$U" "$WORK/partial-clone"
+    cp -R "$DEVICES/$U" "$CACHE_DIR/device/$U" || return 1
+  fi
+  note "device $(du -sh "$CACHE_DIR/device/$U" | cut -f1), cloned in $(($(now_ms) - t)) ms; cache key $KEY"
+  [ -z "${GITHUB_OUTPUT:-}" ] || echo "cache=save" >>"$GITHUB_OUTPUT"
+}
+
+# One plans.json job through sim.sh's run_sim, in a subshell: the Mac's code, the CI device type, and two shims —
+# no Device Hub on Xcode 26, and the Keychain read answered from the environment's secret (sim.sh pipes it into
+# `axe type --stdin`). Prints run_sim's "status reason json".
+run_sim_ci() (
+  PATH="$(dirname "$AXE"):$PATH"
+  export PATH
+  # shellcheck disable=SC2034 # read by the sourced sim.sh
+  STATE="$WORK"
+  # shellcheck disable=SC2034
+  HELD=lock
+  # shellcheck source=/dev/null
+  source "$REPO/tools/mailroom/jobs/sim.sh"
+  # shellcheck disable=SC2034
+    SIM_DEVICE_TYPE="$DEVICE_TYPE" # 440×956 points, as the Mac's profile
+  pgrep() { if [ "${1:-}" = -x ] && [ "${2:-}" = DeviceHub ]; then return 0; fi; command pgrep "$@"; }
+  security() {
+    if [ "${1:-}" = find-generic-password ]; then
+      case " $* " in *" -w "*) printf '%s' "$PW" ;; esac
+      return 0
+    fi
+    command security "$@"
+  }
+  # the runner boots in 67–287 s (phase 1), past sim.sh's 90 s cap for its re-arm and sign-in reboots
+  # shellcheck disable=SC2034
+  sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
+  local bad
+  bad="$(validate_sim "$1" 2>/dev/null)" || true
+  [ -z "$bad" ] || { echo "rejected $bad {}"; return 0; }
+  mkdir -p "$3"
+  run_sim "$1" "$2" "$(cd "$3" && pwd -P)"
+)
+# The real rows: ios-standalone's own plans, in its order. Only op, status, ms and reason codes leave the runner.
+s_rows() {
+  local sha j job out st rs js t left last="${ROW_JOBS##* }" bad=""
+  [ -n "$PW" ] || { note "no DEVCHECK_PASSWORD from the ios-probe environment: rows can't run"; return 1; }
+  SIGNIN_RAN=1
+  sha="$(curl -s --max-time 15 "$ORIGIN/" | sed -n 's/.*<meta name="aperture-build" content="\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
+  [ -n "$sha" ] || { note "no aperture-build marker on $ORIGIN"; return 1; }
+  note "dev serves ${sha:0:7}"
+  : >"$OUT/rows.tsv"
+  for j in $ROW_JOBS; do
+    late && { bad="budget"; break; }
+    job="$WORK/job-$j.json"
+    left=$((DEADLINE - SECONDS - 60))
+    [ "$left" -le 600 ] || left=600
+    [ "$left" -ge 60 ] || { bad="budget"; break; }
+    jq -e --arg n "$j" --arg sha "$sha" --argjson to "$left" --argjson last "$([ "$j" = "$last" ] && echo true || echo false)" \
+      '. as $p | ($p.jobs[] | select(.name == $n)) as $j
+       | {job: "sim", params: {sha: $sha, timeoutSec: $to, shutdown: $last, steps: $j.steps}}' \
+      "$REPO/tools/mailroom/bench/plans.json" >"$job" || { note "no $j job in plans.json"; return 1; }
+    t=$(now_ms)
+    out="$(run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j" 2>>"$WORK/sim.err")" || true
+    read -r st rs js <<<"$out"
+    [ -n "$js" ] || js="{}"
+    # only known shapes reach the artifact, whatever run_sim printed
+    case "$st" in pass | fail | error | rejected) ;; *) st=error rs=BAD_OUT js="{}" ;; esac
+    [[ "$rs" =~ ^(-|[A-Z_]+(\([0-9A-Za-z.-]{0,16}\))?)$ ]] || rs=BAD_OUT
+    printf 'job\t%s\t%s\t%s\t%s\n' "$j" "${st:-error}" "${rs:--}" "$(($(now_ms) - t))" >>"$OUT/rows.tsv"
+    jq -r '.steps[] | "op\t\(.i)\t\(.op)\t\(.status)\t\(.ms)"' <<<"$js" >>"$OUT/rows.tsv" 2>/dev/null || true
+    log "  rows: $j → ${st:-error} ${rs:--} in $(($(now_ms) - t)) ms"
+    if [ "$st" != pass ]; then
+      bad="$j ${st:-error} ${rs:--} $(jq -r '.detail // ""' <<<"$js" 2>/dev/null | tr -cd 'A-Z_')"
+      break
+    fi
+  done
+  [ -z "$bad" ] || {
+    case "$bad" in *SIGNIN_FAILED*AUTH_REJECTED* | *AUTH_REJECTED*) note "sign-in rejected: password rotated? reset the ios-probe secret" ;; esac
+    note "stopped at: $bad"
+    return 1
+  }
+  note "all of: $ROW_JOBS passed"
 }
 
 summary() {
   {
-    echo "## iOS probe, shard $SHARD — iOS ${RUNTIME:-none}, cache $CACHE, origin $ORIGIN"
+    echo "## iOS probe, shard $SHARD — $SRC → $AFTER, iOS ${RUNTIME:-none}, $ORIGIN"
+    echo
+    [ -z "$CARD_MS" ] || echo "cold to the Sign in card: $((CARD_MS / 1000)) s"
     echo
     echo "| step | result | s | note |"
     echo "| --- | --- | --- | --- |"
     awk -F'\t' '{ printf "| %s | %s | %.1f | %s |\n", $1, $2, $3 / 1000, $4 }' "$OUT/steps.tsv"
+    if [ -s "$OUT/rows.tsv" ]; then
+      echo
+      echo "| rows | job | status | reason | s |"
+      echo "| --- | --- | --- | --- | --- |"
+      awk -F'\t' '$1 == "job" { printf "| | %s | %s | %s | %.1f |\n", $2, $3, $4, $5 / 1000 }' "$OUT/rows.tsv"
+    fi
   } >"$OUT/summary.md"
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat "$OUT/summary.md" >>"$GITHUB_STEP_SUMMARY"
   cat "$OUT/summary.md"
@@ -450,20 +604,25 @@ finish() {
 T0=$(now_ms)
 trap finish EXIT
 trap 'exit 143' TERM
-step env s_env
+log "shard $SHARD: $SRC → $AFTER"
+case "$SRC" in
+  restore) step restore s_restore ;;
+  *) step create s_create ;; # cold, seed (seeding happens before the boot starts)
+esac
+step env s_env # beside the boot
 step axe-install s_axe_install
-if [ "$CACHE" = use ]; then
-  step cache-restore-boot s_cache_use
-else
-  step boot s_boot
-fi
+step boot s_boot_wait
 step axe-ready s_axe_ready
 step origin s_origin
-if [ "$CACHE" != use ]; then
+if [ "$SRC" = cold ]; then
   step safari s_safari
   step add-to-home-screen s_a2hs
+  step export export_webclip
 fi
 step home-screen-icon s_icon
-step launch-to-sign-in s_launch
-if { [ "$CACHE" = save ] || [ "$CACHE" = measure ]; } && [ "$SHARD" = 1 ]; then step cache-save s_cache_save; fi # one fixed entry
+step launch-to-sign-in s_launch && CARD_MS=$(($(now_ms) - T0))
+case "$AFTER" in
+  save) step save s_save ;;
+  rows) step rows s_rows ;;
+esac
 [ -z "$FAILED" ]
