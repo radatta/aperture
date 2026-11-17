@@ -91,7 +91,7 @@ export async function mergedPRs(
     : null;
   const full = (prs: PR[]) =>
     prs.length >= PR_LIMIT
-      ? `${PR_LIMIT} merged PRs since ${o.since}, the gh limit: older ones may be missing`
+      ? `${PR_LIMIT} merged PRs since ${searchFrom(o.since)}, the gh limit: older ones may be missing`
       : null;
   const fresh = cached && cached.since === o.since && o.now - cached.fetchedAt < 3_600_000;
   if (cached && fresh && !o.refresh) return { prs: cached.prs, note: full(cached.prs) };

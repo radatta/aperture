@@ -50,7 +50,9 @@ export interface Step {
 // writes its status file says exactly where it is from then on).
 export function timeline(markers: Marker[]): Step[] {
   const ms = [...markers].sort((a, b) => a.ts - b.ts);
-  const firstExplicit = ms.find((m) => m.kind === 'lane-phase')?.ts ?? Infinity;
+  // the first explicit marker that names a phase; a leading parked/blocked says nothing yet
+  const firstExplicit =
+    ms.find((m) => m.kind === 'lane-phase' && m.phase && EXPLICIT[m.phase])?.ts ?? Infinity;
   const out: Step[] = [];
   let cur = 'unattributed' as Phase;
   let reviewed = false;

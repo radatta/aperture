@@ -112,10 +112,10 @@ tick, ΔP is exact.
 
 History comes from `localNotes/usage/manual-readings.json`: `{ readings: [{ at, pct, approx? }], resets: [at] }`,
 `at` as ISO with offset. A manual reading counts as ±½ point (variance 1/12, or 1/3 if `approx`); a reset is an exact
-zero. The weekly resets that `resets_at` implies are added to the history's resets, so no interval spans one: every 7
-days back from the oldest `resets_at` in the log, and just `R − 7 days` for each newer one (a manual reset can move it
-off the schedule). The report lists those it inferred. Once `resets_at` has passed with no fresh reading since, `fit`
-and `line` say the meter reset instead of showing last week's numbers.
+zero. The weekly resets that `resets_at` implies are added to the history's resets, so no interval spans one: each
+`resets_at` steps back 7 days at a time to the previous one (the oldest back to the first manual reading), so a week
+the log skipped is still split, and one a manual reset moved off the schedule stops at the previous value. The report lists those it inferred. Once the latest `resets_at` any fresh reading carried has passed,
+`fit` and `line` say the meter reset instead of showing last week's numbers.
 
 ## Fit
 
@@ -204,7 +204,8 @@ main-checkout sessions and lanes with no merged PR.
   - merged PRs;
   - PRs per lane-hour;
   - QU per PR;
-  - rank correlations across days;
+  - rank correlations across the days with lane work (a day with merges but no lane call, the tail of yesterday's
+    lane, is listed but left out of them);
   - from `heavy.sh` job records, the wall-time growth per extra working session for typecheck, lint and test.
 
 ## Known limits

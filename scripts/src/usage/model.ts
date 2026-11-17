@@ -60,26 +60,25 @@ const WEEK_MS = 7 * 86_400_000;
 
 // Weekly resets the log's resets_at implies, back over the manual readings' span: an interval across one would
 // difference across a reset. Added to the manual resets unless one is listed within an hour.
-// Only the oldest resets_at steps back week by week: a newer one (a manual reset can move it off the schedule)
-// marks just its own window's start, never weeks before it.
+// Each resets_at steps back week by week to the previous one (the oldest to the first manual reading), so a week the
+// log skipped is still split; a manual reset that moved resets_at off the schedule stops its step-back at the
+// previous value. resets_at values within an hour are one (seconds of jitter), and so are inferred resets.
 export function scheduledResets(rows: MeterRow[], manual: Manual | null): string[] {
+  const near = (a: number, b: number) => Math.abs(a - b) < 3_600_000;
   const known = (manual?.resets ?? []).map((r) => Date.parse(r));
   const firstReading = Math.min(...(manual?.readings ?? []).map((r) => Date.parse(r.at)));
-  const ats = [...new Set(rows.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])))].sort(
-    (a, b) => a - b,
-  );
-  const cands: number[] = [];
+  const ats: number[] = [];
+  for (const at of rows
+    .flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : []))
+    .sort((a, b) => a - b))
+    if (!ats.some((x) => near(x, at))) ats.push(at);
+  const out: number[] = [];
   ats.forEach((at, i) => {
-    if (i) cands.push(at - WEEK_MS);
-    else for (let t = at - WEEK_MS; t > firstReading; t -= WEEK_MS) cands.push(t);
+    const stop = i ? ats[i - 1]! - WEEK_MS + 3_600_000 : firstReading;
+    for (let t = at - WEEK_MS; t > stop && t > firstReading; t -= WEEK_MS)
+      if (![...known, ...out].some((k) => near(k, t))) out.push(t);
   });
-  const out: string[] = [];
-  for (const t of cands) {
-    const iso = new Date(t).toISOString();
-    if (t > firstReading && !known.some((k) => Math.abs(k - t) < 3_600_000) && !out.includes(iso))
-      out.push(iso);
-  }
-  return out.sort();
+  return out.sort((a, b) => a - b).map((t) => new Date(t).toISOString());
 }
 
 // From the newest reading: the meter has moved on since it ticked, by up to one point (it would have ticked again).
@@ -151,10 +150,9 @@ export function fitModel(o: {
 
   const lastWindow = windows.at(-1) ?? [];
   const fresh = freshReadings(o.rows);
-  const newest = fresh.at(-1);
-  const resetAtMs = newest?.resetsAt ? newest.resetsAt * 1000 : null;
-  const resetAt =
-    resetAtMs !== null && o.now > resetAtMs && newest!.ts < resetAtMs ? resetAtMs : null;
+  // stale once the latest resets_at any fresh reading carried has passed (a new week's reading carries a later one)
+  const latestReset = Math.max(...fresh.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])));
+  const resetAt = Number.isFinite(latestReset) && o.now > latestReset ? latestReset : null;
   const b = resetAt === null ? burn(lastWindow, o.now) : null;
   const k = all.fit?.k ?? null;
   const quPerHour = q.last !== null ? q.between(o.now - 3_600_000, o.now) : null;
@@ -175,7 +173,7 @@ export function fitModel(o: {
       pctPerHour,
       quPerHour,
       hoursTo100: b && pctPerHour ? hoursTo100(b.pct, b.at, pctPerHour, o.now) : null,
-      since: b?.since ?? null,
+      since: b?.perHour != null ? b.since : null,
       resetAt,
     },
     coverage: { from: q.first, to: q.last },
@@ -325,7 +323,7 @@ export function reportModel(o: {
     phaseShare,
     drivers,
     top: [...covered].sort((x, y) => y.qu - x.qu).slice(0, 5),
-    overhead: overhead(a, rows),
+    overhead: overhead(a, rows, o.prs),
     flags: [...flagAcc].map(([flag, v]) => ({
       flag,
       calls: v.calls,

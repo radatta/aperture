@@ -169,6 +169,22 @@ describe('fit model', () => {
       '2026-01-08T09:00:00.000Z',
       '2026-01-11T09:00:00.000Z',
     ]);
+    // a week the log skipped: R and R + 14 d, readings either side of R + 7 d — still split there
+    const R = resetsAt * 1000;
+    const gap = parseMeter(
+      [
+        meterRow({ ts: '2026-01-13T10:00:00Z', resetsAt }),
+        meterRow({ ts: '2026-01-27T10:00:00Z', resetsAt: resetsAt + 14 * 86400 }),
+        meterRow({ ts: '2026-01-27T10:01:00Z', resetsAt: resetsAt + 14 * 86400 + 4 }), // jitter: the same reset
+      ].join('\n'),
+    ).rows;
+    const wide = {
+      readings: [...manual.readings, { at: '2026-01-24T10:00:00Z', pct: 30 }],
+      resets: [],
+    };
+    expect(scheduledResets(gap, wide)).toEqual(
+      [R - 7 * 86_400_000, R, R + 7 * 86_400_000].map((t) => new Date(t).toISOString()),
+    );
   });
 
   it('counts hours to 100 from the last tick, crediting at most one point of progress since', () => {
@@ -213,6 +229,16 @@ describe('stale meter after a reset', () => {
     });
     expect(f.burn).toMatchObject({ resetAt: resetsAt * 1000, pct: null });
     expect(boardLine(f)).toMatch(/^usage reset .* no reading since$/);
+  });
+
+  it('labels a rate from k × QU/h as such, not as ticks', () => {
+    const resetsAt = Date.parse('2026-01-09T12:00:00Z') / 1000;
+    const meter = [0, 1]
+      .map((i) => meterRow({ ts: `2026-01-05T10:0${i}:00Z`, pct: 3, cost: i, resetsAt }))
+      .join('\n');
+    const now = Date.parse('2026-01-05T10:30:00Z');
+    const f = fitModel({ rows: parseMeter(meter).rows, manual: null, calls: [], now });
+    expect(f.burn).toMatchObject({ resetAt: null, since: null });
   });
 });
 

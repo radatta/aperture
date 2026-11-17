@@ -196,7 +196,7 @@ export interface Overhead {
   to: number | null;
 }
 
-export function overhead(a: Attribution, rows: PRRow[]): Overhead {
+export function overhead(a: Attribution, rows: PRRow[], prs: PR[] = []): Overhead {
   const covered = rows.filter((r) => r.qu > 0);
   const from = covered.length ? Math.min(...covered.map((r) => r.start ?? r.mergedAt)) : null;
   const to = covered.length ? Math.max(...covered.map((r) => r.mergedAt)) : null;
@@ -204,7 +204,8 @@ export function overhead(a: Attribution, rows: PRRow[]): Overhead {
   let hubQU = 0;
   let adhocQU = 0;
   let otherQU = 0;
-  const merged = new Set(rows.map((r) => r.branch));
+  // every branch with a merged PR, the lookback's included: none of them is "no merged PR"
+  const merged = new Set([...rows.map((r) => r.branch), ...prs.map((p) => p.branch)]);
   const unmerged = new Map<string, number>();
   for (const c of a.calls) {
     if (!inWin(c.ts)) continue;

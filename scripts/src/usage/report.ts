@@ -165,7 +165,7 @@ export function reportLines(m: ReportModel, now: number): string[] {
   out.push(
     '## Q2: more lanes → more merges, or just slowdown?',
     '',
-    `Concurrency = lanes with a call in the hour. Across ${c.days.length} days: ρ(mean lanes, merged PRs) = ${f1(c.rhoMerged, 2)}; ρ(mean lanes, PRs per lane-hour) = ${f1(c.rhoPerLaneHour, 2)}.`,
+    `Concurrency = lanes with a call in the hour. Over the ${c.days.filter((d) => d.laneHours > 0).length} days with lane work (merge-only days are listed but not correlated): ρ(mean lanes, merged PRs) = ${f1(c.rhoMerged, 2)}; ρ(mean lanes, PRs per lane-hour) = ${f1(c.rhoPerLaneHour, 2)}.`,
     '',
     '| Day | Mean lanes | Max | Lane-hours | Merged | PRs per lane-hour | QU per PR |',
     '|---|---|---|---|---|---|---|',

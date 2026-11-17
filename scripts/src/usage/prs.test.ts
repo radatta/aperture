@@ -74,6 +74,16 @@ describe('phase timeline', () => {
     expect(phaseAt(timeline([]), min(1))).toBe('unattributed');
   });
 
+  it('keeps heuristics until the first explicit marker that names a phase', () => {
+    const t = timeline([
+      mk(1, 'lane-phase', { phase: 'parked' }),
+      mk(2, 'plan'),
+      mk(5, 'lane-phase', { phase: 'build' }),
+    ]);
+    expect(phaseAt(t, min(3))).toBe('plan');
+    expect(phaseAt(t, min(6))).toBe('build');
+  });
+
   it('starts a new cycle when a Plan runs after the PR step', () => {
     const t = timeline([mk(1, 'plan'), mk(2, 'pr'), mk(3, 'plan'), mk(4, 'edit', { cls: 'src' })]);
     expect(phaseAt(t, min(4))).toBe('build');
@@ -236,6 +246,9 @@ describe('attribution and the PR table', () => {
     expect(o.perPR).toBeCloseTo(10);
     expect(o.adhocQU).toBeCloseTo(20);
     expect(o.otherQU).toBeCloseTo(20);
+    // a lane whose PR merged in the lookback (before --since) isn't "no merged PR"
+    const late = prTable(a, prs, min(500));
+    expect(overhead(a, late, prs).unmerged.map((u) => u.lane)).not.toContain('lane-a');
   });
 
   it('gives a branch with two PRs each its own window', () => {

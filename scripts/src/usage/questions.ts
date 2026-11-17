@@ -160,9 +160,10 @@ export function concurrency(
   const worked = stats.filter((d) => d.laneHours > 0);
   return {
     days: stats,
+    // over days with lane work: a merge-only day (yesterday's lane) would read as zero lanes, one merge
     rhoMerged: spearman(
-      stats.map((d) => d.meanLanes),
-      stats.map((d) => d.merged),
+      worked.map((d) => d.meanLanes),
+      worked.map((d) => d.merged),
     ),
     rhoPerLaneHour: spearman(
       worked.map((d) => d.meanLanes),
