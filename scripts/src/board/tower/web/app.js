@@ -700,6 +700,7 @@ function health(v) {
   box.append(today);
 
   const c = h.container;
+  const sd = h.slowdown; // heavy.sh wall times, last 30 min vs the 24 h before (slowdown.ts)
   if (!c) box.append(tile('h:c', 'CONTAINER', 'no data', 'the sampler has no sample', 'c-bad', []));
   else {
     const stale = src('sampler')?.state !== 'ok'; // the server's rule (derive.ts STALE.sampler)
@@ -717,8 +718,12 @@ function health(v) {
         [gib(c.anonMiB), ` / ${gib(c.highMiB)} GiB`],
         stale
           ? `sampler silent since ${hhmm(c.at)}`
-          : `${c.cpu === null ? '?' : c.cpu.toFixed(1)} cores · tests ${c.tests}/${c.testCap ?? '?'}`,
-        cc,
+          : `${c.cpu === null ? '?' : c.cpu.toFixed(1)} cores · tests ${c.tests}/${c.testCap ?? '?'}${
+              sd.worst && sd.tone !== 'ok'
+                ? ` · slow ×${sd.worst.ratio.toFixed(1)} ${sd.worst.cls}`
+                : ''
+            }`,
+        stale || cc === 'c-bad' || sd.tone === 'ok' ? cc : sd.tone === 'bad' ? 'c-bad' : 'c-hold',
         [
           ['memory', `soft ${gib(c.anonSoft)} · hard ${gib(c.anonHard)} GiB · line: last hour`],
           [
@@ -726,6 +731,7 @@ function health(v) {
             c.cpu === null ? 'unknown (bad tick)' : `${c.cpu.toFixed(1)} of ${c.cores} cores`,
           ],
           ['pids', `${c.pids} of ${c.pidsMax}`],
+          [`slowdown (${sd.windowMin} min vs 24 h)`, sd.line],
           ['as of', `${hhmm(c.at)} (${ago(c.at, v.now)} ago)`],
         ],
         spark(v.sparks?.anon, c.highMiB),
@@ -776,27 +782,40 @@ function health(v) {
           : m.state === 'bad'
             ? m.error // e.g. a time ahead of ours: never "silent since <the future>"
             : `silent since ${hhmm(s.t)}`;
-    box.append(
-      tile(
-        'h:m',
-        'MAC',
-        [gib(s.mem.usedMiB), ` / ${gib(s.memTotalMiB)} GiB`],
-        `${age}${s.vm ? ` · VM ${gib(s.vm.rssMiB)}` : ''}`,
-        cc,
+    // battery / Low Power Mode / thermal (F120): red on an alert; an older agent shows nothing here
+    const pw = h.power;
+    const mt = tile(
+      'h:m',
+      'MAC',
+      [gib(s.mem.usedMiB), ` / ${gib(s.memTotalMiB)} GiB`],
+      `${age}${s.vm ? ` · VM ${gib(s.vm.rssMiB)}` : ''}`,
+      pw.alerts.length ? 'c-bad' : cc,
+      [
+        ['free', `${gib(s.mem.freeMiB)} GiB`],
+        ['compressor', `${gib(s.mem.compressedMiB)} GiB`],
+        ['swap', s.swap ? `${gib(s.swap.usedMiB)} of ${gib(s.swap.totalMiB)} GiB` : 'unknown'],
+        ['VM', s.vm ? `${s.vm.comm} ${gib(s.vm.rssMiB)} GiB` : 'no VM process'],
         [
-          ['free', `${gib(s.mem.freeMiB)} GiB`],
-          ['compressor', `${gib(s.mem.compressedMiB)} GiB`],
-          ['swap', s.swap ? `${gib(s.swap.usedMiB)} of ${gib(s.swap.totalMiB)} GiB` : 'unknown'],
-          ['VM', s.vm ? `${s.vm.comm} ${gib(s.vm.rssMiB)} GiB` : 'no VM process'],
-          [
-            'load',
-            `${s.load ? s.load.map((x) => x.toFixed(1)).join(' ') : 'unknown'} (${s.cpus ?? '?'} cpus)`,
-          ],
-          ['as of', `${hhmm(s.t)} (${ago(s.t, v.now)} ago)`],
+          'load',
+          `${s.load ? s.load.map((x) => x.toFixed(1)).join(' ') : 'unknown'} (${s.cpus ?? '?'} cpus)`,
         ],
-        spark(v.sparks?.mac, s.memTotalMiB),
-      ),
+        [
+          'power',
+          pw.known
+            ? `${pw.line}${pw.alerts.length ? ` — red: ${pw.alerts.join(', ')}` : ''}`
+            : 'unknown (an older agent: reinstall, NEEDS YOU)',
+        ],
+        ...(pw.advice ? [['lanes', pw.advice]] : []),
+        ['as of', `${hhmm(s.t)} (${ago(s.t, v.now)} ago)`],
+      ],
+      spark(v.sparks?.mac, s.memTotalMiB),
     );
+    if (pw.known)
+      mt.querySelector('.sub').after(
+        el('div', `sub power${pw.alerts.length ? ' alert' : ''}`, pw.line),
+      );
+    if (pw.alerts.length && cc === 'c-dev') mt.classList.add('calm-mem'); // red for power: memory's line stays ink
+    box.append(mt);
   }
 
   const w = h.aws;
@@ -902,7 +921,7 @@ function sources(v) {
   b.append(
     el(
       'div',
-      'empty',
+      'empty serving', // five taps open the status-bar readout (debugReadout)
       `serving ${v.version ? v.version.slice(0, 8) : 'an unknown commit'}${v.startedAt ? `, started ${hhmm(v.startedAt)}` : ''}`,
     ),
   );
@@ -1230,6 +1249,76 @@ if (
   matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches
 )
   document.documentElement.classList.add('installed');
+
+// F161: what the page sees about the status bar, for the one case no headless engine reproduces (the installed app on
+// the phone, docs/ops/TOWER.md → Phone). On with ?debug=1, or five taps within 3 s on SOURCES' "serving" line (the
+// installed app has no URL bar); a tap on the box closes it. Read-only, and nothing leaves the page.
+const DEBUG_KEY = 'tower:debug';
+const debugOn = () => {
+  try {
+    return sessionStorage.getItem(DEBUG_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+function setDebug(on) {
+  try {
+    if (on) sessionStorage.setItem(DEBUG_KEY, '1');
+    else sessionStorage.removeItem(DEBUG_KEY);
+  } catch {
+    // no storage (a private window): the box still follows this tap
+    debugForced = on;
+  }
+  debugReadout();
+}
+let debugForced = null;
+function debugReadout() {
+  let box = $('#dbg');
+  if (!(debugForced ?? debugOn())) return box?.remove();
+  if (!box) {
+    box = el('pre', null);
+    box.id = 'dbg';
+    box.title = 'tap to close';
+    box.addEventListener('click', () => setDebug(false));
+    document.body.append(box);
+  }
+  const probe = el('div', null);
+  probe.style.cssText =
+    'position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)';
+  document.body.append(probe);
+  const ps = getComputedStyle(probe);
+  const inset = [ps.paddingTop, ps.paddingBottom];
+  probe.remove();
+  const hd = document.querySelector('header');
+  const r = hd.getBoundingClientRect();
+  const modes = ['standalone', 'fullscreen', 'minimal-ui', 'browser'].filter(
+    (m) => matchMedia(`(display-mode: ${m})`).matches,
+  );
+  const na = (x) => (x === undefined || x === null ? 'n/a' : String(x));
+  box.textContent = [
+    `display-mode: ${modes.join(', ') || 'none matched'}`,
+    `navigator.standalone: ${na(navigator.standalone)}`,
+    `html.installed: ${document.documentElement.classList.contains('installed')}`,
+    `safe-area-inset top ${inset[0]} · bottom ${inset[1]}`,
+    `header padding-top ${parseFloat(getComputedStyle(hd).paddingTop)}px · top ${Math.round(r.top)} · height ${Math.round(r.height)}`,
+    `window ${innerWidth}×${innerHeight} · screen ${screen.width}×${screen.height} · dpr ${devicePixelRatio}`,
+    `visualViewport offsetTop ${na(window.visualViewport?.offsetTop)} · ${matchMedia('(orientation: portrait)').matches ? 'portrait' : 'landscape'}`,
+    navigator.userAgent,
+  ].join('\n');
+}
+let taps = [];
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('.serving')) return;
+  const t = Date.now();
+  taps = taps.filter((x) => t - x < 3000).concat(t);
+  if (taps.length >= 5) {
+    taps = [];
+    setDebug(!(debugForced ?? debugOn()));
+  }
+});
+window.addEventListener('resize', debugReadout);
+if (new URLSearchParams(location.search).get('debug') === '1') setDebug(true);
+
 window.addEventListener('popstate', () => applyOpen());
 window.addEventListener('hashchange', () => applyOpen());
 window.addEventListener('keydown', (e) => {
@@ -1251,7 +1340,7 @@ tick().then(() => {
   }
   window.scrollTo(0, y); // also over the browser's own jump to the #next anchor, which the strip would cover
 });
-setInterval(tick, POLL_MS);
+setInterval(() => tick().then(debugReadout), POLL_MS);
 // the live timers: every second, against the server's clock
 setInterval(() => {
   const now = Date.now() + offset;

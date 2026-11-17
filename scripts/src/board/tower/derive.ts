@@ -5,7 +5,8 @@ import { SHAPE_PATHS } from '../../deploy-base.ts';
 import { hhmm } from './fmt.ts';
 import type { Behind } from './behind.ts';
 import type { Checks, Cached, GhRun } from './gh.ts';
-import type { Costs, MacRead } from './health.ts';
+import { powerSummary, type Costs, type MacRead, type PowerSummary } from './health.ts';
+import { slowdown, type Slowdown } from './slowdown.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
@@ -103,6 +104,8 @@ export type Health = {
   } | null;
   mac: MacRead;
   macReady: boolean; // the installer is on main (else the Mac tile says it installs at merge)
+  power: PowerSummary; // battery / Low Power Mode / thermal (F120)
+  slowdown: Slowdown; // heavy.sh wall times, last 30 min vs the 24 h before
   aws: Costs;
 };
 export type View = {
@@ -756,6 +759,22 @@ export function derive(i: Inputs): View {
       since: i.mac.at,
       branch: null,
     });
+  // a fresh agent older than F120 writes no power: the same install line updates it (install.sh replaces it)
+  else if (
+    i.mac.state === 'ok' &&
+    i.mac.stats &&
+    i.mac.stats.power === undefined &&
+    i.macInstallReady
+  )
+    needs.push({
+      kind: 'source',
+      what: 'Reinstall the Mac stats agent (battery, Low Power Mode, thermal)',
+      link: null,
+      cmd: i.macInstall,
+      unblocks: 'HEALTH → Mac power',
+      since: i.mac.at,
+      branch: null,
+    });
 
   const slots: SlotCard[] = (['dev', 'devb'] as const).map((slot) => {
     const lock = slot === 'dev' ? t.lock : t.lockB;
@@ -963,6 +982,8 @@ export function derive(i: Inputs): View {
         : null,
       mac: i.mac,
       macReady: i.macInstallReady,
+      power: powerSummary(i.mac),
+      slowdown: slowdown(t.jobs, i.now),
       aws: i.aws,
     },
     slipping,

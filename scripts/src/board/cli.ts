@@ -23,6 +23,9 @@ import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { LANE_USAGE, parseLaneArgs, writeLane } from './tower/lanes.ts';
+import { readMacStats } from './tower/health.ts';
+import { compactJob } from './tower/history.ts';
+import { machine } from './machine.ts';
 
 export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on any command: its usage; nothing runs)
   decide-heavy                          stdin {limits, liveLimits, live, slots, req} → HeavyDecision
@@ -30,6 +33,7 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   overlap <repo> <boardDir>             writes <boardDir>/overlap.json
   report <historyDir> [days] [--json]   usage by mix + job peaks
   barriers <historyDir> [days] [--json] how limiting the cap is
+  machine <boardDir> [--json]           the Mac's power line and the slowdown ratio (F120)
   lane <phase> [--step …] [--plan …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
   sync-main                             the main checkout to origin/main; restarts the web tower if its code changed`;
 
@@ -40,6 +44,7 @@ export const FLAGS: Record<string, Spec> = {
   overlap: { args: 2 },
   report: { bare: ['json'], args: 2 },
   barriers: { bare: ['json'], args: 2 },
+  machine: { bare: ['json'], args: 1 },
   lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
   'sync-main': {},
 };
@@ -170,6 +175,17 @@ export function main(argv: string[], stdin: () => string): string {
       const b = barriers(readJsonl(historyDir, 'events-'), since, now);
       return rest.includes('--json') ? JSON.stringify(b) : formatBarriers(b);
     }
+    case 'machine': {
+      const [dir] = args;
+      if (!dir) throw new Error('usage: machine <boardDir> [--json]');
+      const t = now.getTime();
+      const events = readJsonl(join(dir, 'history'), 'events-');
+      const jobs = events
+        .flatMap((e) => compactJob(e) ?? [])
+        .filter((j) => j.t >= t - 8 * 86400_000);
+      const m = machine(readMacStats(join(dir, 'mac-stats.json'), t), jobs, t);
+      return rest.includes('--json') ? JSON.stringify(m) : m.lines.join('\n');
+    }
     case 'lane': {
       // docs/ops/TOWER.md → Lane files: the branch and sha come from git, never from an argument
       if (rest.some(isHelp) || rest.length === 0) return LANE_USAGE;
@@ -201,7 +217,7 @@ export function main(argv: string[], stdin: () => string): string {
       );
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | lane | sync-main (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | lane | sync-main (got ${cmd ?? 'nothing'})`,
       );
   }
 }

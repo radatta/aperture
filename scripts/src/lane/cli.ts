@@ -10,6 +10,7 @@ import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { run } from '../bot/sh.ts';
 import { withMainLock } from '../board/main-lock.ts';
+import { macLine } from '../board/machine.ts';
 import { execRun, syncMain } from '../board/sync-main.ts';
 import { readLanes, writeLane } from '../board/tower/lanes.ts';
 import { REPO_SLUG } from '../identifiers.ts';
@@ -21,6 +22,7 @@ import {
   EXIT,
   activeLanes,
   describeActive,
+  macRead,
   laneCap,
   parseWorktrees,
   readLifecycle,
@@ -105,6 +107,7 @@ export function status(d: Deps): number {
   d.log(
     `${active.length} of ${laneCap(d)} lanes active${active.length ? `: ${describeActive(active)}` : ''}`,
   );
+  d.log(macLine(macRead(d))); // battery / Low Power Mode / thermal, with the ≤ 3 lanes advice (docs/ops/HUB.md)
   for (const a of active) {
     const r = readLifecycle(d, a.branch);
     d.log(

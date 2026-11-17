@@ -161,3 +161,36 @@ export const porcelain = (main: string, branches: string[]) =>
       ]),
     )
     .join('\n');
+
+// A fresh mac-stats.json with a calm AC power block, `power` fields overridden (F120).
+export const macStats = (now: number, power: object = {}) =>
+  JSON.stringify({
+    v: 1,
+    t: new Date(now).toISOString(),
+    host: 'mac',
+    memTotalMiB: 36864,
+    mem: {
+      freeMiB: 1,
+      activeMiB: 1,
+      inactiveMiB: 1,
+      wiredMiB: 1,
+      compressedMiB: 1,
+      usedMiB: 1,
+      pressure: 'normal',
+    },
+    power: {
+      source: 'ac',
+      batteryPct: 82,
+      state: 'charging',
+      remainingMin: null,
+      lowPowerMode: false,
+      thermal: {
+        warningLevel: null,
+        performanceWarningLevel: null,
+        cpuSpeedLimit: null,
+        cpuSchedulerLimit: null,
+        cpuAvailableCpus: null,
+      },
+      ...power,
+    },
+  });

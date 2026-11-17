@@ -5,6 +5,7 @@ import {
   EXIT,
   activeLanes,
   describeActive,
+  macRead,
   expectedGitdir,
   hubName,
   laneCap,
@@ -19,6 +20,7 @@ import {
 } from './state.ts';
 import type { Deps, Lifecycle } from './state.ts';
 import { MainBusy } from '../board/main-lock.ts';
+import { LANES_THROTTLED, powerSummary } from '../board/tower/health.ts';
 import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
 
 export const KICKOFF_MAX = 256 * 1024;
@@ -184,6 +186,12 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
           EXIT.later,
         );
       if (active.length >= cap) d.log(`over the cap (${active.length} of ${cap}): ${a.overCap}`);
+      // advice, never a refusal: the hub decides (docs/ops/HUB.md → lanes on battery)
+      const advice = powerSummary(macRead(d)).advice;
+      if (advice && active.length >= LANES_THROTTLED)
+        d.log(
+          `note: the Mac is on battery or Low Power Mode, ${active.length} lanes active already: suggest ${advice}`,
+        );
 
       if (!d.fs.writeNew(lc, lifecycleText(rec)))
         return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);

@@ -461,6 +461,9 @@ describe('board.sh with the real dev lock', () => {
     });
     expect(r.stdout).toMatch(/^dev lock: flux until \d\d:\d\d$/m);
     expect(r.stdout).not.toMatch(/dev lease/);
+    // F120: the Mac's power line and the slowdown ratio, from cli.ts machine (no mac-stats.json, no history here)
+    expect(r.stdout).toMatch(/^mac: no stats \(agent not installed/m);
+    expect(r.stdout).toMatch(/^slowdown \(30 min vs 24 h\): typecheck – \(0 recent\)/m);
   });
 
   it('the sampler’s status line carries the lock holder from the cache', () => {

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Answer, Call, World } from './fakes.ts';
-import { boardSession, deps, fail, laneFile, porcelain, proc, world } from './fakes.ts';
+import { boardSession, deps, fail, laneFile, macStats, porcelain, proc, world } from './fakes.ts';
 import { KICKOFF_PROMPT, claudeLine, start } from './start.ts';
 import type { StartArgs } from './start.ts';
 
@@ -526,5 +526,35 @@ describe('lane start: the main-checkout lock', () => {
       'git worktree remove',
       'git branch -d',
     ]);
+  });
+});
+
+// F120: advice, never a refusal (docs/ops/HUB.md → lanes on battery)
+describe('lane start: the Mac on battery', () => {
+  it('notes the ≤ 3 lanes advice with 3 lanes active on battery under 30%, and still starts', async () => {
+    const w = world();
+    claudeSession(w);
+    for (const [i, b] of ['one', 'two', 'three'].entries()) {
+      proc(w, 9000 + i, '777');
+      boardSession(w, 9000 + i, b);
+    }
+    const t = deps(w, script(w, [], ['one', 'two', 'three']));
+    writeFileSync(
+      join(w.board, 'mac-stats.json'),
+      macStats(t.clock.now(), { source: 'battery', batteryPct: 25, state: 'discharging' }),
+    );
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(
+      /note: the Mac is on battery or Low Power Mode, 3 lanes active already: suggest ≤ 3 lanes/,
+    );
+  });
+
+  it('no note on AC, or with fewer lanes', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w));
+    writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now(), { lowPowerMode: true }));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).not.toMatch(/note: the Mac/);
   });
 });

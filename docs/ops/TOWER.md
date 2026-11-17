@@ -72,8 +72,13 @@ From the top:
 1. **The health strip**, always above the fold at 1512×860. Click a tile for its details.
    - **TODAY**: DONE TODAY's merges (the same day boundary) and how many deployed. It glows when one lands.
    - **CONTAINER**: memory against soft and hard (a last-hour sparkline), CPU, live `test` slots against
-     `limits.json`.
-   - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge".
+     `limits.json`. The slowdown ratio (SESSION-BOARD.md → _History_ → _Slowdown_) is in its details, and on its line
+     as "slow ×1.8 test" once the worst class reaches ×1.5 (amber; ×2 red).
+   - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge". A second
+     line is the power: "AC 82% charging (0:40 to full) · no thermal limit". It is red, and so is the tile, on Low
+     Power Mode, on battery under 20%, on a CPU speed or scheduler limit under 100%, or on a recorded thermal or
+     performance warning level other than 0. The details add the ≤ 3 lanes advice (HUB.md → _The hub's duties_). An
+     agent older than the power fields shows no line, never red, and NEEDS YOU carries its reinstall.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
    - lane `needs` items, with the link or a copy button for the one-line Mac command (the phone says "on the Mac"
@@ -182,7 +187,12 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
   (2026-11-16), as on other manifest-less sites while the Aperture app cleared it: so the page links
   `/manifest.webmanifest` (`web/manifest.webmanifest`: `display` standalone, scope `/`, Nord, the radar icons), and
   `app.js` also marks the page `installed` when `navigator.standalone` is true or the query matches, which applies the
-  same floor upright. Which of the two fixed it is unverified. **After this merges, remove the tower's Home Screen icon
+  same floor upright. Which of the two fixed it is unverified. The header still sat under the bar on the phone
+  (F161, parked 2026-11-16); before any more CSS, read what the phone reports: open the readout with five taps
+  within 3 s on SOURCES' "serving …" line, or `?debug=1`, and a tap on it closes it. It lists the `display-mode`
+  queries that match, `navigator.standalone`, the `installed` class, the measured `env(safe-area-inset-top/bottom)`,
+  the header's padding and box, the viewport and screen, and the UA. It is read-only, the page's only, and the
+  capture checks it per engine. **After this merges, remove the tower's Home Screen icon
   and add it again.**
 - The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (no tile: the
   dial, a sweep and a blip in mid-tones that read on light and dark tab bars); the Home Screen's detailed one would
@@ -334,20 +344,36 @@ open|tracked|done|dropped, `source`, `since`).
 
 A launchd agent on the Mac, `dev.rahuldatta.aperture.macstats` (`tools/macstats/`). It is not a mailroom job: the
 mailroom's runner is serial and runs in the container→Mac direction. Every 15 s it runs `vm_stat`, `sysctl` and `ps`
-and writes `<main checkout>/localNotes/board/mac-stats.json`:
+and `pmset -g batt`, `pmset -g` and `pmset -g therm` (none needs sudo), and writes
+`<main checkout>/localNotes/board/mac-stats.json`:
 
 ```json
 { "v": 1, "t": "…Z", "host": "…", "agentVersion": "<sha256 of macstats.sh>", "memTotalMiB": 36864,
   "mem": { "freeMiB": …, "activeMiB": …, "inactiveMiB": …, "wiredMiB": …, "compressedMiB": …, "usedMiB": …,
            "freePct": …, "pressure": "normal|warn|critical" },
   "swap": { "totalMiB": …, "usedMiB": … }, "load": [1, 5, 15], "cpus": 12,
-  "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": … } }
+  "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": … },
+  "power": { "source": "ac|battery|null", "batteryPct": 12, "state": "charging", "remainingMin": 542,
+             "lowPowerMode": false,
+             "thermal": { "warningLevel": null, "performanceWarningLevel": null, "cpuSpeedLimit": null,
+                          "cpuSchedulerLimit": null, "cpuAvailableCpus": null } } }
 ```
 
 - `usedMiB` is active + wired + compressor.
 - `freeMiB` is free + speculative.
 - `vm` is the largest resident process named like a hypervisor (`Virtualization`, `limactl`, `qemu`, `vfkit`,
   `krunkit`), or `null`.
+- `power` (F120): from `pmset -g batt`'s `Now drawing from 'AC Power'` / `'Battery Power'` and its
+  `-InternalBattery-0 (id=…)<tab>12%; charging; 9:02 remaining present: true` line. `state` is `charging`,
+  `discharging`, `charged`, `finishing` (finishing charge) or `not-charging` (`AC attached; not charging`).
+  `remainingMin` is to full on AC and to empty on battery, and null for `(no estimate)`. The battery id is never
+  written. `lowPowerMode` is `pmset -g`'s `lowpowermode 0|1`. `thermal` is `pmset -g therm`: a `Note: No … has been
+recorded` line is null, `CPU_Speed_Limit = 80` a number, and a recorded level that isn't a number `"recorded"`.
+  Anything pmset doesn't print is null, so a desktop Mac or a pmset failure is nulls, never a failed tick. `v` stays
+  1 (the key is additive): a key-less file is an older agent.
+- Only the battery line, Low Power Mode and the "No … recorded" notes are seen in real output. The recorded-level
+  layout and an Apple-silicon `CPU_Speed_Limit` are from Intel-era reports (2026-11-17 search), so a parse miss
+  there reads null (no alert), never a failed tick.
 
 **Trust boundary.** The agent takes no input from the container:
 

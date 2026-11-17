@@ -17,7 +17,10 @@ Exit codes:
 - 1: failed midway (says what was rolled back and what is left), or a failed fetch or GitHub read (nothing changed)
 - 2: usage or a bad name
 - 3: refused, with nothing changed
-- 75: refused for now (cap full, deploy still running): wait or act, then rerun
+- 75: refused for now (cap full, deploy still running, the main checkout busy): wait or act, then rerun
+
+`status` prints the active lanes against the cap, then the Mac's `mac:` power line (battery, Low Power Mode,
+thermal; `docs/ops/HUB.md` → _Lanes on battery_).
 
 **Names.** `^[a-z0-9][a-z0-9-]{0,62}$` (the mailroom's rule). Not `main`, `master`, `dev`, `devb`, `test` (the heavy
 guard would read `pnpm lanes start test` as a suite), or the hub's `hub.json` name. Such a name is safe in a path, a
@@ -37,10 +40,22 @@ It refuses, changing nothing, on any of these:
 - an existing worktree path or lifecycle record
 - a window of that name
 - **the cap** (exit 75): it names every active lane and its phase
+- **the main checkout busy** (exit 75): another `lanes start` or a sync-main (a `lanes end` finishing, or
+  `pnpm board sync-main`) held the main-checkout lock past its 120 s wait (below)
+
+**The main-checkout lock** (F155). From the dirty check through `worktree add`, start holds
+`/tmp/aperture-main-checkout.lock` (`APERTURE_MAIN_LOCK`; `scripts/src/board/main-lock.ts`), as sync-main does from
+its dirty check through its switch. Before it, `lanes end`'s sync-main could move `/workspace` mid-start: the fetch
+failed with "cannot lock ref", or the switch on an `index.lock`, rolling back with a misleading message. It is
+`flock(1)` on an fd the process keeps, released when it exits, so it never goes stale. It lives on the rootfs like
+`lib.sh`'s locks, since one container is every session that can race. A wait says so at once. Every `git fetch` here
+(start's, sync-main's, end's PR-head fetch) times out after 60 s, and start's `ls-remote` after 30 s: SIGTERM, which
+git cleans its lock files up on, then the failed-fetch refusal. With the Mac on battery under 30% or in Low Power
+Mode and 3 lanes already active, start prints a `note:` with the ≤ 3 advice and still starts.
 
 Then it runs these steps, each registering an undo:
 
-1. Claims the lifecycle record (`O_EXCL`, so two starts can't race).
+1. Claims the lifecycle record (`O_EXCL`, so two starts can't race), under the main-checkout lock with steps 2–3.
 2. Detaches the main checkout at `origin/main`'s sha, read once: every later step uses that sha, so another session's
    fetch mid-start can't split the base.
 3. Runs `git worktree add --no-track -b <branch> .claude/worktrees/<branch> <that sha>`. If it fails after git made the
