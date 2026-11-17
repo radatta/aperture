@@ -38,6 +38,7 @@ export const FLAGS: Record<string, Spec> = {
   'sim-probe': { bare: ['sign-in'] },
   'sim-shutdown': {},
   'clip-probe': { flags: ['out', 'wait'] },
+  'sim-trial': { flags: ['tag', 'round'], bare: ['keys'] },
 };
 
 const clock: Clock = {
@@ -105,11 +106,7 @@ export async function main(argv: string[]): Promise<number> {
         },
         waitMs,
       );
-    case 'sim-trial':
-      if (flags.keys !== undefined && flags.keys !== 'true') {
-        console.error(`--keys takes no value (got "${flags.keys}")\n${USAGE}`);
-        return EXIT.usage;
-      }
+    case 'sim-trial': // --keys with a value is refused by the guard (FLAGS: bare)
       return simTrial(
         { fs: nodeFs, clock, dir: hostjobsDir(run), log: (s) => console.log(s) },
         flags.tag ?? '',
