@@ -232,6 +232,8 @@ describe('dueClock — a stated clock phrased as a due', () => {
     expect(strip('.env cleanup at 5pm')).toBe('.env cleanup');
     expect(strip('--force flag docs by noon')).toBe('--force flag docs');
     expect(strip('-- call the bank, at 1 am, then lunch')).toBe('-- call the bank, then lunch');
+    expect(strip('fix login - by 5pm')).toBe('fix login');
+    expect(strip('At 5pm - call mum')).toBe('call mum');
   });
   it('a clock not after at/by is not a due; a phrase that is the whole title leaves it whole', () => {
     expect(strip('watch 9pm show')).toBeNull();

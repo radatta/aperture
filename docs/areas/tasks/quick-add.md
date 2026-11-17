@@ -149,7 +149,7 @@ autonomous build:
   model gave that same time but kept the words, so a line's title doesn't depend on the model. Spoken lines
   too. "watch 9pm show", "the 3pm meeting", "move the 3pm to 5pm" and a bare hour ("look at one of the
   leases") still get no time, and so does a line with a second stated clock
-  ("move standup at 3pm to 5pm": which one is the due stays the model's call).
+  ("move standup at 3pm to 5pm": a typed line keeps the model's time, a spoken one gets none).
 
 ## Decision log (2026-11-16)
 

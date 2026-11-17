@@ -470,7 +470,7 @@ export const siriCapture: Scenario = {
       id: 'not-due-clock',
       entry: 'api',
       kind: 'edge',
-      what: '“watch 9pm show”, “the 3pm meeting”, “move the 3pm to 5pm”, “look at one of the leases” kept in the title get no time',
+      what: '“watch 9pm show”, “the 3pm meeting”, “move the 3pm to 5pm”, “look at one of the leases” and a second clock (“move standup at 3pm to 5pm”) kept in the title get no time',
       offDev: {
         file: 'packages/shared/src/quickParse.test.ts',
         test: 'a clock not phrased as a due gets no time when the model kept it',
@@ -997,6 +997,7 @@ export const siriCapture: Scenario = {
           .waitFor({ timeout: 10_000 });
         await ctx.shot('review');
         await field.fill(''); // the line goes unsaved
+        await sleep(2 * SEC); // a create in flight reaches the ledger only with its response
         if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
       },
     },
