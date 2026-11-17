@@ -207,6 +207,23 @@ describe('calendar auto-sync toggle', () => {
   });
 });
 
+describe('the coach’s AI pick switch', () => {
+  it('is on by default, turns off, and the day’s plan follows', async () => {
+    const api = createStubClient({ seed: true, storageKey: `settings-ai-${Math.random()}` });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    const box = (await screen.findByRole('checkbox', {
+      name: /AI pick: Opus chooses today’s problems/,
+    })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    await user.click(box);
+    await waitFor(async () => expect((await api.getSettings()).coachAiPick).toBe(false));
+    expect((await api.getCoachToday()).ai).toBeNull();
+    await user.click(box);
+    await waitFor(async () => expect((await api.getSettings()).coachAiPick).toBe(true));
+  });
+});
+
 describe('build stamp', () => {
   it('shows the build the page came from — "local" outside a deploy', async () => {
     renderApp({ path: '/settings' });

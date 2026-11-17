@@ -8,6 +8,12 @@ import { handleRpc } from '../handler';
 import { TOOLS } from './tools';
 import { RpcParamError } from './types';
 import type { ToolContext } from './types';
+import { AI_PICK_NOTICE } from '@aperture/shared';
+import { FakeAnthropic } from '../anthropic/gateway';
+import type { CoachPickCall } from '../anthropic/gateway';
+import { inlinePickInvoker } from '../coach/invoker';
+import type { CoachPickInvoker } from '../coach/invoker';
+import { runCoachPick } from '../coach/pick';
 
 // The coach's MCP tools over the real handleRpc path (docs/areas/recruiting/coach.md). Synthetic data only.
 const U = 'local';
@@ -90,7 +96,7 @@ async function ended(slug: string, day: string, accepted: boolean, startedAt = T
 describe('leetcode_today', () => {
   it('is listed read-only and answers with slots, rules and the wording note', async () => {
     const tool = TOOLS.find((x) => x.name === 'leetcode_today')!;
-    expect(tool.description).toMatch(/Read-only/);
+    expect(tool.description).toMatch(/Otherwise read-only/);
     const out = await call('leetcode_today');
     expect(out.day).toBe(TODAY);
     expect(out.slots).toHaveLength(4);
@@ -120,6 +126,108 @@ describe('leetcode_today', () => {
   });
   it('refuses a bad day', async () => {
     await expect(call('leetcode_today', { day: 'today' })).rejects.toBeInstanceOf(RpcParamError);
+  });
+});
+
+describe('leetcode_today and the AI pick', () => {
+  const answer: CoachPickCall = {
+    ok: true,
+    fields: {
+      picks: [{ slug: 'two-sum', why: 'Due since Thursday' }],
+      note: 'One re-solve, then rest.',
+      focus: null,
+    },
+    model: 'claude-opus-5-5',
+    usage: { input: 1, output: 1 },
+    ms: 1,
+  };
+  function aiCtx(mode: 'inline' | 'deferred', next: CoachPickCall) {
+    const fake = new FakeAnthropic();
+    fake.nextPick = next;
+    const slept: number[] = [];
+    const invoker: CoachPickInvoker =
+      mode === 'inline'
+        ? inlinePickInvoker((e) =>
+            runCoachPick(
+              {
+                repo: new Repo(doc, liveWrites(doc), e.userId),
+                anthropic: fake,
+                now,
+                log: () => {},
+              },
+              e,
+            ),
+          )
+        : { enabled: true, invoke: async () => {} };
+    ctx = {
+      dispatch: (method: ApiMethod, args: unknown[]) =>
+        handleRpc(
+          doc,
+          { userId: U, method, args, now },
+          { anthropic: fake, coachPickInvoker: invoker },
+        ),
+      upload: async () => {},
+      now,
+      sleep: async (ms) => void slept.push(ms),
+    };
+    return { fake, slept };
+  }
+  // History: a failed try four days back, so two-sum is a due re-solve.
+  const history = () =>
+    backend.logCoachAttempts([
+      { slug: 'two-sum', day: '2026-11-05', outcome: 'failed' },
+      { slug: 'valid-anagram', day: '2026-11-06', outcome: 'clean' },
+    ]);
+
+  it('the first read starts the pick and carries the note and each slot’s why', async () => {
+    await history();
+    const { fake } = aiCtx('inline', answer);
+    const out = await call('leetcode_today');
+    expect(fake.pickCalls).toHaveLength(1);
+    expect(out.ai).toMatchObject({
+      status: 'ok',
+      source: 'ai',
+      note: 'One re-solve, then rest.',
+      notice: null,
+    });
+    expect(out.slots).toEqual([
+      expect.objectContaining({ slug: 'two-sum', why: 'Due since Thursday' }),
+    ]);
+    expect(out.note).toMatch(/coach from ai.note/);
+    await call('leetcode_today');
+    expect(fake.pickCalls).toHaveLength(1);
+  });
+
+  it('a failed pick says so, once, over the rules’ slots', async () => {
+    await history();
+    aiCtx('inline', {
+      ok: false,
+      reason: 'api',
+      detail: 'HTTP 529',
+      model: 'm',
+      usage: null,
+      ms: 1,
+    });
+    const out = await call('leetcode_today');
+    expect(out.ai).toMatchObject({ status: 'fallback', notice: AI_PICK_NOTICE });
+    expect(out.slots.length).toBeGreaterThan(0);
+    expect(out.slots.every((x: { why: unknown }) => x.why === null)).toBe(true);
+  });
+
+  it('waits ~9 s for a pick still running, then answers pending with no slots', async () => {
+    await history();
+    const { slept } = aiCtx('deferred', answer);
+    const out = await call('leetcode_today');
+    expect(slept.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(9_000);
+    expect(out.ai).toMatchObject({ status: 'pending', next: expect.stringMatching(/again/) });
+    expect(out.slots).toEqual([]);
+  });
+
+  it('a past day never starts one', async () => {
+    await history();
+    const { fake } = aiCtx('inline', answer);
+    expect((await call('leetcode_today', { day: '2026-11-08' })).ai).toBeNull();
+    expect(fake.pickCalls).toHaveLength(0);
   });
 });
 

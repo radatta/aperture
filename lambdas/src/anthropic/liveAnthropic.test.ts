@@ -267,3 +267,97 @@ describe('createLiveAnthropic', () => {
     }
   });
 });
+
+describe('coachPick', () => {
+  const ctx = {
+    today: '2026-11-16',
+    candidates: [
+      {
+        slug: 'two-sum',
+        title: 'Two Sum',
+        pattern: 'arrays-hashing',
+        difficulty: 'Easy',
+        kind: 're-solve',
+        ifFocus: null,
+        rule: 'r',
+        history: null,
+      },
+    ],
+    focus: { pattern: 'arrays-hashing', day: 1, of: 3, locked: false },
+    top3: ['arrays-hashing'],
+    mustInclude: null,
+    oldestDue: 'two-sum',
+    momentum: { activeDays: 1, of: 7, lastActiveDay: null, missedYesterday: false },
+    rates: [],
+    recent: [
+      {
+        day: '2026-11-12',
+        slug: 'two-sum',
+        pattern: 'arrays-hashing',
+        difficulty: 'Easy',
+        outcome: 'failed',
+        help: 'none',
+        cause: null,
+        lastError: null,
+        minutes: 40,
+        capMin: 30,
+        notes: 'PRIVATE NOTE',
+      },
+    ],
+  } as never;
+  const ANSWER = { picks: [{ slug: 'two-sum', why: 'due' }], note: null, focus: null };
+
+  it('runs Opus 5.5 with thinking left on (never disabled), effort medium, its schema and its own log event', async () => {
+    const { gw, calls, logs } = setup(() => message(JSON.stringify(ANSWER)));
+    const out = await gw.coachPick({ ctx, timeoutMs: 60_000 });
+    expect(out).toEqual({
+      ok: true,
+      fields: ANSWER,
+      model: 'claude-opus-5-5',
+      usage: { input: 420, output: 37 },
+      ms: expect.any(Number),
+    });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.model).toBe('claude-opus-5-5');
+    expect(body).not.toHaveProperty('thinking');
+    expect(body.output_config).toMatchObject({ effort: 'medium', format: { type: 'json_schema' } });
+    expect(body.max_tokens).toBe(8000);
+    const line = JSON.parse(logs[0]!);
+    expect(line).toMatchObject({
+      event: 'coach_pick',
+      ok: true,
+      candidates: 1,
+      attempts: 1,
+      input_tokens: 420,
+      output_tokens: 37,
+    });
+    expect(logs.join('\n')).not.toMatch(/PRIVATE NOTE|two-sum|SECRET/);
+  });
+
+  it('a refusal is its own reason, with the tokens kept', async () => {
+    const { gw, logs } = setup(() => message('', 'refusal'));
+    const out = await gw.coachPick({ ctx, timeoutMs: 60_000 });
+    expect(out).toMatchObject({ ok: false, reason: 'refusal', usage: { input: 420, output: 37 } });
+    expect(JSON.parse(logs[0]!)).toMatchObject({ reason: 'refusal', stop_reason: 'refusal' });
+  });
+
+  it('max_tokens and HTTP errors are api failures', async () => {
+    expect(
+      await setup(() => message('{', 'max_tokens')).gw.coachPick({ ctx, timeoutMs: 1 }),
+    ).toMatchObject({ ok: false, reason: 'api' });
+    expect(
+      await setup(() => json(529, { error: { message: 'overloaded' } })).gw.coachPick({
+        ctx,
+        timeoutMs: 1,
+      }),
+    ).toMatchObject({ ok: false, reason: 'api', usage: null });
+  });
+
+  it('the other calls still turn thinking off at low effort', async () => {
+    const { gw, calls } = setup(() => message(JSON.stringify(FIELDS)));
+    await gw.parseTask(req);
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body.output_config.effort).toBe('low');
+  });
+});

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
-import { createStubClient } from '../../data/stubClient';
+import { createStubClient, STUB_COACH_PICK_KEY } from '../../data/stubClient';
+import { AI_PICK_NOTICE } from '@aperture/shared';
+import type { CoachAiView, CoachToday } from '@aperture/shared';
 
 beforeEach(() => globalThis.localStorage?.clear());
 afterEach(() => vi.restoreAllMocks());
@@ -206,3 +208,122 @@ describe('the Today card', () => {
     expect(await within(c).findByText('Sliding Window · day 1 of 3')).toBeTruthy();
   });
 });
+
+// The day's AI pick on the card (docs/areas/recruiting/coach.md → The AI pick). The stub's stand-in reads like the
+// rules, so the model's own words come from a spied read.
+describe('the AI pick on the Today card', () => {
+  const view = (o: Partial<CoachAiView>): CoachAiView => ({
+    status: 'ok',
+    source: 'ai',
+    notice: null,
+    reason: null,
+    note: null,
+    focusChange: null,
+    model: 'claude-opus-5-5',
+    pickedAt: 1,
+    ...o,
+  });
+
+  it('the first open starts the pick once, and the picked slots show', async () => {
+    const api = stub(true);
+    expect((await api.getCoachToday()).ai?.status).toBe('due');
+    const start = vi.spyOn(api, 'startCoachPick');
+    renderApp({ api, path: '/recruiting' });
+    expect(await titles()).toHaveLength(4);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect((await api.getCoachToday()).ai?.status).toBe('ok');
+  });
+
+  it('shows the day note, each slot’s why in place of the rule, and a focus change', async () => {
+    const api = stub(true);
+    const real = await api.startCoachPick();
+    const t: CoachToday = {
+      ...real,
+      focus: { ...real.focus, source: 'ai' },
+      ai: view({
+        note: 'One re-solve, then rest.',
+        focusChange: { from: 'two-pointers', to: 'sliding-window', why: 'Weaker first tries' },
+      }),
+      slots: real.slots.map((x, i) => (i === 2 ? { ...x, aiWhy: 'Failed it on Thursday' } : x)),
+    };
+    vi.spyOn(api, 'getCoachToday').mockResolvedValue(t);
+    renderApp({ api, path: '/recruiting' });
+    const c = await card();
+    expect(await within(c).findByText('One re-solve, then rest.')).toBeTruthy();
+    expect(within(c).getByText('Failed it on Thursday')).toBeTruthy();
+    expect(within(c).queryByText(/^Re-solve today: blank editor/)).toBeNull();
+    expect(
+      within(c).getByText(/Opus moved the focus from Two Pointers to Sliding Window — Weaker/),
+    ).toBeTruthy();
+    expect(within(c).getByText(/· Opus’s pick$/)).toBeTruthy();
+  });
+
+  it('a failed pick says so, over the rules’ slots', async () => {
+    globalThis.localStorage.setItem(STUB_COACH_PICK_KEY, 'fallback');
+    renderApp({ api: stub(true), path: '/recruiting' });
+    const c = await card();
+    expect(await within(c).findByText(AI_PICK_NOTICE)).toBeTruthy();
+    expect(within(c).getByRole('status')).toBeTruthy();
+    expect(await titles()).toHaveLength(4);
+  });
+
+  it('a rejected answer reads the same', async () => {
+    globalThis.localStorage.setItem(STUB_COACH_PICK_KEY, 'invalid');
+    renderApp({ api: stub(true), path: '/recruiting' });
+    expect(await within(await card()).findByText(AI_PICK_NOTICE)).toBeTruthy();
+  });
+
+  it('while it runs: “Opus is picking”, no slots, then a claim that never lands turns into the notice', async () => {
+    const api = stub(true);
+    const real = await api.getCoachToday();
+    const pending: CoachToday = {
+      ...real,
+      ai: view({ status: 'pending', source: 'rules', pickedAt: null }),
+    };
+    const fell: CoachToday = {
+      ...real,
+      ai: view({
+        status: 'fallback',
+        source: 'rules',
+        notice: AI_PICK_NOTICE,
+        reason: 'timeout',
+        pickedAt: null,
+      }),
+    };
+    const reads = vi
+      .spyOn(api, 'getCoachToday')
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValue(fell);
+    renderApp({ api, path: '/recruiting' });
+    const c = await card();
+    expect(await within(c).findByText(/Opus is picking today’s problems/)).toBeTruthy();
+    expect(within(c).queryByRole('list', { name: 'Today’s slots' })).toBeNull();
+    // It polls while pending; the stale claim reads back as the fallback.
+    expect(await within(c).findByText(AI_PICK_NOTICE, {}, { timeout: 5_000 })).toBeTruthy();
+    expect(reads.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(await titles()).toHaveLength(4);
+  });
+
+  it('a start that fails shows the rules with a Retry', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    const start = vi.spyOn(api, 'startCoachPick').mockRejectedValueOnce(new Error('offline'));
+    renderApp({ api, path: '/recruiting' });
+    const c = await card();
+    expect(await within(c).findByText(/Couldn’t start today’s AI pick/)).toBeTruthy();
+    expect(await titles()).toHaveLength(4);
+    await user.click(within(c).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(c).queryByText(/Couldn’t start/)).toBeNull());
+  });
+
+  it('with the switch off: the rules, no start, no notice', async () => {
+    const api = stub(true);
+    await api.updateSettings({ coachAiPick: false });
+    const start = vi.spyOn(api, 'startCoachPick');
+    renderApp({ api, path: '/recruiting' });
+    expect(await titles()).toHaveLength(4);
+    expect(start).not.toHaveBeenCalled();
+    expect(within(await card()).queryByText(AI_PICK_NOTICE)).toBeNull();
+  });
+}, 15_000);

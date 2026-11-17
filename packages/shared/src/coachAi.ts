@@ -75,6 +75,7 @@ export interface CoachAiRecent {
 export interface CoachPickContext {
   today: string;
   candidates: CoachAiCandidate[];
+  rules: string[]; // the rules' own pick, in order — the baseline the model improves on
   focus: { pattern: PatternId; day: number; of: number; locked: boolean };
   top3: PatternId[]; // the focus ranking's top three now; a focus change goes only there
   mustInclude: string | null; // the oldest due re-solve the last AI day skipped
@@ -108,6 +109,11 @@ export function coachPickContext(
 ): CoachPickContext {
   const { today } = input;
   const pools = coachPools(input, params);
+  // The rules' plan before any of today's changes: its picks lead the candidates, with the rules' kinds.
+  const rulePlan = planDay(
+    { ...input, aiPick: false, days: input.days.filter((d) => d.day !== today) },
+    params,
+  );
   const { focus, records, seen, ranks } = pools;
   const locked = focus.source !== 'engine'; // a held pick (his or the AI's) runs its block out
   const top3 = ranks.slice(0, 3).map((r) => r.pattern);
@@ -137,6 +143,7 @@ export function coachPickContext(
         : null,
     });
   };
+  for (const s of rulePlan.slots) add(s.slug, s.kind, null, s.reason);
   for (const c of pools.cands['carry-over']) add(c.slug, 'carry-over', null, c.reason);
   for (const r of pools.due.slice(0, CAPS.due))
     add(r.slug, 're-solve', null, ruleOf('re-solve', r.slug));
@@ -201,7 +208,8 @@ export function coachPickContext(
     top3,
     mustInclude,
     oldestDue,
-    momentum: planDay({ ...input, aiPick: false }, params).momentum,
+    rules: rulePlan.slots.map((s) => s.slug),
+    momentum: rulePlan.momentum,
     rates: stats.patterns.map((p) => ({
       pattern: p.pattern,
       firstTry: `${p.firstTry.hit}/${p.firstTry.of}`,
@@ -271,20 +279,15 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   return { ok: true, picks, note, focus };
 }
 
-// The stub's (and the contract suite's) deterministic stand-in for the model: the skipped oldest due, the
-// carry-over, the oldest due, then new and stretch — up to four, never a focus change.
+// The stub's (and the local check's) deterministic stand-in for the model: the rules' own pick, with the rules'
+// reasons as its whys and no note — so a stub day reads exactly like the rules' — plus the skipped oldest due re-solve
+// up front when one is owed. Never a focus change.
 export function standInCoachPick(ctx: CoachPickContext): Record<string, unknown> {
-  const order: SlotKind[] = ['carry-over', 're-solve', 'new', 'stretch'];
-  const pool = ctx.candidates.filter((c) => !c.ifFocus);
-  const ranked = [
-    ...pool.filter((c) => c.slug === ctx.mustInclude),
-    ...order.flatMap((k) => pool.filter((c) => c.kind === k).slice(0, 1)),
-    ...order.flatMap((k) => pool.filter((c) => c.kind === k).slice(1)),
-  ];
-  const picks = [...new Map(ranked.map((c) => [c.slug, c])).values()].slice(0, AI_PICK_MAX);
+  const order = [...new Set([...(ctx.mustInclude ? [ctx.mustInclude] : []), ...ctx.rules])];
+  const byslug = new Map(ctx.candidates.map((c) => [c.slug, c]));
   return {
-    picks: picks.map((c) => ({ slug: c.slug, why: `Stand-in pick: ${c.rule || c.kind}` })),
-    note: 'Stand-in pick (no model here): the rules’ order, re-solves first.',
+    picks: order.slice(0, AI_PICK_MAX).map((slug) => ({ slug, why: byslug.get(slug)?.rule ?? '' })),
+    note: null,
     focus: null,
   };
 }

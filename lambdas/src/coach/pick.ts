@@ -57,8 +57,10 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
       consistent: true,
     });
   const t0 = d.now();
+  // Decided inside the CAS step (re-run on a lost race), so the last attempt's verdict is the one that stuck.
   let queued = false;
-  const row = await repo.casUpdate(
+  let mine = false;
+  await repo.casUpdate(
     shape,
     e.day,
     (cur) => {
@@ -68,7 +70,9 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
         cur.ai.claimId === e.claimId &&
         cur.ai.startedAt === null &&
         t0 - cur.ai.claimedAt > AI_PICK_QUEUE_MS;
-      return queued ? null : startAiRow(cur, e.claimId, t0);
+      const next = queued ? null : startAiRow(cur, e.claimId, t0);
+      mine = next !== null;
+      return next;
     },
     t0,
     { consistent: true },
@@ -87,8 +91,8 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
     log(JSON.stringify({ event: 'coach_pick_skipped', why: 'queued' }));
     return 'fallback';
   }
-  // Not this claim's start (another claim, already started, or stale): someone else owns the day's one call.
-  if (row.ai?.claimId !== e.claimId || row.ai.startedAt !== t0) return 'not-ours';
+  // Not this claim's start (another claim, already started, or settled): the day's one call isn't this event's.
+  if (!mine) return 'not-ours';
 
   const ci = await readCoachInput(repo, e.day, d.now());
   const ctx = coachPickContext(ci);
