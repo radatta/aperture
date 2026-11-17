@@ -7,7 +7,7 @@ import type { LaneFile } from '../board/tower/lanes.ts';
 
 export const EXIT = { ok: 0, failed: 1, usage: 2, refused: 3, later: 75 } as const;
 export const DEFAULT_CAP = 5;
-// `test` too: lib.sh's heavy classifier would read `pnpm lane start test` as a suite.
+// `test` too: lib.sh's heavy classifier would read `pnpm lanes start test` as a suite.
 export const RESERVED = ['main', 'master', 'dev', 'devb', 'test'];
 
 export interface LaneFs {

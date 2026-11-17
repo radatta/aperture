@@ -30,14 +30,15 @@ describe('lane cli', () => {
       ['help', 'status'],
     ])
       expect(await main(argv, never), argv.join(' ')).toBe(0);
-    expect(log.mock.calls.flat().join('\n')).toMatch(/pnpm lane end/);
+    expect(log.mock.calls.flat().join('\n')).toMatch(/pnpm lanes end/);
     log.mockRestore();
   });
 
-  it('a bare flag swallowing a word, or a value flag without one, is refused', async () => {
+  it('a value flag without a value, or a retired flag, is refused', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(await main(['start', 'x', '--skip-permissions', 'y'], never)).toBe(2);
     expect(await main(['end', 'x', '--force-abandon'], never)).toBe(2);
+    // --skip-permissions was dropped: sessions here start in bypass anyway (F136)
+    expect(await main(['start', 'x', '--skip-permissions'], never)).toBe(2);
     err.mockRestore();
   });
 

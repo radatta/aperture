@@ -21,7 +21,7 @@ export type Limits = {
   // rewrites `classes`, never this). `test`: 2 since 2026-11-13, from the 2026-11-08 bench (2 suites
   // measured safe at 4 workers; 3+ unmeasured, estimated near the hard line). Was 4, from the 2026-10-13 edge.
   concurrency?: Record<string, number>;
-  // At most this many active lanes (policy; `pnpm lane start` enforces it, docs/ops/LANES.md).
+  // At most this many active lanes (policy; `pnpm lanes start` enforces it, docs/ops/LANES.md).
   lanes?: { maxActive: number };
   classes: Record<string, ClassCost>;
 };

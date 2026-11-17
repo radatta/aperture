@@ -24,7 +24,7 @@
     "board": "node scripts/src/board/cli.ts",
     "bot": "node scripts/src/bot/cli.ts",
     "mailroom": "node scripts/src/mailroom/cli.ts",
-    "lane": "node scripts/src/lane/cli.ts",
+    "lanes": "node scripts/src/lane/cli.ts",
     "vapid-keys": "node scripts/src/vapid-keys.ts"
   },
   "devDependencies": {

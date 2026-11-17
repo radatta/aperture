@@ -1,4 +1,4 @@
-// `pnpm lane start <branch>`: the worktree off origin/main, its install, a tmux window running Claude named after the
+// `pnpm lanes start <branch>`: the worktree off origin/main, its install, a tmux window running Claude named after the
 // branch with the kickoff as its first message, and the board lane. Refuses before changing anything; a failure
 // midway rolls back what it made (docs/ops/LANES.md → Start).
 import {
@@ -27,7 +27,6 @@ export const KICKOFF_PROMPT =
 export type StartArgs = {
   branch: string | undefined;
   kickoff: string | null;
-  skipPermissions: boolean;
   overCap: string | null;
 };
 
@@ -37,9 +36,8 @@ const refuse = (d: Deps, msg: string, code: number = EXIT.refused) => {
 };
 
 // The shell line typed into the new window: only the validated branch varies.
-export const claudeLine = (b: string, kickoff: boolean, skip: boolean) =>
-  ['claude', '-n', b, ...(skip ? ['--dangerously-skip-permissions'] : [])].join(' ') +
-  (kickoff ? ` '${KICKOFF_PROMPT}'` : '');
+export const claudeLine = (b: string, kickoff: boolean) =>
+  `claude -n ${b}` + (kickoff ? ` '${KICKOFF_PROMPT}'` : '');
 
 export async function start(d: Deps, a: StartArgs): Promise<number> {
   const e = d.env;
@@ -105,7 +103,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   if (d.fs.exists(wt) || trees.some((t) => t.path === wt))
     return refuse(d, `.claude/worktrees/${b} already exists`);
   if (d.fs.exists(lifecyclePath(e, b)))
-    return refuse(d, `a lifecycle record for ${b} exists: pnpm lane end ${b} first`);
+    return refuse(d, `a lifecycle record for ${b} exists: pnpm lanes end ${b} first`);
   // Tab-separated: a window name may hold spaces.
   const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}']);
   const same = windows.split('\n').find((l) => l.slice(l.indexOf('\t') + 1) === b);
@@ -116,7 +114,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   if (active.length >= cap && a.overCap === null)
     return refuse(
       d,
-      `${active.length} of ${cap} lanes active: ${describeActive(active)}. End one (pnpm lane end), park one ` +
+      `${active.length} of ${cap} lanes active: ${describeActive(active)}. End one (pnpm lanes end), park one ` +
         `(pnpm board lane parked), or pass --over-cap "<reason>".`,
       EXIT.later,
     );
@@ -203,7 +201,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   const gitdir = (d.fs.read(`${wt}/.git`) ?? '').trim();
   if (gitdir !== expectedGitdir(b))
     return rollback(
-      `the worktree's .git reads "${gitdir}", not "${expectedGitdir(b)}" (git < 2.48? CLAUDE.md → relative paths)`,
+      `the worktree's .git reads "${gitdir}", not "${expectedGitdir(b)}" (git < 2.48? docs/ops/LANES.md → Start)`,
     );
 
   d.log(`installing in .claude/worktrees/${b} …`);
@@ -255,14 +253,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
 
   try {
-    d.run('tmux', [
-      'send-keys',
-      '-t',
-      paneId,
-      '-l',
-      '--',
-      claudeLine(b, kickoff !== null, a.skipPermissions),
-    ]);
+    d.run('tmux', ['send-keys', '-t', paneId, '-l', '--', claudeLine(b, kickoff !== null)]);
     d.run('tmux', ['send-keys', '-t', paneId, 'Enter']);
   } catch (err) {
     return rollback(`tmux send-keys failed: ${(err as Error).message}`);

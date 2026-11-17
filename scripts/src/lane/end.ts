@@ -1,4 +1,4 @@
-// `pnpm lane end <branch>`: once the PR is merged and main's deploy for it is green (or `--force-abandon "<reason>"`),
+// `pnpm lanes end <branch>`: once the PR is merged and main's deploy for it is green (or `--force-abandon "<reason>"`),
 // archive the worktree's localNotes and check the copy, remove the worktree, clear the board lane, print the
 // maintainer's Mac line and close the lane's window, last and by id only. A rerun resumes (docs/ops/LANES.md → End).
 import { deployFor } from '../board/tower/derive.ts';
@@ -351,7 +351,7 @@ export function end(d: Deps, a: EndArgs): number {
   return EXIT.ok;
 }
 
-// A record for a lane started before `pnpm lane start` (no window known), so its archive can be recorded.
+// A record for a lane started before `pnpm lanes start` (no window known), so its archive can be recorded.
 const bareRecord = (b: string, wt: string, d: Deps): Lifecycle => ({
   v: 1,
   branch: b,
