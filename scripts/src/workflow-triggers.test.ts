@@ -107,12 +107,11 @@ describe('workflow triggers', () => {
   it('branch.yml runs the CI gate on every push but main and dev, and nothing else', () => {
     expect(pushBranches('branch.yml')).toEqual(['main', 'dev']);
     const yml = read('branch.yml');
-    expect(
-      yml
-        .split('\n')
-        .filter((l) => /^\s+uses:/.test(l))
-        .map((l) => l.trim()),
-    ).toEqual(['uses: ./.github/workflows/ci.yml']);
+    // One job, id `branch`, so its checks are `branch / …`: a job named `ci` would post the PR's required check
+    // names (`ci / check`, …) on a branch head, satisfying the ruleset without testing the merge.
+    expect(yml.slice(yml.indexOf('\njobs:\n'))).toBe(
+      '\njobs:\n  branch:\n    uses: ./.github/workflows/ci.yml\n',
+    );
     expect(yml).toContain('cancel-in-progress: true');
     expect(yml).not.toMatch(/secrets|id-token|environment/);
   });

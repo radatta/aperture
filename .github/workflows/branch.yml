@@ -1,10 +1,10 @@
 name: Branch
 
-# The full quality gate on every pushed feature-branch commit, before a PR exists: lanes run only the affected tests
-# locally (`pnpm gate:fast`) and this run is the full suite, once per push (docs/ops/FEATURE-WORKFLOW.md → phases 5
-# and 9; INFRA §9 → Branch runs). The same ci.yml as pr.yml, but its own check names (`branch / …`), so the required
-# `ci / …` checks and checked-tree.ts' PR-run lookup never see it. No AWS, no deploy; `dev` stays excluded with main
-# (the retired deploy branch: workflow-triggers.test.ts).
+# The full quality gate on every pushed feature-branch commit, before a PR exists, so a lane's full suite can run here
+# instead of on the shared container (INFRA §9 → Branch runs). The same ci.yml as pr.yml, but its own check names
+# (`branch / …`, from the job id `branch`, which workflow-triggers.test.ts pins: a `ci` job here would post the PR's
+# required check names on an untested-merge sha), so the required checks and checked-tree.ts' PR-run lookup never
+# see it. No AWS, no deploy; `dev` stays excluded with main (the retired deploy branch: workflow-triggers.test.ts).
 on:
   push:
     branches-ignore: [main, dev]
