@@ -79,18 +79,37 @@ security() {
 }
 # One tape answer: record the call (stdin too, for `type --stdin`), make a screenshot's file, then the first rule
 # whose substring is in the argv and still has uses left; an unmatched point read is an empty group.
+# A rule's `log` is appended, when the rule answers, to the sim's log the `log stream` stub prints when it's stopped:
+# @NOW@ is the call's time (UTC), @NOW8@ the same instant at -0800, as `log stream --style ndjson` stamps it.
+sim_stub_log() {
+  local now now8
+  now="$(jq -nr 'now | (strftime("%Y-%m-%d %H:%M:%S") + "." + (((. * 1000000) | floor) % 1000000 | tostring | ("00000" + .)[-6:]) + "+0000")')"
+  now8="$(jq -nr '(now - 28800) | (strftime("%Y-%m-%d %H:%M:%S") + "." + (((. * 1000000) | floor) % 1000000 | tostring | ("00000" + .)[-6:]) + "-0800")')"
+  printf '%s\n' "$1" | sed -e "s/@NOW@/$now/g" -e "s/@NOW8@/$now8/g" >>"$MAILROOM_FIXTURE_TAPE.hid"
+}
+# The sim's log stream: its answer (a header, say), then it blocks until stopped, and prints what the rules logged.
+# On the Mac's bash 3.2 a backgrounded loop of fractional sleeps dies at its first sleep (axe-diag, 2026-11-16: "s", then
+# gone, rc 0), so it blocks on one sleep it waits for: `wait` answers TERM at once, and 120 s caps it (log's --timeout).
+sim_stub_stream() {
+  local s
+  trap 'kill "$s" 2>/dev/null; cat "$MAILROOM_FIXTURE_TAPE.hid" 2>/dev/null; exit 0' TERM
+  [ -z "$1" ] || printf '%s\n' "$1"
+  command sleep 120 &
+  s=$!
+  wait "$s"
+}
 sim_stub() {
-  local argv="$*" idx=0 m rc n out cnt o=""
+  local argv="$*" idx=0 m rc n out log cnt o=""
   if [ "$1 ${2:-} ${3:-}" = "axe type --stdin" ]; then
     printf '%s <<<%s\n' "$argv" "$(cat)" >>"$MAILROOM_FIXTURE_SIMCALLS"
   else
-    printf '%s\n' "$argv" >>"$MAILROOM_FIXTURE_SIMCALLS"
+    printf '%s%s\n' "$argv" "${AXE_HID_STABILIZATION_MS:+ hid=$AXE_HID_STABILIZATION_MS}" >>"$MAILROOM_FIXTURE_SIMCALLS"
   fi
   if [ "$1 ${2:-}" = "axe screenshot" ]; then
     while [ $# -gt 0 ]; do [ "$1" != --output ] || o="${2:-}"; shift; done
     [ -z "$o" ] || printf 'PNG' >"$o"
   fi
-  while IFS=$'\t' read -r m rc n out; do
+  while IFS=$'\037' read -r m rc n out log; do # fields split on 0x1f: a tab is IFS whitespace, so empty fields would collapse
     idx=$((idx + 1))
     case "$argv" in *"$m"*) ;; *) continue ;; esac
     if [ "$n" != 0 ]; then
@@ -98,6 +117,8 @@ sim_stub() {
       [ "$cnt" -lt "$n" ] || continue
       echo $((cnt + 1)) >"$MAILROOM_FIXTURE_TAPE.c$idx"
     fi
+    [ -z "$log" ] || sim_stub_log "$log"
+    case "$argv" in *"log stream"*) [ "$rc" != 0 ] || sim_stub_stream "$out" ;; esac
     [ -z "$out" ] || printf '%s\n' "$out"
     return "$rc"
   done <"$MAILROOM_FIXTURE_TAPE"
@@ -134,7 +155,7 @@ mktemp() {
   for a in "$@"; do case "$a" in -*) ;; *) command mktemp "$@"; return ;; esac; done
   command mktemp "$@" "${TMPDIR:-/tmp}/rf.XXXXXXXX"
 }
-export -f curl security sim_stub axe xcrun open pgrep caffeinate xcodebuild osascript sleep mktemp
+export -f curl security sim_stub sim_stub_log sim_stub_stream axe xcrun open pgrep caffeinate xcodebuild osascript sleep mktemp
 # A fresh temp dir by its real path, or the suite stops: an unchecked empty one is the cwd (bash 3.2's `cd ""` is a
 # no-op), which the caller's cleanup then deletes.
 tmpdir_real() { local d; d="$(mktemp -d)" && [ -n "$d" ] && (cd "$d" && pwd -P); }
@@ -217,7 +238,7 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
 
   # The tape: the case's rules first, then the defaults; one TAB-separated line per rule.
   jq -r --argjson d "$deftape" '((.tape // []) + $d)[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring),
-    (.out // "" | if type == "string" then . else tojson end)] | join("\t")' <<<"$c" >"$T/tape"
+    (.out // "" | if type == "string" then . else tojson end), (.log // "" | if type == "string" then . else tojson end)] | join("\u001f")' <<<"$c" >"$T/tape"
 
   if [ -n "$raw" ]; then jq -j .raw <<<"$c" >"$hj/staging/x"; else printf '%s' "$job" >"$hj/staging/x"; fi
   case "$setup" in
@@ -363,6 +384,23 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -z "$why" ] && [ -n "$f" ] || continue
       [ -f "$hj/results/$rid/$f" ] || why="no results/$rid/$f"
     done < <(jq -r '.files // [] | .[]' <<<"$c")
+    while IFS= read -r f; do
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      [ ! -e "$hj/results/$rid/$f" ] || why="results/$rid/$f exists"
+    done < <(jq -r '.filesAbsent // [] | .[]' <<<"$c")
+    while IFS=$'\t' read -r f want; do # a result file holding a substring (trial.jsonl's lines)
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      grep -q -F -- "$want" "$hj/results/$rid/$f" 2>/dev/null || why="results/$rid/$f has no \"$want\" (it has: $(head -c 600 "$hj/results/$rid/$f" 2>/dev/null | tr '\n' ' '))"
+    done < <(jq -r '.fileHas // [] | .[] | [.[0], .[1]] | @tsv' <<<"$c")
+    while IFS=$'\t' read -r f want; do # a substring that must be in no result file of that name (the sim log's text)
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      ! grep -q -F -- "$want" "$hj/results/$rid/$f" 2>/dev/null || why="results/$rid/$f has \"$want\""
+    done < <(jq -r '.fileLacks // [] | .[] | [.[0], .[1]] | @tsv' <<<"$c")
+    while IFS=$'\t' read -r f want; do # a result file's line count (a trial op leaves exactly one line)
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      got="$(wc -l <"$hj/results/$rid/$f" 2>/dev/null | tr -d ' ')"
+      [ "$got" = "$want" ] || why="results/$rid/$f has ${got:-no} lines, not $want"
+    done < <(jq -r '.fileLines // [] | .[] | [.[0], (.[1] | tostring)] | @tsv' <<<"$c")
   fi
   # fixtures cases: lines the sandbox profile must hold, and the log tail the job kept.
   if [ -z "$why" ] && [ "$kind" = fixtures ]; then
@@ -456,8 +494,8 @@ lanes_check() {
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
   : >"$L/calls"; : >"$L/simcalls"
   printf '%s' "$defapi" >"$L/api.json"
-  { printf '%s\t0\t0\t%s\n' '-l JavaScript - ' '{"cc":41,"front":"com.googlecode.iterm2","source":"png","bytes":21}'
-    jq -r '.[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring), (.out // "" | if type == "string" then . else tojson end)] | join("\t")' <<<"$deftape"
+  { printf '%s\037%s\037%s\037%s\n' '-l JavaScript - ' 0 0 '{"cc":41,"front":"com.googlecode.iterm2","source":"png","bytes":21}'
+    jq -r '.[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring), (.out // "" | if type == "string" then . else tojson end)] | join("\u001f")' <<<"$deftape"
   } >"$L/tape"
   lane_run() {
     MAILROOM_FIXTURE_API="$L/api.json" MAILROOM_FIXTURE_CALLS="$L/calls" MAILROOM_FIXTURE_TAPE="$L/tape" \
@@ -506,7 +544,7 @@ lanes_check() {
     mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
     : >"$L/calls"; : >"$L/simcalls"
     printf '%s' "$defapi" >"$L/api.json"
-    jq -r '.[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring), (.out // "" | if type == "string" then . else tojson end)] | join("\t")' <<<"$deftape" >"$L/tape"
+    jq -r '.[] | [.m, (.rc // 0 | tostring), (.n // 0 | tostring), (.out // "" | if type == "string" then . else tojson end)] | join("\u001f")' <<<"$deftape" >"$L/tape"
     a="20261113T230010Z-ios-race-$k"
     jq -c --arg id "$a" --argjson now "$now" '.id = $id | .submittedAt = ($now | todate) | .params.steps = [{"op": "wait", "s": 1}]' <<<"$simbase" >"$hj/inbox/$a.json"
     lane_run slow &

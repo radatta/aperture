@@ -96,7 +96,7 @@ describe('mailroom runner', () => {
       .join('\n');
     for (const pin of [
       'SIM_NAME="aperture-devcheck"',
-      'SIM_AXE_VERSION="1.8.0"',
+      'SIM_AXE_VERSIONS="1.8.0 2.0.4"', // each exact (IOS-CHECK.md → Setup)
       'SIM_TERMINATE_ID="com.apple.webapp"',
       `SIM_EMAIL="${IDS.email.devTestUser}"`,
       simCognitoPin(), // the one line the dev account id may stay a literal (tracked-identifiers.test.ts)
@@ -152,7 +152,7 @@ describe('mailroom runner', () => {
     expect(sim).not.toMatch(/(^|[\s;(|&])\/[a-z/]+\/(axe|xcrun|security|open)\b/m);
     expect(sim.match(/(?<!--arg |want |")\baxe\s[^\n]*/g)).toEqual([
       'axe "$@" --udid "$SIM_U"',
-      'axe --version 2>/dev/null | tr -d \'[:space:]\')" || v=""',
+      'axe --version 2>/dev/null)" || v=""', // read whole, then its number alone (the 2.0.4 pin)
     ]);
   });
 

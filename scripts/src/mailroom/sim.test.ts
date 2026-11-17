@@ -228,6 +228,50 @@ describe('validateSimParams', () => {
     expect(closes('tap', false)).toBe('BAD_OP');
     expect(closes('tap', 'yes')).toBe('BAD_OP');
     expect(closes('find', true)).toBe('BAD_OP');
+    // keys/erase `via` is one of the trial's variants, only on those two, and only with `in` (its count is the read-back)
+    const via = (op: object, v: unknown, withIn = true) =>
+      validateSimParams({
+        ...params,
+        steps: [find, { ...op, ...(withIn ? { in: 'bar' } : {}), via: v }],
+      });
+    for (const v of ['tap', 'post', 'hid', 'batch', 'batch15']) {
+      expect(via({ op: 'keys', text: 'ab' }, v)).toBeNull();
+      expect(via({ op: 'erase', n: 2 }, v)).toBeNull();
+    }
+    expect(via({ op: 'keys', text: 'ab' }, 'batch', false)).toBe('BAD_OP');
+    expect(via({ op: 'erase', n: 2 }, 'tap', false)).toBe('BAD_OP');
+    expect(via({ op: 'keys', text: 'ab' }, 'env')).toBe('BAD_OP');
+    expect(via({ op: 'erase', n: 2 }, 1)).toBe('BAD_OP');
+    expect(via({ op: 'find', label: 'x', near: { x: 1, y: 1 }, as: 'a' }, 'batch', false)).toBe(
+      'BAD_OP',
+    );
+    // a trial's tap/launch `via` is tap, hid or batch; a tap's needs its read-back (closes, selects, or a field)
+    const one = (op: object) => validateSimParams({ ...params, steps: [op] });
+    const btn = { op: 'tap', label: 'Cancel', near: { x: 1, y: 1 }, role: 'AXButton' };
+    for (const v of ['tap', 'hid', 'batch']) {
+      expect(one({ op: 'launch', via: v })).toBeNull();
+      expect(one({ ...btn, closes: true, via: v })).toBeNull();
+      expect(one({ ...btn, role: 'AXCheckBox', selects: true, via: v })).toBeNull();
+      expect(one({ ...btn, role: 'AXTextArea', via: v })).toBeNull();
+    }
+    expect(one({ op: 'launch' })).toBeNull();
+    expect(one({ op: 'launch', via: 'post' })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'batch15' })).toBe('BAD_OP');
+    expect(one({ op: 'launch', as: 'x' })).toBe('BAD_OP');
+    // settle: the wait after a trial launch's home presses, 1–5 s, only with via
+    expect(one({ op: 'launch', via: 'tap', settle: 3 })).toBeNull();
+    expect(one({ op: 'launch', via: 'batch', settle: 1 })).toBeNull();
+    expect(one({ op: 'launch', settle: 3 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: 0 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: 6 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: 1.5 })).toBe('BAD_OP');
+    expect(one({ op: 'launch', via: 'tap', settle: '3' })).toBe('BAD_OP');
+    expect(one({ ...btn, closes: true, via: 'post' })).toBe('BAD_OP');
+    expect(one({ ...btn, via: 'tap' })).toBe('BAD_OP'); // no read-back to count with
+    expect(one({ ...btn, role: 'AXTextField', via: 'hid' })).toBeNull();
+    expect(one({ ...btn, selects: true })).toBeNull();
+    expect(one({ ...btn, selects: false })).toBe('BAD_OP');
+    expect(one({ ...btn, selects: true, closes: true })).toBe('BAD_OP');
     // the first bad op decides: a malformed op before a denied tap is BAD_OP
     expect(
       validateSimParams({

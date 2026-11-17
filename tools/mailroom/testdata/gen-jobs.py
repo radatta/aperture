@@ -213,9 +213,11 @@ deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version',
             pt(57, 935, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
             pt(38, 168, el('AXLink', 'Home', 'Home', 20, 158, 37, 20)), pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 158, 36, 20)),
             pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20)),
+            pt(369, 232, el('AXButton', 'Bulk add', '', 318, 212, 102, 34)),  # the Tasks page's landmark (nav's read-back)
             pt(340, 560, el('AXGenericElement', 'Aperture', 'Active', 239, 136, 306, 664))]  # the switcher's card (round A)
            + [pt(x, y, el('AXButton', k, '', x - 15, y - 20, 30, 40)) for k, (x, y) in KEYS.items()]
-           + [{'m': 'describe-ui --udid', 'out': tree()}])
+           + [{'m': 'describe-ui --udid', 'out': tree()},
+              {'m': 'log stream'}])  # the sim's log during a trial job: up, and silent
 simbase = {'v': 1, 'id': '20261104T190000Z-ios-launch-ab12', 'job': 'sim', 'submittedAt': 'now', 'expiresInMin': 10,
            'params': {'sha': A, 'timeoutSec': 300, 'shutdown': False,
                       'steps': [{'op': 'launch'}, {'op': 'readBuild'}, {'op': 'expectBuild'}, {'op': 'shot', 'name': 'home'}]}}
@@ -321,6 +323,13 @@ srej('sim: an unknown job field is BAD_JSON', 'BAD_JSON', patch={'device': 'iPho
 # --- the sim can't run it: error, so the devcheck says "needs you" ---
 serr('sim: no axe is AXE_MISSING', 'AXE_MISSING', tape=[{'m': 'axe --version', 'rc': 127}], simExcludes=['describe-ui', 'bootstatus'], ts=None)
 serr('sim: another axe version is AXE_VERSION', 'AXE_VERSION(1.7.0)', tape=[{'m': 'axe --version', 'out': '1.7.0'}], simExcludes=['describe-ui'])
+# AXe 2.0.4 is on trial beside 1.8.0 (2.0.0 fixed AXe issue 71): each pinned exactly, whatever words --version wraps it in
+spass('sim: axe 2.0.4 is accepted, and the result says which ran', tape=[{'m': 'axe --version', 'out': '2.0.4'}], expect={'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '2.0.4', 'xcode': 'Xcode 27.2'}})
+spass('sim: an --version that says "axe 2.0.4" is 2.0.4', tape=[{'m': 'axe --version', 'out': 'axe 2.0.4'}], expect={'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '2.0.4', 'xcode': 'Xcode 27.2'}})
+spass('sim: "version v1.8.0" is 1.8.0', tape=[{'m': 'axe --version', 'out': 'version v1.8.0'}], expect={'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '1.8.0', 'xcode': 'Xcode 27.2'}})
+serr('sim: a newer axe (2.0.5) is AXE_VERSION until a trial pins it', 'AXE_VERSION(2.0.5)', tape=[{'m': 'axe --version', 'out': '2.0.5'}], simExcludes=['describe-ui'])
+serr('sim: a pre-release of a pinned version is AXE_VERSION', 'AXE_VERSION(1.8.0-beta)', tape=[{'m': 'axe --version', 'out': '1.8.0-beta'}], simExcludes=['describe-ui'])
+serr('sim: a version with a prefix of a pin (1.8) is AXE_VERSION', 'AXE_VERSION(1.8)', tape=[{'m': 'axe --version', 'out': '1.8'}], simExcludes=['describe-ui'])
 serr('sim: no aperture-devcheck sim is SIM_MISSING', 'SIM_MISSING', tape=[{'m': 'simctl list devices -j', 'out': {'devices': {}}}])
 serr('sim: two aperture-devcheck sims is SIM_AMBIGUOUS', 'SIM_AMBIGUOUS', tape=[{'m': 'simctl list devices -j', 'out': dev(n=2)}])
 serr('sim: a sim of another device type is PROFILE_MISMATCH, nothing tapped', 'PROFILE_MISMATCH',
@@ -328,10 +337,13 @@ serr('sim: a sim of another device type is PROFILE_MISMATCH, nothing tapped', 'P
 serr('sim: Device Hub never starting is DEVICE_HUB', 'DEVICE_HUB', tape=[{'m': 'pgrep -x DeviceHub', 'rc': 1}], simIncludes=['open -g -b com.apple.dt.Devices'])
 serr('sim: a failed boot is BOOT_FAILED', 'BOOT_FAILED', tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}, {'m': 'bootstatus', 'rc': 1}])
 serr('sim: describe-ui timing out eight times is AX_TIMEOUT', 'AX_TIMEOUT', tape=[{'m': 'describe-ui --udid', 'rc': 1, 'n': 8}])
-serr('sim: an icon frame while the pill says page 1 (a stale tree, the widget under it) is WEBCLIP_MISSING, not tapped', 'WEBCLIP_MISSING',
-     tape=[{'m': 'describe-ui --udid', 'out': tree(page=1)}], simExcludes=['tap -x 371'])
-serr('sim: no Aperture icon is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False)}],
-     simIncludes=['gesture scroll-left --screen-width 440 --screen-height 956'], simExcludes=['tap -x'])
+sfail('sim: an icon frame while the pill says page 1 (a stale tree, or scrolls iOS dropped) is scrolled 3 times, then ICON_SCROLL_DROPPED, never tapped',
+      'ICON_SCROLL_DROPPED', [L], tape=[{'m': 'describe-ui --udid', 'out': tree(page=1)}], simExcludes=['tap -x 371'],
+      simCount={'gesture scroll-left': 3})
+spass('sim: a page scroll iOS dropped (still page 1) is scrolled again, then the icon on page 2 is tapped', [L],
+      tape=[dtree(tree(), 1), dtree(tree(page=1), 2)], simCount={'gesture scroll-left': 2, 'tap -x 371 -y 247': 1})
+serr('sim: no Aperture icon on page 2 is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False, page=2)}],
+     simExcludes=['tap -x', 'gesture scroll-left'])
 SIGNIN = el('AXButton', 'Sign in', '', 183, 511, 74, 37, pid=67251)
 SIGNED_OUT = [pt(220, 895, {}), pt(220, 530, SIGNIN, n=2), pt(220, 530, {})]  # the launch landmark, the signIn read; gone after one tap
 # The dev account id stays out of tracked files (docs/ops/IDENTIFIERS.md): run-fixtures.sh fills @DEV_ACCOUNT@ from
@@ -587,18 +599,33 @@ spass('sim: a button tap never checks for the keyboard', [L, {'op': 'tap', 'labe
       simCount={'tap -x 38 -y 168': 1, '--point 221,856': 0})
 serr('sim: a hung keyboard read after a field tap is AX_TIMEOUT', 'AX_TIMEOUT', [L, TAPBAR], tape=[HANG('--point 221,856')], simCount={'tap -x 198 -y 895': 1})
 spass('sim: blur checks the keyboard went down once', [L, {'op': 'blur'}], tape=[pt(221, 856, {})], notes={'1': 'keyboard dismissed'}, simCount={'tap -x 395 -y 575': 1})
-sfail('sim: a keyboard that stays up after two Done taps is BLUR', 'BLUR', [L, {'op': 'blur'}], simCount={'tap -x 395 -y 575': 2})
+sfail('sim: a keyboard that stays up after two Done taps is BLUR, Done read at the same frame (dropped input)', 'BLUR', [L, {'op': 'blur'}],
+      simCount={'tap -x 395 -y 575': 2}, notes={'1': 'Done read at the same frame both times'})
 spass('sim: blur with no keyboard up does nothing', [L, {'op': 'blur'}], tape=[pt(395, 575, {})], notes={'1': 'no keyboard to dismiss'}, simExcludes=['tap -x 395'])
-spass('sim: a dropped icon tap (still on the Home Screen) is tapped again at the third poll, not swiped', [L],
-      tape=[pt(220, 895, {}, n=3), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 2},
-      notes={'0': 'icon tapped 2 times'}, simExcludes=['swipe --start-x 220 --start-y 450'])
-spass('sim: icon taps that keep dropping are tapped again at polls 3, 6 and 10', [L],
-      tape=[pt(220, 895, {}, n=11), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4},
-      notes={'0': 'icon tapped 4 times'})
+# the icon tap read back at once (the 11-16 trial): the Home Screen at both looks is a drop, retapped after a home press
+spass('sim: a dropped icon tap (the Home Screen at both looks) is retapped after a fresh home press, not at a poll', [L],
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 2), dtree(tree('SpringBoard'), 2)], simCount={'tap -x 371 -y 247': 2, 'home --step sleep 1 --udid': 2},
+      notes={'0': 'icon tapped 2 times, Home pressed before each retap'}, simExcludes=['swipe --start-x 220 --start-y 450'])
+spass('sim: the Home Screen at both looks and the app 2 s on (a slow launch) is landed: no home press mid-launch', [L],
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 2)], simCount={'tap -x 371 -y 247': 1, 'home --step sleep 1 --udid': 1})
+spass('sim: no verdict at the looks, then the Home Screen at poll 3, is retapped from a reset there', [L],
+      tape=[pt(220, 895, {}, n=3), dtree(tree(), 3), {'m': 'describe-ui --udid', 'rc': 1, 'n': 8}, dtree(tree('SpringBoard'), 1)],
+      simCount={'tap -x 371 -y 247': 2, 'home --step sleep 1 --udid': 2}, notes={'0': 'icon tapped 2 times, Home pressed before each retap'})
+sfail('sim: a fourth tap whose late look sees the app counts as landed, not ICON_TAP_DROPPED', 'LANDMARK', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3)] + [dtree(tree('SpringBoard'), 3), dtree(tree('SpringBoard'), 2)] * 3
+      + [dtree(tree('SpringBoard'), 3), dtree(APPFRONT)],  # keyboard down: no mid-typing relaunch
+      simCount={'tap -x 371 -y 247': 4}, fileHas=[['trial.jsonl', '{"d":1,"hid":null},{"d":0,"hid":null,"frontMs":']])
+spass('sim: the Home Screen at the first look and the app at the second is landed, not retapped', [L],
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 1)], simCount={'tap -x 371 -y 247': 1, 'home --step sleep 1 --udid': 1})
+spass('sim: a look that can\'t read the tree leaves the icon to the polls, no retap', [L],
+      tape=[dtree(tree(), 3), {'m': 'describe-ui --udid', 'rc': 1, 'n': 8}], simCount={'tap -x 371 -y 247': 1})
+sfail('sim: icon taps that keep dropping are retapped from a reset, 4 in all, then ICON_TAP_DROPPED within seconds', 'ICON_TAP_DROPPED', [L],
+      tape=[{'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4, 'home --step sleep 1 --udid': 4},
+      simExcludes=['--point 220,895'])
 sfail('sim: still the Home Screen after four icon taps is ICON_TAP_DROPPED, not LANDMARK', 'ICON_TAP_DROPPED', [L],
       tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={'tap -x 371 -y 247': 4}, files=['shots/01-fail.png'])
 sfail('sim: the app in front without its landmark stays LANDMARK, its icon never tapped again', 'LANDMARK', [L],
-      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(APPFRONT)],  # keyboard down: no mid-typing relaunch
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 4), dtree(APPFRONT)],  # keyboard down: no mid-typing relaunch
       simCount={'tap -x 371 -y 247': 1, 'swipe --start-x 220 --start-y 450': 1, 'simctl terminate': 0, 'tap -x 409 -y 800': 0})
 FORMP = FORM[:-1] + [pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47, pid=FORMPID))]
 serr('sim: a hung re-read of the submit button is AX_TIMEOUT, not AUTH_REJECTED', 'AX_TIMEOUT', [L, {'op': 'signIn'}],
@@ -644,35 +671,35 @@ spass('sim: a stale first landmark read is read again', [L], tape=[pt(220, 895, 
       expect={'signedIn': 'already'})
 # The switcher and home presses are read back (job …192707Z…-relaunch-bd33: AXe reported presses iOS never got). One launch
 # reads the tree three times (ready, then two icon reads that agree), so a kill's own read is the fourth.
-spass('sim: kill by app switcher', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 2)], notes={'1': 'killed by switcher; web: gone'},
+spass('sim: kill by app switcher', KS, tape=[dtree(tree(), 4), dtree(SWITCHER, 2)], notes={'1': 'killed by switcher; web: gone'},
       simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', SWIPE, 'tap -x 400 -y 880 --tap-style physical', WEB],
       simCount={DOUBLE: 1, SWIPE: 1, LEAVE: 1})
 spass('sim: a dropped switcher press (the app still in front) is pressed again before any swipe', KS,
-      tape=[dtree(tree(), 3), dtree(APPFRONT, 1), dtree(SWITCHER, 2)], notes={'1': "killed by switcher; web: gone; the switcher didn't open (Web)"},
+      tape=[dtree(tree(), 4), dtree(APPFRONT, 1), dtree(SWITCHER, 2)], notes={'1': "killed by switcher; web: gone; the switcher didn't open (Web)"},
       simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
 spass('sim: one press of the two landing (the Home Screen) is pressed again, not swiped', KS,
-      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 1), dtree(SWITCHER, 2)], notes={'1': "the switcher didn't open (SpringBoard, Page 2 of 2)"},
+      tape=[dtree(tree(), 4), dtree(tree('SpringBoard'), 1), dtree(SWITCHER, 2)], notes={'1': "the switcher didn't open (SpringBoard, Page 2 of 2)"},
       simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
 sfail('sim: the app still in front after two switcher tries is SWITCHER_FAILED, never swiped or tapped', 'SWITCHER_FAILED', KS,
-      tape=[dtree(tree(), 3), dtree(APPFRONT, 2)], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 0}, files=['shots/01-fail.png'])
+      tape=[dtree(tree(), 4), dtree(APPFRONT, 2)], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 0}, files=['shots/01-fail.png'])
 spass('sim: an app still running after the card swipe is swiped again', KS,
-      tape=[dtree(tree(), 3), dtree(SWITCHER, 3), {'m': 'Web.app/Web', 'out': '4242', 'n': 2}], notes={'1': 'still running after the swipe'},
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), {'m': 'Web.app/Web', 'out': '4242', 'n': 2}], notes={'1': 'still running after the swipe'},
       simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1, WEB: 5})  # 2 alive, then gone before and after the wait, then the note's
 serr('sim: an app still running after two card swipes is SWITCHER_FAILED, needs you (re-trial the gesture); the switcher is left', 'SWITCHER_FAILED', KS,
      notes={'1': "the switcher swipe didn't kill the app: re-trial the gesture"},
-      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), {'m': 'Web.app/Web', 'out': '4242'}], simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1}, files=['shots/01-fail.png'])
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), {'m': 'Web.app/Web', 'out': '4242'}], simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1}, files=['shots/01-fail.png'])
 spass("sim: a switcher without Aperture's card at the swipe spot is not swiped; pressed again", KS,
-      tape=[dtree(tree(), 3), dtree(SWITCHER, 3), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
       notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 2})
 sfail('sim: no Aperture card in two tries is SWITCHER_FAILED, never swiped', 'SWITCHER_FAILED', KS,
-      tape=[dtree(tree(), 3), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 2},
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 2},
       notes={'1': 'no Aperture card in the app switcher in two tries'})
-serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 3), dtree(SWITCHER, 1), HANG('--point 340,560')], simCount={SWIPE: 0})
+serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 4), dtree(SWITCHER, 1), HANG('--point 340,560')], simCount={SWIPE: 0})
 spass('sim: a switcher that closed itself with the last card is not tapped (the spot is a dock icon)', KS,
-      tape=[dtree(tree(), 3), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1)], notes={'1': 'no switcher left to leave (SpringBoard, Page 2 of 2)'},
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1)], notes={'1': 'no switcher left to leave (SpringBoard, Page 2 of 2)'},
       simCount={SWIPE: 1, LEAVE: 0})
 serr('sim: an unreadable tree after the switcher press is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS,
-     tape=[dtree(tree(), 3), {'m': 'describe-ui --udid', 'rc': 1}], simCount={SWIPE: 0, LEAVE: 0})
+     tape=[dtree(tree(), 4), {'m': 'describe-ui --udid', 'rc': 1}], simCount={SWIPE: 0, LEAVE: 0})
 spass('sim: kill by terminate says the web app is gone', [L, {'op': 'kill', 'method': 'terminate'}, L], notes={'1': 'killed by terminate; web: gone'})
 spass('sim: a dropped home press at launch (the app still in front) is pressed again', [L],
       tape=[dtree(tree(), 1), dtree(APPFRONT, 1)], notes={'0': 'home pressed 2 times'}, simCount={PRESS: 2}, simIncludes=['tap -x 371 -y 247'])
@@ -687,6 +714,259 @@ spass('sim: shutdown: true shuts the sim down after a pass', patch={'params': {'
 spass('sim: a bare shutdown of a sim already off does nothing more', [{'op': 'shutdown'}], expect={'booted': 'off'}, tape=[{'m': 'list devices -j', 'out': dev('Shutdown')}], ts=None)
 spass('sim: a bare shutdown resolves the device first', [{'op': 'shutdown'}], expect={'booted': 'off'},
       simIncludes=['simctl list devices -j', 'simctl shutdown ' + U], simExcludes=['describe-ui', 'bootstatus'])
+# --- the input-gap trial: keys/erase `via` (IOS-CHECK.md -> Input-gap trial) ---
+def KV(via, text='ab'): return [L, BAR, {'op': 'keys', 'text': text, 'in': 'bar', 'via': via}]
+def EV(via, n=2): return [L, BAR, {'op': 'erase', 'n': n, 'in': 'bar', 'via': via}]
+def BATCH(lead, *xy): return 'batch --tap-style physical --step sleep ' + lead + ''.join((' --step sleep 0.6' if i else '') + f' --step tap -x {x} -y {y}' for i, (x, y) in enumerate(xy)) + ' --udid'
+AB, D409 = [(48, 744), (264, 800)], (409, 800)
+TRIAL = 'trial.jsonl'
+srej('sim: a via off the list is BAD_OP', 'BAD_OP', [L, BAR, {'op': 'keys', 'text': 'ab', 'via': 'env'}])
+srej('sim: via on a find is BAD_OP', 'BAD_OP', [L, {**BAR, 'via': 'batch'}])
+srej('sim: via without in is BAD_OP (its count is the read-back)', 'BAD_OP', [L, BAR, {'op': 'keys', 'text': 'ab', 'via': 'tap'}])
+spass('sim: a whole word dropped (the field still reads its placeholder) counts every letter', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=3), pt(198, 895, CAPTURE, n=1), typed('Ab')], notes={'2': 'via batch, drops 2; retyped once'},
+      fileHas=[[TRIAL, '"op":"keys","via":"batch","n":2,"drops":2']])
+spass('sim: an erase drop the first look saw counts even when the centre look hits another element', EV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), left('A', n=1), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20), n=1)],
+      notes={'2': 'erased 2; via batch, drops 1; deleted 3 more'}, simCount={BATCH('1', *[D409] * 3): 1},
+      fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":1']])
+spass('sim: keys via tap (the baseline) is the per-key path, counted in trial.jsonl with the load', KV('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'typed 2 keys; via tap, drops 0'}, simCount={'tap -x 48 -y 744 --tap-style physical --udid': 1},
+      simExcludes=['batch --tap-style', 'hid=', '--post-delay'], fileHas=[[TRIAL, '{"load":{"start":'], [TRIAL, '"op":"keys","via":"tap","n":2,"drops":0']])
+spass('sim: keys without via write no trial.jsonl and no via note', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], filesAbsent=[TRIAL], simExcludes=['batch --tap-style'])
+spass('sim: keys via post tap with --post-delay 0.5', KV('post'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'via post, drops 0'},
+      simCount={'tap -x 48 -y 744 --tap-style physical --post-delay 0.5 --udid': 1, 'tap -x 264 -y 800 --tap-style physical --post-delay 0.5 --udid': 1})
+spass('sim: keys via hid set AXe\'s stabilisation wait on the taps only', KV('hid'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'via hid, drops 0'},
+      simCount={'tap -x 48 -y 744 --tap-style physical --udid ' + U + ' hid=500': 1, 'tap -x 264 -y 800 --tap-style physical --udid ' + U + ' hid=500': 1, 'hid=': 2})
+serr('sim: a failed hid tap still clears the wait (the failure screenshot carries none)', 'AXE_FAILED', KV('hid'),
+     tape=[pt(220, 895, CAPTURE, n=2), {'m': 'tap -x 48 -y 744', 'rc': 1}], simCount={'hid=': 1, 'screenshot --output': 1})
+spass('sim: keys via batch read every key, then tap them in one batch after a 1 s lead', KV('batch'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')],
+      notes={'2': 'typed 2 keys; via batch, drops 0'}, simIncludes=['--point 48,744', '--point 264,800', BATCH('1', *AB)],
+      simExcludes=['tap -x 48 -y 744 --tap-style'], simCount={'batch --tap-style': 1})
+spass('sim: keys via batch15 lead 1.5 s', KV('batch15'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], simCount={BATCH('1.5', *AB): 1})
+sfail('sim: a key off its spot under batch is MISS before any batch goes out', 'MISS', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(264, 800, el('AXButton', 'n', '', 249, 780, 30, 40))], simExcludes=['batch --tap-style'])
+serr('sim: a failed key batch is AXE_FAILED, never a pass', 'AXE_FAILED', KV('batch'), tape=[pt(220, 895, CAPTURE, n=2), {'m': 'batch --tap-style', 'rc': 1}])
+spass('sim: a key dropped under batch is counted, then erased and retyped by batch', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=1), typed('A', 198, n=1), typed('Ab')],
+      notes={'2': 'typed 2 keys; via batch, drops 1; retyped once (first read AXStaticText "A")'},
+      simCount={BATCH('1', *AB): 2, BATCH('1', *[D409] * 4): 1}, simExcludes=['tap -x 409 -y 800 --tap-style'],
+      fileHas=[[TRIAL, '"op":"keys","via":"batch","n":2,"drops":1']])
+spass('sim: a slow field under a trial counts no drop (the second look holds the text)', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A'), typed('Ab', 198)], notes={'2': 'via batch, drops 0'}, simCount={'batch --tap-style': 1})
+spass('sim: erase via batch: one batch of deletes; a letter left is counted and deleted again by batch', EV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), left('A', n=1), left('A', 198, n=1)], notes={'2': 'erased 2; via batch, drops 1; deleted 3 more (first read AXTextArea "A")'},
+      simCount={BATCH('1', *[D409] * 2): 1, BATCH('1', *[D409] * 3): 1}, simExcludes=['tap -x 409 -y 800 --tap-style'],
+      fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":1']])
+spass('sim: erase via tap is the per-key path, counted', EV('tap'), tape=[pt(220, 895, CAPTURE, n=2)], notes={'2': 'erased 2; via tap, drops 0'},
+      simCount={DEL: 2}, simExcludes=['batch --tap-style'], fileHas=[[TRIAL, '"op":"erase","via":"tap","n":2,"drops":0']])
+sfail('sim: a field that moved under a trial erase is MISS, uncounted (never a zero)', 'MISS', EV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20)), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20))],
+      fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":null'], [TRIAL, '"un":"notfield"']], fileLines=[[TRIAL, 2]])
+# fix (3): a keys count only from a read that is the field (job …060606Z…-idle5-1 read a checkbox's "0" and counted 5)
+CB0 = el('AXCheckBox', 'private', '0', 179, 880, 70, 28)
+spass('sim: a keys read-back that hits a checkbox both looks is uncounted, not a drop count', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, CB0, n=1), pt(198, 895, CB0, n=1), typed('Ab')],
+      notes={'2': 'via batch, uncounted (not the field); retyped once'},
+      fileHas=[[TRIAL, '"op":"keys","via":"batch","n":2,"drops":null'], [TRIAL, '"un":"notfield"']], fileLines=[[TRIAL, 2]])
+spass('sim: other page text where the field was is uncounted too', KV('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', '', 'Today', 33, 469, 50, 22), n=1), pt(198, 895, {}, n=1), typed('Ab')],
+      fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"notfield"']])
+spass('sim: the second look being the field still counts its letters', KV('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, CB0, n=1), typed('A', 198, n=1), typed('Ab')],
+      notes={'2': 'via tap, drops 1'}, fileHas=[[TRIAL, '"op":"keys","via":"tap","n":2,"drops":1']])
+
+# --- the tap trial: tap/launch `via` (IOS-CHECK.md -> Input-gap trial) ---
+srej('sim: a tap via the keys trial\'s post is BAD_OP', 'BAD_OP', [L, {**CL[1], 'via': 'post'}])
+srej('sim: a tap via with no read-back to count by is BAD_OP', 'BAD_OP', [L, {'op': 'tap', 'label': 'Home', 'near': {'x': 38, 'y': 168}, 'via': 'tap'}])
+srej('sim: selects with closes is BAD_OP', 'BAD_OP', [L, {**CL[1], 'selects': True}])
+srej('sim: selects false is BAD_OP', 'BAD_OP', [L, {'op': 'tap', 'label': 'Task', 'near': {'x': 96, 'y': 464}, 'selects': False}])
+srej('sim: a launch via batch15 is BAD_OP', 'BAD_OP', [{'op': 'launch', 'via': 'batch15'}])
+def CV(via): return [L, {**CL[1], 'via': via}]
+def TBATCH(x, y): return f'batch --tap-style physical --step sleep 1 --step tap -x {x} -y {y} --udid'
+spass('sim: a closes tap via tap that goes is counted 0, one line', CV('tap'), tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=1)],
+      notes={'1': 'via tap, drops 0'}, simCount={CTAP: 1, 'batch --tap-style': 0, 'hid=': 0},
+      fileHas=[[TRIAL, '"op":"tap","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a closes tap via batch still there is counted 1 and tapped again by batch', CV('batch'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=3)],
+      notes={'1': 'tapped again (still there after the first); via batch, drops 1'}, simCount={TBATCH(200, 605): 2, CTAP + ' --tap-style': 0},
+      fileHas=[[TRIAL, '"op":"tap","via":"batch","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+sfail('sim: TAP_DROPPED under a trial leaves its one line, a drop', 'TAP_DROPPED', CV('hid'), tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL)],
+      simCount={'hid=500': 2}, fileHas=[[TRIAL, '"op":"tap","via":"hid","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+spass('sim: a closes tap still there but moved is uncounted (moved), not a drop', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=1), pt(200, 605, el('AXButton', 'Cancel', '', 150, 592, 100, 30), n=2)],
+      notes={'1': 'via tap, uncounted (moved)'}, fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"moved"']], fileLines=[[TRIAL, 2]])
+CLOW = el('AXButton', 'Cancel', '', 150, 620, 100, 30)  # centre 200,635
+spass('sim: a target still moving is read until two frames agree, then tapped there', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CLOW, n=1), pt(200, 635, CLOW, n=1)],
+      notes={'1': 'via tap, drops 0'}, simCount={'tap -x 200 -y 635': 1, CTAP: 0})
+spass('sim: a target that never holds still is tapped anyway, uncounted (moving)', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, el('AXButton', 'Cancel', '', 150, 600, 100, 30), n=1),
+            pt(200, 615, el('AXButton', 'Cancel', '', 150, 610, 100, 30), n=1), pt(200, 625, CLOW, n=1)],
+      notes={'1': 'via tap, uncounted (moving)'}, simCount={'tap -x 200 -y 635': 1},
+      fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"moving"']], fileLines=[[TRIAL, 2]])
+spass('sim: a closes tap without via writes no trial.jsonl and reads no stillness', CL, tape=[pt(200, 600, CANCEL, n=1)],
+      simCount={CREAD: 1}, filesAbsent=[TRIAL])
+# launch via: the icon tap, counted from launch's own Home Screen read-back
+ICONTAP = 'tap -x 371 -y 247'
+spass('sim: a launch via batch sends the icon tap in one batch after the lead, counted 0', [{'op': 'launch', 'via': 'batch'}],
+      notes={'0': 'via batch, drops 0'}, simCount={TBATCH(371, 247): 1, ICONTAP + ' --tap-style': 0},
+      fileHas=[[TRIAL, '"op":"launch","via":"batch","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a launch via hid sets the wait on the icon tap only', [{'op': 'launch', 'via': 'hid'}],
+      simCount={ICONTAP + ' --tap-style physical --udid ' + U + ' hid=500': 1, 'hid=': 1})
+spass('sim: a dropped icon tap under a trial is counted 1, the retap sent the same way', [{'op': 'launch', 'via': 'batch'}],
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 2), dtree(tree('SpringBoard'), 2)], simCount={TBATCH(371, 247): 2},
+      notes={'0': 'icon tapped 2 times, Home pressed before each retap; via batch, drops 1'}, fileHas=[[TRIAL, '"op":"launch","via":"batch","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+sfail('sim: ICON_TAP_DROPPED under a trial leaves its one line, a drop', 'ICON_TAP_DROPPED', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={ICONTAP: 4},
+      fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+sfail('sim: the app up without its landmark counts the icon tap as landed, then LANDMARK', 'LANDMARK', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 4), dtree(APPFRONT)], fileHas=[[TRIAL, '"drops":0']], fileLines=[[TRIAL, 2]])
+serr('sim: a failed icon batch is AXE_FAILED, its line uncounted with that reason', 'AXE_FAILED', [{'op': 'launch', 'via': 'batch'}],
+     tape=[{'m': 'batch --tap-style physical --step sleep 1', 'rc': 1}], fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"AXE_FAILED"']], fileLines=[[TRIAL, 2]])
+spass('sim: a launch without via writes no trial.jsonl', [L], filesAbsent=[TRIAL], simExcludes=['batch --tap-style'])
+# a field tap via: the keyboard is its read-back
+def FV(via): return [L, {'op': 'tap', 'label': 'Capture', 'near': {'x': 220, 'y': 895}, 'role': 'AXTextArea', 'via': via}]
+KBDOWN = lambda n=1: pt(221, 856, {}, n=n)  # the keyboard down: before the tap (the kbup check), and after a dropped one
+spass('sim: a field tap via that brings the keyboard is counted 0', FV('hid'), tape=[pt(198, 895, CAPTURE, n=1), KBDOWN()],
+      notes={'1': 'via hid, drops 0'}, simCount={'tap -x 198 -y 895': 1, 'hid=500': 1}, fileHas=[[TRIAL, '"op":"tap","via":"hid","n":1,"drops":0']])
+spass('sim: a field tap via that brings no keyboard, the field still there, is counted 1 and tapped again', FV('tap'),
+      tape=[pt(198, 895, CAPTURE, n=2), KBDOWN(3)], notes={'1': 'tapped again (no keyboard after the first); via tap, drops 1'},
+      simCount={'tap -x 198 -y 895': 2}, fileHas=[[TRIAL, '"drops":1']], fileLines=[[TRIAL, 2]])
+spass('sim: a field tap via whose spot then reads something else is uncounted (gone)', FV('tap'),
+      tape=[pt(198, 895, CAPTURE, n=1), KBDOWN(3), pt(198, 895, el('AXButton', 'space', '', 100, 880, 240, 40))],
+      notes={'1': 'via tap, uncounted (gone)'}, fileHas=[[TRIAL, '"un":"gone"']])
+spass('sim: a field whose keyboard is already up before the tap is uncounted (kbup)', FV('tap'), tape=[pt(198, 895, CAPTURE, n=1)],
+      notes={'1': 'via tap, uncounted (kbup)'}, fileHas=[[TRIAL, '"un":"kbup"']], fileLines=[[TRIAL, 2]])
+# review round 1: a hung stillness read, a find that fails, a stale tree at the end of launch, a relaunch's tap
+spass('sim: a hung stillness read is tapped anyway, uncounted (unread), not AX_TIMEOUT', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), {'m': '--point 200,605', 'rc': 124, 'n': 1}], notes={'1': 'via tap, uncounted (unread)'},
+      simCount={CTAP: 1}, fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"unread"'], [TRIAL, '"sendMs":']], fileLines=[[TRIAL, 2]])
+sfail('sim: a trial tap whose find misses leaves its line, uncounted (MISS), no time', 'MISS', CV('tap'), tape=[pt(200, 600, {})],
+      simCount={CTAP: 0}, fileHas=[[TRIAL, '"drops":null,"sendMs":null,"un":"MISS"']], fileLines=[[TRIAL, 2]])
+STALE = [{'role': 'AXApplication', 'AXLabel': 'Spotlight', 'frame': FULL, 'children': []}]
+sfail('sim: a stale tree (no app, no pill) at the end of launch counts nothing, then LANDMARK', 'LANDMARK', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(STALE)], simCount={ICONTAP: 1},  # stale from the first look
+      fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"LANDMARK"']], fileLines=[[TRIAL, 2]])
+spass('sim: a launch via that relaunches an app left mid-typing counts its first icon tap, landed', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}], notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'},
+      simCount={'simctl terminate ' + U: 1, ICONTAP: 2}, fileLines=[[TRIAL, 2]],
+      fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":0'], [TRIAL, '"taps":[{"d":0,"hid":null,"frontMs":'], [TRIAL, '},{"d":null,"hid":null}]']])  # the relaunch's tap: a window, no look
+spass('sim: a relaunch whose own icon tap drops still counts the first tap, landed (one line, a 0)', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}, n=6), pt(220, 530, {}, n=6), {'m': 'Web.app/Web', 'rc': 0, 'n': 1}, dtree(tree(), 7), dtree(tree('SpringBoard'), 1)],
+      notes={'0': 'relaunched (it resumed mid-typing, keyboard up)'}, simCount={ICONTAP: 3},
+      fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+# --- the icon trial (IOS-CHECK.md -> Icon trial): settle, and the drop attribution from the sim's own log ---
+NOSVC = {'timestamp': '@NOW@', 'process': 'dtuhidd', 'eventMessage': 'No active service, dropping event'}
+HEARD = {'timestamp': '@NOW@', 'process': 'dtuhidd', 'eventMessage': 'dispatching touch event'}  # a delivered touch's line
+LV = lambda **k: [{'op': 'launch', 'via': 'tap', **k}]
+spass('sim: a launch via with settle 3 waits 3 s after each home press', LV(settle=3), simCount={'home --step sleep 3 --udid': 1, 'home --step sleep 1 --udid': 0},
+      fileHas=[[TRIAL, '"settle":3']])
+srej('sim: settle without via is BAD_OP', 'BAD_OP', [{'op': 'launch', 'settle': 3}])
+srej('sim: settle 0 is BAD_OP', 'BAD_OP', LV(settle=0))
+srej('sim: settle 6 is BAD_OP', 'BAD_OP', LV(settle=6))
+spass('sim: a trial launch starts the sim log and stops it; a silent one is no evidence: the tap\'s hid null, never 0', LV(),
+      simIncludes=['simctl spawn ' + U + ' log stream --level debug --style ndjson'],
+      fileHas=[[TRIAL, '"hid":{"ok":true,"lines":0,"noSvc":0}'], [TRIAL, '"taps":[{"d":0,"hid":null,"frontMs":']], fileLines=[[TRIAL, 2]])
+spass('sim: a tap whose window holds the guest\'s line is heard: no no-service line there is a trusted 0', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'log': HEARD}], fileHas=[[TRIAL, '"hid":{"ok":true,"lines":1,"noSvc":0}'], [TRIAL, '"taps":[{"d":0,"hid":0,"frontMs":']])
+spass('sim: a launch without via starts no sim log', [L], simExcludes=['log stream'])
+spass('sim: a no-service line inside a dropped tap\'s window is that tap\'s; the landed retap has none', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'n': 1, 'log': NOSVC}, {'m': 'tap -x 371 -y 247', 'log': HEARD}, dtree(tree(), 3), dtree(tree('SpringBoard'), 5)],
+      fileHas=[[TRIAL, '"taps":[{"d":1,"hid":1},{"d":0,"hid":0,"frontMs":'], [TRIAL, '"hid":{"ok":true,"lines":2,"noSvc":1}'], [TRIAL, '"hidOther":0']],
+      fileLacks=[[TRIAL, 'dropping event'], ['result.json', 'dropping event']], fileLines=[[TRIAL, 2]])
+spass('sim: a no-service line at the home press, before any tap, is the op\'s other line, no tap\'s', LV(),
+      tape=[{'m': 'home --step sleep 1', 'n': 1, 'log': NOSVC}, {'m': 'tap -x 371 -y 247', 'log': HEARD}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":0'], [TRIAL, '"hidOther":1']])
+spass('sim: a landed tap that logged a no-service line too is the control, counted on the tap', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'log': NOSVC}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":1']])
+spass('sim: a log line whose timestamp can\'t be read is no count (badline)', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'log': {**HEARD, 'timestamp': 'yesterday'}}], fileHas=[[TRIAL, '"why":"badline"'], [TRIAL, '"hid":null']])
+sfail('sim: a trial launch that fails before its tap still carries its settle', 'ICON_SCROLL_DROPPED', LV(settle=3),
+      tape=[{'m': 'describe-ui --udid', 'out': tree(page=1)}], fileHas=[[TRIAL, '"settle":3'], [TRIAL, '"un":"ICON_SCROLL_DROPPED"']], fileLines=[[TRIAL, 2]])
+spass('sim: a no-service line just after the tap (inside its 1 s slack, at the first look) is still that tap\'s', LV(),
+      tape=[dtree(tree(), 3), {'m': 'describe-ui --udid', 'n': 1, 'out': tree(), 'log': NOSVC}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":1']])
+spass('sim: a log that says it lost messages is no count (loss): every hid null', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'log': HEARD}, {'m': 'log stream', 'out': '{"timestamp":"2026-11-16 18:00:00.000000-0800","eventType":"lossEvent","eventMessage":"lost 12 messages"}'}],
+      fileHas=[[TRIAL, '"why":"loss"'], [TRIAL, '"hid":null']])
+spass('sim: a dropped home press in the first find still counts after a reset\'s find (the launch\'s whole), the reset\'s own press doesn\'t', [L],
+      tape=[dtree(tree(), 1), dtree(APPFRONT, 1), dtree(tree(), 2), dtree(tree('SpringBoard'), 3), dtree(tree('SpringBoard'), 2)],
+      notes={'0': 'home pressed 2 times; icon tapped 2 times, Home pressed before each retap'})
+spass('sim: inside a trial launch only icon taps open a tap window: a leftover draft\'s taps and Done aren\'t icon taps', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, el('AXStaticText', '', 'wkbpxa', 25, 884, 346, 22), n=4), pt(221, 856, {}, n=1), pt(221, 856, SPACE, n=1), pt(221, 856, {})],
+      fileHas=[['trial.jsonl', '"taps":[{"d":0,"hid":null,"frontMs":']], fileLacks=[['trial.jsonl', '},{']])
+serr('sim: a hung read looking for Done again after the first tap is AX_TIMEOUT, not BLUR', 'AX_TIMEOUT', [L, {'op': 'blur'}],
+     tape=[{'m': '--point 395,602', 'n': 1}, pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), HANG('--point 395,')], simCount={'tap -x 395 -y 575': 1})
+spass('sim: a -0800 timestamp is the same instant', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'n': 1, 'log': {**NOSVC, 'timestamp': '@NOW8@'}}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":1']])
+spass('sim: a sim log that died is no count: every hid null, the header says died', LV(), tape=[{'m': 'log stream', 'rc': 1}],
+      fileHas=[[TRIAL, '"hid":{"ok":false,"lines":0,"noSvc":0,"why":"died"}'], [TRIAL, '"taps":[{"d":0,"hid":null']])
+spass('sim: a sim log line that isn\'t JSON is no count (badline)', LV(), tape=[{'m': 'log stream', 'out': 'garbage, not a log line'}],
+      fileHas=[[TRIAL, '"why":"badline"'], [TRIAL, '"hid":null']])
+spass('sim: the stream\'s Filtering header is no event', LV(), tape=[{'m': 'log stream', 'out': 'Filtering the log data using "process == dtuhidd"'}],
+      fileHas=[[TRIAL, '"hid":{"ok":true,"lines":0,"noSvc":0}']])
+spass('sim: a reset that lands on Home Screen page 1 scrolls to page 2, then taps', [L],
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 3), dtree(tree('SpringBoard', page=1), 1), dtree(tree('SpringBoard'), 2)],
+      simCount={'gesture scroll-left': 1, 'tap -x 371 -y 247': 2})
+# --- nav reads the page back (job …004656Z…-trial-quiet-4: "on Tasks (fast)" on Home) ---
+NAVT, NAVTOP0 = [L, {'op': 'nav', 'tab': 'Tasks'}], 'swipe --start-x 220 --start-y 250 --end-x 220 --end-y 882'
+spass('sim: nav to Tasks reads its page landmark back; the note stays', NAVT, notes={'1': 'on Tasks (fast)'}, simCount={'--point 369,232': 1, 'tap -x 136 -y 168': 1})
+spass('sim: a Tasks page that comes up late is read again, not tapped again', NAVT, tape=[pt(369, 232, {}, n=1)],
+      notes={'1': 'on Tasks (fast); the page came up late'}, simCount={'tap -x 136 -y 168': 1})
+spass('sim: a tab tap that didn\'t take (no landmark twice, nor at the top) is tapped again from the full path', NAVT, tape=[pt(369, 232, {}, n=3)],
+      notes={'1': "on Tasks; tapped again (the page wasn't Tasks after the first tap)"}, simCount={'tap -x 136 -y 168': 2, NAVTOP0: 8})
+spass('sim: a Tasks page that was only scrolled shows its landmark at the top: no second tab tap', NAVT, tape=[pt(369, 232, {}, n=2)] + [pt(369, y, {}, n=2) for y in (212, 252)],
+      notes={'1': 'its landmark showed once the page was scrolled to the top'}, simCount={'tap -x 136 -y 168': 1, NAVTOP0: 8})
+sfail('sim: no landmark after the second tab tap is NAV_UNCONFIRMED, never a pass', 'NAV_UNCONFIRMED', NAVT, tape=[pt(369, 232, {})],
+      simCount={'tap -x 136 -y 168': 2})
+serr('sim: a hung landmark read is AX_TIMEOUT, not a page miss', 'AX_TIMEOUT', NAVT, tape=[{'m': '--point 369,232', 'rc': 124, 'n': 1}],
+     simCount={'tap -x 136 -y 168': 1})
+spass('sim: a tab with no landmark says its page isn\'t confirmed', [L, {'op': 'nav', 'tab': 'Home'}], notes={'1': 'page not confirmed'})
+# --- erase recognises a field holding text; blur names where it found Done ---
+RUNA = el('AXStaticText', '', 'a', 33, 880, 10, 22)  # inside the bar's frame (25,877 346x36), the start of "ab"
+def KER(via=None, text='ab', n=2):
+    v = {'via': via} if via else {}
+    return [L, BAR, {'op': 'keys', 'text': text, 'in': 'bar', **v}, {'op': 'erase', 'n': n, 'in': 'bar', **v}]
+TYPEDAB = typed('Ab', n=1)  # keys' read-back
+spass('sim: a field holding a letter it was typed (an unlabelled run inside its frame) is the field: deleted again, not MISS', KER(),
+      tape=[pt(220, 895, CAPTURE, n=2), TYPEDAB, pt(220, 895, RUNA, n=1), pt(198, 895, RUNA, n=1)], notes={'3': 'deleted 3 more'}, simCount={DEL: 5})
+spass('sim: that letter under a trial is counted as a dropped delete', KER('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), TYPEDAB, pt(220, 895, RUNA, n=1), pt(198, 895, RUNA, n=1)], fileHas=[[TRIAL, '"op":"erase","via":"tap","n":2,"drops":1']])
+sfail('sim: a run outside the field\'s frame is still not the field (MISS)', 'MISS', KER(),
+      tape=[pt(220, 895, CAPTURE, n=2), TYPEDAB, pt(220, 895, el('AXStaticText', '', 'a', 33, 469, 10, 22)), pt(198, 895, el('AXStaticText', '', 'a', 33, 469, 10, 22))])
+sfail('sim: a run that isn\'t the start of what was typed is other text, not the field (MISS)', 'MISS', KER(),
+      tape=[pt(220, 895, CAPTURE, n=2), TYPEDAB, pt(220, 895, el('AXStaticText', '', 'x', 33, 880, 10, 22)), pt(198, 895, el('AXStaticText', '', 'x', 33, 880, 10, 22))])
+spass('sim: more letters left than were deleted is no count (notfield), the field still emptied', KER('tap', 'abc', 2),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('Abc', n=1), pt(220, 895, el('AXStaticText', '', 'abc', 33, 880, 40, 22), n=1), pt(198, 895, el('AXStaticText', '', 'abc', 33, 880, 40, 22), n=1)],
+      fileHas=[[TRIAL, '"op":"erase","via":"tap","n":2,"drops":null'], [TRIAL, '"un":"notfield"']])
+spass('sim: an empty second look doesn\'t cancel a letter the first saw: deleted again', KER(),
+      tape=[pt(220, 895, CAPTURE, n=2), TYPEDAB, pt(220, 895, RUNA, n=1), pt(198, 895, CAPTURE, n=1)], notes={'3': 'deleted 3 more'}, simCount={DEL: 5})
+DONE602 = el('AXButton', 'Done', '', 375, 583, 40, 38)
+spass('sim: blur reads Done at the bar\'s centre first and says where; a Focus button behind it is never tapped', [L, {'op': 'blur'}],
+      tape=[pt(395, 602, DONE602, n=1), pt(395, 575, el('AXButton', 'Focus', '', 340, 560, 80, 30)), pt(221, 856, {})],
+      notes={'1': 'keyboard dismissed (Done at 395,602)'}, simCount={'tap -x 395 -y 602': 1, '--point 395,575': 0}, simExcludes=['tap -x 380'])
+sfail('sim: Done moved and tapped again, the keyboard still up, says it moved (not a dropped tap)', 'BLUR', [L, {'op': 'blur'}],
+      tape=[pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), pt(395, 575, el('AXButton', 'Done', '', 375, 560, 40, 38))],
+      notes={'1': 'where Done had moved to'}, simCount={'tap -x 395 -y 575': 1, 'tap -x 395 -y 579': 1})
+sfail('sim: Done gone with the keyboard still up says so (not a dropped tap)', 'BLUR', [L, {'op': 'blur'}],
+      tape=[pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38), n=1), pt(395, 575, {})], notes={'1': "Done wasn't there to tap again"},
+      simCount={'tap -x 395 -y 575': 1})
+# selects: a toggle must read on ("1") after the tap
+SEG, SEGON = el('AXCheckBox', 'Task', '0', 72, 450, 49, 28), el('AXCheckBox', 'Task', '1', 72, 450, 49, 28)
+def SV(via=None): return [L, {'op': 'tap', 'label': 'Task', 'near': {'x': 96, 'y': 464}, 'radius': 10, 'role': 'AXCheckBox', 'selects': True, **({'via': via} if via else {})}]
+STAP = 'tap -x 96 -y 464'
+spass('sim: a selects tap via that turns the toggle on is counted 0', SV('tap'), tape=[pt(96, 464, SEG, n=2), pt(96, 464, SEGON)],
+      notes={'1': 'via tap, drops 0'}, simCount={STAP: 1}, fileHas=[[TRIAL, '"op":"tap","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a toggle still off after two looks is counted 1 and tapped again', SV('batch'), tape=[pt(96, 464, SEG, n=4), pt(96, 464, SEGON)],
+      notes={'1': 'tapped again (not selected after the first); via batch, drops 1'}, simCount={TBATCH(96, 464): 2}, fileHas=[[TRIAL, '"drops":1']])
+sfail('sim: a toggle still off after the second tap is TAP_DROPPED', 'TAP_DROPPED', SV('tap'), tape=[pt(96, 464, SEG)], simCount={STAP: 2},
+      fileHas=[[TRIAL, '"drops":1']], fileLines=[[TRIAL, 2]])
+spass('sim: a toggle already on is not tapped, uncounted (already)', SV('tap'), tape=[pt(96, 464, SEGON)],
+      notes={'1': 'already selected; not tapped; via tap, uncounted (already)'}, simCount={STAP: 0}, fileHas=[[TRIAL, '"un":"already"']])
+sfail('sim: something else at the toggle after the tap is MISS, its line uncounted (MISS)', 'MISS', SV('tap'),
+      tape=[pt(96, 464, SEG, n=2), pt(96, 464, el('AXButton', 'private', '', 80, 450, 70, 28))], fileHas=[[TRIAL, '"un":"MISS"']], fileLines=[[TRIAL, 2]])
+spass('sim: selects without via checks the toggle and writes no trial.jsonl', SV(), tape=[pt(96, 464, SEG, n=1), pt(96, 464, SEGON)],
+      simCount={STAP: 1}, filesAbsent=[TRIAL])
 sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)
 
 # --- speed-ups (B–E): every fast path has its miss, and the miss is today's path ---

@@ -22,6 +22,10 @@ vi.mock('./sim.ts', async (orig) => ({
   ...(await orig<typeof import('./sim.ts')>()),
   simCommand: vi.fn(reached),
 }));
+vi.mock('./sim-trial.ts', async (orig) => ({
+  ...(await orig<typeof import('./sim-trial.ts')>()),
+  simTrial: vi.fn(reached),
+}));
 vi.mock('./clip.ts', async (orig) => ({
   ...(await orig<typeof import('./clip.ts')>()),
   clipProbe: vi.fn(reached),
@@ -86,6 +90,9 @@ describe('pnpm mailroom … refuses what it does not know', () => {
     [['edit-pr', '--body', 'x']],
     [['fixtures', '--wait', '30']],
     [['fixtures', '--sha']],
+    [['sim-trial', '--tag', 'x', '--icon', 'yes']],
+    [['sim-trial', '--tag', 'x', '--keys=1']],
+    [['sim-trial', '--tag', 'x', '--loaded']],
   ])('%j → exit 2, nothing run', async (argv) => {
     expect(await main(argv)).toBe(2);
     expect(err[0]).toMatch(/unknown|unexpected|takes no value|needs a value/);
@@ -104,8 +111,16 @@ describe('the guard lets real invocations through', () => {
     [['fixtures']],
     [['fixtures', '--sha', 'a'.repeat(40)]],
     [['clip-probe', '--out', 'x.png', '--wait', '5']],
+    [['sim-trial', '--tag', 'quiet']],
+    [['sim-trial', '--tag', 'quiet', '--round', '2', '--icon']],
+    [['sim-trial', '--tag', 'k', '--keys']],
   ])('%j reaches main', async (argv) => {
     await expect(main(argv)).rejects.toThrow(REACHED);
+  });
+  it('sim-trial --keys with --icon is two trials: exit 2, nothing run', async () => {
+    expect(await main(['sim-trial', '--tag', 'x', '--keys', '--icon'])).toBe(2);
+    expect(err[0]).toMatch(/pick one/);
+    untouched();
   });
 });
 
