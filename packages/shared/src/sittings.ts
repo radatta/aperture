@@ -445,7 +445,7 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
   return next;
 }
 
-// --- Coach events (the extension's trace card and resubmit nudge) ---
+// --- Coach events (the trace — a comment in the code, or the extension's card on older sittings — and the resubmit nudge) ---
 const COACH_KINDS: readonly CoachEventKind[] = [
   'config',
   'trace',

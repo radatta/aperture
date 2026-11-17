@@ -19,6 +19,9 @@ import {
   patternOfTags,
   sittingMinutes,
   sittingProblemUrl,
+  CLAUDE_NOTES_BATCH_MAX,
+  CLAUDE_NOTES_MAX,
+  COACH_VOIDS_MAX,
 } from '@aperture/shared';
 import type {
   CoachAttempt,
@@ -26,8 +29,10 @@ import type {
   CoachSlot,
   CoachStats,
   CoachToday,
+  LegacyGroup,
   PatternId,
   ProblemRecord,
+  ResolveState,
   Rate,
   Sitting,
   Story,
@@ -36,7 +41,7 @@ import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
 // The LeetCode coach for Claude (docs/areas/recruiting/coach.md; docs/areas/mcp → Tools). leetcode_today,
-// list_problems, get_problem, coach_stats and list_stories read; mark_peeked, set_cause_tag, swap_slot,
+// log_attempt, set_focus_pattern, delete_attempt, set_void and set_claude_notes write the user's data, each only on their yes.
 // log_attempt, set_focus_pattern and delete_attempt write the user's data, each only on their yes.
 
 // Every write's description opens with this, so the posture travels with the tool (MCP has no annotations).
@@ -61,7 +66,7 @@ export const SLOT_RULES: Record<CoachSlot['kind'] | 'off-plan', string> = {
 const SOLUTION_RULE =
   'Asked for the solution: push back once with the live numbers (passed/total, the failing input — "trace it"). If they still want it, give it, then offer mark_peeked (it schedules the re-solve) and say when it is due.';
 const TODAY_NOTE =
-  'Say "due", never "overdue", and never count missed days or streaks — momentum is "N of the last 7 days". Offer the floor (one problem) when they are short on time or back after a gap. Open slot 1 with its link when they are ready. A new sitting starts from Start on the LeetCode page, never from here. When ai.source is "ai", Opus picked today’s slots: coach from ai.note and each slot’s `why` (its `reason` is the rules’ facts). When ai.notice is set, say it once, plainly, and coach from the rules’ slots.';
+  'Say "due", never "overdue", and never count missed days or streaks — momentum is "N of the last 7 days". Offer the floor (one problem) when they are short on time or back after a gap. Open slot 1 with its link when they are ready. A new sitting starts from Start on the LeetCode page, never from here. When ai.source is "ai", Opus picked today’s slots: coach from ai.note and each slot’s `why` (its `reason` is the rules’ facts). When ai.notice is set, say it once, plainly, and coach from the rules’ slots. `planMode.line` says the day’s mix (Catch-up fills the slots with re-solves; Balanced is the usual mix): say it once when it is Catch-up. When `unnoted` lists ended sittings, offer once, at the start, to write your notes on all of them from their timelines (get_sitting), then save them in one set_claude_notes call on their yes.';
 const PICKING_NOTE =
   'Opus is still picking today’s problems: say so, call leetcode_today again in about 10 seconds, and don’t coach from a plan until it lands.';
 // leetcode_today waits this long for a pick it started (or found running) before answering `pending`.
@@ -118,6 +123,8 @@ export function todayView(t: CoachToday) {
     })),
     momentum: t.momentum,
     unreviewed: t.unreviewed,
+    unnoted: t.unnoted,
+    planMode: t.planMode,
     rules: { ...SLOT_RULES, solution: SOLUTION_RULE },
     note: TODAY_NOTE,
   };
@@ -157,8 +164,8 @@ const nextDue = (records: ProblemRecord[], slug: string) => {
 };
 // A peek on a sitting still open isn't an attempt yet: the re-solve it will schedule, from the sitting's day.
 const peekDue = (day: string) => ({
-  dueDay: addDays(day, COACH_PARAMS.gaps.peeked[0]!),
-  track: 'peeked' as const,
+  dueDay: addDays(day, COACH_PARAMS.gaps.retry[0]!),
+  track: 'retry' as const,
   once: 'the sitting ends',
 });
 const optDay = (v: unknown, name: string) => {
@@ -218,6 +225,7 @@ const problemSitting = (s: Sitting, at: number) => ({
   review: s.review
     ? { help: s.review.help, cause: s.review.cause ?? null, test: s.review.test === true }
     : null,
+  claudeNotes: s.claudeNotes?.text ?? null,
 });
 const pct = (r: Rate) => (r.of >= STATS_PCT_MIN ? Math.round((100 * r.hit) / r.of) : null);
 const rateView = (r: Rate) => ({ ...r, pct: pct(r) });
@@ -281,6 +289,13 @@ const patternArg = (v: unknown, name: string, other: boolean): PatternId => {
     );
   return v;
 };
+// The re-solve track filter; "peeked" (the track's old name) reads as retry.
+const trackArg = (v: unknown): ResolveState['track'] | undefined => {
+  if (v === undefined) return undefined;
+  if (v === 'peeked' || v === 'retry') return 'retry';
+  if (v === 'clean') return 'clean';
+  throw new RpcParamError('"track" must be clean or retry');
+};
 const todayDay = async (ctx: ToolContext) =>
   ((await ctx.dispatch('getCoachToday', [])) as CoachToday).day;
 
@@ -288,7 +303,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'leetcode_today',
     description: [
-      'The LeetCode coach’s plan for today — open every practice conversation with it ("what’s today?", "continue"). Up to 4 slots in order (carry-over, new in the focus pattern, re-solve due, stretch), each with its reason, 30-minute cap, status (open / in-progress / done / skipped) and easier alternatives; the focus pattern and its day of 3 with why; the floor (one problem that counts as showing up); sittings off the plan; the re-solves due and due in the next 48 h; momentum (active days of the last 7); ended sittings with no cause tag yet.',
+      'The LeetCode coach’s plan for today — open every practice conversation with it ("what’s today?", "continue"). Up to 4 slots in order (carry-over, new in the focus pattern, re-solve due, stretch), each with its reason, 30-minute cap, status (open / in-progress / done / skipped) and easier alternatives; the focus pattern and its day of 3 with why; the floor (one problem that counts as showing up); sittings off the plan; the re-solves due and due in the next 48 h; momentum (active days of the last 7); ended sittings with no cause tag yet (`unreviewed`) and with no Claude’s notes yet (`unnoted`); the plan mode (`planMode`: the setting, today’s mix, the due count and a one-line summary).',
       'Recomputed on every call from their sittings, so a new conversation picks up exactly where the last left off. `rules` says how to coach each slot kind; `note` how to talk about it.',
       '`ai`: with their AI pick setting on, the FIRST call of the day starts that day’s AI pick — a write: it claims the day, spends the day’s one Opus call (picking the slots from the rules’ candidates, with a `why` each and an optional day `note`) and may move the focus — then waits up to ~8 s for it. `ai.status` pending: slots are empty, call again shortly. `ai.notice`: the pick failed and the slots are the rules’.',
       'Otherwise read-only.',
@@ -319,8 +334,8 @@ export const COACH_TOOLS: Tool[] = [
     name: 'mark_peeked',
     description: [
       ASK_FIRST,
-      'Records that they read the solution for a problem: on that day’s sitting on it (its review’s help becomes "solution"), or, with no sitting, as a peeked attempt (also for seeding peeks from before the coach — pass `day`). Either way the problem moves to the peeked track: re-solve due the next day, then 3, 7, 14 days.',
-      'Pass `sittingId`, or `slug` (+ optional `day`, default today). Repeating it is harmless. Returns what was written and `nextDue` — read the due day back to them.',
+      'Records that they read the solution for a problem: on that day’s sitting on it (its review’s help becomes "solution"), or, with no sitting, as a peeked attempt (also for seeding peeks from before the coach — pass `day`). Either way the problem moves to the retry track: re-solve due the next day, then 3, 7, 14 days.',
+      'Pass `sittingId`, or `slug` (+ optional `day`, default today). With no sitting: `accepted: true` when they also got it accepted that day (an accept already recorded that day is kept anyway), and `title` + `difficulty` for a problem off the roadmap. Repeating it is harmless, and fills a title, difficulty or accept the first call lacked. Returns what was written and `nextDue` — read the due day back to them.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -328,6 +343,12 @@ export const COACH_TOOLS: Tool[] = [
         slug: { type: 'string', description: 'The LeetCode problem slug, e.g. "happy-number"' },
         sittingId: { type: 'string', description: 'A sitting id, instead of slug' },
         day: { type: 'string', description: 'YYYY-MM-DD (with slug); omit for today' },
+        accepted: {
+          type: 'boolean',
+          description: 'With slug and no sitting: they also got it accepted that day',
+        },
+        title: { type: 'string', description: 'With slug: the title, for a problem off the roadmap' },
+        difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
       },
       additionalProperties: false,
     },
@@ -335,6 +356,14 @@ export const COACH_TOOLS: Tool[] = [
       const sittingId = optSittingId(args.sittingId);
       const day = optDay(args.day, 'day');
       const { slug } = args;
+      const accepted = optBool(args.accepted, 'accepted');
+      const extra = {
+        ...(args.title !== undefined ? { title: args.title } : {}),
+        ...(args.difficulty !== undefined ? { difficulty: args.difficulty } : {}),
+        ...(accepted !== undefined ? { accepted } : {}),
+      };
+      if (sittingId !== undefined && Object.keys(extra).length)
+        throw new RpcParamError('"accepted", "title" and "difficulty" go with "slug" only');
       if ((sittingId === undefined) === (slug === undefined))
         throw new RpcParamError('pass exactly one of "slug" or "sittingId"');
       if (slug !== undefined && !isProblemSlug(slug))
@@ -374,7 +403,7 @@ export const COACH_TOOLS: Tool[] = [
           wrote = { sittingId: s.id };
         } else {
           const [a] = (await ctx.dispatch('logCoachAttempts', [
-            [{ slug, day: on, outcome: 'failed', help: 'solution' }],
+            [{ slug, day: on, help: 'solution', ...extra }],
           ])) as CoachAttempt[];
           wrote = { attemptId: a!.id };
         }
@@ -433,6 +462,135 @@ export const COACH_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'set_void',
+    description: [
+      ASK_FIRST,
+      'Marks practice as not counting, without deleting it — a test sitting (trying the extension, a warm-up) or a day of the pre-sittings capture (`legacy` in get_problem) that was testing. Void leaves the plan, stats, the re-solve schedule and the records; `void: false` brings it back (and lifts the default on a legacy two-sum day, which starts voided as extension testing).',
+      `Each target: \`sittingId\`, or \`day\` + \`slug\` for a legacy day, with \`void\` true or false. Up to ${COACH_VOIDS_MAX} at once; every target is checked before anything is written. A logged attempt is not voided — delete_attempt removes it. Returns each target's state and the problem's next due day — read them back.`,
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        targets: {
+          type: 'array',
+          minItems: 1,
+          maxItems: COACH_VOIDS_MAX,
+          items: {
+            type: 'object',
+            properties: {
+              sittingId: { type: 'string' },
+              day: { type: 'string', description: 'YYYY-MM-DD, with slug: a legacy day' },
+              slug: { type: 'string' },
+              void: { type: 'boolean' },
+            },
+            required: ['void'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['targets'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const { targets } = args;
+      if (!Array.isArray(targets) || !targets.length || targets.length > COACH_VOIDS_MAX)
+        throw new RpcParamError(`"targets" must be a list of 1 to ${COACH_VOIDS_MAX}`);
+      const sittings: { id: string; void: boolean }[] = [];
+      const legacy: { day: string; slug: string; void: boolean }[] = [];
+      for (const raw of targets) {
+        const t = (raw ?? {}) as Record<string, unknown>;
+        if (typeof t.void !== 'boolean') throw new RpcParamError('each target needs "void": true or false');
+        if (t.sittingId !== undefined) {
+          if (t.day !== undefined || t.slug !== undefined)
+            throw new RpcParamError('a target is a "sittingId", or a "day" + "slug" — not both');
+          sittings.push({ id: optSittingId(t.sittingId)!, void: t.void });
+        } else {
+          const day = optDay(t.day, 'day');
+          if (day === undefined || !isProblemSlug(t.slug))
+            throw new RpcParamError(
+              'a target is a "sittingId", or a "day" + "slug" (a legacy day — get_problem lists them)',
+            );
+          legacy.push({ day, slug: t.slug, void: t.void });
+        }
+      }
+      // Every sitting must exist before anything is written; the legacy days are checked by setCoachVoids, which
+      // writes nothing on a refusal — and it runs before the sitting writes.
+      const heads = sittings.length ? ((await ctx.dispatch('listSittings', [])) as Sitting[]) : [];
+      for (const x of sittings)
+        if (!heads.some((h) => h.id === x.id))
+          throw new Error(`No sitting ${x.id} — list_sittings gives the ids`);
+      const groups = legacy.length
+        ? ((await ctx.dispatch('setCoachVoids', [legacy])) as LegacyGroup[])
+        : [];
+      const written: Sitting[] = [];
+      for (const x of sittings)
+        written.push(
+          (await ctx.dispatch('patchSittingReview', [x.id, { test: x.void }])) as Sitting,
+        );
+      const records = (await ctx.dispatch('listProblemRecords', [])) as ProblemRecord[];
+      return {
+        sittings: written.map((h) => ({
+          sittingId: h.id,
+          slug: h.problemSlug,
+          day: h.day,
+          void: h.review?.test === true,
+          nextDue: nextDue(records, h.problemSlug),
+        })),
+        legacy: groups.map((g) => ({
+          day: g.day,
+          slug: g.slug,
+          void: !g.counted,
+          voidedBy: g.voidedBy,
+          nextDue: nextDue(records, g.slug),
+        })),
+      };
+    },
+  },
+  {
+    name: 'set_claude_notes',
+    description: [
+      ASK_FIRST,
+      `Saves YOUR notes on ended sittings — whatever the outcome: accepted, unfinished, given up at the cap, peeked, dropped, idle-closed or ended by a later Start. Three to five plain lines from the timeline (get_sitting): what happened, where it broke, whether the trace caught it, the pattern trigger, what to watch on the re-solve. Up to ${CLAUDE_NOTES_MAX} characters each; line breaks kept. They sit beside the user's own review, never in it.`,
+      `\`notes\`: up to ${CLAUDE_NOTES_BATCH_MAX} of { sittingId, text } — one call for the whole catch-up list (leetcode_today's \`unnoted\`). Writing again replaces; \`text: null\` clears. Every sitting is checked (exists, ended) before anything is written. Returns what was saved.`,
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        notes: {
+          type: 'array',
+          minItems: 1,
+          maxItems: CLAUDE_NOTES_BATCH_MAX,
+          items: {
+            type: 'object',
+            properties: {
+              sittingId: { type: 'string' },
+              text: { type: ['string', 'null'], maxLength: CLAUDE_NOTES_MAX },
+            },
+            required: ['sittingId', 'text'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['notes'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const { notes } = args;
+      if (!Array.isArray(notes) || !notes.length || notes.length > CLAUDE_NOTES_BATCH_MAX)
+        throw new RpcParamError(`"notes" must be a list of 1 to ${CLAUDE_NOTES_BATCH_MAX}`);
+      for (const n of notes) optSittingId((n as { sittingId?: unknown } | null)?.sittingId ?? '');
+      const saved = (await ctx.dispatch('setSittingClaudeNotes', [notes])) as Sitting[];
+      return {
+        saved: saved.map((x) => ({
+          sittingId: x.id,
+          problem: x.problemTitle,
+          day: x.day,
+          claudeNotes: x.claudeNotes?.text ?? null,
+        })),
+      };
+    },
+  },
+  {
     name: 'swap_slot',
     description: [
       ASK_FIRST,
@@ -466,7 +624,7 @@ export const COACH_TOOLS: Tool[] = [
     name: 'log_attempt',
     description: [
       ASK_FIRST,
-      `Logs practice done outside the extension — on paper, in an editor, in a mock — so the plan and the re-solve queue count it. Each attempt: \`slug\`, \`outcome\` (clean = right first time, no help; solved = got there with a hint or a few tries; failed = didn't, or read the solution), optional \`help\` (${HELP_LEVELS.join('/')}), \`cause\`, \`minutes\`, \`note\`, \`day\` (default today, up to ${ATTEMPT_BACKDATE_DAYS} days back). Up to ${LOG_ATTEMPTS_MAX} at once.`,
+      `Logs practice done outside the extension — on paper, in an editor, in a mock — so the plan and the re-solve queue count it. Each attempt: \`slug\`, \`outcome\` (clean = right first time, no help; solved = got there with a hint or a few tries; failed = didn't), optional \`help\` (${HELP_LEVELS.join('/')}), \`cause\`, \`minutes\`, \`note\`, \`day\` (default today, up to ${ATTEMPT_BACKDATE_DAYS} days back), and for a problem off the roadmap \`title\` + \`difficulty\`. A peek is one attempt: \`help: "solution"\` lands it on the retry track (outcome may be left out; \`outcome: "solved"\` or \`accepted: true\` keeps that it was accepted). Up to ${LOG_ATTEMPTS_MAX} at once.`,
       'It counts toward momentum and the queue; it does not touch their Roll or calibration. Returns the stored attempts and each problem’s next due day — read them back.',
       `\`historical: true\` is for solves from before the coach ("I did these last year"): \`day\` up to ${ATTEMPT_HISTORY_DAYS / 365} years back (a guess is fine; before today; omitted = yesterday — when the problem already has a try with the coach, pass a day before that try). They light up the Progress map as solved before and mark the problem seen, so it is never offered as new; they never enter the re-solve queue or momentum, and never count as a first try: a later live try on that problem counts as a re-solve in the stats and the focus ranking. Use \`solved\` when they don't remember how it went. \`delete_attempt\` undoes one.`,
     ].join(' '),
@@ -489,8 +647,10 @@ export const COACH_TOOLS: Tool[] = [
               minutes: { type: 'integer', minimum: 1, maximum: 600 },
               note: { type: 'string' },
               historical: { type: 'boolean' },
+              difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
+              accepted: { type: 'boolean', description: 'help "solution" only: accepted that day too' },
             },
-            required: ['slug', 'outcome'],
+            required: ['slug'],
             additionalProperties: false,
           },
         },
@@ -527,7 +687,7 @@ export const COACH_TOOLS: Tool[] = [
     name: 'list_problems',
     description: [
       'Every problem they have tried (on LeetCode with the extension, or logged), newest first — the history and the re-solve queue ("what\u2019s due?", "which Two Pointers problems have I peeked?"). Each row: title, slug, pattern, difficulty, days tried (live tries; solves from before the coach are in `historical`), the first and the last outcome (clean / solved / failed), ever accepted, peeked, the newest cause tag, the re-solve state (track, step of N, due day; null due day once graduated; null for a problem with only solves from before the coach), and `historical` (those solves: count, first and last day).',
-      `Filters: \`pattern\` (a pattern id: ${PATTERN_LIST}, other), \`due\` (true: due today or earlier; false: not due), \`peeked\`; \`limit\` 1–${PROBLEMS_LIMIT_MAX} (default 30). With \`due: true\` the oldest due comes first. \`get_problem\` reads one in full.`,
+      `Filters: \`pattern\` (a pattern id: ${PATTERN_LIST}, other), \`due\` (true: due today or earlier; false: not due), \`peeked\` (the solution was read), \`track\` (the re-solve track: clean, or retry — where a failed attempt lands; "peeked" is read as retry); \`limit\` 1–${PROBLEMS_LIMIT_MAX} (default 30). With \`due: true\` the oldest due comes first. \`get_problem\` reads one in full.`,
       'Read-only.',
     ].join(' '),
     inputSchema: {
@@ -536,6 +696,7 @@ export const COACH_TOOLS: Tool[] = [
         pattern: { type: 'string', enum: [...PATTERNS, 'other'] },
         due: { type: 'boolean' },
         peeked: { type: 'boolean' },
+        track: { type: 'string', enum: ['clean', 'retry', 'peeked'] },
         limit: { type: 'integer', minimum: 1, maximum: PROBLEMS_LIMIT_MAX },
       },
       additionalProperties: false,
@@ -545,6 +706,7 @@ export const COACH_TOOLS: Tool[] = [
         args.pattern === undefined ? undefined : patternArg(args.pattern, 'pattern', true);
       const due = optBool(args.due, 'due');
       const peeked = optBool(args.peeked, 'peeked');
+      const track = trackArg(args.track);
       const { limit = 30 } = args;
       if (
         typeof limit !== 'number' ||
@@ -561,6 +723,7 @@ export const COACH_TOOLS: Tool[] = [
         (r) =>
           (pattern === undefined || r.pattern === pattern) &&
           (peeked === undefined || r.peeked === peeked) &&
+          (track === undefined || (!!r.schedule && r.schedule.track === track)) &&
           (today === null || isDue(r, today) === due),
       );
       if (due === true)
@@ -580,7 +743,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'get_problem',
     description: [
-      'One problem in full, by slug: its catalog place (pattern, difficulty, link), every day tried oldest first (outcome, help, cause, minutes, note, `historical` for a solve from before the coach, and the sitting and logged-attempt ids — `delete_attempt` takes a logged one), its sittings (minutes, submits, runs, accepted, review), and the re-solve state with its due day.',
+      'One problem in full, by slug: its catalog place (pattern, difficulty, link), every day tried oldest first (outcome, help, cause, minutes, note, `historical` for a solve from before the coach, where it came from — `sources`: sitting, manual, peek-seed, legacy — the sitting and logged-attempt ids — `delete_attempt` takes a logged one — and Claude’s notes on that day’s sittings, to coach a re-solve from last time), its sittings (minutes, submits, runs, accepted, review, Claude’s notes), the re-solve state with its due day, and `legacy`: the pre-sittings capture’s days on it, with whether each counts (set_void changes that).',
       'A problem with no counted attempt comes back with `record: null` (its uncounted sittings still listed). Read-only.',
     ].join(' '),
     inputSchema: {
@@ -595,19 +758,29 @@ export const COACH_TOOLS: Tool[] = [
       const { slug } = args;
       if (!isProblemSlug(slug))
         throw new RpcParamError('"slug" must be a LeetCode problem slug (lowercase, dashes)');
-      const [records, all] = await Promise.all([
+      const [records, all, legacy] = await Promise.all([
         ctx.dispatch('listProblemRecords', []) as Promise<ProblemRecord[]>,
         ctx.dispatch('listSittings', []) as Promise<Sitting[]>,
+        ctx.dispatch('listLegacyGroups', [slug]) as Promise<LegacyGroup[]>,
       ]);
+      const legacyView = legacy.map((g) => ({
+        day: g.day,
+        submits: g.submits,
+        accepted: g.accepted,
+        firstSubmitAccepted: g.firstSubmitAccepted,
+        counted: g.counted,
+        voidedBy: g.voidedBy,
+      }));
       const r = records.find((x) => x.slug === slug);
       const cat = catalogProblem(slug);
       const mine = all.filter((s) => s.problemSlug === slug);
-      if (!r && !cat && !mine.length)
+      if (!r && !cat && !mine.length && !legacy.length)
         throw new Error(
           `No record of "${slug}" and it isn\u2019t on the roadmap — list_problems lists the ones tried`,
         );
       const t = now(ctx);
       const sittings = mine.map((s) => problemSitting(s, t));
+      const byId = new Map(mine.map((s) => [s.id, s]));
       // The record's own fields first (a logged problem off the roadmap has a null difficulty, and no sitting),
       // then the catalog's, then the newest uncounted sitting's.
       const s0 = mine[0];
@@ -615,11 +788,13 @@ export const COACH_TOOLS: Tool[] = [
         ? { title: r.title, pattern: r.pattern, difficulty: r.difficulty }
         : cat
           ? { title: cat.title, pattern: cat.pattern, difficulty: cat.difficulty }
-          : {
-              title: s0!.problemTitle,
-              pattern: patternOfTags(s0!.topicTags),
-              difficulty: s0!.difficulty,
-            };
+          : s0
+            ? {
+                title: s0.problemTitle,
+                pattern: patternOfTags(s0.topicTags),
+                difficulty: s0.difficulty,
+              }
+            : { title: legacy[0]!.title, pattern: 'other' as const, difficulty: legacy[0]!.difficulty };
       const problem = {
         slug,
         title: src.title,
@@ -635,8 +810,9 @@ export const COACH_TOOLS: Tool[] = [
           problem,
           record: null,
           sittings,
-          note: sittings.length
-            ? 'No counted attempt yet: these sittings were tests or too short.'
+          legacy: legacyView,
+          note: sittings.length || legacy.length
+            ? 'No counted attempt yet: these sittings were tests or too short, or the legacy days are voided.'
             : 'Not tried yet.',
         };
       return {
@@ -658,15 +834,19 @@ export const COACH_TOOLS: Tool[] = [
           historical: r.historical,
           lists: r.lists,
         },
-        tries: r.tries,
+        tries: r.tries.map((x) => ({
+          ...x,
+          claudeNotes: x.sittingIds.flatMap((id) => byId.get(id)?.claudeNotes?.text ?? []),
+        })),
         sittings,
+        legacy: legacyView,
       };
     },
   },
   {
     name: 'coach_stats',
     description: [
-      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits per try, how often a Run came before the first Submit, how often all three trace inputs were in at the first Submit (card on only), and its first tries per week. The run and trace rates cover only attempts with captured data.',
+      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits per try, how often a Run came before the first Submit, how often the attempt was traced before the first Submit (a trace comment in the code, or, on older sittings, all three of the card’s inputs), and its first tries per week. The run and trace rates cover only attempts with captured data.',
       'Optional `from` / `to` (YYYY-MM-DD, inclusive; `to` defaults to their today). Test sittings never count. `note` says how to read it.',
       'Read-only.',
     ].join(' '),

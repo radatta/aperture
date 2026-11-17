@@ -242,6 +242,8 @@ describe('writes ask first', () => {
       'log_attempt',
       'set_focus_pattern',
       'delete_attempt',
+      'set_void',
+      'set_claude_notes',
     ])
       expect(TOOLS.find((x) => x.name === name)!.description).toMatch(
         /^Writes to their Aperture data\. Before calling, say exactly what you will write and wait for their yes/,
@@ -255,7 +257,7 @@ describe('mark_peeked', () => {
     expect(a).toMatchObject({
       slug: 'happy-number',
       peeked: true,
-      nextDue: { dueDay: '2026-11-10', track: 'peeked' },
+      nextDue: { dueDay: '2026-11-10', track: 'retry' },
     });
     const b = await call('mark_peeked', { slug: 'happy-number' });
     expect(b.attemptId).toBe(a.attemptId);
@@ -276,7 +278,7 @@ describe('mark_peeked', () => {
   });
   it('seeds a past peek on its day', async () => {
     const out = await call('mark_peeked', { slug: 'happy-number', day: '2026-11-01' });
-    expect(out.nextDue).toEqual({ dueDay: '2026-11-02', track: 'peeked' });
+    expect(out.nextDue).toEqual({ dueDay: '2026-11-02', track: 'retry' });
   });
   it('bad args → a param error, nothing written', async () => {
     for (const args of [
@@ -424,13 +426,13 @@ describe('live_sitting slot', () => {
   it('mark_peeked on the open sitting says when the re-solve will be due', async () => {
     await start('contains-duplicate');
     const out = await call('mark_peeked', { slug: 'contains-duplicate' });
-    expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'peeked' });
+    expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'retry' });
   });
   it('mark_peeked on an open sitting on a problem with history reads the peek’s due day, not the old schedule', async () => {
     await ended('contains-duplicate', '2026-11-05', true, T0 - 4 * 86_400_000); // clean track, due 11-08
     await start('contains-duplicate');
     const out = await call('mark_peeked', { slug: 'contains-duplicate' });
-    expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'peeked' });
+    expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'retry' });
   });
   it('an off-plan problem is off-plan, under the cap', async () => {
     await start('rotting-oranges');
