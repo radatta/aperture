@@ -572,27 +572,36 @@ export const isRawEventType = (type: SittingEventType | 'replay') =>
 
 // 'open' takes everything; 'grace' only events stamped before the end; 'closed' refuses.
 export function sittingIngestPhase(
-  s: Pick<Sitting, 'status' | 'startedAt' | 'endedAt'>,
+  s: Pick<Sitting, 'status' | 'startedAt' | 'endedAt' | 'closedBy'>,
   now: number,
 ): 'open' | 'grace' | 'closed' {
   if (now - s.startedAt > SITTING_INGEST_WINDOW_MS) return 'closed'; // the window stays a hard ceiling
   if (s.status === 'active') return 'open';
-  return s.endedAt !== null && now - s.endedAt <= SITTING_END_GRACE_MS ? 'grace' : 'closed';
+  if (s.endedAt === null) return 'closed';
+  // An idle close is noticed late, so its end is already old: what it holds back is decided by the event's time
+  // (eventsBeforeEnd), or a return reopens it (sittingReturns), for its whole window.
+  if (s.closedBy === 'idle') return 'grace';
+  return now - s.endedAt <= SITTING_END_GRACE_MS ? 'grace' : 'closed';
 }
+// The end on the extension's clock, with the skew allowance: events stamped after it came after the end.
+const clientEndCutoff = (
+  s: Pick<Sitting, 'startedAt' | 'clientStartedAt'>,
+  endedAt: number,
+): number => endedAt - (s.startedAt - s.clientStartedAt) + SITTING_END_SKEW_MS;
 // The events a call may store: all while active; after the end, those stamped before it on the extension's clock.
 export function eventsBeforeEnd<E extends { at: number }>(
   s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
   events: readonly E[],
 ): E[] {
   if (s.status === 'active' || s.endedAt === null) return [...events];
-  const cutoff = s.endedAt - (s.startedAt - s.clientStartedAt) + SITTING_END_SKEW_MS;
+  const cutoff = clientEndCutoff(s, s.endedAt);
   return events.filter((e) => e.at <= cutoff);
 }
 // Why an events call is refused before anything is written, or null: the sitting is past its grace or its
 // window, or an event's time — skipped ones included — is off the sitting's clock (the extension's — bounds
 // keep junk out of the metrics and the sort).
 export function sittingIngestError(
-  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
+  s: Pick<Sitting, 'status' | 'startedAt' | 'clientStartedAt' | 'endedAt' | 'closedBy'>,
   events: readonly { at: number }[],
   now: number,
 ): string | null {
@@ -613,11 +622,18 @@ export function reserveBudget<B extends Pick<SittingBudget, 'events' | 'bytes'>>
 }
 
 // --- Metrics (derived, never stored) ---
-export function sittingElapsedMs(s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number {
-  return Math.max(0, (s.endedAt ?? now) - s.startedAt);
+// Less the idle gaps its reopens bridged, so coming back hours later never counts the hours.
+export function sittingElapsedMs(
+  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'idleMs'>,
+  now: number,
+): number {
+  return Math.max(0, (s.endedAt ?? now) - s.startedAt - (s.idleMs ?? 0));
 }
 // Whole minutes for display, at least 1.
-export const sittingMinutes = (s: Pick<Sitting, 'startedAt' | 'endedAt'>, now: number): number =>
+export const sittingMinutes = (
+  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'idleMs'>,
+  now: number,
+): number =>
   Math.max(1, msToMin(sittingElapsedMs(s, now)));
 export interface SittingMetrics {
   firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
@@ -636,22 +652,27 @@ export function sittingMetrics(s: Pick<Sitting, 'clientStartedAt' | 'summary'>):
 
 // --- Start: which rep, and whether to refuse (one open rep per roll — rolls.md D6) ---
 export type SittingStartPlan = (
-  { kind: 'resume'; sitting: Sitting } | { kind: 'attach'; rep: Task } | { kind: 'spawn' }
+  | { kind: 'resume'; sitting: Sitting }
+  | { kind: 'reopen'; sitting: Sitting } // an idle-closed sitting coming back (sittingReopenError clear)
+  | { kind: 'attach'; rep: Task }
+  | { kind: 'spawn' }
 ) & {
   // Open sittings to end first: past their window, or their rep finished (Done → done, else abandoned),
   // or — for a Start on another problem — a half-made one whose rep was never created.
   ends: { sitting: Sitting; to: 'done' | 'abandoned'; at: number }[];
 };
-// `sittings` and `tasks` are the alive rows. Stale open sittings end first (they'd otherwise block every
-// Start). Then a repeat Start (same clientSittingId), or one on the problem a still-open sitting is on,
-// resumes it; a Start on another problem while one is open is refused; otherwise the roll's open rep is
-// attached when no open sitting holds it, else a fresh rep is spawned.
+// `sittings` and `tasks` are the alive rows (idle ones already closed — closeIdle). Stale open sittings end
+// first (they'd otherwise block every Start). Then a repeat Start (same clientSittingId), or one on the problem a
+// still-open sitting is on, resumes it; a Start on another problem while one is open is refused; one on the
+// problem an idle-closed sitting of the same app day (`sameDay`, of its startedAt) was on reopens it; otherwise
+// the roll's open rep is attached when no open sitting holds it, else a fresh rep is spawned.
 export function planSittingStart(
   input: Pick<NormalizedSittingStart, 'clientSittingId' | 'problemSlug'>,
   sittings: readonly Sitting[],
   tasks: Task[],
   rollId: string,
   now: number,
+  sameDay: (startedAt: number) => boolean,
 ): SittingStartPlan {
   const ends: SittingStartPlan['ends'] = [];
   const repOf = (x: Sitting) => tasks.find((t) => t.id === x.repTaskId);
@@ -668,9 +689,20 @@ export function planSittingStart(
   const ended = new Set(ends.map((e) => e.sitting.id));
   const open = sittings.filter((x) => x.status === 'active' && !ended.has(x.id));
   const finish = (x: Sitting) => ends.find((e) => e.sitting.id === x.id);
+  // As they stand once this plan's ends are written: what a reopen checks against.
+  const after = () =>
+    sittings.map((x) => {
+      const e = finish(x);
+      return e ? endedSitting(x, e.to, e.at) : x;
+    });
+  const reopens = (x: Sitting) =>
+    x.closedBy === 'idle' &&
+    sameDay(x.startedAt) &&
+    sittingReopenError(x, repOf(x), after(), now) === null;
   const same = sittings.find((x) => x.clientSittingId === input.clientSittingId);
   if (same) {
     const e = finish(same);
+    if (!e && reopens(same)) return { kind: 'reopen', sitting: same, ends };
     return { kind: 'resume', sitting: e ? endedSitting(same, e.to, e.at) : same, ends };
   }
   const onThis = open.find((x) => x.problemSlug === input.problemSlug);
@@ -678,6 +710,10 @@ export function planSittingStart(
   for (const x of open)
     if (repOf(x) || now - x.startedAt < CLAIM_IN_FLIGHT_MS) throw new Error(SITTING_ACTIVE_ERROR);
     else ends.push({ sitting: x, to: 'abandoned', at: now }); // a Start that died before making its rep
+  const back = sittings
+    .filter((x) => x.problemSlug === input.problemSlug && x.status === 'abandoned')
+    .sort((a, b) => b.startedAt - a.startedAt)[0];
+  if (back && reopens(back)) return { kind: 'reopen', sitting: back, ends };
   // No sitting is open past this point, so the roll's open rep is free — one left by a sitting that ran out
   // its window is reused (one open rep per roll).
   const rep = findOpenRollTask(tasks, rollId);
@@ -730,7 +766,7 @@ export function claimStart<G extends GateFields>(
   g: G,
   day: string,
   self: string,
-  sittings: readonly Pick<Sitting, 'id' | 'status'>[],
+  sittings: readonly Pick<Sitting, 'id' | 'status' | 'endedAt'>[],
   ended: ReadonlySet<string>,
   now: number,
 ): G | null {
@@ -739,7 +775,7 @@ export function claimStart<G extends GateFields>(
   if (held) {
     const known = sittings.find((x) => x.id === held);
     const open = known
-      ? known.status === 'active' && !ended.has(held)
+      ? (known.status === 'active' && !ended.has(held)) || reclaimedSince(g, known, now)
       : now - (g.openClaimedAt ?? 0) < CLAIM_IN_FLIGHT_MS;
     if (open) throw new Error(SITTING_ACTIVE_ERROR);
   }
@@ -749,6 +785,118 @@ export function claimStart<G extends GateFields>(
 }
 export const releaseStart = <G extends GateFields>(g: G, id: string): G | null =>
   g.openSittingId === id ? { ...g, openSittingId: null, openClaimedAt: null } : null;
+// A claim made after the sitting's end is a reopen (reclaimStart), maybe still writing its head: a Start that
+// read the sitting ended must not take the gate from it while that claim is young.
+const reclaimedSince = (
+  g: GateFields,
+  s: Pick<Sitting, 'status' | 'endedAt'>,
+  now: number,
+): boolean =>
+  s.status !== 'active' &&
+  s.endedAt !== null &&
+  (g.openClaimedAt ?? 0) > s.endedAt &&
+  now - (g.openClaimedAt ?? 0) < CLAIM_IN_FLIGHT_MS;
+// The claim for a reopen of `self`: as claimStart's, but it starts nothing new, so it counts no Start. Refused while
+// the gate holds another sitting that's open by `sittings` (idle ones already closed), or one claimed moments ago.
+export function reclaimStart<G extends GateFields>(
+  g: G,
+  self: string,
+  sittings: readonly Pick<Sitting, 'id' | 'status' | 'startedAt' | 'endedAt'>[],
+  now: number,
+): G | null {
+  if (g.openSittingId === self) return null;
+  const held = g.openSittingId;
+  if (held) {
+    const known = sittings.find((x) => x.id === held);
+    const open = known
+      ? isSittingOpen(known, now) || reclaimedSince(g, known, now)
+      : now - (g.openClaimedAt ?? 0) < CLAIM_IN_FLIGHT_MS;
+    if (open) throw new Error(SITTING_ACTIVE_ERROR);
+  }
+  return { ...g, openSittingId: self, openClaimedAt: now };
+}
+
+// --- Idle close (docs/areas/recruiting → Idle close): a sitting nothing has touched for SITTING_IDLE_MS is closed
+// by the next read, at its last activity + a tail — never at the moment it's noticed ---
+export const SITTING_IDLE_MS = 45 * 60_000; // the 30-min cap + 15
+export const SITTING_IDLE_TAIL_MS = 5 * 60_000;
+export const SITTING_REOPEN_ERROR = 'Only a sitting closed automatically can be reopened.';
+export const SITTING_REOPEN_REP_ERROR = 'Its rep has moved on — start a new sitting.';
+// The server's own stamps of what it last heard: the budget row (every events call that kept an event) and the
+// reads row (every live_sitting pull). null when there's none.
+export interface SittingActivity {
+  budgetAt: number | null;
+  readsAt: number | null;
+}
+export const sittingLastActivity = (
+  s: Pick<Sitting, 'startedAt' | 'reopenedAt'>,
+  a: SittingActivity,
+): number => Math.max(s.startedAt, s.reopenedAt ?? 0, a.budgetAt ?? 0, a.readsAt ?? 0);
+// The free precheck: could it be idle, before any row is read? (Its own clock alone isn't past the line.)
+export const mayBeIdle = (
+  s: Pick<Sitting, 'status' | 'startedAt' | 'reopenedAt'>,
+  now: number,
+): boolean =>
+  s.status === 'active' && now - Math.max(s.startedAt, s.reopenedAt ?? 0) > SITTING_IDLE_MS;
+// When an idle sitting ends, or null when it isn't idle.
+export function idleCloseAt(
+  s: Pick<Sitting, 'status' | 'startedAt' | 'reopenedAt'>,
+  a: SittingActivity,
+  now: number,
+): number | null {
+  if (!mayBeIdle(s, now)) return null;
+  const last = sittingLastActivity(s, a);
+  return now - last > SITTING_IDLE_MS ? last + SITTING_IDLE_TAIL_MS : null;
+}
+// Why an idle-closed sitting can't reopen now, or null (an open one is already open: null too, a no-op). `sittings`
+// are the alive rows as they stand (idle ones already closed); `rep` is its rep, if alive.
+export function sittingReopenError(
+  s: Sitting,
+  rep: Pick<Task, 'status'> | undefined,
+  sittings: readonly Sitting[],
+  now: number,
+): string | null {
+  if (s.status === 'active') return null;
+  if (s.closedBy !== 'idle' || s.status !== 'abandoned') return SITTING_REOPEN_ERROR;
+  if (now - s.startedAt > SITTING_INGEST_WINDOW_MS) return SITTING_ENDED_ERROR;
+  if (!rep || rep.status === 'done' || rep.status === 'cancelled') return SITTING_REOPEN_REP_ERROR;
+  const others = sittings.filter((x) => x.id !== s.id);
+  if (others.some((x) => isSittingOpen(x, now))) return SITTING_ACTIVE_ERROR;
+  if (others.some((x) => x.repTaskId === s.repTaskId && x.startedAt > s.startedAt))
+    return SITTING_REOPEN_REP_ERROR; // a later sitting took its rep
+  return null;
+}
+// Open again: the gap since its end leaves its minutes, and the reopen counts as activity.
+export const reopenedSitting = (s: Sitting, now: number): Sitting => ({
+  ...s,
+  status: 'active',
+  endedAt: null,
+  closedBy: null,
+  reopenedAt: now,
+  idleMs: (s.idleMs ?? 0) + Math.max(0, now - (s.endedAt ?? now)),
+  updatedAt: Math.max(now, s.updatedAt + 1),
+});
+// An idle close written at `at` (its last activity + the tail).
+export const idleClosedSitting = (s: Sitting, at: number, now: number): Sitting => ({
+  ...endedSitting(s, 'abandoned', at),
+  closedBy: 'idle',
+  updatedAt: Math.max(now, s.updatedAt + 1),
+});
+// Its rep was Done after the idle close: it reads done, its end and closedBy kept.
+export const finishIdleClosed = (s: Sitting, now: number): Sitting | null =>
+  s.closedBy === 'idle' && s.status === 'abandoned'
+    ? { ...s, status: 'done', updatedAt: Math.max(now, s.updatedAt + 1) }
+    : null;
+// An events call on an idle-closed sitting comes back when an event is stamped after its end (the extension's
+// clock); one stamped before it is a straggler, kept without reopening (eventsBeforeEnd).
+export const sittingReturns = (
+  s: Pick<Sitting, 'status' | 'closedBy' | 'startedAt' | 'clientStartedAt' | 'endedAt'>,
+  events: readonly { at: number }[],
+): boolean =>
+  s.status === 'abandoned' &&
+  s.closedBy === 'idle' &&
+  s.endedAt !== null &&
+  events.some((e) => e.at > clientEndCutoff(s, s.endedAt!));
 
 // --- Claude's live pull (live_sitting; docs/areas/recruiting) ---
 // Open = still taking events: active and inside its window. One left active past it reads closed here without

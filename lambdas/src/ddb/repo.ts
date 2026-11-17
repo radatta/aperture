@@ -35,6 +35,7 @@ import type {
   TaskPlan,
   TaskSeries,
   FluxWeekNoteRow,
+  SittingActivity,
 } from '@aperture/shared';
 import { headRowOf, isHeadEvent } from '@aperture/shared';
 import { ConditionFailedError, SK_END } from './DocClient';
@@ -303,6 +304,17 @@ export class Repo {
   async getSittingReads(id: string, opts?: { consistent?: boolean }): Promise<number> {
     const it = await this.doc.get(this.p(), sk.sittingReads(id), opts);
     return it && it.deletedAt === null && typeof it.count === 'number' ? it.count : 0;
+  }
+  // What the server last heard of a sitting (sittings.ts SittingActivity), strongly consistent: the stamps its
+  // budget row (every kept events call) and reads row (every live pull) already carry — idle close's read.
+  async getSittingActivity(id: string): Promise<SittingActivity> {
+    const [budget, reads] = await Promise.all([
+      this.doc.get(this.p(), sk.sittingBudget(id), { consistent: true }),
+      this.doc.get(this.p(), sk.sittingReads(id), { consistent: true }),
+    ]);
+    const at = (it: typeof budget) =>
+      it && it.deletedAt === null && typeof it.updatedAt === 'number' ? it.updatedAt : null;
+    return { budgetAt: at(budget), readsAt: at(reads) };
   }
   async listSittingReplay(id: string): Promise<SittingReplayChunk[]> {
     return alive(

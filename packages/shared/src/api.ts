@@ -627,11 +627,17 @@ export interface ApiClient {
   // extension mints a new id). Events are idempotent per event id, refused with nothing written once the
   // sitting has ended or is over a cap. A sitting ends through its rep — Done → done, Drop → abandoned — or as
   // stale at a later Start; deleting the rep deletes it.
+  // Idle close (docs/areas/recruiting → Idle close): every read below, Start and events first close an open
+  // sitting nothing has touched for SITTING_IDLE_MS, at its last activity + SITTING_IDLE_TAIL_MS (closedBy 'idle',
+  // its rep left in progress). A Start on its problem, or an event stamped after its end, the same app day,
+  // reopens it (a repeat Start of it included); reopenSitting is the button.
   lcSittingStart(input: SittingStartInput): Promise<SittingStartResult>;
   lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult>;
   listSittings(range?: DateRange): Promise<Sitting[]>; // heads, startedAt desc, by `day`
   getSitting(id: string): Promise<SittingDetail>; // never the replay — that's listSittingReplay
   pullLiveSitting(): Promise<LiveSittingPull>; // Claude's live read (live_sitting) — counts itself
+  // An idle-closed sitting open again (sittingReopenError's refusals); an open one is returned as it is.
+  reopenSitting(id: string): Promise<Sitting>;
   listSittingReplay(id: string): Promise<SittingReplayChunk[]>; // at asc; empty once the raw bulk expired
   setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting>;
   // The user's review, whole-replaced (normalizeSittingReview) except the coach's cause and test flag, kept when not

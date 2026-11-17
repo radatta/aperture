@@ -88,6 +88,7 @@ export const API_METHODS = [
   'listSittings',
   'getSitting',
   'pullLiveSitting',
+  'reopenSitting',
   'listSittingReplay',
   'setSittingPrepTarget',
   'setSittingReview',

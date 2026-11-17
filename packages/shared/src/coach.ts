@@ -113,14 +113,14 @@ const asDifficulty = (v: string | null): Difficulty | null =>
 // Test sittings never count: a sitting under minPracticeMin with no accepted submit and no peek, or one the user
 // flagged.
 export function countsAsPractice(
-  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'summary' | 'review'>,
+  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'summary' | 'review' | 'idleMs'>,
   now: number,
   params: CoachParams = COACH_PARAMS,
 ): boolean {
   if (s.review?.test === true) return false;
   if (s.review?.help === 'solution') return true; // a quick peek is still a peek
   const end = s.endedAt ?? Math.min(now, s.startedAt + SITTING_INGEST_WINDOW_MS);
-  const ms = sittingElapsedMs({ startedAt: s.startedAt, endedAt: end }, now);
+  const ms = sittingElapsedMs({ startedAt: s.startedAt, endedAt: end, idleMs: s.idleMs }, now);
   return s.summary.firstAcceptedAt !== null || ms >= params.minPracticeMin * 60_000;
 }
 export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help: HelpLevel) {

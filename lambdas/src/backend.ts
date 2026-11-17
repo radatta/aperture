@@ -138,6 +138,16 @@ import {
   sittingProblemUrl,
   sittingRawExpiresAt,
   sittingRepTitle,
+  mayBeIdle,
+  idleCloseAt,
+  idleClosedSitting,
+  reopenedSitting,
+  finishIdleClosed,
+  sittingReturns,
+  sittingReopenError,
+  reclaimStart,
+  SITTING_IDLE_TAIL_MS,
+  SITTING_REOPEN_REP_ERROR,
 } from '@aperture/shared';
 import type {
   CoachAttempt,
@@ -813,15 +823,21 @@ export class BackendClient implements ApiClient {
       : null;
     const roll = linked?.active ? linked : null; // an archived roll reads as unlinked, as Settings shows it
     if (!roll) throw new Error(LC_ROLL_UNLINKED_ERROR);
-    const sittings = await this.repo.listSittings({ consistent: true });
+    const sittings = await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now);
     const plan = planSittingStart(
       n,
       sittings,
       await this.repo.listTasks({ consistent: true }),
       roll.id,
       now,
+      (startedAt) => dayKeyInZone(startedAt, USER_TIME_ZONE, settings.dayStartHour) === gateDay,
     );
     for (const e of plan.ends) await this.endSitting(e.sitting.id, e.to, e.at);
+    if (plan.kind === 'reopen') {
+      const back = await this.reopen(plan.sitting, now, 'start');
+      await this.keepProblem(n, false);
+      return { sitting: back, resumed: true };
+    }
     if (plan.kind === 'resume') {
       const shaped = await this.resumeShape(plan.sitting, roll);
       await this.keepProblem(n, false);
@@ -965,9 +981,10 @@ export class BackendClient implements ApiClient {
   // kept snapshots and replay into the live row (a repeat counts nothing but can still land the newest code).
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
     const { sittingId, events: all } = normalizeSittingEvents(input);
-    const sitting = await this.repo.getSitting(sittingId, { consistent: true });
-    if (!sitting) throw new Error(`Not found: ${sittingId}`);
+    const head = await this.repo.getSitting(sittingId, { consistent: true });
+    if (!head) throw new Error(`Not found: ${sittingId}`);
     const now = this.now();
+    const sitting = await this.comeBack(await this.closeIdle(head, now), all, now);
     const err = sittingIngestError(sitting, all, now);
     if (err) throw new Error(err);
     const events = eventsBeforeEnd(sitting, all);
@@ -1055,7 +1072,7 @@ export class BackendClient implements ApiClient {
     );
   }
   async listSittings(range?: DateRange): Promise<Sitting[]> {
-    return (await this.repo.listSittings())
+    return (await this.closeIdleAll(await this.repo.listSittings(), this.now()))
       .filter((x) => !range || (x.day >= range.from && x.day <= range.to))
       .sort((a, b) => b.startedAt - a.startedAt);
   }
@@ -1065,7 +1082,7 @@ export class BackendClient implements ApiClient {
     return s;
   }
   async getSitting(id: string): Promise<SittingDetail> {
-    const sitting = await this.mustSitting(id);
+    const sitting = await this.closeIdle(await this.mustSitting(id), this.now());
     const [live, events, problem, liveReads] = await Promise.all([
       this.repo.getSittingLive(id, { consistent: true }),
       this.repo.listSittingEvents(id),
@@ -1087,7 +1104,8 @@ export class BackendClient implements ApiClient {
   async pullLiveSitting(): Promise<LiveSittingPull> {
     const now = this.now();
     const id = (await this.repo.getLcStart({ consistent: true }))?.openSittingId ?? null;
-    const head = id ? await this.repo.getSitting(id, { consistent: true }) : null;
+    const held = id ? await this.repo.getSitting(id, { consistent: true }) : null;
+    const head = held ? await this.closeIdle(held, now) : null; // before the pull counts as activity
     if (head && isSittingOpen(head, now)) {
       // The head rows (compact) give the counts and which Run and Submit are newest, so those always agree;
       // only those two payloads are read in full.
@@ -1133,7 +1151,7 @@ export class BackendClient implements ApiClient {
         lastSitting: null,
       };
     }
-    const heads = await this.repo.listSittings({ consistent: true });
+    const heads = await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now);
     const last = heads.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     return {
       sitting: null,
@@ -1222,9 +1240,23 @@ export class BackendClient implements ApiClient {
     // Best-effort: the task's own change is already saved, so a failure here (a lost race under ingest) is
     // logged, never thrown back as a failed Done — the next Start ends a sitting whose rep finished.
     try {
-      for (const x of await this.repo.listSittings({ consistent: true }))
-        if (x.repTaskId === task.id && x.status === 'active')
+      // An idle one unnoticed till now ends at its last activity, never at this Done.
+      const mine = (
+        await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now)
+      ).filter((x) => x.repTaskId === task.id);
+      for (const x of mine)
+        if (x.status === 'active')
           await this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned', now);
+      // Done after an idle close: the rep's newest sitting reads done, its end kept (Drop leaves it abandoned).
+      const newest = mine.sort((a, b) => b.startedAt - a.startedAt)[0];
+      if (to === 'done' && newest?.closedBy === 'idle')
+        await this.repo.casUpdate(
+          this.repo.sittingShape(newest.id),
+          newest.id,
+          (cur) => finishIdleClosed(cur, now),
+          now,
+          { consistent: true },
+        );
     } catch (err) {
       console.log(
         JSON.stringify({ event: 'lc_sitting_end_deferred', taskId: task.id, error: String(err) }),
@@ -1233,9 +1265,9 @@ export class BackendClient implements ApiClient {
   }
   // Ends it (once), healing its summary first — a fold lost just before Done would otherwise stay lost — and
   // frees the Start gate when it holds this sitting.
-  private async endSitting(id: string, to: 'done' | 'abandoned', now: number): Promise<void> {
+  private async endSitting(id: string, to: 'done' | 'abandoned', now: number): Promise<Sitting> {
     await this.refoldHead(id, now);
-    await this.repo.casUpdate(
+    const head = await this.repo.casUpdate(
       this.repo.sittingShape(id),
       id,
       (cur) => (cur.status === 'active' ? endedSitting(cur, to, now) : null),
@@ -1243,6 +1275,110 @@ export class BackendClient implements ApiClient {
       { consistent: true },
     );
     await this.releaseStartGate(id, now);
+    return head;
+  }
+
+  // --- Idle close (sittings.ts → Idle close; docs/areas/recruiting → Idle close) ---
+  // Every read of sittings, Start and events run this first. Free below mayBeIdle; past it, the two activity stamps
+  // (consistent) decide, and an idle sitting ends at its last activity + the tail as endSitting ends one (refold,
+  // a CAS that only an unchanged open head passes — a reopen or a fresher activity since wins — then the gate). Two
+  // reads at once write one close. Returns the head as it stands.
+  private async closeIdle(s: Sitting, now: number): Promise<Sitting> {
+    if (!mayBeIdle(s, now)) return s;
+    const at = idleCloseAt(s, await this.repo.getSittingActivity(s.id), now);
+    if (at === null) return s;
+    await this.refoldHead(s.id, now);
+    const head = await this.repo.casUpdate(
+      this.repo.sittingShape(s.id),
+      s.id,
+      (cur) =>
+        cur.status === 'active' && (cur.reopenedAt ?? 0) <= at - SITTING_IDLE_TAIL_MS
+          ? idleClosedSitting(cur, at, now)
+          : null,
+      now,
+      { consistent: true },
+    );
+    if (head.closedBy !== 'idle' || head.endedAt !== at) return head; // another call got there first
+    await this.releaseStartGate(s.id, now);
+    console.log(
+      JSON.stringify({ event: 'lc_sitting_idle_close', sittingId: s.id, idleMs: now - at }),
+    );
+    return head;
+  }
+  private async closeIdleAll(list: Sitting[], now: number): Promise<Sitting[]> {
+    const out: Sitting[] = [];
+    for (const s of list) out.push(await this.closeIdle(s, now));
+    return out;
+  }
+  // The Reopen button: an idle-closed sitting open again (sittingReopenError's refusals); an open one as it is.
+  async reopenSitting(id: string): Promise<Sitting> {
+    const now = this.now();
+    const s = await this.closeIdle(await this.mustSitting(id), now);
+    return s.status === 'active' ? s : this.reopen(s, now, 'button');
+  }
+  // An events call that comes back to its idle-closed sitting (an event stamped after the end, the same app day)
+  // reopens it before ingest; refused (another open, its rep moved on), the call ingests against it ended.
+  private async comeBack(
+    s: Sitting,
+    events: readonly { at: number }[],
+    now: number,
+  ): Promise<Sitting> {
+    if (!sittingReturns(s, events)) return s;
+    const { dayStartHour } = await this.ensureSettings();
+    const day = (t: number) => dayKeyInZone(t, USER_TIME_ZONE, dayStartHour);
+    if (day(s.startedAt) !== day(now)) return s;
+    try {
+      return await this.reopen(s, now, 'event');
+    } catch (err) {
+      console.log(
+        JSON.stringify({ event: 'lc_sitting_reopen_refused', sittingId: s.id, error: String(err) }),
+      );
+      return (await this.repo.getSitting(s.id, { consistent: true })) ?? s;
+    }
+  }
+  // Reopen, in Start's order: the gate first (reclaimStart — no Start counted), then the head (a CAS on the
+  // idle-closed head; lost, the gate is freed again), then its rep started as a resume starts it.
+  private async reopen(s: Sitting, now: number, via: 'button' | 'start' | 'event'): Promise<Sitting> {
+    const sittings = await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now);
+    const rep = (await this.repo.getTask(s.repTaskId, { consistent: true })) ?? undefined;
+    const err = sittingReopenError(s, rep, sittings, now);
+    if (err) throw new Error(err);
+    const { dayStartHour } = await this.ensureSettings();
+    const gateDay = dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
+    await this.repo.casUpdate(
+      this.repo.lcStartShape(),
+      'lcstart',
+      (g) => reclaimStart(g, s.id, sittings, now),
+      now,
+      {
+        consistent: true,
+        create: () =>
+          reclaimStart({ ...this.baseAt(now), id: 'lcstart', ...emptyGate(gateDay) }, s.id, [], now)!,
+      },
+    );
+    const head = await this.repo.casUpdate(
+      this.repo.sittingShape(s.id),
+      s.id,
+      (cur) =>
+        cur.status === 'abandoned' && cur.closedBy === 'idle' ? reopenedSitting(cur, now) : null,
+      now,
+      { consistent: true },
+    );
+    if (head.status !== 'active') {
+      await this.releaseStartGate(s.id, now);
+      throw new Error(SITTING_REOPEN_REP_ERROR); // its rep finished meanwhile
+    }
+    const roll = await this.repo.getRoll(head.rollId);
+    if (roll) await this.shapeRep(head, roll, false);
+    console.log(
+      JSON.stringify({
+        event: 'lc_sitting_reopen',
+        sittingId: s.id,
+        via,
+        idleMs: head.idleMs ?? 0,
+      }),
+    );
+    return head;
   }
   private async releaseStartGate(id: string, now: number): Promise<void> {
     try {
@@ -1281,7 +1417,7 @@ export class BackendClient implements ApiClient {
       today,
       now,
       dayStartHour,
-      sittings,
+      sittings: await this.closeIdleAll(sittings, now),
       attempts,
       days,
       focus,
