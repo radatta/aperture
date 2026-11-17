@@ -20,11 +20,11 @@ The user names the mode; collaborative is the default.
 
 - **Collaborative.** Claude stops at decision points: Plan's model, Plan's questions, the execute, review findings
   that need a product call or add scope, a review still finding serious bugs at its round cap, a review item only
-  live state can settle, an effort above `high`, and the dev all-clear.
+  live state can settle or a lens that couldn't run, an effort above `high`, and the dev all-clear.
   Each is one `[ask-maintainer]` (findings as a list), and the lane waits for the hub's `[relay]`.
 - **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands
-  one back, bar the review's round cap, a review item only live state can settle, and an effort above `high` (each an
-  `[ask-maintainer]`: `docs/ops/REVIEW.md` → _Round 2 and later_, _Merge_, _Launching_). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
+  one back, bar the review's round cap, a review item only live state can settle or a lens that couldn't run, and an effort
+  above `high` (each an `[ask-maintainer]`: `docs/ops/REVIEW.md` → _Round 2 and later_, _Merge_, _Launching_). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
   (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a
   noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what
   came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body
@@ -101,24 +101,21 @@ hub message (the checkpoints stay).
 6. **Review** — read `docs/ops/REVIEW.md` first: the lens map, the merge, the finding shape and the escalation
    rules live there.
    - **Round 1, parallel.** On the committed, gate-green diff, launch together the read-only lens reviewers its
-     paths call for: `code-reviewer` (project rules), `review-correctness` and `review-tests` on any diff with code;
-     `review-infra`, `review-shell`, `review-ui` (the headless pass for `app/`) and `review-extension` by trigger. A
-     docs-only diff gets `code-reviewer` alone, plus shell or infra when its trigger names the doc.
+     paths call for (`docs/ops/REVIEW.md` → _Lens map_, _Picking lenses_).
    - **One list, one pass, one gate.** Merge every lens's findings into one deduped list ranked S1–S3
      (`localNotes/review/round-<n>.md`), trace each suspected serious one, fix real bugs and convention breaks in one
      pass, run the gate once, commit. Findings that need a product call or add scope: collaborative → one
      `[ask-maintainer]` with the list; autonomous → decide and log.
-   - **Round 2 and later, only after a serious finding** (a confirmed S1 or S2), a dropped confirmed one, or round 1
-     of a risk class with a code fix: `review-fixes` on the fix diff (plus `review-ui` when the fixes change what
-     renders, `review-infra` when they touch its triggers). Serious again → fix, gate, commit, next round on that fix. Minor only → fix, gate,
-     commit, done.
+   - **Round 2 and later** recheck only the fix diff, and run only while a round finds something serious or leaves
+     an S1/S2 unfixed (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again →
+     fix, gate, commit, next round on that fix. Minor only → fix, gate, commit, done.
    - **Stop** when a round has no serious finding. After four rounds, or a round from the third on that finds no
      fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list — in either mode.
    - A serious finding in round 2 or later that the fixes didn't cause is a **lens gap**: recorded in the report and
      sent to the hub (`docs/ops/REVIEW.md` → _Lens gaps_).
 
 7. **Ready for dev** — once the review has stopped with no serious finding open (or the round cap's ask is answered),
-   and nothing held open for a live-state answer: committed on the feature branch (one commit after the build, one
+   every picked lens ran, and nothing is held open (`docs/ops/REVIEW.md` → _Merge_ 1 and 5): committed on the feature branch (one commit after the build, one
    per round's fixes), gate green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
    rebase (CLAUDE.md → _Claude behavior_), then re-run the gate (and the recheck, after a rebase that resolved

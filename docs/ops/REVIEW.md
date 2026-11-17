@@ -48,10 +48,11 @@ What each touched package still brings, as before:
   external calls only via gated gateways, JWT + origin-secret handling. Page-first: a backend half follows a frontend that already
   passed its review, so the plan says which half this is, and the lenses check the lambda against the contract the
   stub set.
-- **`cdk/`** — the infra lens runs the synth pass on HEAD (dev and prod stages, to a scratch directory) and reports
-  resources, IAM grants and cdk-nag findings; when the lane passes a base template built from `origin/main`, it diffs
-  against that, else the template diff goes under `Not checked:`. No creds needed; never alongside tests or the UI
-  lens's server.
+- **`cdk/`** — the infra lens runs its synth pass on HEAD (`.claude/agents/review-infra.md` → _Synth pass_: the
+  stages, the dummy values, the output path). A base assembly from `origin/main` for the template diff is built with
+  that same command, the same four dummy values and an absolute output path outside any checkout — never a bare
+  `cdk synth`, which reads or creates real tokens under `cdk/.secrets/`. Without a base, the template diff goes under
+  `Not checked:`.
 - **`packages/shared`** — the contract both sides build on: the `app/` and `lambdas/` rows both apply, and the
   correctness lens opens both callers.
 
@@ -80,9 +81,8 @@ Run `git fetch` first. All of a round's lenses go out in one message. Each promp
 `origin/main` sha, the plan's path, the round number, and the lens's own input (the UI checklist; the LLM flag; the
 risk class). A session that started before an agent file existed, or whose checkout lacks it, runs a general-purpose
 agent told to Read the lens file from the lane's own checkout and follow it, on the file's model and effort (set on the launch), told in words that
-it is read-only and given the container rule — read-only by instruction only, an accepted residual. A budget-tight
-pinned relay may move the `fable` lens to `opus` for a launch; nothing moves a lens below its file's model or
-effort. A branch that edits a lens file is reviewed by that lens as the branch wrote it: say so in the round record.
+it is read-only and given the container rule — read-only by instruction only, an accepted residual. Nothing moves a
+lens below its file's model or effort. A branch that edits a lens file is reviewed by that lens as the branch wrote it: say so in the round record.
 
 **Effort stays at `high`** (the rule's home is `CLAUDE.md` → _Claude behavior_): every lens file pins `effort: high`
 or lower, and going above is proposed to the hub with the numbers that show it, never raised in place.
@@ -107,7 +107,8 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
 ## Merge
 
 1. Check every picked lens returned its `lens=` line and ran its pass. A missing one is relaunched; one that can't
-   run (no browser, a blocked synth) goes to the hub as `[blocked]` or `[ask-maintainer]` and holds phase 7. Then
+   run (no browser, a blocked synth) goes to the hub as `[blocked]` or `[ask-maintainer]` and holds the lane until it has run, or the user's explicit
+   yes, relayed, lets the round finish without it (then it is an open finding shipped: _The round record_). Then
    collect every lens's lines; sort by path and line.
 2. The same defect within about five lines of one file is one finding: keep the highest severity, list the lenses
    that found it.
@@ -115,7 +116,9 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
 4. Trace each suspected S1/S2 to confirmed, drop it with the reason, or hold it open (5). Severity is the lens's:
    the merge never lowers it.
 5. A `Not checked:` item, or a suspected S1/S2, that only live state can settle (AWS, the Mac, a device) goes to the
-   hub as one `[ask-maintainer]` with a read-only command to run (describe, get, list); it stays open in the round file and holds phase 7 until
+   hub as one `[ask-maintainer]` with a read-only command to run whose output carries no secret (describe, get, list, with a `--query` naming
+   the fields — never env values, `get-secret-value` or `--with-decryption`); it stays open in the round file and
+   holds the lane until
    the relay answers it (an answer may make it a dev-test row, proven in phase 8).
 6. Write `localNotes/review/round-<n>.md`: per finding an id `R<n>-<nn>`, severity, lenses, path, the issue, and the
    verdict — fix / drop: why / product call / open (5) — then the fix commit. Any S1/S2 a lens reported, confirmed or
@@ -124,6 +127,9 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
    nothing (the prompt says so).
 
 Product calls and added scope: collaborative → one `[ask-maintainer]` with the list; autonomous → decide and log.
+
+**A hold stops the lane where it is**: in the review, before phase 7; after a dev fix or a rebase, before the
+redeploy and phase 10.
 
 ## Fix, gate, commit
 
@@ -140,21 +146,22 @@ commit for the round.
   range touches an infra trigger or the diff is a risk class, `review-infra` reruns on it (with the synth pass for
   `cdk/`).
 - **What it reports** — each fixed finding closed or not, regressions in the touched functions and their callers,
-  sibling call sites with the same pattern, dropped serious findings whose reason the code doesn't bear out; each
+  sibling call sites with the same pattern, S1/S2 left unfixed whose reason the code doesn't bear out; each
   line tagged `cause=fix|sibling|not-closed|pre-existing`.
 - **Serious again** → fix, gate, commit, and the next round rechecks that fix diff. **Minor only** → fix, gate,
   commit, done. **Nothing** → done, no extra gate.
 - **Stop and ask** after four rounds, or from round 3 on when a round finds no fewer serious bugs than the one before:
   `[ask-maintainer]` with the open list and three options — another recheck, re-plan that piece, or ship with it
-  logged as a follow-up — and the lane's pick. In both modes; the lane doesn't enter phase 7 until the relay.
+  logged as a follow-up — and the lane's pick. In both modes; the lane holds until the relay.
 
 ## After a dev fix or a rebase
 
 A fix from dev testing (phase 9), or a rebase that resolved conflicts, is committed and gated, then gets
 `review-fixes`, plus `review-ui` or `review-infra` when it touches their triggers or a risk class, as in round 2 —
-whatever its size. Only a fix that touches no trigger and is covered by a test it adds or changes may skip
-`review-fixes`; say so in the round record. After that, as round 2 and later: serious again → recheck that fix; these
-rounds count toward the cap.
+whatever its size. Only a fix that touches no lens trigger beyond code and no risk class, and is covered by a test
+it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
+recheck is the chain's round 1, the rest runs as round 2 and later (serious again → recheck that fix), the cap and the
+no-fewer comparison count within the chain, and its files are `localNotes/review/dev<k>-round-<n>.md`.
 
 - **Dev fix** — the range is `<the commit before the fix>..HEAD`; the list is the dev defects it fixes.
 - **Rebase** — note the head before rebasing (`git rev-parse HEAD`); after, the recheck reads
@@ -178,6 +185,10 @@ have seen it.
 The report's _what happened_ carries one table per round: lens, model, minutes, tokens when the agent result gives
 them, findings by severity, gates run. No lane recorded review tokens before this, so this is the calibration data
 for the next design change.
+
+**Open findings shipped** — every S1/S2 left unfixed (a drop the second reader upheld, a product call "not now", the
+round cap's "ship it"), every live-state item still open and every lens that didn't run, by id from the round files.
+The list goes in the report, the PR body and `[pr-open]`; an empty one is written "none".
 
 ## Coverage
 
