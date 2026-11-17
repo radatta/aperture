@@ -1006,7 +1006,11 @@ export const lcCoach: Scenario = {
 
         // The Sittings tab beside it still lists this run's sittings, without the Patterns list.
         await ctx.ui.goto('/recruiting');
-        await ctx.page.locator(`a[href$="/recruiting/sittings/${state.offId}"]`).waitFor();
+        // Scoped to the list: the Today card above it links the same off-plan sitting.
+        await ctx.page
+          .getByRole('region', { name: 'All sittings' })
+          .locator(`a[href$="/recruiting/sittings/${state.offId}"]`)
+          .waitFor();
         if (await list.count()) fail('the Patterns list shows on the Sittings tab');
       },
     },
