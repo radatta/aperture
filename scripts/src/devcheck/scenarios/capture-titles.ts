@@ -138,8 +138,8 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   if (!r.ok) return `the parse failed (${r.reason})`;
   const { title, dueTime } = r.input;
   if (s.category && r.input.categoryId !== categoryId) return `no category, “${title}”`;
-  if (!s.category && categoryId && r.input.categoryId === categoryId)
-    return `the run's category set on “${title}”`;
+  // A line naming no category may still be filed by topic (the prompt's "clearly matches" is the model's call,
+  // category suggestion's concern): what this scenario holds is that its leading word stays in the title.
   if (!dueTime && s.untimed === undefined && CLOCK.test(s.line)) return `no time, “${title}”`;
   const want = dueTime ? [s.title] : (s.untimed ?? [s.title]);
   return want.includes(title) ? null : `“${title}”, want “${want.join('” or “')}”`;
