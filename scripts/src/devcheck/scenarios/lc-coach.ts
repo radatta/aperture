@@ -1981,15 +1981,18 @@ export const lcCoach: Scenario = {
           await card.click();
           const panel = ctx.page.getByRole('region', { name: `${pick.patternName} problems` });
           const row = () => panel.getByRole('row').filter({ hasText: pick.title });
-          await row().getByText('Solved before').first().waitFor();
+          await row().getByText('Solved before', { exact: true }).waitFor();
           await ctx.ui.settle();
           await ctx.shot('progress-map-open');
           await ctx.ui.goto(`/recruiting/progress?open=${pick.pattern}`);
-          await row().getByText('Solved before').first().waitFor();
+          await row().getByText('Solved before', { exact: true }).waitFor();
           // Left only: the pick is gone from the open pattern's list, every row left untried.
           await ctx.page.getByRole('button', { name: 'Left only' }).click();
-          await panel.getByRole('row').nth(1).waitFor();
-          if (await row().count()) fail('Left only still lists the history-only problem');
+          // The panel re-renders from the URL: wait for the history-only row to go, then check what's left.
+          await row()
+            .waitFor({ state: 'hidden', timeout: 10_000 })
+            .catch(() => fail('Left only still lists the history-only problem'));
+          if (!(await panel.getByRole('row').count())) fail('Left only lists nothing');
           await ctx.shot('progress-left-only');
           await ctx.page.getByRole('button', { name: 'Left only' }).click();
           await panel.getByRole('button', { name: 'Close' }).click();
