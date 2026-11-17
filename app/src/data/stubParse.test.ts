@@ -84,7 +84,7 @@ describe('stub parseTask', () => {
 
   beforeEach(() => localStorage.removeItem(STUB_FAIL_NEXT_PARSE_KEY));
 
-  it('after midnight, “tonight 2:30am” is the coming night; “tomorrow 1am” and “today 9am” stay', async () => {
+  it('after midnight, “tonight 2:30am” is the coming night; “today 9am” is the calendar day’s', async () => {
     const api = createStubClient({
       seed: false,
       storageKey: `parse-${Math.random()}`,
@@ -96,7 +96,8 @@ describe('stub parseTask', () => {
     };
     expect(await day('essay due tonight 2:30am')).toEqual(['2026-10-31', '02:30', '2026-10-30']);
     expect(await day('essay due tomorrow 1am')).toEqual(['2026-10-31', '01:00', '2026-10-30']);
-    expect(await day('essay due today 9am')).toEqual(['2026-10-30', '09:00', '2026-10-30']);
+    // The app's today is still Oct 30, but its 9am has passed: the next one (the maintainer, 2026-11-17).
+    expect(await day('essay due today 9am')).toEqual(['2026-10-31', '09:00', '2026-10-30']);
   });
 
   it('parses against the active categories and the stub day', async () => {

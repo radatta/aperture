@@ -119,8 +119,7 @@ autonomous build:
   made the parked list durable too (it had moved captures from storage back into memory) and added the
   foreground/age sweep (a relaunch within 30s had hidden a leftover until a later launch). A
   grammar-line error from Raycast stays a red raw save (no model fallback: the pipe is explicit intent).
-  No per-period cost cap on `parse_task` (logged per call; revisit if the credit dips). "call 9am" typed
-  at 3pm still lands today, already past — the 2026-10-09 rule, the user's call.
+  No per-period cost cap on `parse_task` (logged per call; revisit if the credit dips).
 - **Dev check (2026-10-13, Claude in Chrome on dev):** 13/13 flows passed, 3–6s per parse. Two parse-quality
   bugs: Haiku invented a due time (`today plan 10m` → due today 10am, onto the calendar) and dropped or
   reworded the user's words (a marker word, `no category here`, ` extra`; sentence-casing). Fixed: the
@@ -133,20 +132,38 @@ autonomous build:
   voice capture (2026-11-16): Raycast and the Siri Shortcut post to `/api/capture` with a capture token —
   the same parse, plus voice-only time rules ([capture](capture.md)).
 
+## Decision log (2026-11-17, the maintainer)
+
+- **Every clock lands on its next occurrence, typed or spoken.** A typed time already past rolls forward as a
+  spoken one does: "call 9am" at 3pm → tomorrow 9am; "1 am" at 02:01 (the app's day still yesterday) → the
+  coming night's 01:00, not the hour just gone. Found by the voice-capture dev check at 02:01, where a typed
+  "…at 1 am" came back with no time at all (next bullet). `validateParsedTask` resolves every clock with
+  `resolveSpoken` against `ParseContext.now` (the server's clock; the stub's own) — a day the model gave
+  counts only when it's after the calendar's today, so "today 9am" at 3pm rolls and "friday 9am" stays.
+  Replaces the earlier "a past clock lands today" rule (credited in these docs to 2026-10-09, with no record
+  of the maintainer's words) and `nightDueDay` (2026-10-31, below), which this covers.
+- **A clock phrased as a due fills even when the model kept it in its title.** The model sometimes returns
+  "call the bank at 1 am" unchanged with no time (1 in 10 on dev); the title check below then refused it, so
+  the task had no due at all. A stated clock after "at", "by", "due at" or "due by" is the due time whatever
+  the model did with its title, and the phrase leaves the title (`dueClock`, `spokenTime.ts`) — also when the
+  model gave that same time but kept the words, so a line's title doesn't depend on the model. Spoken lines
+  too. "watch 9pm show", "the 3pm meeting", "move the 3pm to 5pm" and a bare hour ("look at one of the
+  leases") still get no time.
+
 ## Decision log (2026-11-16)
 
 - **A clock stated outright fills a time the model missed.** The voice-capture dev check saw a typed "call the
   bank at 6 pm" come back with today and no time. When the model returns no time and the line states a clock
-  outright (am/pm, noon, midnight, a 24-hour time — `spokenTimeIn`'s `clock`), `validateParsedTask` takes it,
-  on today per the typed rule — only when the model took those words out of its title ("watch 9pm show" kept
-  them: they weren't the due time). A different time from the model stands. Covers the app, Raycast and
+  outright (am/pm, noon, midnight, a 24-hour time — `spokenTimeIn`'s `clock`), `validateParsedTask` takes it
+  — only when the model took those words out of its title ("watch 9pm show" kept
+  them: they weren't the due time; an at/by clock is, since 2026-11-17). A different time from the model stands. Covers the app, Raycast and
   `parse_task` alike ([capture → Time rules](capture.md#4-time-rules)).
 
 ## Decision log (2026-10-31)
 
-- **A small-hours clock on today is tonight's.** A parse that lands on the app's today with a clock
+- _Superseded 2026-11-17 (every clock lands on its next occurrence; `nightDueDay` is gone)._
+  **A small-hours clock on today is tonight's.** A parse that lands on the app's today with a clock
   before the day start moves to the next calendar date (`nightDueDay`, shared `due.ts`): "essay due
   tonight 2:30am" typed at 00:22 (app day still yesterday), or "2:30am" typed at 3pm, would otherwise be
   already past. Both parsers go through the one validator (`validateParsedTask`), which now needs
-  `ParseContext.dayStartHour`. Any other day stays as parsed — "tomorrow 1am" is ambiguous — and the
-  2026-10-09 rule stands: "call 9am" at 3pm still lands today.
+  `ParseContext.dayStartHour`. Any other day stays as parsed — "tomorrow 1am" is ambiguous.

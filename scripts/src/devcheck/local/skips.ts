@@ -50,6 +50,8 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     steps: [
       'api-voice-parse',
       'api-typed',
+      'api-typed-ahead',
+      'api-typed-named-day',
       'api-relative',
       'api-wrap',
       'api-roll',

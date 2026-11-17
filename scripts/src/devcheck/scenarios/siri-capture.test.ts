@@ -27,6 +27,7 @@ describe('siri-capture’s spoken lines', () => {
     expect(laClock(at(23, 59))).toEqual({ hour: 23, minute: 59 });
   });
 
+  // The past clock and the clock ahead are the typed steps' too (api-typed, api-typed-ahead): one rule since 2026-11-17.
   it('every hour: the bare hour wraps, the past clock rolls to tomorrow, the clock ahead stays ahead', async () => {
     const S = await loadShared();
     const resolve = (text: string, now: number) => {

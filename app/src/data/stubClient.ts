@@ -1557,8 +1557,9 @@ class StubClient implements ApiClient {
       .filter((c) => c.active)
       .map(({ id, label }) => ({ id, label }));
     const places = this.alive(this.store.places).map(({ slug, name }) => ({ slug, name }));
-    const today = todayKey(this.dayStartHour(), this.now());
-    const ctx = { categories, places, today, dayStartHour: this.dayStartHour() };
+    const now = this.now();
+    const today = todayKey(this.dayStartHour(), now);
+    const ctx = { categories, places, today, now };
     return runQuickParse(text, ctx, async (line) =>
       takeStubParseFailure()
         ? { ok: false, reason: 'unavailable', detail: 'stub failNextParse' }

@@ -90,15 +90,28 @@ describe('captureForToken — a spoken line', () => {
     expect(r.detail).toContain('dropped estimate');
   });
 
-  it('a typed line (Raycast, no voice flag) keeps the typed rules: a past clock lands today', async () => {
+  it('a typed line (Raycast, no voice flag) rolls a past clock forward, as a spoken one does', async () => {
     const { anthropic, clock, mint, capture } = setup();
     clock.now = zonedEpoch('2026-11-16', '15:00', USER_TIME_ZONE);
     const token = await mint();
     anthropic.next = { ok: true, fields: fields({ dueDay: '2026-11-16', dueTime: '09:00' }) };
     const r = await capture(token, 'call mum 9am', false);
-    expect(r.due).toEqual({ day: '2026-11-16', time: '09:00' });
+    expect(r.due).toEqual({ day: '2026-11-17', time: '09:00' });
     expect(anthropic.calls[0]!.voice).toBe(false);
-    expect(r.detail).toBe('Added: call mum · no category · due today 9am');
+    expect(r.detail).toBe('Added: call mum · no category · due tomorrow 9am');
+    expect(r.say).toBe('Added: call mum, tomorrow 9 AM.');
+  });
+
+  // Dev, 2026-11-17 02:01: a typed "…at 1 am" came back unchanged, with no day and no time — due null.
+  it('an at-clock the model kept in its title still sets the time, and leaves the stored title', async () => {
+    const { anthropic, b, clock, mint, capture } = setup();
+    clock.now = zonedEpoch('2026-11-17', '02:01', USER_TIME_ZONE);
+    const token = await mint();
+    anthropic.next = { ok: true, fields: fields({ title: 'call the bank at 1 am' }) };
+    const r = await capture(token, 'call the bank at 1 am', false);
+    expect(r.due).toEqual({ day: '2026-11-18', time: '01:00' });
+    expect(r.say).toBe('Added: call the bank, tomorrow 1 AM.');
+    expect(await b.getTask(r.id!)).toMatchObject({ title: 'call the bank', dueTime: '01:00' });
   });
 
   it('a clock the model missed is filled from the words, typed and spoken, and said back', async () => {
@@ -108,8 +121,8 @@ describe('captureForToken — a spoken line', () => {
     // The dev miss: the model gave today and no time for "at 6 pm".
     anthropic.next = { ok: true, fields: fields({ title: 'call the bank', dueDay: '2026-11-16' }) };
     const typed = await capture(token, 'call the bank at 6 pm', false);
-    expect(typed.due).toEqual({ day: '2026-11-16', time: '18:00' });
-    expect(typed.say).toBe('Added: call the bank, today 6 PM.');
+    expect(typed.due).toEqual({ day: '2026-11-17', time: '18:00' });
+    expect(typed.say).toBe('Added: call the bank, tomorrow 6 PM.');
     // Spoken: the time comes from the words, not the model, so the same miss can't happen there.
     anthropic.next = { ok: true, fields: fields({ title: 'call the vet' }) };
     const spoken = await capture(token, 'call the vet at 6 pm');

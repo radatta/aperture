@@ -5,7 +5,8 @@
 //   - a time already past rolls forward to its next occurrence (3pm + "at 9am" → tomorrow 9am);
 //   - "morning" is 9 AM, "tonight" is 8 PM;
 //   - "in N minutes/hours" is now + N, from the server clock.
-// Typed quick-add keeps its own rules (quickParse.ts) — none of this runs off the voice path.
+// Typed quick add shares the roll and the stated clock (quickParse.ts, the maintainer 2026-11-17); the bare
+// hour, the day-parts and the delay stay voice-only.
 
 import { addDays, USER_TIME_ZONE, zonedDayTime, zonedEpoch } from './dates';
 
@@ -131,6 +132,27 @@ export function spokenTimeIn(line: string): SpokenTime | null {
   if (bare && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
     return { kind: 'bare', ...bare, part };
   return partMatch && part ? { said: partMatch[0], kind: 'part', part } : null;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A stated clock phrased as a due — "at 1 am", "by 5pm", "due at noon": the model's title with that phrase taken
+// out, else null. Phrased so, it's the due time even when the model kept it in its title (quick-add.md
+// 2026-11-17); "watch 9pm show" or "the 3pm meeting" kept theirs, and weren't.
+export function dueClock(line: string, title: string, said: string): { title: string } | null {
+  const clock = escapeRe(
+    said
+      .replace(/\.$/, '')
+      .replace(/(\d)\s*(?=[a-z])/i, '$1 ')
+      .trim(),
+  ).replace(/\s+/g, '\\s*');
+  const re = new RegExp(`\\b(?:due\\s+)?(?:at|by)\\s+${clock}\\.?(?=\\s|$|[,;:!?])`, 'i');
+  if (!re.test(line)) return null;
+  const rest = title
+    .replace(re, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/ ([,;:!?])/g, '$1')
+    .replace(/^[\s,;:.-]+|[\s,;:-]+$/g, '');
+  return { title: rest || title };
 }
 
 // The line with any "in N minutes/hours" phrase taken out — so the estimate guard doesn't read a
