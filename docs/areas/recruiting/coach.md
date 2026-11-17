@@ -148,7 +148,9 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
   reads, so it holds all day. A focus change writes `CoachFocus` with `source: 'ai'` after the day row, and shows
   only while that focus holds. While `due` or `pending` the card and the thread show no slots ("Opus is picking
   today's problems…"; the card polls every 2.5 s, `leetcode_today` waits ≤ 7.5 s); a slot change is refused while
-  `pending`. A focus change never overwrites one the user made during the call.
+  `pending`. A focus change never overwrites one the user made during the call. A start that failed shows the
+  rules with a Retry, on the card and the Home line, for the rest of the day (the start's state is shared by every
+  reader, `useCoach.ts`).
 - **Local and stub:** both run the worker's steps with `standInCoachPick` — the rules' own pick and reasons, no
   note — through the real guardrails; the stub's `aperture:stub:coachPick` key (`fallback`, `invalid`, `slow`)
   shows the other states.
