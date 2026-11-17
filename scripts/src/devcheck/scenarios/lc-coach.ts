@@ -807,13 +807,14 @@ export const lcCoach: Scenario = {
       id: 'ui-review',
       title: 'Review form: Boundary and Peeked saved, read back after a reload and on the head',
       entry: 'ui',
-      proves: ['ui-cause', 'review-cause-head'],
+      proves: ['ui-cause'],
       async run(ctx) {
         const slug = slugOf(ctx, 'review');
         const { sitting } = await ctx.api.writes.lcSittingStart(
           start(slug, titleOf(ctx, 'review')),
         );
         await finish(ctx, sitting.id, sitting.repTaskId);
+        app.reviewId = sitting.id;
         await ctx.ui.goto(`/recruiting/sittings/${sitting.id}`);
         const p = ctx.page;
         await p.getByRole('button', { name: 'Boundary', exact: true }).click();
@@ -828,7 +829,16 @@ export const lcCoach: Scenario = {
             fail(`${name} not pressed after reload`);
         }
         await ctx.shot('lc-coach-review-cause');
-        const head = (await ctx.api.reads.listSittings()).find((x) => x.id === sitting.id);
+      },
+    },
+    {
+      id: 'review-head',
+      title: 'The form’s Save is on the head: the cause, and help as solution',
+      entry: 'api',
+      proves: ['review-cause-head'],
+      async run(ctx) {
+        const id = app.reviewId || fail('no review sitting — the ui-review step failed');
+        const head = (await ctx.api.reads.listSittings()).find((x) => x.id === id);
         const r = head?.review as { cause?: string; help?: string } | null | undefined;
         if (r?.cause !== 'boundary' || r.help !== 'solution')
           fail(`head review: ${JSON.stringify(r)}`);
@@ -887,6 +897,7 @@ export const lcCoach: Scenario = {
   ],
 };
 
+const app = { reviewId: '' }; // the app steps' own state (the sitting ui-review saved)
 async function todayCard(ctx: Ctx) {
   await ctx.ui.goto('/recruiting');
   const c = ctx.page.getByRole('region', { name: 'Today’s practice' });
