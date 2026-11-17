@@ -216,6 +216,29 @@ describe('stub — reminders', () => {
   });
 });
 
+describe('stub — the extension version on a Start', () => {
+  it('keeps x.y.z from the first Start, never a resume’s, and reads anything else as null', async () => {
+    const api = createStubClient({ seed: false, storageKey: `ext-version-${Math.random()}` });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const start = (clientSittingId: string, problemSlug: string, extensionVersion: unknown) =>
+      api.lcSittingStart({
+        clientSittingId,
+        problemSlug,
+        problemTitle: problemSlug,
+        lang: 'python3',
+        startedAt: Date.now(),
+        tzOffsetMinutes: new Date().getTimezoneOffset(),
+        extensionVersion: extensionVersion as string,
+      });
+    const first = await start('01HZZZZZZZZZZZZZZZZZZZZZZZ', 'two-sum', '2.2.0');
+    expect(first.sitting.extensionVersion).toBe('2.2.0');
+    const again = await start('01HZZZZZZZZZZZZZZZZZZZZZZZ', 'two-sum', '9.9.9');
+    expect(again.resumed).toBe(true);
+    expect(again.sitting.extensionVersion).toBe('2.2.0');
+  });
+});
+
 describe('stub — the review draft’s cause', () => {
   // The stub's stand-in for the model's pick: a failed first Submit with no Run before it reads as no-trace.
   async function draftAfter(events: { type: 'run' | 'submit'; status: number; msg: string }[]) {

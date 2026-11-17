@@ -16,3 +16,8 @@ export const COGNITO_CLIENT_ID: string =
 // index.html's <meta name="aperture-build"> — the dev check and the Simulator read it to prove which build
 // they are looking at (docs/ops/DEV-CHECK.md).
 export const BUILD_SHA: string = (import.meta.env.VITE_BUILD_SHA as string | undefined) ?? 'local';
+
+// The LeetCode extension's version this app was built with (extension/manifest.json, via vite.config.ts):
+// Settings → LeetCode compares the build the last Start came from against it.
+export const LC_EXTENSION_VERSION: string =
+  (import.meta.env.VITE_LC_EXTENSION_VERSION as string | undefined) ?? '';

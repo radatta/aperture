@@ -229,6 +229,12 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     expect(head).toMatchObject({
       problemSlug: 'two-sum',
       status: 'active',
+      // The real background stamped its manifest's build on the Start, and A1 kept it.
+      extensionVersion: (
+        JSON.parse(readFileSync(new URL('../../../extension/manifest.json', import.meta.url), 'utf8')) as {
+          version: string;
+        }
+      ).version,
       summary: { firstSubmit: { verdict: 'accepted' } },
     });
     expect(await page.evaluate<boolean>("!!document.querySelector('aperture-lc-coach')")).toBe(false); // no card host at all

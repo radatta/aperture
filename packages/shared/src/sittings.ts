@@ -104,6 +104,7 @@ export interface SittingStartInput {
   tzOffsetMinutes: number;
   lcSolveSessionId?: string | null;
   problem?: unknown; // raw questionDetail.question
+  extensionVersion?: string | null; // the extension's manifest version (x.y.z); anything else reads as null
 }
 export type SittingEventInput =
   | { id: string; type: SittingEventType; at: number; payload: unknown }
@@ -179,8 +180,14 @@ export interface NormalizedSittingStart extends Omit<SittingStartInput, 'problem
   difficulty: string | null;
   topicTags: string[] | null;
   lcSolveSessionId: string | null;
+  extensionVersion: string | null;
   problem: unknown; // null when absent
 }
+// The build that sent a Start: kept only as x.y.z (≤ 20 characters), anything else null — never a refusal,
+// since a Start must never fail over the label of the build that sent it.
+export const EXTENSION_VERSION_RE = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
+export const extensionVersionOf = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim().length <= 20 && EXTENSION_VERSION_RE.test(v.trim()) ? v.trim() : null;
 export function normalizeSittingStart(input: SittingStartInput): NormalizedSittingStart {
   if (!input || typeof input !== 'object') throw new Error('A sitting start is required');
   if (typeof input.clientSittingId !== 'string' || !isUlid(input.clientSittingId))
@@ -211,6 +218,7 @@ export function normalizeSittingStart(input: SittingStartInput): NormalizedSitti
     startedAt: finite(input.startedAt, 'startedAt'),
     tzOffsetMinutes: tz,
     lcSolveSessionId: optStr(input.lcSolveSessionId, 'Solve session id', 80),
+    extensionVersion: extensionVersionOf(input.extensionVersion),
     problem,
   };
 }

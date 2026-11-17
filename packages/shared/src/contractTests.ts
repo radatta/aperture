@@ -3299,6 +3299,27 @@ export function runApiContract(
         expect((await api.listTasks()).filter((t) => t.rollId === first.roll.id)).toHaveLength(1);
       });
 
+      it('start stores the extension build that opened it; a resume never rewrites it; a malformed one is null', async () => {
+        const first = await startSitting(api, { extensionVersion: '2.2.0' });
+        expect(first.sitting.extensionVersion).toBe('2.2.0');
+        const again = await api.lcSittingStart(
+          sittingStart({ clientSittingId: first.sitting.clientSittingId, extensionVersion: '9.9.9' }),
+        );
+        expect(again).toMatchObject({ resumed: true, sitting: { extensionVersion: '2.2.0' } });
+        expect((await api.listSittings())[0]!.extensionVersion).toBe('2.2.0');
+        expect((await api.getSitting(first.sitting.id)).sitting.extensionVersion).toBe('2.2.0');
+        await api.setTaskActual(first.sitting.repTaskId, 30);
+        await api.transitionTask(first.sitting.repTaskId, 'done');
+        const bad = await api.lcSittingStart(
+          sittingStart({
+            problemSlug: 'add-two-numbers',
+            problemTitle: 'Add Two',
+            extensionVersion: 'v2-beta',
+          }),
+        );
+        expect(bad.sitting.extensionVersion).toBeNull();
+      });
+
       it('start on another problem is refused while a sitting is open, and spawns after Done', async () => {
         const { sitting } = await startSitting(api);
         await expect(

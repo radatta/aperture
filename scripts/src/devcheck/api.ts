@@ -313,6 +313,7 @@ export interface DevVerdict {
 export interface DevSitting {
   id: string;
   day: string;
+  extensionVersion?: string | null; // the extension build its Start came from (absent before 2.2.0)
   status: 'active' | 'done' | 'abandoned';
   repTaskId: string;
   rollId: string;
@@ -510,6 +511,7 @@ export interface DevSittingStart {
   startedAt: number;
   tzOffsetMinutes: number;
   problem?: unknown;
+  extensionVersion?: string | null; // the extension's manifest version, as its background stamps it
 }
 export type DevSittingEvent =
   | {

@@ -22,6 +22,7 @@ import {
   lcTimerState,
   normalizeSittingEvents,
   normalizeSittingStart,
+  extensionVersionOf,
   claimStart,
   reclaimStart,
   countStartAttempt,
@@ -111,6 +112,17 @@ describe('normalizeSittingStart', () => {
     expect(() => normalizeSittingStart(start({ problem: 'x'.repeat(70_000) }))).toThrow(
       /too large/,
     );
+  });
+});
+
+describe('extensionVersionOf', () => {
+  it('keeps x.y.z, trimmed; anything else is null and never a refusal', () => {
+    expect(extensionVersionOf('2.2.0')).toBe('2.2.0');
+    expect(extensionVersionOf(' 10.0.31 ')).toBe('10.0.31');
+    for (const bad of ['v2.2.0', '2.2', '2.2.0-beta', '', '1234567.0.0', 2.2, null, undefined, {}])
+      expect(extensionVersionOf(bad), String(bad)).toBeNull();
+    expect(normalizeSittingStart(start({ extensionVersion: 'x'.repeat(30) })).extensionVersion).toBeNull();
+    expect(normalizeSittingStart(start()).extensionVersion).toBeNull();
   });
 });
 

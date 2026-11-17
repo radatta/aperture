@@ -9,6 +9,14 @@ import type { DevSittingReview } from '../api';
 import type { DevSittingEvent, DevSittingStart } from '../api';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import { devUlid } from './flux-history';
+import { readFileSync } from 'node:fs';
+
+// The extension build this checkout ships (extension/manifest.json): the app's Settings calls it "latest".
+const LATEST_EXT = (
+  JSON.parse(readFileSync(new URL('../../../../extension/manifest.json', import.meta.url), 'utf8')) as {
+    version: string;
+  }
+).version;
 
 const tag = (ctx: Ctx) => ctx.nonce.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const slugOf = (ctx: Ctx, which: string) => `devcheck-lc-${tag(ctx)}-${which}`;
@@ -125,6 +133,7 @@ export const lcSittings: Scenario = {
     'app/src/pages/Recruiting/**',
     'app/src/data/hooks/useSittings.ts',
     'app/src/pages/Settings/index.tsx',
+    'app/src/pages/Settings/extensionRow.ts',
     'packages/shared/src/sittings.ts',
     'scripts/src/devcheck/scenarios/lc-sittings.ts',
     'lambdas/src/anthropic/sittingReviewPrompt.ts',
@@ -326,6 +335,59 @@ export const lcSittings: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'Start on another problem while one is open is refused',
+    },
+    // The extension build on each sitting (extension/README.md → Versions).
+    {
+      id: 'start-ext-version',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A Start stores the extension build that sent it; the list and the detail read it back',
+    },
+    {
+      id: 'start-ext-version-resume',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A repeat Start carrying another build keeps the first one',
+    },
+    {
+      id: 'start-ext-version-invalid',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A Start with a malformed build label is not refused; the sitting stores null',
+    },
+    {
+      id: 'settings-ext-differs',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Settings → LeetCode, after a Start from an older build: installed, latest, rebuild needed',
+    },
+    {
+      id: 'settings-ext-equal',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Settings → LeetCode, after a Start from this build: up to date, and still after a reload',
+    },
+    {
+      id: 'settings-ext-none',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Settings → LeetCode with no sitting yet names the latest; a Start with no build reads as older',
+      offDev: {
+        file: 'app/src/pages/Settings/Settings.test.tsx',
+        test: 'no sitting yet: names the latest',
+        why: 'the dev test user’s partition always has sittings from earlier rows; the real Settings page renders over the stub',
+      },
+    },
+    {
+      id: 'settings-ext-newer',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A build newer than the app’s (the app not yet deployed) gets no nag',
+      offDev: {
+        file: 'app/src/pages/Settings/extensionRow.test.ts',
+        test: 'a newer build than this app (the app not yet deployed): no nag',
+        why: 'dev’s app is always built from the checkout the extension version comes from',
+      },
     },
     {
       id: 'events-fold',
@@ -874,7 +936,13 @@ export const lcSittings: Scenario = {
     {
       id: 'start',
       entry: 'api',
-      proves: ['start-spawn', 'start-resume', 'start-other-refused'],
+      proves: [
+        'start-spawn',
+        'start-resume',
+        'start-other-refused',
+        'start-ext-version',
+        'start-ext-version-resume',
+      ],
       title: 'Link a fresh roll; Start A spawns its rep; repeats resume; Start B is refused',
       async run(ctx) {
         const roll = await ctx.api.writes.upsertRoll({
@@ -883,7 +951,7 @@ export const lcSittings: Scenario = {
         });
         state.rollId = roll.id;
         await ctx.api.writes.linkLeetcodeRoll(roll.id);
-        const input = start(ctx, 'a');
+        const input = start(ctx, 'a', { extensionVersion: '0.0.1' }); // a build older than this checkout's
         const { sitting, resumed } = await ctx.api.writes.lcSittingStart(input);
         if (resumed || sitting.status !== 'active')
           throw new Error(`start: ${JSON.stringify(sitting)}`);
@@ -904,6 +972,7 @@ export const lcSittings: Scenario = {
         const again = await ctx.api.writes.lcSittingStart({
           ...input,
           problemTitle: 'devcheck hijack',
+          extensionVersion: '9.9.9', // a resume never rewrites the build
         });
         const same = await ctx.api.writes.lcSittingStart(
           start(ctx, 'a', { problemTitle: 'hijack 2' }),
@@ -911,6 +980,15 @@ export const lcSittings: Scenario = {
         for (const r of [again, same])
           if (!r.resumed || r.sitting.id !== sitting.id)
             throw new Error(`resume: ${JSON.stringify(r)}`);
+        const listed = (await ctx.api.reads.listSittings()).find((x) => x.id === sitting.id);
+        const detail = (await sittingA(ctx)).sitting;
+        for (const [where, v] of [
+          ['start', sitting.extensionVersion],
+          ['resume', again.sitting.extensionVersion],
+          ['list', listed?.extensionVersion],
+          ['detail', detail.extensionVersion],
+        ] as const)
+          if (v !== '0.0.1') throw new Error(`extensionVersion from ${where}: ${String(v)}`);
         // A repeat shapes the rep from the stored sitting: a different title in the request renames nothing.
         if ((await ctx.api.reads.getTask(rep.id))?.title !== `LeetCode · ${titleOf(ctx, 'a')}`)
           throw new Error('a repeated Start renamed the rep');
@@ -1331,6 +1409,20 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'ui-ext-differs',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-differs'],
+      title: 'Settings → LeetCode after A’s Start from an older build: rebuild needed',
+      async run(ctx) {
+        await ctx.ui.goto('/settings#leetcode');
+        await ctx.page
+          .getByText(`Extension: installed 0.0.1, latest ${LATEST_EXT} — rebuild needed.`)
+          .waitFor({ timeout: 15_000 });
+        await ctx.shot('settings-leetcode-ext-differs');
+      },
+    },
+    {
       id: 'end',
       entry: 'api',
       proves: ['end-done'],
@@ -1572,17 +1664,19 @@ export const lcSittings: Scenario = {
     {
       id: 'double-start',
       entry: 'api',
-      proves: ['double-start', 'prep-target', 'end-drop', 'late-drop'],
+      proves: ['double-start', 'prep-target', 'end-drop', 'late-drop', 'start-ext-version-invalid'],
       title:
         'Start C twice at once (one sitting, one rep, one plan row); tag it; dropping its rep abandons it, and a note stamped before the drop still lands',
       async run(ctx) {
-        const input = start(ctx, 'c');
+        const input = start(ctx, 'c', { extensionVersion: 'v2-beta' }); // malformed: stored null, never refused
         const [x, y] = await Promise.all([
           ctx.api.writes.lcSittingStart(input),
           ctx.api.writes.lcSittingStart({ ...input }),
         ]);
         if (x.sitting.id !== y.sitting.id || [x.resumed, y.resumed].filter(Boolean).length !== 1)
           throw new Error(`two answers: ${JSON.stringify([x.resumed, y.resumed])}`);
+        if (x.sitting.extensionVersion !== null)
+          throw new Error(`a malformed build stored as ${String(x.sitting.extensionVersion)}`);
         const reps = (await ctx.api.reads.listTasks()).filter(
           (t) => t.title === `LeetCode · ${titleOf(ctx, 'c')}`,
         );
@@ -1720,7 +1814,9 @@ export const lcSittings: Scenario = {
         'Start D; a note stamped before C’s drop, sent now, lands on C and leaves D’s head and live row as they were',
       async run(ctx) {
         if (!state.cBeforeDrop) throw new Error('no drop of C — the double-start step failed');
-        const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
+        const { sitting } = await ctx.api.writes.lcSittingStart(
+          start(ctx, 'd', { extensionVersion: LATEST_EXT }), // this checkout's build: Settings reads up to date
+        );
         state.d = sitting.id;
         state.dRep = sitting.repTaskId;
         state.dStartedAt = sitting.startedAt;
@@ -1739,6 +1835,21 @@ export const lcSittings: Scenario = {
           throw new Error(`a note to C beside open D: ${JSON.stringify(late)}`);
         if (JSON.stringify(await ctx.api.reads.getSitting(state.d)) !== d0)
           throw new Error('a late note to C moved D');
+      },
+    },
+    {
+      id: 'ui-ext-equal',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-equal'],
+      title: 'Settings → LeetCode after D’s Start from this build: up to date, and after a reload',
+      async run(ctx) {
+        const line = `Extension: ${LATEST_EXT}, up to date as of your last Start.`;
+        await ctx.ui.goto('/settings#leetcode');
+        await ctx.page.getByText(line).waitFor({ timeout: 15_000 });
+        await ctx.shot('settings-leetcode-ext-equal');
+        await ctx.page.reload();
+        await ctx.page.getByText(line).waitFor({ timeout: 15_000 });
       },
     },
     {

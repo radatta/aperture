@@ -984,6 +984,7 @@ class StubClient implements ApiClient {
       rollId: roll.id,
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
+      extensionVersion: n.extensionVersion, // set here only: a resume never rewrites it
       shapedAt: null,
       summary: emptySummary(),
     });

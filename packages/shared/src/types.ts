@@ -486,6 +486,9 @@ export interface Sitting extends BaseEntity {
   rollId: string;
   prepTarget: string; // 'General' until the company UI exists
   lcSolveSessionId: string | null; // LeetCode's own qd_solve_session id at Start (context only)
+  // The extension build that opened it (its manifest version, x.y.z), set at creation only — Settings → LeetCode
+  // compares the newest with the app's (extension/README.md → Versions). Absent on sittings before 2.2.0.
+  extensionVersion?: string | null;
   // When the new sitting's rep was fully shaped (titled, noted, planned, started). Until then a repeat Start
   // shapes it fully — a Start that died after making the rep still finishes; after, a resume only starts it.
   shapedAt: number | null;
