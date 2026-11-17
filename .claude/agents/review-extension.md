@@ -32,4 +32,4 @@ One line per finding, worst first:
 `S1|S2|S3 · confirmed|suspected · path:line · kind · what is wrong · the fix`
 S1: security, data loss, a secret or never-list text, a deploy that fails or can't roll back, a new recurring cost, a guard or gate that passes when it should fail. S2: behaviour a user or operator would hit wrong, a broken invariant, a test or dev-check row that can't fail for the change. S3: the rest. `kind` is a tag from REVIEW.md → _Coverage_.
 Then `Not checked:` (what you could not see, and why), `Other lenses:`, and a last line
-`lens=<name> S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any S1 or S2).
+`lens=<name> S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any confirmed S1 or S2).

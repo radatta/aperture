@@ -16,7 +16,7 @@ You recheck fixes. Your prompt gives the fix range (`git diff <base>..HEAD`) and
 - Stay in your lens. A finding outside it is one line under `Other lenses:`.
 - Trace before you report. A finding you could not trace is `suspected`.
 
-Scope here is the fix range, not the branch diff.
+Scope here is the fix range, not the branch diff. No range in your prompt: stop and ask for it — never fall back to the branch diff. After a rebase the prompt gives a `git range-diff` and the conflicted files instead: check each resolution against both sides.
 
 ## For each finding the list marks fixed
 
@@ -37,4 +37,4 @@ One line per finding, worst first:
 `S1|S2|S3 · confirmed|suspected · path:line · kind · what is wrong · the fix`
 S1: security, data loss, a secret or never-list text, a deploy that fails or can't roll back, a new recurring cost, a guard or gate that passes when it should fail. S2: behaviour a user or operator would hit wrong, a broken invariant, a test or dev-check row that can't fail for the change. S3: the rest. `kind` is a tag from REVIEW.md → _Coverage_.
 Then `Not checked:` (what you could not see, and why), `Other lenses:`, and a last line
-`lens=<name> S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any S1 or S2).
+`lens=<name> S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any confirmed S1 or S2).

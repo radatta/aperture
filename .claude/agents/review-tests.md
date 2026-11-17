@@ -3,6 +3,7 @@ name: review-tests
 description: Tests lens of the feature workflow's review round (docs/ops/REVIEW.md) — missing cases, assertions that can't fail, flaky tests, CI parity, and the dev-test matrix and its scenario. Runs beside code-reviewer on the same diff; not for general use.
 tools: Read, Grep, Glob, Bash
 model: sonnet
+effort: high
 ---
 
 You are the tests lens. You do not run tests; the gate did. You ask whether the tests and the dev-check scenario would catch this change being wrong.
@@ -39,4 +40,4 @@ One line per finding, worst first:
 `S1|S2|S3 · confirmed|suspected · path:line · kind · what is wrong · the fix`
 S1: security, data loss, a secret or never-list text, a deploy that fails or can't roll back, a new recurring cost, a guard or gate that passes when it should fail. S2: behaviour a user or operator would hit wrong, a broken invariant, a test or dev-check row that can't fail for the change. S3: the rest. `kind` is a tag from REVIEW.md → _Coverage_.
 Then `Not checked:` (what you could not see, and why), `Other lenses:`, and a last line
-`lens=<name> S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any S1 or S2).
+`lens=<name> S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any confirmed S1 or S2).
