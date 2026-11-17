@@ -734,9 +734,97 @@ spass('sim: erase via batch: one batch of deletes; a letter left is counted and 
       fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":1']])
 spass('sim: erase via tap is the per-key path, counted', EV('tap'), tape=[pt(220, 895, CAPTURE, n=2)], notes={'2': 'erased 2; via tap, drops 0'},
       simCount={DEL: 2}, simExcludes=['batch --tap-style'], fileHas=[[TRIAL, '"op":"erase","via":"tap","n":2,"drops":0']])
-sfail('sim: a field that moved under a trial erase is MISS, no drop counted', 'MISS', EV('batch'),
+sfail('sim: a field that moved under a trial erase is MISS, uncounted (never a zero)', 'MISS', EV('batch'),
       tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20)), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20))],
-      filesAbsent=[TRIAL])
+      fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":null'], [TRIAL, '"un":"notfield"']], fileLines=[[TRIAL, 2]])
+# fix (3): a keys count only from a read that is the field (job …060606Z…-idle5-1 read a checkbox's "0" and counted 5)
+CB0 = el('AXCheckBox', 'private', '0', 179, 880, 70, 28)
+spass('sim: a keys read-back that hits a checkbox both looks is uncounted, not a drop count', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, CB0, n=1), pt(198, 895, CB0, n=1), typed('Ab')],
+      notes={'2': 'via batch, uncounted (not the field); retyped once'},
+      fileHas=[[TRIAL, '"op":"keys","via":"batch","n":2,"drops":null'], [TRIAL, '"un":"notfield"']], fileLines=[[TRIAL, 2]])
+spass('sim: other page text where the field was is uncounted too', KV('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', '', 'Today', 33, 469, 50, 22), n=1), pt(198, 895, {}, n=1), typed('Ab')],
+      fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"notfield"']])
+spass('sim: the second look being the field still counts its letters', KV('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, CB0, n=1), typed('A', 198, n=1), typed('Ab')],
+      notes={'2': 'via tap, drops 1'}, fileHas=[[TRIAL, '"op":"keys","via":"tap","n":2,"drops":1']])
+
+# --- the tap trial: tap/launch `via` (IOS-CHECK.md -> Input-gap trial) ---
+srej('sim: a tap via the keys trial\'s post is BAD_OP', 'BAD_OP', [L, {**CL[1], 'via': 'post'}])
+srej('sim: a tap via with no read-back to count by is BAD_OP', 'BAD_OP', [L, {'op': 'tap', 'label': 'Home', 'near': {'x': 38, 'y': 168}, 'via': 'tap'}])
+srej('sim: selects with closes is BAD_OP', 'BAD_OP', [L, {**CL[1], 'selects': True}])
+srej('sim: selects false is BAD_OP', 'BAD_OP', [L, {'op': 'tap', 'label': 'Task', 'near': {'x': 96, 'y': 464}, 'selects': False}])
+srej('sim: a launch via batch15 is BAD_OP', 'BAD_OP', [{'op': 'launch', 'via': 'batch15'}])
+def CV(via): return [L, {**CL[1], 'via': via}]
+def TBATCH(x, y): return f'batch --tap-style physical --step sleep 1 --step tap -x {x} -y {y} --udid'
+spass('sim: a closes tap via tap that goes is counted 0, one line', CV('tap'), tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=1)],
+      notes={'1': 'via tap, drops 0'}, simCount={CTAP: 1, 'batch --tap-style': 0, 'hid=': 0},
+      fileHas=[[TRIAL, '"op":"tap","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a closes tap via batch still there is counted 1 and tapped again by batch', CV('batch'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=3)],
+      notes={'1': 'tapped again (still there after the first); via batch, drops 1'}, simCount={TBATCH(200, 605): 2, CTAP + ' --tap-style': 0},
+      fileHas=[[TRIAL, '"op":"tap","via":"batch","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+sfail('sim: TAP_DROPPED under a trial leaves its one line, a drop', 'TAP_DROPPED', CV('hid'), tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL)],
+      simCount={'hid=500': 2}, fileHas=[[TRIAL, '"op":"tap","via":"hid","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+spass('sim: a closes tap still there but moved is uncounted (moved), not a drop', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CANCEL, n=1), pt(200, 605, el('AXButton', 'Cancel', '', 150, 592, 100, 30), n=2)],
+      notes={'1': 'via tap, uncounted (moved)'}, fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"moved"']], fileLines=[[TRIAL, 2]])
+CLOW = el('AXButton', 'Cancel', '', 150, 620, 100, 30)  # centre 200,635
+spass('sim: a target still moving is read until two frames agree, then tapped there', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, CLOW, n=1), pt(200, 635, CLOW, n=1)],
+      notes={'1': 'via tap, drops 0'}, simCount={'tap -x 200 -y 635': 1, CTAP: 0})
+spass('sim: a target that never holds still is tapped anyway, uncounted (moving)', CV('tap'),
+      tape=[pt(200, 600, CANCEL, n=1), pt(200, 605, el('AXButton', 'Cancel', '', 150, 600, 100, 30), n=1),
+            pt(200, 615, el('AXButton', 'Cancel', '', 150, 610, 100, 30), n=1), pt(200, 625, CLOW, n=1)],
+      notes={'1': 'via tap, uncounted (moving)'}, simCount={'tap -x 200 -y 635': 1},
+      fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"moving"']], fileLines=[[TRIAL, 2]])
+spass('sim: a closes tap without via writes no trial.jsonl and reads no stillness', CL, tape=[pt(200, 600, CANCEL, n=1)],
+      simCount={CREAD: 1}, filesAbsent=[TRIAL])
+# launch via: the icon tap, counted from launch's own Home Screen read-back
+ICONTAP = 'tap -x 371 -y 247'
+spass('sim: a launch via batch sends the icon tap in one batch after the lead, counted 0', [{'op': 'launch', 'via': 'batch'}],
+      notes={'0': 'via batch, drops 0'}, simCount={TBATCH(371, 247): 1, ICONTAP + ' --tap-style': 0},
+      fileHas=[[TRIAL, '"op":"launch","via":"batch","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a launch via hid sets the wait on the icon tap only', [{'op': 'launch', 'via': 'hid'}],
+      simCount={ICONTAP + ' --tap-style physical --udid ' + U + ' hid=500': 1, 'hid=': 1})
+spass('sim: a dropped icon tap under a trial is counted 1, the retap sent the same way', [{'op': 'launch', 'via': 'batch'}],
+      tape=[pt(220, 895, {}, n=3), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={TBATCH(371, 247): 2},
+      notes={'0': 'icon tapped 2 times; via batch, drops 1'}, fileHas=[[TRIAL, '"op":"launch","via":"batch","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+sfail('sim: ICON_TAP_DROPPED under a trial leaves its one line, a drop', 'ICON_TAP_DROPPED', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), {'m': 'describe-ui --udid', 'out': tree('SpringBoard')}], simCount={ICONTAP: 4},
+      fileHas=[[TRIAL, '"op":"launch","via":"tap","n":1,"drops":1']], fileLines=[[TRIAL, 2]])
+sfail('sim: the app up without its landmark counts the icon tap as landed, then LANDMARK', 'LANDMARK', [{'op': 'launch', 'via': 'tap'}],
+      tape=[pt(220, 895, {}), pt(221, 856, {}), dtree(tree(), 3), dtree(APPFRONT)], fileHas=[[TRIAL, '"drops":0']], fileLines=[[TRIAL, 2]])
+serr('sim: a failed icon batch is AXE_FAILED, its line uncounted with that reason', 'AXE_FAILED', [{'op': 'launch', 'via': 'batch'}],
+     tape=[{'m': 'batch --tap-style physical --step sleep 1', 'rc': 1}], fileHas=[[TRIAL, '"drops":null'], [TRIAL, '"un":"AXE_FAILED"']], fileLines=[[TRIAL, 2]])
+spass('sim: a launch without via writes no trial.jsonl', [L], filesAbsent=[TRIAL], simExcludes=['batch --tap-style'])
+# a field tap via: the keyboard is its read-back
+def FV(via): return [L, {'op': 'tap', 'label': 'Capture', 'near': {'x': 220, 'y': 895}, 'role': 'AXTextArea', 'via': via}]
+spass('sim: a field tap via that brings the keyboard is counted 0', FV('hid'), tape=[pt(198, 895, CAPTURE, n=1)],
+      notes={'1': 'via hid, drops 0'}, simCount={'tap -x 198 -y 895': 1, 'hid=500': 1}, fileHas=[[TRIAL, '"op":"tap","via":"hid","n":1,"drops":0']])
+spass('sim: a field tap via that brings no keyboard, the field still there, is counted 1 and tapped again', FV('tap'),
+      tape=[pt(198, 895, CAPTURE, n=2), pt(221, 856, {}, n=2)], notes={'1': 'tapped again (no keyboard after the first); via tap, drops 1'},
+      simCount={'tap -x 198 -y 895': 2}, fileHas=[[TRIAL, '"drops":1']], fileLines=[[TRIAL, 2]])
+spass('sim: a field tap via whose spot then reads something else is uncounted (gone)', FV('tap'),
+      tape=[pt(198, 895, CAPTURE, n=1), pt(221, 856, {}, n=2), pt(198, 895, el('AXButton', 'space', '', 100, 880, 240, 40))],
+      notes={'1': 'via tap, uncounted (gone)'}, fileHas=[[TRIAL, '"un":"gone"']])
+# selects: a toggle must read on ("1") after the tap
+SEG, SEGON = el('AXCheckBox', 'Task', '0', 72, 450, 49, 28), el('AXCheckBox', 'Task', '1', 72, 450, 49, 28)
+def SV(via=None): return [L, {'op': 'tap', 'label': 'Task', 'near': {'x': 96, 'y': 464}, 'radius': 10, 'role': 'AXCheckBox', 'selects': True, **({'via': via} if via else {})}]
+STAP = 'tap -x 96 -y 464'
+spass('sim: a selects tap via that turns the toggle on is counted 0', SV('tap'), tape=[pt(96, 464, SEG, n=2), pt(96, 464, SEGON)],
+      notes={'1': 'via tap, drops 0'}, simCount={STAP: 1}, fileHas=[[TRIAL, '"op":"tap","via":"tap","n":1,"drops":0']], fileLines=[[TRIAL, 2]])
+spass('sim: a toggle still off after two looks is counted 1 and tapped again', SV('batch'), tape=[pt(96, 464, SEG, n=4), pt(96, 464, SEGON)],
+      notes={'1': 'tapped again (not selected after the first); via batch, drops 1'}, simCount={TBATCH(96, 464): 2}, fileHas=[[TRIAL, '"drops":1']])
+sfail('sim: a toggle still off after the second tap is TAP_DROPPED', 'TAP_DROPPED', SV('tap'), tape=[pt(96, 464, SEG)], simCount={STAP: 2},
+      fileHas=[[TRIAL, '"drops":1']], fileLines=[[TRIAL, 2]])
+spass('sim: a toggle already on is not tapped, uncounted (already)', SV('tap'), tape=[pt(96, 464, SEGON)],
+      notes={'1': 'already selected; not tapped; via tap, uncounted (already)'}, simCount={STAP: 0}, fileHas=[[TRIAL, '"un":"already"']])
+sfail('sim: something else at the toggle after the tap is MISS, its line uncounted (MISS)', 'MISS', SV('tap'),
+      tape=[pt(96, 464, SEG, n=2), pt(96, 464, el('AXButton', 'private', '', 80, 450, 70, 28))], fileHas=[[TRIAL, '"un":"MISS"']], fileLines=[[TRIAL, 2]])
+spass('sim: selects without via checks the toggle and writes no trial.jsonl', SV(), tape=[pt(96, 464, SEG, n=1), pt(96, 464, SEGON)],
+      simCount={STAP: 1}, filesAbsent=[TRIAL])
 sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)
 
 # --- speed-ups (B–E): every fast path has its miss, and the miss is today's path ---

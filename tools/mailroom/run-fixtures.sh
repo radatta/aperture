@@ -371,6 +371,11 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
       [ -z "$why" ] && [ -n "$f" ] || continue
       grep -q -F -- "$want" "$hj/results/$rid/$f" 2>/dev/null || why="results/$rid/$f has no \"$want\""
     done < <(jq -r '.fileHas // [] | .[] | [.[0], .[1]] | @tsv' <<<"$c")
+    while IFS=$'\t' read -r f want; do # a result file's line count (a trial op leaves exactly one line)
+      [ -z "$why" ] && [ -n "$f" ] || continue
+      got="$(wc -l <"$hj/results/$rid/$f" 2>/dev/null | tr -d ' ')"
+      [ "$got" = "$want" ] || why="results/$rid/$f has ${got:-no} lines, not $want"
+    done < <(jq -r '.fileLines // [] | .[] | [.[0], (.[1] | tostring)] | @tsv' <<<"$c")
   fi
   # fixtures cases: lines the sandbox profile must hold, and the log tail the job kept.
   if [ -z "$why" ] && [ "$kind" = fixtures ]; then

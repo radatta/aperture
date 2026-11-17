@@ -25,7 +25,9 @@ export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its
   sim-probe [--sign-in]                          boot the Mac's iOS sim, launch the web app, screenshot (≤ 5 min)
   sim-shutdown                                   shut the Mac's iOS sim down
   clip-probe [--out <png>] [--wait <seconds>]    fetch the Mac clipboard's image, as tools/coi/xclip does on Ctrl+V
-  sim-trial --tag <idle|loaded|…> [--round N]   the input-gap trial: drops per keys/erase variant (~15 min; one round ~3)`;
+  sim-trial --tag <idle|loaded|…> [--round N] [--keys]
+                                                 the input-gap trial: first-tap drops per target and way of tapping (~30 min;
+                                                 one round ~5); --keys: per keys/erase variant instead (~15 min)`;
 
 // Every command's allowed flags; anything else refuses before it runs (bot/help.ts).
 export const FLAGS: Record<string, Spec> = {
@@ -109,6 +111,7 @@ export async function main(argv: string[]): Promise<number> {
         flags.tag ?? '',
         undefined,
         flags.round === undefined ? undefined : Number(flags.round),
+        flags.keys === 'true' ? 'keys' : 'taps',
       );
     case 'help':
     case undefined:
