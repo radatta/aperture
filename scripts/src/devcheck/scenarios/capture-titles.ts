@@ -1,18 +1,20 @@
 // Typed quick add keeps every title word (quick-add.md → 2026-11-17, titles): a sample of synthetic lines through
-// the real model as the test user — the app's parse route (parseTask, which parse_task and Raycast share), MCP, and
-// the capture bar's Review. Three classes, each a dev finding: a word the model dropped ("…typed at 1 am", 10 of 10),
-// a due phrase it kept ("before 3pm"), and a leading word taken as a category the parse never set. Nothing is
-// saved: parseTask writes nothing. Each step logs its first-try tally — the before/after rate in the PR.
-import type { DevParseResult } from '../api';
+// the real model as the test user — the app's parse route (parseTask, which parse_task shares), MCP, the capture
+// bar's Review, and spoken lines through the capture route. Three classes, each a dev finding: a word the model
+// dropped ("…typed at 1 am", 10 of 10), a due phrase it kept ("before 3pm"), and a leading word taken as a category
+// the parse never set. parseTask writes nothing; the spoken captures are ledgered tasks. Each step logs its
+// first-try tally — the before/after rate in the PR. About 45 model calls, so its steps are slow-tier: they run when
+// the branch touches the parse (slowPaths) or --feature names it.
+import type { DevCaptureResult, DevParseResult } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { marker } from './siri-capture';
 
-// A line, and the title it must save: `untimed` is the title when the model set no time (a "before 3pm" it read
-// as part of the task); absent, a time is required. `category`: the parse must set the run's category.
+// A line, and the title it must save: `untimed` lists the titles allowed when the model set no time (a "before
+// 3pm" it read as part of the task); absent, a time is required. `category`: the parse must set the run's category.
 interface Sample {
   line: string;
   title: string;
-  untimed?: string;
+  untimed?: string[];
   category?: true;
 }
 
@@ -29,13 +31,21 @@ const verbatim = (m: string): Sample[] => [
   { line: 'renew passport online at 9 am', title: 'renew passport online' },
 ];
 const dueOut: Sample[] = [
-  { line: 'finish slides before 3pm', title: 'finish slides', untimed: 'finish slides before 3pm' },
+  {
+    line: 'finish slides before 3pm',
+    title: 'finish slides',
+    untimed: ['finish slides before 3pm'],
+  },
   {
     line: 'email landlord quickly before 5pm',
     title: 'email landlord quickly',
-    untimed: 'email landlord quickly before 5pm',
+    untimed: ['email landlord quickly before 5pm'],
   },
-  { line: 'send invoice until 5pm friday', title: 'send invoice' },
+  {
+    line: 'send invoice until 5pm friday',
+    title: 'send invoice',
+    untimed: ['send invoice until 5pm friday', 'send invoice until 5pm'],
+  },
   { line: 'text sam back later today 3pm', title: 'text sam back later' },
   { line: 'call the bank 6pm', title: 'call the bank' },
   { line: 'pay rent today at 9am', title: 'pay rent' },
@@ -44,13 +54,24 @@ const dueOut: Sample[] = [
   { line: 'standup notes 9:30am', title: 'standup notes' },
   { line: 'call mom later today 7pm', title: 'call mom later' },
   // A clock that's part of the task stays, timed or not.
-  { line: 'watch 9pm show', title: 'watch 9pm show', untimed: 'watch 9pm show' },
+  { line: 'watch 9pm show', title: 'watch 9pm show', untimed: ['watch 9pm show'] },
   {
     line: 'email the team about the 3pm meeting',
     title: 'email the team about the 3pm meeting',
-    untimed: 'email the team about the 3pm meeting',
+    untimed: ['email the team about the 3pm meeting'],
   },
 ];
+// Spoken (the Shortcut's body): the lead-in, the said time and the day go; every other word stays.
+const spoken: Sample[] = [
+  { line: 'remind me to call the bank typed at 5 PM', title: 'call the bank typed' },
+  { line: 'remind me tomorrow at 9 am to water the ferns done', title: 'water the ferns done' },
+  { line: 'remind me at 5 to email the landlord sent', title: 'email the landlord sent' },
+  { line: 'call the plumber asap tonight', title: 'call the plumber asap' },
+  { line: 'stretch typed in 20 minutes', title: 'stretch typed' },
+  { line: 'remind me to book the vet note tomorrow morning', title: 'book the vet note' },
+];
+// Long enough that the model moves the rest to notes: the title is the model's, never grown by the guard.
+const OVERFLOW = `plan the garden makeover typed at 9 am: ${'compost bins, raised beds, drip lines, mulch, trellis, '.repeat(5)}and a bench`;
 // Leading words that name none of the test user's categories (checked against the live list: a clash is left out).
 const leads = (m: string, label: string, live: Set<string>): Sample[] => [
   { line: `${label}, buy oat milk`, title: 'buy oat milk', category: true },
@@ -73,6 +94,10 @@ const leads = (m: string, label: string, live: Set<string>): Sample[] => [
   ].filter((s) => !live.has(s.line.split(/[\s,:]/)[0]!)),
 ];
 
+const parsed =
+  (parse: (line: string) => Promise<DevParseResult>, categoryId: string | null = null) =>
+  async (s: Sample) =>
+    miss(s, await parse(s.line), categoryId);
 const CLOCK = /\d\s*[ap]m\b|\d:\d\d/i;
 // Why a parse misses its sample, or null.
 function miss(s: Sample, r: DevParseResult, categoryId: string | null): string | null {
@@ -82,30 +107,25 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   if (!s.category && categoryId && r.input.categoryId === categoryId)
     return `the run's category set on “${title}”`;
   if (!dueTime && s.untimed === undefined && CLOCK.test(s.line)) return `no time, “${title}”`;
-  const want = dueTime ? s.title : (s.untimed ?? s.title);
-  return title === want ? null : `“${title}”, want “${want}”`;
+  const want = dueTime ? [s.title] : (s.untimed ?? [s.title]);
+  return want.includes(title) ? null : `“${title}”, want “${want.join('” or “')}”`;
 }
 
-// Four at a time (dev's parse route is the shared Lambda); a miss is asked once more — the model is
+// Four at a time (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the model is
 // nondeterministic, the server's guard isn't — and the first-try tally logged.
 async function sample(
   ctx: Ctx,
   what: string,
   samples: Sample[],
-  parse: (line: string) => Promise<DevParseResult>,
-  categoryId: string | null = null,
+  check: (s: Sample, attempt: number) => Promise<string | null>,
 ): Promise<string[]> {
   const first: (string | null)[] = [];
   for (let i = 0; i < samples.length; i += 4)
-    first.push(
-      ...(await Promise.all(
-        samples.slice(i, i + 4).map(async (s) => miss(s, await parse(s.line), categoryId)),
-      )),
-    );
+    first.push(...(await Promise.all(samples.slice(i, i + 4).map((s) => check(s, 0)))));
   const fails: string[] = [];
   for (const [i, m] of first.entries()) {
     if (m === null) continue;
-    const again = miss(samples[i]!, await parse(samples[i]!.line), categoryId);
+    const again = await check(samples[i]!, 1);
     ctx.log(`${what}: “${samples[i]!.line}” missed (${m}); again: ${again ?? 'ok'}`);
     if (again) fails.push(`${samples[i]!.line} → ${again}`);
   }
@@ -120,6 +140,14 @@ export const captureTitles: Scenario = {
   id: 'capture-titles',
   title: 'Typed quick add keeps every title word',
   tiers: ['full'],
+  slowPaths: [
+    'packages/shared/src/quickParse.ts',
+    'packages/shared/src/titleWords.ts',
+    'packages/shared/src/spokenTime.ts',
+    'lambdas/src/anthropic/parsePrompt.ts',
+    'lambdas/src/anthropic/liveAnthropic.ts',
+    'scripts/src/devcheck/scenarios/capture-titles.ts',
+  ],
   rows: [
     {
       id: 'verbatim',
@@ -164,26 +192,27 @@ export const captureTitles: Scenario = {
       what: 'The capture bar’s Review previews the full title; nothing is saved',
     },
     {
-      id: 'stands',
+      id: 'overflow',
       entry: 'api',
       kind: 'edge',
-      what: 'A reworded title, a notes overflow or a field with no words for it leaves the model’s title as it was',
+      what: 'A line long enough for notes keeps the model’s title — the guard never grows it',
+    },
+    {
+      id: 'reworded',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A title the model reworded or reordered stands as it came',
       offDev: {
         file: 'packages/shared/src/titleWords.test.ts',
-        test: 'a title the notes took the overflow from stands',
-        why: 'the model decides whether it rewords or overflows — dev can’t make it',
+        test: 'stands when nothing changes or the words are reordered',
+        why: 'the model decides whether it rewords — dev can’t make it',
       },
     },
     {
       id: 'spoken',
       entry: 'api',
-      kind: 'edge',
-      what: 'A spoken line keeps its words too, with its own meta (“remind me to”, “tonight”, “in 20 minutes”)',
-      offDev: {
-        file: 'packages/shared/src/titleWords.test.ts',
-        test: 'spoken lines too, with their own meta words',
-        why: 'the model decides whether it drops a spoken word — dev can’t make it; siri-capture’s rows run the spoken path',
-      },
+      kind: 'nominal',
+      what: 'A spoken line keeps its words too — “remind me tomorrow to …”, “tonight”, “in 20 minutes” go',
     },
     {
       id: 'raycast',
@@ -197,6 +226,7 @@ export const captureTitles: Scenario = {
     {
       id: 'api-sample',
       entry: 'api',
+      cost: 'slow',
       proves: ['verbatim', 'due-out', 'due-kept', 'lead-category', 'lead-other'],
       title: 'The sample through parseTask: every class’s titles exact, tallies logged',
       async run(ctx) {
@@ -210,9 +240,9 @@ export const captureTitles: Scenario = {
         const parse = (line: string) => ctx.api.reads.parseTask(line);
         try {
           const fails = [
-            ...(await sample(ctx, 'verbatim', verbatim(m), parse)),
-            ...(await sample(ctx, 'due phrase', dueOut, parse)),
-            ...(await sample(ctx, 'leading word', leads(m, label, live), parse, cat.id)),
+            ...(await sample(ctx, 'verbatim', verbatim(m), parsed(parse))),
+            ...(await sample(ctx, 'due phrase', dueOut, parsed(parse))),
+            ...(await sample(ctx, 'leading word', leads(m, label, live), parsed(parse, cat.id))),
           ];
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
         } finally {
@@ -224,6 +254,7 @@ export const captureTitles: Scenario = {
     {
       id: 'mcp-sample',
       entry: 'mcp',
+      cost: 'slow',
       proves: ['mcp-parse'],
       title: 'parse_task: one line from each class, the same titles',
       async run(ctx) {
@@ -232,13 +263,19 @@ export const captureTitles: Scenario = {
           (await ctx.mcp.reads.listCategories()).map((c) => c.label.toLowerCase()),
         );
         const picks = [verbatim(m)[0]!, dueOut[0]!, leads(m, '', live).at(-1)!];
-        const fails = await sample(ctx, 'mcp', picks, (line) => ctx.mcp.reads.parseTask(line));
+        const fails = await sample(
+          ctx,
+          'mcp',
+          picks,
+          parsed((line) => ctx.mcp.reads.parseTask(line)),
+        );
         if (fails.length) throw new Error(fails.join('; '));
       },
     },
     {
       id: 'ui-review',
       entry: 'ui',
+      cost: 'slow',
       proves: ['review'],
       title: 'Capture bar › Review: “…typed at 1 am” previews with “typed” kept; nothing saved',
       async run(ctx) {
@@ -261,6 +298,56 @@ export const captureTitles: Scenario = {
         await field.fill(''); // unsaved
         await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
         if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
+      },
+    },
+    {
+      id: 'api-spoken',
+      entry: 'api',
+      proves: ['spoken'],
+      cost: 'slow',
+      title:
+        'Spoken lines through the capture route: every title word kept, the lead-in and time gone',
+      async run(ctx) {
+        // Two tokens: a re-ask of the same text on one would answer the first capture (the 60 s duplicate guard).
+        const minted = [
+          await ctx.api.writes.mintScopedToken(`devcheck ${ctx.nonce} titles`),
+          await ctx.api.writes.mintScopedToken(`devcheck ${ctx.nonce} titles 2`),
+        ];
+        try {
+          const fails = await sample(ctx, 'spoken', spoken, async (s, attempt) => {
+            const got = await ctx.api.writes.captureRaw(minted[attempt]!.token, {
+              text: s.line,
+              voice: true,
+            });
+            const r = got.body as DevCaptureResult;
+            if (got.status !== 200 || !r?.id) return `HTTP ${got.status}: ${r?.say ?? ''}`;
+            if (r.raw) return `saved as typed: ${r.say}`;
+            const title = (await ctx.api.reads.getTask(r.id))?.title;
+            return title === s.title ? null : `“${title}”, want “${s.title}”`;
+          });
+          if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
+        } finally {
+          for (const t of minted)
+            await ctx.api.writes.revokeScopedToken(t.info.id).catch(() => undefined); // cleanup retries it
+        }
+      },
+    },
+    {
+      id: 'api-overflow',
+      entry: 'api',
+      proves: ['overflow'],
+      cost: 'slow',
+      title: 'A long line: notes take the rest, the title is the model’s, not grown',
+      async run(ctx) {
+        const ok = async (s: Sample) => {
+          const r = await ctx.api.reads.parseTask(s.line);
+          if (!r.ok) return `the parse failed (${r.reason})`;
+          if (!r.input.notes) return `no notes, title “${r.input.title}”`;
+          // The model cuts its title near the prompt's 80; a guard that put dropped words back would run past it.
+          return r.input.title.length <= 100 ? null : `the title grew to ${r.input.title.length}`;
+        };
+        const fails = await sample(ctx, 'overflow', [{ line: OVERFLOW, title: '' }], ok);
+        if (fails.length) throw new Error(fails.join('; '));
       },
     },
     noConsoleErrors,

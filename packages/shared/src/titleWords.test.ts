@@ -143,6 +143,31 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
       'devcheck m call the bank',
     ],
     ['gardening tools sale', { title: 'tools sale', categoryId: 'c-gd' }, 'gardening tools sale'],
+    // Review round 1: words that go with a time or day, clocks read from part of a word, a clock the task is about.
+    [
+      'call mom tomorrow morning 9am',
+      { title: 'call mom', dueDay: '2026-11-18', dueTime: '09:00' },
+      'call mom',
+    ],
+    ['call this afternoon 3pm', { title: 'call', dueDay: TODAY, dueTime: '15:00' }, 'call'],
+    ['call mom around 5pm', { title: 'call mom', dueTime: '17:00' }, 'call mom'],
+    ['call mom at about 5pm', { title: 'call mom', dueTime: '17:00' }, 'call mom'],
+    ['read for about 30m', { title: 'read', estimateMin: 30 }, 'read'],
+    ['submit by the 20th of nov', { title: 'submit', dueDay: FRI }, 'submit'],
+    [
+      'pick up kids at 5 p.m. from school',
+      { title: 'pick up kids from school', dueTime: '17:00' },
+      'pick up kids from school',
+    ],
+    ['call at 5.30pm', { title: 'call', dueTime: '17:30' }, 'call'],
+    ['call 5-6pm', { title: 'call', dueTime: '18:00' }, 'call'],
+    ['move standup to 5pm', { dueDay: TODAY, dueTime: '17:00' }, 'move standup to 5pm'],
+    ['push dinner to 8pm', { title: 'push dinner', dueTime: '20:00' }, 'push dinner'],
+    [
+      'buy cake 🎂 for sam typed at 6 pm',
+      { title: 'buy cake for sam', dueTime: '18:00' },
+      'buy cake 🎂 for sam typed',
+    ],
     // The model's title stands when it can't be lined up, or a field has no words to show for it.
     [
       'submit report end of month',
@@ -178,6 +203,23 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
     ).toBe('call mum');
     expect(title('stretch typed in 20 minutes', { title: 'stretch' }, true)).toBe('stretch typed');
     expect(title('water plants tonight', { title: 'water plants' }, true)).toBe('water plants');
+    expect(
+      title('Remind me tomorrow to call mum', { title: 'call mum', dueDay: '2026-11-18' }, true),
+    ).toBe('call mum');
+    expect(title('Remind me at 5 to call mum', { title: 'call mum' }, true)).toBe('call mum');
+    expect(
+      title(
+        'remind me tomorrow at 9 am to water the ferns done',
+        { title: 'water the ferns', dueDay: '2026-11-18' },
+        true,
+      ),
+    ).toBe('water the ferns done');
+    expect(title('Remind me about the dentist', { title: 'the dentist' }, true)).toBe(
+      'the dentist',
+    );
+    expect(title('update the flat 2 lease at 2', { title: 'update the flat 2 lease' }, true)).toBe(
+      'update the flat 2 lease',
+    );
   });
 
   it('the day and time still land as before', () => {

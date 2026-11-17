@@ -34,6 +34,9 @@ function tokens(text: string): Token[] {
 const same = (a: Token, b: Token) => (a.key || a.raw) === (b.key || b.raw);
 const inside = (t: Token, rs: readonly Range[]) =>
   t.key !== '' && rs.some(([s, e]) => t.start >= s && t.end <= e);
+// A word a used range touches is the parse's: "p.m." of a clock read as "5 p".
+const touches = (t: Token, rs: readonly Range[]) =>
+  t.key !== '' && rs.some(([s, e]) => t.start < e && t.end > s);
 
 // The model's title with every dropped word the parse didn't use put back and any due phrase it did use taken out.
 // The model's own string stands when nothing changes, or when its title isn't the line's words in order
@@ -54,7 +57,7 @@ export function keepTitleWords(line: string, title: string, m: TitleMeta): strin
   }
   let changed = false;
   words.forEach((w, i) => {
-    if (kept[i] || w.key === '' || inside(w, m.meta)) return;
+    if (kept[i] || w.key === '' || touches(w, m.meta)) return;
     kept[i] = changed = true;
   });
   const drop = (i: number) => {
@@ -73,7 +76,7 @@ export function keepTitleWords(line: string, title: string, m: TitleMeta): strin
       CONNECTOR.has(w.key || w.raw) &&
       next &&
       !kept[i + 1] &&
-      inside(next, [...m.meta, ...m.tail])
+      touches(next, [...m.meta, ...m.tail])
     )
       drop(i);
     else if (w.key === '')
@@ -81,6 +84,14 @@ export function keepTitleWords(line: string, title: string, m: TitleMeta): strin
     else break;
   }
   if (!changed) return title;
+  // A dash or emoji between two words that stay stays with them ("buy cake 🎂 for sam").
+  const keyed = words.flatMap((w, i) => (w.key ? [i] : []));
+  words.forEach((w, i) => {
+    if (w.key || kept[i]) return;
+    const before = keyed.filter((k) => k < i).at(-1);
+    const after = keyed.find((k) => k > i);
+    if (before !== undefined && after !== undefined && kept[before] && kept[after]) kept[i] = true;
+  });
   const out = words
     .filter((_, i) => kept[i])
     .map((w) => w.raw)

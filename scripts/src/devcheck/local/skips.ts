@@ -76,7 +76,7 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
       'local: the real Haiku parse is dev’s (parsing is off locally, so a spoken line saves as typed) — runs on dev',
   },
   'capture-titles': {
-    steps: ['api-sample', 'mcp-sample', 'ui-review'],
+    steps: ['api-sample', 'mcp-sample', 'ui-review', 'api-spoken', 'api-overflow'],
     reason: 'local: the real Haiku parse is dev’s (parsing is off locally) — runs on dev',
   },
   'lc-coach': {
