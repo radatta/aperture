@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient, SettingsPatch } from './api';
+import { legacyFixture } from './coachLegacyFixtures';
+import type { LegacyLeetcodeAttempt } from './types';
 import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
@@ -2244,6 +2246,7 @@ export function runApiContract(
           'coachAttempts',
           'coachDays',
           'coachFocus',
+          'coachVoids',
           'days',
           'exportedAt',
           'financeAccounts',
@@ -2257,6 +2260,7 @@ export function runApiContract(
           'habits',
           'ideas',
           'leetcodeProblems',
+          'legacyLeetcodeAttempts',
           'logEntries',
           'places',
           'plans',
@@ -3476,6 +3480,8 @@ export function runApiContract(
           config: { trace: true, hold: true, nudge: true },
           trace: 'traced',
           nudges: 1,
+          traceBy: 'card',
+          scanned: true,
         });
         expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 4 });
         // Each coach event's payload is kept whole beside its head row — the trace text included.
@@ -3499,13 +3505,19 @@ export function runApiContract(
         expect((await api.getSitting(sitting.id)).sitting.summary.headEvents).toBe(4);
       });
 
-      it('a sitting with no coach events reads no coach', async () => {
+      it('a sitting with no coach events and no trace comment reads scanned and untraced', async () => {
         const { sitting } = await startSitting(api);
+        expect((await api.getSitting(sitting.id)).sitting.summary.coach ?? null).toBeNull();
         await api.lcSittingEvents({
           sittingId: sitting.id,
           events: [lcJudged('submit', 10, 'Accepted', LC_T0 + 1000, 3, 3)],
         });
-        expect((await api.getSitting(sitting.id)).sitting.summary.coach ?? null).toBeNull();
+        expect((await api.getSitting(sitting.id)).sitting.summary.coach).toEqual({
+          config: null,
+          trace: 'none',
+          nudges: 0,
+          scanned: true,
+        });
       });
 
       it('events stop a day after Start', async () => {
@@ -4150,6 +4162,259 @@ export function runApiContract(
         await expect(api.updateSettings({ coachAiPick: 'no' as never })).rejects.toThrow(
           /true or false/,
         );
+      });
+    });
+
+    describe('lc coach fixes', () => {
+      const TODAY = '2023-11-14';
+      const MONTH_AGO = LC_T0 - 30 * 86_400_000;
+      async function ended(slug: string, accepted: boolean, events: SittingEventInput[] = []) {
+        const { sitting } = await startSitting(api, { problemSlug: slug, problemTitle: slug });
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            ...events,
+            accepted
+              ? lcJudged('submit', 10, 'Accepted', LC_T0 + 600_000, 3, 3)
+              : lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 600_000, 1, 3),
+          ],
+        });
+        advance(20 * 60_000);
+        await api.setTaskActual(sitting.repTaskId, 20);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        return sitting;
+      }
+      // A synthetic trace docstring: names an input, then walks it.
+      const TRACE = [
+        'class Solution:',
+        '    def twoSum(self, nums, target):',
+        '        """',
+        '        nums = [3, 4, 5], target = 9',
+        '        i=0: 3, need 6, seen {} -> add',
+        '        i=1: 4, need 5, seen {3:0} -> add',
+        '        i=2: 5, need 4, seen {3:0, 4:1} -> found [1, 2]',
+        '        """',
+      ].join('\n');
+
+      it('legacy rows fold into the records; two-sum stays out by default; the groups say why', async () => {
+        api = await makeClient(() => clock, { legacy: legacyFixture(TODAY, MONTH_AGO) });
+        const recs = await api.listProblemRecords();
+        expect(recs.map((r) => [r.slug, r.lastOutcome]).sort()).toEqual([
+          ['contains-duplicate', 'solved'],
+          ['valid-anagram', 'clean'],
+        ]);
+        expect(recs.find((r) => r.slug === 'valid-anagram')!.tries[0]!.sources).toEqual(['legacy']);
+        const groups = await api.listLegacyGroups();
+        expect(groups.map((g) => [g.slug, g.counted, g.voidedBy])).toEqual([
+          ['contains-duplicate', true, null],
+          ['two-sum', false, 'default'],
+          ['valid-anagram', true, null],
+        ]);
+        expect(await api.listLegacyGroups('two-sum')).toHaveLength(1);
+        const exported = await api.exportData();
+        expect(exported.legacyLeetcodeAttempts).toHaveLength(4);
+        expect(exported.coachVoids).toEqual([]);
+      });
+
+      it('voids: lift the default, void a group, un-void it; a batch with an unknown group writes nothing', async () => {
+        const rows = legacyFixture(TODAY, MONTH_AGO);
+        api = await makeClient(() => clock, { legacy: rows });
+        const d2 = rows[2]!.day;
+        const slugs = async () => (await api.listProblemRecords()).map((r) => r.slug).sort();
+        await expect(
+          api.setCoachVoids([
+            { day: d2, slug: 'two-sum', void: false },
+            { day: d2, slug: 'climbing-stairs', void: true },
+          ]),
+        ).rejects.toThrow(/No legacy history/);
+        expect(await slugs()).toEqual(['contains-duplicate', 'valid-anagram']);
+        const after = await api.setCoachVoids([
+          { day: d2, slug: 'two-sum', void: false },
+          { day: d2, slug: 'valid-anagram', void: true },
+        ]);
+        expect(after.map((g) => [g.slug, g.counted, g.voidedBy])).toEqual([
+          ['two-sum', true, null],
+          ['valid-anagram', false, 'you'],
+        ]);
+        expect(await slugs()).toEqual(['contains-duplicate', 'two-sum']);
+        await api.setCoachVoids([{ day: d2, slug: 'valid-anagram', void: false }]);
+        expect(await slugs()).toEqual(['contains-duplicate', 'two-sum', 'valid-anagram']);
+        expect((await api.exportData()).coachVoids).toHaveLength(2);
+        await expect(api.setCoachVoids([])).rejects.toThrow(/non-empty/);
+      });
+
+      it('a legacy group and a logged attempt the same day count once', async () => {
+        const rows = legacyFixture(TODAY, MONTH_AGO);
+        api = await makeClient(() => clock, { legacy: rows });
+        await api.logCoachAttempts([
+          { slug: 'contains-duplicate', day: rows[0]!.day, outcome: 'clean' },
+        ]);
+        const rec = (await api.listProblemRecords()).find((r) => r.slug === 'contains-duplicate')!;
+        expect(rec).toMatchObject({ attempts: 1, firstOutcome: 'solved', submits: 2 });
+      });
+
+      it('a void sitting (the test flag) leaves the records, stats and plan; un-void brings it back', async () => {
+        const s = await ended('valid-anagram', true);
+        expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['valid-anagram']);
+        await api.patchSittingReview(s.id, { test: true });
+        expect(await api.listProblemRecords()).toEqual([]);
+        expect(await api.getCoachStats()).toMatchObject({ attempts: 0 });
+        expect((await api.getCoachToday()).unnoted).toEqual([]);
+        await api.patchSittingReview(s.id, { test: false });
+        expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['valid-anagram']);
+      });
+
+      it('a peek in one call: help solution lands on the retry track and keeps a solved accept', async () => {
+        const [a] = await api.logCoachAttempts([
+          { slug: 'counting-bits', help: 'solution', outcome: 'solved' },
+        ]);
+        expect(a).toMatchObject({
+          outcome: 'failed',
+          help: 'solution',
+          accepted: true,
+          source: 'peek-seed',
+        });
+        const rec = (await api.listProblemRecords())[0]!;
+        expect(rec).toMatchObject({ everAccepted: true, peeked: true });
+        expect(rec.schedule).toMatchObject({ track: 'retry' });
+      });
+
+      it('an off-catalog title and difficulty stick; a repeated peek fills what the first lacked', async () => {
+        await api.logCoachAttempts([
+          {
+            slug: 'made-up-problem',
+            day: '2023-11-10',
+            outcome: 'solved',
+            title: 'Made Up Problem',
+            difficulty: 'Hard',
+          },
+        ]);
+        await api.logCoachAttempts([{ slug: 'made-up-problem', outcome: 'clean' }]);
+        expect((await api.listProblemRecords())[0]).toMatchObject({
+          title: 'Made Up Problem',
+          difficulty: 'Hard',
+        });
+        const [p1] = await api.logCoachAttempts([{ slug: 'another-made-up', help: 'solution' }]);
+        const [p2] = await api.logCoachAttempts([
+          {
+            slug: 'another-made-up',
+            help: 'solution',
+            title: 'Another Made Up',
+            difficulty: 'Easy',
+            accepted: true,
+          },
+        ]);
+        expect(p2!.id).toBe(p1!.id);
+        expect(p2).toMatchObject({ title: 'Another Made Up', difficulty: 'Easy', accepted: true });
+      });
+
+      it('plan mode: the setting, auto into catch-up at 10 due, and a bad value refused', async () => {
+        expect((await api.getSettings()).coachPlanMode ?? 'auto').toBe('auto');
+        expect((await api.getCoachToday()).planMode).toMatchObject({
+          setting: 'auto',
+          mode: 'balanced',
+          due: 0,
+        });
+        const ten = [
+          'contains-duplicate',
+          'valid-anagram',
+          'group-anagrams',
+          'top-k-frequent-elements',
+          'valid-palindrome',
+          'valid-parentheses',
+          'binary-search',
+          'reverse-linked-list',
+          'climbing-stairs',
+          'invert-binary-tree',
+        ];
+        await api.logCoachAttempts(
+          ten.map((slug) => ({ slug, day: '2023-11-10', outcome: 'failed' as const })),
+        );
+        const t = await api.getCoachToday();
+        expect(t.planMode).toEqual({
+          setting: 'auto',
+          mode: 'catch-up',
+          due: 10,
+          line: 'Catch-up: 10 due · auto',
+        });
+        expect(t.slots.map((x) => x.kind)).toEqual(['new', 're-solve', 're-solve', 're-solve']);
+        await api.updateSettings({ coachPlanMode: 'balanced' });
+        const b = await api.getCoachToday();
+        expect(b.planMode).toMatchObject({ setting: 'balanced', mode: 'balanced' });
+        expect(b.slots.filter((x) => x.kind === 're-solve').length).toBeLessThanOrEqual(2);
+        await expect(api.updateSettings({ coachPlanMode: 'fast' as never })).rejects.toThrow(
+          /coachPlanMode/,
+        );
+      });
+
+      it('a trace comment in a snapshot before the first judged event reads traced; none reads untraced', async () => {
+        const traced = await ended('two-sum', false, [lcSnap(TRACE, LC_T0 + 120_000)]);
+        expect((await api.getSitting(traced.id)).sitting.summary.coach).toMatchObject({
+          trace: 'traced',
+          traceBy: 'comment',
+          scanned: true,
+        });
+        const plain = await ended('valid-anagram', false, [
+          lcSnap('class Solution:\n    pass', LC_T0 + 120_000),
+        ]);
+        expect((await api.getSitting(plain.id)).sitting.summary.coach).toMatchObject({
+          trace: 'none',
+          scanned: true,
+        });
+        const late = await ended('contains-duplicate', false, [lcSnap(TRACE, LC_T0 + 700_000)]);
+        expect((await api.getSitting(late.id)).sitting.summary.coach).toMatchObject({
+          trace: 'none',
+        });
+        const stats = await api.getCoachStats();
+        expect(stats.patterns.find((p) => p.pattern === 'arrays-hashing')!.traced).toEqual({
+          hit: 1,
+          of: 3,
+        });
+      });
+
+      it("Claude's notes: any ended sitting, apart from the review, all-or-nothing, the catch-up list", async () => {
+        const a = await ended('valid-anagram', true);
+        const b = await ended('two-sum', false);
+        expect((await api.getCoachToday()).unnoted.map((u) => u.slug)).toEqual([
+          'two-sum',
+          'valid-anagram',
+        ]);
+        const { sitting: open } = await startSitting(api, {
+          problemSlug: 'climbing-stairs',
+          problemTitle: 'Climbing Stairs',
+        });
+        await expect(
+          api.setSittingClaudeNotes([
+            { sittingId: a.id, text: 'Clean.' },
+            { sittingId: open.id, text: 'Not yet.' },
+          ]),
+        ).rejects.toThrow(/still open/);
+        expect((await api.getSitting(a.id)).sitting.claudeNotes ?? null).toBeNull();
+        const out = await api.setSittingClaudeNotes([
+          { sittingId: a.id, text: 'Traced it.\nFirst submit accepted.' },
+          { sittingId: b.id, text: 'Broke on the empty input.' },
+        ]);
+        expect(out.map((x) => x.claudeNotes?.text)).toEqual([
+          'Traced it.\nFirst submit accepted.',
+          'Broke on the empty input.',
+        ]);
+        await api.setSittingReview(b.id, {
+          insight: 'Check empty first',
+          mistakes: [],
+          howItWent: null,
+          tags: [],
+          draftUsed: false,
+        });
+        const got = (await api.getSitting(b.id)).sitting;
+        expect(got.claudeNotes?.text).toBe('Broke on the empty input.');
+        expect(got.review?.insight).toBe('Check empty first');
+        expect((await api.getCoachToday()).unnoted).toEqual([]);
+        await api.setSittingClaudeNotes([{ sittingId: b.id, text: null }]);
+        expect((await api.getSitting(b.id)).sitting.claudeNotes).toBeNull();
+        await expect(
+          api.setSittingClaudeNotes([{ sittingId: a.id, text: 'x'.repeat(801) }]),
+        ).rejects.toThrow(/800/);
+        await expect(api.setSittingClaudeNotes([{ sittingId: 'nope', text: 'x' }])).rejects.toThrow();
       });
     });
 
