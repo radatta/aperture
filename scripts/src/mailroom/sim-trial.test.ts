@@ -42,6 +42,7 @@ describe('tapPlan', () => {
           'icon',
           'Bulk add',
           'keys',
+          'erase',
           'Cancel',
           'Capture',
           'Task',
@@ -54,7 +55,7 @@ describe('tapPlan', () => {
       }
     }
   });
-  it("types the round's word into Bulk add's field, found after it settled, then erases it uncounted", () => {
+  it("types the round's word into Bulk add's field, found after it settled, and erases exactly its letters", () => {
     for (let r = 0; r < TAP_ROUNDS; r++) {
       const p = tapPlan(r, false);
       const keys = p.steps.flatMap((s, i) => (s.op === 'keys' ? [{ s, i }] : []));
@@ -67,7 +68,7 @@ describe('tapPlan', () => {
           as: s.in,
         });
         expect(p.steps[i - 2]).toMatchObject({ op: 'wait' });
-        expect(p.steps[i + 1]).toEqual({ op: 'erase', n: s.text.length + 2 }); // uncounted: no read-back
+        expect(p.steps[i + 1]).toEqual({ op: 'erase', n: s.text.length, in: s.in, via: s.via }); // counted: a field holding text is recognised
         expect(p.steps[i + 2]).toEqual({ op: 'blur' }); // Cancel is tapped with the keyboard down
       }
     }
@@ -294,7 +295,7 @@ describe('summarise', () => {
       notRun: 1,
       msPerTap: null,
     });
-    expect(rows).toHaveLength(7 * TAP_VIAS.length);
+    expect(rows).toHaveLength(8 * TAP_VIAS.length);
   });
 });
 
@@ -340,7 +341,7 @@ describe('simTrial', () => {
     expect(out).toMatch(/^icon +tap +6 +6 +100\.0/m);
     expect(out).toMatch(/^Log +batch +6 +0 +0\.0/m);
     expect(out).toContain('all tap element taps: 6 of 36 dropped');
-    expect(out).toContain('all tap keys + deletes: 0 of 36 dropped');
+    expect(out).toContain('all tap keys + deletes: 0 of 72 dropped');
   });
   it('--keys runs the keys plan', async () => {
     const h = harness(
