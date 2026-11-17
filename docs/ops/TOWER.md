@@ -36,9 +36,10 @@ tower needs `board.sh tower start`. The page's header shows the commit it serves
 file (a checkout moved by hand or by a rolled-back `lanes start`, or a sync-main whose restart failed), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
-inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
+inside). It serves read-only routes only: `/`, `/app.js`, `/manifest.webmanifest`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, plus the same four of the trial variants
+`favicon-a…` and `favicon-b…`; `/?favicon=a|b` serves the page linking those), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -61,8 +62,11 @@ How it reads (the maintainer, 2026-11-13: the text was too small and too long, a
 - A pulsing dot marks work in flight, elapsed timers tick every second, and a row flashes when its state changes.
   Under `prefers-reduced-motion` the pulse, flash and glow are off; the timers still tick (text, not motion).
 - Each lane has a phase track: plan › build › gate › review › local › dev › pr › merged, with the current step lit.
-- The page reloads itself when the server restarts on a new commit (its `version`). The script itself is read
-  from disk on each request, so a reload is all a new one needs.
+  A lane whose file carries a step plan shows its steps instead, the current one filling with its time against its
+  estimate's high end (amber past it), and, while building, waiting on you or testing on dev, `PR ~HH:MM–HH:MM`
+  (amber `PR late · was ~HH:MM` once that has passed with no PR); the bar hides on the phone, the ETA doesn't.
+- The page reloads itself when the server restarts on a new commit (its `version`). The page and its script are
+  read once, when the server starts (`server.ts`), so they always match the View code it runs.
 
 From the top:
 
@@ -90,13 +94,19 @@ From the top:
      read HH:MM", with why (the refresh's own error, `failedWhy`) in its details.
    - A building lane whose lane file hasn't moved in 2 h (`STALE.lane`) carries an amber "quiet" age.
 4. **NEXT**:
-   - your next step (the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item that is
-     undated, or timed within 2 h of now either way);
+   - your next step (the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item not
+     `done` that is undated, or timed within 2 h of now either way);
+   - **NEXT ASK**: when the maintainer is next asked for something, `~HH:MM–HH:MM` — the earliest of a NOW lane's
+     PR window (its lane file's `eta.pr`, while it has no open PR; `late` once that window has passed) and the next
+     `maintainer` or `merge` plan row not done and not past (over its lane's ETA window when it slips; `late` once
+     that has passed too); one still ahead before a late one, which would otherwise hide it (`nextAsk()` in
+     `plan.ts`). The strip's NEXT chip says `ask ~HH:MM`, `ask now` once the window has begun, or `ask late`;
+   - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
+   - the plan's next rows not `done` (up to 3, leaving out the rows YOU NEXT and NEXT ASK show; one past due over 2 h drops off unless it
+     slips), each `HH:MM · what` with what it costs you (`you: 2 min`) and an amber `now HH:MM` slip or `late`;
    - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…, or NOT
      STARTED with no lane file, queue entry or PR; such a lane shows here only, never in NOW). An entry whose PR
      merged (in the PR list's newest 40) or whose row is merged / deploying drops out;
-   - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
-   - your other such `plan[]` steps, up to 3 (PLAN);
    - the dev order per slot (`devQueue` `next` / `waiting`): a different order from the landing order, so a lane
      can show in both;
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
@@ -117,6 +127,40 @@ From the top:
    - parked lanes;
    - lanes whose file hasn't moved in a day.
 
+### Expand
+
+Any panel opens full screen with everything in it (the maintainer, 2026-11-16: the glance stays the default). Tap
+NEEDS YOU, NOW, NEXT or DONE's title, or press `1`–`6` (needs, now, next, done, slipping, sources; SLIPPING's and
+SOURCES' titles still fold them). The URL hash names the open panel (`#next`), so the 5 s poll, a reload and the
+version reload all keep it. A poll never moves the scroll; a reload restores it (`sessionStorage`, per panel; none in
+a private window, so it starts at the top). Esc, the strip's ✕, the same key again or Back closes it, back to where
+the glance was: the first open pushes a history entry and a switch replaces it, so one Back closes; a page opened
+straight at `#next` closes in place. A key with ⌘, Ctrl or ⌥ held does nothing; an unknown hash is the glance.
+
+- HEALTH and the other panels hide; a sticky strip on top keeps ✕, the open panel's name and a chip per other panel
+  with its headline number (`View.heads`: NEEDS `3`, NOW `4 lanes`, NEXT `ask ~19:40` or `n to land`, DONE `5`,
+  SLIPPING `2`, SOURCES `ok` / `2 off`); a chip switches to that panel. On the phone it's a full-screen sheet, the
+  strip scrolling sideways inside itself and sticking below the status bar (the header's installed floor, under _Phone_,
+  holds for it too).
+- Every row opens with its full text and details, and nothing is capped (`+n more` is gone); a tap folds one. What
+  was open on the glance is open again when it closes.
+- **NEXT** expanded: YOU NEXT and NEXT ASK, then the **plan table** — Time | What | You for every `plan[]` row, with
+  `→ HH:MM–HH:MM` and `measured` / `guess` under a row's time when it has an `eta`, a red now-line before the first
+  row still ahead, `done` rows struck with `est HH:MM · actual HH:MM (+n min)`, a slipping row amber with `now HH:MM`
+  (its lane's ETA) or `late` (past due, nothing to say when), and dispatch's `planNotes` below; its head says `as of
+planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YOU item, the dev order per slot,
+  PARKED.
+- A row's marks (`plan.ts`, from `queue.json` and the lane files): **struck** when `done`, or a `merge` row whose
+  `lane`'s PR merged (actual = its merge time). **Slipping** when it isn't done, names a `lane` with no open PR, and
+  that lane's ETA ends after the row's due (`eta.to`, else `at`): a `merge` row against the lane's `eta.pr`, any
+  other against `eta.next`, else `eta.pr`. **Late** when its due has passed and no slip is still ahead: none, or
+  the lane's ETA has passed too (the lane went quiet).
+- **NOW** rows carry their lane's step bar and `PR ~HH:MM–HH:MM` (_Lane files_), and est vs actual per step in their
+  details.
+- Not yet: a lane's last checkpoint and decisions tail, and the machine (charts) view; the header's charts toggle
+  covers the latter on the glance (with a panel open, LOAD hides with the rest). The header's sources chip, with a
+  panel open, opens SOURCES.
+
 **Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory since the server started (up to 24 h; the server samples `mac-stats.json` on its own 5 s tick, so the series has no gap while no page is open). A sparkline with under 3 points isn't drawn.
 
 **Phone** (≤ 700 px; the maintainer's iPhone, 440 px, and 390 px):
@@ -134,23 +178,46 @@ From the top:
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them only when the icon is
   added: **after a change to them merges, remove the Home Screen icon and add it again.** Installed and upright on the
   phone (`display-mode` standalone, or fullscreen, which iOS may report instead), the header's top inset is floored at
-  62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug 301994).
+  62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug 301994). A Home Screen site with no
+  manifest still opens as a web app on iOS 26, and with the floor in place its header still sat under the bar
+  (2026-11-16), as on other manifest-less sites while the Aperture app cleared it: so the page links
+  `/manifest.webmanifest` (`web/manifest.webmanifest`: `display` standalone, scope `/`, Nord, the radar icons), and
+  `app.js` also marks the page `installed` when `navigator.standalone` is true or the query matches, which applies the
+  same floor upright. Which of the two fixed it is unverified. **After this merges, remove the tower's Home Screen icon
+  and add it again.**
 - The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
   tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
   before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
   `favicon-64.png` (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico`
-  holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.
+  holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to. The touch icon's
+  link comes after the tab icons', so the tab never settles on the opaque 180 px radar.
+- **Trial variants** (until the maintainer picks one in real Safari; headless can't show this): macOS Safari draws a
+  light plate behind a tab icon it judges low-contrast on its dark tab bar, which the default's dark tile gets
+  (WebKit bug 309949). `/?favicon=a` links variant a, the same dial with no tile, in mid-tones that read on light
+  and dark bars; `/?favicon=b` variant b, the dial dark on a light Nord-teal tile. Each is `favicon-<v>.svg` with its
+  `-32.png`, `-64.png` and `.ico` (the same commands), the page also linking its `.ico`. The page is built per
+  variant at start (the CSP allows no inline script, and Safari reads icon links as the page parses); any other
+  value is the default page, byte for byte. Safari caches a tab icon per page URL: a Private window shows a variant
+  fresh.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
-and 1512×860, light and dark, plain / stress (every string long, every source off) / empty, and fails on hidden text,
-a sideways scroll, a wrapped header, a spark over its numbers, `undefined` on the page, or a Mac-only button on the
-phone. Two more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
+and 1512×860, light and dark, plain / stress (every string long, every source off) / empty, and expanded (`xnext`,
+`xneeds`, and `xstress` at `#next`), and fails on hidden text, a sideways scroll, a wrapped header, a spark over its
+numbers, `undefined` on the page, or a Mac-only button on the phone; an expanded frame also fails without the strip's
+five chips, with HEALTH or another panel showing, and (NEXT) without a struck row, a slip marker and the now-line. One
+pass per engine then drives the expand at 390 px: a title tap, a poll (scroll kept), a reload (panel and scroll
+kept), Esc, keys `3` `2` `2` `1`, Back, a modified key, `#zzz`, Esc on a page opened at `#next`, and a slot card
+opened on the glance still open after; and fetches both `?favicon=` pages.
+Three more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
 has no option, Chromium ignores it over CDP), so the installed frame is served the page with the floor's
-`display-mode` terms dropped and must clear 62 px; the page as served keeps its own 8 px.
+`display-mode` terms dropped, and the flagged frame the page as served with `navigator.standalone` true (the
+`installed` class's path); both must clear 62 px, and an expanded panel's strip must stick below 62 px in both. The
+page as served keeps its own 8 px.
 
 **SOURCES** (collapsed, plus a header chip that also tints the live dot) lists every source with its age and state:
-`ok`, `stale`, `failed` (with the error) or `missing`.
+`ok`, `stale`, `failed` (with the error) or `missing`. `gh PRs` says how many fork PRs it dropped from the newest 40
+(`n fork PRs dropped of the newest 40`), so a window eaten by forks shows.
 
 - A failed source keeps its last good value and says so; it is never shown empty or green.
 - An empty panel whose source isn't ok says "can't tell: …" in red, never "nothing".
@@ -186,6 +253,7 @@ and what the maintainer must do.
 | CHECKS FAILED                                                   | a check ended other than success / skipped / neutral                                                                                                                                                                                                                   |
 | MERGE ME / HOLD (reason)                                        | every check green; HOLD when `holdReason` gives one                                                                                                                                                                                                                    |
 | BUILDING · WAITING · NEXT FOR DEV · NEEDS YOU · READY · ON dev? | anything else: the lane file's phase and step; with no lane file, the queue's own `state` and its `waitingOn`                                                                                                                                                          |
+| PR (opened)                                                     | no lane file, and the queue says `pr-open` (the PR is open, its checks not green yet) before the PR list shows it; once it does, the PR rows above win                                                                                                                 |
 
 **The automatic HOLD** (`holdReason`, first match wins). A main merge redeploys dev over a dispatched branch
 (CI-BOT.md → _Dev deploys_), so:
@@ -214,6 +282,7 @@ phase change (FEATURE-WORKFLOW.md → _Lane status and checkpoints_), from its w
 ```
 pnpm board lane <phase> [--step <text>] [--pr <n>] [--slot dev|devb] [--session <name>]
                 [--needs <what> (--link <https url> | --cmd <one-line Mac command>) [--unblocks <text>]]
+                [--plan <step>=<lo>-<hi>[?],…] [--files <n>] [--eta-next <lo>-<hi>[?]] [--eta-pr <lo>-<hi>[?]]
 pnpm board lane --clear          (Cleanup)
 ```
 
@@ -225,6 +294,19 @@ pnpm board lane --clear          (Cleanup)
 - `needs` is cleared by any write without `--needs`, because a stale "needs you" is worse than none.
 - `phaseSince` is kept while the phase is unchanged.
 - An unreadable file shows as a problem row in SOURCES, never dropped.
+- **The step plan** (`--plan`, at Plan's end, again whenever the estimates move): each step of
+  `plan build gate review local dev pr` the lane will run, with its range in minutes from measured board history
+  (`heavy.sh` records, archived lanes' estimate-vs-actual), which the lane scales by its file count itself (`--files`
+  records the count beside them); a trailing `?` marks
+  a guess, e.g. `--plan build=60-90,gate=3-6,review=40-70,pr=10-20? --files 37`. It carries across writes until
+  replaced (a new one keeps each step's time so far). At each phase change the time in the phase just left accrues to
+  its step (`spentMs`; `parked` and `blocked` count to none), so est vs actual records itself.
+- **The ETAs** follow from it at every write: `next` is now plus the current step's range less its time so far
+  (never before now), `pr` that plus every later step through `pr`; one `source` for both, `guess` when any step
+  behind the PR ETA is. Past `pr`
+  there are none. `--eta-next` / `--eta-pr` (minutes from now, `?` a guess) set one directly instead. No plan and no
+  flag: no ETA (a stale one is worse than none). The echo ends `· PR ~HH:MM–HH:MM`.
+- A malformed `plan`, `eta` or `files` reads as absent, never a problem row: the lane looks as it did before them.
 
 ```json
 {
@@ -238,12 +320,19 @@ pnpm board lane --clear          (Cleanup)
   "pr": null,
   "slot": null,
   "needs": { "what": "…", "link": "https://…", "cmd": null, "unblocks": "…" },
-  "updatedAt": "…Z"
+  "updatedAt": "…Z",
+  "files": 37,
+  "plan": [{ "phase": "build", "lo": 60, "hi": 90, "source": "measured | guess", "spentMs": 0 }],
+  "eta": {
+    "next": { "lo": "…Z", "hi": "…Z" },
+    "pr": { "lo": "…Z", "hi": "…Z" },
+    "source": "measured | guess"
+  }
 }
 ```
 
-Dispatch writes only intent, in `queue.json` (schema: SESSION-BOARD.md → _Control tower_), plus two keys the web
-tower reads: `devQueue[].hold` and `followups[]` (`id`, `what`, `owner` maintainer|lane|dispatch, `after`, `status`
+Dispatch writes only intent, in `queue.json` (schema: SESSION-BOARD.md → _Control tower_; the plan table's `you`,
+`eta`, `lane`, `done`, `planAt` and `planNotes` among it), plus two keys the web tower reads: `devQueue[].hold` and `followups[]` (`id`, `what`, `owner` maintainer|lane|dispatch, `after`, `status`
 open|tracked|done|dropped, `source`, `since`).
 
 ## Mac stats

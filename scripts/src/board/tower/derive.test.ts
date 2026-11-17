@@ -14,7 +14,7 @@ import type { MacRead, Costs } from './health.ts';
 import type { LaneFile } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import type { Pr } from './prs.ts';
-import type { Lane } from './queue.ts';
+import type { Lane, PlanItem } from './queue.ts';
 
 const NOW = Date.parse('2026-11-13T20:00:00Z');
 const MIN = 60000;
@@ -68,6 +68,9 @@ const file = (over: Partial<LaneFile> = {}): LaneFile => ({
   slot: null,
   needs: null,
   updatedAt: NOW - 5 * MIN,
+  files: null,
+  plan: null,
+  eta: null,
   ...over,
 });
 const queueLane = (over: Partial<Lane> = {}): Lane => ({
@@ -108,7 +111,8 @@ function inputs(
     followups?: NonNullable<TowerState['queue']['data']>['followups'];
     maintainer?: { text: string; since: string | null }[];
     mergeOrder?: NonNullable<TowerState['queue']['data']>['mergeOrder'];
-    plan?: NonNullable<TowerState['queue']['data']>['plan'];
+    plan?: (Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'> & Partial<PlanItem>)[];
+    planNotes?: string[];
   } = {},
 ): Inputs {
   const tower = {
@@ -129,7 +133,16 @@ function inputs(
         maintainer: over.maintainer ?? [],
         wave: null,
         deadRows: null,
-        plan: over.plan ?? [],
+        plan: (over.plan ?? []).map((p) => ({
+          you: null,
+          eta: null,
+          lane: null,
+          done: false,
+          doneAt: null,
+          ...p,
+        })),
+        planNotes: over.planNotes ?? [],
+        planAt: null,
         followups: over.followups ?? [],
         mergeOrder: over.mergeOrder ?? [],
       },
@@ -370,7 +383,7 @@ describe('the accuracy audit (2026-11-14)', () => {
     expect(w.needs.filter((n) => n.branch === 'kilo')).toHaveLength(1);
   });
 
-  it("YOU NEXT counts the rest; the maintainer's undated plan steps follow", () => {
+  it('YOU NEXT counts the rest; the next plan rows not done follow, long-past ones dropped', () => {
     const plan = [
       { at: null, what: 'Rotate the test key', kind: 'maintainer' as const, who: null },
       { at: null, what: 'Land in order', kind: 'dev' as const, who: null },
@@ -386,16 +399,12 @@ describe('the accuracy audit (2026-11-14)', () => {
         ],
       }),
     );
-    expect(v.next).toMatchObject({
-      maintainer: 'a',
-      more: 1,
-      plan: ['Rotate the test key', 'Install the trial'],
-    });
-    expect(derive(inputs({ plan })).next).toMatchObject({
-      maintainer: 'Rotate the test key',
-      more: 0,
-      plan: ['Install the trial'],
-    });
+    const soon = (n: ReturnType<typeof derive>['next']) => n.soon.map((r) => r.what);
+    expect(v.next).toMatchObject({ maintainer: 'a', more: 1 });
+    expect(soon(v.next)).toEqual(['Rotate the test key', 'Land in order', 'Install the trial']);
+    const w = derive(inputs({ plan })).next;
+    expect(w).toMatchObject({ maintainer: 'Rotate the test key', more: 0 });
+    expect(soon(w)).toEqual(['Land in order', 'Install the trial']);
     // a timed step counts within 2 h of now either way, sorted ahead of the undated (plan[] is by `at`); tomorrow
     // evening's never jumps them
     const timed = [
@@ -403,10 +412,13 @@ describe('the accuracy audit (2026-11-14)', () => {
       { at: NOW + 3 * 3600e3, what: 'Tomorrow evening', kind: 'maintainer' as const, who: null },
       ...plan,
     ];
-    expect(derive(inputs({ plan: timed })).next).toMatchObject({
-      maintainer: 'In an hour',
-      plan: ['Rotate the test key', 'Install the trial'],
-    });
+    const x = derive(inputs({ plan: timed })).next;
+    expect(x.maintainer).toBe('In an hour');
+    expect(soon(x)).toEqual(['Tomorrow evening', 'Rotate the test key', 'Land in order']);
+    // a done row is neither the next step nor in the glance
+    const y = derive(inputs({ plan: [{ ...timed[0]!, done: true }, ...plan] })).next;
+    expect(y.maintainer).toBe('Rotate the test key');
+    expect(soon(y)).not.toContain('In an hour');
   });
 
   it('a bare-date since is the end of that local day, shown as the day', () => {
@@ -1062,5 +1074,133 @@ describe('finished lanes leave NOW (2026-11-16)', () => {
         .filter((n) => n.kind === 'lane')
         .map((n) => n.what),
     ).toEqual([expect.stringContaining('admit the branch')]);
+  });
+});
+
+describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, fork count', () => {
+  it('a pr-open queue lane with no PR seen yet is PR (opened) in NOW; a real PR wins', () => {
+    const q = queueLane({ state: 'pr-open', waitingOn: 'checks running' });
+    expect(row(inputs(), { queue: q })).toMatchObject({
+      state: 'PR',
+      label: 'PR (opened)',
+      detail: 'checks running',
+    });
+    expect(derive(inputs({ devQueue: [q] })).active.map((r) => r.label)).toEqual(['PR (opened)']);
+    expect(row(inputs(), { queue: q, pr: pr() }).label).toBe('PR (no checks seen)');
+  });
+
+  it('steps: what each took, the current one live; late once the PR window passed with no PR open', () => {
+    const f = file({
+      phase: 'review',
+      phaseSince: NOW - 10 * MIN,
+      plan: [
+        { phase: 'build', lo: 60, hi: 90, source: 'measured', spentMs: 70 * MIN },
+        { phase: 'review', lo: 20, hi: 40, source: 'measured', spentMs: 5 * MIN },
+        { phase: 'pr', lo: 10, hi: 20, source: 'guess', spentMs: 0 },
+      ],
+      eta: {
+        next: { lo: NOW - 20 * MIN, hi: NOW - 2 * MIN },
+        pr: { lo: NOW - 10 * MIN, hi: NOW - MIN },
+        source: 'measured',
+      },
+    });
+    const r = row(inputs(), { file: f });
+    expect(r.steps).toEqual([
+      { phase: 'build', lo: 60, hi: 90, source: 'measured', spentMin: 70, state: 'done' },
+      { phase: 'review', lo: 20, hi: 40, source: 'measured', spentMin: 15, state: 'now' },
+      { phase: 'pr', lo: 10, hi: 20, source: 'guess', spentMin: 0, state: 'todo' },
+    ]);
+    expect(r.eta).toMatchObject({ late: true, source: 'measured' });
+    // its PR open (a re-test on dev with the lock, say): the PR window is spent, none shows
+    expect(row(inputs(), { file: f, pr: pr() }).eta).toMatchObject({ pr: null, late: false });
+    expect(
+      row(inputs({ lock: lock('echo') }), { file: { ...f, phase: 'dev' }, pr: pr() }),
+    ).toMatchObject({ state: 'TESTING', eta: { pr: null } });
+    expect(row(inputs(), { file: file() })).toMatchObject({ steps: null, eta: null });
+    // off the track: merged or cleanup has done every step; parked or blocked none, its time "so far"
+    const states = (phase: LaneFile['phase']) =>
+      row(inputs(), { file: { ...f, phase, eta: null } }).steps!.map((s) => s.state);
+    expect(states('merged')).toEqual(['done', 'done', 'done']);
+    expect(states('cleanup')).toEqual(['done', 'done', 'done']);
+    expect(states('parked')).toEqual(['todo', 'todo', 'todo']);
+    expect(states('blocked')).toEqual(['todo', 'todo', 'todo']);
+  });
+
+  it('NEXT: the plan table with struck and slipping rows, the notes, the next ask; heads for the strip', () => {
+    const eta = {
+      next: { lo: NOW + 10 * MIN, hi: NOW + 40 * MIN },
+      pr: { lo: NOW + 60 * MIN, hi: NOW + 90 * MIN },
+      source: 'measured' as const,
+    };
+    const v = derive(
+      inputs({
+        lanes: [file({ eta })],
+        planNotes: ['echo slips 30 min'],
+        plan: [
+          {
+            at: NOW - 60 * MIN,
+            what: 'done one',
+            kind: 'dev',
+            who: null,
+            done: true,
+            doneAt: NOW - 50 * MIN,
+          },
+          { at: NOW + 20 * MIN, what: 'echo dev', kind: 'dev', who: null, lane: 'echo' },
+          {
+            at: NOW + 70 * MIN,
+            what: 'merge echo',
+            kind: 'merge',
+            who: null,
+            lane: 'echo',
+            you: '2 min',
+          },
+        ],
+      }),
+    );
+    expect(v.next.table.map((r) => [r.what, r.done, r.deltaMin, r.slip])).toEqual([
+      ['done one', true, 10, null],
+      ['echo dev', false, null, NOW + 40 * MIN],
+      ['merge echo', false, null, NOW + 90 * MIN],
+    ]);
+    expect(v.next.nowIndex).toBe(1);
+    expect(v.next.notes).toEqual(['echo slips 30 min']);
+    expect(v.next.soon.map((r) => r.what)).toEqual(['echo dev', 'merge echo']);
+    // the lane's PR window starts before the slipped merge row: it's the next ask
+    expect(v.next.ask).toMatchObject({ lo: NOW + 60 * MIN, what: 'echo PR', source: 'lane' });
+    expect(v.heads).toMatchObject({
+      needs: '0',
+      now: '1 lane',
+      done: '0',
+      sources: expect.any(String),
+    });
+    expect(v.heads.next).toMatch(/^ask ~\d\d:\d\d$/);
+    // a window already begun says now
+    const begun = derive(
+      inputs({
+        lanes: [file({ eta: { ...eta, pr: { lo: NOW - 5 * MIN, hi: NOW + 20 * MIN } } })],
+      }),
+    );
+    expect(begun.heads.next).toBe('ask now');
+    expect(derive(inputs()).heads.next).toBe('0 to land');
+    // a plan row that is the next ask isn't repeated in the glance below it
+    const only = derive(
+      inputs({
+        plan: [{ at: NOW + 20 * MIN, what: 'talk', kind: 'maintainer', who: null }],
+        maintainer: [{ text: 'a', since: null }],
+      }),
+    ).next;
+    expect(only.ask).toMatchObject({ what: 'talk', source: 'plan' });
+    expect(only.soon).toEqual([]);
+  });
+
+  it('gh PRs says how many fork PRs the newest 40 dropped; ok stays ok, a failure keeps its own detail', () => {
+    const i = inputs();
+    i.tower.prs = { list: [], at: NOW - MIN, error: null, forks: 3 };
+    const s = () => sources(i).find((r) => r.name === 'gh PRs');
+    expect(s()).toMatchObject({ state: 'ok', detail: '3 fork PRs dropped of the newest 40' });
+    i.tower.prs.forks = 0;
+    expect(s()!.detail).toBeNull();
+    i.tower.prs = { list: [], at: NOW - MIN, error: 'HTTP 502', forks: 1 };
+    expect(s()).toMatchObject({ state: 'failed', detail: 'HTTP 502' });
   });
 });

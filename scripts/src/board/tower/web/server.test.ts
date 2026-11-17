@@ -90,6 +90,66 @@ describe('the HTTP surface', () => {
     expect(await fav.text()).toMatch(/^<svg [^>]*viewBox="0 0 32 32"/);
   });
 
+  it('serves two trial favicon sets; /?favicon=a|b links one, anything else is the default page', async () => {
+    const plain = await (await fetch(`${base}/`)).text();
+    for (const q of [
+      '',
+      '?favicon=zzz',
+      '?favicon=',
+      '?favicon=A',
+      '?favicon=__proto__',
+      '?favicon=constructor',
+      '?favicon=toString',
+    ])
+      expect(await (await fetch(`${base}/${q}`)).text(), q).toBe(plain);
+    // the touch icon comes after the tab icons: Safari's tab must not settle on the opaque 180 px radar
+    expect(plain.indexOf('apple-touch-icon')).toBeGreaterThan(plain.indexOf('/favicon.svg'));
+    for (const v of ['a', 'b']) {
+      const page = await (await fetch(`${base}/?favicon=${v}`)).text();
+      expect(page).toContain(
+        `<link rel="icon" type="image/png" sizes="32x32" href="/favicon-${v}-32.png" />`,
+      );
+      expect(page).toContain(
+        `<link rel="icon" type="image/png" sizes="64x64" href="/favicon-${v}-64.png" />`,
+      );
+      expect(page).toContain(`<link rel="icon" href="/favicon-${v}.svg" type="image/svg+xml" />`);
+      expect(page).toContain(`<link rel="icon" href="/favicon-${v}.ico" sizes="any" />`);
+      expect(page).not.toMatch(/href="\/favicon(-\d\d\.png|\.svg)"/);
+      expect(page.replace(/favicon-[ab]/g, 'favicon').replace(/\n.*favicon\.ico.*/, '')).toBe(
+        plain,
+      );
+      for (const [p, px] of [
+        [`/favicon-${v}-32.png`, 32],
+        [`/favicon-${v}-64.png`, 64],
+      ] as const) {
+        const r = await fetch(`${base}${p}`);
+        expect(r.headers.get('content-type')).toBe('image/png');
+        const png = Buffer.from(await r.arrayBuffer());
+        expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([px, px]);
+      }
+      const ico = Buffer.from(await (await fetch(`${base}/favicon-${v}.ico`)).arrayBuffer());
+      expect([ico.readUInt16LE(2), ico.readUInt16LE(4)]).toEqual([1, 2]);
+      const svg = await fetch(`${base}/favicon-${v}.svg`);
+      expect(svg.headers.get('content-type')).toBe('image/svg+xml');
+      expect(await svg.text()).toMatch(/^<svg [^>]*viewBox="0 0 32 32"/);
+    }
+    // a: no tile; b: a light one
+    expect(await (await fetch(`${base}/favicon-a.svg`)).text()).not.toContain('<rect');
+    expect(await (await fetch(`${base}/favicon-b.svg`)).text()).toContain('fill="#8FBCBB"');
+  });
+
+  it('serves the Home Screen manifest, linked from the page: standalone, its own scope, the radar icons', async () => {
+    const page = await (await fetch(`${base}/`)).text();
+    expect(page).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
+    const r = await fetch(`${base}/manifest.webmanifest`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toBe('application/manifest+json');
+    const m = (await r.json()) as Record<string, unknown>;
+    expect(m).toMatchObject({ name: 'tower', start_url: '/', scope: '/', display: 'standalone' });
+    for (const i of m.icons as { src: string }[])
+      expect((await fetch(`${base}${i.src}`)).status, i.src).toBe(200);
+  });
+
   it('/api/state is the View; ?history=1 asks for the series', async () => {
     calls = [];
     expect(await (await fetch(`${base}/api/state`)).json()).toEqual({ v: 1, now: 1 });

@@ -3,7 +3,7 @@
 // The web tower derives NOW and NEEDS YOU from them; locks, PRs and runs stay the truth for state.
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { clean, parseTime } from './fmt.ts';
+import { clean, hhmm, parseTime } from './fmt.ts';
 
 export const PHASES = [
   'plan',
@@ -19,6 +19,11 @@ export const PHASES = [
   'blocked',
 ] as const;
 export type Phase = (typeof PHASES)[number];
+// The phases a step plan covers, in order (the page's track up to the PR); time in the others counts to no step.
+export const STEP_PHASES = ['plan', 'build', 'gate', 'review', 'local', 'dev', 'pr'] as const;
+export type StepPhase = (typeof STEP_PHASES)[number];
+export const isStepPhase = (p: unknown): p is StepPhase =>
+  (STEP_PHASES as readonly unknown[]).includes(p);
 export const BRANCH_RE = /^[a-z0-9][a-z0-9-]{0,62}$/; // the mailroom's branch rule: a safe filename too
 
 export type Needs = {
@@ -27,6 +32,17 @@ export type Needs = {
   cmd: string | null;
   unblocks: string | null;
 };
+// The lane's step plan (TOWER.md → Lane files): each step's estimate in minutes, measured from board history or a
+// guess, and the time spent in it so far (accrued at each phase change). ETAs are absolute times (ms).
+export type Step = {
+  phase: StepPhase;
+  lo: number;
+  hi: number;
+  source: 'measured' | 'guess';
+  spentMs: number;
+};
+export type Range = { lo: number; hi: number };
+export type LaneEta = { next: Range | null; pr: Range | null; source: 'measured' | 'guess' };
 export type LaneFile = {
   branch: string;
   session: string | null;
@@ -38,6 +54,9 @@ export type LaneFile = {
   slot: 'dev' | 'devb' | null;
   needs: Needs | null;
   updatedAt: number;
+  files: number | null; // the plan's file count, which the estimates scale by
+  plan: Step[] | null;
+  eta: LaneEta | null;
 };
 // a file that is there but can't be used: shown, never dropped
 export type LaneProblem = { file: string; problem: string };
@@ -47,6 +66,43 @@ const link = (x: unknown) => {
   const s = str(x);
   return s && /^https:\/\/\S+$/.test(s) ? s : null; // the page renders it as a link: https only
 };
+
+const SOURCES = ['measured', 'guess'];
+const mins = (x: unknown) => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= 100000;
+
+// Optional fields: a malformed one reads as absent (the row looks as it did before them), never a problem row.
+function parsePlan(x: unknown): Step[] | null {
+  if (!Array.isArray(x) || !x.length) return null;
+  const steps: Step[] = [];
+  for (const y of x as Record<string, unknown>[]) {
+    if (!y || !isStepPhase(y.phase) || !mins(y.lo) || !mins(y.hi)) return null;
+    if ((y.lo as number) > (y.hi as number) || !SOURCES.includes(y.source as string)) return null;
+    if (steps.some((t) => t.phase === y.phase)) return null;
+    const spent =
+      Number.isInteger(y.spentMs) && (y.spentMs as number) >= 0 ? (y.spentMs as number) : 0;
+    steps.push({
+      phase: y.phase,
+      lo: y.lo as number,
+      hi: y.hi as number,
+      source: y.source as Step['source'],
+      spentMs: spent,
+    });
+  }
+  return steps;
+}
+function parseRange(x: unknown): Range | null {
+  const r = x as Record<string, unknown> | null | undefined;
+  const lo = parseTime(r?.lo);
+  const hi = parseTime(r?.hi);
+  return lo !== null && hi !== null && lo <= hi ? { lo, hi } : null;
+}
+function parseEta(x: unknown): LaneEta | null {
+  const e = x as Record<string, unknown> | null | undefined;
+  if (!e || typeof e !== 'object' || !SOURCES.includes(e.source as string)) return null;
+  const next = parseRange(e.next);
+  const pr = parseRange(e.pr);
+  return next || pr ? { next, pr, source: e.source as LaneEta['source'] } : null;
+}
 
 export function parseLane(text: string, file: string): LaneFile | LaneProblem {
   let r: Record<string, unknown>;
@@ -79,6 +135,9 @@ export function parseLane(text: string, file: string): LaneFile | LaneProblem {
       ? { what, link: link(n?.link), cmd: str(n?.cmd), unblocks: str(n?.unblocks) }
       : null,
     updatedAt,
+    files: Number.isInteger(r.files) && (r.files as number) >= 0 ? (r.files as number) : null,
+    plan: parsePlan(r.plan),
+    eta: parseEta(r.eta),
   };
 }
 
@@ -120,13 +179,44 @@ export type LaneArgs = {
   slot: 'dev' | 'devb' | null;
   session: string | null;
   needs: Needs | null;
+  plan: { phase: StepPhase; lo: number; hi: number; guess: boolean }[] | null;
+  files: number | null;
+  etaNext: { lo: number; hi: number; guess: boolean } | null;
+  etaPr: { lo: number; hi: number; guess: boolean } | null;
 };
 
 export const LANE_USAGE =
   'usage: pnpm board lane <phase> [--step <text>] [--pr <n>] [--slot dev|devb] [--session <name>]\n' +
   '         [--needs <what> (--link <https url> | --cmd <one-line Mac command>) [--unblocks <text>]]\n' +
+  '         [--plan <step>=<lo>-<hi>[?],…] [--files <n>] [--eta-next <lo>-<hi>[?]] [--eta-pr <lo>-<hi>[?]]\n' +
   '       pnpm board lane --clear\n' +
-  `  phase: ${PHASES.join(' | ')}`;
+  `  phase: ${PHASES.join(' | ')}\n` +
+  `  step:  ${STEP_PHASES.join(' | ')}; minutes, a trailing ? marks a guess (else measured)\n` +
+  '  the plan is kept until replaced; time per step accrues at each phase change; the ETAs follow from it\n' +
+  '  unless --eta-next / --eta-pr (minutes from now) set them';
+
+// `60-90` or `60-90?` (a guess): whole minutes, lo ≤ hi
+const RANGE = /^(\d{1,5})-(\d{1,5})(\?)?$/;
+function range(v: string, k: string) {
+  const m = RANGE.exec(v);
+  if (!m || +m[1]! > +m[2]!)
+    throw new Error(`${k} wants <lo>-<hi> minutes, lo ≤ hi (e.g. 20-35 or 20-35?)`);
+  return { lo: +m[1]!, hi: +m[2]!, guess: !!m[3] };
+}
+function planSpec(v: string): NonNullable<LaneArgs['plan']> {
+  const out: NonNullable<LaneArgs['plan']> = [];
+  for (const part of v.split(',')) {
+    const bits = part.split('=');
+    if (bits.length !== 2)
+      throw new Error(`--plan: ${JSON.stringify(part)} wants <step>=<lo>-<hi>`);
+    const [phase, r] = bits;
+    if (!isStepPhase(phase))
+      throw new Error(`--plan: ${JSON.stringify(phase)} is not a step (${STEP_PHASES.join(' ')})`);
+    if (out.some((s) => s.phase === phase)) throw new Error(`--plan: ${phase} twice`);
+    out.push({ phase, ...range(r ?? '', `--plan ${phase}`) });
+  }
+  return out;
+}
 
 export function parseLaneArgs(argv: string[]): LaneArgs {
   const a: LaneArgs = {
@@ -137,6 +227,10 @@ export function parseLaneArgs(argv: string[]): LaneArgs {
     slot: null,
     session: null,
     needs: null,
+    plan: null,
+    files: null,
+    etaNext: null,
+    etaPr: null,
   };
   let what: string | null = null;
   let lnk: string | null = null;
@@ -156,7 +250,14 @@ export function parseLaneArgs(argv: string[]): LaneArgs {
     else if (k === '--link') lnk = val(++i, k);
     else if (k === '--cmd') cmd = val(++i, k);
     else if (k === '--unblocks') unblocks = val(++i, k);
-    else if (k === '--pr') {
+    else if (k === '--plan') a.plan = planSpec(val(++i, k));
+    else if (k === '--eta-next') a.etaNext = range(val(++i, k), k);
+    else if (k === '--eta-pr') a.etaPr = range(val(++i, k), k);
+    else if (k === '--files') {
+      const v = val(++i, k);
+      if (!/^\d{1,5}$/.test(v)) throw new Error('--files wants a number');
+      a.files = Number(v);
+    } else if (k === '--pr') {
       const v = val(++i, k);
       if (!/^\d+$/.test(v)) throw new Error('--pr wants a number');
       a.pr = Number(v);
@@ -169,7 +270,8 @@ export function parseLaneArgs(argv: string[]): LaneArgs {
     else throw new Error(`unknown phase or argument ${JSON.stringify(k)}`);
   }
   if (a.clear) {
-    if (a.phase || what) throw new Error('--clear takes nothing else');
+    if (a.phase || what || a.plan || a.files !== null || a.etaNext || a.etaPr)
+      throw new Error('--clear takes nothing else');
     return a;
   }
   if (!a.phase) throw new Error('a phase is required');
@@ -204,23 +306,95 @@ export function writeLane(boardDir: string, a: LaneArgs, env: LaneEnv): string {
     // first write
   }
   const t = env.now.toISOString();
+  const now = env.now.getTime();
   const keepSince = prev && prev.phase === a.phase && prev.phaseSince !== null;
+  const phaseSince = keepSince ? prev!.phaseSince! : now;
+  const plan = nextPlan(prev, a, now);
+  const eta = laneEta(plan, a, a.phase!, now - phaseSince, now);
   const out = {
     v: 1,
     branch: env.branch,
     session: a.session ?? env.session ?? prev?.session ?? null,
     phase: a.phase,
     step: a.step,
-    phaseSince: keepSince ? new Date(prev!.phaseSince!).toISOString() : t,
+    phaseSince: new Date(phaseSince).toISOString(),
     sha: env.sha,
     pr: a.pr ?? prev?.pr ?? null,
     slot: a.slot ?? (a.phase === prev?.phase ? prev.slot : null),
     needs: a.needs, // cleared by any write without --needs: a stale "needs you" is worse than none
     updatedAt: t,
+    files: a.files ?? prev?.files ?? null,
+    plan: plan?.map((s) => ({ ...s })) ?? null,
+    eta: eta && {
+      next: eta.next && iso(eta.next),
+      pr: eta.pr && iso(eta.pr),
+      source: eta.source,
+    },
   };
   mkdirSync(dir, { recursive: true });
   const tmp = `${file}.tmp.${process.pid}`;
   writeFileSync(tmp, JSON.stringify(out, null, 2) + '\n');
   renameSync(tmp, file);
-  return `lane ${env.branch}: ${a.phase}${a.step ? ` · ${a.step}` : ''}${a.needs ? ` · needs you: ${a.needs.what}` : ''}`;
+  const prEta = eta?.pr ? ` · PR ~${hhmm(eta.pr.lo)}–${hhmm(eta.pr.hi)}` : '';
+  return `lane ${env.branch}: ${a.phase}${a.step ? ` · ${a.step}` : ''}${prEta}${a.needs ? ` · needs you: ${a.needs.what}` : ''}`;
+}
+
+const iso = (r: Range) => ({ lo: new Date(r.lo).toISOString(), hi: new Date(r.hi).toISOString() });
+
+// The plan after this write: --plan replaces it (keeping each step's time spent so far), else the last one carries.
+// On a phase change, the time in the phase just left accrues to its step, so est vs actual records itself.
+function nextPlan(prev: LaneFile | null, a: LaneArgs, now: number): Step[] | null {
+  const spent = new Map((prev?.plan ?? []).map((s) => [s.phase, s.spentMs]));
+  if (prev && prev.phase !== a.phase && prev.phaseSince !== null && isStepPhase(prev.phase))
+    spent.set(prev.phase, (spent.get(prev.phase) ?? 0) + Math.max(0, now - prev.phaseSince));
+  const base: Omit<Step, 'spentMs'>[] | null = a.plan
+    ? a.plan.map((p) => ({
+        phase: p.phase,
+        lo: p.lo,
+        hi: p.hi,
+        source: p.guess ? 'guess' : 'measured',
+      }))
+    : (prev?.plan ?? null);
+  if (!base) return null;
+  return base.map((s) => ({ ...s, spentMs: spent.get(s.phase) ?? 0 }));
+}
+
+// When the next step and the PR land, from the plan: the current step's remaining time (its estimate less what it
+// has taken, never below now), then each later step up to and including `pr`. A flag sets its own ETA instead. No
+// plan and no flags: none (a stale ETA is worse than none). Past `pr` (merged, cleanup) there is nothing to estimate.
+export function laneEta(
+  plan: Step[] | null,
+  a: Pick<LaneArgs, 'etaNext' | 'etaPr'>,
+  phase: Phase,
+  inPhaseMs: number,
+  now: number,
+): (LaneEta & { next: Range | null; pr: Range | null }) | null {
+  const flag = (f: LaneArgs['etaNext']) =>
+    f && { range: { lo: now + f.lo * 60e3, hi: now + f.hi * 60e3 }, guess: f.guess };
+  const fNext = flag(a.etaNext);
+  const fPr = flag(a.etaPr);
+  let next: Range | null = null;
+  let pr: Range | null = null;
+  let guess = false;
+  const at = STEP_PHASES.indexOf(phase as StepPhase);
+  if (plan && at >= 0) {
+    const cur = plan.find((s) => s.phase === phase);
+    const spent = (cur?.spentMs ?? 0) + inPhaseMs;
+    const left = (m: number) => Math.max(0, m * 60e3 - spent);
+    next = cur ? { lo: now + left(cur.lo), hi: now + left(cur.hi) } : { lo: now, hi: now };
+    guess = cur?.source === 'guess';
+    const later = plan.filter((s) => STEP_PHASES.indexOf(s.phase) > at);
+    pr = later.reduce((r, s) => ({ lo: r.lo + s.lo * 60e3, hi: r.hi + s.hi * 60e3 }), { ...next });
+    if (later.some((s) => s.source === 'guess')) guess = true;
+    if (!cur && !later.length) next = pr = null;
+  }
+  if (fNext) next = fNext.range;
+  if (fPr) pr = fPr.range;
+  if (!next && !pr) return null;
+  // a flag's own `?` decides its part; the plan's guesses count only for what the plan set
+  const src = [
+    fNext ? fNext.guess : plan && next ? guess : false,
+    fPr ? fPr.guess : plan && pr ? guess : false,
+  ];
+  return { next, pr, source: src.some(Boolean) ? 'guess' : 'measured' };
 }

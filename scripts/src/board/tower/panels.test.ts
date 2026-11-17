@@ -4,8 +4,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { NORD, fgc, strip, width } from './ansi.ts';
 import { build, parseArgs } from './main.ts';
 import type { TowerState } from './model.ts';
+import type { PlanItem } from './queue.ts';
 import { HISTORY_H, layout } from './layout.ts';
 import { compose, feedItems, nextMerge, since, waveItems, wants, type Ui } from './panels.ts';
+
+const PLAN_DEFAULTS = { you: null, eta: null, lane: null, done: false, doneAt: null };
 
 // the gh fields only the web tower reads (prs.ts)
 const NO_GH = { sha: null, mergeSha: null, url: null, draft: false };
@@ -339,6 +342,17 @@ describe('tower v2', () => {
     expect(f).toContain('YOU    india-branch india  on you: admit to dev');
   });
 
+  it('a pr-open lane gets its PR badge', () => {
+    const q = state.queue.data!;
+    const devQueue = q.devQueue.map((l) =>
+      l.branch === 'hotel-branch' ? { ...l, state: 'pr-open' as const } : l,
+    );
+    const f = text(
+      compose({ ...state, queue: { ...state.queue, data: { ...q, devQueue } } }, live, 210, 55),
+    );
+    expect(f).toContain('PR     hotel-branch PR 42 hotel');
+  });
+
   it("the maintainer's to-dos show an age only past a day", () => {
     const f = text(compose(state, live, 210, 55));
     expect(f).not.toContain('today');
@@ -411,6 +425,7 @@ describe('tower v2', () => {
       what,
       kind: 'merge' as const,
       who: null,
+      ...PLAN_DEFAULTS,
     });
     // over 2 h past drops; the earliest live one wins; a tie keeps file order; an unscheduled merge never names it
     expect(nextMerge([m('stale', at - 7200001), m('live', at + 60000)], at)?.what).toBe('live');
@@ -420,8 +435,9 @@ describe('tower v2', () => {
   });
 
   it('PLAN without a plan, and without a merge', () => {
-    const withPlan = (plan: NonNullable<TowerState['queue']['data']>['plan']): string =>
-      text(
+    const withPlan = (loose: Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'>[]): string => {
+      const plan = loose.map((p) => ({ ...PLAN_DEFAULTS, ...p }));
+      return text(
         compose(
           { ...state, queue: { ...state.queue, data: { ...state.queue.data!, plan } } },
           live,
@@ -429,6 +445,7 @@ describe('tower v2', () => {
           55,
         ),
       );
+    };
     expect(withPlan([])).toContain('no plan in queue.json (dispatch writes it)');
     const at = Date.parse(NOW);
     const f = withPlan([

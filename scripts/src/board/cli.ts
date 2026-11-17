@@ -29,7 +29,7 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   overlap <repo> <boardDir>             writes <boardDir>/overlap.json
   report <historyDir> [days] [--json]   usage by mix + job peaks
   barriers <historyDir> [days] [--json] how limiting the cap is
-  lane <phase> [--step …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
+  lane <phase> [--step …] [--plan …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
   sync-main                             the main checkout to origin/main; restarts the web tower if its code changed`;
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.

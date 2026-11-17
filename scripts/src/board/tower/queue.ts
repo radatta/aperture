@@ -3,7 +3,16 @@
 import { findIdentifiers } from '../../identifiers.ts';
 import { clean, parseTime } from './fmt.ts';
 
-export const LANE_STATES = ['on-dev', 'next', 'waiting', 'building', 'ready', 'needs-you'] as const;
+// pr-open: the lane opened its PR and checks aren't green yet (between building and ready)
+export const LANE_STATES = [
+  'on-dev',
+  'next',
+  'waiting',
+  'building',
+  'pr-open',
+  'ready',
+  'needs-you',
+] as const;
 export const WAVE_STATES = ['merged', 'open', 'in-flight', 'not-started'] as const;
 export type LaneState = (typeof LANE_STATES)[number];
 export type WaveState = (typeof WAVE_STATES)[number];
@@ -33,8 +42,22 @@ export type WaveItem = {
   title: string | null;
 };
 
-// dispatch's timeline: the one source for "next merge" (the tower's PLAN panel and the statusline)
-export type PlanItem = { at: number | null; what: string; kind: PlanKind; who: string | null };
+// dispatch's timeline: the one source for "next merge" (the tower's PLAN panel and the statusline). Optional, for the
+// plan table (TOWER.md → NEXT expanded): `you` the maintainer's cost, `eta` the window the row finishes in, `lane` the
+// lane whose ETA it waits on, `done` finished (an ISO time is when: the actual).
+export const ETA_SOURCES = ['measured', 'guess'] as const;
+export type EtaSource = (typeof ETA_SOURCES)[number];
+export type PlanItem = {
+  at: number | null;
+  what: string;
+  kind: PlanKind;
+  who: string | null;
+  you: string | null;
+  eta: { from: number; to: number; source: EtaSource } | null;
+  lane: string | null;
+  done: boolean;
+  doneAt: number | null;
+};
 
 // dispatch's follow-up ledger (docs/ops/HUB.md → The hub's duties): the web tower's SLIPPING panel reads it.
 export const FOLLOWUP_STATUS = ['open', 'tracked', 'done', 'dropped'] as const;
@@ -86,6 +109,8 @@ const QUEUE_KEYS = [
   'plan',
   'followups',
   'mergeOrder',
+  'planNotes',
+  'planAt',
 ];
 
 // An open follow-up whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`, `PR <n>`,
@@ -136,6 +161,8 @@ export type QueueData = {
   wave: { name: string; items: WaveItem[] } | null;
   deadRows: { since: number; target: number; excludedRuns: string[] } | null;
   plan: PlanItem[]; // by `at`, the `at`-less last in file order
+  planNotes: string[]; // dispatch's notes on the plan as a whole: what slips, what moved and why
+  planAt: number | null; // when dispatch last rewrote the plan
   followups: Followup[];
   mergeOrder: MergeOrderItem[];
 };
@@ -162,6 +189,7 @@ export type Queue = {
 };
 
 const str = (x: unknown) => (typeof x === 'string' && x.length > 0 ? clean(x) : null);
+const LANE_RE = /^[a-z0-9][a-z0-9-]{0,62}$/; // lanes.ts BRANCH_RE, kept local: this file's imports stay minimal
 const int = (x: unknown) => (Number.isInteger(x) ? (x as number) : null);
 const arr = (x: unknown) => (Array.isArray(x) ? (x as unknown[]) : []);
 
@@ -286,10 +314,46 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       return void problems.push(`plan[${i}]: kind ${JSON.stringify(p.kind)}`);
     const at = planAt(p.at);
     if (at === null && p.at != null) problems.push(`plan[${i}]: at is not an ISO time`); // kept, unscheduled
-    plan.push({ at, what, kind, who: str(p.who) });
+    // the optional fields: a bad one is named and dropped, the row kept (like `at`)
+    const bad = (k: string, why: string) => void problems.push(`plan[${i}]: ${k} ${why}`);
+    const you = str(p.you);
+    if (p.you != null && !you) bad('you', 'is not text');
+    let eta: PlanItem['eta'] = null;
+    if (p.eta != null) {
+      const e = p.eta as Record<string, unknown>;
+      const from = planAt(e?.from);
+      const to = planAt(e?.to);
+      const source = e?.source as EtaSource;
+      if (from === null || to === null) bad('eta', 'wants from and to as ISO times');
+      else if (to < from) bad('eta', 'ends before it starts');
+      else if (!ETA_SOURCES.includes(source)) bad('eta', `source ${JSON.stringify(e.source)}`);
+      else eta = { from, to, source };
+    }
+    const lane = typeof p.lane === 'string' && LANE_RE.test(p.lane) ? p.lane : null;
+    if (p.lane != null && !lane) bad('lane', 'is not a branch name');
+    let done = false;
+    let doneAt: number | null = null;
+    if (p.done === true) done = true;
+    else if (p.done != null && p.done !== false) {
+      doneAt = planAt(p.done);
+      if (doneAt === null) bad('done', 'wants true or an ISO time');
+      else done = true;
+    }
+    plan.push({ at, what, kind, who: str(p.who), you, eta, lane, done, doneAt });
   });
   // stable sort: equal times and the `at`-less keep their file order
   plan.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || 0); // ∞ − ∞ is NaN → 0
+
+  const planNotes: string[] = [];
+  if (raw.planNotes !== undefined && !Array.isArray(raw.planNotes))
+    problems.push('planNotes is not an array');
+  arr(raw.planNotes).forEach((x, i) => {
+    const t = str(x);
+    if (!t) return void problems.push(`planNotes[${i}]: not text`);
+    planNotes.push(t);
+  });
+  const planAtV = raw.planAt == null ? null : planAt(raw.planAt);
+  if (raw.planAt != null && planAtV === null) problems.push('planAt is not an ISO time');
 
   const followups: Followup[] = [];
   const ids = new Set<string>();
@@ -326,7 +390,18 @@ function parse(text: string | null, prev: QueueData | null): Queue {
 
   return {
     status: problems.length ? 'bad' : 'ok',
-    data: { updatedAt, devQueue, maintainer, wave, deadRows, plan, followups, mergeOrder },
+    data: {
+      updatedAt,
+      devQueue,
+      maintainer,
+      wave,
+      deadRows,
+      plan,
+      planNotes,
+      planAt: planAtV,
+      followups,
+      mergeOrder,
+    },
     problems,
     ...(unread.length ? { unread } : {}),
   };

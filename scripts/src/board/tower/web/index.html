@@ -9,10 +9,11 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="tower" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>tower</title>
     <style>
       /* Read at a glance from arm's length (the maintainer, 2026-11-13): big type, one line per item, details on click.
@@ -559,6 +560,188 @@
         color: var(--ink2);
       }
 
+      /* Expand (TOWER.md → Expand): one panel full screen, a strip of the others' headline numbers kept on top. */
+      section h2.exp {
+        cursor: pointer;
+      }
+      @media (hover: hover) {
+        section h2.exp:hover::after {
+          content: '⤢';
+          margin-left: 2px;
+        }
+      }
+      #strip {
+        display: none;
+        position: sticky;
+        top: env(
+          safe-area-inset-top,
+          0px
+        ); /* a Home Screen app: below the status bar, so ✕ stays tappable */
+        z-index: 5;
+        gap: 8px;
+        align-items: center;
+        overflow-x: auto;
+        background: var(--bg);
+        padding: 6px max(18px, env(safe-area-inset-right)) 8px max(18px, env(safe-area-inset-left));
+        scrollbar-width: none;
+      }
+      body[data-open] #strip {
+        display: flex;
+      }
+      #strip .title {
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: 0.09em;
+        white-space: nowrap;
+        margin-right: 4px;
+      }
+      #strip .chip {
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        flex: none;
+      }
+      #strip .chip .k {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--ink2);
+      }
+      #strip .close {
+        flex: none;
+        font-weight: 700;
+      }
+      body[data-open] #health,
+      body[data-open] main > section:not(.x-open) {
+        display: none !important;
+      }
+      body[data-open] main {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      #slipping.x-open .body,
+      #sources.x-open .body {
+        display: block;
+      }
+      section.x-open {
+        min-height: 60vh;
+      }
+      section h3 {
+        font-size: 12px;
+        letter-spacing: 0.09em;
+        color: var(--ink2);
+        margin: 14px 0 4px 10px;
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+      }
+      section h3 .age {
+        font-weight: 400;
+        letter-spacing: 0;
+      }
+      .row .you {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--hold);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 16em;
+      }
+      .slip {
+        color: var(--hold);
+        font-weight: 600;
+      }
+      /* the plan table: Time | What | You */
+      table.plan {
+        width: 100%;
+        border-collapse: collapse;
+        font-variant-numeric: tabular-nums;
+      }
+      table.plan th {
+        text-align: left;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        color: var(--ink2);
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--line);
+      }
+      table.plan td {
+        padding: 7px 8px;
+        vertical-align: top;
+        border-bottom: 1px solid var(--line);
+        overflow-wrap: anywhere;
+      }
+      table.plan td.time {
+        white-space: nowrap;
+        width: 1%;
+        font-weight: 600;
+      }
+      table.plan td.time .eta,
+      table.plan td.time .src {
+        font-weight: 400;
+        font-size: 13px;
+        color: var(--ink2);
+      }
+      table.plan td.time .src.guess {
+        color: var(--hold);
+      }
+      table.plan td.you {
+        width: 22%;
+        color: var(--hold);
+        font-weight: 600;
+      }
+      table.plan td .who {
+        color: var(--ink2);
+        font-size: 14px;
+      }
+      table.plan td .actual {
+        font-size: 13px;
+        color: var(--ink2);
+        text-decoration: none;
+        display: block;
+      }
+      table.plan tr.done td.time,
+      table.plan tr.done td.what > span:first-child,
+      table.plan tr.done td.you {
+        text-decoration: line-through;
+        color: var(--dim);
+      }
+      table.plan tr.slipping {
+        background: color-mix(in srgb, var(--hold) 9%, transparent);
+      }
+      table.plan tr.nowline td {
+        padding: 2px 8px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--bad);
+        border-bottom: 2px solid var(--bad);
+      }
+      ul.notes {
+        margin: 10px 0 4px;
+        padding-left: 28px;
+        color: var(--ink2);
+      }
+      ul.notes li {
+        margin: 3px 0;
+        overflow-wrap: anywhere;
+      }
+      /* the step bar: a pip per planned step, the current one filling with its time against its estimate */
+      .track.steps i {
+        position: relative;
+        overflow: hidden;
+      }
+      .track.steps i.now {
+        background: color-mix(in srgb, var(--c, var(--build)) 30%, var(--line));
+      }
+      .track.steps i.now b {
+        position: absolute;
+        inset: 0 auto 0 0;
+        background: var(--c, var(--build));
+      }
+      .track.steps i.now.over b {
+        background: var(--hold);
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .dot.live,
         .item.flash,
@@ -583,6 +766,19 @@
           (display-mode: fullscreen) and (orientation: portrait) {
           header {
             padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);
+          }
+          /* an expanded panel's strip sticks below that bar too */
+          #strip {
+            top: max(env(safe-area-inset-top, 0px), 62px);
+          }
+        }
+        /* the same floor when app.js finds the page installed (navigator.standalone) but display-mode didn't match */
+        @media (orientation: portrait) {
+          html.installed header {
+            padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);
+          }
+          html.installed #strip {
+            top: max(env(safe-area-inset-top, 0px), 62px);
           }
         }
         header h1 {
@@ -691,6 +887,34 @@
         .only-phone {
           display: inline;
         }
+        #strip {
+          padding: 6px max(12px, env(safe-area-inset-right)) 8px
+            max(12px, env(safe-area-inset-left));
+          gap: 6px;
+        }
+        /* the sheet: the expanded panel fills the screen edge to edge */
+        body[data-open] main {
+          padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px)
+            env(safe-area-inset-left, 0px);
+        }
+        body[data-open] main > section.x-open,
+        #needs.has.x-open {
+          border-radius: 0;
+          box-shadow: none;
+          min-height: calc(100vh - 100px);
+        }
+        table.plan td,
+        table.plan th {
+          padding: 6px 5px;
+        }
+        table.plan td.you {
+          width: 26%;
+        }
+        .row .you {
+          white-space: normal;
+          overflow-wrap: anywhere;
+          max-width: none;
+        }
       }
     </style>
   </head>
@@ -703,6 +927,7 @@
       <button id="charts-toggle" type="button">charts</button>
     </header>
     <div id="banner"></div>
+    <nav id="strip" aria-label="other panels"></nav>
     <div id="health"></div>
     <main>
       <section id="needs">

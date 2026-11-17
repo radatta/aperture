@@ -18,31 +18,33 @@ export type Pr = {
 
 const oid = (x: unknown) => (typeof x === 'string' && /^[0-9a-f]{40}$/.test(x) ? x : null);
 
-export function parsePrs(text: string): Pr[] {
+export const parsePrs = (text: string): Pr[] => readPrs(text).list;
+
+// `forks`: how many of the newest 40 were fork PRs, dropped here (so the window held that many fewer of ours)
+export function readPrs(text: string): { list: Pr[]; forks: number } {
   const raw = JSON.parse(text) as unknown;
   if (!Array.isArray(raw)) throw new Error('gh pr list: not an array');
-  return (
-    raw
-      .map((x) => x as Record<string, unknown>)
-      .filter((x) => Number.isInteger(x.number))
-      // a fork's head branch name is the fork owner's choice: it never stands for a lane
-      .filter((x) => x.isCrossRepository !== true)
-      .map((x) => ({
-        number: x.number as number,
-        title: typeof x.title === 'string' ? clean(x.title) : '',
-        branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
-        state: typeof x.state === 'string' ? x.state : '',
-        mergedAt: parseTime(x.mergedAt),
-        createdAt: parseTime(x.createdAt),
-        sha: oid(x.headRefOid),
-        mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
-        url:
-          typeof x.url === 'string' && x.url.startsWith('https://github.com/')
-            ? clean(x.url)
-            : null,
-        draft: x.isDraft === true,
-      }))
-  );
+  const rows = raw
+    .map((x) => x as Record<string, unknown>)
+    .filter((x) => Number.isInteger(x.number));
+  const forks = rows.filter((x) => x.isCrossRepository === true).length;
+  const list = rows
+    // a fork's head branch name is the fork owner's choice: it never stands for a lane
+    .filter((x) => x.isCrossRepository !== true)
+    .map((x) => ({
+      number: x.number as number,
+      title: typeof x.title === 'string' ? clean(x.title) : '',
+      branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
+      state: typeof x.state === 'string' ? x.state : '',
+      mergedAt: parseTime(x.mergedAt),
+      createdAt: parseTime(x.createdAt),
+      sha: oid(x.headRefOid),
+      mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
+      url:
+        typeof x.url === 'string' && x.url.startsWith('https://github.com/') ? clean(x.url) : null,
+      draft: x.isDraft === true,
+    }));
+  return { list, forks };
 }
 
 export const GH_ARGS = [
@@ -66,6 +68,7 @@ export const ghFetch: Fetch = () =>
 
 export class PrCache {
   list: Pr[] = [];
+  forks = 0; // fork PRs dropped from the last good read
   at: number | null = null; // last success
   error: string | null = null;
   private tried = -Infinity;
@@ -83,7 +86,7 @@ export class PrCache {
     this.busy = true;
     this.tried = now;
     try {
-      this.list = parsePrs(await this.fetch());
+      ({ list: this.list, forks: this.forks } = readPrs(await this.fetch()));
       this.at = now;
       this.error = null;
     } catch (e) {

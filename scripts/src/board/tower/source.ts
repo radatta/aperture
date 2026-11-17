@@ -204,7 +204,12 @@ export class Source {
         (a, b) => (a.start ?? a.end ?? 0) - (b.start ?? b.end ?? 0),
       ),
       queue: this.queue.get(),
-      prs: { list: this.prs?.list ?? [], at: this.prs?.at ?? null, error: this.prs?.error ?? null },
+      prs: {
+        list: this.prs?.list ?? [],
+        at: this.prs?.at ?? null,
+        error: this.prs?.error ?? null,
+        forks: this.prs?.forks ?? 0,
+      },
       bench,
       lockFeed: this.lockFeed,
       leaseFeed: this.leaseFeed,

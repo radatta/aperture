@@ -36,6 +36,8 @@ export const USAGE = `pnpm lanes <command>   (run from the main checkout; docs/o
         print the maintainer's Mac line, close the lane's window by id
   status                               active lanes against the cap`;
 
+const NO_PLAN = { plan: null, files: null, etaNext: null, etaPr: null }; // the step plan stays the lane's own
+
 const flag = (f: Record<string, string>, k: string) => (k in f ? f[k]! : null);
 
 export function lanesAt(dir: string): Lanes {
@@ -44,13 +46,22 @@ export function lanesAt(dir: string): Lanes {
     write: (branch, phase, step, session, sha) =>
       void writeLane(
         dir,
-        { clear: false, phase, step, pr: null, slot: null, session, needs: null },
+        { clear: false, phase, step, pr: null, slot: null, session, needs: null, ...NO_PLAN },
         { branch, sha, session, now: new Date() },
       ),
     clear: (branch) =>
       void writeLane(
         dir,
-        { clear: true, phase: null, step: null, pr: null, slot: null, session: null, needs: null },
+        {
+          clear: true,
+          phase: null,
+          step: null,
+          pr: null,
+          slot: null,
+          session: null,
+          needs: null,
+          ...NO_PLAN,
+        },
         { branch, sha: null, session: null, now: new Date() },
       ),
   };

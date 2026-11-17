@@ -6,8 +6,9 @@ import { hhmm } from './fmt.ts';
 import type { Behind } from './behind.ts';
 import type { Checks, Cached, GhRun } from './gh.ts';
 import type { Costs, MacRead } from './health.ts';
-import type { LaneFile, LaneProblem, Needs } from './lanes.ts';
+import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
+import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
 import type { Pr } from './prs.ts';
 import { firedFollowups, sinceTime, staleFollowups, type Lane } from './queue.ts';
 
@@ -44,6 +45,17 @@ export type LaneRow = {
   fileAge: number | null; // seconds since the lane file's last write; null = no file
   quiet: boolean; // a lane-file state (BUILDING) whose file hasn't moved in STALE.lane: amber on the page
   phase: string | null; // where on the track plan › build › gate › review › local › dev › pr › merged it is
+  // the lane file's step plan (TOWER.md → Lane files): each step's estimate and time spent so far, live
+  steps: LaneStep[] | null;
+  eta: { next: Range | null; pr: Range | null; source: string; late: boolean } | null;
+};
+export type LaneStep = {
+  phase: string;
+  lo: number; // minutes
+  hi: number;
+  source: string;
+  spentMin: number;
+  state: 'done' | 'now' | 'todo';
 };
 export type NeedItem = {
   kind: 'lane' | 'merge' | 'deploy' | 'todo' | 'source';
@@ -108,9 +120,17 @@ export type View = {
     merge: LaneRow[];
     maintainer: string | null;
     more: number; // further NEEDS YOU items after the one `maintainer` shows
-    plan: string[]; // dispatch's plan[] steps for the maintainer, undated or due, after the one shown
     parked: string[];
+    // the plan table (plan.ts): every plan[] row with its live marks, the now-line's place, dispatch's notes
+    table: PlanRow[];
+    nowIndex: number;
+    soon: PlanRow[]; // the glance: the next few rows not yet finished
+    notes: string[];
+    planAt: number | null;
+    ask: Ask | null; // when the maintainer is next asked for something
   };
+  // each panel's headline number, for the strip an expanded panel keeps of the others
+  heads: Record<'needs' | 'now' | 'next' | 'done' | 'slipping' | 'sources', string>;
   done: {
     number: number;
     title: string;
@@ -319,6 +339,39 @@ function trackPhase(state: State, file: LaneFile | null): string | null {
 
 type Ctx = { branch: string; file: LaneFile | null; queue: Lane | null; pr: Pr | null };
 
+// The lane file's step plan, live: the current step's time includes the time in it so far. Its ETA is the lane's
+// last word; `late` once the PR's window has passed with no PR open.
+function laneSteps(file: LaneFile | null, now: number, pr: Pr | null) {
+  if (!file?.plan) return { steps: null, eta: lateEta(file, now, pr) };
+  const at = (STEP_PHASES as readonly string[]).indexOf(file.phase);
+  const steps: LaneStep[] = file.plan.map((s) => {
+    const k = STEP_PHASES.indexOf(s.phase);
+    const live = s.phase === file.phase && file.phaseSince !== null ? now - file.phaseSince : 0;
+    return {
+      phase: s.phase,
+      lo: s.lo,
+      hi: s.hi,
+      source: s.source,
+      spentMin: Math.round((s.spentMs + Math.max(0, live)) / 60e3),
+      // off the track: merged or cleanup has done every step; parked or blocked has none current and none done
+      state:
+        s.phase === file.phase
+          ? 'now'
+          : (at >= 0 && k < at) || file.phase === 'merged' || file.phase === 'cleanup'
+            ? 'done'
+            : 'todo',
+    };
+  });
+  return { steps, eta: lateEta(file, now, pr) };
+}
+// once its PR is open or merged, the lane's PR window is spent: none shows (a re-test on dev included)
+function lateEta(file: LaneFile | null, now: number, pr: Pr | null) {
+  if (!file?.eta) return null;
+  const spent = pr?.state === 'OPEN' || pr?.state === 'MERGED';
+  const prEta = spent ? null : file.eta.pr;
+  return { ...file.eta, pr: prEta, late: !!prEta && prEta.hi < now };
+}
+
 export function laneRow(c: Ctx, i: Inputs): LaneRow {
   const { branch, file, queue, pr } = c;
   const base = {
@@ -328,6 +381,7 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     hold: null as string | null,
     fileAge: file ? Math.max(0, (i.now - file.updatedAt) / 1000) : null,
     quiet: false,
+    ...laneSteps(file, i.now, pr),
   };
   const row = (
     state: State,
@@ -483,6 +537,8 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
         );
       case 'needs-you':
         return row('NEEDS YOU', 'NEEDS YOU', words, 'warn', null);
+      case 'pr-open': // dispatch's word that the PR is open; the PR list hasn't shown it (a real one wins above)
+        return row('PR', 'PR (opened)', words, 'normal', null);
       case 'ready':
         return row('READY', 'READY', words, 'good', null);
       case 'on-dev': // the lock says otherwise (no live lock for it): the queue's claim, marked
@@ -540,6 +596,8 @@ function orderRow(
     session: i.sessionsByBranch[o.branch] ?? null,
     state: 'WAITING',
     label: 'NOT STARTED',
+    steps: null,
+    eta: null,
     detail: null,
     tone: 'dim',
     since: null,
@@ -734,12 +792,30 @@ export function derive(i: Inputs): View {
     'CHECKS FAILED',
   ];
   const byBranch = new Map(rows.map((r) => [r.branch, r]));
+  const table = planTable(
+    q?.plan ?? [],
+    (b) => files.get(b)?.eta ?? null,
+    (b) => prFor(b, prs, queued.get(b)?.pr ?? null, files.get(b)?.pr ?? null),
+    i.now,
+  );
   // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
   // within 2 h of now either way: tomorrow evening's step never jumps the undated ones); the rest follow it
   const mine = (q?.plan ?? []).filter(
-    (p) => p.kind === 'maintainer' && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
+    (p) =>
+      p.kind === 'maintainer' && !p.done && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
   );
   const first = needs[0]?.what ?? mine[0]?.what ?? null;
+  const ask = nextAsk(
+    table.rows,
+    rows
+      .filter((r) => nowStates.includes(r.state))
+      .map((r) => ({
+        branch: r.branch,
+        eta: files.get(r.branch)?.eta ?? null,
+        prOpen: prs.some((p) => p.branch === r.branch && p.state === 'OPEN'),
+      })),
+    i.now,
+  );
   const next = {
     order: order
       .map((o) => ({ ...o, row: byBranch.get(o.branch) ?? orderRow(o, i, prs, files, queued) }))
@@ -754,10 +830,18 @@ export function derive(i: Inputs): View {
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
     maintainer: first,
     more: Math.max(0, needs.length - 1),
-    plan: mine
-      .map((p) => p.what)
-      .filter((w) => w !== first)
-      .slice(0, 3),
+    nowIndex: table.nowIndex,
+    soon: planSoon(
+      // the rows YOU NEXT and NEXT ASK already show aren't repeated
+      table.rows.filter(
+        (r) => r.what !== first && !(ask?.source === 'plan' && r.what === ask.what),
+      ),
+      i.now,
+    ),
+    table: table.rows,
+    notes: q?.planNotes ?? [],
+    planAt: q?.planAt ?? null,
+    ask,
   };
 
   const done = prs
@@ -835,6 +919,20 @@ export function derive(i: Inputs): View {
       })),
   ];
 
+  const active = rows.filter((r) => nowStates.includes(r.state));
+  const srcs = sources(i);
+  const off = srcs.filter((s) => s.state !== 'ok').length;
+  const heads: View['heads'] = {
+    needs: String(needs.length),
+    now: `${active.length} lane${active.length === 1 ? '' : 's'}`,
+    next: next.ask
+      ? `ask ${next.ask.late ? 'late' : next.ask.lo <= i.now ? 'now' : `~${hhmm(next.ask.lo)}`}`
+      : `${next.order.length} to land`,
+    done: String(done.length),
+    slipping: String(slipping.length),
+    sources: off ? `${off} off` : 'ok',
+  };
+
   const g = t.gauges;
   return {
     v: 1,
@@ -843,8 +941,9 @@ export function derive(i: Inputs): View {
     behind: i.behind,
     needs,
     slots,
-    active: rows.filter((r) => nowStates.includes(r.state)),
+    active,
     next,
+    heads,
     done,
     health: {
       container: g
@@ -867,7 +966,7 @@ export function derive(i: Inputs): View {
       aws: i.aws,
     },
     slipping,
-    sources: sources(i),
+    sources: srcs,
     problems: [
       ...t.queue.problems.map((p) => `queue.json: ${p}`),
       ...i.laneProblems.map((p) => `lanes/${p.file}: ${p.problem}`),
@@ -941,7 +1040,12 @@ export function sources(i: Inputs): SourceRow[] {
             detail: null,
           },
   );
-  out.push(gh('gh PRs', { at: t.prs.at, error: t.prs.error }, i.now));
+  const forks = t.prs.forks ?? 0;
+  const prRow = gh('gh PRs', { at: t.prs.at, error: t.prs.error }, i.now);
+  // fork PRs are dropped at the read, so the newest-40 window held that many fewer of ours
+  if (forks && !prRow.detail)
+    prRow.detail = `${forks} fork PR${forks > 1 ? 's' : ''} dropped of the newest 40`;
+  out.push(prRow);
   out.push(gh('gh runs', i.runs, i.now));
   const open = t.prs.list.filter((p) => p.state === 'OPEN' && !p.draft && p.sha);
   const bad = open.map((p) => ({ p, c: i.checks(p.sha!) })).filter(({ c }) => !c || c.error);

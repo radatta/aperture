@@ -443,7 +443,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
     {
       "branch": "",
       "session": "",
-      "state": "on-dev | next | waiting | building | ready | needs-you",
+      "state": "on-dev | next | waiting | building | pr-open | ready | needs-you",
       "slot": "dev | devb (optional, dev when absent)",
       "pr": 41,
       "eta": "<ISO, on-dev>",
@@ -466,8 +466,19 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
   },
   "proofs": { "deadRows": { "since": "<ISO>", "target": 12, "excludedRuns": ["<run id>"] } },
   "plan": [
-    { "at": "<ISO, optional>", "what": "", "kind": "dev | merge | maintainer | ci", "who": "" }
+    {
+      "at": "<ISO, optional>",
+      "what": "",
+      "kind": "dev | merge | maintainer | ci",
+      "who": "",
+      "you": "<optional: the maintainer's cost, 2 min | talk | 1 line + a mode>",
+      "eta": { "from": "<ISO>", "to": "<ISO>", "source": "measured | guess" },
+      "lane": "<optional: the branch whose ETA this row waits on>",
+      "done": "<optional: true, or the ISO time it finished>"
+    }
   ],
+  "planAt": "<ISO, when the hub last rewrote the plan>",
+  "planNotes": ["<what slips, what moved and why, what can wait>"],
   "mergeOrder": [{ "branch": "", "pr": 41, "note": "<optional>" }]
 }
 ```
@@ -477,8 +488,9 @@ it (TOWER.md → _Panels_). Entries with no `branch`, a duplicate branch, or a f
 problems; the tower drops the bad entries and holds nothing on them. A bare-date `since` (`2026-11-13`, in
 `maintainer[]` and `followups[]`) means some time that local day and is read as its end, so an age is never overstated.
 
-A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `ready` (`READY`) is a PR whose check is green, waiting on the maintainer's merge; `needs-you` (`YOU`)
-is blocked on a maintainer step, named in `waitingOn`. Both are hand-set by the hub: the container's token can't
+A lane's `slot` is the dev slot it's on (CI-BOT.md → _Dev slots_); an `on-dev` lane on `devb` reads `branch@devb`, slot A's stay unmarked, and any other value drops the lane as a bad write (a tower from before slot B ignores the key). Lane states: `pr-open` (`PR`) is a PR the lane opened whose checks aren't green yet, between `building` and `ready`;
+`ready` (`READY`) is a PR whose check is green, waiting on the maintainer's merge; `needs-you` (`YOU`)
+is blocked on a maintainer step, named in `waitingOn`. All three are hand-set by the hub: the container's token can't
 read check status, and the tower on a `main` without them drops such lanes as a bad write. `plan` is the one
 source for the next merge — the PLAN panel's title and the statusline (`localNotes/board/next-merge.sh`) both
 take the earliest `kind: merge` item with an `at` no more than 2 h past (the statusline also marks `?` once
@@ -487,6 +499,17 @@ whole ISO date-time (a real date, minutes or seconds, an optional `Z` / offset; 
 ` PST` or fractions) is kept unscheduled and named, so the statusline's `date -d` can't
 read it differently. A `queue.json` that won't parse leaves the tower on its last good plan while the
 statusline reads the new file. No `plan` is an empty plan, not a problem.
+
+The plan-table fields (the web tower's NEXT, TOWER.md → _Expand_) are all optional, and a file without them reads as
+before. `you` is what the row costs the maintainer; `eta` is the window the row finishes in (`at` stays its start,
+its sort key and the statusline's time), `measured` from board history or a `guess`; `lane` names the lane whose ETA
+the row waits on, so the tower can mark it slipping; `done` strikes it (`true`, or the ISO time it finished, which
+the expanded view sets against its due as est vs actual). A `done` row leaves the PLAN panel and the next merge; the
+statusline's `next-merge.sh` (the hub's) should skip it too, with `((.done // false) == false)` in its jq `select`
+(a follow-up of the hub's), else the two can name different next merges. `planAt` is when the hub last rewrote the plan; `planNotes` its
+notes on the whole. A bad value in any of them (a loose time, `to` before `from`, an unknown `source`, a `done` that
+is neither, a `lane` that isn't a branch name, a `planNotes` that isn't a list of text) is named as a problem and
+dropped; the row stays. The hub rewrites them at every lane ETA report.
 
 A wave item's named `pr` fills a missing title from gh, and gh's `MERGED` for it upgrades the item to merged
 but never downgrades one; an item with no `pr` takes the number and title of an open PR on its

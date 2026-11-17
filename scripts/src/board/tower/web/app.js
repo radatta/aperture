@@ -11,6 +11,20 @@ let lastOk = null;
 let served = null; // the commit this page's script came with: a new one reloads the page
 let offset = 0; // server clock − ours: timers tick against the server's now (fixtures run on a fixed clock)
 const expanded = new Set(); // keys of expanded items, kept across polls
+const folded = new Set(); // keys of items folded inside an expanded panel (where every item starts open)
+// An expanded panel (TOWER.md → Expand): the URL hash names it, so a reload or a poll keeps it; Esc or Back closes.
+const PANELS = ['needs', 'now', 'next', 'done', 'slipping', 'sources']; // keys 1–6
+const NAMES = {
+  needs: 'NEEDS YOU',
+  now: 'NOW',
+  next: 'NEXT',
+  done: 'DONE',
+  slipping: 'SLIPPING',
+  sources: 'SOURCES',
+};
+let openId = null; // the expanded panel's id
+let inFull = false; // the panel being drawn is the expanded one: every row open, no "+n more"
+let glanceY = 0; // the glance's scroll, restored on close
 const showAll = new Set(); // panels showing every row
 let seen = new Map(); // item key → its last label: a change flashes the row
 let lastDone = null; // merges today at the last render: one more is a small cheer
@@ -109,7 +123,8 @@ function item(key, parts) {
   const wrap = el('div', `item ${parts.c ?? ''}`);
   wrap.dataset.key = key;
   rendered.add(key);
-  if (expanded.has(key)) wrap.classList.add('open');
+  if (inFull ? !folded.has(key) : expanded.has(key)) wrap.classList.add('open');
+  if (inFull) wrap.dataset.full = '1';
   const sig = parts.sig ?? null;
   if (sig !== null && seen.has(key) && seen.get(key) !== sig) wrap.classList.add('flash');
   if (sig !== null) next_seen.set(key, sig);
@@ -137,8 +152,9 @@ function item(key, parts) {
 }
 let next_seen = new Map();
 function toggle(key, node) {
-  if (expanded.has(key)) expanded.delete(key);
-  else expanded.add(key);
+  const set = node.dataset.full ? folded : expanded;
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
   node.classList.toggle('open');
 }
 // a pulsing dot whose phase follows the wall clock, so re-rendering every 5 s doesn't restart its pulse
@@ -159,8 +175,54 @@ function track(phase) {
   return t;
 }
 
+// The lane's step bar, when its lane file carries a step plan: a pip per step, the current one filled by its time so
+// far against its estimate's high end, amber past it.
+function stepBar(steps) {
+  const t = el('span', 'track steps');
+  t.title = steps
+    .map(
+      (s) =>
+        `${s.phase} ${s.lo}–${s.hi} min${s.source === 'guess' ? '?' : ''}${s.spentMin ? ` · ${s.spentMin} so far` : ''}`,
+    )
+    .join('\n');
+  for (const s of steps) {
+    const pip = el('i', s.state);
+    if (s.state === 'now') {
+      const f = el('b');
+      f.style.width = `${Math.min(100, Math.round((s.spentMin / Math.max(1, s.hi)) * 100))}%`;
+      pip.append(f);
+      if (s.spentMin > s.hi) pip.classList.add('over');
+    }
+    t.append(pip);
+  }
+  return t;
+}
+const range = (r) => `${hhmm(r.lo)}–${hhmm(r.hi)}`;
+// "PR ~19:10–19:40", amber once the window has passed with no PR
+function prEta(r) {
+  const e = r.eta;
+  // before its PR exists: building, waiting on you, or testing on dev
+  if (!e?.pr || !['BUILDING', 'NEEDS YOU', 'TESTING'].includes(r.state)) return null;
+  return e.late
+    ? el('span', 'meta t-warn', `PR late · was ~${hhmm(e.pr.hi)}`)
+    : el('span', 'meta', `PR ~${range(e.pr)}${e.source === 'guess' ? '?' : ''}`);
+}
+// est vs actual per step, for a lane's details
+function stepTable(steps) {
+  return kv(
+    steps.map((s) => [
+      s.phase,
+      `est ${s.lo}–${s.hi} min${s.source === 'guess' ? ' (guess)' : ''}` +
+        (s.state === 'todo' && !s.spentMin
+          ? ''
+          : ` · ${s.state === 'done' ? 'took' : 'so far'} ${s.spentMin} min`),
+    ]),
+  );
+}
+
 // At most `max` rows, then a "+n more" button.
 function list(b, id, items, max) {
+  if (inFull) return items.forEach((i) => b.append(i)); // expanded: everything
   const all = showAll.has(id);
   items.slice(0, all ? items.length : max).forEach((i) => b.append(i));
   if (items.length > max) {
@@ -220,32 +282,33 @@ const NEED = {
   source: ['SETUP', 'c-hold'],
 };
 
+function needItem(n) {
+  const [label, c] = NEED[n.kind] ?? NEED.todo;
+  return item(`need:${n.kind}:${n.branch ?? ''}:${n.what.slice(0, 60)}`, {
+    c,
+    badge: label,
+    sig: n.what,
+    text: [n.link ? httpsLink(n.link, short(n.what)) : short(n.what)],
+    meta: [
+      n.cmd ? copyButton(n.cmd) : null,
+      // a one-line Mac command can't run from a phone: it says where it runs; the command is in the details
+      n.cmd ? el('span', 'meta only-phone', 'on the Mac') : null,
+      n.sinceDay ? `since ${n.sinceDay}` : n.since ? timer(n.since) : null,
+    ],
+    more: [
+      short(n.what) !== n.what ? n.what : null,
+      n.unblocks ? `unblocks: ${n.unblocks}` : null,
+      n.cmd ? el('code', null, n.cmd) : null,
+    ],
+  });
+}
+
 function needs(v) {
   const b = body('needs');
   $('#needs .count').textContent = v.needs.length ? `(${v.needs.length})` : '';
   $('#needs').classList.toggle('has', v.needs.length > 0);
   if (!v.needs.length) return emptyOr(v, b, 'needs', 'nothing needs you ✓');
-  const items = v.needs.map((n) => {
-    const [label, c] = NEED[n.kind] ?? NEED.todo;
-    return item(`need:${n.kind}:${n.branch ?? ''}:${n.what.slice(0, 60)}`, {
-      c,
-      badge: label,
-      sig: n.what,
-      text: [n.link ? httpsLink(n.link, short(n.what)) : short(n.what)],
-      meta: [
-        n.cmd ? copyButton(n.cmd) : null,
-        // a one-line Mac command can't run from a phone: it says where it runs; the command is in the details
-        n.cmd ? el('span', 'meta only-phone', 'on the Mac') : null,
-        n.sinceDay ? `since ${n.sinceDay}` : n.since ? timer(n.since) : null,
-      ],
-      more: [
-        short(n.what) !== n.what ? n.what : null,
-        n.unblocks ? `unblocks: ${n.unblocks}` : null,
-        n.cmd ? el('code', null, n.cmd) : null,
-      ],
-    });
-  });
-  list(b, 'needs', items, 6);
+  list(b, 'needs', v.needs.map(needItem), 6);
 }
 
 // `o`: a landing-order row (NEXT): its own key, its place, dispatch's note
@@ -260,9 +323,10 @@ function laneItem(r, o = null) {
     badge: `${o ? `${o.pos} · ` : ''}${r.label.startsWith('HOLD') ? 'HOLD' : r.label}`,
     sig: r.label,
     text,
-    track: track(r.phase),
+    track: r.steps ? stepBar(r.steps) : track(r.phase),
     meta: [
       r.quiet ? el('span', 'meta t-warn', `quiet ${ago(v_now - r.fileAge * 1000, v_now)}`) : null,
+      prEta(r),
       r.since ? timer(r.since) : null,
     ],
     more: [
@@ -273,6 +337,8 @@ function laneItem(r, o = null) {
       r.pr ? httpsLink(r.pr.url, `PR ${r.pr.number}: ${r.pr.title}`) : null,
       r.phase ? `phase: ${track(r.phase)?.title ?? r.phase}` : null,
       r.fileAge !== null ? `lane file updated ${ago(v_now - r.fileAge * 1000, v_now)} ago` : null,
+      r.eta?.next ? `next step ~${range(r.eta.next)}` : null,
+      r.steps ? stepTable(r.steps) : null,
     ],
   });
 }
@@ -334,9 +400,117 @@ function nowPanel(v) {
   );
 }
 
+// A plan row on the glance: its time, its first clause, what it costs the maintainer, a slip marker.
+const planKey = (r) => `plan:${r.what.slice(0, 60)}`;
+function planItem(r) {
+  return item(planKey(r), {
+    c: r.slip || r.overdue || r.kind === 'maintainer' || r.kind === 'merge' ? 'c-hold' : 'c-dim',
+    badge: r.at ? hhmm(r.at) : 'PLAN',
+    sig: r.what,
+    text: [short(r.what)],
+    meta: [
+      r.you ? el('span', 'you', `you: ${r.you}`) : null,
+      r.overdue
+        ? el('span', 'meta slip', 'late')
+        : r.slip
+          ? el('span', 'meta slip', `now ${hhmm(r.slip)}`)
+          : null,
+    ],
+    more: [short(r.what) !== r.what ? r.what : null, r.lane ? `waits on ${r.lane}` : null],
+  });
+}
+
+function askItem(a) {
+  return item('next:ask', {
+    c: 'c-hold',
+    badge: 'NEXT ASK',
+    sig: `${a.lo}`,
+    text: [a.late ? `late (was ~${hhmm(a.hi)})` : `~${range(a)}`, `  ·  ${short(a.what, 70)}`],
+    meta: [a.source === 'lane' ? 'lane ETA' : 'plan'],
+    more: [short(a.what, 70) !== a.what ? a.what : null],
+  });
+}
+
+// The plan table (expanded NEXT): Time | What | You, a now-line, finished rows struck with est vs actual, a slipping
+// row's "now HH:MM" in amber; dispatch's notes below.
+function planTable(v) {
+  const box = el('div', 'plan-box');
+  const head = el('h3', null, 'PLAN');
+  if (v.next.planAt) {
+    const old = v.now - v.next.planAt > 6 * 3600e3;
+    head.append(el('span', `age ${old ? 't-warn' : 't-dim'}`, `as of ${hhmm(v.next.planAt)}`));
+  }
+  box.append(head);
+  const rows = v.next.table;
+  if (!rows.length) {
+    box.append(el('div', 'empty', 'no plan in queue.json'));
+    return box;
+  }
+  const t = el('table', 'plan');
+  const hr = el('tr');
+  for (const h of ['Time', 'What', 'You']) hr.append(el('th', null, h));
+  t.append(el('thead'));
+  t.firstChild.append(hr);
+  const tb = el('tbody');
+  const nowLine = () => {
+    const tr = el('tr', 'nowline');
+    const td = el('td', null, `now ${hhmm(v.now)}`);
+    td.colSpan = 3;
+    tr.append(td);
+    return tr;
+  };
+  rows.forEach((r, k) => {
+    if (k === v.next.nowIndex) tb.append(nowLine());
+    const tr = el('tr', r.done ? 'done' : r.slip || r.overdue ? 'slipping' : '');
+    const time = el('td', 'time', r.at ? hhmm(r.at) : '—');
+    if (r.eta) {
+      time.append(el('div', 'eta', `→ ${hhmm(r.eta.from)}–${hhmm(r.eta.to)}`));
+      time.append(el('div', `src ${r.eta.source}`, r.eta.source));
+    }
+    const what = el('td', 'what');
+    what.append(el('span', null, r.what));
+    if (r.who) what.append(el('span', 'who', `  ${r.who}`));
+    if (r.overdue)
+      what.append(
+        el(
+          'div',
+          'slip',
+          r.slip
+            ? `late: ${r.lane}'s ETA ${hhmm(r.slip)} has passed too`
+            : 'late: past due, not marked done',
+        ),
+      );
+    else if (r.slip)
+      what.append(el('div', 'slip', `now ${hhmm(r.slip)}${r.lane ? ` · ${r.lane}'s ETA` : ''}`));
+    if (r.done)
+      what.append(
+        el(
+          'div',
+          'actual',
+          r.doneAt === null
+            ? 'done'
+            : `est ${r.due ? hhmm(r.due) : '?'} · actual ${hhmm(r.doneAt)}` +
+                (r.deltaMin === null ? '' : ` (${r.deltaMin > 0 ? '+' : ''}${r.deltaMin} min)`),
+        ),
+      );
+    tr.append(time, what, el('td', 'you', r.you ?? (r.kind === 'maintainer' ? 'yes' : '')));
+    tb.append(tr);
+  });
+  if (v.next.nowIndex >= rows.length) tb.append(nowLine());
+  t.append(tb);
+  box.append(t);
+  if (v.next.notes.length) {
+    const ul = el('ul', 'notes');
+    for (const n of v.next.notes) ul.append(el('li', null, n));
+    box.append(ul);
+  }
+  return box;
+}
+
 function next(v) {
   const b = body('next');
   const items = [];
+  const group = (title) => (inFull ? items.push(el('h3', null, title)) : null);
   if (v.next.maintainer)
     items.push(
       item('next:maintainer', {
@@ -348,11 +522,28 @@ function next(v) {
         more: [short(v.next.maintainer) !== v.next.maintainer ? v.next.maintainer : null],
       }),
     );
-  // dispatch's landing order, each lane as it stands; its merge rows aren't repeated below
+  if (v.next.ask) items.push(askItem(v.next.ask));
+  // dispatch's landing order, each lane as it stands; its merge rows aren't repeated in the merge queue
   const order = v.next.order ?? [];
+  const merge = v.next.merge.filter((r) => !order.some((o) => o.branch === r.branch));
+  // the glance: a merge waiting on you first, then the next few plan rows with what they cost you; expanded, the
+  // whole plan table first
+  if (inFull) {
+    items.push(planTable(v));
+    for (const r of v.next.soon) rendered.add(planKey(r)); // a glance row opened stays open for the glance's return
+  } else {
+    for (const r of merge) items.push(laneItem(r));
+    for (const r of v.next.soon) items.push(planItem(r));
+  }
+  if (order.length) group('Landing order');
   order.forEach((o, k) => items.push(laneItem(o.row, { pos: k + 1, note: o.note })));
-  for (const r of v.next.merge)
-    if (!order.some((o) => o.branch === r.branch)) items.push(laneItem(r));
+  if (inFull && merge.length) group('Merge queue');
+  if (inFull) for (const r of merge) items.push(laneItem(r));
+  if (inFull && v.needs.length) {
+    group('Your items (NEEDS YOU)');
+    for (const n of v.needs) items.push(needItem(n));
+  }
+  if (v.next.queue.length) group('Dev order');
   for (const slot of ['dev', 'devb'])
     v.next.queue
       .filter((l) => l.slot === slot)
@@ -366,16 +557,6 @@ function next(v) {
           }),
         ),
       );
-  for (const p of v.next.plan ?? [])
-    items.push(
-      item(`plan:${p.slice(0, 60)}`, {
-        c: 'c-hold',
-        badge: 'PLAN',
-        sig: p,
-        text: [short(p)],
-        more: [short(p) !== p ? p : null],
-      }),
-    );
   if (v.next.parked.length)
     items.push(
       item('next:parked', {
@@ -385,7 +566,7 @@ function next(v) {
       }),
     );
   if (!items.length) return emptyOr(v, b, 'next', 'nothing queued');
-  list(b, 'next', items, 6);
+  list(b, 'next', items, 8);
 }
 
 function done(v) {
@@ -876,16 +1057,96 @@ function render(v, fresh = true) {
     el('span', null, hhmm(v.now)),
     el('span', 'ver', ` · ${v.version ? v.version.slice(0, 8) : 'version unknown'}`),
   );
+  // a redraw never moves the page: the same scroll after as before
+  const y = window.scrollY;
   health(v);
-  needs(v);
-  nowPanel(v);
-  next(v);
-  done(v);
-  slipping(v);
-  sources(v);
+  for (const [id, draw] of [
+    ['needs', needs],
+    ['now', nowPanel],
+    ['next', next],
+    ['done', done],
+    ['slipping', slipping],
+    ['sources', sources],
+  ]) {
+    inFull = openId === id;
+    draw(v);
+  }
+  inFull = false;
   charts(v);
+  strip(v);
   seen = next_seen;
   for (const k of [...expanded]) if (!k.startsWith('h:') && !rendered.has(k)) expanded.delete(k);
+  for (const k of [...folded]) if (!rendered.has(k)) folded.delete(k);
+  if (window.scrollY !== y) window.scrollTo(0, y);
+}
+
+// The strip an expanded panel keeps of the others: ✕, then each other panel's headline number (View.heads).
+function strip(v) {
+  const s = $('#strip');
+  s.replaceChildren();
+  if (!openId) return;
+  const x = el('button', 'close', '✕');
+  x.type = 'button';
+  x.title = 'close (Esc)';
+  x.setAttribute('aria-label', `close ${NAMES[openId]}`);
+  x.addEventListener('click', closePanel);
+  s.append(x, el('span', 'title', NAMES[openId]));
+  PANELS.forEach((id, k) => {
+    if (id === openId) return;
+    const b = el('button', 'chip');
+    b.type = 'button';
+    b.title = `${NAMES[id]} (key ${k + 1})`;
+    b.append(el('span', 'k', NAMES[id]), document.createTextNode(` ${v.heads?.[id] ?? ''}`));
+    b.addEventListener('click', () => openPanel(id));
+    s.append(b);
+  });
+}
+
+// ---- expand: the hash names the open panel ------------------------------------------------------
+const hashPanel = () => {
+  const h = location.hash.slice(1);
+  return PANELS.includes(h) ? h : null;
+};
+const saveY = () => {
+  try {
+    sessionStorage.setItem(`tower:y:${openId ?? ''}`, String(window.scrollY));
+  } catch {
+    // no storage (private mode): a reload starts at the top
+  }
+};
+// `start`: the page just loaded. Opened at a hash (a reload), the glance's place is the one saved before it.
+function applyOpen(start = false) {
+  const was = openId;
+  openId = hashPanel();
+  if (openId === was) return;
+  if (!was) {
+    // the glance's place, kept for a reload: closing after one still lands where the glance was
+    try {
+      if (start) glanceY = Number(sessionStorage.getItem('tower:y:')) || 0;
+      else sessionStorage.setItem('tower:y:', String((glanceY = window.scrollY)));
+    } catch {
+      if (!start) glanceY = window.scrollY; // no storage: closing after a reload starts at the top
+    }
+  }
+  if (openId) document.body.dataset.open = openId;
+  else delete document.body.dataset.open;
+  for (const id of PANELS) $(`#${id}`).classList.toggle('x-open', id === openId);
+  if (lastView) render(lastView, false);
+  window.scrollTo(0, openId ? 0 : glanceY);
+}
+// The first open pushes a history entry, so Back closes; switching from the strip replaces it.
+function openPanel(id) {
+  if (openId === id) return closePanel();
+  const u = `${location.pathname}${location.search}#${id}`;
+  if (openId) history.replaceState(history.state, '', u);
+  else history.pushState({ tower: 1 }, '', u);
+  applyOpen();
+}
+function closePanel() {
+  if (!openId) return;
+  if (history.state?.tower) return history.back(); // popstate applies it
+  history.replaceState(null, '', `${location.pathname}${location.search}`); // opened by a link or a reload
+  applyOpen();
 }
 
 async function tick() {
@@ -943,6 +1204,7 @@ function fail(text, e, now = false) {
 for (const id of ['slipping', 'sources'])
   $(`#${id} h2`).addEventListener('click', () => $(`#${id}`).classList.toggle('open'));
 $('#sources-chip').addEventListener('click', () => {
+  if (openId) return openPanel('sources'); // the glance's SOURCES is hidden behind an expanded panel
   $('#sources').classList.add('open');
   const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
   $('#sources').scrollIntoView({ behavior: calm ? 'auto' : 'smooth' });
@@ -952,10 +1214,43 @@ $('#charts-toggle').addEventListener('click', () => {
   const u = new URL(location.href);
   if (chartsOn) u.searchParams.set('charts', '1');
   else u.searchParams.delete('charts');
-  history.replaceState(null, '', u);
+  history.replaceState(history.state, '', u); // keeps an open panel's entry: Back still closes it
   tick();
 });
-tick();
+for (const id of ['needs', 'now', 'next', 'done']) {
+  const h = $(`#${id} h2`);
+  h.classList.add('exp');
+  h.title = `expand (key ${PANELS.indexOf(id) + 1})`;
+  h.addEventListener('click', () => openPanel(id));
+}
+// Installed on the Home Screen: iOS 26 may open the page in a mode its display-mode query doesn't match, with a 0
+// inset (WebKit bug 301994), so the status-bar floor also keys on this class (TOWER.md → Phone).
+if (
+  navigator.standalone === true ||
+  matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches
+)
+  document.documentElement.classList.add('installed');
+window.addEventListener('popstate', () => applyOpen());
+window.addEventListener('hashchange', () => applyOpen());
+window.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.repeat) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName ?? '')) return;
+  if (e.key === 'Escape') return closePanel();
+  const k = Number(e.key);
+  if (Number.isInteger(k) && k >= 1 && k <= PANELS.length) openPanel(PANELS[k - 1]);
+});
+window.addEventListener('pagehide', saveY);
+history.scrollRestoration = 'manual'; // the page restores its own scroll (below), once the first render is in
+applyOpen(true);
+tick().then(() => {
+  let y = 0;
+  try {
+    y = Number(sessionStorage.getItem(`tower:y:${openId ?? ''}`)) || 0;
+  } catch {
+    // no storage (a private window): the top
+  }
+  window.scrollTo(0, y); // also over the browser's own jump to the #next anchor, which the strip would cover
+});
 setInterval(tick, POLL_MS);
 // the live timers: every second, against the server's clock
 setInterval(() => {
