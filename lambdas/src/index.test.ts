@@ -785,7 +785,10 @@ describe('handler capture route', () => {
     for (const headers of [{}, bearer('good-jwt'), bearer('apc_short'), bearer(placeToken)]) {
       const res = await post(headers, { text: 'x | ~5' });
       expect(res.statusCode).toBe(401);
-      expect(JSON.parse(res.body)).toEqual({ error: 'Unauthorized', say: CAPTURE_SAY.unauthorized });
+      expect(JSON.parse(res.body)).toEqual({
+        error: 'Unauthorized',
+        say: CAPTURE_SAY.unauthorized,
+      });
     }
     expect(doc.gets.length).toBe(gets); // none of those cost a read
     expect((await post(bearer(`apc_${'A'.repeat(43)}`), { text: 'x | ~5' })).statusCode).toBe(401);
@@ -798,9 +801,9 @@ describe('handler capture route', () => {
     const other = await backend.mintScopedToken('capture', 'Spare');
     expect((await post(bearer(other.token), { text: 'x | ~5' })).statusCode).toBe(200);
     expect(mac).toBeDefined();
-    expect(logs.some((l) => l.includes('"reason":"revoked"') || l.includes('"reason":"unknown"'))).toBe(
-      true,
-    );
+    expect(
+      logs.some((l) => l.includes('"reason":"revoked"') || l.includes('"reason":"unknown"')),
+    ).toBe(true);
   });
 
   it('a capture token opens nothing else: the RPC path and the place route refuse it', async () => {

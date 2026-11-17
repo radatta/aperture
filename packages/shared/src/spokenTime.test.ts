@@ -17,7 +17,13 @@ function said(line: string, nowDay: string, nowHHMM: string, modelDay: string | 
 
 describe('spokenTimeIn', () => {
   it('finds nothing in a line with no time', () => {
-    for (const line of ['call mum', 'buy 5 apples', 'do it at once', 'read chapter 12', 'at the store'])
+    for (const line of [
+      'call mum',
+      'buy 5 apples',
+      'do it at once',
+      'read chapter 12',
+      'at the store',
+    ])
       expect(spokenTimeIn(line)).toBeNull();
   });
 

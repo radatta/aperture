@@ -129,7 +129,10 @@ export function validateParsedTask(
   if (ctx.voice) {
     const spoken = spokenTimeIn(ctx.line ?? '');
     if (spoken) {
-      const r = resolveSpoken(spoken, input.dueDay ?? null, { now: ctx.voice.now, today: ctx.today });
+      const r = resolveSpoken(spoken, input.dueDay ?? null, {
+        now: ctx.voice.now,
+        today: ctx.today,
+      });
       input.dueDay = r.day;
       input.dueTime = r.time;
     } else if (p.dueTime != null) dropped.push('dropped due time');

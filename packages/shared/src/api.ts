@@ -559,7 +559,10 @@ export interface ApiClient {
   // hash) and refuses a name scopedTokenNameError rejects; revoke kills it at once (an unknown id is a
   // no-op). list is the scope's live tokens, oldest first.
   listScopedTokens(scope: TokenScope): Promise<ScopedTokenInfo[]>;
-  mintScopedToken(scope: TokenScope, name: string): Promise<{ token: string; info: ScopedTokenInfo }>;
+  mintScopedToken(
+    scope: TokenScope,
+    name: string,
+  ): Promise<{ token: string; info: ScopedTokenInfo }>;
   revokeScopedToken(id: string): Promise<void>;
 
   // Settings

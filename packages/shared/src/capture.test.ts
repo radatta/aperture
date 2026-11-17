@@ -14,7 +14,9 @@ describe('scopedTokenNameError', () => {
     expect(scopedTokenNameError('   ', others)).toBe('A token needs a name');
     expect(scopedTokenNameError('x'.repeat(40), others)).toBeNull();
     expect(scopedTokenNameError('x'.repeat(41), others)).toMatch(/at most 40/);
-    expect(scopedTokenNameError(' IPHONE ', others)).toBe('Another token is already called "IPHONE"');
+    expect(scopedTokenNameError(' IPHONE ', others)).toBe(
+      'Another token is already called "IPHONE"',
+    );
   });
   it('a full scope refuses first, whatever the name', () => {
     const full = Array.from({ length: SCOPED_TOKENS_MAX }, (_, i) => ({ name: `t${i}` }));

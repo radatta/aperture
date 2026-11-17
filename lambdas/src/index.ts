@@ -413,7 +413,8 @@ async function capture(event: HttpEvent, path: string, d: BffDeps): Promise<Http
   const store = new ScopedTokenStore(d.doc, writes);
   try {
     const auth = await resolveScopedToken(store, event.headers?.[AUTH_HEADER], 'capture');
-    if (path !== '/api/capture') return refuse(422, 'path', 'Not the capture route', CAPTURE_SAY.path);
+    if (path !== '/api/capture')
+      return refuse(422, 'path', 'Not the capture route', CAPTURE_SAY.path);
     const body = captureBody(event);
     if (!body) return refuse(422, 'body', 'Invalid body', CAPTURE_SAY.empty);
     const text = body.text.trim();
@@ -460,7 +461,13 @@ function captureBody(event: HttpEvent): { text: string; voice: boolean } | null 
     const { text, voice } = b as { text?: unknown; voice?: unknown };
     if (typeof text !== 'string') return null;
     // A Shortcut's JSON field typed as Text sends "true" — taken like the Boolean.
-    if (voice !== undefined && voice !== true && voice !== false && voice !== 'true' && voice !== 'false')
+    if (
+      voice !== undefined &&
+      voice !== true &&
+      voice !== false &&
+      voice !== 'true' &&
+      voice !== 'false'
+    )
       return null;
     return { text, voice: voice === true || voice === 'true' };
   } catch {

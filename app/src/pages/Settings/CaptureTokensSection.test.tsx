@@ -62,7 +62,9 @@ describe('Settings › Capture: tokens', () => {
 
   it('a refused mint says why and keeps the typed name', async () => {
     const api = stub();
-    vi.spyOn(api, 'mintScopedToken').mockRejectedValueOnce(new Error('mintScopedToken failed (503)'));
+    vi.spyOn(api, 'mintScopedToken').mockRejectedValueOnce(
+      new Error('mintScopedToken failed (503)'),
+    );
     const user = userEvent.setup();
     renderWithProviders(<CaptureTokensSection />, { api });
     await screen.findByText(/No capture tokens yet/);

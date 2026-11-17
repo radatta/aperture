@@ -17,11 +17,13 @@ import { bearerOf } from './placeToken';
 // 'local' fallback: a missing, malformed, unknown or revoked token is 401 on every stage.
 
 const CAS_ATTEMPTS = 4;
-const tokenRe = (scope: TokenScope) => new RegExp(`^${SCOPED_TOKEN_PREFIX[scope]}[A-Za-z0-9_-]{43}$`);
+const tokenRe = (scope: TokenScope) =>
+  new RegExp(`^${SCOPED_TOKEN_PREFIX[scope]}[A-Za-z0-9_-]{43}$`);
 
 export const newScopedToken = (scope: TokenScope): string =>
   `${SCOPED_TOKEN_PREFIX[scope]}${randomBytes(32).toString('base64url')}`;
-export const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
+export const sha256Hex = (s: string): string =>
+  createHash('sha256').update(s, 'utf8').digest('hex');
 
 export interface ScopedAuth {
   userId: string;
@@ -100,9 +102,7 @@ const bump = (row: ScopedTokenRow, now: number): ScopedTokenRow => ({
   updatedAt: Math.max(now, row.updatedAt + 1),
 });
 
-export type CaptureReservation =
-  | { kind: 'new' }
-  | { kind: 'duplicate'; taskId: string | null }; // null: the first is still in flight
+export type CaptureReservation = { kind: 'new' } | { kind: 'duplicate'; taskId: string | null }; // null: the first is still in flight
 
 // Count one capture before anything is spent — at the cap it throws (CaptureCapError) and nothing is
 // written. The same line within CAPTURE_DUPLICATE_MS of the first is a duplicate: counted (so a replayed
@@ -117,7 +117,9 @@ export function reserveCapture(
   return casRow(store, auth, (row) => {
     if (usesToday(row, now) >= cap) throw new CaptureCapError();
     const dup =
-      row.lastTextHash === textHash && row.lastAt !== null && now - row.lastAt < CAPTURE_DUPLICATE_MS;
+      row.lastTextHash === textHash &&
+      row.lastAt !== null &&
+      now - row.lastAt < CAPTURE_DUPLICATE_MS;
     const next: ScopedTokenRow = {
       ...bump(row, now),
       uses: usesToday(row, now) + 1,
@@ -176,7 +178,12 @@ export function forgetCapture(
   return casRow(store, auth, (row) => {
     if (row.lastTextHash !== textHash || row.lastTaskId !== null)
       return { next: null, out: undefined };
-    const next = { ...row, lastTextHash: null, lastAt: null, updatedAt: Math.max(now, row.updatedAt + 1) };
+    const next = {
+      ...row,
+      lastTextHash: null,
+      lastAt: null,
+      updatedAt: Math.max(now, row.updatedAt + 1),
+    };
     return { next, out: undefined };
   });
 }

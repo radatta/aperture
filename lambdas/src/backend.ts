@@ -2438,7 +2438,8 @@ export class BackendClient implements ApiClient {
     const calendarToday = zonedDayTime(now, USER_TIME_ZONE).day;
     if (reserved.kind === 'duplicate') {
       const first = reserved.taskId ? await this.repo.getTask(reserved.taskId) : null;
-      if (!first) return { ...NO_CAPTURE, id: reserved.taskId, say: CAPTURE_SAY.inFlight, duplicate: true };
+      if (!first)
+        return { ...NO_CAPTURE, id: reserved.taskId, say: CAPTURE_SAY.inFlight, duplicate: true };
       const due = first.dueDay ? { day: first.dueDay, time: first.dueTime } : null;
       const say = captureSay({
         title: first.title,

@@ -58,7 +58,10 @@ const H24 = /\b([01]?\d|2[0-3]):([0-5]\d)\b/;
 const NOON = /\bnoon\b/i;
 const MIDNIGHT = /\bmidnight\b/i;
 // A bare hour: "at 5", "at 5:30", "at five", "5 o'clock", "five o'clock".
-const AT_HOUR = new RegExp(`\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d))?(?=\\s|$|[,.;!?])`, 'i');
+const AT_HOUR = new RegExp(
+  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d))?(?=\\s|$|[,.;!?])`,
+  'i',
+);
 const OCLOCK = new RegExp(`\\b(\\d{1,2}|${HOUR_WORD})\\s*o['’]?\\s?clock\\b`, 'i');
 const MORNING = /\bmorning\b/i;
 const TONIGHT = /\btonight\b/i;
@@ -73,10 +76,14 @@ export function spokenTimeIn(line: string): SpokenTime | null {
     const amount = rel[1] ? 0.5 : /^an?$/i.test(rel[2]!) ? 1 : num(rel[2]!);
     const hours = /^h/i.test(rel[3]!);
     const extra = rel[4] ? 0.5 : 0;
-    const minutes = Math.round((hours ? (amount + extra) * 60 : amount + extra));
+    const minutes = Math.round(hours ? (amount + extra) * 60 : amount + extra);
     if (minutes > 0 && minutes <= 7 * 24 * 60) return { kind: 'relative', minutes };
   }
-  const part: DayPart | null = TONIGHT.test(line) ? 'tonight' : MORNING.test(line) ? 'morning' : null;
+  const part: DayPart | null = TONIGHT.test(line)
+    ? 'tonight'
+    : MORNING.test(line)
+      ? 'morning'
+      : null;
   const ampm = AMPM.exec(line);
   if (ampm) {
     const h = num(ampm[1]!);
@@ -144,8 +151,16 @@ export function resolveSpoken(
           : spoken.part === 'morning'
             ? [hhmmOf(spoken.hour % 12, spoken.minute)]
             : named
-              ? [hhmmOf(spoken.hour < 7 ? spoken.hour + 12 : spoken.hour === 12 ? 12 : spoken.hour, spoken.minute)]
-              : [hhmmOf(spoken.hour % 12, spoken.minute), hhmmOf((spoken.hour % 12) + 12, spoken.minute)];
+              ? [
+                  hhmmOf(
+                    spoken.hour < 7 ? spoken.hour + 12 : spoken.hour === 12 ? 12 : spoken.hour,
+                    spoken.minute,
+                  ),
+                ]
+              : [
+                  hhmmOf(spoken.hour % 12, spoken.minute),
+                  hhmmOf((spoken.hour % 12) + 12, spoken.minute),
+                ];
   if (named) return { day: modelDay, time: clocks[0]! };
   for (const day of [calToday, addDays(calToday, 1)])
     for (const time of clocks) if (at(day, time) > ctx.now) return { day, time };
