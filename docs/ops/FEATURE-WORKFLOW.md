@@ -63,6 +63,11 @@ At those same checkpoints, and at each phase change between them, it also writes
 NEEDS YOU read (`docs/ops/TOWER.md` → _Lane files_); a `[blocked]` or `[ask-maintainer]` is also `--needs` with the
 command or link.
 
+**The lane file carries the estimate.** At every phase change the lane updates its file with the phase, the step,
+and the ETA ranges to the next step and to the PR, re-derived from what each step really took so far; the tower
+reads lane files directly, so status needs no extra hub message (the checkpoints stay). Until `pnpm board lane` has
+fields for the step plan and ETA ranges, they ride in `--step` text (`review r1 · next 25–40 min · PR 2–3 h`).
+
 ## Phases
 
 1. **Worktree** — `pnpm lanes start <branch> [--kickoff <file>]` from `/workspace`: the worktree off `origin/main`,
@@ -78,7 +83,12 @@ command or link.
    (`docs/ops/DEV-CHECK.md` → _Rows_). A UI change also lists the iOS plan probe points (`near`/`scan`) inside the
    changed area and moves them in the same PR, regenerating `tools/mailroom/bench/plans.json` with
    `pnpm sim-bench:plans`; `pnpm ios-probe` is the backstop, the Simulator the proof (`docs/ops/IOS-CHECK.md` →
-   _Probe check_). **→ hub:** `[kickoff]` — what, areas touched, open questions, mode.
+   _Probe check_). The plan also carries a **step plan**: build, each review round, dev test and PR, each with an
+   **ETA range** derived from measured history — the board history's `heavy.sh` records (gate steps, devcheck runs)
+   and archived lanes' estimate-vs-actual records — scaled by the file count, never a guess (guessed ETAs ran 2–4×
+   long, 2026-11-14); a step with no history says so and gets a wide range. Right after Plan, the lane writes the
+   step plan and its ranges to its lane status file (below). **→ hub:** `[kickoff]` — what, areas touched, open
+   questions, mode, the step plan.
 3. **Questions** — collaborative: `[ask-maintainer]` with each question's options and a pick. Autonomous: answer and
    log them.
 4. **Build** — only on the maintainer's "execute" plus a number of review rounds (n). When asking for n, give a rough
@@ -174,7 +184,8 @@ PR (a run that stops before phase 10 releases its dev lock first): status first 
 why), what the feature is, what happened (build, rounds, dev check, decisions), a short happy-path test the
 maintainer can run unaided, the devcheck report's _This feature_ lists, _You don't need to test_ and _Needs you_
 (what still needs the maintainer, and why; "no feature rows" for a branch with no scenario of its own), key
-screenshots (relative links into `localNotes/`). Its text gets pasted into PRs, so it follows
+screenshots (relative links into `localNotes/`), and **each step's estimate against its actual**, which
+also go into `decisions.md` and the lane file, so the next plan's ranges calibrate. Its text gets pasted into PRs, so it follows
 `docs/ops/PUBLIC-CONTENT.md` like the PR body — scan both before `open-pr`. The last message in the pane links it
 (Mac path); the `[pr-open]` points the hub at it.
 

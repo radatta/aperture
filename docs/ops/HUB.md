@@ -55,7 +55,7 @@ A feature session sends one short `SendMessage` to the hub at each of these.
 
 | When                                                  | Message                                                                                                                                                  |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Mode: collab\|auto.`                                          |
+| End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Mode: collab\|auto. Steps: <step plan with ETA ranges>.`      |
 | Phase 8, after `deploy-dev`                           | `[lock] <branch> — taken until <HH:MM>, ETA <n> min.`                                                                                                    |
 | Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait next.` (the refusal prints it ready to send)                                            |
 | Phase 10, `pnpm bot lock release`                     | `[lock] <branch> — released.`                                                                                                                            |
@@ -69,7 +69,9 @@ A feature session sends one short `SendMessage` to the hub at each of these.
 
 Each checkpoint, and each phase change between them, is also `pnpm board lane <phase> …` from the worktree
 (`docs/ops/TOWER.md` → _Lane files_): the web tower reads those files, never the messages. An `[ask-maintainer]`
-or `[blocked]` is also `--needs` with the command or link, so the tower's NEEDS YOU shows it.
+or `[blocked]` is also `--needs` with the command or link, so the tower's NEEDS YOU shows it. The lane file also carries the
+lane's step plan and ETA ranges, updated at every phase change, so status needs no extra message
+(`docs/ops/FEATURE-WORKFLOW.md` → _Lane status and checkpoints_).
 
 **No phone pings, no asking in the pane.** A lane never sends a push notification and never asks the user in its
 own pane, in either mode (the user, 2026-11-16): the hub is the user's one inbox, and whether to ping the phone is
