@@ -188,4 +188,38 @@ describe('identifier guard (the dispatch inputs are public)', () => {
     ).rejects.toThrow(/PERSONAL_IDENTIFIER/);
     expect(existsSync(join(root, 'localNotes', 'devlogs', 'fetches.jsonl'))).toBe(false);
   });
+  it('refuses a branch name (the run key, public in the run name) the same way', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devlogs-guard-'));
+    const sh = ((cmd: string) => (cmd === 'git' ? 'varnaby-fix' : '')) as unknown as Sh;
+    const api = (() => {
+      throw new Error('api called');
+    }) as unknown as Api;
+    const clock = { now: () => NOW, sleep: async () => {} };
+    await expect(
+      fetchLogs(sh, api, 'token', clock, { groups: 'bff' }, root, () => {}, rules),
+    ).rejects.toThrow(/PERSONAL_IDENTIFIER — the run key \(branch name\) .*\(name\)/);
+    expect(existsSync(join(root, 'localNotes', 'devlogs', 'fetches.jsonl'))).toBe(false);
+  });
+  it('dispatches --start/--end normalised to ISO, so words around a date never reach the inputs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devlogs-guard-'));
+    const sh = ((cmd: string) => (cmd === 'git' ? 'some-branch' : '')) as unknown as Sh;
+    let sent: Record<string, string> | null = null;
+    const api = (async (_m: string, _p: string, body?: { inputs: Record<string, string> }) => {
+      sent = body!.inputs;
+      throw new Error('stop here');
+    }) as unknown as Api;
+    const clock = { now: () => NOW, sleep: async () => {} };
+    const args = {
+      start: 'note Oct 13 2026 19:30 UTC',
+      end: 'Oct 13 2026 19:45 UTC (note)',
+      groups: 'bff',
+    };
+    await expect(fetchLogs(sh, api, 'token', clock, args, root, () => {}, rules)).rejects.toThrow(
+      /stop here/,
+    );
+    expect(sent).toMatchObject({
+      start: '2026-10-13T19:30:00.000Z',
+      end: '2026-10-13T19:45:00.000Z',
+    });
+  });
 });

@@ -95,7 +95,8 @@ From the top:
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
 5. **DONE TODAY**: PRs merged since the day began: local midnight, but before noon it reaches back 12 h
    (`dayStart` in `web/main.ts`), so last night's merges stay in view through the morning (marked `yest`) and age
-   out by noon, with no reset cliff. Each shows `deployed ✓` / `deploying` / `deploy failed`, with the long form (a
+   out by noon, with no reset cliff. Fork PRs (`isCrossRepository`) are dropped at the read: a fork's branch name is
+   its owner's choice and never stands for a lane, so a merged fork PR doesn't show here either. Each shows `deployed ✓` / `deploying` / `deploy failed`, with the long form (a
    superseded run) in its details. A merge whose own Deploy run was cancelled rides the first later run that
    wasn't cancelled too (not the newest, which may still be running or fail after this one deployed).
 6. **SLIPPING** (collapsed):
@@ -124,8 +125,8 @@ From the top:
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
   added, so a re-add picks them up.
-- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (one ring, a
-  sweep, a blip on a disc); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
+- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
+  tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
   before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
   `favicon-64.png` (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico`
   holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.

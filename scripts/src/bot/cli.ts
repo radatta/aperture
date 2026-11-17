@@ -30,7 +30,7 @@ import {
 } from './lock.ts';
 import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
-import { fetchLogs } from './logs.ts';
+import { fetchLogs, refuseIdentifiers } from './logs.ts';
 import { pruneBranches } from './prune.ts';
 import { push } from './push.ts';
 import { runCommand } from './run.ts';
@@ -295,6 +295,7 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'logs': {
+      refuseIdentifiers(flags); // before a token is minted (fetchLogs scans again, for its callers)
       const t = await token(PERMS.logs);
       await fetchLogs(run, makeApi(t), t, clock, flags, root());
       return 0;

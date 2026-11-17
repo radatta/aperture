@@ -1,7 +1,7 @@
 // `pnpm bot logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp] [--filter P] [--query Q]`
 // Dispatches fetch-dev-logs.yml (dev groups only — logs-spec.ts) and downloads its artifact into
-// localNotes/devlogs/<key>/. Loop guard: at most 10 fetches an hour per worktree, then it stops and says so —
-// Actions minutes are the real budget (docs/ops/CI-BOT.md → Dev logs).
+// localNotes/devlogs/<key>/. Loop guard: at most 10 fetches an hour per worktree, then it stops and says so — a
+// runaway limit (docs/ops/CI-BOT.md → Dev logs).
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findIdentifiers, identifierRules, type IdentifierRule } from '../identifiers.ts';
@@ -50,19 +50,27 @@ export function checkLoopGuard(file: string, nowMs: number, max = MAX_FETCHES_PE
   }
 }
 
-// A workflow run's inputs are public on a public repo, so the free-text flags are scanned before anything is spent:
-// a hit refuses naming the flag and the kind, never the value (docs/ops/IDENTIFIERS.md).
+// A workflow run's inputs and run name are public on a public repo, so the free text that reaches them is scanned
+// before anything is spent: the three free-text flags, and the run key (from the branch name, which a local branch
+// gets without the push scan). --start/--end are dispatched normalised to ISO, so no text of theirs gets through.
+// A hit refuses naming where and the kind, never the value (docs/ops/IDENTIFIERS.md).
+const SCANNED = {
+  filter: '--filter',
+  query: '--query',
+  groups: '--groups',
+  key: 'the run key (branch name)',
+};
 export function refuseIdentifiers(
-  args: Pick<LogsArgs, 'filter' | 'query' | 'groups'>,
+  args: Partial<Record<keyof typeof SCANNED, string>>,
   rules: IdentifierRule[] = identifierRules(),
 ): void {
-  for (const flag of ['filter', 'query', 'groups'] as const) {
-    const v = args[flag];
+  for (const [k, where] of Object.entries(SCANNED)) {
+    const v = args[k as keyof typeof SCANNED];
     if (!v) continue;
     const kinds = [...new Set(findIdentifiers(v, rules).map((h) => h.kind))];
     if (kinds.length)
       throw new Error(
-        `PERSONAL_IDENTIFIER — --${flag} names a personal identifier (${kinds.join(', ')}); a workflow run's inputs are public (docs/ops/IDENTIFIERS.md). Reword it; nothing was dispatched.`,
+        `PERSONAL_IDENTIFIER — ${where} names a personal identifier (${kinds.join(', ')}); a workflow run's inputs are public (docs/ops/IDENTIFIERS.md). Reword it; nothing was dispatched.`,
       );
   }
 }
@@ -98,7 +106,7 @@ export async function fetchLogs(
   log: (s: string) => void = console.log,
   rules?: IdentifierRule[],
 ): Promise<string> {
-  refuseIdentifiers(args, rules); // before the request is parsed, the ledger written or a run dispatched
+  refuseIdentifiers(args, rules); // before the lock read, the ledger line or a run
   const now = clock.now();
   const end = args.end ?? new Date(now).toISOString();
   const start =
@@ -110,6 +118,7 @@ export async function fetchLogs(
     // keep the generic label
   }
   const key = runKey(label, now);
+  refuseIdentifiers({ key }, rules);
   const groups =
     args.groups ??
     (await defaultGroups(label === 'logs' ? null : label, (b) => heldSlot(api, b), log));
@@ -123,8 +132,8 @@ export async function fetchLogs(
   const run: Run = await dispatchAndWait(api, clock, {
     workflow: 'fetch-dev-logs.yml',
     inputs: {
-      start,
-      end,
+      start: new Date(req.startMs).toISOString(), // normalised: Date.parse takes words around a date
+      end: new Date(req.endMs).toISOString(),
       groups: req.groups.join(','),
       filter: args.filter ?? '',
       query: args.query ?? '',
