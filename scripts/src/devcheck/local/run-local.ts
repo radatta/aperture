@@ -80,7 +80,7 @@ async function main(): Promise<number> {
     try {
       const h = createHash('sha256').update(await out(['diff', 'HEAD', '--binary']));
       // Untracked files by name, size and mtime: an edit to one (a new test between rounds) moves the stamp too.
-      for (const f of (await out(['ls-files', '--others', '--exclude-standard'])).split('\n'))
+      for (const f of (await out(['ls-files', '-z', '--others', '--exclude-standard'])).split('\0'))
         if (f) {
           const st = statSync(join(worktree, f), { throwIfNoEntry: false });
           h.update(`${f}\0${st?.size}\0${st?.mtimeMs}\n`);
