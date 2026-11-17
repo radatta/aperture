@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handler, parseCoachWorkerEvent } from './coachWorker';
+import { handleCoachPick, parseCoachWorkerEvent } from './coachWorker';
+import { InMemoryDoc } from './ddb/DocClient';
+import { FakeAnthropic } from './anthropic/gateway';
 
 const EVENT = { userId: 'u1', day: '2026-11-17', claimId: 'c1' };
 
@@ -29,19 +31,24 @@ describe('parseCoachWorkerEvent', () => {
   });
 });
 
-describe('handler', () => {
-  it('logs one unwired line with no user id', async () => {
+describe('handleCoachPick', () => {
+  it('logs one line a run, with no user id or text', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await expect(handler(EVENT)).resolves.toBeUndefined();
+    // No claim on the day: the run isn't this event's, and nothing is called.
+    const fake = new FakeAnthropic();
+    await expect(handleCoachPick(new InMemoryDoc(), fake, EVENT)).resolves.toBe('not-ours');
+    expect(fake.pickCalls).toHaveLength(0);
     expect(log).toHaveBeenCalledTimes(1);
     const line = JSON.parse(log.mock.calls[0]![0] as string);
-    expect(line).toEqual({ event: 'coach_worker', wired: false, day: EVENT.day, claimId: 'c1' });
+    expect(line).toEqual({ event: 'coach_worker', run: 'not-ours', day: EVENT.day, claimId: 'c1' });
     expect(JSON.stringify(line)).not.toContain('u1');
   });
 
   it('throws on a malformed event and logs nothing', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await expect(handler({ day: EVENT.day })).rejects.toThrow('userId');
+    await expect(
+      handleCoachPick(new InMemoryDoc(), new FakeAnthropic(), { day: EVENT.day }),
+    ).rejects.toThrow('userId');
     expect(log).not.toHaveBeenCalled();
   });
 });

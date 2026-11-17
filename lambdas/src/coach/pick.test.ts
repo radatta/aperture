@@ -321,7 +321,7 @@ describe('when there is no pick', () => {
     const doc = new InMemoryDoc();
     const fake = new FakeAnthropic();
     await expect(handleCoachPick(doc, fake, { userId: U, day: 'x', claimId: 'c' })).rejects.toThrow(
-      'Invalid coach pick event: day',
+      'Invalid coach worker event: day',
     );
     await expect(handleCoachPick(doc, fake, { day: '2026-11-16', claimId: 'c' })).rejects.toThrow(
       'userId',

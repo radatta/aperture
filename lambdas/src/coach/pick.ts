@@ -60,23 +60,29 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
   // Decided inside the CAS step (re-run on a lost race), so the last attempt's verdict is the one that stuck.
   let queued = false;
   let mine = false;
-  await repo.casUpdate(
-    shape,
-    e.day,
-    (cur) => {
-      // A claim that waited too long (a throttle) is given up without a call: readers are near the stale mark.
-      queued =
-        cur.ai?.status === 'pending' &&
-        cur.ai.claimId === e.claimId &&
-        cur.ai.startedAt === null &&
-        t0 - cur.ai.claimedAt > AI_PICK_QUEUE_MS;
-      const next = queued ? null : startAiRow(cur, e.claimId, t0);
-      mine = next !== null;
-      return next;
-    },
-    t0,
-    { consistent: true },
-  );
+  // No row for the day: no claim ever made it (a stray or replayed event) — nothing to do.
+  try {
+    await repo.casUpdate(
+      shape,
+      e.day,
+      (cur) => {
+        // A claim that waited too long (a throttle) is given up without a call: readers are near the stale mark.
+        queued =
+          cur.ai?.status === 'pending' &&
+          cur.ai.claimId === e.claimId &&
+          cur.ai.startedAt === null &&
+          t0 - cur.ai.claimedAt > AI_PICK_QUEUE_MS;
+        const next = queued ? null : startAiRow(cur, e.claimId, t0);
+        mine = next !== null;
+        return next;
+      },
+      t0,
+      { consistent: true },
+    );
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Not found')) return 'not-ours';
+    throw err;
+  }
   const fail = (reason: 'unavailable', detail: string): CoachPickResult => ({
     ok: false,
     reason,
