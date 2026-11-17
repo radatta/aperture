@@ -132,6 +132,15 @@ import {
   patchReview,
   normalizeReviewPatch,
   planDay,
+  aiPickPending,
+  AI_PICK_BUSY_ERROR,
+  claimAiRow,
+  coachAiPickOn,
+  coachPickContext,
+  pickResultOf,
+  settleAiRow,
+  standInCoachPick,
+  startAiRow,
   listRecords,
   coachStats,
   normalizeStatsRange,
@@ -170,6 +179,7 @@ import {
 import type {
   CoachAttempt,
   CoachAttemptInput,
+  CoachPickResult,
   CoachDay,
   CoachFocus,
   CoachInput,
@@ -300,7 +310,7 @@ const FINANCE_SETTINGS_DEFAULTS = {
   financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null, fluxSets: {} };
-const LC_SETTINGS_DEFAULTS = { leetcodeRollId: null };
+const LC_SETTINGS_DEFAULTS = { leetcodeRollId: null, coachAiPick: true };
 const STORAGE_KEY = 'aperture.stub.v1';
 // The stub's VAPID public key: a real uncompressed P-256 point (65 bytes, base64url), generated once with
 // node:crypto, so the browser's pushManager.subscribe accepts it. Nothing holds its private half — the
@@ -498,6 +508,20 @@ function takeStubGcalEdits(): StubGcalEdit[] {
     return [];
   }
 }
+
+// Dev/test hook for the coach's AI pick: the stub has no model, so a pick is the shared stand-in
+// (standInCoachPick) through the real guardrails. Set this localStorage key to `fallback` (an API error),
+// `invalid` (an answer naming a non-candidate) or `slow` (the claim stays pending ~4 s, settled by the next read
+// after that) to see each state. Stub-only.
+export const STUB_COACH_PICK_KEY = 'aperture:stub:coachPick';
+function stubCoachPickMode(): string | null {
+  try {
+    return globalThis.localStorage?.getItem(STUB_COACH_PICK_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+const STUB_SLOW_PICK_MS = 4_000;
 
 export function createStubClient(options: StubOptions = {}): ApiClient {
   return new StubClient(options);
@@ -1157,9 +1181,11 @@ class StubClient implements ApiClient {
   }
 
   // --- The LeetCode coach (coach.ts) — the Lambda's rules over the store --------
+  // The AI pick reads only the server's today: a `day` argument never starts one.
   private coachInput(day?: string): CoachInput {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
-    const { dayStartHour } = this.ensureSettings();
+    const settings = this.ensureSettings();
+    const { dayStartHour } = settings;
     const now = this.now();
     return {
       today: day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour),
@@ -1169,10 +1195,70 @@ class StubClient implements ApiClient {
       attempts: this.alive(this.store.coachAttempts),
       days: this.alive(this.store.coachDays),
       focus: this.alive(this.store.coachFocus)[0] ?? null,
+      aiPick: coachAiPickOn(settings),
+      aiCanStart: day === undefined,
     };
   }
   async getCoachToday(day?: string): Promise<CoachToday> {
-    return planDay(this.coachInput(day));
+    const ci = this.coachInput(day);
+    // `slow`: the stand-in worker lands on the first read after its wait.
+    const ai = ci.days.find((d) => d.day === ci.today)?.ai;
+    if (day === undefined && ai?.status === 'pending' && ai.startedAt === null)
+      if (ci.now - ai.claimedAt >= STUB_SLOW_PICK_MS) return this.runStubPick(ai.claimId);
+    return planDay(ci);
+  }
+  async startCoachPick(): Promise<CoachToday> {
+    const ci = this.coachInput();
+    if (planDay(ci).ai?.status !== 'due') return planDay(ci);
+    const cur = ci.days.find((d) => d.day === ci.today) ?? this.blankCoachDay(ci);
+    const claimId = this.ulid();
+    const claimed = claimAiRow(cur, claimId, ci.now);
+    if (!claimed) return planDay(ci);
+    this.writes.put(this.store.coachDays, { ...claimed, updatedAt: ci.now });
+    if (stubCoachPickMode() === 'slow') return this.getCoachToday();
+    return this.runStubPick(claimId);
+  }
+  // The worker's steps against the store: start (once), the stand-in answer through the guardrails, settle, and
+  // the focus change if it made one.
+  private runStubPick(claimId: string): CoachToday {
+    const ci = this.coachInput();
+    const row = ci.days.find((d) => d.day === ci.today);
+    const started = row && startAiRow(row, claimId, ci.now);
+    if (!started) return planDay(ci);
+    this.writes.put(this.store.coachDays, { ...started, updatedAt: ci.now });
+    const ctx = coachPickContext({
+      ...ci,
+      days: [...ci.days.filter((d) => d.day !== ci.today), started],
+    });
+    const meta = { model: 'stub', usage: null, ms: 0 };
+    const mode = stubCoachPickMode();
+    const res: CoachPickResult =
+      mode === 'fallback'
+        ? { ok: false, reason: 'api', detail: 'stub', oldestDue: ctx.oldestDue, ...meta }
+        : pickResultOf(
+            mode === 'invalid'
+              ? { picks: [{ slug: 'not-a-candidate', why: 'x' }], note: null, focus: null }
+              : standInCoachPick(ctx),
+            ctx,
+            meta,
+          );
+    const settled = settleAiRow(started, claimId, res, ci.now);
+    if (settled) this.writes.put(this.store.coachDays, { ...settled, updatedAt: ci.now });
+    if (settled && res.ok && res.focus) {
+      const cur = ci.focus;
+      this.writes.put(this.store.coachFocus, {
+        ...this.baseAt(ci.now),
+        ...(cur ? { createdAt: cur.createdAt } : {}),
+        id: 'focus',
+        pattern: res.focus.to,
+        sinceDay: ci.today,
+        source: 'ai',
+      });
+    }
+    return planDay(this.coachInput());
+  }
+  private blankCoachDay(ci: CoachInput): CoachDay {
+    return { ...this.baseAt(ci.now), id: ci.today, day: ci.today, floor: false, changes: [] };
   }
   async listProblemRecords(): Promise<ProblemRecord[]> {
     const ci = this.coachInput();
@@ -1194,18 +1280,13 @@ class StubClient implements ApiClient {
   }
   private changeCoachDay(fn: (cur: CoachDay, ci: CoachInput) => CoachDay): CoachToday {
     const ci = this.coachInput();
-    const cur = ci.days.find((d) => d.day === ci.today) ?? {
-      ...this.baseAt(ci.now),
-      id: ci.today,
-      day: ci.today,
-      floor: false,
-      changes: [],
-    };
+    const cur = ci.days.find((d) => d.day === ci.today) ?? this.blankCoachDay(ci);
     const row = this.writes.put(this.store.coachDays, { ...fn(cur, ci), updatedAt: ci.now });
     return planDay({ ...ci, days: [...ci.days.filter((d) => d.day !== ci.today), row] });
   }
   async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
     return this.changeCoachDay((cur, ci) => {
+      if (aiPickPending(cur.ai, ci.now)) throw new Error(AI_PICK_BUSY_ERROR);
       const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
       const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
       const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
@@ -2366,7 +2447,7 @@ class StubClient implements ApiClient {
       if (err) throw new Error(err);
     }
     // As the BFF: a reminder toggle must be a real boolean — a string "false" would read as on.
-    for (const k of Object.keys(REMINDER_SETTINGS_DEFAULTS)) {
+    for (const k of [...Object.keys(REMINDER_SETTINGS_DEFAULTS), 'coachAiPick']) {
       const v = (patch as Record<string, unknown>)[k];
       if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
     }

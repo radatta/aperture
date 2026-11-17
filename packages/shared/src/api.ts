@@ -649,6 +649,10 @@ export interface ApiClient {
   // The LeetCode coach (coach.ts; docs/areas/recruiting/coach.md). Reads are derived on read and write nothing.
   // Day-scoped writes act on the user's day as the server reads it (their zone, dayStartHour).
   getCoachToday(day?: string): Promise<CoachToday>; // no day → the user's today
+  // Starts today's AI pick when the plan says it's `due` (CoachToday.ai): claims the day — once, ever — and hands
+  // the call to the worker; idempotent, so a second reader (the app and the thread at once) just reads. Returns the
+  // plan after the claim (`pending` while the worker runs).
+  startCoachPick(): Promise<CoachToday>;
   listProblemRecords(): Promise<ProblemRecord[]>; // every problem with a counted attempt, newest first
   // How practice is going (coachStats): first tries, re-solves, causes, per ISO week and per pattern. from/to
   // optional day keys; to defaults to the user's today.

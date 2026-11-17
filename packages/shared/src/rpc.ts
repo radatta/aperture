@@ -95,6 +95,7 @@ export const API_METHODS = [
   'deleteSitting',
   'patchSittingReview',
   'getCoachToday',
+  'startCoachPick',
   'listProblemRecords',
   'getCoachStats',
   'setCoachSlot',
