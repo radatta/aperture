@@ -22,7 +22,7 @@ const NAMES = {
   slipping: 'SLIPPING',
   sources: 'SOURCES',
 };
-let open = null; // the expanded panel's id
+let openId = null; // the expanded panel's id
 let inFull = false; // the panel being drawn is the expanded one: every row open, no "+n more"
 let glanceY = 0; // the glance's scroll, restored on close
 const showAll = new Set(); // panels showing every row
@@ -1064,7 +1064,7 @@ function render(v, fresh = true) {
     ['slipping', slipping],
     ['sources', sources],
   ]) {
-    inFull = open === id;
+    inFull = openId === id;
     draw(v);
   }
   inFull = false;
@@ -1080,15 +1080,15 @@ function render(v, fresh = true) {
 function strip(v) {
   const s = $('#strip');
   s.replaceChildren();
-  if (!open) return;
+  if (!openId) return;
   const x = el('button', 'close', '✕');
   x.type = 'button';
   x.title = 'close (Esc)';
-  x.setAttribute('aria-label', `close ${NAMES[open]}`);
+  x.setAttribute('aria-label', `close ${NAMES[openId]}`);
   x.addEventListener('click', closePanel);
-  s.append(x, el('span', 'title', NAMES[open]));
+  s.append(x, el('span', 'title', NAMES[openId]));
   PANELS.forEach((id, k) => {
-    if (id === open) return;
+    if (id === openId) return;
     const b = el('button', 'chip');
     b.type = 'button';
     b.title = `${NAMES[id]} (key ${k + 1})`;
@@ -1105,15 +1105,15 @@ const hashPanel = () => {
 };
 const saveY = () => {
   try {
-    sessionStorage.setItem(`tower:y:${open ?? ''}`, String(window.scrollY));
+    sessionStorage.setItem(`tower:y:${openId ?? ''}`, String(window.scrollY));
   } catch {
     // no storage (private mode): a reload starts at the top
   }
 };
 function applyOpen() {
-  const was = open;
-  open = hashPanel();
-  if (open === was) return;
+  const was = openId;
+  openId = hashPanel();
+  if (openId === was) return;
   if (!was) {
     glanceY = window.scrollY;
     // the glance's place, for a reload: closing after one still lands where the glance was
@@ -1123,22 +1123,22 @@ function applyOpen() {
       // no storage: closing after a reload starts at the top
     }
   }
-  if (open) document.body.dataset.open = open;
+  if (openId) document.body.dataset.open = openId;
   else delete document.body.dataset.open;
-  for (const id of PANELS) $(`#${id}`).classList.toggle('x-open', id === open);
+  for (const id of PANELS) $(`#${id}`).classList.toggle('x-open', id === openId);
   if (lastView) render(lastView, false);
-  window.scrollTo(0, open ? 0 : glanceY);
+  window.scrollTo(0, openId ? 0 : glanceY);
 }
 // The first open pushes a history entry, so Back closes; switching from the strip replaces it.
 function openPanel(id) {
-  if (open === id) return closePanel();
+  if (openId === id) return closePanel();
   const u = `${location.pathname}${location.search}#${id}`;
-  if (open) history.replaceState(history.state, '', u);
+  if (openId) history.replaceState(history.state, '', u);
   else history.pushState({ tower: 1 }, '', u);
   applyOpen();
 }
 function closePanel() {
-  if (!open) return;
+  if (!openId) return;
   if (history.state?.tower) return history.back(); // popstate applies it
   history.replaceState(null, '', `${location.pathname}${location.search}`); // opened by a link or a reload
   applyOpen();
@@ -1199,7 +1199,7 @@ function fail(text, e, now = false) {
 for (const id of ['slipping', 'sources'])
   $(`#${id} h2`).addEventListener('click', () => $(`#${id}`).classList.toggle('open'));
 $('#sources-chip').addEventListener('click', () => {
-  if (open) return openPanel('sources'); // the glance's SOURCES is hidden behind an expanded panel
+  if (openId) return openPanel('sources'); // the glance's SOURCES is hidden behind an expanded panel
   $('#sources').classList.add('open');
   const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
   $('#sources').scrollIntoView({ behavior: calm ? 'auto' : 'smooth' });
@@ -1233,7 +1233,7 @@ applyOpen();
 tick().then(() => {
   let y = 0;
   try {
-    y = Number(sessionStorage.getItem(`tower:y:${open ?? ''}`)) || 0;
+    y = Number(sessionStorage.getItem(`tower:y:${openId ?? ''}`)) || 0;
   } catch {
     // no storage (a private window): the top
   }
