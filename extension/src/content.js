@@ -552,10 +552,12 @@
       // The last write in line carries every earlier one (each merged into the last one's write).
       if (writesPending === 1 && binding && binding.slug === slug && binding.sittingId === sittingId)
         binding = next;
-    }).catch(() => {}); // a failed patch keeps its value in memory only, as a failed whole write did
+    }).catch(() => {}); // a failed patch is lost from storage; a later write in line may drop it from memory too
   }
   // Another tab's write to this sitting's binding (a change event, or the 5 s reread when Safari drops it):
-  // taken as is while none of this tab's own writes is in line.
+  // taken as is while none of this tab's own writes is in line. An event for that tab's older write, arriving
+  // after this tab's newer one landed, can roll memory back until the next event or reread — at worst one
+  // extra doc fill, which the server answers as a repeat Start.
   function adoptBinding(next) {
     if (!next || !binding || writesPending || !sameSitting(next, binding)) return;
     binding = next;

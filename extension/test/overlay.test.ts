@@ -1755,12 +1755,12 @@ describe('the resubmit note, and no trace card', () => {
     await settle(90_000);
     trustedClick(p.submitBtn());
     await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 3, 6000);
-    // Accepted, then a Submit at once: no note.
+    // Accepted inside a failed verdict's minute, then a real Submit: no note — Accepted is the last verdict.
+    await settle(10_000); // the third Wrong Answer is 10 s old
     code.value = code.value.replace('# wrong\n', '');
-    await settle(61_000); // past the third wrong verdict's minute
-    trustedClick(p.submitBtn());
+    p.submitBtn().click(); // the fixed code, by a page click (no note of its own)
     await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 4, 6000);
-    trustedClick(p.submitBtn());
+    trustedClick(p.submitBtn()); // well within a minute of the last Wrong Answer
     await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 5, 6000);
     await settle(4000);
     expect(coachEvents(ext).filter((k) => k.kind === 'nudge-shown')).toHaveLength(1);
@@ -1874,6 +1874,18 @@ describe('the resubmit note, and no trace card', () => {
     expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config']);
   }, 30_000);
 
+  it('a patch merges into another tab’s write it never heard of: storage keeps both', async () => {
+    const { ext } = await sitting({ lateHint: true });
+    const b = open('/problems/two-sum/', ext, { lateHint: true });
+    await until(() => b.phase() === 'active', 6000);
+    await settle(3500);
+    // Tab A's fill lands with no change event (Safari), and before tab B's next 5 s reread.
+    ext.local.data['sitting:two-sum'] = { ...bound(ext), problemSent: true };
+    b.fake().sendHint(); // B learns the question id, from its own copy, which still says problemSent: false
+    await until(() => bound(ext).questionId === '1', 3000);
+    expect(bound(ext).problemSent).toBe(true); // a whole-object write from B would have undone A's
+  }, 30_000);
+
   it('another tab’s write is adopted from the 5 s reread when Safari passes no change event', async () => {
     const { p: a, ext } = await sitting({ lateHint: true });
     const b = open('/problems/two-sum/', ext, { lateHint: true });
@@ -1893,9 +1905,16 @@ describe('the resubmit note, and no trace card', () => {
   it('a patch never brings back a binding another tab cleared before it read', async () => {
     const { p: a, ext } = await sitting({ lateHint: true });
     await settle(3500);
+    const realGet = ext.local.get.bind(ext.local);
+    let reads = 0;
+    ext.local.get = (async (keys?: string | string[] | null) => {
+      if (keys === 'sitting:two-sum') reads++; // the patch's own read
+      return realGet(keys);
+    }) as typeof ext.local.get;
     // The sitting ended and another tab cleared the binding, unheard by this one.
     delete ext.local.data['sitting:two-sum'];
     a.fake().sendHint();
+    await until(() => reads === 1); // the patch ran
     await settle(3000);
     expect(ext.local.data['sitting:two-sum']).toBeUndefined();
   }, 30_000);
