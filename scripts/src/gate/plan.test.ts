@@ -156,6 +156,13 @@ describe('plan', () => {
     expect(fullPkgs(p)).toEqual([]);
   });
 
+  it('renaming a Lambda entry file runs the stacks that name it', () => {
+    const p = plan([del('lambdas/src/coachWorker.ts')], TESTS);
+    expect(pkg(p, 'cdk').tests).toContain('cdk/src/lib/coach-worker.ts');
+    const s = plan(ch('packages/shared/src/x.ts'), TESTS);
+    expect(pkg(s, 'scripts').tests).toContain('scripts/src/lc-e2e/extension.test.ts');
+  });
+
   it('the always-run scanners run on every plan', () => {
     const p = plan(ch('docs/ops/LANES.md'), TESTS);
     for (const t of ALWAYS_RUN) expect(pkg(p, 'scripts').tests).toContain(t);
@@ -189,9 +196,12 @@ describe('plan', () => {
     expect(fullPkgs(plan([del('app/src/pages/Home/old.css')], TESTS))).toEqual(['app']);
     const t = plan([del('app/src/pages/Home/Home.test.tsx')], TESTS);
     expect(pkg(t, 'app').tests).not.toContain('app/src/pages/Home/Home.test.tsx');
-    // a deleted file a rule reads from disk: the rule's tests run, nothing wider
-    const r = plan([del('app/pages/old.html')], TESTS);
-    expect(fullPkgs(r)).toEqual([]);
+    // a deleted .css/.json widens even when a rule claims it: the rule's tests aren't its importers
+    expect(fullPkgs(plan([del('app/src/styles/old.css')], TESTS))).toEqual(['app']);
+    // any other deleted file a rule claims is read from disk, so the rule's tests are its readers
+    expect(fullPkgs(plan([del('app/pages/old.html')], TESTS))).toEqual([]);
+    // a deleted file outside every package: the rule's tests run, nothing wider
+    expect(fullPkgs(plan([del('tools/mailroom/bench/old.json')], TESTS))).toEqual([]);
   });
 
   it('modeOf: skip a package nothing reaches', () => {

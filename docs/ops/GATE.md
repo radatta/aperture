@@ -61,7 +61,10 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
 - **A changed module** runs `vitest related` in its own package and in every package that imports it (`reaches`).
   Every package but `scripts` reaches `packages/shared`. Its sibling `x.test.ts` also runs by name. `scripts` imports
   no package statically; the scripts code that loads lambdas or shared source at runtime comes in by rule (the smoke
-  test's `argSpecs.ts`, siri-capture's shared helpers, deploy-base's header pins).
+  test's `argSpecs.ts`, lc-e2e's spawned local BFF, siri-capture's shared helpers, deploy-base's header pins).
+- **A Lambda entry file** (`lambdas/src/index.ts`, `coachWorker.ts` and the others a stack names by path) runs the cdk
+  stack tests. `NodejsFunction` checks the file exists even with bundling skipped, and `tsc` never sees the path;
+  `rules.test.ts` keeps the list in step with the stacks.
 - **The mailroom fixture suite** runs exactly when CI's own rule says so (`fixture-inputs.ts`).
 - **`ALWAYS_RUN`**: the repo-wide scanners any path can break (tracked identifiers, fixture inputs, the devcheck
   coverage matrix, the tower's import walk).
@@ -72,10 +75,13 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
 - A file in a package that neither a rule nor the graph can see runs that package's whole suite.
 
 **A deleted code module** (`.ts`/`.js` family) widens nothing. Its importers either changed, so they are in
-`related`, or no longer typecheck, and `tsc -b` runs in full every gate. A deleted stylesheet or JSON no rule claims
-runs its package: an ambient declaration can still type its import.
+`related`, or no longer typecheck, and `tsc -b` runs in full every gate. A deleted `.css` or `.json` in a package runs its
+package even when a rule claims it: an ambient declaration can still type its import, and the rule's tests aren't
+necessarily its importers. Any other deleted file is read from disk, so a claiming rule's tests are its readers;
+unclaimed, it runs its package.
 
-**Adding code that reads files, imports by a computed path (`import(x)`, `new URL('../…')`) or spawns:**
+**Adding code that reads files, imports by a computed path (`import(x)`, a template with `${}`, any
+`new URL('…', import.meta.url)`) or spawns:**
 
 - A test: name it in an `INPUT_RULES` entry (what it reads), `ALWAYS_RUN`, or `SELF_CONTAINED` (temp dirs or
   same-area only, with why).
@@ -103,8 +109,8 @@ The completeness test scans tracked and untracked files, so it fails before the 
 **The replay.** The 25 merged PRs 174–198 produced 59 failing-test observations across 22 lanes, mined from the
 lanes' own transcripts and archives (0 of the 30 CI runs on those branches failed). Under these rules:
 
-- 57 of the 59 are selected: 42 named by a rule or the diff, 7 through the graph, 8 by a repo-wide fallback (the
-  same after review round 1's wider rules).
+- 57 of the 59 are selected: 40 named by a rule or the diff, 7 through the graph, 8 by a repo-wide fallback, 2 by a
+  package-wide one (PR 183's deleted fixture JSON).
 - The 2 not selected are load-flake timeouts.
 - 0 real failures missed.
 
@@ -112,13 +118,15 @@ lanes' own transcripts and archives (0 of the 30 CI runs on those branches faile
 
 | Rules                                                                      | Repo full | Package full | Fast |
 | -------------------------------------------------------------------------- | --------- | ------------ | ---- |
-| Final                                                                      | 3         | 0            | 22   |
-| With a snapshot running its package                                        | 3         | 4            | 18   |
+| Final                                                                      | 3         | 1            | 21   |
+| With a snapshot running its package                                        | 3         | 5            | 17   |
 | The plan's first cut (shared contract and deleted modules ran the package) | 3         | 8            | 14   |
 
 The record lives in the lane archive, `faster-lanes/replay/` and `gate-replay/`.
 
-**Cost, measured** (one run each under `heavy.sh`, against the full suite's median of 175 s at ~8.7 container cores):
+**Cost, measured** before review's wider rules (one run each under `heavy.sh`, against the full suite's median of
+175 s at ~8.7 container cores). A shared change now also runs lc-e2e, the smoke test and siri-capture's ~10 devcheck
+importers; a Lambda entry-file change also runs the cdk stack tests:
 
 | Diff                     | Files run | Wall |
 | ------------------------ | --------- | ---- |

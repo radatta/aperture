@@ -81,9 +81,28 @@ export const INPUT_RULES: InputRule[] = [
     why: 'test/load.ts reads extension/src/*.js from disk; lc-e2e boots the extension in a browser',
   },
   {
-    inputs: ['lambdas/src/'],
+    inputs: ['lambdas/src/', 'packages/shared/src/'],
     tests: ['scripts/src/lc-e2e/extension.test.ts'],
-    why: 'lc-e2e runs the extension against the local BFF, with no import edge to it',
+    why: 'lc-e2e runs the extension against the local BFF (serve.ts, with shared inside), with no import edge to it',
+  },
+  {
+    // rules.test.ts checks this list against every lambdas path a cdk/src/lib module names.
+    inputs: [
+      'lambdas/src/index.ts',
+      'lambdas/src/mcp/index.ts',
+      'lambdas/src/coachWorker.ts',
+      'lambdas/src/financeSync.ts',
+      'lambdas/src/kill/index.ts',
+      'lambdas/src/pushDispatch.ts',
+    ],
+    tests: [
+      'cdk/src/lib/app-stack.ts',
+      'cdk/src/lib/coach-worker.ts',
+      'cdk/src/lib/finance-sync.ts',
+      'cdk/src/lib/org-stack.ts',
+      'cdk/src/lib/push-dispatch.ts',
+    ],
+    why: 'the stacks name these Lambda entry files by path, and NodejsFunction checks they exist even with bundling skipped; naming the stack modules runs their importers',
   },
   {
     inputs: ['lambdas/src/', 'packages/shared/src/'],
@@ -277,7 +296,7 @@ export const SELF_CONTAINED: Record<string, string> = {
 // gate's own files are exempt: any change to them is REPO_FULL).
 const RUNTIME = 'runtime state only (no tracked input)';
 const STACK_ENTRY =
-  'lambdas/src entry paths for esbuild, which the stack tests skip (aws:cdk:bundling-stacks: [])';
+  'Lambda entry paths, which NodejsFunction checks exist even with bundling skipped (the entry-file rule)';
 export const MODULE_READERS: Record<string, string> = {
   'app/pwa/identityPages.ts':
     'app/pages/*.html (the app/pages/ rule) and identifiers.json (REPO_FULL)',
@@ -325,7 +344,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/devcheck/ledger.ts': `${RUNTIME}: the ledger file`,
   'scripts/src/devcheck/local/run-local.ts': `${RUNTIME}: git diff and the scenario files (same area)`,
   'scripts/src/devcheck/local/server.ts':
-    'spawns lambdas/src/local/serve.ts (lc-e2e runs it, by the lambdas/src/ rule)',
+    'spawns lambdas/src/local/serve.ts, shared inside (lc-e2e runs it, by the lambdas/ + shared rule)',
   'scripts/src/devcheck/login.ts': `${RUNTIME}: a storage-state file`,
   'scripts/src/devcheck/run.ts': `${RUNTIME}: a pid lock and the scenario files (same area)`,
   'scripts/src/devcheck/scenarios/per-slot-runs.ts': `${RUNTIME}: the branch's git diff`,

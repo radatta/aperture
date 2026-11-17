@@ -20,11 +20,11 @@ import {
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
 const tracked = [
   ...new Set(
-    execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+    execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
       cwd: ROOT,
       encoding: 'utf8',
     })
-      .split('\n')
+      .split('\0') // -z: a non-ASCII path unquoted, so it isn't dropped from the scan
       .filter((f) => f && existsSync(join(ROOT, f))), // a deleted-but-staged path is listed, not readable
   ),
 ];
@@ -35,7 +35,7 @@ const exists = (p: string) => existsSync(join(ROOT, p));
 // File reads, raw imports, spawns, imports by a computed specifier and `new URL('../…')` path climbs: what vitest's
 // import graph can't follow.
 const BLIND =
-  /\b(?:readFileSync|readdirSync|existsSync|statSync|cpSync|execFileSync|execSync|spawnSync|spawn|execFile|createRequire)\(|import\.meta\.glob|\?raw['"]|\bimport\((?!\s*['"`)])|new URL\(\s*['"`]\.\.?\//;
+  /\b(?:readFileSync|readdirSync|existsSync|statSync|cpSync|execFileSync|execSync|spawnSync|spawn|execFile|createRequire)\(|import\.meta\.glob|\?raw['"]|\bimport\((?!\s*(?:(?:'[^']*'|"[^"]*"|`[^`$]*`)\s*[,)]|\)))|new URL\(\s*['"`][^'"`]*['"`]\s*,\s*import\.meta\.url/;
 const CODE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 // The gate's own files: any change to them is REPO_FULL, and they name the API in their rules and strings.
 const GATE_DIR = 'scripts/src/gate/';
@@ -119,6 +119,19 @@ describe('gate rules', () => {
       (f) => !BLIND.test(read(f)),
     );
     expect(stale).toEqual([]);
+  });
+
+  it('the Lambda entry-file rule names every lambdas path a cdk stack module names', () => {
+    const rule = INPUT_RULES.find((r) => r.inputs.includes('lambdas/src/coachWorker.ts'))!;
+    const named = tracked
+      .filter((f) => f.startsWith('cdk/src/lib/') && CODE.test(f))
+      .flatMap((f) =>
+        [...read(f).matchAll(/new URL\(\s*'((?:\.\.\/)+lambdas\/[^']+)'/g)].map((m) =>
+          join(f, '..', m[1]!),
+        ),
+      );
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter((p) => !rule.inputs.includes(p))).toEqual([]);
   });
 
   it('every snapshot has its owning test beside its folder', () => {

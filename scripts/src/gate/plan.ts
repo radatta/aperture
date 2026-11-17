@@ -139,10 +139,17 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
       if (!deleted) addTest(path, 'changed');
     } else if (deleted) {
       // A deleted code module's importers either changed (so they're in `related`) or no longer typecheck (tsc -b runs
-      // in full every gate). Not so a deleted .css/.json: an ambient declaration can still type its import. A deleted
-      // file something reads from disk is a rule's input, so `claimed` ran its tests.
-      if (!claimed && !CODE_EXT.test(path))
-        fullPkg(pkg.dir, `${path}: deleted, and no rule or import graph sees it`);
+      // in full every gate). Not so a deleted .css/.json: an ambient declaration can still type its import, and a rule
+      // that reads it from disk may not run its importers, so it widens even when claimed. Any other deleted file is
+      // read from disk only, so a claiming rule's tests are its readers.
+      if (CODE_EXT.test(path) || owner) {
+        // tsc -b, or the snapshot's own test
+      } else if (MODULE_EXT.test(path))
+        fullPkg(
+          pkg.dir,
+          `${path}: a deleted importable file, whose importers the graph can't find`,
+        );
+      else if (!claimed) fullPkg(pkg.dir, `${path}: deleted, and no rule or import graph sees it`);
     } else if (owner) {
       // handled above
     } else if (MODULE_EXT.test(path)) {

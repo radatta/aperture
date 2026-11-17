@@ -50,15 +50,19 @@ export function verdict(sha: string, r: GhRun | undefined, failedJobs: string[] 
 }
 
 const FIELDS = 'databaseId,workflowName,event,status,conclusion,createdAt,url';
+// A hung gh is a failure (exit 2, retried under --wait), never a stall past --timeout.
+const GH = { timeoutMs: 60_000 };
 
 export function check(run: Run, sha: string): Verdict {
   const runs = JSON.parse(
-    run('gh', ['run', 'list', '--commit', sha, '--limit', '20', '--json', FIELDS]),
+    run('gh', ['run', 'list', '--commit', sha, '--limit', '20', '--json', FIELDS], GH),
   ) as GhRun[];
   const r = pick(runs);
   let failed: string[] = [];
   if (r?.status === 'completed' && r.conclusion !== 'success') {
-    const jobs = JSON.parse(run('gh', ['run', 'view', String(r.databaseId), '--json', 'jobs'])) as {
+    const jobs = JSON.parse(
+      run('gh', ['run', 'view', String(r.databaseId), '--json', 'jobs'], GH),
+    ) as {
       jobs: { name: string; conclusion: string }[];
     };
     failed = jobs.jobs
