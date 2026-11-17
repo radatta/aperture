@@ -24,6 +24,8 @@ const FX = join(import.meta.dirname, 'tower/fixtures/mac');
 const render = (dir: string) =>
   JSON.parse(execFileSync('bash', [AGENT, '--render', dir], { encoding: 'utf8' }));
 const PM = ['pmset-batt.txt', 'pmset.txt', 'pmset-therm.txt'];
+// the one true awk is macOS's; the container may have it (`apt-get install original-awk`), CI doesn't (skipped there)
+const ONE_TRUE_AWK = existsSync('/usr/bin/original-awk') ? '/usr/bin/original-awk' : null;
 // a copy of the fixtures, edited; null deletes a file
 const variant = (edit: (f: Record<string, string | null>) => void) => {
   const d = mkdtempSync(join(tmpdir(), 'mac-'));
@@ -229,6 +231,43 @@ describe('macstats.sh --render: power', () => {
       thermal: null,
     });
     expect(j.mem.usedMiB).toBe(15360);
+  });
+
+  it('powermode (a Mac with High Power Mode): 1 is Low Power Mode, 0 and 2 are not; lowpowermode wins', () => {
+    const pm = (lines: string) => power((f) => (f['pmset.txt'] = lines)).lowPowerMode;
+    expect(pm(' powermode            1\n')).toBe(true);
+    expect(pm(' powermode            2\n')).toBe(false);
+    expect(pm(' powermode            0\n')).toBe(false);
+    expect(pm(' lowpowermode         0\n powermode            1\n')).toBe(false);
+  });
+
+  // macOS runs the one true awk, not this container's mawk/gawk: the same fixtures through it, when installed
+  it.skipIf(!ONE_TRUE_AWK)('BSD awk (original-awk) renders the same power', () => {
+    const t = mkdtempSync(join(tmpdir(), 'oawk-'));
+    mkdirSync(join(t, 'bin'));
+    symlinkSync(ONE_TRUE_AWK!, join(t, 'bin/awk'));
+    writeFileSync(
+      join(t, 'macstats.sh'),
+      readFileSync(AGENT, 'utf8').replace(
+        /^export LC_ALL=C PATH=/m,
+        `export LC_ALL=C PATH=${join(t, 'bin')}:`,
+      ),
+    );
+    const therm =
+      '2026-11-17 10:00:00 -0800 CPU Power notify\n\tCPU_Scheduler_Limit \t= 100\n\tCPU_Available_CPUs \t= 8\n\tCPU_Speed_Limit \t= 80\nThermal Warning Level = 2\n';
+    for (const d of [
+      FX,
+      variant((f) => {
+        f['pmset-batt.txt'] =
+          "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1234567)\t80%; AC attached; not charging present: true\n";
+        f['pmset-therm.txt'] = therm;
+        f['pmset.txt'] = ' powermode 1\n';
+      }),
+    ]) {
+      const r = (agent: string) =>
+        JSON.parse(execFileSync('bash', [agent, '--render', d], { encoding: 'utf8' })).power;
+      expect(r(join(t, 'macstats.sh'))).toEqual(r(AGENT));
+    }
   });
 
   it('the battery id never reaches the JSON', () => {

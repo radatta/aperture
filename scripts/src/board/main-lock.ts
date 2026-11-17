@@ -3,7 +3,8 @@
 // with "cannot lock ref" or an index.lock. flock(1) on an fd this process keeps open: the lock is the open file
 // description's, so it holds across every git child after the flock child exits, and node opens fds close-on-exec,
 // so a git child never carries it. Released on close or process death: never stale. Same-process nesting is free.
-// The file lives on the rootfs like lib.sh's flocks: one container is every session that can race.
+// The file lives on the rootfs like lib.sh's flocks: one container is every session that can race. `fn` must be
+// synchronous: the lock is let go when it returns.
 import { execFileSync } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 
@@ -20,7 +21,14 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
   const file = o.file ?? MAIN_LOCK;
   const wait = o.waitSec ?? 120;
   const warn = o.warn ?? ((s: string) => console.error(s));
-  const fd = openSync(file, 'a', 0o666);
+  let fd: number;
+  try {
+    fd = openSync(file, 'a', 0o666);
+  } catch (e) {
+    // made by someone else (a sudo run) without write for us: flock(2) works on a read-only fd too
+    if ((e as NodeJS.ErrnoException).code !== 'EACCES') throw e;
+    fd = openSync(file, 'r');
+  }
   try {
     const take = (args: string[]) =>
       execFileSync('flock', [...args, '3'], { stdio: ['ignore', 'ignore', 'pipe', fd] });
@@ -29,6 +37,8 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT')
         warn(`warning: no flock(1); ${file} not locked`);
+      else if ((e as { status?: number }).status !== 1)
+        throw e; // only 1 is "held": a usage error isn't busy
       else {
         warn(`main checkout busy (another lanes start or sync-main): waiting up to ${wait} s`);
         try {

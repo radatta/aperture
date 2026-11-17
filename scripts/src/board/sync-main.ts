@@ -6,6 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { towerChanged } from './tower/behind.ts';
+import { timedOut } from '../bot/sh.ts';
 
 // throws on a non-zero exit, and past timeoutMs (SIGTERM: git removes its lock files on TERM)
 export type Run = (cmd: string, args: string[], cwd: string, timeoutMs?: number) => string;
@@ -26,11 +27,7 @@ export const execRun: Run = (cmd, args, cwd, timeoutMs) => {
       killSignal: 'SIGTERM',
     });
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ETIMEDOUT')
-      throw new Error(`${cmd} ${args[0] ?? ''} timed out after ${(timeoutMs ?? 0) / 1000} s`, {
-        cause: e,
-      });
-    throw e;
+    throw timedOut(e, cmd, args, timeoutMs) ?? e;
   }
 };
 

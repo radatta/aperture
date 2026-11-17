@@ -367,7 +367,7 @@ and `pmset -g batt`, `pmset -g` and `pmset -g therm` (none needs sudo), and writ
   `-InternalBattery-0 (id=…)<tab>12%; charging; 9:02 remaining present: true` line. `state` is `charging`,
   `discharging`, `charged`, `finishing` (finishing charge) or `not-charging` (`AC attached; not charging`).
   `remainingMin` is to full on AC and to empty on battery, and null for `(no estimate)`. The battery id is never
-  written. `lowPowerMode` is `pmset -g`'s `lowpowermode 0|1`. `thermal` is `pmset -g therm`: a `Note: No … has been
+  written. `lowPowerMode` is `pmset -g`'s `lowpowermode 0|1`, else `powermode 0|1|2` (a Mac with High Power Mode; 1 is low); neither readable shows "Low Power Mode unknown" on the line, never a silent off. `thermal` is `pmset -g therm`: a `Note: No … has been
 recorded` line is null, `CPU_Speed_Limit = 80` a number, and a recorded level that isn't a number `"recorded"`.
   Anything pmset doesn't print is null, so a desktop Mac or a pmset failure is nulls, never a failed tick. `v` stays
   1 (the key is additive): a key-less file is an older agent.

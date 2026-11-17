@@ -50,7 +50,7 @@ failed with "cannot lock ref", or the switch on an `index.lock`, rolling back wi
 `flock(1)` on an fd the process keeps, released when it exits, so it never goes stale. It lives on the rootfs like
 `lib.sh`'s locks, since one container is every session that can race. A wait says so at once. Every `git fetch` here
 (start's, sync-main's, end's PR-head fetch) times out after 60 s, and start's `ls-remote` after 30 s: SIGTERM, which
-git cleans its lock files up on, then the failed-fetch refusal. With the Mac on battery under 30% or in Low Power
+git cleans its lock files up on, then a refusal (exit 1, nothing changed). With the Mac on battery under 30% or in Low Power
 Mode and 3 lanes already active, start prints a `note:` with the ≤ 3 advice and still starts.
 
 Then it runs these steps, each registering an undo:

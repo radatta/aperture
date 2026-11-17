@@ -32,7 +32,8 @@ collect() {
 # power → one tab-separated line: source pct state remainingMin lpm thermal? twl pwl speed sched cpus ('' = null).
 # Shapes (docs/ops/TOWER.md → Mac stats): "Now drawing from 'AC Power'", " -InternalBattery-0 (id=…)<tab>12%; charging;
 # 9:02 remaining present: true" (also "AC attached; not charging", "charged", "finishing charge", "(no estimate)"),
-# "lowpowermode 1", and therm's "CPU_Speed_Limit = 100" or "Note: No … has been recorded" (none).
+# "lowpowermode 1" (or, on a Mac with High Power Mode, "powermode 0|1|2", 1 = low), and therm's "CPU_Speed_Limit =
+# 100" or "Note: No … has been recorded" (none).
 power() {
   { printf '%s\n' "$PM_BATT" | sed 's/^/B /'; printf '%s\n' "$PM_SET" | sed 's/^/S /'
     printf '%s\n' "$PM_THERM" | sed 's/^/T /'; } | awk '
@@ -48,7 +49,8 @@ power() {
         else if (x == "finishing charge") st = "finishing"
         else if (x == "not charging") st = "not-charging"
         else if (x ~ /^[0-9]+:[0-9][0-9]( remaining)?$/) { split(x, hm, /[: ]/); rem = hm[1] * 60 + hm[2] } } }
-    $1 == "S" && $2 == "lowpowermode" { lpm = $3 == "1" ? "true" : ($3 == "0" ? "false" : "") }
+    $1 == "S" && $2 == "lowpowermode" { lpm = $3 == "1" ? "true" : ($3 == "0" ? "false" : ""); haslpm = 1 }
+    $1 == "S" && $2 == "powermode" && !haslpm { lpm = $3 == "1" ? "true" : ($3 ~ /^[02]$/ ? "false" : "") }
     $1 == "T" && NF > 1 { therm = 1 }
     $1 == "T" && tolower($0) ~ /thermal warning level/ { twl = level($0) }
     $1 == "T" && tolower($0) ~ /performance warning level/ { pwl = level($0) }

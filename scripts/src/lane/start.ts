@@ -152,15 +152,22 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
         null
       )
         return refuse(d, `branch ${b} already exists (local)`);
-      if (
-        d
+      let remote: string;
+      try {
+        remote = d
           .run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${b}`], {
             cwd: e.mainRoot,
             timeoutMs: LS_REMOTE_TIMEOUT_MS,
           })
-          .trim()
-      )
-        return refuse(d, `branch ${b} already exists (on origin)`);
+          .trim();
+      } catch (err) {
+        return refuse(
+          d,
+          `git ls-remote failed (nothing changed): ${(err as Error).message}`,
+          EXIT.failed,
+        );
+      }
+      if (remote) return refuse(d, `branch ${b} already exists (on origin)`);
       const trees = parseWorktrees(
         d.run('git', ['worktree', 'list', '--porcelain'], { cwd: e.mainRoot }),
       );

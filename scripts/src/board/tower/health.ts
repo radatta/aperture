@@ -143,6 +143,7 @@ export type PowerSummary = {
 const hm = (min: number) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
 
 export function powerSummary(read: MacRead): PowerSummary {
+  // a stale read (1–5 min old) still counts: power changes slowly; silent or bad doesn't
   const p = read.state === 'ok' || read.state === 'stale' ? read.stats?.power : undefined;
   if (!p) return { known: false, line: '', alerts: [], advice: null };
   const alerts: string[] = [];
@@ -160,7 +161,7 @@ export function powerSummary(read: MacRead): PowerSummary {
   if (p.lowPowerMode) {
     bits.push('Low Power Mode on');
     alerts.push('Low Power Mode');
-  }
+  } else if (p.lowPowerMode === null && p.source) bits.push('Low Power Mode unknown'); // a pmset line we can't read: say so
   const t = p.thermal;
   const limits: string[] = [];
   if (t) {

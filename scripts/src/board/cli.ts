@@ -182,7 +182,7 @@ export function main(argv: string[], stdin: () => string): string {
       const events = readJsonl(join(dir, 'history'), 'events-');
       const jobs = events
         .flatMap((e) => compactJob(e) ?? [])
-        .filter((j) => j.t >= t - 8 * 86400_000);
+        .filter((j) => j.t >= t - 7 * 86400_000); // the tower's window (source.ts JOB_DAYS)
       const m = machine(readMacStats(join(dir, 'mac-stats.json'), t), jobs, t);
       return rest.includes('--json') ? JSON.stringify(m) : m.lines.join('\n');
     }

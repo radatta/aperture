@@ -8,6 +8,17 @@ export interface RunOptions {
   timeoutMs?: number; // SIGTERM past it: git removes its lock files on TERM
 }
 
+// execFileSync's timeout surfaces as ETIMEDOUT: say what timed out, after how long (sync-main's runner shares it).
+export function timedOut(
+  err: unknown,
+  cmd: string,
+  args: string[],
+  ms: number | undefined,
+): Error | null {
+  if ((err as NodeJS.ErrnoException).code !== 'ETIMEDOUT') return null;
+  return new Error(`${cmd} ${args[0] ?? ''} timed out after ${(ms ?? 0) / 1000} s`, { cause: err });
+}
+
 export function run(cmd: string, args: string[], opts: RunOptions = {}): string {
   try {
     return execFileSync(cmd, args, {
@@ -20,10 +31,8 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): string 
       killSignal: 'SIGTERM',
     }).trim();
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ETIMEDOUT')
-      throw new Error(`${cmd} ${args[0] ?? ''} timed out after ${(opts.timeoutMs ?? 0) / 1000} s`, {
-        cause: err,
-      });
+    const late = timedOut(err, cmd, args, opts.timeoutMs);
+    if (late) throw late;
     // stdout too: `git push --porcelain` prints a rejected ref's reason there, not on stderr.
     const e = err as { stdout?: string; stderr?: string; message: string };
     const out = [e.stdout?.trim(), (e.stderr || e.message).trim()].filter(Boolean).join('\n');

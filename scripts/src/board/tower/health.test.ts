@@ -207,6 +207,12 @@ describe('powerSummary', () => {
     ).toEqual([]);
   });
 
+  it('an unreadable Low Power Mode says so on the line (never a silent "off")', () => {
+    expect(sum({ ...calm, lowPowerMode: null }).line).toBe(
+      'AC 82% charging (0:40 to full) · Low Power Mode unknown · no thermal limit',
+    );
+  });
+
   it('advice: ≤ 3 lanes on battery under 30% or with Low Power Mode on', () => {
     expect(sum({ ...calm, source: 'battery', batteryPct: 29 }).advice).toMatch(/^≤ 3 lanes/);
     expect(sum({ ...calm, source: 'battery', batteryPct: 30 }).advice).toBeNull();

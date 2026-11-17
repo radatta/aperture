@@ -100,7 +100,12 @@ describe('the HTTP surface', () => {
     // no tile: Safari draws its light plate only behind a low-contrast one (TOWER.md → Phone)
     expect(await (await fetch(`${base}/favicon.svg`)).text()).not.toContain('<rect');
     for (const v of ['a', 'b'])
-      for (const p of [`/favicon-${v}.svg`, `/favicon-${v}-32.png`, `/favicon-${v}-64.png`, `/favicon-${v}.ico`])
+      for (const p of [
+        `/favicon-${v}.svg`,
+        `/favicon-${v}-32.png`,
+        `/favicon-${v}-64.png`,
+        `/favicon-${v}.ico`,
+      ])
         expect((await fetch(`${base}${p}`)).status, p).toBe(404);
   });
 

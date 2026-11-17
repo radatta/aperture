@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,7 +10,7 @@ const lockFile = () => join(mkdtempSync(join(tmpdir(), 'main-lock-')), 'main.loc
 // Another process holding the lock for `sec` seconds; resolves once it holds it.
 function holder(file: string, sec: number): Promise<() => void> {
   return new Promise((resolve, reject) => {
-    const p = spawn('flock', [file, 'sh', '-c', `echo held; sleep ${sec}`], {
+    const p = spawn('flock', ['-o', file, 'sh', '-c', `echo held; sleep ${sec}`], {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     p.on('error', reject);
@@ -31,6 +31,13 @@ describe('withMainLock', () => {
       ),
     ).toThrow('boom');
     expect(withMainLock(() => 'again', { file, waitSec: 1 })).toBe('again'); // nothing left held
+  });
+
+  it("a lock file it can't write (made by a sudo run) still locks, read-only", () => {
+    const file = lockFile();
+    writeFileSync(file, '');
+    chmodSync(file, 0o444);
+    expect(withMainLock(() => 'ro', { file, waitSec: 1 })).toBe('ro');
   });
 
   it('nests in one process without waiting on itself', () => {

@@ -189,7 +189,8 @@ async function standalone(b, name) {
     await page.goto(BASE + '/'); // no ?debug: off until five taps
     await page.waitForSelector('.serving', { state: 'attached' });
     if (await page.$('#dbg')) fails.push(`${tag}: readout open without ?debug`);
-    for (let i = 0; i < 5; i++) await page.click('.serving');
+    // SOURCES sits folded on the phone (opened by a tap); the handler is what's under test, so dispatch the taps
+    await page.evaluate(() => { for (let i = 0; i < 5; i++) document.querySelector('.serving').click(); });
     if (!(await page.$('#dbg'))) fails.push(`${tag}: five taps on "serving" didn't open the readout`);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await ctx.close();

@@ -516,6 +516,17 @@ describe('lane start: the main-checkout lock', () => {
     expect(t.lock.depth).toBe(0);
   });
 
+  it('a failed or timed-out ls-remote refuses with 1, nothing changed', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['git ls-remote', fail('git ls-remote timed out after 30 s')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.out()).toMatch(
+      /git ls-remote failed \(nothing changed\): git ls-remote timed out after 30 s/,
+    );
+    expect(mutated(t.calls)).toEqual([]);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+  });
+
   it('a rollback after the lock was released takes it again for its git steps', async () => {
     const w = world();
     const t = deps(w, script(w, [['pnpm install', fail('ERR_PNPM')]]));
@@ -549,12 +560,21 @@ describe('lane start: the Mac on battery', () => {
     );
   });
 
-  it('no note on AC, or with fewer lanes', async () => {
-    const w = world();
-    claudeSession(w);
-    const t = deps(w, script(w));
-    writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now(), { lowPowerMode: true }));
-    expect(await start(t.d, args())).toBe(0);
-    expect(t.out()).not.toMatch(/note: the Mac/);
+  it('no note on AC with 3 lanes, or on Low Power Mode with fewer', async () => {
+    for (const [lanes, power] of [
+      [['one', 'two', 'three'], { batteryPct: 10 }],
+      [['one'], { lowPowerMode: true }],
+    ] as const) {
+      const w = world();
+      claudeSession(w);
+      for (const [i, b] of lanes.entries()) {
+        proc(w, 9000 + i, '777');
+        boardSession(w, 9000 + i, b);
+      }
+      const t = deps(w, script(w, [], [...lanes]));
+      writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now(), power));
+      expect(await start(t.d, args())).toBe(0);
+      expect(t.out()).not.toMatch(/note: the Mac/);
+    }
   });
 });
