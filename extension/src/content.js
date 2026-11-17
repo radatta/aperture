@@ -807,8 +807,8 @@
   // A real click on LeetCode's Submit, in the capture phase at the window — ahead of React's root listener.
   // The first one in a sitting is held (no request is made) and the card shown; the user clicks Submit again.
   // A page script's click() is never held. Submit by keyboard never passes here: it is logged when its
-  // submit arrives (onSubmitItem). A click in one of our own hosts is never a Submit, and neither is <html> or
-  // <body> — the page could mark either with the Submit's selector to have every click held.
+  // submit arrives (onSubmitItem). A click in one of our own hosts is never a Submit, and the hit must be a
+  // button — the page could mark a wrapper, or our host, with the Submit's selector to have every click held.
   window.addEventListener(
     'click',
     (e) => {
@@ -817,7 +817,8 @@
       try {
         hit = sel.submit && e.target && e.target.closest ? e.target.closest(sel.submit) : null;
       } catch {}
-      if (!hit || hit === document.documentElement || hit === document.body) return;
+      // A button only: a page marking a wrapper (or <html>) with the selector gets nothing held.
+      if (!hit || !hit.matches('button,[role=button]')) return;
       if (!sittingOpen()) return;
       const c = coachState();
       if (cardAt != null) {
@@ -920,7 +921,10 @@
       maybeFill(true);
       coachConfig();
     }
-    if (state.phase !== 'active') closeCard('left');
+    if (state.phase !== 'active') {
+      closeCard('left');
+      lastVerdict = null; // a new sitting here never takes the last one's verdict
+    }
     for (const e of r.effects) {
       if (e.do === 'step') runStep(e.step);
       else if (e.do === 'resume') resume();
@@ -982,7 +986,7 @@
     const untraced = coachOn.trace && !coachState().trace && cardAt == null;
     const lost = untraced && coachOn.hold && !coachState().held && !!sel.submit && !q(sel.submit);
     setBadge(
-      `${head} · ${synced}${lost ? ' · trace card off: Submit not found' : ''}`,
+      `${head} · ${synced}${lost ? ' · Submit hold off: Submit not found' : ''}`,
       '',
       untraced ? 'trace' : null,
     );

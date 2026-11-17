@@ -1677,6 +1677,9 @@ describe('the trace card and the resubmit note', () => {
   it('holds the first real Submit, takes the trace, and the user’s second click submits', async () => {
     const { p, ext } = await sitting({ local: { debug: true } });
     await until(() => !!p.opener()); // before any Submit, the card is a click away
+    const first = p.opener();
+    await settle(5100); // the badge's repaint keeps the opener's node (a click across it would be lost)
+    expect(p.opener()).toBe(first);
     trustedClick(p.submitBtn());
     await until(() => !!p.card());
     await settle(500);
@@ -1750,6 +1753,7 @@ describe('the trace card and the resubmit note', () => {
     await until(() => p.fake().submits === 1, 6000);
     expect(p.card()).toBeNull();
     await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
+    expect(p.badge()).not.toContain('now click Submit'); // that click already went
     await settle(4000);
     expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'trace']);
   }, 30_000);
@@ -1763,23 +1767,20 @@ describe('the trace card and the resubmit note', () => {
     await settle(300);
     expect(p.card()).not.toBeNull();
     const heard: string[] = [];
-    // Every way the page could hear or read what's typed: keys, input, composition, the clipboard.
-    const types = [
-      'keydown',
-      'keypress',
-      'keyup',
-      'beforeinput',
-      'input',
-      'compositionend',
-      'paste',
-    ];
+    // Every way the page could hear or read what's typed: the guard's whole list (overlay.js GUARDED) —
+    // keys, textInput, input, composition, the clipboard, drag and drop.
+    const types = (p.w as unknown as { ApertureLC: { overlay: { GUARDED: string[] } } }).ApertureLC
+      .overlay.GUARDED;
+    expect(types).toEqual(
+      expect.arrayContaining(['keydown', 'textInput', 'input', 'paste', 'drop']),
+    );
     for (const t of types) p.w.document.addEventListener(t, (e) => heard.push(e.type), true);
-    for (const t of types.slice(0, 3))
+    for (const t of types)
       field.dispatchEvent(
-        new p.w.KeyboardEvent(t, { key: 'Enter', metaKey: true, bubbles: true, composed: true }),
+        t.startsWith('key')
+          ? new p.w.KeyboardEvent(t, { key: 'Enter', metaKey: true, bubbles: true, composed: true })
+          : new p.w.Event(t, { bubbles: true, composed: true }),
       );
-    for (const t of types.slice(3))
-      field.dispatchEvent(new p.w.Event(t, { bubbles: true, composed: true }));
     expect(heard).toEqual([]);
     // A script's click on Skip does nothing either.
     (field.getRootNode() as ShadowRoot).querySelector<HTMLElement>('[data-ap=skip]')!.click();
@@ -1803,7 +1804,7 @@ describe('the trace card and the resubmit note', () => {
 
   it('with the Submit not found, nothing is held, the badge says so, the submit is logged untraced', async () => {
     const { p, ext } = await sitting({ local: { selectors: { submit: '#nowhere' } } });
-    await until(() => p.badge()?.includes('trace card off: Submit not found'));
+    await until(() => p.badge()?.includes('Submit hold off: Submit not found'));
     trustedClick(p.submitBtn());
     await until(() => p.fake().submits === 1, 6000);
     await until(() => coachEvents(ext).some((k) => k.kind === 'untraced-submit'), 6000);
@@ -1829,11 +1830,61 @@ describe('the trace card and the resubmit note', () => {
     trustedClick(p.submitBtn()); // the real one still holds
     await until(() => !!p.card());
     await settle(600);
-    trustedClick(p.field('empty')); // a click into the card: never a Submit
+    // The page marks our own host as the Submit button: a click into the filled card still isn't one.
+    const cardHost = p.w.document.querySelector('aperture-lc-coach')!;
+    cardHost.setAttribute('data-e2e-locator', 'console-submit-button');
+    cardHost.setAttribute('role', 'button');
+    p.field('empty').value = '[] -> []';
+    trustedClick(p.field('empty'));
     await settle(3500); // and the 3 s batch has gone
     expect(p.card()).not.toBeNull();
     expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config']);
   }, 30_000);
+
+  it('keeps the field’s focus when the card’s host is put back last', async () => {
+    const { p } = await sitting();
+    trustedClick(p.submitBtn());
+    await until(() => !!p.card());
+    const field = p.field('boundary');
+    field.focus();
+    field.value = '[5]';
+    field.setSelectionRange(1, 2);
+    p.w.document.documentElement.appendChild(p.w.document.createElement('div')); // LeetCode appends
+    await settle(600); // the poll moves the hosts back
+    expect(p.w.document.documentElement.lastElementChild!.tagName).toBe('APERTURE-LC-COACH');
+    expect((field.getRootNode() as ShadowRoot).activeElement).toBe(field);
+    expect([field.selectionStart, field.selectionEnd]).toEqual([1, 2]);
+  }, 30_000);
+
+  it('a note clears on leaving the problem, and the nudge switch off shows none', async () => {
+    const { p } = await sitting();
+    trustedClick(p.submitBtn());
+    await until(() => !!p.card());
+    p.tapCard('skip');
+    await until(() => p.badge()?.includes('now click Submit'));
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => p.phase() === 'prompt');
+    p.w.history.back();
+    await until(() => p.phase() === 'active', 6000);
+    expect(p.badge()).not.toContain('now click Submit');
+
+    const off = await sitting({ local: { coachNudge: false } });
+    const code = off.p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += '# wrong\n';
+    trustedClick(off.p.submitBtn());
+    await until(() => !!off.p.card());
+    off.p.tapCard('skip');
+    await until(() => !off.p.card());
+    trustedClick(off.p.submitBtn());
+    await until(() => sentEvents(off.ext).some((e) => e.type === 'submit'), 6000);
+    await settle(10_000);
+    trustedClick(off.p.submitBtn()); // 10 s after a Wrong Answer, the note off
+    await until(() => off.p.fake().submits === 2, 6000);
+    await settle(4000);
+    expect(off.p.badge()).not.toContain('trace the failing input');
+    expect(coachEvents(off.ext).some((k) => k.kind === 'nudge-shown')).toBe(false);
+    expect(coachEvents(off.ext)[0]).toMatchObject({ kind: 'config', nudge: false });
+  }, 40_000);
 
   it('the second click of a double-click is swallowed too: the card stays, nothing is submitted', async () => {
     const { p } = await sitting();
@@ -1939,12 +1990,15 @@ describe('the trace card and the resubmit note', () => {
     await settle(30_000);
     trustedClick(p.submitBtn()); // 30 s after a Wrong Answer
     await until(() => p.badge()?.includes('trace the failing input'));
+    const shownAt = Date.now();
     await until(() => coachEvents(ext).some((k) => k.kind === 'nudge-shown'), 6000);
     expect(coachEvents(ext).find((k) => k.kind === 'nudge-shown')!.gapMs).toBeGreaterThanOrEqual(
       30_000,
     );
     expect(p.fake().submits).toBe(2); // the note never blocks
-    await settle(9000);
+    await settle(7700 - (Date.now() - shownAt)); // still up at about 7.7 s
+    expect(p.badge()).toContain('trace the failing input');
+    await settle(1000); // gone by 8.7 s
     expect(p.badge()).not.toContain('trace the failing input');
     // 90 s after the second Wrong Answer: no note.
     await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 6000);

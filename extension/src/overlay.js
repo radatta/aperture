@@ -110,6 +110,24 @@
     return el;
   }
 
+  // Every event that carries what's typed in the card, or a key LeetCode could act on: keys, WebKit's
+  // `textInput` (the inserted text, ahead of `beforeinput`), input, composition, the clipboard, drag and drop.
+  const GUARDED = [
+    'keydown',
+    'keypress',
+    'keyup',
+    'textInput',
+    'beforeinput',
+    'input',
+    'compositionstart',
+    'compositionupdate',
+    'compositionend',
+    'paste',
+    'cut',
+    'copy',
+    'dragstart',
+    'drop',
+  ];
   // The trace card's fields: what each asks for, by lib/coach.js FIELDS key.
   const TRACE_FIELDS = [
     ['empty', 'Empty or smallest input'],
@@ -127,7 +145,7 @@
     // What's typed in the card stops at the window, in the capture phase: registered at document_start, ahead
     // of LeetCode's own listeners, so its shortcuts (⌘↵ submits) never fire from the card, and no page
     // listener reads the text from the composed input, composition or clipboard events. Stopping propagation
-    // leaves the typing itself alone. `keys` is the probe (README → Safari behaviour): key presses that reached
+    // leaves the typing itself alone. `keys` is the probe (README → Debug mode, `card`): key presses that reached
     // this guard, how many a listener ahead of it had already prevented, and input events — typing that
     // doesn't land shows here.
     const keys = { seen: 0, prevented: 0, inputs: 0 };
@@ -139,20 +157,7 @@
       } else if (e.type === 'input') keys.inputs++;
       e.stopImmediatePropagation();
     };
-    for (const t of [
-      'keydown',
-      'keypress',
-      'keyup',
-      'beforeinput',
-      'input',
-      'compositionstart',
-      'compositionupdate',
-      'compositionend',
-      'paste',
-      'cut',
-      'copy',
-    ])
-      window.addEventListener(t, guard, true);
+    for (const t of GUARDED) window.addEventListener(t, guard, true);
     const btn = (cls, ap, text, fn) => {
       const b = node('button', { class: cls, 'data-ap': ap, type: 'button' }, text);
       b.addEventListener('click', (e) => {
@@ -274,7 +279,9 @@
       );
       b.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (e.isTrusted && genuine(badge.el, styleOf(true, false))) on.openCard();
+        const ok = e.isTrusted && genuine(badge.el, styleOf(true, false));
+        if (debug) debug.log('card.click', { ap: 'trace-open', trusted: e.isTrusted, ok });
+        if (ok) on.openCard();
       });
       return b;
     }
@@ -327,7 +334,17 @@
         [card.el, cardShown],
         [overlay.el, overlayShown],
       ];
+      // Moving a host out and back drops focus from the field being typed in: put it back, selection and all,
+      // or the next keys go to LeetCode.
+      const root = card.body.getRootNode();
+      const active = cardShown ? root.activeElement : null;
+      const range = active && [active.selectionStart, active.selectionEnd];
       keepLast([...hosts.filter((h) => !h[1]), ...hosts.filter((h) => h[1])].map((h) => h[0]));
+      if (!active || root.activeElement === active) return;
+      try {
+        active.focus({ preventScroll: true });
+        if (range[0] != null) active.setSelectionRange(range[0], range[1]);
+      } catch {}
     }
     const ensureAttached = () => {
       overlay.el.setAttribute('style', styleOf(overlayShown, overlayShown));
@@ -369,8 +386,15 @@
       }
       const act = (fn) => (e) => {
         e.stopPropagation();
-        if (!(e.isTrusted && genuine(card.el, styleOf(true, false)))) return;
-        fn();
+        const ok = e.isTrusted && genuine(card.el, styleOf(true, false));
+        // A probe, as the pill's: a click Safari's checks refuse would otherwise do nothing, silently.
+        if (debug)
+          debug.log('card.click', {
+            ap: e.currentTarget.getAttribute('data-ap'),
+            trusted: e.isTrusted,
+            ok,
+          });
+        if (ok) fn();
       };
       const traced = node(
         'button',
@@ -413,5 +437,5 @@
     return { render, setBadge, ensureAttached, renderCard, cardState, owns };
   }
 
-  (root.ApertureLC = root.ApertureLC || {}).overlay = { create, STEP_TEXT };
+  (root.ApertureLC = root.ApertureLC || {}).overlay = { create, STEP_TEXT, GUARDED };
 })(globalThis);

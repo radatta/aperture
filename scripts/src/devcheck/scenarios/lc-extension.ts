@@ -945,7 +945,7 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-submit-missing',
       entry: 'extension',
       kind: 'edge',
-      what: 'LeetCode’s Submit not found: nothing is held, the badge says the trace card is off, the submit is logged untraced',
+      what: 'LeetCode’s Submit not found: nothing is held, the badge says the Submit hold is off, the submit is logged untraced',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'with the Submit not found, nothing is held, the badge says so, the submit is logged untraced',
@@ -1011,7 +1011,7 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-page-marks-html',
       entry: 'extension',
       kind: 'edge',
-      what: 'A page marking <html> with the Submit’s selector gets no click held, and a click in the card never counts as a Submit',
+      what: 'A page marking <html> with the Submit’s selector gets no click held, and one marking the card’s own host as the Submit button can’t make a click in the filled card count as one',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'a page that marks <html> with the Submit’s selector gets no click held, and clicks in the card never count as Submit',
@@ -1059,6 +1059,28 @@ export const lcExtension: Scenario = {
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'a trace made after a submit went, before its verdict, doesn’t count: the submit is still logged untraced',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-focus',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The card’s host put back last (LeetCode appended to <html>) keeps the field’s focus and selection, so typing never lands in LeetCode',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'keeps the field’s focus when the card’s host is put back last',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-note-nav-nudge-off',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A badge note clears on leaving the problem; with the nudge switch off, a resubmit after a failed verdict shows no note and logs none',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a note clears on leaving the problem, and the nudge switch off shows none',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
