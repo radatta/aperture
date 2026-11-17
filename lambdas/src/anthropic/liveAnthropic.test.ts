@@ -361,3 +361,44 @@ describe('coachPick', () => {
     expect(body.output_config.effort).toBe('low');
   });
 });
+
+describe('catalogClassify', () => {
+  const rows = [
+    {
+      id: 9001,
+      slug: 'synthetic-a',
+      title: 'Synthetic A',
+      difficulty: 'Medium' as const,
+      premium: false,
+      acRate: 40,
+      tags: ['Array'],
+      algorithms: true,
+    },
+  ];
+  const ANSWER = { items: [{ id: 9001, pattern: 'heap', similar: [], harder: [] }] };
+
+  it('runs Sonnet 5.5 without a thinking field (disabled is a 400), at low effort, with its own log event', async () => {
+    const { gw, calls, logs } = setup(() => message(JSON.stringify(ANSWER)));
+    const out = await gw.catalogClassify({ rows, timeoutMs: 45_000 });
+    expect(out).toEqual({
+      ok: true,
+      fields: ANSWER,
+      model: 'claude-sonnet-5-5',
+      usage: { input: 420, output: 37 },
+      ms: expect.any(Number),
+    });
+    const body = JSON.parse(calls[0]!.init.body as string);
+    expect(body.model).toBe('claude-sonnet-5-5');
+    expect(body).not.toHaveProperty('thinking');
+    expect(body.output_config).toMatchObject({ effort: 'low', format: { type: 'json_schema' } });
+    expect(JSON.parse(logs[0]!)).toMatchObject({ event: 'catalog_classify', ok: true, rows: 1 });
+  });
+
+  it('keeps the usage of a failed call, so the job can price it', async () => {
+    const out = await setup(() => message('{', 'max_tokens')).gw.catalogClassify({
+      rows,
+      timeoutMs: 1,
+    });
+    expect(out).toMatchObject({ ok: false, reason: 'api', usage: { input: 420, output: 37 } });
+  });
+});
