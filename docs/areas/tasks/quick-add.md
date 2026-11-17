@@ -152,8 +152,8 @@ against the typed words; then:
   due time: "before 3pm", "until 5pm", a bare "6pm", with a day beside it or with its own connector ("today 3pm",
   "5pm friday", "due by friday 9am"), and an at/by/before/until it leaves dangling — never "on" or "to" ("turn
   the heating on 7am", "decide what to work on tomorrow" keep theirs). A spoken "remind me … to" leaves even when
-  the model kept it. A clock mid-title ("watch 9pm
-  show", "the 3pm meeting"), a leading one ("3pm meeting prep"), a day the task is about ("prep for this friday
+  the model kept it. The server never strips a clock mid-title ("watch 9pm show", "the 3pm meeting"), but one
+  the model used for the time isn't put back ("watch show" at 21:00, dev 2026-11-17); a leading one ("3pm meeting prep"), a day the task is about ("prep for this friday
   5pm") and a day with no clock ("pay rent today") stay. Before/until never fill a time: only the model's own does.
 - **A leading category word leaves only when it names the category the parse set** — exactly its label, with
   `,` `:` or a spaced dash after it; with no separator the model's choice stands. "work, email sam" with no such

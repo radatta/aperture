@@ -54,8 +54,10 @@ const dueOut: Sample[] = [
   { line: 'gym session 6am', title: 'gym session' },
   { line: 'standup notes 9:30am', title: 'standup notes' },
   { line: 'call mom later today 7pm', title: 'call mom later' },
-  // A clock that's part of the task stays, timed or not.
-  { line: 'watch 9pm show', title: 'watch 9pm show', untimed: ['watch 9pm show'] },
+  // The clock after "about the" is the task's, timed or not. A bare mid-title clock is the model's to read: kept,
+  // it's a title word and sets no time (siri-capture's kept-words row); used for the time, it leaves — dev,
+  // 2026-11-17, "watch show" at 21:00 twice. Either way the server never strips it on its own.
+  { line: 'watch 9pm show', title: 'watch show', untimed: ['watch 9pm show'] },
   {
     line: 'email the team about the 3pm meeting',
     title: 'email the team about the 3pm meeting',
@@ -197,7 +199,7 @@ export const captureTitles: Scenario = {
       id: 'due-kept',
       entry: 'api',
       kind: 'edge',
-      what: 'A clock that’s part of the task stays — “watch 9pm show”, “the 3pm meeting”',
+      what: 'A clock that’s part of the task stays — “the 3pm meeting”; “watch 9pm show” keeps it unless it set the time',
     },
     {
       id: 'lead-category',
