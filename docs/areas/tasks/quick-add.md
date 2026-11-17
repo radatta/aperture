@@ -148,7 +148,8 @@ autonomous build:
   the model did with its title, and the phrase leaves the title (`dueClock`, `spokenTime.ts`) — also when the
   model gave that same time but kept the words, so a line's title doesn't depend on the model. Spoken lines
   too. "watch 9pm show", "the 3pm meeting", "move the 3pm to 5pm" and a bare hour ("look at one of the
-  leases") still get no time.
+  leases") still get no time, and so does a line with a second stated clock
+  ("move standup at 3pm to 5pm": which one is the due stays the model's call).
 
 ## Decision log (2026-11-16)
 

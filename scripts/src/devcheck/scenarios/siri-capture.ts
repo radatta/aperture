@@ -119,6 +119,11 @@ export const untilLaMidnight = (ms: number): number => {
   return (24 * 60 - hour * 60 - minute) * MIN - (ms % MIN);
 };
 export const untilUtcMidnight = (ms: number): number => 24 * HOUR - (ms % (24 * HOUR));
+// How long until the app's day start (dayStartHour:00 LA) — a Review across it drops its preview (CaptureBar).
+export const untilDayStart =
+  (dayStartHour: number) =>
+  (ms: number): number =>
+    (untilLaMidnight(ms) + dayStartHour * HOUR) % (24 * HOUR) || 24 * HOUR;
 // A row whose answer names a day (or counts toward a UTC day) never starts within 2 min of that midnight:
 // it waits it out.
 // Waits out a midnight closer than `need` (how long the step runs, with margin) — a counter reset mid-step
@@ -131,7 +136,7 @@ async function clearOfMidnight(
 ) {
   const left = until(Date.now());
   if (left >= need) return;
-  ctx.log(`waiting ${Math.ceil(left / SEC) + 5} s for ${which} midnight to pass`);
+  ctx.log(`waiting ${Math.ceil(left / SEC) + 5} s for ${which} to pass`);
   await sleep(left + 5 * SEC);
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
@@ -890,7 +895,7 @@ export const siriCapture: Scenario = {
         'A natural line with a clock three hours ahead: parsed in time, due as the voice rules say',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the plumber')} at ${aheadClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the spoken line');
@@ -905,7 +910,7 @@ export const siriCapture: Scenario = {
         'A typed line (no voice flag): a clock an hour ago rolls to tomorrow, as a spoken one does',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the bank typed')} at ${rollClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the typed line', { voice: false });
@@ -922,7 +927,7 @@ export const siriCapture: Scenario = {
       title: 'A typed clock three hours ahead lands on its next occurrence',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the plumber typed')} at ${aheadClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the typed line ahead', { voice: false });
@@ -936,7 +941,7 @@ export const siriCapture: Scenario = {
       title: 'A typed “tomorrow at <clock>” keeps the day it names',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const { dayStartHour } = await ctx.api.reads.getSettings();
         const t0 = Date.now();
         // A daytime clock: "tomorrow at 1 am" said at 22:00 could be read as the night after tomorrow.
@@ -958,10 +963,13 @@ export const siriCapture: Scenario = {
         'Capture bar › Review, a real parse: a clock an hour ago previews on its next occurrence',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        await clearOfMidnight(ctx, untilDayStart(dayStartHour), 'the day start');
         await ctx.ui.goto('/tasks');
         await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
         const field = ctx.page.locator('textarea[aria-label="Capture task"]');
+        const created = ctx.createdIds().length;
         const t0 = Date.now();
         const text = `${line(ctx, 'call the bank bar')} at ${rollClock(laClock(t0).hour)}`;
         await field.fill(text);
@@ -988,7 +996,8 @@ export const siriCapture: Scenario = {
           .getByRole('button', { name: 'Save reviewed task' })
           .waitFor({ timeout: 10_000 });
         await ctx.shot('review');
-        await field.fill(''); // a Review writes nothing; the line goes unsaved
+        await field.fill(''); // the line goes unsaved
+        if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
       },
     },
     {
@@ -1036,7 +1045,7 @@ export const siriCapture: Scenario = {
       title: 'A stated clock an hour ago rolls to tomorrow, said “tomorrow”',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the bank')} at ${rollClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the past clock');
@@ -1209,7 +1218,7 @@ export const siriCapture: Scenario = {
         'A fresh token: 200 captures of one grammar line, then the 201st → 429 with the spoken limit',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 3 * MIN); // the cap's day is UTC
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC midnight', 3 * MIN); // the cap's day is UTC
         await withToken(ctx, nameC(ctx), async (token, info) => {
           const text = `${line(ctx, 'cap')} | ~5`;
           const day = new Date().toISOString().slice(0, 10);
@@ -1265,7 +1274,7 @@ export const siriCapture: Scenario = {
         'A fresh token: 50 distinct spoken lines (real parses), then the 51st saves as typed, “daily parse limit reached”',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 7 * MIN); // the parse cap's day is UTC too
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC midnight', 7 * MIN); // the parse cap's day is UTC too
         await withToken(ctx, nameD(ctx), async (token) => {
           const day = new Date().toISOString().slice(0, 10);
           const at = aheadClock(laClock(Date.now()).hour);

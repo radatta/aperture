@@ -138,7 +138,7 @@ Two checks keep the grammar honest:
 - **The model's title is the cross-check.** A time applies only when the model took its words out of the
   title: "look at one of the leases", "email the team about the 3pm meeting" or "read John 3:16" keep their
   words, so they get no time. A delay ("in 20 minutes") is a time whatever the model did with its title, and so
-  is a stated clock after "at" / "by" ("call the bank at 1 am"), which then leaves the title — the model once
+  is a stated clock after "at" / "by" ("call the bank at 1 am"), which then leaves the title (unless the line states a second clock) — the model once
   returned that line unchanged with no time (2026-11-17).
 - **A stated clock the model missed is filled from the words** — typed lines too (Raycast, the app's quick
   add): the 2026-11-16 dev check saw "call the bank at 6 pm" come back with today and no time. Only when the

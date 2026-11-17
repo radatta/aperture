@@ -569,6 +569,7 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
         'move the 3pm to 5pm',
         'look at one of the leases',
         'look at 5 options', // a bare hour: never an at/by clock
+        'move standup at 3pm to 5pm', // two stated clocks: the at/by one isn't taken on its own
       ])
         expect(run(line, voice), `${line} (${voice ? 'voice' : 'typed'})`).toEqual({ title: line });
   });

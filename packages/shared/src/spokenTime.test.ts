@@ -228,12 +228,19 @@ describe('dueClock — a stated clock phrased as a due', () => {
     // A title the model already cleaned is left exactly as it wrote it.
     expect(strip('.env cleanup at 5pm', '.env cleanup')).toBe('.env cleanup');
     expect(strip('--force flag docs by noon', '--force flag docs ,')).toBe('--force flag docs ,');
+    // Words kept: only the join is tidied, never the title's own leading punctuation.
+    expect(strip('.env cleanup at 5pm')).toBe('.env cleanup');
+    expect(strip('--force flag docs by noon')).toBe('--force flag docs');
+    expect(strip('-- call the bank, at 1 am, then lunch')).toBe('-- call the bank, then lunch');
   });
   it('a clock not after at/by is not a due; a phrase that is the whole title leaves it whole', () => {
     expect(strip('watch 9pm show')).toBeNull();
     expect(strip('email the team about the 3pm meeting')).toBeNull();
     expect(strip('move the 3pm to 5pm')).toBeNull();
     expect(strip('the cat 1 am wake-up')).toBeNull();
+    // A second stated clock: which is the due is the model's call.
+    expect(strip('move standup at 3pm to 5pm')).toBeNull();
+    expect(strip('call at 9am about the 3pm meeting')).toBeNull();
     expect(strip('at 9am')).toBe('at 9am');
   });
 });

@@ -7,6 +7,7 @@ import {
   laClock,
   loadShared,
   rollClock,
+  untilDayStart,
   untilLaMidnight,
   untilUtcMidnight,
   wrapHour,
@@ -64,6 +65,12 @@ describe('siri-capture’s spoken lines', () => {
     for (const k of SHARED_NUMBERS) expect(Number.isInteger(S[k]), k).toBe(true);
     for (const k of SHARED_FUNCTIONS) expect(typeof S[k], k).toBe('function');
     expect(S.USER_TIME_ZONE).toBe('America/Los_Angeles');
+  });
+
+  it('counts down to the app’s day start', () => {
+    expect(untilDayStart(4)(at(3, 59))).toBe(60_000);
+    expect(untilDayStart(4)(at(4, 0))).toBe(24 * 3_600_000);
+    expect(untilDayStart(0)(at(23, 59))).toBe(60_000);
   });
 
   it('counts down to LA’s and UTC’s midnights', () => {

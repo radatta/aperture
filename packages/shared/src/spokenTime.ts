@@ -149,14 +149,24 @@ export function dueClock(line: string, title: string, said: string): { title: st
     .replace(/\s+/g, '\\s*')
     .replace(/([ap])m$/, '$1\\.?\\s*m');
   const re = new RegExp(`\\b(?:due\\s+)?(?:at|by)\\s+${clock}\\.?(?=\\s|$|[,;:!?])`, 'i');
-  if (!re.test(line)) return null;
+  const at = re.exec(line);
+  if (!at) return null;
+  // A second stated clock ("move standup at 3pm to 5pm"): which one is the due is the model's call.
+  if (spokenTimeIn(line.slice(0, at.index) + line.slice(at.index + at[0].length))?.kind === 'clock')
+    return null;
   // The model already took the phrase out: its title stands as written.
-  if (!re.test(title)) return { title };
-  const rest = title
-    .replace(re, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/ ([,;:!?])/g, '$1')
-    .replace(/^[\s,;:.-]+|[\s,;:-]+$/g, '');
+  const m = re.exec(title);
+  if (!m) return { title };
+  // Only the join is tidied: ".env cleanup at 5pm" keeps its dot, "At noon, call mum" loses the comma.
+  const head = title.slice(0, m.index).replace(/[\s,;:]+$/, '');
+  const tail = title.slice(m.index + m[0].length).trimStart();
+  const rest = !head
+    ? tail.replace(/^[,;:]+\s*/, '')
+    : !tail
+      ? head
+      : /^[,;:!?.]/.test(tail)
+        ? head + tail
+        : `${head} ${tail}`;
   return { title: rest || title };
 }
 
