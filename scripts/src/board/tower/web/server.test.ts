@@ -309,6 +309,10 @@ describe('board.sh tower status', () => {
       // a .sha left by another server (a stale one) is unknown: empty, so sync-main restarts
       writeFileSync(`${pidFile}.sha`, `1 ${head}\n`);
       expect(tower('version', e).stdout).toBe('');
+      // none at all (main's older server, or /tmp cleaned while it ran): empty too, exit 0, nothing on stderr
+      rmSync(`${pidFile}.sha`);
+      const none = tower('version', e);
+      expect([none.status, none.stdout, none.stderr]).toEqual([0, '', '']);
       tower('stop', e);
       expect(existsSync(`${pidFile}.sha`)).toBe(false);
       expect(tower('version', e).status).toBe(1); // stopped
@@ -324,9 +328,18 @@ describe('board.sh tower status', () => {
     const port = (server.address() as AddressInfo).port; // held by this worker: the new tower can't bind it
     const pidFile = join(tmpdir(), `tower-pid-restart-${process.pid}`);
     rmSync(pidFile, { force: true });
-    const r = tower('restart', { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` });
-    expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/did not start/);
+    const board = mkdtempSync(join(tmpdir(), 'tower-board-')); // start writes its dirs and log here, not in /tmp
+    try {
+      const r = tower('restart', {
+        APERTURE_TOWER_PID: pidFile,
+        APERTURE_TOWER_PORT: `${port}`,
+        APERTURE_BOARD_DIR: board,
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/did not start/);
+    } finally {
+      rmSync(board, { recursive: true, force: true });
+    }
   }, 20_000);
 
   it('never claims a proof server (--fixtures) on its port: another session owns it', async () => {

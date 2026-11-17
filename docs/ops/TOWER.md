@@ -127,7 +127,7 @@ From the top:
 - The health strip is two columns: TODAY | AWS, CONTAINER | MAC; sparklines sit in the flow,
   never over the numbers.
 - Mac-only copy buttons become an "on the Mac" label.
-- Home Screen metas: `viewport-fit=cover` with safe-area padding (the header: the top inset plus 8 px, so it clears the status bar), `theme-color` per scheme,
+- Home Screen metas: `viewport-fit=cover` with safe-area padding (the header: the top inset plus 8 px on the phone, 12 px on the desktop, so it clears the status bar), `theme-color` per scheme,
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
   added, so a re-add picks them up.

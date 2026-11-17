@@ -253,9 +253,9 @@ cmd_tower() {
     version)
       # The commit the running server started from: "<pid> <sha>" beside its pidfile. Empty when it wrote none or the
       # file is another server's (a stale one, or an older server that writes none): unknown, so sync-main restarts.
-      local pid sha
+      local pid='' sha=''
       p=$(tower_pid) || { echo "tower: stopped" >&2; return 1; }
-      read -r pid sha <"$TOWER_PID.sha" 2>/dev/null || true
+      { read -r pid sha <"$TOWER_PID.sha"; } 2>/dev/null || true
       [ "$pid" = "$p" ] && printf '%s\n' "$sha"
       return 0 ;;
     *) echo "usage: board.sh tower start|restart|stop|status|version" >&2; return 2 ;;
