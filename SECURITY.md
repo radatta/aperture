@@ -8,7 +8,7 @@ Report a vulnerability privately: this repository's **Security** tab → **Repor
 
 ## Scope
 
-In scope: the code in this repository and the stacks deployed from it.
+In scope: the code in this repository. Please don't test against the live deployment, which holds real data: report from reading the code, or from your own deploy of a fork.
 
 Out of scope: third-party services the app uses, social engineering, and denial of service or other volumetric testing.
 

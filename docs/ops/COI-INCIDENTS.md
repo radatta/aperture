@@ -1316,7 +1316,7 @@ A search-load arm in `.claude/hooks/coi-reverse-shell-guard.sh` (rule in `_searc
 - The files `cpSync` had created on `/workspace` were zero bytes and write-only. The container could not read or remove them, `sudo` included; they need a `chmod` and `rm` from the Mac.
 - `copyFileSync` works on the same mount (probed there before the fix merged).
 
-Not captured: the exact error line, the files' mode bits, the options `cpSync` was called with.
+Not captured: the exact error line, the files' exact mode bits (recorded only as write-only), the options `cpSync` was called with.
 
 ## Mechanism
 

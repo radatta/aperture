@@ -25,7 +25,7 @@ The repo is public. Everything that reaches GitHub passes this one gate: code, d
 No PR has to exist. The Never list covers these too:
 
 - **Branch names and commit text**: public on the first `pnpm bot push`; an amend or force-push doesn't recall them.
-- **Run names**: `deploy-dev <sha> <key>` and `dev-logs <key>`; the key starts with the branch name.
+- **Run names**: `deploy-dev <sha> <key>` and `dev-logs <key>`; the key starts with the branch name (sanitised and cut to 60 characters; `logs` from a detached checkout).
 - **Dispatch inputs**: `pnpm bot logs` sends `--groups`, `--filter` and `--query` as workflow inputs, and the run shows them. Dev logs hold test-user data only, but the filter string is the author's: never a real name, mailbox or amount.
 - **Lock-tag messages**: `refs/locks/dev` and `refs/locks/devb` are annotated tags anyone can fetch; the message carries the branch name.
 - **Artifact names**: `dev-logs-<key>`. The artifact itself is downloadable by any signed-in user for its 1 day ([INFRA.md](../arch/INFRA.md) §9 → _Public repo_).
@@ -36,7 +36,7 @@ Device names, models and viewport sizes · Flux's exercise framing and wording �
 
 ## A finding
 
-`path:line — <category> — <what to write instead>`. Never repeat the offending text: findings get pasted into reports and PRs. A commit message or PR body is cited as `commit <sha7> subject` or `localNotes/pr-<branch>.md:line`. A Never hit in a commit message needs the commit reworded before the push, since a branch's history is public on its PR: `git commit --amend -m …` for the last commit; an older one needs a rebase, then `pnpm bot push --after-rebase` (IDENTIFIERS.md → the push recipe). Lines the diff didn't add are out of scope; at most one "pre-existing" note.
+`path:line — <category> — <what to write instead>`. Never repeat the offending text: findings get pasted into reports and PRs. A commit message or PR body is cited as `commit <sha7> subject` or `localNotes/pr-<branch>.md:line`. A Never hit in a commit message needs the commit reworded before the push, since a branch's history is public from its first push: `git commit --amend -m …` for the last commit; an older one needs a rebase, then `pnpm bot push --after-rebase` (IDENTIFIERS.md → the push recipe). Lines the diff didn't add are out of scope; at most one "pre-existing" note.
 
 ## What enforces it
 
