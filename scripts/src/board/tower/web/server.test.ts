@@ -92,7 +92,15 @@ describe('the HTTP surface', () => {
 
   it('serves two trial favicon sets; /?favicon=a|b links one, anything else is the default page', async () => {
     const plain = await (await fetch(`${base}/`)).text();
-    for (const q of ['', '?favicon=zzz', '?favicon=', '?favicon=A'])
+    for (const q of [
+      '',
+      '?favicon=zzz',
+      '?favicon=',
+      '?favicon=A',
+      '?favicon=__proto__',
+      '?favicon=constructor',
+      '?favicon=toString',
+    ])
       expect(await (await fetch(`${base}/${q}`)).text(), q).toBe(plain);
     // the touch icon comes after the tab icons: Safari's tab must not settle on the opaque 180 px radar
     expect(plain.indexOf('apple-touch-icon')).toBeGreaterThan(plain.indexOf('/favicon.svg'));

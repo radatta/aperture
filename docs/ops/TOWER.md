@@ -98,13 +98,14 @@ From the top:
      `done` that is undated, or timed within 2 h of now either way);
    - **NEXT ASK**: when the maintainer is next asked for something, `~HH:MM–HH:MM` — the earliest of a NOW lane's
      PR window (its lane file's `eta.pr`, while it has no open PR; `late` once that window has passed) and the next
-     `maintainer` or `merge` plan row not done and not past (at its slip when it has one) (`nextAsk()` in `plan.ts`);
+     `maintainer` or `merge` plan row not done and not past (at its slip when it has one; `late` once that has
+     passed too) (`nextAsk()` in `plan.ts`);
+   - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
    - the plan's next rows not `done` (up to 3, after the one above; one past due over 2 h drops off unless it
      slips), each `HH:MM · what` with what it costs you (`you: 2 min`) and an amber `now HH:MM` slip or `late`;
    - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…, or NOT
      STARTED with no lane file, queue entry or PR; such a lane shows here only, never in NOW). An entry whose PR
      merged (in the PR list's newest 40) or whose row is merged / deploying drops out;
-   - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
    - the dev order per slot (`devQueue` `next` / `waiting`): a different order from the landing order, so a lane
      can show in both;
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
@@ -150,11 +151,12 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
 - A row's marks (`plan.ts`, from `queue.json` and the lane files): **struck** when `done`, or a `merge` row whose
   `lane`'s PR merged (actual = its merge time). **Slipping** when it isn't done, names a `lane` with no open PR, and
   that lane's ETA ends after the row's due (`eta.to`, else `at`): a `merge` row against the lane's `eta.pr`, any
-  other against `eta.next`, else `eta.pr`. **Late** when its due passed with neither.
+  other against `eta.next`, else `eta.pr`. **Late** when its due has passed and no slip is still ahead: none, or
+  the lane's ETA has passed too (the lane went quiet).
 - **NOW** rows carry their lane's step bar and `PR ~HH:MM–HH:MM` (_Lane files_), and est vs actual per step in their
   details.
 - Not yet: a lane's last checkpoint and decisions tail, and the machine (charts) view; the header's charts toggle
-  covers the latter.
+  covers the latter. The header's sources chip, with a panel open, opens SOURCES.
 
 **Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory since the server started (up to 24 h; the server samples `mac-stats.json` on its own 5 s tick, so the series has no gap while no page is open). A sparkline with under 3 points isn't drawn.
 
@@ -288,7 +290,8 @@ pnpm board lane --clear          (Cleanup)
   replaced (a new one keeps each step's time so far). At each phase change the time in the phase just left accrues to
   its step (`spentMs`; `parked` and `blocked` count to none), so est vs actual records itself.
 - **The ETAs** follow from it at every write: `next` is now plus the current step's range less its time so far
-  (never before now), `pr` that plus every later step through `pr`; `guess` when any step behind them is. Past `pr`
+  (never before now), `pr` that plus every later step through `pr`; one `source` for both, `guess` when any step
+  behind the PR ETA is. Past `pr`
   there are none. `--eta-next` / `--eta-pr` (minutes from now, `?` a guess) set one directly instead. No plan and no
   flag: no ETA (a stale one is worse than none). The echo ends `· PR ~HH:MM–HH:MM`.
 - A malformed `plan`, `eta` or `files` reads as absent, never a problem row: the lane looks as it did before them.

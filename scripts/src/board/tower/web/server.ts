@@ -88,7 +88,9 @@ export function createHandler(getState: GetState, dir = HERE) {
       return send(400, 'text/plain', 'bad URL\n');
     }
     const file = files[url.pathname];
-    const variant = url.pathname === '/' ? pages[url.searchParams.get('favicon') ?? ''] : undefined;
+    const q = url.searchParams.get('favicon') ?? '';
+    // own keys only: `__proto__` or `constructor` must never reach res.end
+    const variant = url.pathname === '/' && Object.hasOwn(pages, q) ? pages[q] : undefined;
     if (variant) return send(200, file![1], variant);
     if (file) return send(200, file[1], file[0]);
     if (url.pathname === '/api/state') {

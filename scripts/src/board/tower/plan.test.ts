@@ -107,6 +107,18 @@ describe('planTable', () => {
     expect(at(['18:00', ''])).toBe(1);
     expect(at([])).toBe(0);
   });
+
+  it('a slip whose time has passed too is late, and its ask is late', () => {
+    const eta: LaneEta = { next: null, pr: { lo: T('18:00'), hi: T('18:30') }, source: 'measured' };
+    const { rows } = planTable(
+      [row({ at: T('17:00'), what: 'merge x', kind: 'merge', lane: 'x' })],
+      () => eta,
+      noPr,
+      NOW,
+    );
+    expect(rows[0]).toMatchObject({ slip: T('18:30'), overdue: true });
+    expect(nextAsk(rows, [], NOW)).toMatchObject({ hi: T('18:30'), late: true });
+  });
 });
 
 describe('planSoon', () => {

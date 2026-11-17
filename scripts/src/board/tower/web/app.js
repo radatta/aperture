@@ -186,7 +186,7 @@ function stepBar(steps) {
     )
     .join('\n');
   for (const s of steps) {
-    const pip = el('i', s.state === 'now' ? 'now' : s.state);
+    const pip = el('i', s.state);
     if (s.state === 'now') {
       const f = el('b');
       f.style.width = `${Math.min(100, Math.round((s.spentMin / Math.max(1, s.hi)) * 100))}%`;
@@ -214,7 +214,7 @@ function stepTable(steps) {
       `est ${s.lo}–${s.hi} min${s.source === 'guess' ? ' (guess)' : ''}` +
         (s.state === 'todo' && !s.spentMin
           ? ''
-          : ` · ${s.state === 'now' ? 'so far' : 'took'} ${s.spentMin} min`),
+          : ` · ${s.state === 'done' ? 'took' : 'so far'} ${s.spentMin} min`),
     ]),
   );
 }
@@ -402,21 +402,16 @@ function nowPanel(v) {
 // A plan row on the glance: its time, its first clause, what it costs the maintainer, a slip marker.
 function planItem(r) {
   return item(`plan:${r.what.slice(0, 60)}`, {
-    c:
-      r.slip || r.overdue
-        ? 'c-hold'
-        : r.kind === 'maintainer' || r.kind === 'merge'
-          ? 'c-hold'
-          : 'c-dim',
+    c: r.slip || r.overdue || r.kind === 'maintainer' || r.kind === 'merge' ? 'c-hold' : 'c-dim',
     badge: r.at ? hhmm(r.at) : 'PLAN',
     sig: r.what,
     text: [short(r.what)],
     meta: [
       r.you ? el('span', 'you', `you: ${r.you}`) : null,
-      r.slip
-        ? el('span', 'meta slip', `now ${hhmm(r.slip)}`)
-        : r.overdue
-          ? el('span', 'meta slip', 'late')
+      r.overdue
+        ? el('span', 'meta slip', 'late')
+        : r.slip
+          ? el('span', 'meta slip', `now ${hhmm(r.slip)}`)
           : null,
     ],
     more: [short(r.what) !== r.what ? r.what : null, r.lane ? `waits on ${r.lane}` : null],
@@ -473,9 +468,18 @@ function planTable(v) {
     const what = el('td', 'what');
     what.append(el('span', null, r.what));
     if (r.who) what.append(el('span', 'who', `  ${r.who}`));
-    if (r.slip)
+    if (r.overdue)
+      what.append(
+        el(
+          'div',
+          'slip',
+          r.slip
+            ? `late: ${r.lane}'s ETA ${hhmm(r.slip)} has passed too`
+            : 'late: past due, not marked done',
+        ),
+      );
+    else if (r.slip)
       what.append(el('div', 'slip', `now ${hhmm(r.slip)}${r.lane ? ` · ${r.lane}'s ETA` : ''}`));
-    else if (r.overdue) what.append(el('div', 'slip', 'late: past due, not marked done'));
     if (r.done)
       what.append(
         el(
@@ -517,16 +521,20 @@ function next(v) {
       }),
     );
   if (v.next.ask) items.push(askItem(v.next.ask));
-  // the glance: the next few plan rows with what they cost you; expanded, the whole table
-  if (inFull) items.push(planTable(v));
-  else for (const r of v.next.soon) items.push(planItem(r));
-  // dispatch's landing order, each lane as it stands; its merge rows aren't repeated below
+  // dispatch's landing order, each lane as it stands; its merge rows aren't repeated in the merge queue
   const order = v.next.order ?? [];
+  const merge = v.next.merge.filter((r) => !order.some((o) => o.branch === r.branch));
+  // the glance: a merge waiting on you first, then the next few plan rows with what they cost you; expanded, the
+  // whole plan table first
+  if (inFull) items.push(planTable(v));
+  else {
+    for (const r of merge) items.push(laneItem(r));
+    for (const r of v.next.soon) items.push(planItem(r));
+  }
   if (order.length) group('Landing order');
   order.forEach((o, k) => items.push(laneItem(o.row, { pos: k + 1, note: o.note })));
-  const merge = v.next.merge.filter((r) => !order.some((o) => o.branch === r.branch));
-  if (merge.length) group('Merge queue');
-  for (const r of merge) items.push(laneItem(r));
+  if (inFull && merge.length) group('Merge queue');
+  if (inFull) for (const r of merge) items.push(laneItem(r));
   if (inFull && v.needs.length) {
     group('Your items (NEEDS YOU)');
     for (const n of v.needs) items.push(needItem(n));
@@ -554,7 +562,7 @@ function next(v) {
       }),
     );
   if (!items.length) return emptyOr(v, b, 'next', 'nothing queued');
-  list(b, 'next', items, 6);
+  list(b, 'next', items, 8);
 }
 
 function done(v) {
@@ -1106,7 +1114,15 @@ function applyOpen() {
   const was = open;
   open = hashPanel();
   if (open === was) return;
-  if (!was) glanceY = window.scrollY;
+  if (!was) {
+    glanceY = window.scrollY;
+    // the glance's place, for a reload: closing after one still lands where the glance was
+    try {
+      sessionStorage.setItem('tower:y:', String(glanceY));
+    } catch {
+      // no storage: closing after a reload starts at the top
+    }
+  }
   if (open) document.body.dataset.open = open;
   else delete document.body.dataset.open;
   for (const id of PANELS) $(`#${id}`).classList.toggle('x-open', id === open);
@@ -1183,6 +1199,7 @@ function fail(text, e, now = false) {
 for (const id of ['slipping', 'sources'])
   $(`#${id} h2`).addEventListener('click', () => $(`#${id}`).classList.toggle('open'));
 $('#sources-chip').addEventListener('click', () => {
+  if (open) return openPanel('sources'); // the glance's SOURCES is hidden behind an expanded panel
   $('#sources').classList.add('open');
   const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
   $('#sources').scrollIntoView({ behavior: calm ? 'auto' : 'smooth' });
@@ -1192,7 +1209,7 @@ $('#charts-toggle').addEventListener('click', () => {
   const u = new URL(location.href);
   if (chartsOn) u.searchParams.set('charts', '1');
   else u.searchParams.delete('charts');
-  history.replaceState(null, '', u);
+  history.replaceState(history.state, '', u); // keeps an open panel's entry: Back still closes it
   tick();
 });
 for (const id of ['needs', 'now', 'next', 'done']) {
@@ -1204,7 +1221,7 @@ for (const id of ['needs', 'now', 'next', 'done']) {
 window.addEventListener('popstate', applyOpen);
 window.addEventListener('hashchange', applyOpen);
 window.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.repeat) return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName ?? '')) return;
   if (e.key === 'Escape') return closePanel();
   const k = Number(e.key);

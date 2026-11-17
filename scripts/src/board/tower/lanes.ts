@@ -206,7 +206,10 @@ function range(v: string, k: string) {
 function planSpec(v: string): NonNullable<LaneArgs['plan']> {
   const out: NonNullable<LaneArgs['plan']> = [];
   for (const part of v.split(',')) {
-    const [phase, r] = part.split('=');
+    const bits = part.split('=');
+    if (bits.length !== 2)
+      throw new Error(`--plan: ${JSON.stringify(part)} wants <step>=<lo>-<hi>`);
+    const [phase, r] = bits;
     if (!isStepPhase(phase))
       throw new Error(`--plan: ${JSON.stringify(phase)} is not a step (${STEP_PHASES.join(' ')})`);
     if (out.some((s) => s.phase === phase)) throw new Error(`--plan: ${phase} twice`);

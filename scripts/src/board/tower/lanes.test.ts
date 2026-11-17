@@ -90,7 +90,8 @@ describe('parseLaneArgs: the step plan and ETAs', () => {
     expect(() => parseLaneArgs(['build', '--plan', 'gate=1-2,gate=3-4'])).toThrow(/twice/);
     expect(() => parseLaneArgs(['build', '--plan', 'gate=9-2'])).toThrow(/lo ≤ hi/);
     expect(() => parseLaneArgs(['build', '--plan', 'gate=1.5-2'])).toThrow(/lo ≤ hi/);
-    expect(() => parseLaneArgs(['build', '--plan', 'gate'])).toThrow(/lo ≤ hi/);
+    expect(() => parseLaneArgs(['build', '--plan', 'gate'])).toThrow(/wants <step>=/);
+    expect(() => parseLaneArgs(['build', '--plan', 'build=60-90=junk'])).toThrow(/wants <step>=/);
     expect(() => parseLaneArgs(['build', '--eta-pr', '30'])).toThrow(/--eta-pr wants/);
     expect(() => parseLaneArgs(['build', '--files', 'many'])).toThrow(/number/);
     expect(() => parseLaneArgs(['--clear', '--files', '3'])).toThrow(/--clear takes nothing/);

@@ -353,14 +353,13 @@ function laneSteps(file: LaneFile | null, now: number, pr: Pr | null) {
       hi: s.hi,
       source: s.source,
       spentMin: Math.round((s.spentMs + Math.max(0, live)) / 60e3),
+      // off the track: merged or cleanup has done every step; parked or blocked has none current and none done
       state:
         s.phase === file.phase
           ? 'now'
-          : at >= 0 && k < at
+          : (at >= 0 && k < at) || file.phase === 'merged' || file.phase === 'cleanup'
             ? 'done'
-            : at < 0 && s.spentMs
-              ? 'done'
-              : 'todo',
+            : 'todo',
     };
   });
   return { steps, eta: lateEta(file, now, pr) };

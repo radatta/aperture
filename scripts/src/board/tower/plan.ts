@@ -8,7 +8,7 @@ export type PlanRow = PlanItem & {
   due: number | null; // when the row should be finished: its eta's end, else its time
   deltaMin: number | null; // a finished row's actual less its due, whole minutes (+ late, − early)
   slip: number | null; // the lane's ETA end, when it falls after the row's due: amber "now HH:MM"
-  overdue: boolean; // not finished, its due passed, and no lane ETA to say when instead
+  overdue: boolean; // not finished, its due passed, and no lane ETA still ahead to say when instead
 };
 export type PlanPr = { state: string; mergedAt: number | null } | null;
 export type Ask = {
@@ -50,7 +50,8 @@ export function planTable(
       due,
       deltaMin: doneAt !== null && due !== null ? Math.round((doneAt - due) / 60e3) : null,
       slip,
-      overdue: !done && slip === null && due !== null && due < now,
+      // a slip whose time has passed too (the lane went quiet) is late, not "now <a past time>"
+      overdue: !done && due !== null && due < now && (slip === null || slip < now),
     };
   });
   // the now-line sits before the first row still ahead (rows are by time, the undated last)
@@ -85,13 +86,14 @@ export function nextAsk(
     if (r.done || (r.kind !== 'maintainer' && r.kind !== 'merge') || r.due === null) continue;
     if (r.slip === null && r.due < now) continue; // passed and nothing says when: the overdue row says so
     const lo = r.slip ?? r.eta?.from ?? r.at ?? r.due;
+    const hi = r.slip ?? r.due;
     asks.push({
-      lo: Math.min(lo, r.slip ?? r.due),
-      hi: r.slip ?? r.due,
+      lo: Math.min(lo, hi),
+      hi,
       what: r.what,
       branch: r.lane,
       source: 'plan',
-      late: false,
+      late: hi < now,
     });
   }
   return asks.sort((a, b) => a.lo - b.lo)[0] ?? null;

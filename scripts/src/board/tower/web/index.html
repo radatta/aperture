@@ -572,7 +572,10 @@
       #strip {
         display: none;
         position: sticky;
-        top: 0;
+        top: env(
+          safe-area-inset-top,
+          0px
+        ); /* a Home Screen app: below the status bar, so ✕ stays tappable */
         z-index: 5;
         gap: 8px;
         align-items: center;
@@ -877,9 +880,11 @@
         }
         /* the sheet: the expanded panel fills the screen edge to edge */
         body[data-open] main {
-          padding: 0;
+          padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px)
+            env(safe-area-inset-left, 0px);
         }
-        body[data-open] main > section.x-open {
+        body[data-open] main > section.x-open,
+        #needs.has.x-open {
           border-radius: 0;
           box-shadow: none;
           min-height: calc(100vh - 100px);
