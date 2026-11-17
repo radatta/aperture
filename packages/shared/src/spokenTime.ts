@@ -69,9 +69,10 @@ const PAST_TO = new RegExp(
 const H24 = /\b([01]?\d|2[0-3]):([0-5]\d)\b/;
 const NOON = /\bnoon\b/i;
 const MIDNIGHT = /\bmidnight\b/i;
-// A bare hour: "at 5", "at 5:30", "at five", "at five thirty", "5 o'clock", "five o'clock".
+// A bare hour: "at 5", "at 5:30", "at five", "at five thirty", "5 o'clock", "five o'clock". "at 5 o'clock" is
+// said whole, so the title loses all of it (titleWords.ts), not "at 5" alone.
 const AT_HOUR = new RegExp(
-  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d)|${MINUTE_WORD})?(?=\\s|$|[,.;!?])`,
+  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d)|${MINUTE_WORD})?(?:\\s*o['’]?\\s?clock\\b)?(?=\\s|$|[,.;!?])`,
   'i',
 );
 const OCLOCK = new RegExp(`\\b(\\d{1,2}|${HOUR_WORD})\\s*o['’]?\\s?clock\\b`, 'i');

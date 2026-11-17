@@ -83,6 +83,10 @@ const captured = (m: string): Sample[] => [
   },
   { line: `devcheck ${m} stretch typed in 20 minutes`, title: `devcheck ${m} stretch typed` },
   {
+    line: `devcheck ${m} call the bank typed at 5 o'clock`,
+    title: `devcheck ${m} call the bank typed`,
+  },
+  {
     line: `remind me to devcheck ${m} book the vet note tomorrow morning`,
     title: `devcheck ${m} book the vet note`,
   },

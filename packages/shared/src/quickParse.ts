@@ -210,7 +210,10 @@ export function validateParsedTask(
   // calendar's today (resolveSpoken) — except a day a typed line names, below.
   const line = ctx.line;
   const spoken = line === undefined ? null : spokenTimeIn(line);
-  const keptWords = (t: SpokenTime) => saidAt(title, t.said) !== null; // whole words: "flat 2" isn't "at 2"
+  // Whole words: "flat 2" isn't "at 2". "at 5" kept from "at 5 o'clock" is kept too, as before AT_HOUR took o'clock.
+  const keptWords = (t: SpokenTime) =>
+    saidAt(title, t.said) !== null ||
+    (/^at\s/i.test(t.said) && saidAt(title, t.said.replace(/\s*o['’]?\s?clock$/i, '')) !== null);
   // A stated clock phrased as a due ("at 1 am", "by 5pm") is the due time even when the model kept it in its
   // title — seen on dev, 2026-11-17, "…at 1 am" back unchanged with no time. The phrase leaves the title.
   const due = spoken?.kind === 'clock' ? dueClock(line!, title, spoken.said) : null;

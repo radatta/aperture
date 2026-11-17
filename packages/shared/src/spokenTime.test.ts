@@ -113,6 +113,9 @@ describe('spokenTimeIn', () => {
     expect(bare('call mum at five')).toBe('5:0');
     expect(bare("call mum at 5 o'clock")).toBe('5:0');
     expect(bare('call mum five o’clock')).toBe('5:0');
+    // "at 5 o'clock" is said whole, o'clock and all.
+    expect(spokenTimeIn("call mum at 5 o'clock")?.said).toBe("at 5 o'clock");
+    expect(spokenTimeIn('call mum at five oclock today')?.said).toBe('at five oclock');
     expect(bare('call mum at 5:30')).toBe('5:30');
     expect(bare('call mum at 13')).toBeNull();
     // A minute the grammar can't read: no time at all, so the model's clock takes over.

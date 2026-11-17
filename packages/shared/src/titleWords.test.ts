@@ -297,6 +297,23 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
         true,
       ),
     ).toBe('water the ferns done');
+    // "o'clock" belongs to the said clock: it leaves with it, never put back on its own.
+    expect(title("call mum at 5 o'clock", { title: 'call mum' }, true)).toBe('call mum');
+    expect(title('call mum at five oclock', { title: 'call mum' }, true)).toBe('call mum');
+    expect(title("call mum by 5 o'clock", { title: 'call mum' }, true)).toBe('call mum');
+    expect(
+      title("call mum at 5 o'clock tomorrow", { title: 'call mum', dueDay: '2026-11-18' }, true),
+    ).toBe('call mum');
+    expect(title("remind me at 5 o'clock to call mum", { title: 'call mum' }, true)).toBe(
+      'call mum',
+    );
+    // A model that kept "at 5" read it as title words, as before: no time, and the whole phrase is title.
+    expect(parse("call mum at 5 o'clock", { title: 'call mum at 5' }, true)?.input).toMatchObject({
+      title: "call mum at 5 o'clock",
+    });
+    expect(
+      parse("call mum at 5 o'clock", { title: 'call mum at 5' }, true)?.input.dueTime,
+    ).toBeUndefined();
     expect(title('Remind me about the dentist', { title: 'the dentist' }, true)).toBe(
       'the dentist',
     );
