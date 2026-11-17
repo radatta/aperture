@@ -17,6 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "gate:fast": "node scripts/src/gate/cli.ts",
+    "gate:ci": "node scripts/src/gate/ci.ts",
     "devcheck": "pnpm --filter @aperture/scripts devcheck",
     "devcheck:local": "pnpm --filter @aperture/scripts devcheck:local",
     "ios-probe": "pnpm --filter @aperture/scripts ios-probe",

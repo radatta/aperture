@@ -35,6 +35,10 @@ describe('bot run: which runs it may touch', () => {
     expect(refusal({ ...PR_RUN, path: '.github/workflows/pr.yml@refs/pull/9/merge' })).toBeNull();
   });
 
+  it('a Branch push run on a feature branch from this repo qualifies', () => {
+    expect(refusal({ ...PR_RUN, path: '.github/workflows/branch.yml', event: 'push' })).toBeNull();
+  });
+
   it.each([
     [
       'the deploy workflow',
@@ -47,6 +51,23 @@ describe('bot run: which runs it may touch', () => {
     ['dev logs', { path: '.github/workflows/fetch-dev-logs.yml', event: 'workflow_dispatch' }],
     ['the reusable ci on a push', { path: '.github/workflows/ci.yml', event: 'push' }],
     ['pr.yml on another event', { event: 'push' }],
+    [
+      'branch.yml on a pull_request',
+      { path: '.github/workflows/branch.yml', event: 'pull_request' },
+    ],
+    [
+      'branch.yml on main',
+      { path: '.github/workflows/branch.yml', event: 'push', head_branch: 'main' },
+    ],
+    [
+      'a Branch run from a fork',
+      {
+        path: '.github/workflows/branch.yml',
+        event: 'push',
+        head_repository: { full_name: 'someone/aperture' },
+      },
+    ],
+    ['a prototype key as a path', { path: 'constructor' }],
     ['a look-alike path', { path: '.github/workflows/pr.yml.bak' }],
     ['a fork', { head_repository: { full_name: 'someone/aperture' } }],
     ['no head repo', { head_repository: null }],
