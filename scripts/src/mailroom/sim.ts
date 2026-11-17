@@ -32,6 +32,9 @@ export const ROLES = [
   'AXStaticText',
   'AXCheckBox',
 ] as const;
+// How keys/erase send their taps: tap (the default), or the input-gap trial's others (IOS-CHECK.md → Input-gap trial).
+export const VIAS = ['tap', 'post', 'hid', 'batch', 'batch15'] as const;
+export type Via = (typeof VIAS)[number];
 // The app's write buttons, refused for `tap` at validation (lowercased, trimmed: an entry, or an entry and a space) — and again at run time
 // on the element actually matched. A belt: the boundary is the dev test user's own partition.
 export const TAP_DENY = [
@@ -85,8 +88,8 @@ export type IosOp =
   | { op: 'expect'; as: string; enabled: boolean }
   | { op: 'expect'; as: string; aboveKeyboard: true }
   | { op: 'expect'; as: string; sameWidthAs: string }
-  | { op: 'keys'; text: string; in?: string } // in: read the field back where that find/tap found it
-  | { op: 'erase'; n: number; in?: string } // in: read the field back, empty, where that find/tap found it
+  | { op: 'keys'; text: string; in?: string; via?: Via } // in: read the field back where that find/tap found it
+  | { op: 'erase'; n: number; in?: string; via?: Via } // in: read the field back, empty, where that find/tap found it
   | { op: 'scroll'; dir: 'up' | 'down'; pt: number }
   | { op: 'expectBuild'; relaunches?: 0 | 1 }
   | { op: 'shot'; name: string }
@@ -192,6 +195,7 @@ const scanEnds = (o: Obj) => {
   const s = o.scan as { from: number; to: number };
   return [s.from, s.to];
 };
+const via = (o: Obj) => !('via' in o) || (VIAS as readonly unknown[]).includes(o.via);
 
 function where(o: Obj): boolean {
   if ('near' in o === 'scan' in o) return false;
@@ -281,12 +285,18 @@ function opOk(o: unknown): boolean {
       return false;
     case 'keys':
       return (
-        keysOk(o, ['op', 'text'], ['in']) &&
+        keysOk(o, ['op', 'text'], ['in', 'via']) &&
         whole(o.text, /^[a-z ]{1,24}$/) &&
-        (!('in' in o) || asName(o.in))
+        (!('in' in o) || asName(o.in)) &&
+        via(o)
       );
     case 'erase':
-      return keysOk(o, ['op', 'n'], ['in']) && int(o.n, 1, 24) && (!('in' in o) || asName(o.in));
+      return (
+        keysOk(o, ['op', 'n'], ['in', 'via']) &&
+        int(o.n, 1, 24) &&
+        (!('in' in o) || asName(o.in)) &&
+        via(o)
+      );
     case 'scroll':
       return (
         keysOk(o, ['op', 'dir', 'pt'], []) &&

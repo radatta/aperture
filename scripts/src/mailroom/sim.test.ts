@@ -228,6 +228,16 @@ describe('validateSimParams', () => {
     expect(closes('tap', false)).toBe('BAD_OP');
     expect(closes('tap', 'yes')).toBe('BAD_OP');
     expect(closes('find', true)).toBe('BAD_OP');
+    // keys/erase `via` is one of the trial's variants, and only on those two
+    const via = (op: object, v: unknown) =>
+      validateSimParams({ ...params, steps: [{ ...op, via: v }] });
+    for (const v of ['tap', 'post', 'hid', 'batch', 'batch15']) {
+      expect(via({ op: 'keys', text: 'ab' }, v)).toBeNull();
+      expect(via({ op: 'erase', n: 2 }, v)).toBeNull();
+    }
+    expect(via({ op: 'keys', text: 'ab' }, 'env')).toBe('BAD_OP');
+    expect(via({ op: 'erase', n: 2 }, 1)).toBe('BAD_OP');
+    expect(via({ op: 'find', label: 'x', near: { x: 1, y: 1 }, as: 'a' }, 'batch')).toBe('BAD_OP');
     // the first bad op decides: a malformed op before a denied tap is BAD_OP
     expect(
       validateSimParams({

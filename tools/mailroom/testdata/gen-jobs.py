@@ -687,6 +687,48 @@ spass('sim: shutdown: true shuts the sim down after a pass', patch={'params': {'
 spass('sim: a bare shutdown of a sim already off does nothing more', [{'op': 'shutdown'}], expect={'booted': 'off'}, tape=[{'m': 'list devices -j', 'out': dev('Shutdown')}], ts=None)
 spass('sim: a bare shutdown resolves the device first', [{'op': 'shutdown'}], expect={'booted': 'off'},
       simIncludes=['simctl list devices -j', 'simctl shutdown ' + U], simExcludes=['describe-ui', 'bootstatus'])
+# --- the input-gap trial: keys/erase `via` (IOS-CHECK.md -> Input-gap trial) ---
+def KV(via, text='ab'): return [L, BAR, {'op': 'keys', 'text': text, 'in': 'bar', 'via': via}]
+def EV(via, n=2): return [L, BAR, {'op': 'erase', 'n': n, 'in': 'bar', 'via': via}]
+def BATCH(lead, *xy): return 'batch --tap-style physical --step sleep ' + lead + ''.join((' --step sleep 0.6' if i else '') + f' --step tap -x {x} -y {y}' for i, (x, y) in enumerate(xy)) + ' --udid'
+AB, D409 = [(48, 744), (264, 800)], (409, 800)
+TRIAL = 'trial.jsonl'
+srej('sim: a via off the list is BAD_OP', 'BAD_OP', [L, BAR, {'op': 'keys', 'text': 'ab', 'via': 'env'}])
+srej('sim: via on a find is BAD_OP', 'BAD_OP', [L, {**BAR, 'via': 'batch'}])
+spass('sim: keys via tap (the baseline) is the per-key path, counted in trial.jsonl with the load', KV('tap'),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'typed 2 keys; via tap, drops 0'}, simCount={'tap -x 48 -y 744 --tap-style physical --udid': 1},
+      simExcludes=['batch --tap-style', 'hid=', '--post-delay'], fileHas=[[TRIAL, '{"load":{"start":'], [TRIAL, '"op":"keys","via":"tap","n":2,"drops":0']])
+spass('sim: keys without via write no trial.jsonl and no via note', [L, BAR, {'op': 'keys', 'text': 'ab', 'in': 'bar'}],
+      tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], filesAbsent=[TRIAL], simExcludes=['batch --tap-style'])
+spass('sim: keys via post tap with --post-delay 0.5', KV('post'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'via post, drops 0'},
+      simCount={'tap -x 48 -y 744 --tap-style physical --post-delay 0.5 --udid': 1, 'tap -x 264 -y 800 --tap-style physical --post-delay 0.5 --udid': 1})
+spass('sim: keys via hid set AXe\'s stabilisation wait on the taps only', KV('hid'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], notes={'2': 'via hid, drops 0'},
+      simCount={'tap -x 48 -y 744 --tap-style physical --udid ' + U + ' hid=500': 1, 'tap -x 264 -y 800 --tap-style physical --udid ' + U + ' hid=500': 1, 'hid=': 2})
+serr('sim: a failed hid tap still clears the wait (the failure screenshot carries none)', 'AXE_FAILED', KV('hid'),
+     tape=[pt(220, 895, CAPTURE, n=2), {'m': 'tap -x 48 -y 744', 'rc': 1}], simCount={'hid=': 1, 'screenshot --output': 1})
+spass('sim: keys via batch read every key, then tap them in one batch after a 1 s lead', KV('batch'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')],
+      notes={'2': 'typed 2 keys; via batch, drops 0'}, simIncludes=['--point 48,744', '--point 264,800', BATCH('1', *AB)],
+      simExcludes=['tap -x 48 -y 744 --tap-style'], simCount={'batch --tap-style': 1})
+spass('sim: keys via batch15 lead 1.5 s', KV('batch15'), tape=[pt(220, 895, CAPTURE, n=2), typed('Ab')], simCount={BATCH('1.5', *AB): 1})
+sfail('sim: a key off its spot under batch is MISS before any batch goes out', 'MISS', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(264, 800, el('AXButton', 'n', '', 249, 780, 30, 40))], simExcludes=['batch --tap-style'])
+serr('sim: a failed key batch is AXE_FAILED, never a pass', 'AXE_FAILED', KV('batch'), tape=[pt(220, 895, CAPTURE, n=2), {'m': 'batch --tap-style', 'rc': 1}])
+spass('sim: a key dropped under batch is counted, then erased and retyped by batch', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A', n=1), typed('A', 198, n=1), typed('Ab')],
+      notes={'2': 'typed 2 keys; via batch, drops 1; retyped once (first read AXStaticText "A")'},
+      simCount={BATCH('1', *AB): 2, BATCH('1', *[D409] * 4): 1}, simExcludes=['tap -x 409 -y 800 --tap-style'],
+      fileHas=[[TRIAL, '"op":"keys","via":"batch","n":2,"drops":1']])
+spass('sim: a slow field under a trial counts no drop (the second look holds the text)', KV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), typed('A'), typed('Ab', 198)], notes={'2': 'via batch, drops 0'}, simCount={'batch --tap-style': 1})
+spass('sim: erase via batch: one batch of deletes; a letter left is counted and deleted again by batch', EV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), left('A', n=1), left('A', 198, n=1)], notes={'2': 'erased 2; via batch, drops 1; deleted 3 more (first read AXTextArea "A")'},
+      simCount={BATCH('1', *[D409] * 2): 1, BATCH('1', *[D409] * 3): 1}, simExcludes=['tap -x 409 -y 800 --tap-style'],
+      fileHas=[[TRIAL, '"op":"erase","via":"batch","n":2,"drops":1']])
+spass('sim: erase via tap is the per-key path, counted', EV('tap'), tape=[pt(220, 895, CAPTURE, n=2)], notes={'2': 'erased 2; via tap, drops 0'},
+      simCount={DEL: 2}, simExcludes=['batch --tap-style'], fileHas=[[TRIAL, '"op":"erase","via":"tap","n":2,"drops":0']])
+sfail('sim: a field that moved under a trial erase is MISS, no drop counted', 'MISS', EV('batch'),
+      tape=[pt(220, 895, CAPTURE, n=2), pt(220, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20)), pt(198, 895, el('AXStaticText', 'Reflection', '', 53, 205, 80, 20))],
+      filesAbsent=[TRIAL])
 sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)
 
 # --- speed-ups (B–E): every fast path has its miss, and the miss is today's path ---
