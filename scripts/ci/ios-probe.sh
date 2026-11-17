@@ -547,10 +547,29 @@ run_sim_ci() (
   mkdir -p "$3"
   run_sim "$1" "$2" "$(cd "$3" && pwd -P)"
 )
+# Slot A's lock (refs/locks/dev, a public annotated tag whose message is {"branch","sha","expiresAt"}) must be this
+# branch's before anything signs in to dev: the lane takes it right after the push that starts the run, so the rows
+# wait up to 3 min for it, then refuse.
+lock_ok() {
+  local i msg
+  for i in $(seq 1 18); do
+    if git fetch -q --no-tags origin "+refs/locks/dev:refs/probe/lock-dev" 2>/dev/null; then
+      msg="$(git cat-file -p refs/probe/lock-dev 2>/dev/null | sed '1,/^$/d')"
+      if jq -e '.branch == "ios-ci-probe" and ((.expiresAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > now)' <<<"$msg" >/dev/null 2>&1; then
+        note "slot A's lock is ios-ci-probe's (look $i)"
+        return 0
+      fi
+    fi
+    sleep 10
+  done
+  note "slot A's lock isn't ios-ci-probe's after 3 min: no sign-in"
+  return 1
+}
 # The real rows: ios-standalone's own plans, in its order. Only op, status, ms and reason codes leave the runner.
 s_rows() {
   local sha j job out st rs js t left last="${ROW_JOBS##* }" bad=""
   [ -n "$PW" ] || { note "no DEVCHECK_PASSWORD from the ios-probe environment: rows can't run"; return 1; }
+  lock_ok || return 1
   SIGNIN_RAN=1
   sha="$(curl -s --max-time 15 "$ORIGIN/" | sed -n 's/.*<meta name="aperture-build" content="\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
   [ -n "$sha" ] || { note "no aperture-build marker on $ORIGIN"; return 1; }
