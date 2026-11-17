@@ -50,7 +50,7 @@ export function verdict(sha: string, r: GhRun | undefined, failedJobs: string[] 
 }
 
 const FIELDS = 'databaseId,workflowName,event,status,conclusion,createdAt,url';
-// A hung gh is a failure (exit 2, retried under --wait), never a stall past --timeout.
+// A hung gh is a failure (exit 2, retried under --wait), and its minute counts toward --timeout.
 const GH = { timeoutMs: 60_000 };
 
 export function check(run: Run, sha: string): Verdict {
@@ -77,6 +77,7 @@ export async function main(
   run: Run = execRun,
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
   log = console.log,
+  now = Date.now,
 ): Promise<number> {
   if (argv.some((a) => a === '-h' || a === '--help')) return (log(USAGE), 0);
   let wait = false;
@@ -97,7 +98,9 @@ export async function main(
   } catch (err) {
     return (log(`gate:ci — not a commit here: ${msg(err)}`), 2);
   }
-  for (let waited = 0; ; waited += 30) {
+  const start = now();
+  for (;;) {
+    const waited = (now() - start) / 1000; // wall clock: a slow gh counts toward --timeout too
     let v: Verdict | undefined;
     try {
       v = check(run, sha);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeRun } from '../bot/fakes.ts';
-import { main, pick, verdict, type GhRun } from './ci.ts';
+import type { Run } from '../bot/sh.ts';
+import { check, main, pick, verdict, type GhRun } from './ci.ts';
 
 const SHA = '35fe83b8b91cfe2d445e94e1e0e9f08ce81d35b4';
 const r = (over: Partial<GhRun>): GhRun => ({
@@ -105,15 +106,34 @@ describe('main', () => {
       [`gh run list --commit ${SHA}`, list([])],
     ]);
     const slept: number[] = [];
+    let t = 0;
     expect(
       await main(
         ['--wait', '--sha', SHA, '--timeout', '60'],
         run,
-        async (ms) => void slept.push(ms),
+        async (ms) => void (slept.push(ms), (t += ms)),
         () => {},
+        () => t,
       ),
     ).toBe(75);
     expect(slept).toEqual([30_000, 30_000]);
+    // a gh that takes 50 s each look counts too: one sleep, then the timeout
+    const slow = fakeRun([
+      [`git rev-parse --verify ${SHA}`, SHA],
+      [`gh run list --commit ${SHA}`, () => ((t += 50_000), list([]))],
+    ]);
+    const naps: number[] = [];
+    t = 0;
+    expect(
+      await main(
+        ['--wait', '--sha', SHA, '--timeout', '60'],
+        slow.run,
+        async (ms) => void (naps.push(ms), (t += ms)),
+        () => {},
+        () => t,
+      ),
+    ).toBe(75);
+    expect(naps).toEqual([30_000]);
     expect(
       await main(
         ['--sha', SHA],
@@ -122,6 +142,18 @@ describe('main', () => {
         () => {},
       ),
     ).toBe(75);
+  });
+
+  it('every gh call carries a timeout, so a hung gh is a failure', () => {
+    const seen: unknown[] = [];
+    const run = ((_cmd: string, args: string[], opts?: unknown) => {
+      seen.push(opts);
+      return args[1] === 'list'
+        ? JSON.stringify([r({ conclusion: 'failure' })])
+        : JSON.stringify({ jobs: [] });
+    }) as Run;
+    check(run, SHA);
+    expect(seen).toEqual([{ timeoutMs: 60_000 }, { timeoutMs: 60_000 }]);
   });
 
   it('an abbreviated sha is resolved to the full one before gh sees it', async () => {

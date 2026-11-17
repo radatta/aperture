@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_SUITE } from '../fixture-inputs.ts';
+import { isTest } from './plan.ts';
 import {
   ALWAYS_RUN,
   INPUT_RULES,
@@ -32,10 +33,10 @@ const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
 const literal = (p: string) => !p.includes('*') && !p.includes('<pkg>');
 const exists = (p: string) => existsSync(join(ROOT, p));
 
-// File reads, raw imports, spawns, imports by a computed specifier and `new URL('../…')` path climbs: what vitest's
-// import graph can't follow.
+// File reads, raw imports, spawns, imports by a computed specifier and any `new URL(…, import.meta.url)` (a path
+// built from this file's location): what vitest's import graph can't follow.
 const BLIND =
-  /\b(?:readFileSync|readdirSync|existsSync|statSync|cpSync|execFileSync|execSync|spawnSync|spawn|execFile|createRequire)\(|import\.meta\.glob|\?raw['"]|\bimport\((?!\s*(?:(?:'[^']*'|"[^"]*"|`[^`$]*`)\s*[,)]|\)))|new URL\(\s*['"`][^'"`]*['"`]\s*,\s*import\.meta\.url/;
+  /\b(?:readFileSync|readdirSync|existsSync|statSync|cpSync|execFileSync|execSync|spawnSync|spawn|execFile|createRequire)\(|import\.meta\.glob|\?raw['"]|\bimport\((?!\s*(?:(?:'[^']*'|"[^"]*"|`[^`$]*`)\s*[,)]|\)))|new URL\([^;]*?\bimport\.meta\.url/;
 const CODE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 // The gate's own files: any change to them is REPO_FULL, and they name the API in their rules and strings.
 const GATE_DIR = 'scripts/src/gate/';
@@ -121,17 +122,18 @@ describe('gate rules', () => {
     expect(stale).toEqual([]);
   });
 
-  it('the Lambda entry-file rule names every lambdas path a cdk stack module names', () => {
+  it('the Lambda entry-file rule names every lambdas path cdk names, and the module that names it', () => {
     const rule = INPUT_RULES.find((r) => r.inputs.includes('lambdas/src/coachWorker.ts'))!;
     const named = tracked
-      .filter((f) => f.startsWith('cdk/src/lib/') && CODE.test(f))
+      .filter((f) => f.startsWith('cdk/src/') && CODE.test(f) && !isTest(f))
       .flatMap((f) =>
-        [...read(f).matchAll(/new URL\(\s*'((?:\.\.\/)+lambdas\/[^']+)'/g)].map((m) =>
-          join(f, '..', m[1]!),
+        [...read(f).matchAll(/new URL\(\s*'((?:\.\.\/)+lambdas\/[^']+)'/g)].map(
+          (m) => [f, join(f, '..', m[1]!)] as const,
         ),
       );
     expect(named.length).toBeGreaterThan(0);
-    expect(named.filter((p) => !rule.inputs.includes(p))).toEqual([]);
+    expect(named.filter(([, p]) => !rule.inputs.includes(p))).toEqual([]);
+    expect(named.filter(([f]) => !rule.tests.includes(f))).toEqual([]); // naming it runs its importers
   });
 
   it('every snapshot has its owning test beside its folder', () => {

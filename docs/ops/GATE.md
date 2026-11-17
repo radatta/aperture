@@ -81,7 +81,7 @@ necessarily its importers. Any other deleted file is read from disk, so a claimi
 unclaimed, it runs its package.
 
 **Adding code that reads files, imports by a computed path (`import(x)`, a template with `${}`, any
-`new URL('…', import.meta.url)`) or spawns:**
+`new URL(…, import.meta.url)`) or spawns:**
 
 - A test: name it in an `INPUT_RULES` entry (what it reads), `ALWAYS_RUN`, or `SELF_CONTAINED` (temp dirs or
   same-area only, with why).
