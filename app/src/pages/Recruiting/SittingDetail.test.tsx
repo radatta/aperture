@@ -345,6 +345,7 @@ describe('the stub’s sittings', () => {
     expect(await api.draftSittingReview(sitting.id)).toEqual({
       ok: true,
       mistakes: ['Run 1 (Wrong Answer): expected 2, got 3'],
+      cause: null, // Runs only: the stub's rule proposes nothing
     });
     // Only one half captured: that half alone, never "expected null".
     await api.lcSittingEvents({
