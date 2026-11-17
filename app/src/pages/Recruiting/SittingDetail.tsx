@@ -2,6 +2,7 @@ import { useId, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import {
   isSittingOpen,
+  mayBeIdle,
   msToMin,
   problemCompanies,
   ROLL_PLAN_FALLBACK_MIN,
@@ -70,14 +71,30 @@ export function SittingDetail() {
         It may have been deleted with its rep.
       </EmptyState>
     );
-  return <Loaded detail={data} now={now} stale={stale} />;
+  // The re-read failed: End sitting falls back to the cached minutes, and says so.
+  const recheckFailed =
+    mayBeIdle(data.sitting, now) &&
+    q.errorUpdatedAt > q.dataUpdatedAt &&
+    isSittingOpen(data.sitting, now);
+  return <Loaded detail={data} now={now} stale={stale} recheckFailed={recheckFailed} />;
 }
 
-function Loaded({ detail, now, stale }: { detail: Detail; now: number; stale: boolean }) {
+function Loaded({
+  detail,
+  now,
+  stale,
+  recheckFailed,
+}: {
+  detail: Detail;
+  now: number;
+  stale: boolean;
+  recheckFailed: boolean;
+}) {
   const { sitting, live, events, problem, liveReads } = detail;
   // A later sitting took its rep (a Start on another problem attached it): this one's rep is that one's now.
   // Unknown until the list is read: neither is offered meanwhile (or on a failed read).
-  const { data: all } = useSittings();
+  const list = useSittings();
+  const all = list.data;
   const superseded =
     !all || all.some((x) => x.repTaskId === sitting.repTaskId && x.startedAt > sitting.startedAt);
   const idleOpen = isIdleClosed(sitting) && sitting.status === 'abandoned' && !superseded;
@@ -158,6 +175,22 @@ function Loaded({ detail, now, stale }: { detail: Detail; now: number; stale: bo
           // Reopen takes its button away: focus goes on to End sitting, the same button renamed.
           onReopened={() => requestAnimationFrame(() => document.getElementById(END_ID)?.focus())}
         />
+      )}
+
+      {isIdleClosed(sitting) && sitting.status === 'abandoned' && list.isError && (
+        <p role="alert" className="text-sm text-danger">
+          Couldn’t read your sittings to offer Reopen.{' '}
+          <button type="button" className="underline" onClick={() => void list.refetch()}>
+            Retry
+          </button>
+        </p>
+      )}
+
+      {recheckFailed && (
+        <p role="alert" className="text-sm text-danger">
+          Couldn’t re-check whether this sitting closed for inactivity — End sitting’s minutes may
+          run past your last activity.
+        </p>
       )}
 
       {(open || idleOpen) && (

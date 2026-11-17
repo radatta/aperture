@@ -46,6 +46,19 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason:
       'local: the real Haiku draft is dev’s (the model is off locally); grace-over is a wall-clock wait of up to 10 min after Done, proven on dev by any run touching packages/shared/src/sittings.ts, its refusal covered off dev by the contract suite on the Lambda and lambdas/src/index.test.ts — runs on dev',
   },
+  'sitting-auto-close': {
+    steps: [
+      'pull',
+      'kept-alive',
+      'idle-mcp',
+      'idle-closes',
+      'ui-closed',
+      'reopen',
+      'reopen-repeat',
+    ],
+    reason:
+      'local: the idle chain is a ~50-min wall-clock wait (dev can’t backdate; nor can a local run), proven on dev by --feature sitting-auto-close; its cases are covered off dev by the contract suite on the stub and the Lambda — runs on dev',
+  },
   'siri-capture': {
     steps: [
       'api-voice-parse',

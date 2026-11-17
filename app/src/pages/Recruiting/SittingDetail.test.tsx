@@ -416,6 +416,28 @@ describe('closed automatically', () => {
     expect(screen.queryByRole('button', { name: 'Mark rep done' })).toBeNull();
   });
 
+  it('a failed sittings read says why Reopen isn’t offered, with Retry', async () => {
+    const user = userEvent.setup();
+    const { api, sitting } = await withIdleClosed();
+    await api.listSittings(); // closed
+    const list = api.listSittings.bind(api);
+    const failing = vi.spyOn(api, 'listSittings').mockRejectedValue(new Error('Network down'));
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(
+      (
+        await screen.findByText(
+          /Couldn’t read your sittings to offer Reopen/,
+          {},
+          { timeout: 5000 },
+        )
+      ).textContent,
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
+    failing.mockImplementation(list);
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Reopen' })).toBeTruthy();
+  });
+
   it('its list row says closed automatically, not dropped', async () => {
     const { api } = await withIdleClosed();
     renderApp({ api, path: '/recruiting' });

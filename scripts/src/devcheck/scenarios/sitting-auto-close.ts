@@ -80,7 +80,7 @@ export const sittingAutoClose: Scenario = {
       id: 'idle-mcp',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'get_sitting, list_sittings and live_sitting read it closed by idle at its end before anything wrote it (MCP reads write nothing)',
+      what: 'get_sitting, list_sittings and live_sitting read it closed by idle at the pull + 5 min, read before any app read (that MCP reads write nothing is proven off dev: leetcodeTools.test.ts asserts the table unchanged)',
     },
     {
       id: 'rep-minutes',
@@ -249,7 +249,7 @@ export const sittingAutoClose: Scenario = {
       cost: 'slow',
       proves: ['idle-mcp'],
       title:
-        'Past 45 min since the pull, get_sitting, list_sittings and live_sitting read it closed by idle at the pull + 5 min (writing nothing)',
+        'Past 45 min since the pull, get_sitting, list_sittings and live_sitting read it closed by idle at the pull + 5 min',
       async run(ctx) {
         await sleepUntil(state.pullAfter + IDLE_MS + SKEW_MS);
         const one = (await ctx.mcp.reads.getSitting({ id: state.id })).sitting;
@@ -345,11 +345,9 @@ export const sittingAutoClose: Scenario = {
         await ctx.page.getByRole('button', { name: 'Cancel' }).click();
 
         await ctx.ui.goto('/recruiting');
-        const row = ctx.page
-          .getByRole('region', { name: 'All sittings' })
-          .getByRole('link', {
-            name: new RegExp(titleOf(ctx).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-          });
+        const row = ctx.page.getByRole('region', { name: 'All sittings' }).getByRole('link', {
+          name: new RegExp(titleOf(ctx).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+        });
         await row.waitFor({ timeout: 15_000 });
         const text = (await row.textContent()) ?? '';
         if (!/closed automatically/.test(text) || /dropped/.test(text))
