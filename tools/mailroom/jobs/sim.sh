@@ -285,7 +285,9 @@ sim_tap_el() {
     return 1
   fi
   [ -z "${SIM_TRIAL:-}" ] || [ -n "${SIM_TMS:-}" ] || t0="$(sim_ms)"
-  [ -z "${SIM_TRIAL:-}" ] || SIM_TW0="$(sim_ms)"
+  local win=""
+  [ -z "${SIM_TRIAL:-}" ] || { [ "${SIM_TOP:-}" = launch ] && [ -z "${SIM_ICON_TAP:-}" ]; } || win=1
+  [ -z "$win" ] || SIM_TW0="$(sim_ms)"
   case "${SIM_TRIAL:+$SIM_VIA}" in
     hid)
       export AXE_HID_STABILIZATION_MS=500
@@ -295,7 +297,7 @@ sim_tap_el() {
     *) ax tap -x "$cx" -y "$cy" --tap-style physical ${2:+--pre-delay "$2"} >/dev/null 2>&1 || rc=$? ;;
   esac
   [ -z "$t0" ] || SIM_TMS=$(($(sim_ms) - t0))
-  [ -z "${SIM_TRIAL:-}" ] || sim_tap_window
+  [ -z "$win" ] || sim_tap_window
   [ "$rc" = 0 ] || sim_err SIM_UNAVAILABLE AXE_FAILED "tap failed"
 }
 
@@ -535,7 +537,7 @@ sim_find_icon() {
     return 1
   fi
   if [ "$page" = "Page 1 of 2" ] && [ "$scrolls" -ge 3 ]; then
-    sim_fail ICON_SCROLL_DROPPED "still Home Screen page 1 after 3 scrolls AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
+    sim_fail ICON_SCROLL_DROPPED "still Home Screen page 1 after 3 scrolls AXe reported done: iOS dropped the input, or the tree went stale; rerun the step, don't debug the app"
     return 1
   fi
   if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "no page pill, ${app:-no app} in front after $SIM_PRESSES home presses; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
@@ -555,9 +557,9 @@ sim_launch_again() {
   else
     SIM_AGAIN_DEAD="; no web process though the tree showed the app, so not terminated"
   fi
-  ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
+  ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
   sim_find_icon || return 1
-  sim_tap_el "$SIM_ICON"
+  sim_icon_tap
 }
 
 # A leftover draft (job …060606Z…-idle5-1 stopped mid-keys and never erased) changes how the bar reads: empty label, the
@@ -590,7 +592,7 @@ sim_clear_draft() {
 # The icon tap, read back at once (the 11-16 trial: four taps on the icon over 150 s, each ignored, read back only at the
 # polls): 1 s after the tap, and again 1 s later. The web app in front is landed. The Home Screen both times is a drop:
 # Home is pressed, the icon found again and tapped (a reset SpringBoard, not the same tap again), four taps in all, and
-# still the Home Screen 3 s after the fourth is ICON_TAP_DROPPED. Anything else (a tree that won't read, a stale one) is
+# still the Home Screen about 6 s after the fourth (its looks, the peek, one more) is ICON_TAP_DROPPED. Anything else (a tree that won't read, a stale one) is
 # left to the landmark polls. Prints web, home or unknown.
 sim_icon_look() {
   local t v=unknown
@@ -604,6 +606,14 @@ sim_icon_look() {
     if [ -n "$t" ] && sim_tree_web "$t"; then v=web; elif [ -n "$t" ] && sim_tree_home "$t"; then v=home; fi
   fi
   printf '%s' "$v"
+}
+# An icon tap: inside a trial launch, only these open a tap window (a draft's taps and Done aren't icon taps).
+sim_icon_tap() {
+  local rc=0
+  SIM_ICON_TAP=1
+  sim_tap_el "$SIM_ICON" || rc=$?
+  SIM_ICON_TAP=""
+  return "$rc"
 }
 # One tree read: web, home or unknown.
 sim_icon_peek() {
@@ -638,9 +648,13 @@ sim_icon_land() {
 }
 # Home pressed, the icon found again, tapped: one more of launch's four.
 sim_icon_reset() {
+  local p="${SIM_PRESSES:-1}"
   ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
-  sim_find_icon || return 1
-  sim_tap_el "$SIM_ICON" || return 1
+  # the note's "home pressed N times" counts presses pressed again for a drop, the launch's whole: the find's extras
+  # add to it, never the reset's own deliberate press (that one is "Home pressed before each retap")
+  sim_find_icon || { SIM_PRESSES=$((p + SIM_PRESSES - 1)); return 1; }
+  SIM_PRESSES=$((p + SIM_PRESSES - 1))
+  sim_icon_tap || return 1
   SIM_TAPS=$((SIM_TAPS + 1)) SIM_RESETS=$((SIM_RESETS + 1))
 }
 
@@ -659,7 +673,7 @@ sim_op_launch() {
   sim_hid_start
   ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
   sim_find_icon || return 1
-  sim_tap_el "$SIM_ICON" || return 1
+  sim_icon_tap || return 1
   sim_icon_land || return 1
   i=0
   while :; do
@@ -1451,14 +1465,16 @@ sim_trial_out() {
       | (($c.d + "T" + $c.t + "Z") | fromdateiso8601) * 1000 + ((($c.f // "0") + "000")[0:3] | tonumber)
         - (($c.z | sub(":"; "")) as $z | (($z[1:3] | tonumber) * 60 + ($z[3:5] | tonumber)) * 60000 * (if $z[0:1] == "-" then -1 else 1 end));
     ($hid | split("\n") | map(select(length > 0 and (startswith("Filtering") | not)))
-      | map(try (fromjson | {t: (.timestamp | ms), no: ((.eventMessage // "") | contains("No active service"))}) catch null)) as $ev
-    | ($ok and ($ev | all(. != null))) as $good
+      | map(try (fromjson | {t: (.timestamp | ms), no: ((.eventMessage // "") | contains("No active service")),
+          loss: ((.eventType // "") | ascii_downcase | contains("loss"))}) catch null)) as $ev
+    | ($ok and ($ev | all(. != null)) and ($ev | all(.loss | not))) as $good
     | ($ev | map(select(. != null) | .t)) as $all
     | ($ev | map(select(. != null and .no) | .t)) as $no
     | ($taps | map(select(has("t0")))) as $win
     | ($taps | map(select(has("d")))) as $ver
     | (if $tried then {load: {start: $a, end: $b}, hid: ({ok: $good, lines: ($ev | length), noSvc: ($no | length)}
-        + (if $good then {} elif $why != "" then {why: $why} else {why: "badline"} end))} else {load: {start: $a, end: $b}} end),
+        + (if $good then {} elif $why != "" then {why: $why} elif ($ev | any(. != null and .loss)) then {why: "loss"} else {why: "badline"} end))}
+        else {load: {start: $a, end: $b}} end),
       ($tr[] | . as $l
         | ($win | map(select(.i == $l.i)) | sort_by(.k)) as $w
         | if ($l.op == "tap" or $l.op == "launch") and ($w | length) > 0 then
@@ -1725,6 +1741,8 @@ sim_op_blur() {
       sim_tap_el "$SIM_HIT" || return 1
       sleep 1
       SIM_NOTE="keyboard dismissed on the second tap (Done at $at, then $at2)"
+    else
+      sim_hung_err "looking for the keyboard's Done again" && return 1
     fi
     if sim_kb_up; then
       # which it was decides the next step: Done still where it was is input iOS dropped; moved or gone is something else

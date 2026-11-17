@@ -190,7 +190,7 @@ This adds a "vs p50" and a ratio column per job and per op. The 2026-11-08 M3 pr
   | `expectBuildRelaunch`               | `first launch ran X, second Y`: the PWA's two-launch refresh, a relaunch the baseline paid in 3 of 4 runs          |
 
 - **Dropped-input fails** are jobs ending in:
-  - `ICON_TAP_DROPPED`, `HOME_PRESS_DROPPED`, `TAP_DROPPED`, `TYPED` or `ERASED`;
+  - `ICON_TAP_DROPPED`, `ICON_SCROLL_DROPPED`, `HOME_PRESS_DROPPED`, `TAP_DROPPED`, `NAV_UNCONFIRMED`, `TYPED` or `ERASED`;
   - or `SWITCHER_FAILED` whose note says iOS dropped the input. A "no Aperture card … was the app running?" is a fail, not a drop.
 
   `AX_TIMEOUT` and `TIMEOUT` (budget or `PROBES`) are counted apart.
