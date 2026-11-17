@@ -2,7 +2,7 @@
 // trial). AXe can report a tap done that iOS never got (AXe issue 71: a new axe process can lose its first touch before
 // the sim's input service is up). Each round is one sim job. By default it taps element after element, each after a
 // pause, once per way of sending (`via`): the Home Screen icon, Bulk add and its Cancel, the capture bar, the mode
-// row's Task and Log; and types a word into Bulk add's field and erases it, sent the same way. `--keys` runs the
+// row's Task and Log; and types a word into Bulk add's field, sent the same way (then erases it, uncounted). `--keys` runs the
 // earlier trial instead: a word typed and erased per keys `via` (five of them) in the capture bar. The order rotates
 // each round, so a change in the Mac's load lands on every variant alike; the runner's read-backs count the first try's
 // drops into trial.jsonl, and this sums them per target and variant. No dev lock, no deploy, no dev writes. The
@@ -94,7 +94,10 @@ function tapCycle(via: TapVia, k: number, word: string): IosOp[] {
     { op: 'wait', s: 3 },
     { op: 'find', label: BULK_FIELD_LABEL, scan: BULK_FIELD, role: 'AXTextArea', as: field },
     { op: 'keys', text: word, in: field, via },
-    { op: 'erase', n: word.length, in: field, via },
+    // no read-back (smoke round 2026-11-17: a field holding a letter reads as an unlabelled run, which erase's check
+    // takes for a moved field, MISS). Deletes uncounted until the runner's erase knows that read; +2 slack, Cancel
+    // drops any leftover.
+    { op: 'erase', n: word.length + 2 },
     // keyboard down first: it lifts the dialog (Cancel at y 445 up, 648 down), so Cancel is tapped where it rests
     { op: 'blur' },
     { op: 'wait', s: 4 },
