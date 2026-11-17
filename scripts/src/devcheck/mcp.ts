@@ -59,8 +59,7 @@ export interface DevLiveSitting {
     problem: { slug: string };
   } | null;
   slot?: DevLiveSlot | null;
-  trace?: string | null;
-  traceBy?: 'comment' | 'card' | null; // coach-fixes: a trace comment in the code reads `comment`
+  trace?: string | null; // the trace comment before the first judged event (traced / none)
 }
 
 // What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
@@ -233,8 +232,7 @@ export interface DevSittingRead {
   )[];
   code?: { final: string | null; version: number; lang: string | null };
   review?: { insight: string | null; tags: string[]; test?: boolean } | null;
-  trace?: string | null; // coach-fixes: the trace before the first judged event, and who set it
-  traceBy?: 'comment' | 'card' | null;
+  trace?: string | null; // coach-fixes: the trace comment before the first judged event (traced / none)
   claudeNotes?: { text: string; updatedAt: string } | null;
 }
 export interface DevSittingRow {

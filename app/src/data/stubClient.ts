@@ -1168,7 +1168,7 @@ class StubClient implements ApiClient {
     fresh: readonly { id: string; type: string; at: number; payload?: unknown }[],
   ) {
     const rows = this.alive(this.store.sittingHeadRows).filter((x) => x.sittingId === sittingId);
-    if (rows.some((x) => x.coach?.kind === 'trace-comment')) return [];
+    if (rows.some((x) => x.type === 'trace-comment')) return [];
     const judged = [...rows, ...fresh].filter((x) => x.type === 'run' || x.type === 'submit');
     const cut = Math.min(...judged.map((x) => x.at));
     const hit = fresh

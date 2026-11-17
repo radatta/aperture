@@ -134,14 +134,10 @@ export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help:
   if (!accepted || help === 'solution') return 'failed' as const;
   return firstSubmitAccepted && help === 'none' ? ('clean' as const) : ('solved' as const);
 }
-// The trace state at the first submit (sittings.ts foldCoach): a trace comment in the code before the first judged
-// event is a hit, and so is the card at all three inputs. No trace data counts nowhere, nor does a sitting with the
-// card off that the server never scanned for a comment (one from before the comment rule).
-const tracedAtFirstSubmit = (c: Sitting['summary']['coach']): boolean | null => {
-  if (c?.traceBy === 'comment') return true;
-  if (!c?.trace || (c.config?.trace === false && !c.scanned)) return null;
-  return c.trace === 'traced';
-};
+// The trace before the first judged event: the trace comment (sittings.ts commentTrace) is the only source; a sitting
+// folded before the rule counts nowhere.
+const tracedOf = (s: Sitting['summary']): boolean | null =>
+  s.commentTrace ? s.commentTrace === 'traced' : null;
 // A sitting's minutes on its problem: to the first accept (both on the extension's clock), else the whole sitting
 // once it ended; null while it's open with no accept. At least 1.
 export function sittingTryMinutes(
@@ -177,7 +173,7 @@ export function sittingAttempt(s: Sitting): Attempt {
     submits: s.summary.submits,
     runs: s.summary.runs,
     runFirst: first ? s.summary.runsBeforeFirstSubmit > 0 : null,
-    traced: first ? tracedAtFirstSubmit(s.summary.coach) : null,
+    traced: first ? tracedOf(s.summary) : null,
     lastError:
       last && last.verdict !== 'accepted'
         ? { verdict: last.verdict, statusMsg: last.statusMsg }

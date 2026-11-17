@@ -3480,8 +3480,6 @@ export function runApiContract(
           config: { trace: true, hold: true, nudge: true },
           trace: 'traced',
           nudges: 1,
-          traceBy: 'card',
-          scanned: true,
         });
         expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 4 });
         // Each coach event's payload is kept whole beside its head row — the trace text included.
@@ -3505,19 +3503,13 @@ export function runApiContract(
         expect((await api.getSitting(sitting.id)).sitting.summary.headEvents).toBe(4);
       });
 
-      it('a sitting with no coach events and no trace comment reads scanned and untraced', async () => {
+      it('a sitting with no coach events reads no coach', async () => {
         const { sitting } = await startSitting(api);
-        expect((await api.getSitting(sitting.id)).sitting.summary.coach ?? null).toBeNull();
         await api.lcSittingEvents({
           sittingId: sitting.id,
           events: [lcJudged('submit', 10, 'Accepted', LC_T0 + 1000, 3, 3)],
         });
-        expect((await api.getSitting(sitting.id)).sitting.summary.coach).toEqual({
-          config: null,
-          trace: 'none',
-          nudges: 0,
-          scanned: true,
-        });
+        expect((await api.getSitting(sitting.id)).sitting.summary.coach ?? null).toBeNull();
       });
 
       it('events stop a day after Start', async () => {
@@ -4349,22 +4341,13 @@ export function runApiContract(
 
       it('a trace comment in a snapshot before the first judged event reads traced; none reads untraced', async () => {
         const traced = await ended('two-sum', false, [lcSnap(TRACE, LC_T0 + 120_000)]);
-        expect((await api.getSitting(traced.id)).sitting.summary.coach).toMatchObject({
-          trace: 'traced',
-          traceBy: 'comment',
-          scanned: true,
-        });
+        expect((await api.getSitting(traced.id)).sitting.summary.commentTrace).toBe('traced');
         const plain = await ended('valid-anagram', false, [
           lcSnap('class Solution:\n    pass', LC_T0 + 120_000),
         ]);
-        expect((await api.getSitting(plain.id)).sitting.summary.coach).toMatchObject({
-          trace: 'none',
-          scanned: true,
-        });
+        expect((await api.getSitting(plain.id)).sitting.summary.commentTrace).toBe('none');
         const late = await ended('contains-duplicate', false, [lcSnap(TRACE, LC_T0 + 700_000)]);
-        expect((await api.getSitting(late.id)).sitting.summary.coach).toMatchObject({
-          trace: 'none',
-        });
+        expect((await api.getSitting(late.id)).sitting.summary.commentTrace).toBe('none');
         const stats = await api.getCoachStats();
         expect(stats.patterns.find((p) => p.pattern === 'arrays-hashing')!.traced).toEqual({
           hit: 1,
@@ -4768,21 +4751,13 @@ export function runApiContract(
       });
 
       it('stats carry the Patterns tab’s detail: submits a try, run first, traced, weekly first tries', async () => {
-        // valid-palindrome: traced, ran, a wrong submit, then an accept. 3sum: trace skipped, accepted at once.
-        const coach = (at: number, payload: unknown): SittingEventInput => ({
-          id: ulid(),
-          type: 'coach',
-          at,
-          payload,
-        });
+        // valid-palindrome: a trace comment, ran, a wrong submit, then an accept. 3sum: no trace, accepted at once.
+        const traced = ['"""', 's = "aba"', 'l=0 r=2: a == a', 'l=1 r=1 -> done', '"""'].join('\n');
         for (const [slug, events] of [
           [
             'valid-palindrome',
             [
-              coach(LC_T0 + 1000, {
-                kind: 'trace',
-                inputs: { empty: '""', boundary: '"a"', normal: '"ab a"' },
-              }),
+              lcSnap(traced, LC_T0 + 1000),
               lcJudged('run', 10, 'Accepted', LC_T0 + 2000, 3, 3),
               lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 3000, 1, 3),
               lcJudged('submit', 10, 'Accepted', LC_T0 + 4000, 3, 3),
@@ -4791,7 +4766,7 @@ export function runApiContract(
           [
             '3sum',
             [
-              coach(LC_T0 + 1000, { kind: 'trace-skip' }),
+              lcSnap('class Solution:\n    pass', LC_T0 + 1000),
               lcJudged('submit', 10, 'Accepted', LC_T0 + 2000, 3, 3),
             ],
           ],

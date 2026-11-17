@@ -120,12 +120,6 @@ const judged = (type: 'run' | 'submit', ok: boolean): DevSittingEvent => ({
           : { status_code: 11, status_msg: 'Wrong Answer', total_correct: 1, total_testcases: 3 },
   },
 });
-const cardSkip = (): DevSittingEvent => ({
-  id: devUlid(),
-  type: 'coach',
-  at: at(),
-  payload: { kind: 'trace-skip' },
-});
 
 // What this run made and read, shared across steps (a scenario's steps run in order).
 const state = {
@@ -147,7 +141,7 @@ const T = () => state.today || fail('no plan day read — the setup step failed'
 const d = (n: number) => addDays(T(), n);
 const mine = () => [state.voidId, state.traceId, state.noneId, state.lateId].filter(Boolean);
 const notes = (ctx: Ctx) => ({
-  trace: `devcheck-cfx ${ctx.nonce}: traced in a docstring before the first Run.\nFirst submit accepted; the comment beat the card's skip.`,
+  trace: `devcheck-cfx ${ctx.nonce}: traced in a docstring before the first Run.\nFirst submit accepted.`,
   none: `devcheck-cfx ${ctx.nonce}: no trace; the first submit failed.\nRe-solve: trace the empty input first.`,
   late: `devcheck-cfx ${ctx.nonce}: ran first, wrote the trace after.\nDropped it.`,
 });
@@ -338,19 +332,13 @@ export const coachFixes: Scenario = {
       id: 'trace-comment',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'A trace comment in a snapshot before the first Run: live_sitting and get_sitting read traced, by comment',
+      what: 'A trace comment in a snapshot before the first Run: live_sitting, get_sitting and the summary read traced',
     },
     {
       id: 'trace-none',
       entry: 'api',
       kind: 'edge',
       what: 'No comment → none once judged; a comment only after the first Run → none',
-    },
-    {
-      id: 'trace-card-skip',
-      entry: 'api',
-      kind: 'edge',
-      what: 'The card says skipped and the comment is there → traced, by comment',
     },
     // --- Claude's notes ---
     {
@@ -678,13 +666,12 @@ export const coachFixes: Scenario = {
     // --- The trace comment ---
     {
       id: 'trace-open',
-      title: 'Start a sitting; a snapshot with a trace docstring, then the card’s skip',
+      title: 'Start a sitting; a snapshot with a trace docstring',
       entry: 'api',
       async run(ctx) {
         const s = await startSitting(ctx, 'trace');
         state.traceId = s.id;
         await ctx.api.writes.lcSittingEvents(s.id, [snapshot(TRACE_CODE)]);
-        await ctx.api.writes.lcSittingEvents(s.id, [cardSkip()]);
       },
     },
     {
@@ -696,8 +683,7 @@ export const coachFixes: Scenario = {
         const live = await ctx.mcp.reads.liveSitting();
         if (!live.active || live.sitting?.id !== state.traceId)
           fail('live_sitting isn’t on this run’s open sitting');
-        if (live.trace !== 'traced' || live.traceBy !== 'comment')
-          fail(`live_sitting trace ${String(live.trace)} by ${String(live.traceBy)}`);
+        if (live.trace !== 'traced') fail(`live_sitting trace ${String(live.trace)}`);
         // All or nothing: an ended sitting beside the open one gets nothing either.
         expectRefused(
           'notes on an open sitting',
@@ -713,29 +699,26 @@ export const coachFixes: Scenario = {
     },
     {
       id: 'trace-done',
-      title:
-        'An accepted submit and Done: the summary keeps traced by comment over the card’s skip',
+      title: 'An accepted submit and Done: the summary keeps traced',
       entry: 'api',
-      proves: ['trace-comment', 'trace-card-skip'],
+      proves: ['trace-comment'],
       async run(ctx) {
         const id = state.traceId;
         await ctx.api.writes.lcSittingEvents(id, [judged('submit', true)]);
         const s = await sittingOf(ctx, id);
         await done(ctx, s, 15);
-        const coach = (await sittingOf(ctx, id)).summary.coach;
-        if (coach?.trace !== 'traced' || coach.traceBy !== 'comment')
-          fail(`the summary’s coach: ${JSON.stringify(coach)}`);
+        const trace = (await sittingOf(ctx, id)).summary.commentTrace;
+        if (trace !== 'traced') fail(`the summary’s commentTrace: ${String(trace)}`);
       },
     },
     {
       id: 'trace-read',
-      title: 'get_sitting reads the ended sitting traced by comment',
+      title: 'get_sitting reads the ended sitting traced',
       entry: 'mcp',
       proves: ['trace-comment'],
       async run(ctx) {
         const r = await ctx.mcp.reads.getSitting({ id: state.traceId });
-        if (r.trace !== 'traced' || r.traceBy !== 'comment')
-          fail(`get_sitting trace ${String(r.trace)} by ${String(r.traceBy)}`);
+        if (r.trace !== 'traced') fail(`get_sitting trace ${String(r.trace)}`);
       },
     },
     {
@@ -751,17 +734,15 @@ export const coachFixes: Scenario = {
           judged('submit', false),
         ]);
         await done(ctx, none, 1);
-        const a = (await sittingOf(ctx, none.id)).summary.coach;
-        if (a?.trace !== 'none' || a.scanned !== true || a.traceBy === 'comment')
-          fail(`no comment: ${JSON.stringify(a)}`);
+        const a = (await sittingOf(ctx, none.id)).summary.commentTrace;
+        if (a !== 'none') fail(`no comment: ${String(a)}`);
 
         const late = await startSitting(ctx, 'late');
         state.lateId = late.id;
         await ctx.api.writes.lcSittingEvents(late.id, [judged('run', false)]);
         await ctx.api.writes.lcSittingEvents(late.id, [snapshot(TRACE_CODE)]);
-        const b = (await sittingOf(ctx, late.id)).summary.coach;
-        if (b?.trace !== 'none' || b.traceBy === 'comment')
-          fail(`a comment after the first Run: ${JSON.stringify(b)}`);
+        const b = (await sittingOf(ctx, late.id)).summary.commentTrace;
+        if (b !== 'none') fail(`a comment after the first Run: ${String(b)}`);
         await ctx.api.writes.finishTask(late.repTaskId, 'cancelled');
         const dropped = await sittingOf(ctx, late.id);
         if (dropped.status !== 'abandoned') fail(`after Drop: ${dropped.status}`);

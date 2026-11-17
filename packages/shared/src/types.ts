@@ -392,8 +392,11 @@ export interface SittingSummary {
   lcTimer: LcTimerState | null;
   lastEventAt: number | null;
   headEvents: number; // how many head rows this summary folds — a recompute never writes over a larger one
-  coach?: SittingCoach; // only once a coach event or a judged event folds: read it as `summary.coach ?? null`
+  coach?: SittingCoach; // only once a coach event folds: read it as `summary.coach ?? null`
   firstJudgedAt?: number | null; // the first Run's or Submit's `at`; absent on summaries folded before it
+  // The trace (docs/areas/recruiting/index.md → The trace comment): `traced` when a snapshot before the first Run or
+  // Submit held a trace comment, `none` once judged without one; absent until then and on sittings folded before it.
+  commentTrace?: 'traced' | 'none';
 }
 
 // The user's LeetCode Start gate (one row): the day it counts (the user's zone, never the client's), that
@@ -413,7 +416,8 @@ export interface LcStartGate extends BaseEntity {
 export interface SittingHeadRow {
   id: string;
   sittingId: string;
-  type: 'run' | 'submit' | 'note' | 'timer' | 'coach';
+  // `trace-comment` is the server's own row (traceCommentRow), never an extension event.
+  type: 'run' | 'submit' | 'note' | 'timer' | 'coach' | 'trace-comment';
   at: number;
   verdict: SittingVerdict | null; // runs and submits
   timer: LcTimerState | null; // timer reads
@@ -438,21 +442,16 @@ export type CoachEventPayload =
 // What a coach event's head row keeps: its kind (null when unknown — stored, folds nothing), how many
 // inputs a trace filled, and a config's switches.
 export interface CoachMark {
-  // `trace-comment` is the server's own (a snapshot before the first Run or Submit held a trace comment,
-  // traceComment.ts); coachMarkOf never yields it, so the extension can't forge one.
-  kind: CoachEventKind | 'trace-comment' | null;
+  kind: CoachEventKind | null;
   inputs: number | null;
   config: { trace: boolean; hold: boolean; nudge: boolean } | null;
 }
 // The sitting's coaching, folded from its coach rows. `trace` is the state at the first submit: three
-// inputs traced, one or two, skipped, or a submit with no trace (`none`); null until any of those. A trace
-// comment in the code before the first Run or Submit reads `traced` by `comment`, and beats the card.
+// inputs traced, one or two, skipped, or a submit with no trace (`none`); null until any of those.
 export interface SittingCoach {
   config: { trace: boolean; hold: boolean; nudge: boolean } | null;
   trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
   nudges: number;
-  traceBy?: 'comment' | 'card'; // who set `trace`; absent before the comment rule
-  scanned?: boolean; // the server read the code for a trace comment before the first judged event
 }
 
 // A sitting's capture budget: every event the extension sends is reserved here (a CAS increment) before

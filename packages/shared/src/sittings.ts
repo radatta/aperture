@@ -386,7 +386,8 @@ const verdictOrOther = (payload: unknown, at: number, type: 'run' | 'submit'): S
     total: null,
     at,
   };
-export type HeadEventType = SittingHeadRow['type'];
+// The extension's head events; the server's own `trace-comment` row is never one.
+export type HeadEventType = Exclude<SittingHeadRow['type'], 'trace-comment'>;
 const timerWithoutRaw = (t: LcTimerState | null): LcTimerState | null =>
   t ? { ...t, raw: null } : null;
 // The compact row a head event is folded from, taken from its payload once, at write.
@@ -420,11 +421,11 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     total: null,
     at: r.at,
   };
-  // The first judged event closes the trace-comment window: the server scanned the code before it (lcSittingEvents),
-  // so with no trace by then the sitting reads untraced — unless the card traces before the first submit.
+  // The trace comment (traceComment.ts): a server row before the first judged event reads traced; the first Run or
+  // Submit closes the window, so with none by then the sitting reads untraced. The only traced/untraced source.
   if ((r.type === 'run' || r.type === 'submit') && s.runs + s.submits === 0) {
     next.firstJudgedAt = r.at;
-    next.coach = { ...(s.coach ?? emptyCoach()), scanned: true, trace: s.coach?.trace ?? 'none' };
+    next.commentTrace = s.commentTrace ?? 'none';
   }
   if (r.type === 'run') {
     next.runs = s.runs + 1;
@@ -440,12 +441,12 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     }
   } else if (r.type === 'note') next.notes = s.notes + 1;
   else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
-  else if (r.type === 'coach' && r.coach?.kind)
-    next.coach = foldCoach(s.coach, r.coach, s.submits, s.runs + s.submits);
+  else if (r.type === 'coach' && r.coach?.kind) next.coach = foldCoach(s.coach, r.coach, s.submits);
+  else if (r.type === 'trace-comment' && s.runs + s.submits === 0) next.commentTrace = 'traced';
   return next;
 }
 
-// --- Coach events (the trace — a comment in the code, or the extension's card on older sittings — and the resubmit nudge) ---
+// --- Coach events (the extension's trace card and resubmit nudge) ---
 const COACH_KINDS: readonly CoachEventKind[] = [
   'config',
   'trace',
@@ -477,45 +478,30 @@ export function coachMarkOf(payload: unknown): CoachMark {
         : null,
   };
 }
-const emptyCoach = (): SittingCoach => ({ config: null, trace: null, nudges: 0 });
 // One coach row into the sitting's coaching. The trace state is what stood at the first submit: a trace or
 // a skip counts only before it (the latest wins), and a submit seen untraced marks `none` unless one came first.
-// A trace comment (the server's row, at the snapshot's time) counts only before the first judged event, and once
-// it stands the card can't change it: the comment wins.
-function foldCoach(
-  c: SittingCoach | undefined,
-  m: CoachMark,
-  submits: number,
-  judged: number,
-): SittingCoach {
-  const next: SittingCoach = c ? { ...c } : emptyCoach();
+function foldCoach(c: SittingCoach | undefined, m: CoachMark, submits: number): SittingCoach {
+  const next: SittingCoach = c ? { ...c } : { config: null, trace: null, nudges: 0 };
   if (m.kind === 'config') next.config = m.config ?? next.config;
   else if (m.kind === 'nudge-shown') next.nudges += 1;
-  else if (m.kind === 'trace-comment') {
-    if (judged === 0) Object.assign(next, { trace: 'traced', traceBy: 'comment' });
-  } else if (next.traceBy === 'comment') return next;
   else if (m.kind === 'untraced-submit') next.trace ??= 'none';
   else if (submits === 0)
-    Object.assign(next, {
-      trace:
-        m.kind === 'trace-skip' || !m.inputs ? 'skipped' : m.inputs === 3 ? 'traced' : 'partial',
-      traceBy: 'card',
-    });
+    next.trace =
+      m.kind === 'trace-skip' || !m.inputs ? 'skipped' : m.inputs === 3 ? 'traced' : 'partial';
   return next;
 }
-// The server's head row for a snapshot whose code holds a trace comment (traceComment.ts): a coach row at the
-// snapshot's time, keyed by its event id so a retry writes it once.
+// The server's head row for a snapshot whose code holds a trace comment (traceComment.ts): its own type, at the
+// snapshot's time, keyed by its event id so a retry writes it once. Never an extension event (isHeadEvent).
 export const traceCommentRow = (
   sittingId: string,
   e: { id: string; at: number },
 ): SittingHeadRow => ({
   id: e.id,
   sittingId,
-  type: 'coach',
+  type: 'trace-comment',
   at: e.at,
   verdict: null,
   timer: null,
-  coach: { kind: 'trace-comment', inputs: null, config: null },
   deletedAt: null,
 });
 // The head's summary, recomputed from every stored head row in time order — never an increment, so a retry

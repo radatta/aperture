@@ -158,27 +158,24 @@ chars), `trace-skip`, `untraced-submit` (a Submit seen with neither) and `nudge-
 skip `skipped`, a submit seen untraced `none`; a trace after the first submit changes nothing), plus the config and
 a nudge count. A kind the server doesn't know is stored (its payload in full) and folds nothing — its head row keeps
 `kind: null` for good, so an extension that ships a kind first loses that kind's fold on those sittings unless a
-backfill re-reads the payloads. `summary.coach` is absent until a coach event or a judged event folds — on every sitting before them —
-so readers take `summary.coach ?? null`.
+backfill re-reads the payloads. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
+extension that sends none — so readers take `summary.coach ?? null`.
 
 **The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
-the code itself is the source from extension 2.2.0 on (its card is off: config `trace: false`, no trace events).
-At ingest (`lcSittingEvents`), the earliest fresh snapshot before the sitting's first judged event (stored or in the
-same batch) whose code holds a trace comment becomes the server's own head row — type `coach`, mark kind
-`trace-comment`, at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`;
-`coachMarkOf` never yields that kind, so the extension can't forge it). The rule (`traceComment.ts`, no model): a block
-is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or `//` lines; it is a trace when it has an
-input line (`name = <literal>`, or one opening with input / example / trace) and at least 2 other step lines (a digit
-and one of `->`, `=>`, `→`, `=`, `:`, `|`); LeetCode's starter comments (`:type`, `@param`, "Definition for") never
-count; a block not yet closed isn't one. Known limit: three commented-out literal assignments read as a trace.
+the code itself is the only traced/untraced source (the card is going: extension-tidy removes it; nothing here reads
+it). At ingest (`lcSittingEvents`), the earliest fresh snapshot before the sitting's first judged event (stored or in
+the same batch) whose code holds a trace comment becomes the server's own head row — type `trace-comment` (never an
+extension event), at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`). The rule
+(`traceComment.ts`, no model): a block is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or
+`//` lines; it is a trace when it has an input line (`name = <literal>`, or one opening with input / example /
+trace) and at least 2 other step lines (a digit and one of `->`, `=>`, `→`, `=`, `:`, `|`); LeetCode's starter
+comments (`:type`, `@param`, "Definition for") never count; a block not yet closed isn't one. Known limit: three
+commented-out literal assignments read as a trace.
 
-The fold: a `trace-comment` row with nothing judged before it sets `trace: 'traced'`, `traceBy: 'comment'`, and the
-card can't change it after (the comment wins, whichever lands first). The first Run or Submit sets
-`summary.firstJudgedAt` and `coach.scanned: true`, with `trace` `none` unless something set it — so a new sitting with no
-comment reads untraced; a card trace before the first submit still sets `traceBy: 'card'` on older sittings, which
-fold as before. The coach's `traced` (stats, the Patterns tab) is a hit by comment, or the card at three inputs; a
-card-off sitting from before the rule (never scanned) counts nowhere. `live_sitting`, `get_sitting`, the review's
-suggested cause and the draft's signal all read `summary.coach`.
+The fold sets `summary.commentTrace`: `traced` from a `trace-comment` row with nothing judged before it; the first
+Run or Submit sets `summary.firstJudgedAt` and `commentTrace` `none` unless already traced. Absent until judged, and
+on sittings folded before the rule, which count nowhere. The coach's `traced` (stats, the Patterns tab),
+`live_sitting.trace`, `get_sitting.trace`, the review's suggested cause and the draft's trace signal all read it.
 
 ### Claude watches live
 

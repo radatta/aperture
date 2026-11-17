@@ -107,13 +107,12 @@ describe('verdict presentation', () => {
 });
 
 describe('the coach’s view helpers', () => {
-  it('suggests No trace when the trace was skipped or missing, or the first submit failed with no run', () => {
-    expect(suggestedCause(mk({}, { coach: { config: null, trace: 'skipped', nudges: 0 } }))).toBe(
-      'no-trace',
-    );
-    expect(suggestedCause(mk({}, { coach: { config: null, trace: 'none', nudges: 0 } }))).toBe(
-      'no-trace',
-    );
+  it('suggests No trace when the code held no trace comment, or the first submit failed with no run', () => {
+    expect(suggestedCause(mk({}, { commentTrace: 'none' }))).toBe('no-trace');
+    // The card is never read: its "skipped" says nothing.
+    expect(
+      suggestedCause(mk({}, { coach: { config: null, trace: 'skipped', nudges: 0 } })),
+    ).toBeNull();
     expect(
       suggestedCause(mk({}, { firstSubmit: v('wrong_answer'), runsBeforeFirstSubmit: 0 })),
     ).toBe('no-trace');
@@ -123,9 +122,7 @@ describe('the coach’s view helpers', () => {
     expect(
       suggestedCause(mk({}, { firstSubmit: v('accepted'), runsBeforeFirstSubmit: 0 })),
     ).toBeNull();
-    expect(
-      suggestedCause(mk({}, { coach: { config: null, trace: 'traced', nudges: 0 } })),
-    ).toBeNull();
+    expect(suggestedCause(mk({}, { commentTrace: 'traced' }))).toBeNull();
     expect(suggestedCause(mk())).toBeNull();
   });
 

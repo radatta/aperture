@@ -339,9 +339,8 @@ export interface DevSitting {
       config: { trace: boolean; hold: boolean; nudge: boolean } | null;
       trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
       nudges: number;
-      traceBy?: 'comment' | 'card'; // coach-fixes: who set `trace` (a trace comment in the code wins)
-      scanned?: boolean; // the server read the code for a trace comment before the first judged event
     };
+    commentTrace?: 'traced' | 'none'; // coach-fixes: the trace comment before the first judged event
   };
   claudeNotes?: { text: string; updatedAt: number } | null; // coach-fixes: Claude's notes, beside the review
 }

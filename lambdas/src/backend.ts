@@ -1112,7 +1112,7 @@ export class BackendClient implements ApiClient {
     const snaps = events.filter((e) => e.type === 'snapshot' && fresh.has(e.id));
     if (!snaps.length) return false;
     const rows = await this.repo.listSittingHeadRows(sittingId);
-    if (rows.some((r) => r.coach?.kind === 'trace-comment')) return false;
+    if (rows.some((r) => r.type === 'trace-comment')) return false;
     const judged = [...rows, ...events].filter((x) => x.type === 'run' || x.type === 'submit');
     const cut = Math.min(...judged.map((x) => x.at));
     const hit = snaps

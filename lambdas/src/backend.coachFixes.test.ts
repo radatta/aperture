@@ -63,7 +63,7 @@ describe('the trace comment row', () => {
     });
     const traceRows = async () =>
       (await doc.query(pk('u1'), `lcs#${sitting.id}#hd#`)).filter(
-        (r) => (r.coach as { kind?: string } | null)?.kind === 'trace-comment',
+        (r) => r.type === 'trace-comment',
       );
     return { backend, sitting, traceRows };
   }
@@ -89,10 +89,7 @@ describe('the trace comment row', () => {
     const rows = await traceRows();
     expect(rows.map((r) => r.id)).toEqual([a.id]);
     await backend.lcSittingEvents({ sittingId: sitting.id, events: [submit(T0 + 5000)] });
-    expect((await backend.getSitting(sitting.id)).sitting.summary.coach).toMatchObject({
-      trace: 'traced',
-      traceBy: 'comment',
-    });
+    expect((await backend.getSitting(sitting.id)).sitting.summary.commentTrace).toBe('traced');
   });
 
   it('is never written for a snapshot after the first judged event, even in the same batch', async () => {
@@ -104,9 +101,6 @@ describe('the trace comment row', () => {
     expect(await traceRows()).toEqual([]);
     await backend.lcSittingEvents({ sittingId: sitting.id, events: [snap(TRACE, T0 + 3000)] });
     expect(await traceRows()).toEqual([]);
-    expect((await backend.getSitting(sitting.id)).sitting.summary.coach).toMatchObject({
-      trace: 'none',
-      scanned: true,
-    });
+    expect((await backend.getSitting(sitting.id)).sitting.summary.commentTrace).toBe('none');
   });
 });

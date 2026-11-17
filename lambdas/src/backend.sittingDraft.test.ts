@@ -193,7 +193,7 @@ describe('draftSittingReview', () => {
       accepted: false,
       ended: false,
       ranBeforeFirstSubmit: true,
-      trace: 'none', // scanned at the first judged event, no trace comment: untraced
+      trace: 'none', // judged with no trace comment in the code: untraced
     });
     for (const cause of ['careless', 3, ['boundary']]) {
       anthropic.nextDraft = { ok: true, fields: { mistakes: ['a'], cause } };

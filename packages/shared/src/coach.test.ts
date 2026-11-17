@@ -1093,9 +1093,10 @@ describe('pattern detail (the Patterns tab)', () => {
     ...s,
     summary: { ...s.summary, runs: runsBeforeFirstSubmit, runsBeforeFirstSubmit },
   });
-  const withTrace = (s: Sitting, trace: 'traced' | 'partial' | 'skipped' | 'none') => ({
+  // The trace comment's fold (sittings.ts commentTrace): the only traced/untraced source.
+  const withTrace = (s: Sitting, trace: 'traced' | 'none') => ({
     ...s,
-    summary: { ...s.summary, coach: { config: null, trace, nudges: 0 } },
+    summary: { ...s.summary, commentTrace: trace },
   });
   const statsOf = (sittings: Sitting[], manualRows: CoachAttempt[] = [], range = {}) =>
     coachStats(attemptsOf(sittings, manualRows, NOW, undefined, TODAY), TODAY, range);
@@ -1108,7 +1109,7 @@ describe('pattern detail (the Patterns tab)', () => {
         withRuns(sit({ slug: tp[0]!, on: day(-5), submits: ['wrong_answer', 'accepted'] }), 2),
         'traced',
       ),
-      withTrace(withRuns(sit({ slug: tp[1]!, on: day(-4), submits: ['accepted'] }), 0), 'skipped'),
+      withTrace(withRuns(sit({ slug: tp[1]!, on: day(-4), submits: ['accepted'] }), 0), 'none'),
       sit({ slug: tp[2]!, on: day(-3), minutes: 20 }), // never submitted: no submit, run or trace data
     ]);
     expect(pat(s, 'two-pointers')).toMatchObject({
@@ -1120,24 +1121,17 @@ describe('pattern detail (the Patterns tab)', () => {
     });
   });
 
-  it('a partial trace or an untraced submit is a miss; no coach data, or the card off, counts nowhere', () => {
-    const none = withTrace(clean(tp[3]!, day(-1)), 'none');
-    const off = {
-      ...none,
-      summary: {
-        ...none.summary,
-        coach: {
-          config: { trace: false, hold: false, nudge: true },
-          trace: 'none' as const,
-          nudges: 0,
-        },
-      },
+  it('an untraced submit is a miss; no comment data counts nowhere, and the card is never read', () => {
+    const plain = clean(tp[3]!, day(-1));
+    const cardTraced = {
+      ...plain,
+      summary: { ...plain.summary, coach: { config: null, trace: 'traced' as const, nudges: 0 } },
     };
     const s = statsOf([
-      withTrace(clean(tp[0]!, day(-3)), 'partial'),
+      withTrace(clean(tp[0]!, day(-3)), 'none'),
       withTrace(clean(tp[1]!, day(-2)), 'none'),
       clean(tp[2]!, day(-1)),
-      off,
+      cardTraced,
     ]);
     expect(pat(s, 'two-pointers').traced).toEqual({ hit: 0, of: 2 });
   });
