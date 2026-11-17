@@ -745,6 +745,13 @@ export const lcCoach: Scenario = {
           .first()
           .waitFor({ timeout: 5_000 });
         await c.getByText(/of 7 days practised this week/).waitFor({ timeout: 5_000 });
+        // The 48-hour list: a re-solve due beyond today's live slots is there (the scheduler step leaves some).
+        const due = dueBeyond(t)[0];
+        if (due) {
+          const list = c.getByRole('region', { name: 'Re-solves coming up' });
+          const title = (due as { title?: string }).title ?? fail('a due item with no title');
+          await list.getByText(title).first().waitFor({ timeout: 5_000 }); // its row adds " · pattern"
+        }
         await ctx.shot('lc-coach-today-card');
       },
     },
@@ -832,12 +839,16 @@ export const lcCoach: Scenario = {
         const t = await ctx.api.reads.getCoachToday();
         const live = t.slots.filter((x) => x.status !== 'skipped');
         const left = live.filter((x) => x.status !== 'done').length;
-        const want = t.floor?.on
-          ? 'floor day'
-          : left === 0
-            ? `${live.length} of ${live.length} done`
-            : `${left} ${left < live.length ? 'left today' : 'today'}`;
+        const want =
+          t.floor?.on && !t.floor.done
+            ? 'floor day'
+            : left === 0
+              ? `${live.length} of ${live.length} done`
+              : `${left} ${left < live.length ? 'left today' : 'today'}`;
         if (live.length && !text.includes(want)) fail(`the line "${text}" doesn’t say "${want}"`);
+        const due = dueBeyond(t).length;
+        if (due && !text.includes(`+${due} re-solve`))
+          fail(`the line "${text}" doesn’t count ${due} due beyond the slots`);
         if ((await line.getAttribute('href')) !== '/recruiting')
           fail('the line doesn’t link to the card');
         await ctx.shot('lc-coach-home-line');
@@ -961,8 +972,10 @@ export const lcCoach: Scenario = {
       async run(ctx) {
         const id = app.f169Id || fail('no F169 sitting — the ui-f169 step failed');
         const c = await todayCard(ctx);
-        await c.getByText(/^No cause yet:/).waitFor({ timeout: 15_000 });
-        const link = c.getByRole('link', { name: titleOf(ctx, 'f169'), exact: true });
+        // Within its own line: an off-plan sitting is also listed under "Also today".
+        const line = c.getByText(/^No cause yet:/);
+        await line.waitFor({ timeout: 15_000 });
+        const link = line.getByRole('link', { name: titleOf(ctx, 'f169'), exact: true });
         if ((await link.getAttribute('href')) !== `/recruiting/sittings/${id}`)
           fail(`its link: ${String(await link.getAttribute('href'))}`);
       },
@@ -1062,6 +1075,9 @@ export const lcCoach: Scenario = {
 
 // The app steps' own state: the sittings ui-review and ui-f169 saved.
 const app = { reviewId: '', f169Id: '' };
+// recruitingHelpers.ts dueBeyondSlots: due re-solves not already a live (unskipped) slot.
+const dueBeyond = (t: DevCoachToday) =>
+  t.due.filter((q) => !t.slots.some((x) => x.status !== 'skipped' && x.slug === q.slug));
 async function todayCard(ctx: Ctx) {
   await ctx.ui.goto('/recruiting');
   const c = ctx.page.getByRole('region', { name: 'Today’s practice' });

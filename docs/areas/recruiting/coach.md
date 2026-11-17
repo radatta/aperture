@@ -154,22 +154,26 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
 
 - **The Today card** sits above the sittings on `/recruiting` (`TodayCard.tsx`, `useCoach.ts`). It shows the
   focus line with **Change** (a pattern, or the coach's pick, which clears the override), up to four slots, the
-  floor, the due re-solves not already a slot plus the next 48 hours, off-plan sittings, ended sittings with no
+  floor, the due re-solves not already a live slot (a skipped or swapped-away one stays listed) plus the next 48
+  hours (`dueBeyondSlots`), off-plan sittings, ended sittings with no
   cause yet, and the week's momentum. Each slot is its kind, difficulty, the cap, the reason and a LeetCode link in
   a new tab. An in-progress slot links to its sitting, and a done one to its review. **Another** (only while
   `alternatives` has an easier unseen problem), **Skip today** and **Restore** are `setCoachSlot`; **Floor day**
-  and **Full day** are `setCoachFloor`. One write at a time, so a double tap is one call. A refused change says why
+  and **Full day** are `setCoachFloor`. One write at a time, so a double tap is one call; focus stays in the slot's row as its buttons change
+  (CONVENTIONS → focus-return). A refused change says why
   inline, and a failed read is a `LoadError` with Retry. Tones are teal for done-clean and gold or muted
   otherwise, never red.
 - **The review form** adds five cause chips (one choice; a second tap clears it) and labels help's `solution` as
   **Peeked**. With no review at all, it starts on a suggested `no-trace` (`suggestedCause`) when the trace was
   skipped or missing at the first submit, or when that submit failed with no Run before it.
 - **Claude's writes while the form is open (F169).** Help and the cause are also set over MCP (`mark_peeked`,
-  `set_cause_tag`). Until the user touches one, the field follows the stored review as it refreshes. Save re-reads
-  the review first: an untouched help is sent as stored, an untouched cause isn't sent (the server keeps it), and
-  the suggestion is sent only while there's still no review. Help and the chips refuse taps while a Save runs. A failed re-read fails the Save, keeping every field.
+  `set_cause_tag`). Until the user touches one, the field follows the stored review as it refreshes, and Save
+  doesn't send it: `setSittingReview` keeps an absent help or cause (`mergeReview`). Only a first review's
+  suggestions (a hint, No trace) are sent untouched, and only if a re-read just before the Save still finds no
+  review, so one Claude wrote since the form opened wins. Help and the chips refuse taps while a Save runs; a
+  failed re-read fails the Save, keeping every field.
 - **Home's morning line** (`Home/LeetcodeGlance.tsx`, the `FinanceGlance` posture): "LeetCode · 4 today · +1
-  re-solve due" (due re-solves beyond the slots) → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
+  re-solve due" (due re-solves beyond the live slots) → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
   problem. A failed read is one visible line, never silence.
 - A review or task write in the app (a rep's Done included) invalidates the `coach` query prefix. The
   extension's writes don't reach the app's cache: the card catches up when it next mounts with data over 30 s old (a later visit).

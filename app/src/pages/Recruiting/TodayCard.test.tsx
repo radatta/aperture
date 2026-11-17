@@ -30,7 +30,7 @@ describe('the Today card', () => {
     const list = await slots();
     expect(within(list).getAllByText(/^New · /)).toHaveLength(2);
     expect(within(list).getByText('Re-solve · Easy · 30 min')).toBeTruthy();
-    expect(within(list).getByText(/^Re-solve due since/)).toBeTruthy();
+    expect(within(list).getByText(/^Re-solve today: blank editor, no hints/)).toBeTruthy();
     const link = within(list).getByRole('link', { name: 'Two Sum' });
     expect(link.getAttribute('href')).toBe('https://leetcode.com/problems/two-sum/');
     expect(link.getAttribute('target')).toBe('_blank');
@@ -55,7 +55,7 @@ describe('the Today card', () => {
     ).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Another problem — Two Sum' }));
     await waitFor(async () => expect(await titles()).not.toContain('Two Sum'));
-    const swapped = (await api.getCoachToday()).slots.find((s) => s.kind === 're-solve')!;
+    const swapped = (await api.getCoachToday()).slots.find((s) => s.swappedFrom === 'two-sum')!;
     expect(swapped.swappedFrom).toBe('two-sum');
     expect(within(await slots()).getByText(/^Swapped in for/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: `Restore — ${swapped.title}` }));
@@ -71,7 +71,7 @@ describe('the Today card', () => {
     await slots();
     await user.dblClick(screen.getByRole('button', { name: 'Another problem — Two Sum' }));
     await waitFor(async () => expect(await titles()).not.toContain('Two Sum'));
-    const slot = (await api.getCoachToday()).slots.find((s) => s.kind === 're-solve')!;
+    const slot = (await api.getCoachToday()).slots.find((s) => s.swappedFrom === 'two-sum')!;
     expect(slot.swappedFrom).toBe('two-sum');
     await user.click(await screen.findByRole('button', { name: `Restore — ${slot.title}` }));
     await waitFor(async () => expect(await titles()).toContain('Two Sum'));
@@ -92,6 +92,26 @@ describe('the Today card', () => {
       expect(within(await slots()).queryByText('skipped today')).toBeNull(),
     );
     expect((await api.getCoachToday()).slots.every((s) => s.status === 'open')).toBe(true);
+  });
+
+  it('a double tap on Skip still lands focus on Restore', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: stub(true), path: '/recruiting' });
+    await slots();
+    await user.dblClick(screen.getByRole('button', { name: 'Skip today — Permutation in String' }));
+    const restore = await screen.findByRole('button', { name: 'Restore — Permutation in String' });
+    await waitFor(() => expect(document.activeElement).toBe(restore));
+  });
+
+  it('Another keeps focus in its row, though the swapped-in problem can be another kind', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: stub(true), path: '/recruiting' });
+    await slots();
+    const another = screen.getByRole('button', { name: 'Another problem — Two Sum' });
+    await user.click(another);
+    await waitFor(async () => expect(await titles()).not.toContain('Two Sum'));
+    const row = document.activeElement?.closest('li');
+    expect(row && within(row).queryByText(/^Swapped in for Two Sum/)).toBeTruthy();
   });
 
   it('a refused change says why, inline', async () => {

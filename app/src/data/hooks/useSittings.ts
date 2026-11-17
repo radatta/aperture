@@ -37,8 +37,8 @@ export function useSetSittingReview() {
   });
 }
 
-// The stored review as the server has it right now — the form's Save reads it for the fields the user didn't
-// touch, so a help or cause Claude set over MCP since the page loaded is kept, not overwritten (F169).
+// The stored review as the server has it right now — a first review's Save reads it before sending its
+// suggestions, so a review Claude wrote over MCP since the page loaded wins (F169).
 export function useReadSittingReview() {
   const api = useApi();
   const qc = useQueryClient();

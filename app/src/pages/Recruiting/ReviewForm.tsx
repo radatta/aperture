@@ -53,9 +53,9 @@ const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 // tick (edited or not) are saved. A failed save keeps every field and says why.
 //
 // Help and the cause are also Claude's to set over MCP (mark_peeked, set_cause_tag), maybe after this form
-// opened. So until the user touches one, it follows the stored review as it refreshes, and Save sends the
-// stored value as the server has it at that moment — never the stale one the form opened on (F169). The cause is
-// only suggested while there's no review at all: once one is stored, its cause (none included) is what shows.
+// opened. So until the user touches one, it follows the stored review as it refreshes, and Save doesn't send it —
+// the server keeps what's stored (mergeReview), never the stale value the form opened on (F169). Help and the cause
+// are only suggested while there's no review at all: once one is stored, its own values (none included) show.
 const startCause = (s: Sitting): CauseTag | null =>
   s.review ? (s.review.cause ?? null) : suggestedCause(s);
 
@@ -138,11 +138,11 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
     const usedDraft = ticked.length > 0 || (!!saved?.draftUsed && mistakes.length > 0);
     const input = {
       insight: insight || null,
-      help,
       mistakes: all,
       howItWent: howItWent || null,
       tags: tagText.trim() ? [...tags, tagText.trim().toLowerCase()] : tags,
       draftUsed: usedDraft,
+      ...(touched.help ? { help } : {}),
       ...(touched.cause ? { cause } : {}),
     };
     let prepTag: string;
@@ -159,14 +159,16 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
     setBusy(true);
     let step: 'review' | 'prep' = 'review';
     try {
-      // Untouched help and cause: the stored ones as of now. An absent cause is kept by the server; the suggested
-      // one is sent only while there's still no review at all. Help and the cause can't change while this runs
-      // (both refuse taps while busy), so `touched` here is the one Save was pressed on.
-      if (!touched.help || !touched.cause) {
-        const now = await readReview(sitting.id);
-        if (!touched.help && now) input.help = now.help;
-        if (!touched.cause && !now && cause) Object.assign(input, { cause });
-      }
+      // A first review sends the untouched suggestions (a hint, No trace) — but only if there's still no review
+      // as of now: one Claude wrote since the form opened wins. Help and the cause refuse taps while this runs, so
+      // `touched` is the one Save was pressed on.
+      const suggests =
+        !saved && ((!touched.help && help !== 'none') || (!touched.cause && !!cause));
+      if (suggests && !(await readReview(sitting.id)))
+        Object.assign(input, {
+          ...(touched.help ? {} : { help }),
+          ...(touched.cause || !cause ? {} : { cause }),
+        });
       await setReview.mutateAsync({ id: sitting.id, review: input });
       step = 'prep';
       if (prepTag !== sitting.prepTarget)

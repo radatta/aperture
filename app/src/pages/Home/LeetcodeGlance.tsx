@@ -20,7 +20,7 @@ export function LeetcodeGlance() {
           LeetCode · couldn’t load today’s plan
         </Text>
         <Text size="sm" tone="muted" aria-hidden>
-          Recruiting →
+          Today →
         </Text>
       </Link>
     );

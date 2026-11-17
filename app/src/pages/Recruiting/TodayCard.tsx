@@ -84,9 +84,12 @@ function TodayBody({ today }: { today: CoachToday }) {
         <ul aria-label="Today’s slots" className="flex flex-col divide-y divide-line">
           {today.slots.map((s) => (
             <SlotRow
-              key={`${s.kind}-${s.swappedFrom ?? s.slug}`}
+              // The engine's pick: steady across a swap (which can change the kind) and a restore, so the row
+              // keeps its DOM, and focus, through either. Slots never share one (applySlotChange).
+              key={s.swappedFrom ?? s.slug}
               slot={s}
               busy={busy}
+              canStart={() => !inFlight.current}
               onChange={change}
             />
           ))}
@@ -267,10 +270,12 @@ function FocusLine({ today }: { today: CoachToday }) {
 function SlotRow({
   slot: s,
   busy,
+  canStart,
   onChange,
 }: {
   slot: CoachSlot;
   busy: boolean;
+  canStart: () => boolean; // false while another change is in flight: this tap won't start one
   onChange: (s: CoachSlot, action: 'swap' | 'skip' | 'restore') => Promise<boolean>;
 }) {
   const state = slotState(s);
@@ -288,6 +293,7 @@ function SlotRow({
     if (next) returnFocus(next);
   }, [s.status, s.slug, s.swappedFrom]);
   const act = (action: 'swap' | 'skip' | 'restore') => async () => {
+    if (!canStart()) return; // a second tap mid-write: the first tap's own arm stands
     refocus.current = true;
     if (!(await onChange(s, action))) refocus.current = false;
   };
