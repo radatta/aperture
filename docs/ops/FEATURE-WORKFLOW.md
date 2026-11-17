@@ -22,7 +22,7 @@ The user names the mode; collaborative is the default.
   that need a product call or add scope, a review still finding serious bugs at its round cap, and the dev all-clear.
   Each is one `[ask-maintainer]` (findings as a list), and the lane waits for the hub's `[relay]`.
 - **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands
-  one back. Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
+  one back, bar the review's round cap and an effort above `high` (both `[ask-maintainer]`, phase 6). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
   (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a
   noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what
   came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body
@@ -42,9 +42,9 @@ The user names the mode; collaborative is the default.
   - **Dev test is Claude's after the push:** run `pnpm devcheck --tier full --feature <the feature's scenario>` (it
     waits for the deploy itself; a branch with no scenario of its own runs without `--feature`), Read the screenshots.
     A green full run with zero leftovers, every _Feature coverage_ row `pass`, `off dev`, `needs you` or `deferred`
-    (under _This feature_ and _Other scenarios_ alike), `pnpm gate:ci` green on the head sha, plus that review is the
-    all-clear (phase 9). On
-    `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a
+    (under _This feature_ and _Other scenarios_ alike), plus that review is the all-clear (phase 9). On
+    `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate (a rebase that resolved conflicts also gets
+    the recheck, phase 6), `pnpm bot push --after-rebase` (a
     `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
   - **Finished:** `[pr-open]` to the hub — or `[pr-ready]` when the mailroom was unreachable, then the hand-off line
     in its own `[ask-maintainer]` — in the shape `docs/ops/HUB.md` → _Checkpoints_ gives, and the report below.
@@ -106,17 +106,21 @@ hub message (the checkpoints stay).
      (`localNotes/review/round-<n>.md`), trace each suspected serious one, fix real bugs and convention breaks in one
      pass, run the gate once, commit. Findings that need a product call or add scope: collaborative → one
      `[ask-maintainer]` with the list; autonomous → decide and log.
-   - **Round 2 and later, only after a serious finding** (a confirmed S1 or S2): `review-fixes` alone, on the fix
-     diff. Serious again → fix, gate, commit, next round on that fix. Minor only → fix, gate, commit, done.
+   - **Round 2 and later, only after a serious finding** (a confirmed S1 or S2), a dropped confirmed one, or round 1
+     of a risk class with a code fix: `review-fixes` on the fix diff (plus `review-ui` or `review-infra` when the
+     fixes touch their paths). Serious again → fix, gate, commit, next round on that fix. Minor only → fix, gate,
+     commit, done.
    - **Stop** when a round has no serious finding. After four rounds, or a round from the third on that finds no
-     fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list.
+     fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list — in either mode.
    - A serious finding in round 2 or later that the fixes didn't cause is a **lens gap**: recorded in the report and
      sent to the hub (`docs/ops/REVIEW.md` → _Lens gaps_).
 
-7. **Ready for dev** — once the review has stopped: committed on the feature branch (one commit after the build, one
+7. **Ready for dev** — once the review has stopped with no serious finding open (or the round cap's ask is answered),
+   and nothing held open for a live-state answer: committed on the feature branch (one commit after the build, one
    per round's fixes), gate green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
-   rebase (CLAUDE.md → _Claude behavior_), then re-run the gate. Then a green
+   rebase (CLAUDE.md → _Claude behavior_), then re-run the gate (and the recheck, after a rebase that resolved
+   conflicts: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_). Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
    the lock, a green one proves nothing about dev.
    - **Before the first `pnpm bot push`, scan for publication.** The repo is public, so a push publishes; an amend
@@ -187,7 +191,8 @@ hub message (the checkpoints stay).
 
 **Every feature ends with `localNotes/report-<branch>.md`**, either mode, written even when the run never reached a
 PR (a run that stops before phase 10 releases its dev lock first): status first (PR ready / blocked / failed, and
-why), what the feature is, what happened (build, rounds, dev check, decisions), a short happy-path test the
+why), what the feature is, what happened (build, the review's round record and `## Lens gaps` —
+`docs/ops/REVIEW.md` → _The round record_, _Lens gaps_ — dev check, decisions), a short happy-path test the
 user can run unaided, the devcheck report's _This feature_ lists, _You don't need to test_ and _Needs you_
 (what still needs the user, and why; "no feature rows" for a branch with no scenario of its own), key
 screenshots (relative links into `localNotes/`), and **each step's estimate against its actual**, which
@@ -195,5 +200,5 @@ also go into `decisions.md` and the lane file, so the next plan's ranges calibra
 `docs/ops/PUBLIC-CONTENT.md` like the PR body — scan both before `open-pr`. The last message in the pane links it
 (Mac path); the `[pr-open]` points the hub at it.
 
-Page-first still holds: a backend half usually follows a frontend that already passed its rounds, so the plan says
-which half this is, and the reviewer checks the lambda against the contract the stub set.
+Page-first still holds: a backend half usually follows a frontend that already passed its review
+(`docs/ops/REVIEW.md` → _Lens map_, `lambdas/`).

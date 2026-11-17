@@ -319,7 +319,7 @@ pnpm board lane --clear          (Cleanup)
   "branch": "tower-web",
   "session": "auto-6",
   "phase": "review",
-  "step": "round 1 of 3",
+  "step": "round 1 (4 lenses)",
   "phaseSince": "…Z",
   "sha": "<40 hex>",
   "pr": null,
