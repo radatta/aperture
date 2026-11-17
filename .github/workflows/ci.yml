@@ -1,6 +1,6 @@
 name: CI
 
-# The quality gate, factored out so pr.yml and deploy.yml run the exact same checks instead of two
+# The quality gate, factored out so pr.yml, branch.yml and deploy.yml run the exact same checks instead of
 # copies drifting apart. Reusable (workflow_call) — callers own their own triggers + concurrency.
 # Three jobs so the app suite (the long pole) runs beside lint/typecheck/the other tests instead of after
 # them, itself halved with vitest --shard. A caller's `needs` sees one combined result, but a ruleset
@@ -70,8 +70,8 @@ jobs:
           restore-keys: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'app/package.json', 'cdk/package.json', 'lambdas/package.json', 'scripts/package.json', 'packages/*/package.json') }}-
       # The mailroom fixture suite is most of the non-app step (~210 s of ~300) and reads only tools/mailroom/
       # and scripts/src/mailroom/. On a PR it runs only when one of its inputs changed — the rule and its list
-      # are scripts/src/fixture-inputs.ts, tested, not inline shell (classify-changes.ts' lesson). A main push
-      # runs it unless a PR run already ran it on that exact tree (deploy.yml's `skip`; `fixtures` runs it alone),
+      # are scripts/src/fixture-inputs.ts, tested, not inline shell (classify-changes.ts' lesson). A branch push (branch.yml)
+      # always runs it; a main push runs it unless a PR run already ran it on that exact tree (deploy.yml's `skip`; `fixtures` runs it alone),
       # and `check` gates the deploy, so a break the PR's paths can't show (a dependency bump, the runner image)
       # stops there instead (INFRA §9). The diff against HEAD^1 on the PR's merge commit is
       # exactly the PR (--no-renames: a file moved out of the inputs counts by its old path too). A HEAD that

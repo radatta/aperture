@@ -14,9 +14,11 @@ interface Trigger {
 
 // The `on:` block, parsed fail-closed: any shape this can't read for certain — `on: push`, a flow list, a quoted key,
 // CRLF, an inline mapping, a push with anything but one inline `branches: [...]` of literal names (plus inline `paths`
-// filters) — throws, so a test can never pass vacuously. `tags`, `branches-ignore` and globs are refused outright.
+// filters) — throws, so a test can never pass vacuously. `tags` and globs are refused outright, and `branches-ignore`
+// everywhere but the one file named in IGNORE_OK (branch.yml, every feature branch), where it is the only filter.
+const IGNORE_OK = new Set(['branch.yml']);
 const branchList = (line: string) =>
-  /^branches: \[([^\]]*)\]$/
+  /^branches(?:-ignore)?: \[([^\]]*)\]$/
     .exec(line)![1]!
     .split(',')
     .map((b) => b.trim().replace(/^['"]|['"]$/g, ''));
@@ -40,14 +42,20 @@ function parseTriggers(file: string, yml: string): Trigger[] {
     else throw new Error(`${file}: unreadable trigger line ${JSON.stringify(l)}`);
   }
   for (const t of out.filter((x) => x.event === 'push')) {
+    const ignore = IGNORE_OK.has(file);
     for (const l of t.lines)
-      if (!/^(branches|paths|paths-ignore): \[[^\]]*\]$/.test(l))
+      if (
+        !(
+          ignore ? /^branches-ignore: \[[^\]]*\]$/ : /^(branches|paths|paths-ignore): \[[^\]]*\]$/
+        ).test(l)
+      )
         throw new Error(
-          `${file}: push line ${JSON.stringify(l)} — only inline branches/paths filters`,
+          `${file}: push line ${JSON.stringify(l)} — ${ignore ? 'only one inline branches-ignore filter' : 'only inline branches/paths filters'}`,
         );
-    const branches = t.lines.filter((l) => l.startsWith('branches:'));
+    const key = ignore ? 'branches-ignore:' : 'branches:';
+    const branches = t.lines.filter((l) => l.startsWith(key));
     if (branches.length !== 1)
-      throw new Error(`${file}: push needs exactly one inline branches: [...] filter`);
+      throw new Error(`${file}: push needs exactly one inline ${key} [...] filter`);
     for (const b of branchList(branches[0]!))
       if (!/^[\w./-]+$/.test(b))
         throw new Error(`${file}: push branch ${JSON.stringify(b)} is not a literal name`);
@@ -55,14 +63,16 @@ function parseTriggers(file: string, yml: string): Trigger[] {
   return out;
 }
 const triggers = (file: string) => parseTriggers(file, read(file));
+// The branches a push runs on, or for an IGNORE_OK file the branches it skips.
 const pushBranches = (file: string) =>
   triggers(file)
     .filter((t) => t.event === 'push')
-    .flatMap((t) => branchList(t.lines.find((l) => l.startsWith('branches:'))!));
+    .flatMap((t) => branchList(t.lines.find((l) => l.startsWith('branches'))!));
 
 // Every workflow's exact events: a new trigger — `repository_dispatch` (Contents: write can fire it), `workflow_run`,
 // `pull_request_target`, a dispatch — needs a deliberate edit here.
 const EVENTS: Record<string, string[]> = {
+  'branch.yml': ['push'],
   'ci.yml': ['workflow_call'],
   'deploy-dev.yml': ['workflow_dispatch'],
   'deploy-stage.yml': ['workflow_call'],
@@ -89,8 +99,21 @@ describe('workflow triggers', () => {
   it('no workflow runs on a push to `dev`', () => {
     for (const f of workflows) {
       const branches = pushBranches(f);
-      expect(branches, f).not.toContain('dev'); // the parser already refuses a glob, which could match it
+      if (IGNORE_OK.has(f)) expect(branches, f).toContain('dev');
+      else expect(branches, f).not.toContain('dev'); // the parser already refuses a glob, which could match it
     }
+  });
+
+  it('branch.yml runs the CI gate on every push but main and dev, and nothing else', () => {
+    expect(pushBranches('branch.yml')).toEqual(['main', 'dev']);
+    const yml = read('branch.yml');
+    // One job, id `branch`, so its checks are `branch / …`: a job named `ci` would post the PR's required check
+    // names (`ci / check`, …) on a branch head, satisfying the ruleset without testing the merge.
+    expect(yml.slice(yml.indexOf('\njobs:\n'))).toBe(
+      '\njobs:\n  branch:\n    uses: ./.github/workflows/ci.yml\n',
+    );
+    expect(yml).toContain('cancel-in-progress: true');
+    expect(yml).not.toMatch(/secrets|id-token|environment/);
   });
 
   it('only the bot dispatch and the dev-logs fetch can be dispatched', () => {
@@ -116,6 +139,8 @@ describe('workflow triggers', () => {
       'push with no branch filter': 'on:\n  push:\njobs:\n',
       'block-list branches': 'on:\n  push:\n    branches:\n      - dev\njobs:\n',
       'branches-ignore': 'on:\n  push:\n    branches-ignore: [main]\njobs:\n',
+      'branches beside branches-ignore':
+        'on:\n  push:\n    branches-ignore: [main]\n    branches: [dev]\njobs:\n',
       tags: "on:\n  push:\n    branches: [main]\n    tags: ['*']\njobs:\n",
       'duplicate branches': 'on:\n  push:\n    branches: [main]\n    branches: [dev]\njobs:\n',
       'inline mapping': 'on:\n  push: {branches: [dev]}\njobs:\n',
@@ -123,6 +148,16 @@ describe('workflow triggers', () => {
     };
     for (const [why, yml] of Object.entries(bad))
       expect(() => parseTriggers(why, yml), why).toThrow();
+    // branch.yml takes branches-ignore alone: no branches, paths or tags beside it, no glob, no block list
+    const ignoreBad = {
+      'branches filter': 'on:\n  push:\n    branches: [dev]\njobs:\n',
+      'paths beside it': 'on:\n  push:\n    branches-ignore: [main]\n    paths: [app/**]\njobs:\n',
+      'ignore glob': "on:\n  push:\n    branches-ignore: ['**']\njobs:\n",
+      'block list': 'on:\n  push:\n    branches-ignore:\n      - main\njobs:\n',
+      'no filter': 'on:\n  push:\njobs:\n',
+    };
+    for (const [why, yml] of Object.entries(ignoreBad))
+      expect(() => parseTriggers('branch.yml', yml), why).toThrow();
     expect(parseTriggers('ok', 'on:\n  push:\n    branches: [main]\njobs:\n')).toEqual([
       { event: 'push', lines: ['branches: [main]'] },
     ]);

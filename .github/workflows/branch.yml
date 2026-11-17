@@ -1,0 +1,25 @@
+name: Branch
+
+# The full quality gate on every pushed feature-branch commit, before a PR exists, so a lane's full suite can run here
+# instead of on the shared container (INFRA §9 → Branch runs). The same ci.yml as pr.yml, but its own check names
+# (`branch / …`, from the job id `branch`, which workflow-triggers.test.ts pins: a `ci` job here would post the PR's
+# required check names on an untested-merge sha), so the required checks and checked-tree.ts' PR-run lookup never
+# see it. No AWS, no deploy; `dev` stays excluded with main (the retired deploy branch: workflow-triggers.test.ts).
+on:
+  push:
+    branches-ignore: [main, dev]
+
+# A newer push to the same branch makes the in-flight run moot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only, pinned here as in pr.yml. pull-requests: read is what ci.yml's `check` asks for (its secret scan reads a
+# PR's commits); a push run doesn't use it, but a caller must grant what the called jobs request.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  branch:
+    uses: ./.github/workflows/ci.yml
