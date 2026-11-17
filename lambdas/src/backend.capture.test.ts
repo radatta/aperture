@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CAPTURE_DUPLICATE_MS,
+  CAPTURE_IN_FLIGHT_MS,
   CAPTURE_PARSE_DAILY_CAP,
   CAPTURE_PARSE_DEADLINE_MS,
   CAPTURE_SAY,
@@ -180,6 +181,39 @@ describe('captureForToken — caps and the duplicate guard', () => {
     const r = await capture(token, 'milk | ~5');
     expect(r).toMatchObject({ id: null, duplicate: true, say: CAPTURE_SAY.inFlight });
     expect(a.id).toBeTruthy();
+  });
+
+  it('a first still unsaved after 20 s died: the same line again is a new capture', async () => {
+    const { store, b, mint, capture, clock } = setup();
+    const token = await mint();
+    const [info] = await b.listScopedTokens('capture');
+    await capture(token, 'milk | ~5');
+    const row = (await store.row('u1', info!.id))!;
+    await store.replaceRow('u1', row, { ...row, lastTaskId: null, updatedAt: row.updatedAt + 1 });
+    clock.now += CAPTURE_IN_FLIGHT_MS;
+    const r = await capture(token, 'milk | ~5');
+    expect(r).toMatchObject({ duplicate: false, raw: false });
+    expect(r.id).toBeTruthy();
+  });
+
+  it('the voice prompt only when the words hold a time the grammar reads', async () => {
+    const { anthropic, mint, capture } = setup();
+    const token = await mint();
+    anthropic.next = { ok: true, fields: fields() };
+    await capture(token, 'call mum at 5');
+    await capture(token, 'call mum at quarter past five');
+    expect(anthropic.calls.map((c) => c.voice)).toEqual([true, false]);
+  });
+
+  it('a failed settings read after the count forgets the line, so the retry is new', async () => {
+    const { b, mint, capture } = setup();
+    const token = await mint();
+    const spy = vi
+      .spyOn(b, 'ensureSettings' as never)
+      .mockRejectedValueOnce(new Error('ddb') as never);
+    await expect(capture(token, 'milk | ~5')).rejects.toThrow('ddb');
+    spy.mockRestore();
+    expect(await capture(token, 'milk | ~5')).toMatchObject({ duplicate: false });
   });
 
   it('a voiced and a typed line with the same words are different captures', async () => {

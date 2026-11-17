@@ -54,6 +54,9 @@ export const CAPTURE_DAILY_CAP = 200;
 export const CAPTURE_PARSE_DAILY_CAP = 50;
 // The same line again within this window is the first capture answered again, not a second task.
 export const CAPTURE_DUPLICATE_MS = 60_000;
+// A first capture still unsaved after this long died (the Lambda's 15 s timeout, plus margin): the same line
+// again is a new capture, not "already got that".
+export const CAPTURE_IN_FLIGHT_MS = 20_000;
 // The parse's deadline inside the route: Siri waits on it, so past this the line is saved as typed.
 export const CAPTURE_PARSE_DEADLINE_MS = 5_000;
 export const CAPTURE_TEXT_MAX = 2_500;
@@ -89,7 +92,7 @@ export const CAPTURE_SAY = {
   empty: "Aperture didn't get any text.",
   tooLong: 'That was too long for Aperture. Nothing was added.',
   cap: 'Daily capture limit reached. Nothing was added.',
-  inFlight: 'Already got that a moment ago.',
+  inFlight: "Got that a moment ago. If it isn't in the app in a minute, say it again.",
   error: 'Aperture hit an error. Check the app before retrying.',
   // The Shortcut's own fallback when the answer has no `say` (a CloudFront error has no body).
   noAnswer: "Aperture didn't confirm. Check the app.",

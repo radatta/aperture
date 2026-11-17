@@ -76,6 +76,7 @@ import {
   CAPTURE_PARSE_DEADLINE_MS,
   CAPTURE_SAY,
   captureSay,
+  spokenTimeIn,
   fmtDueDay,
   fmtDuration,
   parseFailText,
@@ -2433,10 +2434,10 @@ export class BackendClient implements ApiClient {
     const line = text.trim();
     const textHash = sha256Hex(`${voice ? 'v' : 't'}|${line.toLowerCase().replace(/\s+/g, ' ')}`);
     const reserved = await reserveCapture(this.scopedTokens, auth, textHash, now);
-    const settings = await this.ensureSettings();
-    const appToday = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
     const calendarToday = zonedDayTime(now, USER_TIME_ZONE).day;
     if (reserved.kind === 'duplicate') {
+      const settings = await this.ensureSettings();
+      const appToday = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
       const first = reserved.taskId ? await this.repo.getTask(reserved.taskId) : null;
       if (!first)
         return { ...NO_CAPTURE, id: reserved.taskId, say: CAPTURE_SAY.inFlight, duplicate: true };
@@ -2453,6 +2454,8 @@ export class BackendClient implements ApiClient {
       return { id: first.id, say, detail: say, raw: false, duplicate: true, due };
     }
     try {
+      const settings = await this.ensureSettings();
+      const appToday = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
       const [all, alivePlaces] = await Promise.all([
         this.repo.listCategories(),
         this.repo.listPlaces({ consistent: true }),
@@ -2470,7 +2473,16 @@ export class BackendClient implements ApiClient {
         if (!(await claimParse(this.scopedTokens, auth, now)))
           return { ok: false, reason: 'unavailable', detail: 'daily parse limit reached' };
         const timeoutMs = Math.min(parseBudgetMs(l), CAPTURE_PARSE_DEADLINE_MS);
-        return this.anthropic.parseTask({ text: l, today: appToday, categories, timeoutMs, voice });
+        // The voice prompt (time words out, no dueTime) only when the grammar can read the time back;
+        // otherwise the typed prompt, so a clock it can't read ("quarter past five") isn't lost.
+        const spoken = voice && spokenTimeIn(l) !== null;
+        return this.anthropic.parseTask({
+          text: l,
+          today: appToday,
+          categories,
+          timeoutMs,
+          voice: spoken,
+        });
       });
       const task = await this.createTask(parsed.ok ? parsed.input : { title: line });
       try {

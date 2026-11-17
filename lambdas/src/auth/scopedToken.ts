@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   CAPTURE_DAILY_CAP,
   CAPTURE_DUPLICATE_MS,
+  CAPTURE_IN_FLIGHT_MS,
   CAPTURE_PARSE_DAILY_CAP,
   dayKey,
   SCOPED_TOKEN_PREFIX,
@@ -116,10 +117,12 @@ export function reserveCapture(
 ): Promise<CaptureReservation> {
   return casRow(store, auth, (row) => {
     if (usesToday(row, now) >= cap) throw new CaptureCapError();
+    // A first still unsaved past CAPTURE_IN_FLIGHT_MS died: this one is a new capture.
+    const age = row.lastAt === null ? Infinity : now - row.lastAt;
     const dup =
       row.lastTextHash === textHash &&
-      row.lastAt !== null &&
-      now - row.lastAt < CAPTURE_DUPLICATE_MS;
+      age < CAPTURE_DUPLICATE_MS &&
+      (row.lastTaskId !== null || age < CAPTURE_IN_FLIGHT_MS);
     const next: ScopedTokenRow = {
       ...bump(row, now),
       uses: usesToday(row, now) + 1,

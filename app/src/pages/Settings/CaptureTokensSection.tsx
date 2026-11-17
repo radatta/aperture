@@ -89,7 +89,8 @@ function MintToken({
   const problem = trimmed || full ? scopedTokenNameError(trimmed, tokens) : null;
 
   async function make() {
-    if (!trimmed || problem || !loaded) return;
+    // A second Enter while the first mint is out would mint a twin whose plaintext is never shown.
+    if (!trimmed || problem || !loaded || mint.isPending) return;
     setError(null);
     try {
       const r = await mint.mutateAsync(trimmed);

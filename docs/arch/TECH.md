@@ -192,6 +192,9 @@ SK (type-prefixed range keys):
   fin#item#<id> · fin#sync#<itemId> · fin#acct#<id> · fin#txn#<id> · fin#rule#<ulid>   finances
   gcal#sync#<sub>               calendar two-way sync cursor, one per Google account
   place#<id> · ptoken           errand places; the place token's pointer {hash|null, createdAt, hint, retiring[], updatedAt}
+  stoken#<ulid>                 a scoped device token (capture): name, hint, hash, the day's counters and the
+                                duplicate guard — the authority; no userId attribute, like ptoken (a credential,
+                                never exported or returned; tasks/capture.md §3)
   pushsub#<sha256(endpoint) prefix>  a device's Web Push subscription (a credential: never exported or returned;
                                 a user's Remove tombstones it keyless, a push-service 404/410 deletes it)
   psent#<fireAt 13d>#<key> · pcount#<LA day> · ptest#<ulid> · pushhealth · pusharm
@@ -203,12 +206,15 @@ SK (type-prefixed range keys):
 PK = placetoken#<sha256hex> / SK = placetoken
                                 the place token's lookup row {userId, …}: the Shortcut route resolves a user
                                 from a token (tasks/places.md §4)
+PK = stoken#<sha256hex> / SK = stoken
+                                a scoped token's lookup row {userId, tokenId, scope}: the capture route resolves
+                                a user from a token (tasks/capture.md §3)
 PK = push / SK = user#<userId> · health
                                 the reminder poller's registry (who has a device) and its stage-wide
                                 heartbeat — derived, never client-set, never exported (tasks/reminders.md)
 ```
 
-- **Two non-`u#` partitions:** `placetoken#<hash>` and `push`. Everything else is under the user's.
+- **Three non-`u#` partitions:** `placetoken#<hash>`, `stoken#<hash>` and `push`. Everything else is under the user's.
 - **One GSI, three key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms); reminders — what may ping, by when (`GSI1PK = u#<userId>#remind`, `GSI1SK` = fire time epoch ms) on open dated tasks, plans and Send-test rows, set atomically with the item's own write.
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".
@@ -324,7 +330,7 @@ outlier, and two things make it worse than an ordinary bug:
 
 _(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; a plan read keeps one row per id within what it reads, the newest, so no read misses it and a failed write never loses it), and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
-`deleteCheck` was the only one that destroyed a row. The reminder dispatcher's bookkeeping rows (test, sent and count), a dead device's push subscription, and the poller's per-user registry row once a user has no device left are deleted for real too, on purpose ([tasks/reminders](../areas/tasks/reminders.md)). The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)_
+`deleteCheck` was the only one that destroyed a row. The reminder dispatcher's bookkeeping rows (test, sent and count), a dead device's push subscription, and the poller's per-user registry row once a user has no device left are deleted for real too, on purpose ([tasks/reminders](../areas/tasks/reminders.md)). The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)). A scoped token's two rows (`stoken#<hash>` and `u#…/stoken#<id>`, 2026-11-16) are deleted for real on revoke for the same reason ([tasks/capture](../areas/tasks/capture.md#3-token)).)_
 
 - **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
   `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The

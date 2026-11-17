@@ -27,8 +27,8 @@ Tasks only: there is no "log" twin (the maintainer, 2026-11-16).
 ## 2. The route: `POST /api/capture`
 
 Outside the RPC surface, like `GET /api/places/<slug>/tasks` ([places §4](places.md#4-the-shortcut-route)),
-and the only thing a capture token opens. Every `/api/capture*` path ends at it; it never falls through to
-the JWT path.
+and the only thing a capture token opens. `/api/capture` and every path under it end at it; they never fall
+through to the JWT path.
 
 - **Auth:** `x-aperture-authorization: Bearer apc_<43 chars>`. CloudFront forwards only that header on
   `/api/*`, so a new header or a `?token=` would be stripped.
@@ -42,18 +42,18 @@ the JWT path.
 - **Anything else:** `{error, say}`. **Never 404:** CloudFront turns an origin 403/404 into the app's
   `index.html` (a 200), which the Shortcut would read as nothing.
 
-| Status | When                                         | `say`                                                                   |
-| ------ | -------------------------------------------- | ----------------------------------------------------------------------- |
-| 200    | parsed                                       | "Added: call mum, today 5 PM." (a place: "Added to Grocer: milk.")      |
-| 200    | saved as typed                               | "Added as typed, with no date or time: call mum at five."               |
-| 200    | the same line within a minute                | "Already added: call mum, today 5 PM." (same `id`, nothing new)         |
-| 200    | …and the first is still in flight            | "Already got that a moment ago." (`id` null)                            |
-| 401    | missing, malformed, unknown or revoked token | "Aperture: this capture token isn't valid. Make a new one in Settings." |
-| 405    | not POST                                     | "Aperture capture needs a POST."                                        |
-| 413    | body over 16 KiB                             | "That was too long for Aperture. Nothing was added."                    |
-| 422    | other path / bad body / empty / over-long    | the path's, "Aperture didn't get any text." or the too-long one         |
-| 429    | 200 captures today                           | "Daily capture limit reached. Nothing was added."                       |
-| 500    | anything else                                | "Aperture hit an error. Check the app before retrying."                 |
+| Status | When                                         | `say`                                                                                  |
+| ------ | -------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 200    | parsed                                       | "Added: call mum, today 5 PM." (a place: "Added to Grocer: milk.")                     |
+| 200    | saved as typed                               | "Added as typed, with no date or time: call mum at five."                              |
+| 200    | the same line within a minute                | "Already added: call mum, today 5 PM." (same `id`, nothing new)                        |
+| 200    | …and the first is still in flight            | "Got that a moment ago. If it isn't in the app in a minute, say it again." (`id` null) |
+| 401    | missing, malformed, unknown or revoked token | "Aperture: this capture token isn't valid. Make a new one in Settings."                |
+| 405    | not POST                                     | "Aperture capture needs a POST."                                                       |
+| 413    | body over 16 KiB                             | "That was too long for Aperture. Nothing was added."                                   |
+| 422    | other path / bad body / empty / over-long    | the path's, "Aperture didn't get any text." or the too-long one                        |
+| 429    | 200 captures today                           | "Daily capture limit reached. Nothing was added."                                      |
+| 500    | anything else                                | "Aperture hit an error. Check the app before retrying."                                |
 
 **Flow** (`BackendClient.captureForToken`): count the capture first (one conditional write — at the cap it
 refuses before anything is spent) → parse (`runQuickParse`: a `|` line takes the grammar and never meets
@@ -109,7 +109,9 @@ Per token, per UTC day — guards, not UX:
   model call counts: a grammar line never does.
 - **Duplicate guard:** the same line (case and spacing aside, voice and typed apart) within 60 s of the
   first is answered with the first's task, and never moves the window. The Shortcut never retries by itself,
-  so only a manual retry after an unclear failure can double up.
+  so only a manual retry after an unclear failure can double up. A first still unsaved after 20 s
+  (`CAPTURE_IN_FLIGHT_MS` — past the Lambda's 15 s timeout) died, so the same line then is a new capture;
+  inside those 20 s the answer hedges ("…if it isn't in the app in a minute, say it again").
 - **Leaked token:** 50 × ~$0.0003 × 30 days ≈ $0.45 a month of model spend plus junk tasks — five leaked ≈
   $2.25. Revoke in Settings stops it at once. Not capped: the request floor (a missing or malformed header
   costs nothing, an unknown token one GetItem); reserved concurrency would cap the whole shared BFF.
@@ -124,10 +126,19 @@ lands today, even if past". The decisions (the maintainer, 2026-11-16):
 3. "morning" is 9 AM, "tonight" 8 PM; "in N minutes/hours" is computed from the server clock, never by the
    model.
 
-**The time comes from code, the day from the model** (`packages/shared/src/spokenTime.ts`). The model gets
-the voice rules on top of the typed prompt — strip spoken times and a leading "remind me to" from the title,
-`dueTime` always null, a day only when one was said — and its `dueTime` is ignored. Precedence: relative →
-a stated clock → a bare hour → a day-part.
+**The time comes from code, the day from the model** (`packages/shared/src/spokenTime.ts`). When the grammar
+finds a time in the line, the model gets the voice rules on top of the typed prompt — strip spoken times and a
+leading "remind me to" from the title, `dueTime` always null, a day only when one was said — and its
+`dueTime` is ignored. Precedence: relative → a stated clock → a bare hour → a day-part.
+
+Two checks keep the grammar honest:
+
+- **The model's title is the cross-check.** A time applies only when the model took its words out of the
+  title. "look at one of the leases", "email the morning team" or "read John 3:16" keep their words, so they
+  get no time.
+- **A clock the grammar can't read is the model's** ("at quarter past five"): with no grammar match the model
+  gets the typed prompt, and a clock it returns is taken and rolled forward like any stated time — but only
+  when the line has a digit or an hour word in it, so an invented time is still dropped.
 
 | Said                                         | Now         | Lands                                            |
 | -------------------------------------------- | ----------- | ------------------------------------------------ |
@@ -140,10 +151,13 @@ a stated clock → a bare hour → a day-part.
 | tonight                                      | 3 PM / 9 PM | today 8 PM / tomorrow 8 PM                       |
 | this morning / tomorrow morning              | 10 AM       | tomorrow 9 AM                                    |
 | friday at 5 (a named day, a bare hour)       | any         | Friday 5 PM — the daytime hour, 07:00–18:59      |
+| at 12 tonight / at 1 tonight / at 11 tonight | 9 PM        | tomorrow 12 AM / tomorrow 1 AM / today 11 PM     |
+| at five thirty / five thirty pm              | 6 AM        | today 5:30 PM                                    |
 | noon / midnight / 17:00                      | any         | as said, rolled if past                          |
 
 - A time equal to now is past ("at 5" at 5:00 PM → tomorrow 5 AM).
-- A day counts as named only when it's neither the app's today nor the calendar's ("today at 9 am" rolls).
+- A day counts as named only when it's after the calendar's today ("today at 9 am" rolls; a past day the
+  model read, "monday" as last Monday, rolls too). "friday at 1 tonight" is the small hours after Friday.
 - "afternoon" and "evening" stay day-only (not decided). A raw save gets no time: with no model there's no
   day, and a wrong day is worse than none.
 - `say` reads a timed task against the calendar date ("today 5 AM" said at 1 AM) and a day-only one against

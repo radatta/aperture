@@ -10,11 +10,14 @@
 import { addDays, USER_TIME_ZONE, zonedDayTime, zonedEpoch } from './dates';
 
 export type DayPart = 'morning' | 'tonight';
-export type SpokenTime =
+// `said` is the words that matched, as written — the caller checks the model took them out of the title
+// (if the model kept "at one" in "look at one of the leases", it wasn't a time).
+export type SpokenTime = { said: string } & (
   | { kind: 'relative'; minutes: number }
   | { kind: 'clock'; hhmm: string } // stated outright: "9am", "5:30 pm", "17:00", "noon", "midnight"
   | { kind: 'bare'; hour: number; minute: number; part: DayPart | null } // "at 5", "five o'clock", "at 8 tonight"
-  | { kind: 'part'; part: DayPart }; // "tonight", "tomorrow morning"
+  | { kind: 'part'; part: DayPart } // "tonight", "tomorrow morning"
+);
 
 export const DAY_PART_TIME: Record<DayPart, string> = { morning: '09:00', tonight: '20:00' };
 
@@ -49,17 +52,19 @@ const RELATIVE = new RegExp(
   `\\bin\\s+(?:(half\\s+an?)|(an?|\\d+(?:\\.\\d+)?|${AMOUNT_WORD}))\\s*(minutes?|mins?|hours?|hrs?)(\\s+and\\s+a\\s+half)?\\b`,
   'i',
 );
+// A spoken minute after an hour word: "five thirty", "at 8 fifteen".
+const MINUTE_WORD = `\\s+(fifteen|thirty|forty[- ]five)`;
 // Stated outright: am/pm (Siri writes "5 PM" or "5 p.m."), a 24-hour clock, noon, midnight.
 const AMPM = new RegExp(
-  `\\b(\\d{1,2}|${HOUR_WORD})(?::(\\d{2}))?\\s*(a\\.?m\\.?|p\\.?m\\.?)(?=\\s|$|[,.;!?])`,
+  `\\b(\\d{1,2}|${HOUR_WORD})(?::(\\d{2})|${MINUTE_WORD})?\\s*(a\\.?m\\.?|p\\.?m\\.?)(?=\\s|$|[,.;!?])`,
   'i',
 );
 const H24 = /\b([01]?\d|2[0-3]):([0-5]\d)\b/;
 const NOON = /\bnoon\b/i;
 const MIDNIGHT = /\bmidnight\b/i;
-// A bare hour: "at 5", "at 5:30", "at five", "5 o'clock", "five o'clock".
+// A bare hour: "at 5", "at 5:30", "at five", "at five thirty", "5 o'clock", "five o'clock".
 const AT_HOUR = new RegExp(
-  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d))?(?=\\s|$|[,.;!?])`,
+  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d)|${MINUTE_WORD})?(?=\\s|$|[,.;!?])`,
   'i',
 );
 const OCLOCK = new RegExp(`\\b(\\d{1,2}|${HOUR_WORD})\\s*o['’]?\\s?clock\\b`, 'i');
@@ -77,35 +82,46 @@ export function spokenTimeIn(line: string): SpokenTime | null {
     const hours = /^h/i.test(rel[3]!);
     const extra = rel[4] ? 0.5 : 0;
     const minutes = Math.round(hours ? (amount + extra) * 60 : amount + extra);
-    if (minutes > 0 && minutes <= 7 * 24 * 60) return { kind: 'relative', minutes };
+    if (minutes > 0 && minutes <= 7 * 24 * 60) return { said: rel[0], kind: 'relative', minutes };
   }
-  const part: DayPart | null = TONIGHT.test(line)
-    ? 'tonight'
-    : MORNING.test(line)
-      ? 'morning'
-      : null;
+  const partMatch = TONIGHT.exec(line) ?? MORNING.exec(line);
+  const part: DayPart | null = partMatch
+    ? /^t/i.test(partMatch[0])
+      ? 'tonight'
+      : 'morning'
+    : null;
+  // A minute given as digits ("5:30") or as a word ("five thirty").
+  const minuteOf = (digits: string | undefined, word: string | undefined) =>
+    digits ? Number(digits) : word ? num(word.replace(' ', '-')) : 0;
   const ampm = AMPM.exec(line);
   if (ampm) {
     const h = num(ampm[1]!);
-    const m = ampm[2] ? Number(ampm[2]) : 0;
+    const m = minuteOf(ampm[2], ampm[3]);
     if (h >= 1 && h <= 12 && m < 60) {
-      const pm = /^p/i.test(ampm[3]!);
-      return { kind: 'clock', hhmm: `${pad2((h % 12) + (pm ? 12 : 0))}:${pad2(m)}` };
+      const pm = /^p/i.test(ampm[4]!);
+      return { said: ampm[0], kind: 'clock', hhmm: `${pad2((h % 12) + (pm ? 12 : 0))}:${pad2(m)}` };
     }
   }
-  if (NOON.test(line)) return { kind: 'clock', hhmm: '12:00' };
-  if (MIDNIGHT.test(line)) return { kind: 'clock', hhmm: '00:00' };
+  const noon = NOON.exec(line);
+  if (noon) return { said: noon[0], kind: 'clock', hhmm: '12:00' };
+  const midnight = MIDNIGHT.exec(line);
+  if (midnight) return { said: midnight[0], kind: 'clock', hhmm: '00:00' };
   // "17:00" or "09:30" is a 24-hour clock; "5:30" (no leading zero, under 13) is a bare hour.
   const h24 = H24.exec(line);
-  if (h24 && (Number(h24[1]) >= 13 || h24[1]!.startsWith('0') || h24[1] === '00'))
-    return { kind: 'clock', hhmm: `${pad2(Number(h24[1]))}:${h24[2]}` };
-  const bare = AT_HOUR.exec(line) ?? OCLOCK.exec(line) ?? (h24 ? [h24[0], h24[1], h24[2]] : null);
-  if (bare) {
-    const hour = num(bare[1]!);
-    const minute = bare[2] ? Number(bare[2]) : 0;
-    if (hour >= 1 && hour <= 12) return { kind: 'bare', hour, minute, part };
-  }
-  return part ? { kind: 'part', part } : null;
+  if (h24 && (Number(h24[1]) >= 13 || h24[1]!.startsWith('0')))
+    return { said: h24[0], kind: 'clock', hhmm: `${pad2(Number(h24[1]))}:${h24[2]}` };
+  const at = AT_HOUR.exec(line);
+  const oclock = at ? null : OCLOCK.exec(line);
+  const bare = at
+    ? { said: at[0], hour: num(at[1]!), minute: minuteOf(at[2], at[3]) }
+    : oclock
+      ? { said: oclock[0], hour: num(oclock[1]!), minute: 0 }
+      : h24
+        ? { said: h24[0], hour: Number(h24[1]), minute: Number(h24[2]) }
+        : null;
+  if (bare && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
+    return { kind: 'bare', ...bare, part };
+  return partMatch && part ? { said: partMatch[0], kind: 'part', part } : null;
 }
 
 // The line with any "in N minutes/hours" phrase taken out — so the estimate guard doesn't read a
@@ -138,8 +154,12 @@ export function resolveSpoken(
     return { day: r.day, time: r.hhmm };
   }
   const calToday = zonedDayTime(ctx.now, zone).day;
-  const named = modelDay !== null && modelDay !== ctx.today && modelDay !== calToday;
+  // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward.
+  const named =
+    modelDay !== null && modelDay !== ctx.today && modelDay !== calToday && modelDay > calToday;
   const hhmmOf = (h24: number, m: number) => `${pad2(h24)}:${pad2(m)}`;
+  // "at 12 tonight" is midnight and "at 1 tonight" the small hours; 4–11 tonight is the evening.
+  const tonightHour = (h: number) => (h === 12 ? 0 : h <= 3 ? h : h + 12);
   // Every clock the words could mean, in order of preference on a given day.
   const clocks: string[] =
     spoken.kind === 'clock'
@@ -147,7 +167,7 @@ export function resolveSpoken(
       : spoken.kind === 'part'
         ? [DAY_PART_TIME[spoken.part]]
         : spoken.part === 'tonight'
-          ? [hhmmOf((spoken.hour % 12) + 12, spoken.minute)]
+          ? [hhmmOf(tonightHour(spoken.hour), spoken.minute)]
           : spoken.part === 'morning'
             ? [hhmmOf(spoken.hour % 12, spoken.minute)]
             : named
@@ -161,7 +181,11 @@ export function resolveSpoken(
                   hhmmOf(spoken.hour % 12, spoken.minute),
                   hhmmOf((spoken.hour % 12) + 12, spoken.minute),
                 ];
-  if (named) return { day: modelDay, time: clocks[0]! };
+  if (named) {
+    // "friday at 1 tonight" is the small hours after Friday.
+    const late = spoken.kind === 'bare' && spoken.part === 'tonight' && spoken.hour % 12 <= 3;
+    return { day: late ? addDays(modelDay, 1) : modelDay, time: clocks[0]! };
+  }
   for (const day of [calToday, addDays(calToday, 1)])
     for (const time of clocks) if (at(day, time) > ctx.now) return { day, time };
   return { day: addDays(calToday, 1), time: clocks[0]! }; // unreachable: tomorrow is always ahead

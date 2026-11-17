@@ -368,6 +368,25 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(v.dropped).toEqual(['dropped due time']);
   });
 
+  it('words the model kept in its title were not a time', () => {
+    const v = voice('look at one of the leases', { title: 'look at one of the leases' });
+    expect(v.input).toEqual({ title: 'look at one of the leases' });
+    expect(voice('email the morning team', { title: 'email the morning team' }).input.dueTime).toBe(
+      undefined,
+    );
+  });
+
+  it("a clock the grammar can't read is the model's, rolled forward; an invented one is dropped", () => {
+    // 06:00 now: "quarter past five" — the model's 05:15 has passed, so it rolls to tomorrow.
+    expect(voice('call mum at quarter past five', { dueTime: '05:15' }).input).toMatchObject({
+      dueDay: '2026-11-17',
+      dueTime: '05:15',
+    });
+    const made = voice('call mum soon', { dueTime: '10:00' });
+    expect(made.input.dueTime).toBeUndefined();
+    expect(made.dropped).toEqual(['dropped due time']);
+  });
+
   it('a named day from the model stays; "today" rolls a past time forward', () => {
     expect(voice('call mum friday at 5', { dueDay: '2026-11-20' }).input).toMatchObject({
       dueDay: '2026-11-20',

@@ -28,15 +28,28 @@ describe('spokenTimeIn', () => {
   });
 
   it('takes relative first, then a stated clock, then a bare hour, then a day-part', () => {
-    expect(spokenTimeIn('call mum in 20 minutes at 5')).toEqual({ kind: 'relative', minutes: 20 });
-    expect(spokenTimeIn('call mum at 9 am tonight')).toEqual({ kind: 'clock', hhmm: '09:00' });
+    expect(spokenTimeIn('call mum in 20 minutes at 5')).toEqual({
+      said: 'in 20 minutes',
+      kind: 'relative',
+      minutes: 20,
+    });
+    expect(spokenTimeIn('call mum at 9 am tonight')).toEqual({
+      said: '9 am',
+      kind: 'clock',
+      hhmm: '09:00',
+    });
     expect(spokenTimeIn('call mum at 8 tonight')).toEqual({
+      said: 'at 8',
       kind: 'bare',
       hour: 8,
       minute: 0,
       part: 'tonight',
     });
-    expect(spokenTimeIn('call mum tonight')).toEqual({ kind: 'part', part: 'tonight' });
+    expect(spokenTimeIn('call mum tonight')).toEqual({
+      said: 'tonight',
+      kind: 'part',
+      part: 'tonight',
+    });
   });
 
   it('reads the relative phrases Siri writes', () => {
@@ -85,6 +98,10 @@ describe('spokenTimeIn', () => {
     expect(bare('call mum five o’clock')).toBe('5:0');
     expect(bare('call mum at 5:30')).toBe('5:30');
     expect(bare('call mum at 13')).toBeNull();
+    expect(bare('call mum at five thirty')).toBe('5:30');
+    expect(bare('call mum at 8 forty five')).toBe('8:45');
+    const s = spokenTimeIn('call mum at five thirty pm');
+    expect(s).toMatchObject({ kind: 'clock', hhmm: '17:30', said: 'five thirty pm' });
   });
 
   it('withoutRelative drops the delay so it never reads as an estimate', () => {
@@ -164,6 +181,17 @@ describe('resolveSpoken — the voice rules', () => {
     expect(said('friday at 7', MON, '10:00', FRI)).toBe('2026-11-20 07:00');
     expect(said('friday at 5 am', MON, '10:00', FRI)).toBe('2026-11-20 05:00');
     expect(said('friday morning', MON, '10:00', FRI)).toBe('2026-11-20 09:00');
+  });
+
+  it('"at 12 tonight" is midnight and 1–3 tonight the small hours; 4–11 tonight the evening', () => {
+    expect(said('call mum at 12 tonight', MON, '21:00')).toBe('2026-11-17 00:00');
+    expect(said('call mum at 1 tonight', MON, '21:00')).toBe('2026-11-17 01:00');
+    expect(said('call mum at 11 tonight', MON, '21:00')).toBe('2026-11-16 23:00');
+    expect(said('friday at 1 tonight', MON, '10:00', '2026-11-20')).toBe('2026-11-21 01:00');
+  });
+
+  it('a past day from the model is not a named day: the time rolls forward', () => {
+    expect(said('call mum monday at 9 am', MON, '15:00', '2026-11-09')).toBe('2026-11-17 09:00');
   });
 
   it('DST: spring-forward and fall-back days resolve on the wall clock', () => {

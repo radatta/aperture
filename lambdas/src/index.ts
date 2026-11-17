@@ -257,7 +257,8 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   // to JWT. The body (and testMode) is ignored.
   if (path.startsWith('/api/places/')) return placeRead(event, path, d.doc);
   // Voice capture (capture.md): POST /api/capture with a capture token — likewise outside the RPC dispatch
-  // and the only thing a capture token opens; every /api/capture* path ends here, never at the JWT path.
+  // and the only thing a capture token opens; /api/capture and every path under it end here, never at the
+  // JWT path.
   if (method === 'capture') return capture(event, path, d);
 
   const ingest = isLcIngestMethod(method);
