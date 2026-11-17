@@ -4,7 +4,7 @@
 # 390×844, dpr 3, touch) and the Mac (1512×860), light and dark. Asserts what a phone must never do — hide text,
 # scroll sideways, wrap the header, draw a spark over its numbers, offer a Mac-only button — and exits 1 naming each
 # failure. Variants: `plain` (the view as served), `stress` (the same view with every string long and every source
-# off), `empty` (nothing in flight).
+# off), `empty` (nothing in flight); plus an installed and a tab frame at 440 per engine for the status-bar floor.
 #   scripts/board/tower-web-capture.sh <out-dir>                 the fixtures at a fixed clock, on a spare port
 #   scripts/board/tower-web-capture.sh <out-dir> --url <base>    a running server (a live proof server)
 # Run it under scripts/board/heavy.sh -- (it starts browsers).
@@ -118,7 +118,6 @@ async function check(page, tag, phone) {
   for (const b of r) fails.push(`${tag}: ${b}`);
 }
 
-// A tap opens a row with details, which then shows them in full; a slot card stays open across a poll.
 // The Home Screen app at 440, in a real engine's cascade: no browser here emulates display-mode (Playwright has no
 // option; Chromium ignores it over CDP), so the installed frame is served the page with the floor's display-mode
 // terms dropped (portrait stays), and headless reports a 0 inset, as iOS 26 can. Installed, the header clears the
@@ -146,6 +145,7 @@ async function standalone(b, name) {
   }
 }
 
+// A tap opens a row with details, which then shows them in full; a slot card stays open across a poll.
 async function taps(page, tag) {
   const n = await page.locator('#needs .item.has-more').count();
   if (n) {

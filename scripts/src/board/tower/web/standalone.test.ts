@@ -37,6 +37,7 @@ describe('the tower as a Home Screen app', () => {
 
   it('floors the header only inside the phone rule, installed and upright, after its shorthand', () => {
     expect(html.split(FLOOR)).toHaveLength(2); // exactly one floor
+    expect(html.match(/62px\)/g)).toHaveLength(1); // and no other, whatever gap follows it
     const at = html.indexOf(FLOOR);
     const phones = [...html.matchAll(/@media \(max-width: 700px\) \{/g)].map((m) => block(m.index));
     const phone = phones.find(([a, b]) => a < at && at < b);
@@ -47,6 +48,8 @@ describe('the tower as a Home Screen app', () => {
     const query = text.lastIndexOf('@media', at - phone![0]);
     expect(query).toBeGreaterThan(short); // after the shorthand, so it wins the cascade
     expect(text.slice(query)).toMatch(QUERY);
+    const [qa, qb] = block(phone![0] + query);
+    expect(qa < at && at < qb).toBe(true); // inside that query's own block
     // nothing later sets the header's top padding again
     expect(html.slice(at + FLOOR.length)).not.toMatch(/header \{[^}]*padding(-top)?:/);
     // the tab layout keeps its own inset plus gap
