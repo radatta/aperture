@@ -387,6 +387,7 @@ export interface DevCoachDay {
   id: string;
   day: string;
   floor: boolean;
+  changes?: { action: string; from: string; to: string | null }[]; // today's slot changes (a restore removes one)
   ai?: DevCoachDayAi;
 }
 // One attempt for logCoachAttempts (packages/shared/src/coach.ts CoachAttemptInput).

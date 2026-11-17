@@ -3,8 +3,10 @@
 // setting off after the sweep (pipeline.ts), so no other scenario's read starts the day's one pick; the steps here
 // that need it on turn it on and put it back off in their own `finally` (withAi).
 //
-// The cheap steps run with the setting off: off means no call, a bad argument is refused, and the card's pending and
-// fallback states and Home's picking line through a canned getCoachToday (ctx.intercept), plus the Settings switch.
+// The cheap steps run with the setting off: off means no call, a bad argument is refused, and the card's pending,
+// fallback, failed-start and day-note states and Home's lines through canned answers (ctx.intercept), plus the
+// Settings switch. A day already under way on the rules (a slot change, a sitting or an attempt today) is never due,
+// so nothing here makes one before ai-day, and the scenario runs before lc-sittings and lc-coach (scenarios/index.ts).
 // The real pick is the slow tier — one real Opus call a day per user on dev, and the day can never be re-picked (a
 // fallback stays a fallback). So when this run finds today's row already holding a pick from an earlier run, the slow
 // steps read needs-you rather than fail; a fallback that happens during this run is a failure, naming its reason.
@@ -35,6 +37,7 @@ const addDays = (day: string, n: number): string => {
 const isLocal = () => new URL(targetOrigin()).hostname === '127.0.0.1';
 const MODEL = { dev: 'claude-opus-5-5', local: 'local-stand-in' };
 const PICKING = 'Opus is picking today’s problems…';
+const START_FAILED = 'Couldn’t start today’s AI pick — using the rules for now.';
 const slugs = (t: DevCoachToday) => t.slots.map((s) => s.slug);
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 // The worker's call is ≤ 60 s inside its 90 s timeout, and a claim reads as a timeout at 120 s
@@ -127,6 +130,8 @@ export const lcCoachAi: Scenario = {
     'lambdas/src/coach/**',
     'lambdas/src/coachWorker.ts',
     'lambdas/src/anthropic/coachPickPrompt.ts',
+    'packages/shared/src/coach.ts',
+    'lambdas/src/anthropic/liveAnthropic.ts',
     'app/src/data/hooks/useCoach.ts',
     'app/src/pages/Recruiting/TodayCard.tsx',
     'scripts/src/devcheck/scenarios/lc-coach-ai.ts',
@@ -161,6 +166,18 @@ export const lcCoachAi: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'A failed pick says so on the card — “AI pick unavailable today, using the rules” — over the rules’ slots',
+    },
+    {
+      id: 'start-failed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A start that fails shows the rules’ slots with “Couldn’t start today’s AI pick — using the rules for now.” and Retry; Home’s line reads the rules’ plan, not “picking”; Retry lands the pick',
+    },
+    {
+      id: 'focus-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A pick’s day note shows above the slots, its focus move says “Opus moved the focus from … to … — why”, the focus line ends “· Opus’s pick”, and a slot’s why replaces its rule reason',
     },
     {
       id: 'settings-switch',
@@ -254,10 +271,10 @@ export const lcCoachAi: Scenario = {
       id: 'mcp-pending',
       entry: 'mcp',
       kind: 'edge',
-      what: 'leetcode_today waits ~9 s for a pick still running, then answers pending with no slots',
+      what: 'leetcode_today waits ~8 s for a pick still running, then answers pending with no slots',
       offDev: {
         file: 'lambdas/src/mcp/coachTools.test.ts',
-        test: 'waits ~9 s for a pick still running, then answers pending with no slots',
+        test: 'waits ~8 s for a pick still running, then answers pending with no slots',
         why: 'a real pick can’t be held open past the tool’s wait on dev, and the day can’t be re-picked',
       },
     },
@@ -409,6 +426,144 @@ export const lcCoachAi: Scenario = {
       },
     },
     {
+      id: 'start-failed',
+      title:
+        'A start that fails (canned): the rules with Retry on the card, the rules’ line on Home; Retry lands a pick',
+      entry: 'ui',
+      proves: ['start-failed'],
+      async run(ctx) {
+        // Canned both ways: a Retry let through would spend the day's one real pick before ai-day's first open
+        // starts it. The setting stays off, so a start a canned route missed still writes nothing.
+        const real = await ctx.api.reads.getCoachToday();
+        if (!real.slots.length) fail('the plan has no slots to show under the failed start');
+        const picked = {
+          ...real,
+          ai: view('ok', { source: 'ai', model: MODEL.dev, pickedAt: Date.now() }),
+          slots: real.slots.map((s) => ({ ...s, aiWhy: `devcheck canned why: ${s.title}` })),
+        };
+        const roll = await ctx.api.writes.upsertRoll({
+          name: `devcheck-coach-ai ${ctx.nonce} start roll`,
+          estimateMin: 45,
+        });
+        await ctx.api.writes.linkLeetcodeRoll(roll.id);
+        let plan = await ctx.intercept('getCoachToday', {
+          status: 200,
+          body: { ...real, ai: view('due') },
+        });
+        let start = await ctx.intercept('startCoachPick', { status: 500 });
+        try {
+          // Home first: its own first read is due, its start fails, and the line falls back to the rules' plan.
+          await morning(ctx);
+          const line = ctx.page.getByRole('link', { name: /^LeetCode · / });
+          await line.waitFor({ state: 'visible', timeout: 15_000 });
+          await until(
+            'Home’s line after the failed start',
+            async () => start.hits() > 0 && !((await line.textContent()) ?? '').includes('picking'),
+          );
+          const live = real.slots.filter((x) => x.status !== 'skipped');
+          const left = live.filter((x) => x.status !== 'done').length;
+          const want =
+            real.floor?.on && !real.floor.done
+              ? 'floor day'
+              : left === 0
+                ? `${live.length} of ${live.length} done`
+                : `${left} ${left < live.length ? 'left today' : 'today'}`;
+          const text = (await line.textContent()) ?? '';
+          if (live.length && !text.includes(want))
+            fail(`Home’s line after a failed start: “${text}”, want the rules’ “${want}”`);
+          await ctx.shot('lc-coach-ai-home-start-failed');
+
+          const c = await todayCard(ctx);
+          await c.getByText(START_FAILED).waitFor({ timeout: 15_000 });
+          const retry = c.getByRole('button', { name: 'Retry', exact: true });
+          await retry.waitFor({ timeout: 5_000 });
+          await slotsList(ctx).waitFor({ timeout: 15_000 });
+          for (const s of real.slots)
+            if (!(await c.getByText(s.reason, { exact: true }).count()))
+              fail(`no rule reason for ${s.slug} under the failed start`);
+          if (await c.getByText(PICKING).count()) fail('a failed start still says Opus is picking');
+          await ctx.shot('lc-coach-ai-start-failed');
+
+          // Retry: both routes switch to a landed pick before the tap — the new ones first (a later route answers
+          // first), so no call passes through in between.
+          const okStart = await ctx.intercept('startCoachPick', { status: 200, body: picked });
+          const okPlan = await ctx.intercept('getCoachToday', { status: 200, body: picked });
+          await start.release();
+          await plan.release();
+          [start, plan] = [okStart, okPlan];
+          await retry.click();
+          await until('Retry’s start', async () => okStart.hits() > 0);
+          await c.getByText(picked.slots[0]!.aiWhy, { exact: true }).waitFor({ timeout: 15_000 });
+          if (await c.getByText(START_FAILED).count()) fail('the failed-start line outlived Retry');
+        } finally {
+          await start.release();
+          await plan.release();
+          await ctx.api.writes.linkLeetcodeRoll(null);
+        }
+      },
+    },
+    {
+      id: 'focus-note',
+      title: 'A landed pick (canned): the day note, the focus move, Opus’s focus, a slot’s why',
+      entry: 'ui',
+      proves: ['focus-note'],
+      async run(ctx) {
+        // The model's note and focus move can't be asked for: the answer is the harness's (ai-day shows the real
+        // one's, when it makes them). Pattern names: packages/shared/src/neetcode150.ts PATTERN_NAMES.
+        const real = await ctx.api.reads.getCoachToday();
+        const first = real.slots[0] ?? fail('the plan has no slots');
+        const note = `devcheck canned day note ${ctx.nonce}`;
+        const why = `devcheck canned why ${ctx.nonce}`;
+        const moved = 'devcheck canned focus why';
+        const canned = await ctx.intercept('getCoachToday', {
+          status: 200,
+          body: {
+            ...real,
+            focus: {
+              ...real.focus,
+              pattern: 'sliding-window',
+              day: 1,
+              source: 'ai',
+              why: 'Sliding Window: Opus’s pick since today',
+            },
+            ai: view('ok', {
+              source: 'ai',
+              note,
+              focusChange: { from: 'two-pointers', to: 'sliding-window', why: moved },
+              model: MODEL.dev,
+              pickedAt: Date.now(),
+            }),
+            slots: real.slots.map((s, i) => ({ ...s, aiWhy: i === 0 ? why : null })),
+          },
+        });
+        try {
+          const c = await todayCard(ctx);
+          const noteLine = c.getByText(note, { exact: true });
+          await noteLine.waitFor({ timeout: 15_000 });
+          const list = slotsList(ctx);
+          await list.waitFor({ timeout: 15_000 });
+          const [n, l] = [await noteLine.boundingBox(), await list.boundingBox()];
+          if (!n || !l || n.y >= l.y) fail('the day note isn’t above the slots');
+          await c
+            .getByText(`Opus moved the focus from Two Pointers to Sliding Window — ${moved}`, {
+              exact: true,
+            })
+            .waitFor({ timeout: 5_000 });
+          await c
+            .getByText(/^Sliding Window · day 1 of 3 · Opus’s pick$/)
+            .waitFor({ timeout: 5_000 });
+          const li = list.getByRole('listitem').first();
+          if (!(await li.getByText(why, { exact: true }).count()))
+            fail('slot 1 doesn’t show its why');
+          if (first.reason !== why && (await li.getByText(first.reason, { exact: true }).count()))
+            fail('slot 1 shows its rule reason beside the why');
+          await ctx.shot('lc-coach-ai-focus-note');
+        } finally {
+          await canned.release();
+        }
+      },
+    },
+    {
       id: 'settings-switch',
       title: 'Settings › LeetCode: the AI pick on, reload, off, reload',
       entry: 'ui',
@@ -466,10 +621,15 @@ export const lcCoachAi: Scenario = {
         ctx.api.writes.recordCoachPickFocus();
         await withAi(ctx, async () => {
           const t = await ctx.api.reads.getCoachToday();
-          if (t.ai?.status !== 'due')
+          if (t.ai?.status !== 'due') {
+            // Under way on the rules today (a slot change, a sitting, an attempt) is never due: name what is.
+            const sat = (await ctx.api.reads.listSittings()).filter((x) => x.day === day());
+            const tried = (await ctx.api.reads.listCoachAttempts()).filter((x) => x.day === day());
+            const changes = (await ctx.api.reads.getCoachDay(day()))?.changes?.length ?? 0;
             fail(
-              `the plan isn’t due a pick with it on and history before today: ai ${JSON.stringify(t.ai)} — is the coach worker configured on this stack?`,
+              `the plan isn’t due a pick with it on and history before today: ai ${JSON.stringify(t.ai)}; today ${sat.length} sitting(s), ${tried.length} attempt(s), ${changes} slot change(s) — under way on the rules, or no coach worker on this stack`,
             );
+          }
           await ctx.ui.goto('/recruiting');
           const c = ctx.page.getByRole('region', { name: 'Today’s practice' });
           const picking = c.getByText(PICKING);
@@ -502,7 +662,7 @@ export const lcCoachAi: Scenario = {
           await ctx.page.setViewportSize({ width: 390, height: 844 });
           try {
             await ctx.ui.settle();
-            await ctx.shot('lc-coach-ai-day-390');
+            await ctx.shot('lc-coach-ai-day-390'); // light, then dark (scenario.ts makeShot)
           } finally {
             await ctx.page.setViewportSize(PHONE);
           }
@@ -656,6 +816,10 @@ export const lcCoachAi: Scenario = {
           // Resolves the ledger entry (a restore with nothing to undo changes nothing).
           await ctx.mcp.writes.swapSlot(t0.day, slot.slug, { slug: slot.slug, action: 'restore' });
         });
+        // A focus the pick moved holds past the setting: clear it (resolving coach-focus:<run>) so lc-sittings and
+        // lc-coach, after this scenario, start from the engine's.
+        if ((await ctx.api.reads.getCoachFocusRow())?.source === 'ai')
+          await ctx.api.writes.setCoachFocus(null);
       },
     },
     noConsoleErrors,
