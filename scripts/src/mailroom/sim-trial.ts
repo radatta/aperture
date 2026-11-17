@@ -26,9 +26,8 @@ export function trialPlan(round: number, last: boolean): SimParams {
   const word = at(TRIAL_WORDS, round);
   const order = VIAS.map((_, k) => at(VIAS, k + round));
   const steps: IosOp[] = [
-    // a fresh app each round: launch resumes a running one, and a round stopped mid-typing leaves the keyboard and
-    // an edit menu up (idle2, 2026-11-08: every launch then saw neither Home nor sign-in). Needs the app running.
-    { op: 'kill', method: 'terminate' },
+    // no kill first: it fails when the app isn't running (a dropped icon tap, idle4). A sim left mid-typing by an
+    // aborted round fails the next launch (LANDMARK): rerun that round with --round. Start the trial on a fresh sim.
     { op: 'launch' },
     { op: 'signIn' },
     { op: 'expect', signedIn: true },

@@ -194,6 +194,7 @@ AXe can report a tap done that iOS never got. AXe issue 71: on Xcode 27 with iOS
   - The first line of `trial.jsonl` holds the Mac's `vm.loadavg` at the job's start and end.
   - The read-backs still retry, and fail as `TYPED` or `ERASED`. A trial hides nothing.
 - **Running it:** `pnpm mailroom sim-trial --tag <idle|loaded|…>`. This needs no dev lock and no deploy.
+  - Start on a fresh sim: `pnpm mailroom sim-shutdown`, then `pnpm mailroom sim-probe`, then let it settle about 3 minutes. A boot's indexing load would otherwise land on round 0. A round that aborts mid-typing makes the next launch fail `LANDMARK`; rerun that round with `--round`.
   - It runs 5 jobs (rounds); `--round N` reruns one of them (same word and order), for a round a load spike spoiled. In each, one word of 6 letters is typed into the capture bar and erased with exactly 6 deletes, once per variant.
   - The variant order rotates each round, so a change in load hits all of them alike.
   - It prints taps, drops, the drop %, the ops retried, and the median ms per tap for each variant, plus each round's load. The files stay in `.hostjobs/results/<id>/`.
