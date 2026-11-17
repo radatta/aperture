@@ -37,10 +37,11 @@ describe('the tower as a Home Screen app', () => {
   });
 
   it('floors the header only inside the phone rule, installed and upright, after its shorthand', () => {
-    expect(html.split(FLOOR)).toHaveLength(2); // exactly one floor
-    // and no other but the strip's, whatever gap follows it
-    expect(html.match(/62px\)/g)).toHaveLength(2);
-    expect(html.split(STRIP)).toHaveLength(2);
+    // two floors, each with the strip's: the display-mode query's, and the `installed` class's (app.js sets it when
+    // iOS opens the app in a mode the query misses); no other, whatever gap follows it
+    expect(html.split(FLOOR)).toHaveLength(3);
+    expect(html.split(STRIP)).toHaveLength(3);
+    expect(html.match(/62px\)/g)).toHaveLength(4);
     const at = html.indexOf(FLOOR);
     const phones = [...html.matchAll(/@media \(max-width: 700px\) \{/g)].map((m) => block(m.index));
     const phone = phones.find(([a, b]) => a < at && at < b);
@@ -55,8 +56,15 @@ describe('the tower as a Home Screen app', () => {
     expect(qa < at && at < qb).toBe(true); // inside that query's own block
     const strip = html.indexOf(STRIP); // the strip's floor, in the same block
     expect(qa < strip && strip < qb).toBe(true);
+    // the class's floor: the next rule in the same phone block, upright only
+    const at2 = html.indexOf(FLOOR, at + 1);
+    expect(phone![0] < at2 && at2 < phone![1]).toBe(true);
+    expect(html.slice(qb, at2)).toMatch(
+      /^\s*\/\*[^*]*\*\/\s*@media \(orientation: portrait\) \{\s*html\.installed header \{\s*$/,
+    );
+    expect(html.slice(at2, phone![1])).toContain(`html.installed #strip {\n            ${STRIP}`);
     // nothing later sets the header's top padding again
-    expect(html.slice(at + FLOOR.length)).not.toMatch(/header \{[^}]*padding(-top)?:/);
+    expect(html.slice(at2 + FLOOR.length)).not.toMatch(/header \{[^}]*padding(-top)?:/);
     // the tab layout keeps its own inset plus gap
     expect(html).toContain('padding: calc(env(safe-area-inset-top, 0px) + 12px)');
   });

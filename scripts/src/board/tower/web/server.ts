@@ -4,6 +4,7 @@
 //   GET /favicon.svg, /favicon-32.png, /favicon-64.png, /favicon.ico (both sizes)  the tab icon, bolder for 16 px;
 //     Safari skips the SVG one. /favicon-a…, /favicon-b… the same four of two trial variants (a: no tile, b: a light
 //     tile), which `/?favicon=a|b` links instead: Safari draws a plate behind a low-contrast tab icon (TOWER.md)
+//   GET /manifest.webmanifest  the Home Screen app's manifest
 //   GET /api/state   the View as JSON  (?history=1 adds the chart series)
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -21,6 +22,9 @@ const STATIC: Record<string, [string, string]> = {
   '/favicon-32.png': ['favicon-32.png', 'image/png'],
   '/favicon-64.png': ['favicon-64.png', 'image/png'],
   '/favicon.ico': ['favicon.ico', 'image/x-icon'],
+  // a manifest with display standalone: iOS 26 opens a Home Screen site without one in a mode the page's
+  // display-mode query may not match (TOWER.md → Phone)
+  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
 };
 const VARIANTS = ['a', 'b'] as const;
 for (const v of VARIANTS)

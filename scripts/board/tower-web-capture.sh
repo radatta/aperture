@@ -130,10 +130,14 @@ async function check(page, tag, phone) {
 // terms dropped (portrait stays), and headless reports a 0 inset, as iOS 26 can. Installed, the header clears the
 // 62 px floor; the page as served (a tab) keeps its own 8 px.
 async function standalone(b, name) {
-  for (const mode of ['installed', 'tab']) {
+  // `flagged`: the page as served, but navigator.standalone true (iOS 26 can open a Home Screen app in a mode
+  // display-mode misses): app.js's `installed` class must floor it the same way
+  for (const mode of ['installed', 'flagged', 'tab']) {
     const tag = `${name}-${mode}-p440-light`;
     const ctx = await b.newContext({ ...SIZES.p440, colorScheme: 'light' });
     const page = await ctx.newPage();
+    if (mode === 'flagged')
+      await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
     let forced = 0;
     if (mode === 'installed')
       await page.route(BASE + '/', async (route) => {
@@ -145,8 +149,8 @@ async function standalone(b, name) {
     await page.waitForSelector('#meta .ver', { state: 'attached' });
     if (mode === 'installed' && forced !== 2) fails.push(`${tag}: found ${forced} of the 2 floor terms to force`);
     const top = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('header')).paddingTop));
-    if (mode === 'installed' ? top < 62 + 8 : top !== 8) fails.push(`${tag}: header padding-top ${top}px`);
-    if (mode === 'installed') {
+    if (mode !== 'tab' ? top < 62 + 8 : top !== 8) fails.push(`${tag}: header padding-top ${top}px`);
+    if (mode !== 'tab') {
       // an expanded panel's sticky strip sits below the same floor
       await page.evaluate(() => (location.hash = '#next'));
       await page.waitForTimeout(300);

@@ -38,7 +38,7 @@ SOURCES says what to run. The server compares on each page poll (HEAD read from 
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, plus the same four of the trial variants
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, `/manifest.webmanifest`, plus the same four of the trial variants
 `favicon-a…` and `favicon-b…`; `/?favicon=a|b` serves the page linking those), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
@@ -178,7 +178,13 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them only when the icon is
   added: **after a change to them merges, remove the Home Screen icon and add it again.** Installed and upright on the
   phone (`display-mode` standalone, or fullscreen, which iOS may report instead), the header's top inset is floored at
-  62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug 301994).
+  62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug 301994). A Home Screen site with no
+  manifest still opens as a web app on iOS 26, and with the floor in place its header still sat under the bar
+  (2026-11-16), as on other manifest-less sites while the Aperture app cleared it: so the page links
+  `/manifest.webmanifest` (`web/manifest.webmanifest`: `display` standalone, scope `/`, Nord, the radar icons), and
+  `app.js` also marks the page `installed` when `navigator.standalone` is true or the query matches, which applies the
+  same floor upright. Which of the two fixed it is unverified. **After this merges, remove the tower's Home Screen icon
+  and add it again.**
 - The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
   tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
   before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
@@ -203,9 +209,11 @@ five chips, with HEALTH or another panel showing, and (NEXT) without a struck ro
 pass per engine then drives the expand at 390 px: a title tap, a poll (scroll kept), a reload (panel and scroll
 kept), Esc, keys `3` `2` `2` `1`, Back, a modified key, `#zzz`, Esc on a page opened at `#next`, and a slot card
 opened on the glance still open after; and fetches both `?favicon=` pages.
-Two more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
+Three more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
 has no option, Chromium ignores it over CDP), so the installed frame is served the page with the floor's
-`display-mode` terms dropped and must clear 62 px; the page as served keeps its own 8 px.
+`display-mode` terms dropped, and the flagged frame the page as served with `navigator.standalone` true (the
+`installed` class's path); both must clear 62 px, and an expanded panel's strip must stick below 62 px in both. The
+page as served keeps its own 8 px.
 
 **SOURCES** (collapsed, plus a header chip that also tints the live dot) lists every source with its age and state:
 `ok`, `stale`, `failed` (with the error) or `missing`. `gh PRs` says how many fork PRs it dropped from the newest 40

@@ -13,6 +13,7 @@
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>tower</title>
     <style>
       /* Read at a glance from arm's length (the maintainer, 2026-11-13): big type, one line per item, details on click.
@@ -768,6 +769,15 @@
           }
           /* an expanded panel's strip sticks below that bar too */
           #strip {
+            top: max(env(safe-area-inset-top, 0px), 62px);
+          }
+        }
+        /* the same floor when app.js finds the page installed (navigator.standalone) but display-mode didn't match */
+        @media (orientation: portrait) {
+          html.installed header {
+            padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);
+          }
+          html.installed #strip {
             top: max(env(safe-area-inset-top, 0px), 62px);
           }
         }

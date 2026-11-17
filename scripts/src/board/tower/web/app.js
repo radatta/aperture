@@ -1223,6 +1223,13 @@ for (const id of ['needs', 'now', 'next', 'done']) {
   h.title = `expand (key ${PANELS.indexOf(id) + 1})`;
   h.addEventListener('click', () => openPanel(id));
 }
+// Installed on the Home Screen: iOS 26 may open the page in a mode its display-mode query doesn't match, with a 0
+// inset (WebKit bug 301994), so the status-bar floor also keys on this class (TOWER.md → Phone).
+if (
+  navigator.standalone === true ||
+  matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches
+)
+  document.documentElement.classList.add('installed');
 window.addEventListener('popstate', () => applyOpen());
 window.addEventListener('hashchange', () => applyOpen());
 window.addEventListener('keydown', (e) => {

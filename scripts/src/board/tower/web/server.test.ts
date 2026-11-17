@@ -138,6 +138,18 @@ describe('the HTTP surface', () => {
     expect(await (await fetch(`${base}/favicon-b.svg`)).text()).toContain('fill="#8FBCBB"');
   });
 
+  it('serves the Home Screen manifest, linked from the page: standalone, its own scope, the radar icons', async () => {
+    const page = await (await fetch(`${base}/`)).text();
+    expect(page).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
+    const r = await fetch(`${base}/manifest.webmanifest`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toBe('application/manifest+json');
+    const m = (await r.json()) as Record<string, unknown>;
+    expect(m).toMatchObject({ name: 'tower', start_url: '/', scope: '/', display: 'standalone' });
+    for (const i of m.icons as { src: string }[])
+      expect((await fetch(`${base}${i.src}`)).status, i.src).toBe(200);
+  });
+
   it('/api/state is the View; ?history=1 asks for the series', async () => {
     calls = [];
     expect(await (await fetch(`${base}/api/state`)).json()).toEqual({ v: 1, now: 1 });
