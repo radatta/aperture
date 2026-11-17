@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { IDENTITY_FIX, rangeIdentityHits } from '../commit-identity.ts';
 import { REPO_SLUG, describeHits, findIdentifiers } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
+import { shq } from '../shq.ts';
 import type { Clock } from '../bot/dispatch.ts';
 import { featureBranch, requirePushed } from '../bot/git.ts';
 import { iosFiles } from '../bot/ios-routing.ts';
@@ -18,8 +19,12 @@ import type { Fs, Result } from './submit.ts';
 export const MAC_ROOT = macRoot();
 // After a printed Mac line when the path is unknown here, so the placeholder never reads as a real path.
 export const MAC_NOTE = MAC_ROOT === MAC_PLACEHOLDER ? `\n  ${MAC_ROOT_NOTE}` : '';
-export const macPath = (p: string) =>
-  p === '/workspace' || p.startsWith('/workspace/') ? MAC_ROOT + p.slice('/workspace'.length) : p;
+// A container path as the Mac's, one zsh word for a hand-off line: the validated root (or the placeholder) bare, the
+// rest through shq.
+export const macDir = (p: string) =>
+  p === '/workspace' || p.startsWith('/workspace/')
+    ? MAC_ROOT + (p.length > '/workspace'.length ? shq(p.slice('/workspace'.length)) : '')
+    : shq(p);
 export const RENEW_LINE = `cd ${MAC_ROOT} && security add-generic-password -a "$USER" -s aperture-mailroom-gh -T /usr/bin/security -U -w`;
 // The one install line (MAILROOM.md → Install): install.sh fetched from merged main, never the shared folder's copy.
 export const INSTALL_LINE = `cd ${MAC_ROOT} && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/${REPO_SLUG}/contents/tools/mailroom/install.sh?ref=main')`;
@@ -48,10 +53,11 @@ export interface Fallback {
   line: string;
   late: string;
 }
-const openFallback = (d: Deps, branch: string, title: string): Fallback => ({
-  line: `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md${MAC_NOTE}`,
+// Every variable word goes through shq: the line is pasted into zsh, whatever validated it upstream.
+export const openFallback = (d: Deps, branch: string, title: string): Fallback => ({
+  line: `cd ${macDir(d.root)} && gh pr create --title ${shq(title)} --body-file ${shq(`localNotes/pr-${branch}.md`)}${MAC_NOTE}`,
   // --head matches a fork's same-named branch too: the jq keeps only this repo's PR.
-  late: `it may still open the PR. Check on the Mac first (empty output means none):\n  cd ${macPath(d.root)} && gh pr list --head ${branch} --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:`,
+  late: `it may still open the PR. Check on the Mac first (empty output means none):\n  cd ${macDir(d.root)} && gh pr list --head ${shq(branch)} --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:`,
 });
 
 function unreachable(d: Deps, why: string, fb: Fallback, late = false): number {

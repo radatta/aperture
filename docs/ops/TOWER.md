@@ -30,9 +30,10 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 | `scripts/board/tower-web.sh --once`                    | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
-and never from a worktree. After a merge, `pnpm board sync-main` moves `/workspace` and restarts the tower only if
-its code changed. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
-file (a merge synced by hand, or `pnpm lanes start` detaching `/workspace`), the sources chip reads "behind main" and
+and never from a worktree. `pnpm lanes start` and `pnpm lanes end` finish with sync-main, so a merge followed by
+either needs nothing by hand; after a merge that no lane command follows, run `pnpm board sync-main`. A stopped
+tower needs `board.sh tower start`. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
+file (a checkout moved by hand or by a rolled-back `lanes start`, or a sync-main whose restart failed), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
@@ -128,9 +129,12 @@ From the top:
   never over the numbers.
 - Mac-only copy buttons become an "on the Mac" label.
 - Home Screen metas: `viewport-fit=cover` with safe-area padding (the header: the top inset plus 8 px on the phone, 12 px on the desktop, so it clears the status bar), `theme-color` per scheme,
+  the app's `apple-mobile-web-app-capable` = `yes` and `apple-mobile-web-app-status-bar-style` = `black-translucent`,
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
-  `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
-  added, so a re-add picks them up.
+  `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them only when the icon is
+  added: **after a change to them merges, remove the Home Screen icon and add it again.** Installed and upright on the
+  phone (`display-mode` standalone, or fullscreen, which iOS may report instead), the header's top inset is floored at
+  62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug 301994).
 - The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
   tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
   before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
@@ -141,7 +145,9 @@ From the top:
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
 and 1512×860, light and dark, plain / stress (every string long, every source off) / empty, and fails on hidden text,
 a sideways scroll, a wrapped header, a spark over its numbers, `undefined` on the page, or a Mac-only button on the
-phone.
+phone. Two more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
+has no option, Chromium ignores it over CDP), so the installed frame is served the page with the floor's
+`display-mode` terms dropped and must clear 62 px; the page as served keeps its own 8 px.
 
 **SOURCES** (collapsed, plus a header chip that also tints the live dot) lists every source with its age and state:
 `ok`, `stale`, `failed` (with the error) or `missing`.

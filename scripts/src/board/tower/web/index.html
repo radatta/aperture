@@ -6,6 +6,8 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#eceff4" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#242933" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="tower" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -573,6 +575,15 @@
           gap: 8px;
           padding: calc(env(safe-area-inset-top, 0px) + 8px) max(12px, env(safe-area-inset-right))
             8px max(12px, env(safe-area-inset-left));
+        }
+        /* Installed, upright: never under the status bar, even when iOS reports a 0 inset (WebKit bug 301994).
+           62px is a Dynamic Island phone's inset (54px bar); iOS may report fullscreen (WebKit bug 264218). Above
+           700px or sideways no installed screen has such a bar, so the floor stays here. */
+        @media (display-mode: standalone) and (orientation: portrait),
+          (display-mode: fullscreen) and (orientation: portrait) {
+          header {
+            padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);
+          }
         }
         header h1 {
           font-size: 19px;

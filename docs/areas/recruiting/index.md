@@ -410,14 +410,15 @@ nothing on the other end. "Dev" here always means the deployed AWS stage, never 
 Safari has been the daily browser since 2026-10-04. The Firefox install below is **retired and removed**
 (2026-11-10): it ran v1, whose write PR D removed; the AMO notes stay as the record of how it was signed.
 
-**1. Daily driver — the Safari prod app, prod origin, your personal Safari profile.**
+**1. Daily driver — the Safari prod app, prod origin, a dedicated Recruiting Safari profile.**
+The LeetCode tab group lives in that profile; the personal profile has neither build.
 This is the only one that needs to be permanent, and it genuinely does: a temporary extension you forgot
 to re-load after a restart doesn't error, it just silently stops capturing. Same silent-failure family as
 the identity seam. Build: `extension/README.md` → _Build it for Safari_.
 
 **2. Stage validation — the Safari dev app (red icon), dev origin, an "Aperture Dev" Safari profile.**
-A second app with its own bundle ID (`…ApertureLeetCodeDev`), so its options are separate, and enabled
-only in that profile while prod is disabled there — exactly one capture path per profile, so real
+A second app with its own bundle ID (`…ApertureLeetCodeDev`), so its options are separate, ticked in
+that profile for good while prod is never enabled there — exactly one capture path per profile, so real
 practice never lands in dev. Its Xcode project references `extension/` live, so picking up a code change
 is a rebuild plus the re-copy (README step 4). This is where the four ingest checks get run.
 
@@ -444,7 +445,8 @@ like a failed patch (`window.fetch` stays `[native code]`).
 
 ### Loading a temporary extension (layer 3)
 
-Safari: Settings → **Developer** → **Add Temporary Extension…** → this repo's `extension/` folder, then
+Only in the "Aperture Dev" profile, in the dev app's place: untick the dev app while it is loaded, and tick it
+again after. Safari: Settings → **Developer** → **Add Temporary Extension…** → this repo's `extension/` folder, then
 tick it under Extensions → _Temporary_ (the Developer tab needs Settings → Advanced → _Show features for
 web developers_; Apple, "Running your Safari web extension", checked 2026-11-13). Options: README →
 _Configure_.
@@ -515,7 +517,7 @@ third one is ongoing work, and only for these events:
 | Rotating the token deliberately                                                      | update the GitHub secret → redeploy → re-paste in the extension                                                                         |
 | Cognito pool replaced                                                                | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never                                            |
 | Origin changes                                                                       | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08                             |
-| New browser / profile / machine                                                      | paste the token there — `storage.local` is per-profile                                                                                  |
+| New browser / profile / machine                                                      | paste the origin and token there — Options start blank in each profile (`storage.local` is per-profile)                                 |
 | Browser restart (temporary extension only)                                           | re-add it. The installed apps are unaffected                                                                                            |
 | Free Apple certificate expiry (2027-09-28)                                           | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData                                                   |
 | Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |

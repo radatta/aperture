@@ -10,7 +10,8 @@ import {
   MAC_ROOT,
   RENEW_LINE,
   WAIT_MS,
-  macPath,
+  macDir,
+  openFallback,
   openPr,
   probe,
 } from './open-pr.ts';
@@ -326,7 +327,7 @@ describe('openPr', () => {
     );
     // A real Mac line: the worktree's Mac path, and only this repo's PR (a fork's same-named branch is dropped).
     expect(out).toContain(
-      `\n  cd ${macPath(ROOT)} && gh pr list --head mac-mailroom --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:\n  cd ${macPath(ROOT)} && gh pr create`,
+      `\n  cd ${macDir(ROOT)} && gh pr list --head mac-mailroom --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:\n  cd ${macDir(ROOT)} && gh pr create`,
     );
   });
 
@@ -408,7 +409,7 @@ describe('openPr', () => {
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
     expect([...fs.files.keys()].some((k) => k.endsWith('.withdrawn.json'))).toBe(true);
     expect(logs.join('\n')).toContain(
-      `cd ${MAC_ROOT}/.claude/worktrees/mac-mailroom && gh pr create --title "Mac mailroom opens PRs" --body-file localNotes/pr-mac-mailroom.md${MAC_NOTE}`,
+      `cd ${MAC_ROOT}/.claude/worktrees/mac-mailroom && gh pr create --title 'Mac mailroom opens PRs' --body-file localNotes/pr-mac-mailroom.md${MAC_NOTE}`,
     );
     expect(logs.join('\n')).toMatch(/never installed; no result ever written/);
   });
@@ -487,7 +488,21 @@ describe('probe', () => {
   });
 });
 
-it('maps container paths to the Mac', () => {
-  expect(macPath('/workspace/.claude/worktrees/x')).toBe(`${MAC_ROOT}/.claude/worktrees/x`);
-  expect(macPath('/workspacex')).toBe('/workspacex');
+it('maps container paths to the Mac as one zsh word', () => {
+  expect(macDir('/workspace/.claude/worktrees/x')).toBe(`${MAC_ROOT}/.claude/worktrees/x`);
+  expect(macDir('/workspace')).toBe(MAC_ROOT);
+  expect(macDir('/workspacex')).toBe('/workspacex');
+  expect(macDir('/workspace/a b')).toBe(`${MAC_ROOT}'/a b'`);
+  expect(macDir('/tmp/$(x)')).toBe(`'/tmp/$(x)'`);
+});
+
+// Validation refuses these before a line is printed (BRANCH_RE, TITLE_RE); the builder quotes them anyway.
+it('the hand-off lines single-quote a hostile branch and title', () => {
+  const d = { root: '/workspace/.claude/worktrees/x' } as Deps;
+  const title = `it's "a" $(touch y); \`id\` !x *?[z]`;
+  const fb = openFallback(d, 'b;$(z)', title);
+  expect(fb.line).toContain(
+    `gh pr create --title 'it'\\''s "a" $(touch y); \`id\` !x *?[z]' --body-file 'localNotes/pr-b;$(z).md'`,
+  );
+  expect(fb.late).toContain(`gh pr list --head 'b;$(z)' --json`);
 });

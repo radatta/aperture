@@ -3,6 +3,7 @@
 // and refuses unless it's the one open PR, the user's, onto main, at this push. Never silent: an unreachable Mac prints
 // the user's `gh pr edit` line. docs/ops/MAILROOM.md → The edit-pr job.
 import { featureBranch, requirePushed } from '../bot/git.ts';
+import { shq } from '../shq.ts';
 import { makeEditPrJob, sha256, validateJob } from './job.ts';
 import {
   EXIT,
@@ -11,7 +12,7 @@ import {
   budget,
   deliver,
   failed,
-  macPath,
+  macDir,
   prBody,
   refuse,
   warnings,
@@ -27,8 +28,8 @@ const HINTS: Record<string, string> = {
     'the installed runner predates edit-pr — reinstall from main (MAILROOM.md → Install), or run the gh pr edit line by hand',
 };
 
-const editFallback = (d: Deps, branch: string, title?: string): Fallback => ({
-  line: `cd ${macPath(d.root)} && gh pr edit ${branch} --body-file localNotes/pr-${branch}.md${title ? ` --title "${title}"` : ''}${MAC_NOTE}`,
+export const editFallback = (d: Deps, branch: string, title?: string): Fallback => ({
+  line: `cd ${macDir(d.root)} && gh pr edit ${shq(branch)} --body-file ${shq(`localNotes/pr-${branch}.md`)}${title ? ` --title ${shq(title)}` : ''}${MAC_NOTE}`,
   late: `it may still edit the PR. Check its body on github.com before running:`,
 });
 

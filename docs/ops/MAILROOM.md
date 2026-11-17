@@ -117,10 +117,11 @@ Other uses:
 Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire. A running `sim` job no longer delays it: `open-pr` runs in the fast lane (_The runner_ → _Lanes_). The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
 
 ```sh
-cd <Mac worktree> && gh pr create --title "…" --body-file localNotes/pr-<branch>.md
+cd <Mac worktree> && gh pr create --title '…' --body-file localNotes/pr-<branch>.md
 ```
 
-The title rule excludes `"`, `$`, backticks and `!`, so that line always pastes cleanly. On exit 3 or a token error, the user gets that line: from a lane, as an `[ask-maintainer]` to the hub, in either mode (FEATURE-WORKFLOW.md → _Talking to the user_). `edit-pr`'s `MAC_UNREACHABLE` prints the matching `gh pr edit` line, which goes the same way.
+Every variable word goes through `shq` (`scripts/src/shq.ts`), so the line pastes cleanly into zsh whatever the title
+rule lets through. On exit 3 or a token error, the user gets that line: from a lane, as an `[ask-maintainer]` to the hub, in either mode (FEATURE-WORKFLOW.md → _Talking to the user_). `edit-pr`'s `MAC_UNREACHABLE` prints the matching `gh pr edit` line, which goes the same way.
 
 A branch that changes `.github/workflows/` can't be pushed by the bot (no `workflows` permission), so the user's line then also starts with `git push -u origin <branch>` — after a rebase, `git push --force-with-lease -u origin <branch>` (FEATURE-WORKFLOW.md → phase 8).
 

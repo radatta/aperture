@@ -6,8 +6,8 @@ import { macLine, parseAdmission } from './mac-line.ts';
 const ROOT = '/mac/repo';
 const P = 'repos/o/r/environments/dev/deployment-branch-policies';
 
-// Outside single quotes, no zsh glob or history character may appear.
-const unquoted = (line: string) => line.replace(/'[^']*'/g, "''");
+// Outside single quotes (and shq's \' between them), no zsh glob or history character may appear.
+const unquoted = (line: string) => line.replace(/'[^']*'|\\'/g, "''");
 
 describe('macLine', () => {
   it('not admitted: the branch delete only', () => {
@@ -38,6 +38,17 @@ describe('macLine', () => {
     expect(l).not.toMatch(/\n/);
     expect(l.startsWith(`cd ${ROOT} && `)).toBe(true);
     expect(unquoted(l)).not.toMatch(/[?*[\]<!{}]/);
+  });
+
+  // nameProblem refuses these before end gets here; the line quotes them anyway.
+  it('a hostile branch is quoted in the delete and in the jq filter', () => {
+    const b = `x'; $(rm y) "\\(z)" !*?[`;
+    const l = macLine(ROOT, b, true, { kind: 'unknown' }, 'o/r');
+    expect(l).toContain(`git branch -D 'x'\\''; $(rm y) "\\(z)" !*?['`);
+    expect(l).toContain(
+      `--jq '.branch_policies[] | select(.name=="x'\\''; $(rm y) \\"\\\\(z)\\" !*?[") | .id'`,
+    );
+    expect(unquoted(l)).not.toMatch(/[?*[\]<!{}$;"`]/);
   });
 
   it('the placeholder root carries no identifier', () => {

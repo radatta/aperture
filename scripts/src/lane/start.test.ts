@@ -159,6 +159,7 @@ describe('lane start: refusals change nothing', () => {
       expect(
         existsSync(join(w.board, 'lifecycle', `${B}.json`)) && name !== 'a lifecycle record',
       ).toBe(false);
+      expect(t.sync.calls).toBe(0);
     });
 
   it('notes untracked paths but goes on', async () => {
@@ -281,6 +282,31 @@ describe('lane start: the nominal run', () => {
     expect(t.calls.some((c) => c.line.includes('HOSTILE-MARKER'))).toBe(false);
   });
 
+  it('syncs main once the session is live, after the started line', async () => {
+    const w = world();
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.sync.calls).toBe(1);
+    expect(t.sync.ran.at(-1)).toBe('tmux send-keys -t %9 Enter');
+    expect(t.sync.logged.at(-1)).toMatch(new RegExp(`^lane ${B}: started in window @9`));
+    expect(t.out().trimEnd().endsWith('tower: restart not needed (serving aaaaaaa)')).toBe(true);
+  });
+
+  it('a sync-main failure only warns: exit 0, nothing rolled back', async () => {
+    const w = world();
+    const t = deps(w, script(w));
+    t.sync.fail = 'tower: restart failed (1 tower file changed since aaaaaaa): did not start';
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(
+      /warning: sync-main failed \(retry: pnpm board sync-main\): tower: restart failed/,
+    );
+    expect(t.out()).not.toMatch(/rolling back/);
+    expect(mutated(t.calls).some((l) => /kill-window|worktree remove|branch -d/.test(l))).toBe(
+      false,
+    );
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(true);
+  });
+
   it('warns, without failing, when the session name never shows', async () => {
     const w = world();
     const t = deps(w, script(w));
@@ -340,6 +366,7 @@ describe('lane start: rollback', () => {
       expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
       expect(t.out()).toMatch(/rolled back: nothing left behind/);
       if (name === 'a failed install') expect(t.out()).toMatch(/ERR_PNPM/);
+      expect(t.sync.calls).toBe(0);
     });
 
   it('names what is left when an undo fails', async () => {
