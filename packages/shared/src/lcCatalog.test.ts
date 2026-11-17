@@ -3,7 +3,9 @@ import {
   buildCatalog,
   catalogCounts,
   classesOf,
+  LC_CATALOG_PART_MAX_CHARS,
   lcCatalogSourceUrl,
+  normalizeCatalogImport,
   packCatalog,
   parseClasses,
   trimSourceRows,
@@ -202,4 +204,33 @@ it('pins the source by commit', () => {
   expect(lcCatalogSourceUrl()).toMatch(
     /^https:\/\/raw\.githubusercontent\.com\/noworneverev\/leetcode-api\/[0-9a-f]{40}\/data\/leetcode_questions_mini\.json$/,
   );
+});
+
+describe('normalizeCatalogImport', () => {
+  it('passes a kick, a dev cap and a part through', () => {
+    expect(normalizeCatalogImport(undefined)).toEqual({});
+    expect(normalizeCatalogImport({ limit: 300 })).toEqual({ limit: 300 });
+    expect(normalizeCatalogImport({ classes: '1\ttrees\t-\t-' })).toEqual({
+      classes: '1\ttrees\t-\t-',
+      part: 1,
+      parts: 1,
+    });
+    expect(normalizeCatalogImport({ classes: 'x', part: 2, parts: 3 })).toMatchObject({
+      part: 2,
+      parts: 3,
+    });
+  });
+
+  it('refuses a malformed input with the reason', () => {
+    expect(() => normalizeCatalogImport([])).toThrow(/object/);
+    expect(() => normalizeCatalogImport({ nope: 1 })).toThrow(/Unknown import field/);
+    expect(() => normalizeCatalogImport({ limit: 0 })).toThrow(/limit/);
+    expect(() => normalizeCatalogImport({ part: 1 })).toThrow(/go with classes/);
+    expect(() => normalizeCatalogImport({ classes: ' ' })).toThrow(/non-empty/);
+    expect(() =>
+      normalizeCatalogImport({ classes: 'x'.repeat(LC_CATALOG_PART_MAX_CHARS + 1) }),
+    ).toThrow(/split it/);
+    expect(() => normalizeCatalogImport({ classes: 'x', part: 4, parts: 3 })).toThrow(/part must/);
+    expect(() => normalizeCatalogImport({ classes: 'x', parts: 9 })).toThrow(/parts must/);
+  });
 });

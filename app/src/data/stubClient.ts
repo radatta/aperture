@@ -316,7 +316,13 @@ import type {
   SittingStartInput,
   SittingStartResult,
 } from '@aperture/shared';
-import { patchKeyError, SETTINGS_PATCH_KEYS, STORY_PATCH_KEYS } from '@aperture/shared';
+import {
+  normalizeCatalogImport,
+  patchKeyError,
+  SETTINGS_PATCH_KEYS,
+  STORY_PATCH_KEYS,
+} from '@aperture/shared';
+import type { CatalogImportInput, CatalogStatus } from '@aperture/shared';
 import {
   FLUX_NOTE_MIN_SETS,
   fluxFilterError,
@@ -1483,6 +1489,24 @@ class StubClient implements ApiClient {
   async deleteCoachAttempt(id: string): Promise<void> {
     if (this.find(this.store.coachAttempts, id))
       this.writes.softDelete(this.store.coachAttempts, id);
+  }
+  // The full catalog builds only on the server (the import job fetches its source): the stub has none.
+  async getCatalogStatus(): Promise<CatalogStatus> {
+    return {
+      state: 'absent',
+      sha: null,
+      count: 0,
+      premium: 0,
+      by: null,
+      importedAt: null,
+      staged: null,
+      costUsd: 0,
+      lastError: null,
+    };
+  }
+  async startCatalogImport(input: CatalogImportInput): Promise<CatalogStatus> {
+    normalizeCatalogImport(input);
+    throw new Error('The full catalog imports on the server only');
   }
   // Deterministic stand-in for the Haiku draft (same shape and rules, no model): one line per judged Run or
   // Submit that wasn't accepted, naming its failing case or error head.

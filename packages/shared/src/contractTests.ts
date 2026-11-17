@@ -4108,6 +4108,28 @@ export function runApiContract(
       });
     });
 
+    // The full LeetCode catalog (lcCatalog.ts): stage-wide, built only by the Lambda's import job; what both
+    // sides share is the status before any import and the input's refusals.
+    describe('lc catalog', () => {
+      it('reads as absent before any import', async () => {
+        expect(await api.getCatalogStatus()).toMatchObject({
+          state: 'absent',
+          sha: null,
+          count: 0,
+          by: null,
+          staged: null,
+          lastError: null,
+        });
+      });
+
+      it('refuses a malformed import input', async () => {
+        await expect(api.startCatalogImport({ limit: 0 })).rejects.toThrow(/limit/);
+        await expect(api.startCatalogImport({ classes: 'x', part: 3, parts: 2 })).rejects.toThrow(
+          /part must/,
+        );
+      });
+    });
+
     // The LeetCode coach (coach.ts): a plan derived on read from the sittings, and the few decisions it stores.
     // The coach's AI pick (coachAi.ts): both sides answer with the same stand-in through the real guardrails, so a
     // picked day reads like the rules' — what this pins is the claim, the once-a-day hold and the switch.

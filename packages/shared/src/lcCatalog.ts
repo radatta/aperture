@@ -291,3 +291,67 @@ export function unpackCatalog(raw: unknown): LcCatalogRow[] | null {
     by: LC_CLASSIFIED_BY[t[10]]!,
   }));
 }
+
+// --- The import, over the API (startCatalogImport / getCatalogStatus) ---
+// absent: never imported. staging: a classification upload has some of its parts. running: a job holds the claim.
+// ready: every algorithm problem has a pattern from NeetCode or a model. partial: some still have only their tags'
+// guess (rows the dataset added since the last classification; each kick classifies a few). failed: the newest
+// job failed and no catalog was ever built (a failure after one keeps the live catalog and sets lastError).
+export type CatalogImportState = 'absent' | 'staging' | 'running' | 'ready' | 'partial' | 'failed';
+export interface CatalogStatus {
+  state: CatalogImportState;
+  sha: string | null; // the source commit the live catalog was built from
+  count: number;
+  premium: number;
+  by: Record<LcClassifiedBy, number> | null;
+  importedAt: number | null;
+  staged: { have: number; of: number } | null; // the classification upload's parts so far
+  costUsd: number; // the server-side model path's spend, cumulative; it stops at LC_CATALOG_COST_STOP_USD
+  lastError: string | null;
+}
+// One call per part of the classification file (parts in any order; a part 1 starts a new upload); the last part
+// in, or a call with no classes, kicks the import. `limit` caps the non-NeetCode problems (dev's import).
+export interface CatalogImportInput {
+  classes?: string;
+  part?: number;
+  parts?: number;
+  limit?: number;
+}
+export const LC_CATALOG_PART_MAX_CHARS = 64_000;
+export const LC_CATALOG_PARTS_MAX = 8;
+export const LC_CATALOG_COST_STOP_USD = 0.25;
+export const LC_CATALOG_MODEL_ROWS_PER_KICK = 50;
+
+// Validates and normalizes the import's input; throws with the reason.
+export function normalizeCatalogImport(raw: unknown): CatalogImportInput {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw))
+    throw new Error('Import input must be an object');
+  const o = raw as Record<string, unknown>;
+  const extra = Object.keys(o).filter((k) => !['classes', 'part', 'parts', 'limit'].includes(k));
+  if (extra.length) throw new Error(`Unknown import field: ${extra[0]}`);
+  const int = (v: unknown, lo: number, hi: number) =>
+    Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi;
+  const out: CatalogImportInput = {};
+  if (o.limit !== undefined) {
+    if (!int(o.limit, 1, 10_000)) throw new Error('limit must be a whole number from 1 to 10000');
+    out.limit = o.limit as number;
+  }
+  if (o.classes === undefined) {
+    if (o.part !== undefined || o.parts !== undefined)
+      throw new Error('part and parts go with classes');
+    return out;
+  }
+  if (typeof o.classes !== 'string' || !o.classes.trim())
+    throw new Error('classes must be non-empty text');
+  if (o.classes.length > LC_CATALOG_PART_MAX_CHARS)
+    throw new Error(
+      `A classes part is at most ${LC_CATALOG_PART_MAX_CHARS} characters; split it into parts`,
+    );
+  const parts = o.parts ?? 1;
+  const part = o.part ?? 1;
+  if (!int(parts, 1, LC_CATALOG_PARTS_MAX))
+    throw new Error(`parts must be 1 to ${LC_CATALOG_PARTS_MAX}`);
+  if (!int(part, 1, parts as number)) throw new Error('part must be 1 to parts');
+  return { ...out, classes: o.classes, part: part as number, parts: parts as number };
+}

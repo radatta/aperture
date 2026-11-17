@@ -56,6 +56,7 @@ import type {
   ProblemRecord,
   SittingReviewPatch,
 } from './coach';
+import type { CatalogImportInput, CatalogStatus } from './lcCatalog';
 import type { PatternId } from './neetcode150';
 import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
@@ -691,6 +692,11 @@ export interface ApiClient {
   // Claude's notes on ended sittings, ≤ CLAUDE_NOTES_BATCH_MAX at once, all validated before any write; null or
   // blank text clears. Never touches the review. Returns the sittings after.
   setSittingClaudeNotes(items: ClaudeNotesInput[]): Promise<Sitting[]>;
+  // The full LeetCode catalog (lcCatalog.ts), stage-wide, not the user's: its import status, and the import —
+  // a classification part staged, or a job kicked (the last part in, or a call with none). Idempotent while a
+  // job runs: a second kick just reads the status.
+  getCatalogStatus(): Promise<CatalogStatus>;
+  startCatalogImport(input: CatalogImportInput): Promise<CatalogStatus>;
 
   // Flux — one row per finished set (D47). record is idempotent on the client's id (a retry returns the
   // stored row) and refuses per fluxSetError; list is alive, completedAt desc, from/to both or neither;
