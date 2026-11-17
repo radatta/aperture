@@ -115,6 +115,7 @@ const state = {
   d: '',
   dRep: '',
   dStartedAt: 0,
+  newer: false, // E or F started from a build newer than the app's (ui-ext-newer)
 };
 // A time after everything already sent on A. The events step stamps its batch up to 6 s ahead of the clock, so on a
 // fast run (the local check) a plain Date.now() is still behind it, and live and `last` — the newest by `at` —
@@ -368,25 +369,26 @@ export const lcSittings: Scenario = {
       what: 'Settings → LeetCode, after a Start from this build: up to date, and still after a reload',
     },
     {
-      id: 'settings-ext-none',
+      id: 'settings-ext-unversioned',
       entry: 'ui',
       kind: 'edge',
-      what: 'Settings → LeetCode with no sitting yet names the latest; a Start with no build reads as older',
-      offDev: {
-        file: 'app/src/pages/Settings/Settings.test.tsx',
-        test: 'no sitting yet: names the latest',
-        why: 'the dev test user’s partition always has sittings from earlier rows; the real Settings page renders over the stub',
-      },
+      what: 'Settings → LeetCode after a Start whose build label was malformed (stored null): read as an older build, rebuild needed',
     },
     {
       id: 'settings-ext-newer',
       entry: 'ui',
       kind: 'edge',
-      what: 'A build newer than the app’s (the app not yet deployed) gets no nag',
+      what: 'Settings → LeetCode after a Start from a build newer than the app’s (the app not yet deployed): no nag',
+    },
+    {
+      id: 'settings-ext-none',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Settings → LeetCode with no sitting at all names the latest',
       offDev: {
-        file: 'app/src/pages/Settings/extensionRow.test.ts',
-        test: 'a newer build than this app (the app not yet deployed): no nag',
-        why: 'dev’s app is always built from the checkout the extension version comes from',
+        file: 'app/src/pages/Settings/Settings.test.tsx',
+        test: 'no sitting yet: names the latest',
+        why: 'every run leaves the dev test user’s partition with sittings (lc-sittings itself starts several) and nothing deletes them; the real Settings page renders over the stub',
       },
     },
     {
@@ -1707,6 +1709,22 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'ui-ext-unversioned',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-unversioned'],
+      title: 'Settings → LeetCode after C’s Start with a malformed build label: an older build, rebuild needed',
+      async run(ctx) {
+        if (!state.c) throw new Error('no sitting C — the double-start step failed');
+        await ctx.ui.goto('/settings#leetcode');
+        await ctx.page
+          .getByText(
+            `Extension: the last Start came from a build older than ${LATEST_EXT} — rebuild needed.`,
+          )
+          .waitFor({ timeout: 15_000 });
+      },
+    },
+    {
       id: 'mcp-legacy-gone',
       entry: 'mcp',
       proves: ['mcp-legacy-gone'],
@@ -1844,6 +1862,7 @@ export const lcSittings: Scenario = {
       proves: ['settings-ext-equal'],
       title: 'Settings → LeetCode after D’s Start from this build: up to date, and after a reload',
       async run(ctx) {
+        if (!state.d) throw new Error('no sitting D — the late-neighbour step failed');
         const line = `Extension: ${LATEST_EXT}, up to date as of your last Start.`;
         await ctx.ui.goto('/settings#leetcode');
         await ctx.page.getByText(line).waitFor({ timeout: 15_000 });
@@ -2069,8 +2088,9 @@ export const lcSittings: Scenario = {
         'Start E and F at once: one opens, the other is refused as still open; drop the winner',
       async run(ctx) {
         const results = await Promise.allSettled([
-          ctx.api.writes.lcSittingStart(start(ctx, 'e')),
-          ctx.api.writes.lcSittingStart(start(ctx, 'f')),
+          // A build newer than the app's: the winner is the newest sitting, for ui-ext-newer.
+          ctx.api.writes.lcSittingStart(start(ctx, 'e', { extensionVersion: '99.0.0' })),
+          ctx.api.writes.lcSittingStart(start(ctx, 'f', { extensionVersion: '99.0.0' })),
         ]);
         const won = results.filter((r) => r.status === 'fulfilled');
         const lost = results.filter((r) => r.status === 'rejected');
@@ -2082,6 +2102,23 @@ export const lcSittings: Scenario = {
         const { sitting } = (won[0] as PromiseFulfilledResult<{ sitting: { repTaskId: string } }>)
           .value;
         await ctx.api.writes.finishTask(sitting.repTaskId, 'cancelled');
+        state.newer = true;
+      },
+    },
+    {
+      id: 'ui-ext-newer',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-newer'],
+      title: 'Settings → LeetCode after a Start from a build newer than the app’s: no rebuild nag',
+      async run(ctx) {
+        if (!state.newer) throw new Error('no newer sitting — the parallel step failed');
+        await ctx.ui.goto('/settings#leetcode');
+        await ctx.page
+          .getByText(`Extension: installed 99.0.0; this app was built with ${LATEST_EXT}.`)
+          .waitFor({ timeout: 15_000 });
+        if (await ctx.page.getByText(/rebuild needed/).count())
+          throw new Error('a newer build still asks for a rebuild');
       },
     },
     {

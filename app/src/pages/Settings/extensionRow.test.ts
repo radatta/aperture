@@ -33,14 +33,14 @@ describe('extensionRow', () => {
   });
   it('an older build: installed, latest, rebuild needed — whatever order the list is in', () => {
     expect(extensionRow([sitting(5, '2.1.0'), sitting(2, '2.2.0')], '2.2.0')).toEqual({
-      text: 'Extension: installed 2.1.0, latest 2.2.0 — rebuild needed.',
+      text: 'Extension: installed 2.1.0, latest 2.2.0\u00a0— rebuild needed.',
       rebuild: true,
     });
   });
   it('a sitting from before versions (no version on it): older, rebuild needed', () => {
     for (const v of [undefined, null, 'garbage'])
       expect(extensionRow([sitting(1, v)], '2.2.0')).toEqual({
-        text: 'Extension: the last Start came from a build older than 2.2.0 — rebuild needed.',
+        text: 'Extension: the last Start came from a build older than 2.2.0\u00a0— rebuild needed.',
         rebuild: true,
       });
   });

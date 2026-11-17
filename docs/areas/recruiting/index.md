@@ -117,7 +117,10 @@ by the next read, never by a scheduled job ($0, no new resource).
 
 All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda share them):
 
-- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), the user's review
+- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), the extension
+  build that started it (`extensionVersion`: its manifest's x.y.z, anything else null and never a refusal, set at
+  creation only, absent before 2.2.0; Settings → LeetCode compares the newest with the app's own —
+  `extension/README.md` → Versions), the user's review
   (`review`, _Review and the Claude draft_ below) and the `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
   runs before the first submit, LeetCode's timer state, and `headEvents`, how many rows it folds.
   **Recomputed, never incremented:** any events call carrying a head event — fresh or a repeat — rebuilds it

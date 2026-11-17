@@ -225,6 +225,7 @@ describe('the coach’s AI pick switch', () => {
 });
 
 // Settings → LeetCode's extension line: the newest sitting's build against the one the app was built with.
+// The line keeps the dash with the version (a no-break space); Testing Library collapses it to a space in the page.
 describe('the extension version line', () => {
   const LATEST = import.meta.env.VITE_LC_EXTENSION_VERSION as string;
   async function withStart(extensionVersion?: string | null) {
@@ -262,6 +263,24 @@ describe('the extension version line', () => {
     renderApp({ api: await withStart('0.0.1'), path: '/settings' });
     expect(
       await screen.findByText(`Extension: installed 0.0.1, latest ${LATEST} — rebuild needed.`),
+    ).toBeTruthy();
+  });
+  it('a failed read says so, with a Retry that recovers', async () => {
+    const api = await withStart(LATEST);
+    const real = api.listSittings.bind(api);
+    let fail = true;
+    vi.spyOn(api, 'listSittings').mockImplementation((...a) =>
+      fail ? Promise.reject(new Error('offline')) : real(...a),
+    );
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    expect(
+      await screen.findByText('Couldn’t read which extension build your last Start came from.'),
+    ).toBeTruthy();
+    fail = false;
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+    expect(
+      await screen.findByText(`Extension: ${LATEST}, up to date as of your last Start.`),
     ).toBeTruthy();
   });
   it('a Start with no version reads as a build from before versions', async () => {

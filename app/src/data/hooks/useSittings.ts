@@ -9,12 +9,16 @@ import { useSettings } from './useSettings';
 
 // LeetCode sittings (heads), newest first. Written by the extension; a rep's Done ends one, which is why
 // every task write invalidates this prefix (invalidate.ts).
-export function useSittings(range?: DateRange, opts: { enabled?: boolean } = {}) {
+export function useSittings(
+  range?: DateRange,
+  opts: { enabled?: boolean; refetchOnWindowFocus?: boolean } = {},
+) {
   const api = useApi();
   return useQuery({
     queryKey: qk.sittings(range?.from, range?.to),
     queryFn: () => api.listSittings(range),
     enabled: opts.enabled ?? true,
+    ...(opts.refetchOnWindowFocus ? { refetchOnWindowFocus: true } : {}),
   });
 }
 

@@ -962,8 +962,9 @@ const PLAN_MODE_OPTIONS: { value: CoachPlanMode; label: string; hint: string }[]
 
 // Which extension build the newest sitting's Start came from, against the one this app was built with
 // (extensionRow.ts; extension/README.md → Versions). Shares the Sittings page's cached list.
+// Refetched on coming back to the app: a Settings page left open through a rebuild and a Start catches up.
 function ExtensionVersionLine() {
-  const sittingsQ = useSittings();
+  const sittingsQ = useSittings(undefined, { refetchOnWindowFocus: true });
   if (!LC_EXTENSION_VERSION || sittingsQ.isPending) return null;
   if (sittingsQ.isError && sittingsQ.data === undefined)
     return (
