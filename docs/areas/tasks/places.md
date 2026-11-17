@@ -7,6 +7,9 @@
 events); PR 3 the morning/night ritual nudges. Research and path comparison: the branch's
 `localNotes/synthesis.md` (archived with the branch).
 
+Voice capture's `POST /api/capture` ([capture](capture.md)) follows this route's shape — the header, never-404,
+a spoken/shown text on every answer — with its own named, scoped tokens.
+
 Permanent design-of-record: §6 is the decision log, §7 the build record. Where this doc and the code disagree,
 fix whichever is wrong and say so here.
 

@@ -129,8 +129,9 @@ autonomous build:
   `16:00`, `noon`) — the one rule that doesn't depend on the model behaving. The re-run confirmed both,
   and caught one more invention ("call dentist tonight" → 15m): an estimate is now dropped the same way
   when the line has no duration (`30m`, `2h`, `90 min`, `an hour`).
-- **Not built:** an editable preview (edit the text, Review again); a scoped Raycast token
-  (`parse_task` + `create_task` — [mcp → Deferred](../mcp/index.md#deferred)).
+- **Not built:** an editable preview (edit the text, Review again). The scoped Raycast token landed with
+  voice capture (2026-11-16): Raycast and the Siri Shortcut post to `/api/capture` with a capture token —
+  the same parse, plus voice-only time rules ([capture](capture.md)).
 
 ## Decision log (2026-10-31)
 
