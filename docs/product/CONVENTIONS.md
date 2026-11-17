@@ -75,8 +75,9 @@ per file was most of CI's runtime on its single worker). CI runs the suite as tw
 halves (`ci.yml`), assigned by a hash of each file's path, so a file's CI shard-mates stay fixed until a
 file is added or removed; locally, vitest's several workers mix them differently every run. The cost:
 CI no longer runs every file in one graph, so a leak from one file into another in the other shard
-can only show up in a local run, and only when vitest's workers happen to pair the two files (the gate
-runs the full suite before every dev deploy and PR). So:
+can only show up in a local run, and only when vitest's workers happen to pair the two files — and since
+`pnpm gate:fast` (2026-11-17) a lane runs only the files its diff reaches, so fewer such pairings
+(`docs/ops/GATE.md` → _What is weaker_; `pnpm gate:fast --full` runs them all). So:
 
 - **New module-level state in `app/src`** (a singleton, cache, or `let`) needs a reset in
   `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file.

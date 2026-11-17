@@ -21,6 +21,12 @@
       "p95Sec": 155,
       "source": "2026-11-13 at VITEST_MAX_WORKERS=4, scripts at 2 (4,742 tests): pids/wall the max of 3 solo runs; anon the median (max 4046 had neighbours' noise) - SESSION-BOARD.md Results"
     },
+    "test-fast": {
+      "pids": 300,
+      "anonMiB": 4000,
+      "p95Sec": 240,
+      "source": "2026-11-17, ONE sample: gate:fast's app run on a one-page diff (44 files at VITEST_MAX_WORKERS=4): pids +294, anon +3718 MiB, 57.5 s; anon rounded up, p95 set to cover a run that includes the ~210 s mailroom fixture suite - docs/ops/GATE.md; re-measure from a day of history"
+    },
     "ui": {
       "pids": 280,
       "anonMiB": 2700,
