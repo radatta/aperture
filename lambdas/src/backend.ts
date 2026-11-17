@@ -1627,7 +1627,7 @@ export class BackendClient implements ApiClient {
     const places = alivePlaces.map(({ slug, name }) => ({ slug, name }));
     const now = this.now();
     const today = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
-    const ctx = { categories, places, today, now };
+    const ctx = { categories, places, today, dayStartHour: settings.dayStartHour, now };
     return runQuickParse(text, ctx, (line) =>
       this.anthropic.parseTask({ text: line, today, categories, timeoutMs: parseBudgetMs(line) }),
     );
@@ -2660,6 +2660,7 @@ export class BackendClient implements ApiClient {
         categories,
         places,
         today: appToday,
+        dayStartHour: settings.dayStartHour,
         now,
         voice,
       };

@@ -5,6 +5,7 @@
 // Design record: docs/areas/tasks/quick-add.md.
 
 import { isDayKey, isTimeKey } from './dates';
+import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
@@ -61,8 +62,9 @@ export type ParseCategory = Pick<Category, 'id' | 'label'>;
 export interface ParseContext {
   categories: readonly ParseCategory[]; // active only
   places: readonly PlaceRef[]; // alive — a known `@slug` word is taken before the model sees the line
-  today: string; // the app's today (dayStartHour) — the receipt's; a clock resolves against `now`
-  now: number; // every clock, typed or spoken, lands on its next occurrence after this (spokenTime.ts)
+  today: string; // the app's today (dayStartHour)
+  dayStartHour: number; // the day start `today` was resolved with — a small-hours clock on it is its night's
+  now: number; // a clock with no day of its own lands on its next occurrence after this (spokenTime.ts)
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
   // A spoken line (voice capture, capture.md): its time comes from the words — the model's dueTime is
   // ignored. Absent: the typed rules (the model's clock, or one stated outright).
@@ -135,9 +137,9 @@ export function validateParsedTask(
     else dropped.push('dropped due day');
   }
 
-  // Every clock lands on its next occurrence after now, typed or spoken (the maintainer, 2026-11-17): "1 am" at
+  // A clock lands on its next occurrence after now, typed or spoken (the maintainer, 2026-11-17): "1 am" at
   // 02:01 is tomorrow's 01:00, "9am" at 3pm tomorrow's. A day the model gave counts only when it's after the
-  // calendar's today (resolveSpoken).
+  // calendar's today (resolveSpoken) — except a day a typed line names, below.
   const line = ctx.line;
   const spoken = line === undefined ? null : spokenTimeIn(line);
   const keptWords = (t: SpokenTime) => title.toLowerCase().includes(t.said.toLowerCase());
@@ -184,7 +186,13 @@ export function validateParsedTask(
     const words = spoken?.kind === 'clock' ? spoken : null;
     const time = modelTime ?? (words && (due || !keptWords(words)) ? words.hhmm : null);
     if (time && dayKept) {
-      resolve({ said: '', kind: 'clock', hhmm: time });
+      // A day the typed line names stays as written (the maintainer, 2026-11-17): "pay rent today 9am" at 3pm is
+      // overdue, "nov 10 9am" is Nov 10. A small-hours clock on the app's today is that day's night — "today
+      // 1am" at 02:01 is the 01:00 just gone (nightDueDay). Only a clock with no day word rolls.
+      if (input.dueDay && DAY_WORD.test(line ?? '')) {
+        input.dueTime = time;
+        input.dueDay = nightDueDay(input.dueDay, time, ctx.today, ctx.dayStartHour);
+      } else resolve({ said: '', kind: 'clock', hhmm: time });
       // The same line keeps the same title whatever the model did with the phrase.
       if (due && time === words?.hhmm) input.title = due.title;
     } else if (p.dueTime != null) dropped.push('dropped due time');

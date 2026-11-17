@@ -502,7 +502,7 @@ Decisions (2026-10-09):
 - **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
 parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is quiet.
 - **A time with no day means today** (`call dentist 4pm`); a time whose day was dropped as invalid is
-  dropped too. _Superseded 2026-11-17:_ every clock lands on its next occurrence — tomorrow when it has
+  dropped too. _Superseded 2026-11-17:_ a clock with no day lands on its next occurrence — tomorrow when it has
   passed ([quick-add](../tasks/quick-add.md)).
 
 ## Deferred

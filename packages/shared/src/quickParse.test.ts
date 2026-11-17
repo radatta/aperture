@@ -16,6 +16,7 @@ const ctx = {
   ],
   places: [{ slug: 'grocer', name: 'Grocer' }],
   today: '2026-10-12',
+  dayStartHour: 4,
   now: Date.UTC(2026, 9, 12, 15, 0), // Monday 2026-10-12, 08:00 in LA
 };
 const fields = (over: Record<string, unknown> = {}) => ({
@@ -675,5 +676,65 @@ describe('validateParsedTask — the small hours', () => {
         expect(run({ title: line }, true), `${why}, spoken, kept`).toEqual(landing);
       }
     }
+  });
+});
+
+// The maintainer, 2026-11-17 (Q3): a day the typed line names stays as written; only a clock with no day word
+// rolls. Spoken lines keep their own rules ("today at 5 am" rolls, above).
+describe('validateParsedTask — a day the typed line names', () => {
+  // 2026-11-17 in LA (UTC-8); the app day is 11-16 before 04:00.
+  const at = (h: number, m: number) => Date.UTC(2026, 10, 17, h + 8, m);
+  const typed = (line: string, over: Record<string, unknown>, h: number, m: number) => {
+    const i = validateParsedTask(fields({ title: 'pay rent', ...over }), {
+      ...ctx,
+      today: h < 4 ? '2026-11-16' : '2026-11-17',
+      now: at(h, m),
+      line,
+    })!.input;
+    return [i.dueDay, i.dueTime];
+  };
+  it('a written day stays as written, even past; a small-hours clock on today is its night', () => {
+    // 15:00: today 9am is overdue, not tomorrow's.
+    expect(typed('pay rent today 9am', { dueDay: '2026-11-17', dueTime: '09:00' }, 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+    // A past date stays.
+    expect(typed('pay rent nov 10 9am', { dueDay: '2026-11-10', dueTime: '09:00' }, 15, 0)).toEqual(
+      ['2026-11-10', '09:00'],
+    );
+    // 02:01, the app's today still 11-16: "today 1am" is its night's 01:00 — the one just gone.
+    expect(typed('pay rent today 1am', { dueDay: '2026-11-16', dueTime: '01:00' }, 2, 1)).toEqual([
+      '2026-11-17',
+      '01:00',
+    ]);
+    // 15:00: "today 2:30am" is tonight's.
+    expect(
+      typed('pay rent today 2:30am', { dueDay: '2026-11-17', dueTime: '02:30' }, 15, 0),
+    ).toEqual(['2026-11-18', '02:30']);
+    // 00:30: "tomorrow 1am", read against the app's 11-16, stays 11-17.
+    expect(
+      typed('pay rent tomorrow 1am', { dueDay: '2026-11-17', dueTime: '01:00' }, 0, 30),
+    ).toEqual(['2026-11-17', '01:00']);
+    // A kept at-clock with the day the model read: the day stays, the phrase leaves.
+    expect(
+      typed(
+        'pay rent today at 9am',
+        { title: 'pay rent today at 9am', dueDay: '2026-11-17' },
+        15,
+        0,
+      ),
+    ).toEqual(['2026-11-17', '09:00']);
+  });
+  it('no day word: the clock rolls, whatever day the model put on it', () => {
+    expect(typed('pay rent 9am', { dueDay: '2026-11-17', dueTime: '09:00' }, 15, 0)).toEqual([
+      '2026-11-18',
+      '09:00',
+    ]);
+    // A day the line names but the model missed: nothing to keep, so it rolls.
+    expect(typed('pay rent today 9am', { dueTime: '09:00' }, 15, 0)).toEqual([
+      '2026-11-18',
+      '09:00',
+    ]);
   });
 });

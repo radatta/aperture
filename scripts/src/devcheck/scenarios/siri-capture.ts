@@ -44,6 +44,7 @@ export interface Shared {
   zonedEpoch(day: string, hhmm: string, timeZone: string): number;
   addDays(day: string, n: number): string;
   dayKeyInZone(epochMs: number, timeZone: string, dayStartHour: number): string;
+  nightDueDay(dueDay: string, dueTime: string, today: string, dayStartHour: number): string;
 }
 export const SHARED_NUMBERS = [
   'CAPTURE_DAILY_CAP',
@@ -61,12 +62,13 @@ export const SHARED_FUNCTIONS = [
   'zonedEpoch',
   'addDays',
   'dayKeyInZone',
+  'nightDueDay',
 ] as const;
 const SHARED_SRC = new URL('../../../../packages/shared/src/', import.meta.url);
 let sharedP: Promise<Shared> | undefined;
 export const loadShared = (): Promise<Shared> =>
   (sharedP ??= Promise.all(
-    ['dates.ts', 'spokenTime.ts', 'capture.ts'].map(
+    ['dates.ts', 'due.ts', 'spokenTime.ts', 'capture.ts'].map(
       (f) => import(new URL(f, SHARED_SRC).href) as Promise<object>,
     ),
   ).then((mods) => Object.assign({}, ...mods) as Shared));
@@ -312,20 +314,12 @@ async function expectDue(
     throw new Error(`say is “${r.say}”, expected it to end “, ${whens[0]}.”`);
   return { ...due, time: due.time, at: S.zonedEpoch(due.day, due.time, S.USER_TIME_ZONE) };
 }
-// What the time rules give for `text`, at each end of the call — typed and spoken alike since 2026-11-17.
-// `day` is the day the model reads in the words at that moment (null: none named).
-const spokenWant = (
-  S: Shared,
-  text: string,
-  t0: number,
-  t1: number,
-  day: (now: number) => string | null = () => null,
-) => {
+// What the time rules give for `text` with no named day, at each end of the call — typed and spoken alike since
+// 2026-11-17.
+const spokenWant = (S: Shared, text: string, t0: number, t1: number) => {
   const spoken = S.spokenTimeIn(text);
   if (!spoken) throw new Error(`the scenario's line has no spoken time: ${text}`);
-  return [t0, t1].map((now) =>
-    S.resolveSpoken(spoken, day(now), { now, today: laDay(new Date(now)) }),
-  );
+  return [t0, t1].map((now) => S.resolveSpoken(spoken, null, { now, today: laDay(new Date(now)) }));
 };
 async function expectSpokenDue(
   ctx: Ctx,
@@ -437,6 +431,12 @@ export const siriCapture: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'A typed “tomorrow at <clock>” keeps the day it names',
+    },
+    {
+      id: 'typed-today',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A typed “today at <a clock an hour ago>” stays on the app’s day (its small hours that day’s night) — overdue, not rolled to tomorrow',
     },
     {
       id: 'typed-bar',
@@ -947,12 +947,39 @@ export const siriCapture: Scenario = {
         // A daytime clock: "tomorrow at 1 am" said at 22:00 could be read as the night after tomorrow.
         const text = `${line(ctx, 'call the dentist typed')} tomorrow at 5 pm`;
         const r = await capture(ctx, tokenB, text, 'the typed named day', { voice: false });
-        // The model reads "tomorrow" against the app's today (dayStartHour) — in the small hours that's the
-        // calendar's today, so the clock's next occurrence.
-        const tomorrow = (now: number) =>
-          S.addDays(S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour), 1);
+        // A named day stays as written (2026-11-17): "tomorrow" is the app's today + 1 (dayStartHour).
         const t1 = Date.now();
-        await expectDue(ctx, S, r, spokenWant(S, text, t0, t1, tomorrow), t0, t1);
+        const want = [t0, t1].map((now) => ({
+          day: S.addDays(S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour), 1),
+          time: '17:00',
+        }));
+        await expectDue(ctx, S, r, want, t0, t1);
+      },
+    },
+    {
+      id: 'api-typed-today',
+      entry: 'api',
+      proves: ['typed-today'],
+      title: 'A typed “today at <a clock an hour ago>” stays on the app’s day, not rolled',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        await clearOfMidnight(ctx, untilDayStart(dayStartHour), 'the day start');
+        const t0 = Date.now();
+        const clock = rollClock(laClock(t0).hour);
+        const hhmm = (S.spokenTimeIn(`at ${clock}`) as { hhmm?: string } | null)?.hhmm;
+        if (!hhmm) throw new Error(`“at ${clock}” isn’t a stated clock`);
+        const text = `${line(ctx, 'pay the gas bill typed')} today at ${clock}`;
+        const r = await capture(ctx, tokenB, text, 'the typed today', { voice: false });
+        const t1 = Date.now();
+        // The app's today, its small hours on that day's night (due.ts nightDueDay) — never rolled forward.
+        const want = [t0, t1].map((now) => {
+          const app = S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour);
+          return { day: S.nightDueDay(app, hhmm, app, dayStartHour), time: hhmm };
+        });
+        // The rolled answer would be tomorrow's in every hour but the day start's, where tonight's is both.
+        await expectDue(ctx, S, r, want, t0, t1);
       },
     },
     {

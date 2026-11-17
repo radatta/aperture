@@ -119,8 +119,8 @@ Per token, per UTC day — guards, not UX:
 ## 4. Time rules
 
 Rule 2 — a past clock rolls forward — and the at/by fill below hold for typed quick add too (the app, Raycast,
-`parse_task`; the maintainer, 2026-11-17, [quick-add](quick-add.md)): a typed clock lands where a spoken one
-would. The bare hour, the day-parts and the delay are voice only (`voice: true`). The decisions (the
+`parse_task`; the maintainer, 2026-11-17, [quick-add](quick-add.md)): a typed clock with no day lands where a
+spoken one would, while a day the typed line names stays as written ("today 9am" at 3pm is overdue). The bare hour, the day-parts and the delay are voice only (`voice: true`). The decisions (the
 maintainer, 2026-11-16):
 
 1. A bare "at N" is the next N o'clock, wrapping: 2 AM + "at 5" → 5 AM; 6 AM + "at 5" → 5 PM.
@@ -226,7 +226,8 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
 - **No "Test" button in Settings** — it would need the plaintext; the phone run is the test.
 - **Recipe, not an importable shortcut** — `shortcuts sign` is unverified, and a file must never embed the
   token.
-- **2026-11-17 (the maintainer):** typed lines roll a past clock as spoken ones do, and a stated clock after
+- **2026-11-17 (the maintainer):** typed lines roll a past clock with no day as spoken ones do (a day they
+  name stays as written), and a stated clock after
   "at" / "by" is the due time even when the model kept it in its title — [quick-add's decision log](quick-add.md).
 
 ## 8. Build record
