@@ -682,59 +682,131 @@ describe('validateParsedTask — the small hours', () => {
 // The maintainer, 2026-11-17 (Q3): a day the typed line names stays as written; only a clock with no day word
 // rolls. Spoken lines keep their own rules ("today at 5 am" rolls, above).
 describe('validateParsedTask — a day the typed line names', () => {
-  // 2026-11-17 in LA (UTC-8); the app day is 11-16 before 04:00.
+  // 2026-11-17 (a Tuesday) in LA (UTC-8); the app day is 11-16 before the day start.
   const at = (h: number, m: number) => Date.UTC(2026, 10, 17, h + 8, m);
-  const typed = (line: string, over: Record<string, unknown>, h: number, m: number) => {
+  const typed = (line: string, over: Record<string, unknown>, h: number, m: number, start = 4) => {
     const i = validateParsedTask(fields({ title: 'pay rent', ...over }), {
       ...ctx,
-      today: h < 4 ? '2026-11-16' : '2026-11-17',
+      today: h < start ? '2026-11-16' : '2026-11-17',
+      dayStartHour: start,
       now: at(h, m),
       line,
     })!.input;
     return [i.dueDay, i.dueTime];
   };
+  const day = (d: string, t: string) => ({ dueDay: d, dueTime: t });
+
   it('a written day stays as written, even past; a small-hours clock on today is its night', () => {
-    // 15:00: today 9am is overdue, not tomorrow's.
-    expect(typed('pay rent today 9am', { dueDay: '2026-11-17', dueTime: '09:00' }, 15, 0)).toEqual([
+    // 15:00: today 9am is overdue, not tomorrow's; a past date stays.
+    expect(typed('pay rent today 9am', day('2026-11-17', '09:00'), 15, 0)).toEqual([
       '2026-11-17',
       '09:00',
     ]);
-    // A past date stays.
-    expect(typed('pay rent nov 10 9am', { dueDay: '2026-11-10', dueTime: '09:00' }, 15, 0)).toEqual(
-      ['2026-11-10', '09:00'],
-    );
+    expect(typed('pay rent nov 10 9am', day('2026-11-10', '09:00'), 15, 0)).toEqual([
+      '2026-11-10',
+      '09:00',
+    ]);
     // 02:01, the app's today still 11-16: "today 1am" is its night's 01:00 — the one just gone.
-    expect(typed('pay rent today 1am', { dueDay: '2026-11-16', dueTime: '01:00' }, 2, 1)).toEqual([
+    expect(typed('pay rent today 1am', day('2026-11-16', '01:00'), 2, 1)).toEqual([
       '2026-11-17',
       '01:00',
     ]);
     // 15:00: "today 2:30am" is tonight's.
-    expect(
-      typed('pay rent today 2:30am', { dueDay: '2026-11-17', dueTime: '02:30' }, 15, 0),
-    ).toEqual(['2026-11-18', '02:30']);
-    // 00:30: "tomorrow 1am", read against the app's 11-16, stays 11-17.
-    expect(
-      typed('pay rent tomorrow 1am', { dueDay: '2026-11-17', dueTime: '01:00' }, 0, 30),
-    ).toEqual(['2026-11-17', '01:00']);
-    // A kept at-clock with the day the model read: the day stays, the phrase leaves.
-    expect(
-      typed(
-        'pay rent today at 9am',
-        { title: 'pay rent today at 9am', dueDay: '2026-11-17' },
-        15,
-        0,
-      ),
-    ).toEqual(['2026-11-17', '09:00']);
+    expect(typed('pay rent today 2:30am', day('2026-11-17', '02:30'), 15, 0)).toEqual([
+      '2026-11-18',
+      '02:30',
+    ]);
+    // 00:30: "tomorrow 1am", read against the app's 11-16, is 11-17.
+    expect(typed('pay rent tomorrow 1am', day('2026-11-17', '01:00'), 0, 30)).toEqual([
+      '2026-11-17',
+      '01:00',
+    ]);
+    // "today" is the app's day whatever day the model read: at 02:01, 9am is the app day's — overdue.
+    expect(typed('pay rent today 9am', day('2026-11-17', '09:00'), 2, 1)).toEqual([
+      '2026-11-16',
+      '09:00',
+    ]);
+    // "tonight" names today too: 9pm at 22:00 is overdue, 2:30am typed at 3pm the coming night's.
+    expect(typed('pay rent tonight 9pm', day('2026-11-17', '21:00'), 22, 0)).toEqual([
+      '2026-11-17',
+      '21:00',
+    ]);
+    expect(typed('pay rent tonight 2:30am', day('2026-11-17', '02:30'), 15, 0)).toEqual([
+      '2026-11-18',
+      '02:30',
+    ]);
+    // A written date stays — a small-hours clock on today's date, an ISO date, m/d, the weekday itself.
+    expect(typed('pay rent nov 17 2am', day('2026-11-17', '02:00'), 15, 0)).toEqual([
+      '2026-11-17',
+      '02:00',
+    ]);
+    expect(typed('pay rent 2026-11-10 9am', day('2026-11-10', '09:00'), 15, 0)).toEqual([
+      '2026-11-10',
+      '09:00',
+    ]);
+    expect(typed('pay rent 11/10 9am', day('2026-11-10', '09:00'), 15, 0)).toEqual([
+      '2026-11-10',
+      '09:00',
+    ]);
+    expect(typed('pay rent tue 9am', day('2026-11-17', '09:00'), 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
   });
-  it('no day word: the clock rolls, whatever day the model put on it', () => {
-    expect(typed('pay rent 9am', { dueDay: '2026-11-17', dueTime: '09:00' }, 15, 0)).toEqual([
-      '2026-11-18',
-      '09:00',
-    ]);
-    // A day the line names but the model missed: nothing to keep, so it rolls.
+
+  it('"today" and "tomorrow" come from the words when the model read no day', () => {
     expect(typed('pay rent today 9am', { dueTime: '09:00' }, 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+    expect(typed('pay rent tomorrow 9am', { dueTime: '09:00' }, 15, 0)).toEqual([
       '2026-11-18',
       '09:00',
     ]);
+    // The whole line kept, no day, no time: the at-clock fills, the day is the words'.
+    expect(typed('pay rent today at 9am', { title: 'pay rent today at 9am' }, 15, 0)).toEqual([
+      '2026-11-17',
+      '09:00',
+    ]);
+    const kept = validateParsedTask(
+      fields({ title: 'pay rent today at 9am', dueDay: '2026-11-17' }),
+      {
+        ...ctx,
+        today: '2026-11-17',
+        now: at(15, 0),
+        line: 'pay rent today at 9am',
+      },
+    )!.input;
+    expect(kept).toMatchObject({ title: 'pay rent today', dueDay: '2026-11-17', dueTime: '09:00' });
+  });
+
+  it('a day start other than 4: "today" is the app day that start makes', () => {
+    // Midnight start: "today 1am" at 02:01 is today's 01:00, gone.
+    expect(typed('pay rent today 1am', day('2026-11-17', '01:00'), 2, 1, 0)).toEqual([
+      '2026-11-17',
+      '01:00',
+    ]);
+    // 6am start: "today 5am" typed at 15:00 is the coming night's.
+    expect(typed('pay rent today 5am', day('2026-11-17', '05:00'), 15, 0, 6)).toEqual([
+      '2026-11-18',
+      '05:00',
+    ]);
+  });
+
+  it('no day of its own: the clock rolls, whatever day the model put on it', () => {
+    expect(typed('pay rent 9am', day('2026-11-17', '09:00'), 15, 0)).toEqual([
+      '2026-11-18',
+      '09:00',
+    ]);
+    // Day-ish words that name no day: the model's "today" for a bare clock still rolls.
+    for (const line of [
+      'may need to call the bank 9am',
+      'call Jan at 9am',
+      '2nd interview 9am',
+      'month-end close 9am',
+      'day trip prep 9am',
+      'sat down with the plan 9am', // 11-17 is a Tuesday
+    ])
+      expect(typed(line, day('2026-11-17', '09:00'), 15, 0), line).toEqual(['2026-11-18', '09:00']);
   });
 });

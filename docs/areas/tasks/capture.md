@@ -34,7 +34,7 @@ through to the JWT path.
   `/api/*`, so a new header or a `?token=` would be stripped.
 - **Body:** JSON `{text, voice?}`. `text` is trimmed, 1–2,500 characters; the body is at most 16 KiB.
   `voice: true` (the Shortcut; `"true"` as text is taken too) applies the voice time rules (§4); absent
-  (Raycast) keeps the typed rules, exactly as the capture bar. Both roll a past clock forward.
+  (Raycast) keeps the typed rules, exactly as the capture bar. Both roll a past clock with no day forward.
 - **Order:** 405 non-POST → 413 body too large → 401 token → 422 other path, bad JSON, empty or over-long
   text (only after auth, never counted) → 429 daily cap → 200.
 - **200:** `{id, say, detail, raw, duplicate, due}` — `say` the sentence to speak, `detail` the typed

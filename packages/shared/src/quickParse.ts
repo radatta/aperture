@@ -4,7 +4,7 @@
 // contract, the validator for Haiku's untrusted JSON, and the flow (grammar bypass → model → validate).
 // Design record: docs/areas/tasks/quick-add.md.
 
-import { isDayKey, isTimeKey } from './dates';
+import { addDays, isDayKey, isTimeKey, weekdayOf } from './dates';
 import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
@@ -103,6 +103,59 @@ const str = (v: unknown): v is string => typeof v === 'string';
 const present = (input: CreateTaskInput): CreateTaskInput =>
   Object.fromEntries(Object.entries(input).filter(([, v]) => v != null)) as CreateTaskInput;
 
+const TODAY_WORD = /\b(today|tdy|tonight)\b/i;
+const TOMORROW_WORD = /\b(tomorrow|tmrw?|tmw)\b/i;
+const MONTH_WORDS = [
+  'jan(uary)?',
+  'feb(ruary)?',
+  'mar(ch)?',
+  'apr(il)?',
+  'may',
+  'june?',
+  'july?',
+  'aug(ust)?',
+  'sept?(ember)?',
+  'oct(ober)?',
+  'nov(ember)?',
+  'dec(ember)?',
+];
+const WEEKDAY_WORDS = [
+  'sun(day)?',
+  'mon(day)?',
+  'tue(s|sday)?',
+  'wed(nesday)?',
+  'thu(r|rs|rsday)?',
+  'fri(day)?',
+  'sat(urday)?',
+];
+// Whether the typed words name this very day: its weekday, its month and day, "m/d" or "YYYY-MM-DD" — never a
+// day word on its own ("may need to…", "2nd interview", "month-end"), which the model's "today" for a bare clock
+// would otherwise freeze.
+function wordsNameDate(line: string, day: string): boolean {
+  if (line.includes(day)) return true;
+  const [, m, d] = day.split('-').map(Number) as [number, number, number];
+  const month = MONTH_WORDS[m - 1]!;
+  const dd = `0?${d}(st|nd|rd|th)?`;
+  return [
+    `\\b${WEEKDAY_WORDS[weekdayOf(day)]}\\b`,
+    `\\b0?${m}/0?${d}(/\\d{2,4})?\\b`,
+    `\\b${month}\\.?\\s*${dd}\\b`,
+    `\\b${dd}\\s+(of\\s+)?${month}\\b`,
+  ].some((re) => new RegExp(re, 'i').test(line));
+}
+// The day a typed line names (the maintainer, 2026-11-17): "today" / "tonight" is the app's today (its small
+// hours that day's night), "tomorrow" the day after — from the words, whatever day the model read; any other day
+// only when the words name the model's. Null: no day of its own, so the clock rolls.
+function wordsDay(
+  line: string,
+  modelDay: string | null,
+  today: string,
+): { day: string; today: boolean } | null {
+  if (TODAY_WORD.test(line)) return { day: today, today: true };
+  if (TOMORROW_WORD.test(line)) return { day: addDays(today, 1), today: false };
+  return modelDay && wordsNameDate(line, modelDay) ? { day: modelDay, today: false } : null;
+}
+
 // Keep each field the server would accept; a bad one is dropped and named. The model's JSON is untrusted
 // (structured outputs can't carry numeric or calendar constraints), so this takes `unknown`. Returns null
 // only for an unusable (blank or missing) title.
@@ -189,9 +242,12 @@ export function validateParsedTask(
       // A day the typed line names stays as written (the maintainer, 2026-11-17): "pay rent today 9am" at 3pm is
       // overdue, "nov 10 9am" is Nov 10. A small-hours clock on the app's today is that day's night — "today
       // 1am" at 02:01 is the 01:00 just gone (nightDueDay). Only a clock with no day word rolls.
-      if (input.dueDay && DAY_WORD.test(line ?? '')) {
+      const named = line === undefined ? null : wordsDay(line, input.dueDay ?? null, ctx.today);
+      if (named) {
         input.dueTime = time;
-        input.dueDay = nightDueDay(input.dueDay, time, ctx.today, ctx.dayStartHour);
+        input.dueDay = named.today
+          ? nightDueDay(named.day, time, ctx.today, ctx.dayStartHour)
+          : named.day;
       } else resolve({ said: '', kind: 'clock', hhmm: time });
       // The same line keeps the same title whatever the model did with the phrase.
       if (due && time === words?.hhmm) input.title = due.title;

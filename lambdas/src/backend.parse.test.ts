@@ -161,4 +161,14 @@ describe('backend parseTask', () => {
       today: '2026-11-16',
     });
   });
+
+  it("a typed 'today' small-hours clock is the night of the user's own day start", async () => {
+    const { b, anthropic } = makeBackend(zonedEpoch('2026-11-17', '15:00', USER_TIME_ZONE));
+    await b.updateSettings({ dayStartHour: 6 });
+    anthropic.next = { ok: true, fields: fields({ dueDay: '2026-11-17', dueTime: '05:00' }) };
+    // 5am is before a 6am start: tonight's. A start the server didn't pass on (4) would keep it today.
+    expect(await b.parseTask('pay rent today 5am')).toMatchObject({
+      input: { dueDay: '2026-11-18', dueTime: '05:00' },
+    });
+  });
 });

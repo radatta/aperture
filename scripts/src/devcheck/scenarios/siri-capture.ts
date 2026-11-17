@@ -978,7 +978,8 @@ export const siriCapture: Scenario = {
           const app = S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour);
           return { day: S.nightDueDay(app, hhmm, app, dayStartHour), time: hhmm };
         });
-        // The rolled answer would be tomorrow's in every hour but the day start's, where tonight's is both.
+        // Kept and rolled differ in every hour but the day start's (a start after midnight): there tonight's 3 am
+        // is both, so the row proves nothing that hour.
         await expectDue(ctx, S, r, want, t0, t1);
       },
     },

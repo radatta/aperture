@@ -142,11 +142,12 @@ autonomous build:
   Replaces the earlier "a past clock lands today" rule (credited in these docs to 2026-10-09, with no record
   of the maintainer's words).
 - **A day the typed line names stays as written.** "pay rent today 9am" at 3pm is today 9am, overdue; "nov 10
-  9am" is Nov 10. Before the day start a written "today" is the app's day, and a small-hours clock on it that
-  day's night (`nightDueDay`, 2026-10-31, below): "today 1am" at 02:01 is the 01:00 just gone. A day the
-  line names is one `DAY_WORD` finds (today, tomorrow, a weekday, a month, a date) that the model returned;
-  a line naming one the model missed rolls, having no day to keep. Spoken lines keep their 2026-11-16 rules
-  ("today at 9 am" said at 3pm rolls, [capture → Time rules](capture.md#4-time-rules)).
+  9am" is Nov 10. "today" and "tonight" are the app's day — its small hours that day's night (`nightDueDay`,
+  2026-10-31, below), so "today 1am" at 02:01 is the 01:00 just gone — and "tomorrow" the day after, read from
+  the words even when the model returned no day. Any other day counts only when the words name the very date
+  the model returned: its weekday, month and day, `m/d` or `YYYY-MM-DD`. A day-ish word that names no date
+  ("may need to…", "2nd interview", "month-end") leaves a bare clock to roll. Spoken lines keep their 2026-11-16
+  rules ("today at 9 am" said at 3pm rolls, [capture → Time rules](capture.md#4-time-rules)).
 - **A clock phrased as a due fills even when the model kept it in its title.** The model sometimes returns
   "call the bank at 1 am" unchanged with no time (1 in 10 on dev); the title check below then refused it, so
   the task had no due at all. A stated clock after "at", "by", "due at" or "due by" is the due time whatever
@@ -167,9 +168,10 @@ autonomous build:
 
 ## Decision log (2026-10-31)
 
-- _Since 2026-11-17 for a day the line names only; a clock with no day lands on its next occurrence._
+- _Since 2026-11-17 for a line that says "today" or "tonight" only; a clock with no day lands on its next
+  occurrence (above)._
   **A small-hours clock on today is tonight's.** A parse that lands on the app's today with a clock
   before the day start moves to the next calendar date (`nightDueDay`, shared `due.ts`): "essay due
-  tonight 2:30am" typed at 00:22 (app day still yesterday), or "2:30am" typed at 3pm, would otherwise be
+  tonight 2:30am" typed at 00:22 (app day still yesterday), or "today 2:30am" typed at 3pm, would otherwise be
   already past. Both parsers go through the one validator (`validateParsedTask`), which now needs
   `ParseContext.dayStartHour`. Any other day stays as parsed — "tomorrow 1am" is ambiguous.
