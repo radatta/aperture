@@ -927,7 +927,7 @@ export function derive(i: Inputs): View {
     needs: String(needs.length),
     now: `${active.length} lane${active.length === 1 ? '' : 's'}`,
     next: next.ask
-      ? `ask ${next.ask.late ? 'late' : `~${hhmm(next.ask.lo)}`}`
+      ? `ask ${next.ask.late ? 'late' : next.ask.lo <= i.now ? 'now' : `~${hhmm(next.ask.lo)}`}`
       : `${next.order.length} to land`,
     done: String(done.length),
     slipping: String(slipping.length),

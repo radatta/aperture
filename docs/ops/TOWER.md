@@ -63,8 +63,8 @@ How it reads (the maintainer, 2026-11-13: the text was too small and too long, a
   Under `prefers-reduced-motion` the pulse, flash and glow are off; the timers still tick (text, not motion).
 - Each lane has a phase track: plan › build › gate › review › local › dev › pr › merged, with the current step lit.
   A lane whose file carries a step plan shows its steps instead, the current one filling with its time against its
-  estimate's high end (amber past it), and `PR ~HH:MM–HH:MM` (amber `PR late · was ~HH:MM` once that has passed
-  with no PR); the bar hides on the phone, the ETA doesn't.
+  estimate's high end (amber past it), and, while building, waiting on you or testing on dev, `PR ~HH:MM–HH:MM`
+  (amber `PR late · was ~HH:MM` once that has passed with no PR); the bar hides on the phone, the ETA doesn't.
 - The page reloads itself when the server restarts on a new commit (its `version`). The page and its script are
   read once, when the server starts (`server.ts`), so they always match the View code it runs.
 
@@ -98,10 +98,11 @@ From the top:
      `done` that is undated, or timed within 2 h of now either way);
    - **NEXT ASK**: when the maintainer is next asked for something, `~HH:MM–HH:MM` — the earliest of a NOW lane's
      PR window (its lane file's `eta.pr`, while it has no open PR; `late` once that window has passed) and the next
-     `maintainer` or `merge` plan row not done and not past (at its slip when it has one; `late` once that has
-     passed too) (`nextAsk()` in `plan.ts`);
+     `maintainer` or `merge` plan row not done and not past (over its lane's ETA window when it slips; `late` once
+     that has passed too); one still ahead before a late one, which would otherwise hide it (`nextAsk()` in
+     `plan.ts`). The strip's NEXT chip says `ask ~HH:MM`, `ask now` once the window has begun, or `ask late`;
    - the merge queue (MERGE ME and HOLD, with the reason) not already in the landing order;
-   - the plan's next rows not `done` (up to 3, after the one above; one past due over 2 h drops off unless it
+   - the plan's next rows not `done` (up to 3, leaving out the rows YOU NEXT and NEXT ASK show; one past due over 2 h drops off unless it
      slips), each `HH:MM · what` with what it costs you (`you: 2 min`) and an amber `now HH:MM` slip or `late`;
    - the landing order (`queue.json` `mergeOrder`), numbered, each lane as it stands (building, PR, HOLD…, or NOT
      STARTED with no lane file, queue entry or PR; such a lane shows here only, never in NOW). An entry whose PR
@@ -156,7 +157,8 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
 - **NOW** rows carry their lane's step bar and `PR ~HH:MM–HH:MM` (_Lane files_), and est vs actual per step in their
   details.
 - Not yet: a lane's last checkpoint and decisions tail, and the machine (charts) view; the header's charts toggle
-  covers the latter. The header's sources chip, with a panel open, opens SOURCES.
+  covers the latter on the glance (with a panel open, LOAD hides with the rest). The header's sources chip, with a
+  panel open, opens SOURCES.
 
 **Charts** (the header toggle) show 24 h of container memory and CPU, plus the Mac's memory since the server started (up to 24 h; the server samples `mac-stats.json` on its own 5 s tick, so the series has no gap while no page is open). A sparkline with under 3 points isn't drawn.
 
@@ -189,7 +191,7 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
   `-32.png`, `-64.png` and `.ico` (the same commands), the page also linking its `.ico`. The page is built per
   variant at start (the CSP allows no inline script, and Safari reads icon links as the page parses); any other
   value is the default page, byte for byte. Safari caches a tab icon per page URL: a Private window shows a variant
-  fresh. A contact sheet of the three at 16 and 32 px on light and dark bars is in the lane's report.
+  fresh.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
@@ -285,7 +287,8 @@ pnpm board lane --clear          (Cleanup)
 - An unreadable file shows as a problem row in SOURCES, never dropped.
 - **The step plan** (`--plan`, at Plan's end, again whenever the estimates move): each step of
   `plan build gate review local dev pr` the lane will run, with its range in minutes from measured board history
-  (`heavy.sh` records, archived lanes' estimate-vs-actual) scaled by the file count (`--files`); a trailing `?` marks
+  (`heavy.sh` records, archived lanes' estimate-vs-actual), which the lane scales by its file count itself (`--files`
+  records the count beside them); a trailing `?` marks
   a guess, e.g. `--plan build=60-90,gate=3-6,review=40-70,pr=10-20? --files 37`. It carries across writes until
   replaced (a new one keeps each step's time so far). At each phase change the time in the phase just left accrues to
   its step (`spentMs`; `parked` and `blocked` count to none), so est vs actual records itself.

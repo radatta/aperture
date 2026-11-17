@@ -1170,6 +1170,13 @@ describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, for
       sources: expect.any(String),
     });
     expect(v.heads.next).toMatch(/^ask ~\d\d:\d\d$/);
+    // a window already begun says now
+    const begun = derive(
+      inputs({
+        lanes: [file({ eta: { ...eta, pr: { lo: NOW - 5 * MIN, hi: NOW + 20 * MIN } } })],
+      }),
+    );
+    expect(begun.heads.next).toBe('ask now');
     expect(derive(inputs()).heads.next).toBe('0 to land');
     // a plan row that is the next ask isn't repeated in the glance below it
     const only = derive(

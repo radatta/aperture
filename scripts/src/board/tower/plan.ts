@@ -69,7 +69,8 @@ export const planSoon = (rows: PlanRow[], now: number, n = 3) =>
     .slice(0, n);
 
 // When the maintainer is next asked for something: a lane's PR (its ETA, while it has no open PR), or dispatch's
-// next maintainer or merge row (its slip if it has one). The earliest start wins; a late one is already due.
+// next maintainer or merge row (its slip if it has one). The earliest start wins, among those still ahead first: a
+// late one (a lane gone quiet) would otherwise hide a real ask behind it until someone marks it done.
 export function nextAsk(
   rows: PlanRow[],
   lanes: { branch: string; eta: LaneEta | null; prOpen: boolean }[],
@@ -99,5 +100,5 @@ export function nextAsk(
       late: hi < now,
     });
   }
-  return asks.sort((a, b) => a.lo - b.lo)[0] ?? null;
+  return asks.sort((a, b) => Number(a.late) - Number(b.late) || a.lo - b.lo)[0] ?? null;
 }

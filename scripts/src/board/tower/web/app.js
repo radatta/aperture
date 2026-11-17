@@ -201,7 +201,8 @@ const range = (r) => `${hhmm(r.lo)}–${hhmm(r.hi)}`;
 // "PR ~19:10–19:40", amber once the window has passed with no PR
 function prEta(r) {
   const e = r.eta;
-  if (!e?.pr || (r.state !== 'BUILDING' && r.state !== 'NEEDS YOU')) return null;
+  // before its PR exists: building, waiting on you, or testing on dev
+  if (!e?.pr || !['BUILDING', 'NEEDS YOU', 'TESTING'].includes(r.state)) return null;
   return e.late
     ? el('span', 'meta t-warn', `PR late · was ~${hhmm(e.pr.hi)}`)
     : el('span', 'meta', `PR ~${range(e.pr)}${e.source === 'guess' ? '?' : ''}`);
@@ -400,8 +401,9 @@ function nowPanel(v) {
 }
 
 // A plan row on the glance: its time, its first clause, what it costs the maintainer, a slip marker.
+const planKey = (r) => `plan:${r.what.slice(0, 60)}`;
 function planItem(r) {
-  return item(`plan:${r.what.slice(0, 60)}`, {
+  return item(planKey(r), {
     c: r.slip || r.overdue || r.kind === 'maintainer' || r.kind === 'merge' ? 'c-hold' : 'c-dim',
     badge: r.at ? hhmm(r.at) : 'PLAN',
     sig: r.what,
@@ -526,8 +528,10 @@ function next(v) {
   const merge = v.next.merge.filter((r) => !order.some((o) => o.branch === r.branch));
   // the glance: a merge waiting on you first, then the next few plan rows with what they cost you; expanded, the
   // whole plan table first
-  if (inFull) items.push(planTable(v));
-  else {
+  if (inFull) {
+    items.push(planTable(v));
+    for (const r of v.next.soon) rendered.add(planKey(r)); // a glance row opened stays open for the glance's return
+  } else {
     for (const r of merge) items.push(laneItem(r));
     for (const r of v.next.soon) items.push(planItem(r));
   }

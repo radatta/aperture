@@ -171,6 +171,10 @@ describe('nextAsk', () => {
   it('a lane with its PR open asks nothing here; a late lane is due now; nothing is null', () => {
     expect(nextAsk([], [lane('x', '19:30', '19:50', true)], NOW)).toBeNull();
     expect(nextAsk([], [lane('x', '18:00', '18:30')], NOW)).toMatchObject({ late: true });
+    // a late ask never hides one still ahead
+    expect(
+      nextAsk([], [lane('x', '18:00', '18:30'), lane('y', '19:30', '19:50')], NOW),
+    ).toMatchObject({ branch: 'y', late: false });
     expect(nextAsk([], [], NOW)).toBeNull();
   });
   it('a slipping merge row asks at its slip; dev rows and done or passed rows never ask', () => {
