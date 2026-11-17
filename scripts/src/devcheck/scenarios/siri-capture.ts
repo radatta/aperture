@@ -1,24 +1,37 @@
 // Voice capture — "Hey Siri, Aperture" / the Action Button / Raycast → a task (docs/areas/tasks/capture.md). A
 // capture token is made, kept through a cancelled revoke and a reload, and revoked in Settings › Capture; the
-// route itself (POST /api/capture) is driven raw (api.ts captureRaw) with tokens minted through the guarded API.
-// Tokens are ledgered by the id the mint answered with (the browser's mintScopedToken response, recorder.ts,
-// or the API's), every task the route made by the 200's `id`; cleanup revokes and deletes by those records,
-// and the scenario's last step does it early so the scenarios after it see none of this. A token's plaintext
-// lives in this module's memory only — never in a log, an error, a screenshot or the ledger. Names and titles
-// carry the run's nonce. The time rows compute what the server should answer with the shared resolver itself
-// (packages/shared/src/spokenTime.ts) at the moment of the call: the rules are the unit tests' (the off-dev
-// rows); these prove the route applies them, with the model's day and the server's clock, end to end.
+// section's failed reads and writes are injected by the harness (ctx.intercept); the route itself (POST
+// /api/capture) is driven raw (api.ts captureRaw) with tokens minted through the guarded API. Tokens are
+// ledgered by the id the mint answered with (the browser's mintScopedToken response, recorder.ts, or the API's),
+// every task the route made by the 200's `id`; cleanup revokes and deletes by those records, and the scenario's
+// last step does it early so the scenarios after it see none of this. A token's plaintext lives in this
+// module's memory only — never in a log, an error, a screenshot or the ledger. Names and titles carry the run's
+// nonce. The time rows compute what the server should answer with the shared rules themselves
+// (packages/shared/src/spokenTime.ts, due.ts) at the moment of the call: the rules are the unit tests' (the
+// off-dev rows); these prove the route applies them, with the model's day and the server's clock, end to end.
 import { randomBytes } from 'node:crypto';
 import type { DevCaptureResult, DevScopedToken } from '../api';
+import { targetOrigin } from '../config';
 import type { PwRequest } from '../pw-types';
 import { methodOf } from '../recorder';
-import { hidingSecret, laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import {
+  hidingSecret,
+  laDay,
+  needsYou,
+  noConsoleErrors,
+  type Ctx,
+  type Scenario,
+} from '../scenario';
 
 // The slice of @aperture/shared the scenario reads. scripts doesn't depend on shared, so its source is loaded at
 // run time (tsx transpiles it) — the same rules and texts the Lambda runs, never a copy that could drift.
-interface Shared {
-  CAPTURE_SAY: Record<'unauthorized' | 'method' | 'path' | 'empty' | 'tooLong' | 'cap', string>;
+// siri-capture.test.ts checks every name below is really there.
+export const SAY_KEYS = ['unauthorized', 'method', 'path', 'empty', 'tooLong', 'cap'] as const;
+export interface Shared {
+  CAPTURE_SAY: Record<(typeof SAY_KEYS)[number], string>;
   CAPTURE_DAILY_CAP: number;
+  CAPTURE_PARSE_DAILY_CAP: number;
+  CAPTURE_DUPLICATE_MS: number;
   CAPTURE_TEXT_MAX: number;
   CAPTURE_BODY_MAX: number;
   SCOPED_TOKENS_MAX: number;
@@ -37,18 +50,39 @@ interface Shared {
   ): { day: string; time: string };
   zonedEpoch(day: string, hhmm: string, timeZone: string): number;
   addDays(day: string, n: number): string;
+  dayKeyInZone(epochMs: number, timeZone: string, dayStartHour: number): string;
+  nightDueDay(dueDay: string, dueTime: string, today: string, dayStartHour: number): string;
 }
+export const SHARED_NUMBERS = [
+  'CAPTURE_DAILY_CAP',
+  'CAPTURE_PARSE_DAILY_CAP',
+  'CAPTURE_DUPLICATE_MS',
+  'CAPTURE_TEXT_MAX',
+  'CAPTURE_BODY_MAX',
+  'SCOPED_TOKENS_MAX',
+  'SCOPED_TOKEN_NAME_MAX',
+] as const;
+export const SHARED_FUNCTIONS = [
+  'captureWhen',
+  'spokenTimeIn',
+  'resolveSpoken',
+  'zonedEpoch',
+  'addDays',
+  'dayKeyInZone',
+  'nightDueDay',
+] as const;
 const SHARED_SRC = new URL('../../../../packages/shared/src/', import.meta.url);
 let sharedP: Promise<Shared> | undefined;
 export const loadShared = (): Promise<Shared> =>
   (sharedP ??= Promise.all(
-    ['dates.ts', 'spokenTime.ts', 'capture.ts'].map(
+    ['dates.ts', 'due.ts', 'spokenTime.ts', 'capture.ts'].map(
       (f) => import(new URL(f, SHARED_SRC).href) as Promise<object>,
     ),
   ).then((mods) => Object.assign({}, ...mods) as Shared));
 
 const TOKEN_RE = /^apc_[A-Za-z0-9_-]{43}$/;
-const MIN = 60_000;
+const SEC = 1_000;
+const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
 // A clock or a stated time left in a title: the voice rules strip it (capture.md → Time rules).
 const TIME_WORDS =
@@ -57,19 +91,18 @@ const TIME_WORDS =
 const line = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
 const nameA = (ctx: Ctx) => `devcheck ${ctx.nonce} phone`; // made and revoked in Settings
 const nameB = (ctx: Ctx) => `devcheck ${ctx.nonce} mac`; // the neighbour, minted through the API
-const nameC = (ctx: Ctx) => `devcheck ${ctx.nonce} cap`; // the cap row's own
+const nameC = (ctx: Ctx) => `devcheck ${ctx.nonce} cap`; // the capture cap's own
+const nameD = (ctx: Ctx) => `devcheck ${ctx.nonce} parse`; // the parse cap's own
 const fillName = (ctx: Ctx, i: number) => `devcheck ${ctx.nonce} fill ${i}`;
 
 // Steps share what earlier ones made; a failed step skips the rest, so these are set when read.
 let tokenA: string; // plaintexts — never logged
 let tokenB: string;
-let tokenC: string | undefined;
 let infoA: DevScopedToken;
 let infoB: DevScopedToken;
-let infoC: DevScopedToken | undefined;
 let taskIds: string[] = []; // every task the route made this run, torn down by the last step
 
-// The LA wall clock now (the hour 0–23 and the minute).
+// The LA wall clock (the hour 0–23 and the minute).
 export function laClock(
   ms: number,
   zone = 'America/Los_Angeles',
@@ -83,15 +116,32 @@ export function laClock(
   const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
   return { hour: get('hour') % 24, minute: get('minute') };
 }
+// How long until the next midnight — LA's (the app's dates) or UTC's (the caps' day). LA's offset is whole
+// minutes, so the seconds are the epoch's.
+export const untilLaMidnight = (ms: number): number => {
+  const { hour, minute } = laClock(ms);
+  return (24 * 60 - hour * 60 - minute) * MIN - (ms % MIN);
+};
+export const untilUtcMidnight = (ms: number): number => 24 * HOUR - (ms % (24 * HOUR));
+// A row whose answer names a day (or counts toward a UTC day) never starts within 2 min of that midnight:
+// it waits it out.
+async function clearOfMidnight(ctx: Ctx, until: (ms: number) => number, which: string) {
+  const left = until(Date.now());
+  if (left >= 2 * MIN) return;
+  ctx.log(`waiting ${Math.ceil(left / SEC) + 5} s for ${which} midnight to pass`);
+  await sleep(left + 5 * SEC);
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+
 const h12 = (h: number) => h % 12 || 12;
 const ampm = (h: number) => `${h12(h)} ${h < 12 ? 'am' : 'pm'}`;
-// "at N" for an hour already past in both its AM and PM readings today (or today's, then the next) — so it can
-// only wrap: the hour before now; near the hour's end (≥ :55) the current one, so the answer can't move while
-// the call is in flight. Lands 10–12 h ahead.
+// A bare "at N" for an hour already past today in its AM reading — the hour before now (near the hour's end,
+// ≥ :55, the current one, so the answer can't move while the call is in flight). The next N o'clock is then
+// its PM today, or tomorrow's AM: always 10–12 h on.
 export const wrapHour = (hour: number, minute: number): number =>
   h12(minute >= 55 ? hour : (hour + 23) % 24);
-// A stated clock one hour ago ("at 5 pm" at 6:xx PM) — rolled to tomorrow. At midnight's hour the hour before
-// is yesterday's 11 PM, which is still ahead today, so it says this hour's "12 am" instead.
+// A stated clock one hour ago ("at 5 pm" at 6:xx PM). At midnight's hour the hour before is yesterday's 11
+// PM, which is still ahead today, so it says this hour's "12 am" instead.
 export const rollClock = (hour: number): string => (hour === 0 ? '12 am' : ampm(hour - 1));
 // A stated clock three hours ahead — never near now, so it can't roll while the call is in flight.
 export const aheadClock = (hour: number): string => ampm((hour + 3) % 24);
@@ -125,9 +175,19 @@ function refused(
       `${what}: say is ${JSON.stringify(said)}${say ? `, not ${JSON.stringify(say)}` : ''}`,
     );
 }
-// One spoken capture with `token`; a new task's id is kept for the teardown (the ledger has it already).
-async function capture(ctx: Ctx, token: string, text: string, what: string) {
-  const r = ok(await ctx.api.writes.captureRaw(token, { text, voice: true }), what);
+// One capture with `token` — spoken (the Shortcut) unless `voice` is false (Raycast's body: no flag at all); a
+// new task's id is kept for the teardown (the ledger has it already). `tag` tells same-text calls apart in the
+// ledger's titles.
+async function capture(
+  ctx: Ctx,
+  token: string,
+  text: string,
+  what: string,
+  opts: { voice?: boolean; tag?: string } = {},
+) {
+  const body = opts.voice === false ? { text } : { text, voice: true };
+  const got = await ctx.api.writes.captureRaw(token, body, opts.tag ? { tag: opts.tag } : {});
+  const r = ok(got, what);
   if (r.id && !r.duplicate && !taskIds.includes(r.id)) taskIds.push(r.id);
   return r;
 }
@@ -139,7 +199,7 @@ async function until<T>(what: string, read: () => Promise<T>, done: (v: T) => bo
     const v = await read();
     if (done(v)) return v;
     if (Date.now() > end) throw new Error(`${what}: the server still has ${JSON.stringify(v)}`);
-    await new Promise((r) => setTimeout(r, 500));
+    await sleep(500);
   }
 }
 const getTask = async (ctx: Ctx, id: string) => {
@@ -161,9 +221,23 @@ function expectFresh(
     );
   return info;
 }
+// A token of this run's own, minted through the API, used, and revoked whatever happens.
+async function withToken(
+  ctx: Ctx,
+  name: string,
+  use: (token: string, info: DevScopedToken) => Promise<void>,
+) {
+  const minted = await ctx.api.writes.mintScopedToken(name);
+  try {
+    await use(minted.token, expectFresh(minted.token, minted.info, name));
+  } finally {
+    await ctx.api.writes.revokeScopedToken(minted.info.id).catch(() => undefined); // cleanup retries it
+  }
+}
 
 // The show-once reveal, from the click that mints: read it, then close it at once. Any throw on the way blanks
-// the page before it leaves (scenario.ts hidingSecret), so no shot, a failure's included, ever holds the token.
+// the page before it leaves (scenario.ts hidingSecret, which also scrubs a token out of the error's text), so
+// no shot, a failure's included, ever holds the token.
 async function takeRevealedToken(ctx: Ctx, mint: () => Promise<void>): Promise<string> {
   return hidingSecret(ctx.page, async () => {
     await mint();
@@ -194,14 +268,18 @@ const rowButton = (ctx: Ctx, name: string) =>
   ctx.page.getByRole('button', { name: `Revoke ${name}`, exact: true });
 const confirmText = (ctx: Ctx, name: string) =>
   ctx.page.getByText(`${name} stops adding tasks at once.`, { exact: true });
+const nameField = (ctx: Ctx) => ctx.page.getByLabel('New token for', { exact: true });
+const makeButton = (ctx: Ctx) =>
+  ctx.page.getByRole('button', { name: 'Make capture token', exact: true });
 
-// The voice rows: the answer's due equals what the shared resolver gives for the words with no named day, at
-// the call's start or its end (the server's clock is somewhere between), and `say` speaks it.
-async function expectSpokenDue(
+// The model rows: `due` equals one of `want` (the answer computed at the call's start or its end — the server's
+// clock is somewhere between), the task holds it, the title keeps the nonce and lost the spoken time, and `say`
+// speaks it as of either end.
+async function expectDue(
   ctx: Ctx,
   S: Shared,
-  text: string,
   r: DevCaptureResult,
+  want: { day: string; time: string }[],
   t0: number,
   t1: number,
 ): Promise<{ day: string; time: string; at: number }> {
@@ -209,11 +287,6 @@ async function expectSpokenDue(
     throw new Error(
       `saved as typed (raw: true) — the parse failed or missed its deadline; if this repeats, raise CAPTURE_PARSE_DEADLINE_MS: ${r.say}`,
     );
-  const spoken = S.spokenTimeIn(text);
-  if (!spoken) throw new Error(`the scenario's line has no spoken time: ${text}`);
-  const want = [t0, t1].map((now) =>
-    S.resolveSpoken(spoken, null, { now, today: laDay(new Date(now)) }),
-  );
   const due = r.due;
   if (!due?.time || !want.some((w) => w.day === due.day && w.time === due.time))
     throw new Error(`due ${JSON.stringify(due)}, expected ${JSON.stringify(want[0])}`);
@@ -224,17 +297,37 @@ async function expectSpokenDue(
     );
   if (!task.title.includes(ctx.nonce) || TIME_WORDS.test(task.title))
     throw new Error(`the title is “${task.title}” — the nonce kept, the spoken time taken out`);
-  const when = S.captureWhen(due, laDay(new Date(t1)), laDay(new Date(t1)));
-  if (!r.say.startsWith('Added: ') || !when || !r.say.endsWith(`, ${when}.`))
-    throw new Error(`say is “${r.say}”, expected it to end “, ${when}.”`);
+  const whens = [t0, t1].map((t) => S.captureWhen(due, laDay(new Date(t)), laDay(new Date(t))));
+  if (!r.say.startsWith('Added: ') || !whens.some((w) => w && r.say.endsWith(`, ${w}.`)))
+    throw new Error(`say is “${r.say}”, expected it to end “, ${whens[0]}.”`);
   return { ...due, time: due.time, at: S.zonedEpoch(due.day, due.time, S.USER_TIME_ZONE) };
+}
+// What the voice rules give for `text` with no named day, at each end of the call.
+const spokenWant = (S: Shared, text: string, t0: number, t1: number) => {
+  const spoken = S.spokenTimeIn(text);
+  if (!spoken) throw new Error(`the scenario's line has no spoken time: ${text}`);
+  return [t0, t1].map((now) => S.resolveSpoken(spoken, null, { now, today: laDay(new Date(now)) }));
+};
+async function expectSpokenDue(
+  ctx: Ctx,
+  S: Shared,
+  text: string,
+  r: DevCaptureResult,
+  t0: number,
+  t1: number,
+) {
+  return expectDue(ctx, S, r, spokenWant(S, text, t0, t1), t0, t1);
 }
 
 export const siriCapture: Scenario = {
   id: 'siri-capture',
   title: 'Voice capture: Settings › Capture tokens and the capture route',
   tiers: ['full'],
-  slowPaths: ['lambdas/src/auth/scopedToken.ts', 'packages/shared/src/capture.ts'],
+  slowPaths: [
+    'lambdas/src/auth/scopedToken.ts',
+    'lambdas/src/ddb/scopedTokens.ts',
+    'packages/shared/src/capture.ts',
+  ],
   rows: [
     {
       id: 'mint',
@@ -249,10 +342,34 @@ export const siriCapture: Scenario = {
       what: 'An empty, 41-character or clashing name is refused before anything is sent: Make token disabled, the reason shown',
     },
     {
+      id: 'mint-failed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A mint the server fails says why, keeps the typed name and shows no token',
+    },
+    {
+      id: 'list-failed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The token list failing says “Couldn’t load capture tokens.” and offers no mint; Retry brings the list back',
+    },
+    {
+      id: 'recipe',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Set up the Siri Shortcut: the URL is this origin’s /api/capture, the header key x-aperture-authorization',
+    },
+    {
       id: 'limit',
       entry: 'api',
       kind: 'edge',
       what: 'A 6th live token is refused: “At most 5 tokens”',
+    },
+    {
+      id: 'revoke-failed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A revoke the server fails says “Couldn’t revoke — try again.” and the token stays listed and working',
     },
     {
       id: 'revoke-cancel',
@@ -285,6 +402,12 @@ export const siriCapture: Scenario = {
       what: 'A natural spoken line with a clock: parsed in time, the time out of the title, due where the voice rules put it, said back',
     },
     {
+      id: 'typed',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A typed line (no voice flag — Raycast’s body) keeps the typed rules: a clock an hour ago lands today, not tomorrow',
+    },
+    {
       id: 'relative',
       entry: 'api',
       kind: 'nominal',
@@ -294,7 +417,7 @@ export const siriCapture: Scenario = {
       id: 'wrap',
       entry: 'api',
       kind: 'edge',
-      what: 'A bare “at N” already past in both readings wraps to the next N o’clock, ~11 h on',
+      what: 'A bare hour already past today is the next N o’clock, ~11 h on',
     },
     {
       id: 'roll',
@@ -307,6 +430,12 @@ export const siriCapture: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'The same line twice within a minute: the first task answered again (“Already added”), one task',
+    },
+    {
+      id: 'dup-window',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The same line again past the minute’s window is a new task',
     },
     {
       id: 'unauth',
@@ -333,6 +462,12 @@ export const siriCapture: Scenario = {
       what: 'A token’s 201st capture in a UTC day is refused 429 with the spoken limit',
     },
     {
+      id: 'parse-cap',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Past 50 model parses in a UTC day a spoken line saves as typed, and says why',
+    },
+    {
       id: 'grammar-table',
       entry: 'api',
       kind: 'edge',
@@ -341,40 +476,6 @@ export const siriCapture: Scenario = {
         file: 'packages/shared/src/spokenTime.test.ts',
         test: 'a bare hour is the next N o’clock, wrapping (decision 1)',
         why: 'needs an injected clock — DST, the minute edge and every phrase at every hour can’t be waited for on dev',
-      },
-    },
-    {
-      id: 'typed-unchanged',
-      entry: 'api',
-      kind: 'edge',
-      what: 'A typed line (no voice flag) keeps the typed rule: a past clock lands today',
-      offDev: {
-        file: 'packages/shared/src/quickParse.test.ts',
-        test: 'typed lines keep the 2026-10-09 rule: a past clock lands today',
-        why: 'needs a clock already past a stated time and a model reply that names it, which dev can’t pin',
-      },
-    },
-    {
-      id: 'dup-window',
-      entry: 'api',
-      kind: 'edge',
-      what: 'The same line after the 60 s window is a new task',
-      offDev: {
-        file: 'lambdas/src/backend.capture.test.ts',
-        // The it() title is a template literal; matrix.ts matches its source text.
-        test: 'the same line after ${CAPTURE_DUPLICATE_MS / 1000} s is a new task',
-        why: 'a 60 s wall-clock wait per run — the window itself is a pure comparison on the token row',
-      },
-    },
-    {
-      id: 'parse-cap',
-      entry: 'api',
-      kind: 'edge',
-      what: 'Past 50 model parses a day the line saves as typed, and says so',
-      offDev: {
-        file: 'lambdas/src/backend.capture.test.ts',
-        test: 'past ${CAPTURE_PARSE_DAILY_CAP} model calls a day the line saves as typed, and the model isn’t called',
-        why: '50 real Haiku calls a run — the cap is a counter on the token row, the same conditional write the capture cap (proven on dev) uses',
       },
     },
     {
@@ -433,21 +534,17 @@ export const siriCapture: Scenario = {
       title: 'Settings › Capture: name it, Make token → shown once, then listed “ends …<last 4>”',
       async run(ctx) {
         taskIds = [];
-        tokenC = undefined;
-        infoC = undefined;
         const S = await loadShared();
         // A token a crashed run minted is swept first; one nothing recorded (the pipeline reports those) can
-        // still crowd the run out of the room it needs (this one, the neighbour, the cap's).
+        // still crowd the run out of the room it needs: this one and the neighbour at once, then one more.
         const live = await ctx.api.reads.listScopedTokens();
         if (live.length > S.SCOPED_TOKENS_MAX - 3)
           throw new Error(
             `the test user already holds ${live.length} capture tokens (${live.map((t) => t.name).join(', ')}) — revoke the strays`,
           );
         await ctx.ui.goto('/settings');
-        await ctx.page.getByLabel('New token for', { exact: true }).fill(nameA(ctx));
-        tokenA = await takeRevealedToken(ctx, () =>
-          ctx.page.getByRole('button', { name: 'Make capture token', exact: true }).click(),
-        );
+        await nameField(ctx).fill(nameA(ctx));
+        tokenA = await takeRevealedToken(ctx, () => makeButton(ctx).click());
         const listed = await until(
           'the new token listed',
           async () => (await ctx.api.reads.listScopedTokens()).find((t) => t.name === nameA(ctx)),
@@ -477,12 +574,11 @@ export const siriCapture: Scenario = {
         ctx.page.on('request', watch);
         try {
           await ctx.ui.goto('/settings');
-          const field = ctx.page.getByLabel('New token for', { exact: true });
-          const make = ctx.page.getByRole('button', { name: 'Make capture token', exact: true });
+          const field = nameField(ctx);
           const refusedWith = async (name: string, why: string | null, shot: string) => {
             await field.fill(name);
             if (why) await ctx.ui.expectText(why);
-            if (!(await make.isDisabled()))
+            if (!(await makeButton(ctx).isDisabled()))
               throw new Error(`Make token is enabled for “${name.slice(0, 50)}”`);
             await field.press('Enter'); // the field's own Enter is refused too
             if (shot) await ctx.shot(shot);
@@ -501,13 +597,94 @@ export const siriCapture: Scenario = {
             'name-clash',
           );
           await field.fill('');
-          await new Promise((r) => setTimeout(r, 500)); // a stray mint would be on the wire by now
+          await sleep(500); // a stray mint would be on the wire by now
         } finally {
           ctx.page.off('request', watch);
         }
         if (sent.length) throw new Error(`a refused name still sent ${sent.length} mint(s)`);
         const after = (await ctx.api.reads.listScopedTokens()).length;
         if (after !== before) throw new Error(`the token count moved ${before} → ${after}`);
+      },
+    },
+    {
+      id: 'ui-mint-failed',
+      entry: 'ui',
+      proves: ['mint-failed'],
+      title: 'A mint the server fails (injected 503): the reason shown, the name kept, no token',
+      async run(ctx) {
+        const before = (await ctx.api.reads.listScopedTokens()).length;
+        await ctx.ui.goto('/settings');
+        const name = line(ctx, 'unminted');
+        await nameField(ctx).fill(name);
+        const failing = await ctx.intercept('mintScopedToken', { status: 503, times: 1 });
+        try {
+          await makeButton(ctx).click();
+          await ctx.ui.expectText('mintScopedToken failed (503)', 15_000);
+          if (failing.hits() !== 1)
+            throw new Error(`the injected failure answered ${failing.hits()}×`);
+          if ((await nameField(ctx).inputValue()) !== name)
+            throw new Error('the typed name was lost');
+          if (
+            await ctx.page.getByRole('textbox', { name: 'Capture token', exact: true }).isVisible()
+          )
+            throw new Error('a token was shown for a failed mint');
+          await ctx.shot('mint-failed');
+        } finally {
+          await failing.release();
+        }
+        await nameField(ctx).fill('');
+        const after = (await ctx.api.reads.listScopedTokens()).length;
+        if (after !== before) throw new Error(`the token count moved ${before} → ${after}`);
+      },
+    },
+    {
+      id: 'ui-list-failed',
+      entry: 'ui',
+      proves: ['list-failed'],
+      title:
+        'The token list failing (injected 500s): “Couldn’t load capture tokens.”, no mint; Retry brings it back',
+      async run(ctx) {
+        const failing = await ctx.intercept('listScopedTokens', { status: 500 });
+        try {
+          await ctx.ui.goto('/settings');
+          const failed = ctx.page.getByText('Couldn’t load capture tokens.', { exact: true });
+          await failed.waitFor({ state: 'visible', timeout: 20_000 }); // after the query layer's retries
+          if (await ctx.page.getByText(/No capture tokens yet/).isVisible())
+            throw new Error('a failed list reads as an empty one');
+          await nameField(ctx).fill(line(ctx, 'blind'));
+          if (!(await makeButton(ctx).isDisabled()))
+            throw new Error('Make token is enabled with no list to check the name against');
+          await ctx.shot('list-failed');
+          await failing.release();
+          await failed
+            .locator('xpath=..')
+            .getByRole('button', { name: 'Retry', exact: true })
+            .click({ timeout: 5_000 });
+          await rowButton(ctx, nameA(ctx)).waitFor({ state: 'visible', timeout: 15_000 });
+          await failed.waitFor({ state: 'hidden', timeout: 5_000 });
+          await nameField(ctx).fill('');
+        } finally {
+          await failing.release();
+        }
+      },
+    },
+    {
+      id: 'ui-recipe',
+      entry: 'ui',
+      proves: ['recipe'],
+      title: 'Set up the Siri Shortcut: this origin’s /api/capture and the header key',
+      async run(ctx) {
+        await ctx.ui.goto('/settings');
+        await ctx.page
+          .getByRole('button', { name: 'Set up the Siri Shortcut', exact: true })
+          .click({ timeout: 15_000 });
+        const field = async (label: string) =>
+          (await ctx.page.getByLabel(label, { exact: true }).textContent())?.trim();
+        const url = await field('URL');
+        if (url !== `${targetOrigin()}/api/capture`) throw new Error(`the recipe’s URL is ${url}`);
+        const key = await field('Header key');
+        if (key !== 'x-aperture-authorization') throw new Error(`the header key is ${key}`);
+        await ctx.shot('recipe');
       },
     },
     {
@@ -518,6 +695,38 @@ export const siriCapture: Scenario = {
         const minted = await ctx.api.writes.mintScopedToken(nameB(ctx));
         tokenB = minted.token;
         infoB = expectFresh(tokenB, minted.info, 'API mint');
+      },
+    },
+    {
+      id: 'ui-revoke-failed',
+      entry: 'ui',
+      proves: ['revoke-failed'],
+      title:
+        'A revoke the server fails (injected 500): “Couldn’t revoke”, the token kept and working',
+      async run(ctx) {
+        await ctx.ui.goto('/settings');
+        await rowButton(ctx, nameB(ctx)).click({ timeout: 15_000 });
+        const confirm = confirmText(ctx, nameB(ctx));
+        await confirm.waitFor({ state: 'visible', timeout: 5_000 });
+        const failing = await ctx.intercept('revokeScopedToken', { status: 500, times: 1 });
+        try {
+          await confirm
+            .locator('xpath=..')
+            .getByRole('button', { name: 'Revoke', exact: true })
+            .click({ timeout: 5_000 });
+          await ctx.ui.expectText('Couldn’t revoke — try again.', 15_000);
+          await ctx.ui.expectText(nameB(ctx));
+          await ctx.shot('revoke-failed');
+        } finally {
+          await failing.release();
+        }
+        await confirm
+          .locator('xpath=..')
+          .getByRole('button', { name: 'Cancel', exact: true })
+          .click({ timeout: 5_000 });
+        if (!(await tokenById(ctx, infoB.id))) throw new Error('the failed revoke revoked it');
+        const r = await capture(ctx, tokenB, `${line(ctx, 'still')} | ~5`, 'after a failed revoke');
+        if (r.duplicate || !r.id) throw new Error(`after a failed revoke: ${JSON.stringify(r)}`);
       },
     },
     {
@@ -616,10 +825,48 @@ export const siriCapture: Scenario = {
         'A natural line with a clock three hours ahead: parsed in time, due as the voice rules say',
       async run(ctx) {
         const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the plumber')} at ${aheadClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the spoken line');
         await expectSpokenDue(ctx, S, text, r, t0, Date.now());
+      },
+    },
+    {
+      id: 'api-typed',
+      entry: 'api',
+      proves: ['typed'],
+      title:
+        'A typed line (no voice flag): a clock an hour ago lands today, as the capture bar does',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const t0 = Date.now();
+        const clock = rollClock(laClock(t0).hour);
+        const hhmm = (S.spokenTimeIn(`at ${clock}`) as { hhmm?: string } | null)?.hhmm;
+        if (!hhmm) throw new Error(`“at ${clock}” isn’t a stated clock`);
+        // The typed rule (quickParse.ts): a clock with no day lands on the app's today — a small-hours one on
+        // the night after it (due.ts nightDueDay).
+        const typedWant = (now: number) => {
+          const app = S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour);
+          return { day: S.nightDueDay(app, hhmm, app, dayStartHour), time: hhmm };
+        };
+        // In the day-start hour every clock an hour back is a small-hours one, filed under tonight — where the
+        // voice rule rolls it too, so this hour can't tell the two apart.
+        if (typedWant(t0).day !== laDay(new Date(t0)))
+          needsYou(
+            `at ${dayStartHour}:xx (the day start) a clock an hour back is filed under tonight — rerun after ${dayStartHour + 1}:00`,
+            { stepOnly: true },
+          );
+        const text = `${line(ctx, 'call the bank typed')} at ${clock}`;
+        const r = await capture(ctx, tokenB, text, 'the typed line', { voice: false });
+        const t1 = Date.now();
+        const due = await expectDue(ctx, S, r, [typedWant(t0), typedWant(t1)], t0, t1);
+        if (!/\btoday\b/.test(r.say)) throw new Error(`say doesn’t say today: ${r.say}`);
+        const voiced = spokenWant(S, text, t0, t1);
+        if (voiced.some((v) => v.day === due.day && v.time === due.time))
+          throw new Error('the typed line got the voice rule’s answer');
       },
     },
     {
@@ -637,9 +884,7 @@ export const siriCapture: Scenario = {
         // Rounded up to the minute from the server's now, which lies between t0 and t1 (a minute's slack for
         // the two clocks).
         if (due.at < t0 + 19 * MIN || due.at > t1 + 21 * MIN)
-          throw new Error(
-            `due ${Math.round((due.at - t0) / 1000)} s after the call, not 20–21 min`,
-          );
+          throw new Error(`due ${Math.round((due.at - t0) / SEC)} s after the call, not 20–21 min`);
         if (!/\b(today|tomorrow)\b/.test(r.say)) throw new Error(`say names no day: ${r.say}`);
         const t = await getTask(ctx, r.id!);
         if (t.estimateMin != null)
@@ -650,7 +895,7 @@ export const siriCapture: Scenario = {
       id: 'api-wrap',
       entry: 'api',
       proves: ['wrap'],
-      title: 'A bare “at N” already past in both readings wraps ~11 h on',
+      title: 'A bare “at N” already past today is the next N o’clock, ~11 h on',
       async run(ctx) {
         const S = await loadShared();
         const t0 = Date.now();
@@ -669,6 +914,7 @@ export const siriCapture: Scenario = {
       title: 'A stated clock an hour ago rolls to tomorrow, said “tomorrow”',
       async run(ctx) {
         const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
         const t0 = Date.now();
         const text = `${line(ctx, 'call the bank')} at ${rollClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the past clock');
@@ -795,8 +1041,7 @@ export const siriCapture: Scenario = {
         try {
           for (let i = 1; i <= room; i++)
             fillers.push((await ctx.api.writes.mintScopedToken(fillName(ctx, i))).info.id);
-          const extra = fillName(ctx, room + 1);
-          const err = await ctx.api.writes.mintScopedToken(extra).then(
+          const err = await ctx.api.writes.mintScopedToken(fillName(ctx, room + 1)).then(
             (m) => {
               fillers.push(m.info.id); // ledgered, and revoked below
               return null;
@@ -815,6 +1060,25 @@ export const siriCapture: Scenario = {
       },
     },
     {
+      id: 'api-dup-window',
+      entry: 'api',
+      proves: ['dup-window'],
+      cost: 'slow',
+      title: 'The same line again a minute after the first: a new task (a 61 s wait)',
+      async run(ctx) {
+        const S = await loadShared();
+        const title = line(ctx, 'window');
+        const first = await capture(ctx, tokenB, `${title} | ~5`, 'the first', { tag: '#1' });
+        await sleep(S.CAPTURE_DUPLICATE_MS + SEC); // past the window from the first's answer, so from its count
+        const again = await capture(ctx, tokenB, `${title} | ~5`, 'past the window', { tag: '#2' });
+        if (first.duplicate || again.duplicate || !again.id || again.id === first.id)
+          throw new Error(`first ${JSON.stringify(first)}, then ${JSON.stringify(again)}`);
+        if (again.say !== `Added: ${title}.`) throw new Error(`say is “${again.say}”`);
+        await getTask(ctx, first.id!);
+        await getTask(ctx, again.id);
+      },
+    },
+    {
       id: 'api-cap',
       entry: 'api',
       proves: ['cap'],
@@ -823,41 +1087,93 @@ export const siriCapture: Scenario = {
         'A fresh token: 200 captures of one grammar line, then the 201st → 429 with the spoken limit',
       async run(ctx) {
         const S = await loadShared();
-        const minted = await ctx.api.writes.mintScopedToken(nameC(ctx));
-        tokenC = minted.token;
-        infoC = expectFresh(tokenC, minted.info, 'the cap’s token');
-        const token = tokenC;
-        const text = `${line(ctx, 'cap')} | ~5`;
-        const day = new Date().toISOString().slice(0, 10); // the cap's day is UTC
-        const rolled = () =>
-          new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : '';
-        // The first alone (it makes the task), then the rest four at a time — under dev's concurrency
-        // reservation. A duplicate counts toward the cap and costs no model call; past the minute's window
-        // the same line makes one more task, recorded like the first.
-        await capture(ctx, token, text, 'capture 1');
-        let next = 2;
-        const worker = async () => {
-          while (next <= S.CAPTURE_DAILY_CAP) {
-            const i = next++;
-            const got = await ctx.api.writes.captureRaw(token, { text, voice: true });
-            if (got.status !== 200)
-              throw new Error(
-                `capture ${i} of ${S.CAPTURE_DAILY_CAP} → ${got.status}${rolled()}: ${JSON.stringify(got.body)}`,
-              );
-            const r = got.body as DevCaptureResult;
-            if (r.id && !r.duplicate && !taskIds.includes(r.id)) taskIds.push(r.id);
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC'); // the cap's day is UTC
+        await withToken(ctx, nameC(ctx), async (token, info) => {
+          const text = `${line(ctx, 'cap')} | ~5`;
+          const day = new Date().toISOString().slice(0, 10);
+          const rolled = () =>
+            new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : '';
+          // The first alone (it makes the task), then the rest two at a time — the counter's conditional write
+          // gives up after a few lost races (a 500), and dev's concurrency reservation is shared. A duplicate
+          // counts toward the cap and costs no model call; past the minute's window the same line makes one
+          // more task, recorded like the first. Each call's ledger title carries its number, so a 5xx's open
+          // intent can't hide behind a sibling's answer. The first failure stops both workers.
+          await capture(ctx, token, text, 'capture 1', { tag: '#1' });
+          let next = 2;
+          const stopped: { err?: Error } = {};
+          const worker = async () => {
+            while (!stopped.err && next <= S.CAPTURE_DAILY_CAP) {
+              const i = next++;
+              try {
+                await capture(
+                  ctx,
+                  token,
+                  text,
+                  `capture ${i} of ${S.CAPTURE_DAILY_CAP}${rolled()}`,
+                  {
+                    tag: `#${i}`,
+                  },
+                );
+              } catch (err) {
+                stopped.err ??= err instanceof Error ? err : new Error(String(err));
+              }
+            }
+          };
+          await Promise.all([worker(), worker()]);
+          if (stopped.err) throw stopped.err;
+          const used = (await tokenById(ctx, info.id))?.usedToday;
+          if (used !== S.CAPTURE_DAILY_CAP)
+            throw new Error(`after the captures it reads ${used} today${rolled()}`);
+          const over = S.CAPTURE_DAILY_CAP + 1;
+          refused(
+            await ctx.api.writes.captureRaw(token, { text, voice: true }, { tag: `#${over}` }),
+            429,
+            `capture ${over}${rolled()}`,
+            S.CAPTURE_SAY.cap,
+          );
+        });
+      },
+    },
+    {
+      id: 'api-parse-cap',
+      entry: 'api',
+      proves: ['parse-cap'],
+      cost: 'slow',
+      title:
+        'A fresh token: 50 distinct spoken lines (real parses), then the 51st saves as typed, “daily parse limit reached”',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC'); // the parse cap's day is UTC too
+        await withToken(ctx, nameD(ctx), async (token) => {
+          const at = aheadClock(laClock(Date.now()).hour);
+          // One at a time: each is a real model call. A raw save on the way (a missed deadline) still spent its
+          // claim, so it counts like a parse — only the 51st must be refused one.
+          let raws = 0;
+          for (let i = 1; i <= S.CAPTURE_PARSE_DAILY_CAP; i++) {
+            const r = await capture(
+              ctx,
+              token,
+              `${line(ctx, `parse ${i} call the vet`)} at ${at}`,
+              `parse ${i}`,
+            );
+            if (r.raw) raws++;
           }
-        };
-        await Promise.all([worker(), worker(), worker(), worker()]);
-        const used = (await tokenById(ctx, infoC.id))?.usedToday;
-        if (used !== S.CAPTURE_DAILY_CAP)
-          throw new Error(`after the captures it reads ${used} today${rolled()}`);
-        refused(
-          await ctx.api.writes.captureRaw(token, { text, voice: true }),
-          429,
-          `capture ${S.CAPTURE_DAILY_CAP + 1}${rolled()}`,
-          S.CAPTURE_SAY.cap,
-        );
+          if (raws)
+            ctx.log(`parse cap: ${raws} of ${S.CAPTURE_PARSE_DAILY_CAP} saved as typed on the way`);
+          const n = S.CAPTURE_PARSE_DAILY_CAP + 1;
+          const r = await capture(
+            ctx,
+            token,
+            `${line(ctx, `parse ${n} call the vet`)} at ${at}`,
+            `parse ${n}`,
+          );
+          if (
+            !r.raw ||
+            !r.detail.includes('daily parse limit reached') ||
+            !r.say.startsWith('Added as typed')
+          )
+            throw new Error(`parse ${n}: ${JSON.stringify(r)}`);
+        });
       },
     },
     {
@@ -866,8 +1182,8 @@ export const siriCapture: Scenario = {
       title:
         'Revoke the run’s tokens and delete the route’s tasks now, so no later scenario sees them',
       async run(ctx) {
-        for (const id of [infoB?.id, infoC?.id])
-          if (id && (await tokenById(ctx, id))) await ctx.api.writes.revokeScopedToken(id);
+        for (const t of await ctx.api.reads.listScopedTokens())
+          if (t.id === infoB?.id) await ctx.api.writes.revokeScopedToken(t.id);
         for (const id of taskIds)
           if (await ctx.api.reads.getTask(id)) await ctx.api.writes.deleteTask(id);
         const left = (await ctx.api.reads.listScopedTokens()).filter((t) =>

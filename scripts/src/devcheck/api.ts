@@ -1275,15 +1275,18 @@ export function createApiClient({
     // The voice Shortcut's route, raw (capture.md → The route): POST /api/capture with `token` in the BFF
     // header — a capture token, 'jwt' for the test user's session (it must be refused), or none — and `body`
     // as JSON (a string goes as sent: malformed on purpose). Returns the status and parsed body, whatever they
-    // are. A 200 with an `id` made a task (or answered an earlier one): any id not yet recorded is ledgered
-    // as a task (CAPTURE_VIA), so cleanup deletes it. `path` is the capture route's (a wrong /api/capture… path
-    // proves its 422) or /api/listTasks (a read: a capture token must open nothing else); `method` proves the
-    // 405. A 429 carrying the route's own `{error, say}` is the daily cap, returned as is; any other is
-    // Lambda throttling, backed off like call()'s.
+    // are. Every POST to the route itself is ledgered like a create, whatever the bearer (a JWT or a revoked
+    // token wrongly let through would still make a task): an intent, then the 200's `id` as a task
+    // (CAPTURE_VIA) when it's new — so cleanup deletes it — or `refused` (a refusal, or a duplicate naming a
+    // recorded task); a 5xx leaves the intent open, a possible leak. `tag` goes on the ledger title, so
+    // same-text calls (the cap's 200) can't resolve each other's intents. `path` is the capture route's (a
+    // wrong /api/capture… path proves its 422) or /api/listTasks (a read: a capture token must open nothing
+    // else); `method` proves the 405. A 429 carrying the route's own `{error, say}` is the daily cap, returned
+    // as is; any other is Lambda throttling, backed off like call()'s.
     async captureRaw(
       bearer: string | null,
       body: string | object,
-      opts: { method?: 'POST' | 'GET' | 'PUT'; path?: string } = {},
+      opts: { method?: 'POST' | 'GET' | 'PUT'; path?: string; tag?: string } = {},
     ): Promise<{ status: number; body: unknown }> {
       const path = opts.path ?? '/api/capture';
       if (!/^\/api\/capture(\/|$)/.test(path) && path !== '/api/listTasks')
@@ -1294,10 +1297,8 @@ export function createApiClient({
       const raw = typeof body === 'string' ? body : JSON.stringify(body);
       const text0 =
         typeof body === 'string' ? body : String((body as { text?: unknown }).text ?? '');
-      const title = text0.slice(0, 80);
-      // Only a capture token on the route itself can make a task; the rest are refused before any write.
-      const creates =
-        bearer !== null && bearer !== 'jwt' && method === 'POST' && path === '/api/capture';
+      const title = `${text0.slice(0, 80)}${opts.tag ? ` ${opts.tag}` : ''}`;
+      const creates = method === 'POST' && path === '/api/capture';
       if (creates) ledger.append({ run, op: 'intent', via: CAPTURE_VIA, title });
       const send = () => {
         const headers: Record<string, string> = {};

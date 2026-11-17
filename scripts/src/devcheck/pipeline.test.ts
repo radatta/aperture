@@ -36,7 +36,14 @@ import {
 import { statusLine } from './report';
 import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
-import { hidingSecret, needsYou, noConsoleErrors, type Ctx, type Scenario } from './scenario';
+import {
+  hidingSecret,
+  needsYou,
+  noConsoleErrors,
+  scrubSecrets,
+  type Ctx,
+  type Scenario,
+} from './scenario';
 
 const SHA = 'a'.repeat(40);
 const shell = (sha: string) => `<meta name="aperture-build" content="${sha}" />`;
@@ -762,6 +769,39 @@ describe('runPipeline', () => {
     expect(r.steps[1]!.shot).toBeUndefined();
     expect(r.shots.filter((f) => f.startsWith('sc2-'))).toEqual([]);
     expect(w.gotos).toEqual(['about:blank']);
+  });
+
+  it('a secret-bearing failure leaves its token out of the report: the call log’s preview is scrubbed', async () => {
+    const w = world();
+    const token = `apc_${'Ab3_-'.repeat(8)}xyz`;
+    const sc = scenario(async (_x, ctx) =>
+      hidingSecret(ctx.page, async () => {
+        const err = new TypeError(
+          `locator.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for textbox "${token}"`,
+        );
+        err.stack = `${err.name}: ${err.message}\n    at reveal (siri-capture.ts:1:1)`;
+        throw err;
+      }),
+    )(w);
+    const r = await runPipeline(deps(w, [sc]));
+    const error = r.steps[0]!.error!;
+    expect(error).toContain('waiting for textbox "[token]"');
+    expect(JSON.stringify(r)).not.toContain(token);
+    expect(r.steps[0]!.shot).toBeUndefined();
+  });
+
+  it('scrubSecrets blanks every device-token shape and keeps the error’s class, name and stack shape', async () => {
+    const place = `apl_${'p'.repeat(43)}`;
+    const err = new RangeError(`a ${place} and apc_short`);
+    err.stack = `RangeError: a ${place} and apc_short\n    at x (y.ts:1:1)`;
+    const caught = await hidingSecret({ goto: async () => undefined }, async () => {
+      throw err;
+    }).catch((e: unknown) => e as Error);
+    expect(caught).toBe(err);
+    expect(caught).toBeInstanceOf(RangeError);
+    expect(caught.message).toBe('a [token] and apc_short'); // too short to be a token: kept
+    expect(caught.stack).toBe('RangeError: a [token] and apc_short\n    at x (y.ts:1:1)');
+    expect(scrubSecrets(`x apt_${'t'.repeat(20)} y`)).toBe('x [token] y');
   });
 
   it('a task gone before cleanup (deleted with its parent) is "gone", not a leftover', async () => {

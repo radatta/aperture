@@ -47,7 +47,14 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
       'local: the real Haiku draft is dev’s (the model is off locally); grace-over is a wall-clock wait of up to 10 min after Done, proven on dev by any run touching packages/shared/src/sittings.ts, its refusal covered off dev by the contract suite on the Lambda and lambdas/src/index.test.ts — runs on dev',
   },
   'siri-capture': {
-    steps: ['api-voice-parse', 'api-relative', 'api-wrap', 'api-roll'],
+    steps: [
+      'api-voice-parse',
+      'api-typed',
+      'api-relative',
+      'api-wrap',
+      'api-roll',
+      'api-parse-cap',
+    ],
     reason:
       'local: the real Haiku parse is dev’s (parsing is off locally, so a spoken line saves as typed) — runs on dev',
   },

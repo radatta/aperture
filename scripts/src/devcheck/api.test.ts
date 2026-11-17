@@ -32,7 +32,7 @@ import {
   type FetchLike,
 } from './api';
 import { DEV_ORIGIN } from './config';
-import type { Ledger, LedgerEntry } from './ledger';
+import { orphanIntents, type Ledger, type LedgerEntry } from './ledger';
 
 function memLedger(): Ledger & { entries: Omit<LedgerEntry, 't'>[] } {
   const entries: Omit<LedgerEntry, 't'>[] = [];
@@ -751,6 +751,14 @@ describe('createApiClient', () => {
       expect(fetch).toHaveBeenCalledTimes(4);
     });
 
+    it('a session JWT the route wrongly took still has its task recorded', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'T9', say: 'Added: a.' }));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger, run: 'r1' });
+      await api.writes.captureRaw('jwt', { text: 'a' });
+      expect(ledger.entries.filter((e) => e.op === 'created').map((e) => e.id)).toEqual(['T9']);
+    });
+
     it('ledgers each task the route made once — a duplicate’s id isn’t new — and resolves every intent', async () => {
       const ledger = memLedger();
       const answers = [
@@ -777,7 +785,7 @@ describe('createApiClient', () => {
       ]);
     });
 
-    it('a 5xx leaves the capture’s intent open; a refusal with no token or the session writes no intent', async () => {
+    it('a 5xx leaves the capture’s intent open; a refusal to any bearer resolves its own, by its tag', async () => {
       const ledger = memLedger();
       const answers = [
         reply(500, { error: 'Internal error', say: 'x' }),
@@ -790,10 +798,18 @@ describe('createApiClient', () => {
         ledger,
         run: 'r1',
       });
-      await api.writes.captureRaw(CAP, { text: 'a' });
-      await api.writes.captureRaw(null, { text: 'a' });
-      await api.writes.captureRaw('jwt', { text: 'a' });
-      expect(ledger.entries.map((e) => e.op)).toEqual(['intent']);
+      await api.writes.captureRaw(CAP, { text: 'a' }, { tag: '#1' });
+      await api.writes.captureRaw(null, { text: 'a' }, { tag: '#2' });
+      await api.writes.captureRaw('jwt', { text: 'a' }, { tag: '#3' });
+      expect(ledger.entries.map((e) => [e.op, e.title])).toEqual([
+        ['intent', 'a #1'],
+        ['intent', 'a #2'],
+        ['refused', 'a #2'],
+        ['intent', 'a #3'],
+        ['refused', 'a #3'],
+      ]);
+      // #1's intent stays open — a sibling's answer under another tag can't close it.
+      expect(orphanIntents(ledger.read()).map((e) => e.title)).toEqual(['a #1']);
     });
 
     it('returns the route’s own 429 (the daily cap) at once, but backs off a Lambda throttle', async () => {

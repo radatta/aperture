@@ -145,11 +145,15 @@ export const noConsoleErrors: Step = {
   },
 };
 
-// A stretch of a step that may put a secret on screen (the place token's show-once reveal). On any throw the
-// page goes to about:blank before the error leaves — the pipeline's failure shot comes after — so not even a
-// reveal that appeared once a wait had given up is shot; and the error is marked so the pipeline takes no
-// failure shot at all (a page that wouldn't navigate is the case that needs it).
+// A stretch of a step that may put a secret on screen (a token's show-once reveal). On any throw the page goes
+// to about:blank before the error leaves — the pipeline's failure shot comes after — so not even a reveal that
+// appeared once a wait had given up is shot; and the error is marked so the pipeline takes no failure shot at
+// all (a page that wouldn't navigate is the case that needs it). Its text is scrubbed of anything shaped like a
+// device token (apc_/apl_/apt_…): Playwright's call log previews the element it waited on — the reveal's text,
+// which is the token. The error keeps its class, name and stack shape.
 const withheld = new WeakSet<object>();
+const SECRET_SHAPE = /ap[clt]_[A-Za-z0-9_-]{20,}/g;
+export const scrubSecrets = (text: string): string => text.replace(SECRET_SHAPE, '[token]');
 export const shotWithheld = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && withheld.has(err);
 export async function hidingSecret<T>(
@@ -160,6 +164,8 @@ export async function hidingSecret<T>(
     return await run();
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
+    e.message = scrubSecrets(e.message);
+    if (e.stack) e.stack = scrubSecrets(e.stack);
     withheld.add(e);
     await page.goto('about:blank').catch(() => undefined);
     throw e;
