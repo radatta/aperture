@@ -1,6 +1,7 @@
 // `pnpm lanes end <branch>`: once the PR is merged and main's deploy for it is green (or `--force-abandon "<reason>"`),
 // archive the worktree's localNotes and check the copy, remove the worktree, clear the board lane, print the
 // maintainer's Mac line, close the lane's window by id only, and sync main (board sync-main). A rerun resumes (docs/ops/LANES.md → End).
+import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
 import { deployFor } from '../board/tower/derive.ts';
 import { parseRuns } from '../board/tower/gh.ts';
 import { verdict } from '../bot/prune.ts';
@@ -128,8 +129,14 @@ function deployGate(
 function headCovered(d: Deps, head: string, pr: Pr): boolean | 'fetch-failed' {
   if (head === pr.headRefOid) return true;
   const at = d.env.mainRoot;
-  if (tryRun(d, 'git', ['fetch', 'origin', `pull/${pr.number}/head`], at) === null)
+  try {
+    d.run('git', ['fetch', 'origin', `pull/${pr.number}/head`], {
+      cwd: at,
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
+  } catch {
     return 'fetch-failed';
+  }
   return tryRun(d, 'git', ['merge-base', '--is-ancestor', head, pr.headRefOid], at) !== null;
 }
 

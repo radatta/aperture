@@ -49,7 +49,10 @@ export interface Deps {
   log: (s: string) => void;
   env: Env;
   syncMain: () => string; // board/sync-main.ts: the main checkout to origin/main, the tower restarted if stale; throws
+  lock: <T>(fn: () => T) => T; // board/main-lock.ts: git writes in the main checkout, one session at a time; throws busy
 }
+
+export const LS_REMOTE_TIMEOUT_MS = 30_000; // the fetch's is board/sync-main.ts FETCH_TIMEOUT_MS
 
 // Both lifecycle commands end here: a failure warns and never changes the command's outcome.
 export function syncMainSoft(d: Deps): void {

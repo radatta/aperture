@@ -15,8 +15,11 @@ import {
   syncMainSoft,
   tryRun,
   worktreePath,
+  LS_REMOTE_TIMEOUT_MS,
 } from './state.ts';
 import type { Deps, Lifecycle } from './state.ts';
+import { MainBusy } from '../board/main-lock.ts';
+import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
 
 export const KICKOFF_MAX = 256 * 1024;
 export const CONFIRM_MS = 20_000;
@@ -73,70 +76,8 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     );
   const [tmuxSession, serverPid, serverStart] = sessions[0]!.split(' ');
 
-  const status = d.run('git', ['status', '--porcelain'], { cwd: e.mainRoot });
-  const tracked = status.split('\n').filter((l) => l && !l.startsWith('??'));
-  if (tracked.length)
-    return refuse(
-      d,
-      `the main checkout has tracked changes:\n  ${tracked.slice(0, 10).join('\n  ')}`,
-    );
-  if (tryRun(d, 'git', ['symbolic-ref', '-q', 'HEAD'], e.mainRoot) !== null)
-    return refuse(d, `the main checkout is on a branch; it stays detached at origin/main`);
-  const untracked = status.split('\n').filter((l) => l.startsWith('??'));
-  if (untracked.length)
-    d.log(`note: untracked in the main checkout (left alone): ${untracked.length} path(s)`);
-
-  try {
-    d.run('git', ['fetch', 'origin'], { cwd: e.mainRoot });
-  } catch (err) {
-    return refuse(d, `git fetch failed (nothing changed): ${(err as Error).message}`, EXIT.failed);
-  }
-  if (tryRun(d, 'git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], e.mainRoot) !== null)
-    return refuse(d, `branch ${b} already exists (local)`);
-  if (
-    d.run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${b}`], { cwd: e.mainRoot }).trim()
-  )
-    return refuse(d, `branch ${b} already exists (on origin)`);
   const wt = worktreePath(e, b);
-  const trees = parseWorktrees(
-    d.run('git', ['worktree', 'list', '--porcelain'], { cwd: e.mainRoot }),
-  );
-  if (d.fs.exists(wt) || trees.some((t) => t.path === wt))
-    return refuse(d, `.claude/worktrees/${b} already exists`);
-  if (d.fs.exists(lifecyclePath(e, b)))
-    return refuse(d, `a lifecycle record for ${b} exists: pnpm lanes end ${b} first`);
-  // Tab-separated: a window name may hold spaces.
-  const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}']);
-  const same = windows.split('\n').find((l) => l.slice(l.indexOf('\t') + 1) === b);
-  if (same)
-    return refuse(d, `a window named ${b} exists (${same.split('\t')[0]}): names are addresses`);
-  const active = activeLanes(d, trees);
-  const cap = laneCap(d);
-  if (active.length >= cap && a.overCap === null)
-    return refuse(
-      d,
-      `${active.length} of ${cap} lanes active: ${describeActive(active)}. End one (pnpm lanes end), park one ` +
-        `(pnpm board lane parked), or pass --over-cap "<reason>".`,
-      EXIT.later,
-    );
-  if (active.length >= cap) d.log(`over the cap (${active.length} of ${cap}): ${a.overCap}`);
-
-  // From here every step registers its undo; a failure runs them in reverse.
-  const undo: { what: string; fn: () => void }[] = [];
-  const rollback = (why: string) => {
-    d.log(`lane: ${why}; rolling back`);
-    const left: string[] = [];
-    for (const u of undo.reverse()) {
-      try {
-        u.fn();
-      } catch (err) {
-        left.push(`${u.what} (${(err as Error).message.split('\n')[0]})`);
-      }
-    }
-    d.log(left.length ? `left behind: ${left.join('; ')}` : 'rolled back: nothing left behind');
-    return EXIT.failed;
-  };
-
+  const lc = lifecyclePath(e, b);
   const rec: Lifecycle = {
     v: 1,
     branch: b,
@@ -152,52 +93,154 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     archive: null,
     startedAt: new Date(d.clock.now()).toISOString(),
   };
-  const lc = lifecyclePath(e, b);
-  if (!d.fs.writeNew(lc, lifecycleText(rec)))
-    return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
-  undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });
+  // From here every step registers its undo; a failure runs them in reverse.
+  const undo: { what: string; fn: () => void }[] = [];
+  const rollback = (why: string) => {
+    d.log(`lane: ${why}; rolling back`);
+    const left: string[] = [];
+    const steps = () => {
+      for (const u of undo.reverse()) {
+        try {
+          u.fn();
+        } catch (err) {
+          left.push(`${u.what} (${(err as Error).message.split('\n')[0]})`);
+        }
+      }
+    };
+    try {
+      d.lock(steps); // its git steps touch the main checkout's refs too; nested inside the locked span, free
+    } catch (err) {
+      if (!(err instanceof MainBusy)) throw err;
+      steps(); // undoing beats leaving it half made
+    }
+    d.log(left.length ? `left behind: ${left.join('; ')}` : 'rolled back: nothing left behind');
+    return EXIT.failed;
+  };
 
-  // One sha for every step: another session's fetch moving origin/main mid-start can't split the base.
-  let base: string;
+  // The dirty check through worktree add run under the main-checkout lock (board/main-lock.ts, F155): sync-main (a
+  // `lanes end` finishing) can't move HEAD or refs in between. Busy past its wait is a refusal: nothing changed.
+  let base = '';
+  let early: number | null;
   try {
-    base = d.run('git', ['rev-parse', 'origin/main'], { cwd: e.mainRoot });
-    rec.baseSha = base;
-    if (d.run('git', ['rev-parse', 'HEAD'], { cwd: e.mainRoot }) !== base)
-      d.run('git', ['switch', '--detach', base], { cwd: e.mainRoot });
-  } catch (err) {
-    return rollback(`could not detach the main checkout at origin/main: ${(err as Error).message}`);
-  }
-  try {
-    d.run('git', ['worktree', 'add', '--no-track', '-b', b, `.claude/worktrees/${b}`, base], {
-      cwd: e.mainRoot,
-    });
-  } catch (err) {
-    // git makes the -b branch before the checkout and keeps it when the checkout fails: take it back if it is ours.
-    const made = tryRun(
-      d,
-      'git',
-      ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`],
-      e.mainRoot,
-    );
-    if (made === base)
+    early = d.lock((): number | null => {
+      const status = d.run('git', ['status', '--porcelain'], { cwd: e.mainRoot });
+      const tracked = status.split('\n').filter((l) => l && !l.startsWith('??'));
+      if (tracked.length)
+        return refuse(
+          d,
+          `the main checkout has tracked changes:\n  ${tracked.slice(0, 10).join('\n  ')}`,
+        );
+      if (tryRun(d, 'git', ['symbolic-ref', '-q', 'HEAD'], e.mainRoot) !== null)
+        return refuse(d, `the main checkout is on a branch; it stays detached at origin/main`);
+      const untracked = status.split('\n').filter((l) => l.startsWith('??'));
+      if (untracked.length)
+        d.log(`note: untracked in the main checkout (left alone): ${untracked.length} path(s)`);
+
+      try {
+        d.run('git', ['fetch', 'origin'], { cwd: e.mainRoot, timeoutMs: FETCH_TIMEOUT_MS });
+      } catch (err) {
+        return refuse(
+          d,
+          `git fetch failed (nothing changed): ${(err as Error).message}`,
+          EXIT.failed,
+        );
+      }
+      if (
+        tryRun(d, 'git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], e.mainRoot) !==
+        null
+      )
+        return refuse(d, `branch ${b} already exists (local)`);
+      if (
+        d
+          .run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${b}`], {
+            cwd: e.mainRoot,
+            timeoutMs: LS_REMOTE_TIMEOUT_MS,
+          })
+          .trim()
+      )
+        return refuse(d, `branch ${b} already exists (on origin)`);
+      const trees = parseWorktrees(
+        d.run('git', ['worktree', 'list', '--porcelain'], { cwd: e.mainRoot }),
+      );
+      if (d.fs.exists(wt) || trees.some((t) => t.path === wt))
+        return refuse(d, `.claude/worktrees/${b} already exists`);
+      if (d.fs.exists(lifecyclePath(e, b)))
+        return refuse(d, `a lifecycle record for ${b} exists: pnpm lanes end ${b} first`);
+      // Tab-separated: a window name may hold spaces.
+      const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}']);
+      const same = windows.split('\n').find((l) => l.slice(l.indexOf('\t') + 1) === b);
+      if (same)
+        return refuse(
+          d,
+          `a window named ${b} exists (${same.split('\t')[0]}): names are addresses`,
+        );
+      const active = activeLanes(d, trees);
+      const cap = laneCap(d);
+      if (active.length >= cap && a.overCap === null)
+        return refuse(
+          d,
+          `${active.length} of ${cap} lanes active: ${describeActive(active)}. End one (pnpm lanes end), park one ` +
+            `(pnpm board lane parked), or pass --over-cap "<reason>".`,
+          EXIT.later,
+        );
+      if (active.length >= cap) d.log(`over the cap (${active.length} of ${cap}): ${a.overCap}`);
+
+      if (!d.fs.writeNew(lc, lifecycleText(rec)))
+        return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
+      undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });
+
+      // One sha for every step: another session's fetch moving origin/main mid-start can't split the base.
+      try {
+        base = d.run('git', ['rev-parse', 'origin/main'], { cwd: e.mainRoot });
+        rec.baseSha = base;
+        if (d.run('git', ['rev-parse', 'HEAD'], { cwd: e.mainRoot }) !== base)
+          d.run('git', ['switch', '--detach', base], { cwd: e.mainRoot });
+      } catch (err) {
+        return rollback(
+          `could not detach the main checkout at origin/main: ${(err as Error).message}`,
+        );
+      }
+      try {
+        d.run('git', ['worktree', 'add', '--no-track', '-b', b, `.claude/worktrees/${b}`, base], {
+          cwd: e.mainRoot,
+        });
+      } catch (err) {
+        // git makes the -b branch before the checkout and keeps it when the checkout fails: take it back if it is ours.
+        const made = tryRun(
+          d,
+          'git',
+          ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`],
+          e.mainRoot,
+        );
+        if (made === base)
+          undo.push({
+            what: `branch ${b}`,
+            fn: () => {
+              d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot }); // repo-wide, but only drops dead admin dirs
+              d.run('git', ['branch', '-d', b], { cwd: e.mainRoot });
+            },
+          });
+        return rollback(`worktree add failed: ${(err as Error).message}`);
+      }
+      // The safe delete: the branch sits at the main checkout's HEAD, so -d never refuses (and never loses work).
       undo.push({
         what: `branch ${b}`,
-        fn: () => {
-          d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot }); // repo-wide, but only drops dead admin dirs
-          d.run('git', ['branch', '-d', b], { cwd: e.mainRoot });
-        },
+        fn: () => d.run('git', ['branch', '-d', b], { cwd: e.mainRoot }),
       });
-    return rollback(`worktree add failed: ${(err as Error).message}`);
+      undo.push({
+        what: `worktree ${wt}`,
+        fn: () =>
+          d.run('git', ['worktree', 'remove', `.claude/worktrees/${b}`], { cwd: e.mainRoot }),
+      });
+
+      return null;
+    });
+  } catch (err) {
+    if (err instanceof MainBusy)
+      return refuse(d, `${err.message} (nothing changed; retry)`, EXIT.later);
+    throw err;
   }
-  // The safe delete: the branch sits at the main checkout's HEAD, so -d never refuses (and never loses work).
-  undo.push({
-    what: `branch ${b}`,
-    fn: () => d.run('git', ['branch', '-d', b], { cwd: e.mainRoot }),
-  });
-  undo.push({
-    what: `worktree ${wt}`,
-    fn: () => d.run('git', ['worktree', 'remove', `.claude/worktrees/${b}`], { cwd: e.mainRoot }),
-  });
+  if (early !== null) return early;
 
   const gitdir = (d.fs.read(`${wt}/.git`) ?? '').trim();
   if (gitdir !== expectedGitdir(b))

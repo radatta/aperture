@@ -1,6 +1,5 @@
 // `pnpm lanes <command>`: one lane = one branch = one worktree = one Claude session named after the branch, born at
 // kickoff and gone at cleanup. Plain node, builtins only. docs/ops/LANES.md.
-import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -10,7 +9,8 @@ import { cliGuard, emit } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { run } from '../bot/sh.ts';
-import { syncMain } from '../board/sync-main.ts';
+import { withMainLock } from '../board/main-lock.ts';
+import { execRun, syncMain } from '../board/sync-main.ts';
 import { readLanes, writeLane } from '../board/tower/lanes.ts';
 import { REPO_SLUG } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
@@ -92,13 +92,8 @@ function realDeps(): Deps {
       slug: REPO_SLUG,
       procDir: '/proc',
     },
-    // Untrimmed, as `pnpm board sync-main` runs it: sync-main reads porcelain's XY columns.
-    syncMain: () =>
-      syncMain(
-        (c, a, cwd) =>
-          execFileSync(c, a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
-        mainRoot,
-      ),
+    syncMain: () => syncMain(execRun, mainRoot, withMainLock),
+    lock: withMainLock,
   };
 }
 

@@ -17,7 +17,8 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
-import { syncMain } from './sync-main.ts';
+import { withMainLock } from './main-lock.ts';
+import { execRun, syncMain } from './sync-main.ts';
 import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
@@ -194,9 +195,9 @@ export function main(argv: string[], stdin: () => string): string {
     }
     case 'sync-main':
       return syncMain(
-        (c, a, cwd) =>
-          execFileSync(c, a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+        execRun,
         process.env.INIT_CWD ?? process.cwd(), // pnpm runs scripts from the root; INIT_CWD is where it was typed
+        withMainLock,
       );
     default:
       throw new Error(

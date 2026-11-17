@@ -38,8 +38,7 @@ SOURCES says what to run. The server compares on each page poll (HEAD read from 
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/manifest.webmanifest`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, plus the same four of the trial variants
-`favicon-a…` and `favicon-b…`; `/?favicon=a|b` serves the page linking those), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -185,20 +184,16 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
   `app.js` also marks the page `installed` when `navigator.standalone` is true or the query matches, which applies the
   same floor upright. Which of the two fixed it is unverified. **After this merges, remove the tower's Home Screen icon
   and add it again.**
-- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
-  tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
-  before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
-  `favicon-64.png` (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico`
-  holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to. The touch icon's
-  link comes after the tab icons', so the tab never settles on the opaque 180 px radar.
-- **Trial variants** (until the maintainer picks one in real Safari; headless can't show this): macOS Safari draws a
-  light plate behind a tab icon it judges low-contrast on its dark tab bar, which the default's dark tile gets
-  (WebKit bug 309949). `/?favicon=a` links variant a, the same dial with no tile, in mid-tones that read on light
-  and dark bars; `/?favicon=b` variant b, the dial dark on a light Nord-teal tile. Each is `favicon-<v>.svg` with its
-  `-32.png`, `-64.png` and `.ico` (the same commands), the page also linking its `.ico`. The page is built per
-  variant at start (the CSP allows no inline script, and Safari reads icon links as the page parses); any other
-  value is the default page, byte for byte. Safari caches a tab icon per page URL: a Private window shows a variant
-  fresh.
+- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (no tile: the
+  dial, a sweep and a blip in mid-tones that read on light and dark tab bars); the Home Screen's detailed one would
+  read as a dark square there. No tile because macOS Safari draws a light plate behind a tab icon it judges
+  low-contrast on its dark bar (WebKit bug 309949), which a dark tile got; the maintainer picked this one of two
+  trial variants in real Safari (2026-11-16). Its PNGs are linked before the SVG because Safari's tab skips an SVG
+  icon (it showed a letter monogram): `favicon-32.png` and `favicon-64.png`
+  (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico` holding both
+  (`convert favicon-32.png favicon-64.png favicon.ico`), linked too, which Safari falls back to. The touch icon's
+  link comes after the tab icons', so the tab never settles on the opaque 180 px radar. Safari caches a tab icon per
+  page URL: a Private window shows a new one fresh.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
@@ -208,7 +203,7 @@ numbers, `undefined` on the page, or a Mac-only button on the phone; an expanded
 five chips, with HEALTH or another panel showing, and (NEXT) without a struck row, a slip marker and the now-line. One
 pass per engine then drives the expand at 390 px: a title tap, a poll (scroll kept), a reload (panel and scroll
 kept), Esc, keys `3` `2` `2` `1`, Back, a modified key, `#zzz`, Esc on a page opened at `#next`, and a slot card
-opened on the glance still open after; and fetches both `?favicon=` pages.
+opened on the glance still open after.
 Three more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
 has no option, Chromium ignores it over CDP), so the installed frame is served the page with the floor's
 `display-mode` terms dropped, and the flagged frame the page as served with `navigator.standalone` true (the

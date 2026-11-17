@@ -461,3 +461,70 @@ describe('lane start: rollback', () => {
     ).toEqual([['branch', '-d', B]]);
   });
 });
+
+// F155: one start or sync-main at a time in the main checkout
+describe('lane start: the main-checkout lock', () => {
+  it('the dirty check through worktree add run inside the lock; sync-main after it is released', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.lock.events.length).toBe(2);
+    const [inAt, outAt] = t.lock.events.map((e) => Number(e.split(' ').at(-1)));
+    const inside = t.calls.slice(inAt, outAt).map((c) => c.line);
+    expect(inside[0]).toBe('git status --porcelain');
+    expect(inside.some((l) => l.startsWith('git fetch origin'))).toBe(true);
+    expect(inside.at(-1)).toMatch(/^git worktree add/);
+    expect(t.calls.slice(outAt).some((c) => c.line === 'pnpm install')).toBe(true);
+    expect(t.sync.calls).toBe(1);
+    expect(t.lock.depth).toBe(0); // sync-main ran outside: it takes the lock itself
+  });
+
+  it('a busy lock refuses with 75, nothing changed', async () => {
+    const w = world();
+    const t = deps(w, script(w));
+    t.lock.busy = true;
+    expect(await start(t.d, args())).toBe(75);
+    expect(mutated(t.calls)).toEqual([]);
+    expect(t.calls.some((c) => c.line.startsWith('git'))).toBe(false);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+    expect(t.out()).toMatch(/main checkout busy.*nothing changed; retry/);
+    expect(t.sync.calls).toBe(0);
+  });
+
+  it('the fetch and ls-remote carry timeouts', async () => {
+    const w = world();
+    claudeSession(w);
+    const timeouts: Record<string, number | undefined> = {};
+    const t = deps(w, script(w));
+    const run = t.d.run;
+    t.d.run = (cmd, a, o) => {
+      if (cmd === 'git' && (a[0] === 'fetch' || a[0] === 'ls-remote'))
+        timeouts[a[0]] = o?.timeoutMs;
+      return run(cmd, a, o);
+    };
+    expect(await start(t.d, args())).toBe(0);
+    expect(timeouts).toEqual({ fetch: 60_000, 'ls-remote': 30_000 });
+  });
+
+  it('a timed-out fetch is the failed-fetch refusal', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['git fetch origin', fail('git fetch timed out after 60 s')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.out()).toMatch(/git fetch failed \(nothing changed\): git fetch timed out after 60 s/);
+    expect(mutated(t.calls)).toEqual([]);
+    expect(t.lock.depth).toBe(0);
+  });
+
+  it('a rollback after the lock was released takes it again for its git steps', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['pnpm install', fail('ERR_PNPM')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.lock.events.length).toBe(4);
+    const [inAt, outAt] = t.lock.events.slice(2).map((e) => Number(e.split(' ').at(-1)));
+    expect(t.calls.slice(inAt, outAt).map((c) => c.line.split(' ').slice(0, 3).join(' '))).toEqual([
+      'git worktree remove',
+      'git branch -d',
+    ]);
+  });
+});

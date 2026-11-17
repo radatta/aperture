@@ -129,6 +129,22 @@ describe('lane end: gates', () => {
       3,
     ],
     [
+      "a PR head fetch that times out (60 s): it can't compare",
+      {},
+      [
+        ['git rev-parse --verify --quiet refs/heads/', 'e'.repeat(40)],
+        [
+          'git fetch origin pull/42/head',
+          (c) => {
+            if (c.timeoutMs !== 60_000) throw new Error('no timeout');
+            throw new Error('git fetch timed out after 60 s');
+          },
+        ],
+      ],
+      /could not fetch PR 42's head to compare/,
+      1,
+    ],
+    [
       'a merge with no deploy run yet, minutes old',
       {},
       [

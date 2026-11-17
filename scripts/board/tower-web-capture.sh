@@ -264,11 +264,6 @@ async function expandPass(b, name) {
   await fresh.waitForTimeout(300);
   const f = await fresh.evaluate(() => ({ url: location.href, open: document.body.dataset.open ?? null }));
   if (f.open !== null || !f.url.startsWith(BASE) || f.url.includes('#')) fails.push(`${tag}: Esc on a direct #next: ${JSON.stringify(f)}`);
-  // the favicon trial pages
-  for (const v of ['a', 'b']) {
-    const html = await (await fetch(`${BASE}/?favicon=${v}`)).text();
-    if (!html.includes(`href="/favicon-${v}-32.png"`)) fails.push(`${tag}: /?favicon=${v} doesn't link its icons`);
-  }
   console.log(`${tag}: done`);
   await ctx.close();
 }
