@@ -138,6 +138,7 @@ describe('createApiClient', () => {
       'listSittings',
       'listStories',
       'listTasks',
+      'parseTask',
       'placeDigestRaw',
       'probePresigned',
     ]);

@@ -283,8 +283,8 @@ const makeButton = (ctx: Ctx) =>
   ctx.page.getByRole('button', { name: 'Make capture token', exact: true });
 
 // The model rows: `due` equals one of `want` (the answer computed at the call's start or its end — the server's
-// clock is somewhere between), the task holds it, the title keeps the nonce and lost the spoken time, and `say`
-// speaks it as of either end.
+// clock is somewhere between), the task holds it, the title keeps the nonce and lost the spoken time — or is
+// exactly `title`, a typed line's every word but its due phrase (capture-titles) — and `say` speaks it as of either end.
 async function expectDue(
   ctx: Ctx,
   S: Shared,
@@ -292,6 +292,7 @@ async function expectDue(
   want: { day: string; time: string }[],
   t0: number,
   t1: number,
+  title?: string,
 ): Promise<{ day: string; time: string; at: number }> {
   if (r.raw)
     throw new Error(
@@ -307,8 +308,14 @@ async function expectDue(
     throw new Error(
       `the answer says ${JSON.stringify(due)}, the task holds ${task.dueDay} ${task.dueTime}`,
     );
-  if (!task.title.includes(marker(ctx.nonce)) || TIME_WORDS.test(task.title))
-    throw new Error(`the title is “${task.title}” — the nonce kept, the spoken time taken out`);
+  if (
+    title !== undefined
+      ? task.title !== title
+      : !task.title.includes(marker(ctx.nonce)) || TIME_WORDS.test(task.title)
+  )
+    throw new Error(
+      `the title is “${task.title}” — ${title !== undefined ? `want “${title}”` : 'the nonce kept, the spoken time taken out'}`,
+    );
   const whens = [t0, t1].map((t) => S.captureWhen(due, laDay(new Date(t)), laDay(new Date(t))));
   if (!r.say.startsWith('Added: ') || !whens.some((w) => w && r.say.endsWith(`, ${w}.`)))
     throw new Error(`say is “${r.say}”, expected it to end “, ${whens[0]}.”`);
@@ -328,8 +335,9 @@ async function expectSpokenDue(
   r: DevCaptureResult,
   t0: number,
   t1: number,
+  title?: string,
 ) {
-  return expectDue(ctx, S, r, spokenWant(S, text, t0, t1), t0, t1);
+  return expectDue(ctx, S, r, spokenWant(S, text, t0, t1), t0, t1, title);
 }
 
 export const siriCapture: Scenario = {
@@ -914,7 +922,15 @@ export const siriCapture: Scenario = {
         const t0 = Date.now();
         const text = `${line(ctx, 'call the bank typed')} at ${rollClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the typed line', { voice: false });
-        const due = await expectSpokenDue(ctx, S, text, r, t0, Date.now());
+        const due = await expectSpokenDue(
+          ctx,
+          S,
+          text,
+          r,
+          t0,
+          Date.now(),
+          line(ctx, 'call the bank typed'),
+        );
         if (due.day !== S.addDays(laDay(new Date(t0)), 1))
           throw new Error(`landed ${due.day}, not tomorrow`);
         if (!/\btomorrow\b/.test(r.say)) throw new Error(`say doesn’t say tomorrow: ${r.say}`);
@@ -931,7 +947,7 @@ export const siriCapture: Scenario = {
         const t0 = Date.now();
         const text = `${line(ctx, 'call the plumber typed')} at ${aheadClock(laClock(t0).hour)}`;
         const r = await capture(ctx, tokenB, text, 'the typed line ahead', { voice: false });
-        await expectSpokenDue(ctx, S, text, r, t0, Date.now());
+        await expectSpokenDue(ctx, S, text, r, t0, Date.now(), line(ctx, 'call the plumber typed'));
       },
     },
     {
@@ -953,7 +969,7 @@ export const siriCapture: Scenario = {
           day: S.addDays(S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour), 1),
           time: '17:00',
         }));
-        await expectDue(ctx, S, r, want, t0, t1);
+        await expectDue(ctx, S, r, want, t0, t1, line(ctx, 'call the dentist typed'));
       },
     },
     {
@@ -980,7 +996,7 @@ export const siriCapture: Scenario = {
         });
         // Kept and rolled differ in every hour but the day start's (a start after midnight): there tonight's 3 am
         // is both, so the row proves nothing that hour.
-        await expectDue(ctx, S, r, want, t0, t1);
+        await expectDue(ctx, S, r, want, t0, t1, line(ctx, 'pay the gas bill typed'));
       },
     },
     {
@@ -1018,8 +1034,8 @@ export const siriCapture: Scenario = {
         const want = spokenWant(S, text, t0, t1);
         if (!want.some((w) => w.day === dueDay && w.time === dueTime))
           throw new Error(`previewed ${dueDay} ${dueTime}, expected ${JSON.stringify(want[0])}`);
-        if (!title.includes(marker(ctx.nonce)) || TIME_WORDS.test(title))
-          throw new Error(`the title is “${title}” — the nonce kept, the clock taken out`);
+        if (title !== line(ctx, 'call the bank bar'))
+          throw new Error(`the title is “${title}”, want “${line(ctx, 'call the bank bar')}”`);
         await ctx.page
           .getByRole('button', { name: 'Save reviewed task' })
           .waitFor({ timeout: 10_000 });

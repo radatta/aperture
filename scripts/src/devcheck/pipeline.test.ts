@@ -279,6 +279,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [...categories.values()],
+      parseTask: async () => ({ ok: false as const, reason: 'unavailable' }),
       listPlansForDay: async () => [],
       listHabits: async () => [],
       listRolls: async () => [],

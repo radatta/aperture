@@ -777,7 +777,8 @@ describe('validateParsedTask — a day the typed line names', () => {
         line: 'pay rent today at 9am',
       },
     )!.input;
-    expect(kept).toMatchObject({ title: 'pay rent today', dueDay: '2026-11-17', dueTime: '09:00' });
+    // The day beside the due clock leaves the title with it (titleWords.ts).
+    expect(kept).toMatchObject({ title: 'pay rent', dueDay: '2026-11-17', dueTime: '09:00' });
   });
 
   it('a day start other than 4: "today" is the app day that start makes', () => {

@@ -16,6 +16,7 @@ import {
   MCP_CATEGORY_VIA,
   type DevAttachment,
   type DevCategory,
+  type DevParseResult,
   type DevPlace,
   type DevPlaceDigest,
   type DevSeries,
@@ -333,6 +334,7 @@ export function createMcpClient({
     listSeries: (includeStopped = false) =>
       data<DevSeries[]>('list_series', includeStopped ? { includeStopped: true } : {}),
     listCategories: () => data<DevCategory[]>('list_categories'),
+    parseTask: (text: string) => data<DevParseResult>('parse_task', { text }), // the real model; writes nothing
     // The digest plus each errand's id and status (lambdas/src/mcp/placeTools.ts) — a pure read, no heartbeat.
     listPlaceTasks: (place: string) =>
       data<DevPlaceDigest & { tasks: { id: string; title: string; status: string }[] }>(

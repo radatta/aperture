@@ -8,6 +8,7 @@ import { addDays, isDayKey, isTimeKey, weekdayOf } from './dates';
 import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
+import { keepTitleWords, type Range, type TitleMeta } from './titleWords';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
 import {
@@ -81,6 +82,10 @@ const CLOCK_IN_LINE =
 const DURATION_IN_LINE =
   /\b\d+(\.\d+)?\s*(m|mins?|minutes?|h|hrs?|hours?)\b|\b(an?|one|two|three|half an?)\s+hours?\b|\bhalf\s+hour\b/i;
 
+// Every match of a global regex, as line ranges.
+const rangesOf = (line: string, re: RegExp): Range[] =>
+  [...line.matchAll(re)].map((m) => [m.index, m.index + m[0].length] as const);
+
 // Something a spoken clock the voice grammar can't read is made of: a digit, an hour word, a quarter or a
 // half ("quarter past five", "half 6").
 const SPOKEN_CLOCK_HINT =
@@ -128,21 +133,22 @@ const WEEKDAY_WORDS = [
   'fri(day)?',
   'sat(urday)?',
 ];
-// Whether the typed words name this very day: its weekday, its month and day, "m/d" or "YYYY-MM-DD" — never a
-// day word on its own ("may need to…", "2nd interview", "month-end"), which the model's "today" for a bare clock
-// would otherwise freeze.
-function wordsNameDate(line: string, day: string): boolean {
-  if (line.includes(day)) return true;
+// Where the typed words name this very day: its weekday, its month and day, "m/d" or "YYYY-MM-DD" — never a day
+// word on its own ("may need to…", "2nd interview", "month-end"), which the model's "today" for a bare clock would
+// otherwise freeze.
+function dateRanges(line: string, day: string): Range[] {
   const [, m, d] = day.split('-').map(Number) as [number, number, number];
   const month = MONTH_WORDS[m - 1]!;
   const dd = `0?${d}(st|nd|rd|th)?`;
   return [
+    day.replace(/-/g, '\\-'),
     `\\b${WEEKDAY_WORDS[weekdayOf(day)]}\\b`,
     `\\b0?${m}/0?${d}(/\\d{2,4})?\\b`,
     `\\b${month}\\.?\\s*${dd}\\b`,
     `\\b${dd}\\s+(of\\s+)?${month}\\b`,
-  ].some((re) => new RegExp(re, 'i').test(line));
+  ].flatMap((re) => rangesOf(line, new RegExp(re, 'gi')));
 }
+const wordsNameDate = (line: string, day: string) => dateRanges(line, day).length > 0;
 // The day a typed line names (the maintainer, 2026-11-17): "today" / "tonight" is the app's today (its small
 // hours that day's night), "tomorrow" the day after — from the words, whatever day the model read; any other day
 // only when the words name the model's. Null: no day of its own, so the clock rolls.
@@ -268,7 +274,111 @@ export function validateParsedTask(
     else dropped.push('dropped estimate');
   }
 
+  // The title keeps every word the parse didn't use, and loses a due phrase it did (titleWords.ts).
+  if (line !== undefined) {
+    const meta = titleMeta(line, input, p.dueDay, ctx, categoryLabel, spoken);
+    if (meta) input.title = keepTitleWords(line, input.title, meta);
+  }
   return { input, categoryLabel, dropped };
+}
+
+// A word the parse used is often led by one that goes with it: "before 3pm", "due by fri", "this friday", "~30m".
+const CLOCK_LEAD = /(?:(?:\bdue\s+)?\b(?:at|by|before|until|till)\s+|\bdue\s+|@\s*)?$/i;
+const DAY_LEAD =
+  /(?:(?:\bdue\s+)?\b(?:by|on|before|until|till)\s+|\bdue\s+)?(?:\b(?:this|next)\s+)?$/i;
+const EST_LEAD = /(?:\bfor\s+|~\s*)?$/i;
+const led = (line: string, [s, e]: Range, lead: RegExp): Range => [
+  s - lead.exec(line.slice(0, s))![0].length,
+  e,
+];
+const CLOCKS = new RegExp(CLOCK_IN_LINE.source, 'gi');
+const DURATIONS = new RegExp(DURATION_IN_LINE.source, 'gi');
+const DAY_WORDS = /\b(today|tdy|tonight|tomorrow|tmrw?|tmw)\b/gi;
+const VOICE_PARTS = /\b(?:(?:this|tomorrow|in the)\s+)?morning\b|\btonight\b/gi;
+const OBJECT_OF = /\b(?:for|of|about|from)\s+$/i;
+const REMIND = /^\s*remind me(\s+to)?\b/i;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The line ranges the parse used, for keepTitleWords: a clock (a spoken time on voice) when a time was set, the
+// day words when a day was, a duration when an estimate was, the category word when that category was. Null — the
+// model's title stands — when a set field has no words to show for it (a day from "end of month", a clock from
+// "quarter past five") or notes took the overflow: words the model dropped then may have been the field's.
+function titleMeta(
+  line: string,
+  input: CreateTaskInput,
+  modelDay: unknown,
+  ctx: ParseContext,
+  categoryLabel: string | null,
+  spoken: SpokenTime | null,
+): TitleMeta | null {
+  if (input.notes) return null;
+  const clocks: Range[] = [];
+  if (input.dueTime) {
+    clocks.push(...rangesOf(line, CLOCKS));
+    if (ctx.voice && spoken) {
+      const at = line.indexOf(spoken.said);
+      if (at >= 0) clocks.push([at, at + spoken.said.length]);
+      clocks.push(...rangesOf(line, VOICE_PARTS));
+    }
+    if (!clocks.length) return null;
+  }
+  const days: Range[] = [];
+  const dayKnown = (d: unknown): d is string => str(d) && isDayKey(d);
+  if (input.dueDay || (ctx.voice && input.dueTime)) {
+    days.push(...rangesOf(line, DAY_WORDS));
+    for (const d of new Set([input.dueDay, modelDay].filter(dayKnown)))
+      days.push(...dateRanges(line, d));
+  }
+  // A day with no words for it is the model's reading of a phrase no list knows — unless it's the day a bare
+  // clock lands on ("call 9am": today, rolled or not).
+  const clockDay = input.dueTime != null && (modelDay == null || modelDay === ctx.today);
+  if (input.dueDay && !days.length && !clockDay) return null;
+  const meta: Range[] = [
+    ...clocks.map((r) => led(line, r, CLOCK_LEAD)),
+    ...days.map((r) => led(line, r, DAY_LEAD)),
+  ];
+  if (input.estimateMin) meta.push(...rangesOf(line, DURATIONS).map((r) => led(line, r, EST_LEAD)));
+  if (input.dueDay || input.dueTime) meta.push(...rangesOf(line, /\bdue\b/gi));
+  if (ctx.voice) {
+    const remind = REMIND.exec(line);
+    if (remind) meta.push([0, remind[0].length]);
+  }
+  // The category word: the model may drop it; with a separator after it ("aperture, …") it always goes.
+  let lead: Range | null = null;
+  if (categoryLabel) {
+    const label = escapeRe(categoryLabel.trim()).replace(/\s+/g, '\\s+');
+    const word = new RegExp(`^\\s*${label}(?![\\p{L}\\p{N}])`, 'iu').exec(line);
+    if (word) {
+      const sep = /^(?:\s*[,:]|\s+[-–—]+(?=\s))/.exec(line.slice(word[0].length));
+      meta.push([0, word[0].length + (sep?.[0].length ?? 0)]);
+      if (sep) lead = [0, word[0].length + sep[0].length];
+    }
+  }
+  return { meta, tail: dueTail(line, input, days), lead };
+}
+
+// A due phrase the parse used, taken out when it ends the title: the line's one stated clock when it is the due
+// time, led ("before 3pm", "until 5pm") or bare ("call the bank 6pm" — a bare clock mid-title, "watch 9pm show",
+// stays), and a day beside it or with its own connector ("today 3pm", "5pm friday", "by friday").
+function dueTail(line: string, input: CreateTaskInput, days: readonly Range[]): Range[] {
+  const spoken = spokenTimeIn(line);
+  if (spoken?.kind !== 'clock' || spoken.hhmm !== input.dueTime) return [];
+  const at = line.indexOf(spoken.said);
+  if (at < 0) return [];
+  // A second stated clock ("move standup at 3pm to 5pm") makes this one no surer than the other.
+  if (spokenTimeIn(line.slice(0, at) + line.slice(at + spoken.said.length))?.kind === 'clock')
+    return [];
+  const clock = led(line, [at, at + spoken.said.length], CLOCK_LEAD);
+  const near = (a: Range, b: Range) =>
+    /^\s*$/.test(line.slice(Math.min(a[1], b[1]), Math.max(a[0], b[0])));
+  // "this friday" alone isn't a connector, and a day the task is about stays: "prep for this friday 5pm".
+  const own = (d: Range) => /^(?:due|by|on|before|until|till)\b/i.test(line.slice(d[0]));
+  const day = input.dueDay
+    ? days
+        .map((d) => led(line, d, DAY_LEAD))
+        .filter((d) => (near(d, clock) || own(d)) && !OBJECT_OF.test(line.slice(0, d[0])))
+    : [];
+  return [clock, ...day];
 }
 
 // A known `@slug` word in a natural-language line ("shampoo @grocer"): the place, and the line without it.
