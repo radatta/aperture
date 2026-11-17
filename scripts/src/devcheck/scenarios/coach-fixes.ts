@@ -225,7 +225,7 @@ export const coachFixes: Scenario = {
       offDev: {
         file: 'app/src/pages/Recruiting/SittingDetail.test.tsx',
         test: 'a sitting with no review keeps its suggested help and cause after Doesn’t count',
-        why: 'same path as void-ui (proven on dev): the form reads the stored review the void writes; dev’s void sitting carries a review word only by chance of its timeline, so the suggestion is pinned by the jsdom test',
+        why: 'same path as void-ui (proven on dev): the form reads the stored review the void writes; dev’s void sitting is a clean accept, which suggests nothing, so the suggestion is pinned by the jsdom test on a failed first submit',
       },
     },
     {

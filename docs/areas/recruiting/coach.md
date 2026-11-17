@@ -332,8 +332,9 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
   inline, and a failed read is a `LoadError` with Retry. Tones are teal for done-clean and gold or muted
   otherwise, never red.
 - **The review form** adds five cause chips (one choice; a second tap clears it) and labels help's `solution` as
-  **Peeked**. With no review at all, it starts on a suggested `no-trace` (`suggestedCause`) when the trace was
-  skipped or missing at the first submit, or when that submit failed with no Run before it.
+  **Peeked**. With no review of the user's own (a void alone is none), it starts on a suggested `no-trace`
+  (`suggestedCause`) only after a failed first submit: when the code held no trace comment before it, or no Run came
+  first. A clean accept has no cause to suggest.
 - **Claude's writes while the form is open (F169).** Help and the cause are also set over MCP (`mark_peeked`,
   `set_cause_tag`). Until the user touches one, the field follows the stored review as it refreshes, and Save
   doesn't send it: `setSittingReview` keeps an absent help or cause (`mergeReview`). Only a first review's

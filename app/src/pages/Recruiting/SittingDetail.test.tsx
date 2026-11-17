@@ -765,11 +765,12 @@ describe('void and Claude’s notes', () => {
     const id = await idOf(api, 'two-sum');
     await api.patchSittingReview(id, { test: true });
     const review = (await api.getSitting(id)).sitting.review;
+    // The precondition: the seed's Two Sum has no review words, so the void wrote the only review.
+    expect(review).toMatchObject({ insight: null, mistakes: [], help: 'none', test: true });
     renderApp({ api, path: '/recruiting' });
     const row = await screen.findByRole('link', { name: /Two Sum/ });
     expect(within(row).getByText('Doesn’t count')).toBeTruthy();
-    if (review && !review.insight && !review.mistakes.length && review.help === 'none')
-      expect(within(row).queryByLabelText('reviewed')).toBeNull();
+    expect(within(row).queryByLabelText('reviewed')).toBeNull();
   });
 
   it('Claude’s notes show under the review, apart from it, and only when written', async () => {

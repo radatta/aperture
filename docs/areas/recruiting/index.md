@@ -174,7 +174,8 @@ commented-out literal assignments read as a trace.
 
 The fold sets `summary.commentTrace`: `traced` from a `trace-comment` row with nothing judged before it; the first
 Run or Submit sets `summary.firstJudgedAt` and `commentTrace` `none` unless already traced. Absent until judged, and
-on sittings folded before the rule, which count nowhere. The coach's `traced` (stats, the Patterns tab),
+on sittings folded before the rule, which count nowhere — except a sitting open across the deploy: its next fold reads
+`none`, its earlier snapshots never scanned (at most one, accepted). The coach's `traced` (stats, the Patterns tab),
 `live_sitting.trace`, `get_sitting.trace`, the review's suggested cause and the draft's trace signal all read it.
 
 ### Claude watches live

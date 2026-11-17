@@ -378,6 +378,7 @@ export const COACH_TOOLS: Tool[] = [
       let target: string;
       let onDay: string;
       let open = false; // a peek on an open sitting isn't an attempt until it ends: say when it will be due
+      let ignored: string | null = null;
       if (sittingId !== undefined) {
         // A sitting flagged as a test never counts: a peek on it would schedule nothing.
         const head = ((await ctx.dispatch('listSittings', [])) as Sitting[]).find(
@@ -405,6 +406,9 @@ export const COACH_TOOLS: Tool[] = [
           open = isSittingOpen(s, now(ctx));
           await ctx.dispatch('patchSittingReview', [s.id, { help: 'solution' }]);
           wrote = { sittingId: s.id };
+          // The sitting has its own title, difficulty and accept: say the logged-attempt fields went unused.
+          if (Object.keys(extra).length)
+            ignored = `${Object.keys(extra).join(', ')} ignored: that day has a sitting on it, which records them`;
         } else {
           const [a] = (await ctx.dispatch('logCoachAttempts', [
             [{ slug, day: on, help: 'solution', ...extra }],
@@ -419,6 +423,7 @@ export const COACH_TOOLS: Tool[] = [
         peeked: true,
         ...wrote,
         nextDue: (!open && nextDue(records, target)) || peekDue(onDay),
+        ...(ignored ? { note: ignored } : {}),
       };
     },
   },
@@ -528,8 +533,11 @@ export const COACH_TOOLS: Tool[] = [
       // Every sitting must exist before anything is written (a consistent read each, so one started seconds ago is
       // found); the legacy days are checked by setCoachVoids, which writes nothing on a refusal — and runs first.
       for (const x of sittings)
-        await (ctx.dispatch('getSitting', [x.id]) as Promise<unknown>).catch(() => {
-          throw new Error(`No sitting ${x.id} — list_sittings gives the ids`);
+        await (ctx.dispatch('getSitting', [x.id]) as Promise<unknown>).catch((e: unknown) => {
+          // Only a missing sitting is "No sitting"; a throttle or timeout surfaces as itself.
+          if (/Not found/.test(String((e as Error)?.message)))
+            throw new Error(`No sitting ${x.id} — list_sittings gives the ids`);
+          throw e;
         });
       const groups = legacy.length
         ? ((await ctx.dispatch('setCoachVoids', [legacy])) as LegacyGroup[])
@@ -576,7 +584,7 @@ export const COACH_TOOLS: Tool[] = [
             type: 'object',
             properties: {
               sittingId: { type: 'string' },
-              text: { type: ['string', 'null'], maxLength: CLAUDE_NOTES_MAX },
+              text: { type: ['string', 'null'] }, // ≤ CLAUDE_NOTES_MAX after whitespace folding (server-checked)
             },
             required: ['sittingId', 'text'],
             additionalProperties: false,

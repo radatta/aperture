@@ -1268,7 +1268,8 @@ function dayMode(view: CoachPlanModeView, ai: CoachDayAi | undefined): CoachPlan
   return {
     ...view,
     mode: kept,
-    line: `${name(kept)}: ${view.due} due · today’s pick; ${name(view.mode)} from tomorrow`,
+    // Under auto, tomorrow's mix is the replay's call, not a promise.
+    line: `${name(kept)}: ${view.due} due · today’s pick; ${view.setting === 'auto' ? 'auto' : name(view.mode)} from tomorrow`,
   };
 }
 
@@ -1884,6 +1885,8 @@ export function normalizeClaudeNotes(v: unknown): ClaudeNotesInput[] {
     if (typeof r.sittingId !== 'string' || !r.sittingId) throw new Error('sittingId is required');
     if (seen.has(r.sittingId)) throw new Error(`Sitting ${r.sittingId} is listed twice`);
     seen.add(r.sittingId);
+    // A missing text is a mistake, never a clear: only an explicit null (or blank) clears.
+    if (!('text' in r)) throw new Error('text is required — null clears the notes');
     return { sittingId: r.sittingId, text: claudeNotesText(r.text) };
   });
 }

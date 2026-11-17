@@ -382,6 +382,10 @@ describe("Claude's notes", () => {
       ]),
     ).toThrow(/twice/);
     expect(() => normalizeClaudeNotes([])).toThrow(/non-empty/);
+    expect(() => normalizeClaudeNotes([{ sittingId: 's' }])).toThrow(/text is required/);
+    expect(normalizeClaudeNotes([{ sittingId: 's', text: null }])).toEqual([
+      { sittingId: 's', text: null },
+    ]);
     expect(() =>
       normalizeClaudeNotes(
         Array.from({ length: 21 }, (_, i) => ({ sittingId: `s${i}`, text: 'a' })),

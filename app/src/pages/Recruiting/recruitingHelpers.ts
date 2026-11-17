@@ -130,11 +130,11 @@ export function dueLabel(dueDay: string, today: string): string {
   return fmtDayHeading(dueDay);
 }
 
-// The cause the review form starts on when none is saved: no trace, when the code held no trace comment before the
-// first judged event, or when the first submit failed with no run before it.
+// The cause the review form starts on when none is saved — only when the first submit failed (a clean accept has no
+// cause): no trace, when the code held no trace comment before the first judged event, or when no run came first.
 export function suggestedCause(s: Pick<Sitting, 'summary'>): CauseTag | null {
-  if (s.summary.commentTrace === 'none') return 'no-trace';
   const first = s.summary.firstSubmit;
+  if (first && first.verdict !== 'accepted' && s.summary.commentTrace === 'none') return 'no-trace';
   if (first && first.verdict !== 'accepted' && s.summary.runsBeforeFirstSubmit === 0)
     return 'no-trace';
   return null;
