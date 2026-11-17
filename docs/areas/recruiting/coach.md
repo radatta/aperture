@@ -117,6 +117,15 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
   dropped event never leaves a reader waiting; a result after that is stored as the timeout readers saw. A day
   already under way on the rules (a slot changed, or practice logged today) isn't picked: a pick landing then would
   replace a plan in use.
+- **The worker** (`lambdas/src/coachWorker.ts` → `runCoachPick` in `coach/pick.ts`; the infra is INFRA §1): its event
+  is `{userId, day, claimId}` (anything else refused before any read). It starts the claim (a conditional put of
+  `startedAt`), reads the day's input strongly consistent, builds the context, makes the call, runs the answer through
+  the guardrails, settles the row, then applies a focus change. An event for a claim that isn't its own, already
+  started or settled, or for a day with no row, returns `not-ours` with no call; a throw after the start settles
+  `unavailable`/`error` at once. One log line a run (`coach_worker`: the run, day and claim, never the user id), plus
+  `coach_pick` from the gateway and `coach_pick_rejected` with a guardrail's code. Callers reach it through a
+  `CoachPickInvoker` (`coach/invoker.ts`): live (an Event invoke), inline (tests, the local check), or disabled
+  (testMode, or no `COACH_WORKER_FN` on the stage — then no pick is ever `due`).
 - **Candidates** (`coachPickContext`): the rules' own pick first (with its kinds), then the carry-over, ≤ 15 due
   re-solves oldest first, ≤ 5 unseen in the focus, ≤ 3 stretch, and, while no focus pick is held, ≤ 3 unseen in each
   other top-3 pattern behind a focus change (`ifFocus`). Context: the rules' order, the last 14 days of attempts
