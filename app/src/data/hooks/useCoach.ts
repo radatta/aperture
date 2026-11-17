@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import type { CoachSlotInput, CoachToday, PatternId } from '@aperture/shared';
 import { useApi } from '../api-context';
@@ -10,6 +10,7 @@ import { qk } from '../queryKeys';
 // read that finds it `due` starts it (once per day per client — the server's claim is the real once), and the day is
 // polled while it's `pending`; a claim that never lands reads back as a fallback, so polling always ends.
 const PICK_POLL_MS = 2_500;
+const PICK_START = ['coach', 'pick-start'] as const;
 const started = new WeakMap<QueryClient, Set<string>>();
 export function useCoachToday(opts: { enabled?: boolean } = {}) {
   const api = useApi();
@@ -21,9 +22,16 @@ export function useCoachToday(opts: { enabled?: boolean } = {}) {
     refetchInterval: (q) => (q.state.data?.ai?.status === 'pending' ? PICK_POLL_MS : false),
   });
   const start = useMutation({
+    mutationKey: PICK_START,
     mutationFn: () => api.startCoachPick(),
     onSuccess: (today) => qc.setQueryData(qk.coachToday(), today),
   });
+  // Shared by every reader (Home's line and the card): the newest start's outcome, wherever it was fired.
+  const starts = useMutationState({
+    filters: { mutationKey: PICK_START },
+    select: (m) => m.state.status,
+  });
+  const startFailed = starts[starts.length - 1] === 'error';
   const day = query.data?.ai?.status === 'due' ? query.data.day : null;
   useEffect(() => {
     if (!day) return;
@@ -32,7 +40,7 @@ export function useCoachToday(opts: { enabled?: boolean } = {}) {
     seen.add(day);
     start.mutate();
   }, [day, qc, start]);
-  return { ...query, pickStart: start };
+  return { ...query, startFailed, retryStart: () => start.mutate() };
 }
 
 // Slot and floor writes hand back the day's plan after them: it lands in the cache as is.

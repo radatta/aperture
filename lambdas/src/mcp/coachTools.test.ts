@@ -214,11 +214,11 @@ describe('leetcode_today and the AI pick', () => {
     expect(out.slots.every((x: { why: unknown }) => x.why === null)).toBe(true);
   });
 
-  it('waits ~9 s for a pick still running, then answers pending with no slots', async () => {
+  it('waits ~8 s for a pick still running, then answers pending with no slots', async () => {
     await history();
     const { slept } = aiCtx('deferred', answer);
     const out = await call('leetcode_today');
-    expect(slept.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(9_000);
+    expect(slept.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(7_500);
     expect(out.ai).toMatchObject({ status: 'pending', next: expect.stringMatching(/again/) });
     expect(out.slots).toEqual([]);
   });

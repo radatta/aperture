@@ -115,7 +115,7 @@ export function coachPickContext(
     params,
   );
   const { focus, records, seen, ranks } = pools;
-  const locked = focus.source !== 'engine'; // a held pick (his or the AI's) runs its block out
+  const locked = focus.source !== 'engine'; // a held pick (the user's or the AI's) runs its block out
   const top3 = ranks.slice(0, 3).map((r) => r.pattern);
   const ruleOf = (kind: SlotKind, slug: string) =>
     pools.cands[kind].find((c) => c.slug === slug)?.reason ?? '';

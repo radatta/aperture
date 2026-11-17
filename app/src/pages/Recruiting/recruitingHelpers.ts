@@ -127,8 +127,8 @@ export const dueBeyondSlots = (t: Pick<CoachToday, 'due' | 'slots'>) =>
 
 // Home's morning line: "LeetCode · 4 today · +1 re-solve due". A floor day names its one problem; a day with
 // every slot done or skipped says so.
-// While the AI pick runs the slots are about to change, so the line says so — unless the start failed (the card then
-// shows the rules with a Retry, and so does this line).
+// While the AI pick runs the slots are about to change, so the line says so — unless the start failed: then the
+// line is the rules' (the card offers the Retry).
 export function coachGlance(t: CoachToday, startFailed = false): string {
   if (t.ai?.status === 'pending' || (t.ai?.status === 'due' && !startFailed))
     return 'LeetCode · picking today’s problems…';

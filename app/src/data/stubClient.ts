@@ -1209,7 +1209,8 @@ class StubClient implements ApiClient {
   }
   async startCoachPick(): Promise<CoachToday> {
     const ci = this.coachInput();
-    if (planDay(ci).ai?.status !== 'due') return planDay(ci);
+    const plan = planDay(ci);
+    if (plan.ai?.status !== 'due') return plan;
     const cur = ci.days.find((d) => d.day === ci.today) ?? this.blankCoachDay(ci);
     const claimId = this.ulid();
     const claimed = claimAiRow(cur, claimId, ci.now);

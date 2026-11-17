@@ -247,7 +247,7 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
       );
       return out;
     },
-    // His practice history goes to the API (the same posture and data class as the review draft); the log line
+    // The user's practice history goes to the API (the same posture and data class as the review draft); the log line
     // carries counts and tokens only, never the data or the answer.
     async coachPick(req: CoachPickRequest) {
       const started = Date.now();

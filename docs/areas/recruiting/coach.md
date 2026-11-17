@@ -114,18 +114,20 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
 - **Once, ever:** a day with any `ai` is never claimed again; a fallback stays a fallback. The worker starts only its
   own claim, once (`startedAt` fences a redelivered event), gives up without a call when its event waited over 20 s,
   and its writes land only on that claim. A claim older than 120 s reads as `fallback`/`timeout` with no write, so a
-  dropped event never leaves a reader waiting; a result after that is stored as the timeout readers saw.
+  dropped event never leaves a reader waiting; a result after that is stored as the timeout readers saw. A day
+  already under way on the rules (a slot changed, or practice logged today) isn't picked: a pick landing then would
+  replace a plan in use.
 - **Candidates** (`coachPickContext`): the rules' own pick first (with its kinds), then the carry-over, ≤ 15 due
   re-solves oldest first, ≤ 5 unseen in the focus, ≤ 3 stretch, and, while no focus pick is held, ≤ 3 unseen in each
   other top-3 pattern behind a focus change (`ifFocus`). Context: the rules' order, the last 14 days of attempts
   (outcome, help, cause, last error, minutes against the 30-minute cap, notes cut to 160), per-pattern rates,
-  momentum, the focus, the top 3. No ids. His practice data goes to the API, as for the review draft.
+  momentum, the focus, the top 3. No ids. The user's practice data goes to the API, as for the review draft.
 - **The call:** `claude-opus-5-5`, thinking on (it can't be off), effort `medium`, structured output (slugs and
   patterns enumerated), 60 s, 8,000 max tokens, no fallback model, no retry; one log line `coach_pick` with tokens,
   never text. Typical ≈ 4–7k in, 1–3k out: about $0.04–0.10 a day, worst ≈ $0.18.
 - **Guardrails, in code, never trusted to the model** (`validateCoachPick`): 1–4 unique picks, every one a
   candidate; the oldest due re-solve can't be skipped two AI days running (`mustInclude`, from the last `ok` day's
-  `oldestDue`); a focus change only to another top-3 pattern and never while a pick (his or the AI's) is held; an
+  `oldestDue`); a focus change only to another top-3 pattern and never while a pick (the user's or the AI's) is held; an
   `ifFocus` pick only with that change. Any break rejects the whole answer (`invalid`, the code in `detail`); only
   text is repaired (trimmed, a why ≤ 140, the note ≤ 240, an empty why → the rule's reason). The floor is always
   the rules'.
@@ -135,7 +137,8 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
   facts); swaps, skips, status and alternatives work as on any day, keyed by the pick; it isn't re-checked on later
   reads, so it holds all day. A focus change writes `CoachFocus` with `source: 'ai'` after the day row, and shows
   only while that focus holds. While `due` or `pending` the card and the thread show no slots ("Opus is picking
-  today's problems…"; the card polls every 2.5 s, `leetcode_today` waits ≤ 9 s), and a slot change is refused.
+  today's problems…"; the card polls every 2.5 s, `leetcode_today` waits ≤ 7.5 s); a slot change is refused while
+  `pending`. A focus change never overwrites one the user made during the call.
 - **Local and stub:** both run the worker's steps with `standInCoachPick` — the rules' own pick and reasons, no
   note — through the real guardrails; the stub's `aperture:stub:coachPick` key (`fallback`, `invalid`, `slow`)
   shows the other states.
@@ -153,7 +156,7 @@ LeetCode tags (`patternOfTags`), else `other`. The user's own problem history ne
 
 | Tool                                         | Kind   | Over                                                                                                                                            |
 | -------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 9 s; `ai` and each slot's `why`    |
+| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 7.5 s; `ai` and each slot's `why`  |
 | `live_sitting`                               | (read) | gains `slot` (kind or `off-plan`, reason, cap, `overCap`, the rules) and `trace` (`summary.coach.trace`, [index.md](index.md) → _Coach events_) |
 | `mark_peeked {slug \| sittingId, day?}`      | write  | that day's sitting's review → help `solution`; none → a peek attempt                                                                            |
 | `set_cause_tag {sittingId?, cause, peeked?}` | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                          |

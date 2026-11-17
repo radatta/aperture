@@ -319,6 +319,15 @@ describe('the overlay and the view', () => {
     expect(planDay(input({ attempts: [] })).ai).toBeNull();
   });
 
+  it('isn’t due once the day is under way on the rules: a slot change, or practice logged today', () => {
+    const swapped = dayRow(TODAY, undefined, [
+      { kind: 're-solve', action: 'skip', from: 'two-sum', to: null, at: NOW },
+    ]);
+    expect(planDay(input({ days: [swapped] })).ai).toBeNull();
+    const practised = [...history, manual('contains-duplicate', TODAY, 'clean')];
+    expect(planDay(input({ attempts: practised })).ai).toBeNull();
+  });
+
   it('shows pending, then a stale claim as a timeout with the notice', () => {
     const pending = dayRow(
       TODAY,

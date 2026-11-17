@@ -94,34 +94,50 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
   // Not this claim's start (another claim, already started, or settled): the day's one call isn't this event's.
   if (!mine) return 'not-ours';
 
-  const ci = await readCoachInput(repo, e.day, d.now());
-  const ctx = coachPickContext(ci);
+  // From here the day is started: any throw settles it now (with the cause), never a silent 120 s timeout.
   let res: CoachPickResult;
-  if (ctx.candidates.length < 2)
-    res = { ...fail('unavailable', 'no-candidates'), oldestDue: ctx.oldestDue };
-  else {
-    const out = await d.anthropic.coachPick({ ctx, timeoutMs: COACH_PICK_TIMEOUT_MS });
-    const meta = { model: out.model, usage: out.usage, ms: out.ms };
-    res = out.ok
-      ? pickResultOf(out.fields, ctx, meta)
-      : {
-          ok: false,
-          reason: out.reason,
-          detail: out.detail ?? null,
-          oldestDue: ctx.oldestDue,
-          ...meta,
-        };
-    if (!res.ok && res.reason === 'invalid')
-      log(JSON.stringify({ event: 'coach_pick_rejected', code: res.detail }));
+  let focusRead: CoachFocus | null = null;
+  try {
+    const ci = await readCoachInput(repo, e.day, d.now());
+    focusRead = ci.focus;
+    const ctx = coachPickContext(ci);
+    if (ctx.candidates.length < 2)
+      res = { ...fail('unavailable', 'no-candidates'), oldestDue: ctx.oldestDue };
+    else {
+      const out = await d.anthropic.coachPick({ ctx, timeoutMs: COACH_PICK_TIMEOUT_MS });
+      const meta = { model: out.model, usage: out.usage, ms: out.ms };
+      res = out.ok
+        ? pickResultOf(out.fields, ctx, meta)
+        : {
+            ok: false,
+            reason: out.reason,
+            detail: out.detail ?? null,
+            oldestDue: ctx.oldestDue,
+            ...meta,
+          };
+      if (!res.ok && res.reason === 'invalid')
+        log(JSON.stringify({ event: 'coach_pick_rejected', code: res.detail }));
+    }
+  } catch (err) {
+    log(JSON.stringify({ event: 'coach_pick_error', name: (err as Error).name }));
+    res = fail('unavailable', 'error');
   }
   const settled = await settle(res);
   if (settled.ai?.claimId !== e.claimId || settled.ai.settledAt === null) return 'lost';
-  if (settled.ai.status === 'ok' && settled.ai.focus) await applyFocus(d, e, settled.ai.focus.to);
+  if (settled.ai.status === 'ok' && settled.ai.focus)
+    await applyFocus(d, e, settled.ai.focus.to, focusRead);
   return settled.ai.status === 'ok' ? 'ok' : 'fallback';
 }
 
 // The focus change, after the day row: if this write fails the view shows no change (focusChange needs the row).
-async function applyFocus(d: CoachPickDeps, e: CoachPickEvent, pattern: CoachFocus['pattern']) {
+// Never over the user's own change: a focus row written since the context read it (a pick on the card during the
+// call) wins, and the view then shows no change.
+async function applyFocus(
+  d: CoachPickDeps,
+  e: CoachPickEvent,
+  pattern: CoachFocus['pattern'],
+  read: CoachFocus | null,
+) {
   const now = d.now();
   const fresh: CoachFocus = {
     id: 'focus',
@@ -136,7 +152,10 @@ async function applyFocus(d: CoachPickDeps, e: CoachPickEvent, pattern: CoachFoc
   await d.repo.casUpdate(
     d.repo.coachFocusShape(),
     'focus',
-    (cur) => ({ ...fresh, createdAt: cur.createdAt }),
+    (cur) => {
+      const unchanged = read ? cur.updatedAt === read.updatedAt : cur.deletedAt !== null;
+      return unchanged ? { ...fresh, createdAt: cur.createdAt } : null;
+    },
     now,
     { allowDeleted: true, create: () => fresh },
   );

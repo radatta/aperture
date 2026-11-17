@@ -317,6 +317,19 @@ describe('the AI pick on the Today card', () => {
     await waitFor(() => expect(within(c).queryByText(/Couldn’t start/)).toBeNull());
   });
 
+  it('a start that failed on Home shows the Retry on the card, never a stuck “picking”', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    vi.spyOn(api, 'startCoachPick').mockRejectedValueOnce(new Error('offline'));
+    renderApp({ api, path: '/' });
+    const line = await screen.findByText(/^LeetCode · \d+ today/);
+    await user.click(line);
+    const c = await card();
+    expect(await within(c).findByText(/Couldn’t start today’s AI pick/)).toBeTruthy();
+    expect(within(c).queryByText(/Opus is picking/)).toBeNull();
+    expect(within(c).getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
   it('with the switch off: the rules, no start, no notice', async () => {
     const api = stub(true);
     await api.updateSettings({ coachAiPick: false });

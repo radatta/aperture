@@ -117,7 +117,7 @@ export class FakeAnthropic implements AnthropicGateway {
   }
 
   pickCalls: CoachPickRequest[] = [];
-  nextPick: CoachPickCall | ((req: CoachPickRequest) => CoachPickCall) = {
+  nextPick: CoachPickCall | ((req: CoachPickRequest) => CoachPickCall | Promise<CoachPickCall>) = {
     ok: false,
     reason: 'unavailable',
     detail: 'FakeAnthropic: no pick set',

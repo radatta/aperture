@@ -1297,7 +1297,8 @@ export class BackendClient implements ApiClient {
   // winner whose invoke fails settles the day as a fallback at once, so nothing waits on a pick that never started.
   async startCoachPick(): Promise<CoachToday> {
     const ci = await this.coachInput(undefined, true);
-    if (planDay(ci).ai?.status !== 'due') return planDay(ci);
+    const plan = planDay(ci);
+    if (plan.ai?.status !== 'due') return plan;
     const claimId = this.ulid();
     const empty: CoachDay = {
       ...this.baseAt(ci.now),

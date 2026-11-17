@@ -160,6 +160,42 @@ describe('the AI pick, end to end', () => {
   });
 });
 
+describe('the worker’s edges', () => {
+  it('never moves a focus the user set during the call', async () => {
+    const { anthropic, b, events, run } = await setup({ mode: 'deferred' });
+    anthropic.nextPick = async (req: CoachPickRequest) => {
+      const to = req.ctx.top3.find((p) => p !== req.ctx.focus.pattern)!;
+      await b.setCoachFocus('graphs'); // the user, on the card, mid-call
+      return answer(() => ({
+        picks: [{ slug: 'two-sum', why: 'x' }],
+        note: null,
+        focus: { to, why: 'y' },
+      }))(req);
+    };
+    await b.startCoachPick();
+    expect(await run(events[0]!)).toBe('ok');
+    expect((await b.exportData()).coachFocus).toMatchObject({
+      pattern: 'graphs',
+      source: 'override',
+    });
+    expect((await b.getCoachToday()).ai?.focusChange).toBeNull();
+  });
+
+  it('a throw after the start settles the day at once, never a silent timeout', async () => {
+    const { anthropic, b, events, run } = await setup({ mode: 'deferred' });
+    anthropic.nextPick = () => {
+      throw new Error('boom');
+    };
+    await b.startCoachPick();
+    expect(await run(events[0]!)).toBe('fallback');
+    expect(await stored(b)).toMatchObject({
+      status: 'fallback',
+      reason: 'unavailable',
+      detail: 'error',
+    });
+  });
+});
+
 describe('the claim', () => {
   it('two readers at once: one claim, one invoke, one call even when the event is redelivered', async () => {
     const { anthropic, b, events, run } = await setup({ mode: 'deferred' });

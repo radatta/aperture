@@ -64,7 +64,7 @@ describe('coachPickUserContent', () => {
 });
 
 describe('coachPickOutputSchema', () => {
-  it('narrows slugs to the candidates and a focus change to the top three, all fields required', () => {
+  it('narrows slugs to the candidates and a focus change to the other top-three patterns, all fields required', () => {
     const s = coachPickOutputSchema(ctx) as {
       required: string[];
       properties: {
@@ -74,6 +74,12 @@ describe('coachPickOutputSchema', () => {
     };
     expect(s.required).toEqual(['picks', 'note', 'focus']);
     expect(s.properties.picks.items.properties.slug.enum).toEqual(['two-sum', 'valid-parentheses']);
-    expect(s.properties.focus.anyOf[0].properties.to.enum).toEqual(ctx.top3);
+    expect(s.properties.focus.anyOf[0].properties.to.enum).toEqual(['stack', 'two-pointers']);
+  });
+  it('offers no focus change while a pick is held', () => {
+    const held = { ...ctx, focus: { ...ctx.focus, locked: true } };
+    expect((coachPickOutputSchema(held) as { properties: { focus: unknown } }).properties.focus).toEqual({
+      type: 'null',
+    });
   });
 });

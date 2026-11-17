@@ -948,10 +948,19 @@ function aiViewOf(input: CoachInput, pools: CoachPools): CoachAiView | null {
     pickedAt: null,
   };
   if (!a) {
+    // A day already under way on the rules (a slot changed, or practice logged today) keeps them: a pick landing now
+    // would replace a plan in use and orphan its changes.
+    const today = input.today;
+    const underway =
+      (pools.row?.changes.length ?? 0) > 0 ||
+      pools.all.some((x) => x.day === today) ||
+      input.sittings.some((x) => x.day === today && x.review?.test !== true);
     const options = new Set(SLOT_KINDS.flatMap((k) => pools.cands[k].map((c) => c.slug)));
-    const due = input.aiCanStart === true && pools.before.length > 0 && options.size >= 2;
+    const due =
+      input.aiCanStart === true && !underway && pools.before.length > 0 && options.size >= 2;
     return due ? { ...base, status: 'due', source: 'rules' } : null;
   }
+
   if (aiPickPending(a, input.now)) return { ...base, status: 'pending', source: 'rules' };
   if (a.status === 'ok') {
     const f = pools.focus;

@@ -25,7 +25,7 @@ const ENGINE = ''; // the focus picker's "the coach's pick" option (clears the o
 // claude.ai drives the coaching; this is the glance, plus the few changes worth a tap: another problem, skip,
 // restore, a floor day, the focus override. Every write is reversible, and a refused one says why inline.
 export function TodayCard() {
-  const { data: today, isPending, isError, refetch, pickStart } = useCoachToday();
+  const { data: today, isPending, isError, refetch, startFailed, retryStart } = useCoachToday();
   const id = useId();
   return (
     <Card aria-labelledby={`${id}-h`} role="region" className="flex flex-col gap-3">
@@ -39,11 +39,7 @@ export function TodayCard() {
           Loading today’s plan…
         </Text>
       ) : (
-        <TodayBody
-          today={today}
-          startFailed={pickStart.isError}
-          onRetryStart={() => pickStart.mutate()}
-        />
+        <TodayBody today={today} startFailed={startFailed} onRetryStart={retryStart} />
       )}
     </Card>
   );
@@ -82,11 +78,22 @@ function TodayBody({
   }
   const change = (s: CoachSlot, action: 'swap' | 'skip' | 'restore') =>
     run(() => slot.mutateAsync({ slug: s.slug, action }));
-  const queue = [...dueBeyondSlots(today), ...today.next48h];
-  // While Opus picks, the rule slots aren't shown: the plan never shifts under a glance. A start that failed shows
-  // the rules, said out loud, with a Retry.
+  // While Opus picks, the rule slots aren't shown — nor what's due beyond them: the plan never shifts under a glance.
+  // A start that failed shows the rules, said out loud, with a Retry.
   const ai = today.ai;
   const picking = ai?.status === 'pending' || (ai?.status === 'due' && !startFailed);
+  const startNote = ai?.status === 'due' && startFailed;
+  const queue = picking ? today.next48h : [...dueBeyondSlots(today), ...today.next48h];
+  // One live region, always mounted, so each change is announced — the landing too (screen readers only).
+  const status = picking
+    ? 'Opus is picking today’s problems… usually under a minute.'
+    : startNote
+      ? 'Couldn’t start today’s AI pick — using the rules for now.'
+      : ai?.status === 'fallback'
+        ? ai.notice
+        : ai?.status === 'ok'
+          ? 'Opus picked today’s problems.'
+          : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -100,27 +107,23 @@ function TodayBody({
         </Text>
       )}
       {ai?.status === 'ok' && ai.note && <Text size="sm">{ai.note}</Text>}
-      {ai?.status === 'fallback' && ai.notice && (
+      <div
+        className={cx(
+          'flex flex-wrap items-center gap-2',
+          (!status || ai?.status === 'ok') && 'sr-only',
+        )}
+      >
         <p role="status" className="text-sm text-ink-muted">
-          {ai.notice}
+          {status}
         </p>
-      )}
-      {ai?.status === 'due' && startFailed && (
-        <div role="status" className="flex flex-wrap items-center gap-2">
-          <Text size="sm" tone="muted">
-            Couldn’t start today’s AI pick — using the rules for now.
-          </Text>
+        {startNote && (
           <Button variant="quiet" size="sm" onClick={onRetryStart}>
             Retry
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
-      {picking ? (
-        <p role="status" className="text-sm text-ink-muted">
-          Opus is picking today’s problems… usually under a minute.
-        </p>
-      ) : today.slots.length === 0 ? (
+      {picking ? null : today.slots.length === 0 ? (
         <Text size="sm" tone="muted">
           Nothing to plan today — every problem in reach is done or queued for later.
         </Text>

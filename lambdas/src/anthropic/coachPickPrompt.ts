@@ -38,6 +38,7 @@ export const coachPickUserContent = (ctx: CoachPickContext): string =>
 // code (validateCoachPick), since a schema is never the guardrail.
 export const coachPickOutputSchema = (ctx: CoachPickContext): Record<string, unknown> => {
   const nullable = (s: Record<string, unknown>) => ({ anyOf: [s, { type: 'null' }] });
+  const canMove = !ctx.focus.locked && ctx.top3.some((p) => p !== ctx.focus.pattern);
   return {
     type: 'object',
     additionalProperties: false,
@@ -56,12 +57,19 @@ export const coachPickOutputSchema = (ctx: CoachPickContext): Record<string, unk
         },
       },
       note: nullable({ type: 'string' }),
-      focus: nullable({
-        type: 'object',
-        additionalProperties: false,
-        required: ['to', 'why'],
-        properties: { to: { type: 'string', enum: [...ctx.top3] }, why: { type: 'string' } },
-      }),
+      // No focus change on offer (a pick is held, or no other top-3 pattern): null only, so the model can't spend
+      // the day on an answer the guardrails must reject.
+      focus: canMove
+        ? nullable({
+            type: 'object',
+            additionalProperties: false,
+            required: ['to', 'why'],
+            properties: {
+              to: { type: 'string', enum: ctx.top3.filter((p) => p !== ctx.focus.pattern) },
+              why: { type: 'string' },
+            },
+          })
+        : { type: 'null' },
     },
   };
 };

@@ -63,7 +63,7 @@ const TODAY_NOTE =
 const PICKING_NOTE =
   'Opus is still picking today’s problems: say so, call leetcode_today again in about 10 seconds, and don’t coach from a plan until it lands.';
 // leetcode_today waits this long for a pick it started (or found running) before answering `pending`.
-const PICK_WAIT_MS = 9_000;
+const PICK_WAIT_MS = 7_500; // inside the MCP Lambda's 15 s with the reads around it
 const PICK_POLL_MS = 1_500;
 
 const slotView = (s: CoachSlot, n: number) => ({
@@ -287,7 +287,7 @@ export const COACH_TOOLS: Tool[] = [
     description: [
       'The LeetCode coach’s plan for today — open every practice conversation with it ("what’s today?", "continue"). Up to 4 slots in order (carry-over, new in the focus pattern, re-solve due, stretch), each with its reason, 30-minute cap, status (open / in-progress / done / skipped) and easier alternatives; the focus pattern and its day of 3 with why; the floor (one problem that counts as showing up); sittings off the plan; the re-solves due and due in the next 48 h; momentum (active days of the last 7); ended sittings with no cause tag yet.',
       'Recomputed on every call from their sittings, so a new conversation picks up exactly where the last left off. `rules` says how to coach each slot kind; `note` how to talk about it.',
-      '`ai`: with their AI pick on, Opus picks the day’s slots once a day, from the rules’ candidates, with a `why` per slot and an optional day `note`; the first read of the day starts it (their setting, decided once — no yes needed) and this waits up to ~9 s for it. `ai.status` pending: slots are empty, call again shortly. `ai.notice`: the pick failed and the slots are the rules’.',
+      '`ai`: with their AI pick setting on, the FIRST call of the day starts that day’s AI pick — a write: it claims the day, spends the day’s one Opus call (picking the slots from the rules’ candidates, with a `why` each and an optional day `note`) and may move the focus — then waits up to ~8 s for it. `ai.status` pending: slots are empty, call again shortly. `ai.notice`: the pick failed and the slots are the rules’.',
       'Otherwise read-only.',
     ].join(' '),
     inputSchema: {
