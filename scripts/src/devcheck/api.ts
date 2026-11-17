@@ -319,7 +319,7 @@ export interface DevSitting {
 }
 export interface DevSittingReview {
   insight: string | null;
-  help: 'none' | 'hint' | 'solution';
+  help?: 'none' | 'hint' | 'solution'; // absent keeps the stored help (the coach's peek)
   mistakes: string[];
   howItWent: string | null;
   tags: string[];

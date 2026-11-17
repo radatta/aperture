@@ -632,6 +632,39 @@ describe('slot changes', () => {
     const after = planDay(input({ days: [row] }));
     const swapped = after.slots.find((s) => s.swappedFrom === stretch.slug)!;
     expect(swapped.slug).toBe(changes[0]!.to);
+    expect(swapped.kind).toBe('stretch'); // an unseen problem in a stretch slot stays a stretch
+    // A second swap takes its kind from the engine's slot, not from what was swapped in.
+    const seenTwo = new Set(['two-sum']);
+    const viaTried = applySlotChange(
+      after,
+      changes,
+      { slug: swapped.slug, action: 'swap', toSlug: 'two-sum' },
+      known,
+      seenTwo,
+      NOW,
+    );
+    const tried = planDay(
+      input({ sittings: [clean('two-sum', day(-1))], days: [{ ...row, changes: viaTried }] }),
+    );
+    expect(tried.slots.find((s) => s.swappedFrom === stretch.slug)).toMatchObject({
+      slug: 'two-sum',
+      kind: 're-solve',
+    });
+    const back = applySlotChange(
+      tried,
+      viaTried,
+      { slug: 'two-sum', action: 'swap', toSlug: 'happy-number' },
+      known,
+      seenTwo,
+      NOW,
+    );
+    const third = planDay(
+      input({ sittings: [clean('two-sum', day(-1))], days: [{ ...row, changes: back }] }),
+    );
+    expect(third.slots.find((s) => s.swappedFrom === stretch.slug)).toMatchObject({
+      slug: 'happy-number',
+      kind: 'stretch',
+    });
     expect(
       applySlotChange(after, changes, { slug: swapped.slug, action: 'restore' }, known, seen, NOW),
     ).toEqual([]);

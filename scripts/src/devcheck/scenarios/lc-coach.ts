@@ -123,7 +123,7 @@ export const lcCoach: Scenario = {
       id: 'mcp-peek-sitting',
       entry: 'mcp',
       kind: 'nominal',
-      what: '"I looked at the solution" mid-sitting — mark_peeked on the open sitting records it and says the re-solve is due tomorrow',
+      what: '"I looked at the solution" mid-sitting — mark_peeked on the open sitting records it and says the re-solve is due tomorrow; a form save after it without help keeps the peek',
     },
     {
       id: 'mcp-cause',
@@ -373,6 +373,17 @@ export const lcCoach: Scenario = {
         const review = c.review as { cause?: string; help?: string } | null;
         if (review?.cause !== 'boundary' || review.help !== 'solution')
           fail(`set_cause_tag: ${JSON.stringify(c)}`);
+        // The app form's Save landing after the peek, without help: the peek and the cause stay.
+        const saved = await ctx.api.writes.setSittingReview(state.offId, {
+          insight: `devcheck ${ctx.nonce} off`,
+          mistakes: [],
+          howItWent: null,
+          tags: [],
+          draftUsed: false,
+        });
+        const kept = saved.review as { cause?: string; help?: string } | null | undefined;
+        if (kept?.help !== 'solution' || kept.cause !== 'boundary')
+          fail(`a save without help: ${JSON.stringify(kept)}`);
       },
     },
     {
@@ -430,6 +441,9 @@ export const lcCoach: Scenario = {
         const swapped =
           t1.slots.find((s) => s.swappedFrom === slot.slug && s.slug !== slot.slug) ??
           fail(`no swapped slot: ${slugs(t1).join(',')}`);
+        // The default swap takes an unseen problem: a stretch slot stays a stretch, any other is new.
+        const wantKind = slot.kind === 'stretch' ? 'stretch' : 'new';
+        if (swapped.kind !== wantKind) fail(`swapped-in kind ${swapped.kind}, want ${wantKind}`);
         const t2 = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
           slug: swapped.slug,
           action: 'restore',

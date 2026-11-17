@@ -521,8 +521,11 @@ export function easierIn(
 }
 
 // A re-solve slot's reason: today's rule first, then why it's due.
-const resolveReason = (r: ProblemRecord, today: string) =>
-  `Re-solve today: blank editor, no hints. Due since ${fmtSpokenDay(r.schedule!.dueDay, today)} (${r.schedule!.track === 'peeked' ? 'peeked or failed' : 'clean'} track, step ${r.schedule!.step + 1}); last tried ${fmtSpokenDay(r.lastDay, today)}`;
+const resolveReason = (r: ProblemRecord, today: string) => {
+  const due = r.schedule!.dueDay;
+  const when = due === today ? 'Due today' : `Due since ${fmtSpokenDay(due, today)}`;
+  return `Re-solve today: blank editor, no hints. ${when} (${r.schedule!.track === 'peeked' ? 'peeked or failed' : 'clean'} track, step ${r.schedule!.step + 1}); last tried ${fmtSpokenDay(r.lastDay, today)}`;
+};
 const queueItem = (r: ProblemRecord, h: number): QueueItem => ({
   slug: r.slug,
   title: r.title,
@@ -676,6 +679,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   // when it replaced one.
   const dueSlugs = new Set(dueNow.map((r) => r.slug));
   function swappedIn(was: SlotKind, slug: string, from: string): CoachSlot {
+    // (The carry-over is always a slot already, so a swap can't target it: kept as a guard.)
     const kind: SlotKind = carrySlugs.has(slug)
       ? 'carry-over'
       : dueSlugs.has(slug) || seen.has(slug)
@@ -700,7 +704,8 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   // The day's changes, by the engine's pick: a swap replaces it (the original stays in its queue), a skip marks it.
   const row = input.days.find((d) => d.day === today) ?? null;
   for (const c of row?.changes ?? []) {
-    // A change names its slot by the engine's pick alone (picks are unique across slots); its `kind` is history.
+    // A change names its slot by the engine's pick alone (picks are unique across slots); its `kind` is the slot's
+    // as shown when it was changed — a record, never matched on.
     const i = slots.findIndex((s) => (s.swappedFrom ?? s.slug) === c.from);
     if (i < 0) continue;
     if (c.action === 'skip') slots[i] = { ...slots[i]!, status: 'skipped' };
