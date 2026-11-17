@@ -21,10 +21,10 @@ async function setup() {
   });
   return { doc, backend, now };
 }
-const legacyItems = async (doc: InMemoryDoc) =>
-  JSON.stringify(await doc.query(pk('u1'), 'lc#'));
+const legacyItems = async (doc: InMemoryDoc) => JSON.stringify(await doc.query(pk('u1'), 'lc#'));
 // Synthetic: a docstring that names an input, then walks it.
-const TRACE = '"""\nnums = [3, 4], target = 7\ni=0: 3 -> add\ni=1: 4 -> found\n"""\nclass Solution: pass';
+const TRACE =
+  '"""\nnums = [3, 4], target = 7\ni=0: 3 -> add\ni=1: 4 -> found\n"""\nclass Solution: pass';
 
 describe('the legacy rows on the table', () => {
   it('every coach write leaves the lc# rows exactly as they were', async () => {

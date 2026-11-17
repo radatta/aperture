@@ -994,7 +994,10 @@ describe('inputs', () => {
       [{ slug: 'counting-bits', outcome: 'clean', help: 'hint' }, /no help/],
       [{ slug: 'counting-bits', outcome: 'clean', help: 'solution' }, /no help/],
       [{ slug: 'counting-bits', outcome: 'solved', accepted: true }, /only for a peek/],
-      [{ slug: 'counting-bits', help: 'solution', outcome: 'solved', accepted: false }, /contradicts/],
+      [
+        { slug: 'counting-bits', help: 'solution', outcome: 'solved', accepted: false },
+        /contradicts/,
+      ],
       [{ slug: 'counting-bits' }, /outcome/],
       [{ slug: 'counting-bits', outcome: 'clean', difficulty: 'Brutal' }, /difficulty/],
       [{ slug: 'counting-bits', outcome: 'clean', day: day(1) }, /after today/],
@@ -1006,10 +1009,12 @@ describe('inputs', () => {
     for (const [v, re] of bad) expect(() => normalizeCoachAttempt(v, TODAY)).toThrow(re);
   });
   it('a peek in one call: help solution lands failed, and a solved peek keeps its accept', () => {
-    expect(normalizeCoachAttempt({ slug: 'counting-bits', help: 'solution' }, TODAY)).toMatchObject({
-      outcome: 'failed',
-      help: 'solution',
-    });
+    expect(normalizeCoachAttempt({ slug: 'counting-bits', help: 'solution' }, TODAY)).toMatchObject(
+      {
+        outcome: 'failed',
+        help: 'solution',
+      },
+    );
     const solved = normalizeCoachAttempt(
       { slug: 'counting-bits', help: 'solution', outcome: 'solved' },
       TODAY,
@@ -1025,7 +1030,12 @@ describe('inputs', () => {
   it('an off-catalog title and difficulty are kept', () => {
     expect(
       normalizeCoachAttempt(
-        { slug: 'made-up-problem', outcome: 'solved', title: 'Made Up Problem', difficulty: 'Hard' },
+        {
+          slug: 'made-up-problem',
+          outcome: 'solved',
+          title: 'Made Up Problem',
+          difficulty: 'Hard',
+        },
         TODAY,
       ),
     ).toMatchObject({ title: 'Made Up Problem', difficulty: 'Hard' });

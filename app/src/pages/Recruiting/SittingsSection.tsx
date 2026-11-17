@@ -1,4 +1,10 @@
-import { fmtDayHeading, fmtDuration, hasReviewWords, sittingMinutes, todayKey } from '@aperture/shared';
+import {
+  fmtDayHeading,
+  fmtDuration,
+  hasReviewWords,
+  sittingMinutes,
+  todayKey,
+} from '@aperture/shared';
 import type { Sitting } from '@aperture/shared';
 import { Link } from 'react-router';
 import { EmptyState } from '../../components/EmptyState';

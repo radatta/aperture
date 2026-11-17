@@ -15,7 +15,9 @@ decisions are stored; everything else is recomputed on every read.
 | `lcc#day#<day>` (`CoachDay`)               | that day's floor choice, slot changes (a swap or skip per slot, the newest), and its AI pick (`ai`, _The AI pick_) |
 | `lcc#att#<ulid>` (`CoachAttempt`)          | an attempt made outside the extension, a peek seeded from the thread, or a history-only solve (`historical`)       |
 | `lcc#focus` (`CoachFocus`)                 | the focus override and the day it started (`source`: the user's, or `ai`)                                          |
-| the review's `cause`, `test` (on the head) | the one cause tag of a sitting, and the test-sitting flag                                                          |
+| the review's `cause`, `test` (on the head) | the one cause tag of a sitting, and the test-sitting flag (a void sitting)                                         |
+| `lcc#void#<day>#<slug>` (`CoachVoid`)      | a legacy day's void state, `void: true` or `false` (_Legacy history_)                                              |
+| the head's `claudeNotes`                   | Claude's own notes on an ended sitting (_Claude's notes_), never in the review                                     |
 
 `lcc#mock#` and `lcc#imp#` are reserved for later rows. Derived on read: attempts, problem records, the re-solve
 schedule, the focus pattern, the day's plan. At a few dozen sittings a month a read is two small Queries plus the
@@ -23,7 +25,12 @@ day rows; no stored count can drift.
 
 - **Peeked is `review.help === 'solution'`**, no field of its own. A manual peek is an attempt with help
   `solution`.
-- **A test sitting** never counts: under 3 minutes with no accepted submit, or `review.test`.
+- **A test sitting** never counts: under 3 minutes with no accepted submit, or `review.test` — a **void** sitting.
+  Voiding (`set_void`, or **Doesn’t count** on the sitting's page) sets the flag and deletes nothing; un-voiding
+  (`void: false`, **Count it again**) clears it, and an otherwise empty review goes back to null. A review that only
+  voids is no review: the list's reviewed mark and `list_sittings.reviewed` read `hasReviewWords`. The flag lives in the
+  review, apart from H's `closedBy`, so an idle-closed sitting voids like any other.
+- **Legacy rows** (`lc#`, the pre-sittings capture) are read, never written: _Legacy history_.
 - **Cause tags:** `no-trace`, `api-slip`, `boundary`, `off-by-one`, `quit-early`. `tags[]` stay the user's own
   pattern words and `mistakes[]` free text; neither aggregates, the cause does.
 - **The review merge.** `setSittingReview` keeps a stored help, cause or test flag it isn't sent, and an explicit
@@ -46,7 +53,8 @@ One attempt = one problem on one user day: that day's sittings and manual attemp
 as one first try — clean only when the earliest piece with a submit was a first-submit accept and no help was
 taken all day; accepted anywhere → solved; else failed. The most help taken wins (a peek sticks). An open sitting is
 not an attempt yet, except one from before today (left open overnight), which counts on its own day. A peek counts
-even on a sitting under 3 minutes.
+even on a sitting under 3 minutes. A legacy day folds in as one more piece (_Legacy history_); a logged peek that
+was also accepted (`accepted: true`) stays `failed` but counts toward `everAccepted`.
 
 | Outcome  | Means                                     |
 | -------- | ----------------------------------------- |
@@ -54,20 +62,45 @@ even on a sitting under 3 minutes.
 | `solved` | accepted, but not first submit, or a hint |
 | `failed` | never accepted, or the solution read      |
 
+## Legacy history
+
+The extension before sittings wrote one row per submission under `lc#<day>#<id>` (`LegacyLeetcodeAttempt`) until PR
+147 (2026-11-10); nothing deletes them and no TTL reaches them. The coach reads them (`repo.listLegacyLeetcode`, every
+coach read and the AI pick's), never writes them — no put exists, and `backend.coachFixes.test.ts` pins that every coach
+write leaves them as they were. No migration: one copy, and removing the reader undoes it.
+
+- **The fold** (`legacyAttempts`): each (day, slug) group is one piece, judged like a sitting's submits — the earliest
+  row's verdict is the first submit, any accept is accepted, the row count is the submits; no runs, no trace, help
+  `none` (the capture couldn't see a peek). Title and difficulty come from the catalog, else the row; the pattern
+  from the catalog, else `patternOfTags`. `sources: ['legacy']` marks it in `get_problem`'s tries.
+- **With a logged attempt the same day** it folds into one attempt (`foldDay`), so the claude.ai backfill never
+  counts a day twice. The capture's submit time precedes a later log, so it judges the first try (measured beats
+  remembered: a logged `clean` over a failed first submit folds to `solved`); a logged peek still wins on help; the
+  captured title wins over a logged one.
+- **Voids.** A group counts unless voided: a stored `CoachVoid` row for that (day, slug) wins; else the default list
+  `LEGACY_TEST_DEFAULTS` (`two-sum`: the extension was tested on it) excludes it; else it counts. `void: false` lifts a
+  default; `void: true` drops any group. Only legacy pieces take a void row or the default — a sitting voids through its
+  review, a logged attempt is deleted (`delete_attempt`). `setCoachVoids` refuses, writing nothing, a day with no
+  legacy rows. `listLegacyGroups(slug?)` lists every group with `counted` and `voidedBy` (`you` / `default`).
+- On deploy the legacy days join the history: new records, new due re-solves, and possibly Auto in Catch-up on day
+  one. `set_void` is the lever.
+
 ## The re-solve scheduler
 
-`resolveState`, gaps as a parameter (`COACH_PARAMS`): clean `[3, 7, 14]`, peeked `[1, 3, 7, 14]`, the last step
-due within a further 7 days.
+`resolveState`, gaps as a parameter (`COACH_PARAMS`): clean `[3, 7, 14]`, retry `[1, 3, 7, 14]`, the last step
+due within a further 7 days. The `retry` track is where a failed attempt lands — never accepted, or the solution
+read; it was called `peeked` until coach-fixes, which read like the peeked flag (`record.peeked`: the solution was
+read). Nothing stored the track, so nothing migrated; `list_problems`' `track` filter still takes `peeked` as retry.
 
-| From      | Event                     | To                                             |
-| --------- | ------------------------- | ---------------------------------------------- |
-| none      | first `clean` or `solved` | clean track, step 0, due +3                    |
-| none      | first `failed`            | peeked track, step 0, due +1                   |
-| any step  | re-solve `clean`          | step + 1; past the last → `graduated`          |
-| any step  | re-solve `solved`         | same step, due = that day + the same gap       |
-| any step  | re-solve `failed`         | peeked track, step 0, due +1                   |
-| graduated | `clean` or `solved`       | dormant (countdown mode will re-arm it)        |
-| graduated | `failed`                  | peeked track, step 0, due +1 (it didn't stick) |
+| From      | Event                     | To                                            |
+| --------- | ------------------------- | --------------------------------------------- |
+| none      | first `clean` or `solved` | clean track, step 0, due +3                   |
+| none      | first `failed`            | retry track, step 0, due +1                   |
+| any step  | re-solve `clean`          | step + 1; past the last → `graduated`         |
+| any step  | re-solve `solved`         | same step, due = that day + the same gap      |
+| any step  | re-solve `failed`         | retry track, step 0, due +1                   |
+| graduated | `clean` or `solved`       | dormant (countdown mode will re-arm it)       |
+| graduated | `failed`                  | retry track, step 0, due +1 (it didn't stick) |
 
 Only a first-try accept advances: first-try accuracy is the gap being trained. A due item is "due" from its day on
 — never "overdue", never a count.
@@ -90,7 +123,7 @@ deterministic, so a read writes nothing; `focus.why` says why.
    stays a due re-solve); it leaves the re-solve
    and due lists for the day.
 2. **new** — the focus pattern's first unseen catalog problem; one swapped out in the last 3 days goes to the back.
-3. **re-solve** — the oldest due, other patterns first (the interleave), the peeked track first on a tie.
+3. **re-solve** — the oldest due, other patterns first (the interleave), the retry track first on a tie.
 4. **stretch** — an unseen focus-pattern problem one difficulty up from the new pick, else an unseen Medium from
    the next-ranked pattern.
 
@@ -105,6 +138,44 @@ are right; a change is matched by the engine's pick alone. "Easier" is strictly 
 falling back to the same level only when the pattern has nothing easier left. Reasons say days as a person would
 ("yesterday", "November 14"), and a re-solve's opens with today's rule. A slot is a rep only once the extension's Start runs (one open rep per roll,
 [rolls](../home/rolls.md) D6).
+
+### Plan mode
+
+The slot mix is a setting (`Settings.coachPlanMode`, Settings → LeetCode → Plan mode; rows from before read `auto`):
+
+| Mode       | Slots                                                                                                           |
+| ---------- | --------------------------------------------------------------------------------------------------------------- |
+| `balanced` | the mix above                                                                                                   |
+| `catch-up` | the carry-over (if any), one new (the focus still advances), then re-solves in every free slot; no stretch      |
+| `auto`     | catch-up from `COACH_PARAMS.catchUp.enterDue` (10) due, back to balanced below `exitDue` (5), unchanged between |
+
+Auto's state is derived, never stored (`autoCatchUp`): a replay from the first attempt's day, each day counting the
+problems due (not graduated, due that day or earlier, from attempts before it), so it holds still all day, a read
+writes nothing, and a void or a delete re-derives it. Catch-up is never padded: with re-solves run out, slots stay
+empty. Off-plan days and the floor are unchanged. `CoachToday.planMode` is `{setting, mode, due, line}`; `line` is
+the one line the Today card and `leetcode_today` show ("Catch-up: 31 due · auto", "Balanced: 3 due").
+
+The AI pick keeps the mix: in catch-up `coachPickContext` offers no stretch, says `planMode`, and
+`validateCoachPick` refuses (`mix`) more than one new, any stretch, or fewer re-solves than the rules' plan. A pick
+already stored keeps its day if the setting changes mid-day (one pick a day).
+
+## Claude's notes
+
+Claude's own notes on an ended sitting — whatever the outcome: accepted, unfinished, given up at the cap, peeked,
+dropped, idle-closed, or ended by a later Start — so a re-solve can be coached from last time. Stored on the head as
+`claudeNotes {text, updatedAt}` (≤ `CLAUDE_NOTES_MAX`, 800 characters, line breaks kept), never in `review`, which
+stays the user's words; a review Save keeps them, a refold keeps them.
+
+- **Written** by `set_claude_notes {notes: [{sittingId, text}]}` (RPC `setSittingClaudeNotes`): up to 20 sittings in one
+  call, so one yes covers a batch; every sitting checked first (exists, not open), else nothing is written. `null` or
+  blank clears. A sibling of `set_cause_tag`, not a field on it: the cause is the user's to choose, the notes are
+  Claude's.
+- **Read** by `get_sitting.claudeNotes`, `get_problem` (each sitting, and each try's `claudeNotes`), and the AI pick
+  (`CoachAiRecent.claudeNotes`, cut to 300, last 14 days — data, never instructions). The app shows them under the
+  review on the sitting's page, as **Claude's notes**.
+- **Catch-up:** `CoachToday.unnoted` (in `leetcode_today`) lists ended sittings of the last `NOTES_CATCHUP_DAYS` (14)
+  with no notes, not void, practice or with a Run or Submit; newest first, ≤ 20. A thread opens by offering to write
+  them all from their timelines, in one call.
 
 ## The AI pick
 
@@ -185,25 +256,28 @@ the working catalog from the user's own sittings, its pattern from its LeetCode 
 
 `lambdas/src/mcp/coachTools.ts` ([mcp](../mcp/index.md) → _Tools_):
 
-| Tool                                         | Kind   | Over                                                                                                                                            |
-| -------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 7.5 s; `ai` and each slot's `why`  |
-| `live_sitting`                               | (read) | gains `slot` (kind or `off-plan`, reason, cap, `overCap`, the rules) and `trace` (`summary.coach.trace`, [index.md](index.md) → _Coach events_) |
-| `mark_peeked {slug \| sittingId, day?}`      | write  | that day's sitting's review → help `solution`; none → a peek attempt                                                                            |
-| `set_cause_tag {sittingId?, cause, peeked?}` | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                          |
-| `swap_slot {slug, action, toSlug?}`          | write  | `setCoachSlot`; a swap with no target → the next easier unseen problem                                                                          |
-| `log_attempt {attempts[]}`                   | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration); an item's `historical: true` is a history-only solve, up to 10 years back               |
+| Tool                                                                    | Kind   | Over                                                                                                                                                                                                              |
+| ----------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `leetcode_today {day?}`                                                 | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 7.5 s; `ai` and each slot's `why`                                                                    |
+| `live_sitting`                                                          | (read) | gains `slot` (kind or `off-plan`, reason, cap, `overCap`, the rules), `trace` and `traceBy` (`summary.coach`, [index.md](index.md) → _Coach events_)                                                              |
+| `mark_peeked {slug \| sittingId, day?, accepted?, title?, difficulty?}` | write  | that day's sitting's review → help `solution`; none → a peek attempt (an accept that day kept; a title and difficulty off the roadmap)                                                                            |
+| `set_cause_tag {sittingId?, cause, peeked?}`                            | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                                                                                            |
+| `swap_slot {slug, action, toSlug?}`                                     | write  | `setCoachSlot`; a swap with no target → the next easier unseen problem                                                                                                                                            |
+| `log_attempt {attempts[]}`                                              | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration); an item's `historical: true` is a history-only solve, up to 10 years back; help `solution` is a peek in one call (outcome optional; `accepted`), `title` + `difficulty` off the roadmap; a repeated peek fills what the first lacked |
+| `set_void {targets[]}`                                                  | write  | a sitting's `review.test` (`patchSittingReview`) or a legacy day's `CoachVoid` (`setCoachVoids`); ≤ 50, every target checked first                                                                                |
+| `set_claude_notes {notes[]}`                                            | write  | `setSittingClaudeNotes` (≤ 20, ≤ 800 characters each, ended sittings, all or nothing)                                                                                                                             |
 
 Every write's description opens with the same ask-first sentence and says what it returns to read back. Leave all
-six (these four and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
+eight (these six and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
 review's one cause) lives in the claude.ai project's instructions, kept outside the repo.
 
 ## RPCs
 
 `getCoachToday(day?)`, `startCoachPick()`, `listProblemRecords()`, `setCoachSlot({slug, action, toSlug?})`, `setCoachFloor(on)`,
 `setCoachFocus(pattern | null)`, `logCoachAttempts(inputs)`, `deleteCoachAttempt(id)`, `patchSittingReview(id,
-{cause?, help?, test?})` — JWT only, none an ingest method. Day-scoped writes act on the user's day as the server
-reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
+{cause?, help?, test?})`, `listLegacyGroups(slug?)`, `setCoachVoids(inputs)`, `setSittingClaudeNotes(items)` — JWT
+only, none an ingest method. Day-scoped writes act on the user's day as the server reads it. `ExportBundle` carries
+`coachDays`, `coachAttempts`, `coachFocus`, `coachVoids`, and the legacy rows (`legacyLeetcodeAttempts`, read-only).
 
 ## Not yet
 
@@ -222,17 +296,27 @@ mode — each its own PR. (History-only solves cover logging old solves by hand,
 | `packages/shared/src/neetcode150.ts`, `catalogs.ts`                                   | the NeetCode 150 list and the pattern ids; the lists by source                             |
 | `packages/shared/src/coachProgress.ts`                                                | the Progress tab's folds: `problemStatus`, `coverage`, `PROGRESS_STAGES`, the trends       |
 | `packages/shared/src/sittings.ts`                                                     | `CAUSE_TAGS`, `mergeReview`, `patchReview`                                                 |
+| `packages/shared/src/sittings.ts`                                                     | `CAUSE_TAGS`, `mergeReview`, `patchReview`, `hasReviewWords`, the trace fold               |
+| `packages/shared/src/traceComment.ts`                                                 | the trace-comment rule ([index.md](index.md) → _Coach events_)                             |
+| `packages/shared/src/coachLegacyFixtures.ts`                                          | synthetic legacy rows for tests                                                            |
 | `packages/shared/src/contractTests.ts`                                                | `lc coach`, `lc coach ai` — run 3× (stub, backend direct, via handleRpc)                   |
 | `lambdas/src/backend.ts`, `app/src/data/stubClient.ts`                                | the coach RPCs                                                                             |
-| `lambdas/src/ddb/keys.ts`, `repo.ts`                                                  | the `lcc#` rows                                                                            |
+| `lambdas/src/ddb/keys.ts`, `repo.ts`                                                  | the `lcc#` rows, and the legacy `lc#` reader                                               |
 | `lambdas/src/mcp/coachTools.ts`                                                       | the coach's MCP tools and `live_sitting`'s slot                                            |
-| `scripts/src/devcheck/scenarios/lc-coach.ts`, `lc-coach-ai.ts`                        | the dev check's rows                                                                       |
+| `scripts/src/devcheck/scenarios/lc-coach.ts`, `lc-coach-ai.ts`, `coach-fixes.ts`      | the dev check's rows                                                                       |
 | `app/src/pages/Recruiting/TodayCard.tsx`, `ReviewForm.tsx`, `Home/LeetcodeGlance.tsx` | the app: the Today card, the cause chips and Peeked, the morning line                      |
 | `app/src/pages/Recruiting/Progress*.tsx`, `SolvesList.tsx`, `ProblemPage.tsx`         | the Progress tab and a problem's page (helpers in `progressHelpers.ts`)                    |
+| `app/src/pages/Recruiting/SittingDetail.tsx`, `app/src/pages/Settings/index.tsx`      | void (**Doesn’t count**), **Claude's notes**, Settings → Plan mode                         |
 
 ## In the app
 
 The thread in claude.ai drives the coaching; the app is the glance and the record.
+
+- **Plan mode and void (coach-fixes).** The Today card shows `planMode.line` under the focus line and marks a retry-track
+  queue row "· retry". Settings → LeetCode → **Plan mode** is three radios (Auto, Balanced, Catch-up). A sitting's
+  page has **Doesn’t count** (a quiet button; one button whose label flips to **Count it again**, so focus stays put;
+  a boxed notice while void; a refusal inline) and, under the review, **Claude's notes** when written. The sittings
+  list marks a void row "Doesn’t count".
 
 - **The Today card** sits above the sittings on `/recruiting` (`TodayCard.tsx`, `useCoach.ts`). It shows the
   focus line with **Change** (a pattern, or the coach's pick, which clears the override), up to four slots, the

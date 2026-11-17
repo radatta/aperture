@@ -12,10 +12,10 @@ Rows are written by a **browser extension**, not by the app. There is no authori
 
 **Redesign in progress (lc-redesign, 2026-11).** A1 — sittings: contract, server, list page — is the section
 below; A2 — the extension rebuilt around sittings — is _The shape_. The old per-submission capture is gone
-from the extension, and its rows (`leetcodeAttempts`, SK `lc#<day>#<id>`) lie dormant: PR D (2026-11) removed the
-method that wrote them (`recordLeetcodeAttempt`: a device token now gets a 401, a JWT a 404 at the origin, which
-CloudFront serves as `index.html`), nothing reads them, the export leaves them out, and nothing migrates or deletes
-them. The redesign's evidence (what LeetCode exposes, from a HAR capture on 2026-11-08) is archived with the branch's
+from the extension, and its rows (`leetcodeAttempts`, SK `lc#<day>#<id>`) are read-only history: PR D (2026-11)
+removed the method that wrote them (`recordLeetcodeAttempt`: a device token now gets a 401, a JWT a 404 at the origin,
+which CloudFront serves as `index.html`), and nothing migrates or deletes them. Since coach-fixes the coach folds
+them as legacy attempts and the export carries them ([coach.md](coach.md) → _Legacy history_). The redesign's evidence (what LeetCode exposes, from a HAR capture on 2026-11-08) is archived with the branch's
 notes (`/workspace/localNotes/archive/lc-redesign/lc-capture/`); durable decisions are recorded here.
 
 ## Sittings
@@ -158,8 +158,27 @@ chars), `trace-skip`, `untraced-submit` (a Submit seen with neither) and `nudge-
 skip `skipped`, a submit seen untraced `none`; a trace after the first submit changes nothing), plus the config and
 a nudge count. A kind the server doesn't know is stored (its payload in full) and folds nothing — its head row keeps
 `kind: null` for good, so an extension that ships a kind first loses that kind's fold on those sittings unless a
-backfill re-reads the payloads. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
-extension that sends none — so readers take `summary.coach ?? null`.
+backfill re-reads the payloads. `summary.coach` is absent until a coach event or a judged event folds — on every sitting before them —
+so readers take `summary.coach ?? null`.
+
+**The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
+the code itself is the source from extension 2.2.0 on (its card is off: config `trace: false`, no trace events).
+At ingest (`lcSittingEvents`), the earliest fresh snapshot before the sitting's first judged event (stored or in the
+same batch) whose code holds a trace comment becomes the server's own head row — type `coach`, mark kind
+`trace-comment`, at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`;
+`coachMarkOf` never yields that kind, so the extension can't forge it). The rule (`traceComment.ts`, no model): a block
+is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or `//` lines; it is a trace when it has an
+input line (`name = <literal>`, or one opening with input / example / trace) and at least 2 other step lines (a digit
+and one of `->`, `=>`, `→`, `=`, `:`, `|`); LeetCode's starter comments (`:type`, `@param`, "Definition for") never
+count; a block not yet closed isn't one. Known limit: three commented-out literal assignments read as a trace.
+
+The fold: a `trace-comment` row with nothing judged before it sets `trace: 'traced'`, `traceBy: 'comment'`, and the
+card can't change it after (the comment wins, whichever lands first). The first Run or Submit sets
+`summary.firstJudgedAt` and `coach.scanned: true`, with `trace` `none` unless something set it — so a new sitting with no
+comment reads untraced; a card trace before the first submit still sets `traceBy: 'card'` on older sittings, which
+fold as before. The coach's `traced` (stats, the Patterns tab) is a hit by comment, or the card at three inputs; a
+card-off sitting from before the rule (never scanned) counts nowhere. `live_sitting`, `get_sitting`, the review's
+suggested cause and the draft's signal all read `summary.coach`.
 
 ### Claude watches live
 
@@ -433,7 +452,7 @@ storage — a different risk class from a JWT. A device token sent to any other 
 | `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                                                                                    |
 | `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks, `pullLiveSitting`                                                                                                                                                                                              |
 | `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_; `get_sitting`, `list_sittings` — _Reading a sitting back_                                                                                                                                                        |
-| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#` stays reserved for the dormant legacy rows                                                                                                                                                                  |
+| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#` holds the legacy rows, read-only (no writer)                                                                                                                                                                |
 | `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                                                                                         |
 | `packages/shared/src/coach.ts`, `neetcode150.ts`         | the LeetCode coach's engine and catalog — [coach.md](coach.md) (its own files table)                                                                                                                                                                     |
 | `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                                                                                        |

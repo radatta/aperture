@@ -376,6 +376,10 @@ describe("Claude's notes", () => {
       ]),
     ).toThrow(/twice/);
     expect(() => normalizeClaudeNotes([])).toThrow(/non-empty/);
-    expect(() => normalizeClaudeNotes(Array.from({ length: 21 }, (_, i) => ({ sittingId: `s${i}`, text: 'a' })))).toThrow(/20/);
+    expect(() =>
+      normalizeClaudeNotes(
+        Array.from({ length: 21 }, (_, i) => ({ sittingId: `s${i}`, text: 'a' })),
+      ),
+    ).toThrow(/20/);
   });
 });

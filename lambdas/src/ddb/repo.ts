@@ -272,7 +272,11 @@ export class Repo {
     row: SittingHeadRow,
     meta: { userId: string; createdAt: number; updatedAt: number },
   ): Promise<boolean> {
-    return this.putChildIfAbsent(sk.sittingHeadRow(row.sittingId, row.id), { ...row, ...meta }, null);
+    return this.putChildIfAbsent(
+      sk.sittingHeadRow(row.sittingId, row.id),
+      { ...row, ...meta },
+      null,
+    );
   }
   async listSittingHeadRows(id: string): Promise<SittingHeadRow[]> {
     return alive(

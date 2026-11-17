@@ -327,7 +327,9 @@ function foldDays(parts: Attempt[]): Attempt[] {
 // --- Legacy history: the pre-sittings extension's submissions (lc#, read-only; coach.md → Legacy history) ---
 // Legacy groups excluded unless the user lifts them (a stored void: false): the extension was tested on these.
 // Applied to legacy pieces only — never to a sitting or a logged attempt. `day` narrows an entry to one day.
-export const LEGACY_TEST_DEFAULTS: readonly { slug: string; day?: string }[] = [{ slug: 'two-sum' }];
+export const LEGACY_TEST_DEFAULTS: readonly { slug: string; day?: string }[] = [
+  { slug: 'two-sum' },
+];
 export const COACH_VOIDS_MAX = 50;
 export const coachVoidId = (day: string, slug: string) => `${day}#${slug}`;
 export interface LegacyGroup {
@@ -801,7 +803,10 @@ export interface CoachInput {
   planMode?: CoachPlanMode; // the setting; absent → auto
 }
 // The CoachInput fields attemptsOf reads beyond the sittings and logged attempts.
-const moreOf = (ci: Pick<CoachInput, 'legacy' | 'voids'>) => ({ legacy: ci.legacy, voids: ci.voids });
+const moreOf = (ci: Pick<CoachInput, 'legacy' | 'voids'>) => ({
+  legacy: ci.legacy,
+  voids: ci.voids,
+});
 
 const UP: Record<Difficulty, Difficulty | null> = { Easy: 'Medium', Medium: 'Hard', Hard: null };
 const DIFF_RANK: Record<Difficulty, number> = { Easy: 0, Medium: 1, Hard: 2 };
@@ -1017,11 +1022,7 @@ function planModeOf(
   params: CoachParams,
 ): CoachPlanModeView {
   const mode =
-    setting === 'auto'
-      ? autoCatchUp(before, today, params)
-        ? 'catch-up'
-        : 'balanced'
-      : setting;
+    setting === 'auto' ? (autoCatchUp(before, today, params) ? 'catch-up' : 'balanced') : setting;
   const line = `${mode === 'catch-up' ? 'Catch-up' : 'Balanced'}: ${due} due${setting === 'auto' ? ' · auto' : ''}`;
   return { setting, mode, due, line };
 }
@@ -1821,7 +1822,8 @@ export function normalizeCoachVoids(v: unknown): CoachVoidInput[] {
   if (v.length > COACH_VOIDS_MAX) throw new Error(`At most ${COACH_VOIDS_MAX} voids at once`);
   const seen = new Set<string>();
   return v.map((x) => {
-    if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error('A void must be an object');
+    if (!x || typeof x !== 'object' || Array.isArray(x))
+      throw new Error('A void must be an object');
     const r = x as Record<string, unknown>;
     for (const k of Object.keys(r))
       if (k !== 'day' && k !== 'slug' && k !== 'void') throw new Error(`Unknown void field: ${k}`);
@@ -1838,7 +1840,8 @@ export function normalizeCoachVoids(v: unknown): CoachVoidInput[] {
 // --- Claude's notes on a sitting (setSittingClaudeNotes) ---
 export const CLAUDE_NOTES_MAX = 800;
 export const CLAUDE_NOTES_BATCH_MAX = 20;
-export const CLAUDE_NOTES_OPEN_ERROR = "Claude's notes go on an ended sitting — this one is still open";
+export const CLAUDE_NOTES_OPEN_ERROR =
+  "Claude's notes go on an ended sitting — this one is still open";
 export interface ClaudeNotesInput {
   sittingId: string;
   text: string | null; // null or blank clears
@@ -1864,7 +1867,8 @@ export function normalizeClaudeNotes(v: unknown): ClaudeNotesInput[] {
     throw new Error(`At most ${CLAUDE_NOTES_BATCH_MAX} sittings' notes at once`);
   const seen = new Set<string>();
   return v.map((x) => {
-    if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error('A note must be an object');
+    if (!x || typeof x !== 'object' || Array.isArray(x))
+      throw new Error('A note must be an object');
     const r = x as Record<string, unknown>;
     for (const k of Object.keys(r))
       if (k !== 'sittingId' && k !== 'text') throw new Error(`Unknown note field: ${k}`);

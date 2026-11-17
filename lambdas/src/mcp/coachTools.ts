@@ -347,7 +347,10 @@ export const COACH_TOOLS: Tool[] = [
           type: 'boolean',
           description: 'With slug and no sitting: they also got it accepted that day',
         },
-        title: { type: 'string', description: 'With slug: the title, for a problem off the roadmap' },
+        title: {
+          type: 'string',
+          description: 'With slug: the title, for a problem off the roadmap',
+        },
         difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
       },
       additionalProperties: false,
@@ -499,7 +502,8 @@ export const COACH_TOOLS: Tool[] = [
       const legacy: { day: string; slug: string; void: boolean }[] = [];
       for (const raw of targets) {
         const t = (raw ?? {}) as Record<string, unknown>;
-        if (typeof t.void !== 'boolean') throw new RpcParamError('each target needs "void": true or false');
+        if (typeof t.void !== 'boolean')
+          throw new RpcParamError('each target needs "void": true or false');
         if (t.sittingId !== undefined) {
           if (t.day !== undefined || t.slug !== undefined)
             throw new RpcParamError('a target is a "sittingId", or a "day" + "slug" — not both');
@@ -648,7 +652,10 @@ export const COACH_TOOLS: Tool[] = [
               note: { type: 'string' },
               historical: { type: 'boolean' },
               difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
-              accepted: { type: 'boolean', description: 'help "solution" only: accepted that day too' },
+              accepted: {
+                type: 'boolean',
+                description: 'help "solution" only: accepted that day too',
+              },
             },
             required: ['slug'],
             additionalProperties: false,
@@ -794,7 +801,11 @@ export const COACH_TOOLS: Tool[] = [
                 pattern: patternOfTags(s0.topicTags),
                 difficulty: s0.difficulty,
               }
-            : { title: legacy[0]!.title, pattern: 'other' as const, difficulty: legacy[0]!.difficulty };
+            : {
+                title: legacy[0]!.title,
+                pattern: 'other' as const,
+                difficulty: legacy[0]!.difficulty,
+              };
       const problem = {
         slug,
         title: src.title,
@@ -811,9 +822,10 @@ export const COACH_TOOLS: Tool[] = [
           record: null,
           sittings,
           legacy: legacyView,
-          note: sittings.length || legacy.length
-            ? 'No counted attempt yet: these sittings were tests or too short, or the legacy days are voided.'
-            : 'Not tried yet.',
+          note:
+            sittings.length || legacy.length
+              ? 'No counted attempt yet: these sittings were tests or too short, or the legacy days are voided.'
+              : 'Not tried yet.',
         };
       return {
         problem,

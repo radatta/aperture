@@ -14,7 +14,8 @@ const PY_DOCSTRING = `class Solution:
 `;
 
 describe('traceCommentIn', () => {
-  it('reads a Python docstring that walks an input', () => expect(traceCommentIn(PY_DOCSTRING)).toBe(true));
+  it('reads a Python docstring that walks an input', () =>
+    expect(traceCommentIn(PY_DOCSTRING)).toBe(true));
 
   it("reads a ''' docstring", () =>
     expect(traceCommentIn(PY_DOCSTRING.replaceAll('"""', "'''"))).toBe(true));
@@ -118,7 +119,10 @@ ${PY_DOCSTRING}`;
 describe('commentBlocks', () => {
   it('splits # runs at a code line', () => {
     const blocks = commentBlocks('# a\n# b\n# c\nx = 1\n# d\n# e\n# f');
-    expect(blocks).toEqual([[' a', ' b', ' c'], [' d', ' e', ' f']]);
+    expect(blocks).toEqual([
+      [' a', ' b', ' c'],
+      [' d', ' e', ' f'],
+    ]);
   });
 
   it('isTraceBlock counts steps apart from the input line', () =>

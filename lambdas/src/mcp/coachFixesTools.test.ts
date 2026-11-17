@@ -113,10 +113,9 @@ describe('set_void', () => {
         { day: LEGACY_DAY, slug: 'valid-anagram', void: false },
       ],
     });
-    expect((await call('list_problems')).problems.map((p: { slug: string }) => p.slug).sort()).toEqual([
-      'climbing-stairs',
-      'valid-anagram',
-    ]);
+    expect(
+      (await call('list_problems')).problems.map((p: { slug: string }) => p.slug).sort(),
+    ).toEqual(['climbing-stairs', 'valid-anagram']);
   });
 
   it('lifts the default on a legacy two-sum day', async () => {
@@ -157,10 +156,9 @@ describe('set_claude_notes', () => {
   it('saves notes on an accepted and an unaccepted sitting in one call; get_sitting and get_problem read them', async () => {
     const a = await ended('climbing-stairs', '2026-11-08', true);
     const b = await ended('climbing-stairs', '2026-11-07', false);
-    expect((await call('leetcode_today')).unnoted.map((u: { sittingId: string }) => u.sittingId)).toEqual([
-      a.id,
-      b.id,
-    ]);
+    expect(
+      (await call('leetcode_today')).unnoted.map((u: { sittingId: string }) => u.sittingId),
+    ).toEqual([a.id, b.id]);
     const out = await call('set_claude_notes', {
       notes: [
         { sittingId: a.id, text: 'Traced the base case.\nAccepted first try.' },
@@ -184,7 +182,12 @@ describe('set_claude_notes', () => {
 
   it('takes an abandoned sitting, refuses an open one, and writes nothing on a refusal', async () => {
     const a = await ended('climbing-stairs', '2026-11-08', false);
-    await repo.putSittingIfAbsent({ ...a, id: ulid(), clientSittingId: ulid(), status: 'abandoned' });
+    await repo.putSittingIfAbsent({
+      ...a,
+      id: ulid(),
+      clientSittingId: ulid(),
+      status: 'abandoned',
+    });
     const open = await ended('valid-anagram', TODAY, false, true);
     await expect(
       call('set_claude_notes', {
@@ -225,13 +228,15 @@ describe('the peek and off-catalog fields', () => {
     const p = await call('get_problem', { slug: 'made-up-problem' });
     expect(p.problem).toMatchObject({ title: 'Made Up Problem', difficulty: 'Medium' });
     expect(p.record).toMatchObject({ everAccepted: true });
-    await expect(
-      call('mark_peeked', { sittingId: ulid(), title: 'x' }),
-    ).rejects.toBeInstanceOf(RpcParamError);
+    await expect(call('mark_peeked', { sittingId: ulid(), title: 'x' })).rejects.toBeInstanceOf(
+      RpcParamError,
+    );
   });
 
   it('mark_peeked keeps an accept already logged that day, without accepted', async () => {
-    await call('log_attempt', { attempts: [{ slug: 'counting-bits', day: '2026-11-05', outcome: 'solved' }] });
+    await call('log_attempt', {
+      attempts: [{ slug: 'counting-bits', day: '2026-11-05', outcome: 'solved' }],
+    });
     await call('mark_peeked', { slug: 'counting-bits', day: '2026-11-05' });
     expect((await call('get_problem', { slug: 'counting-bits' })).record).toMatchObject({
       everAccepted: true,
@@ -255,7 +260,13 @@ describe('the retry track and the plan mode', () => {
     expect((await slugs('clean')).sort()).toEqual(['climbing-stairs', 'valid-anagram']);
     await expect(call('list_problems', { track: 'fast' })).rejects.toBeInstanceOf(RpcParamError);
     const today = await call('leetcode_today');
-    expect(today.planMode).toMatchObject({ setting: 'auto', mode: 'balanced', line: expect.stringMatching(/^Balanced: \d+ due · auto$/) });
-    expect(today.due.every((q: { track: string }) => q.track === 'retry' || q.track === 'clean')).toBe(true);
+    expect(today.planMode).toMatchObject({
+      setting: 'auto',
+      mode: 'balanced',
+      line: expect.stringMatching(/^Balanced: \d+ due · auto$/),
+    });
+    expect(
+      today.due.every((q: { track: string }) => q.track === 'retry' || q.track === 'clean'),
+    ).toBe(true);
   });
 });

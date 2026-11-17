@@ -4414,7 +4414,9 @@ export function runApiContract(
         await expect(
           api.setSittingClaudeNotes([{ sittingId: a.id, text: 'x'.repeat(801) }]),
         ).rejects.toThrow(/800/);
-        await expect(api.setSittingClaudeNotes([{ sittingId: 'nope', text: 'x' }])).rejects.toThrow();
+        await expect(
+          api.setSittingClaudeNotes([{ sittingId: 'nope', text: 'x' }]),
+        ).rejects.toThrow();
       });
     });
 
