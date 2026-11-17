@@ -109,10 +109,6 @@ describe('verdict presentation', () => {
 describe('the coach’s view helpers', () => {
   it('suggests No trace when the code held no trace comment, or the first submit failed with no run', () => {
     expect(suggestedCause(mk({}, { commentTrace: 'none' }))).toBe('no-trace');
-    // The card is never read: its "skipped" says nothing.
-    expect(
-      suggestedCause(mk({}, { coach: { config: null, trace: 'skipped', nudges: 0 } })),
-    ).toBeNull();
     expect(
       suggestedCause(mk({}, { firstSubmit: v('wrong_answer'), runsBeforeFirstSubmit: 0 })),
     ).toBe('no-trace');

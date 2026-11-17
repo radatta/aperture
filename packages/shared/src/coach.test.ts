@@ -1121,17 +1121,11 @@ describe('pattern detail (the Patterns tab)', () => {
     });
   });
 
-  it('an untraced submit is a miss; no comment data counts nowhere, and the card is never read', () => {
-    const plain = clean(tp[3]!, day(-1));
-    const cardTraced = {
-      ...plain,
-      summary: { ...plain.summary, coach: { config: null, trace: 'traced' as const, nudges: 0 } },
-    };
+  it('an untraced submit is a miss; a sitting with no comment data counts nowhere', () => {
     const s = statsOf([
       withTrace(clean(tp[0]!, day(-3)), 'none'),
       withTrace(clean(tp[1]!, day(-2)), 'none'),
       clean(tp[2]!, day(-1)),
-      cardTraced,
     ]);
     expect(pat(s, 'two-pointers').traced).toEqual({ hit: 0, of: 2 });
   });

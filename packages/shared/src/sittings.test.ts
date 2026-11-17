@@ -981,8 +981,6 @@ describe('idle close', () => {
 describe('the trace comment fold (commentTrace)', () => {
   const judged = (type: 'run' | 'submit', id: string, at: number) =>
     headRowOf('s', { id, type, at, payload: { result: { status_code: 11 } } });
-  const card = (id: string, at: number, payload: unknown) =>
-    headRowOf('s', { id, type: 'coach', at, payload });
   it('absent until judged; the first judged event with no comment reads none', () => {
     expect(summarizeHeadRows([]).commentTrace).toBeUndefined();
     const s = summarizeHeadRows([judged('submit', 'a', 5)]);
@@ -1004,18 +1002,15 @@ describe('the trace comment fold (commentTrace)', () => {
         .commentTrace,
     ).toBe('none');
   });
-  it('never reads the card, and leaves the card fold alone', () => {
-    const rows = [
-      card('k', 1, {
-        kind: 'trace',
-        inputs: { empty: '[]', boundary: '[0]', normal: '[1]' },
-        ms: 1,
-      }),
-      judged('submit', 'a', 2),
-    ];
-    const s = summarizeHeadRows(rows);
+  it('only its own row moves it: another head row before the first judged event changes nothing', () => {
+    const other = headRowOf('s', {
+      id: 'k',
+      type: 'coach',
+      at: 1,
+      payload: { kind: 'not-a-kind' },
+    });
+    const s = summarizeHeadRows([other, judged('submit', 'a', 2)]);
     expect(s.commentTrace).toBe('none');
-    expect(s.coach).toEqual({ config: null, trace: 'traced', nudges: 0 });
   });
   it('a tie on time folds by id, so a retry lands the same way', () => {
     const rows = [judged('submit', 'b', 2), traceCommentRow('s', { id: 'a', at: 2 })];
