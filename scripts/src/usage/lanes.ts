@@ -37,6 +37,17 @@ export function fileRef(rel: string): FileRef | null {
 
 const WORKTREE_DIR = '-workspace--claude-worktrees-';
 const WORKTREE_CWD = /^\/workspace\/\.claude\/worktrees\/([a-z0-9][a-z0-9-]{0,62})(\/|$)/;
+const BRANCH = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const NOT_LANES = new Set(['main', 'master', 'dev', 'HEAD']);
+
+// The lane one transcript row was working in: its git branch (what a PR's headRefName matches), else its cwd's
+// worktree. Older lanes ran from the main checkout and worked in a worktree by cd, so the session alone can't say.
+// undefined in the main checkout (detached at main).
+export function rowLane(cwd: unknown, gitBranch: unknown): string | undefined {
+  if (typeof gitBranch === 'string' && BRANCH.test(gitBranch) && !NOT_LANES.has(gitBranch))
+    return gitBranch;
+  return typeof cwd === 'string' ? WORKTREE_CWD.exec(cwd)?.[1] : undefined;
+}
 
 // The lane and role of a session: a worktree session is that lane's; in the main checkout the hub (by its
 // scripts/board/hub.json name) is the hub and anything else is ad hoc; a project outside /workspace is other.
@@ -49,7 +60,9 @@ export function laneOf(
 ): { lane: string | null; role: Role } {
   const fromCwd = cwd ? WORKTREE_CWD.exec(cwd)?.[1] : undefined;
   if (fromCwd) return { lane: fromCwd, role: 'lane' };
-  if (project.startsWith(WORKTREE_DIR)) return { lane: project.slice(WORKTREE_DIR.length), role: 'lane' };
-  if (project === '-workspace') return name === hub ? { lane: null, role: 'hub' } : { lane: null, role: 'adhoc' };
+  if (project.startsWith(WORKTREE_DIR))
+    return { lane: project.slice(WORKTREE_DIR.length), role: 'lane' };
+  if (project === '-workspace')
+    return name === hub ? { lane: null, role: 'hub' } : { lane: null, role: 'adhoc' };
   return { lane: null, role: 'other' };
 }

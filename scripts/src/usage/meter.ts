@@ -93,7 +93,8 @@ export function ticks(readings: Reading[]): { windows: Point[][]; stragglers: nu
   let stragglers = 0;
   for (const r of readings) {
     if (r.resetsAt !== null && old.has(r.resetsAt)) continue;
-    const moved = resetsAt !== null && r.resetsAt !== null && Math.abs(r.resetsAt - resetsAt) > HOUR_S;
+    const moved =
+      resetsAt !== null && r.resetsAt !== null && Math.abs(r.resetsAt - resetsAt) > HOUR_S;
     const dropped = env >= 0 && r.pct <= env - RESET_DROP;
     if (moved || dropped || env < 0) {
       if ((moved || dropped) && resetsAt !== null && r.resetsAt !== resetsAt) old.add(resetsAt);
@@ -105,7 +106,11 @@ export function ticks(readings: Reading[]): { windows: Point[][]; stragglers: nu
     if (r.pct < env) stragglers++;
     else if (r.pct > env) {
       // a window's first reading sits somewhere inside its integer: manual-grade, not a tick
-      cur.push(env < 0 ? { ts: r.ts, p: r.pct, r: 1 / 12, src: 'manual' } : { ts: r.ts, p: r.pct, r: 0, src: 'tick' });
+      cur.push(
+        env < 0
+          ? { ts: r.ts, p: r.pct, r: 1 / 12, src: 'manual' }
+          : { ts: r.ts, p: r.pct, r: 0, src: 'tick' },
+      );
       env = r.pct;
     }
   }
@@ -116,7 +121,12 @@ export function ticks(readings: Reading[]): { windows: Point[][]; stragglers: nu
 // Manual readings and resets → points, split into windows at each reset (a reset is a known zero).
 export function manualWindows(m: Manual): Point[][] {
   const pts: Point[] = [
-    ...m.readings.map((x) => ({ ts: Date.parse(x.at), p: x.pct, r: x.approx ? 1 / 3 : 1 / 12, src: 'manual' as const })),
+    ...m.readings.map((x) => ({
+      ts: Date.parse(x.at),
+      p: x.pct,
+      r: x.approx ? 1 / 3 : 1 / 12,
+      src: 'manual' as const,
+    })),
     ...m.resets.map((at) => ({ ts: Date.parse(at), p: 0, r: 0, src: 'reset' as const })),
   ]
     .filter((p) => Number.isFinite(p.ts))
@@ -163,7 +173,10 @@ export function costDeltas(rows: MeterRow[]): { ts: number; sid: string; d: numb
 }
 
 // Burn over the ticks of the trailing hour, or the last 3 ticks when the hour has fewer than 2.
-export function burn(window: Point[], now: number): { pct: number; perHour: number | null; since: number } | null {
+export function burn(
+  window: Point[],
+  now: number,
+): { pct: number; perHour: number | null; since: number } | null {
   const last = window.at(-1);
   if (!last) return null;
   const t = window.filter((p) => p.src === 'tick');

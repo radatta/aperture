@@ -69,11 +69,9 @@ export function priceCall(
   const flags: PriceFlag[] = [];
   let key = normalizeModel(model);
   if (key === 'haiku-5-5' && t.i + t.cw5 + t.cw1 + t.cr > HAIKU_LONG_OVER) key = 'haiku-5-5-long';
-  let price = PRICES[key];
-  if (!price) {
-    flags.push('unknown-model');
-    price = PRICES[FALLBACK];
-  }
+  const known = PRICES[key];
+  if (!known) flags.push('unknown-model');
+  const price = known ?? PRICES[FALLBACK]!;
   const fast = opts.fast ? 2 : 1;
   if (opts.fast) flags.push('fast');
   if (opts.unsplit) flags.push('cw-unsplit');

@@ -21,13 +21,15 @@ describe('doctor', () => {
   });
 
   it('flags a status line that never sources the logger, or only mentions it in a comment', () => {
-    expect(doctor({ ...good, statusline: 'echo hi\n' })[1].ok).toBe(false);
-    expect(doctor({ ...good, statusline: '# statusline-log.sh removed\n' })[1].ok).toBe(false);
-    expect(doctor({ ...good, statusline: null })[1].fix).toContain(SOURCING_LINE);
+    expect(doctor({ ...good, statusline: 'echo hi\n' })[1]!.ok).toBe(false);
+    expect(doctor({ ...good, statusline: '# statusline-log.sh removed\n' })[1]!.ok).toBe(false);
+    expect(doctor({ ...good, statusline: null })[1]!.fix).toContain(SOURCING_LINE);
   });
 
   it('flags a stale or missing log with its age', () => {
-    expect(doctor({ ...good, newestRowTs: '2026-01-10T11:30:00Z' })[2].fix).toContain('30 min old');
-    expect(doctor({ ...good, newestRowTs: null })[2].fix).toContain('no meter rows');
+    expect(doctor({ ...good, newestRowTs: '2026-01-10T11:30:00Z' })[2]!.fix).toContain(
+      '30 min old',
+    );
+    expect(doctor({ ...good, newestRowTs: null })[2]!.fix).toContain('no meter rows');
   });
 });

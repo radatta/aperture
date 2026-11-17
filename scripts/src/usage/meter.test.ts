@@ -14,14 +14,22 @@ import {
 import { quantile, shrinkLog, slope, spearman } from './stats.ts';
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 5, 10, min)).toISOString();
-const log = (rows: Parameters<typeof meterRow>[0][]) => parseMeter(rows.map(meterRow).join('\n')).rows;
+const log = (rows: Parameters<typeof meterRow>[0][]) =>
+  parseMeter(rows.map(meterRow).join('\n')).rows;
 
 describe('meter series', () => {
   it("skips torn and null-rl rows, and a session's first row never counts", () => {
     const { rows, bad } = parseMeter(`${meterRow({ ts: at(0), pct: 5 })}\n{"ts":"x"\n`);
     expect(bad).toBe(1);
     expect(freshReadings(rows)).toEqual([]);
-    expect(freshReadings(log([{ ts: at(0), pct: null, cost: 0 }, { ts: at(1), pct: 5 }]))).toEqual([]);
+    expect(
+      freshReadings(
+        log([
+          { ts: at(0), pct: null, cost: 0 },
+          { ts: at(1), pct: 5 },
+        ]),
+      ),
+    ).toEqual([]);
   });
 
   it('ignores stale sessions: only rows whose % or cost moved count, and the envelope never falls', () => {
@@ -36,7 +44,7 @@ describe('meter series', () => {
     ]);
     const { windows, stragglers } = ticks(freshReadings(rows));
     expect(windows).toHaveLength(1);
-    expect(windows[0].map((p) => [p.p, p.src])).toEqual([
+    expect(windows[0]!.map((p) => [p.p, p.src])).toEqual([
       [92, 'manual'],
       [93, 'tick'],
       [94, 'tick'],
@@ -64,7 +72,10 @@ describe('meter series', () => {
       { ts: at(2), pct: 0, cost: 3 },
       { ts: at(3), pct: 1, cost: 4 },
     ]);
-    expect(ticks(freshReadings(drop)).windows.map((x) => x.map((p) => p.p))).toEqual([[100], [0, 1]]);
+    expect(ticks(freshReadings(drop)).windows.map((x) => x.map((p) => p.p))).toEqual([
+      [100],
+      [0, 1],
+    ]);
   });
 
   it('turns manual readings into windows split at resets, a reset being an exact zero', () => {
@@ -86,16 +97,21 @@ describe('meter series', () => {
         [30, 'manual'],
       ],
     ]);
-    expect(w[0][1].r).toBeCloseTo(1 / 3);
+    expect(w[0]![1]!.r).toBeCloseTo(1 / 3);
   });
 
   it('builds intervals of at least 3 points and 10 minutes, never across windows', () => {
-    const pts: Point[] = [0, 1, 2, 3, 4, 8, 9].map((p, i) => ({ ts: i * 600_000, p, r: 0, src: 'tick' }));
+    const pts: Point[] = [0, 1, 2, 3, 4, 8, 9].map((p, i) => ({
+      ts: i * 600_000,
+      p,
+      r: 0,
+      src: 'tick',
+    }));
     expect(intervals(pts).map((i) => [i.dP, i.src])).toEqual([
       [3, 'tick→tick'],
       [5, 'tick→tick'],
     ]);
-    expect(intervals([pts[0]])).toEqual([]);
+    expect(intervals([pts[0]!])).toEqual([]);
     expect(intervals([])).toEqual([]);
   });
 
@@ -124,7 +140,14 @@ describe('meter series', () => {
 describe('fit', () => {
   // Synthetic truth: k = 0.04 %/QU, λ = 0.5 %/h, with ΔQU and Δt varied independently.
   const truth = (dQU: number, dT: number): Obs => ({ dP: 0.04 * dQU + 0.5 * dT, dQU, dT, r: 0.02 });
-  const obs = [truth(100, 1), truth(300, 0.5), truth(50, 4), truth(200, 2), truth(120, 0.2), truth(400, 3)];
+  const obs = [
+    truth(100, 1),
+    truth(300, 0.5),
+    truth(50, 4),
+    truth(200, 2),
+    truth(120, 0.2),
+    truth(400, 3),
+  ];
 
   it('recovers k and λ from noiseless data', () => {
     const f = fitKLambda(obs);
@@ -134,7 +157,12 @@ describe('fit', () => {
   });
 
   it('clips a negative λ to 0 and refits k', () => {
-    const neg = [100, 200, 300, 400, 500].map((q, i) => ({ dP: 0.05 * q - 0.3 * (i + 1), dQU: q, dT: i + 1, r: 0.02 }));
+    const neg = [100, 200, 300, 400, 500].map((q, i) => ({
+      dP: 0.05 * q - 0.3 * (i + 1),
+      dQU: q,
+      dT: i + 1,
+      r: 0.02,
+    }));
     const f = fitKLambda(neg);
     expect(f.lambda).toBe(0);
     expect(f.k).toBeGreaterThan(0);
@@ -159,7 +187,10 @@ describe('fit', () => {
   });
 
   it('scores a fit on held-out intervals', () => {
-    expect(holdout({ k: 0.04, lambda: 0.5 }, obs)).toMatchObject({ n: 6, mae: expect.closeTo(0, 9) });
+    expect(holdout({ k: 0.04, lambda: 0.5 }, obs)).toMatchObject({
+      n: 6,
+      mae: expect.closeTo(0, 9),
+    });
   });
 });
 
@@ -181,7 +212,7 @@ describe('stats', () => {
   it('skips shrinkage with under 3 groups or a group of one', () => {
     expect(shrinkLog({ a: [1, 2], b: [3, 4] }).shrinkage).toBe(false);
     expect(shrinkLog({ a: [1, 2], b: [3, 4], c: [5] }).shrinkage).toBe(false);
-    expect(shrinkLog({ a: [1, 2], b: [3, 4] }).groups[0].median).toBeCloseTo(Math.sqrt(2));
+    expect(shrinkLog({ a: [1, 2], b: [3, 4] }).groups[0]!.median).toBeCloseTo(Math.sqrt(2));
   });
 
   it('ranks with ties and fits a slope', () => {

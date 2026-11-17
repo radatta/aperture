@@ -53,4 +53,6 @@ export function doctor(i: DoctorInput): Check[] {
 }
 
 export const formatDoctor = (checks: Check[]) =>
-  checks.map((c) => `${c.ok ? 'ok  ' : 'FAIL'} ${c.what}${c.fix ? `\n     → ${c.fix}` : ''}`).join('\n');
+  checks
+    .map((c) => `${c.ok ? 'ok  ' : 'FAIL'} ${c.what}${c.fix ? `\n     → ${c.fix}` : ''}`)
+    .join('\n');

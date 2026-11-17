@@ -7,7 +7,7 @@ export function quantile(xs: number[], q: number): number {
   const s = [...xs].sort((a, b) => a - b);
   const i = (s.length - 1) * q;
   const lo = Math.floor(i);
-  return s[lo] + (s[Math.ceil(i)] - s[lo]) * (i - lo);
+  return s[lo]! + (s[Math.ceil(i)]! - s[lo]!) * (i - lo);
 }
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -35,7 +35,11 @@ const Z80 = 0.8416;
 // Empirical-Bayes shrinkage of each group's mean ln cost toward the overall mean, with the variance pooled across
 // groups (docs/ops/USAGE-METER.md → PR types). Groups with no values are listed with n = 0.
 export function shrinkLog(values: Record<string, number[]>): Shrinkage {
-  const groups = Object.entries(values).map(([g, xs]) => ({ g, ys: xs.filter((x) => x > 0).map(Math.log), xs }));
+  const groups = Object.entries(values).map(([g, xs]) => ({
+    g,
+    ys: xs.filter((x) => x > 0).map(Math.log),
+    xs,
+  }));
   const full = groups.filter((g) => g.ys.length);
   const N = full.reduce((a, g) => a + g.ys.length, 0);
   const all = full.flatMap((g) => g.ys);
@@ -44,7 +48,9 @@ export function shrinkLog(values: Record<string, number[]>): Shrinkage {
   const s2 = N - full.length > 0 ? within / (N - full.length) : all.length > 1 ? variance(all) : 0;
   const shrinkage = full.length >= 3 && full.every((g) => g.ys.length >= 2);
   const means = full.map((g) => mean(g.ys));
-  const tau2 = shrinkage ? Math.max(0, variance(means) - s2 * mean(full.map((g) => 1 / g.ys.length))) : 0;
+  const tau2 = shrinkage
+    ? Math.max(0, variance(means) - s2 * mean(full.map((g) => 1 / g.ys.length)))
+    : 0;
   const s = Math.sqrt(s2);
   return {
     s,
@@ -52,7 +58,17 @@ export function shrinkLog(values: Record<string, number[]>): Shrinkage {
     shrinkage,
     groups: groups.map(({ g, ys, xs }) => {
       if (!ys.length)
-        return { group: g, n: 0, min: NaN, median: NaN, max: NaN, p80: NaN, budgetMean: NaN, rawMedian: NaN, shrunk: false };
+        return {
+          group: g,
+          n: 0,
+          min: NaN,
+          median: NaN,
+          max: NaN,
+          p80: NaN,
+          budgetMean: NaN,
+          rawMedian: NaN,
+          shrunk: false,
+        };
       const m = mean(ys);
       const B = shrinkage && tau2 + s2 / ys.length > 0 ? tau2 / (tau2 + s2 / ys.length) : 1;
       const theta = B * m + (1 - B) * grand;
@@ -81,10 +97,10 @@ function variance(xs: number[]) {
 function ranks(xs: number[]): number[] {
   const idx = xs.map((x, i) => [x, i] as const).sort((a, b) => a[0] - b[0]);
   const r = new Array<number>(xs.length);
-  for (let i = 0; i < idx.length; ) {
+  for (let i = 0; i < idx.length;) {
     let j = i;
-    while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++;
-    for (let k = i; k <= j; k++) r[idx[k][1]] = (i + j) / 2 + 1;
+    while (j + 1 < idx.length && idx[j + 1]![0] === idx[i]![0]) j++;
+    for (let k = i; k <= j; k++) r[idx[k]![1]] = (i + j) / 2 + 1;
     i = j + 1;
   }
   return r;
@@ -98,9 +114,11 @@ export function pearson(x: number[], y: number[]): number {
   let sxx = 0;
   let syy = 0;
   for (let i = 0; i < x.length; i++) {
-    sxy += (x[i] - mx) * (y[i] - my);
-    sxx += (x[i] - mx) ** 2;
-    syy += (y[i] - my) ** 2;
+    const dx = x[i]! - mx;
+    const dy = y[i]! - my;
+    sxy += dx * dy;
+    sxx += dx * dx;
+    syy += dy * dy;
   }
   return sxx && syy ? sxy / Math.sqrt(sxx * syy) : NaN;
 }
@@ -115,8 +133,8 @@ export function slope(x: number[], y: number[]): number {
   let sxy = 0;
   let sxx = 0;
   for (let i = 0; i < x.length; i++) {
-    sxy += (x[i] - mx) * (y[i] - my);
-    sxx += (x[i] - mx) ** 2;
+    sxy += (x[i]! - mx) * (y[i]! - my);
+    sxx += (x[i]! - mx) ** 2;
   }
   return sxx ? sxy / sxx : NaN;
 }

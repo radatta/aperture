@@ -45,7 +45,8 @@ export function discover(root: string): Found[] {
         if (a.isDirectory() && a.name === 'workflows')
           for (const w of ls(join(root, sub, 'workflows')).filter((d) => d.isDirectory()))
             for (const f of ls(join(root, sub, 'workflows', w.name)))
-              if (f.isFile() && f.name.endsWith('.jsonl')) rels.push(`${sub}/workflows/${w.name}/${f.name}`);
+              if (f.isFile() && f.name.endsWith('.jsonl'))
+                rels.push(`${sub}/workflows/${w.name}/${f.name}`);
       }
     }
   }
@@ -131,7 +132,11 @@ export async function scan(o: ScanOpts): Promise<ScanResult> {
     for (const c of old?.calls ?? []) merger.add(c);
     const markers: Marker[] = [...(old?.markers ?? [])];
     const st: ReadStats = { bytes: 0, skipped: 0, done: from };
-    for await (const { line } of lines(join(o.root, f.rel), { start: from, end: f.size, maxBps: o.maxBps }, st)) {
+    for await (const { line } of lines(
+      join(o.root, f.rel),
+      { start: from, end: f.size, maxBps: o.maxBps },
+      st,
+    )) {
       if (!wanted(line)) continue;
       const p = parseLine(line);
       if (!p) continue;

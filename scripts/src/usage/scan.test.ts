@@ -42,7 +42,11 @@ describe('lines (throttled reader)', () => {
     write('f.jsonl', `${'x'.repeat(50)}\nok\n`);
     const st: ReadStats = { bytes: 0, skipped: 0, done: 0 };
     const got: string[] = [];
-    for await (const l of lines(join(root, 'f.jsonl'), { end: 54, maxBps: 1e9, maxLine: 10, hwm: 4 }, st))
+    for await (const l of lines(
+      join(root, 'f.jsonl'),
+      { end: 54, maxBps: 1e9, maxLine: 10, hwm: 4 },
+      st,
+    ))
       got.push(l.line.toString());
     expect(got).toEqual(['ok']);
     expect(st.skipped).toBe(1);
@@ -51,7 +55,14 @@ describe('lines (throttled reader)', () => {
   it('keeps to maxBps', async () => {
     write('f.jsonl', `${'y'.repeat(999)}\n`.repeat(20)); // 20 kB
     const t0 = Date.now();
-    for await (const _ of lines(join(root, 'f.jsonl'), { end: 20_000, maxBps: 100_000, hwm: 1000 }));
+    let n = 0;
+    for await (const l of lines(join(root, 'f.jsonl'), {
+      end: 20_000,
+      maxBps: 100_000,
+      hwm: 1000,
+    }))
+      n += l.line.length + 1;
+    expect(n).toBe(20_000);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(180);
   });
 });
@@ -64,7 +75,11 @@ describe('discover and planFile', () => {
     write(`${P}/${SID}/subagents/workflows/wf_x-1/agent-w1.jsonl`, '');
     write(`${P}/${SID}/tool-results/t.txt`, 'x');
     write(`${P}/notes.jsonl`, '');
-    expect(discover(root).map((f) => f.ref.kind).sort()).toEqual(['main', 'subagent', 'workflow']);
+    expect(
+      discover(root)
+        .map((f) => f.ref.kind)
+        .sort(),
+    ).toEqual(['main', 'subagent', 'workflow']);
   });
 
   it('skips unchanged files, resumes grown ones, rescans shrunk or replaced ones', () => {
@@ -103,7 +118,9 @@ describe('scan', () => {
     ]);
     const main = l.sessions.find((s) => s.kind === 'main')!;
     expect(main).toMatchObject({ name: 'lane-a', cwd: '/workspace/.claude/worktrees/lane-a' });
-    expect(l.sessions.find((s) => s.kind === 'subagent')).toMatchObject({ agentType: 'code-reviewer' });
+    expect(l.sessions.find((s) => s.kind === 'subagent')).toMatchObject({
+      agentType: 'code-reviewer',
+    });
     expect(JSON.stringify(l.sessions)).not.toContain('free text');
     expect(l.markers.get(main.rel)!.map((m) => m.kind)).toEqual(['review', 'spawn']);
     expect(await run()).toMatchObject({ scanned: 0 });
@@ -115,14 +132,29 @@ describe('scan', () => {
     await run();
     expect(loadCache(cache).calls).toHaveLength(1);
     // the torn line is completed by a rewrite of its tail, then the same request logs a larger output
-    write(rel, `${row('m1', 5)}${row('m2', 1, { tools: [bash('pnpm board lane gate')] })}${row('m1', 99)}`);
+    write(
+      rel,
+      `${row('m1', 5)}${row('m2', 1, { tools: [bash('pnpm board lane gate')] })}${row('m1', 99)}`,
+    );
     await run();
     const l = loadCache(cache);
     expect(l.calls.map((c) => [c.id, c.o])).toEqual([
       ['m1', 99],
       ['m2', 1],
     ]);
-    expect(readIndex(cache).files[rel].offset).toBe(Buffer.byteLength(row('m1', 5) + row('m2', 1, { tools: [bash('pnpm board lane gate')] }) + row('m1', 99)));
+    expect(readIndex(cache).files[rel]!.offset).toBe(
+      Buffer.byteLength(
+        row('m1', 5) + row('m2', 1, { tools: [bash('pnpm board lane gate')] }) + row('m1', 99),
+      ),
+    );
+  });
+
+  it('rereads everything when the parser version changed', async () => {
+    write(`${P}/${SID}.jsonl`, row('m1'));
+    await run();
+    const ix = readIndex(cache);
+    writeFileSync(join(cache, 'index.json'), JSON.stringify({ ...ix, parser: ix.parser - 1 }));
+    expect(await run()).toMatchObject({ scanned: 1 });
   });
 
   it('rescans a file that shrank (rewritten) instead of resuming past its end', async () => {
@@ -141,7 +173,7 @@ describe('scan', () => {
     await run();
     const l = loadCache(cache);
     expect(l.calls).toHaveLength(1);
-    expect(l.calls[0].file).toBe(`${P}/${SID}/subagents/agent-a1.jsonl`);
+    expect(l.calls[0]!.file).toBe(`${P}/${SID}/subagents/agent-a1.jsonl`);
     expect(l.dupes).toBe(2);
   });
 
@@ -157,7 +189,15 @@ describe('scan', () => {
   it('waits on memory before a big file and gives up loudly when it stays high', async () => {
     write(`${P}/${SID}.jsonl`, row('m1'));
     await expect(
-      scan({ root, cache, maxBps: 1e9, bigFile: 0, waitMs: 0, memoryOk: () => false, log: () => {} }),
+      scan({
+        root,
+        cache,
+        maxBps: 1e9,
+        bigFile: 0,
+        waitMs: 0,
+        memoryOk: () => false,
+        log: () => {},
+      }),
     ).rejects.toThrow(/memory stayed high/);
   }, 1000);
 });

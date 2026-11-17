@@ -28,7 +28,10 @@ describe('prices', () => {
   });
 
   it('flags an unknown model and prices it as Opus 5.5; doubles fast mode', () => {
-    expect(priceCall('claude-nova-1', { ...T, o: 1e6 })).toEqual({ qu: 20, flags: ['unknown-model'] });
+    expect(priceCall('claude-nova-1', { ...T, o: 1e6 })).toEqual({
+      qu: 20,
+      flags: ['unknown-model'],
+    });
     expect(priceCall('claude-opus-5-5', { ...T, o: 1e6 }, { fast: true })).toEqual({
       qu: 40,
       flags: ['fast'],
@@ -45,7 +48,9 @@ describe('transcript lines', () => {
   it('reads one call with the 5m/1h cache split, and only parses wanted lines', () => {
     const row = assistantRow({ usage: { i: 2, cw5: 30, cw1: 70, cr: 900, o: 40 } });
     expect(wanted(Buffer.from(row))).toBe(true);
-    expect(wanted(Buffer.from('{"type":"user","content":"\\"type\\":\\"assistant\\""}'))).toBe(false);
+    expect(wanted(Buffer.from('{"type":"user","content":"\\"type\\":\\"assistant\\""}'))).toBe(
+      false,
+    );
     expect(parseLine(Buffer.from(row))?.call).toMatchObject({
       id: 'msg_fix_01',
       model: 'claude-opus-5-5',
@@ -108,12 +113,19 @@ describe('markers', () => {
 
   it('tells devcheck:local from devcheck, and finds push, open-pr, the gate and commits', () => {
     expect(bashMarkers('pnpm devcheck:local --tier full')).toEqual([{ kind: 'local' }]);
-    expect(bashMarkers('pnpm devcheck --tier full')).toEqual([{ kind: 'dev' }]);
+    expect(bashMarkers('pnpm devcheck --tier full')).toEqual([{ kind: 'devcheck' }]);
     expect(bashMarkers('pnpm bot push')).toEqual([{ kind: 'dev' }]);
     expect(bashMarkers('pnpm mailroom open-pr --title x')).toEqual([{ kind: 'pr' }]);
     expect(bashMarkers('scripts/board/heavy.sh -- pnpm typecheck')).toEqual([{ kind: 'gate' }]);
     expect(bashMarkers('pnpm test:unit')).toEqual([]);
     expect(bashMarkers('git add -A && git commit -m "fixed it"')).toEqual([{ kind: 'commit' }]);
+    expect(bashMarkers('cd /w/x && CI=true pnpm test')).toEqual([{ kind: 'gate' }]);
+  });
+
+  it('ignores commands only mentioned inside another command', () => {
+    expect(bashMarkers('grep -n "pnpm board lane review" docs/x.md')).toEqual([]);
+    expect(bashMarkers("echo 'then pnpm bot push'")).toEqual([]);
+    expect(bashMarkers('rg "pnpm devcheck --tier" scripts/')).toEqual([]);
   });
 
   it('classes edits by path', () => {
@@ -129,7 +141,14 @@ describe('markers', () => {
         tools: [agent('Plan'), agent('code-reviewer'), edit('/w/a.ts'), bash('pnpm lint')],
       }),
     )!;
-    expect(p.markers.map((m) => m.kind)).toEqual(['plan', 'spawn', 'review', 'spawn', 'edit', 'gate']);
+    expect(p.markers.map((m) => m.kind)).toEqual([
+      'plan',
+      'spawn',
+      'review',
+      'spawn',
+      'edit',
+      'gate',
+    ]);
     expect(p.markers[1]).toMatchObject({ agentType: 'Plan', toolUseId: 'toolu_fix_0' });
     expect(p.markers.every((m) => m.ts === Date.parse('2026-01-05T10:00:00.000Z'))).toBe(true);
   });
@@ -137,7 +156,11 @@ describe('markers', () => {
 
 describe('lanes', () => {
   it('maps transcript paths to main, subagent and workflow refs', () => {
-    expect(fileRef(`-workspace/${SID}.jsonl`)).toEqual({ project: '-workspace', sid: SID, kind: 'main' });
+    expect(fileRef(`-workspace/${SID}.jsonl`)).toEqual({
+      project: '-workspace',
+      sid: SID,
+      kind: 'main',
+    });
     expect(fileRef(`p/${SID}/subagents/agent-a1b2.jsonl`)).toEqual({
       project: 'p',
       sid: SID,

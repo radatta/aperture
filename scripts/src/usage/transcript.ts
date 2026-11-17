@@ -1,6 +1,7 @@
 // One Claude Code transcript line → what the cost model keeps: a call's usage (deduped later by message id), the
 // session's name, and phase markers from the call's tool_use blocks. Markers hold enums only — never command text,
 // paths or content — because the cache is the only thing derived from transcripts (docs/ops/USAGE-METER.md).
+import { rowLane } from './lanes.ts';
 import type { Tokens } from './prices.ts';
 
 export interface Call extends Tokens {
@@ -9,6 +10,7 @@ export interface Call extends Tokens {
   model: string;
   fast: boolean;
   unsplit: boolean; // cache writes had no 5m/1h split, all counted as 5m
+  lane?: string; // the lane the row itself was in (lanes.ts rowLane)
 }
 
 export const LANE_PHASES = [
@@ -33,7 +35,8 @@ export type MarkerKind =
   | 'gate'
   | 'review'
   | 'local'
-  | 'dev'
+  | 'dev' // bot push / deploy-dev
+  | 'devcheck' // a dev-stage devcheck run
   | 'pr'
   | 'commit'
   | 'spawn'
@@ -46,6 +49,7 @@ export interface Marker {
   cls?: EditClass;
   agentType?: string;
   toolUseId?: string;
+  lane?: string;
 }
 
 export interface Parsed {
@@ -76,17 +80,30 @@ export function editClass(path: string): EditClass {
   return 'src';
 }
 
-// Bash command → markers, in the order checked (devcheck:local before devcheck).
+// Bash command → markers, in the order checked (devcheck:local before devcheck). A command counts only where it
+// runs — at the start of the line or of a `&&`/`;`/`|` segment, after `cd …` or env assignments, or as heavy.sh's
+// payload — never quoted inside a grep or an echo.
+const AT = String.raw`(?:^|[;&|(]\s*|\s--\s+)(?:\w+=\S*\s+)*`;
+const run = (body: string) => new RegExp(`${AT}${body}`, 'm');
+const LANE = run(String.raw`pnpm board lane (\w+)`);
+const LOCAL = run(String.raw`pnpm devcheck:local\b`);
+const DEVCHECK = run(String.raw`pnpm devcheck\b(?!:)`);
+const PUSH = run(String.raw`pnpm bot (?:push|deploy-dev)\b`);
+const OPEN_PR = run(String.raw`pnpm mailroom open-pr\b`);
+const GATE = run(String.raw`(?:\S*heavy\.sh\s+--\s+)?pnpm (?:typecheck|lint|test)\b(?![:\w-])`);
+const COMMIT = run(String.raw`git (?:-C \S+ )?commit\b`);
+
 export function bashMarkers(cmd: string): Omit<Marker, 'ts'>[] {
   const out: Omit<Marker, 'ts'>[] = [];
-  const lane = /\bpnpm board lane (\w+)/.exec(cmd);
-  if (lane && (LANE_PHASES as readonly string[]).includes(lane[1]))
-    out.push({ kind: 'lane-phase', phase: lane[1] as LanePhase });
-  if (/\bdevcheck:local\b/.test(cmd)) out.push({ kind: 'local' });
-  else if (/\bpnpm (bot (push|deploy-dev)|devcheck)\b/.test(cmd)) out.push({ kind: 'dev' });
-  if (/\bmailroom open-pr\b/.test(cmd)) out.push({ kind: 'pr' });
-  if (/\bpnpm (typecheck|lint|test)\b(?![:\w-])/.test(cmd)) out.push({ kind: 'gate' });
-  if (/\bgit commit\b/.test(cmd)) out.push({ kind: 'commit' });
+  const phase = LANE.exec(cmd)?.[1];
+  if (phase && (LANE_PHASES as readonly string[]).includes(phase))
+    out.push({ kind: 'lane-phase', phase: phase as LanePhase });
+  if (LOCAL.test(cmd)) out.push({ kind: 'local' });
+  else if (DEVCHECK.test(cmd)) out.push({ kind: 'devcheck' });
+  if (PUSH.test(cmd)) out.push({ kind: 'dev' });
+  if (OPEN_PR.test(cmd)) out.push({ kind: 'pr' });
+  if (GATE.test(cmd)) out.push({ kind: 'gate' });
+  if (COMMIT.test(cmd)) out.push({ kind: 'commit' });
   return out;
 }
 
@@ -135,10 +152,17 @@ export function parseLine(line: Buffer | string): Parsed | null {
   if (!Number.isFinite(ts)) return null;
   const msg = (row.message ?? {}) as Record<string, unknown>;
   const out: Parsed = { markers: [], cwd: typeof row.cwd === 'string' ? row.cwd : undefined };
+  const lane = rowLane(row.cwd, row.gitBranch);
   const content = Array.isArray(msg.content) ? msg.content : [];
   for (const b of content)
     if (b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_use')
-      out.markers.push(...toolMarkers(b as Record<string, unknown>).map((m) => ({ ts, ...m })));
+      out.markers.push(
+        ...toolMarkers(b as Record<string, unknown>).map((m) => ({
+          ts,
+          ...m,
+          ...(lane ? { lane } : {}),
+        })),
+      );
   const u = msg.usage as Record<string, unknown> | undefined;
   const model = typeof msg.model === 'string' ? msg.model : '';
   const id =
@@ -159,6 +183,7 @@ export function parseLine(line: Buffer | string): Parsed | null {
       o: num(u.output_tokens),
       fast: u.speed === 'fast',
       unsplit: !split && cwTotal > 0,
+      ...(lane ? { lane } : {}),
     };
     if (call.i + call.cw5 + call.cw1 + call.cr + call.o > 0) out.call = call;
   }
@@ -179,6 +204,7 @@ export function mergeCall(a: Call, b: Call): Call {
     o: Math.max(a.o, b.o),
     fast: a.fast || b.fast,
     unsplit: a.unsplit && b.unsplit,
+    ...((a.lane ?? b.lane) ? { lane: a.lane ?? b.lane } : {}),
   };
 }
 

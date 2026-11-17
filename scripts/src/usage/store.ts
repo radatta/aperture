@@ -1,7 +1,14 @@
 // The usage cache under <usage dir>/cache/: one shard per transcript file (its session record, deduped calls and
 // markers) plus index.json saying how far each file was read. Atomic writes (tmp + rename), so an interrupted scan
 // leaves every shard whole. Loading dedupes calls globally: a forked session can repeat a message in another file.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Kind } from './lanes.ts';
 import { priceCall, type PriceFlag } from './prices.ts';
@@ -37,8 +44,12 @@ export interface IndexEntry {
 }
 export interface Index {
   v: 1;
+  parser: number;
   files: Record<string, IndexEntry>;
 }
+
+// Bump when transcript.ts extracts something new or different: the next scan rereads every file.
+export const PARSER = 4;
 
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -81,11 +92,11 @@ export const readShard = (cache: string, rel: string) => {
 export function readIndex(cache: string): Index {
   try {
     const ix = JSON.parse(readFileSync(join(cache, 'index.json'), 'utf8'));
-    if (ix?.v === 1 && ix.files) return ix;
+    if (ix?.v === 1 && ix.parser === PARSER && ix.files) return ix;
   } catch {
     // missing or torn: rescan
   }
-  return { v: 1, files: {} };
+  return { v: 1, parser: PARSER, files: {} };
 }
 export const writeIndex = (cache: string, ix: Index) =>
   writeAtomic(join(cache, 'index.json'), JSON.stringify(ix));

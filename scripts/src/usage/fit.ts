@@ -97,7 +97,7 @@ const pct = (xs: number[], q: number) => {
   const s = [...xs].sort((a, b) => a - b);
   const i = (s.length - 1) * q;
   const lo = Math.floor(i);
-  return s[lo] + (s[Math.ceil(i)] - s[lo]) * (i - lo);
+  return s[lo]! + (s[Math.ceil(i)]! - s[lo]!) * (i - lo);
 };
 
 export interface Interval2 {
@@ -125,11 +125,17 @@ export function uncertainty(obs: Obs[], fit: (o: Obs[]) => Fit, B = 2000, seed =
       ls.push(f.lambda);
     }
     const r = { lo: Math.min(...ks), hi: Math.max(...ks) };
-    return { method: 'leave-one-out', k80: r, k95: r, lambda80: { lo: Math.min(...ls), hi: Math.max(...ls) }, sdLnK: sdLn(ks) };
+    return {
+      method: 'leave-one-out',
+      k80: r,
+      k95: r,
+      lambda80: { lo: Math.min(...ls), hi: Math.max(...ls) },
+      sdLnK: sdLn(ks),
+    };
   }
   const rand = rng(seed);
   for (let b = 0; b < B; b++) {
-    const sample = obs.map(() => obs[Math.floor(rand() * obs.length)]);
+    const sample = obs.map(() => obs[Math.floor(rand() * obs.length)]!);
     const f = fit(sample);
     ks.push(f.k);
     ls.push(f.lambda);
@@ -153,7 +159,9 @@ function sdLn(ks: number[]) {
 // Score a fit on held-out intervals: mean absolute error in points, and the cumulative predicted vs actual ΔP.
 export function holdout(f: Pick<Fit, 'k' | 'lambda'>, obs: Obs[]) {
   const pred = obs.map((o) => f.k * o.dQU + f.lambda * o.dT);
-  const mae = obs.length ? obs.reduce((s, o, i) => s + Math.abs(o.dP - pred[i]), 0) / obs.length : NaN;
+  const mae = obs.length
+    ? obs.reduce((s, o, i) => s + Math.abs(o.dP - pred[i]!), 0) / obs.length
+    : NaN;
   return {
     n: obs.length,
     mae,

@@ -1,5 +1,13 @@
 // Compose the loaded tables into what the report prints. Pure: the CLI loads files and passes them in.
-import { fitKLambda, fitKOnly, holdout, uncertainty, type Fit, type Obs, type Uncertainty } from './fit.ts';
+import {
+  fitKLambda,
+  fitKOnly,
+  holdout,
+  uncertainty,
+  type Fit,
+  type Obs,
+  type Uncertainty,
+} from './fit.ts';
 import {
   burn,
   costDeltas,
@@ -11,21 +19,35 @@ import {
   type Manual,
   type MeterRow,
 } from './meter.ts';
+import type { PR } from './gh.ts';
+import { agreement, PHASES, type Phase } from './phases.ts';
+import {
+  attribute,
+  overhead,
+  prTable,
+  PR_TYPES,
+  type Overhead,
+  type PRRow,
+  type PRType,
+} from './prs.ts';
+import { concurrency, reviewRounds, type Concurrency, type JobEvent } from './questions.ts';
+import { median, shrinkLog, spearman } from './stats.ts';
+import type { Loaded } from './store.ts';
 
 // QU between two instants from time-sorted calls, by prefix sums.
 export function quIndex(calls: { ts: number; qu: number }[]) {
   const ts = calls.map((c) => c.ts);
   const pre = [0];
-  for (const c of calls) pre.push(pre.at(-1)! + c.qu);
+  for (const c of calls) pre.push(pre[pre.length - 1]! + c.qu);
   const upto = (t: number) => {
     let lo = 0;
     let hi = ts.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (ts[mid] <= t) lo = mid + 1;
+      if (ts[mid]! <= t) lo = mid + 1;
       else hi = mid;
     }
-    return pre[lo];
+    return pre[lo]!;
   };
   return {
     between: (t0: number, t1: number) => upto(t1) - upto(t0),
@@ -44,7 +66,10 @@ export function scheduledResets(rows: MeterRow[], manual: Manual | null): string
   const out: string[] = [];
   for (const at of new Set(rows.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])))) {
     for (let t = at - WEEK_MS; t > firstReading; t -= WEEK_MS)
-      if (!known.some((k) => Math.abs(k - t) < 3_600_000) && !out.includes(new Date(t).toISOString()))
+      if (
+        !known.some((k) => Math.abs(k - t) < 3_600_000) &&
+        !out.includes(new Date(t).toISOString())
+      )
         out.push(new Date(t).toISOString());
   }
   return out.sort();
@@ -86,9 +111,15 @@ export function fitModel(o: {
   });
   const inferred = scheduledResets(o.rows, o.manual);
   const manual = o.manual && { ...o.manual, resets: [...o.manual.resets, ...inferred] };
-  const hist = (manual ? manualWindows(manual) : []).flatMap((w) => intervals(w)).filter(covered).map(toObs);
+  const hist = (manual ? manualWindows(manual) : [])
+    .flatMap((w) => intervals(w))
+    .filter(covered)
+    .map(toObs);
   const { windows, stragglers } = ticks(freshReadings(o.rows));
-  const live = windows.flatMap((w) => intervals(w)).filter(covered).map(toObs);
+  const live = windows
+    .flatMap((w) => intervals(w))
+    .filter(covered)
+    .map(toObs);
   const fitOf = (obs: Obs[]) =>
     obs.length
       ? { fit: fitKLambda(obs), unc: uncertainty(obs, (x) => fitKLambda(x)), kOnly: fitKOnly(obs) }
@@ -98,8 +129,10 @@ export function fitModel(o: {
 
   // the log's own ΔQU over the live ticks, as a cross-check of the calls table
   const deltas = costDeltas(o.rows);
-  const span = live.length ? [live[0].t0, live.at(-1)!.t1] : null;
-  const logQU = span ? deltas.filter((d) => d.ts > span[0] && d.ts <= span[1]).reduce((a, d) => a + d.d, 0) : 0;
+  const span = live.length ? ([live[0]!.t0, live.at(-1)!.t1] as const) : null;
+  const logQU = span
+    ? deltas.filter((d) => d.ts > span[0] && d.ts <= span[1]).reduce((a, d) => a + d.d, 0)
+    : 0;
   const callQU = span ? q.between(span[0], span[1]) : 0;
 
   const lastWindow = windows.at(-1) ?? [];
@@ -126,5 +159,169 @@ export function fitModel(o: {
       since: b?.since ?? null,
     },
     coverage: { from: q.first, to: q.last },
+  };
+}
+
+export interface TypeRow {
+  type: PRType;
+  n: number;
+  min: number;
+  median: number;
+  max: number;
+  p80: number;
+  pctMedian: number | null;
+  pctP80: number | null;
+}
+export interface ReportModel {
+  fit: FitModel;
+  rows: PRRow[];
+  types: TypeRow[];
+  shrinkage: boolean;
+  logSd: number;
+  phaseShare: { phase: Phase; median: number; mean: number }[];
+  drivers: { what: string; rho: number }[];
+  top: PRRow[];
+  overhead: Overhead;
+  flags: { flag: string; calls: number; quShare: number }[];
+  additivity: { sessions: number; medianRatio: number | null; outside: number };
+  agreement: { share: number | null; sessions: number };
+  dupes: number;
+  orphans: number;
+  totalQU: number;
+  unattributedShare: number | null; // of lane QU in PR windows
+  rounds: ReturnType<typeof reviewRounds>;
+  concurrency: Concurrency;
+}
+
+export function reportModel(o: {
+  rows: MeterRow[];
+  manual: Manual | null;
+  loaded: Loaded;
+  prs: PR[];
+  reports: Map<string, string>;
+  events: JobEvent[];
+  since: number;
+  hub: string;
+  now: number;
+}): ReportModel {
+  const fit = fitModel({ rows: o.rows, manual: o.manual, calls: o.loaded.calls, now: o.now });
+  const a = attribute(o.loaded, o.hub);
+  const rows = prTable(a, o.prs, o.since);
+  const covered = rows.filter((r) => r.qu > 0);
+  const k = fit.all.fit?.k ?? null;
+  const sdLnK = fit.all.unc?.sdLnK;
+  const sh = shrinkLog(
+    Object.fromEntries(
+      PR_TYPES.map((t) => [t, covered.filter((r) => r.type === t).map((r) => r.qu)]),
+    ),
+  );
+  const sdPct = Math.sqrt(sh.s ** 2 + (Number.isFinite(sdLnK) ? (sdLnK as number) ** 2 : 0));
+  const types: TypeRow[] = sh.groups.map((g) => ({
+    type: g.group as PRType,
+    n: g.n,
+    min: g.min,
+    median: g.median,
+    max: g.max,
+    p80: g.p80,
+    pctMedian: k !== null && g.n ? g.median * k : null,
+    pctP80: k !== null && g.n ? Math.exp(Math.log(g.median * k) + 0.8416 * sdPct) : null,
+  }));
+  const phaseShare = PHASES.map((phase) => {
+    const shares = covered.map((r) => (r.byPhase[phase] ?? 0) / r.qu);
+    return {
+      phase,
+      median: median(shares),
+      mean: shares.reduce((x, y) => x + y, 0) / (shares.length || 1),
+    };
+  });
+  const qu = covered.map((r) => r.qu);
+  const drivers = (
+    [
+      ['main-session turns', covered.map((r) => r.turns)],
+      ['subagent runs', covered.map((r) => r.subagents)],
+      ['review rounds', covered.map((r) => r.rounds)],
+      ['files changed', covered.map((r) => r.files)],
+      ['lines changed', covered.map((r) => r.lines)],
+    ] as const
+  ).map(([what, x]) => ({ what, rho: spearman([...x], qu) }));
+
+  const flagAcc = new Map<string, { calls: number; qu: number }>();
+  let totalQU = 0;
+  for (const c of o.loaded.calls) {
+    totalQU += c.qu;
+    for (const f of c.flags) {
+      const v = flagAcc.get(f) ?? { calls: 0, qu: 0 };
+      v.calls++;
+      v.qu += c.qu;
+      flagAcc.set(f, v);
+    }
+  }
+
+  // additivity: each session's calls (with its subagents) against its own status-line cost over the log window
+  const bySid = new Map<string, MeterRow[]>();
+  for (const r of o.rows) {
+    if (r.cost === null) continue;
+    const list = bySid.get(r.sid) ?? [];
+    list.push(r);
+    bySid.set(r.sid, list);
+  }
+  const ratios: number[] = [];
+  for (const [sid, rs] of bySid) {
+    if (rs.length < 2) continue;
+    const logQU = costDeltas(rs).reduce((x, d) => x + d.d, 0);
+    if (logQU < 1) continue;
+    const callQU = a.calls
+      .filter((c) => c.session.endsWith(`/${sid}`) && c.ts > rs[0]!.ts && c.ts <= rs.at(-1)!.ts)
+      .reduce((x, c) => x + c.qu, 0);
+    ratios.push(callQU / logQU);
+  }
+
+  let agree = 0;
+  let total = 0;
+  let agreeSessions = 0;
+  const byTrack = new Map<string, { ts: number; qu: number }[]>();
+  for (const c of a.calls) {
+    if (c.role !== 'lane') continue;
+    const list = byTrack.get(c.track) ?? [];
+    list.push(c);
+    byTrack.set(c.track, list);
+  }
+  for (const [s, ms] of a.markers) {
+    const g = agreement(ms, byTrack.get(s) ?? []);
+    if (!g || !g.total) continue;
+    agree += g.agree;
+    total += g.total;
+    agreeSessions++;
+  }
+  const inPR = covered.reduce((x, r) => x + r.qu, 0);
+  return {
+    fit,
+    rows,
+    types,
+    shrinkage: sh.shrinkage,
+    logSd: sh.s,
+    phaseShare,
+    drivers,
+    top: [...covered].sort((x, y) => y.qu - x.qu).slice(0, 5),
+    overhead: overhead(a, rows),
+    flags: [...flagAcc].map(([flag, v]) => ({
+      flag,
+      calls: v.calls,
+      quShare: totalQU ? v.qu / totalQU : 0,
+    })),
+    additivity: {
+      sessions: ratios.length,
+      medianRatio: ratios.length ? median(ratios) : null,
+      outside: ratios.filter((r) => r < 0.85 || r > 1.1).length,
+    },
+    agreement: { share: total ? agree / total : null, sessions: agreeSessions },
+    dupes: o.loaded.dupes,
+    orphans: a.orphans,
+    totalQU,
+    unattributedShare: inPR
+      ? covered.reduce((x, r) => x + (r.byPhase.unattributed ?? 0), 0) / inPR
+      : null,
+    rounds: reviewRounds(a, rows, o.reports),
+    concurrency: concurrency(a, rows, o.events, o.since),
   };
 }
