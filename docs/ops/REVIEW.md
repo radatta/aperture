@@ -59,6 +59,10 @@ number, and the lens's own input (the UI checklist; the LLM flag). A session tha
 existed, or whose checkout lacks it, runs a general-purpose agent told to Read the lens file and follow it, on the
 file's model, with the container rule in words. A budget-tight kickoff may move the `fable` lens to `opus`.
 
+**Effort stays at `high`.** No lens, or any other agent, runs above `high` (`xhigh` or `max`) without an
+`[ask-maintainer]` through the hub and the maintainer's explicit yes. A lens that seems to need more is proposed to
+the hub with the numbers that show it, never raised in place.
+
 ## Finding shape
 
 Every lens reports one line per finding, worst first:
