@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ApplicationBundleVersion</key>
+	<integer>1</integer>
+	<key>ClassicMode</key>
+	<false/>
+	<key>ConfigurationIsManaged</key>
+	<false/>
+	<key>ContentMode</key>
+	<string>UIWebClipContentModeRecommended</string>
+	<key>Eligibility</key>
+	<integer>0</integer>
+	<key>FullScreen</key>
+	<true/>
+	<key>IconIsPrecomposed</key>
+	<false/>
+	<key>IconIsScreenShotBased</key>
+	<false/>
+	<key>IgnoreManifestScope</key>
+	<false/>
+	<key>IsAppClip</key>
+	<false/>
+	<key>Orientations</key>
+	<integer>0</integer>
+	<key>PlaceholderBundleIdentifier</key>
+	<string>com.apple.WebKit.PushBundle.44B65C6E668B4766A45899AF15FA4D1C</string>
+	<key>ScenelessBackgroundLaunch</key>
+	<false/>
+	<key>Title</key>
+	<string>Aperture</string>
+	<key>TrustedClientBundleIdentifiers</key>
+	<array>
+		<string>com.apple.mobilesafari</string>
+	</array>
+	<key>URL</key>
+	<string>https://dev.aperture.rahuldatta.dev/</string>
+	<key>WebClipStatusBarStyle</key>
+	<string>UIWebClipStatusBarStyleLegacyBlackTranslucent</string>
+</dict>
+</plist>

@@ -15,9 +15,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "cold save" ;;
-    2) echo "cold card" ;;
-    *) echo "cold card" ;;
+    1) echo "restore card" ;;
+    2) echo "restore card" ;;
+    *) echo "seed card" ;;
   esac
 }
 KEY="ios-probe-dev-26.5-v2" # the cached device; bump to re-save (cache keys are immutable)
@@ -247,9 +247,19 @@ s_boot_wait() {
   note "booted iOS $RUNTIME, udid $U ($(grep -c 'Data Migration' "$WORK/boot.log" 2>/dev/null || echo 0) migration lines)"
 }
 
-# Seed (option 3): the files Safari's Add to Home Screen wrote, captured by a cold run's export, copied into a fresh
-# device's data before its first boot. Not built yet: run 6 captures what they are.
-seed_webclip() { note "seed: no captured webclip yet"; return 1; }
+# Seed (option 3): the webclip bundle Safari's Add to Home Screen wrote on run 6 (scripts/ci/ios-probe-seed/: its
+# Info.plist says FullScreen, URL dev), copied into a fresh device's data before its first boot, so SpringBoard
+# finds it as it builds the Home Screen. No Safari, no download. Whether iOS 26 also needs the placeholder app
+# install coordination made is what this tests.
+seed_webclip() {
+  local d="$DEVICES/$U/data/Library/WebClips" w
+  mkdir -p "$d" || return 1
+  for w in "$(cd "$(dirname "$0")" && pwd -P)"/ios-probe-seed/*.webclip; do
+    cp -R "$w" "$d/" || return 1
+    mkdir -p "$d/$(basename "$w")/Storage" "$d/$(basename "$w")/StagedCookies"
+  done
+  note "seeded $(ls "$d" | tr '\n' ' ')"
+}
 # What Add to Home Screen changed in the device (paths since the marker), and the WebClips and SpringBoard state.
 export_webclip() {
   local d="$DEVICES/$U/data"
