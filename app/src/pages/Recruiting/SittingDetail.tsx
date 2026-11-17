@@ -10,7 +10,7 @@ import {
   sittingMinutes,
   sittingProblemUrl,
 } from '@aperture/shared';
-import type { SittingDetail as Detail } from '@aperture/shared';
+import type { Sitting, SittingDetail as Detail } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
@@ -20,6 +20,7 @@ import {
   useReopenSitting,
   useSitting,
   useSittings,
+  useVoidSitting,
 } from '../../data/hooks/useSittings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { fmtDuration } from '../../lib/format';
@@ -223,6 +224,19 @@ function Loaded({
       )}
 
       <ReviewForm key={sitting.id} sitting={sitting} />
+
+      {sitting.claudeNotes?.text && (
+        <section aria-labelledby="claude-notes" className="flex flex-col gap-1">
+          <Text as="h2" id="claude-notes" size="lg" weight="semibold">
+            Claude’s notes
+          </Text>
+          <Text as="p" size="sm" className="whitespace-pre-line">
+            {sitting.claudeNotes.text}
+          </Text>
+        </section>
+      )}
+
+      <VoidControl sitting={sitting} />
     </article>
   );
 }
@@ -261,6 +275,36 @@ function IdleClosed({
         <p role="alert" className="text-sm text-danger">
           {reopen.error instanceof Error ? reopen.error.message : 'Couldn’t reopen it.'}
         </p>
+      )}
+    </div>
+  );
+}
+
+// A test sitting (the extension tried, a warm-up) is voided, not deleted: out of the plan, stats and re-solves, and
+// back with one tap. One button whose label flips, so focus stays put; a refused write says why inline.
+function VoidControl({ sitting }: { sitting: Sitting }) {
+  const v = useVoidSitting();
+  const voided = sitting.review?.test === true;
+  return (
+    <div className="flex flex-col gap-2">
+      {voided && (
+        <Text as="p" size="sm" className="rounded-xl border border-line bg-panel px-3 py-2">
+          Doesn’t count — left out of the plan, stats and re-solves.
+        </Text>
+      )}
+      <Button
+        variant="quiet"
+        size="sm"
+        className="self-start"
+        aria-disabled={v.isPending || undefined}
+        onClick={() => !v.isPending && v.mutate({ id: sitting.id, test: !voided })}
+      >
+        {voided ? 'Count it again' : 'Doesn’t count'}
+      </Button>
+      {v.isError && (
+        <Text as="p" size="xs" tone="danger" role="alert">
+          Couldn’t change that — {(v.error as Error).message || 'try again'}.
+        </Text>
       )}
     </div>
   );

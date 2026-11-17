@@ -1110,6 +1110,16 @@ export const isEmptyReview = (r: SittingReviewInput): boolean =>
   (r.help ?? 'none') === 'none' &&
   !r.cause &&
   r.test !== true;
+// Whether a stored review says anything of the user's own: a review that only voids the sitting (the test flag) is
+// no review — the list's reviewed mark and list_sittings' `reviewed` read this.
+export const hasReviewWords = (r: SittingReview | null | undefined): boolean =>
+  !!r &&
+  (!!r.insight ||
+    !!r.howItWent ||
+    r.mistakes.length > 0 ||
+    r.tags.length > 0 ||
+    !!r.cause ||
+    r.help !== 'none');
 const EMPTY_REVIEW: SittingReviewInput = {
   insight: null,
   help: 'none',

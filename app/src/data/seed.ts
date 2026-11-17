@@ -15,7 +15,6 @@ import {
   foldLive,
   foldSummary,
   headRowOf,
-  legacyFixture,
   isHeadEvent,
   normalizeSittingEvents,
   PREP_TARGET_DEFAULT,
@@ -988,7 +987,4 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       }),
     );
   });
-
-  // The pre-sittings capture's rows (read-only, legacy attempts in the coach) — synthetic, a month back.
-  store.legacyLeetcodeAttempts = legacyFixture(dayKey(nowMs, START_HOUR), nowMs - 30 * DAY);
 }

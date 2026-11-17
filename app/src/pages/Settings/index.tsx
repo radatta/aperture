@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
-import { AREA_LABEL, AREAS, areaOf } from '@aperture/shared';
-import type { Area, CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
+import { AREA_LABEL, AREAS, areaOf, COACH_PARAMS } from '@aperture/shared';
+import type {
+  Area,
+  CalendarRef,
+  Category,
+  CoachPlanMode,
+  GoogleCalendar,
+  Settings,
+} from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
@@ -899,6 +906,30 @@ function LeetcodeSection() {
             </Text>
           </span>
         </label>
+        {/* The plan's slot mix (docs/areas/recruiting/coach.md → Plan mode). Old rows read undefined = auto. */}
+        <fieldset className="flex flex-col gap-1">
+          <legend>
+            <Text size="sm">Plan mode</Text>
+          </legend>
+          {PLAN_MODE_OPTIONS.map((o) => (
+            <label key={o.value} className="flex items-start gap-2">
+              <input
+                type="radio"
+                name="coach-plan-mode"
+                className="mt-1"
+                value={o.value}
+                checked={(settings.coachPlanMode ?? 'auto') === o.value}
+                onChange={() => update.mutate({ coachPlanMode: o.value })}
+              />
+              <span className="flex flex-col">
+                <Text size="sm">{o.label}</Text>
+                <Text size="xs" tone="muted">
+                  {o.hint}
+                </Text>
+              </span>
+            </label>
+          ))}
+        </fieldset>
         {update.isError && (
           <p role="alert" className="text-xs text-danger">
             Couldn&apos;t save that — try again.
@@ -908,6 +939,23 @@ function LeetcodeSection() {
     </section>
   );
 }
+const PLAN_MODE_OPTIONS: { value: CoachPlanMode; label: string; hint: string }[] = [
+  {
+    value: 'auto',
+    label: 'Auto',
+    hint: `Catch-up while ${COACH_PARAMS.catchUp.enterDue} or more re-solves are due, back to Balanced below ${COACH_PARAMS.catchUp.exitDue}.`,
+  },
+  {
+    value: 'balanced',
+    label: 'Balanced',
+    hint: 'A mix: carry-over, new, re-solve, stretch.',
+  },
+  {
+    value: 'catch-up',
+    label: 'Catch-up',
+    hint: 'Re-solves fill every slot but one new; no stretch.',
+  },
+];
 
 function FluxVoiceCard() {
   const voice = useVoice();

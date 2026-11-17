@@ -735,3 +735,57 @@ describe('the stub’s sittings', () => {
     expect(screen.getByLabelText<HTMLInputElement>('One-liner').value).toBe('keep me');
   });
 });
+
+describe('void and Claude’s notes', () => {
+  it('Doesn’t count voids the sitting (a notice, the list marks it), survives a reload, and Count it again undoes it', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    const before = (await api.listProblemRecords()).some((r) => r.sittingIds.includes(id));
+    expect(before).toBe(true);
+    const view = await open(api);
+    const btn = await screen.findByRole('button', { name: 'Doesn’t count' });
+    await user.click(btn);
+    expect(await screen.findByText(/Doesn’t count — left out of the plan/)).toBeTruthy();
+    const again = screen.getByRole('button', { name: 'Count it again' });
+    expect(document.activeElement).toBe(again); // the same button, its label flipped
+    await waitFor(async () =>
+      expect((await api.listProblemRecords()).some((r) => r.sittingIds.includes(id))).toBe(false),
+    );
+    view.unmount();
+    await open(api);
+    expect(await screen.findByText(/Doesn’t count — left out of the plan/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Count it again' }));
+    await waitFor(() => expect(screen.queryByText(/left out of the plan/)).toBeNull());
+    expect((await api.getSitting(id)).sitting.review?.test ?? false).toBe(false);
+  });
+
+  it('a voided sitting with no review words shows no reviewed mark, but says Doesn’t count', async () => {
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    await api.patchSittingReview(id, { test: true });
+    const review = (await api.getSitting(id)).sitting.review;
+    renderApp({ api, path: '/recruiting' });
+    const row = await screen.findByRole('link', { name: /Two Sum/ });
+    expect(within(row).getByText('Doesn’t count')).toBeTruthy();
+    if (review && !review.insight && !review.mistakes.length && review.help === 'none')
+      expect(within(row).queryByLabelText('reviewed')).toBeNull();
+  });
+
+  it('Claude’s notes show under the review, apart from it, and only when written', async () => {
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    const view = await open(api);
+    await screen.findByRole('heading', { name: 'Two Sum' });
+    expect(screen.queryByRole('heading', { name: 'Claude’s notes' })).toBeNull();
+    view.unmount();
+    await api.setSittingClaudeNotes([
+      { sittingId: id, text: 'Traced the empty case first.\nFirst submit failed on duplicates.' },
+    ]);
+    await open(api);
+    const h = await screen.findByRole('heading', { name: 'Claude’s notes' });
+    const section = h.closest('section')!;
+    expect(within(section).getByText(/Traced the empty case first\./)).toBeTruthy();
+    expect(screen.getByLabelText<HTMLInputElement>('One-liner')).toBeTruthy();
+  });
+});

@@ -356,3 +356,24 @@ describe('flux voice (D58)', () => {
     expect(screen.queryByLabelText('Voice')).toBeNull();
   });
 });
+
+describe('the coach’s plan mode', () => {
+  it('reads Auto by default, saves a pick, and the day’s plan follows', async () => {
+    const api = createStubClient({ seed: true, storageKey: `settings-mode-${Math.random()}` });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    const auto = (await screen.findByRole('radio', { name: /^Auto/ })) as HTMLInputElement;
+    expect(auto.checked).toBe(true);
+    await user.click(screen.getByRole('radio', { name: /^Catch-up/ }));
+    await waitFor(async () => expect((await api.getSettings()).coachPlanMode).toBe('catch-up'));
+    expect((await api.getCoachToday()).planMode).toMatchObject({
+      setting: 'catch-up',
+      mode: 'catch-up',
+    });
+    expect((screen.getByRole('radio', { name: /^Catch-up/ }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    await user.click(screen.getByRole('radio', { name: /^Balanced/ }));
+    await waitFor(async () => expect((await api.getSettings()).coachPlanMode).toBe('balanced'));
+  });
+});

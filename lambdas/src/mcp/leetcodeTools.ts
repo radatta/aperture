@@ -182,7 +182,7 @@ function sittingRow(s: Sitting, now: number) {
     submitCount: s.summary.submits,
     outcome: outcomeOf(s),
     prepTarget: s.prepTarget,
-    reviewed: !!s.review,
+    reviewed: hasReviewWords(s.review),
     tags: s.review?.tags ?? [],
   };
 }

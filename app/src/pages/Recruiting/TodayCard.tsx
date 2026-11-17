@@ -113,6 +113,10 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
   return (
     <div className="flex flex-col gap-4">
       <FocusLine today={today} />
+      {/* The plan mode in one line (coach.md → Plan mode): what the mix is today and why. */}
+      <Text size="xs" tone="muted" data-testid="plan-mode">
+        {today.planMode.line}
+      </Text>
 
       {ai?.status === 'ok' && ai.focusChange && (
         <Text size="xs" tone="muted">
@@ -232,7 +236,7 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
                   <Text as="span" size="xs" tone="subtle">
                     {' '}
                     · {PATTERN_NAMES[q.pattern]}
-                    {q.track === 'peeked' ? ' · peeked' : ''}
+                    {q.track === 'retry' ? ' · retry' : ''}
                   </Text>
                 </Text>
                 <Text size="xs" tone="muted" className="shrink-0">
