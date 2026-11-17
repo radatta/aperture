@@ -129,6 +129,23 @@ describe('simTrial', () => {
     expect(h.jobs).toHaveLength(2);
     expect(h.logs.join('\n')).toMatch(/^tap +12 +2 /m);
   });
+  it('a round with no readable count is exit 1, never a zero', async () => {
+    const h = harness((job) => result(job));
+    const runner = async (_: unknown, job: SimJob) => {
+      const r = await h.runner(_, job);
+      if (h.jobs.length === 3) h.d.fs.rename(`${HJ}/results/${job.id}/trial.jsonl`, `${HJ}/gone`);
+      return r;
+    };
+    expect(await simTrial(h.d, 'idle', runner)).toBe(1);
+    expect(h.logs.join('\n')).toContain('FAILED: no trial.jsonl lines');
+    expect(h.logs.join('\n')).toContain('sim-shutdown');
+  });
+  it('an unreadable line is counted, not skipped', () => {
+    expect(parseTrial('{"load":{"start":"-","end":"-"}}\nnot json\n')).toMatchObject({
+      bad: 1,
+      lines: [],
+    });
+  });
   it('refuses a bad tag', async () => {
     const h = harness((job) => result(job));
     expect(await simTrial(h.d, 'Idle Mac', h.runner)).toBe(2);

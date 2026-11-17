@@ -50,7 +50,7 @@ SIM_JQ='
   def text: type == "string" and length <= 200 and (explode | all(. >= 32 and . != 127));
   def lbl: whole("^[A-Za-z0-9 .,:;()/+_&'"'"'?…-]{1,60}$");
   def asname: whole("^[a-z][a-z0-9-]{0,23}$");
-  def via: if has("via") then (.via | type == "string" and (. as $v | ["tap","post","hid","batch","batch15"] | index($v)) != null) else true end;
+  def via: if has("via") then has("in") and (.via | type == "string" and (. as $v | ["tap","post","hid","batch","batch15"] | index($v)) != null) else true end;
   def role: type == "string" and (. as $r | ["AXButton","AXLink","AXTextArea","AXTextField","AXStaticText","AXCheckBox"] | index($r) != null);
   def where:
     ((has("near")) != (has("scan")))
@@ -1205,13 +1205,15 @@ sim_trial() {
 # The field, read where `in` was found: SIM_TYPED_OK=1 when it holds the text (case-insensitive: the app's fields
 # auto-capitalise), and SIM_TYPED is what it read, filtered like a MISS note.
 sim_typed_read() {
-  local e
+  local e r="${4:-}"
+  [ -n "$r" ] || r='{}'
   SIM_TYPED_OK="" SIM_TYPED_LEN=0
   rm -f "$SIM_P.unread"
   e="$(sim_point "$2" "$3")" || return 1
   sim_hung_err "reading the typed text" && return 1
   SIM_TYPED="$(jq -r '"\(.role // "") \"\((.value // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:40])\""' <<<"$e")"
-  SIM_TYPED_LEN="$(jq -r '(.value // "") | length' <<<"$e")"
+  # letters held, for a trial's count: the placeholder `in` recorded while empty (iOS reads it as the value) is none
+  SIM_TYPED_LEN="$(jq -r --argjson r "$r" '(.value // "") | if . == "" or . == ($r.value // "") then 0 else length end' <<<"$e")"
   if jq -e --arg t "$1" '((.value // "") | ascii_downcase) == $t' <<<"$e" >/dev/null 2>&1; then SIM_TYPED_OK=1; fi
 }
 
@@ -1221,7 +1223,7 @@ sim_typed_read() {
 # the note says so, so a rising drop rate stays visible. Assumes the field held nothing before.
 # A trial's `via` also counts the first read-back's drops (letters missing; at least 1 when it reads wrong) in trial.jsonl.
 sim_op_keys() {
-  local text field x y cx cy tries=0 first="" via t0 ms drops
+  local text field r x y cx cy tries=0 first="" via t0 ms drops
   text="$(jq -r .text <<<"$1")"
   field="$(jq -r '.in // ""' <<<"$1")"
   via="$(jq -r '.via // ""' <<<"$1")"
@@ -1232,12 +1234,13 @@ sim_op_keys() {
   ms=$(($(sim_ms) - t0))
   SIM_NOTE="typed ${#text} keys"
   [ -n "$field" ] || return 0
-  read -r x y cx cy < <(sim_read_get "$field" | jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"')
+  r="$(sim_read_get "$field")"
+  read -r x y cx cy < <(jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$r")
   while :; do
-    sim_typed_read "$text" "$x" "$y" || return 1
+    sim_typed_read "$text" "$x" "$y" "$r" || return 1
     if [ -z "$SIM_TYPED_OK" ]; then
       sleep 1
-      sim_typed_read "$text" "$cx" "$cy" || return 1
+      sim_typed_read "$text" "$cx" "$cy" "$r" || return 1
     fi
     if [ -n "$via" ] && [ "$tries" = 0 ]; then
       drops=0
@@ -1287,7 +1290,7 @@ sim_erased_read() {
 # A trial's `via` also counts the first read-back's letters left in trial.jsonl (with n = the letters typed, each is a
 # dropped delete).
 sim_op_erase() {
-  local n field r x y cx cy rounds=0 more first="" more1="" found via t0 ms drops
+  local n field r x y cx cy rounds=0 more first="" more1="" found left via t0 ms drops
   n="$(jq -r '.n | floor' <<<"$1")"
   via="$(jq -r '.via // ""' <<<"$1")"
   SIM_VIA="${via:-tap}"
@@ -1302,15 +1305,17 @@ sim_op_erase() {
   read -r x y cx cy < <(jq -r '"\(.at.x // 0) \(.at.y // 0) \((.frame.x // 0) + (.frame.w // 0) / 2 | floor) \((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$r")
   while :; do
     sim_erased_read "$r" "$x" "$y" || return 1
-    found="$SIM_ERASED_FIELD"
+    found="$SIM_ERASED_FIELD" left="$SIM_LEFT"
     if [ -z "$SIM_ERASED_OK" ]; then
       sleep 1
       sim_erased_read "$r" "$cx" "$cy" || return 1
       [ -z "$SIM_ERASED_FIELD" ] || found=1
+      [ "$SIM_LEFT" -le "$left" ] || left="$SIM_LEFT" # the most either look saw: the centre can hit another element
     fi
+    [ "$left" -ge 1 ] || left=1
     if [ -n "$via" ] && [ "$rounds" = 0 ] && [ -n "$found" ]; then
       drops=0
-      [ -n "$SIM_ERASED_OK" ] || drops="$SIM_LEFT"
+      [ -n "$SIM_ERASED_OK" ] || drops="$left"
       sim_trial erase "$n" "$drops" "$ms"
       SIM_NOTE="$SIM_NOTE; via $via, drops $drops"
     fi
@@ -1324,7 +1329,7 @@ sim_op_erase() {
       sim_fail ERASED "deleted $n, then more twice; the field still reads $SIM_ERASED at $x,$y: iOS dropped the input; rerun the step, don't debug the app"
       return 1
     fi
-    more=$((SIM_LEFT + 2))
+    more=$((left + 2))
     [ "$more" -le 24 ] || more=24
     [ -z "$more1" ] && more1="$more" || more1="$more1 and $more"
     rounds=$((rounds + 1))
