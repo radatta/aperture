@@ -145,17 +145,20 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   return want.includes(title) ? null : `“${title}”, want “${want.join('” or “')}”`;
 }
 
-// Four at a time (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the model is
-// nondeterministic, the server's guard isn't — and the first-try tally logged.
+// Four at a time by default (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the
+// model is nondeterministic, the server's guard isn't — and the first-try tally logged. Captures go one at a time
+// (`batch` 1): each is up to three conditional writes on its token's one row, and four at once lost that race on
+// dev (2026-11-17, a 500) — a race no Shortcut or hotkey makes.
 async function sample(
   ctx: Ctx,
   what: string,
   samples: Sample[],
   check: (s: Sample, attempt: number) => Promise<string | null>,
+  batch = 4,
 ): Promise<string[]> {
   const first: (string | null)[] = [];
-  for (let i = 0; i < samples.length; i += 4)
-    first.push(...(await Promise.all(samples.slice(i, i + 4).map((s) => check(s, 0)))));
+  for (let i = 0; i < samples.length; i += batch)
+    first.push(...(await Promise.all(samples.slice(i, i + batch).map((s) => check(s, 0)))));
   const fails: string[] = [];
   for (const [i, m] of first.entries()) {
     if (m === null) continue;
@@ -369,6 +372,7 @@ export const captureTitles: Scenario = {
               const title = (await ctx.api.reads.getTask(r.id))?.title;
               return title === s.title ? null : `“${title}”, want “${s.title}”`;
             },
+            1,
           );
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
         } finally {
