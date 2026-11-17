@@ -57,6 +57,7 @@ function stress(v) {
     v.active[2].state = 'HOLD';
   }
   v.slots[0] = { ...v.slots[0], branch: 'a-fifty-character-branch-name-for-the-dev-slot-card', session: 'auto-6', detail: LONG('slot'), live: true, state: 'live' };
+  v.behind = { head: 'f'.repeat(40), files: 12 }; // the header chip reads "behind main · N off"
   v.slots[1] = { ...v.slots[1], branch: null, live: false, state: 'unknown', why: `refresh failed (${LONG('why')}), last read 05:59`, asOf: now - 400000 };
   v.sources = v.sources.map((s, i) => (i < 12 ? { ...s, state: 'failed', detail: LONG('src') } : s));
   v.next.plan = [LONG('plan')];

@@ -370,7 +370,7 @@ describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
     expect(firedAt('2026-11-14 (after a trial)', merged, now)).toBe(
       new Date(2026, 10, 14).getTime(),
     );
-    expect(firedAt('Sat 11-14 (flip day)', merged, now)).toBe(new Date(2026, 10, 14).getTime());
+    expect(firedAt('Sat 11-14 (demo day)', merged, now)).toBe(new Date(2026, 10, 14).getTime());
     expect(firedAt('11-01', merged, now)).toBe(new Date(2026, 10, 1).getTime()); // two weeks back: this year
     // written in December for early January: next year's, not eleven months ago
     expect(firedAt('01-05 (new year)', merged, new Date(2026, 11, 20).getTime())).toBe(
@@ -383,8 +383,8 @@ describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
     expect(firedAt('2026-11-14T09:00:00Z', merged, now)).toBe(Date.parse('2026-11-14T09:00:00Z'));
     for (const a of [
       'wave 4',
-      'repo goes public',
-      'lane deploy-log-mask (before the flip)',
+      'audit goes green',
+      'lane kilo-branch (before the cutover)',
       'next CI lane',
       '1-2 days after tower merge',
       '2-3 merges',

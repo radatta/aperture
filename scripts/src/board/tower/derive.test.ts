@@ -142,6 +142,7 @@ function inputs(
   return {
     now: NOW,
     version: sha('f'),
+    behind: null,
     tower,
     lanes: over.lanes ?? [],
     laneProblems: [],
@@ -150,7 +151,6 @@ function inputs(
     checks: (s) =>
       over.checks?.[s] ? { runs: over.checks[s]!, at: NOW - MIN, error: null } : null,
     files: (s) => (over.files?.[s] ? { files: over.files[s]!, error: null } : null),
-    minutes: null,
     mac: over.mac ?? mac,
     aws,
     tests: 1,
@@ -372,7 +372,7 @@ describe('the accuracy audit (2026-11-14)', () => {
 
   it("YOU NEXT counts the rest; the maintainer's undated plan steps follow", () => {
     const plan = [
-      { at: null, what: 'Flip the repo public', kind: 'maintainer' as const, who: null },
+      { at: null, what: 'Rotate the test key', kind: 'maintainer' as const, who: null },
       { at: null, what: 'Land in order', kind: 'dev' as const, who: null },
       { at: NOW - 3 * 3600e3, what: 'Long past', kind: 'maintainer' as const, who: null },
       { at: null, what: 'Install the trial', kind: 'maintainer' as const, who: null },
@@ -389,10 +389,10 @@ describe('the accuracy audit (2026-11-14)', () => {
     expect(v.next).toMatchObject({
       maintainer: 'a',
       more: 1,
-      plan: ['Flip the repo public', 'Install the trial'],
+      plan: ['Rotate the test key', 'Install the trial'],
     });
     expect(derive(inputs({ plan })).next).toMatchObject({
-      maintainer: 'Flip the repo public',
+      maintainer: 'Rotate the test key',
       more: 0,
       plan: ['Install the trial'],
     });
@@ -405,7 +405,7 @@ describe('the accuracy audit (2026-11-14)', () => {
     ];
     expect(derive(inputs({ plan: timed })).next).toMatchObject({
       maintainer: 'In an hour',
-      plan: ['Flip the repo public', 'Install the trial'],
+      plan: ['Rotate the test key', 'Install the trial'],
     });
   });
 
@@ -642,7 +642,6 @@ describe('sources: every source with its age; failed is failed, never empty', ()
       'gh PRs',
       'gh runs',
       'gh checks',
-      'Actions minutes',
       'Mac stats',
       'AWS costs',
       'lane files',
@@ -651,7 +650,6 @@ describe('sources: every source with its age; failed is failed, never empty', ()
     expect(s['dev lock']).toMatchObject({ state: 'failed', detail: 'refresh failing' });
     expect(s['gh PRs']).toMatchObject({ state: 'failed', detail: 'HTTP 502' });
     expect(s['gh runs']!.state).toBe('stale');
-    expect(s['Actions minutes']!.state).toBe('missing');
     // a failed PR read keeps the last list: the lanes still show
     expect(derive(i).active.map((r) => r.branch)).toEqual(['echo']);
   });
@@ -993,5 +991,76 @@ describe('round 4', () => {
       state: 'failed',
       detail: 'holder expiry unreadable',
     });
+  });
+});
+
+describe('finished lanes leave NOW (2026-11-16)', () => {
+  const merged = (over: Partial<Pr> = {}) =>
+    pr({ state: 'MERGED', mergedAt: NOW - 30 * MIN, mergeSha: sha('9'), ...over });
+  const deploy = (over: Partial<GhRun> = {}) =>
+    run({ name: 'Deploy', event: 'push', branch: 'main', sha: sha('9'), ...over });
+
+  it('merged, deploying, deployed and failed lanes show only in DONE TODAY; the failed deploy is still a need', () => {
+    const cases: [string, GhRun[]][] = [
+      ['MERGED', []],
+      ['DEPLOYING', [deploy({ status: 'in_progress', conclusion: null })]],
+      ['DONE', [deploy()]],
+      ['DEPLOY FAILED', [deploy({ conclusion: 'failure' })]],
+    ];
+    for (const [state, runs] of cases) {
+      const i = inputs({ prs: [merged()], runs, lanes: [file({ phase: 'pr', pr: 50 })] });
+      expect(row(i, { file: file({ phase: 'pr', pr: 50 }), pr: merged() }).state).toBe(state);
+      const v = derive(i);
+      expect(v.active.map((r) => r.branch)).toEqual([]);
+      expect(v.done.map((d) => d.number)).toEqual([50]);
+      expect(v.needs.some((n) => n.kind === 'deploy')).toBe(state === 'DEPLOY FAILED');
+    }
+  });
+
+  it('a merged or cleanup lane file with no PR in the list is off NOW, even holding a lock (its slot card shows it)', () => {
+    for (const phase of ['merged', 'cleanup'] as const) {
+      const v = derive(inputs({ lanes: [file({ phase })], lock: lock('echo') }));
+      expect(v.active).toEqual([]);
+      expect(v.slots[0]!.branch).toBe('echo');
+    }
+    // a merged PR still holding the lock: the same
+    const v = derive(inputs({ prs: [merged()], runs: [deploy()], lock: lock('echo') }));
+    expect(v.active).toEqual([]);
+    expect(v.slots[0]!.branch).toBe('echo');
+  });
+
+  it('a merged lane file with an OPEN PR stays visible as the PR (PRs are truth over lane files)', () => {
+    const v = derive(
+      inputs({ prs: [pr()], checks: green, lanes: [file({ phase: 'merged', pr: 50 })] }),
+    );
+    // a green open PR is MERGE ME: a merge item in NEEDS YOU, not a finished lane
+    expect(v.needs.filter((n) => n.kind === 'merge').map((n) => n.branch)).toEqual(['echo']);
+    expect(
+      row(inputs({ prs: [pr()], checks: green }), { file: file({ phase: 'merged' }), pr: pr() })
+        .state,
+    ).toBe('MERGE ME');
+  });
+
+  it('a merged lane file with a closed PR is MERGED, never BUILDING or SLIPPING as quiet', () => {
+    const old = file({ phase: 'merged', pr: 50, updatedAt: NOW - 30 * 3600e3 });
+    const closed = pr({ state: 'CLOSED' });
+    expect(row(inputs(), { file: old, pr: closed })).toMatchObject({ state: 'MERGED' });
+    const v = derive(inputs({ prs: [closed], lanes: [old] }));
+    expect(v.active).toEqual([]);
+    expect(v.slipping.filter((s) => s.kind === 'quiet')).toEqual([]);
+  });
+
+  it("a merged lane's ask is dropped when written before the merge, kept when written after", () => {
+    const needs = { what: 'admit the branch', link: null, cmd: 'x', unblocks: null };
+    const before = file({ phase: 'pr', pr: 50, needs, updatedAt: NOW - 40 * MIN });
+    const after = file({ phase: 'merged', pr: 50, needs, updatedAt: NOW - 10 * MIN });
+    const lanes = (f: LaneFile) =>
+      derive(inputs({ prs: [merged()], runs: [deploy()], lanes: [f] })).needs;
+    expect(lanes(before).filter((n) => n.kind === 'lane')).toEqual([]);
+    expect(
+      lanes(after)
+        .filter((n) => n.kind === 'lane')
+        .map((n) => n.what),
+    ).toEqual([expect.stringContaining('admit the branch')]);
   });
 });

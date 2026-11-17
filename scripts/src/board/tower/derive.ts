@@ -3,8 +3,8 @@
 // Truth comes from locks, PRs and Actions runs; lane files add the phase, the step and what the maintainer must do.
 import { SHAPE_PATHS } from '../../deploy-base.ts';
 import { hhmm } from './fmt.ts';
-import type { Checks, Cached, GhRun, Minutes } from './gh.ts';
-import { ACTIONS_INCLUDED_MIN } from './gh.ts';
+import type { Behind } from './behind.ts';
+import type { Checks, Cached, GhRun } from './gh.ts';
 import type { Costs, MacRead } from './health.ts';
 import type { LaneFile, LaneProblem, Needs } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
@@ -91,23 +91,16 @@ export type Health = {
   } | null;
   mac: MacRead;
   macReady: boolean; // the installer is on main (else the Mac tile says it installs at merge)
-  actions: {
-    minutes: number;
-    of: number;
-    counted: number;
-    total: number;
-    month: string;
-    capped: boolean;
-  } | null;
   aws: Costs;
 };
 export type View = {
   v: 1;
   now: number;
   version: string | null;
+  behind: Behind | null; // the checkout moved past the served commit in a tower file: run `pnpm board sync-main`
   needs: NeedItem[];
   slots: SlotCard[];
-  active: LaneRow[]; // NOW: building, testing, PR, checks failed, merged, deploying
+  active: LaneRow[]; // NOW: in-flight lanes (needs you, ready, on dev, building, testing, PR, checks failed)
   next: {
     // dispatch's landing order (queue.json mergeOrder), each entry with its lane's row; merged ones dropped
     order: { branch: string; pr: number | null; note: string | null; row: LaneRow }[];
@@ -144,6 +137,7 @@ export type View = {
 export type Inputs = {
   now: number;
   version: string | null;
+  behind: Behind | null;
   tower: TowerState;
   lanes: LaneFile[];
   laneProblems: LaneProblem[];
@@ -151,7 +145,6 @@ export type Inputs = {
   runs: Cached<GhRun[]>; // the newest runs: main Deploy + deploy-dev dispatches
   checks: (sha: string) => Checks | null;
   files: (sha: string) => { files: string[] | null; error: string | null } | null;
-  minutes: { state: Cached<Minutes | null> } | null;
   mac: MacRead;
   aws: Costs;
   tests: number;
@@ -170,7 +163,6 @@ export const STALE = {
   queue: 7200,
   lane: 7200,
   laneQuiet: 86400,
-  minutes: 7200,
 };
 const PARKED = /^PARKED/i; // dispatch's word for a parked lane, at the start of its waitingOn
 const RUN_FRESH_MS = 2 * 3600e3; // a ledger run with no end older than this is an orphan, not in flight
@@ -403,6 +395,19 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     );
   }
 
+  // a lane file past its merge, with no open PR (none in the newest 40, or a closed one): finished, so off NOW even
+  // while it still holds a lock (its slot card shows that). An open PR wins: PRs are truth over lane files.
+  if (file && (file.phase === 'merged' || file.phase === 'cleanup') && pr?.state !== 'OPEN')
+    return row(
+      'MERGED',
+      'MERGED',
+      pr
+        ? `lane file says ${file.phase}; PR ${pr.number} is ${pr.state.toLowerCase()}`
+        : 'PR not in the newest 40 read; `pnpm board lane --clear` at Cleanup',
+      'warn',
+      file.phaseSince,
+    );
+
   for (const slot of ['dev', 'devb'] as const) {
     const lock = slot === 'dev' ? i.tower.lock : i.tower.lockB;
     if (liveLock(lock, i.now) && lock.branch === branch) {
@@ -492,15 +497,6 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
         return row('BUILDING', 'BUILDING', words, 'normal', null);
     }
   }
-  // a lane file past its merge whose PR is no longer in the PR list (the newest 40): Cleanup clears it
-  if ((file.phase === 'merged' || file.phase === 'cleanup') && !pr)
-    return row(
-      'MERGED',
-      'MERGED',
-      'PR not in the newest 40 read; `pnpm board lane --clear` at Cleanup',
-      'warn',
-      file.phaseSince,
-    );
   const word: Record<string, string> = {
     plan: 'Plan',
     build: 'Build',
@@ -617,7 +613,13 @@ export function derive(i: Inputs): View {
 
   // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for the maintainer, sources only the maintainer can fix.
   const needs: NeedItem[] = [];
-  for (const l of i.lanes) if (l.needs) needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
+  for (const l of i.lanes) {
+    if (!l.needs) continue;
+    // an ask written before its lane's PR merged is finished with the lane; one written after is deliberate
+    const p = prFor(l.branch, prs, queued.get(l.branch)?.pr ?? null, l.pr ?? null);
+    if (p?.state === 'MERGED' && p.mergedAt !== null && l.updatedAt < p.mergedAt) continue;
+    needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
+  }
   // an unreadable lane file may have carried a needs item: say so where the maintainer looks first
   for (const p of i.laneProblems)
     needs.push({
@@ -720,7 +722,8 @@ export function derive(i: Inputs): View {
     };
   });
 
-  // WAITING lanes show in NEXT's dev order, not in NOW
+  // WAITING lanes show in NEXT's dev order, not in NOW; finished ones (merged, deploying, deployed, failed) only in
+  // DONE TODAY, whose deploy marks and the DEPLOY FAILED need come from the PRs, not from NOW
   const nowStates: State[] = [
     'NEEDS YOU',
     'READY',
@@ -729,9 +732,6 @@ export function derive(i: Inputs): View {
     'TESTING',
     'PR',
     'CHECKS FAILED',
-    'MERGED',
-    'DEPLOYING',
-    'DEPLOY FAILED',
   ];
   const byBranch = new Map(rows.map((r) => [r.branch, r]));
   // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
@@ -836,11 +836,11 @@ export function derive(i: Inputs): View {
   ];
 
   const g = t.gauges;
-  const m = i.minutes?.state.value ?? null;
   return {
     v: 1,
     now: i.now,
     version: i.version,
+    behind: i.behind,
     needs,
     slots,
     active: rows.filter((r) => nowStates.includes(r.state)),
@@ -864,16 +864,6 @@ export function derive(i: Inputs): View {
         : null,
       mac: i.mac,
       macReady: i.macInstallReady,
-      actions: m
-        ? {
-            minutes: m.minutes,
-            capped: m.capped,
-            of: ACTIONS_INCLUDED_MIN,
-            counted: m.counted,
-            total: m.total,
-            month: m.month,
-          }
-        : null,
       aws: i.aws,
     },
     slipping,
@@ -976,15 +966,6 @@ export function sources(i: Inputs): SourceRow[] {
             detail: `${open.length} open PRs`,
           },
   );
-  if (i.minutes) {
-    const s = i.minutes.state;
-    const m = s.value;
-    const r = gh('Actions minutes', s, i.now, STALE.minutes);
-    if (m && m.counted < m.total && r.state === 'ok')
-      r.detail = `estimate, ${m.counted} of ${m.total} runs counted`;
-    else if (m && r.state === 'ok') r.detail = 'estimate from job times';
-    out.push(r);
-  } else out.push({ name: 'Actions minutes', state: 'missing', at: null, detail: 'gh off' });
   const mac = i.mac;
   out.push({
     name: 'Mac stats',
@@ -1031,13 +1012,8 @@ export function sources(i: Inputs): SourceRow[] {
   return out;
 }
 
-function gh(
-  name: string,
-  c: { at: number | null; error: string | null },
-  now: number,
-  lim = STALE.gh,
-): SourceRow {
+function gh(name: string, c: { at: number | null; error: string | null }, now: number): SourceRow {
   if (c.error) return { name, state: 'failed', at: c.at, detail: c.error };
   if (c.at === null) return { name, state: 'missing', at: null, detail: 'not read yet' };
-  return { name, state: (now - c.at) / 1000 > lim ? 'stale' : 'ok', at: c.at, detail: null };
+  return { name, state: (now - c.at) / 1000 > STALE.gh ? 'stale' : 'ok', at: c.at, detail: null };
 }

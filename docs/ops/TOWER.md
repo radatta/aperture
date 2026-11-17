@@ -18,23 +18,26 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
   every 60 s  gh: pr list · newest 100 Actions runs · files per new head
               checks per open PR head (every 60 s while running, 2 min once all finished)
               devlock.sh refresh (the lock caches)
-  hourly      Actions minutes estimate (job times; cached in localNotes/board/tower/actions-runs.json)
                                                  localNotes/board/mac-stats.json ◀── launchd agent, every 15 s
 ```
 
 ## Run it
 
-| Command                                       | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `board.sh tower start\|restart\|stop\|status` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts` without `--fixtures` / `--once`, is the server, and its pid is written back; any other listener (a proof server included) is never claimed, and `start` names it. `APERTURE_TOWER_PORT` moves the port (6183), `APERTURE_TOWER_PID` the pidfile. Log: `localNotes/board/tower.log` |
-| `scripts/board/tower-web.sh --once`           | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Command                                                | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board.sh tower start\|restart\|stop\|status\|version` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts` without `--fixtures` / `--once`, is the server, and its pid is written back; any other listener (a proof server included) is never claimed, and `start` names it. `APERTURE_TOWER_PORT` moves the port (6183), `APERTURE_TOWER_PID` the pidfile. Log: `localNotes/board/tower.log`. `version` prints the commit the running server started from, which it writes beside its pidfile (`<pidfile>.sha`, `<pid> <sha>`; printed only when that pid is the running server, else empty: unknown); `stop` removes it. `restart` exits with `start`'s status. |
+| `pnpm board sync-main`                                 | The main checkout to `origin/main` (fetch, then `git switch --detach`; refuses tracked changes or a checkout on a branch, untracked files are fine), then `board.sh tower restart` only when the tower is running and its served commit differs from the new HEAD in a file the tower runs (`behind.ts` `TOWER_PATHS`: `scripts/src/board`, `scripts/board` and the files they import or read outside them, tests and fixtures excluded; a test holds the list to the import graph) or is unknown. Never starts a stopped tower. Prints what moved and why it restarted or didn't; a rerun is a no-op. Runs from any worktree.                                                                                                                                                                                                                                                                             |
+| `scripts/board/tower-web.sh --once`                    | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
-and never from a worktree. After a merge that changes it, run `board.sh tower restart` from `/workspace`. The page's
-header shows the commit it serves. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
+and never from a worktree. After a merge, `pnpm board sync-main` moves `/workspace` and restarts the tower only if
+its code changed. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
+file (a merge synced by hand, or `pnpm lane start` detaching `/workspace`), the sources chip reads "behind main" and
+SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
+move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -67,22 +70,20 @@ From the top:
    - **CONTAINER**: memory against soft and hard (a last-hour sparkline), CPU, live `test` slots against
      `limits.json`.
    - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge".
-   - **ACTIONS**: an **estimate**, job times each rounded up to a minute, against the plan's 3,000, with a bar. The
-     container token can't read billing (403). It's the UTC month, listed one UTC day at a time. A filtered listing
-     stops at 1,000 runs, so a day that reaches it makes the figure a lower bound (`≥`, amber). It counts a run's
-     latest attempt only; re-runs keep their run id.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
    - lane `needs` items, with the link or a copy button for the one-line Mac command (the phone says "on the Mac"
-     instead; the command is in the details);
+     instead; the command is in the details). An ask written before its lane's PR merged is dropped with the lane;
+     one written after the merge shows;
    - queue lanes in `needs-you` with no lane-file ask, in the queue's words;
    - **MERGE ME** PRs, with what they unblock (queue lanes whose `waitingOn` names the PR);
    - **DEPLOY FAILED**, with the run link;
    - `queue.json` `maintainer[]` to-dos (a bare-date `since` shows as `since MM-DD`, not a timer);
    - an unreadable lane file (it may have carried an item);
    - the Mac agent missing (its install line, once that's on main) or silent.
-3. **NOW**: the `dev` and `devb` cards, then every lane that's building, needs you, ready, on dev, in PR, failing
-   checks, merged or deploying.
+3. **NOW**: the `dev` and `devb` cards, then every lane that's building, needs you, ready, on dev, in PR or failing
+   checks. A finished lane (merged, deploying, deployed or deploy failed, or a lane file at `merged` / `cleanup`
+   with no open PR) shows only in DONE TODAY, and its slot card while it still holds a lock.
    - A card shows the holder, session, what it's doing and the lock's end; a click shows the full detail.
    - A lock read under 5 min old is a quiet "as of HH:MM". Past that the card turns amber: "lock unknown · last
      read HH:MM", with why (the refresh's own error, `failedWhy`) in its details.
@@ -100,7 +101,8 @@ From the top:
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
 5. **DONE TODAY**: PRs merged since the day began: local midnight, but before noon it reaches back 12 h
    (`dayStart` in `web/main.ts`), so last night's merges stay in view through the morning (marked `yest`) and age
-   out by noon, with no reset cliff. Each shows `deployed ✓` / `deploying` / `deploy failed`, with the long form (a
+   out by noon, with no reset cliff. Fork PRs (`isCrossRepository`) are dropped at the read: a fork's branch name is
+   its owner's choice and never stands for a lane, so a merged fork PR doesn't show here either. Each shows `deployed ✓` / `deploying` / `deploy failed`, with the long form (a
    superseded run) in its details. A merge whose own Deploy run was cancelled rides the first later run that
    wasn't cancelled too (not the newest, which may still be running or fail after this one deployed).
 6. **SLIPPING** (collapsed):
@@ -122,16 +124,18 @@ From the top:
   text one tap away; every row and slot card opens on a tap, and stays open across polls.
   `short()` never cuts inside `( )` or `[ ]`.
 - The header stays one line: the time without "as of", the commit in SOURCES (`serving <sha>, started HH:MM`).
-- The health strip is two columns: TODAY | AWS, CONTAINER | MAC, ACTIONS full width; sparklines sit in the flow,
+- The health strip is two columns: TODAY | AWS, CONTAINER | MAC; sparklines sit in the flow,
   never over the numbers.
 - Mac-only copy buttons become an "on the Mac" label.
-- Home Screen metas: `viewport-fit=cover` with safe-area padding, `theme-color` per scheme,
+- Home Screen metas: `viewport-fit=cover` with safe-area padding (the header: the top inset plus 8 px on the phone, 12 px on the desktop, so it clears the status bar), `theme-color` per scheme,
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
   `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
   added, so a re-add picks them up.
-- The tab icon is the same radar as PNGs, linked before the SVG because Safari's tab skips an SVG icon (it showed a
-  letter monogram): `favicon-32.png` and `favicon-64.png` (`rsvg-convert -w 32 -h 32 …`), and `favicon.ico` holding
-  both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.
+- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
+  tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
+  before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
+  `favicon-64.png` (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico`
+  holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
@@ -145,20 +149,21 @@ phone.
 - A failed source keeps its last good value and says so; it is never shown empty or green.
 - An empty panel whose source isn't ok says "can't tell: …" in red, never "nothing".
 - Two failed page polls in a row put a red "tower server unreachable since HH:MM" banner over everything.
+- Behind main (above, _Run it_): the chip reads `behind main` (`behind` on the phone, `· N off` when sources are off
+  too) and SOURCES carries an amber row with both commits and `pnpm board sync-main`.
 
 Freshness limits (`derive.ts` `STALE`):
 
-| Source          | Stale after                      |
-| --------------- | -------------------------------- |
-| sampler         | 90 s                             |
-| lock caches     | 5 min                            |
-| gh              | 3 min                            |
-| a PR's checks   | 5 min                            |
-| queue.json      | 2 h                              |
-| a lane file     | amber at 2 h, SLIPPING at 24 h   |
-| Actions minutes | 2 h                              |
-| Mac stats       | 60 s, then silent (red) at 5 min |
-| AWS costs       | 3 days                           |
+| Source        | Stale after                      |
+| ------------- | -------------------------------- |
+| sampler       | 90 s                             |
+| lock caches   | 5 min                            |
+| gh            | 3 min                            |
+| a PR's checks | 5 min                            |
+| queue.json    | 2 h                              |
+| a lane file   | amber at 2 h, SLIPPING at 24 h   |
+| Mac stats     | 60 s, then silent (red) at 5 min |
+| AWS costs     | 3 days                           |
 
 ## Lane states
 
@@ -169,6 +174,7 @@ and what the maintainer must do.
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | PARKED                                                          | the lane file says `parked`, or the queue's `waitingOn` starts `PARKED`                                                                                                                                                                                                |
 | MERGED → DEPLOYING → DONE / DEPLOY FAILED                       | the PR merged; main's `Deploy` push run for its merge sha. A run cancelled by a later merge (deploy.yml's concurrency group) follows the newest later Deploy run, which carries it                                                                                     |
+| MERGED (lane file)                                              | the lane file says `merged` or `cleanup` and there's no open PR (none in the newest 40, or a closed one), before the lock check: a finished lane still holding a lock stays off NOW                                                                                    |
 | TESTING on dev / devb                                           | the branch holds that slot's live lock. Detail: `deploying` (a running dispatch whose run-name carries its sha), `devcheck running since` (an open ledger run, under 2 h), `held for you: …`, else the step. On a lock read over 5 min old: `TESTING on dev?` with why |
 | PR (checks running / no checks seen / checks unknown / draft)   | open PR; the `pull_request` runs for its head sha (newest per workflow). Green is believed only from fresh reads: a failed or stale PR list (its head may have moved) or checks read caps it at `checks unknown`                                                       |
 | CHECKS FAILED                                                   | a check ended other than success / skipped / neutral                                                                                                                                                                                                                   |

@@ -21,22 +21,28 @@ const oid = (x: unknown) => (typeof x === 'string' && /^[0-9a-f]{40}$/.test(x) ?
 export function parsePrs(text: string): Pr[] {
   const raw = JSON.parse(text) as unknown;
   if (!Array.isArray(raw)) throw new Error('gh pr list: not an array');
-  return raw
-    .map((x) => x as Record<string, unknown>)
-    .filter((x) => Number.isInteger(x.number))
-    .map((x) => ({
-      number: x.number as number,
-      title: typeof x.title === 'string' ? clean(x.title) : '',
-      branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
-      state: typeof x.state === 'string' ? x.state : '',
-      mergedAt: parseTime(x.mergedAt),
-      createdAt: parseTime(x.createdAt),
-      sha: oid(x.headRefOid),
-      mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
-      url:
-        typeof x.url === 'string' && x.url.startsWith('https://github.com/') ? clean(x.url) : null,
-      draft: x.isDraft === true,
-    }));
+  return (
+    raw
+      .map((x) => x as Record<string, unknown>)
+      .filter((x) => Number.isInteger(x.number))
+      // a fork's head branch name is the fork owner's choice: it never stands for a lane
+      .filter((x) => x.isCrossRepository !== true)
+      .map((x) => ({
+        number: x.number as number,
+        title: typeof x.title === 'string' ? clean(x.title) : '',
+        branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
+        state: typeof x.state === 'string' ? x.state : '',
+        mergedAt: parseTime(x.mergedAt),
+        createdAt: parseTime(x.createdAt),
+        sha: oid(x.headRefOid),
+        mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
+        url:
+          typeof x.url === 'string' && x.url.startsWith('https://github.com/')
+            ? clean(x.url)
+            : null,
+        draft: x.isDraft === true,
+      }))
+  );
 }
 
 export const GH_ARGS = [
@@ -47,7 +53,7 @@ export const GH_ARGS = [
   '--limit',
   '40',
   '--json',
-  'number,title,headRefName,state,mergedAt,createdAt,headRefOid,mergeCommit,url,isDraft',
+  'number,title,headRefName,state,mergedAt,createdAt,headRefOid,mergeCommit,url,isDraft,isCrossRepository',
 ];
 
 export type Fetch = () => Promise<string>;

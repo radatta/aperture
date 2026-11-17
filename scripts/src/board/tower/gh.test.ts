@@ -1,16 +1,5 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  ChecksCache,
-  FilesCache,
-  MinutesCache,
-  Poller,
-  jobMinutes,
-  monthKey,
-  parseRuns,
-} from './gh.ts';
+import { ChecksCache, FilesCache, Poller, monthKey, parseRuns } from './gh.ts';
 
 const runJson = (o: object) => ({
   id: 1,
@@ -110,69 +99,8 @@ describe('FilesCache', () => {
   });
 });
 
-describe('Actions minutes estimate', () => {
-  it('rounds each job up to a whole minute', () => {
-    const jobs = JSON.stringify({
-      jobs: [
-        { started_at: '2026-11-13T19:00:00Z', completed_at: '2026-11-13T19:00:05Z' },
-        { started_at: '2026-11-13T19:00:00Z', completed_at: '2026-11-13T19:02:00Z' },
-        { started_at: '2026-11-13T19:00:00Z', completed_at: null },
-      ],
-    });
-    expect(jobMinutes(jobs)).toBe(3);
-  });
-  it('counts at most perCycle new runs per load, caches them on disk, and starts over each month', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'min-')), 'tower/actions-runs.json');
-    const ids = [11, 12, 13];
-    const calls: string[] = [];
-    const gh = async (a: string[]) => {
-      const route = a[1]!;
-      calls.push(route);
-      if (route.includes('/jobs'))
-        return JSON.stringify({
-          jobs: [{ started_at: '2026-11-13T19:00:00Z', completed_at: '2026-11-13T19:01:30Z' }],
-        });
-      // the runs were all created on the 13th (or, in December, the 1st); other days list none
-      return route.includes('created=2026-11-13&') || route.includes('created=2026-12-01&')
-        ? page(ids.map((id) => runJson({ id })))
-        : page([]);
-    };
-    const now = Date.parse('2026-11-13T20:00:00Z');
-    const m = new MinutesCache(file, gh, 2);
-    expect(await m.load(now)).toEqual({
-      month: '2026-11',
-      minutes: 4,
-      counted: 2,
-      total: 3,
-      capped: false,
-    });
-    // one UTC day per listing (a filtered listing stops at 1,000 results)
-    expect(
-      calls.filter((c) => c.includes('created=')).map((c) => /created=([\d-]+)/.exec(c)![1]),
-    ).toEqual(Array.from({ length: 13 }, (_, d) => `2026-11-${String(d + 1).padStart(2, '0')}`));
-    expect(await new MinutesCache(file, gh, 2).load(now)).toMatchObject({ minutes: 6, counted: 3 });
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ v: 1, month: '2026-11' });
-    calls.length = 0;
-    await new MinutesCache(file, gh, 5).load(Date.parse('2026-12-01T09:00:00Z'));
-    expect(calls.filter((c) => c.includes('/jobs'))).toHaveLength(3);
-    expect(monthKey(Date.parse('2026-12-01T09:00:00Z'))).toBe('2026-12');
-  });
-});
-
-describe('the listing cap', () => {
-  it('a day with 1,000 runs makes the estimate a lower bound', async () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'cap-')), 'runs.json');
-    let next = 1;
-    const gh = async (a: string[]) => {
-      const route = a[1]!;
-      if (route.includes('/jobs')) return JSON.stringify({ jobs: [] });
-      if (!route.includes('created=2026-11-02&')) return page([]);
-      return page(Array.from({ length: 100 }, () => runJson({ id: next++ })));
-    };
-    const r = await new MinutesCache(file, gh, 0).load(Date.parse('2026-11-02T12:00:00Z'));
-    expect(r).toMatchObject({ capped: true, total: 1000 });
-  });
-  it('the month is UTC: 2026-11-30 20:00 PST is already December', () => {
+describe('monthKey', () => {
+  it('is UTC: 2026-11-30 20:00 PST is already December', () => {
     expect(monthKey(Date.parse('2026-12-01T04:00:00Z'))).toBe('2026-12');
   });
 });

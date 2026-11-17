@@ -52,10 +52,10 @@ describe('the HTTP surface', () => {
     expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
   });
 
-  it('serves the radar icon: a 180 px PNG at the paths iOS probes, the SVG as the favicon', async () => {
+  it('serves the radar icons: a 180 px PNG at the paths iOS probes, a bolder SVG as the favicon', async () => {
     const page = await (await fetch(`${base}/`)).text();
     expect(page).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />');
-    expect(page).toContain('<link rel="icon" href="/icon.svg" type="image/svg+xml" />');
+    expect(page).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />');
     for (const p of ['/apple-touch-icon.png', '/apple-touch-icon-precomposed.png']) {
       const r = await fetch(`${base}${p}`);
       expect(r.status).toBe(200);
@@ -75,7 +75,7 @@ describe('the HTTP surface', () => {
       const png = Buffer.from(await (await fetch(`${base}${p}`)).arrayBuffer());
       expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([px, px]);
     }
-    expect(page.indexOf('/favicon-32.png')).toBeLessThan(page.indexOf('/icon.svg'));
+    expect(page.indexOf('/favicon-32.png')).toBeLessThan(page.indexOf('/favicon.svg'));
     const ico = await fetch(`${base}/favicon.ico`);
     expect(ico.status).toBe(200);
     expect(ico.headers.get('content-type')).toBe('image/x-icon');
@@ -84,6 +84,10 @@ describe('the HTTP surface', () => {
     const svg = await fetch(`${base}/icon.svg`);
     expect(svg.headers.get('content-type')).toBe('image/svg+xml');
     expect(await svg.text()).toMatch(/^<svg [^>]*viewBox="0 0 180 180"/);
+    // the tab icon is its own, drawn on a 32 grid so its strokes survive 16 px; the Home Screen keeps icon.svg
+    const fav = await fetch(`${base}/favicon.svg`);
+    expect(fav.headers.get('content-type')).toBe('image/svg+xml');
+    expect(await fav.text()).toMatch(/^<svg [^>]*viewBox="0 0 32 32"/);
   });
 
   it('/api/state is the View; ?history=1 asks for the series', async () => {
@@ -160,7 +164,14 @@ describe('--once on the fixtures', () => {
     expect(v.slipping.map((s: V) => s.kind)).toEqual(['followup', 'parked', 'quiet']);
     expect(v.health.mac.state).toBe('stale');
     expect(v.health.aws.total).toBeCloseTo(0.35);
-    expect(v.sources.find((s: V) => s.name === 'Actions minutes').state).toBe('missing');
+    expect(v.behind).toBeNull(); // fixtures never compare commits
+    // fixtures/board/lanes/mike-branch.json is merged with no PR in the list: finished, so not in NOW
+    expect(v.active.map((r: V) => r.branch)).not.toContain('mike-branch');
+    // fixtures/prs.json has a fork's open PR on echo-branch's name: no lane, slot or row picks it up
+    expect(JSON.stringify(v)).not.toContain('/pull/43');
+    // the Actions-minutes estimate is gone (public repo, free runners): no tile, no source row
+    expect(v.health.actions).toBeUndefined();
+    expect(v.sources.some((s: V) => /actions minutes/i.test(s.name))).toBe(false);
     expect(v.problems).toEqual([]);
   });
 });
@@ -231,7 +242,7 @@ describe('board.sh tower status', () => {
   });
 
   // A tower on a free port: the board's own (a temp board, no GitHub) or a fixtures proof server.
-  async function web(port: number, fixtures: boolean) {
+  async function web(port: number, fixtures: boolean, extra: NodeJS.ProcessEnv = {}) {
     const board = mkdtempSync(join(tmpdir(), 'tower-board-'));
     const args = fixtures ? ['--fixtures', FIXTURES, '--now', '2026-11-08T06:10:00Z'] : [];
     const c = spawn(
@@ -251,6 +262,7 @@ describe('board.sh tower status', () => {
           ...process.env,
           APERTURE_BOARD_DIR: board,
           APERTURE_DEVLOCK_SOURCE: `file:${join(board, 'missing')}`, // its lock refresh never asks GitHub
+          ...extra,
         },
       },
     );
@@ -276,6 +288,56 @@ describe('board.sh tower status', () => {
     } finally {
       c.kill();
       rmSync(pidFile, { force: true });
+      rmSync(board, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('records the commit it serves beside the pidfile: tower version prints it, stop removes it', async () => {
+    const port = await freePort();
+    const pidFile = join(tmpdir(), `tower-pid-sha-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    const e = { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` };
+    const { c, board } = await web(port, false, { APERTURE_TOWER_PID: pidFile });
+    try {
+      for (let i = 0; i < 50 && !existsSync(pidFile); i++)
+        await new Promise((r) => setTimeout(r, 100));
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const r = tower('version', e);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe(head);
+      expect(readFileSync(`${pidFile}.sha`, 'utf8')).toBe(`${c.pid} ${head}\n`);
+      // a .sha left by another server (a stale one) is unknown: empty, so sync-main restarts
+      writeFileSync(`${pidFile}.sha`, `1 ${head}\n`);
+      expect(tower('version', e).stdout).toBe('');
+      // none at all (main's older server, or /tmp cleaned while it ran): empty too, exit 0, nothing on stderr
+      rmSync(`${pidFile}.sha`);
+      const none = tower('version', e);
+      expect([none.status, none.stdout, none.stderr]).toEqual([0, '', '']);
+      tower('stop', e);
+      expect(existsSync(`${pidFile}.sha`)).toBe(false);
+      expect(tower('version', e).status).toBe(1); // stopped
+    } finally {
+      c.kill();
+      rmSync(pidFile, { force: true });
+      rmSync(`${pidFile}.sha`, { force: true });
+      rmSync(board, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("restart exits with start's status: a tower that fails to come up is a failed restart", () => {
+    const port = (server.address() as AddressInfo).port; // held by this worker: the new tower can't bind it
+    const pidFile = join(tmpdir(), `tower-pid-restart-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    const board = mkdtempSync(join(tmpdir(), 'tower-board-')); // start writes its dirs and log here, not in /tmp
+    try {
+      const r = tower('restart', {
+        APERTURE_TOWER_PID: pidFile,
+        APERTURE_TOWER_PORT: `${port}`,
+        APERTURE_BOARD_DIR: board,
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/did not start/);
+    } finally {
       rmSync(board, { recursive: true, force: true });
     }
   }, 20_000);
@@ -370,5 +432,25 @@ describe('the day boundary and the Mac series (2026-11-14)', () => {
     } finally {
       rmSync(fx, { recursive: true, force: true });
     }
+  });
+});
+
+describe('behind main (the served commit vs the checkout)', () => {
+  it('reaches the View on each request, from the check build was given', () => {
+    let calls = 0;
+    const t = build(
+      {
+        port: 0,
+        bind: '127.0.0.1',
+        fixtures: FIXTURES,
+        now: Date.parse('2026-11-08T06:10:00Z'),
+        gh: false,
+        once: true,
+      },
+      { behind: () => (calls++, { head: 'b'.repeat(40), files: 2 }) },
+    );
+    expect(t.view(false).behind).toEqual({ head: 'b'.repeat(40), files: 2 });
+    t.view(false);
+    expect(calls).toBe(2); // asked per request: no timer
   });
 });

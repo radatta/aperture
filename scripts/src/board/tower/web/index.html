@@ -10,7 +10,7 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
-    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>tower</title>
     <style>
       /* Read at a glance from arm's length (the maintainer, 2026-11-13): big type, one line per item, details on click.
@@ -89,8 +89,8 @@
         display: flex;
         gap: 14px;
         align-items: center;
-        padding: max(12px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 10px
-          max(18px, env(safe-area-inset-left));
+        padding: calc(env(safe-area-inset-top, 0px) + 12px) max(18px, env(safe-area-inset-right))
+          10px max(18px, env(safe-area-inset-left));
       }
       header h1 {
         font-size: 21px;
@@ -171,16 +171,13 @@
       /* the health strip: hero numbers, always above the fold */
       #health {
         display: grid;
-        grid-template-columns: 0.8fr 1fr 1fr 1fr 0.9fr;
+        grid-template-columns: 0.8fr 1fr 1fr 0.9fr;
         gap: 10px;
         padding: 0 18px 12px;
       }
       @media (max-width: 1000px) {
         #health {
           grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-        #health .tile:first-child {
-          grid-column: 1 / -1;
         }
       }
       .tile {
@@ -248,19 +245,6 @@
       }
       .tile svg.spark.none {
         display: none;
-      }
-      .bar {
-        height: 6px;
-        border-radius: 3px;
-        background: var(--line);
-        margin: 4px 0 3px;
-        overflow: hidden;
-      }
-      .bar > span {
-        display: block;
-        height: 100%;
-        background: var(--c);
-        border-radius: 3px;
       }
       .tile.cheer {
         animation: cheer 2.4s ease-out;
@@ -432,6 +416,9 @@
         color: var(--bad);
         padding: 4px 0 4px 13px;
       }
+      .cant.behind {
+        color: var(--hold);
+      }
       .showall {
         margin: 4px 0 0 10px;
       }
@@ -584,8 +571,8 @@
       @media (max-width: 700px) {
         header {
           gap: 8px;
-          padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
-            max(12px, env(safe-area-inset-left));
+          padding: calc(env(safe-area-inset-top, 0px) + 8px) max(12px, env(safe-area-inset-right))
+            8px max(12px, env(safe-area-inset-left));
         }
         header h1 {
           font-size: 19px;
@@ -601,19 +588,12 @@
           gap: 8px;
           padding: 0 max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
         }
-        #health .tile:first-child {
-          grid-column: auto;
-        }
         .tile.k-aws {
           order: 1;
         }
         .tile.k-container,
         .tile.k-mac {
           order: 2;
-        }
-        .tile.k-actions {
-          order: 3;
-          grid-column: 1 / -1;
         }
         .tile {
           padding: 7px 10px 6px;

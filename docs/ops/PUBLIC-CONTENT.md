@@ -26,7 +26,7 @@ No PR has to exist. The Never list covers these too:
 
 - **Branch names and commit text**: public on the first `pnpm bot push`; an amend or force-push doesn't recall them.
 - **Run names**: `deploy-dev <sha> <key>` and `dev-logs <key>`; the key starts with the branch name (sanitised and cut to 60 characters; `logs` from a detached checkout).
-- **Dispatch inputs**: `pnpm bot logs` sends `--groups`, `--filter` and `--query` as workflow inputs, and the run shows them. Dev logs hold test-user data only, but the filter string is the author's: never a real name, mailbox or amount.
+- **Dispatch inputs**: `pnpm bot logs` sends `--groups`, `--filter` and `--query` as workflow inputs, and the run shows them. Dev logs hold test-user data only, but the filter string is the author's: never a real name, mailbox or amount. The CLI refuses a personal identifier in them and in the key, and sends `--start`/`--end` as ISO ([IDENTIFIERS.md](IDENTIFIERS.md) → _The checks_).
 - **Lock-tag messages**: `refs/locks/dev` and `refs/locks/devb` are annotated tags anyone can fetch; the message carries the branch name.
 - **Artifact names**: `dev-logs-<key>`. The artifact itself is downloadable by any signed-in user for its 1 day ([INFRA.md](../arch/INFRA.md) §9 → _Public repo_).
 

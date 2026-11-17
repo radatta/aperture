@@ -1,9 +1,12 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LOG_GROUPS, parseLogsRequest } from './logs-spec.ts';
-import { checkLoopGuard, defaultGroups, parseSince } from './logs.ts';
+import { identifierRules, type Identifiers } from '../identifiers.ts';
+import type { Api } from './api.ts';
+import { checkLoopGuard, defaultGroups, fetchLogs, parseSince, refuseIdentifiers } from './logs.ts';
+import type { Run as Sh } from './sh.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
 const req = (over: Partial<{ start: string; end: string; groups: string; key: string }> = {}) =>
@@ -122,5 +125,101 @@ describe('default groups (no --groups)', () => {
       lines: [],
     });
     expect(asked).toBe(false);
+  });
+});
+
+describe('identifier guard (the dispatch inputs are public)', () => {
+  // Made up: no real identifier is in this file (tracked-identifiers.test.ts scans it).
+  const fake: Identifiers = {
+    maintainer: { name: 'Alex Example', github: 'alex-example' },
+    repo: 'example/aperture',
+    email: { contact: 'a@example.com', alerts: 'b@example.com', devTestUser: 'c@example.com' },
+    domains: {
+      apex: 'example.com',
+      prod: 'a.example.com',
+      dev: 'd.example.com',
+      devb: 'e.example.com',
+    },
+    aws: { devAccountId: '123456789012', region: 'us-west-2', prodAccountSha256: 'a'.repeat(64) },
+    bundlePrefix: 'com.example',
+  };
+  const rules = identifierRules(fake, null);
+  const home = ['', 'Users', 'someone', 'logs'].join('/');
+
+  it('refuses a name in --filter, naming the flag and kind but never the value', () => {
+    let msg = '';
+    try {
+      refuseIdentifiers({ filter: '"alex"' }, rules);
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/^PERSONAL_IDENTIFIER — --filter names a personal identifier \(name\)/);
+    expect(msg).toMatch(/nothing was dispatched/);
+    expect(msg.toLowerCase()).not.toContain('alex');
+  });
+  it('refuses an account id in --query (dashed too) and a home path in --groups', () => {
+    expect(() =>
+      refuseIdentifiers({ query: 'filter @message like /1234-5678-9012/' }, rules),
+    ).toThrow(/--query .*\(account-id\)/);
+    expect(() => refuseIdentifiers({ groups: `bff,${home}` }, rules)).toThrow(
+      /--groups .*\(home-path\)/,
+    );
+  });
+  it('lets ordinary values through', () => {
+    expect(() =>
+      refuseIdentifiers(
+        { filter: 'ERROR', query: 'fields @timestamp, @message', groups: 'bff,mcp' },
+        rules,
+      ),
+    ).not.toThrow();
+    expect(() => refuseIdentifiers({}, rules)).not.toThrow();
+  });
+  it('refuses before anything is spent: no API call, no git, no ledger line', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devlogs-guard-'));
+    const api = (() => {
+      throw new Error('api called');
+    }) as unknown as Api;
+    const sh = (() => {
+      throw new Error('sh called');
+    }) as unknown as Sh;
+    const clock = { now: () => NOW, sleep: async () => {} };
+    await expect(
+      fetchLogs(sh, api, 'token', clock, { filter: 'Example' }, root, () => {}, rules),
+    ).rejects.toThrow(/PERSONAL_IDENTIFIER/);
+    expect(existsSync(join(root, 'localNotes', 'devlogs', 'fetches.jsonl'))).toBe(false);
+  });
+  it('refuses a branch name (the run key, public in the run name) the same way', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devlogs-guard-'));
+    const sh = ((cmd: string) => (cmd === 'git' ? 'example-fix' : '')) as unknown as Sh;
+    const api = (() => {
+      throw new Error('api called');
+    }) as unknown as Api;
+    const clock = { now: () => NOW, sleep: async () => {} };
+    await expect(
+      fetchLogs(sh, api, 'token', clock, { groups: 'bff' }, root, () => {}, rules),
+    ).rejects.toThrow(/PERSONAL_IDENTIFIER — the run key \(branch name\) .*\(name\)/);
+    expect(existsSync(join(root, 'localNotes', 'devlogs', 'fetches.jsonl'))).toBe(false);
+  });
+  it('dispatches --start/--end normalised to ISO, so words around a date never reach the inputs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devlogs-guard-'));
+    const sh = ((cmd: string) => (cmd === 'git' ? 'some-branch' : '')) as unknown as Sh;
+    let sent: Record<string, string> | null = null;
+    const api = (async (_m: string, _p: string, body?: { inputs: Record<string, string> }) => {
+      sent = body!.inputs;
+      throw new Error('stop here');
+    }) as unknown as Api;
+    const clock = { now: () => NOW, sleep: async () => {} };
+    const args = {
+      start: 'note Oct 13 2026 19:30 UTC',
+      end: 'Oct 13 2026 19:45 UTC (note)',
+      groups: 'bff',
+    };
+    await expect(fetchLogs(sh, api, 'token', clock, args, root, () => {}, rules)).rejects.toThrow(
+      /stop here/,
+    );
+    expect(sent).toMatchObject({
+      start: '2026-10-13T19:30:00.000Z',
+      end: '2026-10-13T19:45:00.000Z',
+    });
   });
 });

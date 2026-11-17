@@ -4,7 +4,8 @@
 #   board.sh hub              the hub session (hub.json, docs/ops/HUB.md) and whether the board has it live
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
 #   board.sh sampler start|restart|stop|status
-#   board.sh tower start|restart|stop|status   (the web tower on :6183, docs/ops/TOWER.md)
+#   board.sh tower start|restart|stop|status|version   (the web tower on :6183, docs/ops/TOWER.md; version: the commit
+#     it serves, which pnpm board sync-main compares)
 #   board.sh gc
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -243,12 +244,21 @@ cmd_tower() {
         for ((i = 0; i < 25; i++)); do sb_alive "$p" || break; sleep 0.2; done
         sb_alive "$p" && { echo "tower: $p still running" >&2; return 1; }
       fi
-      [ "$1" = restart ] && cmd_tower start
+      rm -f "$TOWER_PID.sha"
+      [ "$1" = restart ] && { cmd_tower start; return; } # start's status: sync-main reads a failed restart from it
       return 0 ;;
     status)
       if p=$(tower_pid); then echo "tower: running (pid $p) — http://localhost:$TOWER_PORT"
       else echo "tower: stopped — board.sh tower start"; return 1; fi ;;
-    *) echo "usage: board.sh tower start|restart|stop|status" >&2; return 2 ;;
+    version)
+      # The commit the running server started from: "<pid> <sha>" beside its pidfile. Empty when it wrote none or the
+      # file is another server's (a stale one, or an older server that writes none): unknown, so sync-main restarts.
+      local pid='' sha=''
+      p=$(tower_pid) || { echo "tower: stopped" >&2; return 1; }
+      { read -r pid sha <"$TOWER_PID.sha"; } 2>/dev/null || true
+      [ "$pid" = "$p" ] && printf '%s\n' "$sha"
+      return 0 ;;
+    *) echo "usage: board.sh tower start|restart|stop|status|version" >&2; return 2 ;;
   esac
 }
 

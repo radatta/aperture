@@ -1,7 +1,7 @@
 // The repo's public identifiers — `identifiers.json` at the root, their one tracked home (docs/ops/IDENTIFIERS.md) —
 // and the one rule set that keeps the personal ones out of everything else: tracked files
-// (tracked-identifiers.test.ts), commits (.claude/hooks/precommit-guard.sh, via identifiers-scan.ts) and PR titles
-// and bodies (mailroom/open-pr.ts). Every pattern is built from the config or the gitignored .local/mac-root, so no
+// (tracked-identifiers.test.ts), commits (.claude/hooks/precommit-guard.sh, via identifiers-scan.ts), PR titles
+// and bodies (mailroom/open-pr.ts) and dev-log fetch inputs (bot/logs.ts). Every pattern is built from the config or the gitignored .local/mac-root, so no
 // rule spells an identifier itself.
 // Read at runtime, never imported: the file sits outside every package's rootDir. Imports stay node: and ./mac-root.ts
 // only, so the bot CLI and the hook still load this under plain node.

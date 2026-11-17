@@ -44,5 +44,18 @@
     "state": "CLOSED",
     "mergedAt": null,
     "createdAt": "2026-11-01T18:00:00Z"
+  },
+  {
+    "number": 43,
+    "title": "Echo: a fork's PR on a lane's branch name",
+    "headRefName": "echo-branch",
+    "state": "OPEN",
+    "mergedAt": null,
+    "createdAt": "2026-11-08T05:50:00Z",
+    "headRefOid": "7777777777777777777777777777777777777777",
+    "url": "https://github.com/radatta/aperture/pull/43",
+    "isDraft": false,
+    "mergeCommit": null,
+    "isCrossRepository": true
   }
 ]

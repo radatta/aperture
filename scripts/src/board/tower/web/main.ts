@@ -7,20 +7,18 @@
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_SLUG } from '../../../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../../../mac-root.ts';
 import { sessionNames } from '../../sessions.ts';
+import { behindCheck, type Behind } from '../behind.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
 import {
   ChecksCache,
   FilesCache,
-  MinutesCache,
   Poller,
   ghText,
-  minutesPoller,
   monthKey,
   runsPoller,
   type GhRun,
@@ -131,13 +129,12 @@ export const dayStart = (now: number) => {
   return Math.min(d.getTime(), now - 12 * 3600e3);
 };
 
-export function build(a: Args) {
+export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
   const fx = a.fixtures;
   const paths: Paths = fx ? fixturePaths(fx) : defaultPaths(REPO);
   const clock = () => a.now ?? Date.now();
   const fileGh: GhText = async (args) => {
     const route = args.join(' ');
-    if (route.includes('/jobs')) return readFileSync(join(fx!, 'jobs.json'), 'utf8');
     if (route.includes('head_sha=')) {
       const sha = /head_sha=([0-9a-f]+)/.exec(route)![1]!;
       const all = JSON.parse(readFileSync(join(fx!, 'checks.json'), 'utf8')) as Record<
@@ -166,17 +163,6 @@ export function build(a: Args) {
   const runs = gh ? runsPoller(gh) : new Poller<GhRun[]>([], async () => [], Infinity);
   const checks = gh ? new ChecksCache(gh) : null;
   const files = gh ? new FilesCache(gh) : null;
-  const minutes = gh
-    ? minutesPoller(
-        new MinutesCache(
-          fx
-            ? join(tmpdir(), `tower-fixture-runs-${process.pid}.json`)
-            : join(paths.boardDir, 'tower/actions-runs.json'),
-          gh,
-        ),
-        clock,
-      )
-    : null;
   const costsPath = fx ? join(fx, 'costs-daily.json') : join(paths.boardDir, '../costs-daily.json');
   // The fixtures' cost rows use synthetic account ids, labelled by their own accounts.json.
   const fxAccounts = fx
@@ -192,6 +178,21 @@ export function build(a: Args) {
     }).trim();
   } catch {
     // not a checkout
+  }
+  // Behind main: the served commit against the checkout's HEAD, asked on each page poll (behind.ts). Fixtures never.
+  const repoGit = (args: string[]) =>
+    execFileSync('git', ['-C', REPO, ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  let behind = deps.behind ?? (() => null);
+  if (!deps.behind && version && !fx) {
+    try {
+      const gitDir = repoGit(['rev-parse', '--absolute-git-dir']).trim();
+      behind = behindCheck({ version, gitDir, git: repoGit });
+    } catch {
+      // no git dir: the chip never shows
+    }
   }
   const macHist: { t: number; usedMiB: number; totalMiB: number }[] = [];
   const startedAt = clock();
@@ -229,9 +230,7 @@ export function build(a: Args) {
   };
 
   // GitHub, in the background: never awaited by a request, never two of one kind at once.
-  // The minutes backfill (up to 100 job reads) runs detached: it never delays the PR and run reads.
-  async function poll(now: number, withMinutes = true) {
-    if (withMinutes) void minutes?.poll(now);
+  async function poll(now: number) {
     await Promise.all([prs?.poll(now), runs.poll(now)]);
     for (const p of prs?.list ?? []) {
       if (p.state !== 'OPEN' || !p.sha) continue;
@@ -250,6 +249,7 @@ export function build(a: Args) {
     const inputs: Inputs = {
       now,
       version,
+      behind: behind(),
       tower,
       lanes: lanes.lanes,
       laneProblems: lanes.problems,
@@ -257,7 +257,6 @@ export function build(a: Args) {
       runs: runs.state,
       checks: (sha) => checks?.get(sha) ?? null,
       files: (sha) => files?.get(sha) ?? null,
-      minutes,
       mac,
       aws: readCosts(costsPath, now, monthKey(now), fixtureAccounts),
       tests: fx ? 0 : liveTests(paths.boardDir),
@@ -288,7 +287,7 @@ export function build(a: Args) {
       },
     };
   }
-  return { poll, view, sample, clock, paths };
+  return { poll, view, sample, clock, paths, version };
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -304,8 +303,8 @@ function refreshDevlock() {
 async function run(a: Args) {
   const t = build(a);
   if (a.once) {
-    await t.poll(t.clock(), false);
-    await t.poll(t.clock(), false); // the second round reads checks and files for the PRs the first one listed
+    await t.poll(t.clock());
+    await t.poll(t.clock()); // the second round reads checks and files for the PRs the first one listed
     process.stdout.write(JSON.stringify(t.view(false), null, 2) + '\n');
     return;
   }
@@ -320,7 +319,10 @@ async function run(a: Args) {
   // The pidfile is written only once the port is bound: `board.sh tower` reads "running" from it, and the port
   // itself is the one-server lock (a second server fails with EADDRINUSE). Fixture servers never write it.
   const pidFile = process.env.APERTURE_TOWER_PID;
-  if (pidFile && !a.fixtures) writeFileSync(pidFile, `${process.pid}\n`);
+  if (pidFile && !a.fixtures) {
+    writeFileSync(`${pidFile}.sha`, `${process.pid} ${t.version ?? ''}\n`); // board.sh tower version
+    writeFileSync(pidFile, `${process.pid}\n`);
+  }
   void t.poll(t.clock());
   setInterval(() => {
     void t.poll(t.clock());

@@ -618,54 +618,6 @@ function health(v) {
     );
   }
 
-  const ms = src('Actions minutes');
-  const a = h.actions;
-  if (!a)
-    box.append(
-      tile(
-        'h:a',
-        'ACTIONS',
-        ms?.state === 'failed' ? 'failed' : 'counting…',
-        ms?.detail ?? 'first estimate within the hour',
-        ms?.state === 'failed' ? 'c-bad' : 'c-dim',
-        [],
-      ),
-    );
-  else {
-    const srcBad = ms?.state === 'ok' ? null : ms?.state === 'stale' ? 'c-hold' : 'c-bad';
-    const cc =
-      srcBad ??
-      (a.minutes > a.of ? 'c-bad' : a.capped || a.minutes > a.of * 0.8 ? 'c-hold' : 'c-good');
-    const bar = el('div', 'bar');
-    const fill = el('span');
-    fill.style.width = `${Math.min(100, (a.minutes / a.of) * 100).toFixed(1)}%`;
-    bar.append(fill);
-    box.append(
-      tile(
-        'h:a',
-        'ACTIONS',
-        [
-          `${a.capped ? '≥' : '≈'}${a.minutes.toLocaleString()}`,
-          ` / ${(a.of / 1000).toFixed(0)}k min`,
-        ],
-        srcBad ? `estimate ${ms.state}` : `${a.month} UTC · estimate`,
-        cc,
-        [
-          [
-            'how',
-            'job times, each rounded up to a minute (billing is unreadable to the container)',
-          ],
-          [
-            'counted',
-            `${a.counted} of ${a.total} runs${a.capped ? ' · a day hit the 1,000-run cap: lower bound' : ''}`,
-          ],
-          ['as of', ms?.at ? `${hhmm(ms.at)} (${ago(ms.at, v.now)} ago)` : '—'],
-        ],
-        bar,
-      ),
-    );
-  }
-
   const w = h.aws;
   const acct = Object.entries(w.byAccount)
     .map(([k, x]) => `${k} $${x.toFixed(2)}`)
@@ -725,16 +677,20 @@ function sources(v) {
   const off = v.sources.filter((s) => s.state !== 'ok');
   $('#sources .count').textContent = off.length ? `(${off.length} not ok)` : '(all ok)';
   const chip = $('#sources-chip');
-  chip.textContent = off.length
-    ? `${off.length} source${off.length > 1 ? 's' : ''} off`
-    : 'sources ok';
-  chip.className = off.length
-    ? off.some((s) => s.state === 'failed')
-      ? 't-bad'
-      : 't-warn'
-    : 't-dim';
-  $('#live-dot').className =
-    `dot live ${off.some((s) => s.state === 'failed') ? 'c-bad' : off.length ? 'c-hold' : 'c-good'}`;
+  const failed = off.some((s) => s.state === 'failed');
+  // behind main joins the chip (a third header button doesn't fit at 390 px): "behind main · 2 off"
+  if (v.behind)
+    chip.replaceChildren(
+      'behind',
+      el('span', 'only-desk', ' main'),
+      off.length ? ` · ${off.length} off` : '',
+    );
+  else
+    chip.textContent = off.length
+      ? `${off.length} source${off.length > 1 ? 's' : ''} off`
+      : 'sources ok';
+  chip.className = failed ? 't-bad' : off.length || v.behind ? 't-warn' : 't-dim';
+  $('#live-dot').className = `dot live ${failed ? 'c-bad' : off.length ? 'c-hold' : 'c-good'}`; // data, not code
   for (const s of v.sources) {
     const c = s.state === 'ok' ? 'c-good' : s.state === 'stale' ? 'c-hold' : 'c-bad';
     b.append(
@@ -747,6 +703,20 @@ function sources(v) {
     );
   }
   for (const p of v.problems) b.append(el('div', 'cant', p));
+  if (v.behind) {
+    const n = v.behind.files;
+    const why =
+      n < 0
+        ? 'git does not know the served commit'
+        : `${n} tower file${n === 1 ? '' : 's'} changed`;
+    const row = el(
+      'div',
+      'cant behind',
+      `tower behind main: serving ${(v.version ?? '?').slice(0, 8)}, the checkout is at ${v.behind.head.slice(0, 8)} (${why}). In the container: pnpm board sync-main `,
+    );
+    row.append(copyButton('pnpm board sync-main'));
+    b.append(row);
+  }
   // the code this server runs: read at its start (a restart moves it)
   b.append(
     el(
