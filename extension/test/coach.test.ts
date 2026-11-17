@@ -112,6 +112,9 @@ describe('the resubmit note', () => {
 describe('against the shared contract', () => {
   it('every coach payload passes the events normalizer and its head-row read', () => {
     const big = 'é'.repeat(400); // clipped to 300, 2 bytes each in UTF-8
+    // The worst case under C0's 4 KB cap: three fields of 150 four-byte characters (300 UTF-16 units each).
+    const wide = '😀'.repeat(200);
+    const widest = coach.cardPayload({ empty: wide, boundary: wide, normal: wide }, 1);
     const payloads = [
       coach.configPayload(ON),
       coach.cardPayload({ empty: big, boundary: big, normal: '\u0001'.repeat(400) + 'x' }, 5000),
@@ -119,6 +122,7 @@ describe('against the shared contract', () => {
       coach.cardPayload({}, 900),
       { kind: 'untraced-submit' },
       { kind: 'nudge-shown', gapMs: 30_000 },
+      widest,
     ];
     const events = payloads.map((p, i) => coach.event(p, ulid.ulid, 1_800_000_000_000 + i));
     expect(() => normalizeSittingEvents({ sittingId: ulid.ulid(), events })).not.toThrow();
@@ -130,6 +134,8 @@ describe('against the shared contract', () => {
       { kind: 'trace-skip', inputs: null, config: null },
       { kind: 'untraced-submit', inputs: null, config: null },
       { kind: 'nudge-shown', inputs: null, config: null },
+      { kind: 'trace', inputs: 3, config: null },
     ]);
+    expect(new TextEncoder().encode(JSON.stringify(widest)).length).toBeLessThanOrEqual(4096);
   });
 });

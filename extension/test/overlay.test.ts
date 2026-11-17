@@ -1678,7 +1678,15 @@ describe('the trace card and the resubmit note', () => {
     const { p, ext } = await sitting({ local: { debug: true } });
     await until(() => !!p.opener()); // before any Submit, the card is a click away
     const first = p.opener();
-    await settle(5100); // the badge's repaint keeps the opener's node (a click across it would be lost)
+    // A sync lands, so the badge's text changes on its next repaint ("synced 5s ago"): the opener's node stays
+    // (a click across a rebuild would be lost).
+    const { sittingId } = ext.local.data['sitting:two-sum'] as { sittingId: string };
+    await ext.local.set({
+      'sync:two-sum': { sittingId, status: 'active', lastSyncAt: Date.now() },
+    });
+    const before = p.badge();
+    await settle(5100);
+    expect(p.badge()).not.toBe(before);
     expect(p.opener()).toBe(first);
     trustedClick(p.submitBtn());
     await until(() => !!p.card());
@@ -1771,9 +1779,22 @@ describe('the trace card and the resubmit note', () => {
     // keys, textInput, input, composition, the clipboard, drag and drop.
     const types = (p.w as unknown as { ApertureLC: { overlay: { GUARDED: string[] } } }).ApertureLC
       .overlay.GUARDED;
-    expect(types).toEqual(
-      expect.arrayContaining(['keydown', 'textInput', 'input', 'paste', 'drop']),
-    );
+    expect(types).toEqual([
+      'keydown',
+      'keypress',
+      'keyup',
+      'textInput',
+      'beforeinput',
+      'input',
+      'compositionstart',
+      'compositionupdate',
+      'compositionend',
+      'paste',
+      'cut',
+      'copy',
+      'dragstart',
+      'drop',
+    ]);
     for (const t of types) p.w.document.addEventListener(t, (e) => heard.push(e.type), true);
     for (const t of types)
       field.dispatchEvent(

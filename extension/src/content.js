@@ -984,7 +984,13 @@
     note = null;
     // Before the trace: the card's opener, and a word when the hold can't find LeetCode's Submit.
     const untraced = coachOn.trace && !coachState().trace && cardAt == null;
-    const lost = untraced && coachOn.hold && !coachState().held && !!sel.submit && !q(sel.submit);
+    const found = sel.submit ? q(sel.submit) : null;
+    const lost =
+      untraced &&
+      coachOn.hold &&
+      !coachState().held &&
+      !!sel.submit &&
+      !(found && found.matches('button,[role=button]')); // the hold's own rule (the click handler)
     setBadge(
       `${head} · ${synced}${lost ? ' · Submit hold off: Submit not found' : ''}`,
       '',
