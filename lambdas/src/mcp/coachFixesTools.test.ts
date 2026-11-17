@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { emptySummary, legacyRow, ulid, type ApiMethod, type Sitting } from '@aperture/shared';
+import { emptySummary, ulid, type ApiMethod, type Sitting } from '@aperture/shared';
+import { legacyRow } from '@aperture/shared/contract';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { entityItem } from '../ddb/mapping';
 import { Repo } from '../ddb/repo';
@@ -181,13 +182,9 @@ describe('set_claude_notes', () => {
   });
 
   it('takes an abandoned sitting, refuses an open one, and writes nothing on a refusal', async () => {
-    const a = await ended('climbing-stairs', '2026-11-08', false);
-    await repo.putSittingIfAbsent({
-      ...a,
-      id: ulid(),
-      clientSittingId: ulid(),
-      status: 'abandoned',
-    });
+    const done = await ended('climbing-stairs', '2026-11-08', false);
+    const a = { ...done, id: ulid(), clientSittingId: ulid(), status: 'abandoned' as const };
+    await repo.putSittingIfAbsent(a);
     const open = await ended('valid-anagram', TODAY, false, true);
     await expect(
       call('set_claude_notes', {
@@ -198,6 +195,13 @@ describe('set_claude_notes', () => {
       }),
     ).rejects.toThrow(/still open/);
     expect((await repo.getSitting(a.id))?.claudeNotes ?? null).toBeNull();
+    const ok = await call('set_claude_notes', {
+      notes: [{ sittingId: a.id, text: 'Dropped at the cap; the loop bound was off by one.' }],
+    });
+    expect(ok.saved).toMatchObject([
+      { sittingId: a.id, claudeNotes: expect.stringMatching(/^Dropped/) },
+    ]);
+    expect((await repo.getSitting(a.id))?.status).toBe('abandoned');
     await expect(call('set_claude_notes', { notes: [] })).rejects.toBeInstanceOf(RpcParamError);
     await expect(
       call('set_claude_notes', { notes: [{ sittingId: a.id, text: 'z'.repeat(801) }] }),

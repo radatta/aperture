@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient, SettingsPatch } from './api';
 import { legacyFixture } from './coachLegacyFixtures';
+export { legacyFixture, legacyRow } from './coachLegacyFixtures';
 import type { LegacyLeetcodeAttempt } from './types';
 import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';

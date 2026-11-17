@@ -13,7 +13,6 @@ export * from './catalogs';
 export * from './coach';
 export * from './coachAi';
 export * from './coachProgress';
-export * from './coachLegacyFixtures';
 export * from './traceComment';
 export * from './stories';
 export * from './rolls';

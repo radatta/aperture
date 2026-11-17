@@ -381,7 +381,7 @@ export const coachFixes: Scenario = {
       id: 'legacy-fold',
       entry: 'api',
       kind: 'nominal',
-      what: 'Legacy rows fold into records, stats, today and get_problem, marked by source',
+      what: 'Legacy rows fold into the records, stats and the day’s plan, marked by source',
       offDev: {
         file: 'packages/shared/src/coachFixes.test.ts',
         test: 'legacy tries show in the records with their source, and tombstoned rows are skipped',

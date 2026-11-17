@@ -1137,7 +1137,7 @@ class StubClient implements ApiClient {
           : [],
       ),
     );
-    const traced = this.traceCommentRows(sittingId, fresh);
+    const traced = this.traceCommentRows(sittingId, events);
     if (traced.length) this.writes.insertMany(this.store.sittingHeadRows, traced);
     if (events.some((e) => isHeadEvent(e.type)) || traced.length) this.refoldHead(sittingId);
     const bulk = events.filter((e) => !isHeadEvent(e.type));
@@ -1161,8 +1161,9 @@ class StubClient implements ApiClient {
       status: this.mustFind(this.store.sittings, sittingId).status,
     };
   }
-  // Backend parity (traceCommentRowFor): the earliest fresh snapshot before the sitting's first judged event (stored or
-  // in this batch) whose code holds a trace comment becomes one server head row, once per sitting.
+  // Backend parity (traceCommentRow): the earliest snapshot in the batch, a repeat too, before the sitting's first
+  // judged event (stored or in this batch) whose code holds a trace comment becomes one server head row, once per
+  // sitting.
   private traceCommentRows(
     sittingId: string,
     fresh: readonly { id: string; type: string; at: number; payload?: unknown }[],

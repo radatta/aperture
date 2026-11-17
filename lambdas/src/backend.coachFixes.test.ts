@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { legacyFixture, ulid } from '@aperture/shared';
+import { ulid } from '@aperture/shared';
+import { legacyFixture } from '@aperture/shared/contract';
 import { InMemoryDoc } from './ddb/DocClient';
 import { entityItem } from './ddb/mapping';
 import { Repo } from './ddb/repo';
@@ -15,11 +16,12 @@ async function setup() {
   for (const r of legacyFixture('2023-11-14', T0 - 30 * 86_400_000))
     await doc.put(entityItem('u1', `lc#${r.day}#${r.id}`, r));
   const now = { t: T0 };
-  const backend = new BackendClient(new Repo(doc, liveWrites(doc, 'prod'), 'u1'), {
+  const repo = new Repo(doc, liveWrites(doc, 'prod'), 'u1');
+  const backend = new BackendClient(repo, {
     userId: 'u1',
     now: () => now.t,
   });
-  return { doc, backend, now };
+  return { doc, backend, now, repo };
 }
 const legacyItems = async (doc: InMemoryDoc) => JSON.stringify(await doc.query(pk('u1'), 'lc#'));
 // Synthetic: a docstring that names an input, then walks it.
@@ -50,7 +52,7 @@ describe('the legacy rows on the table', () => {
 
 describe('the trace comment row', () => {
   async function opened() {
-    const { doc, backend } = await setup();
+    const { doc, backend, repo } = await setup();
     const roll = await backend.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
     await backend.updateSettings({ leetcodeRollId: roll.id });
     const { sitting } = await backend.lcSittingStart({
@@ -65,7 +67,7 @@ describe('the trace comment row', () => {
       (await doc.query(pk('u1'), `lcs#${sitting.id}#hd#`)).filter(
         (r) => r.type === 'trace-comment',
       );
-    return { backend, sitting, traceRows };
+    return { backend, sitting, traceRows, repo };
   }
   const snap = (code: string, at: number) => ({
     id: ulid(),
@@ -90,6 +92,28 @@ describe('the trace comment row', () => {
     expect(rows.map((r) => r.id)).toEqual([a.id]);
     await backend.lcSittingEvents({ sittingId: sitting.id, events: [submit(T0 + 5000)] });
     expect((await backend.getSitting(sitting.id)).sitting.summary.commentTrace).toBe('traced');
+  });
+
+  it('a retry of a snapshot stored without its trace row (the call died between) still writes it', async () => {
+    const { backend, sitting, traceRows, repo } = await opened();
+    const a = snap(TRACE, T0 + 2000);
+    // The first call stored the snapshot event, then died before the trace row.
+    await repo.putSittingEventIfAbsent(
+      {
+        ...a,
+        sittingId: sitting.id,
+        userId: 'u1',
+        createdAt: T0,
+        updatedAt: T0,
+        deletedAt: null,
+        receivedAt: T0,
+      },
+      null,
+    );
+    expect(await traceRows()).toEqual([]);
+    const r = await backend.lcSittingEvents({ sittingId: sitting.id, events: [a] });
+    expect(r.duplicates).toBe(1);
+    expect((await traceRows()).map((x) => x.id)).toEqual([a.id]);
   });
 
   it('is never written for a snapshot after the first judged event, even in the same batch', async () => {

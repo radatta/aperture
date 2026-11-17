@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   attemptsOf,
   autoCatchUp,
+  coachStats,
   claudeNotesText,
   COACH_PARAMS,
   legacyGroups,
@@ -177,6 +178,11 @@ describe('legacy history', () => {
     const recs = listRecords(input({ legacy: [rows[0]!, rows[1]!, dead] }));
     expect(recs.map((r) => r.slug)).toEqual(['contains-duplicate']);
     expect(recs[0]!.tries[0]!.sources).toEqual(['legacy']);
+    // Stats and the day's plan read the same attempts.
+    const ci = input({ legacy: rows });
+    expect(coachStats(attempts(ci), TODAY)).toMatchObject({ attempts: 2, problems: 2 });
+    const t = planDay(ci);
+    expect(t.momentum.lastActiveDay).toBe(d);
   });
 
   it('legacyGroups lists every group with why it does not count', () => {

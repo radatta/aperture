@@ -6,7 +6,7 @@
 // or `//` lines. It is a trace when it holds an input line (`name = <literal>`, or one opening with input /
 // example / trace) and at least TRACE_STEP_MIN other step lines (a digit plus one of -> => → = : |). LeetCode's
 // starter comments (`:type`, `@param`, "Definition for …") never count. Known limit: three commented-out literal
-// assignments read as a trace; the comment only ever upgrades the card's state, never blanks it.
+// assignments read as a trace. It is the only traced/untraced source (sittings.ts commentTrace).
 
 export const TRACE_BLOCK_MIN_LINES = 3;
 export const TRACE_STEP_MIN = 2;

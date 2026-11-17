@@ -1,5 +1,5 @@
-// Synthetic legacy LeetCode rows (the pre-sittings capture, `lc#`) for tests and the stub's seed: catalog slugs,
-// made-up days, ids and times. Nothing writes these rows any more, so tests hand them to the store directly.
+// Synthetic legacy LeetCode rows (the pre-sittings capture, `lc#`) for tests (via '@aperture/shared/contract'):
+// catalog slugs, made-up days, ids and times. Nothing writes these rows any more, so tests put them in the store.
 import { addDays } from './dates';
 import type { LeetcodeVerdict, LegacyLeetcodeAttempt } from './types';
 

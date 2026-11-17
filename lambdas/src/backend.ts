@@ -1084,7 +1084,12 @@ export class BackendClient implements ApiClient {
             );
       if (written) fresh.add(e.id);
     }
-    const traced = await this.traceCommentRow(sittingId, events, fresh, now);
+    const traced = await this.traceCommentRow(
+      sittingId,
+      events,
+      sitting.summary.firstJudgedAt,
+      now,
+    );
     let status = sitting.status;
     if (events.some((e) => isHeadEvent(e.type)) || traced)
       status = (await this.refoldHead(sittingId, now)).status;
@@ -1100,16 +1105,20 @@ export class BackendClient implements ApiClient {
     logIngest(fresh.size, duplicates, bytes);
     return { accepted: fresh.size, duplicates, skipped, version: live?.version ?? 0, status };
   }
-  // A trace comment (docs/areas/recruiting/index.md → Coach events): the earliest fresh snapshot before the sitting's
-  // first judged event (stored, or in this batch) whose code holds one becomes the server's own head row, once per
-  // sitting. Only a batch with a fresh snapshot reads the head rows. True when it wrote one.
+  // A trace comment (docs/areas/recruiting/index.md → Coach events): the earliest snapshot before the sitting's first
+  // judged event (stored, or in this batch) whose code holds one becomes the server's own head row, once per sitting.
+  // Every snapshot in the batch, a repeat too: a call that died after storing its snapshot but before this row is
+  // finished by the retry (the put is by the snapshot's id). Only a batch with a snapshot before the stored first
+  // judged event reads the head rows. True when it wrote one.
   private async traceCommentRow(
     sittingId: string,
     events: readonly { id: string; type: string; at: number; payload?: unknown }[],
-    fresh: ReadonlySet<string>,
+    judgedAt: number | null | undefined,
     now: number,
   ): Promise<boolean> {
-    const snaps = events.filter((e) => e.type === 'snapshot' && fresh.has(e.id));
+    const snaps = events.filter(
+      (e) => e.type === 'snapshot' && (judgedAt == null || e.at < judgedAt),
+    );
     if (!snaps.length) return false;
     const rows = await this.repo.listSittingHeadRows(sittingId);
     if (rows.some((r) => r.type === 'trace-comment')) return false;

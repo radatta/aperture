@@ -265,8 +265,6 @@ export class Repo {
       throw err;
     }
   }
-  // A sitting's head rows (what its summary is recomputed from), strongly consistent: the call that just wrote
-  // one must see it. Compact, so the recompute stays cheap however large the payloads.
   // The server's own head row (a trace comment seen in a snapshot, sittings.ts traceCommentRow), once by its id.
   async putSittingTraceRowIfAbsent(
     row: SittingHeadRow,
@@ -278,6 +276,8 @@ export class Repo {
       null,
     );
   }
+  // A sitting's head rows (what its summary is recomputed from), strongly consistent: the call that just wrote
+  // one must see it. Compact, so the recompute stays cheap however large the payloads.
   async listSittingHeadRows(id: string): Promise<SittingHeadRow[]> {
     return alive(
       (await this.doc.query(this.p(), sk.sittingHeadRowPrefix(id), { consistent: true })).map((i) =>

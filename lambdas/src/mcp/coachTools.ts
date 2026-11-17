@@ -41,8 +41,9 @@ import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
 // The LeetCode coach for Claude (docs/areas/recruiting/coach.md; docs/areas/mcp → Tools). leetcode_today,
-// log_attempt, set_focus_pattern, delete_attempt, set_void and set_claude_notes write the user's data, each only on their yes.
-// log_attempt, set_focus_pattern and delete_attempt write the user's data, each only on their yes.
+// list_problems, get_problem, coach_stats and list_stories read; mark_peeked, set_cause_tag, swap_slot,
+// log_attempt, set_focus_pattern, delete_attempt, set_void and set_claude_notes write the user's data, each only on
+// their yes.
 
 // Every write's description opens with this, so the posture travels with the tool (MCP has no annotations).
 const ASK_FIRST =
@@ -507,7 +508,10 @@ export const COACH_TOOLS: Tool[] = [
         if (t.sittingId !== undefined) {
           if (t.day !== undefined || t.slug !== undefined)
             throw new RpcParamError('a target is a "sittingId", or a "day" + "slug" — not both');
-          sittings.push({ id: optSittingId(t.sittingId)!, void: t.void });
+          const id = optSittingId(t.sittingId)!;
+          if (sittings.some((x) => x.id === id))
+            throw new RpcParamError(`sitting ${id} is listed twice`);
+          sittings.push({ id, void: t.void });
         } else {
           const day = optDay(t.day, 'day');
           if (day === undefined || !isProblemSlug(t.slug))
@@ -858,7 +862,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'coach_stats',
     description: [
-      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits per try, how often a Run came before the first Submit, how often the attempt was traced before the first Submit (a trace comment in the code, or, on older sittings, all three of the card’s inputs), and its first tries per week. The run and trace rates cover only attempts with captured data.',
+      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits per try, how often a Run came before the first Submit, how often the attempt was traced before the first Run or Submit (a trace comment in the code; sittings from before that rule count nowhere), and its first tries per week. The run and trace rates cover only attempts with captured data.',
       'Optional `from` / `to` (YYYY-MM-DD, inclusive; `to` defaults to their today). Test sittings never count. `note` says how to read it.',
       'Read-only.',
     ].join(' '),
