@@ -13,6 +13,8 @@ import {
   useSetCoachFocus,
   useSetCoachSlot,
 } from '../../data/hooks/useCoach';
+import { cx } from '../../lib/cx';
+import { returnFocus } from '../../lib/useDisclosure';
 import { dueLabel, SLOT_KIND_LABEL, slotState } from './recruitingHelpers';
 
 const sittingPath = (id: string) => `/recruiting/sittings/${id}`;
@@ -238,6 +240,7 @@ function FocusLine({ today }: { today: CoachToday }) {
       </Text>
       {picking && (
         <Select
+          autoFocus
           label="Focus pattern"
           value={f.source === 'override' ? f.pattern : ENGINE}
           aria-disabled={focus.isPending || undefined}
@@ -264,10 +267,21 @@ function SlotRow({
 }: {
   slot: CoachSlot;
   busy: boolean;
-  onChange: (s: CoachSlot, action: 'swap' | 'skip' | 'restore') => void;
+  onChange: (s: CoachSlot, action: 'swap' | 'skip' | 'restore') => Promise<void>;
 }) {
   const state = slotState(s);
-  const act = (action: 'swap' | 'skip' | 'restore') => () => onChange(s, action);
+  const row = useRef<HTMLLIElement>(null);
+  // The pressed button usually goes with the change (Skip → Restore): focus stays in the row, on its first
+  // button, else its title — never dropped to <body> (CONVENTIONS → focus-return).
+  const act = (action: 'swap' | 'skip' | 'restore') => async () => {
+    await onChange(s, action);
+    requestAnimationFrame(() => {
+      const li = row.current;
+      if (!li || li.contains(document.activeElement)) return;
+      const next = li.querySelector<HTMLElement>('button') ?? li.querySelector<HTMLElement>('a');
+      if (next) returnFocus(next);
+    });
+  };
   const quiet = (label: string, action: 'swap' | 'skip' | 'restore', name: string) => (
     <Button
       variant="quiet"
@@ -280,7 +294,7 @@ function SlotRow({
     </Button>
   );
   return (
-    <li className="flex flex-col gap-1 py-3">
+    <li ref={row} className="flex flex-col gap-1 py-3">
       <div className="flex items-baseline justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <Text size="xs" tone="subtle" weight="medium">
@@ -291,14 +305,23 @@ function SlotRow({
             href={s.url}
             target="_blank"
             rel="noreferrer"
-            className={`font-medium underline-offset-2 hover:underline ${s.status === 'skipped' ? 'text-ink-subtle line-through' : 'text-ink'}`}
+            className={cx(
+              'font-medium underline-offset-2 hover:underline',
+              s.status === 'skipped' ? 'text-ink-subtle line-through' : 'text-ink',
+            )}
           >
             {s.title}
+            <span aria-hidden className="text-ink-subtle">
+              {' '}
+              ↗
+            </span>
           </a>
         </div>
-        <Text size="sm" tone={state.tone} className="shrink-0 text-right">
-          {state.label}
-        </Text>
+        {s.status !== 'open' && (
+          <Text size="sm" tone={state.tone} className="shrink-0 text-right">
+            {state.label}
+          </Text>
+        )}
       </div>
       <Text size="xs" tone="muted">
         {s.reason}

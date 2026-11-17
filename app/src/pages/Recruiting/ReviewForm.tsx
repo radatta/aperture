@@ -22,6 +22,7 @@ import {
   useSetSittingPrepTarget,
   useSetSittingReview,
 } from '../../data/hooks/useSittings';
+import { cx } from '../../lib/cx';
 import { suggestedCause } from './recruitingHelpers';
 import { NotesField } from '../../modules/tasks/notes/NotesField';
 import { notesValue } from '../../modules/tasks/notes/parseNotes';
@@ -53,19 +54,23 @@ const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 //
 // Help and the cause are also Claude's to set over MCP (mark_peeked, set_cause_tag), maybe after this form
 // opened. So until the user touches one, it follows the stored review as it refreshes, and Save sends the
-// stored value as the server has it at that moment — never the stale one the form opened on (F169).
+// stored value as the server has it at that moment — never the stale one the form opened on (F169). The cause is
+// only suggested while there's no review at all: once one is stored, its cause (none included) is what shows.
+const startCause = (s: Sitting): CauseTag | null =>
+  s.review ? (s.review.cause ?? null) : suggestedCause(s);
+
 export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const saved = sitting.review ?? null;
   const [insight, setInsight] = useState(saved?.insight ?? '');
   const [help, setHelp] = useState<HelpLevel>(saved?.help ?? suggestedHelp(sitting));
-  const [cause, setCause] = useState<CauseTag | null>(saved?.cause ?? suggestedCause(sitting));
+  const [cause, setCause] = useState<CauseTag | null>(startCause(sitting));
   const [touched, setTouched] = useState({ help: false, cause: false });
   const [syncedAt, setSyncedAt] = useState(saved?.updatedAt ?? null);
   if ((saved?.updatedAt ?? null) !== syncedAt) {
     // The stored review moved (a save here, or Claude's write elsewhere): untouched fields follow it.
     setSyncedAt(saved?.updatedAt ?? null);
     if (!touched.help) setHelp(saved?.help ?? suggestedHelp(sitting));
-    if (!touched.cause) setCause(saved?.cause ?? suggestedCause(sitting));
+    if (!touched.cause) setCause(startCause(sitting));
   }
   const readReview = useReadSittingReview();
   const [mistakes, setMistakes] = useState<string[]>(saved?.mistakes ?? []);
@@ -78,6 +83,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false); // a double click lands both clicks before `busy` renders
   const setReview = useSetSittingReview();
   const setPrepTarget = useSetSittingPrepTarget();
   const drafting = useDraftSittingReview();
@@ -148,17 +154,18 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       setError(`${(e as Error).message}.`);
       return;
     }
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
     let step: 'review' | 'prep' = 'review';
     try {
       // Untouched help and cause: the stored ones as of now. An absent cause is kept by the server; the suggested
-      // one is sent only while no cause was ever there (not one Claude cleared since the form opened).
+      // one is sent only while there's still no review at all. Help and the cause can't change while this runs
+      // (both refuse taps while busy), so `touched` here is the one Save was pressed on.
       if (!touched.help || !touched.cause) {
         const now = await readReview(sitting.id);
         if (!touched.help && now) input.help = now.help;
-        const suggested = suggestedCause(sitting);
-        if (!touched.cause && !now?.cause && !saved?.cause && suggested)
-          Object.assign(input, { cause: suggested });
+        if (!touched.cause && !now && cause) Object.assign(input, { cause });
       }
       await setReview.mutateAsync({ id: sitting.id, review: input });
       step = 'prep';
@@ -179,6 +186,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
           : 'The review saved, but the prep target didn’t — try Save again.',
       );
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   }
@@ -217,6 +225,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
           options={HELP}
           value={help}
           onChange={(v) => {
+            if (busy) return;
             setHelp(v);
             setTouched((t) => ({ ...t, help: true }));
           }}
@@ -229,7 +238,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       <div className="flex flex-col gap-1">
         <Text size="sm" tone="muted" id={`${id}-cause`}>
           Cause
-          {!touched.cause && !saved?.cause && cause && (
+          {!touched.cause && !saved && cause && (
             <Text as="span" size="xs" tone="subtle">
               {' '}
               · suggested
@@ -243,15 +252,18 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
               key={c}
               type="button"
               aria-pressed={cause === c}
+              aria-disabled={busy || undefined}
               onClick={() => {
+                if (busy) return;
                 setCause(cause === c ? null : c);
                 setTouched((t) => ({ ...t, cause: true }));
               }}
-              className={
+              className={cx(
+                'rounded-full border px-3 py-1.5 text-sm transition',
                 cause === c
-                  ? 'rounded-full border border-teal bg-teal/15 px-3 py-1 text-sm text-ink'
-                  : 'rounded-full border border-line bg-surface px-3 py-1 text-sm text-ink-muted hover:text-ink'
-              }
+                  ? 'border-teal-soft bg-teal-soft font-medium text-ink'
+                  : 'border-line bg-surface text-ink-muted hover:text-ink',
+              )}
             >
               {CAUSE_NAMES[c]}
             </button>

@@ -7,7 +7,7 @@
 // last: its backdated attempts change the plan for any read after it.
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
-import type { Ctx, Scenario } from '../scenario';
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { devUlid } from './flux-history';
 
 const addDays = (day: string, n: number): string => {
@@ -297,11 +297,18 @@ export const lcCoach: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'A failed read on Home is one visible line linking to the card, never silence',
-      offDev: {
-        file: 'app/src/pages/Home/Home.test.tsx',
-        test: 'a failed read is one visible line, never silence',
-        why: 'the same failed getCoachToday the card’s dev-proven row (ui-failed) runs; only the line’s wording differs',
-      },
+    },
+    {
+      id: 'ui-floor',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Full day and Floor day on the card turn the floor off and on',
+    },
+    {
+      id: 'ui-focus',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Change on the focus line: the coach’s pick clears an override, and a pattern sets one',
     },
   ],
   steps: [
@@ -891,9 +898,76 @@ export const lcCoach: Scenario = {
           .getByText(/ · day \d of 3/)
           .first()
           .waitFor({ timeout: 15_000 });
+      },
+    },
+    {
+      id: 'ui-home-failed',
+      title: 'getCoachToday fails: Home’s morning shows one line linking to the card',
+      entry: 'ui',
+      proves: ['ui-home-failed'],
+      async run(ctx) {
+        const i = await ctx.intercept('getCoachToday', { status: 500 });
+        try {
+          await morning(ctx);
+          const line = ctx.page.getByRole('link', { name: /^LeetCode · couldn’t load/ });
+          await line.waitFor({ state: 'visible', timeout: 30_000 });
+          if ((await line.getAttribute('href')) !== '/recruiting')
+            fail('the failed line doesn’t link to the card');
+          await ctx.shot('lc-coach-home-failed');
+        } finally {
+          await i.release();
+        }
+      },
+    },
+    {
+      id: 'ui-floor',
+      title: 'Full day, then Floor day, on the card',
+      entry: 'ui',
+      proves: ['ui-floor'],
+      async run(ctx) {
+        // The floor is ledgered through the API first (coachFloorId), so cleanup turns it off whatever the UI leaves.
+        const day = (await ctx.api.writes.setCoachFloor(today(), true)).day;
+        if (day !== today()) fail(`the plan's day moved: ${day}`);
+        const c = await todayCard(ctx);
+        await c.getByText(/Floor day: just/).waitFor({ timeout: 15_000 });
+        await c.getByRole('button', { name: 'Full day', exact: true }).click();
+        await c.getByText(/Short on time\? Floor:/).waitFor({ timeout: 15_000 });
+        if ((await ctx.api.reads.getCoachToday()).floor?.on !== false) fail('Full day left it on');
+        await c.getByRole('button', { name: 'Floor day', exact: true }).click();
+        await c.getByText(/Floor day: just/).waitFor({ timeout: 15_000 });
+        if ((await ctx.api.reads.getCoachToday()).floor?.on !== true)
+          fail('Floor day didn’t turn it on');
+        await ctx.shot('lc-coach-floor-on');
+        await ctx.api.writes.setCoachFloor(today(), false);
+      },
+    },
+    {
+      id: 'ui-focus',
+      title: 'The focus picker: the coach’s pick, then Intervals',
+      entry: 'ui',
+      proves: ['ui-focus'],
+      async run(ctx) {
+        // Ledgered through the API first (coachFocusId), so cleanup clears whatever the UI leaves.
+        await ctx.api.writes.setCoachFocus('intervals');
+        const c = await todayCard(ctx);
+        const pick = async (label: string) => {
+          await c.getByRole('button', { name: 'Change', exact: true }).click();
+          await c.getByLabel('Focus pattern').selectOption({ label });
+        };
+        await c.getByText('Intervals · day 1 of 3 · your pick').waitFor({ timeout: 15_000 });
+        await pick('The coach’s pick');
+        await until(
+          'the override cleared',
+          async () => (await ctx.api.reads.getCoachToday()).focus.source === 'engine',
+        );
+        await pick('Intervals');
+        await c.getByText('Intervals · day 1 of 3 · your pick').waitFor({ timeout: 15_000 });
+        await ctx.shot('lc-coach-focus-pick');
+        await ctx.api.writes.setCoachFocus(null);
         await ctx.api.writes.linkLeetcodeRoll(null); // the roll ui-home linked, for the scenarios after
       },
     },
+    noConsoleErrors,
   ],
 };
 

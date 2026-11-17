@@ -162,14 +162,14 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
   inline, and a failed read is a `LoadError` with Retry. Tones are teal for done-clean and gold or muted
   otherwise, never red.
 - **The review form** adds five cause chips (one choice; a second tap clears it) and labels help's `solution` as
-  **Peeked**. With no cause saved, it starts on a suggested `no-trace` (`suggestedCause`) when the trace was
+  **Peeked**. With no review at all, it starts on a suggested `no-trace` (`suggestedCause`) when the trace was
   skipped or missing at the first submit, or when that submit failed with no Run before it.
 - **Claude's writes while the form is open (F169).** Help and the cause are also set over MCP (`mark_peeked`,
   `set_cause_tag`). Until the user touches one, the field follows the stored review as it refreshes. Save re-reads
   the review first: an untouched help is sent as stored, an untouched cause isn't sent (the server keeps it), and
-  the suggestion is sent only while no cause was ever stored. A failed re-read fails the Save, keeping every field.
-- **Home's morning line** (`Home/LeetcodeGlance.tsx`, the `FinanceGlance` posture): "LeetCode · 4 today · 2
-  re-solves due" → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
+  the suggestion is sent only while there's still no review. Help and the chips refuse taps while a Save runs. A failed re-read fails the Save, keeping every field.
+- **Home's morning line** (`Home/LeetcodeGlance.tsx`, the `FinanceGlance` posture): "LeetCode · 4 today · 1
+  more re-solve due" (due re-solves beyond the slots) → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
   problem. A failed read is one visible line, never silence.
-- A sitting, review or task write invalidates the `coach` query prefix, so the card follows the extension and the
-  rep's Done.
+- A review or task write in the app (a rep's Done included) invalidates the `coach` query prefix. The
+  extension's writes don't reach the app's cache: the card catches up when it next mounts with data over 30 s old (a later visit).

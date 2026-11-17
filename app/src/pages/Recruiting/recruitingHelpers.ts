@@ -120,7 +120,7 @@ export function suggestedCause(s: Pick<Sitting, 'summary'>): CauseTag | null {
   return null;
 }
 
-// Home's morning line: "LeetCode · 4 today · 2 re-solves due". A floor day names its one problem; a day with
+// Home's morning line: "LeetCode · 4 today · 1 more re-solve due". A floor day names its one problem; a day with
 // every slot done or skipped says so.
 export function coachGlance(t: CoachToday): string {
   const live = t.slots.filter((s) => s.status !== 'skipped');
@@ -135,6 +135,7 @@ export function coachGlance(t: CoachToday): string {
           : left < live.length
             ? `${left} left today`
             : `${left} today`;
-  const due = t.due.length;
-  return `LeetCode · ${head}${due ? ` · ${due} ${due === 1 ? 're-solve' : 're-solves'} due` : ''}`;
+  // Due re-solves beyond today's slots (one already a slot is counted there).
+  const due = t.due.filter((q) => !t.slots.some((s) => s.slug === q.slug)).length;
+  return `LeetCode · ${head}${due ? ` · ${due} more ${due === 1 ? 're-solve' : 're-solves'} due` : ''}`;
 }

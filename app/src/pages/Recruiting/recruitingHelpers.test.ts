@@ -133,14 +133,26 @@ describe('the coach’s view helpers', () => {
     ({ slots: [], due: [], floor: null, ...over }) as unknown as CoachToday;
   it('the Home line counts what’s left, the due re-solves, and a floor day', () => {
     const four = ['open', 'open', 'open', 'open'] as const;
-    expect(coachGlance(day({ slots: four.map(slot), due: [{}, {}] as never }))).toBe(
-      'LeetCode · 4 today · 2 re-solves due',
+    const slotOn = (slug: string) => ({ status: 'open', slug }) as CoachSlot;
+    expect(
+      coachGlance(
+        day({
+          slots: ['a', 'b', 'c', 'two-sum'].map(slotOn),
+          due: [{ slug: 'two-sum' }, { slug: 'x' }, { slug: 'y' }] as never,
+        }),
+      ),
+    ).toBe('LeetCode · 4 today · 2 more re-solves due'); // two-sum is a slot already
+    expect(coachGlance(day({ slots: four.map(slot), due: [{ slug: 'x' }] as never }))).toBe(
+      'LeetCode · 4 today · 1 more re-solve due',
     );
     expect(
       coachGlance(
-        day({ slots: [slot('done'), slot('open'), slot('skipped')], due: [{}] as never }),
+        day({
+          slots: [slot('done'), slot('open'), slot('skipped')],
+          due: [{ slug: 'x' }] as never,
+        }),
       ),
-    ).toBe('LeetCode · 1 left today · 1 re-solve due');
+    ).toBe('LeetCode · 1 left today · 1 more re-solve due');
     expect(coachGlance(day({ slots: [slot('done'), slot('skipped')] }))).toBe(
       'LeetCode · 1 of 1 done',
     );

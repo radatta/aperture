@@ -13,7 +13,7 @@ const slots = async () => within(await card()).findByRole('list', { name: 'Today
 const titles = async () =>
   within(await slots())
     .getAllByRole('listitem')
-    .map((li) => within(li).getAllByRole('link')[0]!.textContent);
+    .map((li) => within(li).getAllByRole('link')[0]!.textContent?.replace(/\s*↗$/, ''));
 
 // The seeded stub's day: a Sliding Window focus, two new problems, Two Sum due as a re-solve, a stretch.
 describe('the Today card', () => {
@@ -84,6 +84,9 @@ describe('the Today card', () => {
     await slots();
     await user.click(screen.getByRole('button', { name: 'Skip today — Permutation in String' }));
     expect(await within(await slots()).findByText('skipped today')).toBeTruthy();
+    // The pressed Skip is gone: focus moves to the row's Restore, not <body>.
+    const restore = screen.getByRole('button', { name: 'Restore — Permutation in String' });
+    await waitFor(() => expect(document.activeElement).toBe(restore));
     await user.click(screen.getByRole('button', { name: 'Restore — Permutation in String' }));
     await waitFor(async () =>
       expect(within(await slots()).queryByText('skipped today')).toBeNull(),
