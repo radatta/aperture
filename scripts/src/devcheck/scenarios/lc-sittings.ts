@@ -343,7 +343,7 @@ export const lcSittings: Scenario = {
       id: 'coach-fold',
       entry: 'api',
       kind: 'nominal',
-      what: 'Coach events (config, an untraced submit, a nudge) fold into the sitting’s coaching; a repeat is a duplicate',
+      what: 'Coach events (config, an untraced submit, a nudge) fold into the sitting’s coaching, each payload kept whole; a repeat is a duplicate',
     },
     {
       id: 'coach-after-submit',
@@ -361,10 +361,21 @@ export const lcSittings: Scenario = {
       id: 'coach-trace-states',
       entry: 'api',
       kind: 'edge',
-      what: 'Before the first submit, three inputs traced is traced, one or two partial, none or a skip skipped, the latest winning',
+      what: 'Before the first submit, three inputs traced is traced, one or two partial, none or a skip skipped',
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
         test: 'three inputs before the first submit is traced; one or two partial; none or a skip, skipped',
+        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+      },
+    },
+    {
+      id: 'coach-trace-latest',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Of a skip and a trace before the first submit, the later one stands',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'the latest before the first submit wins; one after it changes nothing',
         why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
       },
     },
@@ -992,7 +1003,14 @@ export const lcSittings: Scenario = {
         const again = await ctx.api.writes.lcSittingEvents(state.a, batch);
         if (again.accepted !== 0 || again.duplicates !== 4)
           throw new Error(`again: ${JSON.stringify(again)}`);
-        const before = (await sittingA(ctx)).sitting.summary;
+        const read = await sittingA(ctx);
+        const kept = read.events.filter((e) => e.type === 'coach');
+        const keptTrace = kept.find((e) => JSON.stringify(e.payload).includes('"boundary":"[1]"'));
+        if (kept.length !== 4 || !keptTrace)
+          throw new Error(
+            `${kept.length} coach payloads kept, trace ${keptTrace ? 'kept' : 'missing'}`,
+          );
+        const before = read.sitting.summary;
         const c = before.coach; // field by field: a stored map's key order isn't kept
         if (
           c?.trace !== 'none' ||

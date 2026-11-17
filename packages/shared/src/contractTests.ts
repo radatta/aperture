@@ -3442,11 +3442,12 @@ export function runApiContract(
           at,
           payload,
         });
-        const traced = coachEv(LC_T0 + 2000, {
+        const tracePayload = {
           kind: 'trace',
           inputs: { empty: '[]', boundary: '[1]', normal: '[3,1,2]' },
           ms: 45_000,
-        });
+        };
+        const traced = coachEv(LC_T0 + 2000, tracePayload);
         const events = [
           coachEv(LC_T0 + 1000, { kind: 'config', trace: true, hold: true, nudge: true }),
           traced,
@@ -3463,6 +3464,10 @@ export function runApiContract(
           nudges: 1,
         });
         expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 4 });
+        // Each coach event's payload is kept whole beside its head row — the trace text included.
+        const kept = detail.events.filter((e) => e.type === 'coach');
+        expect(kept).toHaveLength(3);
+        expect(kept.map((e) => e.payload)).toContainEqual(tracePayload);
         expect((await api.listSittings())[0]!.summary.coach?.trace).toBe('traced');
         // The export carries each coach row's mark (never its text), on both clients.
         const exported = (await api.exportData()).sittingHeadRows.filter((r) => r.type === 'coach');

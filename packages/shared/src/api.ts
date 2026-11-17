@@ -289,7 +289,7 @@ export interface ExportBundle {
   // (bulk; the export is one Lambda response) — like attachment bytes.
   sittings: Sitting[];
   sittingLive: SittingLive[];
-  sittingHeadRows: SittingHeadRow[]; // runs/submits/notes/timer as verdicts — their raw payloads stay in the table
+  sittingHeadRows: SittingHeadRow[]; // runs/submits/notes/timer/coach as verdicts and marks — payloads stay in the table
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export

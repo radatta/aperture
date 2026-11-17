@@ -333,7 +333,7 @@ export interface DevSittingDetail {
     code: string | null;
     facts: { edits: number; longestStallMs: number; focus: [number, boolean][] };
   } | null;
-  events: { id: string; type: string; at: number }[];
+  events: { id: string; type: string; at: number; payload?: unknown }[];
   problem: { slug: string } | null;
   liveReads: number; // live_sitting pulls (PR B)
 }
