@@ -49,9 +49,10 @@ What each touched package still brings, as before:
   passed its review, so the plan says which half this is, and the lenses check the lambda against the contract the
   stub set.
 - **`cdk/`** — the infra lens runs its synth pass on HEAD (`.claude/agents/review-infra.md` → _Synth pass_: the
-  stages, the dummy values, the output path). A base assembly from `origin/main` for the template diff is built with
-  that same command, the same four dummy values and an absolute output path outside any checkout — never a bare
-  `cdk synth`, which reads or creates real tokens under `cdk/.secrets/`. Without a base, the template diff goes under
+  stages, the dummy values, the output path). A base assembly for the template diff is built by the lane from a checkout at the prompt's
+  `origin/main` sha, under `heavy.sh`, with that same command, stages, `devmain` runs and all five dummy values, to
+  an absolute output path outside any checkout — never a bare `cdk synth`, which reads or creates real tokens under
+  `cdk/.secrets/`. Without a base, the template diff goes under
   `Not checked:`.
 - **`packages/shared`** — the contract both sides build on: the `app/` and `lambdas/` rows both apply, and the
   correctness lens opens both callers.
@@ -60,7 +61,7 @@ What each touched package still brings, as before:
 
 `git diff --name-only origin/main...HEAD` against the table and the infra triggers; when unsure, add the lens. The
 pick goes in `localNotes/decisions.md`. The triggered lenses are a floor: a kickoff or a relay can add lenses or
-rechecks, never remove one.
+rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_ 1).
 
 - **Docs only** — `code-reviewer` alone; plus shell if an operator command changed, infra if a deploy, slot, lock or
   approval rule changed.
@@ -106,7 +107,8 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
 
 ## Merge
 
-1. Check every picked lens returned its `lens=` line and ran its pass. A missing one is relaunched; one that can't
+1. Check every picked lens returned its `lens=` line and ran its pass. A missing one is relaunched, and so is an infra lens
+   that put its synth under `Not checked:` because the board was busy (once the UI lens returns); one that can't
    run (no browser, a blocked synth) goes to the hub as `[blocked]` or `[ask-maintainer]` and holds the lane until it has run, or the user's explicit
    yes, relayed, lets the round finish without it (then it is an open finding shipped: _The round record_). Then
    collect every lens's lines; sort by path and line.
@@ -129,7 +131,7 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
 Product calls and added scope: collaborative → one `[ask-maintainer]` with the list; autonomous → decide and log.
 
 **A hold stops the lane where it is**: in the review, before phase 7; after a dev fix or a rebase, before the
-redeploy and phase 10.
+next push or deploy, and phase 10.
 
 ## Fix, gate, commit
 
@@ -158,10 +160,10 @@ commit for the round.
 
 A fix from dev testing (phase 9), or a rebase that resolved conflicts, is committed and gated, then gets
 `review-fixes`, plus `review-ui` or `review-infra` when it touches their triggers or a risk class, as in round 2 —
-whatever its size. Only a fix that touches no lens trigger beyond code and no risk class, and is covered by a test
-it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
+whatever its size. Only a fix that touches no infra, shell, UI or extension trigger and no risk class, and is
+covered by a test it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
 recheck is the chain's round 1, the rest runs as round 2 and later (serious again → recheck that fix), the cap and the
-no-fewer comparison count within the chain, and its files are `localNotes/review/dev<k>-round-<n>.md`.
+no-fewer comparison count within the chain, and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
 
 - **Dev fix** — the range is `<the commit before the fix>..HEAD`; the list is the dev defects it fixes.
 - **Rebase** — note the head before rebasing (`git rev-parse HEAD`); after, the recheck reads
@@ -170,8 +172,8 @@ no-fewer comparison count within the chain, and its files are `localNotes/review
 
 ## Lens gaps
 
-A serious finding in round 2 or later that the fixes didn't cause (`cause=pre-existing`) means a round-1 lens should
-have seen it.
+A serious finding in round 2 or later, or in any recheck of a dev or rebase chain, that the fixes didn't cause
+(`cause=pre-existing`) means an earlier lens should have seen it.
 
 - **The lane** records it under `## Lens gaps` in its report — lens, kind, one line, round — and sends one
   `lens-gap: <lens> <kind> — <line>` per gap in its `[pr-open]`.
@@ -187,7 +189,8 @@ them, findings by severity, gates run. No lane recorded review tokens before thi
 for the next design change.
 
 **Open findings shipped** — every S1/S2 left unfixed (a drop the second reader upheld, a product call "not now", the
-round cap's "ship it"), every live-state item still open and every lens that didn't run, by id from the round files.
+round cap's "ship it"), every live-state item still open (only after the relay's answer, _Merge_ 5) by id from the round files,
+and every lens that didn't run, by lens and round (only after the user's yes, _Merge_ 1).
 The list goes in the report, the PR body and `[pr-open]`; an empty one is written "none".
 
 ## Coverage

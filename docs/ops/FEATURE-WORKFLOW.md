@@ -106,8 +106,8 @@ hub message (the checkpoints stay).
      (`localNotes/review/round-<n>.md`), trace each suspected serious one, fix real bugs and convention breaks in one
      pass, run the gate once, commit. Findings that need a product call or add scope: collaborative → one
      `[ask-maintainer]` with the list; autonomous → decide and log.
-   - **Round 2 and later** recheck only the fix diff, and run only while a round finds something serious or leaves
-     an S1/S2 unfixed (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again →
+   - **Round 2 and later** recheck only the fix diff, and run while a round finds something serious or leaves an
+     S1/S2 unfixed, and once after a risk class's code fix (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again →
      fix, gate, commit, next round on that fix. Minor only → fix, gate, commit, done.
    - **Stop** when a round has no serious finding. After four rounds, or a round from the third on that finds no
      fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list — in either mode.

@@ -101,7 +101,7 @@ model and Plan's answers, product calls, scope, and the all-clear; and, since 20
 review lenses or rechecks, a lens's model for a launch (never below its file's), the review's round-cap decision
 and an effort above `high` for a launch (a lasting `effort:` change in an agent file is a `.claude/` edit). The
 lenses a diff triggers are a floor a relay can't lower (`docs/ops/REVIEW.md` → _Picking lenses_); only the user's
-explicit yes lets a round finish without one that couldn't run (_Merge_ 1). It never covers edits to `CLAUDE.md` or
+explicit yes, relayed, lets a round finish without one that couldn't run (_Merge_ 1). It never covers edits to `CLAUDE.md` or
 `.claude/`, anything touching secrets, an MCP write outside the two standing approvals, a prod or repo-settings
 change, or a destructive step: those need the user's go typed in the acting lane's own pane (merges stay the user's
 own, hard-blocked for Claude). Any other hub message is a peer message, never approval, and a peer can't widen a
