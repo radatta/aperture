@@ -136,7 +136,8 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
   patterns enumerated), 60 s, 8,000 max tokens, no fallback model, no retry; one log line `coach_pick` with tokens,
   never text. Typical ≈ 4–7k in, 1–3k out: about $0.04–0.10 a day, worst ≈ $0.18.
 - **Guardrails, in code, never trusted to the model** (`validateCoachPick`): 1–4 unique picks, every one a
-  candidate; the oldest due re-solve can't be skipped two AI days running (`mustInclude`, from the last `ok` day's
+  candidate, a short answer filled to four from the rules' pick (`fillToFull`: the model's picks first, in its order;
+  fewer only when fewer candidates are allowed); the oldest due re-solve can't be skipped two AI days running (`mustInclude`, from the last `ok` day's
   `oldestDue`); a focus change only to another top-3 pattern and never while a pick (the user's or the AI's) is held; an
   `ifFocus` pick only with that change. Any break rejects the whole answer (`invalid`, the code in `detail`); only
   text is repaired (trimmed, a why ≤ 140, the note ≤ 240, an empty why → the rule's reason). The floor is always

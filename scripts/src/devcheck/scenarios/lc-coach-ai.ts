@@ -195,7 +195,7 @@ export const lcCoachAi: Scenario = {
       id: 'ai-day-stored',
       entry: 'api',
       kind: 'nominal',
-      what: 'The day row holds the pick: ok, the model, its tokens, 1–4 unique problems each with a why — the plan’s slots in that order; the whys and note keep the coach’s wording (never “overdue”, no missed days or streaks)',
+      what: 'The day row holds the pick: ok, the model, its tokens, 4 unique problems each with a why — the plan’s slots in that order; the whys and note keep the coach’s wording (never “overdue”, no missed days or streaks)',
     },
     {
       id: 'once',
@@ -706,7 +706,8 @@ export const lcCoachAi: Scenario = {
         if (!isLocal() && !(ai.usage && ai.usage.input > 0 && ai.usage.output > 0))
           fail(`usage: ${JSON.stringify(ai.usage)}`);
         const picked = ai.picks.map((p) => p.slug);
-        if (picked.length < 1 || picked.length > 4 || new Set(picked).size !== picked.length)
+        // Four, as the rules' day (the test user has far more than four candidates): a short answer is filled.
+        if (picked.length !== 4 || new Set(picked).size !== picked.length)
           fail(`picks: ${picked.join(', ')}`);
         if (ai.picks.some((p) => !p.why.trim())) fail('a pick with no why');
         // The coach's wording rule (coachTools TODAY_NOTE, the pick's prompt): due, never overdue; no missed days or

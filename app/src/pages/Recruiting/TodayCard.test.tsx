@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
@@ -211,6 +211,9 @@ describe('the Today card', () => {
 
 // The day's AI pick on the card (docs/areas/recruiting/coach.md → The AI pick). The stub's stand-in reads like the
 // rules, so the model's own words come from a spied read.
+// Home's LeetCode line shows in morning mode only (Home/index.tsx), so the tests that start from Home pin a morning.
+const MORNING = Date.parse('2026-11-17T17:00:00Z'); // 09:00 in Los Angeles
+
 describe('the AI pick on the Today card', () => {
   const view = (o: Partial<CoachAiView>): CoachAiView => ({
     status: 'ok',
@@ -318,7 +321,9 @@ describe('the AI pick on the Today card', () => {
   });
 
   it('a start that failed on Home shows the Retry on the card, never a stuck “picking”', async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: MORNING }); // Home's LeetCode line is morning-only
+    onTestFinished(() => void vi.useRealTimers());
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const api = stub(true);
     vi.spyOn(api, 'startCoachPick').mockRejectedValueOnce(new Error('offline'));
     renderApp({ api, path: '/' });
@@ -331,7 +336,7 @@ describe('the AI pick on the Today card', () => {
   });
 
   it('a failed start keeps its Retry past the cache’s clean-up (5 minutes)', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: MORNING }); // Home's LeetCode line is morning-only
     try {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       const api = stub(true);

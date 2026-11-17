@@ -228,6 +228,7 @@ export type CoachPickAnswer =
       picks: CoachAiPick[];
       note: string | null;
       focus: { from: PatternId; to: PatternId; why: string } | null;
+      filled: number; // slots the rules filled after a short answer (fillToFull)
     }
   | { ok: false; code: string };
 
@@ -276,7 +277,31 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   }
   const note = typeof r.note === 'string' && r.note.trim() ? cut(r.note, AI_NOTE_MAX) : null;
   if (r.note !== undefined && r.note !== null && typeof r.note !== 'string') return fail('shape');
-  return { ok: true, picks, note, focus };
+  const full = fillToFull(picks, ctx, focus);
+  return { ok: true, picks: full, note, focus, filled: full.length - picks.length };
+}
+
+// The day is four problems, as the rules' (fewer only when fewer are allowed): a short answer keeps the model's picks
+// in its order and takes the rest from the rules' own pick, then the other candidates — each with its rule reason as
+// its why. Never a slot dropped; never another problem than a candidate the answer's focus allows.
+export function fillToFull(
+  picks: readonly CoachAiPick[],
+  ctx: CoachPickContext,
+  focus: { to: PatternId } | null,
+): CoachAiPick[] {
+  const allowed = ctx.candidates.filter((c) => !c.ifFocus || c.ifFocus === focus?.to);
+  const want = Math.min(AI_PICK_MAX, allowed.length);
+  const taken = new Set(picks.map((p) => p.slug));
+  const byslug = new Map(allowed.map((c) => [c.slug, c]));
+  const pool = [...ctx.rules.flatMap((s) => byslug.get(s) ?? []), ...allowed];
+  const out = [...picks];
+  for (const c of pool) {
+    if (out.length >= want) break;
+    if (taken.has(c.slug)) continue;
+    taken.add(c.slug);
+    out.push({ slug: c.slug, kind: c.kind, why: cut(c.rule || c.kind, AI_WHY_MAX) });
+  }
+  return out;
 }
 
 // The stub's (and the local check's) deterministic stand-in for the model: the rules' own pick, with the rules'
@@ -328,6 +353,7 @@ export type CoachPickResult =
       picks: CoachAiPick[];
       note: string | null;
       focus: CoachDayAi['focus'];
+      filled?: number; // slots the rules filled (logged, not stored)
       oldestDue: string | null;
       model: string | null;
       usage: CoachDayAi['usage'];
@@ -382,6 +408,14 @@ export function pickResultOf(
 ): CoachPickResult {
   const v = validateCoachPick(raw, ctx);
   return v.ok
-    ? { ...v, ...meta, oldestDue: ctx.oldestDue }
+    ? {
+        ok: true,
+        picks: v.picks,
+        note: v.note,
+        focus: v.focus,
+        filled: v.filled,
+        ...meta,
+        oldestDue: ctx.oldestDue,
+      }
     : { ok: false, reason: 'invalid', detail: v.code, oldestDue: ctx.oldestDue, ...meta };
 }

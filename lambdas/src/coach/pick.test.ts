@@ -79,7 +79,8 @@ describe('the AI pick, end to end', () => {
     expect((await b.getCoachToday()).ai).toMatchObject({ status: 'due' });
     const t = await b.startCoachPick();
     expect(t.ai).toMatchObject({ status: 'ok', source: 'ai', note: 'A light day.', notice: null });
-    expect(t.slots.map((s) => s.aiWhy)).toEqual(['why 1', 'why 2']);
+    expect(t.slots).toHaveLength(4); // two answered, two filled from the rules
+    expect(t.slots.slice(0, 2).map((s) => s.aiWhy)).toEqual(['why 1', 'why 2']);
     expect(anthropic.pickCalls).toHaveLength(1);
     expect(await stored(b)).toMatchObject({
       status: 'ok',

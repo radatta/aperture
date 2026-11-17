@@ -190,9 +190,10 @@ describe('leetcode_today and the AI pick', () => {
       note: 'One re-solve, then rest.',
       notice: null,
     });
-    expect(out.slots).toEqual([
+    expect(out.slots[0]).toEqual(
       expect.objectContaining({ slug: 'two-sum', why: 'Due since Thursday' }),
-    ]);
+    );
+    expect(out.slots.every((x: { why: unknown }) => typeof x.why === 'string')).toBe(true);
     expect(out.note).toMatch(/coach from ai.note/);
     await call('leetcode_today');
     expect(fake.pickCalls).toHaveLength(1);

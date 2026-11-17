@@ -170,10 +170,40 @@ describe('the guardrails', () => {
     );
     expect(v.ok).toBe(true);
     if (!v.ok) return;
-    expect(v.picks.map((p) => p.kind)).toEqual(['carry-over', 're-solve']);
+    expect(v.picks.slice(0, 2).map((p) => p.kind)).toEqual(['carry-over', 're-solve']);
+    expect(v.filled).toBe(2);
     expect(v.picks[0]!.why).toHaveLength(140);
     expect(v.picks[1]!.why).toMatch(/^Re-solve today/); // empty → the rule's reason
     expect(v.note).toBe('A light day.');
+  });
+
+  it('fills a short answer to four from the rules’ pick, keeping the model’s picks first and in order', () => {
+    const v = validateCoachPick(
+      {
+        picks: [{ slug: 'valid-anagram', why: 'Boundary slip last time' }],
+        note: null,
+        focus: null,
+      },
+      ctx,
+    );
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.picks).toHaveLength(4);
+    expect(v.filled).toBe(3);
+    expect(v.picks[0]).toMatchObject({ slug: 'valid-anagram', why: 'Boundary slip last time' });
+    const rest = v.picks.slice(1).map((p) => p.slug);
+    expect(rest).toEqual(ctx.rules.filter((x) => x !== 'valid-anagram').slice(0, 3));
+    for (const p of v.picks.slice(1))
+      expect(p.why).toBe(ctx.candidates.find((c) => c.slug === p.slug)!.rule);
+    expect(v.picks.some((p) => ctx.candidates.find((c) => c.slug === p.slug)!.ifFocus)).toBe(false);
+  });
+
+  it('a full answer fills nothing', () => {
+    const four = ctx.rules.slice(0, 4).map((slug) => ({ slug, why: 'x' }));
+    expect(validateCoachPick({ picks: four, note: null, focus: null }, ctx)).toMatchObject({
+      ok: true,
+      filled: 0,
+    });
   });
 
   it('rejects a pick that is not a candidate', () => {

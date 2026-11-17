@@ -124,6 +124,8 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
           };
       if (!res.ok && res.reason === 'invalid')
         log(JSON.stringify({ event: 'coach_pick_rejected', code: res.detail }));
+      if (res.ok && res.filled)
+        log(JSON.stringify({ event: 'coach_pick_filled', filled: res.filled }));
     }
   } catch (err) {
     log(JSON.stringify({ event: 'coach_pick_error', name: (err as Error).name }));
