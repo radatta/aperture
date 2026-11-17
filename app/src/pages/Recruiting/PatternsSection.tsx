@@ -13,7 +13,8 @@ import { fmtRate, MIN_PCT, patternRows } from './patternsHelpers';
 
 // The Patterns tab (docs/areas/recruiting/coach.md → The Patterns tab): how practice is going per pattern, in the
 // order the coach ranks them for the focus (weakest first tries first), with the focus marked and "Set as focus" on
-// the rest. A focus write hands keyboard focus to the Focus card, since the button it came from goes away.
+// the rest. The button a focus write came from goes away, so keyboard focus moves to the row that now holds the
+// focus (Set) or to the Focus card (Back) — never the top of the page.
 const MAX_WEEKS = 8;
 
 export function PatternsSection() {
@@ -21,6 +22,7 @@ export function PatternsSection() {
   const focus = useCoachFocus();
   const set = useSetFocusPattern();
   const focusCard = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLOListElement>(null);
 
   if (!stats.data)
     return (
@@ -38,7 +40,13 @@ export function PatternsSection() {
   const rows = patternRows(s.ranking, s.patterns);
   const current = focus.data ?? null;
   const pick = (p: PatternId | null) =>
-    set.mutate(p, { onSuccess: () => focusCard.current?.focus() });
+    set.mutate(p, {
+      onSuccess: () =>
+        (p
+          ? list.current?.querySelector<HTMLElement>(`li[data-pattern="${p}"]`)
+          : focusCard.current
+        )?.focus(),
+    });
 
   return (
     <div className="flex flex-col gap-4">
@@ -53,8 +61,8 @@ export function PatternsSection() {
       {set.isError && (
         <div role="alert">
           <Text as="p" tone="danger" size="sm">
-            {set.error instanceof Error ? set.error.message : 'Couldn’t set the focus.'} Nothing
-            changed.
+            {sentence(set.error instanceof Error ? set.error.message : 'Couldn’t set the focus')}{' '}
+            Nothing changed.
           </Text>
         </div>
       )}
@@ -84,7 +92,7 @@ export function PatternsSection() {
           for 3 active days, then takes the top one.
         </Text>
       </div>
-      <ol aria-labelledby="patterns-ranking" className="-mx-2 flex flex-col gap-1">
+      <ol ref={list} aria-labelledby="patterns-ranking" className="-mx-2 flex flex-col gap-1">
         {rows.map((r) => (
           <PatternRow
             key={r.pattern}
@@ -92,7 +100,7 @@ export function PatternsSection() {
             isFocus={current?.pattern === r.pattern}
             pending={set.isPending && set.variables === r.pattern}
             disabled={set.isPending || !current}
-            onFocus={() => pick(r.pattern)}
+            onPick={() => pick(r.pattern)}
           />
         ))}
       </ol>
@@ -147,7 +155,7 @@ function PatternRow({
   isFocus,
   pending,
   disabled,
-  onFocus,
+  onPick,
 }: {
   pattern: PatternId;
   rank: number | null;
@@ -155,7 +163,7 @@ function PatternRow({
   isFocus: boolean;
   pending: boolean;
   disabled: boolean;
-  onFocus: () => void;
+  onPick: () => void;
 }) {
   const name = PATTERN_NAMES[pattern];
   const nameId = `pattern-${pattern}`;
@@ -164,6 +172,7 @@ function PatternRow({
       aria-current={isFocus ? 'true' : undefined}
       aria-labelledby={nameId}
       data-pattern={pattern}
+      tabIndex={-1}
       className={cx('flex flex-col gap-1 rounded-xl px-2 py-2.5', isFocus && 'bg-teal-soft')}
     >
       <div className="flex min-h-8 items-center gap-2">
@@ -178,9 +187,14 @@ function PatternRow({
             Focus
           </Text>
         ) : rank !== null ? (
-          <Button variant="quiet" size="sm" onClick={onFocus} disabled={disabled}>
+          <Button
+            variant="quiet"
+            size="sm"
+            onClick={onPick}
+            disabled={disabled}
+            aria-label={pending ? `Setting ${name} as focus` : `Set as focus, ${name}`}
+          >
             {pending ? 'Setting…' : 'Set as focus'}
-            <span className="sr-only">, {name}</span>
           </Button>
         ) : stat ? (
           <Text size="xs" tone="muted" className="px-3">
@@ -190,7 +204,7 @@ function PatternRow({
       </div>
       <div className="flex flex-col gap-1 pl-8">
         {stat ? (
-          <PatternStats stat={stat} />
+          <PatternStats stat={stat} onTeal={isFocus} />
         ) : (
           <Text size="xs" tone="muted">
             Not started
@@ -201,19 +215,24 @@ function PatternRow({
   );
 }
 
-// A " · "-joined line whose parts never break inside ("3 of 8" stays together); the line wraps between them.
+// A " · "-joined line whose parts never break inside ("3 of 8" stays together); the line wraps between them, and a
+// separator travels with the part after it, so none is left hanging at a line's end.
 function Metrics({ parts }: { parts: (string | false)[] }) {
   return parts
     .filter((p): p is string => Boolean(p))
     .map((p, i) => (
-      <span key={i}>
-        {i > 0 && ' · '}
-        <span className="whitespace-nowrap">{p}</span>
+      <span key={i} className="whitespace-nowrap">
+        {i > 0 && '· '}
+        {p}
       </span>
-    ));
+    ))
+    .flatMap((el, i) => (i > 0 ? [' ', el] : [el]));
 }
+// A server reason as a sentence: the refusal's text carries no closing stop.
+const sentence = (msg: string) => (/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`);
 
-function PatternStats({ stat }: { stat: PatternStat }) {
+// On the focus row's teal fill, teal text falls under 4.5:1, so a clean run reads in ink there.
+function PatternStats({ stat, onTeal }: { stat: PatternStat; onTeal: boolean }) {
   const causes = (Object.entries(stat.causes) as [CauseTag, number][]).sort((a, b) => b[1] - a[1]);
   const spt = stat.submitsPerTry;
   return (
@@ -221,7 +240,9 @@ function PatternStats({ stat }: { stat: PatternStat }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Text
           size="sm"
-          tone={stat.firstTry.of && stat.firstTry.hit === stat.firstTry.of ? 'teal' : 'ink'}
+          tone={
+            !onTeal && stat.firstTry.of && stat.firstTry.hit === stat.firstTry.of ? 'teal' : 'ink'
+          }
         >
           <span className="whitespace-nowrap">First try {fmtRate(stat.firstTry)}</span>
         </Text>
@@ -248,8 +269,8 @@ function PatternStats({ stat }: { stat: PatternStat }) {
   );
 }
 
-// First tries per ISO week, the last MAX_WEEKS with any: one bar each, its height the clean share (a floor of 3px
-// so a 0-of-n week still reads as a bar); a week with fewer than MIN_PCT tries is drawn hollow, so a 1-of-1 week
+// First tries per ISO week, the last MAX_WEEKS with any: one bar each, its height the clean share (a floor of 4px
+// so a 0-of-n week still reads as a bar, not a dot); a week with fewer than MIN_PCT tries is drawn hollow, so a 1-of-1 week
 // doesn't read like a full one.
 function WeekBars({ weeks }: { weeks: PatternStat['weeks'] }) {
   const shown = weeks.slice(-MAX_WEEKS);
@@ -270,7 +291,7 @@ function WeekBars({ weeks }: { weeks: PatternStat['weeks'] }) {
     >
       {shown.map((x, i) => {
         const frac = x.firstTry.of ? x.firstTry.hit / x.firstTry.of : 0;
-        const bh = Math.max(3, Math.round(frac * h));
+        const bh = Math.max(4, Math.round(frac * h));
         const thin = x.firstTry.of < MIN_PCT;
         return (
           <rect
@@ -279,7 +300,7 @@ function WeekBars({ weeks }: { weeks: PatternStat['weeks'] }) {
             y={h - bh + (thin ? 0.5 : 0)}
             width={thin ? w - 1 : w}
             height={thin ? bh - 1 : bh}
-            rx={1.5}
+            rx={1}
             className={thin ? 'fill-none stroke-teal' : 'fill-teal'}
           />
         );

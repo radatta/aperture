@@ -10,7 +10,7 @@ export const fmtRate = (r: Rate) =>
     ? '—'
     : r.of < MIN_PCT
       ? `${r.hit} of ${r.of}`
-      : `${r.hit} of ${r.of} · ${Math.round((r.hit / r.of) * 100)}%`;
+      : `${r.hit} of ${r.of} (${Math.round((r.hit / r.of) * 100)}%)`;
 
 // The ranking first (every roadmap pattern with something unseen left), then any practised to the end of its list,
 // then the rest in roadmap order — so all 18 show, and only a ranked one can take the focus. `other` (problems

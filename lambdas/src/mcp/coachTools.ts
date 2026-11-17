@@ -626,7 +626,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'coach_stats',
     description: [
-      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits a try, how often a Run came before the first Submit, how often the trace card was filled in, and its first tries per week.',
+      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus), each pattern also with submits per try, how often a Run came before the first Submit, how often all three trace inputs were in at the first Submit (card on only), and its first tries per week. The run and trace rates cover only attempts with captured data.',
       'Optional `from` / `to` (YYYY-MM-DD, inclusive; `to` defaults to their today). Test sittings never count. `note` says how to read it.',
       'Read-only.',
     ].join(' '),

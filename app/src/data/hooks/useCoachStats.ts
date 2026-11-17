@@ -9,7 +9,8 @@ export function useCoachStats() {
   const api = useApi();
   return useQuery({ queryKey: qk.coachStats(), queryFn: () => api.getCoachStats() });
 }
-// The focus as the day's plan holds it — the same query as the Today card's, so both read one cache entry.
+// The focus as the day's plan holds it: the getCoachToday query under qk.coachToday(), one cache entry for any
+// view of the day.
 export function useCoachFocus() {
   const api = useApi();
   return useQuery({

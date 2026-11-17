@@ -4,8 +4,8 @@ import { RecruitingTabs } from './RecruitingTabs';
 
 // Recruiting is a three-tab hub: Sittings (LeetCode, captured by the extension), Patterns (how each
 // pattern's practice is going, and the coach's focus) and Stories (the behavioral story bank, authored
-// here). The tabs are real routes — /recruiting, /recruiting/patterns and /recruiting/stories — so each is linkable and back/forward works; the shell renders the active one
-// through the Outlet.
+// here). The tabs are real routes — /recruiting, /recruiting/patterns and /recruiting/stories — so each
+// is linkable and back/forward works; the shell renders the active one through the Outlet.
 export function RecruitingPage() {
   return (
     <div className="flex flex-col gap-4">

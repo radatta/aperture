@@ -217,7 +217,7 @@ to use it" — and never picks it, as draft lines arrive unticked: a Save keeps 
 beside them): all 18 roadmap patterns in the order the focus ranks them (`getCoachStats().ranking`, weakest first
 tries first; an untried pattern scores as a coin flip), then any practised to the end of its list ("All seen"),
 then `other` — problems outside the roadmap — last and only once something lands there. The day's focus is marked
-(`getCoachToday().focus`, the Today card's query); every other ranked pattern has **Set as focus**
+(`getCoachToday().focus`, the plan's own focus); every other ranked pattern has **Set as focus**
 (`setCoachFocus`), and an override shows **Back to the coach's pick** (`setCoachFocus(null)`). Either write hands
 keyboard focus to the Focus card. A refused write says why inline; a failed read is a `LoadError` with Retry.
 

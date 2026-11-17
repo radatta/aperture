@@ -52,7 +52,7 @@ describe('Patterns tab', () => {
     );
     expect(within(row('Two Pointers')).getByText('First try 1 of 2')).toBeTruthy();
     expect(within(row('Two Pointers')).getByText('Boundary 1')).toBeTruthy();
-    expect(within(row('Stack')).getByText('First try 3 of 5 · 60%')).toBeTruthy();
+    expect(within(row('Stack')).getByText('First try 3 of 5 (60%)')).toBeTruthy();
     // Two Pointers missed more, so it ranks above Stack.
     const names = within(screen.getByRole('list', { name: 'Weakest first tries first' }))
       .getAllByRole('listitem')
@@ -67,10 +67,8 @@ describe('Patterns tab', () => {
     await user.click(await screen.findByRole('button', { name: 'Set as focus, Graphs' }));
     expect(await screen.findByText(/^Focus · Graphs · day 1 of 3/)).toBeTruthy();
     await waitFor(() => expect(row('Graphs').getAttribute('aria-current')).toBe('true'));
-    // The clicked button is gone: keyboard focus lands on the Focus card, not the top of the page.
-    await waitFor(() =>
-      expect(document.activeElement?.textContent).toMatch(/^Focus · Graphs · day 1 of 3/),
-    );
+    // The clicked button is gone: keyboard focus lands on the row that now holds the focus, not the top of the page.
+    await waitFor(() => expect(document.activeElement).toBe(row('Graphs')));
     expect((await api.getCoachToday()).focus).toMatchObject({
       pattern: 'graphs',
       day: 1,
@@ -79,6 +77,9 @@ describe('Patterns tab', () => {
 
     await user.click(screen.getByRole('button', { name: 'Back to the coach’s pick' }));
     expect(await screen.findByText(/^Focus · Arrays & Hashing/)).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toMatch(/^Focus · Arrays & Hashing/),
+    );
     expect((await api.getCoachToday()).focus.source).toBe('engine');
   });
 
@@ -88,8 +89,8 @@ describe('Patterns tab', () => {
     const user = userEvent.setup();
     renderApp({ api, path: '/recruiting/patterns' });
     await user.click(await screen.findByRole('button', { name: 'Set as focus, Graphs' }));
-    expect((await screen.findByRole('alert')).textContent).toMatch(
-      /Nothing unseen is left in Graphs.*Nothing changed/,
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Nothing unseen is left in Graphs. Nothing changed.',
     );
     expect(row('Arrays & Hashing').getAttribute('aria-current')).toBe('true');
   });
@@ -125,7 +126,7 @@ describe('helpers', () => {
   it('fmtRate: a dash for none, counts under 5, a percentage from 5', () => {
     expect(fmtRate({ hit: 0, of: 0 })).toBe('—');
     expect(fmtRate({ hit: 2, of: 4 })).toBe('2 of 4');
-    expect(fmtRate({ hit: 2, of: 6 })).toBe('2 of 6 · 33%');
+    expect(fmtRate({ hit: 2, of: 6 })).toBe('2 of 6 (33%)');
   });
 
   it('patternRows: the ranking, then patterns with nothing unseen, then the rest in roadmap order', () => {
