@@ -6,7 +6,7 @@
 // catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The schedule step runs
 // last: its backdated attempts change the plan for any read after it.
 import { McpRpcError, PARAM_ERROR } from '../mcp';
-import type { DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
+import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
 import type { Ctx, Scenario } from '../scenario';
 import { devUlid } from './flux-history';
 
@@ -231,6 +231,77 @@ export const lcCoach: Scenario = {
       what: 'In a real claude.ai thread, Claude says what it will write and waits for a yes before each coach write',
       needsYou:
         'the claude.ai connector and the model’s behaviour are the user’s to watch (the dev thread walk)',
+    },
+    // --- The app (PR A-app): the Today card, the review's cause and Peeked, Home's morning line ---
+    {
+      id: 'ui-card',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The Today card on /recruiting shows each slot with its kind, the 30-minute cap, its reason and a LeetCode link, plus the focus and momentum',
+    },
+    {
+      id: 'ui-swap',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Another swaps a slot to an easier problem (Skip when nothing easier is left); Restore brings the original back',
+    },
+    {
+      id: 'ui-cause',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A cause chip and Peeked, saved in the review form, read back after a reload',
+    },
+    {
+      id: 'review-cause-head',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'The form’s Save puts the cause and help: solution on the sitting’s head',
+    },
+    {
+      id: 'ui-f169',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A Save in a review form opened before Claude’s mark_peeked keeps the peek (F169)',
+    },
+    {
+      id: 'ui-failed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A failed read of today’s plan says so on the card with Retry, and Retry recovers',
+    },
+    {
+      id: 'ui-home',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Home’s morning line reads the day’s plan and links to the card',
+    },
+    {
+      id: 'ui-home-absent',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'With no LeetCode roll linked, Home’s morning has no LeetCode line',
+    },
+    {
+      id: 'ui-empty',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'An empty account’s card offers new problems only — no carry-over, no re-solves',
+      offDev: {
+        file: 'app/src/pages/Recruiting/TodayCard.test.tsx',
+        test: 'an empty account gets new problems only — no carry-over, no re-solves',
+        why: why.history,
+      },
+    },
+    {
+      id: 'ui-home-failed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A failed read on Home is one visible line linking to the card, never silence',
+      offDev: {
+        file: 'app/src/pages/Home/Home.test.tsx',
+        test: 'a failed read is one visible line, never silence',
+        why: 'the same failed getCoachToday the card’s dev-proven row (ui-failed) runs; only the line’s wording differs',
+      },
     },
   ],
   steps: [
@@ -620,5 +691,218 @@ export const lcCoach: Scenario = {
         }
       },
     },
+
+    // --- The app (PR A-app). After the scheduler: the plan these read is whatever it left, read live. ---
+    {
+      id: 'ui-card',
+      title: 'The Today card shows the API’s slots with their kind, cap, reason and link',
+      entry: 'ui',
+      proves: ['ui-card'],
+      async run(ctx) {
+        const t = await ctx.api.reads.getCoachToday();
+        const c = await todayCard(ctx);
+        for (const s of t.slots) {
+          const link = c.getByRole('link', { name: s.title, exact: true }).first();
+          await link.waitFor({ state: 'visible', timeout: 15_000 });
+          if ((await link.getAttribute('href')) !== `https://leetcode.com/problems/${s.slug}/`)
+            fail(`${s.slug}: link ${String(await link.getAttribute('href'))}`);
+          if (!(await c.getByText(s.reason, { exact: true }).count()))
+            fail(`no reason for ${s.slug}`);
+        }
+        if (!(await c.getByText(/· 30 min$/).count())) fail('no slot shows the 30-minute cap');
+        await c
+          .getByText(/ · day \d of 3/)
+          .first()
+          .waitFor({ timeout: 5_000 });
+        await c.getByText(/of 7 days practised this week/).waitFor({ timeout: 5_000 });
+        await ctx.shot('lc-coach-today-card');
+      },
+    },
+    {
+      id: 'ui-swap',
+      title: 'Another (or Skip) on a slot, then Restore — through the card',
+      entry: 'ui',
+      proves: ['ui-swap'],
+      async run(ctx) {
+        const t0 = await ctx.api.reads.getCoachToday();
+        const open = t0.slots.filter((s) => s.status === 'open' && !s.swappedFrom);
+        const slot =
+          open.find(
+            (s) => (s as DevCoachSlot & { alternatives?: unknown[] }).alternatives?.length,
+          ) ??
+          open[0] ??
+          fail('no open slot to change');
+        const canSwap = !!(slot as DevCoachSlot & { alternatives?: unknown[] }).alternatives
+          ?.length;
+        // The UI's change has no id of its own: a ledgered skip on the same slot first records it, so cleanup
+        // restores the slot whatever the UI step leaves (mcp.ts swapSlot; api.ts coachSlotId).
+        await ctx.mcp.writes.swapSlot(t0.day, slot.slug, { slug: slot.slug, action: 'skip' });
+        const c = await todayCard(ctx);
+        await c.getByRole('button', { name: `Restore — ${slot.title}` }).click();
+        await until('the slot reopened', async () =>
+          (await ctx.api.reads.getCoachToday()).slots.some(
+            (s) => s.slug === slot.slug && s.status === 'open',
+          ),
+        );
+        if (canSwap) {
+          await c.getByRole('button', { name: `Another problem — ${slot.title}` }).click();
+          let swapped: DevCoachSlot | undefined;
+          await until('the swap', async () => {
+            swapped = (await ctx.api.reads.getCoachToday()).slots.find(
+              (s) => s.swappedFrom === slot.slug,
+            );
+            return !!swapped;
+          });
+          await c.getByRole('link', { name: swapped!.title, exact: true }).first().waitFor();
+          await ctx.shot('lc-coach-swapped');
+          await c.getByRole('button', { name: `Restore — ${swapped!.title}` }).click();
+        } else {
+          ctx.log(`no easier problem left for ${slot.slug}: Skip instead of Another`);
+          await c.getByRole('button', { name: `Skip today — ${slot.title}` }).click();
+          await c.getByText('skipped today').first().waitFor({ timeout: 10_000 });
+          await c.getByRole('button', { name: `Restore — ${slot.title}` }).click();
+        }
+        await until('the original back', async () =>
+          same(slugs(await ctx.api.reads.getCoachToday()), slugs(t0)),
+        );
+        // Resolves the ledger entry (a restore with nothing to undo changes nothing).
+        await ctx.mcp.writes.swapSlot(t0.day, slot.slug, { slug: slot.slug, action: 'restore' });
+      },
+    },
+    {
+      id: 'ui-home-absent',
+      title: 'No roll linked: Home’s morning has no LeetCode line',
+      entry: 'ui',
+      proves: ['ui-home-absent'],
+      async run(ctx) {
+        if ((await ctx.api.reads.getSettings()).leetcodeRollId != null)
+          fail('a LeetCode roll is linked — the test-sitting step should have unlinked it');
+        await morning(ctx);
+        await new Promise((r) => setTimeout(r, 2_000)); // a line would need the plan's read: let it land
+        if (await ctx.page.getByText(/^LeetCode · /).count()) fail('a LeetCode line with no roll');
+      },
+    },
+    {
+      id: 'ui-home',
+      title: 'Link a roll: Home’s morning line reads the plan and links to the card',
+      entry: 'ui',
+      proves: ['ui-home'],
+      async run(ctx) {
+        const roll = await ctx.api.writes.upsertRoll({
+          name: titleOf(ctx, 'app-roll'),
+          estimateMin: 45,
+        });
+        await ctx.api.writes.linkLeetcodeRoll(roll.id);
+        await morning(ctx);
+        const line = ctx.page.getByRole('link', { name: /^LeetCode · / });
+        await line.waitFor({ state: 'visible', timeout: 15_000 });
+        const text = (await line.textContent()) ?? '';
+        if (/couldn’t load/.test(text)) fail(`the line: ${text}`);
+        if ((await line.getAttribute('href')) !== '/recruiting')
+          fail('the line doesn’t link to the card');
+        await ctx.shot('lc-coach-home-line');
+      },
+    },
+    {
+      id: 'ui-review',
+      title: 'Review form: Boundary and Peeked saved, read back after a reload and on the head',
+      entry: 'ui',
+      proves: ['ui-cause', 'review-cause-head'],
+      async run(ctx) {
+        const slug = slugOf(ctx, 'review');
+        const { sitting } = await ctx.api.writes.lcSittingStart(
+          start(slug, titleOf(ctx, 'review')),
+        );
+        await finish(ctx, sitting.id, sitting.repTaskId);
+        await ctx.ui.goto(`/recruiting/sittings/${sitting.id}`);
+        const p = ctx.page;
+        await p.getByRole('button', { name: 'Boundary', exact: true }).click();
+        await p.getByRole('button', { name: 'Peeked', exact: true }).click();
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        await p.reload({ waitUntil: 'load' });
+        for (const name of ['Boundary', 'Peeked']) {
+          const b = p.getByRole('button', { name, exact: true });
+          await b.waitFor({ timeout: 15_000 });
+          if ((await b.getAttribute('aria-pressed')) !== 'true')
+            fail(`${name} not pressed after reload`);
+        }
+        await ctx.shot('lc-coach-review-cause');
+        const head = (await ctx.api.reads.listSittings()).find((x) => x.id === sitting.id);
+        const r = head?.review as { cause?: string; help?: string } | null | undefined;
+        if (r?.cause !== 'boundary' || r.help !== 'solution')
+          fail(`head review: ${JSON.stringify(r)}`);
+      },
+    },
+    {
+      id: 'ui-f169',
+      title: 'F169: a form open before mark_peeked; the Save keeps the peek',
+      entry: 'ui',
+      proves: ['ui-f169'],
+      async run(ctx) {
+        const slug = slugOf(ctx, 'f169');
+        const { sitting } = await ctx.api.writes.lcSittingStart(start(slug, titleOf(ctx, 'f169')));
+        await finish(ctx, sitting.id, sitting.repTaskId);
+        await ctx.ui.goto(`/recruiting/sittings/${sitting.id}`);
+        const p = ctx.page;
+        const none = p.getByRole('button', { name: 'No help', exact: true });
+        await none.waitFor({ timeout: 15_000 });
+        if ((await none.getAttribute('aria-pressed')) !== 'true')
+          fail('the form didn’t open on No help');
+        await ctx.mcp.writes.markPeeked({ sittingId: sitting.id });
+        await p.getByLabel('One-liner').fill(`devcheck ${ctx.nonce}`);
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        const head = (await ctx.api.reads.listSittings()).find((x) => x.id === sitting.id);
+        const r = head?.review as { help?: string; insight?: string } | null | undefined;
+        if (r?.help !== 'solution' || !r.insight)
+          fail(`the Save dropped the peek: ${JSON.stringify(r)}`);
+        const peeked = p.getByRole('button', { name: 'Peeked', exact: true });
+        await until(
+          'the form shows the peek',
+          async () => (await peeked.getAttribute('aria-pressed')) === 'true',
+        );
+      },
+    },
+    {
+      id: 'ui-failed',
+      title: 'getCoachToday fails: the card says so with Retry; Retry recovers',
+      entry: 'ui',
+      proves: ['ui-failed'],
+      async run(ctx) {
+        const i = await ctx.intercept('getCoachToday', { status: 500 });
+        await ctx.ui.goto('/recruiting');
+        const c = ctx.page.getByRole('region', { name: 'Today’s practice' });
+        await c.getByText('Couldn’t load today’s plan.').waitFor({ timeout: 30_000 });
+        await ctx.shot('lc-coach-card-failed');
+        await i.release();
+        await c.getByRole('button', { name: 'Retry' }).click();
+        await c
+          .getByText(/ · day \d of 3/)
+          .first()
+          .waitFor({ timeout: 15_000 });
+        await ctx.api.writes.linkLeetcodeRoll(null); // the roll ui-home linked, for the scenarios after
+      },
+    },
   ],
 };
+
+async function todayCard(ctx: Ctx) {
+  await ctx.ui.goto('/recruiting');
+  const c = ctx.page.getByRole('region', { name: 'Today’s practice' });
+  await c
+    .getByText(/ · day \d of 3/)
+    .first()
+    .waitFor({ timeout: 15_000 });
+  return c;
+}
+async function morning(ctx: Ctx) {
+  await ctx.ui.goto('/');
+  await ctx.page.getByRole('button', { name: 'Morning', exact: true }).click();
+  await ctx.page.getByText('Plan today', { exact: true }).waitFor({ timeout: 15_000 });
+}
+async function until(what: string, ok: () => Promise<boolean>, ms = 15_000) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 500)))
+    if (await ok()) return;
+  fail(`timed out waiting for ${what}`);
+}

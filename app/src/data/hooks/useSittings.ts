@@ -22,15 +22,30 @@ export function useSitting(id: string) {
   return useQuery({ queryKey: qk.sitting(id), queryFn: () => api.getSitting(id) });
 }
 
-// The review saves whole; the list (its reviewed dot) and the detail both refresh.
+// The review saves whole; the list (its reviewed dot), the detail and the coach's day (its cause) refresh.
 export function useSetSittingReview() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, review }: { id: string; review: SittingReviewInput }) =>
       api.setSittingReview(id, review),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sittings'] }),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['sittings'] }),
+        qc.invalidateQueries({ queryKey: qk.coach() }),
+      ]),
   });
+}
+
+// The stored review as the server has it right now — the form's Save reads it for the fields the user didn't
+// touch, so a help or cause Claude set over MCP since the page loaded is kept, not overwritten (F169).
+export function useReadSittingReview() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return (id: string) =>
+    qc
+      .fetchQuery({ queryKey: qk.sitting(id), queryFn: () => api.getSitting(id), staleTime: 0 })
+      .then((d) => d.sitting.review ?? null);
 }
 
 export function useSetSittingPrepTarget() {

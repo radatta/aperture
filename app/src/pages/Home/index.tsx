@@ -28,6 +28,7 @@ import { ComingUpCard } from './ComingUpCard';
 import { StillOpenSection } from './StillOpenSection';
 import { FinanceGlance } from './FinanceGlance';
 import { FluxGlance } from './FluxGlance';
+import { LeetcodeGlance } from './LeetcodeGlance';
 import { PushSyncNotice } from '../../modules/push/PushSyncNotice';
 import { API_MODE } from '../../shared/env';
 import { LockIcon } from '../../components/icons';
@@ -61,6 +62,7 @@ function MorningHome() {
     <div className="flex flex-col gap-4">
       <DayShapeCard mode="morning" />
       <FinanceGlance mode="morning" />
+      <LeetcodeGlance />
       <PlanTodayCard />
       <HabitsCard title="Habits due today" />
       <IntentCard />

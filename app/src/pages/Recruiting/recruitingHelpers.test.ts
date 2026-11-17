@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { emptySummary } from '@aperture/shared';
-import type { Sitting, SittingSummary } from '@aperture/shared';
+import type { CoachSlot, CoachToday, Sitting, SittingSummary } from '@aperture/shared';
 import {
+  coachGlance,
+  dueLabel,
   groupSittings,
+  slotState,
+  suggestedCause,
   sittingOutcome,
   summarizeSittings,
   verdictLabel,
@@ -80,5 +84,74 @@ describe('verdict presentation', () => {
     expect(verdictTone('accepted')).toBe('teal');
     expect(verdictTone('runtime_error')).toBe('gold');
     expect(verdictLabel('time_limit')).toBe('Time Limit');
+  });
+});
+
+describe('the coach’s view helpers', () => {
+  it('suggests No trace when the trace was skipped or missing, or the first submit failed with no run', () => {
+    expect(suggestedCause(mk({}, { coach: { config: null, trace: 'skipped', nudges: 0 } }))).toBe(
+      'no-trace',
+    );
+    expect(suggestedCause(mk({}, { coach: { config: null, trace: 'none', nudges: 0 } }))).toBe(
+      'no-trace',
+    );
+    expect(
+      suggestedCause(mk({}, { firstSubmit: v('wrong_answer'), runsBeforeFirstSubmit: 0 })),
+    ).toBe('no-trace');
+    expect(
+      suggestedCause(mk({}, { firstSubmit: v('wrong_answer'), runsBeforeFirstSubmit: 2 })),
+    ).toBeNull();
+    expect(
+      suggestedCause(mk({}, { firstSubmit: v('accepted'), runsBeforeFirstSubmit: 0 })),
+    ).toBeNull();
+    expect(
+      suggestedCause(mk({}, { coach: { config: null, trace: 'traced', nudges: 0 } })),
+    ).toBeNull();
+    expect(suggestedCause(mk())).toBeNull();
+  });
+
+  it('a slot’s state is teal only when done clean, never red', () => {
+    expect(slotState({ status: 'done', outcome: 'clean' })).toEqual({
+      label: 'done · clean',
+      tone: 'teal',
+    });
+    expect(slotState({ status: 'done', outcome: 'failed' }).tone).toBe('gold');
+    expect(slotState({ status: 'in-progress', outcome: null }).label).toBe('in progress');
+    expect(slotState({ status: 'skipped', outcome: null }).tone).toBe('muted');
+    expect(slotState({ status: 'open', outcome: null }).label).toBe('open');
+  });
+
+  it('labels a queue day as due, tomorrow, or its heading', () => {
+    expect(dueLabel('2026-11-14', '2026-11-16')).toBe('due');
+    expect(dueLabel('2026-11-16', '2026-11-16')).toBe('due');
+    expect(dueLabel('2026-11-17', '2026-11-16')).toBe('tomorrow');
+    expect(dueLabel('2026-11-18', '2026-11-16')).toBe('Wednesday, Nov 18');
+  });
+
+  const slot = (status: CoachSlot['status']) => ({ status }) as CoachSlot;
+  const day = (over: Partial<CoachToday>): CoachToday =>
+    ({ slots: [], due: [], floor: null, ...over }) as unknown as CoachToday;
+  it('the Home line counts what’s left, the due re-solves, and a floor day', () => {
+    const four = ['open', 'open', 'open', 'open'] as const;
+    expect(coachGlance(day({ slots: four.map(slot), due: [{}, {}] as never }))).toBe(
+      'LeetCode · 4 today · 2 re-solves due',
+    );
+    expect(
+      coachGlance(
+        day({ slots: [slot('done'), slot('open'), slot('skipped')], due: [{}] as never }),
+      ),
+    ).toBe('LeetCode · 1 left today · 1 re-solve due');
+    expect(coachGlance(day({ slots: [slot('done'), slot('skipped')] }))).toBe(
+      'LeetCode · 1 of 1 done',
+    );
+    expect(coachGlance(day({}))).toBe('LeetCode · nothing planned today');
+    expect(
+      coachGlance(
+        day({
+          slots: four.map(slot),
+          floor: { on: true, done: false, title: 'Two Sum' } as CoachToday['floor'],
+        }),
+      ),
+    ).toBe('LeetCode · floor day · Two Sum');
   });
 });

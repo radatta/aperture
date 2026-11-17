@@ -414,4 +414,108 @@ describe('the stub’s sittings', () => {
       expect(sitting.endedAt, sitting.problemSlug).toBeGreaterThanOrEqual(last);
     }
   });
+
+  // --- The coach's cause and peeked (docs/areas/recruiting/coach.md) ---
+  const pressed = (name: string) =>
+    screen.getByRole('button', { name }).getAttribute('aria-pressed');
+
+  it('starts on the suggested No trace after a first submit with no run; an untouched Save keeps it', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    await open(api);
+    await screen.findByRole('button', { name: 'No trace' });
+    expect(pressed('No trace')).toBe('true');
+    expect(screen.getByText(/suggested/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    const { sitting } = await api.getSitting(await idOf(api, 'two-sum'));
+    expect(sitting.review?.cause).toBe('no-trace');
+  });
+
+  it('one cause at a time, a second tap clears it; Peeked and the cause read back after a reload', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const { unmount } = await open(api);
+    await user.click(await screen.findByRole('button', { name: 'Boundary' }));
+    expect(pressed('Boundary')).toBe('true');
+    expect(pressed('No trace')).toBe('false');
+    await user.click(screen.getByRole('button', { name: 'Boundary' }));
+    expect(pressed('Boundary')).toBe('false');
+    await user.click(screen.getByRole('button', { name: 'Off by one' }));
+    await user.click(screen.getByRole('button', { name: 'Peeked' }));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    const id = await idOf(api, 'two-sum');
+    expect((await api.getSitting(id)).sitting.review).toMatchObject({
+      help: 'solution',
+      cause: 'off-by-one',
+    });
+    unmount();
+    await open(api);
+    await screen.findByRole('button', { name: 'Off by one' });
+    expect(pressed('Off by one')).toBe('true');
+    expect(pressed('Peeked')).toBe('true');
+    expect(screen.queryByText(/suggested/)).toBeNull();
+  });
+
+  it('a cleared cause saves as none', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    await api.patchSittingReview(id, { cause: 'api-slip' });
+    await open(api);
+    await user.click(await screen.findByRole('button', { name: 'API slip' }));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect((await api.getSitting(id)).sitting.review?.cause ?? null).toBeNull();
+  });
+
+  // F169: Claude marks the problem peeked (and tags the cause) over MCP while the form is open; the user's
+  // Save of other fields must keep both, and the form then shows them.
+  it('a Save after Claude’s mark_peeked keeps the peek and the cause it set', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    await open(api);
+    await screen.findByRole('button', { name: 'A hint' });
+    expect(pressed('A hint')).toBe('true');
+    await api.patchSittingReview(id, { help: 'solution', cause: 'quit-early' });
+    await user.type(screen.getByLabelText('One-liner'), 'Trace the failing case first');
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect((await api.getSitting(id)).sitting.review).toMatchObject({
+      insight: 'Trace the failing case first',
+      help: 'solution',
+      cause: 'quit-early',
+    });
+    await waitFor(() => expect(pressed('Peeked')).toBe('true'));
+    expect(pressed('Quit early')).toBe('true');
+  });
+
+  it('what the user picked wins over Claude’s write', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    await open(api);
+    await user.click(await screen.findByRole('button', { name: 'No help' }));
+    await user.click(screen.getByRole('button', { name: 'Boundary' }));
+    await api.patchSittingReview(id, { help: 'solution', cause: 'quit-early' });
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect((await api.getSitting(id)).sitting.review).toMatchObject({
+      help: 'none',
+      cause: 'boundary',
+    });
+  });
+
+  it('a failed read before the save keeps every field and says so', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    await open(api);
+    await user.type(await screen.findByLabelText('One-liner'), 'keep me');
+    vi.spyOn(api, 'getSitting').mockRejectedValueOnce(new Error('offline'));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Couldn’t save the review/);
+    expect(screen.getByLabelText<HTMLInputElement>('One-liner').value).toBe('keep me');
+  });
 });
