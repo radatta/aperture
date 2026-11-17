@@ -6,6 +6,7 @@ import type { Job } from './model.ts';
 
 export const SLOW_CLASSES = ['typecheck', 'lint', 'test', 'ui'] as const; // lib.sh sb_classify; the rest are too mixed
 export const SLOW_WINDOW_MIN = 30;
+const HEADLINE = new Set(['typecheck', 'lint']);
 export const MIN_RECENT = 2;
 export const MIN_BASE = 5;
 export const SLOW_WARN = 1.5;
@@ -63,7 +64,9 @@ export function slowdown(jobs: Job[], now: number): Slowdown {
       base: pool.length >= MIN_BASE ? base : null,
     };
   });
-  const rated = classes.filter((c) => c.ratio !== null);
+  // the headline (tile colour, "slow ×…") from the clean signals only: test mixes suites with filtered runs, ui dev
+  // checks with captures; both still show in the line
+  const rated = classes.filter((c) => c.ratio !== null && HEADLINE.has(c.cls));
   const top = rated.sort((a, b) => b.ratio! - a.ratio!)[0];
   const worst = top ? { cls: top.cls, ratio: top.ratio! } : null;
   const tone = !worst

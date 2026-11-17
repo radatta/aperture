@@ -194,9 +194,12 @@ describe('powerSummary', () => {
     expect(sum(thermal({ cpuSpeedLimit: 80 })).alerts).toEqual(['CPU speed 80%']);
     expect(sum(thermal({ cpuSchedulerLimit: 50 })).alerts).toEqual(['scheduler 50%']);
     expect(sum(thermal({ warningLevel: 2 })).line).toMatch(/limit: thermal warning 2$/);
-    expect(sum(thermal({ performanceWarningLevel: 'recorded' })).alerts).toEqual([
-      'performance warning recorded',
-    ]);
+    // a level that isn't a number: shown, not red (an unseen layout, never a guess)
+    const odd = sum(thermal({ performanceWarningLevel: 'recorded' }));
+    expect(odd.alerts).toEqual([]);
+    expect(odd.line).toBe(
+      'AC 82% charging (0:40 to full) · performance warning unreadable · no thermal limit',
+    );
   });
 
   it('not red: 20% on battery, 12% on AC, limits at 100, a warning level of 0', () => {

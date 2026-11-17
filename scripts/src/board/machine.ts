@@ -8,7 +8,7 @@ import { slowdown, type Slowdown } from './tower/slowdown.ts';
 
 export type Machine = {
   mac: { state: MacRead['state']; power: PowerSummary };
-  slowdown: Slowdown | null;
+  slowdown: Slowdown;
   lines: string[];
 };
 
@@ -22,14 +22,11 @@ export function macLine(read: MacRead): string {
   return `mac: ${p.line}${p.alerts.length ? ` — RED: ${p.alerts.join(', ')}` : ''}${p.advice ? ` — suggest ${p.advice}` : ''}${read.state === 'stale' ? ' (stale)' : ''}`;
 }
 
-export function machine(read: MacRead, jobs: Job[] | null, now: number): Machine {
-  const s = jobs ? slowdown(jobs, now) : null;
+export function machine(read: MacRead, jobs: Job[], now: number): Machine {
+  const s = slowdown(jobs, now);
   return {
     mac: { state: read.state, power: powerSummary(read) },
     slowdown: s,
-    lines: [
-      macLine(read),
-      s ? `slowdown (${s.windowMin} min vs 24 h): ${s.line}` : 'slowdown: no history',
-    ],
+    lines: [macLine(read), `slowdown (${s.windowMin} min vs 24 h): ${s.line}`],
   };
 }

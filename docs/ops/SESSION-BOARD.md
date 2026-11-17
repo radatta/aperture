@@ -128,7 +128,8 @@ clean job events (exit 0, not a load test or guard) that ended in the last 30 mi
 it shows the count instead. `test-file`, `build`, `dev` and `other` are too mixed to compare. `×1.5` is amber and
 `×2` red on the tower. It answers "is it slow now", whatever the cause: the Mac on battery or in Low Power Mode, heat,
 or a crowded container (the `mac:` line beside it tells the first two apart). `test` mixes whole suites with
-filtered runs, and `ui` dev checks with short captures, so `typecheck` and `lint` are the cleaner signals. Measured 2026-11-17 in a low-power window:
+filtered runs, and `ui` dev checks with short captures, so only `typecheck` and `lint` set the tower's colour and
+"slow ×…" headline; all four show in the line. Measured 2026-11-17 in a low-power window:
 typecheck ×1.8, lint ×2, test ×1.2.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`

@@ -772,7 +772,7 @@ export function derive(i: Inputs): View {
       link: null,
       cmd: i.macInstall,
       unblocks: 'HEALTH → Mac power',
-      since: i.mac.at,
+      since: null, // the latest tick would read "just now" forever
       branch: null,
     });
 

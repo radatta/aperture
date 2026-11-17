@@ -171,10 +171,15 @@ export function powerSummary(read: MacRead): PowerSummary {
       limits.push(`CPU speed ${t.cpuSpeedLimit}%`);
     if (t.cpuSchedulerLimit !== null && t.cpuSchedulerLimit < 100)
       limits.push(`scheduler ${t.cpuSchedulerLimit}%`);
-    if (t.warningLevel !== null && t.warningLevel !== 0)
-      limits.push(`thermal warning ${t.warningLevel}`);
-    if (t.performanceWarningLevel !== null && t.performanceWarningLevel !== 0)
-      limits.push(`performance warning ${t.performanceWarningLevel}`);
+    // a level that isn't a number is a layout we haven't seen: shown, never red on a guess
+    const odd: string[] = [];
+    for (const [name, v] of [
+      ['thermal warning', t.warningLevel],
+      ['performance warning', t.performanceWarningLevel],
+    ] as const)
+      if (typeof v === 'number' && v !== 0) limits.push(`${name} ${v}`);
+      else if (typeof v === 'string') odd.push(`${name} unreadable`);
+    if (odd.length) bits.push(odd.join(', '));
   }
   alerts.push(...limits);
   bits.push(

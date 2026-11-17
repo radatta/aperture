@@ -78,7 +78,8 @@ describe('slowdown', () => {
       job('test', 9, 320),
     ];
     expect(of(jobs, 'test')).toMatchObject({ base: '7d', nBase: 6, ratio: 2 });
-    expect(slowdown(jobs, NOW).tone).toBe('bad');
+    // test is in the line, never the headline: it mixes whole suites with filtered runs
+    expect(slowdown(jobs, NOW)).toMatchObject({ worst: null, tone: 'ok' });
   });
 
   it("failed, load-test and guard runs don't count", () => {

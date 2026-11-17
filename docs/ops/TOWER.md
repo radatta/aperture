@@ -73,7 +73,7 @@ From the top:
    - **TODAY**: DONE TODAY's merges (the same day boundary) and how many deployed. It glows when one lands.
    - **CONTAINER**: memory against soft and hard (a last-hour sparkline), CPU, live `test` slots against
      `limits.json`. The slowdown ratio (SESSION-BOARD.md → _History_ → _Slowdown_) is in its details, and on its line
-     as "slow ×1.8 test" once the worst class reaches ×1.5 (amber; ×2 red).
+     as "slow ×1.8 lint" once typecheck or lint reaches ×1.5 (amber; ×2 red).
    - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge". A second
      line is the power: "AC 82% charging (0:40 to full) · no thermal limit". It is red, and so is the tile, on Low
      Power Mode, on battery under 20%, on a CPU speed or scheduler limit under 100%, or on a recorded thermal or
@@ -372,8 +372,8 @@ recorded` line is null, `CPU_Speed_Limit = 80` a number, and a recorded level th
   Anything pmset doesn't print is null, so a desktop Mac or a pmset failure is nulls, never a failed tick. `v` stays
   1 (the key is additive): a key-less file is an older agent.
 - Only the battery line, Low Power Mode and the "No … recorded" notes are seen in real output. The recorded-level
-  layout and an Apple-silicon `CPU_Speed_Limit` are from Intel-era reports (2026-11-17 search), so a parse miss
-  there reads null (no alert), never a failed tick.
+  layout and an Apple-silicon `CPU_Speed_Limit` are from Intel-era reports (2026-11-17 search), so a level that
+  isn't a number shows as "unreadable" on the line, never red on a guess, and never fails a tick.
 
 **Trust boundary.** The agent takes no input from the container:
 
