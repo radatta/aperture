@@ -34,7 +34,8 @@ day rows; no stored count can drift.
   today — yesterday when no day is given — and up to 10 years back): a solve from before the coach. It never reaches `attemptsOf`; `historyAttemptsOf` folds them by day the same
   way. A problem with one is _seen_ (never a new or stretch pick, never "unseen" for the focus ranking or the room
   check; swapped in, it's a re-solve) and gets a record (`ProblemRecord.historical`, its tries flagged), but no
-  schedule, no first try (a later live try on it is a re-solve in the stats), and no part of momentum, active days
+  schedule, and a live try dated after it is no first try (a re-solve in the stats and the focus ranking; a live
+  try before it stays a first try), and no part of momentum, active days
   or the stats counts. A day's live tries win over it: its base fields come from the live tries whenever there are
   any. `CoachScope` carries the history and the Premium setting into the folds that need them; absent, the engine
   is as it was. A live attempt stays at 60 days back.
@@ -174,7 +175,9 @@ second list adds a member there, and its picker a Settings field, since the plan
 
 The 7 LeetCode Premium problems are marked `premium`. **`Settings.leetcodePremium`** (default on; an older row reads
 as on) lets the coach pick them like any other — `pickable`, `easierIn`, the ranking's "nothing unseen left" and
-the room check all honour it (`CoachInput.premium`); off, they're never picked. A problem outside the list joins
+the room check all honour it (`CoachInput.premium`); off, they're never picked. The focus replay reads the setting
+as it stands now, so flipping it can move the focus (a pattern whose only unseen problems are Premium drops in or
+out of the ranking), and today's new or stretch pick with it. A problem outside the list joins
 the working catalog from the user's own sittings, its pattern from its LeetCode tags (`patternOfTags`), else
 `other`. The user's own problem history never goes in the tracked file.
 
@@ -329,8 +332,8 @@ the URL, so a reload or Back keeps them.
 
 - **Status** (`problemStatus`): from the newest live try — clean, solved, peeked (the solution read) or not yet
   (not accepted); a problem with only history-only solves reads _Solved before_ (or not yet, if none was
-  accepted); untried otherwise. **Done** is accepted on any try, live or history-only, so a failed re-solve shows in
-  its square but never takes a solved problem off the count. Due since / next due / graduated come
+  accepted); untried otherwise. **Done** is a clean or solved try, live or history-only (a try that read the solution
+  never counts), so a failed re-solve shows in its square but never takes a solved problem off the count. Due since / next due / graduated come
   from the schedule. Teal for clean, gold for the rest that went somewhere, muted for history, never red; a due
   re-solve is never "overdue".
 - **The map** (`coverage` against `DEFAULT_CATALOG`, `PROGRESS_STAGES`): a summary line (done, tried, not tried,

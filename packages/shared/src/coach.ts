@@ -480,6 +480,11 @@ export function coachScope(ci: Pick<CoachInput, 'attempts' | 'premium'>): CoachS
     if (!history.has(a.slug)) history.set(a.slug, a.day);
   return { premium: ci.premium === true, history };
 }
+// A live try on a problem with a history-only solve dated before it: seen already, so never a first try.
+const historyBefore = (scope: CoachScope, a: Pick<Attempt, 'slug' | 'day'>) => {
+  const h = scope.history.get(a.slug);
+  return h !== undefined && h < a.day;
+};
 // Slugs seen before `day`: live attempts and history-only solves alike.
 const seenBefore = (attempts: readonly Attempt[], scope: CoachScope, day: string) =>
   new Set([
@@ -487,16 +492,20 @@ const seenBefore = (attempts: readonly Attempt[], scope: CoachScope, day: string
     ...[...scope.history].filter(([, d]) => d < day).map(([slug]) => slug),
   ]);
 // Patterns by a shrunk first-try miss rate, (misses + 1) / (first tries + 2), as of `day` (attempts before it),
-// ties by the roadmap order; a pattern with no unseen catalog problem left drops out. A problem with a
-// history-only solve is seen but never a first try: a later live try on it is a re-solve.
+// ties by the roadmap order; a pattern with no unseen catalog problem left drops out. A live try after a
+// history-only solve on the same problem is no first try (a re-solve); one before it still is.
 export function rankPatterns(
   attempts: readonly Attempt[],
   day: string,
   scope: CoachScope = NO_SCOPE,
 ): Ranked[] {
   const firsts = new Map<string, Attempt>();
-  for (const a of attempts)
-    if (a.day < day && !firsts.has(a.slug) && !scope.history.has(a.slug)) firsts.set(a.slug, a);
+  const met = new Set<string>();
+  for (const a of attempts) {
+    if (a.day >= day || met.has(a.slug)) continue;
+    met.add(a.slug);
+    if (!historyBefore(scope, a)) firsts.set(a.slug, a);
+  }
   const seen = seenBefore(attempts, scope, day);
   const stat = new Map<PatternId, Ranked>();
   for (const a of firsts.values()) {
@@ -1158,7 +1167,7 @@ export function coachStats(
   const from = range.from ?? null;
   const to = range.to ?? today;
   if (from !== null && from > to) throw new Error('from must not be after to');
-  const seen = new Set<string>(scope.history.keys()); // a history-only problem's live tries are re-solves
+  const seen = new Set<string>();
   const ranked = rankPatterns(attempts, addDays(today, 1), scope);
   const ranks = new Map(ranked.map((r, i) => [r.pattern, i + 1]));
   const out: CoachStats = {
@@ -1185,7 +1194,7 @@ export function coachStats(
   const days = new Set<string>();
   const slugs = new Set<string>();
   for (const a of attempts) {
-    const first = !seen.has(a.slug);
+    const first = !seen.has(a.slug) && !historyBefore(scope, a); // after a history-only solve: a re-solve
     seen.add(a.slug);
     if ((from !== null && a.day < from) || a.day > to) continue;
     const clean = a.outcome === 'clean';
@@ -1254,13 +1263,13 @@ export function patternDetail(
   to: string,
   scope: CoachScope = NO_SCOPE,
 ): Map<PatternId, PatternDetail> {
-  const seen = new Set<string>(scope.history.keys());
+  const seen = new Set<string>();
   const acc = new Map<
     PatternId,
     PatternDetail & { submits: number; submitted: number; byWeek: Map<string, Rate> }
   >();
   for (const a of attempts) {
-    const first = !seen.has(a.slug);
+    const first = !seen.has(a.slug) && !historyBefore(scope, a); // after a history-only solve: a re-solve
     seen.add(a.slug);
     if ((from !== null && a.day < from) || a.day > to) continue;
     const d =

@@ -4473,7 +4473,7 @@ export function runApiContract(
         expect((await api.getCoachToday()).slots[0]!.slug).toBe('contains-duplicate');
       });
 
-      it('a history-only solve beside a sitting the same day leaves the day’s outcome alone', async () => {
+      it('a history-only solve on a problem with a sitting leaves its live outcome and schedule alone', async () => {
         await finished('two-sum', true);
         await api.logCoachAttempts([
           { slug: 'two-sum', outcome: 'failed', historical: true, minutes: 50, note: 'long ago' },

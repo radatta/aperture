@@ -57,7 +57,8 @@ export function reSolveText(st: ProblemStatus, today: string): string | null {
 const liveTries = (r: ProblemRecord) => r.tries.filter((t) => !t.historical);
 export function triesText(r: ProblemRecord): string {
   const n = liveTries(r).length;
-  return n ? `${n} ${n === 1 ? 'try' : 'tries'}` : 'solved before';
+  if (!n) return 'before the coach';
+  return `${n} ${n === 1 ? 'try' : 'tries'}${r.historical ? ' and before the coach' : ''}`;
 }
 // The first live try: what the gap is measured on. A history-only problem has none.
 export function firstTryText(r: ProblemRecord): string {

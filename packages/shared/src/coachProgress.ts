@@ -161,7 +161,7 @@ export interface ProgressWeek {
 }
 const mondayOf = (day: string) => addDays(day, -((weekdayOf(day) + 6) % 7));
 // The `weeks` ISO weeks up to today's, oldest first, empty ones included. A first try is a problem's first live
-// try with no history-only solve before (coachStats' rule), so a history-only problem's tries are re-solves.
+// try with no history-only solve dated before it (coachStats' rule); a live try after one is a re-solve.
 export function progressWeeks(
   records: readonly ProblemRecord[],
   today: string,
@@ -187,7 +187,8 @@ export function progressWeeks(
       const w = byWeek.get(isoWeekKey(t.day));
       if (!w || t.day > today) return;
       w[t.outcome] += 1;
-      const rate = i === 0 && !r.historical ? w.firstTry : w.resolve;
+      const after = !!r.historical && r.historical.firstDay < t.day; // a history-only solve came first
+      const rate = i === 0 && !after ? w.firstTry : w.resolve;
       rate.of += 1;
       if (t.outcome === 'clean') rate.hit += 1;
     });

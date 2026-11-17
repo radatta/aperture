@@ -1238,6 +1238,27 @@ describe('history-only solves', () => {
     );
   });
 
+  it('only a history-only solve dated before a live try makes it a re-solve', () => {
+    // Live first (day -20), the history logged later with the default day: the live try stays a first try.
+    const sittings = [clean('two-sum', day(-20))];
+    const later = [old('two-sum', day(-1))];
+    const live = attemptsOf(sittings, later, NOW);
+    const scope = coachScope(input({ sittings, attempts: later }));
+    expect(coachStats(live, TODAY, {}, scope)).toMatchObject({ firstTry: { hit: 1, of: 1 } });
+    expect(
+      rankPatterns(live, TODAY, scope).find((r) => r.pattern === 'arrays-hashing'),
+    ).toMatchObject({
+      of: 1,
+    });
+    // History dated before it: the live try is a re-solve.
+    const earlier = [old('two-sum', day(-200))];
+    const scope2 = coachScope(input({ sittings, attempts: earlier }));
+    expect(coachStats(live, TODAY, {}, scope2)).toMatchObject({
+      firstTry: { of: 0 },
+      resolve: { hit: 1, of: 1 },
+    });
+  });
+
   it('mark a problem seen for the focus ranking without counting as a first try', () => {
     const all = AH.map((c) => old(c.slug, day(-100)));
     const scope = coachScope(input({ attempts: all }));

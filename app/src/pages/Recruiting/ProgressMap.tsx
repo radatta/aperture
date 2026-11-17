@@ -87,7 +87,7 @@ export function ProgressMap({
               className="flex min-w-0 flex-col gap-2"
             >
               <div className="flex flex-col gap-1.5">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2 lg:max-xl:min-h-8">
                   <Text
                     as="h3"
                     id={headId}
@@ -351,7 +351,7 @@ function Panel({
 }
 
 const ROW =
-  'lg:grid lg:grid-cols-[minmax(0,1fr)_5.5rem_7rem_4rem_9rem_minmax(0,14rem)_6rem] lg:items-baseline lg:gap-3';
+  'lg:grid lg:grid-cols-[minmax(12rem,2fr)_5rem_6.5rem_7rem_7.5rem_minmax(0,1fr)_5.5rem] lg:items-baseline lg:gap-3';
 function ProblemList({
   cells,
   today,

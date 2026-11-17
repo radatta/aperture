@@ -287,7 +287,13 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       listProblemRecords: async () => [],
-      getCoachStats: async () => ({ attempts: 0, ranking: [], patterns: [] }),
+      getCoachStats: async () => ({
+        attempts: 0,
+        firstTry: { hit: 0, of: 0 },
+        resolve: { hit: 0, of: 0 },
+        ranking: [],
+        patterns: [],
+      }),
       listCoachAttempts: async () => [],
       getCoachFocusRow: async () => null,
       getCoachDay: async () => null,

@@ -419,6 +419,8 @@ export interface DevCoachToday {
 // What getCoachStats answers — the fields the Patterns tab's steps read.
 export interface DevCoachStats {
   attempts: number;
+  firstTry: { hit: number; of: number };
+  resolve: { hit: number; of: number };
   ranking: string[];
   patterns: { pattern: string; attempts: number; firstTry: { hit: number; of: number } }[];
 }

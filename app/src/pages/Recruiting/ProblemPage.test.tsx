@@ -21,7 +21,7 @@ describe('Problem page', () => {
         day: '2024-05-02',
         outcome: 'solved',
         historical: true,
-        note: 'did it in school',
+        note: 'on paper',
       },
       {
         slug: 'two-sum',
@@ -52,7 +52,7 @@ describe('Problem page', () => {
     expect(within(tries[1]!).getByText('Peeked')).toBeTruthy();
     expect(within(tries[2]!).getByText('Before the coach')).toBeTruthy();
     expect(within(tries[2]!).getByText('Solved')).toBeTruthy();
-    expect(within(tries[2]!).getByText('Note: did it in school')).toBeTruthy();
+    expect(within(tries[2]!).getByText('Note: on paper')).toBeTruthy();
     expect(within(tries[2]!).getByText(/history only/)).toBeTruthy();
   });
 

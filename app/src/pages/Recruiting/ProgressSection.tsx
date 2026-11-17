@@ -61,7 +61,8 @@ export function ProgressSection() {
     set({ pattern: f.pattern, status: f.status, difficulty: f.difficulty });
 
   // Wider than the app's column on a desktop (the map's five stages and the tables need the room); the header, tabs
-  // and dock stay in the column.
+  // and dock stay in the column. The arithmetic assumes AppShell's column (max-w-3xl, px-5 = 1.25rem, no padded
+  // wrapper between it and this div): centred on it, up to 72rem, 1.25rem from each edge of the window.
   return (
     <div className="flex flex-col gap-4 lg:ml-[calc(50%-min(36rem,calc(50vw-1.25rem)))] lg:w-[min(72rem,calc(100vw-2.5rem))]">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-6">

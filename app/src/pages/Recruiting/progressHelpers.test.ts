@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { fmtPastDay } from '@aperture/shared';
 import { parseFilters, parsePattern, parseView, reSolveText } from './progressHelpers';
 
 const TODAY = '2026-11-17';
@@ -30,12 +29,6 @@ describe('progress helpers', () => {
       status: null,
       difficulty: null,
     });
-  });
-  it('says a past day as a person would, naming another year', () => {
-    expect(fmtPastDay(TODAY, TODAY)).toBe('today');
-    expect(fmtPastDay('2026-11-16', TODAY)).toBe('yesterday');
-    expect(fmtPastDay('2026-10-02', TODAY)).toBe('October 2');
-    expect(fmtPastDay('2024-03-01', TODAY)).toBe('March 1, 2024');
   });
   it('the re-solve line: due, next, graduated, out of the queue, none', () => {
     expect(reSolveText(st({ dueSince: TODAY }), TODAY)).toBe('Re-solve due today');

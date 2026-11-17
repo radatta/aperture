@@ -11,7 +11,13 @@
 // a refused write, Set as focus and back, 390 px) runs just before the schedule step.
 import { PHONE } from '../browser';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
-import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
+import type {
+  DevCoachSlot,
+  DevCoachStats,
+  DevCoachToday,
+  DevSittingEvent,
+  DevSittingStart,
+} from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { devUlid } from './flux-history';
 
@@ -99,18 +105,16 @@ const DESKTOP = { width: 1512, height: 860 }; // the 14" MacBook Pro's Safari co
 const progress = {
   pick: null as (typeof PROGRESS_PICKS)[number] | null,
   id: '',
-  paperId: '',
   note: '',
   planBefore: null as DevCoachToday | null,
-  statsBefore: 0,
+  statsBefore: null as DevCoachStats | null,
 };
 const progressState = () => ({
   pick: progress.pick ?? fail('no history-only pick — the progress-mcp step failed'),
   id: progress.id,
-  paperId: progress.paperId,
   note: progress.note,
   planBefore: progress.planBefore ?? fail('no plan read before the history-only solve'),
-  statsBefore: progress.statsBefore,
+  statsBefore: progress.statsBefore ?? fail('no stats read before the history-only solve'),
 });
 
 // What this run made and read, shared across steps (a scenario's steps run in order).
@@ -620,6 +624,12 @@ export const lcCoach: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Trends draws its four cards over the server’s records',
+    },
+    {
+      id: 'progress-desktop',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'At 1512 and 1024 px the wider tab (map with a card open, Solves, Trends) never scrolls sideways',
     },
     {
       id: 'progress-390',
@@ -1796,7 +1806,7 @@ export const lcCoach: Scenario = {
       title:
         'log_attempt historical: the schema, three refusals, then a history-only solve 400 days back',
       entry: 'mcp',
-      proves: ['progress-schema', 'progress-history-bad', 'progress-history', 'progress-mixed'],
+      proves: ['progress-schema', 'progress-history-bad', 'progress-history'],
       async run(ctx) {
         // A catalog problem this account hasn't touched, logged as solved before (400 days back), ledgered by id:
         // progress-undo deletes it, and cleanup does if a step fails first.
@@ -1865,30 +1875,11 @@ export const lcCoach: Scenario = {
         const read = await ctx.mcp.reads.getProblem({ slug: pick.slug });
         if (!read.tries?.some((t) => t.historical === true && t.attemptIds.includes(logged.id)))
           fail(`get_problem's tries lack the history-only one: ${JSON.stringify(read.tries)}`);
-        // The mixed branch: a history-only solve on this run's logged problem, which has a live try today.
-        const paper = slugOf(ctx, 'paper');
-        const liveBefore =
-          (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper && r.schedule) ??
-          fail(`no live record with a schedule on ${paper}`);
-        const mixed = await ctx.mcp.writes.logAttempt([
-          { slug: paper, outcome: 'failed', historical: true, day: addDays(today(), -400) },
-        ]);
-        progress.paperId =
-          mixed.attempts[0]?.id ?? fail('the mixed history-only solve stored nothing');
-        const both = await ctx.mcp.reads.getProblem({ slug: paper });
-        const flags = (both.tries ?? []).map((t) => `${t.historical === true}:${t.outcome}`);
-        if (flags[0] !== 'true:failed' || flags.slice(1).some((f) => f.startsWith('true')))
-          fail(`get_problem's tries, oldest first: ${flags.join(', ')}`);
-        const liveAfter = (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper);
-        if (JSON.stringify(liveAfter?.schedule) !== JSON.stringify(liveBefore.schedule))
-          fail(
-            `the live schedule moved: ${JSON.stringify([liveBefore.schedule, liveAfter?.schedule])}`,
-          );
         progress.pick = pick;
         progress.id = logged.id;
         progress.note = note;
         progress.planBefore = planBefore;
-        progress.statsBefore = statsBefore.attempts;
+        progress.statsBefore = statsBefore;
       },
     },
     {
@@ -1911,8 +1902,10 @@ export const lcCoach: Scenario = {
         )
           fail(`the plan moved: ${JSON.stringify({ before: planBefore, after })}`);
         const statsAfter = await ctx.api.reads.getCoachStats();
-        if (statsAfter.attempts !== statsBefore)
-          fail(`stats counted it: ${statsBefore} → ${statsAfter.attempts}`);
+        const counts = (x: DevCoachStats) =>
+          JSON.stringify({ attempts: x.attempts, firstTry: x.firstTry, resolve: x.resolve });
+        if (counts(statsAfter) !== counts(statsBefore))
+          fail(`stats moved: ${counts(statsBefore)} → ${counts(statsAfter)}`);
       },
     },
     {
@@ -1929,6 +1922,7 @@ export const lcCoach: Scenario = {
         'progress-problem',
         'progress-trends',
         'progress-390',
+        'progress-desktop',
         'progress-load-error',
         'premium-toggle',
         'premium-off',
@@ -2044,6 +2038,24 @@ export const lcCoach: Scenario = {
           await ctx.page.getByRole('heading', { name: /^Time against the \d+ min cap$/ }).waitFor();
           await ctx.ui.settle();
           await ctx.shot('progress-trends');
+
+          // The wider tab never scrolls sideways at 1512 and 1024.
+          for (const size of [DESKTOP, { width: 1024, height: 768 }]) {
+            await ctx.page.setViewportSize(size);
+            for (const path of [
+              `/recruiting/progress?open=${pick.pattern}`,
+              '/recruiting/progress?view=solves',
+              '/recruiting/progress?view=trends',
+            ]) {
+              await ctx.ui.goto(path);
+              await ctx.ui.settle();
+              const wide = await ctx.page.evaluate<boolean>(
+                '(() => document.documentElement.scrollWidth > window.innerWidth)()',
+              );
+              if (wide) fail(`${path} scrolls sideways at ${size.width}`);
+            }
+          }
+          await ctx.shot('progress-1024');
         } finally {
           await ctx.page.setViewportSize(PHONE);
         }
@@ -2111,14 +2123,34 @@ export const lcCoach: Scenario = {
     },
     {
       id: 'progress-undo',
-      title: 'delete_attempt on the history-only id: the problem has no record again',
+      title:
+        'A history-only solve on a problem with a live try; then delete_attempt on both history-only ids',
       entry: 'mcp',
-      proves: ['progress-history-delete'],
+      proves: ['progress-mixed', 'progress-history-delete'],
       async run(ctx) {
-        const { pick, id, paperId } = progressState();
+        const { pick, id } = progressState();
+        // The mixed branch: a history-only solve on this run's logged problem, which has a live try today.
+        const paper = slugOf(ctx, 'paper');
+        const liveBefore =
+          (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper && r.schedule) ??
+          fail(`no live record with a schedule on ${paper}`);
+        const mixed = await ctx.mcp.writes.logAttempt([
+          { slug: paper, outcome: 'failed', historical: true, day: addDays(today(), -400) },
+        ]);
+        const paperId =
+          mixed.attempts[0]?.id ?? fail('the mixed history-only solve stored nothing');
+        const both = await ctx.mcp.reads.getProblem({ slug: paper });
+        const flags = (both.tries ?? []).map((t) => `${t.historical === true}:${t.outcome}`);
+        if (flags[0] !== 'true:failed' || flags.slice(1).some((f) => f.startsWith('true')))
+          fail(`get_problem's tries, oldest first: ${flags.join(', ')}`);
+        const liveAfter = (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper);
+        if (JSON.stringify(liveAfter?.schedule) !== JSON.stringify(liveBefore.schedule))
+          fail(
+            `the live schedule moved: ${JSON.stringify([liveBefore.schedule, liveAfter?.schedule])}`,
+          );
         const gone = await ctx.mcp.writes.deleteAttempt(id);
         if (!gone.deleted) fail(`delete_attempt on the history-only id: ${JSON.stringify(gone)}`);
-        if (paperId && !(await ctx.mcp.writes.deleteAttempt(paperId)).deleted)
+        if (!(await ctx.mcp.writes.deleteAttempt(paperId)).deleted)
           fail('delete_attempt on the mixed history-only id deleted nothing');
         if ((await ctx.api.reads.listProblemRecords()).some((r) => r.slug === pick.slug))
           fail('the history-only problem still has a record after delete_attempt');
