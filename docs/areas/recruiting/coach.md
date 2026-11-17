@@ -77,11 +77,10 @@ write leaves them as they were. No migration: one copy, and removing the reader 
   counts a day twice. The capture's submit time precedes a later log, so it judges the first try (measured beats
   remembered: a logged `clean` over a failed first submit folds to `solved`); a logged peek still wins on help; the
   captured title wins over a logged one.
-- **Voids.** A group counts unless voided: a stored `CoachVoid` row for that (day, slug) wins; else the default list
-  `LEGACY_TEST_DEFAULTS` (`two-sum`: the extension was tested on it) excludes it; else it counts. `void: false` lifts a
-  default; `void: true` drops any group. Only legacy pieces take a void row or the default — a sitting voids through its
-  review, a logged attempt is deleted (`delete_attempt`). `setCoachVoids` refuses, writing nothing, a day with no
-  legacy rows. `listLegacyGroups(slug?)` lists every group with `counted` and `voidedBy` (`you` / `default`).
+- **Voids.** Every legacy group counts until a stored `CoachVoid` row for that (day, slug) says `void: true`;
+  `void: false` brings it back. Only legacy pieces take a void row — a sitting voids through its review, a logged
+  attempt is deleted (`delete_attempt`). `setCoachVoids` refuses, writing nothing, a day with no legacy rows.
+  `listLegacyGroups(slug?)` lists every group with `counted` and `voidedBy` (`you` or null).
 - On deploy the legacy days join the history: new records, new due re-solves, and possibly Auto in Catch-up on day
   one. `set_void` is the lever.
 

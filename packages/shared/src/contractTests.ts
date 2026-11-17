@@ -4189,18 +4189,19 @@ export function runApiContract(
         '        """',
       ].join('\n');
 
-      it('legacy rows fold into the records; two-sum stays out by default; the groups say why', async () => {
+      it('legacy rows fold into the records, every group counting; the groups say so', async () => {
         api = await makeClient(() => clock, { legacy: legacyFixture(TODAY, MONTH_AGO) });
         const recs = await api.listProblemRecords();
         expect(recs.map((r) => [r.slug, r.lastOutcome]).sort()).toEqual([
           ['contains-duplicate', 'solved'],
+          ['two-sum', 'clean'],
           ['valid-anagram', 'clean'],
         ]);
         expect(recs.find((r) => r.slug === 'valid-anagram')!.tries[0]!.sources).toEqual(['legacy']);
         const groups = await api.listLegacyGroups();
         expect(groups.map((g) => [g.slug, g.counted, g.voidedBy])).toEqual([
           ['contains-duplicate', true, null],
-          ['two-sum', false, 'default'],
+          ['two-sum', true, null],
           ['valid-anagram', true, null],
         ]);
         expect(await api.listLegacyGroups('two-sum')).toHaveLength(1);
@@ -4209,29 +4210,29 @@ export function runApiContract(
         expect(exported.coachVoids).toEqual([]);
       });
 
-      it('voids: lift the default, void a group, un-void it; a batch with an unknown group writes nothing', async () => {
+      it('voids: void groups, un-void one; a batch with an unknown group writes nothing', async () => {
         const rows = legacyFixture(TODAY, MONTH_AGO);
         api = await makeClient(() => clock, { legacy: rows });
         const d2 = rows[2]!.day;
         const slugs = async () => (await api.listProblemRecords()).map((r) => r.slug).sort();
         await expect(
           api.setCoachVoids([
-            { day: d2, slug: 'two-sum', void: false },
+            { day: d2, slug: 'two-sum', void: true },
             { day: d2, slug: 'climbing-stairs', void: true },
           ]),
         ).rejects.toThrow(/No legacy history/);
-        expect(await slugs()).toEqual(['contains-duplicate', 'valid-anagram']);
+        expect(await slugs()).toEqual(['contains-duplicate', 'two-sum', 'valid-anagram']);
         const after = await api.setCoachVoids([
-          { day: d2, slug: 'two-sum', void: false },
+          { day: d2, slug: 'two-sum', void: true },
           { day: d2, slug: 'valid-anagram', void: true },
         ]);
         expect(after.map((g) => [g.slug, g.counted, g.voidedBy])).toEqual([
-          ['two-sum', true, null],
+          ['two-sum', false, 'you'],
           ['valid-anagram', false, 'you'],
         ]);
-        expect(await slugs()).toEqual(['contains-duplicate', 'two-sum']);
+        expect(await slugs()).toEqual(['contains-duplicate']);
         await api.setCoachVoids([{ day: d2, slug: 'valid-anagram', void: false }]);
-        expect(await slugs()).toEqual(['contains-duplicate', 'two-sum', 'valid-anagram']);
+        expect(await slugs()).toEqual(['contains-duplicate', 'valid-anagram']);
         expect((await api.exportData()).coachVoids).toHaveLength(2);
         await expect(api.setCoachVoids([])).rejects.toThrow(/non-empty/);
       });

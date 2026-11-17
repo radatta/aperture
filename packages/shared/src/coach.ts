@@ -321,11 +321,6 @@ function foldDays(parts: Attempt[]): Attempt[] {
 }
 
 // --- Legacy history: the pre-sittings extension's submissions (lc#, read-only; coach.md → Legacy history) ---
-// Legacy groups excluded unless the user lifts them (a stored void: false): the extension was tested on these.
-// Applied to legacy pieces only — never to a sitting or a logged attempt. `day` narrows an entry to one day.
-export const LEGACY_TEST_DEFAULTS: readonly { slug: string; day?: string }[] = [
-  { slug: 'two-sum' },
-];
 export const COACH_VOIDS_MAX = 50;
 export const coachVoidId = (day: string, slug: string) => `${day}#${slug}`;
 export interface LegacyGroup {
@@ -337,19 +332,16 @@ export interface LegacyGroup {
   accepted: boolean;
   firstSubmitAccepted: boolean;
   counted: boolean;
-  voidedBy: 'you' | 'default' | null; // why it doesn't count
+  voidedBy: 'you' | null; // a stored void: true
 }
-// Whether a legacy (day, slug) group counts: a stored void row wins, then the default list, else it counts.
+// Whether a legacy (day, slug) group counts: every one does until a stored void row says void: true.
 export function legacyVoidedBy(
   day: string,
   slug: string,
   voids: readonly CoachVoid[],
 ): LegacyGroup['voidedBy'] {
   const row = voids.find((v) => v.deletedAt === null && v.day === day && v.slug === slug);
-  if (row) return row.void ? 'you' : null;
-  return LEGACY_TEST_DEFAULTS.some((d) => d.slug === slug && (d.day === undefined || d.day === day))
-    ? 'default'
-    : null;
+  return row?.void ? 'you' : null;
 }
 // Every legacy (day, slug) group, oldest day first, with whether it counts.
 export function legacyGroups(

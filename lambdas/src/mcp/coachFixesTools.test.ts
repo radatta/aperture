@@ -107,7 +107,10 @@ describe('set_void', () => {
       { sittingId: s.id, slug: 'climbing-stairs', day: '2026-11-08', void: true, nextDue: null },
     ]);
     expect(out.legacy).toMatchObject([{ slug: 'valid-anagram', void: true, voidedBy: 'you' }]);
-    expect((await call('list_problems')).problems).toEqual([]);
+    // Only the legacy two-sum day (not voided) is left.
+    expect((await call('list_problems')).problems.map((p: { slug: string }) => p.slug)).toEqual([
+      'two-sum',
+    ]);
     await call('set_void', {
       targets: [
         { sittingId: s.id, void: false },
@@ -116,17 +119,20 @@ describe('set_void', () => {
     });
     expect(
       (await call('list_problems')).problems.map((p: { slug: string }) => p.slug).sort(),
-    ).toEqual(['climbing-stairs', 'valid-anagram']);
+    ).toEqual(['climbing-stairs', 'two-sum', 'valid-anagram']);
   });
 
-  it('lifts the default on a legacy two-sum day', async () => {
+  it('get_problem lists a legacy day and its state; voided, the record goes; un-voided, it is back', async () => {
     const before = await call('get_problem', { slug: 'two-sum' });
-    expect(before.record).toBeNull();
-    expect(before.legacy).toMatchObject([{ day: LEGACY_DAY, counted: false, voidedBy: 'default' }]);
+    expect(before.record).toMatchObject({ attempts: 1, firstOutcome: 'clean' });
+    expect(before.tries[0]).toMatchObject({ sources: ['legacy'], claudeNotes: [] });
+    expect(before.legacy).toMatchObject([{ day: LEGACY_DAY, counted: true, voidedBy: null }]);
+    await call('set_void', { targets: [{ day: LEGACY_DAY, slug: 'two-sum', void: true }] });
+    const voided = await call('get_problem', { slug: 'two-sum' });
+    expect(voided.record).toBeNull();
+    expect(voided.legacy).toMatchObject([{ day: LEGACY_DAY, counted: false, voidedBy: 'you' }]);
     await call('set_void', { targets: [{ day: LEGACY_DAY, slug: 'two-sum', void: false }] });
-    const after = await call('get_problem', { slug: 'two-sum' });
-    expect(after.record).toMatchObject({ attempts: 1, firstOutcome: 'clean' });
-    expect(after.tries[0]).toMatchObject({ sources: ['legacy'], claudeNotes: [] });
+    expect((await call('get_problem', { slug: 'two-sum' })).record).toMatchObject({ attempts: 1 });
   });
 
   it('refuses a bad target, an unknown sitting or a day with no legacy rows — and writes nothing', async () => {
@@ -261,7 +267,7 @@ describe('the retry track and the plan mode', () => {
       (await call('list_problems', { track })).problems.map((p: { slug: string }) => p.slug);
     expect(await slugs('retry')).toEqual(['counting-bits']);
     expect(await slugs('peeked')).toEqual(['counting-bits']);
-    expect((await slugs('clean')).sort()).toEqual(['climbing-stairs', 'valid-anagram']);
+    expect((await slugs('clean')).sort()).toEqual(['climbing-stairs', 'two-sum', 'valid-anagram']);
     await expect(call('list_problems', { track: 'fast' })).rejects.toBeInstanceOf(RpcParamError);
     const today = await call('leetcode_today');
     expect(today.planMode).toMatchObject({

@@ -474,7 +474,7 @@ export const COACH_TOOLS: Tool[] = [
     name: 'set_void',
     description: [
       ASK_FIRST,
-      'Marks practice as not counting, without deleting it — a test sitting (trying the extension, a warm-up) or a day of the pre-sittings capture (`legacy` in get_problem) that was testing. Void leaves the plan, stats, the re-solve schedule and the records; `void: false` brings it back (and lifts the default on a legacy two-sum day, which starts voided as extension testing).',
+      'Marks practice as not counting, without deleting it — a test sitting (trying the extension, a warm-up) or a day of the pre-sittings capture (`legacy` in get_problem) that was testing. Void leaves the plan, stats, the re-solve schedule and the records; `void: false` brings it back.',
       `Each target: \`sittingId\`, or \`day\` + \`slug\` for a legacy day, with \`void\` true or false. Up to ${COACH_VOIDS_MAX} at once; every target is checked before anything is written. A logged attempt is not voided — delete_attempt removes it. Returns each target's state and the problem's next due day — read them back.`,
     ].join(' '),
     inputSchema: {

@@ -35,7 +35,7 @@ export function legacyRow(
 }
 
 // Three groups ~a month before `today`: contains-duplicate solved on the second submit, valid-anagram accepted
-// first try, two-sum (excluded by default as extension testing).
+// first try, two-sum accepted first try.
 export function legacyFixture(today: string, base: number): LegacyLeetcodeAttempt[] {
   const d1 = addDays(today, -30);
   const d2 = addDays(today, -29);

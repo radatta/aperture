@@ -132,21 +132,27 @@ describe('legacy history', () => {
   it('folds each (day, slug) group into one attempt, judged by its first submit', () => {
     const list = attempts(input({ legacy: rows }));
     expect(list.map((a) => [a.slug, a.outcome, a.submits, a.sources])).toEqual([
+      ['two-sum', 'clean', 1, ['legacy']],
       ['contains-duplicate', 'solved', 2, ['legacy']],
       ['valid-anagram', 'clean', 1, ['legacy']],
     ]);
   });
 
-  it('two-sum is test data by default; a stored void: false lifts it, a void: true drops any group', () => {
-    expect(attempts(input({ legacy: rows })).some((a) => a.slug === 'two-sum')).toBe(false);
-    const lifted = attempts(input({ legacy: rows, voids: [voidRow(d, 'two-sum', false)] }));
-    expect(lifted.find((a) => a.slug === 'two-sum')).toMatchObject({ outcome: 'clean' });
+  it('every legacy group counts until a stored void: true drops it; void: false brings it back', () => {
     const dropped = attempts(input({ legacy: rows, voids: [voidRow(d, 'valid-anagram', true)] }));
-    expect(dropped.map((a) => a.slug)).toEqual(['contains-duplicate']);
+    expect(dropped.map((a) => a.slug)).toEqual(['two-sum', 'contains-duplicate']);
+    const back = attempts(input({ legacy: rows, voids: [voidRow(d, 'valid-anagram', false)] }));
+    expect(back.map((a) => a.slug)).toContain('valid-anagram');
   });
 
-  it('the default never touches a logged two-sum, even on a legacy day', () => {
-    const list = attempts(input({ legacy: rows, attempts: [logged('two-sum', d, 'solved')] }));
+  it('a voided legacy day leaves a logged attempt on it counting', () => {
+    const list = attempts(
+      input({
+        legacy: rows,
+        voids: [voidRow(d, 'two-sum', true)],
+        attempts: [logged('two-sum', d, 'solved')],
+      }),
+    );
     expect(list.find((a) => a.slug === 'two-sum')).toMatchObject({
       outcome: 'solved',
       sources: ['manual'],
@@ -180,16 +186,16 @@ describe('legacy history', () => {
     expect(recs[0]!.tries[0]!.sources).toEqual(['legacy']);
     // Stats and the day's plan read the same attempts.
     const ci = input({ legacy: rows });
-    expect(coachStats(attempts(ci), TODAY)).toMatchObject({ attempts: 2, problems: 2 });
+    expect(coachStats(attempts(ci), TODAY)).toMatchObject({ attempts: 3, problems: 3 });
     const t = planDay(ci);
     expect(t.momentum.lastActiveDay).toBe(d);
   });
 
-  it('legacyGroups lists every group with why it does not count', () => {
+  it('legacyGroups lists every group with whether it counts', () => {
     const groups = legacyGroups(rows, [voidRow(d, 'valid-anagram', true)]);
     expect(groups.map((g) => [g.slug, g.counted, g.voidedBy, g.submits])).toEqual([
       ['contains-duplicate', true, null, 2],
-      ['two-sum', false, 'default', 1],
+      ['two-sum', true, null, 1],
       ['valid-anagram', false, 'you', 1],
     ]);
   });
