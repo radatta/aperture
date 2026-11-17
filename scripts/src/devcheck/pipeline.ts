@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { DEV_WORK_MIN, financeRowOf, ledgerKind, type ApiClient } from './api';
+import { DEV_WORK_MIN, coachSlotOf, financeRowOf, ledgerKind, type ApiClient } from './api';
 import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -518,6 +518,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.listSittings()).some((x) => x.id === id);
       case 'lcRollLink':
         return (await client.reads.getSettings()).leetcodeRollId != null;
+      case 'coachAttempt':
+        return (await client.reads.listCoachAttempts()).some((a) => a.id === id);
+      case 'coachSlot': {
+        const { day, slug } = coachSlotOf(id);
+        const t = await client.reads.getCoachToday();
+        return (
+          t.day === day &&
+          t.slots.some((x) => x.swappedFrom === slug || (x.slug === slug && x.status === 'skipped'))
+        );
+      }
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
@@ -570,6 +580,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'lcRollLink':
         await client.writes.linkLeetcodeRoll(null);
+        return true;
+      case 'coachAttempt':
+        await client.writes.deleteCoachAttempt(id);
+        return true;
+      case 'coachSlot':
+        await client.writes.restoreCoachSlot(id);
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

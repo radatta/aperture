@@ -283,6 +283,11 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listHabits: async () => [],
       listRolls: async () => [],
       listSittings: async () => [],
+      getCoachToday: async () => {
+        throw new Error('unused');
+      },
+      listProblemRecords: async () => [],
+      listCoachAttempts: async () => [],
       draftSittingReview: async () => {
         throw new Error('unused');
       },
@@ -562,6 +567,15 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       setReminderSettings: async () => {
+        throw new Error('unused');
+      },
+      patchSittingReview: async () => {
+        throw new Error('unused');
+      },
+      deleteCoachAttempt: async () => {
+        throw new Error('unused');
+      },
+      restoreCoachSlot: async () => {
         throw new Error('unused');
       },
       restoreReminderToggles: async () => {

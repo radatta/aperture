@@ -337,6 +337,43 @@ export interface DevSittingDetail {
   problem: { slug: string } | null;
   liveReads: number; // live_sitting pulls (PR B)
 }
+// What getCoachToday / leetcode_today answer — the fields the scenario reads.
+export interface DevCoachSlot {
+  n?: number;
+  kind: 'carry-over' | 'new' | 're-solve' | 'stretch';
+  slug: string;
+  title: string;
+  reason: string;
+  capMin: number;
+  status: 'open' | 'in-progress' | 'done' | 'skipped';
+  sittingId: string | null;
+  outcome: string | null;
+  swappedFrom: string | null;
+}
+export interface DevCoachToday {
+  day: string;
+  mode: string;
+  focus: { pattern: string; day: number; of: number; source: string };
+  slots: DevCoachSlot[];
+  floor: { slug: string; on: boolean; done: boolean } | null;
+  offPlan: { sittingId: string; slug: string }[];
+  due: { slug: string; dueDay: string }[];
+  next48h: { slug: string; dueDay: string }[];
+  momentum: { activeDays: number; lastActiveDay: string | null };
+  unreviewed: { sittingId: string; slug: string }[];
+}
+export interface DevCoachAttempt {
+  id: string;
+  slug: string;
+  day: string;
+  outcome: string;
+  help: string;
+}
+export interface DevProblemRecord {
+  slug: string;
+  peeked: boolean;
+  schedule: { track: string; dueDay: string; graduated: boolean } | null;
+}
 export interface DevSittingStart {
   clientSittingId: string;
   problemSlug: string;
@@ -404,6 +441,18 @@ export const SITTING_REP_VIA = 'api:lcSittingStart:rep';
 // first link — it exists while the setting names a roll, and removing it unlinks.
 export const LC_ROLL_LINK_VIA = 'api:linkLeetcodeRoll';
 export const lcRollLinkId = (run: string): string => `lc-roll-link:${run}`;
+// The LeetCode coach (docs/areas/recruiting/coach.md). A manual or peek attempt is recorded by the id its log
+// returns and deleted by deleteCoachAttempt. A slot change has no id: `coach-slot:<run>:<day>:<slug>` is recorded
+// before the call; it exists while that day is today and its slot is still changed, and a restore removes it (a
+// change left on a past day only moves that day's plan, which nothing reads again).
+export const COACH_ATTEMPT_VIA = 'coach:attempt';
+export const COACH_SLOT_VIA = 'coach:slot';
+export const coachSlotId = (run: string, day: string, slug: string): string =>
+  `coach-slot:${run}:${day}:${slug}`;
+export const coachSlotOf = (id: string): { day: string; slug: string } => {
+  const [day = '', slug = ''] = id.split(':').slice(-2);
+  return { day, slug };
+};
 // The test user's Shortcut token. It has no id, so a rotate records `place-token:<run>` — before the call, like
 // a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
 // A recurring series this harness created — through the API, the browser's upsertSeries create (recorder.ts)
@@ -480,7 +529,9 @@ export type LedgerKind =
   | 'roll'
   | 'sitting'
   | 'lcRollLink'
-  | 'scopedToken';
+  | 'scopedToken'
+  | 'coachAttempt'
+  | 'coachSlot';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
@@ -494,6 +545,8 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === ROLL_VIA) return 'roll';
   if (via === SITTING_VIA) return 'sitting';
   if (via === LC_ROLL_LINK_VIA) return 'lcRollLink';
+  if (via === COACH_ATTEMPT_VIA) return 'coachAttempt';
+  if (via === COACH_SLOT_VIA) return 'coachSlot';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_MARK_VIA) return 'financeMark';
@@ -629,6 +682,11 @@ export function createApiClient({
     listHabits: () => call<DevHabit[]>('listHabits', []),
     listRolls: () => call<DevRoll[]>('listRolls', []),
     listSittings: () => call<DevSitting[]>('listSittings', []),
+    getCoachToday: () => call<DevCoachToday>('getCoachToday', []),
+    listProblemRecords: () => call<DevProblemRecord[]>('listProblemRecords', []),
+    // The coach's stored attempts, alive (the export's; the test user's are a handful).
+    listCoachAttempts: async () =>
+      (await call<{ coachAttempts: DevCoachAttempt[] }>('exportData', [])).coachAttempts,
     getSitting: (id: string) => call<DevSittingDetail>('getSitting', [id]),
     // The Haiku draft (PR C): a model call that writes nothing — a read here, one real call per use.
     draftSittingReview: (id: string) => call<DevReviewDraft>('draftSittingReview', [id]),
@@ -1025,6 +1083,25 @@ export function createApiClient({
     async finishTask(id: string, to: 'done' | 'cancelled'): Promise<DevTask> {
       assertLedgerTask(id);
       return call<DevTask>('transitionTask', [id, to]);
+    },
+    // The coach's partial review write (cause, help, test) on a sitting this run started.
+    async patchSittingReview(
+      id: string,
+      patch: { cause?: string | null; help?: string; test?: boolean },
+    ): Promise<DevSitting> {
+      assertLedger(id, 'sitting');
+      return call<DevSitting>('patchSittingReview', [id, patch]);
+    },
+    // Cleanup's removal of an attempt the ledger recorded (from log_attempt's or mark_peeked's answer).
+    async deleteCoachAttempt(id: string): Promise<void> {
+      assertLedger(id, 'coachAttempt');
+      await call<null>('deleteCoachAttempt', [id]);
+    },
+    // Cleanup's removal of a slot change: restore it, today only (coachSlotId).
+    async restoreCoachSlot(id: string): Promise<void> {
+      assertLedger(id, 'coachSlot');
+      const { slug } = coachSlotOf(id);
+      await call<DevCoachToday>('setCoachSlot', [{ slug, action: 'restore' }]);
     },
     async deleteSitting(id: string): Promise<void> {
       assertLedger(id, 'sitting');

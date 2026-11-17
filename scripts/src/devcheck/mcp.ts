@@ -4,8 +4,12 @@
 // stateless JSON-RPC (lambdas/src/mcp/protocol.ts): no initialize or session needed; a tool's result is
 // `{content: [{type: 'text', text}], isError?}` inside HTTP 200, the text JSON (or 'ok').
 import {
+  COACH_ATTEMPT_VIA,
+  COACH_SLOT_VIA,
+  coachSlotId,
   MCP_SERIES_VIA,
   ledgerKind,
+  type DevCoachToday,
   type CreateSeriesInput,
   MCP_CATEGORY_VIA,
   type DevAttachment,
@@ -50,6 +54,31 @@ export interface DevLiveSitting {
     liveReads: number;
     problem: { slug: string };
   } | null;
+  slot?: DevLiveSlot | null;
+}
+
+// What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
+export interface DevPeeked {
+  slug: string;
+  peeked: boolean;
+  sittingId?: string;
+  attemptId?: string;
+  nextDue: { dueDay: string; track: string } | null;
+}
+export interface DevLoggedAttempt {
+  id: string;
+  slug: string;
+  day: string;
+  outcome: string;
+  nextDue: { dueDay: string; track: string } | null;
+}
+// live_sitting's slot in today's plan.
+export interface DevLiveSlot {
+  kind: string;
+  reason: string;
+  capMin: number;
+  overCap: boolean;
+  rules: string;
 }
 
 // What search_log / list_log answer (lambdas/src/mcp/logTools.ts) — the fields the scenario reads.
@@ -252,6 +281,8 @@ export function createMcpClient({
     searchLog: (args: Record<string, unknown>) => data<DevLogPage>('search_log', args),
     listLog: (args: Record<string, unknown>) => data<DevLogPage>('list_log', args),
     getDay: (args: Record<string, unknown>) => data<DevDayView>('get_day', args),
+    leetcodeToday: (args: Record<string, unknown> = {}) =>
+      data<DevCoachToday>('leetcode_today', args),
   };
 
   const writes = {
@@ -403,6 +434,67 @@ export function createMcpClient({
           `refusing to delete attachment ${id} — not on recorded task ${taskId}`,
         );
       return data<{ deleted: string }>('delete_attachment', { id });
+    },
+
+    // The LeetCode coach's writes (lambdas/src/mcp/coachTools.ts). Args go as given — the param-error rows send
+    // bad ones on purpose. An attempt is recorded from the answer; a slot change before the call (coachSlotId).
+    async markPeeked(args: Record<string, unknown>): Promise<DevPeeked> {
+      if (typeof args.sittingId === 'string') assertLedger(args.sittingId, 'sitting');
+      const title = `peek ${String(args.slug ?? args.sittingId)}`;
+      ledger.append({ run, op: 'intent', via: COACH_ATTEMPT_VIA, title });
+      let out: DevPeeked;
+      try {
+        out = await data<DevPeeked>('mark_peeked', args);
+      } catch (err) {
+        ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        throw err;
+      }
+      // On a sitting there is no attempt: the intent resolves as a refusal (nothing of its kind was made).
+      if (out.attemptId)
+        ledger.append({ run, op: 'created', id: out.attemptId, via: COACH_ATTEMPT_VIA, title });
+      else ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+      return out;
+    },
+    async setCauseTag(
+      args: Record<string, unknown>,
+    ): Promise<{ sittingId: string; review: unknown }> {
+      if (typeof args.sittingId !== 'string')
+        throw new DevcheckError('LEDGER_GUARD', 'set_cause_tag needs a recorded sittingId here');
+      assertLedger(args.sittingId, 'sitting');
+      return data('set_cause_tag', args);
+    },
+    // swap or skip on today's slot `origin` (the engine's pick); a restore resolves the recorded change.
+    async swapSlot(
+      day: string,
+      origin: string,
+      args: Record<string, unknown>,
+    ): Promise<DevCoachToday> {
+      const id = coachSlotId(run, day, origin);
+      if (args.action === 'restore') {
+        assertLedger(id, 'coachSlot');
+        const t = await data<DevCoachToday>('swap_slot', args);
+        ledger.append({ run, op: 'deleted', id });
+        return t;
+      }
+      if (!ledger.has(id))
+        ledger.append({ run, op: 'created', id, via: COACH_SLOT_VIA, title: origin });
+      return data<DevCoachToday>('swap_slot', args);
+    },
+    async logAttempt(
+      attempts: Record<string, unknown>[],
+    ): Promise<{ attempts: DevLoggedAttempt[] }> {
+      const title = `log ${attempts.map((a) => String(a.slug)).join(',')}`;
+      ledger.append({ run, op: 'intent', via: COACH_ATTEMPT_VIA, title });
+      let out: { attempts: DevLoggedAttempt[] };
+      try {
+        out = await data<{ attempts: DevLoggedAttempt[] }>('log_attempt', { attempts });
+      } catch (err) {
+        ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        throw err;
+      }
+      for (const a of out.attempts)
+        ledger.append({ run, op: 'created', id: a.id, via: COACH_ATTEMPT_VIA, title });
+      return out;
     },
   };
 

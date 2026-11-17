@@ -24,6 +24,7 @@ import { bffShapes } from './bff-shapes';
 import { identifierCleanup } from './identifier-cleanup';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
+import { lcCoach } from './lc-coach';
 import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
 import { partsV2 } from './parts-v2';
@@ -72,6 +73,7 @@ export const SCENARIOS: Scenario[] = [
   timedReminders, // its cheap rows first; its poller chain (two tick waits) last, so it can defer whole
   cognitoRefresh,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
+  lcCoach, // after lcSittings: it links its own roll, Starts on today's slot, and unlinks for the next
   devConcurrencyCaps,
   bffHardening,
   bffShapes,
