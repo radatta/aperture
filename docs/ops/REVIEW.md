@@ -12,16 +12,16 @@ recheck of the fix diff alone, only while a round still finds something serious.
 Each lens is a read-only agent in `.claude/agents/`. `code-reviewer` is the base: run alone before any non-trivial
 commit, it behaves as before (and says what it left to the other lenses).
 
-| Lens        | Agent                | Model       | Runs when the diff touches                                                                                                                      | Owns                                                                                                                                         |
-| ----------- | -------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| rules       | `code-reviewer`      | session's   | every diff                                                                                                                                      | security, BFF writes, secrets, public content, conventions, docs, data-model invariants, architecture fit, merged neighbours, approval holes |
-| correctness | `review-correctness` | opus, high  | any code, config or script                                                                                                                      | logic, ordering, reads and writes, failure paths, time, contracts, model output                                                              |
-| tests       | `review-tests`       | sonnet      | any code, config or script                                                                                                                      | test gaps, assertions that can't fail, isolation, clocks, CI parity, fakes, the dev-test matrix and its scenario                             |
-| infra       | `review-infra`       | fable, high | the infra triggers below; the risk classes                                                                                                      | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
-| shell       | `review-shell`       | opus, high  | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`, `scripts/src/{lane,board,mailroom}/`; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
-| UI          | `review-ui`          | sonnet      | `app/`; `packages/shared` when it changes what renders                                                                                          | the headless pass, first-open state, focus, input size, probe points                                                                         |
-| extension   | `review-extension`   | opus, high  | `extension/`                                                                                                                                    | research before fixing, the WebKit quirks, the wire contract                                                                                 |
-| fix recheck | `review-fixes`       | opus, high  | rounds 2 and later; a non-trivial dev fix; a rebase that resolved conflicts                                                                     | fix closed, fix regressions, sibling call sites, drop reasons                                                                                |
+| Lens        | Agent                | Model           | Runs when the diff touches                                                                                                                      | Owns                                                                                                                                         |
+| ----------- | -------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| rules       | `code-reviewer`      | session's, high | every diff                                                                                                                                      | security, BFF writes, secrets, public content, conventions, docs, data-model invariants, architecture fit, merged neighbours, approval holes |
+| correctness | `review-correctness` | opus, high      | any code, config or script                                                                                                                      | logic, ordering, reads and writes, failure paths, time, contracts, model output                                                              |
+| tests       | `review-tests`       | sonnet, high    | any code, config or script                                                                                                                      | test gaps, assertions that can't fail, isolation, clocks, CI parity, fakes, the dev-test matrix and its scenario                             |
+| infra       | `review-infra`       | fable, high     | the infra triggers below; the risk classes                                                                                                      | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
+| shell       | `review-shell`       | opus, high      | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`, `scripts/src/{lane,board,mailroom}/`; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
+| UI          | `review-ui`          | sonnet, high    | `app/`; `packages/shared` when it changes what renders                                                                                          | the headless pass, first-open state, focus, input size, probe points                                                                         |
+| extension   | `review-extension`   | opus, high      | `extension/`                                                                                                                                    | research before fixing, the WebKit quirks, the wire contract                                                                                 |
+| fix recheck | `review-fixes`       | opus, high      | rounds 2 and later; a dev fix; a rebase that resolved conflicts                                                                                 | fix closed, fix regressions, sibling call sites, drop reasons                                                                                |
 
 **Infra triggers** — anything that can change a deploy, a dev slot or a monthly bill:
 
@@ -79,9 +79,10 @@ rechecks, never remove one.
 Run `git fetch` first. All of a round's lenses go out in one message. Each prompt carries the diff range, the
 `origin/main` sha, the plan's path, the round number, and the lens's own input (the UI checklist; the LLM flag; the
 risk class). A session that started before an agent file existed, or whose checkout lacks it, runs a general-purpose
-agent told to Read the lens file from the lane's own checkout and follow it, on the file's model, told in words that
+agent told to Read the lens file from the lane's own checkout and follow it, on the file's model and effort (set on the launch), told in words that
 it is read-only and given the container rule — read-only by instruction only, an accepted residual. A budget-tight
-kickoff may move the `fable` lens to `opus`.
+pinned relay may move the `fable` lens to `opus` for a launch; nothing moves a lens below its file's model or
+effort. A branch that edits a lens file is reviewed by that lens as the branch wrote it: say so in the round record.
 
 **Effort stays at `high`** (the rule's home is `CLAUDE.md` → _Claude behavior_): every lens file pins `effort: high`
 or lower, and going above is proposed to the hub with the numbers that show it, never raised in place.
@@ -105,17 +106,22 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
 
 ## Merge
 
-1. Collect every lens's lines; sort by path and line.
+1. Check every picked lens returned its `lens=` line and ran its pass. A missing one is relaunched; one that can't
+   run (no browser, a blocked synth) goes to the hub as `[blocked]` or `[ask-maintainer]` and holds phase 7. Then
+   collect every lens's lines; sort by path and line.
 2. The same defect within about five lines of one file is one finding: keep the highest severity, list the lenses
    that found it.
 3. `Other lenses:` notes join as `suspected`.
-4. Trace each suspected S1/S2 to confirmed, or drop it with the reason.
+4. Trace each suspected S1/S2 to confirmed, drop it with the reason, or hold it open (5). Severity is the lens's:
+   the merge never lowers it.
 5. A `Not checked:` item, or a suspected S1/S2, that only live state can settle (AWS, the Mac, a device) goes to the
-   hub as one `[ask-maintainer]` with the command to run; it stays open in the round file and holds phase 7 until
-   answered or proven on dev.
+   hub as one `[ask-maintainer]` with a read-only command to run (describe, get, list); it stays open in the round file and holds phase 7 until
+   the relay answers it (an answer may make it a dev-test row, proven in phase 8).
 6. Write `localNotes/review/round-<n>.md`: per finding an id `R<n>-<nn>`, severity, lenses, path, the issue, and the
-   verdict — fix / drop: why / product call / open (5) — then the fix commit. Dropping a finding a lens reported as a
-   confirmed S1/S2 always gets a second reader: `review-fixes` checks the drop reasons, as in round 2.
+   verdict — fix / drop: why / product call / open (5) — then the fix commit. Any S1/S2 a lens reported, confirmed or
+   suspected, that leaves the round other than fixed (dropped, or a product call decided "not now") gets a second
+   reader: `review-fixes` checks those reasons against HEAD, as in round 2 — with no fix range when the round fixed
+   nothing (the prompt says so).
 
 Product calls and added scope: collaborative → one `[ask-maintainer]` with the list; autonomous → decide and log.
 
@@ -126,11 +132,13 @@ commit for the round.
 
 ## Round 2 and later
 
-- **Only after a serious finding**, a dropped confirmed S1/S2, or round 1 of a risk class with a code fix. Otherwise
+- **Only after a serious finding**, an S1/S2 left unfixed (_Merge_ 6), or round 1 of a risk class with a code fix. Otherwise
   the review has stopped; go to phase 7.
 - **What runs** — `review-fixes`, on `<the commit before the fixes>..HEAD`, with the previous round's
-  `round-<n>.md`. If a fixed finding came from the UI lens, `review-ui` also re-shoots just those screens; if the fix
-  range touches an infra trigger, `review-infra` reruns on it (with the synth pass for `cdk/`).
+  `round-<n>.md`. If the fix range changes what renders (`app/` components or styles, or a UI-lens finding), `review-ui` also
+  re-shoots just those screens; if the fix
+  range touches an infra trigger or the diff is a risk class, `review-infra` reruns on it (with the synth pass for
+  `cdk/`).
 - **What it reports** — each fixed finding closed or not, regressions in the touched functions and their callers,
   sibling call sites with the same pattern, dropped serious findings whose reason the code doesn't bear out; each
   line tagged `cause=fix|sibling|not-closed|pre-existing`.
@@ -142,8 +150,11 @@ commit for the round.
 
 ## After a dev fix or a rebase
 
-A non-trivial fix from dev testing (phase 9), or a rebase that resolved conflicts, is committed and gated, then gets
-`review-fixes` (plus `review-ui` or `review-infra` as in round 2); a fix it leads to is gated again.
+A fix from dev testing (phase 9), or a rebase that resolved conflicts, is committed and gated, then gets
+`review-fixes`, plus `review-ui` or `review-infra` when it touches their triggers or a risk class, as in round 2 —
+whatever its size. Only a fix that touches no trigger and is covered by a test it adds or changes may skip
+`review-fixes`; say so in the round record. After that, as round 2 and later: serious again → recheck that fix; these
+rounds count toward the cap.
 
 - **Dev fix** — the range is `<the commit before the fix>..HEAD`; the list is the dev defects it fixes.
 - **Rebase** — note the head before rebasing (`git rev-parse HEAD`); after, the recheck reads

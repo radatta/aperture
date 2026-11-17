@@ -19,10 +19,12 @@ the `[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
 The user names the mode; collaborative is the default.
 
 - **Collaborative.** Claude stops at decision points: Plan's model, Plan's questions, the execute, review findings
-  that need a product call or add scope, a review still finding serious bugs at its round cap, and the dev all-clear.
+  that need a product call or add scope, a review still finding serious bugs at its round cap, a review item only
+  live state can settle, an effort above `high`, and the dev all-clear.
   Each is one `[ask-maintainer]` (findings as a list), and the lane waits for the hub's `[relay]`.
 - **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands
-  one back, bar the review's round cap and an effort above `high` (both `[ask-maintainer]`, phase 6). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
+  one back, bar the review's round cap, a review item only live state can settle, and an effort above `high` (each an
+  `[ask-maintainer]`: `docs/ops/REVIEW.md` → _Round 2 and later_, _Merge_, _Launching_). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
   (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a
   noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what
   came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body
@@ -44,7 +46,7 @@ The user names the mode; collaborative is the default.
     A green full run with zero leftovers, every _Feature coverage_ row `pass`, `off dev`, `needs you` or `deferred`
     (under _This feature_ and _Other scenarios_ alike), plus that review is the all-clear (phase 9). On
     `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate (a rebase that resolved conflicts also gets
-    the recheck, phase 6), `pnpm bot push --after-rebase` (a
+    the recheck: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_), `pnpm bot push --after-rebase` (a
     `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
   - **Finished:** `[pr-open]` to the hub — or `[pr-ready]` when the mailroom was unreachable, then the hand-off line
     in its own `[ask-maintainer]` — in the shape `docs/ops/HUB.md` → _Checkpoints_ gives, and the report below.
@@ -107,8 +109,8 @@ hub message (the checkpoints stay).
      pass, run the gate once, commit. Findings that need a product call or add scope: collaborative → one
      `[ask-maintainer]` with the list; autonomous → decide and log.
    - **Round 2 and later, only after a serious finding** (a confirmed S1 or S2), a dropped confirmed one, or round 1
-     of a risk class with a code fix: `review-fixes` on the fix diff (plus `review-ui` or `review-infra` when the
-     fixes touch their paths). Serious again → fix, gate, commit, next round on that fix. Minor only → fix, gate,
+     of a risk class with a code fix: `review-fixes` on the fix diff (plus `review-ui` when the fixes change what
+     renders, `review-infra` when they touch its triggers). Serious again → fix, gate, commit, next round on that fix. Minor only → fix, gate,
      commit, done.
    - **Stop** when a round has no serious finding. After four rounds, or a round from the third on that finds no
      fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list — in either mode.
@@ -164,7 +166,7 @@ hub message (the checkpoints stay).
    — the headless agent's oddity, the user's repro, a devcheck row — is a bug to fix:** "pre-existing" decides
    only where (this branch when it's the same surface, else its own small PR), never whether; triage by reading the
    code path or reproducing, never "automation artifact" or "by design" unverified. Fixes go back through the gate
-   (plus the fix-diff recheck, `review-fixes`, if non-trivial), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
+   (plus the fix-diff recheck: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
    every row of the feature's matrix proven on dev, covered off dev, or listed under _Needs you_, and every other
    scenario's row likewise (_Other scenarios (regression)_) — a row the report shows `fail` or `skipped` is untested
    (a `deferred` slow row counts like off dev, with `ios-standalone`'s caveat: `docs/ops/DEV-CHECK.md` → _Slow
