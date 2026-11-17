@@ -1375,13 +1375,11 @@ export const lcCoach: Scenario = {
         await ctx.shot('lc-coach-draft-cause');
         await p.getByRole('button', { name: 'Save review' }).click();
         await ctx.ui.expectText('Saved.', 15_000);
+        // getSitting is a consistent read: a stale list can't answer the old cause over a wrong write.
         const causeNow = async () =>
-          (
-            (await ctx.api.reads.listSittings()).find((x) => x.id === id)?.review as
-              { cause?: string } | null | undefined
-          )?.cause;
-        if ((await causeNow()) !== 'boundary')
-          fail(`an untapped proposal was saved: ${await causeNow()}`);
+          ((await ctx.api.reads.getSitting(id)).sitting.review as { cause?: string } | null)?.cause;
+        const first = await causeNow();
+        if (first !== 'boundary') fail(`an untapped proposal was saved: ${String(first)}`);
         const again = await ctx.intercept('draftSittingReview', {
           status: 200,
           times: 1,
@@ -1393,9 +1391,13 @@ export const lcCoach: Scenario = {
         await chip('Off by one').click();
         await p.getByRole('button', { name: 'Save review' }).click();
         await ctx.ui.expectText('Saved.', 15_000);
-        for (let i = 0; i < 20 && (await causeNow()) !== 'off-by-one'; i++)
+        // "Saved." may still be the first Save's line for a moment: wait for the second to land.
+        let tapped = await causeNow();
+        for (let i = 0; i < 40 && tapped !== 'off-by-one'; i++) {
           await new Promise((r) => setTimeout(r, 250));
-        if ((await causeNow()) !== 'off-by-one') fail(`the tapped cause: ${await causeNow()}`);
+          tapped = await causeNow();
+        }
+        if (tapped !== 'off-by-one') fail(`the tapped cause: ${String(tapped)}`);
       },
     },
     noConsoleErrors,

@@ -49,8 +49,9 @@ const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 
 // The sitting's review (docs/areas/recruiting → Review): the user's one-liner, how much help it took (Peeked is
 // the coach's peeked), the coach's one cause tag, the mistakes, how it went, their own pattern tags and the prep
-// target — one Save for all of it. "Draft with Claude" only proposes mistake lines, unticked; only the ones they
-// tick (edited or not) are saved. A failed save keeps every field and says why.
+// target — one Save for all of it. "Draft with Claude" only proposes: mistake lines, unticked, of which only the
+// ones they tick (edited or not) are saved; and a cause, which marks its chip and is saved only if tapped. A
+// failed save keeps every field and says why.
 //
 // Help and the cause are also Claude's to set over MCP (mark_peeked, set_cause_tag), maybe after this form
 // opened. So until the user touches one, it follows the stored review as it refreshes, and Save doesn't send it —
@@ -280,11 +281,14 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
             </button>
           ))}
         </div>
-        {showProposal && (
-          <Text size="xs" tone="muted" id={`${id}-proposed`}>
-            Claude suggests {CAUSE_NAMES[proposed]} — tap it to use it.
-          </Text>
-        )}
+        {/* Always mounted, so a screen reader hears the proposal when a draft brings one. */}
+        <div aria-live="polite">
+          {showProposal && (
+            <Text size="xs" tone="muted" id={`${id}-proposed`}>
+              Claude suggests {CAUSE_NAMES[proposed]} — tap it to use it.
+            </Text>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">

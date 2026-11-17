@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ApiClient } from '@aperture/shared';
+import type { ApiClient, ReviewDraft } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -438,7 +438,9 @@ describe('the stub’s sittings', () => {
     const user = userEvent.setup();
     const api = seeded();
     const draft = vi.spyOn(api, 'draftSittingReview');
-    draft.mockResolvedValue({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'boundary' });
+    draft.mockResolvedValue({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'no-trace' });
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'boundary' });
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'boundary' });
     const id = await idOf(api, 'two-sum');
     await open(api);
     await user.click(await screen.findByRole('button', { name: 'Draft with Claude' }));
@@ -460,10 +462,17 @@ describe('the stub’s sittings', () => {
     await waitFor(async () =>
       expect((await api.getSitting(id)).sitting.review?.cause).toBe('boundary'),
     );
-    // A draft with no cause, or a failed one, proposes nothing.
-    draft.mockResolvedValueOnce({ ok: true, mistakes: ['x'], cause: null });
+    // A new draft replaces the proposal: one with no cause key (an older server), or a failed one, leaves none.
     await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
-    await screen.findByRole('group', { name: 'Claude’s draft' });
+    expect(await screen.findByText(/Claude suggests No trace/)).toBeTruthy(); // the mock's no-trace ≠ Boundary
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['x'] } as ReviewDraft);
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    await waitFor(() => expect(screen.queryByText(/Claude suggests/)).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    expect(await screen.findByText(/Claude suggests No trace/)).toBeTruthy();
+    draft.mockResolvedValueOnce({ ok: false, reason: 'api' });
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    expect(await screen.findByText(/Claude didn’t answer/)).toBeTruthy();
     expect(screen.queryByText(/Claude suggests/)).toBeNull();
   });
 
