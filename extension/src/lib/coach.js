@@ -1,6 +1,6 @@
 // The coach's rules — pure, over a caller's clock. At a sitting's first Submit the extension holds the click
 // once and shows a trace card (three inputs traced by hand: the empty or smallest, a boundary, a normal one);
-// he Traces or Skips, then clicks Submit himself — the extension never clicks it. A Submit within a minute of a
+// the user Traces or Skips, then clicks Submit again — the extension never clicks it. A Submit within a minute of a
 // failed one gets a non-blocking "trace the failing input" note. What happened goes to Aperture as `coach`
 // events (packages/shared/src/types.ts CoachEventPayload); the card, the hold and the note are each off-able in
 // Options (storage.local coachTrace, coachHold, coachNudge — absent means on).
@@ -24,11 +24,17 @@
     return { trace, hold: trace && on('hold'), nudge: on('nudge') };
   }
 
-  // The card's three fields: trimmed, at most 300 characters, blank → null.
+  // The card's three fields: control characters out (but newline and tab — a pasted one costs 6 bytes of
+  // JSON, and a trace over the server's cap would be dropped), trimmed, at most 300 characters, blank → null.
+  // eslint-disable-next-line no-control-regex
+  const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
   function traceInputs(raw) {
     const out = {};
     for (const k of FIELDS) {
-      const v = raw && typeof raw[k] === 'string' ? raw[k].trim().slice(0, INPUT_MAX) : '';
+      const v =
+        raw && typeof raw[k] === 'string'
+          ? raw[k].replace(CONTROL, '').trim().slice(0, INPUT_MAX)
+          : '';
       out[k] = v || null;
     }
     return out;

@@ -233,7 +233,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     }
     await click('trace', 'aperture-lc-coach');
     await until(async () => (await textOf('aperture-lc-coach', '[data-ap=trace]')) === null);
-    // His own second click submits.
+    // The user's own second click submits.
     await page.locator('[data-e2e-locator=console-submit-button]').click();
     await page.locator('[data-e2e-locator=console-run-button]').click();
 

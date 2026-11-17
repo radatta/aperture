@@ -755,8 +755,9 @@
   window.addEventListener('focus', (e) => e.isTrusted && recheck());
 
   // ---- the coach (lib/coach.js): the trace card at the first Submit, the resubmit note ----
-  // Its per-sitting state rides on the binding (`coach`: config sent, the trace's outcome, whether the hold
-  // fired), so a reload never asks twice. The last verdict and the card are this page's only.
+  // Its per-sitting state rides on the binding (`coach`: config sent, the trace's outcome and when, whether the
+  // hold fired), so a reload never asks twice. The last verdict and the card are this page's only.
+  const DOUBLE_MS = 500; // a click this soon after the card opened is the same gesture (a double-click)
   let lastVerdict = null; // {at, verdict} of the last judged submit on this sitting
   let cardAt = null; // when the card opened; null while closed
   let note = null; // {text, until}: a short line on the badge
@@ -793,33 +794,42 @@
     view.renderCard(false);
     paintBadge();
   }
-  // Trace or Skip from the card (a trace with nothing typed is a Skip).
-  function finishCard(values) {
+  // Trace or Skip from the card (a trace with nothing typed is a Skip). `passing`: the Submit that took it is
+  // going through now, so there's nothing left to tell the user to click.
+  function finishCard(values, passing = false) {
     if (cardAt == null || !binding) return;
     const payload = coachLib.cardPayload(values, Date.now() - cardAt);
     sendCoach(payload);
-    setCoach({ trace: payload.kind === 'trace' ? 'traced' : 'skipped' });
+    setCoach({ trace: payload.kind === 'trace' ? 'traced' : 'skipped', traceAt: Date.now() });
     closeCard(payload.kind);
-    flash('now click Submit');
+    if (!passing) flash('now click Submit');
   }
   // A real click on LeetCode's Submit, in the capture phase at the window — ahead of React's root listener.
-  // The first one in a sitting is held (no request is made) and the card shown; he clicks Submit again
-  // himself. A page script's click() is never held. Submit by keyboard never passes here: it is logged when
-  // its submit arrives (onSubmitItem).
+  // The first one in a sitting is held (no request is made) and the card shown; the user clicks Submit again.
+  // A page script's click() is never held. Submit by keyboard never passes here: it is logged when its
+  // submit arrives (onSubmitItem). A click in one of our own hosts is never a Submit, and neither is <html> or
+  // <body> — the page could mark either with the Submit's selector to have every click held.
   window.addEventListener(
     'click',
     (e) => {
-      if (!e.isTrusted) return;
+      if (!e.isTrusted || view.owns(e.target)) return;
       let hit = null;
       try {
         hit = sel.submit && e.target && e.target.closest ? e.target.closest(sel.submit) : null;
       } catch {}
-      if (!hit || !sittingOpen()) return;
+      if (!hit || hit === document.documentElement || hit === document.body) return;
+      if (!sittingOpen()) return;
       const c = coachState();
-      // With the card open, this Submit takes what's typed as the trace (nothing typed: just closes it).
       if (cardAt != null) {
+        // The second click of the double-click that opened the card: swallowed too, never a submit.
+        if (Date.now() - cardAt < DOUBLE_MS) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+        // With the card open, this Submit takes what's typed as the trace (nothing typed: just closes it).
         const { values } = view.cardState();
-        if (coachLib.cardPayload(values, 0).kind === 'trace') return finishCard(values);
+        if (coachLib.cardPayload(values, 0).kind === 'trace') return finishCard(values, true);
         return closeCard('submit');
       }
       if (coachLib.shouldHold({ settings: coachOn, trusted: true, active: true, coach: c })) {
@@ -839,16 +849,20 @@
   );
   // A submit LeetCode judged, for the open sitting: the verdict the next Submit's note reads, and — when
   // nothing was traced or skipped before it — an untraced submit (a keyboard submit, the hold off, the
-  // Submit not found, or a second click past the card).
+  // Submit not found, or a second click past the card). The verdict comes seconds after the request: a trace
+  // made in between came after the submit (`at` is the request's), so it doesn't count either. Only while the
+  // sitting is active: a binding write mid-resume would make the resume stand down.
   function onSubmitItem(m) {
+    if (!sittingOpen()) return;
     const verdict = coachLib.verdictOf(m.payload);
     lastVerdict = verdict ? { at: Date.now(), verdict } : null;
-    if (coachState().trace) return;
+    const c = coachState();
+    if (c.trace && !(c.trace !== 'untraced' && c.traceAt > m.at)) return;
     // The probe for a hold that didn't hold: a submit while the card is still up came past it.
     if (cardAt != null) debug.log('hold.leak', { ms: Date.now() - cardAt });
     closeCard('submitted');
     sendCoach({ kind: 'untraced-submit' }, m.at);
-    setCoach({ trace: 'untraced' });
+    setCoach({ trace: 'untraced', traceAt: null });
   }
 
   // ---- the overlay ----
@@ -966,7 +980,7 @@
     note = null;
     // Before the trace: the card's opener, and a word when the hold can't find LeetCode's Submit.
     const untraced = coachOn.trace && !coachState().trace && cardAt == null;
-    const lost = untraced && coachOn.hold && !coachState().held && !q(sel.submit);
+    const lost = untraced && coachOn.hold && !coachState().held && !!sel.submit && !q(sel.submit);
     setBadge(
       `${head} · ${synced}${lost ? ' · trace card off: Submit not found' : ''}`,
       '',
@@ -1002,6 +1016,7 @@
     sync = null;
     lastTimerRaw = null;
     lastVerdict = null;
+    note = null;
     closeCard('nav');
     paintBadge(); // the last problem's pill or badge goes now, not after the reads below
     if (!slug) return act({ type: 'nav', slug: null });

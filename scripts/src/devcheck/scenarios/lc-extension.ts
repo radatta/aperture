@@ -879,7 +879,7 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-hold',
       entry: 'extension',
       kind: 'nominal',
-      what: 'The first real Submit of a sitting is held (no request) and the trace card shown; three inputs typed and Traced, his own second click submits, and the sitting folds config + traced',
+      what: 'The first real Submit of a sitting is held (no request) and the trace card shown; three inputs typed and Traced, the user’s own second click submits, and the sitting folds config + traced',
       offDev: {
         file: 'scripts/src/lc-e2e/extension.test.ts',
         test: 'Start resets the editor, starts the timer and opens a sitting; the first Submit waits for the trace card; a submit lands with its verdict',
@@ -945,10 +945,10 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-submit-missing',
       entry: 'extension',
       kind: 'edge',
-      what: 'LeetCode’s Submit not found (or `submit: null`): nothing is held, the badge says the trace card is off, the submit is logged untraced',
+      what: 'LeetCode’s Submit not found: nothing is held, the badge says the trace card is off, the submit is logged untraced',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'with the Submit selector off (or not found), nothing is held, the badge says so, the submit is logged untraced',
+        test: 'with the Submit not found, nothing is held, the badge says so, the submit is logged untraced',
         why: `${noStep}; dev can’t move LeetCode’s button; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
@@ -956,7 +956,7 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-off',
       entry: 'extension',
       kind: 'edge',
-      what: 'The card off in Options: no card, no opener, and the sitting’s config says so',
+      what: 'The card off (its storage switch, as Options writes it): no card, no opener, and the sitting’s config says so',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'with the card off in Options: no card, no opener, the config says so',
@@ -967,7 +967,7 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-hold-off',
       entry: 'extension',
       kind: 'edge',
-      what: 'The hold off in Options: the Submit passes, and the badge’s opener still offers the card',
+      what: 'The hold off (its storage switch, as Options writes it): the Submit passes, and the badge’s opener still offers the card',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'with the hold off: the Submit passes, the opener still offers the card',
@@ -997,10 +997,76 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-coach-submit-null',
+      entry: 'extension',
+      kind: 'edge',
+      what: '`submit: null` turns the hold off without a word on the badge; the card is still offered; the submit is logged untraced',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'with the Submit selector null, the hold is off without a word, and the submit is logged untraced',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-page-marks-html',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A page marking <html> with the Submit’s selector gets no click held, and a click in the card never counts as a Submit',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a page that marks <html> with the Submit’s selector gets no click held, and clicks in the card never count as Submit',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-double-click',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A double-click on Submit: the second click is swallowed with the first, nothing submitted',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'the second click of a double-click is swallowed too: the card stays, nothing is submitted',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-card-leaves',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'The card closes on leaving the problem and when Aperture ends the sitting, sending nothing',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'the card closes on leaving the problem and when Aperture ends the sitting, sending nothing',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-live-switch',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A switch changed mid-sitting applies at once: the hold turned off lets the Submit through',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'an Options change mid-sitting applies at once: the hold turned off lets the Submit through',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-coach-late-trace',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A trace made after a submit went, before its verdict, doesn’t count: the submit is still logged untraced',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a trace made after a submit went, before its verdict, doesn’t count: the submit is still logged untraced',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
       id: 'ext-coach-safari',
       entry: 'extension',
       kind: 'nominal',
-      what: 'In Safari on leetcode.com: the first Submit held and the card shown, typing in the card lands and never reaches LeetCode, his second click submits, a keyboard Submit is logged untraced, the resubmit note, Skip, off in Options',
+      what: 'In Safari on leetcode.com: the first Submit held and the card shown, typing in the card lands and never reaches LeetCode, the user’s second click submits, a keyboard Submit is logged untraced, the resubmit note, Skip, off in Options',
       needsYou:
         'only Safari and LeetCode’s real Submit show the hold — the Safari pass with Debug mode on (the `hold`, `hold.leak` and `card` probes), then Export debug log',
     },

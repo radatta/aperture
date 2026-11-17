@@ -124,20 +124,35 @@
     let overlayShown = false;
     let badgeShown = false;
     let cardShown = false;
-    // Keys typed in the card stop at the window, in the capture phase: registered at document_start, ahead of
-    // LeetCode's own listeners, so its shortcuts (⌘↵ submits) never fire from the card. Stopping propagation
-    // leaves the typing itself alone. `keys` is the probe (README → Safari behaviour): how many reached this
-    // guard, and how many a listener ahead of it had already prevented — typing that doesn't land shows here.
+    // What's typed in the card stops at the window, in the capture phase: registered at document_start, ahead
+    // of LeetCode's own listeners, so its shortcuts (⌘↵ submits) never fire from the card, and no page
+    // listener reads the text from the composed input, composition or clipboard events. Stopping propagation
+    // leaves the typing itself alone. `keys` is the probe (README → Safari behaviour): key presses that reached
+    // this guard, how many a listener ahead of it had already prevented, and input events — typing that
+    // doesn't land shows here.
     const keys = { seen: 0, prevented: 0, inputs: 0 };
     const guard = (e) => {
       if (e.target !== card.el) return;
       if (e.type === 'keydown') {
         keys.seen++;
         if (e.defaultPrevented) keys.prevented++;
-      }
+      } else if (e.type === 'input') keys.inputs++;
       e.stopImmediatePropagation();
     };
-    for (const t of ['keydown', 'keypress', 'keyup']) window.addEventListener(t, guard, true);
+    for (const t of [
+      'keydown',
+      'keypress',
+      'keyup',
+      'beforeinput',
+      'input',
+      'compositionstart',
+      'compositionupdate',
+      'compositionend',
+      'paste',
+      'cut',
+      'copy',
+    ])
+      window.addEventListener(t, guard, true);
     const btn = (cls, ap, text, fn) => {
       const b = node('button', { class: cls, 'data-ap': ap, type: 'button' }, text);
       b.addEventListener('click', (e) => {
@@ -246,45 +261,62 @@
     // text null hides it; tone: '' | 'warn' | 'bad'; action 'reopen' makes it the pill, a button; 'trace' adds
     // the trace card's opener above it.
     // An unchanged repaint keeps the nodes: a pill rebuilt between mousedown and mouseup would lose the click.
+    // What's painted ('status', the pill's text, or null). The status line is updated in place and the opener
+    // kept while it's offered, so the 5 s repaint never swaps a node between mousedown and mouseup.
     let painted = null;
+    let statusEl = null;
+    let openerEl = null;
+    function opener() {
+      const b = node(
+        'button',
+        { class: 'badge pill opener', 'data-ap': 'trace-open', type: 'button' },
+        'Trace 3 inputs',
+      );
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.isTrusted && genuine(badge.el, styleOf(true, false))) on.openCard();
+      });
+      return b;
+    }
     function setBadge(text, tone, action) {
       badgeShown = !!text;
       badge.el.setAttribute('style', styleOf(badgeShown, false));
       order();
-      const key = JSON.stringify([text || null, tone || '', action || null]);
-      if (key === painted) return;
-      painted = key;
-      badge.body.replaceChildren();
-      if (!text) return;
-      if (action !== 'reopen') {
-        badge.body.append(
-          node('div', { class: `badge ${tone || ''}`, 'data-ap': 'badge', role: 'status' }, text),
-        );
-        if (action !== 'trace') return;
-        const opener = node(
+      if (!text || action === 'reopen') {
+        const key = text ? `pill:${text}` : null;
+        if (key === painted) return;
+        painted = key;
+        statusEl = openerEl = null;
+        badge.body.replaceChildren();
+        if (!text) return;
+        const pill = node(
           'button',
-          { class: 'badge pill opener', 'data-ap': 'trace-open', type: 'button' },
-          'Trace 3 inputs',
+          { class: 'badge pill', 'data-ap': 'reopen', type: 'button' },
+          text,
         );
-        opener.addEventListener('click', (e) => {
+        pill.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (e.isTrusted && genuine(badge.el, styleOf(true, false))) on.openCard();
+          const ok = e.isTrusted && genuine(badge.el, styleOf(true, false));
+          // A probe: a click Safari's checks refuse would otherwise do nothing, silently.
+          if (debug) debug.log('pill', { trusted: e.isTrusted, ok });
+          if (ok) on.reopen();
         });
-        return badge.body.append(opener);
+        return badge.body.append(pill);
       }
-      const pill = node(
-        'button',
-        { class: 'badge pill', 'data-ap': 'reopen', type: 'button' },
-        text,
-      );
-      pill.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const ok = e.isTrusted && genuine(badge.el, styleOf(true, false));
-        // A probe: a click Safari's checks refuse would otherwise do nothing, silently.
-        if (debug) debug.log('pill', { trusted: e.isTrusted, ok });
-        if (ok) on.reopen();
-      });
-      badge.body.append(pill);
+      if (painted !== 'status') {
+        painted = 'status';
+        badge.body.replaceChildren();
+        statusEl = node('div', { 'data-ap': 'badge', role: 'status' });
+        openerEl = null;
+        badge.body.append(statusEl);
+      }
+      if (statusEl.textContent !== text) statusEl.textContent = text;
+      statusEl.className = `badge ${tone || ''}`;
+      if (action === 'trace' && !openerEl) badge.body.append((openerEl = opener()));
+      else if (action !== 'trace' && openerEl) {
+        openerEl.remove();
+        openerEl = null;
+      }
     }
     // LeetCode may rebuild <html>'s children; the content script's poll calls this to put them back.
     // The shown one last (the overlay over the badge), as soon as either changes and on every poll.
@@ -332,7 +364,6 @@
       for (const [k, label] of TRACE_FIELDS) {
         const id = `ap-trace-${k}`;
         const ta = node('textarea', { id, 'data-ap': `trace-${k}`, maxlength: '300', rows: '2' });
-        ta.addEventListener('input', () => keys.inputs++);
         fields[k] = ta;
         panel.append(node('label', { for: id }, label), ta);
       }
@@ -377,7 +408,9 @@
     let cardValues = () => ({});
     // What the card holds now (a Submit clicked with the card open takes it as the trace), and the probe.
     const cardState = () => ({ values: cardShown ? cardValues() : null, keys: { ...keys } });
-    return { render, setBadge, ensureAttached, renderCard, cardState };
+    // Whether a node is one of our hosts (a click there is never LeetCode's).
+    const owns = (el) => el === overlay.el || el === badge.el || el === card.el;
+    return { render, setBadge, ensureAttached, renderCard, cardState, owns };
   }
 
   (root.ApertureLC = root.ApertureLC || {}).overlay = { create, STEP_TEXT };
