@@ -63,9 +63,11 @@ describe('createMcpClient', () => {
   it('exposes exactly the declared reads and writes', () => {
     const c = client(server({}));
     expect(Object.keys(c.reads).sort()).toEqual([
+      'coachStats',
       'getAttachmentDownloadUrl',
       'getCalibration',
       'getDay',
+      'getProblem',
       'getSitting',
       'leetcodeToday',
       'listAttachments',
@@ -74,8 +76,10 @@ describe('createMcpClient', () => {
       'listLog',
       'listPlaceTasks',
       'listPlaces',
+      'listProblems',
       'listSeries',
       'listSittings',
+      'listStories',
       'listTasks',
       'liveSitting',
       'searchLog',
@@ -89,12 +93,15 @@ describe('createMcpClient', () => {
       'createTask',
       'createTaskExpectingRefusal',
       'deleteAttachment',
+      'deleteAttempt',
+      'deleteAttemptUnknown',
       'deleteTask',
       'logAttempt',
       'markPeeked',
       'markPeekedUnknown',
       'setCauseTag',
       'setCauseTagUnknown',
+      'setFocusPattern',
       'splitTask',
       'stopSeries',
       'stopSeriesUnknown',
@@ -102,6 +109,46 @@ describe('createMcpClient', () => {
       'updateCategory',
       'updateTask',
     ]);
+  });
+
+  it('delete_attempt only on a recorded attempt, resolved when it went; set_focus_pattern recorded, then cleared', async () => {
+    const ledger = memLedger([{ run: 'r0', op: 'created', id: 'A1', via: 'coach:attempt' }]);
+    const fetch = server({
+      delete_attempt: json({ id: 'A1', deleted: true, slug: 's' }),
+      set_focus_pattern: json({
+        override: null,
+        focus: { patternId: 'graphs', day: 1, source: 'override' },
+      }),
+    });
+    const c = client(fetch, ledger);
+    await expect(c.writes.deleteAttempt('T1')).rejects.toThrow(); // a task id, not an attempt
+    expect(await c.writes.deleteAttempt('A1')).toMatchObject({ deleted: true });
+    expect(ledger.entries.at(-1)).toMatchObject({ op: 'deleted', id: 'A1' });
+    await c.writes.setFocusPattern('graphs');
+    expect(ledger.entries.at(-1)).toMatchObject({
+      op: 'created',
+      id: 'coach-focus:r1',
+      via: 'coach:focus',
+    });
+    await c.writes.setFocusPattern('graphs'); // a repeat records nothing new
+    expect(ledger.entries.filter((x) => x.id === 'coach-focus:r1')).toHaveLength(1);
+    await c.writes.setFocusPattern(null);
+    expect(ledger.entries.at(-1)).toMatchObject({ op: 'deleted', id: 'coach-focus:r1' });
+    expect(sentTools(fetch)).toEqual([
+      'delete_attempt',
+      'set_focus_pattern',
+      'set_focus_pattern',
+      'set_focus_pattern',
+    ]);
+  });
+
+  it('set_focus_pattern refused at the param check resolves the record it made', async () => {
+    const ledger = memLedger();
+    const fetch = vi.fn<FetchLike>(async () =>
+      http(200, { jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad pattern' } }),
+    );
+    await expect(client(fetch, ledger).writes.setFocusPattern('graph')).rejects.toThrow();
+    expect(ledger.entries.map((x) => x.op)).toEqual(['created', 'deleted']);
   });
 
   it('reads a place’s list by slug, and passes place on create_task', async () => {

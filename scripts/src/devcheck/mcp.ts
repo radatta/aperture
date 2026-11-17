@@ -5,7 +5,9 @@
 // `{content: [{type: 'text', text}], isError?}` inside HTTP 200, the text JSON (or 'ok').
 import {
   COACH_ATTEMPT_VIA,
+  COACH_FOCUS_VIA,
   COACH_SLOT_VIA,
+  coachFocusId,
   coachSlotId,
   MCP_SERIES_VIA,
   ledgerKind,
@@ -72,6 +74,40 @@ export interface DevLoggedAttempt {
   day: string;
   outcome: string;
   nextDue: { dueDay: string; track: string } | null;
+}
+// What the coach's history and stats reads answer (coachTools.ts) — the fields the scenario reads.
+export interface DevRate {
+  hit: number;
+  of: number;
+  pct: number | null;
+}
+export interface DevProblemRow {
+  slug: string;
+  patternId: string;
+  attempts: number;
+  peeked: boolean;
+  reSolve: { track: string; dueDay: string | null; graduated: boolean } | null;
+}
+export interface DevProblemRead {
+  problem: { slug: string; title: string; onRoadmap: boolean; url: string };
+  record: { attempts: number } | null;
+  tries?: { day: string; outcome: string; sittingIds: string[]; attemptIds: string[] }[];
+  sittings?: { id: string }[];
+}
+export interface DevCoachStats {
+  from: string | null;
+  to: string;
+  attempts: number;
+  problems: number;
+  firstTry: DevRate;
+  resolve: DevRate;
+  weeks: { week: string; attempts: number }[];
+  patterns: { patternId: string; rank: number | null; attempts: number }[];
+  note: string;
+}
+export interface DevFocusSet {
+  override: { pattern: string; since: string } | null;
+  focus: { patternId: string; day: number; source: string };
 }
 // live_sitting's slot in today's plan.
 export interface DevLiveSlot {
@@ -292,6 +328,19 @@ export function createMcpClient({
     getDay: (args: Record<string, unknown>) => data<DevDayView>('get_day', args),
     leetcodeToday: (args: Record<string, unknown> = {}) =>
       data<DevCoachToday>('leetcode_today', args),
+    // The coach's history, stats and story reads: pure reads, args as given.
+    listProblems: (args: Record<string, unknown> = {}) =>
+      data<{ today?: string; problems: DevProblemRow[]; more: boolean; note?: string }>(
+        'list_problems',
+        args,
+      ),
+    getProblem: (args: Record<string, unknown>) => data<DevProblemRead>('get_problem', args),
+    coachStats: (args: Record<string, unknown> = {}) => data<DevCoachStats>('coach_stats', args),
+    listStories: () =>
+      data<{
+        stories: { id: string; title: string; situation: string; competencies: string[] }[];
+        note?: string;
+      }>('list_stories', {}),
   };
 
   const writes = {
@@ -495,6 +544,37 @@ export function createMcpClient({
         ledger.append({ run, op: 'created', id, via: COACH_SLOT_VIA, title: origin });
       return data<DevCoachToday>('swap_slot', args);
     },
+    // The focus override, as api.ts's setCoachFocus: recorded before setting it, resolved when cleared.
+    async setFocusPattern(pattern: unknown): Promise<DevFocusSet> {
+      const id = coachFocusId(run);
+      const fresh = typeof pattern === 'string' && !pendingIds(ledger.read()).includes(id);
+      if (fresh) ledger.append({ run, op: 'created', id, via: COACH_FOCUS_VIA, title: pattern });
+      let out: DevFocusSet;
+      try {
+        out = await data<DevFocusSet>('set_focus_pattern', { pattern });
+      } catch (err) {
+        // Refused at the param check: nothing was set, so the record this call made resolves now.
+        if (fresh && err instanceof McpRpcError && err.code === PARAM_ERROR)
+          ledger.append({ run, op: 'deleted', id });
+        throw err;
+      }
+      if (pattern === null && ledger.has(id)) ledger.append({ run, op: 'deleted', id });
+      return out;
+    },
+    // delete_attempt on an attempt this run logged; the ledger resolves when the tool says it went.
+    async deleteAttempt(
+      id: string,
+    ): Promise<{ id: string; deleted: boolean; slug?: string; nextDue?: unknown }> {
+      assertLedger(id, 'coachAttempt');
+      const out = await data<{ id: string; deleted: boolean; slug?: string }>('delete_attempt', {
+        id,
+      });
+      if (out.deleted) ledger.append({ run, op: 'deleted', id });
+      return out;
+    },
+    // delete_attempt on an id this run never logged: must write nothing (lc-coach mcp-b-bad-args).
+    deleteAttemptUnknown: (unknownId: unknown) =>
+      data<{ id: string; deleted: boolean }>('delete_attempt', { id: unknownId }),
     async logAttempt(
       attempts: Record<string, unknown>[],
     ): Promise<{ attempts: DevLoggedAttempt[] }> {

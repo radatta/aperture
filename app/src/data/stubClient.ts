@@ -133,6 +133,8 @@ import {
   normalizeReviewPatch,
   planDay,
   listRecords,
+  coachStats,
+  normalizeStatsRange,
   attemptsOf,
   catalogProblem,
   applySlotChange,
@@ -144,6 +146,7 @@ import {
   COACH_PARAMS,
   normalizeSittingStart,
   draftMistakes,
+  draftCause,
   timelineOf,
   planSittingStart,
   reserveBudget,
@@ -171,6 +174,8 @@ import type {
   CoachFocus,
   CoachInput,
   CoachSlotInput,
+  CoachStats,
+  CoachStatsRange,
   CoachToday,
   PatternId,
   ProblemRecord,
@@ -1178,6 +1183,15 @@ class StubClient implements ApiClient {
       attempts: ci.attempts,
     });
   }
+  async getCoachStats(range?: CoachStatsRange): Promise<CoachStats> {
+    const r = normalizeStatsRange(range);
+    const ci = this.coachInput();
+    return coachStats(
+      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+      ci.today,
+      r,
+    );
+  }
   private changeCoachDay(fn: (cur: CoachDay, ci: CoachInput) => CoachDay): CoachToday {
     const ci = this.coachInput();
     const cur = ci.days.find((d) => d.day === ci.today) ?? {
@@ -1264,7 +1278,18 @@ class StubClient implements ApiClient {
           (d.input && got ? `${d.input} → ${got}` : d.input || got || 'no case captured');
         return `${what}: ${why}`;
       });
-    return { ok: true, mistakes: draftMistakes(lines) ?? [] }; // the backend's own fit: cut to 160, first 5
+    // The cause, by a fixed rule standing in for the model's pick: a first submit that failed with no Run before it
+    // reads as no-trace; anything else proposes nothing.
+    const first = judged.findIndex((x) => x.type === 'submit');
+    const untraced =
+      first >= 0 &&
+      judged[first]!.verdict.verdict !== 'accepted' &&
+      !judged.slice(0, first).some((x) => x.type === 'run');
+    return {
+      ok: true,
+      mistakes: draftMistakes(lines) ?? [], // the backend's own fit: cut to 160, first 5
+      cause: draftCause(untraced ? 'no-trace' : null),
+    };
   }
   async deleteSitting(id: string): Promise<void> {
     if (!this.find(this.store.sittings, id)) return;

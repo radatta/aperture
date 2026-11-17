@@ -49,8 +49,9 @@ const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 
 // The sitting's review (docs/areas/recruiting → Review): the user's one-liner, how much help it took (Peeked is
 // the coach's peeked), the coach's one cause tag, the mistakes, how it went, their own pattern tags and the prep
-// target — one Save for all of it. "Draft with Claude" only proposes mistake lines, unticked; only the ones they
-// tick (edited or not) are saved. A failed save keeps every field and says why.
+// target — one Save for all of it. "Draft with Claude" only proposes: mistake lines, unticked, of which only the
+// ones they tick (edited or not) are saved; and a cause, which marks its chip and is saved only if tapped. A
+// failed save keeps every field and says why.
 //
 // Help and the cause are also Claude's to set over MCP (mark_peeked, set_cause_tag), maybe after this form
 // opened. So until the user touches one, it follows the stored review as it refreshes, and Save doesn't send it —
@@ -88,12 +89,15 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const setPrepTarget = useSetSittingPrepTarget();
   const drafting = useDraftSittingReview();
   const [draftNote, setDraftNote] = useState<string | null>(null);
+  // The draft's cause: a proposal that marks its chip and never picks it — saved only if tapped, like a line.
+  const [proposed, setProposed] = useState<CauseTag | null>(null);
   const id = useId();
   const chips = useRef<HTMLUListElement>(null);
   const tagBox = useRef<HTMLInputElement>(null);
   const [focusMistake, setFocusMistake] = useState<number | null>(null); // the line Add a mistake made
 
   const ticked = draft.filter((d) => d.ticked && d.text.trim());
+  const showProposal = proposed !== null && proposed !== cause;
   const insightLen = folded(insight).length;
   const insightOver = insightLen > REVIEW_INSIGHT_MAX;
   const howOver = notesValue(howItWent).length > REVIEW_HOW_MAX; // multi-line: the server keeps line breaks
@@ -121,9 +125,11 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
 
   async function draftIt() {
     setDraftNote(null);
+    setProposed(null);
     try {
       const out = await drafting.mutateAsync(sitting.id);
       if (!out.ok) return setDraftNote(DRAFT_FAILED[out.reason]);
+      setProposed(out.cause ?? null);
       if (!out.mistakes.length) return setDraftNote('Claude found nothing to add.');
       setDraft(out.mistakes.map((text) => ({ text, ticked: false })));
     } catch {
@@ -178,6 +184,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       setMistakes(normal?.mistakes ?? []);
       setTags(normal?.tags ?? []);
       setDraft([]);
+      setProposed(null);
       setTagText('');
       setTouched({ help: false, cause: false });
       setStatus('Saved.');
@@ -255,6 +262,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
               type="button"
               aria-pressed={cause === c}
               aria-disabled={busy || undefined}
+              aria-describedby={showProposal && proposed === c ? `${id}-proposed` : undefined}
               onClick={() => {
                 if (busy) return;
                 setCause(cause === c ? null : c);
@@ -264,12 +272,22 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
                 'rounded-full border px-3 py-1.5 text-sm transition',
                 cause === c
                   ? 'border-teal-soft bg-teal-soft font-medium text-ink'
-                  : 'border-line bg-surface text-ink-muted hover:text-ink',
+                  : showProposal && proposed === c
+                    ? 'border-dashed border-teal bg-surface text-ink'
+                    : 'border-line bg-surface text-ink-muted hover:text-ink',
               )}
             >
               {CAUSE_NAMES[c]}
             </button>
           ))}
+        </div>
+        {/* Always mounted, so a screen reader hears the proposal when a draft brings one. */}
+        <div aria-live="polite">
+          {showProposal && (
+            <Text size="xs" tone="muted" id={`${id}-proposed`}>
+              Claude suggests {CAUSE_NAMES[proposed]} — tap it to use it.
+            </Text>
+          )}
         </div>
       </div>
 

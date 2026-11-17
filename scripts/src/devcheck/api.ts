@@ -325,7 +325,8 @@ export interface DevSittingReview {
   tags: string[];
   draftUsed: boolean;
 }
-export type DevReviewDraft = { ok: true; mistakes: string[] } | { ok: false; reason: string };
+export type DevReviewDraft =
+  { ok: true; mistakes: string[]; cause?: string | null } | { ok: false; reason: string };
 export interface DevSittingDetail {
   sitting: DevSitting;
   live: {

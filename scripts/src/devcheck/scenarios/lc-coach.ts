@@ -1,12 +1,13 @@
 // The LeetCode coach on dev (docs/areas/recruiting/coach.md): today's plan through the API and leetcode_today,
 // a sitting on a slot moving it in progress then done, an off-plan sitting leaving the queue alone, the review
 // merge, the four MCP writes as the test user, the floor and focus, and the schedule over backdated attempts; then
-// the app (PR A-app): the Today card, the review's cause and Peeked, F169, Home's morning line.
+// the app (PR A-app): the Today card, the review's cause and Peeked, F169, Home's morning line; then PR B's history,
+// stats, story and focus tools, delete_attempt, and the review draft's cause (one real Haiku call, slow tier).
 // Everything this run makes is ledgered by id and cleaned by the pipeline: sittings (with their reps), rolls and the
-// roll link, attempts (deleteCoachAttempt), slot changes (restored), the floor (off) and the focus (cleared). Problem
-// slugs outside the catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The
+// roll link, attempts (deleteCoachAttempt), slot changes (restored), the floor (off), the focus (cleared) and a story.
+// Problem slugs outside the catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The
 // schedule step's backdated attempts change the plan for any read after it, so the app steps after it read the plan
-// live, never an earlier step's.
+// live, never an earlier step's; PR B's reads run over what it logged.
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
@@ -93,6 +94,12 @@ export const lcCoach: Scenario = {
   id: 'lc-coach',
   title: 'The LeetCode coach: today’s plan, slots by sitting, and the MCP tools',
   tiers: ['full'],
+  // The draft's cause (a real Haiku call) runs when a branch touches the draft or this scenario.
+  slowPaths: [
+    'lambdas/src/anthropic/sittingReviewPrompt.ts',
+    'packages/shared/src/sittings.ts',
+    'scripts/src/devcheck/scenarios/lc-coach.ts',
+  ],
   rows: [
     {
       id: 'plan',
@@ -332,6 +339,78 @@ export const lcCoach: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Change on the focus line: the coach’s pick clears an override, a pattern sets one, Cancel closes it',
+    },
+    // --- PR B: the history, stats, story and focus tools, delete_attempt, the draft's cause ---
+    {
+      id: 'mcp-tools-b',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'tools/list has the history, stats and story reads and the two newer writes (set_focus_pattern, delete_attempt)',
+    },
+    {
+      id: 'mcp-due',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"what’s due?" — list_problems with due: true is the re-solve queue, oldest due first; a graduated problem isn’t in it',
+    },
+    {
+      id: 'mcp-problem',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'get_problem reads one problem back: each day tried with its logged-attempt ids, and its re-solve state',
+    },
+    {
+      id: 'mcp-stats',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"how am I doing?" — coach_stats counts first tries and re-solves per ISO week and per pattern; a range narrows it',
+    },
+    {
+      id: 'mcp-stories',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'list_stories answers the story bank (a list, or empty with a note)',
+    },
+    {
+      id: 'mcp-focus',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"let’s do graphs" — set_focus_pattern holds it from today, day 1 of 3, and leetcode_today agrees; null hands back to the engine',
+    },
+    {
+      id: 'mcp-delete',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"undo that log" — delete_attempt removes a logged attempt and its problem leaves the list; a repeat writes nothing',
+    },
+    {
+      id: 'mcp-b-bad-args',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'An unknown pattern or a bad id is a param error; an unknown problem is an error; an id nobody logged deletes nothing',
+    },
+    {
+      id: 'draft-cause',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'The review draft (one Haiku call) answers a cause beside its lines — a tag or null — and writes nothing',
+    },
+    {
+      id: 'ui-draft-cause',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The draft’s cause marks its chip (“Claude suggests …”) and never picks it: a Save keeps the old cause; a tap picks it and the Save stores it',
+    },
+    {
+      id: 'mcp-b-empty',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'With nothing tried, list_problems is an empty list with a note',
+      offDev: {
+        file: 'lambdas/src/mcp/coachTools.test.ts',
+        test: 'is an empty list with a note',
+        why: why.history,
+      },
     },
   ],
   steps: [
@@ -1067,6 +1146,258 @@ export const lcCoach: Scenario = {
         if (await c.getByLabel('Focus pattern').count()) fail('Cancel left the picker open');
         await ctx.shot('lc-coach-focus-pick');
         await ctx.api.writes.setCoachFocus(null);
+      },
+    },
+
+    // --- PR B. After the app steps: reads over what the scheduler logged; the draft last. ---
+    {
+      id: 'b-reads',
+      title: 'The history, stats and story reads over what the scheduler step logged',
+      entry: 'mcp',
+      proves: ['mcp-tools-b', 'mcp-due', 'mcp-problem', 'mcp-stats', 'mcp-stories'],
+      async run(ctx) {
+        const names = await ctx.mcp.reads.toolsList();
+        for (const n of [
+          'list_problems',
+          'get_problem',
+          'coach_stats',
+          'list_stories',
+          'set_focus_pattern',
+          'delete_attempt',
+        ])
+          if (!names.includes(n)) fail(`tools/list has no ${n}`);
+        const d = (n: number) => addDays(today(), n);
+        const [step, solved, failed, grad] = ['step', 'solved', 'failed', 'grad'].map((w) =>
+          slugOf(ctx, w),
+        );
+        // The scheduler step left step and solved due today, failed due two days ago, grad graduated.
+        const due = await ctx.mcp.reads.listProblems({ due: true, pattern: 'other', limit: 100 });
+        const mine = due.problems
+          .map((p) => p.slug)
+          .filter((x) => [step, solved, failed, grad].includes(x));
+        if (
+          mine[0] !== failed ||
+          !mine.includes(step!) ||
+          !mine.includes(solved!) ||
+          mine.includes(grad!)
+        )
+          fail(`due list: ${mine.join(',')}`);
+        for (let i = 1; i < due.problems.length; i++)
+          if (
+            (due.problems[i]!.reSolve?.dueDay ?? '') < (due.problems[i - 1]!.reSolve?.dueDay ?? '')
+          )
+            fail('the due list isn’t oldest first');
+        const g = await ctx.mcp.reads.getProblem({ slug: grad });
+        const tries = g.tries ?? [];
+        if (g.record?.attempts !== 4 || tries.length !== 4 || g.problem.onRoadmap)
+          fail(`get_problem: ${JSON.stringify(g).slice(0, 300)}`);
+        if (tries.some((x) => x.attemptIds.length !== 1)) fail('a try has no logged-attempt id');
+        const all = await ctx.mcp.reads.coachStats({ from: d(-40) });
+        if (all.attempts < 10 || all.firstTry.of < 4 || all.resolve.of < 6 || !all.note)
+          fail(`coach_stats: ${JSON.stringify(all).slice(0, 300)}`);
+        if (!all.patterns.some((p) => p.patternId === 'other'))
+          fail('coach_stats has no pattern for the logged problems');
+        const weeks = all.weeks.map((w) => w.week);
+        if (weeks.join() !== [...weeks].sort().join()) fail(`weeks out of order: ${weeks.join()}`);
+        const one = await ctx.mcp.reads.coachStats({ from: d(-40), to: d(-40) });
+        if (one.to !== d(-40) || one.weeks.length !== 1 || one.firstTry.hit < 1)
+          fail(`a one-day range: ${JSON.stringify(one).slice(0, 300)}`);
+        const story = await ctx.api.writes.createStory(titleOf(ctx, 'story'));
+        await ctx.api.writes.updateStory(story.id, {
+          situation: `devcheck ${ctx.nonce}`,
+          competencyTags: ['ownership'],
+        });
+        // The list read is eventually consistent: give a just-written story a moment.
+        let listed:
+          Awaited<ReturnType<typeof ctx.mcp.reads.listStories>>['stories'][number] | undefined;
+        for (let i = 0; i < 20; i++) {
+          listed = (await ctx.mcp.reads.listStories()).stories.find((x) => x.id === story.id);
+          if (listed?.situation === `devcheck ${ctx.nonce}`) break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        if (
+          listed?.title !== titleOf(ctx, 'story') ||
+          listed.situation !== `devcheck ${ctx.nonce}` ||
+          listed.competencies.join() !== 'ownership'
+        )
+          fail(`list_stories: ${JSON.stringify(listed)}`);
+      },
+    },
+    {
+      id: 'b-focus',
+      title: 'set_focus_pattern on, read back through leetcode_today, then cleared',
+      entry: 'mcp',
+      proves: ['mcp-focus'],
+      async run(ctx) {
+        const on = await ctx.mcp.writes.setFocusPattern('graphs');
+        if (on.override?.since !== today() || on.focus.patternId !== 'graphs' || on.focus.day !== 1)
+          fail(`set_focus_pattern: ${JSON.stringify(on)}`);
+        const t = (await ctx.mcp.reads.leetcodeToday()) as DevCoachToday & {
+          focus: { patternId?: string; source: string };
+        };
+        if (t.focus.patternId !== 'graphs' || t.focus.source !== 'override')
+          fail(`leetcode_today's focus: ${JSON.stringify(t.focus)}`);
+        const off = await ctx.mcp.writes.setFocusPattern(null);
+        if (off.override !== null || off.focus.source !== 'engine')
+          fail(`clearing: ${JSON.stringify(off)}`);
+      },
+    },
+    {
+      id: 'b-delete',
+      title: 'delete_attempt on an attempt this run logged, twice; bad arguments',
+      entry: 'mcp',
+      proves: ['mcp-delete', 'mcp-b-bad-args'],
+      async run(ctx) {
+        const slug = slugOf(ctx, 'undo');
+        const logged = await ctx.mcp.writes.logAttempt([{ slug, outcome: 'solved' }]);
+        const id = logged.attempts[0]?.id ?? fail('log_attempt stored nothing');
+        const gone = await ctx.mcp.writes.deleteAttempt(id);
+        if (!gone.deleted || gone.slug !== slug) fail(`delete_attempt: ${JSON.stringify(gone)}`);
+        if (
+          (await ctx.mcp.reads.listProblems({ limit: 100 })).problems.some((p) => p.slug === slug)
+        )
+          fail('the deleted attempt’s problem is still listed');
+        if ((await ctx.mcp.writes.deleteAttemptUnknown(id)).deleted)
+          fail('a repeated delete_attempt said it deleted');
+        const before = (await ctx.api.reads.listCoachAttempts()).length;
+        if ((await ctx.mcp.writes.deleteAttemptUnknown(devUlid())).deleted)
+          fail('delete_attempt on an id nobody logged said it deleted');
+        await expectParamError('delete_attempt nope', () =>
+          ctx.mcp.writes.deleteAttemptUnknown('nope'),
+        );
+        await expectParamError('set_focus_pattern graph', () =>
+          ctx.mcp.writes.setFocusPattern('graph'),
+        );
+        await expectParamError('coach_stats from after to', () =>
+          ctx.mcp.reads.coachStats({ from: today(), to: addDays(today(), -1) }),
+        );
+        await expectParamError('coach_stats from monday', () =>
+          ctx.mcp.reads.coachStats({ from: 'monday' }),
+        );
+        await expectParamError('get_problem Two Sum', () =>
+          ctx.mcp.reads.getProblem({ slug: 'Two Sum' }),
+        );
+        await expectParamError('list_problems limit 0', () =>
+          ctx.mcp.reads.listProblems({ limit: 0 }),
+        );
+        try {
+          await ctx.mcp.reads.getProblem({ slug: slugOf(ctx, 'never') });
+          fail('get_problem on an unknown problem answered');
+        } catch (err) {
+          if (!/No record of/.test(String(err))) throw err;
+        }
+        // Only a growth is a write: a stale read may still count the attempt deleted just above.
+        if ((await ctx.api.reads.listCoachAttempts()).length > before)
+          fail('a refused call wrote an attempt');
+        if ((await ctx.api.reads.getCoachToday()).focus.source !== 'engine')
+          fail('a refused focus call set a focus');
+      },
+    },
+    {
+      id: 'b-draft-cause',
+      title: 'A sitting with a failed submit; the review draft answers its lines and a cause',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['draft-cause'],
+      async run(ctx) {
+        const roll = await ctx.api.writes.upsertRoll({
+          name: titleOf(ctx, 'draft-roll'),
+          estimateMin: 45,
+        });
+        await ctx.api.writes.linkLeetcodeRoll(roll.id);
+        try {
+          const { sitting } = await ctx.api.writes.lcSittingStart(
+            start(slugOf(ctx, 'draft'), titleOf(ctx, 'draft')),
+          );
+          await ctx.api.writes.lcSittingEvents(sitting.id, [
+            {
+              id: devUlid(),
+              type: 'submit',
+              at: Date.now(),
+              payload: {
+                request: { lang: 'python3', typed_code: 'def f(a):\n    return a[0]' },
+                result: {
+                  status_code: 15,
+                  status_msg: 'Runtime Error',
+                  runtime_error: 'IndexError: list index out of range',
+                  last_testcase: '[]',
+                  expected_output: '0',
+                  total_correct: 2,
+                  total_testcases: 3,
+                },
+              },
+            },
+          ]);
+          await finish(ctx, sitting.id, sitting.repTaskId, false);
+          let out = await ctx.api.reads.draftSittingReview(sitting.id);
+          // An outage isn't this feature's bug — one more try; a second failure is the row's.
+          if (!out.ok && ['timeout', 'network', 'api'].includes(out.reason)) {
+            ctx.log(`the real draft failed once (${out.reason}); one more try`);
+            out = await ctx.api.reads.draftSittingReview(sitting.id);
+          }
+          const draft = out.ok ? out : fail(`draft failed: ${out.reason}`);
+          if (!('cause' in draft)) fail('the draft has no cause field');
+          const tags = ['no-trace', 'api-slip', 'boundary', 'off-by-one', 'quit-early'];
+          if (draft.cause !== null && !tags.includes(draft.cause ?? ''))
+            fail(`draft cause: ${String(draft.cause)}`);
+          ctx.log(`draft cause: ${String(draft.cause)}; ${draft.mistakes.length} line(s)`);
+          const after = await ctx.api.reads.getSitting(sitting.id);
+          if (after.sitting.review) fail('the draft wrote a review');
+        } finally {
+          await ctx.api.writes.linkLeetcodeRoll(null);
+        }
+      },
+    },
+    {
+      id: 'ui-draft-cause',
+      title: 'The review form: a draft’s cause is marked, not picked; saved only once tapped',
+      entry: 'ui',
+      proves: ['ui-draft-cause'],
+      async run(ctx) {
+        const id = app.reviewId || fail('no review sitting — the ui-review step failed');
+        await ctx.ui.goto(`/recruiting/sittings/${id}`);
+        const p = ctx.page;
+        const chip = (name: string) => p.getByRole('button', { name, exact: true });
+        await chip('Boundary').waitFor({ timeout: 15_000 });
+        // The model can't be told what to say: the draft's reply is the harness's (b-draft-cause proves the real one).
+        const canned = await ctx.intercept('draftSittingReview', {
+          status: 200,
+          times: 1,
+          body: { ok: true, mistakes: ['devcheck draft line'], cause: 'off-by-one' },
+        });
+        await p.getByRole('button', { name: 'Draft with Claude' }).click();
+        await ctx.ui.expectText('Claude suggests Off by one — tap it to use it.', 10_000);
+        await canned.release();
+        if ((await chip('Off by one').getAttribute('aria-pressed')) !== 'false')
+          fail('the draft’s cause was picked for them');
+        if ((await chip('Boundary').getAttribute('aria-pressed')) !== 'true')
+          fail('the draft moved the saved cause');
+        await ctx.shot('lc-coach-draft-cause');
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        // getSitting is a consistent read: a stale list can't answer the old cause over a wrong write.
+        const causeNow = async () =>
+          ((await ctx.api.reads.getSitting(id)).sitting.review as { cause?: string } | null)?.cause;
+        const first = await causeNow();
+        if (first !== 'boundary') fail(`an untapped proposal was saved: ${String(first)}`);
+        const again = await ctx.intercept('draftSittingReview', {
+          status: 200,
+          times: 1,
+          body: { ok: true, mistakes: ['devcheck draft line'], cause: 'off-by-one' },
+        });
+        await p.getByRole('button', { name: 'Draft with Claude' }).click();
+        await ctx.ui.expectText('Claude suggests Off by one — tap it to use it.', 10_000);
+        await again.release();
+        await chip('Off by one').click();
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        // "Saved." may still be the first Save's line for a moment: wait for the second to land.
+        let tapped = await causeNow();
+        for (let i = 0; i < 40 && tapped !== 'off-by-one'; i++) {
+          await new Promise((r) => setTimeout(r, 250));
+          tapped = await causeNow();
+        }
+        if (tapped !== 'off-by-one') fail(`the tapped cause: ${String(tapped)}`);
       },
     },
     noConsoleErrors,

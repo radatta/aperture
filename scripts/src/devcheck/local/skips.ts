@@ -58,6 +58,10 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason:
       'local: the real Haiku parse is dev’s (parsing is off locally, so a spoken line saves as typed) — runs on dev',
   },
+  'lc-coach': {
+    steps: ['b-draft-cause'],
+    reason: 'local: the real Haiku review draft is dev’s (the model is off locally) — runs on dev',
+  },
   'dev-slot-b': {
     steps: ['shell', 'push'],
     reason:

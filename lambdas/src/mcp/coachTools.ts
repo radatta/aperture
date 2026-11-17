@@ -11,14 +11,31 @@ import {
   HELP_LEVELS,
   LOG_ATTEMPTS_MAX,
   PATTERN_NAMES,
+  PATTERNS,
+  catalogProblem,
+  isPatternId,
+  patternOfTags,
   sittingMinutes,
+  sittingProblemUrl,
 } from '@aperture/shared';
-import type { CoachAttempt, CoachSlot, CoachToday, ProblemRecord, Sitting } from '@aperture/shared';
+import type {
+  CoachAttempt,
+  CoachFocus,
+  CoachSlot,
+  CoachStats,
+  CoachToday,
+  PatternId,
+  ProblemRecord,
+  Rate,
+  Sitting,
+  Story,
+} from '@aperture/shared';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
-// The LeetCode coach for Claude (docs/areas/recruiting/coach.md; docs/areas/mcp → Tools). leetcode_today reads;
-// mark_peeked, set_cause_tag, swap_slot and log_attempt write the user's data, each only on their yes.
+// The LeetCode coach for Claude (docs/areas/recruiting/coach.md; docs/areas/mcp → Tools). leetcode_today,
+// list_problems, get_problem, coach_stats and list_stories read; mark_peeked, set_cause_tag, swap_slot,
+// log_attempt, set_focus_pattern and delete_attempt write the user's data, each only on their yes.
 
 // Every write's description opens with this, so the posture travels with the tool (MCP has no annotations).
 const ASK_FIRST =
@@ -129,6 +146,112 @@ const optSittingId = (v: unknown) => {
     throw new RpcParamError('"sittingId" must be a sitting id — list_sittings gives them');
   return v as string | undefined;
 };
+
+// --- The read tools' views ---
+const PROBLEMS_LIMIT_MAX = 100;
+const scheduleView = (r: ProblemRecord) =>
+  r.schedule
+    ? {
+        track: r.schedule.track,
+        step: r.schedule.step + 1,
+        of: COACH_PARAMS.gaps[r.schedule.track].length,
+        dueDay: r.schedule.graduated ? null : r.schedule.dueDay,
+        dueBy: r.schedule.dueBy,
+        graduated: r.schedule.graduated,
+      }
+    : null;
+const isDue = (r: ProblemRecord, today: string) =>
+  !!r.schedule && !r.schedule.graduated && r.schedule.dueDay <= today;
+const problemRow = (r: ProblemRecord) => ({
+  slug: r.slug,
+  title: r.title,
+  pattern: PATTERN_NAMES[r.pattern],
+  patternId: r.pattern,
+  difficulty: r.difficulty,
+  attempts: r.attempts,
+  firstDay: r.firstDay,
+  firstOutcome: r.firstOutcome,
+  lastDay: r.lastDay,
+  lastOutcome: r.lastOutcome,
+  everAccepted: r.everAccepted,
+  peeked: r.peeked,
+  cause: r.cause,
+  reSolve: scheduleView(r),
+});
+// A sitting on the problem, short: get_sitting reads one in full.
+const problemSitting = (s: Sitting, at: number) => ({
+  id: s.id,
+  day: s.day,
+  status: s.status,
+  open: isSittingOpen(s, at),
+  minutes: sittingMinutes(s, at),
+  submits: s.summary.submits,
+  runs: s.summary.runs,
+  accepted: s.summary.firstAcceptedAt !== null,
+  firstSubmitAccepted: s.summary.firstSubmit ? s.summary.firstSubmit.verdict === 'accepted' : null,
+  review: s.review
+    ? { help: s.review.help, cause: s.review.cause ?? null, test: s.review.test === true }
+    : null,
+});
+const pct = (r: Rate) => (r.of >= STATS_PCT_MIN ? Math.round((100 * r.hit) / r.of) : null);
+const rateView = (r: Rate) => ({ ...r, pct: pct(r) });
+const STATS_PCT_MIN = 5; // under this many tries a rate is only a count
+const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried. \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top as of now, whatever the range: the plan's next pick unless it is the pattern just held or they set one. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock scores are not in this yet.`;
+const statsView = (s: CoachStats) => ({
+  from: s.from,
+  to: s.to,
+  activeDays: s.activeDays,
+  problems: s.problems,
+  attempts: s.attempts,
+  firstTry: rateView(s.firstTry),
+  resolve: rateView(s.resolve),
+  peeked: s.peeked,
+  causes: s.causes,
+  untagged: s.untagged,
+  weeks: s.weeks.map((w) => ({
+    week: w.week,
+    attempts: w.attempts,
+    firstTry: rateView(w.firstTry),
+    resolve: rateView(w.resolve),
+  })),
+  patterns: s.patterns.map((p) => ({
+    pattern: PATTERN_NAMES[p.pattern],
+    patternId: p.pattern,
+    rank: p.rank,
+    problems: p.problems,
+    attempts: p.attempts,
+    firstTry: rateView(p.firstTry),
+    resolve: rateView(p.resolve),
+    peeked: p.peeked,
+    causes: p.causes,
+  })),
+  weakest: s.weakest && { pattern: PATTERN_NAMES[s.weakest], patternId: s.weakest },
+  note: STATS_NOTE,
+});
+const storyView = (s: Story) => ({
+  id: s.id,
+  title: s.title,
+  competencies: s.competencyTags,
+  situation: s.situation,
+  action: s.action,
+  result: s.result,
+  updatedAt: iso(s.updatedAt),
+});
+const optBool = (v: unknown, name: string) => {
+  if (v !== undefined && typeof v !== 'boolean')
+    throw new RpcParamError(`"${name}" must be true or false`);
+  return v as boolean | undefined;
+};
+const PATTERN_LIST = PATTERNS.join(', ');
+const patternArg = (v: unknown, name: string, other: boolean): PatternId => {
+  if (!isPatternId(v) || (!other && v === 'other'))
+    throw new RpcParamError(
+      `"${name}" must be one of ${PATTERN_LIST}${other ? ', other' : ''} — the pattern ids`,
+    );
+  return v;
+};
+const todayDay = async (ctx: ToolContext) =>
+  ((await ctx.dispatch('getCoachToday', [])) as CoachToday).day;
 
 export const COACH_TOOLS: Tool[] = [
   {
@@ -354,6 +477,259 @@ export const COACH_TOOLS: Tool[] = [
           cause: a.cause,
           nextDue: nextDue(records, a.slug),
         })),
+      };
+    },
+  },
+  {
+    name: 'list_problems',
+    description: [
+      'Every problem they have tried (on LeetCode with the extension, or logged), newest first — the history and the re-solve queue ("what\u2019s due?", "which Two Pointers problems have I peeked?"). Each row: title, slug, pattern, difficulty, days tried, the first and the last outcome (clean / solved / failed), ever accepted, peeked, the newest cause tag, and the re-solve state (track, step of N, due day; null due day once graduated).',
+      `Filters: \`pattern\` (a pattern id: ${PATTERN_LIST}, other), \`due\` (true: due today or earlier; false: not due), \`peeked\`; \`limit\` 1–${PROBLEMS_LIMIT_MAX} (default 30). With \`due: true\` the oldest due comes first. \`get_problem\` reads one in full.`,
+      'Read-only.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', enum: [...PATTERNS, 'other'] },
+        due: { type: 'boolean' },
+        peeked: { type: 'boolean' },
+        limit: { type: 'integer', minimum: 1, maximum: PROBLEMS_LIMIT_MAX },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const pattern =
+        args.pattern === undefined ? undefined : patternArg(args.pattern, 'pattern', true);
+      const due = optBool(args.due, 'due');
+      const peeked = optBool(args.peeked, 'peeked');
+      const { limit = 30 } = args;
+      if (
+        typeof limit !== 'number' ||
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > PROBLEMS_LIMIT_MAX
+      )
+        throw new RpcParamError(`"limit" must be a whole number from 1 to ${PROBLEMS_LIMIT_MAX}`);
+      const [records, today] = await Promise.all([
+        ctx.dispatch('listProblemRecords', []) as Promise<ProblemRecord[]>,
+        due === undefined ? null : todayDay(ctx),
+      ]);
+      let rows = records.filter(
+        (r) =>
+          (pattern === undefined || r.pattern === pattern) &&
+          (peeked === undefined || r.peeked === peeked) &&
+          (today === null || isDue(r, today) === due),
+      );
+      if (due === true)
+        rows = [...rows].sort((a, b) => a.schedule!.dueDay.localeCompare(b.schedule!.dueDay));
+      return {
+        ...(today !== null ? { today } : {}),
+        problems: rows.slice(0, limit).map(problemRow),
+        more: rows.length > limit,
+        ...(records.length === 0
+          ? {
+              note: 'No practice recorded yet — a sitting started on LeetCode, or log_attempt, adds one.',
+            }
+          : {}),
+      };
+    },
+  },
+  {
+    name: 'get_problem',
+    description: [
+      'One problem in full, by slug: its catalog place (pattern, difficulty, link), every day tried oldest first (outcome, help, cause, and the sitting and logged-attempt ids — `delete_attempt` takes a logged one), its sittings (minutes, submits, runs, accepted, review), and the re-solve state with its due day.',
+      'A problem with no counted attempt comes back with `record: null` (its uncounted sittings still listed). Read-only.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'The LeetCode problem slug, e.g. "two-sum"' },
+      },
+      required: ['slug'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const { slug } = args;
+      if (!isProblemSlug(slug))
+        throw new RpcParamError('"slug" must be a LeetCode problem slug (lowercase, dashes)');
+      const [records, all] = await Promise.all([
+        ctx.dispatch('listProblemRecords', []) as Promise<ProblemRecord[]>,
+        ctx.dispatch('listSittings', []) as Promise<Sitting[]>,
+      ]);
+      const r = records.find((x) => x.slug === slug);
+      const cat = catalogProblem(slug);
+      const mine = all.filter((s) => s.problemSlug === slug);
+      if (!r && !cat && !mine.length)
+        throw new Error(
+          `No record of "${slug}" and it isn\u2019t on the roadmap — list_problems lists the ones tried`,
+        );
+      const t = now(ctx);
+      const sittings = mine.map((s) => problemSitting(s, t));
+      // The record's own fields first (a logged problem off the roadmap has a null difficulty, and no sitting),
+      // then the catalog's, then the newest uncounted sitting's.
+      const s0 = mine[0];
+      const src = r
+        ? { title: r.title, pattern: r.pattern, difficulty: r.difficulty }
+        : cat
+          ? { title: cat.title, pattern: cat.pattern, difficulty: cat.difficulty }
+          : {
+              title: s0!.problemTitle,
+              pattern: patternOfTags(s0!.topicTags),
+              difficulty: s0!.difficulty,
+            };
+      const problem = {
+        slug,
+        title: src.title,
+        pattern: PATTERN_NAMES[src.pattern],
+        patternId: src.pattern,
+        difficulty: src.difficulty,
+        onRoadmap: !!cat,
+        url: sittingProblemUrl(slug),
+      };
+      // Sittings that never counted (a test, or too short with no accept) still show, so they can be talked about.
+      if (!r)
+        return {
+          problem,
+          record: null,
+          sittings,
+          note: sittings.length
+            ? 'No counted attempt yet: these sittings were tests or too short.'
+            : 'Not tried yet.',
+        };
+      return {
+        problem,
+        record: {
+          attempts: r.attempts,
+          firstDay: r.firstDay,
+          firstOutcome: r.firstOutcome,
+          lastDay: r.lastDay,
+          lastOutcome: r.lastOutcome,
+          everAccepted: r.everAccepted,
+          peeked: r.peeked,
+          cause: r.cause,
+          reSolve: scheduleView(r),
+          submits: r.submits,
+          runs: r.runs,
+          causes: r.causes,
+          lastError: r.lastError,
+        },
+        tries: r.tries,
+        sittings,
+      };
+    },
+  },
+  {
+    name: 'coach_stats',
+    description: [
+      'How practice is going — for the weekly check ("how am I doing?"): active days, problems, first tries and how many were clean, re-solves and how many were clean, peeks, the cause-tag mix, per ISO week (the trend) and per pattern (weakest first, by the ranking that picks the focus).',
+      'Optional `from` / `to` (YYYY-MM-DD, inclusive; `to` defaults to their today). Test sittings never count. `note` says how to read it.',
+      'Read-only.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'YYYY-MM-DD, inclusive' },
+        to: { type: 'string', description: 'YYYY-MM-DD, inclusive' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const from = optDay(args.from, 'from');
+      const to = optDay(args.to, 'to');
+      if (from !== undefined && to !== undefined && from > to)
+        throw new RpcParamError('"from" must not be after "to"');
+      const range = {
+        ...(from !== undefined ? { from } : {}),
+        ...(to !== undefined ? { to } : {}),
+      };
+      return statsView((await ctx.dispatch('getCoachStats', [range])) as CoachStats);
+    },
+  },
+  {
+    name: 'list_stories',
+    description: [
+      'Their behavioral story bank — STAR stories they wrote in the app, newest edit first, each with its competency tags, situation, action and result. For mock behavioral rounds and "which story fits this question?". Stories are their own words: quote them, never rewrite one as theirs.',
+      'Read-only (stories are written in the app).',
+    ].join(' '),
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      const stories = (await ctx.dispatch('listStories', [])) as Story[];
+      return {
+        stories: stories.map(storyView),
+        ...(stories.length
+          ? {}
+          : { note: 'No stories yet — they are written on the Recruiting page.' }),
+      };
+    },
+  },
+  {
+    name: 'set_focus_pattern',
+    description: [
+      ASK_FIRST,
+      `Sets the pattern the plan holds from today (their pick over the engine\u2019s), for ${COACH_PARAMS.blockDays} active days; after that the engine picks again. \`pattern\` is a pattern id (${PATTERN_LIST}); null clears their pick and gives the choice back to the engine. Refused when the pattern has no untried roadmap problem left.`,
+      `Setting the pattern already held keeps its day. Returns the focus as the plan now reads it (pattern, day N of ${COACH_PARAMS.blockDays}, why) — read it back.`,
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          anyOf: [{ type: 'string', enum: [...PATTERNS] }, { type: 'null' }],
+          description: 'A pattern id, or null to clear',
+        },
+      },
+      required: ['pattern'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (!('pattern' in args)) throw new RpcParamError('"pattern" is required (null clears it)');
+      const pattern = args.pattern === null ? null : patternArg(args.pattern, 'pattern', false);
+      const stored = (await ctx.dispatch('setCoachFocus', [pattern])) as CoachFocus | null;
+      const t = (await ctx.dispatch('getCoachToday', [])) as CoachToday;
+      return {
+        override: stored
+          ? { pattern: PATTERN_NAMES[stored.pattern], since: stored.sinceDay }
+          : null,
+        focus: todayView(t).focus,
+      };
+    },
+  },
+  {
+    name: 'delete_attempt',
+    description: [
+      ASK_FIRST,
+      'Removes one attempt logged with log_attempt or mark_peeked (its id: from their result, or get_problem\u2019s `tries`). Sittings are never deleted here. The plan and the re-solve queue recompute without it.',
+      'Returns what was removed and the problem\u2019s next due day after — read both back. An id with no live logged attempt writes nothing and says so.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The logged attempt\u2019s id' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const { id } = args;
+      if (typeof id !== 'string' || !isUlid(id))
+        throw new RpcParamError('"id" must be a logged attempt id — get_problem lists them');
+      const before = (await ctx.dispatch('listProblemRecords', [])) as ProblemRecord[];
+      const hit = before
+        .flatMap((r) => r.tries.map((x) => ({ r, x })))
+        .find(({ x }) => x.attemptIds.includes(id));
+      if (!hit)
+        return {
+          id,
+          deleted: false,
+          note: 'No live logged attempt has that id (already removed, or not a logged attempt) — nothing written.',
+        };
+      await ctx.dispatch('deleteCoachAttempt', [id]);
+      const after = (await ctx.dispatch('listProblemRecords', [])) as ProblemRecord[];
+      return {
+        id,
+        deleted: true,
+        slug: hit.r.slug,
+        title: hit.r.title,
+        day: hit.x.day,
+        nextDue: nextDue(after, hit.r.slug),
+        stillTried: after.some((r) => r.slug === hit.r.slug),
       };
     },
   },

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applySlotChange,
   attemptsOf,
+  coachStats,
   countsAsPractice,
   easierIn,
   focusOn,
@@ -10,6 +11,7 @@ import {
   normalizeCoachAttempt,
   normalizeFocusPattern,
   normalizeReviewPatch,
+  normalizeStatsRange,
   outcomeOf,
   planDay,
   patternOfTags,
@@ -835,6 +837,119 @@ describe('records', () => {
     const p = manual('two-sum', TODAY, 'failed', 'solution');
     expect(peekOf([p], { slug: 'two-sum', day: TODAY })).toBe(p);
     expect(peekOf([p], { slug: 'two-sum', day: day(-1) })).toBeNull();
+  });
+});
+
+describe('stats', () => {
+  // TODAY is a Monday (ISO week 47); everything from day(-7) to day(-1) is week 46.
+  const peek = manual('valid-palindrome', day(-2), 'failed', 'solution');
+  const sittings = [
+    clean('two-sum', day(-7)),
+    sit({ slug: 'valid-anagram', on: day(-6), submits: ['wrong_answer'], cause: 'boundary' }),
+    clean('valid-anagram', TODAY),
+    sit({ slug: '3sum', on: day(-1), submits: ['accepted'], test: true }), // a test sitting never counts
+  ];
+  const all = () => attemptsOf(sittings, [peek], NOW, undefined, TODAY);
+
+  it('counts first tries and re-solves, clean only as a hit, per week and per pattern, weakest first', () => {
+    expect(coachStats(all(), TODAY)).toEqual({
+      from: null,
+      to: TODAY,
+      activeDays: 4,
+      problems: 3,
+      attempts: 4,
+      firstTry: { hit: 1, of: 3 },
+      resolve: { hit: 1, of: 1 },
+      peeked: 1,
+      causes: { boundary: 1 },
+      untagged: 1, // the peek: went wrong, no cause
+      weeks: [
+        { week: '2026-W46', attempts: 3, firstTry: { hit: 1, of: 3 }, resolve: { hit: 0, of: 0 } },
+        { week: '2026-W47', attempts: 1, firstTry: { hit: 0, of: 0 }, resolve: { hit: 1, of: 1 } },
+      ],
+      patterns: [
+        {
+          pattern: 'two-pointers', // 1 of 1 first tries missed: the weakest
+          problems: 1,
+          attempts: 1,
+          firstTry: { hit: 0, of: 1 },
+          resolve: { hit: 0, of: 0 },
+          peeked: 1,
+          causes: {},
+          rank: 1,
+        },
+        {
+          pattern: 'arrays-hashing',
+          problems: 2,
+          attempts: 3,
+          firstTry: { hit: 1, of: 2 },
+          resolve: { hit: 1, of: 1 },
+          peeked: 0,
+          causes: { boundary: 1 },
+          rank: 2, // ties the untried patterns, first in the roadmap order
+        },
+      ],
+      weakest: 'two-pointers',
+    });
+  });
+  it('weakest is the ranking’s top even with no row in range: all clean so far → an untried pattern', () => {
+    const s = coachStats(attemptsOf([clean('two-sum', day(-2))], [], NOW), TODAY);
+    expect(s.patterns.map((p) => p.pattern)).toEqual(['arrays-hashing']);
+    expect(s.patterns[0]!.rank).toBeGreaterThan(1); // 1 of 1 clean: the strongest
+    expect(s.weakest).toBe('two-pointers');
+  });
+  it('a range never turns a re-solve into a first try', () => {
+    const s = coachStats(all(), TODAY, { from: TODAY });
+    expect(s).toMatchObject({
+      from: TODAY,
+      attempts: 1,
+      problems: 1,
+      firstTry: { hit: 0, of: 0 },
+      resolve: { hit: 1, of: 1 },
+    });
+    expect(coachStats(all(), TODAY, { from: day(-6), to: day(-2) })).toMatchObject({
+      to: day(-2),
+      attempts: 2,
+      firstTry: { hit: 0, of: 2 },
+      activeDays: 2,
+    });
+  });
+  it('no attempts: zeros and empty lists, never a missing field', () => {
+    expect(() => coachStats([], TODAY, { from: day(1) })).toThrow(/not be after/); // to defaults to today
+    expect(coachStats([], TODAY)).toMatchObject({
+      attempts: 0,
+      firstTry: { hit: 0, of: 0 },
+      weeks: [],
+      patterns: [],
+      causes: {},
+    });
+  });
+  it('the range input', () => {
+    expect(normalizeStatsRange(undefined)).toEqual({});
+    expect(normalizeStatsRange({ from: day(-3) })).toEqual({ from: day(-3) });
+    expect(() => normalizeStatsRange({ from: 'soon' })).toThrow(/from must be an ISO date/);
+    expect(() => normalizeStatsRange({ from: TODAY, to: day(-1) })).toThrow(/not be after/);
+    expect(() => normalizeStatsRange({ since: TODAY })).toThrow(/Unknown range field: since/);
+    expect(() => normalizeStatsRange('2026-11-01')).toThrow(/must be an object/);
+  });
+  it('a record lists every try with its sitting and logged-attempt ids', () => {
+    const recs = listRecords({ now: NOW, today: TODAY, sittings, attempts: [peek] });
+    const va = recs.find((r) => r.slug === 'valid-anagram')!;
+    expect(va.tries.map((t) => [t.day, t.outcome, t.cause])).toEqual([
+      [day(-6), 'failed', 'boundary'],
+      [TODAY, 'clean', null],
+    ]);
+    expect(va.tries[0]!.sittingIds).toEqual([sittings[1]!.id]);
+    expect(recs.find((r) => r.slug === 'valid-palindrome')!.tries).toEqual([
+      {
+        day: day(-2),
+        outcome: 'failed',
+        help: 'solution',
+        cause: null,
+        sittingIds: [],
+        attemptIds: [peek.id],
+      },
+    ]);
   });
 });
 

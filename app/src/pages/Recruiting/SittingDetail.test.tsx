@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ApiClient } from '@aperture/shared';
+import type { ApiClient, ReviewDraft } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -345,6 +345,7 @@ describe('the stub’s sittings', () => {
     expect(await api.draftSittingReview(sitting.id)).toEqual({
       ok: true,
       mistakes: ['Run 1 (Wrong Answer): expected 2, got 3'],
+      cause: null, // Runs only: the stub's rule proposes nothing
     });
     // Only one half captured: that half alone, never "expected null".
     await api.lcSittingEvents({
@@ -431,6 +432,48 @@ describe('the stub’s sittings', () => {
     expect(await screen.findByText('Saved.')).toBeTruthy();
     const { sitting } = await api.getSitting(await idOf(api, 'two-sum'));
     expect(sitting.review?.cause).toBe('no-trace');
+  });
+
+  it('the draft’s cause marks its chip and never picks it: Save keeps the old cause until it is tapped', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const draft = vi.spyOn(api, 'draftSittingReview');
+    draft.mockResolvedValue({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'no-trace' });
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'boundary' });
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'boundary' });
+    const id = await idOf(api, 'two-sum');
+    await open(api);
+    await user.click(await screen.findByRole('button', { name: 'Draft with Claude' }));
+    const hint = await screen.findByText('Claude suggests Boundary — tap it to use it.');
+    expect(pressed('Boundary')).toBe('false');
+    expect(pressed('No trace')).toBe('true'); // the form's own suggestion stands
+    expect(screen.getByRole('button', { name: 'Boundary' }).getAttribute('aria-describedby')).toBe(
+      hint.id,
+    );
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect((await api.getSitting(id)).sitting.review?.cause).toBe('no-trace');
+    expect(screen.queryByText(/Claude suggests/)).toBeNull(); // a Save clears the draft and its proposal
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    await user.click(await screen.findByRole('button', { name: 'Boundary' }));
+    expect(pressed('Boundary')).toBe('true');
+    expect(screen.queryByText(/Claude suggests/)).toBeNull(); // picked: nothing left to suggest
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await waitFor(async () =>
+      expect((await api.getSitting(id)).sitting.review?.cause).toBe('boundary'),
+    );
+    // A new draft replaces the proposal: one with no cause key (an older server), or a failed one, leaves none.
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    expect(await screen.findByText(/Claude suggests No trace/)).toBeTruthy(); // the mock's no-trace ≠ Boundary
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['x'] } as ReviewDraft);
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    await waitFor(() => expect(screen.queryByText(/Claude suggests/)).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    expect(await screen.findByText(/Claude suggests No trace/)).toBeTruthy();
+    draft.mockResolvedValueOnce({ ok: false, reason: 'api' });
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    expect(await screen.findByText(/Claude didn’t answer/)).toBeTruthy();
+    expect(screen.queryByText(/Claude suggests/)).toBeNull();
   });
 
   it('one cause at a time, a second tap clears it; Peeked and the cause read back after a reload', async () => {

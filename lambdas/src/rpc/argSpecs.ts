@@ -444,6 +444,7 @@ export const RPC_ARGS = {
   // The LeetCode coach — the normalizers in coach.ts check every field with their own messages.
   getCoachToday: [opt(day)],
   listProblemRecords: [],
+  getCoachStats: [opt(owned('range', ['from', 'to'], { object: true }))],
   setCoachSlot: [owned('slot', SLOT_KEYS, { object: true })],
   setCoachFloor: [named('on', bool)],
   setCoachFocus: [nullable(strOf<PatternId>(KEY_MAX))],

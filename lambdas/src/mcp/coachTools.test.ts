@@ -125,7 +125,14 @@ describe('leetcode_today', () => {
 
 describe('writes ask first', () => {
   it('every coach write opens with the ask-first sentence', () => {
-    for (const name of ['mark_peeked', 'set_cause_tag', 'swap_slot', 'log_attempt'])
+    for (const name of [
+      'mark_peeked',
+      'set_cause_tag',
+      'swap_slot',
+      'log_attempt',
+      'set_focus_pattern',
+      'delete_attempt',
+    ])
       expect(TOOLS.find((x) => x.name === name)!.description).toMatch(
         /^Writes to their Aperture data\. Before calling, say exactly what you will write and wait for their yes/,
       );
@@ -319,6 +326,234 @@ describe('live_sitting slot', () => {
     await start('rotting-oranges');
     t = T0 + 5 * 60_000;
     expect((await call('live_sitting')).slot).toMatchObject({ kind: 'off-plan', overCap: false });
+  });
+});
+
+describe('the read tools', () => {
+  it('are listed read-only', () => {
+    for (const name of ['list_problems', 'get_problem', 'coach_stats', 'list_stories'])
+      expect(TOOLS.find((x) => x.name === name)!.description).toMatch(/Read-only/);
+  });
+});
+
+describe('list_problems', () => {
+  const DAY = 86_400_000;
+  beforeEach(async () => {
+    await ended('two-sum', '2026-11-05', true, T0 - 4 * DAY); // clean: re-solve due 11-08
+    await ended('valid-anagram', '2026-11-08', false, T0 - DAY); // failed: peeked track, due 11-09
+    await ended('3sum', '2026-11-08', true, T0 - DAY); // clean: due 11-11
+  });
+  it('lists every problem tried, newest first, with its re-solve state', async () => {
+    const out = await call('list_problems');
+    expect(out.problems.map((p: { slug: string }) => p.slug)).toEqual([
+      '3sum',
+      'valid-anagram',
+      'two-sum',
+    ]);
+    expect(out.problems[2]).toMatchObject({
+      title: 'Two Sum',
+      pattern: 'Arrays & Hashing',
+      patternId: 'arrays-hashing',
+      attempts: 1,
+      firstOutcome: 'clean',
+      reSolve: { track: 'clean', step: 1, of: 3, dueDay: '2026-11-08', graduated: false },
+    });
+    expect(out.more).toBe(false);
+  });
+  it('due: true is the queue, oldest due first; filters combine; limit cuts with `more`', async () => {
+    const due = await call('list_problems', { due: true });
+    expect(due.today).toBe(TODAY);
+    expect(due.problems.map((p: { slug: string }) => p.slug)).toEqual(['two-sum', 'valid-anagram']);
+    expect(
+      (await call('list_problems', { due: false })).problems.map((p: { slug: string }) => p.slug),
+    ).toEqual(['3sum']);
+    expect(
+      (await call('list_problems', { pattern: 'two-pointers' })).problems.map(
+        (p: { slug: string }) => p.slug,
+      ),
+    ).toEqual(['3sum']);
+    expect((await call('list_problems', { peeked: true })).problems).toEqual([]);
+    const one = await call('list_problems', { limit: 1 });
+    expect(one.problems).toHaveLength(1);
+    expect(one.more).toBe(true);
+  });
+  it('refuses a bad pattern, flag or limit', async () => {
+    for (const args of [
+      { pattern: 'greedy-ish' },
+      { due: 'yes' },
+      { peeked: 1 },
+      { limit: 0 },
+      { limit: 101 },
+      { limit: 2.5 },
+    ])
+      await expect(call('list_problems', args)).rejects.toBeInstanceOf(RpcParamError);
+  });
+});
+
+describe('list_problems with nothing tried', () => {
+  it('is an empty list with a note', async () => {
+    const out = await call('list_problems');
+    expect(out.problems).toEqual([]);
+    expect(out.note).toMatch(/No practice recorded yet/);
+  });
+});
+
+describe('get_problem', () => {
+  it('reads one problem: its tries with ids, its sittings, its re-solve state', async () => {
+    const s = await ended('two-sum', '2026-11-05', false, T0 - 4 * 86_400_000);
+    const logged = await call('log_attempt', { attempts: [{ slug: 'two-sum', outcome: 'clean' }] });
+    const out = await call('get_problem', { slug: 'two-sum' });
+    expect(out.problem).toMatchObject({
+      title: 'Two Sum',
+      pattern: 'Arrays & Hashing',
+      onRoadmap: true,
+      url: 'https://leetcode.com/problems/two-sum/',
+    });
+    expect(out.record).toMatchObject({ attempts: 2, firstOutcome: 'failed', lastOutcome: 'clean' });
+    expect(out.tries).toEqual([
+      expect.objectContaining({ day: '2026-11-05', outcome: 'failed', sittingIds: [s.id] }),
+      expect.objectContaining({ day: TODAY, attemptIds: [logged.attempts[0].id] }),
+    ]);
+    expect(out.sittings).toEqual([
+      expect.objectContaining({ id: s.id, day: '2026-11-05', submits: 1, accepted: false }),
+    ]);
+  });
+  it('a logged problem off the roadmap, with no sitting: its record, difficulty null', async () => {
+    await call('log_attempt', {
+      attempts: [{ slug: 'some-synthetic-problem', outcome: 'clean', day: '2026-11-05' }],
+    });
+    const out = await call('get_problem', { slug: 'some-synthetic-problem' });
+    expect(out.problem).toMatchObject({ onRoadmap: false, patternId: 'other', difficulty: null });
+    expect(out.record).toMatchObject({ attempts: 1, firstOutcome: 'clean' });
+    expect(out.sittings).toEqual([]);
+  });
+  it('a problem whose only sitting is a test is record: null, with that sitting listed', async () => {
+    const s = await ended('some-synthetic-problem', TODAY, false);
+    await backend.patchSittingReview(s.id, { test: true });
+    const out = await call('get_problem', { slug: 'some-synthetic-problem' });
+    expect(out).toMatchObject({ problem: { onRoadmap: false, patternId: 'other' }, record: null });
+    expect(out.sittings).toEqual([
+      expect.objectContaining({ id: s.id, review: expect.objectContaining({ test: true }) }),
+    ]);
+    expect(out.note).toMatch(/tests or too short/);
+  });
+  it('a roadmap problem never tried is record: null; an unknown one is an error', async () => {
+    expect(await call('get_problem', { slug: 'valid-sudoku' })).toMatchObject({
+      problem: { title: 'Valid Sudoku', difficulty: 'Medium' },
+      record: null,
+    });
+    await expect(call('get_problem', { slug: 'not-a-real-problem' })).rejects.toThrow(
+      /No record of "not-a-real-problem"/,
+    );
+    await expect(call('get_problem', { slug: 'Two Sum' })).rejects.toBeInstanceOf(RpcParamError);
+    await expect(call('get_problem', {})).rejects.toBeInstanceOf(RpcParamError);
+  });
+});
+
+describe('coach_stats', () => {
+  it('counts first tries and re-solves, with a pct only from 5 tries, the weakest pattern and the note', async () => {
+    await ended('two-sum', '2026-11-05', true, T0 - 4 * 86_400_000);
+    await ended('two-sum', TODAY, true);
+    await ended('3sum', '2026-11-06', false, T0 - 3 * 86_400_000);
+    const out = await call('coach_stats');
+    expect(out).toMatchObject({
+      from: null,
+      to: TODAY,
+      attempts: 3,
+      problems: 2,
+      firstTry: { hit: 1, of: 2, pct: null },
+      resolve: { hit: 1, of: 1, pct: null },
+      weakest: { pattern: 'Two Pointers', patternId: 'two-pointers' },
+    });
+    expect(out.patterns[0]).toMatchObject({
+      pattern: 'Two Pointers',
+      patternId: 'two-pointers',
+      rank: 1,
+    });
+    expect(out.weeks.map((w: { week: string }) => w.week)).toEqual(['2026-W45', '2026-W46']);
+    expect(out.note).toMatch(/never with other people/);
+    expect(await call('coach_stats', { from: TODAY })).toMatchObject({ attempts: 1, from: TODAY });
+  });
+  it('a pct from 5 tries', async () => {
+    const slugs = ['two-sum', 'valid-anagram', 'contains-duplicate', 'group-anagrams', '3sum'];
+    for (const [i, slug] of slugs.entries()) await ended(slug, TODAY, i < 4, T0 - 3600_000 + i);
+    expect((await call('coach_stats')).firstTry).toEqual({ hit: 4, of: 5, pct: 80 });
+  });
+  it('refuses a bad range', async () => {
+    for (const args of [{ from: 'monday' }, { to: '11/09' }, { from: TODAY, to: '2026-11-01' }])
+      await expect(call('coach_stats', args)).rejects.toBeInstanceOf(RpcParamError);
+    await expect(call('coach_stats', { from: '2026-11-20' })).rejects.toThrow(/not be after/);
+  });
+});
+
+describe('list_stories', () => {
+  it('lists the story bank; empty is a note', async () => {
+    expect((await call('list_stories')).note).toMatch(/No stories yet/);
+    await backend.createStory({
+      title: 'A synthetic migration',
+      competencyTags: ['ownership'],
+      situation: 'S',
+      action: 'A',
+      result: 'R',
+    });
+    const out = await call('list_stories');
+    expect(out.stories).toEqual([
+      expect.objectContaining({
+        title: 'A synthetic migration',
+        competencies: ['ownership'],
+        situation: 'S',
+      }),
+    ]);
+    expect(out.note).toBeUndefined();
+  });
+});
+
+describe('set_focus_pattern', () => {
+  it('holds a pattern from today, day 1 of 3; null gives it back to the engine', async () => {
+    const out = await call('set_focus_pattern', { pattern: 'graphs' });
+    expect(out.override).toEqual({ pattern: 'Graphs', since: TODAY });
+    expect(out.focus).toMatchObject({ patternId: 'graphs', day: 1, of: 3, source: 'override' });
+    expect((await call('leetcode_today')).focus).toMatchObject({
+      patternId: 'graphs',
+      source: 'override',
+    });
+    const again = await call('set_focus_pattern', { pattern: 'graphs' }); // a repeat is one state
+    expect(again.override).toEqual({ pattern: 'Graphs', since: TODAY });
+    const cleared = await call('set_focus_pattern', { pattern: null });
+    expect(cleared.override).toBeNull();
+    expect(cleared.focus).toMatchObject({ patternId: 'arrays-hashing', source: 'engine' });
+  });
+  it('refuses an unknown pattern, `other`, or no pattern — nothing written', async () => {
+    for (const args of [{ pattern: 'graph' }, { pattern: 'other' }, {}])
+      await expect(call('set_focus_pattern', args)).rejects.toBeInstanceOf(RpcParamError);
+    expect(await repo.getCoachFocus({ consistent: true })).toBeNull();
+  });
+});
+
+describe('delete_attempt', () => {
+  it('removes a logged attempt and reads back what went; the queue recomputes', async () => {
+    const logged = await call('log_attempt', {
+      attempts: [{ slug: 'merge-intervals', outcome: 'failed' }],
+    });
+    const id = logged.attempts[0].id as string;
+    expect(await call('delete_attempt', { id })).toEqual({
+      id,
+      deleted: true,
+      slug: 'merge-intervals',
+      title: 'Merge Intervals',
+      day: TODAY,
+      nextDue: null,
+      stillTried: false,
+    });
+    expect((await call('list_problems')).problems).toEqual([]);
+    // A repeat writes nothing and says so.
+    expect(await call('delete_attempt', { id })).toMatchObject({ id, deleted: false });
+  });
+  it('a sitting’s id or an unknown id deletes nothing; a bad id is a param error', async () => {
+    const s = await ended('two-sum', TODAY, true);
+    expect(await call('delete_attempt', { id: s.id })).toMatchObject({ deleted: false });
+    expect((await call('list_problems')).problems).toHaveLength(1);
+    await expect(call('delete_attempt', { id: 'nope' })).rejects.toBeInstanceOf(RpcParamError);
   });
 });
 

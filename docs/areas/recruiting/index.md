@@ -154,8 +154,10 @@ Claude set over MCP while it was open: [coach.md → In the app](coach.md#in-the
 Submits with their cases (each field ≤ 400 chars), and the code at the first submit and the final code (≤ 4 KB
 each; the user's code goes to the API — decided). It proposes **mistake lines only** — at most 5, each ≤ 160
 characters, each naming a failing case or a concrete code change, describing and never judging; the one-liner and
-how it went are never drafted. The answer is made fit (`draftMistakes`): a line over 160 is cut to 160 ending
-"…" and only the first 5 are kept; only an answer that isn't a list of text is `bad-shape`. It writes
+how it went are never drafted. The same call proposes the coach's one cause tag or null, from the cases and four
+signals: a suggestion for the form's cause ([coach](coach.md) → _The draft's cause_). The answer is made fit (`draftMistakes`,
+`draftCause`): a line over 160 is cut to 160 ending "…" and only the first 5 are kept; only an answer that isn't a
+list of text is `bad-shape`, and a cause that isn't a tag is null, the lines kept. It writes
 nothing: the lines arrive unticked and editable, "Use all" ticks them, and only the ticked ones reach the review on
 Save. Nothing judged yet → `nothing-to-draft` with no model call; a failure says why inline and the form keeps
 working. A smoke run never reaches the model; the log line carries counts, never code. Cost: ≈ 2.5k tokens in and
