@@ -444,10 +444,11 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       Statistic: 'Maximum',
       MetricName: 'Duration',
     });
-    // The push dispatch adds none (no fixed monthly cost): the account-wide Errors alarm covers it.
+    // The push dispatch and the coach worker add none (no fixed monthly cost; the org's free ten are full): the
+    // account-wide Errors alarm covers them.
     expect(
-      Object.keys(t.findResources('AWS::CloudWatch::Alarm')).filter((id) =>
-        id.includes('PushDispatch'),
+      Object.keys(t.findResources('AWS::CloudWatch::Alarm')).filter(
+        (id) => id.includes('PushDispatch') || id.includes('CoachWorker'),
       ),
     ).toEqual([]);
     t.resourceCountIs('AWS::SNS::Topic', 1);
@@ -554,6 +555,12 @@ describe('ApertureAppStack finance sync', () => {
     const [id, res] = Object.entries(fns)[0]!;
     return { id, props: res.Properties as Record<string, unknown> };
   };
+  const workerId = () =>
+    Object.keys(
+      app.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: 'aperture-coach-worker-dev' },
+      }),
+    )[0]!;
   // A function's Role is { Fn::GetAtt: [roleId, 'Arn'] }; a policy attaches by { Ref: roleId }.
   const policiesOfRole = (fnRole: unknown) =>
     Object.values(app.findResources('AWS::IAM::Policy'))
@@ -628,9 +635,16 @@ describe('ApertureAppStack finance sync', () => {
       expect(resourcesFor('ssm:GetParameter')).toContain(`aperture/dev/${leaf}`);
     for (const action of ['ssm:PutParameter', 'ssm:DeleteParameter'])
       expect(resourcesFor(action)).toContain('aperture/dev/plaid/items/*');
+    // Exactly two ARNs, never `arn:*`: the sync and the coach worker (minimizePolicies may merge their statements).
     const invoke = stmts.filter((st) => st.Action === 'lambda:InvokeFunction');
-    expect(invoke).toHaveLength(1);
-    expect(invoke[0]!.Resource).toEqual({ 'Fn::GetAtt': [syncFn().id, 'Arn'] }); // never `arn:*`
+    expect(
+      invoke
+        .flatMap((st) => st.Resource)
+        .map((r) => JSON.stringify(r))
+        .sort(),
+    ).toEqual(
+      [syncFn().id, workerId()].map((id) => JSON.stringify({ 'Fn::GetAtt': [id, 'Arn'] })).sort(),
+    );
   });
 
   // Attachment deletes run on both functions (BFF panel + MCP delete_attachment/delete_task). A plain
@@ -676,8 +690,18 @@ describe('ApertureAppStack finance sync', () => {
       }),
     )[0]!.Properties as Record<string, unknown>;
     expect(policiesOfRole(mcp.Role).length).toBeGreaterThan(0);
-    expect(JSON.stringify(policiesOfRole(mcp.Role))).not.toMatch(/plaid|InvokeFunction/);
+    expect(JSON.stringify(policiesOfRole(mcp.Role))).not.toMatch(/plaid/);
     expect(JSON.stringify(mcp.Environment)).not.toMatch(/PLAID|FINANCE_SYNC/);
+    // Its one invoke grant is the coach worker's exact ARN — never the sync's.
+    const invoke = policiesOfRole(mcp.Role).filter((st) =>
+      JSON.stringify(st.Action).includes('lambda:'),
+    );
+    expect(invoke).toEqual([
+      expect.objectContaining({
+        Action: 'lambda:InvokeFunction',
+        Resource: { 'Fn::GetAtt': [workerId(), 'Arn'] },
+      }),
+    ]);
   });
 
   it('schedules a sync 3×/day in LA time for the device user, never retried', () => {
@@ -790,6 +814,149 @@ describe('ApertureAppStack finance sync by stage', () => {
   });
 });
 
+describe('ApertureAppStack coach worker', () => {
+  const build = (stage: string) => {
+    const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
+    const env = { account: '111111111111', region: 'us-west-1' };
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
+      stage,
+      env,
+      allowedOrigins: ['*'],
+    });
+    return Template.fromStack(
+      new ApertureAppStack(app, `ApertureApp-${stage}`, {
+        stage,
+        env,
+        table: data.table,
+        userPool: data.userPool,
+        filesBucket: data.filesBucket,
+        cognitoDomain: data.cognitoDomain,
+        originSecret: 'o',
+        deviceToken: 'd',
+        agentToken: 'a',
+      }),
+    );
+  };
+  const dev = build('dev');
+  const prod = build('prod');
+  const fnOf = (t: Template, name: string) => {
+    const [id, res] = Object.entries(
+      t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }),
+    )[0]!;
+    return { id, props: res.Properties as Record<string, unknown> };
+  };
+  const statementsOf = (t: Template, fnRole: unknown) =>
+    Object.values(t.findResources('AWS::IAM::Policy'))
+      .filter((p) =>
+        JSON.stringify(p.Properties.Roles).includes(
+          JSON.stringify({ Ref: (fnRole as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0] }),
+        ),
+      )
+      .flatMap(
+        (p) => p.Properties.PolicyDocument.Statement as { Action: unknown; Resource: unknown }[],
+      );
+  const actionsOf = (stmts: { Action: unknown }[]) =>
+    stmts.flatMap((st) => (Array.isArray(st.Action) ? st.Action : [st.Action]));
+  const worker = fnOf(dev, 'aperture-coach-worker-dev');
+
+  it('runs a fifth function, 90 s / 512 MB on Node 22, with no Function URL and only table/stage env', () => {
+    dev.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'aperture-coach-worker-dev',
+      Runtime: 'nodejs22.x',
+      Timeout: 90,
+      MemorySize: 512,
+    });
+    dev.resourceCountIs('AWS::Lambda::Url', 2); // BFF + MCP only
+    const env = (worker.props.Environment as { Variables: Record<string, unknown> }).Variables;
+    expect(Object.keys(env).sort()).toEqual(['STAGE', 'TABLE_NAME']); // the key is read from SSM, never env
+  });
+
+  it('reserves 1 on each dev slot; prod reserves none', () => {
+    expect(worker.props.ReservedConcurrentExecutions).toBe(1);
+    expect(
+      fnOf(prod, 'aperture-coach-worker-prod').props.ReservedConcurrentExecutions,
+    ).toBeUndefined();
+  });
+
+  it('is never retried by Lambda, drops an event after a minute, and keeps logs for 30 days', () => {
+    const invoke = Object.values(dev.findResources('AWS::Lambda::EventInvokeConfig')).filter(
+      (r) => JSON.stringify(r.Properties.FunctionName) === JSON.stringify({ Ref: worker.id }),
+    );
+    expect(invoke.map((r) => r.Properties)).toEqual([
+      expect.objectContaining({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 }),
+    ]);
+    for (const [t, stage] of [
+      [dev, 'dev'],
+      [prod, 'prod'],
+    ] as const)
+      t.hasResourceProperties('AWS::Logs::LogGroup', {
+        LogGroupName: `/aws/lambda/aperture-coach-worker-${stage}`,
+        RetentionInDays: 30,
+      });
+  });
+
+  it('its role gets Get/Put/Query on the table + GSI1 and the Anthropic key only — nothing else', () => {
+    const stmts = statementsOf(dev, worker.props.Role);
+    const actions = actionsOf(stmts);
+    expect(actions.filter((a) => String(a).startsWith('dynamodb:')).sort()).toEqual([
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+    ]);
+    expect(actions.filter((a) => !String(a).startsWith('dynamodb:')).sort()).toEqual([
+      'logs:CreateLogStream',
+      'logs:PutLogEvents',
+      'ssm:GetParameter',
+    ]);
+    const ddb = stmts.filter((st) => actionsOf([st]).includes('dynamodb:Query'));
+    expect(JSON.stringify(ddb.map((st) => st.Resource))).toContain('/index/GSI1');
+    const ssm = stmts.filter((st) => actionsOf([st]).includes('ssm:GetParameter'));
+    expect(
+      JSON.stringify(ssm.map((st) => st.Resource)).match(/parameter\/aperture\/[^"]*/g),
+    ).toEqual(['parameter/aperture/dev/anthropic/api_key']);
+    expect(JSON.stringify(stmts)).not.toMatch(/\*"|index\/\*|s3:|lambda:|plaid|google|push/);
+  });
+
+  it('its role is its own: no managed policy, so it can never re-create its log group outside the stack', () => {
+    const roleId = (worker.props.Role as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
+    expect(
+      dev.findResources('AWS::IAM::Role')[roleId]!.Properties.ManagedPolicyArns,
+    ).toBeUndefined();
+    const stmts = statementsOf(dev, worker.props.Role);
+    expect(actionsOf(stmts)).not.toContain('logs:CreateLogGroup');
+    const groupId = Object.keys(
+      dev.findResources('AWS::Logs::LogGroup', {
+        Properties: { LogGroupName: '/aws/lambda/aperture-coach-worker-dev' },
+      }),
+    )[0]!;
+    expect(
+      stmts.filter((st) => actionsOf([st]).includes('logs:PutLogEvents')).map((st) => st.Resource),
+    ).toEqual([{ 'Fn::GetAtt': [groupId, 'Arn'] }]);
+  });
+
+  it('the BFF and the MCP function name it and may invoke exactly its ARN', () => {
+    for (const t of [dev, prod]) {
+      const stage = t === dev ? 'dev' : 'prod';
+      const workerId = fnOf(t, `aperture-coach-worker-${stage}`).id;
+      for (const name of [`aperture-bff-${stage}`, `aperture-mcp-${stage}`]) {
+        const fn = fnOf(t, name).props;
+        const env = (fn.Environment as { Variables: Record<string, unknown> }).Variables;
+        expect(env.COACH_WORKER_FN).toEqual({ Ref: workerId });
+        const resources = statementsOf(t, fn.Role)
+          .filter((st) => actionsOf([st]).includes('lambda:InvokeFunction'))
+          .flatMap((st) => st.Resource);
+        expect(resources).toContainEqual({ 'Fn::GetAtt': [workerId, 'Arn'] });
+        expect(JSON.stringify(resources)).not.toMatch(/\*/);
+      }
+    }
+  });
+
+  it('nothing schedules it', () => {
+    const targets = JSON.stringify(dev.findResources('AWS::Scheduler::Schedule'));
+    expect(targets).not.toContain(worker.id);
+  });
+});
+
 describe('ApertureAppStack push dispatch (reminders)', () => {
   const build = (stage: string) => {
     const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
@@ -855,7 +1022,12 @@ describe('ApertureAppStack push dispatch (reminders)', () => {
   it('reserves one concurrent tick on prod and on dev; prod reserves nothing else', () => {
     expect(fnOf(prod, 'aperture-push-dispatch-prod').props.ReservedConcurrentExecutions).toBe(1);
     expect(poller.props.ReservedConcurrentExecutions).toBe(1);
-    for (const name of ['aperture-bff-prod', 'aperture-mcp-prod', 'aperture-finance-sync-prod'])
+    for (const name of [
+      'aperture-bff-prod',
+      'aperture-mcp-prod',
+      'aperture-finance-sync-prod',
+      'aperture-coach-worker-prod',
+    ])
       expect(fnOf(prod, name).props.ReservedConcurrentExecutions).toBeUndefined();
   });
 
@@ -1085,6 +1257,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     const devNames = names(dev.templates);
     expect(devNames).toEqual([
       'aperture-bff-dev',
+      'aperture-coach-worker-dev',
       'aperture-finance-sync-dev',
       'aperture-mcp-dev',
       'aperture-push-dispatch-dev',
@@ -1267,7 +1440,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       const buckets = resources(main.templates)
         .filter((r) => r.Type === 'AWS::Lambda::Function')
         .map((r) => JSON.stringify((r.Properties?.Code as { S3Bucket: unknown }).S3Bucket));
-      expect(buckets).toHaveLength(4);
+      expect(buckets).toHaveLength(5);
       for (const b of buckets) expect(b).toContain('cdk-devmain-assets-');
       for (const a of main.artifacts) expect(JSON.stringify(a.assets)).not.toContain('hnb659fds');
     });

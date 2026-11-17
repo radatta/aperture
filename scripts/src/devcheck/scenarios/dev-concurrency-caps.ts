@@ -10,7 +10,7 @@ const STACKS = 'cdk/src/stacks.test.ts';
 const KILL = 'lambdas/src/kill/kill.test.ts';
 const ORG = 'cdk/src/org.test.ts';
 const BFF_BURST = 12; // past the old account quota of 10, under the BFF's 18
-const MCP_BURST = 6; // under /mcp's 10
+const MCP_BURST = 6; // under /mcp's 9
 const TICK_WINDOW_MS = 3 * 60_000; // the poller runs every minute: two missed ticks fail it
 
 const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
@@ -46,7 +46,7 @@ export const devConcurrencyCaps: Scenario = {
     },
     offDev(
       'reservation-values',
-      'Each dev function reserves its own share (BFF 18, MCP 10, finance sync 1, poller 1), summing to 30 on each dev slot (dev, devb); prod keeps only the poller’s 1',
+      'Each dev function reserves its own share (BFF 18, MCP 9, finance sync 1, poller 1, coach worker 1), summing to 30 on each dev slot (dev, devb); prod keeps only the poller’s 1',
       STACKS,
       "reserves each dev function's own share, summing to the slot's ceiling",
       'template state: the test user has no AWS credential to read a reservation, and dev shows only its effect (the rows above)',

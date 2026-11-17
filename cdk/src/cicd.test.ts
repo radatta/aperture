@@ -241,7 +241,7 @@ describe('ApertureCicdStack roles', () => {
     expect(actions.every((a) => a.startsWith('logs:'))).toBe(true); // no bootstrap assume, S3, CFN
     const resources = JSON.stringify(stmts.map((s) => s.Resource));
     const groups = [...resources.matchAll(/\/aws\/lambda\/([a-z-]+):\*/g)].map((m) => m[1]).sort();
-    const fns = ['bff', 'mcp', 'finance-sync', 'push-dispatch'];
+    const fns = ['bff', 'mcp', 'finance-sync', 'push-dispatch', 'coach-worker'];
     expect(groups).toEqual(
       fns.flatMap((fn) => [`aperture-${fn}-dev`, `aperture-${fn}-devb`]).sort(),
     );

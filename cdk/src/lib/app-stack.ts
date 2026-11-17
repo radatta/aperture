@@ -13,6 +13,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { CoachWorker } from './coach-worker';
 import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
 import { PushDispatch } from './push-dispatch';
@@ -193,6 +194,8 @@ export class ApertureAppStack extends Stack {
       plaidSsmBase,
       deviceUserId,
     });
+    // The LeetCode coach's worker (the AI pick) — before the BFF and MCP functions too, which both name and invoke it.
+    const coachWorker = new CoachWorker(this, 'CoachWorker', { stage, table, anthropicKeyArn });
 
     // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
     const fnTimeout = Duration.seconds(15); // shared with the Monitoring duration alarm below
@@ -235,6 +238,7 @@ export class ApertureAppStack extends Stack {
         ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}),
         PLAID_ENV: plaidEnv,
         FINANCE_SYNC_FN: financeSync.fn.functionName, // async-invoked after Refresh / connect / reconnect
+        COACH_WORKER_FN: coachWorker.fn.functionName, // async-invoked for the day's AI pick
         // Google OAuth redirect/return base. Only a static custom-domain URL — the CloudFront domain is a
         // token that would create a Lambda→distribution→FunctionURL→Lambda cycle. Unset without a domain.
         ...(domainName ? { APP_URL: `https://${domainName}` } : {}),
@@ -267,6 +271,13 @@ export class ApertureAppStack extends Stack {
       new iam.PolicyStatement({
         actions: ['lambda:InvokeFunction'],
         resources: [financeSync.fn.functionArn],
+      }),
+    );
+    // The coach worker: its exact ARN, as the sync's (the MCP function gets the same, below).
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'],
+        resources: [coachWorker.fn.functionArn],
       }),
     );
     fn.addToRolePolicy(
@@ -310,6 +321,7 @@ export class ApertureAppStack extends Stack {
         MCP_CLIENT_ID: claudeClient.userPoolClientId, // the bearer verifier binds to this claude client
         COGNITO_DOMAIN: cognitoDomain, // the façade's /oauth2 authorize+token base
         ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}), // same Cognito sub the ingest writes attribute to
+        COACH_WORKER_FN: coachWorker.fn.functionName, // async-invoked for the day's AI pick, as from the BFF
         ...(domainName ? { APP_URL: `https://${domainName}` } : {}),
       },
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] },
@@ -317,6 +329,13 @@ export class ApertureAppStack extends Stack {
     grantBackendData(mcpFn, table, filesBucket, ssmBase, { ssmWrite: false });
     mcpFn.addToRolePolicy(
       new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [anthropicKeyArn] }),
+    );
+    // The coach worker only — never finance-sync (nothing Plaid on this function).
+    mcpFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'],
+        resources: [coachWorker.fn.functionArn],
+      }),
     );
     ackLambdaIam(mcpFn, stage, Stack.of(this).region, { ssmWrite: false });
     const mcpUrl = mcpFn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
@@ -506,9 +525,9 @@ export class ApertureAppStack extends Stack {
     new CfnOutput(this, 'McpUrl', { value: `${appUrl}/mcp` }); // the URL to register in Claude Code / claude.ai
     new CfnOutput(this, 'McpClientId', { value: claudeClient.userPoolClientId }); // paste into claude.ai's connector OAuth Client ID
 
-    // Runtime watch on the Lambdas, prod only (see monitoring.ts). The push dispatch has no alarm of its own (no
-    // fixed monthly cost — the maintainer, 2026-11-04): the account-wide Errors alarm covers it, and a stuck tick's 20 s
-    // timeout lands in Errors. Option B: Lambda alarms only — CloudFront
+    // Runtime watch on the Lambdas, prod only (see monitoring.ts). The push dispatch and the coach worker have no
+    // alarm of their own (no fixed monthly cost — the maintainer, 2026-11-04; the org's free ten are full): the
+    // account-wide Errors alarm covers them, and a stuck tick's 20 s or a pick's 90 s timeout lands in Errors. Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
     // worth it, and the synthetic check already proves the edge wiring at deploy time).
     if (stage === 'prod')

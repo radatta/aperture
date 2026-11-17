@@ -94,7 +94,7 @@ export class Monitoring extends Construct {
         period,
       }),
       1,
-      'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync / push-dispatch (or a CDK provider function, deploy-time only) → Monitor',
+      'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync / push-dispatch / coach-worker (or a CDK provider function, deploy-time only) → Monitor',
     );
     alarm(
       'Throttles',
