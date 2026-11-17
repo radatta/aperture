@@ -150,6 +150,8 @@ async function standalone(b, name) {
     if (mode === 'installed' && forced !== 2) fails.push(`${tag}: found ${forced} of the 2 floor terms to force`);
     const top = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('header')).paddingTop));
     if (mode !== 'tab' ? top < 62 + 8 : top !== 8) fails.push(`${tag}: header padding-top ${top}px`);
+    await page.screenshot({ path: `${OUT}/${tag}.png` });
+    console.log(`${OUT}/${tag}.png`);
     if (mode !== 'tab') {
       // an expanded panel's sticky strip sits below the same floor
       await page.evaluate(() => (location.hash = '#next'));
@@ -159,8 +161,7 @@ async function standalone(b, name) {
       await page.evaluate(() => (location.hash = ''));
       await page.waitForTimeout(300);
     }
-    await page.screenshot({ path: `${OUT}/${tag}.png` });
-    console.log(`${OUT}/${tag}.png`);
+    await page.unrouteAll({ behavior: 'ignoreErrors' }); // a poll still in flight mustn't throw on close
     await ctx.close();
   }
 }
@@ -328,6 +329,7 @@ async function taps(page, tag) {
           await page.screenshot({ path: `${OUT}/${tag}.png`, fullPage: true });
           if (variant === 'stress' && scheme === 'light' && size !== 'desk') await taps(page, tag);
           console.log(`${OUT}/${tag}.png`);
+          await page.unrouteAll({ behavior: 'ignoreErrors' }); // a poll still in flight mustn't throw on close
           await ctx.close();
         }
     }
