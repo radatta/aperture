@@ -31,13 +31,13 @@
     timerReset: '[role="button"][aria-label="Reset"],button[aria-label="Reset"]',
     timerResetConfirm: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-secondary',
     lang: '[data-e2e-locator="lang-selector-button"]',
-    // LeetCode's Submit — never clicked: a real click on it is held once for the trace card (lib/coach.js).
-    // From the 2026-11-08 page dump, and Safari's own DOM in debug log 10 (2026-11-13: a <button>, aria-label
-    // Submit); `null` turns the hold off (the Submit then always passes).
+    // LeetCode's Submit — never clicked or held: a real click on it is what the resubmit note reads
+    // (lib/coach.js). From the 2026-11-08 page dump, and Safari's own DOM in debug log 10 (2026-11-13: a
+    // <button>, aria-label Submit); `null` turns the note off.
     submit: '[data-e2e-locator="console-submit-button"]',
   });
   const KEYS = Object.keys(DEFAULTS);
-  // The keys `null` turns off: each click step, and `submit` (the hold); `dialog` and `lang` aren't steps, so a
+  // The keys `null` turns off: each click step, and `submit` (the note); `dialog` and `lang` aren't steps, so a
   // null there is ignored.
   const OFFABLE = [
     'editorReset',

@@ -1,6 +1,6 @@
-// The options page: the connection (origin + device token), the outbox's last send, the coach's switches
-// (lib/coach.js), debug mode and its export, and selector overrides (lib/selectors.js merges them over the
-// defaults).
+// The options page: the version, the connection (origin + device token), the outbox's last send, the coach's
+// note switch (lib/coach.js), debug mode and its export, and selector overrides (lib/selectors.js merges them
+// over the defaults).
 (() => {
   'use strict';
   const api =
@@ -13,6 +13,12 @@
   };
   const tell = (type) => api.runtime.sendMessage({ type }).catch(() => {});
   const { coach } = globalThis.ApertureLC;
+  // The build Safari runs (manifest.json); the app's Settings compares it with the one it was built from.
+  let version = null;
+  try {
+    version = String(api.runtime.getManifest().version);
+  } catch {}
+  $('version').textContent = version ? `Version ${version}` : 'Version unknown';
 
   // ---- connection ----
   async function load() {
@@ -25,7 +31,8 @@
       'outbox',
       ...Object.values(coach.KEYS),
     ]);
-    showCoach(coach.settingsOf(got), got);
+    showCoach(coach.settingsOf(got));
+    local.remove(coach.RETIRED_KEYS).catch(() => {}); // the retired trace card's switches
     if (typeof got.apiOrigin === 'string') $('apiOrigin').value = got.apiOrigin;
     if (typeof got.deviceToken === 'string') $('deviceToken').value = got.deviceToken;
     $('debug').checked = !!got.debug;
@@ -96,28 +103,32 @@
     if (confirm('Drop the captures Aperture refused? They will not be sent.')) tell('clear-failed');
   });
 
-  // ---- the coach: each switch on unless stored false; the hold needs the card ----
-  function showCoach(on, got) {
-    $('coachTrace').checked = on.trace;
-    $('coachHold').checked = got[coach.KEYS.hold] !== false;
-    $('coachHold').disabled = !on.trace;
+  // ---- the coach: the resubmit note, on unless stored false ----
+  function showCoach(on) {
     $('coachNudge').checked = on.nudge;
   }
-  for (const k of Object.keys(coach.KEYS))
-    $(coach.KEYS[k]).addEventListener('change', async () => {
-      try {
-        await local.set({ [coach.KEYS[k]]: $(coach.KEYS[k]).checked });
-        const got = await local.get(Object.values(coach.KEYS));
-        showCoach(coach.settingsOf(got), got);
-        say('coachStatus', 'Saved.', 'ok');
-      } catch (err) {
-        say('coachStatus', `Couldn’t save: ${(err && err.message) || err}`, 'err');
-      }
-    });
+  $('coachNudge').addEventListener('change', async () => {
+    try {
+      await local.set({ [coach.KEYS.nudge]: $('coachNudge').checked });
+      showCoach(coach.settingsOf(await local.get(Object.values(coach.KEYS))));
+      say('coachStatus', 'Saved.', 'ok');
+    } catch (err) {
+      say('coachStatus', `Couldn’t save: ${(err && err.message) || err}`, 'err');
+    }
+  });
 
   // ---- debug ----
   $('debug').addEventListener('change', () => local.set({ debug: $('debug').checked }));
-  const logJson = async () => JSON.stringify((await local.get('debugLog')).debugLog || [], null, 1);
+  // The log, led by an entry naming the build that wrote it (the array shape the readers know).
+  const logJson = async () =>
+    JSON.stringify(
+      [
+        { t: Date.now(), type: 'export', version },
+        ...((await local.get('debugLog')).debugLog || []),
+      ],
+      null,
+      1,
+    );
   $('exportLog').addEventListener('click', async () => {
     const url = URL.createObjectURL(new Blob([await logJson()], { type: 'application/json' }));
     const a = Object.assign(document.createElement('a'), {

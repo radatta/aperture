@@ -1,10 +1,8 @@
-// The overlay, the badge and the coach's trace card — painting only (the decisions are lib/overlay-state.js and
-// lib/coach.js, the actions content.js).
+// The overlay and the badge — painting only (the decisions are lib/overlay-state.js, the actions content.js).
 // Both live in closed shadow roots on hosts appended to <html>, outside React's #__next, so LeetCode's
 // hydration never touches them, and no page script can read their state, their text or Aperture's words —
 // whether the overlay and the badge show is all the page can see. The badge host also carries the pill a
-// dismissed problem shows (Start a sitting) and the trace card's opener, under the same click rule as the
-// overlay's buttons; the card is a third host, a panel that leaves the problem readable. Their
+// dismissed problem shows (Start a sitting), under the same click rule as the overlay's buttons. Their
 // styles are inline in the root, so neither side's CSS leaks into the other. A button acts only on a real
 // click (isTrusted) on an overlay that is really showing: the host the last child of <html>, its style ours,
 // nothing on it or <html> fading or moving it — checked at the click, and the host is put back and kept last
@@ -41,20 +39,9 @@
       background: rgba(28,29,33,.88); color: #f4f4f6; box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: min(460px, calc(100vw - 24px)); }
     .badge.warn { background: #8a5a00; } .badge.bad { background: #b3261e; }
     .pill { border: 0; cursor: pointer; font-weight: 600; }
-    .opener { position: fixed; right: 12px; bottom: 46px; }
-    .panel { position: fixed; right: 12px; bottom: 46px; width: min(380px, calc(100vw - 24px));
-      max-height: calc(100vh - 70px); overflow: auto; border-radius: 14px; padding: 16px 16px 14px;
-      background: #fbfaf7; color: #1c1d21; box-shadow: 0 18px 50px rgba(0,0,0,.35); }
-    .panel h1 { font-size: 16px; margin: 0 0 4px; }
-    .panel label { display: block; font-size: 12px; color: #6a6c75; margin: 10px 0 4px; }
-    .panel textarea { width: 100%; min-height: 44px; resize: vertical; font: 13px/1.35 ui-monospace, Menlo, monospace;
-      padding: 6px 8px; border-radius: 8px; border: 1px solid #c9cad0; background: #fff; color: #1c1d21; }
-    .panel .row { margin-top: 12px; }
     @media (prefers-color-scheme: dark) {
       .card { background: #1d1f24; color: #ececf0; } .kicker, .meta, .hint { color: #a3a5ae; }
       .secondary { color: #ececf0; border-color: #4a4c55; } .err { color: #ff8a80; } .primary { background: #2f8f62; }
-      .panel { background: #1d1f24; color: #ececf0; } .panel label { color: #a3a5ae; }
-      .panel textarea { background: #14161a; color: #ececf0; border-color: #4a4c55; }
     }`;
 
   const HOST_STYLE =
@@ -110,54 +97,11 @@
     return el;
   }
 
-  // Every event that carries what's typed in the card, or a key LeetCode could act on: keys, WebKit's
-  // `textInput` (the inserted text, ahead of `beforeinput`), input, composition, the clipboard, drag and drop.
-  const GUARDED = [
-    'keydown',
-    'keypress',
-    'keyup',
-    'textInput',
-    'beforeinput',
-    'input',
-    'compositionstart',
-    'compositionupdate',
-    'compositionend',
-    'paste',
-    'cut',
-    'copy',
-    'dragstart',
-    'drop',
-  ];
-  // The trace card's fields: what each asks for, by lib/coach.js FIELDS key.
-  const TRACE_FIELDS = [
-    ['empty', 'Empty or smallest input'],
-    ['boundary', 'A boundary case'],
-    ['normal', 'A normal case'],
-  ];
-
   function create(on) {
     const overlay = host('aperture-lc-overlay');
     const badge = host('aperture-lc-badge');
-    const card = host('aperture-lc-coach');
     let overlayShown = false;
     let badgeShown = false;
-    let cardShown = false;
-    // What's typed in the card stops at the window, in the capture phase: registered at document_start, ahead
-    // of LeetCode's own listeners, so its shortcuts (⌘↵ submits) never fire from the card, and no page
-    // listener reads the text from the composed input, composition or clipboard events. Stopping propagation
-    // leaves the typing itself alone. `keys` is the probe (README → Debug mode, `card`): key presses that reached
-    // this guard, how many a listener ahead of it had already prevented, and input events — typing that
-    // doesn't land shows here.
-    const keys = { seen: 0, prevented: 0, inputs: 0 };
-    const guard = (e) => {
-      if (e.target !== card.el) return;
-      if (e.type === 'keydown') {
-        keys.seen++;
-        if (e.defaultPrevented) keys.prevented++;
-      } else if (e.type === 'input') keys.inputs++;
-      e.stopImmediatePropagation();
-    };
-    for (const t of GUARDED) window.addEventListener(t, guard, true);
     const btn = (cls, ap, text, fn) => {
       const b = node('button', { class: cls, 'data-ap': ap, type: 'button' }, text);
       b.addEventListener('click', (e) => {
@@ -263,28 +207,11 @@
       });
     }
 
-    // text null hides it; tone: '' | 'warn' | 'bad'; action 'reopen' makes it the pill, a button; 'trace' adds
-    // the trace card's opener above it.
+    // text null hides it; tone: '' | 'warn' | 'bad'; action 'reopen' makes it the pill, a button.
     // An unchanged repaint keeps the nodes: a pill rebuilt between mousedown and mouseup would lose the click.
-    // What's painted ('status', the pill's text, or null). The status line is updated in place and the opener
-    // kept while it's offered, so the 5 s repaint never swaps a node between mousedown and mouseup.
+    // What's painted ('status', the pill's text, or null); the status line is updated in place.
     let painted = null;
     let statusEl = null;
-    let openerEl = null;
-    function opener() {
-      const b = node(
-        'button',
-        { class: 'badge pill opener', 'data-ap': 'trace-open', type: 'button' },
-        'Trace 3 inputs',
-      );
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const ok = e.isTrusted && genuine(badge.el, styleOf(true, false));
-        if (debug) debug.log('card.click', { ap: 'trace-open', trusted: e.isTrusted, ok });
-        if (ok) on.openCard();
-      });
-      return b;
-    }
     function setBadge(text, tone, action) {
       badgeShown = !!text;
       badge.el.setAttribute('style', styleOf(badgeShown, false));
@@ -293,7 +220,7 @@
         const key = text ? `pill:${text}` : null;
         if (key === painted) return;
         painted = key;
-        statusEl = openerEl = null;
+        statusEl = null;
         badge.body.replaceChildren();
         if (!text) return;
         const pill = node(
@@ -314,128 +241,25 @@
         painted = 'status';
         badge.body.replaceChildren();
         statusEl = node('div', { 'data-ap': 'badge', role: 'status' });
-        openerEl = null;
         badge.body.append(statusEl);
       }
       if (statusEl.textContent !== text) statusEl.textContent = text;
       statusEl.className = `badge ${tone || ''}`;
-      if (action === 'trace' && !openerEl) badge.body.append((openerEl = opener()));
-      else if (action !== 'trace' && openerEl) {
-        openerEl.remove();
-        openerEl = null;
-      }
     }
     // LeetCode may rebuild <html>'s children; the content script's poll calls this to put them back.
     // The shown one last (the overlay over the badge), as soon as either changes and on every poll.
-    // Hidden hosts first, then the shown ones from the bottom up: badge, card, overlay.
     function order() {
-      const hosts = [
-        [badge.el, badgeShown],
-        [card.el, cardShown],
-        [overlay.el, overlayShown],
-      ];
-      // Moving a host out and back drops focus from the field being typed in: put it back, selection and all,
-      // or the next keys go to LeetCode.
-      const root = card.body.getRootNode();
-      const active = cardShown ? root.activeElement : null;
-      const range = active && [active.selectionStart, active.selectionEnd];
-      keepLast([...hosts.filter((h) => !h[1]), ...hosts.filter((h) => h[1])].map((h) => h[0]));
-      if (!active || root.activeElement === active) return;
-      try {
-        active.focus({ preventScroll: true });
-        if (range[0] != null) active.setSelectionRange(range[0], range[1]);
-      } catch {}
+      keepLast(overlayShown || !badgeShown ? [badge.el, overlay.el] : [overlay.el, badge.el]);
     }
     const ensureAttached = () => {
       overlay.el.setAttribute('style', styleOf(overlayShown, overlayShown));
       badge.el.setAttribute('style', styleOf(badgeShown, false));
-      card.el.setAttribute('style', styleOf(cardShown, false));
       order();
     };
-
-    // The trace card: open → the three fields and Trace / Skip; null → hidden. Trace hands content.js what was
-    // typed; the buttons act under the real-click rule, on this host.
-    function renderCard(open) {
-      if (open === cardShown) return order();
-      cardShown = open;
-      card.el.setAttribute('style', styleOf(open, false));
-      card.body.replaceChildren();
-      order();
-      if (!open) return;
-      Object.assign(keys, { seen: 0, prevented: 0, inputs: 0 });
-      const fields = {};
-      const panel = node('div', {
-        class: 'panel',
-        role: 'dialog',
-        'aria-label': 'Trace before you submit',
-      });
-      panel.append(
-        node('p', { class: 'kicker' }, 'Aperture · before you submit'),
-        node('h1', {}, 'Trace 3 inputs by hand'),
-        node(
-          'p',
-          { class: 'meta' },
-          'Walk your code over each, line by line. A word or two is enough.',
-        ),
-      );
-      for (const [k, label] of TRACE_FIELDS) {
-        const id = `ap-trace-${k}`;
-        const ta = node('textarea', { id, 'data-ap': `trace-${k}`, maxlength: '300', rows: '2' });
-        fields[k] = ta;
-        panel.append(node('label', { for: id }, label), ta);
-      }
-      const act = (fn) => (e) => {
-        e.stopPropagation();
-        const ok = e.isTrusted && genuine(card.el, styleOf(true, false));
-        // A probe, as the pill's: a click Safari's checks refuse would otherwise do nothing, silently.
-        if (debug)
-          debug.log('card.click', {
-            ap: e.currentTarget.getAttribute('data-ap'),
-            trusted: e.isTrusted,
-            ok,
-          });
-        if (ok) fn();
-      };
-      const traced = node(
-        'button',
-        { class: 'primary', 'data-ap': 'trace', type: 'button' },
-        'Traced',
-      );
-      traced.addEventListener(
-        'click',
-        act(() => on.trace(values())),
-      );
-      const skip = node(
-        'button',
-        { class: 'secondary', 'data-ap': 'skip', type: 'button' },
-        'Skip',
-      );
-      skip.addEventListener(
-        'click',
-        act(() => on.skip()),
-      );
-      panel.append(
-        node('div', { class: 'row' }, traced, skip),
-        node('p', { class: 'hint' }, 'Then click Submit again — Aperture never submits for you.'),
-      );
-      card.body.append(panel);
-      try {
-        fields.empty.focus({ preventScroll: true }); // straight to typing, out of LeetCode's editor
-      } catch {}
-      function values() {
-        const out = {};
-        for (const [k] of TRACE_FIELDS) out[k] = fields[k].value;
-        return out;
-      }
-      cardValues = values;
-    }
-    let cardValues = () => ({});
-    // What the card holds now (a Submit clicked with the card open takes it as the trace), and the probe.
-    const cardState = () => ({ values: cardShown ? cardValues() : null, keys: { ...keys } });
     // Whether a node is one of our hosts (a click there is never LeetCode's).
-    const owns = (el) => el === overlay.el || el === badge.el || el === card.el;
-    return { render, setBadge, ensureAttached, renderCard, cardState, owns };
+    const owns = (el) => el === overlay.el || el === badge.el;
+    return { render, setBadge, ensureAttached, owns };
   }
 
-  (root.ApertureLC = root.ApertureLC || {}).overlay = { create, STEP_TEXT, GUARDED };
+  (root.ApertureLC = root.ApertureLC || {}).overlay = { create, STEP_TEXT };
 })(globalThis);

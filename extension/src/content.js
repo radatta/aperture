@@ -59,7 +59,7 @@
   let sync = null; // storage.local sync:<slug> — the background's last word on it
   let status = null; // storage.local status — the outbox's state
   let sel = selLib.merge(null);
-  let coachOn = coachLib.settingsOf(null); // Options' coach switches (lib/coach.js); all on until read
+  let coachOn = coachLib.settingsOf(null); // Options' note switch (lib/coach.js); on until read
   let pendingStart = null; // {slug, clientSittingId, startedAt} for the Start in progress
   let lastStartRetryable = false;
   const problems = new Map(); // slug → LeetCode's questionDetail.question, this page load, oldest first
@@ -336,7 +336,7 @@
   function learnQuestionId(slug, questionId) {
     questionIds.set(slug, questionId);
     if (binding && binding.slug === slug && binding.questionId == null)
-      saveBinding({ ...binding, questionId: String(questionId) }).catch(() => {});
+      patchBinding({ questionId: String(questionId) });
   }
   function onProblem(slug, doc, questionId) {
     const fit = wire.fitProblem(doc, PROBLEM_MAX);
@@ -411,9 +411,8 @@
     }).catch(() => null);
     filling = false;
     debug.log('fill', { ok: !!r && r.status === 200, http: r ? r.status : null });
-    // The binding may have been rewritten meanwhile (learnQuestionId): mark the one still on this sitting.
-    if (r && r.status === 200 && binding && binding.sittingId === b.sittingId)
-      await saveBinding({ ...binding, problemSent: true });
+    // Marked only on the binding still on this sitting (a nav or an end may have replaced it meanwhile).
+    if (r && r.status === 200 && sameSitting(binding, b)) await patchBinding({ problemSent: true });
   }
   if (document.readyState === 'loading')
     document.addEventListener('DOMContentLoaded', () => readPageDoc('load'), { once: true });
@@ -505,9 +504,49 @@
   }
 
   // ---- the binding ----
+  const sameSitting = (x, y) => !!x && !!y && x.slug === y.slug && x.sittingId === y.sittingId;
   async function saveBinding(b) {
     binding = b;
     await local.set({ [`sitting:${b.slug}`]: b });
+  }
+  // Two tabs on one problem each hold the binding in memory, so a whole-object write from one would undo what
+  // the other wrote (F181). A change is a patch instead: applied here at once, then merged into what storage
+  // holds now — only while that is still this sitting, so a cleared or replaced binding never comes back. The
+  // patches go one at a time; the other tab adopts the result (adoptBinding). Not atomic across tabs (no
+  // compare-and-set in storage.local), but the window is one read and one write, and patches touch
+  // different fields.
+  const mergeBinding = (b, patch) => ({
+    ...b,
+    ...patch,
+    ...(patch.coach ? { coach: { ...(b.coach || {}), ...patch.coach } } : {}),
+  });
+  let patching = Promise.resolve();
+  let patchesPending = 0;
+  function patchBinding(patch) {
+    if (!binding) return Promise.resolve();
+    const { slug, sittingId } = binding;
+    binding = mergeBinding(binding, patch);
+    patchesPending++;
+    patching = patching
+      .then(async () => {
+        const key = `sitting:${slug}`;
+        const stored = (await local.get(key))[key];
+        if (!stored || stored.sittingId !== sittingId) return;
+        const next = mergeBinding(stored, patch);
+        await local.set({ [key]: next });
+        // The last patch in line carries every earlier one (each merged into the last one's write).
+        if (patchesPending === 1 && binding && binding.slug === slug && binding.sittingId === sittingId)
+          binding = next;
+      })
+      .catch(() => {})
+      .finally(() => patchesPending--);
+    return patching;
+  }
+  // Another tab's write to this sitting's binding (a change event, or the 5 s reread when Safari drops it):
+  // taken as is while none of this tab's own patches is in line.
+  function adoptBinding(next) {
+    if (!next || !binding || patchesPending || !sameSitting(next, binding)) return;
+    binding = next;
   }
   async function clearBinding() {
     const slug = (binding && binding.slug) || screenSlug;
@@ -543,6 +582,10 @@
       try {
         return await timerStep(path);
       } finally {
+        // Where it ended too: Start keeps the mode LeetCode last used, so a stopwatch stays one (F154).
+        const after = readTimer();
+        path.statusAfter = clip(after && after.status, 20);
+        path.modeAfter = clip(after && after.mode, 20);
         debug.log('timer', path); // every exit: a failed Safari run is where the path matters most
       }
     },
@@ -713,16 +756,15 @@
     resumed.add(b.sittingId);
     const body = startBody(b.clientSittingId, b.clientStartedAt);
     const r = await send({ type: 'start', body }).catch(() => ({ status: 0 }));
-    if (binding !== b) return;
+    // The same sitting, not the same object: a patch meanwhile (a hint, another tab's write) replaces the object.
+    if (!sameSitting(binding, b)) return;
     const s = r.status === 200 && r.json && r.json.sitting;
     if (s) {
       const active = s.status === 'active' && s.problemSlug === screenSlug;
-      if (active)
-        await saveBinding({
-          ...b,
-          sittingId: s.id,
-          problemSent: b.problemSent || !!body.problem,
-        });
+      if (active && s.id !== b.sittingId)
+        await saveBinding({ ...binding, sittingId: s.id, problemSent: !!body.problem });
+      else if (active && !binding.problemSent && body.problem)
+        await patchBinding({ problemSent: true });
       debug.log('resume', { active });
       return act({ type: 'resumed', active });
     }
@@ -754,20 +796,14 @@
   }
   window.addEventListener('focus', (e) => e.isTrusted && recheck());
 
-  // ---- the coach (lib/coach.js): the trace card at the first Submit, the resubmit note ----
-  // Its per-sitting state rides on the binding (`coach`: config sent, the trace's outcome and when, whether the
-  // hold fired), so a reload never asks twice. The last verdict and the card are this page's only.
-  const DOUBLE_MS = 500; // a click this soon after the card opened is the same gesture (a double-click)
+  // ---- the coach (lib/coach.js): the resubmit note ----
+  // `config` goes once a sitting, flagged on the binding (`coach.config`), so a reload or a second tab never
+  // sends it twice. The last verdict and the note are this page's only. A binding from before 2.2.0 may still
+  // carry the retired card's `coach.trace`, `held` and `traceAt`: nothing reads them.
   let lastVerdict = null; // {at, verdict} of the last judged submit on this sitting
-  let cardAt = null; // when the card opened; null while closed
   let note = null; // {text, until}: a short line on the badge
-  const coachState = () => (binding && binding.coach) || {};
   const sittingOpen = () =>
     state.phase === 'active' && !!liveBinding() && bindingStatus() === 'active';
-  function setCoach(patch) {
-    if (!binding) return;
-    saveBinding({ ...binding, coach: { ...coachState(), ...patch } }).catch(() => {});
-  }
   const sendCoach = (payload, at = Date.now()) => queue([coachLib.event(payload, mintId, at)]);
   const flash = (text) => {
     note = { text, until: Date.now() + coachLib.NOTE_MS };
@@ -776,39 +812,14 @@
   };
   // Once a sitting, as it goes active (a Start, or a resume of one opened before this version): what was on.
   function coachConfig() {
-    if (!binding || coachState().config) return;
+    if (!binding || (binding.coach && binding.coach.config)) return;
     sendCoach(coachLib.configPayload(coachOn));
-    setCoach({ config: true });
+    patchBinding({ coach: { config: true } });
   }
-  function openCard() {
-    if (!sittingOpen() || coachState().trace || cardAt != null) return;
-    cardAt = Date.now();
-    view.renderCard(true);
-    paintBadge();
-  }
-  function closeCard(how) {
-    if (cardAt == null) return;
-    const { keys } = view.cardState();
-    debug.log('card', { how, ms: Date.now() - cardAt, keys }); // the probe: did typing land (overlay.js)
-    cardAt = null;
-    view.renderCard(false);
-    paintBadge();
-  }
-  // Trace or Skip from the card (a trace with nothing typed is a Skip). `passing`: the Submit that took it is
-  // going through now, so there's nothing left to tell the user to click.
-  function finishCard(values, passing = false) {
-    if (cardAt == null || !binding) return;
-    const payload = coachLib.cardPayload(values, Date.now() - cardAt);
-    sendCoach(payload);
-    setCoach({ trace: payload.kind === 'trace' ? 'traced' : 'skipped', traceAt: Date.now() });
-    closeCard(payload.kind);
-    if (!passing) flash('now click Submit');
-  }
-  // A real click on LeetCode's Submit, in the capture phase at the window — ahead of React's root listener.
-  // The first one in a sitting is held (no request is made) and the card shown; the user clicks Submit again.
-  // A page script's click() is never held. Submit by keyboard never passes here: it is logged when its
-  // submit arrives (onSubmitItem). A click in one of our own hosts is never a Submit, and the hit must be a
-  // button — the page could mark a wrapper, or our host, with the Submit's selector to have every click held.
+  // A real click on LeetCode's Submit, in the capture phase at the window: within a minute of a failed verdict,
+  // the note. It never blocks or delays the click. A page script's click() gets no note, nor does a click in
+  // one of our own hosts, and the hit must be a button — the page could mark a wrapper (or <html>) with the
+  // Submit's selector to have every click count.
   window.addEventListener(
     'click',
     (e) => {
@@ -817,29 +828,8 @@
       try {
         hit = sel.submit && e.target && e.target.closest ? e.target.closest(sel.submit) : null;
       } catch {}
-      // A button only: a page marking a wrapper (or <html>) with the selector gets nothing held.
       if (!hit || !hit.matches('button,[role=button]')) return;
       if (!sittingOpen()) return;
-      const c = coachState();
-      if (cardAt != null) {
-        // The second click of the double-click that opened the card: swallowed too, never a submit.
-        if (Date.now() - cardAt < DOUBLE_MS) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          return;
-        }
-        // With the card open, this Submit takes what's typed as the trace (nothing typed: just closes it).
-        const { values } = view.cardState();
-        if (coachLib.cardPayload(values, 0).kind === 'trace') return finishCard(values, true);
-        return closeCard('submit');
-      }
-      if (coachLib.shouldHold({ settings: coachOn, trusted: true, active: true, coach: c })) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        setCoach({ held: true });
-        debug.log('hold', { at: Date.now() });
-        return openCard();
-      }
       const gap = coachLib.nudgeGap({ settings: coachOn, last: lastVerdict, now: Date.now() });
       if (gap == null) return;
       lastVerdict = null; // one note per failed verdict
@@ -848,22 +838,11 @@
     },
     true,
   );
-  // A submit LeetCode judged, for the open sitting: the verdict the next Submit's note reads, and — when
-  // nothing was traced or skipped before it — an untraced submit (a keyboard submit, the hold off, the
-  // Submit not found, or a second click past the card). The verdict comes seconds after the request: a trace
-  // made in between came after the submit (`at` is the request's), so it doesn't count either. Only while the
-  // sitting is active: a binding write mid-resume would make the resume stand down.
+  // A submit LeetCode judged, for the open sitting: the verdict the next Submit's note reads.
   function onSubmitItem(m) {
     if (!sittingOpen()) return;
     const verdict = coachLib.verdictOf(m.payload);
     lastVerdict = verdict ? { at: Date.now(), verdict } : null;
-    const c = coachState();
-    if (c.trace && !(c.trace !== 'untraced' && c.traceAt > m.at)) return;
-    // The probe for a hold that didn't hold: a submit while the card is still up came past it.
-    if (cardAt != null) debug.log('hold.leak', { ms: Date.now() - cardAt });
-    closeCard('submitted');
-    sendCoach({ kind: 'untraced-submit' }, m.at);
-    setCoach({ trace: 'untraced', traceAt: null });
   }
 
   // ---- the overlay ----
@@ -873,9 +852,6 @@
     continue: () => act({ type: 'continue' }),
     dismiss: () => act({ type: 'dismiss' }),
     reopen: () => reopen(),
-    trace: (values) => finishCard(values),
-    skip: () => finishCard({}),
-    openCard: () => openCard(),
   });
   // The pill on a dismissed problem. A sitting still open for it (opened meanwhile in another tab) resumes
   // instead of prompting: the nav reads the binding. One already over (by bindingStatus's rule) prompts.
@@ -921,10 +897,7 @@
       maybeFill(true);
       coachConfig();
     }
-    if (state.phase !== 'active') {
-      closeCard('left');
-      lastVerdict = null; // a new sitting here never takes the last one's verdict
-    }
+    if (state.phase !== 'active') lastVerdict = null; // a new sitting here never takes the last one's verdict
     for (const e of r.effects) {
       if (e.do === 'step') runStep(e.step);
       else if (e.do === 'resume') resume();
@@ -982,20 +955,7 @@
     const synced = last ? `synced ${ago(now - last)}` : 'waiting for the first sync';
     if (note && note.until > now) return setBadge(`${head} · ${note.text}`, '');
     note = null;
-    // Before the trace: the card's opener, and a word when the hold can't find LeetCode's Submit.
-    const untraced = coachOn.trace && !coachState().trace && cardAt == null;
-    const found = sel.submit ? q(sel.submit) : null;
-    const lost =
-      untraced &&
-      coachOn.hold &&
-      !coachState().held &&
-      !!sel.submit &&
-      !(found && found.matches('button,[role=button]')); // the hold's own rule (the click handler)
-    setBadge(
-      `${head} · ${synced}${lost ? ' · Submit hold off: Submit not found' : ''}`,
-      '',
-      untraced ? 'trace' : null,
-    );
+    setBadge(`${head} · ${synced}`, '');
   }
   // The repaint never waits on the read: a reloaded extension's storage may never answer.
   setInterval(() => {
@@ -1027,7 +987,6 @@
     lastTimerRaw = null;
     lastVerdict = null;
     note = null;
-    closeCard('nav');
     paintBadge(); // the last problem's pill or badge goes now, not after the reads below
     if (!slug) return act({ type: 'nav', slug: null });
     const got = await local.get([`sitting:${slug}`, `sync:${slug}`]);
@@ -1080,7 +1039,11 @@
   // are only counted — logging them would loop), and whether it was restored from the back/forward cache.
   const pageId = mintId().slice(-6);
   let ownLogChanges = 0;
-  debug.log('oc.reg', { pageId, readyState: document.readyState });
+  let loadedVersion = null; // the build this page's scripts came from (README → Versions)
+  try {
+    loadedVersion = String(api.runtime.getManifest().version).slice(0, 20);
+  } catch {}
+  debug.log('oc.reg', { pageId, readyState: document.readyState, v: loadedVersion });
   api.storage.onChanged.addListener((changes, area) => {
     const keys = Object.keys(changes || {}).filter((k) => k !== 'debugLog');
     if (!keys.length) return void ownLogChanges++;
@@ -1098,6 +1061,8 @@
         () => {},
       );
     if (changes.status) status = changes.status.newValue || null;
+    const b = screenSlug && changes[`sitting:${screenSlug}`];
+    if (b) adoptBinding(b.newValue);
     const k = screenSlug && `sync:${screenSlug}`;
     if (k && changes[k]) learnSync(changes[k].newValue);
     if (state.phase === 'active') paintBadge();
@@ -1113,10 +1078,11 @@
     const slug = screenSlug;
     const k = `sync:${slug}`;
     const got = await Promise.resolve()
-      .then(() => local.get([k, 'status']))
+      .then(() => local.get([k, 'status', `sitting:${slug}`]))
       .catch(() => null);
     if (!got || screenSlug !== slug || !rereading()) return;
     status = got.status || null;
+    adoptBinding(got[`sitting:${slug}`]);
     const next = got[k] || null;
     if (JSON.stringify(next) === JSON.stringify(sync)) return;
     debug.log('sync.reread', { status: next && next.status, synced: !!(next && next.lastSyncAt) });
