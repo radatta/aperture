@@ -405,6 +405,13 @@ describe('the day row’s steps', () => {
     expect(claimAiRow(fell, 'c3', NOW)).toBeNull(); // a fallback stays a fallback
   });
 
+  it('won’t claim a day a slot change reached first', () => {
+    const changed = dayRow(TODAY, undefined, [
+      { kind: 'new', action: 'skip', from: 'two-sum', to: null, at: NOW },
+    ]);
+    expect(claimAiRow(changed, 'c1', NOW)).toBeNull();
+  });
+
   it('starts only its own live claim, once', () => {
     const claimed = claimAiRow(blank, 'c1', NOW)!;
     const started = startAiRow(claimed, 'c1', NOW + 1_000)!;

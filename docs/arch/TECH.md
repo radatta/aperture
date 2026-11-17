@@ -267,7 +267,7 @@ aperture/
       shared/ · test/  # env.ts (the one Vite env reader) · the jsdom setup + test utils
   lambdas/src/         # BFF — index.ts, handler.ts, backend.ts, sessions.ts (pomodoro sessions); auth/ (verify),
                        #   rpc/ (argSpecs, shape, failure), ddb/ (keys, repo, writes, mapping, DocClient),
-                       #   anthropic/ (the gated Claude gateway + prompts), coach/ + coachWorker.ts (the AI pick),
+                       #   anthropic/ (the gated Claude gateway + prompts), coach/ (the AI pick's worker core),
                        #   google/, plaid/, s3/, mcp/,
                        #   push/ (service.ts: reminder devices + Send test; the poller's sender) + pushDispatch.ts,
                        #   finance/ + financeSync.ts (the sync Lambda), coachWorker.ts (the coach's AI pick), kill/ (the dev account's kill switch),

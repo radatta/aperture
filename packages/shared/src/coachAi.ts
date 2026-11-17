@@ -309,9 +309,10 @@ const blankAi = (claimId: string, now: number): CoachDayAi => ({
   usage: null,
   ms: null,
 });
-// One claim a day, ever: a day that has any `ai` is never claimed again (a fallback stays a fallback).
+// One claim a day, ever: a day that has any `ai` is never claimed again (a fallback stays a fallback). Nor one a
+// slot change reached first (a change between the plan read and the claim): it's under way on the rules.
 export const claimAiRow = (cur: CoachDay, claimId: string, now: number): CoachDay | null =>
-  cur.ai ? null : { ...cur, ai: blankAi(claimId, now) };
+  cur.ai || cur.changes.length > 0 ? null : { ...cur, ai: blankAi(claimId, now) };
 // The worker's start: only its own live claim, only once (a redelivered event finds `startedAt` set).
 export const startAiRow = (cur: CoachDay, claimId: string, now: number): CoachDay | null =>
   cur.ai?.status === 'pending' &&

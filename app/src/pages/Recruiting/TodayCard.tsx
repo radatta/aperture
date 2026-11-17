@@ -27,11 +27,28 @@ const ENGINE = ''; // the focus picker's "the coach's pick" option (clears the o
 export function TodayCard() {
   const { data: today, isPending, isError, refetch, startFailed, retryStart } = useCoachToday();
   const id = useId();
+  const status = aiStatus(today, startFailed);
   return (
     <Card aria-labelledby={`${id}-h`} role="region" className="flex flex-col gap-3">
       <Text as="h2" id={`${id}-h`} size="lg" weight="semibold">
         Today’s practice
       </Text>
+      {/* The AI pick's one live region, mounted before the plan loads so its first line is announced too. */}
+      <div
+        className={cx(
+          'flex flex-wrap items-center gap-2',
+          (!status.text || status.quiet) && 'sr-only',
+        )}
+      >
+        <p role="status" className="text-sm text-ink-muted">
+          {status.text}
+        </p>
+        {status.retry && (
+          <Button variant="quiet" size="sm" onClick={retryStart}>
+            Retry
+          </Button>
+        )}
+      </div>
       {isError && !today ? (
         <LoadError onRetry={() => void refetch()}>Couldn’t load today’s plan.</LoadError>
       ) : isPending || !today ? (
@@ -39,21 +56,31 @@ export function TodayCard() {
           Loading today’s plan…
         </Text>
       ) : (
-        <TodayBody today={today} startFailed={startFailed} onRetryStart={retryStart} />
+        <TodayBody today={today} startFailed={startFailed} />
       )}
     </Card>
   );
 }
 
-function TodayBody({
-  today,
-  startFailed,
-  onRetryStart,
-}: {
-  today: CoachToday;
-  startFailed: boolean;
-  onRetryStart: () => void;
-}) {
+// The AI pick's state on the card: whether it's still picking (slots withheld), and the line said about it — a
+// fallback's notice, a failed start (with a Retry), or, once picked, a screen-reader-only "picked" (`quiet`).
+function aiStatus(today: CoachToday | undefined, startFailed: boolean) {
+  const ai = today?.ai;
+  const picking = ai?.status === 'pending' || (ai?.status === 'due' && !startFailed);
+  const retry = ai?.status === 'due' && startFailed;
+  const text = picking
+    ? 'Opus is picking today’s problems… usually under a minute.'
+    : retry
+      ? 'Couldn’t start today’s AI pick — using the rules for now.'
+      : ai?.status === 'fallback'
+        ? ai.notice
+        : ai?.status === 'ok'
+          ? 'Opus picked today’s problems.'
+          : null;
+  return { picking, retry, text, quiet: ai?.status === 'ok' };
+}
+
+function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boolean }) {
   const slot = useSetCoachSlot();
   const floor = useSetCoachFloor();
   const [error, setError] = useState<string | null>(null);
@@ -79,21 +106,9 @@ function TodayBody({
   const change = (s: CoachSlot, action: 'swap' | 'skip' | 'restore') =>
     run(() => slot.mutateAsync({ slug: s.slug, action }));
   // While Opus picks, the rule slots aren't shown — nor what's due beyond them: the plan never shifts under a glance.
-  // A start that failed shows the rules, said out loud, with a Retry.
   const ai = today.ai;
-  const picking = ai?.status === 'pending' || (ai?.status === 'due' && !startFailed);
-  const startNote = ai?.status === 'due' && startFailed;
+  const { picking } = aiStatus(today, startFailed);
   const queue = picking ? today.next48h : [...dueBeyondSlots(today), ...today.next48h];
-  // One live region, always mounted, so each change is announced — the landing too (screen readers only).
-  const status = picking
-    ? 'Opus is picking today’s problems… usually under a minute.'
-    : startNote
-      ? 'Couldn’t start today’s AI pick — using the rules for now.'
-      : ai?.status === 'fallback'
-        ? ai.notice
-        : ai?.status === 'ok'
-          ? 'Opus picked today’s problems.'
-          : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -107,21 +122,6 @@ function TodayBody({
         </Text>
       )}
       {ai?.status === 'ok' && ai.note && <Text size="sm">{ai.note}</Text>}
-      <div
-        className={cx(
-          'flex flex-wrap items-center gap-2',
-          (!status || ai?.status === 'ok') && 'sr-only',
-        )}
-      >
-        <p role="status" className="text-sm text-ink-muted">
-          {status}
-        </p>
-        {startNote && (
-          <Button variant="quiet" size="sm" onClick={onRetryStart}>
-            Retry
-          </Button>
-        )}
-      </div>
 
       {picking ? null : today.slots.length === 0 ? (
         <Text size="sm" tone="muted">

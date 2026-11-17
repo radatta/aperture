@@ -181,6 +181,16 @@ describe('the worker’s edges', () => {
     expect((await b.getCoachToday()).ai?.focusChange).toBeNull();
   });
 
+  it('the switch turned off after the claim: no call, a fallback', async () => {
+    const { anthropic, b, events, run } = await setup({ mode: 'deferred' });
+    anthropic.nextPick = firstTwo;
+    await b.startCoachPick();
+    await b.updateSettings({ coachAiPick: false });
+    expect(await run(events[0]!)).toBe('fallback');
+    expect(anthropic.pickCalls).toHaveLength(0);
+    expect(await stored(b)).toMatchObject({ status: 'fallback', detail: 'off' });
+  });
+
   it('a throw after the start settles the day at once, never a silent timeout', async () => {
     const { anthropic, b, events, run } = await setup({ mode: 'deferred' });
     anthropic.nextPick = () => {

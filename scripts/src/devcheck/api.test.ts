@@ -297,6 +297,15 @@ describe('createApiClient', () => {
       );
     });
 
+    it('records nothing for a start with the setting off', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { day: '2026-11-17', slots: [] }));
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await api.writes.startCoachPick({ off: true });
+      expect(ledger.entries).toEqual([]);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
     it('logs attempts with an intent, then each id from the answer; a 4xx is a refusal', async () => {
       const ledger = memLedger();
       let status = 200;

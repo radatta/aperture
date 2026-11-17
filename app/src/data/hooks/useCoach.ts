@@ -21,26 +21,33 @@ export function useCoachToday(opts: { enabled?: boolean } = {}) {
     enabled: opts.enabled ?? true,
     refetchInterval: (q) => (q.state.data?.ai?.status === 'pending' ? PICK_POLL_MS : false),
   });
-  const start = useMutation({
+  // `day` rides as the variables, so only today's starts count; kept in the cache all session (a few a day), since
+  // the once-a-day guard below outlives any GC — a collected failure would read as "picking" with no Retry.
+  const start = useMutation<CoachToday, Error, string>({
     mutationKey: PICK_START,
+    gcTime: Infinity,
     mutationFn: () => api.startCoachPick(),
     onSuccess: (today) => qc.setQueryData(qk.coachToday(), today),
   });
-  // Shared by every reader (Home's line and the card): the newest start's outcome, wherever it was fired.
+  const day = query.data?.ai?.status === 'due' ? query.data.day : null;
+  // Shared by every reader (Home's line and the card): the newest start's outcome for this day, wherever it was fired.
   const starts = useMutationState({
-    filters: { mutationKey: PICK_START },
+    filters: { mutationKey: PICK_START, predicate: (m) => m.state.variables === query.data?.day },
     select: (m) => m.state.status,
   });
   const startFailed = starts[starts.length - 1] === 'error';
-  const day = query.data?.ai?.status === 'due' ? query.data.day : null;
   useEffect(() => {
     if (!day) return;
     const seen = started.get(qc) ?? started.set(qc, new Set()).get(qc)!;
     if (seen.has(day)) return;
     seen.add(day);
-    start.mutate();
+    start.mutate(day);
   }, [day, qc, start]);
-  return { ...query, startFailed, retryStart: () => start.mutate() };
+  return {
+    ...query,
+    startFailed,
+    retryStart: () => query.data && start.mutate(query.data.day),
+  };
 }
 
 // Slot and floor writes hand back the day's plan after them: it lands in the cache as is.

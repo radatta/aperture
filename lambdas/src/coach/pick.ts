@@ -41,7 +41,7 @@ export async function readCoachInput(repo: Repo, day: string, now: number): Prom
     attempts,
     days,
     focus,
-    aiPick: true,
+    aiPick: settings?.coachAiPick !== false, // switched off after the claim: no call
     aiCanStart: false,
   };
 }
@@ -107,7 +107,8 @@ export async function runCoachPick(d: CoachPickDeps, e: CoachPickEvent): Promise
     const ci = await readCoachInput(repo, e.day, d.now());
     focusRead = ci.focus;
     const ctx = coachPickContext(ci);
-    if (ctx.candidates.length < 2)
+    if (!ci.aiPick) res = { ...fail('unavailable', 'off'), oldestDue: ctx.oldestDue };
+    else if (ctx.candidates.length < 2)
       res = { ...fail('unavailable', 'no-candidates'), oldestDue: ctx.oldestDue };
     else {
       const out = await d.anthropic.coachPick({ ctx, timeoutMs: COACH_PICK_TIMEOUT_MS });

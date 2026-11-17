@@ -326,7 +326,7 @@ export const lcCoachAi: Scenario = {
         if (t.ai != null)
           fail(`the plan has an AI view with the pick off: ${JSON.stringify(t.ai)}`);
         state.prior = await aiRow(ctx);
-        const started = await ctx.api.writes.startCoachPick();
+        const started = await ctx.api.writes.startCoachPick({ off: true });
         if (started.ai != null) fail(`a start with the pick off: ${JSON.stringify(started.ai)}`);
         const after = await aiRow(ctx);
         if (JSON.stringify(after) !== JSON.stringify(state.prior))

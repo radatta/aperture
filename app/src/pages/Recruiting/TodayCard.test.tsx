@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_COACH_PICK_KEY } from '../../data/stubClient';
@@ -328,6 +328,26 @@ describe('the AI pick on the Today card', () => {
     expect(await within(c).findByText(/Couldn’t start today’s AI pick/)).toBeTruthy();
     expect(within(c).queryByText(/Opus is picking/)).toBeNull();
     expect(within(c).getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('a failed start keeps its Retry past the cache’s clean-up (5 minutes)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const api = stub(true);
+      vi.spyOn(api, 'startCoachPick').mockRejectedValueOnce(new Error('offline'));
+      renderApp({ api, path: '/' });
+      await user.click(await screen.findByText(/^LeetCode · \d+ today/));
+      const c = await card();
+      expect(await within(c).findByText(/Couldn’t start today’s AI pick/)).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(6 * 60_000);
+      });
+      expect(within(c).getByRole('button', { name: 'Retry' })).toBeTruthy();
+      expect(within(c).queryByText(/Opus is picking/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('with the switch off: the rules, no start, no notice', async () => {

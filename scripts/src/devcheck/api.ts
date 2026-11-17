@@ -1192,8 +1192,10 @@ export function createApiClient({
       if (!pendingIds(ledger.read()).includes(id))
         ledger.append({ run, op: 'created', id, via: COACH_FOCUS_VIA, title: 'ai pick focus' });
     },
-    async startCoachPick(): Promise<DevCoachToday> {
-      writes.recordCoachPickFocus();
+    // `off`: the setting is off, so nothing can move the focus — no ledger line (cleanup would otherwise clear a
+    // focus row this run never wrote).
+    async startCoachPick(opts: { off?: boolean } = {}): Promise<DevCoachToday> {
+      if (!opts.off) writes.recordCoachPickFocus();
       return call<DevCoachToday>('startCoachPick', []);
     },
     // Attempts logged through the API, as the app's and log_attempt's path: an intent, then each id from the
