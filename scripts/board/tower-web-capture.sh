@@ -146,6 +146,15 @@ async function standalone(b, name) {
     if (mode === 'installed' && forced !== 2) fails.push(`${tag}: found ${forced} of the 2 floor terms to force`);
     const top = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('header')).paddingTop));
     if (mode === 'installed' ? top < 62 + 8 : top !== 8) fails.push(`${tag}: header padding-top ${top}px`);
+    if (mode === 'installed') {
+      // an expanded panel's sticky strip sits below the same floor
+      await page.evaluate(() => (location.hash = '#next'));
+      await page.waitForTimeout(300);
+      const st = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#strip')).top));
+      if (!(st >= 62)) fails.push(`${tag}: the expand strip sticks at ${st}px, under the status bar`);
+      await page.evaluate(() => (location.hash = ''));
+      await page.waitForTimeout(300);
+    }
     await page.screenshot({ path: `${OUT}/${tag}.png` });
     console.log(`${OUT}/${tag}.png`);
     await ctx.close();
