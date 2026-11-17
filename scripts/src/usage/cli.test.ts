@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commands, usageFor, usageKeys } from '../bot/help.ts';
-import { FLAGS, USAGE, main, newestRowTs, parseArgs, statuslineScript } from './cli.ts';
+import { FLAGS, USAGE, main, newestRowTs, parseArgs, ptMidnight, statuslineScript } from './cli.ts';
+import { mergedPRs, PR_LIMIT } from './gh.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
 import { fitModel, hoursTo100, scheduledResets } from './model.ts';
 import { parseMeter } from './meter.ts';
@@ -86,6 +87,60 @@ describe('usage cli helpers', () => {
   });
 });
 
+describe('since and merged PRs', () => {
+  it('puts --since at Pacific midnight in either offset', () => {
+    expect(new Date(ptMidnight('2026-01-10')).toISOString()).toBe('2026-01-10T08:00:00.000Z');
+    expect(new Date(ptMidnight('2026-07-10')).toISOString()).toBe('2026-07-10T07:00:00.000Z');
+    expect(ptMidnight('last-tuesday')).toBeNaN();
+  });
+
+  const pr = (n: number) => ({
+    number: n,
+    title: 't',
+    headRefName: 'b',
+    mergedAt: '2026-01-05T10:00:00Z',
+    changedFiles: 1,
+    additions: 1,
+    deletions: 0,
+    files: [{ path: 'a.ts' }],
+  });
+
+  it('asks gh for PRs merged since the day, caches by day, and says when it hit the limit', async () => {
+    const calls: string[][] = [];
+    const gh = async (args: string[]) => {
+      calls.push(args);
+      const n = calls.length === 1 ? 1 : PR_LIMIT;
+      return JSON.stringify(Array.from({ length: n }, (_, i) => pr(i + 1)));
+    };
+    const cache = join(tmp, 'c');
+    const a = await mergedPRs(cache, { since: '2026-01-01', now: 0, gh });
+    expect(calls[0]).toContain('merged:>=2026-01-01');
+    expect(a).toMatchObject({ note: null, prs: [{ number: 1, branch: 'b', files: ['a.ts'] }] });
+    expect((await mergedPRs(cache, { since: '2026-01-01', now: 60_000, gh })).prs).toHaveLength(1);
+    expect(calls).toHaveLength(1); // cached
+    const b = await mergedPRs(cache, { since: '2025-12-01', now: 60_000, gh }); // another day refetches
+    expect(b.note).toContain('the gh limit');
+  });
+
+  it('falls back to the cache with a note when gh fails, and fails loud with none', async () => {
+    const cache = join(tmp, 'c');
+    const bad = async (): Promise<string> => {
+      throw new Error('HTTP 502');
+    };
+    await expect(mergedPRs(cache, { since: '2026-01-01', now: 0, gh: bad })).rejects.toThrow(
+      /HTTP 502/,
+    );
+    await mergedPRs(cache, {
+      since: '2026-01-01',
+      now: 0,
+      gh: async () => JSON.stringify([pr(1)]),
+    });
+    const r = await mergedPRs(cache, { since: '2026-01-01', now: 0, refresh: true, gh: bad });
+    expect(r.note).toContain('gh failed');
+    expect(r.prs).toHaveLength(1);
+  });
+});
+
 describe('fit model', () => {
   it('splits manual history at weekly resets implied by resets_at', () => {
     const resetsAt = Date.parse('2026-01-15T09:00:00Z') / 1000; // a Thursday 01:00 PT
@@ -151,6 +206,7 @@ describe('usage report end to end', () => {
       join(usage, 'cache', 'prs.json'),
       JSON.stringify({
         fetchedAt: Date.now(),
+        since: '2026-01-01',
         prs: [
           {
             number: 3,

@@ -85,6 +85,9 @@ function meta(root: string, rel: string) {
   }
 }
 
+const markerKey = (m: Marker) =>
+  `${m.ts}|${m.kind}|${m.phase ?? ''}|${m.cls ?? ''}|${m.toolUseId ?? ''}|${m.lane ?? ''}`;
+
 export interface ScanOpts {
   root: string;
   cache: string;
@@ -131,6 +134,8 @@ export async function scan(o: ScanOpts): Promise<ScanResult> {
     const merger = new CallMerger();
     for (const c of old?.calls ?? []) merger.add(c);
     const markers: Marker[] = [...(old?.markers ?? [])];
+    // a crash between the shard and index writes resumes over bytes already read: keep each marker once
+    const seen = new Set(markers.map(markerKey));
     const st: ReadStats = { bytes: 0, skipped: 0, done: from };
     for await (const { line } of lines(
       join(o.root, f.rel),
@@ -143,7 +148,12 @@ export async function scan(o: ScanOpts): Promise<ScanResult> {
       if (p.name) s.name = p.name;
       if (p.cwd && !s.cwd) s.cwd = p.cwd;
       if (p.call) merger.add(p.call);
-      markers.push(...p.markers);
+      for (const m of p.markers) {
+        const k = markerKey(m);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        markers.push(m);
+      }
     }
     writeShard(o.cache, { s, calls: [...merger.calls.values()], markers });
     ix.files[f.rel] = {

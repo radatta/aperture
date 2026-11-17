@@ -65,6 +65,19 @@ describe('meter series', () => {
     ]);
     const w = ticks(freshReadings(rows)).windows;
     expect(w.map((x) => x.map((p) => p.p))).toEqual([[99], [1, 2]]);
+    // a straggler whose resets_at drifted by seconds is still the old window's
+    const drift = log([
+      { ts: at(0), sid: 'a', pct: 98, cost: 1, resetsAt: R1 },
+      { ts: at(1), sid: 'a', pct: 99, cost: 2, resetsAt: R1 },
+      { ts: at(2), sid: 'a', pct: 1, cost: 3, resetsAt: R2 },
+      { ts: at(2), sid: 'b', pct: 50, cost: 1, resetsAt: R1 + 5 },
+      { ts: at(3), sid: 'b', pct: 99, cost: 2, resetsAt: R1 + 5 },
+      { ts: at(4), sid: 'a', pct: 2, cost: 4, resetsAt: R2 },
+    ]);
+    expect(ticks(freshReadings(drift)).windows.map((x) => x.map((p) => p.p))).toEqual([
+      [99],
+      [1, 2],
+    ]);
     // a manual reset that leaves resets_at alone shows as a drop of 10+
     const drop = log([
       { ts: at(0), pct: 99, cost: 1 },

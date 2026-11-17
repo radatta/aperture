@@ -1,4 +1,11 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -155,6 +162,33 @@ describe('scan', () => {
     const ix = readIndex(cache);
     writeFileSync(join(cache, 'index.json'), JSON.stringify({ ...ix, parser: ix.parser - 1 }));
     expect(await run()).toMatchObject({ scanned: 1 });
+  });
+
+  it('keeps each marker once when a crash left the index behind its shard', async () => {
+    const rel = `${P}/${SID}.jsonl`;
+    write(rel, row('m1', 1, { tools: [bash('pnpm lint')], ts: '2026-01-05T10:01:00.000Z' }));
+    await run();
+    const before = readFileSync(join(cache, 'index.json'), 'utf8');
+    appendFileSync(
+      join(root, rel),
+      row('m2', 1, { tools: [bash('pnpm test')], ts: '2026-01-05T10:02:00.000Z' }),
+    );
+    await run();
+    writeFileSync(join(cache, 'index.json'), before); // the shard has m2's marker; the index doesn't know
+    appendFileSync(join(root, rel), row('m3', 1, { ts: '2026-01-05T10:03:00.000Z' }));
+    await run();
+    const l = loadCache(cache);
+    expect(l.markers.get(rel)!.map((m) => m.kind)).toEqual(['gate', 'gate']);
+    expect(l.calls.map((c) => c.id)).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('gives a forked copy of a session to the file that started first', async () => {
+    const at = (h: number) => ({ ts: `2026-01-05T${String(h).padStart(2, '0')}:00:00.000Z` });
+    write(`${P}/${SID2}.jsonl`, row('m0', 1, at(11)) + row('m1', 1, at(12)));
+    write(`${P}/${SID}.jsonl`, row('m0', 1, at(11)) + row('m9', 1, at(9)));
+    await run();
+    const l = loadCache(cache);
+    expect(l.calls.find((c) => c.id === 'm0')!.file).toBe(`${P}/${SID}.jsonl`);
   });
 
   it('rescans a file that shrank (rewritten) instead of resuming past its end', async () => {

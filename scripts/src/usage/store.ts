@@ -49,7 +49,7 @@ export interface Index {
 }
 
 // Bump when transcript.ts extracts something new or different: the next scan rereads every file.
-export const PARSER = 4;
+export const PARSER = 5;
 
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -113,22 +113,24 @@ export interface Loaded {
 const rank = (k: Kind) => (k === 'main' ? 1 : 0);
 
 export function loadShards(shards: Shard[]): Loaded {
-  const best = new Map<string, { c: Call; s: SessionRec }>();
+  const best = new Map<string, { c: Call; s: SessionRec; first: number }>();
   let dupes = 0;
   const markers = new Map<string, Marker[]>();
   for (const sh of shards) {
     markers.set(sh.s.rel, sh.markers);
+    // a fork copies the original's rows with their timestamps; the original is the file that started first
+    const first = Math.min(...sh.calls.map((c) => c.ts));
     for (const c of sh.calls) {
       const prev = best.get(c.id);
       if (!prev) {
-        best.set(c.id, { c, s: sh.s });
+        best.set(c.id, { c, s: sh.s, first });
         continue;
       }
       dupes++;
+      const [r, pr] = [rank(sh.s.kind), rank(prev.s.kind)];
       const better =
-        rank(sh.s.kind) < rank(prev.s.kind) ||
-        (rank(sh.s.kind) === rank(prev.s.kind) && c.ts < prev.c.ts);
-      if (better) best.set(c.id, { c, s: sh.s });
+        r < pr || (r === pr && (c.ts < prev.c.ts || (c.ts === prev.c.ts && first < prev.first)));
+      if (better) best.set(c.id, { c, s: sh.s, first });
     }
   }
   const calls = [...best.values()]

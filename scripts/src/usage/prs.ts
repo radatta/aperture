@@ -43,7 +43,8 @@ export function attribute(l: Loaded, hub: string): Attribution {
   };
   const resolve = (s: SessionRec, hint: string | undefined) => {
     const w = whoOf(s);
-    if (w.role === 'hub') return w;
+    // the hub stays the hub wherever it cd's; another repo's branch is never an Aperture lane
+    if (w.role === 'hub' || w.role === 'other') return w;
     const lane = hint ?? w.lane;
     return lane ? { lane, role: 'lane' as Role } : w;
   };

@@ -120,6 +120,10 @@ describe('markers', () => {
     expect(bashMarkers('pnpm test:unit')).toEqual([]);
     expect(bashMarkers('git add -A && git commit -m "fixed it"')).toEqual([{ kind: 'commit' }]);
     expect(bashMarkers('cd /w/x && CI=true pnpm test')).toEqual([{ kind: 'gate' }]);
+    expect(bashMarkers('set -o pipefail; pnpm typecheck 2>&1 | tail -3')).toEqual([
+      { kind: 'gate' },
+    ]);
+    expect(bashMarkers('pnpm test src/a.test.ts')).toEqual([]); // one file is not the gate
   });
 
   it('ignores commands only mentioned inside another command', () => {
@@ -150,6 +154,7 @@ describe('markers', () => {
       'gate',
     ]);
     expect(p.markers[1]).toMatchObject({ agentType: 'Plan', toolUseId: 'toolu_fix_0' });
+    expect(p.markers[4]).toMatchObject({ kind: 'edit', toolUseId: 'toolu_fix_2' });
     expect(p.markers.every((m) => m.ts === Date.parse('2026-01-05T10:00:00.000Z'))).toBe(true);
   });
 });

@@ -104,8 +104,29 @@ export function readMeter(usageDir: string): { rows: MeterRow[]; bad: number } {
         .filter((f) => /^meter-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
         .sort()
     : [];
-  const all = parseMeter(files.map((f) => readFileSync(join(usageDir, f), 'utf8')).join('\n'));
-  return all;
+  const rows: MeterRow[] = [];
+  let bad = 0;
+  for (const f of files) {
+    const p = parseMeter(readFileSync(join(usageDir, f), 'utf8'));
+    for (const r of p.rows) rows.push(r);
+    bad += p.bad;
+  }
+  rows.sort((x, y) => x.ts - y.ts);
+  return { rows, bad };
+}
+
+// Midnight Pacific on a YYYY-MM-DD, in whichever offset (PST or PDT) that day has.
+export function ptMidnight(day: string): number {
+  const utc = Date.parse(`${day}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(utc)) return NaN;
+  const name = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    timeZoneName: 'shortOffset',
+  })
+    .formatToParts(utc + 12 * 3_600_000)
+    .find((p) => p.type === 'timeZoneName')?.value;
+  const h = Number(/GMT([+-]\d+)/.exec(name ?? '')?.[1] ?? -8);
+  return utc - h * 3_600_000;
 }
 
 export function readManual(usageDir: string): Manual | null {
@@ -193,14 +214,19 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
       return 0;
     }
     case 'report': {
-      const since = Date.parse(`${flags.since ?? DEFAULT_SINCE}T00:00:00-08:00`);
+      const sinceDay = flags.since ?? DEFAULT_SINCE;
+      const since = ptMidnight(sinceDay);
       if (!Number.isFinite(since)) {
         out('--since takes YYYY-MM-DD');
         return 2;
       }
       if (!flags['no-scan']) await scanQuiet(e, out);
       const now = Date.now();
-      const { prs, note } = await mergedPRs(e.cache, { refresh: !!flags.refresh, now });
+      const { prs, note } = await mergedPRs(e.cache, {
+        since: sinceDay,
+        refresh: !!flags.refresh,
+        now,
+      });
       const m = reportModel({
         rows: readMeter(e.usageDir).rows,
         manual: readManual(e.usageDir),

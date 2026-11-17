@@ -103,6 +103,13 @@ describe('phase timeline', () => {
       ]),
     ).toEqual({ agree: 1, total: 1 });
     expect(agreement([mk(0, 'plan')], [])).toBeNull();
+    // a lane that writes `plan` first: its timeline starts at -Infinity, the comparison still at the marker
+    const lead = [mk(10, 'lane-phase', { phase: 'plan' }), mk(11, 'plan')];
+    const calls = [
+      { ts: min(5), qu: 9 },
+      { ts: min(12), qu: 1 },
+    ];
+    expect(agreement(lead, calls)).toEqual({ agree: 1, total: 1 });
   });
 });
 
@@ -153,7 +160,12 @@ describe('attribution and the PR table', () => {
     { project: '-workspace', sid: '00000000-0000-4000-8000-000000000003', cwd: '/workspace' },
     [call('a1', 60, 1_000_000, { lane: 'lane-a' }), call('a2', 61)], // an older lane run from the main checkout
   );
-  const a = attribute(loadShards([main, sub, hub, adhoc]), 'hub');
+  const other = shard(
+    `-home-x-other/${SID2}.jsonl`,
+    { project: '-home-x-other', sid: SID2, cwd: '/home/x/other' },
+    [call('o1', 70, 1_000_000, { lane: 'lane-a' })], // another repo on a branch of the same name
+  );
+  const a = attribute(loadShards([main, sub, hub, adhoc, other]), 'hub');
   const prs: PR[] = [
     {
       number: 7,
@@ -189,6 +201,7 @@ describe('attribution and the PR table', () => {
     expect(byId(50)).toMatchObject({ role: 'hub', lane: null });
     expect(byId(60)).toMatchObject({ role: 'lane', lane: 'lane-a' });
     expect(byId(61)).toMatchObject({ role: 'adhoc' });
+    expect(byId(70)).toMatchObject({ role: 'other', lane: null });
   });
 
   it('rolls calls into the PR, post-merge up to POST_MS, with phases summing to the total', () => {
@@ -215,6 +228,7 @@ describe('attribution and the PR table', () => {
     expect(o.hubQU).toBeCloseTo(10);
     expect(o.perPR).toBeCloseTo(10);
     expect(o.adhocQU).toBeCloseTo(20);
+    expect(o.otherQU).toBeCloseTo(20);
   });
 
   it('gives a branch with two PRs each its own window', () => {

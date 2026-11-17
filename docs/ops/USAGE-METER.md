@@ -23,7 +23,13 @@ status line ─► statusline-log.sh ─► meter-<day>.jsonl ──┐
 | `pnpm usage scan [--rate <MB/s>]`                    | Only the transcript scan (default 40, at most 60).                                                                                                   |
 | `pnpm usage doctor`                                  | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                  |
 
-`--no-scan` on report, fit and line skips the scan. `-h` on any command prints its usage and runs nothing.
+`--no-scan` on report, fit and line skips the scan. `-h` on any command prints its usage and runs nothing. `--since`
+is midnight Pacific on that day, in its own offset.
+
+Paths come from the environment, defaults in brackets: `APERTURE_USAGE_DIR` (`/workspace/localNotes/usage`),
+`APERTURE_USAGE_PROJECTS` (`~/.claude/projects`), `APERTURE_CLAUDE_DIR` (`~/.claude`, for `doctor`),
+`APERTURE_LANE_ARCHIVE` (`/workspace/localNotes/archive`), `APERTURE_BOARD_DIR` (`/workspace/localNotes/board`) and
+`APERTURE_CGROUP_DIR` (`/sys/fs/cgroup`, for the memory guard).
 
 ## Units
 
@@ -79,9 +85,12 @@ The transcript store sits on the container's root disk, and COI pauses the conta
   field's max. Input and cache counts are exact; output is a lower bound whichever row is kept. A message id seen in
   two files (a forked session) is counted once, owned by the subagent file over its parent.
 - **Markers:** each call's tool uses become enum-only markers for the phases: an explicit `pnpm board lane <phase>`,
-  a Plan or `code-reviewer` spawn, a source/test/docs/notes edit, a full `pnpm typecheck|lint|test`,
-  `devcheck:local`, `devcheck`, `bot push|deploy-dev`, `mailroom open-pr`, `git commit`. A command counts only where
-  it runs, never quoted inside a grep or echo. The cache keeps no command text, path or content.
+  a Plan or `code-reviewer` spawn, a source/test/docs/notes edit, a full `pnpm typecheck|lint|test` (no file
+  argument), `devcheck:local`, `devcheck`, `bot push|deploy-dev`, `mailroom open-pr`, `git commit`. A command counts
+  only at command position (line start, after `&&`/`;`/`|`, env assignments or `heavy.sh --`), so a grep or echo of
+  one doesn't; a quoted string that itself contains `; pnpm …` still can. Each marker keeps its tool-use id. The cache
+  keeps no command text or content; per transcript it keeps its relative path, its first row's cwd and the session
+  name (pattern-checked).
 - **Cache** (`localNotes/usage/cache/`): one shard per transcript file, plus `index.json` with each file's size,
   mtime, inode and the byte offset of its last complete line. An unchanged file is skipped, a grown one resumes from
   its offset (a torn last line waits for the next run), and a shrunk or replaced one is reread. A change to what
@@ -135,7 +144,8 @@ post.
 
 - An explicit `pnpm board lane <phase>` wins from the first one on. Before it, tool-use heuristics move the phase
   forward.
-- A source edit after a red gate goes back to build. After the first review, fixes stay in review.
+- A source edit while in gate goes back to build (a red gate's fix; a green one can't be told apart). After the first
+  review, fixes stay in review.
 - A Plan run after the PR step starts the next cycle on the same track.
 - Calls before the first marker are plan when planning came first, else **unattributed**, which stays visible.
 - A subagent or workflow agent takes its parent's phase at its own first call.
@@ -147,8 +157,8 @@ post.
 
 ## PR table and types
 
-Merged PRs come from `gh pr list` (read-only token), cached an hour in `cache/prs.json`; a failed read falls back to
-the cache and says so. A PR's calls are its branch's from the previous PR on that branch (or the start) to its merge.
+Merged PRs come from `gh pr list --search merged:>=<since>` (read-only token, at most 1000, and the report says when
+it hit that), cached an hour per `--since` in `cache/prs.json`; a failed read falls back to the cache and says so. A PR's calls are its branch's from the previous PR on that branch (or the start) to its merge.
 For the last PR on a branch, the window runs 6 hours past the merge, which covers cleanup and the deploy watch. Each
 row lists:
 
@@ -194,7 +204,8 @@ main-checkout sessions and lanes with no merged PR.
 
 - Output tokens in transcripts are a lower bound. The additivity check shows how much that matters.
 - Phase heuristics before explicit lane markers are approximate. The agreement figure says how approximate.
-- Transcripts older than Claude Code's retention are gone, so early PRs can show "no calls" and leave the type
-  statistics.
+- A transcript Claude Code deleted before its first scan is gone, so early PRs can show "no calls" and leave the type
+  statistics. Once scanned, a shard outlives its transcript, and a `PARSER` bump rereads only the transcripts still
+  there: older shards keep the earlier parser's output.
 - Meter intervals are few, and whole-percent readings are coarse, so k's interval is wide. Read the interval, not the
   point.

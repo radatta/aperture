@@ -1,6 +1,7 @@
 // One Claude Code transcript line → what the cost model keeps: a call's usage (deduped later by message id), the
 // session's name, and phase markers from the call's tool_use blocks. Markers hold enums only — never command text,
 // paths or content — because the cache is the only thing derived from transcripts (docs/ops/USAGE-METER.md).
+import { PHASES } from '../board/tower/lanes.ts';
 import { rowLane } from './lanes.ts';
 import type { Tokens } from './prices.ts';
 
@@ -13,19 +14,8 @@ export interface Call extends Tokens {
   lane?: string; // the lane the row itself was in (lanes.ts rowLane)
 }
 
-export const LANE_PHASES = [
-  'plan',
-  'build',
-  'gate',
-  'review',
-  'local',
-  'dev',
-  'pr',
-  'merged',
-  'cleanup',
-  'parked',
-  'blocked',
-] as const;
+// The phases `pnpm board lane` accepts: the tower's own list, so a new phase parses here too.
+export const LANE_PHASES = PHASES;
 export type LanePhase = (typeof LANE_PHASES)[number];
 
 export type MarkerKind =
@@ -90,7 +80,10 @@ const LOCAL = run(String.raw`pnpm devcheck:local\b`);
 const DEVCHECK = run(String.raw`pnpm devcheck\b(?!:)`);
 const PUSH = run(String.raw`pnpm bot (?:push|deploy-dev)\b`);
 const OPEN_PR = run(String.raw`pnpm mailroom open-pr\b`);
-const GATE = run(String.raw`(?:\S*heavy\.sh\s+--\s+)?pnpm (?:typecheck|lint|test)\b(?![:\w-])`);
+// a full run: nothing after the command but a redirect, a pipe or the next command (`pnpm test <file>` isn't the gate)
+const GATE = run(
+  String.raw`(?:\S*heavy\.sh\s+--\s+)?pnpm (?:typecheck|lint|test)(?=\s*(?:$|[;&|)>]|2>))`,
+);
 const COMMIT = run(String.raw`git (?:-C \S+ )?commit\b`);
 
 export function bashMarkers(cmd: string): Omit<Marker, 'ts'>[] {
@@ -110,6 +103,15 @@ export function bashMarkers(cmd: string): Omit<Marker, 'ts'>[] {
 function toolMarkers(block: Record<string, unknown>): Omit<Marker, 'ts'>[] {
   const input = (block.input ?? {}) as Record<string, unknown>;
   const id = typeof block.id === 'string' ? block.id : undefined;
+  // every marker carries its tool-use id, so a re-read never doubles one and two real calls never merge
+  return rawMarkers(block, input, id).map((m) => (id ? { ...m, toolUseId: id } : m));
+}
+
+function rawMarkers(
+  block: Record<string, unknown>,
+  input: Record<string, unknown>,
+  id: string | undefined,
+): Omit<Marker, 'ts'>[] {
   switch (block.name) {
     case 'Bash':
       return typeof input.command === 'string' ? bashMarkers(input.command) : [];

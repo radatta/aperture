@@ -108,6 +108,24 @@ describe('statusline-log.sh', () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it("is safe under the caller's set -eu, and leaves errexit as it found it", () => {
+    const out = execFileSync(
+      'bash',
+      ['-c', 'set -eu; input=$(cat); . "$1"; echo "rc=$? flags=$-"', '_', SCRIPT],
+      {
+        input: status(),
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH ?? '',
+          APERTURE_USAGE_DIR: dir,
+          APERTURE_USAGE_STAMP_DIR: stamps,
+        },
+      },
+    );
+    expect(out).toMatch(/^rc=0 flags=\S*e\S*\n$/);
+    expect(rows()).toHaveLength(1);
+  });
+
   it('stays silent when the log dir is unwritable', () => {
     chmodSync(dir, 0o555);
     expect(run(status(), { APERTURE_USAGE_DIR: join(dir, 'sub') })).toBe('rc=0\n0\n');

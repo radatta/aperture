@@ -92,7 +92,7 @@ export function ticks(readings: Reading[]): { windows: Point[][]; stragglers: nu
   const old = new Set<number>();
   let stragglers = 0;
   for (const r of readings) {
-    if (r.resetsAt !== null && old.has(r.resetsAt)) continue;
+    if (r.resetsAt !== null && [...old].some((o) => Math.abs(o - r.resetsAt!) <= HOUR_S)) continue;
     const moved =
       resetsAt !== null && r.resetsAt !== null && Math.abs(r.resetsAt - resetsAt) > HOUR_S;
     const dropped = env >= 0 && r.pct <= env - RESET_DROP;

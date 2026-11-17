@@ -27,15 +27,20 @@ export const ghText: GhText = (args) =>
     ),
   );
 
-export const PR_ARGS = [
+export const PR_LIMIT = 1000;
+// Merged on or after `since` (YYYY-MM-DD): the search bounds the list by date, so the limit is a ceiling the report
+// warns about, not a silent cut.
+export const prArgs = (since: string) => [
   'pr',
   'list',
   '--repo',
   REPO_SLUG,
   '--state',
   'merged',
+  '--search',
+  `merged:>=${since}`,
   '--limit',
-  '300',
+  String(PR_LIMIT),
   '--json',
   'number,title,headRefName,mergedAt,changedFiles,additions,deletions,files',
 ];
@@ -73,26 +78,32 @@ export function parsePRs(text: string): PR[] {
 
 export async function mergedPRs(
   cache: string,
-  o: { refresh?: boolean; now: number; gh?: GhText },
+  o: { since: string; refresh?: boolean; now: number; gh?: GhText },
 ): Promise<{ prs: PR[]; note: string | null }> {
   const path = join(cache, 'prs.json');
   const cached = existsSync(path)
-    ? (JSON.parse(readFileSync(path, 'utf8')) as { fetchedAt: number; prs: PR[] })
+    ? (JSON.parse(readFileSync(path, 'utf8')) as { fetchedAt: number; since?: string; prs: PR[] })
     : null;
-  if (cached && !o.refresh && o.now - cached.fetchedAt < 3_600_000)
-    return { prs: cached.prs, note: null };
+  const full = (prs: PR[]) =>
+    prs.length >= PR_LIMIT
+      ? `${PR_LIMIT} merged PRs since ${o.since}, the gh limit: older ones may be missing`
+      : null;
+  const fresh = cached && cached.since === o.since && o.now - cached.fetchedAt < 3_600_000;
+  if (cached && fresh && !o.refresh) return { prs: cached.prs, note: full(cached.prs) };
   const gh = o.gh ?? ghText;
+  const args = prArgs(o.since);
   try {
-    // one retry: a 300-PR query with files now and then fails upstream and works the second time
-    const prs = parsePRs(await gh(PR_ARGS).catch(() => gh(PR_ARGS)));
-    writeAtomic(path, JSON.stringify({ fetchedAt: o.now, prs }));
-    return { prs, note: null };
+    // one retry: a big query with files now and then fails upstream and works the second time
+    const prs = parsePRs(await gh(args).catch(() => gh(args)));
+    writeAtomic(path, JSON.stringify({ fetchedAt: o.now, since: o.since, prs }));
+    return { prs, note: full(prs) };
   } catch (e) {
     if (!cached)
       throw new Error(`gh pr list failed and no cached PRs: ${(e as Error).message}`, { cause: e });
+    const when = new Date(cached.fetchedAt).toISOString();
     return {
       prs: cached.prs,
-      note: `gh failed; PRs as cached ${new Date(cached.fetchedAt).toISOString()}`,
+      note: `gh failed; PRs as cached ${when}, since ${cached.since ?? '?'}`,
     };
   }
 }
