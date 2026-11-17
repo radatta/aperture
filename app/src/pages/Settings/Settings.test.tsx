@@ -250,7 +250,9 @@ describe('the extension version line', () => {
   it('no sitting yet: names the latest', async () => {
     renderApp({ api: await withStart(), path: '/settings' });
     expect(
-      await screen.findByText(`Extension: latest ${LATEST}. Your next Start shows which build Safari runs.`),
+      await screen.findByText(
+        `Extension: latest ${LATEST}. Your next Start shows which build Safari runs.`,
+      ),
     ).toBeTruthy();
   });
   it('the last Start came from this build: up to date', async () => {

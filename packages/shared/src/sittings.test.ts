@@ -121,7 +121,9 @@ describe('extensionVersionOf', () => {
     expect(extensionVersionOf(' 10.0.31 ')).toBe('10.0.31');
     for (const bad of ['v2.2.0', '2.2', '2.2.0-beta', '', '1234567.0.0', 2.2, null, undefined, {}])
       expect(extensionVersionOf(bad), String(bad)).toBeNull();
-    expect(normalizeSittingStart(start({ extensionVersion: 'x'.repeat(30) })).extensionVersion).toBeNull();
+    expect(
+      normalizeSittingStart(start({ extensionVersion: 'x'.repeat(30) })).extensionVersion,
+    ).toBeNull();
     expect(normalizeSittingStart(start()).extensionVersion).toBeNull();
   });
 });

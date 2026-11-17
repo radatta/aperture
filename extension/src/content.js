@@ -550,7 +550,12 @@
       const next = mergeBinding(stored, patch);
       await local.set({ [key]: next });
       // The last write in line carries every earlier one (each merged into the last one's write).
-      if (writesPending === 1 && binding && binding.slug === slug && binding.sittingId === sittingId)
+      if (
+        writesPending === 1 &&
+        binding &&
+        binding.slug === slug &&
+        binding.sittingId === sittingId
+      )
         binding = next;
     }).catch(() => {}); // a failed patch is lost from storage; a later write in line may drop it from memory too
   }

@@ -19,7 +19,9 @@ function optionsPage(ext: Ext) {
     value: { writeText: async (t: string) => void copied.push(t) },
   });
   // The scripts as the page lists them, so a script the page stops loading fails here too.
-  const scripts = [...w.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')!);
+  const scripts = [...w.document.querySelectorAll('script[src]')].map((s) =>
+    s.getAttribute('src')!,
+  );
   expect(scripts.at(-1)).toBe('src/options.js');
   for (const f of scripts) w.eval(src(f));
   const $ = <T extends HTMLElement = HTMLInputElement>(id: string) =>
@@ -151,9 +153,9 @@ describe('the Options page', () => {
     saveSel('{"submit": null, "editorReset": "#reset"}');
     await until(() => o.status('selectorStatus').startsWith('Saved.'));
     expect(ext.local.data.selectors).toEqual({ submit: null, editorReset: '#reset' });
-    expect(
-      (await loaded(ext)).$<HTMLTextAreaElement>('selectors').value.replace(/\s/g, ''),
-    ).toBe('{"submit":null,"editorReset":"#reset"}');
+    expect((await loaded(ext)).$<HTMLTextAreaElement>('selectors').value.replace(/\s/g, '')).toBe(
+      '{"submit":null,"editorReset":"#reset"}',
+    );
     o.click('resetSelectors');
     await until(() => !('selectors' in ext.local.data));
   });

@@ -13,7 +13,9 @@ import { readFileSync } from 'node:fs';
 
 // The extension build this checkout ships (extension/manifest.json): the app's Settings calls it "latest".
 const LATEST_EXT = (
-  JSON.parse(readFileSync(new URL('../../../../extension/manifest.json', import.meta.url), 'utf8')) as {
+  JSON.parse(
+    readFileSync(new URL('../../../../extension/manifest.json', import.meta.url), 'utf8'),
+  ) as {
     version: string;
   }
 ).version;
@@ -1713,7 +1715,8 @@ export const lcSittings: Scenario = {
       entry: 'ui',
       cost: 'slow',
       proves: ['settings-ext-unversioned'],
-      title: 'Settings → LeetCode after C’s Start with a malformed build label: an older build, rebuild needed',
+      title:
+        'Settings → LeetCode after C’s Start with a malformed build label: an older build, rebuild needed',
       async run(ctx) {
         if (!state.c) throw new Error('no sitting C — the double-start step failed');
         await ctx.ui.goto('/settings#leetcode');

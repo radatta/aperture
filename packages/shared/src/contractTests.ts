@@ -3303,7 +3303,10 @@ export function runApiContract(
         const first = await startSitting(api, { extensionVersion: '2.2.0' });
         expect(first.sitting.extensionVersion).toBe('2.2.0');
         const again = await api.lcSittingStart(
-          sittingStart({ clientSittingId: first.sitting.clientSittingId, extensionVersion: '9.9.9' }),
+          sittingStart({
+            clientSittingId: first.sitting.clientSittingId,
+            extensionVersion: '9.9.9',
+          }),
         );
         expect(again).toMatchObject({ resumed: true, sitting: { extensionVersion: '2.2.0' } });
         expect((await api.listSittings())[0]!.extensionVersion).toBe('2.2.0');

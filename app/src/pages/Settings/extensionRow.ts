@@ -38,8 +38,14 @@ export function extensionRow(sittings: readonly Sitting[], latest: string): Exte
       rebuild: true,
     };
   if (cmp < 0)
-    return { text: `Extension: installed ${installed}, latest ${latest}\u00a0— rebuild needed.`, rebuild: true };
+    return {
+      text: `Extension: installed ${installed}, latest ${latest}\u00a0— rebuild needed.`,
+      rebuild: true,
+    };
   if (cmp > 0)
-    return { text: `Extension: installed ${installed}; this app was built with ${latest}.`, rebuild: false };
+    return {
+      text: `Extension: installed ${installed}; this app was built with ${latest}.`,
+      rebuild: false,
+    };
   return { text: `Extension: ${installed}, up to date as of your last Start.`, rebuild: false };
 }

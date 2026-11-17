@@ -239,7 +239,8 @@ export function fakeExtension(
       id,
       getManifest: () => ({
         ...manifest,
-        version: typeof opts.version === 'function' ? opts.version() : (opts.version ?? manifest.version),
+        version:
+          typeof opts.version === 'function' ? opts.version() : (opts.version ?? manifest.version),
       }),
       onMessage: { addListener: (l: (typeof msgListeners)[number]) => msgListeners.push(l) },
       onStartup: { addListener() {} },

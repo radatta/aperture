@@ -231,13 +231,17 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
       status: 'active',
       // The real background stamped its manifest's build on the Start, and A1 kept it.
       extensionVersion: (
-        JSON.parse(readFileSync(new URL('../../../extension/manifest.json', import.meta.url), 'utf8')) as {
+        JSON.parse(
+          readFileSync(new URL('../../../extension/manifest.json', import.meta.url), 'utf8'),
+        ) as {
           version: string;
         }
       ).version,
       summary: { firstSubmit: { verdict: 'accepted' } },
     });
-    expect(await page.evaluate<boolean>("!!document.querySelector('aperture-lc-coach')")).toBe(false); // no card host at all
+    expect(await page.evaluate<boolean>("!!document.querySelector('aperture-lc-coach')")).toBe(
+      false,
+    ); // no card host at all
     // The coach's config landed and folded: the card and its hold off, the note on. Whether the sitting was
     // traced is the server's call from the code, not the extension's.
     const coached = await until(async () => {
@@ -283,7 +287,9 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     await until(
       async () => (await page.evaluate<{ submits: number }>('window.__fake')).submits > submits,
     );
-    expect(await page.evaluate<boolean>("!!document.querySelector('aperture-lc-coach')")).toBe(false);
+    expect(await page.evaluate<boolean>("!!document.querySelector('aperture-lc-coach')")).toBe(
+      false,
+    );
 
     await page.locator('[data-fake=next]').click();
     await until(async () => (await phase()) === 'prompt');

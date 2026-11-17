@@ -187,7 +187,9 @@ export interface NormalizedSittingStart extends Omit<SittingStartInput, 'problem
 // since a Start must never fail over the label of the build that sent it.
 export const EXTENSION_VERSION_RE = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 export const extensionVersionOf = (v: unknown): string | null =>
-  typeof v === 'string' && v.trim().length <= 20 && EXTENSION_VERSION_RE.test(v.trim()) ? v.trim() : null;
+  typeof v === 'string' && v.trim().length <= 20 && EXTENSION_VERSION_RE.test(v.trim())
+    ? v.trim()
+    : null;
 export function normalizeSittingStart(input: SittingStartInput): NormalizedSittingStart {
   if (!input || typeof input !== 'object') throw new Error('A sitting start is required');
   if (typeof input.clientSittingId !== 'string' || !isUlid(input.clientSittingId))

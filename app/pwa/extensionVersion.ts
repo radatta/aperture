@@ -7,6 +7,7 @@ export function lcExtensionVersion(): string {
   const manifest = JSON.parse(
     readFileSync(new URL('../../extension/manifest.json', import.meta.url), 'utf8'),
   ) as { version?: unknown };
-  if (typeof manifest.version !== 'string') throw new Error('extension/manifest.json has no version');
+  if (typeof manifest.version !== 'string')
+    throw new Error('extension/manifest.json has no version');
   return manifest.version;
 }
