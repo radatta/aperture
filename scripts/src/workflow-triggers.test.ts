@@ -68,6 +68,7 @@ const EVENTS: Record<string, string[]> = {
   'deploy-stage.yml': ['workflow_call'],
   'deploy.yml': ['push'],
   'fetch-dev-logs.yml': ['workflow_dispatch'],
+  'ios-probe.yml': ['push'], // its own branch only
   'pr.yml': ['pull_request'],
 };
 

@@ -44,6 +44,8 @@ export const ACTIONS = [
   'gitleaks/gitleaks-action',
 ];
 
+// GitHub-hosted runner labels, never self-hosted (a public repo's fork could run code on it). macos-26: the iOS probe.
+const HOSTED = ['ubuntu-latest', 'macos-26'];
 // A line minus its trailing comment, indentation kept (workflow-permissions' stripComment also trims).
 const code = (l: string) => l.replace(/(^|\s)#.*$/, '');
 // Keys this file reads by line. Any other spelling of one (quoted, `key :`, a flow mapping) is unreadable, not unseen.
@@ -127,8 +129,10 @@ export function checkForkGuard(files: Record<string, string>): string[] {
         if (ownerRepo && !allUses.has(ownerRepo)) allUses.set(ownerRepo, f);
       }
       const runsOn = /^\s*runs-on:\s*(.*?)\s*$/.exec(c)?.[1];
-      if (runsOn !== undefined && runsOn !== 'ubuntu-latest')
-        problems.push(`${f}:${i + 1}: runs-on "${runsOn}" — only ubuntu-latest (GitHub-hosted)`);
+      if (runsOn !== undefined && !HOSTED.includes(runsOn))
+        problems.push(
+          `${f}:${i + 1}: runs-on "${runsOn}" — only ${HOSTED.join(' or ')} (GitHub-hosted)`,
+        );
       for (const ev of ['pull_request_target', 'workflow_run'])
         if (new RegExp(`\\b${ev}\\b`).test(l)) problems.push(`${f}:${i + 1}: mentions ${ev}`);
       // A container, service image or default shell would run around the allowlist, or the guard's own shell.

@@ -1,0 +1,62 @@
+name: iOS probe
+
+# A feasibility probe, on the ios-ci-probe branch only (never main, never a PR, never a fork): can a hosted macOS
+# runner boot an iPhone sim, drive it with AXe, add dev slot B to the Home Screen and launch it to its sign-in card?
+# No secrets. Every knob and step lives in scripts/ci/ios-probe.sh, so the probe iterates by pushing that file.
+on:
+  push:
+    branches: [ios-ci-probe]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3] # three cold runners for the spread; RUNS in the script turns shards off
+    steps:
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: mode
+        run: echo "cache=$(bash scripts/ci/ios-probe.sh cache-mode)" >> "$GITHUB_OUTPUT"
+      - if: steps.mode.outputs.cache == 'use'
+        uses: actions/cache/restore@v6
+        with:
+          path: .ios-probe-cache
+          key: ios-probe-device-v1
+      - id: probe
+        run: bash scripts/ci/ios-probe.sh
+        env:
+          IOS_PROBE_SHARD: ${{ matrix.shard }}
+      - if: always() && steps.probe.outputs.cache == 'save'
+        uses: actions/cache/save@v6
+        with:
+          path: .ios-probe-cache
+          key: ios-probe-device-v1 # one fixed entry (shard 1 saves); delete it after the probe
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-probe-${{ matrix.shard }}
+          path: ios-probe-out
+          retention-days: 3
+          if-no-files-found: warn
