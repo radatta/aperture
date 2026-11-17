@@ -12,6 +12,7 @@ import { captureTask } from './capture-task';
 import { categorySuggest } from './category-suggest';
 import { cognitoRefresh } from './cognito-refresh';
 import { deadRows } from './dead-rows';
+import { errandRowsNight } from './errand-rows-night';
 import { devSlotB } from './dev-slot-b';
 import { dayGuards } from './day-guards';
 import { failedReads } from './failed-reads';
@@ -62,6 +63,7 @@ export const SCENARIOS: Scenario[] = [
   fluxPerf,
   attachmentDelete,
   places,
+  errandRowsNight,
   logMcp,
   privateLog,
   reflectionLine,
