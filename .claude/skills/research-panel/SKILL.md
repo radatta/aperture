@@ -1,6 +1,6 @@
 ---
 name: research-panel
-description: Multi-agent web research on one question — a scout splits it into angles, parallel search-specialist researchers take one each, an opus synthesizer writes one report that keeps documented, anecdotal and unknown apart. User-invoked only, as `/research-panel <question>`; the report lands in the worktree's localNotes/research/.
+description: Multi-agent web research on one question — a scout splits it into angles, parallel web-only researchers take one each, an opus synthesizer writes one report that keeps documented, anecdotal and unknown apart. User-invoked only, as `/research-panel <question>`; the report lands in the worktree's localNotes/research/.
 argument-hint: '<question> [researchers=N] [scout=|researcher=|synth=<model>]'
 disable-model-invocation: true
 ---
@@ -18,8 +18,12 @@ $ARGUMENTS
 
 No question above → ask for one and stop. Knobs in the text become `args`: `researchers=N` (default 5, 1–8) and
 `scout=`, `researcher=`, `synth=` (`models`: each `sonnet`, `opus`, `haiku` or `fable`; defaults sonnet, sonnet,
-opus). Strip them from the question. The script logs and ignores anything else, and runs every stage as
-`search-specialist` (web tools, Read, Bash; no Edit or Write).
+opus). Strip them from the question. The script logs and ignores anything else.
+
+Every stage runs as `web-researcher` (`.claude/agents/web-researcher.md`): `WebSearch` and `WebFetch`, no local
+tools, because each stage reads web-derived text and a prompt-injected page must have nothing local to reach. A
+session started before that file existed may not know the type; restart it (`claude --resume`) rather than swap
+in an agent with local tools.
 
 ## Search privacy — hard rule
 

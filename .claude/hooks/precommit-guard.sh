@@ -11,12 +11,13 @@
   set -euo pipefail
   INPUT=$(cat)
   COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-  # `git commit`, also behind git's own -C <dir> / -c <k=v> (which used to slip past every check here). A here-string,
-  # not a pipe: under pipefail a long command's printf can take SIGPIPE from grep -q and read as "no match".
-  # An option's value is a shell word — bare characters and '…' / "…" spans — so `git -c "user.name=A B" commit`
-  # (a space inside the quotes) is still seen.
-  WORD="([^[:space:]'\"]|'[^']*'|\"[^\"]*\")+"
-  GITOPTS="git([[:space:]]+-[Cc][[:space:]]+$WORD)*"
+  # `git commit`, also behind any of git's own options (-C <dir>, -c <k=v>, --git-dir/--work-tree/--namespace/
+  # --config-env <value>, any bare -… word: --no-pager, -P, --git-dir=…), which used to skip every check here. A value
+  # is a shell word — bare characters, \-escapes and '…' / "…" spans — so `git -c "user.name=A B" commit` and
+  # `-c user.name=A\ B` are seen. A here-string, not a pipe: under pipefail a long command's printf can take SIGPIPE
+  # from grep -q and read as "no match".
+  WORD="([^[:space:]'\"\\\\]|\\\\.|'[^']*'|\"([^\"\\\\]|\\\\.)*\")+"
+  GITOPTS="git([[:space:]]+((-[Cc]|--git-dir|--work-tree|--namespace|--config-env)[[:space:]]+$WORD|-$WORD))*"
   grep -Eq "$GITOPTS[[:space:]]+commit" <<<"$COMMAND" || exit 0
 
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
@@ -71,13 +72,14 @@
     fi
   fi
 
-  # Commit identity (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity): author and committer are the maintainer's GitHub
-  # login (identifiers.json → maintainer.github) with its noreply address, WIP commits too. `git var` sees the config
-  # and this hook's environment; scripts/src/commit-identity.ts adds what it can't — an override in the command itself
-  # (GIT_AUTHOR_*/GIT_COMMITTER_* or GIT_CONFIG_* assignments, --author, -c user.*, a `git config` of one in the same
-  # line; read from the command's shell words minus its -m/-F values, so a message is only text) and the author an
-  # --amend keeps. Fails open like the block above, a missing or malformed maintainer.github included. A rebase, cherry-pick or `commit -C <sha>`, and a
-  # `git -C <other dir> commit`: `pnpm bot push` and `open-pr` check every commit's identity again.
+  # Commit identity (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity): author and committer are the
+  # maintainer's GitHub login (identifiers.json → maintainer.github) with its noreply address, WIP commits too.
+  # `git var` sees the config and this hook's environment; scripts/src/commit-identity.ts adds what it can't — an
+  # override in the command itself (GIT_AUTHOR_*/GIT_COMMITTER_*, GIT_CONFIG_*, HOME/XDG_CONFIG_HOME/GIT_DIR
+  # assignments, --author, -c/--config-env on user.*/include keys, a `git config` of one; read from the command's
+  # shell words minus its -m/-F values, so a message is only text) and the author an --amend keeps. Fails open like
+  # the block above, a missing or malformed maintainer.github included (the CLI exits 2). A rebase, cherry-pick or
+  # `commit -C <sha>`, and a `git -C <other dir> commit`: `pnpm bot push` and `open-pr` check every commit again.
   WHO="$TOP/scripts/src/commit-identity.ts"
   if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$WHO" ] && command -v node >/dev/null; then
     idents() {
@@ -114,7 +116,7 @@ except ValueError:
     raise SystemExit(0)
 
 SEPS = {"&&", "||", ";", "|", "&", "|&", ";;", "(", ")"}
-CLUSTER = re.compile(r"-[apqsnvzeiou]*m(.*)")  # -m, -am, -qm, or -m"msg" glued on
+CLUSTER = re.compile(r"-[apqsnvzeio]*m(.*)")  # -m, -am, -qm, or -m"msg" glued on; not after -u (its own value)
 problems = []
 i = 0
 while i < len(toks):
@@ -122,8 +124,8 @@ while i < len(toks):
         i += 1
         continue
     j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):  # git's own options, e.g. -C <path>
-        j += 2 if toks[j] in ("-C", "-c") else 1
+    while j < len(toks) and toks[j].startswith("-"):  # git's own options, e.g. -C <path>, --no-pager
+        j += 2 if toks[j] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env") else 1
     if j >= len(toks) or toks[j] != "commit":
         i += 1
         continue

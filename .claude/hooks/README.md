@@ -83,7 +83,9 @@ login from `identifiers.json` with its noreply address, and the hook never inher
 `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, so the `ids` cases pass on identity; the `identity:` fixtures set `"identity"` (a
 wrong config), `"env"` (the hook's environment), `"head_author"` (a wrongly authored HEAD, for `--amend`) or
 `"ids_patch"` (an edited `identifiers.json` — no `maintainer.github` proves the fail-open). The hook's `git … commit`
-gate reads an option value as a shell word, quotes included, so `git -c "user.name=A B" commit` reaches the block.
+gate takes any git option before `commit` (`--no-pager`, `-P`, `--git-dir <dir>`, …) and reads an option value as a
+shell word, quotes and `\`-escapes included, so `git -c "user.name=A B" commit` and `git --no-pager commit` reach
+every block.
 
 ## Board hooks
 

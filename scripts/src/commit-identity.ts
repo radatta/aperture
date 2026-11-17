@@ -18,14 +18,20 @@ type Run = (cmd: string, args: string[]) => string;
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// GitHub's noreply address for the login, with or without its numeric id (`<id>+<login>@…`, `<login>@…`).
-export const expectedIdentity = (ids: Pick<Identifiers, 'maintainer'> = IDS): Identity => ({
-  name: ids.maintainer.github,
-  email: new RegExp(
-    `^(\\d+\\+)?${escape(ids.maintainer.github)}@users\\.noreply\\.github\\.com$`,
-    'i',
-  ),
-});
+// GitHub's noreply address for the login, with or without its numeric id (`<id>+<login>@…`, `<login>@…`). A missing
+// or malformed login throws here, so only this check stops (the hook's CLI exits 2 and fails open); identifiers.ts
+// loads without it, so the identifier scan still runs.
+export function expectedIdentity(ids: Pick<Identifiers, 'maintainer'> = IDS): Identity {
+  const login: unknown = ids.maintainer.github;
+  if (typeof login !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(login))
+    throw new Error(
+      'identifiers.json: maintainer.github must be a GitHub login (letters, digits, hyphens; 1–39)',
+    );
+  return {
+    name: login,
+    email: new RegExp(`^(\\d+\\+)?${escape(login)}@users\\.noreply\\.github\\.com$`, 'i'),
+  };
+}
 
 // The fields that are wrong, in order; empty when the identity is the expected one.
 export function identityProblem(name: string, email: string, want = expectedIdentity()): Field[] {
@@ -69,9 +75,11 @@ export const IDENTITY_FIX = (login = IDS.maintainer.github): string =>
   `Set it — \`git config user.name ${login}\`, \`git config user.email ${login}@users.noreply.github.com\` (or its \`<id>+\` form) — drop any override, then restamp the branch: \`git rebase origin/main --exec 'git commit --amend --no-edit --reset-author'\` and \`pnpm bot push --after-rebase\``;
 
 // The command as shell words: quotes and backslashes resolved, `;`, `&`, `|`, `(`, `)` and a newline as words of
-// their own (a separator run, e.g. `&&`, is one word). Null on an unterminated quote. A heredoc body or `$(…)` is
-// read as plain words — over-matching there can only deny, never let a commit through.
+// their own (a separator run, e.g. `&&`, is one word). Null — the caller then matches the raw line, failing closed —
+// on an unterminated quote, any `<<` (a heredoc body isn't words: an apostrophe in it would open a quote that hides
+// what follows) or an unquoted word starting with `#` (a comment, the same). `$(…)` is read as plain words.
 export function shellWords(command: string): string[] | null {
+  if (command.includes('<<')) return null;
   const words: string[] = [];
   let w = '';
   let open = false; // a word is being read (an empty quoted word counts)
@@ -102,7 +110,8 @@ export function shellWords(command: string): string[] | null {
     } else if (c === '\\') {
       i++;
       if (next && next !== '\n') add(next);
-    } else if (c === ' ' || c === '\t') end();
+    } else if (c === '#' && !open) return null;
+    else if (c === ' ' || c === '\t') end();
     else if (';&|()\n'.includes(c)) {
       end();
       const prev = words.at(-1) ?? '';
@@ -118,11 +127,12 @@ export function shellWords(command: string): string[] | null {
 }
 
 // The words minus every commit message and message file — `-m`, `--message` (`--m` and up: git takes a unique
-// prefix), `-F`, `--file` (`--fil` and up), glued, `=`-joined or in a short cluster like `-am` — so a message that
+// prefix), `-F`, `--file` (`--fil` and up), glued, `=`-joined or in a short cluster like `-am` (not after `-u`, which
+// takes the rest of its word as its own value) — so a message that
 // mentions `--author` or GIT_AUTHOR_EMAIL= is text, not an override. Anywhere in the line: a `git tag -m` message
 // is text too.
 const MSG_LONG = /^--(m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?|fil(?:e)?)(=.*)?$/;
-const MSG_SHORT = /^-[apqsnvzeiou]*[mF](.*)$/;
+const MSG_SHORT = /^-[apqsnvzeio]*[mF](.*)$/;
 export function withoutMessages(words: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < words.length; i++) {
@@ -137,26 +147,33 @@ export function withoutMessages(words: string[]): string[] {
 }
 
 // What a commit command overrides that `git var` can't see before it runs, matched on the command without its
-// messages: a GIT_AUTHOR_*/GIT_COMMITTER_* name or email set in it, `--author` (any prefix from `--au`, which git
-// takes), `-c`/`--config-env` on an identity key, a `git config` of one, and — failing closed, whatever the key —
-// a GIT_CONFIG_KEY_<n>, GIT_CONFIG_PARAMETERS, GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM set in it. Names the shape,
-// never the value.
-const KEY = '(?:user|author|committer)\\.(?:name|email)';
+// messages: a GIT_AUTHOR_*/GIT_COMMITTER_* name or email set (`=` or `+=`) in it, `--author` (any prefix from `--au`,
+// which git takes), `-c`/`--config-env` on an identity or include key, a `git config` of one, and — failing closed,
+// whatever they hold — a GIT_CONFIG_KEY_<n>, GIT_CONFIG_PARAMETERS, GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM, or a
+// HOME, XDG_CONFIG_HOME or GIT_DIR (git pointed at other config) set in it. Names the shape, never the value.
+const KEY = '(?:(?:user|author|committer)\\.(?:name|email)|include\\.path|includeif\\.)';
 const OVERRIDES: [string, RegExp][] = [
   [
     'a GIT_AUTHOR_/GIT_COMMITTER_ name or email set in the command',
-    /\bGIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)=/,
+    /\bGIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)\+?=/,
   ],
   [
     'git config set through GIT_CONFIG_* in the command',
-    /\bGIT_CONFIG_(?:KEY_\d+|PARAMETERS|GLOBAL|SYSTEM)=/,
+    /\bGIT_CONFIG_(?:KEY_\d+|PARAMETERS|GLOBAL|SYSTEM)\+?=/,
+  ],
+  [
+    'git pointed at other config (HOME, XDG_CONFIG_HOME or GIT_DIR set in the command)',
+    /(?<![\w$])(?:HOME|XDG_CONFIG_HOME|GIT_DIR)\+?=/,
   ],
   ['`--author` on the commit', /\bcommit\b[^;&|]*\s--au(?:t(?:h(?:o(?:r)?)?)?)?(?=[=\s]|$)/],
-  ['`-c` on an identity key', new RegExp(`(?:^|\\s)-c\\s*['"]?${KEY}\\b`, 'i')],
-  ['`--config-env` on an identity key', new RegExp(`--config-env[=\\s]+['"]?${KEY}\\b`, 'i')],
+  ['`-c` on an identity or include key', new RegExp(`(?:^|\\s)-c\\s*['"]?${KEY}`, 'i')],
   [
-    '`git config` of an identity key in the same command',
-    new RegExp(`\\bgit\\b(?:\\s+-[Cc]\\s+\\S+)*\\s+config\\b[^;&|]*\\b${KEY}\\b`, 'i'),
+    '`--config-env` on an identity or include key',
+    new RegExp(`--config-env[=\\s]+['"]?${KEY}`, 'i'),
+  ],
+  [
+    '`git config` of an identity or include key in the same command',
+    new RegExp(`\\bgit\\b(?:\\s+(?:-[Cc]\\s+\\S+|-\\S+))*\\s+config\\b[^;&|]*\\b${KEY}`, 'i'),
   ],
 ];
 // The command as matched: its words without messages, rejoined; the raw command when it can't be split (fail closed).
@@ -170,14 +187,17 @@ export const overrideProblems = (command: string): string[] => {
 };
 
 // `--amend` (from `--am`) keeps HEAD's author unless the last `--reset-author`/`--no-reset-author` (from `--res`,
-// `--no-res`) of the line is a reset.
-const AMEND = /\bcommit\b[^;&|]*\s--am(?:e(?:n(?:d)?)?)?(?=\s|$)/;
+// `--no-res`) of the same simple command is a reset — a reset in a later command (a rebase's --exec) doesn't count
+// for an earlier amend. Split at separators, a quoted --exec body's included.
+const AMEND = /\bcommit\b.*\s--am(?:e(?:n(?:d)?)?)?(?=\s|$)/;
 const RESET = /(?:^|\s)--(no-)?res(?:e(?:t(?:-(?:a(?:u(?:t(?:h(?:o(?:r)?)?)?)?)?)?)?)?)?(?=\s|$)/g;
-export const keepsHeadAuthor = (command: string): boolean => {
-  const text = matchable(command);
-  const last = [...text.matchAll(RESET)].at(-1);
-  return AMEND.test(text) && (!last || last[1] !== undefined);
-};
+export const keepsHeadAuthor = (command: string): boolean =>
+  matchable(command)
+    .split(/[;&|()\n]/)
+    .some((cmd) => {
+      const last = [...cmd.matchAll(RESET)].at(-1);
+      return AMEND.test(cmd) && (!last || last[1] !== undefined);
+    });
 
 // The hook's input: `author <ident>`, `committer <ident>` (git var GIT_AUTHOR_IDENT / GIT_COMMITTER_IDENT) and
 // `head-author <ident>` (HEAD's %an <%ae>, absent on an unborn branch), one per line. Null when author or committer

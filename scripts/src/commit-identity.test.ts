@@ -37,7 +37,7 @@ describe('identityProblem', () => {
   });
 
   it.each([
-    ['a personal mailbox under the login', `${LOGIN}@gmail.com`],
+    ['a mailbox off the noreply domain', 'someone@example.com'],
     ['another login’s noreply', '12345678+someone@users.noreply.github.com'],
     ['a non-numeric id', `x1+${LOGIN}@users.noreply.github.com`],
     ['a longer domain', `${NOREPLY}.example.com`],
@@ -45,6 +45,22 @@ describe('identityProblem', () => {
     ['an empty email', ''],
   ])('refuses %s', (_, email) => {
     expect(identityProblem(LOGIN, email)).toEqual(['email']);
+  });
+});
+
+describe('expectedIdentity', () => {
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['not a string', 42],
+    ['not a login', 'some one'],
+    ['an email', 'someone@example.com'],
+    ['over 39 characters', 'a'.repeat(40)],
+  ])('throws on a maintainer.github that is %s, naming the key', (_, github) => {
+    const ids = { maintainer: { name: 'x', github } } as unknown as Parameters<
+      typeof expectedIdentity
+    >[0];
+    expect(() => expectedIdentity(ids)).toThrow(/maintainer\.github must be a GitHub login/);
   });
 });
 
@@ -116,6 +132,21 @@ describe('overrideProblems', () => {
     ],
     [`GIT_CONFIG_PARAMETERS="'user.email'='x'" ${GIT} -m "x"`, 'GIT_CONFIG_'],
     [`GIT_CONFIG_GLOBAL=/tmp/other ${GIT} -m "x"`, 'GIT_CONFIG_'],
+    [`GIT_AUTHOR_EMAIL+=someone@example.com ${GIT} -m "x"`, 'GIT_AUTHOR_'],
+    [`GIT_CONFIG_KEY_0+=user.email ${GIT} -m "x"`, 'GIT_CONFIG_'],
+    [`HOME=/tmp/other ${GIT} -m "x"`, 'other config'],
+    [`XDG_CONFIG_HOME=/tmp/other ${GIT} -m "x"`, 'other config'],
+    [`GIT_DIR=/tmp/other/.git ${GIT} -m "x"`, 'other config'],
+    [`git -c include.path=/tmp/other commit -m "x"`, '`-c`'],
+    [`git -c includeIf.gitdir:/x/.path=/tmp/other commit -m "x"`, '`-c`'],
+    [`git config include.path /tmp/other && ${GIT} -m "x"`, '`git config`'],
+    [`git --no-pager config user.email someone@example.com && ${GIT} -m "x"`, '`git config`'],
+    [`git --config-env=include.path=X commit -m "x"`, '--config-env'],
+    // -u takes the rest of its word, so -uam is no message cluster: the next word is an option.
+    [`${GIT} -uam --author=someone@example.com`, '--author'],
+    // A comment or a heredoc can't be split into words: the raw line is matched (fail closed).
+    [`# -m it's\n${GIT} -m don\\'t --author=someone@example.com`, '--author'],
+    [`cat <<EOF\nit's\nEOF\n${GIT} -m x --author=someone@example.com`, '--author'],
     [`git config user.email someone@example.com && ${GIT} -m "x"`, '`git config`'],
     [`git config set user.name Someone; ${GIT} -m "x"`, '`git config`'],
     [
@@ -146,6 +177,8 @@ describe('overrideProblems', () => {
     `${GIT} -F --author`,
     // Not an abbreviation of --author: --no-author clears it.
     `${GIT} --no-author -m "x"`,
+    `echo $HOME && ${GIT} -m "x"`,
+    `MY_GIT_DIR=x ${GIT} -m "x"`,
   ])('allows %s', (cmd) => {
     expect(overrideProblems(cmd)).toEqual([]);
   });
@@ -157,6 +190,7 @@ describe('shellWords and withoutMessages', () => {
     ['a "b\\"c" d\\ e', ['a', 'b"c', 'd e']],
     [`a&&b ;c|d\ne`, ['a', '&&', 'b', ';', 'c', '|', 'd', ';', 'e']],
     [`a "" b`, ['a', '', 'b']],
+    [`a b#c "#d"`, ['a', 'b#c', '#d']],
     [`x="a;b" y`, ['x=a;b', 'y']],
   ])('%s', (cmd, want) => {
     expect(shellWords(cmd)).toEqual(want);
@@ -164,6 +198,8 @@ describe('shellWords and withoutMessages', () => {
 
   it('cannot split an unterminated quote, so the raw line is matched (fail closed)', () => {
     expect(shellWords(`${GIT} -m "x`)).toBeNull();
+    expect(shellWords(`cat <<'EOF'\nx\nEOF`)).toBeNull();
+    expect(shellWords(`ls # a comment`)).toBeNull();
     expect(overrideProblems(`${GIT} --author=x -m "x`)).toEqual(['`--author` on the commit']);
   });
 
@@ -215,6 +251,12 @@ describe('commandHits (the hook)', () => {
     [`${GIT} -m "fixed the --amend path"`, false], // a message is text
     [`${GIT} --amend -m "no --reset-author here"`, true],
     [`git rebase origin/main --exec '${GIT} --amend --no-edit'`, true],
+    // A reset in a later command doesn't cover an earlier amend.
+    [
+      `${GIT} --amend --no-edit && git rebase origin/main --exec '${GIT} --amend --no-edit --reset-author'`,
+      true,
+    ],
+    [`git rebase origin/main --exec '${GIT} --amend --no-edit --reset-author'`, false],
     [`${GIT} --all -m x`, false],
   ])('keepsHeadAuthor: %s → %s', (cmd, want) => {
     expect(keepsHeadAuthor(cmd)).toBe(want);

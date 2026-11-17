@@ -2,19 +2,17 @@
 
 Every feature runs the same eleven phases, in a lane (`docs/ops/LANES.md`) that reports to the hub
 (`docs/ops/HUB.md`). Root `CLAUDE.md` → _Feature workflow_ keeps the rules every session needs and each phase's
-must-dos; this is the how-to. **Read it at kickoff, and again before each of phases 8–11** — nothing loads it on its
-own, so `pnpm lanes start`'s first prompt opens it before the kickoff.
+must-dos; this is the how-to. **Read it at kickoff, again before each of phases 8–11, and after any compaction** —
+nothing loads it on its own, so `pnpm lanes start --kickoff`'s first prompt opens it before the kickoff.
 
 ## Talking to the user: through the hub only
 
-A lane never sends a phone ping and never asks the user in its own pane, in either mode (the user,
-2026-11-16). Whatever it needs from the user — a decision, a Mac command, a resource it can't reach — goes to the hub as
-`[ask-maintainer]` with the options and the lane's pick, or the exact one-line Mac command; the hub relays it with
-its recommendation and sends back the answer as `[relay]` (`docs/ops/HUB.md` → _Messages_). So in a lane, "ask the
-user", "tell the user" and "hand the user" anywhere in the docs mean that message. Anything the user types in
-a lane's pane goes to the hub as `[info]` at once, verbatim in the message (it is not GitHub-bound text). Which hub
-messages count as the user's approval: `docs/ops/HUB.md` → _Approval_; for a go only the pane can give, the
-`[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
+The rule — no phone pings, no asking in the pane, every need as `[ask-maintainer]`, the user's pane words relayed
+as `[info]` — and its message shapes live in `docs/ops/HUB.md` → _Messages_, _Checkpoints_. What it means here: in a
+lane, "ask the user", "tell the user" and "hand the user" anywhere in the docs mean an `[ask-maintainer]` to the
+hub, with the options and the lane's pick or the exact one-line Mac command; the answer comes back as `[relay]`.
+Which hub messages count as the user's approval: `docs/ops/HUB.md` → _Approval_; for a go only the pane can give,
+the `[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
 
 ## Two modes
 
@@ -46,19 +44,16 @@ The user names the mode; collaborative is the default.
     (under _This feature_ and _Other scenarios_ alike), plus that review is the all-clear (phase 9). On
     `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a
     `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
-  - **Finished:** `[pr-open]` (or `[pr-ready]` when the mailroom was unreachable) to the hub, with the devcheck
-    report's _This feature_ lists — _You don't need to test_ / _Needs you_, "no feature rows" for a branch with no
-    scenario of its own — and the report below.
+  - **Finished:** `[pr-open]` to the hub — or `[pr-ready]` when the mailroom was unreachable, then the hand-off line
+    in its own `[ask-maintainer]` — in the shape `docs/ops/HUB.md` → _Checkpoints_ gives, and the report below.
 
-**No hub.** Before the kickoff, `ListAgents` must list the hub (`board.sh hub` is the quick check). Missing, in
-either mode: `pnpm board lane <phase> --needs "no hub"` (the tower shows it), one line in the pane saying so — a
-statement, not a question — then carry on with what is already approved and keep sending at each checkpoint (the
-messages land when it is back). A call that needs the user is parked as a logged decision until the hub returns.
+**No hub** before the kickoff, or a hub that drops mid-run: `docs/ops/HUB.md` → _Missing hub_.
 
 ## Lane status and checkpoints
 
 At the checkpoints marked **→ hub** — kickoff (2), the dev lock taken, queued or released (8, 10), blocked, PR open
-(10), merged (11) — the lane sends one short `[tag] <branch> — facts` message (`docs/ops/HUB.md` → _Checkpoints_).
+(10), merged (11) — the lane sends one short `[tag] <branch> — facts` message to the pinned hub address (`docs/ops/HUB.md` →
+_Checkpoints_, _Approval_).
 At those same checkpoints, and at each phase change between them, it also writes its lane status file —
 `pnpm board lane <phase> [--step …] [--needs … --link|--cmd …]`, from the worktree — which the web tower's NOW and
 NEEDS YOU read (`docs/ops/TOWER.md` → _Lane files_); a `[blocked]` or `[ask-maintainer]` is also `--needs` with the

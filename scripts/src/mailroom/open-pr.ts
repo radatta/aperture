@@ -50,8 +50,8 @@ export interface Fallback {
 }
 const openFallback = (d: Deps, branch: string, title: string): Fallback => ({
   line: `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md${MAC_NOTE}`,
-  // --head matches a fork's same-named branch too: only a row with isCrossRepository false is this repo's PR.
-  late: `it may still open the PR. Check before opening it by hand: gh pr list --head ${branch} --json url,isCrossRepository (a row with isCrossRepository true is a fork's — ignore it); then, only if none:`,
+  // --head matches a fork's same-named branch too: the jq keeps only this repo's PR.
+  late: `it may still open the PR. Check on the Mac first (empty output means none):\n  cd ${macPath(d.root)} && gh pr list --head ${branch} --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:`,
 });
 
 function unreachable(d: Deps, why: string, fb: Fallback, late = false): number {

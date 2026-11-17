@@ -25,13 +25,11 @@ describe('loadIdentifiers', () => {
   it.each([
     ['missing', undefined],
     ['empty', ''],
-    ['not a string', 42],
     ['not a login', 'some one'],
-    ['an email', 'someone@example.com'],
-    ['over 39 characters', 'a'.repeat(40)],
-  ])('refuses a maintainer.github that is %s, saying so', (_, github) => {
-    expect(() => loadIdentifiers(write(github))).toThrow(
-      /maintainer\.github must be a GitHub login/,
-    );
-  });
+  ])(
+    'still loads with a maintainer.github that is %s: only the identity check needs it',
+    (_, github) => {
+      expect(loadIdentifiers(write(github)).maintainer.name).toBe(real.maintainer.name);
+    },
+  );
 });

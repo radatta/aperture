@@ -320,8 +320,13 @@ describe('openPr', () => {
       if (to.includes('/inbox/')) fs.files.delete(to); // the Mac takes it, then goes quiet
     };
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
-    expect(logs.join('\n')).toMatch(
-      /may still open the PR[\s\S]*gh pr list --head mac-mailroom --json url,isCrossRepository \(a row with isCrossRepository true is a fork's/,
+    const out = logs.join('\n');
+    expect(out).toContain(
+      'may still open the PR. Check on the Mac first (empty output means none):',
+    );
+    // A real Mac line: the worktree's Mac path, and only this repo's PR (a fork's same-named branch is dropped).
+    expect(out).toContain(
+      `\n  cd ${macPath(ROOT)} && gh pr list --head mac-mailroom --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:\n  cd ${macPath(ROOT)} && gh pr create`,
     );
   });
 
