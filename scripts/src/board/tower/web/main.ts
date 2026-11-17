@@ -320,7 +320,7 @@ async function run(a: Args) {
   // itself is the one-server lock (a second server fails with EADDRINUSE). Fixture servers never write it.
   const pidFile = process.env.APERTURE_TOWER_PID;
   if (pidFile && !a.fixtures) {
-    writeFileSync(`${pidFile}.sha`, `${t.version ?? ''}\n`); // the commit it serves: board.sh tower version
+    writeFileSync(`${pidFile}.sha`, `${process.pid} ${t.version ?? ''}\n`); // board.sh tower version
     writeFileSync(pidFile, `${process.pid}\n`);
   }
   void t.poll(t.clock());

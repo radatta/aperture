@@ -245,15 +245,19 @@ cmd_tower() {
         sb_alive "$p" && { echo "tower: $p still running" >&2; return 1; }
       fi
       rm -f "$TOWER_PID.sha"
-      [ "$1" = restart ] && cmd_tower start
+      [ "$1" = restart ] && { cmd_tower start; return; } # start's status: sync-main reads a failed restart from it
       return 0 ;;
     status)
       if p=$(tower_pid); then echo "tower: running (pid $p) — http://localhost:$TOWER_PORT"
       else echo "tower: stopped — board.sh tower start"; return 1; fi ;;
     version)
-      # The commit the running server started from, which it writes beside its pidfile; empty when it wrote none.
-      tower_pid >/dev/null || { echo "tower: stopped" >&2; return 1; }
-      cat "$TOWER_PID.sha" 2>/dev/null || true ;;
+      # The commit the running server started from: "<pid> <sha>" beside its pidfile. Empty when it wrote none or the
+      # file is another server's (a stale one, or an older server that writes none): unknown, so sync-main restarts.
+      local pid sha
+      p=$(tower_pid) || { echo "tower: stopped" >&2; return 1; }
+      read -r pid sha <"$TOWER_PID.sha" 2>/dev/null || true
+      [ "$pid" = "$p" ] && printf '%s\n' "$sha"
+      return 0 ;;
     *) echo "usage: board.sh tower start|restart|stop|status|version" >&2; return 2 ;;
   esac
 }

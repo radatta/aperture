@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TOWER_PATHS, behindCheck, readHead, towerChanged, type Git } from './behind.ts';
 
@@ -5,24 +7,35 @@ const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 
 describe('readHead', () => {
-  it('reads a detached HEAD from the file, without git', () => {
-    const git: Git = () => {
-      throw new Error('git called');
-    };
-    expect(readHead('/r/.git', git, () => `${A}\n`)).toBe(A);
-  });
-  it('asks git when HEAD is a ref, and gives null when nothing reads', () => {
+  it('reads a detached HEAD from the file; a branch checkout or no file gives null, never a git call', () => {
+    expect(readHead('/r/.git', () => `${A}\n`)).toBe(A);
+    expect(readHead('/r/.git', () => 'ref: refs/heads/x\n')).toBeNull();
     expect(
-      readHead(
-        '/r/.git',
-        () => `${B}\n`,
-        () => 'ref: refs/heads/x\n',
-      ),
-    ).toBe(B);
-    const none = () => {
-      throw new Error('ENOENT');
+      readHead('/r/.git', () => {
+        throw new Error('ENOENT');
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('TOWER_PATHS', () => {
+  it("covers every file web/main.ts's static import graph reaches", () => {
+    const root = resolve(import.meta.dirname, '../../../..');
+    const seen = new Set<string>();
+    const walk = (f: string) => {
+      if (seen.has(f)) return;
+      seen.add(f);
+      const src = readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/^(?:import|export)\b[^;]*?from '(\.[^']+)'/gms))
+        walk(resolve(dirname(f), m[1]!));
     };
-    expect(readHead('/r/.git', none, none)).toBeNull();
+    walk(join(import.meta.dirname, 'web/main.ts'));
+    const outside = [...seen]
+      .map((f) => relative(root, f))
+      .filter((f) => !TOWER_PATHS.some((p) => f === p || f.startsWith(`${p}/`)));
+    expect(outside).toEqual([]);
+    expect(seen.size).toBeGreaterThan(15); // the walk found the graph, not just main.ts
+    expect(TOWER_PATHS).toContain('identifiers.json'); // read at load by identifiers.ts, not imported
   });
 });
 
@@ -31,7 +44,19 @@ describe('towerChanged', () => {
     let seen: string[] = [];
     const git: Git = (args) => ((seen = args), 'scripts/board/board.sh\n');
     expect(towerChanged(git, A, B)).toEqual(['scripts/board/board.sh']);
-    expect(seen).toEqual(['diff', '--name-only', A, B, '--', ...TOWER_PATHS]);
+    expect(seen.slice(0, 5 + TOWER_PATHS.length)).toEqual([
+      'diff',
+      '--name-only',
+      A,
+      B,
+      '--',
+      ...TOWER_PATHS,
+    ]);
+    // tests and fixtures never run in the server: a merge touching only them restarts nothing
+    expect(seen.slice(5 + TOWER_PATHS.length)).toEqual([
+      ':(exclude,glob)**/*.test.ts',
+      ':(exclude)scripts/src/board/tower/fixtures',
+    ]);
     expect(
       towerChanged(
         () => {

@@ -16,6 +16,7 @@ type World = {
   served?: string | null; // null: `tower version` fails (an older server)
   changed?: Record<string, string[] | 'fail'>; // `${from}..${to}` → tower files
   restartFails?: boolean;
+  switchFails?: boolean;
 };
 
 function fake(w: World) {
@@ -52,6 +53,7 @@ function fake(w: World) {
         if (w.fetchFails) throw new Error('network');
         return '';
       case 'switch':
+        if (w.switchFails) throw new Error('untracked file would be overwritten');
         w.head = rest[1]!;
         return '';
       case 'diff': {
@@ -103,7 +105,7 @@ describe('sync-main', () => {
     expect(f.did('switch') || f.did('restart')).toBe(false);
   });
 
-  it('restarts a tower serving an older commit even when the checkout already moved (lanes start detached it)', () => {
+  it('restarts a tower serving an older commit even when the checkout already moved (pnpm lane start detached it)', () => {
     const f = fake({
       head: B,
       origin: B,
@@ -156,6 +158,14 @@ describe('sync-main', () => {
     const f = fake({ head: A, origin: B, fetchFails: true });
     expect(() => syncMain(f.run, MAIN)).toThrow(/git fetch failed — nothing moved/);
     expect(f.did('switch')).toBe(false);
+  });
+
+  it('a failed switch says nothing moved and restarts nothing', () => {
+    const f = fake({ head: A, origin: B, tower: 'running', served: null, switchFails: true });
+    expect(() => syncMain(f.run, MAIN)).toThrow(
+      /git switch failed — nothing moved: untracked file/,
+    );
+    expect(f.did('restart')).toBe(false);
   });
 
   it('a second run is a no-op', () => {

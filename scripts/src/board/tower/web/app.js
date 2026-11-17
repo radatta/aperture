@@ -690,8 +690,7 @@ function sources(v) {
       ? `${off.length} source${off.length > 1 ? 's' : ''} off`
       : 'sources ok';
   chip.className = failed ? 't-bad' : off.length || v.behind ? 't-warn' : 't-dim';
-  $('#live-dot').className =
-    `dot live ${failed ? 'c-bad' : off.length || v.behind ? 'c-hold' : 'c-good'}`;
+  $('#live-dot').className = `dot live ${failed ? 'c-bad' : off.length ? 'c-hold' : 'c-good'}`; // data, not code
   for (const s of v.sources) {
     const c = s.state === 'ok' ? 'c-good' : s.state === 'stale' ? 'c-hold' : 'c-bad';
     b.append(

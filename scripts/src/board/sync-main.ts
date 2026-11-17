@@ -1,6 +1,6 @@
 // `pnpm board sync-main` (docs/ops/TOWER.md → Run it): the main checkout to origin/main, detached, then the web tower
 // restarted only when the code it serves differs from the new HEAD in a file the tower runs. The base is the commit the
-// tower serves (board.sh tower version), not the old HEAD: a checkout moved by `lanes start` is caught too. Never
+// tower serves (board.sh tower version), not the old HEAD: a checkout moved by `pnpm lane start` is caught too. Never
 // starts a stopped tower. Idempotent: a second run says so and does nothing.
 import { dirname, join } from 'node:path';
 import { towerChanged } from './tower/behind.ts';
@@ -36,7 +36,13 @@ export function syncMain(run: Run, here: string): string {
   }
   const old = git(['rev-parse', 'HEAD']);
   const target = git(['rev-parse', 'origin/main']);
-  if (old !== target) git(['switch', '--detach', target]); // the sha: a concurrent fetch can't split it
+  if (old !== target)
+    try {
+      git(['switch', '--detach', target]); // the sha: a concurrent fetch can't split it
+    } catch (e) {
+      // git aborts a switch whole (an untracked file it would overwrite): HEAD is where it was
+      throw new Error(`git switch failed — nothing moved: ${(e as Error).message}`, { cause: e });
+    }
   const moved =
     old === target
       ? `main checkout: already at ${short(target)}`
