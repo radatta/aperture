@@ -1186,7 +1186,11 @@ class StubClient implements ApiClient {
   async getCoachStats(range?: CoachStatsRange): Promise<CoachStats> {
     const r = normalizeStatsRange(range);
     const ci = this.coachInput();
-    return coachStats(attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today), ci.today, r);
+    return coachStats(
+      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+      ci.today,
+      r,
+    );
   }
   private changeCoachDay(fn: (cur: CoachDay, ci: CoachInput) => CoachDay): CoachToday {
     const ci = this.coachInput();

@@ -958,10 +958,9 @@ export type DraftFailReason =
   | 'bad-json'
   | 'bad-shape' // the model's answer wasn't a list of text (draftMistakes)
   | 'nothing-to-draft'; // no Run or Submit judged yet — no model call
-// `cause`: the one cause tag the model proposes, or null — a proposal the form shows, never saved unless tapped.
+// `cause`: the one cause tag the model proposes, or null — a suggestion for the form, never written by the draft.
 export type ReviewDraft =
-  | { ok: true; mistakes: string[]; cause: CauseTag | null }
-  | { ok: false; reason: DraftFailReason };
+  { ok: true; mistakes: string[]; cause: CauseTag | null } | { ok: false; reason: DraftFailReason };
 // The model's `cause`, made fit: a known tag, else null — a stray value drops the proposal, never the draft.
 export const draftCause = (v: unknown): CauseTag | null => (isCauseTag(v) ? v : null);
 // The model's `mistakes`, made fit: folded, empties dropped, a line over 160 characters cut to 160 ending "…",
