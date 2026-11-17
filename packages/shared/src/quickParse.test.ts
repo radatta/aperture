@@ -368,6 +368,27 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(v.dropped).toEqual(['dropped due time']);
   });
 
+  it('a day from the model counts only when the words name one', () => {
+    // 18:30: "at 5" is tomorrow 5 AM, even if the model dated it tomorrow on its own.
+    const late = Date.UTC(2026, 10, 17, 2, 30);
+    const v = (line: string) =>
+      validateParsedTask(fields({ dueDay: '2026-11-17' }), {
+        ...ctx,
+        today: '2026-11-16',
+        line,
+        voice: { now: late },
+      })!.input;
+    expect(v('call mum at 5')).toMatchObject({ dueDay: '2026-11-17', dueTime: '05:00' });
+    expect(v('call mum tomorrow at 5')).toMatchObject({ dueDay: '2026-11-17', dueTime: '17:00' });
+  });
+
+  it('a minute the grammar can’t read leaves the model’s clock, rolled forward', () => {
+    expect(voice('call mum at five twenty pm', { dueTime: '17:20' }).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:20',
+    });
+  });
+
   it('words the model kept in its title were not a time', () => {
     const v = voice('look at one of the leases', { title: 'look at one of the leases' });
     expect(v.input).toEqual({ title: 'look at one of the leases' });

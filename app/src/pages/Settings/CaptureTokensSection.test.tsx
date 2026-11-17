@@ -65,6 +65,26 @@ describe('Settings › Capture: tokens', () => {
     ).toBeTruthy();
   });
 
+  it('a second Enter while a mint is out mints nothing more', async () => {
+    const api = stub();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = api.mintScopedToken.bind(api);
+    const mint = vi.spyOn(api, 'mintScopedToken').mockImplementation(async (scope, name) => {
+      await gate;
+      return real(scope, name);
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureTokensSection />, { api });
+    await screen.findByText(/No capture tokens yet/);
+    const field = screen.getByLabelText('New token for');
+    await user.type(field, 'iPhone{Enter}{Enter}');
+    release();
+    await screen.findByLabelText('Capture token');
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(await api.listScopedTokens('capture')).toHaveLength(1);
+  });
+
   it('a refused mint says why and keeps the typed name', async () => {
     const api = stub();
     vi.spyOn(api, 'mintScopedToken').mockRejectedValueOnce(

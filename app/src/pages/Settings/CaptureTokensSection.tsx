@@ -103,6 +103,7 @@ function MintToken({
       const r = await mint.mutateAsync(trimmed);
       setName('');
       onMinted(r.token);
+      mint.reset(); // the plaintext leaves the mutation cache too — the reveal holds the one copy
     } catch (e) {
       setError(errText(e)); // the typed name stays
     }

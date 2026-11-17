@@ -156,6 +156,9 @@ Two checks keep the grammar honest:
 | noon / midnight / 17:00                      | any         | as said, rolled if past                          |
 
 - A time equal to now is past ("at 5" at 5:00 PM → tomorrow 5 AM).
+- A day the model gives counts only when the words name one (`DAY_WORD`: tomorrow, a weekday, a month, a
+  date) — a model that dated a bare "at 5" tomorrow on its own can't turn it into a daytime hour. A minute the
+  grammar can't read ("at five twenty pm") means no grammar time at all, so the model's clock takes over.
 - A day counts as named only when it's after the calendar's today ("today at 9 am" rolls; a past day the
   model read, "monday" as last Monday, rolls too). "friday at 1 tonight" is the small hours after Friday.
 - "afternoon" and "evening" stay day-only (not decided). A raw save gets no time: with no model there's no
