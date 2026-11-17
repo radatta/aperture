@@ -877,6 +877,10 @@ describe('stats', () => {
           peeked: 1,
           causes: {},
           rank: 1,
+          submitsPerTry: null, // a logged peek carries no submit, run or trace
+          runBeforeSubmit: { hit: 0, of: 0 },
+          traced: { hit: 0, of: 0 },
+          weeks: [{ week: '2026-W46', firstTry: { hit: 0, of: 1 } }],
         },
         {
           pattern: 'arrays-hashing',
@@ -887,10 +891,19 @@ describe('stats', () => {
           peeked: 0,
           causes: { boundary: 1 },
           rank: 2, // ties the untried patterns, first in the roadmap order
+          submitsPerTry: 1,
+          runBeforeSubmit: { hit: 0, of: 3 },
+          traced: { hit: 0, of: 0 },
+          weeks: [{ week: '2026-W46', firstTry: { hit: 1, of: 2 } }], // today's is a re-solve
         },
       ],
       weakest: 'two-pointers',
+      ranking: expect.arrayContaining(['two-pointers', 'arrays-hashing']),
     });
+    expect(coachStats(all(), TODAY).ranking.slice(0, 2)).toEqual([
+      'two-pointers',
+      'arrays-hashing',
+    ]);
   });
   it('weakest is the ranking’s top even with no row in range: all clean so far → an untried pattern', () => {
     const s = coachStats(attemptsOf([clean('two-sum', day(-2))], [], NOW), TODAY);
@@ -1038,7 +1051,7 @@ describe('pattern detail (the Patterns tab)', () => {
   const pat = (s: ReturnType<typeof statsOf>, p: string) =>
     s.patterns.find((x) => x.pattern === p)!;
 
-  it('submits per problem, run-before-submit and trace rate over first tries with the data', () => {
+  it('submits a try, run-before-submit and trace rate over the attempts with the data', () => {
     const s = statsOf([
       withTrace(
         withRuns(sit({ slug: tp[0]!, on: day(-5), submits: ['wrong_answer', 'accepted'] }), 2),
@@ -1050,19 +1063,48 @@ describe('pattern detail (the Patterns tab)', () => {
     expect(pat(s, 'two-pointers')).toMatchObject({
       problems: 3,
       attempts: 3,
-      submitsPerProblem: 1.5,
+      submitsPerTry: 1.5,
       runBeforeSubmit: { hit: 1, of: 2 },
       traced: { hit: 1, of: 2 },
     });
   });
 
-  it('a partial trace or an untraced submit is a miss; no coach data counts nowhere', () => {
+  it('a partial trace or an untraced submit is a miss; no coach data, or the card off, counts nowhere', () => {
+    const none = withTrace(clean(tp[3]!, day(-1)), 'none');
+    const off = {
+      ...none,
+      summary: {
+        ...none.summary,
+        coach: {
+          config: { trace: false, hold: false, nudge: true },
+          trace: 'none' as const,
+          nudges: 0,
+        },
+      },
+    };
     const s = statsOf([
       withTrace(clean(tp[0]!, day(-3)), 'partial'),
       withTrace(clean(tp[1]!, day(-2)), 'none'),
       clean(tp[2]!, day(-1)),
+      off,
     ]);
     expect(pat(s, 'two-pointers').traced).toEqual({ hit: 0, of: 2 });
+  });
+
+  it('a re-solve’s submits are its own try; a logged piece earlier the same day keeps the sitting’s run and trace', () => {
+    const s = statsOf(
+      [
+        clean(st[0]!, day(-9)),
+        withTrace(withRuns(sit({ slug: st[0]!, on: day(-2), submits: ['accepted'] }), 1), 'traced'),
+      ],
+      [{ ...manual(st[0]!, day(-2), 'solved'), at: zonedEpoch(day(-2), '08:00', USER_TIME_ZONE) }],
+    );
+    expect(pat(s, 'stack')).toMatchObject({
+      attempts: 2,
+      submitsPerTry: 1,
+      runBeforeSubmit: { hit: 1, of: 2 },
+      traced: { hit: 1, of: 1 },
+    });
   });
 
   it('per-week first tries, oldest first; a re-solve is not a first try', () => {
@@ -1085,7 +1127,7 @@ describe('pattern detail (the Patterns tab)', () => {
     );
     expect(pat(s, 'two-pointers')).toMatchObject({
       attempts: 2,
-      submitsPerProblem: null,
+      submitsPerTry: null,
       runBeforeSubmit: { hit: 0, of: 0 },
       traced: { hit: 0, of: 0 },
     });
@@ -1103,7 +1145,7 @@ describe('pattern detail (the Patterns tab)', () => {
     );
     expect(pat(s, 'two-pointers')).toMatchObject({
       attempts: 1,
-      submitsPerProblem: 1,
+      submitsPerTry: 1,
       runBeforeSubmit: { hit: 0, of: 1 },
       weeks: [{ week: expect.any(String), firstTry: { hit: 0, of: 1 } }],
     });

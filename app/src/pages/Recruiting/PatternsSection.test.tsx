@@ -22,7 +22,9 @@ describe('Patterns tab', () => {
     renderApp({ api: freshApi(), path: '/recruiting/patterns' });
     expect(await screen.findByText('Nothing to rank yet.')).toBeTruthy();
     expect(await screen.findByText(/^Focus · Arrays & Hashing · day 1 of 3/)).toBeTruthy();
-    const items = within(screen.getByRole('list', { name: /Patterns/ })).getAllByRole('listitem');
+    const items = within(
+      screen.getByRole('list', { name: 'Weakest first tries first' }),
+    ).getAllByRole('listitem');
     expect(items).toHaveLength(PATTERNS.length);
     expect(screen.getAllByText('Not started')).toHaveLength(PATTERNS.length);
     expect(row('Arrays & Hashing').getAttribute('aria-current')).toBe('true');
@@ -45,24 +47,30 @@ describe('Patterns tab', () => {
       })),
     ]);
     renderApp({ api, path: '/recruiting/patterns' });
-    await screen.findByText(/7 problems · 7 attempts/);
+    await screen.findByText(
+      (_, el) => el?.tagName === 'P' && /^7 problems · 7 attempts/.test(el.textContent ?? ''),
+    );
     expect(within(row('Two Pointers')).getByText('First try 1 of 2')).toBeTruthy();
     expect(within(row('Two Pointers')).getByText('Boundary 1')).toBeTruthy();
     expect(within(row('Stack')).getByText('First try 3 of 5 · 60%')).toBeTruthy();
     // Two Pointers missed more, so it ranks above Stack.
-    const names = within(screen.getByRole('list', { name: /Patterns/ }))
+    const names = within(screen.getByRole('list', { name: 'Weakest first tries first' }))
       .getAllByRole('listitem')
-      .map((li) => li.getAttribute('aria-label'));
-    expect(names.indexOf('Two Pointers')).toBeLessThan(names.indexOf('Stack'));
+      .map((li) => li.getAttribute('data-pattern'));
+    expect(names.indexOf('two-pointers')).toBeLessThan(names.indexOf('stack'));
   });
 
   it('“Set as focus” moves the day’s focus to day 1 of the pick; “Back to the coach’s pick” clears it', async () => {
     const api = freshApi();
     const user = userEvent.setup();
     renderApp({ api, path: '/recruiting/patterns' });
-    await user.click(await screen.findByRole('button', { name: 'Set Graphs as focus' }));
+    await user.click(await screen.findByRole('button', { name: 'Set as focus, Graphs' }));
     expect(await screen.findByText(/^Focus · Graphs · day 1 of 3/)).toBeTruthy();
     await waitFor(() => expect(row('Graphs').getAttribute('aria-current')).toBe('true'));
+    // The clicked button is gone: keyboard focus lands on the Focus card, not the top of the page.
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toMatch(/^Focus · Graphs · day 1 of 3/),
+    );
     expect((await api.getCoachToday()).focus).toMatchObject({
       pattern: 'graphs',
       day: 1,
@@ -79,7 +87,7 @@ describe('Patterns tab', () => {
     vi.spyOn(api, 'setCoachFocus').mockRejectedValue(new Error('Nothing unseen is left in Graphs'));
     const user = userEvent.setup();
     renderApp({ api, path: '/recruiting/patterns' });
-    await user.click(await screen.findByRole('button', { name: 'Set Graphs as focus' }));
+    await user.click(await screen.findByRole('button', { name: 'Set as focus, Graphs' }));
     expect((await screen.findByRole('alert')).textContent).toMatch(
       /Nothing unseen is left in Graphs.*Nothing changed/,
     );
@@ -92,7 +100,7 @@ describe('Patterns tab', () => {
     const user = userEvent.setup();
     renderApp({ api, path: '/recruiting/patterns' });
     expect(await screen.findByText('Couldn’t load the patterns.')).toBeTruthy();
-    expect(screen.queryByRole('list', { name: /Patterns/ })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Weakest first tries first' })).toBeNull();
     read.mockRestore();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Nothing to rank yet.')).toBeTruthy();
@@ -130,5 +138,9 @@ describe('helpers', () => {
       ['tries', null, 'tries'],
     ]);
     expect(rows).toHaveLength(PATTERNS.length);
+    // A problem outside the roadmap lands on `other`: one more row, last, never rankable.
+    const withOther = patternRows(['stack'], [stat('other')]);
+    expect(withOther).toHaveLength(PATTERNS.length + 1);
+    expect(withOther.at(-1)).toMatchObject({ pattern: 'other', rank: null });
   });
 });

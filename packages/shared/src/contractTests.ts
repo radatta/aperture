@@ -4177,7 +4177,7 @@ export function runApiContract(
         expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['happy-number']);
       });
 
-      it('stats carry the Patterns tab’s detail: submits a problem, run first, traced, weekly first tries', async () => {
+      it('stats carry the Patterns tab’s detail: submits a try, run first, traced, weekly first tries', async () => {
         // valid-palindrome: traced, ran, a wrong submit, then an accept. 3sum: trace skipped, accepted at once.
         const coach = (at: number, payload: unknown): SittingEventInput => ({
           id: ulid(),
@@ -4217,7 +4217,7 @@ export function runApiContract(
           problems: 2,
           attempts: 2,
           firstTry: { hit: 1, of: 2 },
-          submitsPerProblem: 1.5,
+          submitsPerTry: 1.5,
           runBeforeSubmit: { hit: 1, of: 2 },
           traced: { hit: 1, of: 2 },
           weeks: [{ week: '2023-W46', firstTry: { hit: 1, of: 2 } }],

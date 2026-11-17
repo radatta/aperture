@@ -125,6 +125,10 @@ export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help:
   if (!accepted || help === 'solution') return 'failed' as const;
   return firstSubmitAccepted && help === 'none' ? ('clean' as const) : ('solved' as const);
 }
+// The trace state the extension's card left at the first submit (sittings.ts foldCoach): only all three inputs is a
+// hit; a sitting with no coach data, or with the card switched off in its config, counts nowhere.
+const tracedAtFirstSubmit = (c: Sitting['summary']['coach']): boolean | null =>
+  !c?.trace || c.config?.trace === false ? null : c.trace === 'traced';
 // What one sitting says, as an attempt.
 export function sittingAttempt(s: Sitting): Attempt {
   const help = s.review?.help ?? 'none';
@@ -147,7 +151,7 @@ export function sittingAttempt(s: Sitting): Attempt {
     submits: s.summary.submits,
     runs: s.summary.runs,
     runFirst: first ? s.summary.runsBeforeFirstSubmit > 0 : null,
-    traced: first && s.summary.coach?.trace ? s.summary.coach.trace === 'traced' : null,
+    traced: first ? tracedAtFirstSubmit(s.summary.coach) : null,
     lastError:
       last && last.verdict !== 'accepted'
         ? { verdict: last.verdict, statusMsg: last.statusMsg }
@@ -196,7 +200,7 @@ export interface Attempt {
   submits: number;
   runs: number;
   runFirst: boolean | null; // a Run before the first submit; null with no captured submit
-  traced: boolean | null; // all three trace inputs written before the first submit; null with no trace data
+  traced: boolean | null; // all three trace inputs stood at the first submit; null with no trace data or the card off
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
   sittingIds: string[]; // newest first
   attemptIds: string[]; // the logged attempts' (CoachAttempt) ids, newest first
@@ -228,8 +232,9 @@ function foldDay(parts: Attempt[]): Attempt {
     firstSubmitAccepted: first?.firstSubmitAccepted ?? null,
     submits: sorted.reduce((n, p) => n + p.submits, 0),
     runs: sorted.reduce((n, p) => n + p.runs, 0),
-    runFirst: first?.runFirst ?? null, // the first try's, like firstSubmitAccepted
-    traced: first?.traced ?? null,
+    // The first captured submit's: a logged piece never has one, so it can't blank a sitting's run or trace.
+    runFirst: sorted.find((p) => p.runFirst !== null)?.runFirst ?? null,
+    traced: sorted.find((p) => p.runFirst !== null)?.traced ?? null,
     lastError: [...sorted].reverse().find((p) => p.submits || p.runs)?.lastError ?? null,
     sittingIds: sorted.flatMap((p) => p.sittingIds).reverse(),
     attemptIds: sorted.flatMap((p) => p.attemptIds).reverse(),
@@ -1000,13 +1005,13 @@ export function coachStats(
 
 // --- The Patterns tab's per-pattern detail (coach_stats grows it): how each try went, over the same range ---
 export interface PatternDetail {
-  submitsPerProblem: number | null; // captured submits ÷ problems with one, to 1 decimal; null with none
-  runBeforeSubmit: Rate; // first tries with a captured submit that ran first
-  traced: Rate; // first tries with trace data that traced all three inputs
-  weeks: { week: string; firstTry: Rate }[]; // ISO weeks in range with an attempt, oldest first
+  submitsPerTry: number | null; // captured submits ÷ attempts with one (a re-solve is its own), 1 decimal; null with none
+  runBeforeSubmit: Rate; // attempts with a captured submit whose first submit had a Run before it
+  traced: Rate; // attempts with trace data whose trace stood at all three inputs at the first submit
+  weeks: { week: string; firstTry: Rate }[]; // ISO weeks in range with a first try, oldest first
 }
-// Every attempt is a try here (a re-solve is one too); the first-try rate per week reuses coachStats' rule — the
-// problem's first attempt ever.
+// Every attempt in range counts toward the first three (a re-solve too); `weeks` counts first tries only, by
+// coachStats' rule — the problem's first attempt ever.
 export function patternDetail(
   attempts: readonly Attempt[],
   from: string | null,
@@ -1015,7 +1020,7 @@ export function patternDetail(
   const seen = new Set<string>();
   const acc = new Map<
     PatternId,
-    PatternDetail & { submits: number; submitted: Set<string>; byWeek: Map<string, Rate> }
+    PatternDetail & { submits: number; submitted: number; byWeek: Map<string, Rate> }
   >();
   for (const a of attempts) {
     const first = !seen.has(a.slug);
@@ -1025,18 +1030,18 @@ export function patternDetail(
       acc.get(a.pattern) ??
       acc
         .set(a.pattern, {
-          submitsPerProblem: null,
+          submitsPerTry: null,
           runBeforeSubmit: blankRate(),
           traced: blankRate(),
           weeks: [],
           submits: 0,
-          submitted: new Set(),
+          submitted: 0,
           byWeek: new Map(),
         })
         .get(a.pattern)!;
     if (a.submits > 0) {
       d.submits += a.submits;
-      d.submitted.add(a.slug);
+      d.submitted += 1;
     }
     if (a.runFirst !== null) bump(d.runBeforeSubmit, a.runFirst);
     if (a.traced !== null) bump(d.traced, a.traced);
@@ -1050,7 +1055,7 @@ export function patternDetail(
       p,
       {
         ...d,
-        submitsPerProblem: submitted.size ? Math.round((submits / submitted.size) * 10) / 10 : null,
+        submitsPerTry: submitted ? Math.round((submits / submitted) * 10) / 10 : null,
         weeks: [...byWeek]
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([week, firstTry]) => ({ week, firstTry })),

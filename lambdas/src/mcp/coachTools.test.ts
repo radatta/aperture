@@ -469,6 +469,10 @@ describe('coach_stats', () => {
       pattern: 'Two Pointers',
       patternId: 'two-pointers',
       rank: 1,
+      submitsPerTry: 1,
+      runBeforeSubmit: { hit: 0, of: 1, pct: null },
+      traced: { hit: 0, of: 0, pct: null },
+      weeks: [{ week: '2026-W45', firstTry: { hit: 0, of: 1, pct: null } }],
     });
     expect(out.weeks.map((w: { week: string }) => w.week)).toEqual(['2026-W45', '2026-W46']);
     expect(out.note).toMatch(/never with other people/);

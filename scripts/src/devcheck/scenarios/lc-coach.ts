@@ -9,6 +9,7 @@
 // schedule step's backdated attempts change the plan for any read after it, so the app steps after it read the plan
 // live, never an earlier step's; PR B's reads run over what it logged. PR D's Patterns tab (its ranking, failed reads,
 // a refused write, Set as focus and back, 390 px) runs just before the schedule step.
+import { PHONE } from '../browser';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
@@ -415,6 +416,7 @@ export const lcCoach: Scenario = {
         why: why.history,
       },
     },
+    {
       id: 'patterns-table',
       entry: 'ui',
       kind: 'nominal',
@@ -430,7 +432,7 @@ export const lcCoach: Scenario = {
       id: 'patterns-390',
       entry: 'ui',
       kind: 'edge',
-      what: 'At 390 px all 18 rows and every “Set as focus” sit on screen, no sideways scroll (light and dark)',
+      what: 'At 390 px every row’s “Set as focus” sits on screen, no sideways scroll, light and dark',
     },
     {
       id: 'patterns-load-error',
@@ -464,21 +466,16 @@ export const lcCoach: Scenario = {
       id: 'patterns-focus-refused',
       entry: 'ui',
       kind: 'edge',
-      what: 'A refused focus write says why inline and changes nothing',
-      offDev: {
-        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
-        test: 'a refused focus write says why inline and changes nothing',
-        why: 'only a pattern with nothing unseen refuses, and those carry no button; the server half is floor-focus’s refusal (proven on dev)',
-      },
+      what: 'A refused focus write (the server’s 400 and its reason) says why inline and changes nothing',
     },
     {
       id: 'patterns-stats-detail',
       entry: 'api',
       kind: 'edge',
-      what: 'Stats carry submits a problem, run-before-submit, trace rate and weekly first tries; test sittings never count',
+      what: 'Stats carry submits a try, run-before-submit and trace rate over the attempts with that data',
       offDev: {
         file: 'packages/shared/src/coach.test.ts',
-        test: 'test sittings never count, and the range bounds every field',
+        test: 'submits a try, run-before-submit and trace rate over the attempts with the data',
         why: 'the per-pattern counts on dev mix earlier runs’ history; the contract test runs the same fold on both clients',
       },
     },
@@ -486,12 +483,13 @@ export const lcCoach: Scenario = {
       id: 'patterns-sittings-unchanged',
       entry: 'ui',
       kind: 'edge',
-      what: 'The Sittings tab beside it is unchanged',
-      offDev: {
-        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
-        test: 'the Sittings tab is unchanged next to it',
-        why: 'the Recruiting test suite renders it on the same route tree; the step opens /recruiting on dev as well',
-      },
+      what: 'The Sittings tab beside it still opens as itself, without the Patterns list',
+    },
+    {
+      id: 'patterns-mcp',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'coach_stats carries each pattern’s submits a try, run-first and traced rates, and its weekly first tries',
     },
   ],
   steps: [
@@ -845,31 +843,53 @@ export const lcCoach: Scenario = {
       },
     },
     {
+      id: 'patterns-mcp',
+      title: 'coach_stats carries the Patterns tab’s per-pattern detail',
+      entry: 'mcp',
+      proves: ['patterns-mcp'],
+      async run(ctx) {
+        // This run's earlier sittings and logged attempts guarantee at least one pattern row.
+        const mp = (await ctx.mcp.reads.coachStats()).patterns[0];
+        if (!mp) fail('coach_stats has no pattern rows after this run’s attempts');
+        if (!mp!.runBeforeSubmit || !mp!.traced || !Array.isArray(mp!.weeks))
+          fail(`coach_stats pattern lacks the detail: ${JSON.stringify(mp)}`);
+      },
+    },
+    {
       id: 'patterns',
-      title: 'Recruiting › Patterns: the ranking, a failed read, Set as focus and back, at 390 px',
+      title:
+        'Recruiting › Patterns: the ranking, a failed read, a refused write, Set as focus and back, 390 px',
       entry: 'ui',
-      proves: ['patterns-table', 'patterns-set-focus', 'patterns-390', 'patterns-load-error'],
+      proves: [
+        'patterns-table',
+        'patterns-set-focus',
+        'patterns-390',
+        'patterns-load-error',
+        'patterns-focus-refused',
+        'patterns-sittings-unchanged',
+      ],
       async run(ctx) {
         const stats = await ctx.api.reads.getCoachStats();
         const row = (p: string) => ctx.page.locator(`li[data-pattern="${p}"]`);
-        const setButton = (p: string) => row(p).getByRole('button', { name: /^Set .* as focus$/ });
+        const focusRow = (p: string) =>
+          ctx.page.locator(`li[data-pattern="${p}"][aria-current="true"]`);
+        const setButton = (p: string) => row(p).getByRole('button', { name: /^Set as focus/ });
+        const list = ctx.page.getByRole('list', { name: 'Weakest first tries first' });
         // A failed read first: the error with Retry, no list; released, Retry recovers.
         const down = await ctx.intercept('getCoachStats', { status: 500 });
         await ctx.ui.goto('/recruiting/patterns');
         await ctx.ui.expectText('Couldn’t load the patterns.');
-        if (await ctx.page.getByRole('list', { name: /^Patterns/ }).count())
-          fail('the ranking rendered over a failed read');
+        if (await list.count()) fail('the ranking rendered over a failed read');
         await ctx.shot('patterns-load-error');
         await down.release();
         await ctx.page.getByRole('button', { name: 'Retry' }).click();
-        const list = ctx.page.getByRole('list', { name: /^Patterns/ });
         await list.waitFor();
+        const want = PATTERN_COUNT + (stats.patterns.some((p) => p.pattern === 'other') ? 1 : 0);
         const shown = await list.getByRole('listitem').count();
-        if (shown !== PATTERN_COUNT) fail(`${shown} pattern rows, want ${PATTERN_COUNT}`);
+        if (shown !== want) fail(`${shown} pattern rows, want ${want}`);
         const today = await ctx.api.reads.getCoachToday();
-        if ((await row(today.focus.pattern).getAttribute('aria-current')) !== 'true')
-          fail(`the focus row (${today.focus.pattern}) isn’t marked`);
-        const practised = stats.patterns[0];
+        await focusRow(today.focus.pattern).waitFor();
+        const practised = stats.patterns.find((p) => p.pattern !== 'other');
         if (practised) {
           const f = practised.firstTry;
           const text = (await row(practised.pattern).textContent()) ?? '';
@@ -881,50 +901,72 @@ export const lcCoach: Scenario = {
         await ctx.ui.settle();
         await ctx.shot('patterns');
 
-        // Set as focus through the page. The override is ledgered first by setting it through the API on another
-        // ranked pattern (the focus row is one id), so cleanup clears it whatever the page leaves.
         const [a, b] = stats.ranking.filter((p) => p !== today.focus.pattern);
         if (!a || !b) fail(`too few ranked patterns: ${stats.ranking.join(', ')}`);
+        // A refused write (the server's 400 with its reason) says why inline and moves nothing.
+        const refuse = await ctx.intercept('setCoachFocus', {
+          status: 400,
+          times: 1,
+          body: { error: 'devcheck refused this focus' },
+        });
+        await setButton(b!).click();
+        await ctx.ui.expectText(/devcheck refused this focus\. Nothing changed\./);
+        await refuse.release();
+        if ((await ctx.api.reads.getCoachToday()).focus.pattern !== today.focus.pattern)
+          fail('a refused focus write moved the focus');
+        await ctx.shot('patterns-focus-refused');
+
+        // Set as focus through the page. The override is ledgered first by setting it through the API on another
+        // ranked pattern (the focus row is one id), so cleanup clears it whatever the page leaves.
         await ctx.api.writes.setCoachFocus(a!);
         await ctx.ui.goto('/recruiting/patterns');
         await setButton(b!).click();
-        await ctx.page.locator(`li[data-pattern="${b}"][aria-current="true"]`).waitFor();
+        await focusRow(b!).waitFor();
         await ctx.ui.expectText(/Focus · .* · day 1 of 3/);
         const held = (await ctx.api.reads.getCoachToday()).focus;
         if (held.pattern !== b || held.day !== 1 || held.source !== 'override')
           fail(`the plan's focus after Set as focus: ${JSON.stringify(held)}`);
         await ctx.shot('patterns-focus-set');
-        await ctx.page.getByRole('button', { name: 'Back to the coach’s pick' }).click();
-        await ctx.page
-          .getByRole('button', { name: 'Back to the coach’s pick' })
-          .waitFor({ state: 'hidden' });
+        const back = ctx.page.getByRole('button', { name: 'Back to the coach’s pick' });
+        await back.click();
+        await back.waitFor({ state: 'hidden' });
         if ((await ctx.api.reads.getCoachToday()).focus.source !== 'engine')
           fail('“Back to the coach’s pick” left the override');
         await ctx.api.writes.setCoachFocus(null); // resolves the ledger entry; a no-op on the server now
 
-        // 390 px, before any typing: every row and its button on screen, no sideways scroll, both themes.
-        await ctx.page.setViewportSize({ width: 390, height: 844 });
-        for (const theme of ['light', 'dark'] as const) {
-          await ctx.ui.setTheme(theme);
+        // 390 px as the page first opens: every row's button on screen, no sideways scroll, light then dark.
+        try {
+          await ctx.page.setViewportSize({ width: 390, height: 844 });
           await ctx.ui.goto('/recruiting/patterns');
           await list.waitFor();
-          const wide = await ctx.page.evaluate<boolean>(
-            '(() => document.documentElement.scrollWidth > window.innerWidth)()',
-          );
-          if (wide) fail(`${theme}: the page scrolls sideways at 390`);
-          const buttons = ctx.page.getByRole('button', { name: /^Set .* as focus$/ });
-          for (let i = 0; i < (await buttons.count()); i++) {
-            const btn = buttons.nth(i);
-            await btn.scrollIntoViewIfNeeded();
-            const box = await btn.boundingBox();
-            if (!box || box.x < 0 || box.x + box.width > 390)
-              fail(`${theme}: ${await btn.getAttribute('aria-label')} is off screen at 390`);
+          for (const theme of ['light', 'dark'] as const) {
+            await ctx.ui.setTheme(theme);
+            const wide = await ctx.page.evaluate<boolean>(
+              '(() => document.documentElement.scrollWidth > window.innerWidth)()',
+            );
+            if (wide) fail(`${theme}: the page scrolls sideways at 390`);
+            const buttons = ctx.page.getByRole('button', { name: /^Set as focus/ });
+            for (let i = 0; i < (await buttons.count()); i++) {
+              const btn = buttons.nth(i);
+              await btn.scrollIntoViewIfNeeded();
+              const box = await btn.boundingBox();
+              if (!box || box.x < 0 || box.x + box.width > 390)
+                fail(`${theme}: button ${i + 1} is off screen at 390`);
+            }
           }
           await ctx.ui.settle();
-          await ctx.shot(`patterns-390-${theme}`);
+          await ctx.shot('patterns-390');
+        } finally {
+          await ctx.page.setViewportSize(PHONE);
         }
-        await ctx.ui.goto('/recruiting'); // the Sittings tab still opens beside it
-        await ctx.page.getByRole('link', { name: 'Sittings' }).waitFor();
+
+        // The Sittings tab beside it still opens as itself.
+        await ctx.ui.goto('/recruiting');
+        const sittingsTab = ctx.page.getByRole('link', { name: 'Sittings' });
+        await sittingsTab.waitFor();
+        if ((await sittingsTab.getAttribute('aria-current')) !== 'page')
+          fail('the Sittings tab isn’t current on /recruiting');
+        if (await list.count()) fail('the Patterns list shows on the Sittings tab');
       },
     },
     {
