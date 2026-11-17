@@ -88,12 +88,16 @@ function MintToken({
   // Said as you type (or at once when the list is full), never after a round trip.
   const problem = trimmed || full ? scopedTokenNameError(trimmed, tokens) : null;
   // The message renders under the field — with the field just above the bottom dock, behind it. Bring it
-  // into view each time it changes, or a disabled Make token reads as doing nothing.
+  // into view when you act on the field (focus, typing), never on its own: a full list shows the limit
+  // message on load, and scrolling then would jump Settings away from where you were.
   const message = error ?? problem;
   const messageRef = useRef<HTMLDivElement>(null);
+  const reveal = () => messageRef.current?.scrollIntoView?.({ block: 'nearest' });
+  const typed = useRef(false);
   useEffect(() => {
-    if (message) messageRef.current?.scrollIntoView?.({ block: 'nearest' });
-  }, [message]);
+    if (typed.current && message) reveal();
+    typed.current = false;
+  });
 
   async function make() {
     // A second Enter while the first mint is out would mint a twin whose plaintext is never shown.
@@ -103,7 +107,7 @@ function MintToken({
       const r = await mint.mutateAsync(trimmed);
       setName('');
       onMinted(r.token);
-      mint.reset(); // the plaintext leaves the mutation cache too — the reveal holds the one copy
+      mint.reset(); // with the hook's gcTime 0, the plaintext leaves the mutation cache: the reveal holds the one copy
     } catch (e) {
       setError(errText(e)); // the typed name stays
     }
@@ -116,9 +120,12 @@ function MintToken({
           label="New token for"
           value={name}
           onChange={(e) => {
+            typed.current = true;
             setName(e.target.value);
             setError(null);
           }}
+          // After the browser's own focus scroll, which clears only the field.
+          onFocus={() => requestAnimationFrame(() => message && reveal())}
           onKeyDown={(e) => e.key === 'Enter' && void make()}
           placeholder="iPhone, Raycast…"
           className="w-48"
@@ -143,13 +150,17 @@ function MintToken({
   );
 }
 
+// Each part holds together (a date's own " · " included); a wrap only comes after a separator's dot.
 function tokenLine(t: ScopedTokenInfo): string {
+  const whole = (part: string) => part.replace(/ /g, '\u00a0');
   return [
     `ends …${t.hint}`,
     `created ${fmtDateTime(t.createdAt)}`,
     t.lastUsedAt !== null ? `last used ${fmtDateTime(t.lastUsedAt)}` : 'never used',
-    `${t.usedToday}\u00a0today`, // never "0" on one line and "today" on the next
-  ].join('\u00a0· '); // a wrap never starts a line with the dot
+    `${t.usedToday} today`,
+  ]
+    .map(whole)
+    .join('\u00a0· ');
 }
 
 function TokenRow({ token }: { token: ScopedTokenInfo }) {

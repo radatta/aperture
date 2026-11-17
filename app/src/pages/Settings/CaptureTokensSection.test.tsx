@@ -43,26 +43,46 @@ describe('Settings › Capture: tokens', () => {
     const api = stub();
     const scrolled = vi.fn();
     Element.prototype.scrollIntoView = scrolled;
-    await api.mintScopedToken('capture', 'iPhone');
-    const mint = vi.spyOn(api, 'mintScopedToken');
-    const user = userEvent.setup();
-    renderWithProviders(<CaptureTokensSection />, { api });
-    await screen.findByText('iPhone');
-    await user.type(screen.getByLabelText('New token for'), 'iphone');
-    expect(screen.getByText('Another token is already called “iPhone”')).toBeTruthy();
-    // Brought into view: under the field, it could sit behind the bottom dock.
-    expect(scrolled).toHaveBeenCalled();
-    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; // jsdom has none
-    expect(
-      screen.getByRole<HTMLButtonElement>('button', { name: 'Make capture token' }).disabled,
-    ).toBe(true);
-    expect(mint).not.toHaveBeenCalled();
+    try {
+      await api.mintScopedToken('capture', 'iPhone');
+      const mint = vi.spyOn(api, 'mintScopedToken');
+      const user = userEvent.setup();
+      renderWithProviders(<CaptureTokensSection />, { api });
+      await screen.findByText('iPhone');
+      await user.type(screen.getByLabelText('New token for'), 'iphone');
+      expect(screen.getByText('Another token is already called “iPhone”')).toBeTruthy();
+      // Brought into view: under the field, it could sit behind the bottom dock.
+      expect(scrolled).toHaveBeenCalled();
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Make capture token' }).disabled,
+      ).toBe(true);
+      expect(mint).not.toHaveBeenCalled();
 
-    for (let i = 1; i < SCOPED_TOKENS_MAX; i++) await api.mintScopedToken('capture', `t${i}`);
-    renderWithProviders(<CaptureTokensSection />, { api });
-    expect(
-      await screen.findByText(`At most ${SCOPED_TOKENS_MAX} tokens — revoke one first`),
-    ).toBeTruthy();
+      for (let i = 1; i < SCOPED_TOKENS_MAX; i++) await api.mintScopedToken('capture', `t${i}`);
+      renderWithProviders(<CaptureTokensSection />, { api });
+      expect(
+        await screen.findByText(`At most ${SCOPED_TOKENS_MAX} tokens — revoke one first`),
+      ).toBeTruthy();
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; // jsdom has none
+    }
+  });
+
+  it('a full list says so on load without scrolling the page; focusing the field brings it into view', async () => {
+    const api = stub();
+    for (let i = 0; i < SCOPED_TOKENS_MAX; i++) await api.mintScopedToken('capture', `t${i}`);
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      const user = userEvent.setup();
+      renderWithProviders(<CaptureTokensSection />, { api });
+      await screen.findByText(`At most ${SCOPED_TOKENS_MAX} tokens — revoke one first`);
+      expect(scrolled).not.toHaveBeenCalled();
+      await user.click(screen.getByLabelText('New token for'));
+      await waitFor(() => expect(scrolled).toHaveBeenCalled());
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 
   it('a second Enter while a mint is out mints nothing more', async () => {

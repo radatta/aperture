@@ -74,7 +74,7 @@ const MORE_NUMBER =
 // A day the words name — only then is a day the model gave "named" (a model that ignored the voice rules and
 // dated "at 5" tomorrow mustn't turn the bare hour into a daytime one).
 export const DAY_WORD =
-  /\b(tomorrow|tmrw?|tmw|today|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|weekend|week|month|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december|\d{1,2}(st|nd|rd|th)|\d{1,2}\/\d{1,2})\b/i;
+  /\b(tomorrow|tmrw?|tmw|today|days?|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|weekend|week|month|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december|\d{1,2}(st|nd|rd|th)|\d{1,2}\/\d{1,2})\b/i;
 const TONIGHT = /\btonight\b/i;
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -141,6 +141,10 @@ export const withoutRelative = (line: string): string =>
 export interface SpokenContext {
   now: number;
   today: string; // the app's today (dayStartHour) — a model day equal to it was not "named"
+  // The line has a day word (DAY_WORD). Without one, a model day of calendar tomorrow isn't trusted: it's
+  // the model moving a bare time on its own ("at 5" at 6 PM → tomorrow 17:00). A later day it is: "in 2
+  // days", "Christmas Eve" name days no list of words covers.
+  dayInWords?: boolean;
   timeZone?: string;
 }
 
@@ -165,7 +169,9 @@ export function resolveSpoken(
   const calToday = zonedDayTime(ctx.now, zone).day;
   // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward.
   const named =
-    modelDay !== null && modelDay !== ctx.today && modelDay !== calToday && modelDay > calToday;
+    modelDay !== null &&
+    modelDay > calToday &&
+    (ctx.dayInWords !== false || modelDay !== addDays(calToday, 1));
   const hhmmOf = (h24: number, m: number) => `${pad2(h24)}:${pad2(m)}`;
   // "at 12 tonight" is midnight and "at 1 tonight" the small hours; 4–11 tonight is the evening.
   const tonightHour = (h: number) => (h === 12 ? 0 : h <= 3 ? h : h + 12);

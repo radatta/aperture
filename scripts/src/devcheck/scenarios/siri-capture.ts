@@ -125,9 +125,16 @@ export const untilLaMidnight = (ms: number): number => {
 export const untilUtcMidnight = (ms: number): number => 24 * HOUR - (ms % (24 * HOUR));
 // A row whose answer names a day (or counts toward a UTC day) never starts within 2 min of that midnight:
 // it waits it out.
-async function clearOfMidnight(ctx: Ctx, until: (ms: number) => number, which: string) {
+// Waits out a midnight closer than `need` (how long the step runs, with margin) — a counter reset mid-step
+// would read as a bug.
+async function clearOfMidnight(
+  ctx: Ctx,
+  until: (ms: number) => number,
+  which: string,
+  need = 2 * MIN,
+) {
   const left = until(Date.now());
-  if (left >= 2 * MIN) return;
+  if (left >= need) return;
   ctx.log(`waiting ${Math.ceil(left / SEC) + 5} s for ${which} midnight to pass`);
   await sleep(left + 5 * SEC);
 }
@@ -1087,7 +1094,7 @@ export const siriCapture: Scenario = {
         'A fresh token: 200 captures of one grammar line, then the 201st → 429 with the spoken limit',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC'); // the cap's day is UTC
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 3 * MIN); // the cap's day is UTC
         await withToken(ctx, nameC(ctx), async (token, info) => {
           const text = `${line(ctx, 'cap')} | ~5`;
           const day = new Date().toISOString().slice(0, 10);
@@ -1143,7 +1150,7 @@ export const siriCapture: Scenario = {
         'A fresh token: 50 distinct spoken lines (real parses), then the 51st saves as typed, “daily parse limit reached”',
       async run(ctx) {
         const S = await loadShared();
-        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC'); // the parse cap's day is UTC too
+        await clearOfMidnight(ctx, untilUtcMidnight, 'UTC', 7 * MIN); // the parse cap's day is UTC too
         await withToken(ctx, nameD(ctx), async (token) => {
           const at = aheadClock(laClock(Date.now()).hour);
           // One at a time: each is a real model call. A raw save on the way (a missed deadline) still spent its
@@ -1172,7 +1179,9 @@ export const siriCapture: Scenario = {
             !r.detail.includes('daily parse limit reached') ||
             !r.say.startsWith('Added as typed')
           )
-            throw new Error(`parse ${n}: ${JSON.stringify(r)}`);
+            throw new Error(
+              `parse ${n}: ${JSON.stringify(r)}${untilUtcMidnight(Date.now()) > 23 * 60 * MIN ? ' (the UTC day rolled)' : ''}`,
+            );
         });
       },
     },

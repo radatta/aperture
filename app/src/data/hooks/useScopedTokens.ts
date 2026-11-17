@@ -15,6 +15,7 @@ export function useMintScopedToken(scope: TokenScope) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => api.mintScopedToken(scope, name),
+    gcTime: 0, // the result holds the plaintext: gone from the mutation cache once the caller is done
     onSettled: () => qc.invalidateQueries({ queryKey: qk.scopedTokens(scope) }),
   });
 }

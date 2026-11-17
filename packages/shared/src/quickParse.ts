@@ -144,8 +144,11 @@ export function validateParsedTask(
     const kept = !!spoken && title.toLowerCase().includes(spoken.said.toLowerCase());
     const clock = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const resolve = (t: SpokenTime) => {
-      const named = DAY_WORD.test(ctx.line ?? '') ? (input.dueDay ?? null) : null;
-      const r = resolveSpoken(t, named, { now: ctx.voice!.now, today: ctx.today });
+      const r = resolveSpoken(t, input.dueDay ?? null, {
+        now: ctx.voice!.now,
+        today: ctx.today,
+        dayInWords: DAY_WORD.test(ctx.line ?? ''),
+      });
       input.dueDay = r.day;
       input.dueTime = r.time;
     };

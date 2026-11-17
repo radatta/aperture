@@ -380,6 +380,26 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       })!.input;
     expect(v('call mum at 5')).toMatchObject({ dueDay: '2026-11-17', dueTime: '05:00' });
     expect(v('call mum tomorrow at 5')).toMatchObject({ dueDay: '2026-11-17', dueTime: '17:00' });
+    // A later day the model read from words no list covers stays.
+    const later = (line: string) =>
+      validateParsedTask(fields({ dueDay: '2026-12-24' }), {
+        ...ctx,
+        today: '2026-11-16',
+        line,
+        voice: { now: late },
+      })!.input;
+    expect(later('dentist on Christmas Eve at 9am')).toMatchObject({
+      dueDay: '2026-12-24',
+      dueTime: '09:00',
+    });
+    expect(
+      validateParsedTask(fields({ dueDay: '2026-11-18' }), {
+        ...ctx,
+        today: '2026-11-16',
+        line: 'call mum in 2 days at 5 pm',
+        voice: { now: late },
+      })!.input,
+    ).toMatchObject({ dueDay: '2026-11-18', dueTime: '17:00' });
   });
 
   it('a minute the grammar can’t read leaves the model’s clock, rolled forward', () => {
