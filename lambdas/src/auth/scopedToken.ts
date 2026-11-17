@@ -164,3 +164,19 @@ export function recordCaptureTask(
     };
   });
 }
+
+// A capture that failed after it was counted: drop its line from the duplicate guard (only while the row
+// still waits on it), so the user's retry is a new capture, not "already got that".
+export function forgetCapture(
+  store: ScopedTokenStore,
+  auth: ScopedAuth,
+  textHash: string,
+  now: number,
+): Promise<void> {
+  return casRow(store, auth, (row) => {
+    if (row.lastTextHash !== textHash || row.lastTaskId !== null)
+      return { next: null, out: undefined };
+    const next = { ...row, lastTextHash: null, lastAt: null, updatedAt: Math.max(now, row.updatedAt + 1) };
+    return { next, out: undefined };
+  });
+}

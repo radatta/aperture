@@ -344,3 +344,55 @@ describe('parseFailText', () => {
     );
   });
 });
+
+describe('validateParsedTask — voice (capture.md → Time rules)', () => {
+  // Monday 2026-11-16, 06:00 in LA.
+  const now = Date.UTC(2026, 10, 16, 14, 0);
+  const voice = (line: string, over: Record<string, unknown> = {}) =>
+    validateParsedTask(fields({ title: 'call mum', ...over }), {
+      ...ctx,
+      today: '2026-11-16',
+      line,
+      voice: { now },
+    })!;
+
+  it('takes the time from the words, not the model', () => {
+    expect(voice('call mum at 5').input).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+    // The model's own clock is ignored when the words say otherwise…
+    expect(voice('call mum at 5', { dueDay: '2026-11-16', dueTime: '05:00' }).input.dueTime).toBe(
+      '17:00',
+    );
+    // …and dropped when the words have none.
+    const v = voice('call mum', { dueDay: '2026-11-16', dueTime: '10:00' });
+    expect(v.input).toEqual({ title: 'call mum', dueDay: '2026-11-16' });
+    expect(v.dropped).toEqual(['dropped due time']);
+  });
+
+  it('a named day from the model stays; "today" rolls a past time forward', () => {
+    expect(voice('call mum friday at 5', { dueDay: '2026-11-20' }).input).toMatchObject({
+      dueDay: '2026-11-20',
+      dueTime: '17:00',
+    });
+    expect(voice('call mum today at 5 am', { dueDay: '2026-11-16' }).input).toMatchObject({
+      dueDay: '2026-11-17',
+      dueTime: '05:00',
+    });
+  });
+
+  it('a relative delay is a time, never an estimate', () => {
+    const v = voice('call mum in 2 hours', { estimateMin: 120 });
+    expect(v.input).toEqual({ title: 'call mum', dueDay: '2026-11-16', dueTime: '08:00' });
+    expect(v.dropped).toEqual(['dropped estimate']);
+    // A real duration beside it still counts.
+    expect(voice('stretch 20 minutes in an hour', { estimateMin: 20 }).input.estimateMin).toBe(20);
+  });
+
+  it('typed lines keep the 2026-10-09 rule: a past clock lands today', () => {
+    const v = validateParsedTask(fields({ title: 'call', dueTime: '09:00' }), {
+      ...ctx,
+      today: '2026-11-16',
+      line: 'call 9am',
+    })!;
+    expect(v.input).toMatchObject({ dueDay: '2026-11-16', dueTime: '09:00' });
+  });
+});

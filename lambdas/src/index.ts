@@ -2,10 +2,14 @@
 // ApiClient method over DynamoDB (single-table). Business logic lives in BackendClient (shared
 // machines); this file is just the AWS/HTTP edge. Phase 11 replaces the fixed userId with the Cognito
 // `sub`; Phase 12 provisions the table + wires TABLE_NAME. Beside the RPC route sit three non-RPC ones:
-// /api/health, the Google OAuth callback, and the iPhone Shortcut's GET /api/places/<slug>/tasks.
+// /api/health, the Google OAuth callback, the iPhone Shortcut's GET /api/places/<slug>/tasks, and voice
+// capture's POST /api/capture.
 import {
   APERTURE,
   AUTH_HEADER,
+  CAPTURE_BODY_MAX,
+  CAPTURE_SAY,
+  CAPTURE_TEXT_MAX,
   isLcIngestMethod,
   ORIGIN_SECRET_HEADER,
   PLACE_READ_TEXT,
@@ -14,7 +18,7 @@ import {
   placeUnknownError,
 } from '@aperture/shared';
 import { isApiMethod } from '@aperture/shared';
-import type { PlaceRead, PlaceReadError } from '@aperture/shared';
+import type { CaptureError, CaptureResult, PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
 import type { Verifier } from './auth/verify';
@@ -33,6 +37,8 @@ import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { PlaceTokenStore } from './ddb/placeTokens';
 import { PlaceReadCapError, resolvePlaceRead } from './auth/placeToken';
+import { ScopedTokenStore } from './ddb/scopedTokens';
+import { CaptureCapError, resolveScopedToken } from './auth/scopedToken';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
 import { createS3Presigner } from './s3/presigner';
@@ -119,6 +125,7 @@ interface HttpEvent {
   headers?: Record<string, string | undefined>;
   queryStringParameters?: Record<string, string | undefined> | null;
   body?: string | null;
+  isBase64Encoded?: boolean;
 }
 interface HttpResult {
   statusCode: number;
@@ -249,6 +256,9 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   // JWT path: every /api/places/* path ends here, so it never reaches handleRpc and never falls through
   // to JWT. The body (and testMode) is ignored.
   if (path.startsWith('/api/places/')) return placeRead(event, path, d.doc);
+  // Voice capture (capture.md): POST /api/capture with a capture token — likewise outside the RPC dispatch
+  // and the only thing a capture token opens; every /api/capture* path ends here, never at the JWT path.
+  if (method === 'capture') return capture(event, path, d);
 
   const ingest = isLcIngestMethod(method);
   if ((event.body?.length ?? 0) > (ingest ? INGEST_BODY_MAX : RPC_BODY_MAX))
@@ -369,5 +379,91 @@ async function placeRead(event: HttpEvent, path: string, doc: DocClient): Promis
       return reply(422, 'place', { error: message, text: placeReadUnknownText(slug) });
     const name = err instanceof Error ? err.name : 'unknown';
     return reply(500, 'error', { error: 'Internal error', text: PLACE_READ_TEXT.error }, { name });
+  }
+}
+
+// 405 non-POST → 413 a body over CAPTURE_BODY_MAX → 401 a missing, malformed, unknown or revoked capture
+// token (resolveScopedToken; no 'local' fallback) → 422 any other path, bad JSON, or text empty or over
+// CAPTURE_TEXT_MAX — only once authenticated, and never counted → 429 at the daily cap → 200 the task.
+// Never 404 (the SPA fallback would answer the Shortcut with a web page). Every body carries `say`, the
+// sentence Siri speaks, so no failure is silent. Writes happen in BackendClient.captureForToken (the
+// token's counters, the task). The log line carries the outcome only — never the text, header, token,
+// hash or an error message.
+async function capture(event: HttpEvent, path: string, d: BffDeps): Promise<HttpResult> {
+  const started = Date.now();
+  const reply = (
+    statusCode: number,
+    reason: string,
+    body: CaptureResult | CaptureError,
+    extra: Record<string, string | boolean> = {},
+  ): HttpResult => {
+    const ms = Date.now() - started;
+    console.log(JSON.stringify({ event: 'capture', ok: statusCode === 200, reason, ms, ...extra }));
+    return { statusCode, headers: CORS, body: JSON.stringify(body) };
+  };
+  const refuse = (status: number, reason: string, error: string, say: string) =>
+    reply(status, reason, { error, say });
+  if (event.requestContext?.http?.method !== 'POST') {
+    const res = refuse(405, 'method', 'Method Not Allowed', CAPTURE_SAY.method);
+    return { ...res, headers: { ...res.headers, allow: 'POST' } };
+  }
+  if ((event.body?.length ?? 0) > CAPTURE_BODY_MAX)
+    return refuse(413, 'size', 'Too large', CAPTURE_SAY.tooLong);
+  const writes = liveWrites(d.doc); // one per request: the token store and the Repo share it
+  const store = new ScopedTokenStore(d.doc, writes);
+  try {
+    const auth = await resolveScopedToken(store, event.headers?.[AUTH_HEADER], 'capture');
+    if (path !== '/api/capture') return refuse(422, 'path', 'Not the capture route', CAPTURE_SAY.path);
+    const body = captureBody(event);
+    if (!body) return refuse(422, 'body', 'Invalid body', CAPTURE_SAY.empty);
+    const text = body.text.trim();
+    if (!text) return refuse(422, 'empty', 'Empty text', CAPTURE_SAY.empty);
+    if (text.length > CAPTURE_TEXT_MAX)
+      return refuse(422, 'long', 'Text too long', CAPTURE_SAY.tooLong);
+    const backend = new BackendClient(new Repo(d.doc, writes, auth.userId), {
+      userId: auth.userId,
+      google: d.google,
+      stateSecret: process.env.ORIGIN_SECRET,
+      anthropic: d.anthropic,
+      scopedTokens: store,
+    });
+    const result = await backend.captureForToken(text, body.voice, auth);
+    return reply(200, 'ok', result, { raw: result.raw, duplicate: result.duplicate });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    if (err instanceof CaptureCapError)
+      return refuse(429, 'cap', 'Daily capture cap reached', CAPTURE_SAY.cap);
+    if (message.startsWith('Unauthorized'))
+      return refuse(401, unauthorizedReason(message), 'Unauthorized', CAPTURE_SAY.unauthorized);
+    const name = err instanceof Error ? err.name : 'unknown';
+    return reply(500, 'error', { error: 'Internal error', say: CAPTURE_SAY.error }, { name });
+  }
+}
+const unauthorizedReason = (message: string): string =>
+  /missing/.test(message)
+    ? 'missing'
+    : /malformed/.test(message)
+      ? 'malformed'
+      : /revoked/.test(message)
+        ? 'revoked'
+        : 'unknown';
+
+// The Shortcut's JSON body: {text, voice?}. Null for anything else (bad JSON, a non-object, a non-string
+// text, a non-boolean voice). A Function URL base64-encodes a body it doesn't take for text.
+function captureBody(event: HttpEvent): { text: string; voice: boolean } | null {
+  try {
+    const raw = event.isBase64Encoded
+      ? Buffer.from(event.body ?? '', 'base64').toString('utf8')
+      : (event.body ?? '');
+    const b: unknown = JSON.parse(raw);
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
+    const { text, voice } = b as { text?: unknown; voice?: unknown };
+    if (typeof text !== 'string') return null;
+    // A Shortcut's JSON field typed as Text sends "true" — taken like the Boolean.
+    if (voice !== undefined && voice !== true && voice !== false && voice !== 'true' && voice !== 'false')
+      return null;
+    return { text, voice: voice === true || voice === 'true' };
+  } catch {
+    return null;
   }
 }

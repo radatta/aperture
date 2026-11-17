@@ -109,6 +109,13 @@ export function localDayTime(epochMs: number): { day: string; hhmm: string } {
   return { day: keyOf(new Date(epochMs)), hhmm: hhmmOfEpoch(epochMs) };
 }
 
+// Spoken (voice capture's `say`): "17:00" → "5 PM", "09:30" → "9:30 AM", "00:00" → "12 AM".
+export function fmtClockSpoken(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number) as [number, number];
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}${m === 0 ? '' : `:${pad2(m)}`} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
 // A span in whole minutes, rounded.
 export const msToMin = (ms: number): number => Math.round(ms / 60_000);
 
@@ -235,6 +242,33 @@ const MONTHS = [
   'Nov',
   'Dec',
 ] as const;
+
+const MONTHS_LONG = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+] as const;
+
+// A day said aloud, against `today`: "today", "tomorrow", a weekday name 2–6 days on, else "November 24"
+// (and "yesterday" / the date for a past one — a spoken answer never shows a past day, but it reads right).
+export function fmtSpokenDay(key: string, today: string): string {
+  const n = daysBetween(today, key);
+  if (n === 0) return 'today';
+  if (n === 1) return 'tomorrow';
+  if (n === -1) return 'yesterday';
+  if (n >= 2 && n <= 6) return fmtWeekday(key);
+  const p = key.split('-');
+  return `${MONTHS_LONG[Number(p[1]) - 1]} ${Number(p[2])}`;
+}
 
 export function fmtWeekday(key: string): string {
   return WEEKDAYS[weekdayOf(key)]!;

@@ -24,6 +24,7 @@ export * from './api';
 export * from './bulkTasks';
 export * from './categorySuggest';
 export * from './quickParse';
+export * from './spokenTime';
 export * from './rpc';
 export * from './finance';
 export * from './financeFixtures';

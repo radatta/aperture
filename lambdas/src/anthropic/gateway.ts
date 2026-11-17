@@ -14,6 +14,7 @@ export interface ParseRequest {
   today: string; // the user's day (dayStartHour), YYYY-MM-DD
   categories: readonly ParseCategory[]; // active only
   timeoutMs: number;
+  voice?: boolean; // a spoken line (capture.md): the prompt leaves the time to the server
 }
 
 export interface FluxNoteRequest {

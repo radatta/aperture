@@ -1,5 +1,12 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`parseSystemPrompt > a spoken line adds the voice rules after the typed ones, which stay word for word 1`] = `
+"
+The line was spoken, not typed:
+- Also remove from the title any spoken time ("at 5", "five o'clock", "at 8 tonight", "in 20 minutes", "in an hour", "tonight", "this morning", "tomorrow morning") and a leading "remind me to" or "remind me". The server works out the time itself: dueTime is always null.
+- dueDay: only for a day the user said ("tomorrow", "friday", "next monday"). A spoken time alone, "today", "tonight" or "this morning" is not a day: null."
+`;
+
 exports[`parseSystemPrompt > names the day with its weekday and lists categories as id: label 1`] = `
 "You turn one quick-capture line into fields for a task tracker. Today is 2026-10-12 (Monday) in America/Los_Angeles.
 Categories (id: label) — use the id, or null if none clearly matches:

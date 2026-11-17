@@ -4,6 +4,8 @@
 // scoped-token shapes, the caps, the wire shapes and the spoken texts. Design record:
 // docs/areas/tasks/capture.md.
 
+import { fmtClockSpoken, fmtSpokenDay } from './dates';
+
 // --- Scoped tokens ---------------------------------------------------------
 // A single-purpose device credential: one scope, one route. Only `capture` exists; later ones (a Health
 // ingest, an error beacon) add a scope + a prefix + their own route, never an RPC method. Unlike the place
@@ -65,7 +67,7 @@ export interface CaptureRequest {
 }
 
 export interface CaptureResult {
-  id: string;
+  id: string | null; // null only for a duplicate whose first capture is still in flight
   say: string; // the sentence to speak
   detail: string; // the typed receipt: title · when · category · estimate
   raw: boolean; // saved as typed (no parse, or it failed)
@@ -83,6 +85,7 @@ export interface CaptureError {
 export const CAPTURE_SAY = {
   unauthorized: "Aperture: this capture token isn't valid. Make a new one in Settings.",
   method: 'Aperture capture needs a POST.',
+  path: "Aperture: the Shortcut's URL isn't the capture address. Check it in Settings.",
   empty: "Aperture didn't get any text.",
   tooLong: 'That was too long for Aperture. Nothing was added.',
   cap: 'Daily capture limit reached. Nothing was added.',
@@ -91,3 +94,50 @@ export const CAPTURE_SAY = {
   // The Shortcut's own fallback when the answer has no `say` (a CloudFront error has no body).
   noAnswer: "Aperture didn't confirm. Check the app.",
 } as const;
+
+// --- The spoken answer -----------------------------------------------------
+export const CAPTURE_SAY_TITLE_MAX = 80;
+
+// The title as spoken: at most CAPTURE_SAY_TITLE_MAX, cut at a word, without trailing punctuation (the
+// sentence adds its own full stop).
+function spokenTitle(title: string): string {
+  const t = title.replace(/\s+/g, ' ').trim();
+  const cut =
+    t.length <= CAPTURE_SAY_TITLE_MAX
+      ? t
+      : `${t.slice(0, CAPTURE_SAY_TITLE_MAX).replace(/\s+\S*$/, '') || t.slice(0, CAPTURE_SAY_TITLE_MAX)}…`;
+  return cut.replace(/[\s.,;:!?]+$/, '');
+}
+
+// When it's due, said aloud: a timed task against the calendar date ("today 5 AM" at 1 AM is unambiguous),
+// a day-only one against the app's today (dayStartHour), as everywhere else in the app. Null: no due day.
+export function captureWhen(
+  due: { day: string; time: string | null } | null,
+  calendarToday: string,
+  appToday: string,
+): string | null {
+  if (!due) return null;
+  if (!due.time) return fmtSpokenDay(due.day, appToday);
+  return `${fmtSpokenDay(due.day, calendarToday)} ${fmtClockSpoken(due.time)}`;
+}
+
+export interface CaptureSayInput {
+  title: string;
+  due: { day: string; time: string | null } | null;
+  placeName: string | null;
+  calendarToday: string;
+  appToday: string;
+  raw: boolean;
+  duplicate: boolean;
+}
+
+// "Added: call mum, today 5 PM." · "Added to Grocer: milk." · "Already added: call mum, today 5 PM." ·
+// "Added as typed, with no date or time: call mum at five." Category and estimate aren't spoken — the
+// receipt (`detail`) has them.
+export function captureSay(x: CaptureSayInput): string {
+  const title = spokenTitle(x.title);
+  if (x.raw && !x.duplicate) return `Added as typed, with no date or time: ${title}.`;
+  const when = captureWhen(x.due, x.calendarToday, x.appToday);
+  const lead = x.duplicate ? 'Already added' : x.placeName ? `Added to ${x.placeName}` : 'Added';
+  return `${lead}: ${title}${when ? `, ${when}` : ''}.`;
+}

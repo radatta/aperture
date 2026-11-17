@@ -10,6 +10,7 @@ import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bu
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
+import { resolveSpoken, spokenTimeIn, withoutRelative } from './spokenTime';
 
 // Longer than this is never sent to the model; the raw save still takes the whole line as the title.
 // Sized to the model's output: the overflow comes back as notes, so a much longer line can't fit in
@@ -57,6 +58,9 @@ export interface ParseContext {
   today: string;
   dayStartHour: number; // the day start `today` was resolved with — a small-hours clock is tonight's
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
+  // A spoken line (voice capture, capture.md): its time comes from the words, resolved against `now` by
+  // spokenTime.ts — the model's dueTime is ignored, a past time rolls forward. Absent: the typed rules.
+  voice?: { now: number };
 }
 
 // A clock the user actually wrote: "4pm", "9:30am", "4 p", "16:00", "noon", "midnight". A model has read
@@ -120,9 +124,19 @@ export function validateParsedTask(
     else dropped.push('dropped due day');
   }
 
+  // Spoken: the time is the words', never the model's (spokenTime.ts) — and with it the day, when the words
+  // were relative or the time had already passed. A day the model gave stays only as "the day named".
+  if (ctx.voice) {
+    const spoken = spokenTimeIn(ctx.line ?? '');
+    if (spoken) {
+      const r = resolveSpoken(spoken, input.dueDay ?? null, { now: ctx.voice.now, today: ctx.today });
+      input.dueDay = r.day;
+      input.dueTime = r.time;
+    } else if (p.dueTime != null) dropped.push('dropped due time');
+  }
   // A time with no day means today (a product call); a small-hours clock on today means tonight
   // (nightDueDay); a time whose day was dropped is dropped too.
-  if (p.dueTime != null) {
+  else if (p.dueTime != null) {
     const t = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const stated = ctx.line === undefined || CLOCK_IN_LINE.test(ctx.line);
     if (str(t) && isTimeKey(t) && stated && (input.dueDay != null || p.dueDay == null)) {
@@ -133,7 +147,8 @@ export function validateParsedTask(
 
   // 0 is "no estimate" (the grammar wants >= 1), so it clears quietly rather than reading as an error.
   if (p.estimateMin != null && p.estimateMin !== 0) {
-    const statedEst = ctx.line === undefined || DURATION_IN_LINE.test(ctx.line);
+    const estLine = ctx.line !== undefined && ctx.voice ? withoutRelative(ctx.line) : ctx.line;
+    const statedEst = estLine === undefined || DURATION_IN_LINE.test(estLine);
     if (
       statedEst &&
       typeof p.estimateMin === 'number' &&
