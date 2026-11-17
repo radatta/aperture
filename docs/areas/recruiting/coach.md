@@ -130,19 +130,46 @@ reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
 
 ## Not yet
 
-The app's Today card and review toggles, `coach_stats` and the remaining reads, the pattern dashboard, mocks, the
+`coach_stats` and the remaining reads, the pattern dashboard, mocks, the
 history import, and countdown mode — each its own PR. `CoachToday.mode`, `target` and `arm` are already in the
 shape, and the gaps and cap are parameters, so countdown mode and an A/B arm add rather than change.
 
 ## Files
 
-| File                                                   | What                                                                                       |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `packages/shared/src/coach.ts`                         | the engine: attempts, records, `resolveState`, `focusOn`, `planDay`, the write normalizers |
-| `packages/shared/src/neetcode150.ts`                   | the catalog and the pattern ids                                                            |
-| `packages/shared/src/sittings.ts`                      | `CAUSE_TAGS`, `mergeReview`, `patchReview`                                                 |
-| `packages/shared/src/contractTests.ts`                 | `lc coach` — run 3× (stub, backend direct, via handleRpc)                                  |
-| `lambdas/src/backend.ts`, `app/src/data/stubClient.ts` | the coach RPCs                                                                             |
-| `lambdas/src/ddb/keys.ts`, `repo.ts`                   | the `lcc#` rows                                                                            |
-| `lambdas/src/mcp/coachTools.ts`                        | the coach's MCP tools and `live_sitting`'s slot                                            |
-| `scripts/src/devcheck/scenarios/lc-coach.ts`           | the dev check's rows                                                                       |
+| File                                                                                  | What                                                                                       |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `packages/shared/src/coach.ts`                                                        | the engine: attempts, records, `resolveState`, `focusOn`, `planDay`, the write normalizers |
+| `packages/shared/src/neetcode150.ts`                                                  | the catalog and the pattern ids                                                            |
+| `packages/shared/src/sittings.ts`                                                     | `CAUSE_TAGS`, `mergeReview`, `patchReview`                                                 |
+| `packages/shared/src/contractTests.ts`                                                | `lc coach` — run 3× (stub, backend direct, via handleRpc)                                  |
+| `lambdas/src/backend.ts`, `app/src/data/stubClient.ts`                                | the coach RPCs                                                                             |
+| `lambdas/src/ddb/keys.ts`, `repo.ts`                                                  | the `lcc#` rows                                                                            |
+| `lambdas/src/mcp/coachTools.ts`                                                       | the coach's MCP tools and `live_sitting`'s slot                                            |
+| `scripts/src/devcheck/scenarios/lc-coach.ts`                                          | the dev check's rows                                                                       |
+| `app/src/pages/Recruiting/TodayCard.tsx`, `ReviewForm.tsx`, `Home/LeetcodeGlance.tsx` | the app: the Today card, the cause chips and Peeked, the morning line                      |
+
+## In the app
+
+The thread in claude.ai drives the coaching; the app is the glance and the record.
+
+- **The Today card** sits above the sittings on `/recruiting` (`TodayCard.tsx`, `useCoach.ts`). It shows the
+  focus line with **Change** (a pattern, or the coach's pick, which clears the override), up to four slots, the
+  floor, the due re-solves not already a slot plus the next 48 hours, off-plan sittings, ended sittings with no
+  cause yet, and the week's momentum. Each slot is its kind, difficulty, the cap, the reason and a LeetCode link in
+  a new tab. An in-progress slot links to its sitting, and a done one to its review. **Another** (only while
+  `alternatives` has an easier unseen problem), **Skip today** and **Restore** are `setCoachSlot`; **Floor day**
+  and **Full day** are `setCoachFloor`. One write at a time, so a double tap is one call. A refused change says why
+  inline, and a failed read is a `LoadError` with Retry. Tones are teal for done-clean and gold or muted
+  otherwise, never red.
+- **The review form** adds five cause chips (one choice; a second tap clears it) and labels help's `solution` as
+  **Peeked**. With no cause saved, it starts on a suggested `no-trace` (`suggestedCause`) when the trace was
+  skipped or missing at the first submit, or when that submit failed with no Run before it.
+- **Claude's writes while the form is open (F169).** Help and the cause are also set over MCP (`mark_peeked`,
+  `set_cause_tag`). Until the user touches one, the field follows the stored review as it refreshes. Save re-reads
+  the review first: an untouched help is sent as stored, an untouched cause isn't sent (the server keeps it), and
+  the suggestion is sent only while no cause was ever stored. A failed re-read fails the Save, keeping every field.
+- **Home's morning line** (`Home/LeetcodeGlance.tsx`, the `FinanceGlance` posture): "LeetCode · 4 today · 2
+  re-solves due" → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
+  problem. A failed read is one visible line, never silence.
+- A sitting, review or task write invalidates the `coach` query prefix, so the card follows the extension and the
+  rep's Done.

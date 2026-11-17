@@ -146,6 +146,8 @@ anything over a cap naming the field, and turns a review that says nothing into 
 row of its own, so the list's reviewed dot and `list_sittings` read it free; a refold spreads the head and keeps
 it, and a review and a refold racing are both CAS writes over the current head. Writable at any status, an open
 sitting included. The form starts help on `hint` once a submit failed before the accepted one (`suggestedHelp`).
+The form also carries the coach's cause chips and labels `solution` as **Peeked**; how it keeps a help or cause
+Claude set over MCP while it was open: [coach.md → In the app](coach.md#in-the-app).
 
 **Draft with Claude** (`draftSittingReview`) is a button, never automatic: one Haiku call (`claude-haiku-5-5`,
 `lambdas/src/anthropic/sittingReviewPrompt.ts`, snapshot-tested) over the problem, the newest 8 judged Runs and
