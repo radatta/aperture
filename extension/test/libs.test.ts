@@ -116,7 +116,7 @@ describe('selectors', () => {
       expect(typeof v, k).toBe('string');
       expect(() => doc.querySelector(v), k).not.toThrow(); // valid CSS, every one
     }
-    for (const gone of ['timerClicks', 'run', 'submit']) expect(selectors.KEYS).not.toContain(gone);
+    for (const gone of ['timerClicks', 'run']) expect(selectors.KEYS).not.toContain(gone);
     const m = selectors.merge({
       editorReset: '#r',
       timerStart: null,
@@ -124,12 +124,14 @@ describe('selectors', () => {
       bogus: 'x',
       dialog: 7,
       lang: null, // not a step: a null is ignored
+      submit: null, // the trace card's hold, off
     });
     expect(m).toMatchObject({
       editorReset: '#r',
       timerStart: null,
       dialog: selectors.DEFAULTS.dialog,
       lang: selectors.DEFAULTS.lang,
+      submit: null,
     });
     expect(m).not.toHaveProperty('bogus');
     expect(m).not.toHaveProperty('timerClicks');
