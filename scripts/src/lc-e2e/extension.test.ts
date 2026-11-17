@@ -186,7 +186,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     for (const t of temps) rmSync(t, { recursive: true, force: true });
   });
 
-  it('Start resets the editor, starts the timer and opens a sitting; the first Submit waits for the trace card; a submit lands with its verdict', async () => {
+  it('Start resets the editor, starts the timer and opens a sitting; the first Submit goes straight through, no trace card; a submit lands with its verdict', async () => {
     await page.goto('https://leetcode.com/problems/two-sum/description/');
     // A countdown left paused, as the debug log recorded one: Start resets it, then starts it again.
     await page.evaluate(
@@ -218,22 +218,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     // snapshot ahead of it. Code typed inside the debounce reaches live within the 30 s snapshot window.
     await until(async () => (await page.evaluate<{ syncs: number }>('window.__fake')).syncs >= 2);
     await new Promise((r) => setTimeout(r, 200)); // the relay's hand-off
-    // The first real Submit is held for the trace card (lib/coach.js): no request, the card up.
-    await page.locator('[data-e2e-locator=console-submit-button]').click();
-    await until(async () => (await textOf('aperture-lc-coach', '[data-ap=trace]')) === 'Traced');
-    expect(await page.evaluate<{ submits: number }>('window.__fake')).toMatchObject({ submits: 0 });
-    // Typed with real keys into the closed root's fields, then Traced at its real place.
-    for (const [k, text] of [
-      ['empty', '[] 0 -> []'],
-      ['boundary', '[3,3] 6 -> [0,1]'],
-      ['normal', '[2,7,11,15] 9 -> [0,1]'],
-    ]) {
-      await click(`trace-${k}`, 'aperture-lc-coach');
-      await page.keyboard.type!(text!);
-    }
-    await click('trace', 'aperture-lc-coach');
-    await until(async () => (await textOf('aperture-lc-coach', '[data-ap=trace]')) === null);
-    // The user's own second click submits.
+    // The first real Submit goes straight to LeetCode: the trace card is retired (2.2.0), nothing is held.
     await page.locator('[data-e2e-locator=console-submit-button]').click();
     await page.locator('[data-e2e-locator=console-run-button]').click();
 
@@ -246,16 +231,18 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
       status: 'active',
       summary: { firstSubmit: { verdict: 'accepted' } },
     });
-    // The coach events landed and folded: the switches, and all three traced before the first submit.
+    expect(await textOf('aperture-lc-coach', '[role=dialog]')).toBeNull(); // no card host at all
+    // The coach's config landed and folded: the card and its hold off, the note on. Whether the sitting was
+    // traced is the server's call from the code, not the extension's.
     const coached = await until(async () => {
       const [s] = await rpc<Sitting[]>('listSittings');
-      return s?.summary.coach?.trace ? s : null;
+      return s?.summary.coach?.config ? s : null;
     });
-    expect(coached.summary.coach).toEqual({
-      config: { trace: true, hold: true, nudge: true },
-      trace: 'traced',
+    expect(coached.summary.coach).toMatchObject({
+      config: { trace: false, hold: false, nudge: true },
       nudges: 0,
     });
+    expect(coached.summary.coach?.trace).not.toBe('traced');
     const detail = await until(async () => {
       const d = await rpc<{ live: { code: string } | null; problem: unknown }>(
         'getSitting',
@@ -272,7 +259,7 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     expect(await textOf('aperture-lc-badge', '[data-ap=badge]')).toMatch(/^Aperture · \dm · /);
   }, 60_000);
 
-  it('resumes a reload mid-sitting with no overlay and no reset, never asks for the trace again, and re-prompts on SPA navigation where a second Start is refused', async () => {
+  it('resumes a reload mid-sitting with no overlay and no reset, Submit passes, and re-prompts on SPA navigation where a second Start is refused', async () => {
     const before = await rpc<Sitting[]>('listSittings');
     await page.reload();
     await until(async () => (await phase()) === 'active');
@@ -284,13 +271,13 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     });
     const after = await rpc<Sitting[]>('listSittings');
     expect(after.map((s) => s.id)).toEqual(before.map((s) => s.id));
-    // Traced before the reload: a Submit now goes straight through, no card.
+    // A Submit after the reload goes straight through, no card.
     const submits = (await page.evaluate<{ submits: number }>('window.__fake')).submits;
     await page.locator('[data-e2e-locator=console-submit-button]').click();
     await until(
       async () => (await page.evaluate<{ submits: number }>('window.__fake')).submits > submits,
     );
-    expect(await textOf('aperture-lc-coach', '[data-ap=trace]')).toBeNull();
+    expect(await textOf('aperture-lc-coach', '[role=dialog]')).toBeNull();
 
     await page.locator('[data-fake=next]').click();
     await until(async () => (await phase()) === 'prompt');

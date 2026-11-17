@@ -159,7 +159,10 @@ skip `skipped`, a submit seen untraced `none`; a trace after the first submit ch
 a nudge count. A kind the server doesn't know is stored (its payload in full) and folds nothing — its head row keeps
 `kind: null` for good, so an extension that ships a kind first loses that kind's fold on those sittings unless a
 backfill re-reads the payloads. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
-extension that sends none — so readers take `summary.coach ?? null`.
+extension that sends none — so readers take `summary.coach ?? null`. **The trace card is retired (extension
+2.2.0):** the extension now sends only `config` (with `trace` and `hold` false) and `nudge-shown`; `trace`,
+`trace-skip` and `untraced-submit` stay in the type and the fold for the sittings that carry them, and whether a
+newer sitting was traced is decided server-side, from the code.
 
 **The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
 the code itself is the only traced/untraced source (the card is going: extension-tidy removes it; nothing here reads
@@ -392,12 +395,11 @@ that comes after the Start goes in a repeat Start that fills it in. How, and the
 `extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the
 extension stays passive.
 
-**The Submit hold is the one place the extension stands between the user and LeetCode's UI** (the
-maintainer, 2026-11-16: hold once, re-click). The first real Submit click of a sitting is swallowed so the trace
-card can ask for three hand-traced inputs; no request is made, altered or re-issued, and the user clicks Submit
-again. The extension never clicks Submit — an automated submit was rejected. It fails open (a keyboard submit,
-a missing selector or the hold off pass untouched and are logged `untraced-submit`), and each part is off-able
-in Options. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
+**The extension never stands between the user and LeetCode's Submit.** The Submit hold (2026-11-16: hold
+once for the trace card, re-click) was retired with the card in 2.2.0 (the maintainer, 2026-11-17: in an
+interview the trace goes in a code comment, so a separate card is extra infra). What's left reads a real Submit
+click only for the resubmit note, which never blocks it; the extension never clicks Submit — an automated
+submit was rejected. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
 
 **The page's world is evidence, never authority** (the maintainer, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on

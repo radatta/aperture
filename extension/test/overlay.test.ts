@@ -38,7 +38,7 @@ async function until<T>(fn: () => T | null | undefined | false, ms = 3000): Prom
     await io();
     const v = fn();
     if (v) return v;
-    if (t >= ms) throw new Error('until: timed out');
+    if (t >= ms) throw new Error(`until: timed out after ${ms} ms waiting for ${String(fn)}`);
     await vi.advanceTimersByTimeAsync(STEP);
   }
 }
@@ -240,13 +240,6 @@ function open(
       setTimer: (s: Record<string, unknown>) => void;
     };
   const style = () => root()?.querySelector('style')?.textContent ?? '';
-  // The coach's trace card (its own host) and its opener (on the badge's).
-  const cardRoot = () => rootOf(w.document.querySelector('aperture-lc-coach'));
-  const card = () => cardRoot()?.querySelector('[role=dialog]') ?? null;
-  const field = (k: string) =>
-    cardRoot()?.querySelector(`[data-ap=trace-${k}]`) as HTMLTextAreaElement;
-  const tapCard = (ap: string) => trustedClick(cardRoot()!.querySelector(`[data-ap=${ap}]`)!);
-  const opener = () => rootOf(badgeHost())?.querySelector('[data-ap=trace-open]') ?? null;
   const submitBtn = () =>
     w.document.querySelector('button[data-e2e-locator=console-submit-button]') as HTMLElement;
   return {
@@ -262,10 +255,6 @@ function open(
     pill,
     tapPill,
     badgeHost,
-    card,
-    field,
-    tapCard,
-    opener,
     submitBtn,
   };
 }
@@ -324,12 +313,12 @@ describe('the overlay on a LeetCode problem', () => {
     const withSubmit = messages(ext, 'enqueue').find((m) =>
       m.events!.some((e) => e.type === 'submit'),
     )!;
-    // The coach's config went with them (once a sitting); a script's click() is never held.
+    // The coach's config went with them (once a sitting): the retired card and its hold off.
     expect(withSubmit.events!.map((e) => e.type)).toEqual(['snapshot', 'coach', 'submit']);
     expect(withSubmit.events![1]!.payload).toEqual({
       kind: 'config',
-      trace: true,
-      hold: true,
+      trace: false,
+      hold: false,
       nudge: true,
     });
     expect((withSubmit.events![0]!.payload as { code: string }).code).toContain('return [0, 1]');
@@ -1652,14 +1641,16 @@ describe('the debug log’s wire probe', () => {
   }, 20_000);
 });
 
-// The coach (lib/coach.js): the first real Submit of a sitting is held once and the trace card shown; Trace or
-// Skip, then the user clicks Submit again — never the extension. A Submit within a minute of a failed one gets a note.
-describe('the trace card and the resubmit note', () => {
-  async function sitting(opts: { local?: Record<string, unknown>; path?: string } = {}) {
+// The coach (lib/coach.js): a real Submit within a minute of a failed one gets a note; nothing is ever held.
+// The trace card is retired (2.2.0). And the binding two tabs share (F181).
+describe('the resubmit note, and no trace card', () => {
+  async function sitting(
+    opts: { local?: Record<string, unknown>; path?: string; lateHint?: boolean } = {},
+  ) {
     const bg = fakeBackground();
     const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
     if (opts.local) await ext.local.set(opts.local);
-    const p = open(opts.path ?? '/problems/two-sum/', ext);
+    const p = open(opts.path ?? '/problems/two-sum/', ext, { lateHint: opts.lateHint });
     await until(() => p.phase() === 'prompt');
     p.tap('start');
     await until(() => p.phase() === 'active', 8000);
@@ -1669,333 +1660,65 @@ describe('the trace card and the resubmit note', () => {
     sentEvents(ext)
       .filter((e) => e.type === 'coach')
       .map((e) => e.payload as { kind: string } & Record<string, unknown>);
-  const log = (ext: ReturnType<typeof fakeExtension>, type: string) =>
-    ((ext.local.data.debugLog as Array<{ type: string } & Record<string, unknown>>) || []).filter(
-      (e) => e.type === type,
-    );
+  const bound = (ext: ReturnType<typeof fakeExtension>) =>
+    ext.local.data['sitting:two-sum'] as Record<string, unknown> & {
+      sittingId: string;
+      questionId?: string | null;
+      problemSent?: boolean;
+      coach?: Record<string, unknown>;
+    };
+  const noCard = (p: ReturnType<typeof open>) => {
+    expect(p.w.document.querySelector('aperture-lc-coach')).toBeNull();
+    expect(p.badge() ?? '').not.toMatch(/Trace|hold/);
+  };
 
-  it('holds the first real Submit, takes the trace, and the user’s second click submits', async () => {
-    const { p, ext } = await sitting({ local: { debug: true } });
-    await until(() => !!p.opener()); // before any Submit, the card is a click away
-    const first = p.opener();
-    // A sync lands, so the badge's text changes on its next repaint ("synced 5s ago"): the opener's node stays
-    // (a click across a rebuild would be lost).
-    const { sittingId } = ext.local.data['sitting:two-sum'] as { sittingId: string };
-    await ext.local.set({
-      'sync:two-sum': { sittingId, status: 'active', lastSyncAt: Date.now() },
-    });
-    const before = p.badge();
-    await settle(5100);
-    expect(p.badge()).not.toBe(before);
-    expect(p.opener()).toBe(first);
+  it('the first Submit goes straight through: no card, no hold, no opener', async () => {
+    const { p, ext } = await sitting();
+    await settle(600);
+    noCard(p);
     trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    await settle(500);
-    expect(p.fake().submits).toBe(0); // held: no request was made
-    expect(p.opener()).toBeNull();
-    p.field('empty').value = '[] -> []';
-    p.field('boundary').value = ' [5] target 5 -> none ';
-    p.tapCard('trace');
-    await until(() => !p.card());
-    await until(() => p.badge()?.includes('now click Submit'));
-    trustedClick(p.submitBtn()); // the user’s own click
+    await until(() => p.fake().submits === 1, 6000);
     await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
-    expect(p.fake().submits).toBe(1);
-    const kinds = coachEvents(ext);
-    expect(kinds.map((k) => k.kind)).toEqual(['config', 'trace']);
-    expect(kinds[1]).toMatchObject({
-      inputs: { empty: '[] -> []', boundary: '[5] target 5 -> none', normal: null },
-      ms: expect.any(Number),
-    });
-    // The trace goes ahead of the submit; nothing untraced follows.
-    // The fold orders by time: the trace is before the submit (its id breaks a tie the same way).
-    const sent = sentEvents(ext) as Array<{
-      id: string;
-      type: string;
-      at: number;
-      payload: { kind?: string };
-    }>;
-    const trace = sent.find((e) => e.type === 'coach' && e.payload.kind === 'trace')!;
-    const submit = sent.find((e) => e.type === 'submit')!;
-    expect(trace.at < submit.at || (trace.at === submit.at && trace.id < submit.id)).toBe(true);
-    await settle(4000);
-    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'trace']);
-    expect(ext.local.data['sitting:two-sum']).toMatchObject({
-      coach: { config: true, held: true, trace: 'traced' },
-    });
-    expect(log(ext, 'hold')).toHaveLength(1);
-    expect(log(ext, 'card')[0]).toMatchObject({ how: 'trace', keys: expect.any(Object) });
-    expect(log(ext, 'hold.leak')).toEqual([]);
+    noCard(p);
+  }, 30_000);
 
-    // A reload mid-sitting after the trace: never asked again, no opener, the Submit passes.
+  it('sends config once a sitting (card and hold off), never again on a reload, and nothing for a submit', async () => {
+    const { p, ext } = await sitting();
+    trustedClick(p.submitBtn()); // a real click
+    await until(() => p.fake().submits === 1, 6000);
+    p.submitBtn().click(); // a page script's, as a keyboard Submit reaches LeetCode without us
+    await until(() => p.fake().submits === 2, 6000);
+    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 6000);
+    const r = open('/problems/two-sum/', ext); // a reload, mid-sitting
+    await until(() => r.phase() === 'active', 6000);
+    await settle(4000);
+    expect(coachEvents(ext)).toEqual([{ kind: 'config', trace: false, hold: false, nudge: true }]);
+    expect(bound(ext).coach).toEqual({ config: true });
+  }, 30_000);
+
+  it('a binding from before 2.2.0, with the card’s state on it, resumes and sends no second config', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const first = open('/problems/two-sum/', ext);
+    await until(() => first.phase() === 'prompt');
+    first.tap('start');
+    await until(() => first.phase() === 'active', 8000);
+    await settle(3500);
+    const b = bound(ext);
+    // What 2.1's card left on it: a trace, the hold fired, when.
+    await ext.local.set({
+      'sitting:two-sum': {
+        ...b,
+        coach: { config: true, trace: 'traced', traceAt: 1, held: true },
+      },
+    });
     const r = open('/problems/two-sum/', ext);
     await until(() => r.phase() === 'active', 6000);
-    await settle(600);
-    expect(r.opener()).toBeNull();
     trustedClick(r.submitBtn());
     await until(() => r.fake().submits === 1, 6000);
-    expect(r.card()).toBeNull();
-  }, 40_000);
-
-  it('Skip is logged as a skip, and so is Traced with nothing typed', async () => {
-    for (const ap of ['skip', 'trace']) {
-      const { p, ext } = await sitting();
-      trustedClick(p.submitBtn());
-      await until(() => !!p.card());
-      p.tapCard(ap);
-      await until(() => !p.card());
-      await until(() => coachEvents(ext).some((k) => k.kind === 'trace-skip'), 6000);
-      trustedClick(p.submitBtn());
-      await until(() => p.fake().submits === 1, 6000);
-      expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'trace-skip']);
-    }
-  }, 40_000);
-
-  it('a Submit clicked with the card filled takes it as the trace and goes through', async () => {
-    const { p, ext } = await sitting();
-    trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    p.field('normal').value = '[2,7,11,15] 9 -> [0,1]';
-    await settle(600); // past a double-click's second click
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    expect(p.card()).toBeNull();
-    await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
-    expect(p.badge()).not.toContain('now click Submit'); // that click already went
     await settle(4000);
-    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'trace']);
-  }, 30_000);
-
-  it('the card’s buttons ignore a script’s click, and keys typed in it never reach the page', async () => {
-    const { p, ext } = await sitting();
-    trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    const field = p.field('empty');
-    (field.getRootNode() as ShadowRoot).querySelector<HTMLElement>('[data-ap=trace]')!.click();
-    await settle(300);
-    expect(p.card()).not.toBeNull();
-    const heard: string[] = [];
-    // Every way the page could hear or read what's typed: the guard's whole list (overlay.js GUARDED) —
-    // keys, textInput, input, composition, the clipboard, drag and drop.
-    const types = (p.w as unknown as { ApertureLC: { overlay: { GUARDED: string[] } } }).ApertureLC
-      .overlay.GUARDED;
-    expect(types).toEqual([
-      'keydown',
-      'keypress',
-      'keyup',
-      'textInput',
-      'beforeinput',
-      'input',
-      'compositionstart',
-      'compositionupdate',
-      'compositionend',
-      'paste',
-      'cut',
-      'copy',
-      'dragstart',
-      'drop',
-    ]);
-    for (const t of types) p.w.document.addEventListener(t, (e) => heard.push(e.type), true);
-    for (const t of types)
-      field.dispatchEvent(
-        t.startsWith('key')
-          ? new p.w.KeyboardEvent(t, { key: 'Enter', metaKey: true, bubbles: true, composed: true })
-          : new p.w.Event(t, { bubbles: true, composed: true }),
-      );
-    expect(heard).toEqual([]);
-    // A script's click on Skip does nothing either.
-    (field.getRootNode() as ShadowRoot).querySelector<HTMLElement>('[data-ap=skip]')!.click();
-    await settle(300);
-    expect(p.card()).not.toBeNull();
-    await settle(3500); // the 3 s batch
+    noCard(r);
     expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config']);
-  }, 30_000);
-
-  it('a page script’s click() on Submit is never held: the submit goes, logged untraced', async () => {
-    const { p, ext } = await sitting();
-    p.submitBtn().click();
-    await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
-    expect(p.card()).toBeNull();
-    await until(() => coachEvents(ext).some((k) => k.kind === 'untraced-submit'), 6000);
-    expect(p.opener()).toBeNull(); // past the first submit the card has nothing to ask
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 2, 6000);
-    expect(p.card()).toBeNull();
-  }, 30_000);
-
-  it('with the Submit not found, nothing is held, the badge says so, the submit is logged untraced', async () => {
-    const { p, ext } = await sitting({ local: { selectors: { submit: '#nowhere' } } });
-    await until(() => p.badge()?.includes('Submit hold off: Submit not found'));
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    await until(() => coachEvents(ext).some((k) => k.kind === 'untraced-submit'), 6000);
-    expect(p.card()).toBeNull();
-  }, 30_000);
-
-  it('with the Submit selector null, the hold is off without a word, and the submit is logged untraced', async () => {
-    const { p, ext } = await sitting({ local: { selectors: { submit: null } } });
-    await until(() => !!p.opener()); // the card is still offered
-    expect(p.badge()).not.toContain('Submit not found');
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    await until(() => coachEvents(ext).some((k) => k.kind === 'untraced-submit'), 6000);
-    expect(p.card()).toBeNull();
-  }, 30_000);
-
-  it('a page that marks <html> with the Submit’s selector gets no click held, and clicks in the card never count as Submit', async () => {
-    const { p, ext } = await sitting();
-    p.w.document.documentElement.setAttribute('data-e2e-locator', 'console-submit-button');
-    trustedClick(p.w.document.querySelector('[data-fake=code]')!); // anywhere on the page
-    await settle(300);
-    expect(p.card()).toBeNull();
-    trustedClick(p.submitBtn()); // the real one still holds
-    await until(() => !!p.card());
-    await settle(600);
-    // The page marks our own host as the Submit button: a click into the filled card still isn't one.
-    const cardHost = p.w.document.querySelector('aperture-lc-coach')!;
-    cardHost.setAttribute('data-e2e-locator', 'console-submit-button');
-    cardHost.setAttribute('role', 'button');
-    p.field('empty').value = '[] -> []';
-    trustedClick(p.field('empty'));
-    await settle(3500); // and the 3 s batch has gone
-    expect(p.card()).not.toBeNull();
-    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config']);
-  }, 30_000);
-
-  it('keeps the field’s focus when the card’s host is put back last', async () => {
-    const { p } = await sitting();
-    trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    const field = p.field('boundary');
-    field.focus();
-    field.value = '[5]';
-    field.setSelectionRange(1, 2);
-    p.w.document.documentElement.appendChild(p.w.document.createElement('div')); // LeetCode appends
-    await settle(600); // the poll moves the hosts back
-    expect(p.w.document.documentElement.lastElementChild!.tagName).toBe('APERTURE-LC-COACH');
-    expect((field.getRootNode() as ShadowRoot).activeElement).toBe(field);
-    expect([field.selectionStart, field.selectionEnd]).toEqual([1, 2]);
-  }, 30_000);
-
-  it('a note clears on leaving the problem, and the nudge switch off shows none', async () => {
-    const { p } = await sitting();
-    trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    p.tapCard('skip');
-    await until(() => p.badge()?.includes('now click Submit'));
-    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
-    await until(() => p.phase() === 'prompt');
-    p.w.history.back();
-    await until(() => p.phase() === 'active', 6000);
-    expect(p.badge()).not.toContain('now click Submit');
-
-    const off = await sitting({ local: { coachNudge: false } });
-    const code = off.p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
-    code.value += '# wrong\n';
-    trustedClick(off.p.submitBtn());
-    await until(() => !!off.p.card());
-    off.p.tapCard('skip');
-    await until(() => !off.p.card());
-    trustedClick(off.p.submitBtn());
-    await until(() => sentEvents(off.ext).some((e) => e.type === 'submit'), 6000);
-    await settle(10_000);
-    trustedClick(off.p.submitBtn()); // 10 s after a Wrong Answer, the note off
-    await until(() => off.p.fake().submits === 2, 6000);
-    await settle(4000);
-    expect(off.p.badge()).not.toContain('trace the failing input');
-    expect(coachEvents(off.ext).some((k) => k.kind === 'nudge-shown')).toBe(false);
-    expect(coachEvents(off.ext)[0]).toMatchObject({ kind: 'config', nudge: false });
-  }, 40_000);
-
-  it('the second click of a double-click is swallowed too: the card stays, nothing is submitted', async () => {
-    const { p } = await sitting();
-    trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    trustedClick(p.submitBtn()); // within half a second
-    await settle(1000);
-    expect(p.fake().submits).toBe(0);
-    expect(p.card()).not.toBeNull();
-  }, 30_000);
-
-  it('the card closes on leaving the problem and when Aperture ends the sitting, sending nothing', async () => {
-    const { p, ext } = await sitting();
-    trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
-    await until(() => p.phase() === 'prompt');
-    expect(p.card()).toBeNull();
-    const b = await sitting();
-    trustedClick(b.p.submitBtn());
-    await until(() => !!b.p.card());
-    await settle(3500); // the config's 3 s batch goes before the end (events after it are dropped)
-    const sittingId = (b.ext.local.data['sitting:two-sum'] as { sittingId: string }).sittingId;
-    await b.ext.local.set({ 'sync:two-sum': { sittingId, status: 'ended' } });
-    await until(() => b.p.phase() === 'ended');
-    expect(b.p.card()).toBeNull();
-    await settle(4000);
-    for (const e of [ext, b.ext]) expect(coachEvents(e).map((k) => k.kind)).toEqual(['config']);
-  }, 40_000);
-
-  it('an Options change mid-sitting applies at once: the hold turned off lets the Submit through', async () => {
-    const { p, ext } = await sitting();
-    await ext.local.set({ coachHold: false });
-    await settle(100);
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    expect(p.card()).toBeNull();
-  }, 30_000);
-
-  it('a trace made after a submit went, before its verdict, doesn’t count: the submit is still logged untraced', async () => {
-    const { p, ext } = await sitting({ local: { coachHold: false } });
-    await until(() => !!p.opener());
-    trustedClick(p.opener() as HTMLElement);
-    await until(() => !!p.card());
-    p.field('empty').value = '[]';
-    p.submitBtn().click(); // a submit that passes the card (as a keyboard one would)
-    await settle(30); // the request is out; its verdict is still being polled
-    p.tapCard('trace');
-    await until(() => coachEvents(ext).some((k) => k.kind === 'untraced-submit'), 6000);
-    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'trace', 'untraced-submit']);
-  }, 30_000);
-
-  it('with the card off in Options: no card, no opener, the config says so', async () => {
-    const { p, ext } = await sitting({ local: { coachTrace: false } });
-    await settle(600);
-    expect(p.opener()).toBeNull();
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    expect(p.card()).toBeNull();
-    await until(() => coachEvents(ext).some((k) => k.kind === 'untraced-submit'), 6000);
-    expect(coachEvents(ext)[0]).toEqual({ kind: 'config', trace: false, hold: false, nudge: true });
-  }, 30_000);
-
-  it('with the hold off: the Submit passes, the opener still offers the card', async () => {
-    const { p, ext } = await sitting({ local: { coachHold: false } });
-    await until(() => !!p.opener());
-    trustedClick(p.opener() as HTMLElement);
-    await until(() => !!p.card());
-    p.field('empty').value = '[]';
-    p.field('boundary').value = '[1]';
-    p.field('normal').value = '[1,2]';
-    p.tapCard('trace');
-    await until(() => coachEvents(ext).some((k) => k.kind === 'trace'), 6000);
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    expect(coachEvents(ext)[0]).toMatchObject({ kind: 'config', hold: false });
-  }, 30_000);
-
-  it('no sitting open: no card, no opener, nothing sent', async () => {
-    const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
-    const p = open('/problems/two-sum/', ext);
-    await until(() => p.phase() === 'prompt');
-    p.tap('look');
-    await settle(600);
-    expect(p.opener()).toBeNull();
-    trustedClick(p.submitBtn());
-    await until(() => p.fake().submits === 1, 6000);
-    await settle(4000);
-    expect(p.card()).toBeNull();
-    expect(messages(ext, 'enqueue')).toEqual([]);
   }, 30_000);
 
   it('a Submit within a minute of a failed one gets the note; none after a minute, none after Accepted', async () => {
@@ -2003,11 +1726,8 @@ describe('the trace card and the resubmit note', () => {
     const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
     code.value += '# wrong\n';
     trustedClick(p.submitBtn());
-    await until(() => !!p.card());
-    p.tapCard('skip');
-    await until(() => !p.card());
-    trustedClick(p.submitBtn());
     await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
+    expect(p.badge()).not.toContain('trace the failing input'); // no failed verdict before the first
     await settle(30_000);
     trustedClick(p.submitBtn()); // 30 s after a Wrong Answer
     await until(() => p.badge()?.includes('trace the failing input'));
@@ -2035,5 +1755,148 @@ describe('the trace card and the resubmit note', () => {
     await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 5, 6000);
     await settle(4000);
     expect(coachEvents(ext).filter((k) => k.kind === 'nudge-shown')).toHaveLength(1);
+    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'nudge-shown']);
   }, 60_000);
+
+  // After a Wrong Answer, the note's resubmit within the minute — the shared setup of the cases below.
+  async function failedOnce(opts: { local?: Record<string, unknown> } = {}) {
+    const s = await sitting(opts);
+    const code = s.p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += '# wrong\n';
+    s.p.submitBtn().click(); // the submit itself (a page click: it counts for the verdict, not the note)
+    await until(() => sentEvents(s.ext).some((e) => e.type === 'submit'), 6000);
+    await settle(10_000);
+    return s;
+  }
+  const noNote = async (p: ReturnType<typeof open>, ext: ReturnType<typeof fakeExtension>) => {
+    await settle(4000);
+    expect(p.badge() ?? '').not.toContain('trace the failing input');
+    expect(coachEvents(ext).some((k) => k.kind === 'nudge-shown')).toBe(false);
+  };
+
+  it('a page script’s click() on Submit gets no note; nor does a page marking <html> with the selector', async () => {
+    const { p, ext } = await failedOnce();
+    p.submitBtn().click();
+    await until(() => p.fake().submits === 2, 6000);
+    p.w.document.documentElement.setAttribute('data-e2e-locator', 'console-submit-button');
+    trustedClick(p.w.document.querySelector('[data-fake=code]')!); // anywhere on the page
+    await noNote(p, ext);
+  }, 30_000);
+
+  it('with the Submit selector null or matching nothing: no note, and no word on the badge', async () => {
+    for (const submit of [null, '#nowhere']) {
+      const { p, ext } = await failedOnce({ local: { selectors: { submit } } });
+      trustedClick(p.submitBtn());
+      await until(() => p.fake().submits === 2, 6000);
+      await noNote(p, ext);
+      expect(p.badge()).not.toContain('Submit');
+    }
+  }, 60_000);
+
+  it('no sitting open: no note, nothing sent', async () => {
+    const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('look');
+    const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += '# wrong\n';
+    trustedClick(p.submitBtn());
+    await until(() => p.fake().submits === 1, 6000);
+    await settle(5000);
+    trustedClick(p.submitBtn());
+    await until(() => p.fake().submits === 2, 6000);
+    await settle(4000);
+    expect(messages(ext, 'enqueue')).toEqual([]);
+    noCard(p);
+  }, 30_000);
+
+  it('a note clears on leaving the problem, and the nudge switch off shows none', async () => {
+    const { p } = await failedOnce();
+    trustedClick(p.submitBtn());
+    await until(() => p.badge()?.includes('trace the failing input'));
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => p.phase() === 'prompt');
+    p.w.history.back();
+    await until(() => p.phase() === 'active', 6000);
+    expect(p.badge()).not.toContain('trace the failing input');
+
+    const off = await failedOnce({ local: { coachNudge: false } });
+    trustedClick(off.p.submitBtn()); // 10 s after a Wrong Answer, the note off
+    await until(() => off.p.fake().submits === 2, 6000);
+    await noNote(off.p, off.ext);
+    expect(coachEvents(off.ext)[0]).toMatchObject({ kind: 'config', nudge: false });
+  }, 40_000);
+
+  it('an Options change mid-sitting applies at once: the note turned off shows none', async () => {
+    const { p, ext } = await failedOnce();
+    await ext.local.set({ coachNudge: false });
+    await settle(100);
+    trustedClick(p.submitBtn());
+    await until(() => p.fake().submits === 2, 6000);
+    await noNote(p, ext);
+  }, 30_000);
+
+  // F181: each tab holds the binding in memory; a write is a patch merged into what storage holds now.
+  it('two tabs on one sitting: one learns the question id while the other fills the doc; storage keeps both', async () => {
+    const { p: a, ext, bg } = await sitting({ lateHint: true });
+    const b = open('/problems/two-sum/', ext, { lateHint: true }); // a second tab, resuming
+    await until(() => b.phase() === 'active', 6000);
+    await settle(3500);
+    expect(bound(ext)).toMatchObject({ questionId: null, problemSent: false });
+    a.fake().sendHint(); // tab A learns the question id
+    await until(() => bound(ext).questionId === '1');
+    const starts = messages(ext, 'start').length;
+    b.fake().fetchDoc(); // tab B's LeetCode fetches the doc: B fills it in, from its own copy of the binding
+    await until(() => bound(ext).problemSent === true, 6000);
+    expect(bound(ext).questionId).toBe('1'); // B's write kept A's
+    expect(messages(ext, 'start')).toHaveLength(starts + 1);
+    // A adopted B's write: its own doc now sends no second fill.
+    await settle(5100);
+    a.fake().fetchDoc();
+    await settle(3000);
+    expect(messages(ext, 'start')).toHaveLength(starts + 1);
+    expect(bg.sittings).toHaveLength(1);
+    // One config across both tabs.
+    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config']);
+  }, 30_000);
+
+  it('another tab’s write is adopted from the 5 s reread when Safari passes no change event', async () => {
+    const { p: a, ext } = await sitting({ lateHint: true });
+    const b = open('/problems/two-sum/', ext, { lateHint: true });
+    await until(() => b.phase() === 'active', 6000);
+    await settle(3500);
+    // A write no change event reports (Safari): straight into storage's data.
+    const cur = bound(ext);
+    ext.local.data['sitting:two-sum'] = { ...cur, questionId: '1', problemSent: true };
+    await settle(5100);
+    const starts = messages(ext, 'start').length;
+    a.fake().fetchDoc(); // A would fill it in, had it not adopted problemSent
+    await settle(3000);
+    expect(messages(ext, 'start')).toHaveLength(starts);
+    expect(bound(ext)).toMatchObject({ questionId: '1', problemSent: true });
+  }, 30_000);
+
+  it('a patch never brings back a binding another tab cleared', async () => {
+    const { p: a, ext } = await sitting({ lateHint: true });
+    await settle(3500);
+    // The sitting ended and another tab cleared the binding, unheard by this one.
+    delete ext.local.data['sitting:two-sum'];
+    a.fake().sendHint();
+    await settle(3000);
+    expect(ext.local.data['sitting:two-sum']).toBeUndefined();
+  }, 30_000);
+
+  it('a hint during a reload’s resume doesn’t leave the page stuck resuming', async () => {
+    const { ext, bg } = await sitting({ lateHint: true });
+    await settle(3500);
+    let release = () => {};
+    bg.hold = new Promise<void>((res) => (release = res));
+    const r = open('/problems/two-sum/', ext, { lateHint: true });
+    await until(() => messages(ext, 'start').length === 2); // the resume's Start, held
+    expect(r.phase()).toBe('resuming');
+    r.fake().sendHint(); // LeetCode names the question mid-resume: the binding is patched
+    await until(() => bound(ext).questionId === '1');
+    release();
+    await until(() => r.phase() === 'active', 6000);
+  }, 30_000);
 });
