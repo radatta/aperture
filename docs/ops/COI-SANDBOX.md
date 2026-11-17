@@ -1002,6 +1002,10 @@ fails regardless. Use `gh run list` / `gh run view` — same information, Action
   garbage, clamshell sleep, VM-wide mount restart, shared `node_modules` — signatures in _Known
   failure modes_, evidence in
   [COI-INCIDENTS.md → Incident B](COI-INCIDENTS.md#incident-b--a-13-hour-unattended-run-died-and-left-the-terminal-broken).
+- **A restart can drop `statusLine` from `~/.claude/settings.json`.** COI re-seeds the container's user settings at
+  setup (seen 10-26 and 11-05; the seed's source is still unknown), and with the key gone the status line, the board
+  one-liner and the usage meter log all stop without an error. `~/.claude/statusline-command.sh` itself survives.
+  `pnpm usage doctor` notices; the restore is in [USAGE-METER.md → Install](USAGE-METER.md#install).
 - **Night profile needs `[monitoring.nft] enabled = false`.** The nft monitor **hardcodes**
   auto-pause-on-high (ignores `auto_pause_on_high`), and "unauthorized connection attempt" fires HIGH
   on _any_ non-allowlisted egress — so benign OS background traffic (Ubuntu/Canonical, esp.
