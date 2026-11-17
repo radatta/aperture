@@ -132,7 +132,7 @@
   ],
   "planAt": "2026-11-08T05:58:00Z",
   "planNotes": [
-    "bravo-branch slips: its devcheck reruns after the 05:52 deploy",
+    "bravo-branch slips: its devcheck reruns after the new deploy",
     "golf moved to tomorrow; nothing waits on it"
   ],
   "followups": [

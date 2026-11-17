@@ -205,16 +205,23 @@ async function expandPass(b, name) {
   await page.waitForTimeout(6000); // a poll redraws everything
   const s1 = await want('after a poll', 'next');
   if (s1.y !== y0) fails.push(`${tag}: a poll moved the scroll ${y0} → ${s1.y}`);
+  await page.keyboard.press('Escape');
+  await want('Esc', null);
+  // in-page state (not a reload's: that starts the page afresh) comes back with the glance
+  if (!(await page.locator('.slot').first().evaluate((e) => e.classList.contains('open'))))
+    fails.push(`${tag}: a slot card opened on the glance closed across the expand`);
+  await page.keyboard.press('3');
+  await want('key 3', 'next');
+  await page.evaluate(() => scrollTo(0, 120));
+  const y1 = (await state()).y;
   await page.reload();
   await page.waitForSelector('#meta .ver', { state: 'attached' });
   await page.waitForTimeout(400);
   const s2 = await want('after a reload', 'next');
-  if (Math.abs(s2.y - y0) > 2) fails.push(`${tag}: a reload lost the scroll ${y0} → ${s2.y}`);
+  if (Math.abs(s2.y - y1) > 2) fails.push(`${tag}: a reload lost the scroll ${y1} → ${s2.y}`);
   await page.keyboard.press('Escape');
   await page.waitForSelector('#meta .ver', { state: 'attached' });
-  await want('Esc', null);
-  if (!(await page.locator('.slot').first().evaluate((e) => e.classList.contains('open'))))
-    fails.push(`${tag}: a slot card opened on the glance closed across the expand`);
+  await want('Esc after a reload', null);
   await page.keyboard.press('3');
   await want('key 3', 'next');
   await page.keyboard.press('2');
