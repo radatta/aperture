@@ -45,6 +45,11 @@ import {
   SITTING_INGEST_WINDOW_MS,
   SITTING_MAX_EVENTS,
   SITTING_START_TIME_ERROR,
+  SITTING_IDLE_MS,
+  SITTING_IDLE_TAIL_MS,
+  SITTING_REOPEN_ERROR,
+  SITTING_REOPEN_REP_ERROR,
+  sittingMinutes,
   sittingMetrics,
   DRAFT_LINES_MAX,
   REVIEW_LINE_MAX,
@@ -3609,13 +3614,15 @@ export function runApiContract(
         expect(got.live).toBeNull();
       });
 
+      // Left a day, it's idle long before: the next Start closes it at its last activity + the tail.
       it('a sitting ended past its window takes no late events', async () => {
         const { sitting } = await startSitting(api);
         advance(SITTING_INGEST_WINDOW_MS + 1);
         await api.lcSittingStart(sittingStart({ startedAt: LC_T0 + SITTING_INGEST_WINDOW_MS + 1 }));
         expect((await api.getSitting(sitting.id)).sitting).toMatchObject({
           status: 'abandoned',
-          endedAt: LC_T0 + SITTING_INGEST_WINDOW_MS + 1,
+          closedBy: 'idle',
+          endedAt: sitting.startedAt + SITTING_IDLE_TAIL_MS,
         });
         await expect(
           api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', LC_T0 + 1000)] }),
@@ -3880,7 +3887,7 @@ export function runApiContract(
           lastSitting: { id: sitting.id, status: 'done' },
         });
         expect((await api.getSitting(sitting.id)).liveReads).toBe(1);
-        // Open past its window: read as closed, and not counted (the next Start ends it).
+        // Left open past its window: idle long before, so the pull closes it first, and isn't counted.
         advance(60_000);
         const next = await api.lcSittingStart(
           sittingStart({ problemSlug: 'three-sum', problemTitle: '3Sum', startedAt: clock }),
@@ -3888,10 +3895,165 @@ export function runApiContract(
         advance(SITTING_INGEST_WINDOW_MS + 1);
         expect(await api.pullLiveSitting()).toMatchObject({
           sitting: null,
-          lastSitting: { id: next.sitting.id, status: 'active' },
+          lastSitting: {
+            id: next.sitting.id,
+            status: 'abandoned',
+            closedBy: 'idle',
+            endedAt: next.sitting.startedAt + SITTING_IDLE_TAIL_MS,
+          },
           liveReads: 0,
         });
         expect((await api.getSitting(next.sitting.id)).liveReads).toBe(0);
+      });
+
+      // Idle close (docs/areas/recruiting → Idle close).
+      const M = 60_000;
+      it('an idle sitting closes on the next read at its last activity + 5 min, its rep still in progress', async () => {
+        const { sitting } = await startSitting(api);
+        advance(40 * M);
+        await api.lcSittingEvents({ sittingId: sitting.id, events: [lcSnap('a', clock)] });
+        const last = clock;
+        advance(SITTING_IDLE_MS); // 85 min on the clock, exactly 45 since the events call: untouched
+        expect((await api.listSittings())[0]).toMatchObject({ status: 'active', endedAt: null });
+        advance(1);
+        const [closed] = await api.listSittings();
+        expect(closed).toMatchObject({
+          id: sitting.id,
+          status: 'abandoned',
+          closedBy: 'idle',
+          endedAt: last + SITTING_IDLE_TAIL_MS,
+        });
+        expect(sittingMinutes(closed!, clock)).toBe(45); // 40 working + the 5-min tail, never the 45 idle
+        expect((await api.getTask(sitting.repTaskId))?.status).toBe('in_progress');
+        advance(60 * M); // a later read never moves the end
+        expect((await api.getSitting(sitting.id)).sitting).toEqual(closed);
+        // The gate is free: a Start on another problem goes through, on the roll's open rep.
+        const next = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+        );
+        expect(next).toMatchObject({ resumed: false, sitting: { repTaskId: sitting.repTaskId } });
+      });
+
+      it('the detail read and the live pull close an idle sitting before answering', async () => {
+        const { sitting } = await startSitting(api);
+        advance(SITTING_IDLE_MS + 1);
+        expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ closedBy: 'idle' });
+        const next = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+        );
+        advance(SITTING_IDLE_MS + 1);
+        expect(await api.pullLiveSitting()).toMatchObject({
+          sitting: null,
+          liveReads: 0, // not counted: the pull came after the close
+          lastSitting: { id: next.sitting.id, closedBy: 'idle', endedAt: next.sitting.startedAt + SITTING_IDLE_TAIL_MS },
+        });
+      });
+
+      it('a live pull keeps a sitting open', async () => {
+        const { sitting } = await startSitting(api);
+        advance(30 * M);
+        expect((await api.pullLiveSitting()).sitting?.id).toBe(sitting.id);
+        const pulled = clock;
+        advance(SITTING_IDLE_MS); // 75 min since the last event, 45 since the pull
+        expect((await api.getSitting(sitting.id)).sitting.status).toBe('active');
+        advance(1);
+        expect((await api.getSitting(sitting.id)).sitting).toMatchObject({
+          closedBy: 'idle',
+          endedAt: pulled + SITTING_IDLE_TAIL_MS,
+        });
+      });
+
+      it('reopen restores it, refuses while another is open, and is idempotent', async () => {
+        const { sitting } = await startSitting(api);
+        expect(await api.reopenSitting(sitting.id)).toMatchObject({ status: 'active' }); // open: as it is
+        advance(SITTING_IDLE_MS + 1);
+        const closed = (await api.getSitting(sitting.id)).sitting;
+        advance(60 * M);
+        const back = await api.reopenSitting(sitting.id);
+        expect(back).toMatchObject({
+          status: 'active',
+          endedAt: null,
+          closedBy: null,
+          reopenedAt: clock,
+          idleMs: clock - closed.endedAt!,
+        });
+        expect(sittingMinutes(back, clock)).toBe(5); // the tail before the gap; nothing since
+        expect((await api.pullLiveSitting()).sitting?.id).toBe(sitting.id); // it holds the gate again
+        advance(1000);
+        expect(await api.reopenSitting(sitting.id)).toMatchObject({ reopenedAt: back.reopenedAt });
+        await expect(
+          api.lcSittingStart(
+            sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+          ),
+        ).rejects.toThrow(SITTING_ACTIVE_ERROR);
+        // Idle again; another problem takes the rep, and while it's open the first can't come back.
+        advance(SITTING_IDLE_MS + 1);
+        const other = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+        );
+        await expect(api.reopenSitting(sitting.id)).rejects.toThrow(SITTING_ACTIVE_ERROR);
+        advance(SITTING_IDLE_MS + 1);
+        await expect(api.reopenSitting(sitting.id)).rejects.toThrow(SITTING_REOPEN_REP_ERROR);
+        expect((await api.getSitting(other.sitting.id)).sitting.closedBy).toBe('idle');
+      });
+
+      it('an event after an idle close reopens it; a straggler lands without reopening', async () => {
+        const { sitting } = await startSitting(api);
+        const call = (events: SittingEventInput[]) =>
+          api.lcSittingEvents({ sittingId: sitting.id, events });
+        await call([lcSnap('a', LC_T0 + 1000)]);
+        advance(SITTING_IDLE_MS + 1);
+        const closed = (await api.getSitting(sitting.id)).sitting;
+        expect(closed.endedAt).toBe(LC_T0 + SITTING_IDLE_TAIL_MS);
+        advance(60 * M); // well past the usual 10-min grace
+        expect(await call([lcSnap('b', LC_T0 + 2 * M)])).toMatchObject({
+          accepted: 1,
+          skipped: 0,
+          status: 'abandoned',
+        });
+        expect((await api.getSitting(sitting.id)).sitting.endedAt).toBe(closed.endedAt);
+        expect(await call([lcSnap('c', clock)])).toMatchObject({ accepted: 1, status: 'active' });
+        const { sitting: back, live } = await api.getSitting(sitting.id);
+        expect(back).toMatchObject({ status: 'active', closedBy: null, idleMs: clock - closed.endedAt! });
+        expect(live?.code).toBe('c');
+      });
+
+      it('a Start on the same problem the same day reopens it; the next day starts a new one', async () => {
+        const { sitting } = await startSitting(api);
+        advance(SITTING_IDLE_MS + 1);
+        const again = await api.lcSittingStart(sittingStart({ startedAt: clock }));
+        expect(again).toMatchObject({
+          resumed: true,
+          sitting: { id: sitting.id, status: 'active', closedBy: null },
+        });
+        expect(again.sitting.idleMs).toBe(clock - (sitting.startedAt + SITTING_IDLE_TAIL_MS));
+        advance(16 * 60 * M); // the next app day (the clock starts 14:13 in Los Angeles), inside the window
+        const fresh = await api.lcSittingStart(sittingStart({ startedAt: clock }));
+        expect(fresh.resumed).toBe(false);
+        expect(fresh.sitting.id).not.toBe(sitting.id);
+        expect(fresh.sitting.repTaskId).toBe(sitting.repTaskId); // the roll's open rep, reused
+        expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ closedBy: 'idle' });
+      });
+
+      it('Done after an idle close keeps its end and reads done; Drop leaves it abandoned', async () => {
+        const { sitting } = await startSitting(api);
+        advance(SITTING_IDLE_MS + 1 + 60 * M); // never noticed until the Done
+        await api.setTaskActual(sitting.repTaskId, 5);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        expect((await api.getSitting(sitting.id)).sitting).toMatchObject({
+          status: 'done',
+          closedBy: 'idle',
+          endedAt: LC_T0 + SITTING_IDLE_TAIL_MS,
+        });
+        await expect(api.reopenSitting(sitting.id)).rejects.toThrow(SITTING_REOPEN_ERROR);
+        const next = await api.lcSittingStart(sittingStart({ startedAt: clock }));
+        advance(SITTING_IDLE_MS + 1);
+        await api.transitionTask(next.sitting.repTaskId, 'cancelled');
+        expect((await api.getSitting(next.sitting.id)).sitting).toMatchObject({
+          status: 'abandoned',
+          closedBy: 'idle',
+        });
+        await expect(api.reopenSitting(next.sitting.id)).rejects.toThrow(SITTING_REOPEN_REP_ERROR);
       });
     });
 

@@ -3,6 +3,8 @@ import {
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
   SITTING_END_SKEW_MS,
+  SITTING_IDLE_MS,
+  SITTING_IDLE_TAIL_MS,
   SITTING_INGEST_WINDOW_MS,
   SITTING_RAW_KEEP_MS,
   ulid,
@@ -367,7 +369,7 @@ describe('live pulls on the table', () => {
     expect(pull.lastRun?.at).toBe(T0 + 7_000);
   });
 
-  it('nothing open — none ever, the gate on an ended one, or past the window — writes nothing', async () => {
+  it('nothing open — none ever, the gate on an ended one, or past the window — writes nothing but an idle close', async () => {
     const { doc, backend, now } = setup();
     await linked(backend);
     let rows = doc.snapshot();
@@ -394,11 +396,13 @@ describe('live pulls on the table', () => {
       startedAt: now.t,
     });
     now.t += SITTING_INGEST_WINDOW_MS + 1;
-    rows = doc.snapshot();
+    // Idle long before its window ran out: the first pull closes it (its only write), the next writes nothing.
     expect(await backend.pullLiveSitting()).toMatchObject({
       sitting: null,
-      lastSitting: { id: next.sitting.id, status: 'active' },
+      lastSitting: { id: next.sitting.id, status: 'abandoned', closedBy: 'idle' },
     });
+    rows = doc.snapshot();
+    expect((await backend.pullLiveSitting()).lastSitting?.id).toBe(next.sitting.id);
     expect(doc.snapshot()).toEqual(rows);
   });
 
@@ -504,5 +508,106 @@ describe('the review on the head', () => {
     await backend.deleteSitting(sitting.id);
     await expect(backend.getSitting(sitting.id)).rejects.toThrow(/Not found/);
     expect(await backend.listSittings()).toEqual([]);
+  });
+});
+
+describe('idle close on the table', () => {
+  const idle = async () => {
+    const t = setup();
+    await linked(t.backend);
+    const { sitting } = await t.backend.lcSittingStart(start());
+    t.now.t += SITTING_IDLE_MS + 1;
+    return { ...t, sitting };
+  };
+  const headRow = async (doc: InMemoryDoc, id: string) => doc.get(pk('u1'), sk.sitting(id));
+
+  it('reads at once close it once, at the same end, and log one close', async () => {
+    const { backend, doc, sitting } = await idle();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await Promise.all([
+        backend.listSittings(),
+        backend.getSitting(sitting.id),
+        backend.pullLiveSitting(),
+        backend.getCoachToday(),
+      ]);
+      const closes = log.mock.calls.filter((c) => String(c[0]).includes('lc_sitting_idle_close'));
+      expect(closes).toHaveLength(1);
+    } finally {
+      log.mockRestore();
+    }
+    expect(await headRow(doc, sitting.id)).toMatchObject({
+      status: 'abandoned',
+      closedBy: 'idle',
+      endedAt: T0 + SITTING_IDLE_TAIL_MS,
+    });
+    expect((await doc.get(pk('u1'), sk.lcStart()))?.openSittingId).toBeNull();
+  });
+
+  it('the coach’s read closes it too', async () => {
+    const { backend, doc, sitting } = await idle();
+    await backend.getCoachToday();
+    expect(await headRow(doc, sitting.id)).toMatchObject({ closedBy: 'idle' });
+  });
+
+  it('below the line a read costs no activity read', async () => {
+    const { backend, now } = setup();
+    await linked(backend);
+    await backend.lcSittingStart(start());
+    now.t += SITTING_IDLE_MS;
+    const spy = vi.spyOn(Repo.prototype, 'getSittingActivity');
+    try {
+      await backend.listSittings();
+      expect(spy).not.toHaveBeenCalled();
+      now.t += 1;
+      await backend.listSittings();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a smoke run (noopWrites) reads it closed and writes nothing', async () => {
+    const { doc, now, sitting } = await idle();
+    const smoke = new BackendClient(new Repo(doc, noopWrites(), 'u1'), {
+      userId: 'u1',
+      now: () => now.t,
+    });
+    const rows = doc.snapshot();
+    expect((await smoke.listSittings())[0]).toMatchObject({ id: sitting.id, closedBy: 'idle' });
+    expect(doc.snapshot()).toEqual(rows);
+  });
+
+  it('a reopen racing a Start on another problem leaves one sitting open, holding the gate', async () => {
+    const { backend, doc, sitting } = await idle();
+    await backend.listSittings(); // closed
+    await Promise.allSettled([
+      backend.reopenSitting(sitting.id),
+      backend.lcSittingStart({ ...start(), problemSlug: 'add-two-numbers', startedAt: T0 }),
+    ]);
+    const open = (await backend.listSittings()).filter((x) => x.status === 'active');
+    expect(open).toHaveLength(1);
+    expect((await doc.get(pk('u1'), sk.lcStart()))?.openSittingId).toBe(open[0]!.id);
+  });
+
+  it('a reopen whose head was finished meanwhile frees the gate again', async () => {
+    const { backend, doc, sitting } = await idle();
+    await backend.listSittings(); // closed
+    // The rep is Done between the reopen's checks and its head write: the head reads done when the CAS runs.
+    const real = Repo.prototype.casUpdate;
+    const spy = vi.spyOn(Repo.prototype, 'casUpdate').mockImplementation(async function (
+      this: Repo,
+      ...args: Parameters<Repo['casUpdate']>
+    ) {
+      const [shape, id] = args;
+      if (shape.sk === sk.sitting(sitting.id) && id === sitting.id) {
+        const cur = await doc.get(pk('u1'), sk.sitting(sitting.id));
+        await doc.put({ ...cur!, status: 'done' });
+        spy.mockRestore();
+      }
+      return real.apply(this, args as never);
+    } as never);
+    await expect(backend.reopenSitting(sitting.id)).rejects.toThrow(/moved on/);
+    expect((await doc.get(pk('u1'), sk.lcStart()))?.openSittingId).toBeNull();
   });
 });

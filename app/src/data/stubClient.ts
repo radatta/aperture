@@ -122,6 +122,15 @@ import {
   emptyLiveFields,
   emptySummary,
   endedSitting,
+  mayBeIdle,
+  idleCloseAt,
+  idleClosedSitting,
+  reopenedSitting,
+  finishIdleClosed,
+  sittingReturns,
+  sittingReopenError,
+  reclaimStart,
+  SITTING_REOPEN_REP_ERROR,
   foldLive,
   isHeadEvent,
   LC_ROLL_UNLINKED_ERROR,
@@ -274,6 +283,7 @@ import type {
   SittingDetail,
   LiveSittingPull,
   SittingBudget,
+  SittingActivity,
   SittingHeadRow,
   LcStartGate,
   SittingEvent,
@@ -871,9 +881,21 @@ class StubClient implements ApiClient {
     const linked = settings.leetcodeRollId ?? null;
     const roll = linked ? this.find(this.store.rolls, linked) : undefined;
     if (!roll?.active) throw new Error(LC_ROLL_UNLINKED_ERROR); // archived reads as unlinked
-    const sittings = this.alive(this.store.sittings);
-    const plan = planSittingStart(n, sittings, this.alive(this.store.tasks), roll.id, now);
+    const sittings = this.closeIdleAll(now);
+    const plan = planSittingStart(
+      n,
+      sittings,
+      this.alive(this.store.tasks),
+      roll.id,
+      now,
+      (startedAt) => dayKeyInZone(startedAt, USER_TIME_ZONE, settings.dayStartHour) === gateDay,
+    );
     for (const e of plan.ends) this.endSitting(e.sitting.id, e.to, e.at);
+    if (plan.kind === 'reopen') {
+      const back = await this.reopen(plan.sitting, now);
+      this.keepProblem(n, false);
+      return { sitting: back, resumed: true };
+    }
     if (plan.kind === 'resume') {
       const shaped = await this.resumeShape(plan.sitting, roll);
       this.keepProblem(n, false);
@@ -994,8 +1016,12 @@ class StubClient implements ApiClient {
   }
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
     const { sittingId, events: all } = normalizeSittingEvents(input);
-    const sitting = this.mustFind(this.store.sittings, sittingId);
     const now = this.now();
+    const sitting = await this.comeBack(
+      this.closeIdle(this.mustFind(this.store.sittings, sittingId), now),
+      all,
+      now,
+    );
     const err = sittingIngestError(sitting, all, now);
     if (err) throw new Error(err);
     // Inside an ended sitting's grace only the events stamped before its end are kept; none kept writes nothing.
@@ -1101,12 +1127,12 @@ class StubClient implements ApiClient {
     if (newerSummary(cur.summary, summary)) this.writes.patch(this.store.sittings, id, { summary });
   }
   async listSittings(range?: DateRange): Promise<Sitting[]> {
-    return this.alive(this.store.sittings)
+    return this.closeIdleAll(this.now())
       .filter((x) => !range || (x.day >= range.from && x.day <= range.to))
       .sort((a, b) => b.startedAt - a.startedAt);
   }
   async getSitting(id: string): Promise<SittingDetail> {
-    const sitting = this.mustFind(this.store.sittings, id);
+    const sitting = this.closeIdle(this.mustFind(this.store.sittings, id), this.now());
     return {
       sitting,
       live: this.sittingLiveOf(id),
@@ -1125,7 +1151,8 @@ class StubClient implements ApiClient {
   async pullLiveSitting(): Promise<LiveSittingPull> {
     const now = this.now();
     const id = this.store.lcStartGate?.openSittingId ?? null;
-    const head = id ? this.find(this.store.sittings, id) : undefined;
+    const held = id ? this.find(this.store.sittings, id) : undefined;
+    const head = held && this.closeIdle(held, now); // before the pull counts as activity
     if (head && isSittingOpen(head, now)) {
       const had = this.find(this.store.sittingReads, head.id);
       const liveReads = (had?.count ?? 0) + 1;
@@ -1191,7 +1218,7 @@ class StubClient implements ApiClient {
       today: day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour),
       now,
       dayStartHour,
-      sittings: this.alive(this.store.sittings),
+      sittings: this.closeIdleAll(now),
       attempts: this.alive(this.store.coachAttempts),
       days: this.alive(this.store.coachDays),
       focus: this.alive(this.store.coachFocus)[0] ?? null,
@@ -1395,9 +1422,69 @@ class StubClient implements ApiClient {
   // A rep's finish ends its open sitting (Done → done, else abandoned); its delete removes it.
   private endSittingsFor(task: Task, to: TaskStatus): void {
     if (!task.rollId || (to !== 'done' && to !== 'cancelled')) return;
-    for (const x of this.alive(this.store.sittings))
-      if (x.repTaskId === task.id && x.status === 'active')
-        this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned');
+    const now = this.now();
+    const mine = this.closeIdleAll(now).filter((x) => x.repTaskId === task.id); // backend parity
+    for (const x of mine)
+      if (x.status === 'active') this.endSitting(x.id, to === 'done' ? 'done' : 'abandoned');
+    const newest = mine.sort((a, b) => b.startedAt - a.startedAt)[0];
+    const done = to === 'done' && newest ? finishIdleClosed(newest, now) : null;
+    if (done) this.writes.put(this.store.sittings, done);
+  }
+  // --- Idle close (backend parity: closeIdle, reopen) ---
+  private sittingActivityOf(id: string): SittingActivity {
+    return {
+      budgetAt: this.find(this.store.sittingBudgets, id)?.updatedAt ?? null,
+      readsAt: this.find(this.store.sittingReads, id)?.updatedAt ?? null,
+    };
+  }
+  private closeIdle(s: Sitting, now: number): Sitting {
+    if (!mayBeIdle(s, now)) return s;
+    const at = idleCloseAt(s, this.sittingActivityOf(s.id), now);
+    if (at === null) return s;
+    this.refoldHead(s.id);
+    const head = this.writes.put(
+      this.store.sittings,
+      idleClosedSitting(this.mustFind(this.store.sittings, s.id), at, now),
+    );
+    this.releaseStartGate(s.id);
+    return head;
+  }
+  private closeIdleAll(now: number): Sitting[] {
+    return this.alive(this.store.sittings).map((x) => this.closeIdle(x, now));
+  }
+  async reopenSitting(id: string): Promise<Sitting> {
+    const now = this.now();
+    const s = this.closeIdle(this.mustFind(this.store.sittings, id), now);
+    return s.status === 'active' ? s : this.reopen(s, now);
+  }
+  private async comeBack(s: Sitting, events: readonly { at: number }[], now: number) {
+    if (!sittingReturns(s, events)) return s;
+    const { dayStartHour } = this.ensureSettings();
+    const day = (t: number) => dayKeyInZone(t, USER_TIME_ZONE, dayStartHour);
+    if (day(s.startedAt) !== day(now)) return s;
+    try {
+      return await this.reopen(s, now);
+    } catch {
+      return this.mustFind(this.store.sittings, s.id); // refused: ingests against it ended
+    }
+  }
+  private async reopen(s: Sitting, now: number): Promise<Sitting> {
+    const sittings = this.closeIdleAll(now);
+    const err = sittingReopenError(s, this.find(this.store.tasks, s.repTaskId), sittings, now);
+    if (err) throw new Error(err);
+    const gateDay = dayKeyInZone(now, USER_TIME_ZONE, this.ensureSettings().dayStartHour);
+    const gate = this.store.lcStartGate ?? { ...this.base(), id: 'lcstart', ...emptyGate(gateDay) };
+    const claimed = reclaimStart(gate, s.id, sittings, now);
+    if (claimed) this.store.lcStartGate = { ...claimed, updatedAt: now };
+    const cur = this.mustFind(this.store.sittings, s.id);
+    if (cur.status !== 'abandoned' || cur.closedBy !== 'idle') {
+      this.releaseStartGate(s.id);
+      throw new Error(SITTING_REOPEN_REP_ERROR);
+    }
+    const head = this.writes.put(this.store.sittings, reopenedSitting(cur, now));
+    const roll = this.find(this.store.rolls, head.rollId);
+    if (roll) await this.shapeRep(head, roll, false);
+    return head;
   }
   private endSitting(id: string, to: 'done' | 'abandoned', at = this.now()): void {
     this.refoldHead(id);

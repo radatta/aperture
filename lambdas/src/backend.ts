@@ -1288,17 +1288,19 @@ export class BackendClient implements ApiClient {
     const at = idleCloseAt(s, await this.repo.getSittingActivity(s.id), now);
     if (at === null) return s;
     await this.refoldHead(s.id, now);
+    let wrote = false; // this call's close won the CAS (its last try decides)
     const head = await this.repo.casUpdate(
       this.repo.sittingShape(s.id),
       s.id,
-      (cur) =>
-        cur.status === 'active' && (cur.reopenedAt ?? 0) <= at - SITTING_IDLE_TAIL_MS
-          ? idleClosedSitting(cur, at, now)
-          : null,
+      (cur) => {
+        const ok = cur.status === 'active' && (cur.reopenedAt ?? 0) <= at - SITTING_IDLE_TAIL_MS;
+        wrote = ok;
+        return ok ? idleClosedSitting(cur, at, now) : null;
+      },
       now,
       { consistent: true },
     );
-    if (head.closedBy !== 'idle' || head.endedAt !== at) return head; // another call got there first
+    if (!wrote) return head; // another call closed it first, or it came back meanwhile
     await this.releaseStartGate(s.id, now);
     console.log(
       JSON.stringify({ event: 'lc_sitting_idle_close', sittingId: s.id, idleMs: now - at }),
