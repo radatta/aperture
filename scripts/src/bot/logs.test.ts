@@ -131,7 +131,7 @@ describe('default groups (no --groups)', () => {
 describe('identifier guard (the dispatch inputs are public)', () => {
   // Made up: no real identifier is in this file (tracked-identifiers.test.ts scans it).
   const fake: Identifiers = {
-    maintainer: { name: 'Quillon Varnaby', github: 'qv-example' },
+    maintainer: { name: 'Alex Example', github: 'alex-example' },
     repo: 'example/aperture',
     email: { contact: 'a@example.com', alerts: 'b@example.com', devTestUser: 'c@example.com' },
     domains: {
@@ -149,13 +149,13 @@ describe('identifier guard (the dispatch inputs are public)', () => {
   it('refuses a name in --filter, naming the flag and kind but never the value', () => {
     let msg = '';
     try {
-      refuseIdentifiers({ filter: '"quillon"' }, rules);
+      refuseIdentifiers({ filter: '"alex"' }, rules);
     } catch (e) {
       msg = (e as Error).message;
     }
     expect(msg).toMatch(/^PERSONAL_IDENTIFIER — --filter names a personal identifier \(name\)/);
     expect(msg).toMatch(/nothing was dispatched/);
-    expect(msg.toLowerCase()).not.toContain('quillon');
+    expect(msg.toLowerCase()).not.toContain('alex');
   });
   it('refuses an account id in --query (dashed too) and a home path in --groups', () => {
     expect(() =>
@@ -184,13 +184,13 @@ describe('identifier guard (the dispatch inputs are public)', () => {
     }) as unknown as Sh;
     const clock = { now: () => NOW, sleep: async () => {} };
     await expect(
-      fetchLogs(sh, api, 'token', clock, { filter: 'Varnaby' }, root, () => {}, rules),
+      fetchLogs(sh, api, 'token', clock, { filter: 'Example' }, root, () => {}, rules),
     ).rejects.toThrow(/PERSONAL_IDENTIFIER/);
     expect(existsSync(join(root, 'localNotes', 'devlogs', 'fetches.jsonl'))).toBe(false);
   });
   it('refuses a branch name (the run key, public in the run name) the same way', async () => {
     const root = mkdtempSync(join(tmpdir(), 'devlogs-guard-'));
-    const sh = ((cmd: string) => (cmd === 'git' ? 'varnaby-fix' : '')) as unknown as Sh;
+    const sh = ((cmd: string) => (cmd === 'git' ? 'example-fix' : '')) as unknown as Sh;
     const api = (() => {
       throw new Error('api called');
     }) as unknown as Api;
