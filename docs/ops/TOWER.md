@@ -140,7 +140,8 @@ straight at `#next` closes in place. A key with ⌘, Ctrl or ⌥ held does nothi
 - HEALTH and the other panels hide; a sticky strip on top keeps ✕, the open panel's name and a chip per other panel
   with its headline number (`View.heads`: NEEDS `3`, NOW `4 lanes`, NEXT `ask ~19:40` or `n to land`, DONE `5`,
   SLIPPING `2`, SOURCES `ok` / `2 off`); a chip switches to that panel. On the phone it's a full-screen sheet, the
-  strip scrolling sideways inside itself.
+  strip scrolling sideways inside itself and sticking below the status bar (the header's installed floor, under _Phone_,
+  holds for it too).
 - Every row opens with its full text and details, and nothing is capped (`+n more` is gone); a tap folds one. What
   was open on the glance is open again when it closes.
 - **NEXT** expanded: YOU NEXT and NEXT ASK, then the **plan table** — Time | What | You for every `plan[]` row, with

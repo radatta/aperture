@@ -766,6 +766,10 @@
           header {
             padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);
           }
+          /* an expanded panel's strip sticks below that bar too */
+          #strip {
+            top: max(env(safe-area-inset-top, 0px), 62px);
+          }
         }
         header h1 {
           font-size: 19px;

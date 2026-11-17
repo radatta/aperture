@@ -12,6 +12,7 @@ const META = [
   '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />',
 ];
 const FLOOR = 'padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);';
+const STRIP = 'top: max(env(safe-area-inset-top, 0px), 62px);'; // an expanded panel's sticky strip (TOWER.md → Expand)
 const QUERY =
   /^@media \(display-mode: standalone\) and \(orientation: portrait\),\s*\(display-mode: fullscreen\) and \(orientation: portrait\) \{/;
 
@@ -37,7 +38,9 @@ describe('the tower as a Home Screen app', () => {
 
   it('floors the header only inside the phone rule, installed and upright, after its shorthand', () => {
     expect(html.split(FLOOR)).toHaveLength(2); // exactly one floor
-    expect(html.match(/62px\)/g)).toHaveLength(1); // and no other, whatever gap follows it
+    // and no other but the strip's, whatever gap follows it
+    expect(html.match(/62px\)/g)).toHaveLength(2);
+    expect(html.split(STRIP)).toHaveLength(2);
     const at = html.indexOf(FLOOR);
     const phones = [...html.matchAll(/@media \(max-width: 700px\) \{/g)].map((m) => block(m.index));
     const phone = phones.find(([a, b]) => a < at && at < b);
@@ -50,6 +53,8 @@ describe('the tower as a Home Screen app', () => {
     expect(text.slice(query)).toMatch(QUERY);
     const [qa, qb] = block(phone![0] + query);
     expect(qa < at && at < qb).toBe(true); // inside that query's own block
+    const strip = html.indexOf(STRIP); // the strip's floor, in the same block
+    expect(qa < strip && strip < qb).toBe(true);
     // nothing later sets the header's top padding again
     expect(html.slice(at + FLOOR.length)).not.toMatch(/header \{[^}]*padding(-top)?:/);
     // the tab layout keeps its own inset plus gap
