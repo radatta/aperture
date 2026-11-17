@@ -288,6 +288,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       },
       listProblemRecords: async () => [],
       listCoachAttempts: async () => [],
+      getCoachFocusRow: async () => null,
       draftSittingReview: async () => {
         throw new Error('unused');
       },
@@ -576,9 +577,6 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       restoreCoachSlot: async () => {
-        throw new Error('unused');
-      },
-      patchSittingReviewToUnknown: async () => {
         throw new Error('unused');
       },
       clearCoachFloor: async () => {

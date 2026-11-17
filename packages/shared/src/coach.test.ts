@@ -412,23 +412,23 @@ describe('planDay', () => {
   });
   it('a sitting on another problem is off-plan; the due list is unchanged', () => {
     const base = [clean('two-sum', day(-10))];
-    const off = sit({ slug: 'network-delay-time', on: TODAY, submits: ['accepted'] });
+    const off = sit({ slug: 'rotting-oranges', on: TODAY, submits: ['accepted'] });
     const t = planDay(input({ sittings: [...base, off] }));
     expect(t.offPlan).toEqual([
-      { sittingId: off.id, slug: 'network-delay-time', title: off.problemTitle },
+      { sittingId: off.id, slug: 'rotting-oranges', title: off.problemTitle },
     ]);
     expect(t.due.map((q) => q.slug)).toEqual(
       planDay(input({ sittings: base })).due.map((q) => q.slug),
     );
   });
   it('a manual attempt counts toward momentum and the queue', () => {
-    const t = planDay(input({ attempts: [manual('merge-intervals', day(-2), 'clean')] }));
+    const t = planDay(input({ attempts: [manual('counting-bits', day(-2), 'clean')] }));
     expect(t.momentum).toMatchObject({
       activeDays: 1,
       lastActiveDay: day(-2),
       missedYesterday: true,
     });
-    expect(t.next48h.map((q) => q.slug)).toEqual(['merge-intervals']); // due day(+1)
+    expect(t.next48h.map((q) => q.slug)).toEqual(['counting-bits']); // due day(+1)
   });
   it('a test sitting changes nothing', () => {
     const t = sit({ slug: 'valid-anagram', on: day(-1), submits: ['wrong_answer'], test: true });
@@ -474,19 +474,19 @@ describe('focus', () => {
     expect(mid).toMatchObject({ pattern: 'arrays-hashing', day: 3 });
   });
   it('an override holds from its day; after 3 active days the engine takes over again', () => {
-    const f = focusOn([], { pattern: 'backtracking', sinceDay: TODAY }, TODAY);
-    expect(f).toMatchObject({ pattern: 'backtracking', day: 1, source: 'override' });
+    const f = focusOn([], { pattern: 'heap', sinceDay: TODAY }, TODAY);
+    expect(f).toMatchObject({ pattern: 'heap', day: 1, source: 'override' });
     const three = [
-      clean('subsets', day(-3)),
-      clean('permutations', day(-2)),
-      clean('combination-sum', day(-1)),
+      clean('kth-largest-element-in-a-stream', day(-3)),
+      clean('last-stone-weight', day(-2)),
+      clean('k-closest-points-to-origin', day(-1)),
     ];
     const after = focusOn(
       attemptsOf(three, [], NOW),
-      { pattern: 'backtracking', sinceDay: day(-3) },
+      { pattern: 'heap', sinceDay: day(-3) },
       TODAY,
     );
-    expect(after.pattern).not.toBe('backtracking');
+    expect(after.pattern).not.toBe('heap');
     expect(after).toMatchObject({ day: 1, source: 'engine' });
   });
   it('refuses an override on a pattern with nothing unseen left', () => {
@@ -711,24 +711,24 @@ describe('records', () => {
 
 describe('inputs', () => {
   it('a manual attempt: defaults, bounds and the help/outcome rules', () => {
-    expect(
-      normalizeCoachAttempt({ slug: 'merge-intervals', outcome: 'clean' }, TODAY),
-    ).toMatchObject({
-      day: TODAY,
-      help: 'none',
-      cause: null,
-      minutes: null,
-    });
+    expect(normalizeCoachAttempt({ slug: 'counting-bits', outcome: 'clean' }, TODAY)).toMatchObject(
+      {
+        day: TODAY,
+        help: 'none',
+        cause: null,
+        minutes: null,
+      },
+    );
     const bad: [unknown, RegExp][] = [
-      [{ slug: 'Merge Intervals', outcome: 'clean' }, /slug/],
-      [{ slug: 'merge-intervals', outcome: 'great' }, /outcome/],
-      [{ slug: 'merge-intervals', outcome: 'clean', help: 'hint' }, /no help/],
-      [{ slug: 'merge-intervals', outcome: 'solved', help: 'solution' }, /failed/],
-      [{ slug: 'merge-intervals', outcome: 'clean', day: day(1) }, /after today/],
-      [{ slug: 'merge-intervals', outcome: 'clean', day: day(-61) }, /60 days/],
-      [{ slug: 'merge-intervals', outcome: 'clean', cause: 'tired' }, /cause/],
-      [{ slug: 'merge-intervals', outcome: 'clean', minutes: 0 }, /minutes/],
-      [{ slug: 'merge-intervals', outcome: 'clean', extra: 1 }, /Unknown/],
+      [{ slug: 'Counting Bits', outcome: 'clean' }, /slug/],
+      [{ slug: 'counting-bits', outcome: 'great' }, /outcome/],
+      [{ slug: 'counting-bits', outcome: 'clean', help: 'hint' }, /no help/],
+      [{ slug: 'counting-bits', outcome: 'solved', help: 'solution' }, /failed/],
+      [{ slug: 'counting-bits', outcome: 'clean', day: day(1) }, /after today/],
+      [{ slug: 'counting-bits', outcome: 'clean', day: day(-61) }, /60 days/],
+      [{ slug: 'counting-bits', outcome: 'clean', cause: 'tired' }, /cause/],
+      [{ slug: 'counting-bits', outcome: 'clean', minutes: 0 }, /minutes/],
+      [{ slug: 'counting-bits', outcome: 'clean', extra: 1 }, /Unknown/],
     ];
     for (const [v, re] of bad) expect(() => normalizeCoachAttempt(v, TODAY)).toThrow(re);
   });

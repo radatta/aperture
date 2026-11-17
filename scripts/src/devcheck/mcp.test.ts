@@ -94,6 +94,7 @@ describe('createMcpClient', () => {
       'markPeeked',
       'markPeekedUnknown',
       'setCauseTag',
+      'setCauseTagUnknown',
       'splitTask',
       'stopSeries',
       'stopSeriesUnknown',

@@ -162,7 +162,7 @@ export const COACH_TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        slug: { type: 'string', description: 'The LeetCode problem slug, e.g. "insert-interval"' },
+        slug: { type: 'string', description: 'The LeetCode problem slug, e.g. "happy-number"' },
         sittingId: { type: 'string', description: 'A sitting id, instead of slug' },
         day: { type: 'string', description: 'YYYY-MM-DD (with slug); omit for today' },
       },
@@ -183,6 +183,14 @@ export const COACH_TOOLS: Tool[] = [
       let onDay: string;
       let open = false; // a peek on an open sitting isn't an attempt until it ends: say when it will be due
       if (sittingId !== undefined) {
+        // A sitting flagged as a test never counts: a peek on it would schedule nothing.
+        const head = ((await ctx.dispatch('listSittings', [])) as Sitting[]).find(
+          (x) => x.id === sittingId,
+        );
+        if (head?.review?.test === true)
+          throw new Error(
+            'That sitting is flagged as a test, so a peek on it counts for nothing — pass "slug" instead',
+          );
         const s = (await ctx.dispatch('patchSittingReview', [
           sittingId,
           { help: 'solution' },

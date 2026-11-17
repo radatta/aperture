@@ -3956,17 +3956,17 @@ export function runApiContract(
         await api.transitionTask(sitting.repTaskId, 'done');
         const done = await api.getCoachToday();
         expect(done.slots[0]).toMatchObject({ status: 'done', outcome: 'clean' });
-        const off = await finished('network-delay-time', true);
+        const off = await finished('rotting-oranges', true);
         const after = await api.getCoachToday();
         expect(after.offPlan.map((x) => x.sittingId)).toEqual([off.id]);
         expect(after.slots.map((x) => x.slug)).toEqual(done.slots.map((x) => x.slug));
         expect(after.unreviewed.map((x) => x.slug).sort()).toEqual([
           'contains-duplicate',
-          'network-delay-time',
+          'rotting-oranges',
         ]);
         expect((await api.listProblemRecords()).map((r) => r.slug).sort()).toEqual([
           'contains-duplicate',
-          'network-delay-time',
+          'rotting-oranges',
         ]);
       });
 
@@ -4049,6 +4049,26 @@ export function runApiContract(
         expect((await api.exportData()).coachFocus).toBeNull();
       });
 
+      it('an override on a pattern with nothing unseen left is refused; one already holding there stays', async () => {
+        const held = await api.setCoachFocus('tries');
+        const tries = [
+          'implement-trie-prefix-tree',
+          'design-add-and-search-words-data-structure',
+          'word-search-ii',
+        ];
+        await api.logCoachAttempts(
+          tries.map((slug, i) => ({
+            slug,
+            outcome: 'clean' as const,
+            day: addDays(TODAY, -3 + i),
+          })),
+        );
+        expect(await api.setCoachFocus('tries')).toEqual(held); // still holding: no-op, never refused
+        await api.setCoachFocus(null);
+        await expect(api.setCoachFocus('tries')).rejects.toThrow(/Nothing unseen/);
+        expect((await api.exportData()).coachFocus).toBeNull();
+      });
+
       it('picking the same pattern again after the engine moved on re-stamps it from today', async () => {
         const today = TODAY;
         clock -= 3 * 86_400_000;
@@ -4075,22 +4095,22 @@ export function runApiContract(
 
       it('manual attempts log, count, and delete idempotently; a bad list writes nothing', async () => {
         const [a] = await api.logCoachAttempts([
-          { slug: 'merge-intervals', outcome: 'clean', day: '2023-11-13' },
+          { slug: 'counting-bits', outcome: 'clean', day: '2023-11-13' },
         ]);
         expect(a).toMatchObject({
-          slug: 'merge-intervals',
+          slug: 'counting-bits',
           day: '2023-11-13',
           source: 'manual',
           help: 'none',
         });
         const t = await api.getCoachToday();
         expect(t.momentum).toMatchObject({ activeDays: 1, lastActiveDay: '2023-11-13' });
-        expect(t.next48h.map((q) => q.slug)).toEqual(['merge-intervals']);
+        expect(t.next48h.map((q) => q.slug)).toEqual(['counting-bits']);
         const [p1] = await api.logCoachAttempts([
-          { slug: 'insert-interval', outcome: 'failed', help: 'solution' },
+          { slug: 'happy-number', outcome: 'failed', help: 'solution' },
         ]);
         const [p2] = await api.logCoachAttempts([
-          { slug: 'insert-interval', outcome: 'failed', help: 'solution' },
+          { slug: 'happy-number', outcome: 'failed', help: 'solution' },
         ]);
         expect(p2!.id).toBe(p1!.id); // a peek logged twice is one
         const pair = await api.logCoachAttempts([
@@ -4117,7 +4137,7 @@ export function runApiContract(
         await api.deleteCoachAttempt(a!.id);
         await api.deleteCoachAttempt(a!.id);
         await api.deleteCoachAttempt(ulid());
-        expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['insert-interval']);
+        expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['happy-number']);
       });
     });
 

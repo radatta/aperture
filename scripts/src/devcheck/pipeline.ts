@@ -532,8 +532,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         const t = await client.reads.getCoachToday();
         return t.day === id.slice(id.lastIndexOf(':') + 1) && t.floor?.on === true;
       }
-      case 'coachFocus':
-        return (await client.reads.getCoachToday()).focus.source === 'override';
+      case 'coachFocus': // the row, even once its block ran out: it still anchors the focus replay
+        return (await client.reads.getCoachFocusRow()) !== null;
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':

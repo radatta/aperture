@@ -468,6 +468,8 @@ export function createMcpClient({
     // mark_peeked on an id that isn't the user's: must be refused, so nothing can be written (lc-coach ownership).
     markPeekedUnknown: (unknownId: string) =>
       data<DevPeeked>('mark_peeked', { sittingId: unknownId }),
+    setCauseTagUnknown: (unknownId: string) =>
+      data<unknown>('set_cause_tag', { sittingId: unknownId, cause: 'boundary' }),
     async setCauseTag(
       args: Record<string, unknown>,
     ): Promise<{ sittingId: string; review: unknown }> {

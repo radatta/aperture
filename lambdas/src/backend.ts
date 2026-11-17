@@ -1260,8 +1260,9 @@ export class BackendClient implements ApiClient {
     const today = day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
     return { today, now, dayStartHour, sittings, attempts, days, focus };
   }
+  // Consistent: a read right after a coach write (a focus, a floor, a logged attempt) must see it.
   async getCoachToday(day?: string): Promise<CoachToday> {
-    return planDay(await this.coachInput(day));
+    return planDay(await this.coachInput(day, true));
   }
   // Consistent: the coach tools read it right after a write (a peek, a logged attempt) to say what's due next.
   async listProblemRecords(): Promise<ProblemRecord[]> {

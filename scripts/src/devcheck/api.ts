@@ -698,6 +698,10 @@ export function createApiClient({
     // The coach's stored attempts, alive (the export's; the test user's are a handful).
     listCoachAttempts: async () =>
       (await call<{ coachAttempts: DevCoachAttempt[] }>('exportData', [])).coachAttempts,
+    // The stored focus override row, held or not (the plan's `focus.source` says only whether it still holds).
+    getCoachFocusRow: async () =>
+      (await call<{ coachFocus: { pattern: string; sinceDay: string } | null }>('exportData', []))
+        .coachFocus,
     getSitting: (id: string) => call<DevSittingDetail>('getSitting', [id]),
     // The Haiku draft (PR C): a model call that writes nothing — a read here, one real call per use.
     draftSittingReview: (id: string) => call<DevReviewDraft>('draftSittingReview', [id]),
@@ -1090,9 +1094,6 @@ export function createApiClient({
     // The same for a review: aimed at an id that isn't the user's, so it must be refused (rev-ownership).
     setSittingReviewToUnknown: (unknownId: string, review: DevSittingReview) =>
       call<unknown>('setSittingReview', [unknownId, review]),
-    // The coach's review patch aimed at an id that isn't the user's: must be refused (lc-coach ownership).
-    patchSittingReviewToUnknown: (unknownId: string, patch: { cause: string }) =>
-      call<unknown>('patchSittingReview', [unknownId, patch]),
     // Today's floor choice: recorded before turning it on (coachFloorId), resolved when turned off.
     async setCoachFloor(day: string, on: boolean): Promise<DevCoachToday> {
       const id = coachFloorId(run, day);

@@ -134,31 +134,37 @@ describe('writes ask first', () => {
 
 describe('mark_peeked', () => {
   it('with no sitting: a peeked attempt, due tomorrow; repeating it is one state', async () => {
-    const a = await call('mark_peeked', { slug: 'insert-interval' });
+    const a = await call('mark_peeked', { slug: 'happy-number' });
     expect(a).toMatchObject({
-      slug: 'insert-interval',
+      slug: 'happy-number',
       peeked: true,
       nextDue: { dueDay: '2026-11-10', track: 'peeked' },
     });
-    const b = await call('mark_peeked', { slug: 'insert-interval' });
+    const b = await call('mark_peeked', { slug: 'happy-number' });
     expect(b.attemptId).toBe(a.attemptId);
     expect(await repo.listCoachAttempts()).toHaveLength(1);
   });
   it('on today’s sitting: its review records the solution read', async () => {
-    const s = await ended('move-zeroes', TODAY, true);
-    const out = await call('mark_peeked', { slug: 'move-zeroes' });
+    const s = await ended('missing-number', TODAY, true);
+    const out = await call('mark_peeked', { slug: 'missing-number' });
     expect(out).toMatchObject({ sittingId: s.id, nextDue: { dueDay: '2026-11-10' } });
     expect((await repo.getSitting(s.id))!.review).toMatchObject({ help: 'solution' });
     expect(await repo.listCoachAttempts()).toHaveLength(0);
   });
+  it('refuses a peek by id on a sitting flagged as a test, writing nothing', async () => {
+    const s = await ended('missing-number', TODAY, false);
+    await backend.patchSittingReview(s.id, { test: true });
+    await expect(call('mark_peeked', { sittingId: s.id })).rejects.toThrow(/flagged as a test/);
+    expect((await repo.getSitting(s.id))!.review).toMatchObject({ help: 'none', test: true });
+  });
   it('seeds a past peek on its day', async () => {
-    const out = await call('mark_peeked', { slug: 'insert-interval', day: '2026-11-01' });
+    const out = await call('mark_peeked', { slug: 'happy-number', day: '2026-11-01' });
     expect(out.nextDue).toEqual({ dueDay: '2026-11-02', track: 'peeked' });
   });
   it('bad args → a param error, nothing written', async () => {
     for (const args of [
       {},
-      { slug: 'Insert Interval' },
+      { slug: 'Happy Number' },
       { slug: 'a', sittingId: ulid() },
       { sittingId: 'x' },
     ])
@@ -239,16 +245,16 @@ describe('swap_slot', () => {
 describe('log_attempt', () => {
   it('counts toward momentum and the queue', async () => {
     const out = await call('log_attempt', {
-      attempts: [{ slug: 'merge-intervals', outcome: 'clean', day: '2026-11-08', minutes: 20 }],
+      attempts: [{ slug: 'counting-bits', outcome: 'clean', day: '2026-11-08', minutes: 20 }],
     });
     expect(out.attempts[0]).toMatchObject({
-      slug: 'merge-intervals',
+      slug: 'counting-bits',
       outcome: 'clean',
       nextDue: { dueDay: '2026-11-11' },
     });
     const today = await call('leetcode_today');
     expect(today.momentum).toMatchObject({ activeDays: 1, lastActiveDay: '2026-11-08' });
-    expect(today.next48h.map((q: { slug: string }) => q.slug)).toEqual(['merge-intervals']);
+    expect(today.next48h.map((q: { slug: string }) => q.slug)).toEqual(['counting-bits']);
   });
   it('bad args are refused with nothing written — the whole list', async () => {
     await expect(call('log_attempt', { attempts: [] })).rejects.toBeInstanceOf(RpcParamError);
@@ -258,7 +264,7 @@ describe('log_attempt', () => {
     await expect(
       call('log_attempt', {
         attempts: [
-          { slug: 'merge-intervals', outcome: 'clean' },
+          { slug: 'counting-bits', outcome: 'clean' },
           { slug: 'two-sum', outcome: 'great' },
         ],
       }),
@@ -310,7 +316,7 @@ describe('live_sitting slot', () => {
     expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'peeked' });
   });
   it('an off-plan problem is off-plan, under the cap', async () => {
-    await start('network-delay-time');
+    await start('rotting-oranges');
     t = T0 + 5 * 60_000;
     expect((await call('live_sitting')).slot).toMatchObject({ kind: 'off-plan', overCap: false });
   });
@@ -318,7 +324,7 @@ describe('live_sitting slot', () => {
 
 describe('ownership', () => {
   it('coach rows sit under the caller’s partition: another user sees none of them', async () => {
-    await call('log_attempt', { attempts: [{ slug: 'merge-intervals', outcome: 'clean' }] });
+    await call('log_attempt', { attempts: [{ slug: 'counting-bits', outcome: 'clean' }] });
     await call('swap_slot', { slug: (await call('leetcode_today')).slots[0].slug, action: 'skip' });
     await backend.setCoachFocus('graphs');
     const other = new BackendClient(new Repo(doc, liveWrites(doc), 'someone-else'), {

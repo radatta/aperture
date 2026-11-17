@@ -479,6 +479,7 @@ export const lcCoach: Scenario = {
           fail('the floor didn’t turn on');
         if ((await w.setCoachFloor(today(), false)).floor?.on !== false)
           fail('the floor didn’t turn off');
+        // Only this scenario sets a focus on the test user, so clearing "the" override clears this run's.
         const f = await w.setCoachFocus('intervals');
         if (f?.pattern !== 'intervals' || f.sinceDay !== today())
           fail(`focus: ${JSON.stringify(f)}`);
@@ -537,8 +538,8 @@ export const lcCoach: Scenario = {
           if (!/Not found/.test(String(err))) throw err;
         }
         try {
-          await ctx.api.writes.patchSittingReviewToUnknown(stranger, { cause: 'boundary' });
-          fail('patchSittingReview on an unknown sitting was accepted');
+          await ctx.mcp.writes.setCauseTagUnknown(stranger);
+          fail('set_cause_tag on an unknown sitting was accepted');
         } catch (err) {
           if (!/Not found/.test(String(err))) throw err;
         }
