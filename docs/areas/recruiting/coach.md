@@ -26,8 +26,9 @@ day rows; no stored count can drift.
 - **A test sitting** never counts: under 3 minutes with no accepted submit, or `review.test`.
 - **Cause tags:** `no-trace`, `api-slip`, `boundary`, `off-by-one`, `quit-early`. `tags[]` stay the user's own
   pattern words and `mistakes[]` free text; neither aggregates, the cause does.
-- **The review merge.** `setSittingReview` keeps a stored cause or test flag it isn't sent, and an explicit null
-  clears it (`mergeReview`), so the app form's Save never wipes a cause set over MCP. `patchSittingReview` is the
+- **The review merge.** `setSittingReview` keeps a stored help, cause or test flag it isn't sent, and an explicit
+  value replaces it (a null cause clears it; `mergeReview`), so the app form's Save never wipes a peek or a cause set
+  over MCP. `patchSittingReview` is the
   coach's partial write.
 
 ## Attempts and outcomes
@@ -89,7 +90,11 @@ never padded. **Floor:** the oldest due re-solve, else the carry-over, else the 
 apply, and today's sittings and attempts mark each slot `in-progress` or `done`. **A sitting is linked to its slot
 by slug on read**, never stamped, so a swap after a Start still reads right; a sitting on any other problem is
 `offPlan` and leaves the queue alone. A swap never takes another slot's problem or engine pick, and "Another"
-never offers back the pick it replaced. A slot is a rep only once the extension's Start runs (one open rep per roll,
+never offers back the pick it replaced. A swapped-in problem takes its own kind (the carry-over; a due or
+already-tried problem is a re-solve; an unseen one is new, or a stretch in a stretch slot), so its coaching rules
+are right; a change is matched by the engine's pick alone. "Easier" is strictly easier, the nearest level first,
+falling back to the same level only when the pattern has nothing easier left. Reasons say days as a person would
+("yesterday", "November 14"), and a re-solve's opens with today's rule. A slot is a rep only once the extension's Start runs (one open rep per roll,
 [rolls](../home/rolls.md) D6).
 
 ## The catalog

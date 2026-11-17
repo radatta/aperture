@@ -3,7 +3,7 @@
 // here writes; `today` is recomputed on every read, and the day's plan reads only what happened before the day,
 // so it holds still all day.
 
-import { addDays, daysBetween, isDayKey, USER_TIME_ZONE, zonedEpoch } from './dates';
+import { addDays, daysBetween, fmtSpokenDay, isDayKey, USER_TIME_ZONE, zonedEpoch } from './dates';
 import { NEETCODE_150, PATTERNS, PATTERN_NAMES, isPatternId } from './neetcode150';
 import type { CatalogProblem, Difficulty, PatternId } from './neetcode150';
 import {
@@ -423,7 +423,7 @@ export function focusOn(
     of: params.blockDays,
     source: held ? 'override' : 'engine',
     why: held
-      ? `${PATTERN_NAMES[pattern]}: your pick since ${override.sinceDay}`
+      ? `${PATTERN_NAMES[pattern]}: your pick since ${fmtSpokenDay(override.sinceDay, today)}`
       : whyRanked(ranked, pattern),
   };
 }
@@ -501,8 +501,9 @@ const pickable = (c: CatalogProblem, seen: ReadonlySet<string>) => !c.premium &&
 // Every problem on the plan: each slot's, and each engine pick a swap replaced.
 const slotProblems = (slots: readonly Pick<CoachSlot, 'slug' | 'swappedFrom'>[]) =>
   new Set(slots.flatMap((s) => (s.swappedFrom ? [s.slug, s.swappedFrom] : [s.slug])));
-// Unseen catalog problems in `pattern` no harder than `than` (easier first, then catalog order) — a slot's
-// "Another", and swap_slot's default.
+// Unseen catalog problems in `pattern` strictly easier than `than`, the nearest level first (Hard → Medium before
+// Easy), then catalog order; only when the pattern has nothing easier left, the same difficulty — a slot's
+// "Another", and swap_slot's default. `than` null (an unknown difficulty) reads as Hard.
 export function easierIn(
   pattern: PatternId,
   than: Difficulty | null,
@@ -510,15 +511,18 @@ export function easierIn(
   not: ReadonlySet<string>,
 ): CatalogProblem[] {
   const cap = than ? DIFF_RANK[than] : 2;
-  return NEETCODE_150.filter(
-    (c) =>
-      c.pattern === pattern &&
-      pickable(c, seen) &&
-      !not.has(c.slug) &&
-      DIFF_RANK[c.difficulty] <= cap,
-  ).sort((a, b) => DIFF_RANK[a.difficulty] - DIFF_RANK[b.difficulty]);
+  const open = NEETCODE_150.filter(
+    (c) => c.pattern === pattern && pickable(c, seen) && !not.has(c.slug),
+  );
+  const easier = open
+    .filter((c) => DIFF_RANK[c.difficulty] < cap)
+    .sort((a, b) => DIFF_RANK[b.difficulty] - DIFF_RANK[a.difficulty]);
+  return easier.length ? easier : open.filter((c) => DIFF_RANK[c.difficulty] === cap);
 }
 
+// A re-solve slot's reason: today's rule first, then why it's due.
+const resolveReason = (r: ProblemRecord, today: string) =>
+  `Re-solve today: blank editor, no hints. Due since ${fmtSpokenDay(r.schedule!.dueDay, today)} (${r.schedule!.track === 'peeked' ? 'peeked or failed' : 'clean'} track, step ${r.schedule!.step + 1}); last tried ${fmtSpokenDay(r.lastDay, today)}`;
 const queueItem = (r: ProblemRecord, h: number): QueueItem => ({
   slug: r.slug,
   title: r.title,
@@ -530,7 +534,6 @@ const queueItem = (r: ProblemRecord, h: number): QueueItem => ({
   dueAt: dayStartAt(r.schedule!.dueDay, h),
   lastDay: r.schedule!.lastDay,
 });
-const shortDay = (day: string, today: string) => (day === addDays(today, -1) ? 'yesterday' : day);
 
 // From state as of the start of the day: carry-over (the last active day's unaccepted, unpeeked problem, if
 // within carryOverDays), new (the focus pattern's next unseen problem), re-solve (the oldest due, other patterns
@@ -603,7 +606,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   const cands: Record<SlotKind, Cand[]> = {
     'carry-over': carry.map((a) => ({
       slug: a.slug,
-      reason: `Carry-over from ${shortDay(a.day, today)}: not accepted yet${a.lastError ? ` (${a.lastError.verdict.replace('_', ' ')})` : ''}; finish it before it goes cold`,
+      reason: `Carry-over from ${fmtSpokenDay(a.day, today)}: not accepted yet${a.lastError ? ` (${a.lastError.verdict.replace('_', ' ')})` : ''}; finish it before it goes cold`,
     })),
     new: fresh.map((c) => ({
       slug: c.slug,
@@ -611,7 +614,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     })),
     're-solve': resolve.map((r) => ({
       slug: r.slug,
-      reason: `Re-solve due since ${r.schedule!.dueDay} (${r.schedule!.track === 'peeked' ? 'peeked or failed' : 'clean'} track, step ${r.schedule!.step + 1}); last tried ${r.lastDay}, blank editor, no hints`,
+      reason: resolveReason(r, today),
     })),
     stretch: stretch.map((c) => ({
       slug: c.slug,
@@ -668,14 +671,41 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     };
   }
 
+  // A swapped-in problem takes its own kind, so its coaching rules are right: the carry-over, a due re-solve or
+  // a problem already tried (a re-solve's rules: blank editor, no hints), else unseen — new, or still a stretch
+  // when it replaced one.
+  const dueSlugs = new Set(dueNow.map((r) => r.slug));
+  function swappedIn(was: SlotKind, slug: string, from: string): CoachSlot {
+    const kind: SlotKind = carrySlugs.has(slug)
+      ? 'carry-over'
+      : dueSlugs.has(slug) || seen.has(slug)
+        ? 're-solve'
+        : was === 'stretch'
+          ? 'stretch'
+          : 'new';
+    const rec = records.find((r) => r.slug === slug);
+    const what =
+      kind === 'carry-over'
+        ? 'the carry-over'
+        : kind === 're-solve'
+          ? rec && dueSlugs.has(slug)
+            ? `a due re-solve — ${resolveReason(rec, today)}`
+            : 'a problem you’ve tried before: re-solve it today with a blank editor and no hints'
+          : kind === 'stretch'
+            ? 'a stretch'
+            : `new in ${PATTERN_NAMES[catalogProblem(slug)?.pattern ?? rec?.pattern ?? 'other']}`;
+    return slotOf(kind, slug, `Swapped in for ${titleOf(from)}: ${what}`, from);
+  }
+
   // The day's changes, by the engine's pick: a swap replaces it (the original stays in its queue), a skip marks it.
   const row = input.days.find((d) => d.day === today) ?? null;
   for (const c of row?.changes ?? []) {
-    const i = slots.findIndex((s) => s.kind === c.kind && (s.swappedFrom ?? s.slug) === c.from);
+    // A change names its slot by the engine's pick alone (picks are unique across slots); its `kind` is history.
+    const i = slots.findIndex((s) => (s.swappedFrom ?? s.slug) === c.from);
     if (i < 0) continue;
     if (c.action === 'skip') slots[i] = { ...slots[i]!, status: 'skipped' };
     else if (c.to && !slots.some((s) => s.slug === c.to))
-      slots[i] = slotOf(c.kind, c.to, `Swapped in for ${titleOf(c.from)}`, c.from);
+      slots[i] = swappedIn(slots[i]!.kind, c.to, c.from);
   }
 
   // Today's sittings and attempts, linked to a slot by slug on read.
@@ -715,7 +745,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
         slug: floorPick.slug,
         title: titleOf(floorPick.slug),
         reason: dueNow[0]
-          ? `The oldest due re-solve (due since ${dueNow[0].schedule!.dueDay}); this alone counts as showing up`
+          ? `The oldest due re-solve (due since ${fmtSpokenDay(dueNow[0].schedule!.dueDay, today)}); this alone counts as showing up`
           : carry[0]
             ? 'Finish the carry-over; this alone counts as showing up'
             : 'One new problem; this alone counts as showing up',
@@ -899,7 +929,7 @@ export function applySlotChange(
     today.slots.find((s) => s.swappedFrom === input.slug);
   if (!slot) throw new Error(`No slot today is on ${input.slug}`);
   const from = slot.swappedFrom ?? slot.slug;
-  const rest = changes.filter((c) => !(c.kind === slot.kind && c.from === from));
+  const rest = changes.filter((c) => c.from !== from);
   if (input.action === 'restore') return rest;
   if (input.action === 'skip')
     return [...rest, { kind: slot.kind, action: 'skip', from, to: null, at: now }];

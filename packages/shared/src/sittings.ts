@@ -837,7 +837,9 @@ export const CAUSE_TAGS: readonly CauseTag[] = [
   'quit-early',
 ];
 export const isCauseTag = (v: unknown): v is CauseTag => CAUSE_TAGS.includes(v as CauseTag);
-export type SittingReviewInput = Omit<SittingReview, 'updatedAt'>;
+// `help` is optional like `cause` and `test`: absent keeps the stored one, so a form saved after a peek over MCP
+// never writes the peek back over.
+export type SittingReviewInput = Omit<SittingReview, 'updatedAt' | 'help'> & { help?: HelpLevel };
 
 const fold = (s: string) => s.replace(/\s+/g, ' ').trim();
 const reviewText = (v: unknown, label: string, max: number, oneLine: boolean): string | null => {
@@ -858,9 +860,9 @@ const reviewList = (v: unknown, label: string): string[] => {
 export function normalizeSittingReview(input: unknown): SittingReviewInput | null {
   const r = obj(input);
   if (!r) throw new Error('Review must be an object');
-  if (!HELP_LEVELS.includes(r.help as HelpLevel))
+  if (r.help !== undefined && !HELP_LEVELS.includes(r.help as HelpLevel))
     throw new Error('Help must be none, hint or solution');
-  const help = r.help as HelpLevel;
+  const help = r.help as HelpLevel | undefined;
   const insight = reviewText(r.insight, 'One-liner', REVIEW_INSIGHT_MAX, true);
   const howItWent = reviewText(r.howItWent, 'How it went', REVIEW_HOW_MAX, false);
   const mistakes = reviewList(r.mistakes, 'Mistakes');
@@ -878,23 +880,26 @@ export function normalizeSittingReview(input: unknown): SittingReviewInput | nul
     throw new Error('Test must be true or false');
   const out: SittingReviewInput = {
     insight,
-    help,
+    ...(help !== undefined ? { help } : {}),
     mistakes,
     howItWent,
     tags,
     draftUsed: r.draftUsed === true && mistakes.length > 0,
-    // Said only when sent: an absent cause or test keeps the stored one (mergeReview), an explicit null clears it.
+    // Said only when sent: an absent help, cause or test keeps the stored one (mergeReview); a null cause clears it.
     ...(r.cause !== undefined ? { cause: r.cause as CauseTag | null } : {}),
     ...(r.test !== undefined ? { test: r.test as boolean } : {}),
   };
-  return isEmptyReview(out) && r.cause === undefined && r.test === undefined ? null : out;
+  // Nothing said (help explicitly none, nothing else) → null, which clears; with help absent, the merge decides.
+  return isEmptyReview(out) && help !== undefined && r.cause === undefined && r.test === undefined
+    ? null
+    : out;
 }
 export const isEmptyReview = (r: SittingReviewInput): boolean =>
   !r.insight &&
   !r.howItWent &&
   !r.mistakes.length &&
   !r.tags.length &&
-  r.help === 'none' &&
+  (r.help ?? 'none') === 'none' &&
   !r.cause &&
   r.test !== true;
 const EMPTY_REVIEW: SittingReviewInput = {
@@ -905,9 +910,9 @@ const EMPTY_REVIEW: SittingReviewInput = {
   tags: [],
   draftUsed: false,
 };
-// The stored review after a write: `next`'s fields (null = the form cleared everything), with the cause and test
-// flag kept from `cur` unless `next` sends them, so the app form's Save never wipes a cause the coach set over MCP.
-// All empty → null. The cause and flag are stored only when set.
+// The stored review after a write: `next`'s fields (null = the form cleared everything, help `none` included), with
+// help, the cause and the test flag kept from `cur` unless `next` sends them, so the app form's Save never wipes a
+// peek or a cause the coach set over MCP. All empty → null. The cause and flag are stored only when set.
 export function mergeReview(
   cur: SittingReview | null | undefined,
   next: SittingReviewInput | null,
@@ -916,9 +921,10 @@ export function mergeReview(
   const cause = next?.cause !== undefined ? next.cause : (cur?.cause ?? null);
   const test = next?.test !== undefined ? next.test : cur?.test === true;
   const n = next ?? EMPTY_REVIEW;
-  const merged: SittingReviewInput = {
+  const help: HelpLevel = next === null ? 'none' : (next.help ?? cur?.help ?? 'none');
+  const merged = {
     insight: n.insight,
-    help: n.help,
+    help,
     mistakes: n.mistakes,
     howItWent: n.howItWent,
     tags: n.tags,

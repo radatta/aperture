@@ -3,6 +3,7 @@ import {
   applySlotChange,
   attemptsOf,
   countsAsPractice,
+  easierIn,
   focusOn,
   focusRoomError,
   listRecords,
@@ -507,6 +508,101 @@ describe('focus', () => {
   });
 });
 
+describe('reasons and kinds (F173)', () => {
+  const ISO = /\d{4}-\d{2}-\d{2}/;
+  it('reasons say days the way a person would, never a raw ISO date', () => {
+    const t = planDay(
+      input({
+        sittings: [failed('valid-anagram', day(-1)), clean('valid-palindrome', day(-9))],
+        focus: focusRow('arrays-hashing', day(-1)),
+      }),
+    );
+    for (const x of t.slots) expect(x.reason).not.toMatch(ISO);
+    expect(t.floor!.reason).not.toMatch(ISO);
+    expect(t.focus.why).not.toMatch(ISO);
+    expect(t.slots.find((x) => x.kind === 'carry-over')!.reason).toMatch(/from yesterday/);
+  });
+  it('a re-solve’s reason opens with today’s rule', () => {
+    const t = planDay(input({ sittings: [clean('valid-palindrome', day(-5))] }));
+    const r = t.slots.find((x) => x.kind === 're-solve')!;
+    expect(r.reason).toMatch(/^Re-solve today: blank editor, no hints\. Due since /);
+  });
+  it('a swapped-in problem takes its own kind: unseen → new, a due one → re-solve', () => {
+    const sittings = [clean('valid-palindrome', day(-5)), clean('two-sum', day(-6))];
+    const t = planDay(input({ sittings, focus: focusRow('arrays-hashing', TODAY) }));
+    const resolve = t.slots.find((x) => x.kind === 're-solve')!;
+    const known = (slug: string) => NEETCODE_150.some((c) => c.slug === slug);
+    const seen = new Set(['valid-palindrome', 'two-sum']);
+    const row = (changes: CoachDay['changes']): CoachDay => ({
+      id: TODAY,
+      userId: 'u',
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+      day: TODAY,
+      floor: false,
+      changes,
+    });
+    const toNew = applySlotChange(
+      t,
+      [],
+      { slug: resolve.slug, action: 'swap', toSlug: 'happy-number' },
+      known,
+      seen,
+      NOW,
+    );
+    const a = planDay(
+      input({ sittings, focus: focusRow('arrays-hashing', TODAY), days: [row(toNew)] }),
+    );
+    expect(a.slots.find((x) => x.swappedFrom === resolve.slug)).toMatchObject({
+      slug: 'happy-number',
+      kind: 'new',
+    });
+    const newSlot = t.slots.find((x) => x.kind === 'new')!;
+    const other = resolve.slug === 'two-sum' ? 'valid-palindrome' : 'two-sum';
+    const toDue = applySlotChange(
+      t,
+      [],
+      { slug: newSlot.slug, action: 'swap', toSlug: other },
+      known,
+      seen,
+      NOW,
+    );
+    const b = planDay(
+      input({ sittings, focus: focusRow('arrays-hashing', TODAY), days: [row(toDue)] }),
+    );
+    const swapped = b.slots.find((x) => x.swappedFrom === newSlot.slug)!;
+    expect(swapped).toMatchObject({ slug: other, kind: 're-solve' });
+    expect(swapped.reason).toMatch(/blank editor, no hints/);
+    // Restoring it by its slug still finds the slot, whatever kind it shows now.
+    expect(applySlotChange(b, toDue, { slug: other, action: 'restore' }, known, seen, NOW)).toEqual(
+      [],
+    );
+  });
+  it('"easier" is strictly easier, the nearest level first; the same level only when nothing easier is left', () => {
+    const none = new Set<string>();
+    const fromHard = easierIn('arrays-hashing', 'Hard', none, none);
+    expect(fromHard.length).toBeGreaterThan(0);
+    expect(fromHard[0]!.difficulty).toBe('Medium');
+    expect(fromHard.every((c) => c.difficulty !== 'Hard')).toBe(true);
+    expect(
+      easierIn('arrays-hashing', 'Medium', none, none).every((c) => c.difficulty === 'Easy'),
+    ).toBe(true);
+    // Easy has nothing easier: the same level.
+    expect(
+      easierIn('arrays-hashing', 'Easy', none, none).every((c) => c.difficulty === 'Easy'),
+    ).toBe(true);
+    const easies = new Set(
+      NEETCODE_150.filter((c) => c.pattern === 'arrays-hashing' && c.difficulty === 'Easy').map(
+        (c) => c.slug,
+      ),
+    );
+    expect(
+      easierIn('arrays-hashing', 'Medium', easies, none).every((c) => c.difficulty === 'Medium'),
+    ).toBe(true);
+  });
+});
+
 describe('slot changes', () => {
   const t = planDay(input());
   const seen = new Set<string>();
@@ -761,6 +857,16 @@ describe('review merge (setSittingReview keeps what the coach set)', () => {
     expect(r).toMatchObject({ cause: 'no-trace', help: 'none', mistakes: [], updatedAt: 5 });
     expect(patchReview(r, { cause: null }, 6)).toBeNull();
     expect(patchReview(null, { help: 'solution' }, 7)).toMatchObject({ help: 'solution' });
+  });
+  it('a form save that doesn’t send help keeps a peek set over MCP (F172); an explicit help replaces it', () => {
+    const peeked = patchReview(null, { help: 'solution' }, 5);
+    const noHelp = { ...base, help: undefined };
+    expect(mergeReview(peeked, noHelp, 6)).toMatchObject({
+      help: 'solution',
+      insight: 'two pointers',
+    });
+    expect(mergeReview(peeked, { ...base, help: 'hint' }, 7)).toMatchObject({ help: 'hint' });
+    expect(mergeReview(peeked, null, 8)).toBeNull(); // the form's explicit clear-all
   });
   it('a review with only the cause survives an empty form save', () => {
     const r = patchReview(null, { cause: 'off-by-one' }, 5);

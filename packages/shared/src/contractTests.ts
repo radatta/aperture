@@ -3989,6 +3989,14 @@ export function runApiContract(
         expect(
           (await api.setSittingReview(s.id, { ...form, cause: null })).review,
         ).not.toHaveProperty('cause');
+        // A save that doesn't send help keeps the peek (a mark_peeked landing while the form was open).
+        const noHelp = { ...form, help: undefined };
+        expect((await api.setSittingReview(s.id, noHelp)).review).toMatchObject({
+          help: 'solution',
+        });
+        expect((await api.setSittingReview(s.id, { ...form, help: 'hint' })).review).toMatchObject({
+          help: 'hint',
+        });
         expect((await api.patchSittingReview(s.id, { test: true })).review).toMatchObject({
           test: true,
         });
