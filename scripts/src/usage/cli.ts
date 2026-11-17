@@ -6,14 +6,22 @@ import { join } from 'node:path';
 import { cliGuard } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { doctor, formatDoctor } from './doctor.ts';
+import { parseMeter, type Manual, type MeterRow } from './meter.ts';
+import { fitModel } from './model.ts';
+import { boardLine, fitLines } from './report.ts';
 import { anonBytes, scan } from './scan.ts';
+import { loadCache } from './store.ts';
 
 export const USAGE = `pnpm usage <command>   (-h / --help on any command: its usage; nothing runs)
   scan [--rate <MB/s>]          read new transcript bytes into the cache (rate-limited, resumable)
+  fit [--no-scan]               k (meter % per QU) with its interval, the holdout, burn now
+  line [--no-scan]              one line: usage % · %/h · hours to 100
   doctor                        is the meter logger installed and writing?`;
 
 export const FLAGS: Record<string, Spec> = {
   scan: { flags: ['rate'] },
+  fit: { bare: ['no-scan'] },
+  line: { bare: ['no-scan'] },
   doctor: {},
 };
 
@@ -77,6 +85,33 @@ export function statuslineScript(settings: string | null, home: string): string 
   }
 }
 
+export function readMeter(usageDir: string): { rows: MeterRow[]; bad: number } {
+  const files = existsSync(usageDir)
+    ? readdirSync(usageDir).filter((f) => /^meter-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort()
+    : [];
+  const all = parseMeter(files.map((f) => readFileSync(join(usageDir, f), 'utf8')).join('\n'));
+  return all;
+}
+
+export function readManual(usageDir: string): Manual | null {
+  try {
+    const m = JSON.parse(readFileSync(join(usageDir, 'manual-readings.json'), 'utf8'));
+    return { readings: m.readings ?? [], resets: m.resets ?? [] };
+  } catch {
+    return null;
+  }
+}
+
+async function scanQuiet(e: ReturnType<typeof env>, out: (s: string) => void) {
+  await scan({
+    root: e.projects,
+    cache: e.cache,
+    maxBps: 40e6,
+    memoryOk: () => (anonBytes(e.cgroup) ?? 0) < ANON_LIMIT,
+    log: out,
+  });
+}
+
 export async function main(argv: string[], out = (s: string) => console.log(s)): Promise<number> {
   const verdict = cliGuard(argv, USAGE, FLAGS, parseArgs);
   if (verdict) {
@@ -103,6 +138,18 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
       out(
         `scan: ${r.scanned}/${r.files} files read, ${(r.bytes / 1e6).toFixed(1)} MB in ${((Date.now() - t0) / 1000).toFixed(1)} s, ${r.calls} calls in those files, ${r.skippedLines} oversize lines skipped`,
       );
+      return 0;
+    }
+    case 'fit':
+    case 'line': {
+      if (!flags['no-scan']) await scanQuiet(e, positional[0] === 'line' ? () => {} : out);
+      const m = fitModel({
+        rows: readMeter(e.usageDir).rows,
+        manual: readManual(e.usageDir),
+        calls: loadCache(e.cache).calls,
+        now: Date.now(),
+      });
+      out(positional[0] === 'line' ? boardLine(m) : fitLines(m).join('\n'));
       return 0;
     }
     case 'doctor': {
