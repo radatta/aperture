@@ -139,8 +139,10 @@ describe('normalizeSittingEvents', () => {
 });
 
 describe('folds', () => {
-  it('only judged, note and timer events move the head', () => {
-    expect(['run', 'submit', 'note', 'timer'].every((t) => isHeadEvent(t as never))).toBe(true);
+  it('only judged, note, timer and coach events move the head', () => {
+    expect(['run', 'submit', 'note', 'timer', 'coach'].every((t) => isHeadEvent(t as never))).toBe(
+      true,
+    );
     expect(['snapshot', 'submitDetails', 'replay'].some((t) => isHeadEvent(t as never))).toBe(
       false,
     );
@@ -178,6 +180,99 @@ describe('folds', () => {
       runsBeforeFirstSubmit: 1,
       firstSubmit: { verdict: 'wrong_answer' },
       submitsBeforeAccepted: 1,
+    });
+  });
+  describe('coach events', () => {
+    const coach = (id: string, at: number, payload: unknown) =>
+      headRowOf('s', { id, type: 'coach', at, payload });
+    const submit = (id: string, at: number) =>
+      headRowOf('s', { id, type: 'submit', at, payload: { result: { status_code: 11 } } });
+    const trace = (empty: unknown, boundary: unknown, normal: unknown) => ({
+      kind: 'trace',
+      inputs: { empty, boundary, normal },
+      ms: 40_000,
+    });
+    it('a head row keeps the kind, the traced count and the switches, never the text', () => {
+      expect(coach('a', 1, trace('[]', '[1]', '[1,2,3]')).coach).toEqual({
+        kind: 'trace',
+        inputs: 3,
+        config: null,
+      });
+      expect(coach('a', 1, trace('[]', '  ', null)).coach).toMatchObject({ inputs: 1 });
+      expect(
+        coach('a', 1, { kind: 'config', trace: true, hold: false, nudge: true }).coach,
+      ).toEqual({
+        kind: 'config',
+        inputs: null,
+        config: { trace: true, hold: false, nudge: true },
+      });
+      expect(coach('a', 1, { kind: 'config', trace: 'yes' }).coach!.config).toBeNull();
+      expect(coach('a', 1, { kind: 'later-thing' }).coach!.kind).toBeNull();
+      expect(coach('a', 1, null).coach!.kind).toBeNull();
+      expect(submit('a', 1).coach).toBeNull();
+    });
+    it('three inputs before the first submit is traced; one or two partial; none or a skip, skipped', () => {
+      const at = (p: unknown) => summarizeHeadRows([coach('a', 1, p), submit('b', 2)]).coach;
+      expect(at(trace('[]', '[0]', '[1,2]'))).toEqual({ config: null, trace: 'traced', nudges: 0 });
+      expect(at(trace('[]', null, '[1,2]'))!.trace).toBe('partial');
+      expect(at(trace('', null, ' '))!.trace).toBe('skipped');
+      expect(at({ kind: 'trace-skip', ms: 900 })!.trace).toBe('skipped');
+    });
+    it('the latest before the first submit wins; one after it changes nothing', () => {
+      const skipThenTrace = summarizeHeadRows([
+        coach('a', 1, { kind: 'trace-skip', ms: 1 }),
+        coach('b', 2, trace('[]', '[0]', '[1]')),
+        submit('c', 3),
+        coach('d', 4, { kind: 'trace-skip', ms: 1 }),
+      ]);
+      expect(skipThenTrace.coach!.trace).toBe('traced');
+    });
+    it('a submit seen untraced is none, unless a trace or skip came first, whenever it lands', () => {
+      expect(
+        summarizeHeadRows([submit('a', 1), coach('b', 2, { kind: 'untraced-submit' })]).coach!
+          .trace,
+      ).toBe('none');
+      expect(
+        summarizeHeadRows([
+          coach('a', 1, { kind: 'trace-skip', ms: 1 }),
+          submit('b', 2),
+          coach('c', 3, { kind: 'untraced-submit' }),
+        ]).coach!.trace,
+      ).toBe('skipped');
+    });
+    it('nudges count, the config is the latest readable one, and an unknown kind folds nothing', () => {
+      const s = summarizeHeadRows([
+        coach('a', 1, { kind: 'config', trace: true, hold: true, nudge: true }),
+        coach('b', 2, { kind: 'nudge-shown', gapMs: 30_000 }),
+        coach('c', 3, { kind: 'nudge-shown', gapMs: 20_000 }),
+        coach('d', 4, { kind: 'config', hold: 1 }),
+      ]);
+      expect(s.coach).toEqual({
+        config: { trace: true, hold: true, nudge: true },
+        trace: null,
+        nudges: 2,
+      });
+      expect(s.headEvents).toBe(4);
+      const unknown = summarizeHeadRows([coach('a', 1, { kind: 'later-thing' })]);
+      expect(unknown.coach).toBeUndefined();
+      expect(unknown.headEvents).toBe(1);
+    });
+    it('a sitting with no coach events has no coach on its summary', () => {
+      expect(summarizeHeadRows([submit('a', 1)]).coach).toBeUndefined();
+    });
+    it('a coach event is taken up to 4 KB, refused past it', () => {
+      const ev = (n: number) => ({
+        id: ulid(),
+        type: 'coach' as const,
+        at: 1,
+        payload: { kind: 'trace', note: 'x'.repeat(n) },
+      });
+      expect(normalizeSittingEvents({ sittingId: ulid(), events: [ev(4000)] }).events).toHaveLength(
+        1,
+      );
+      expect(() => normalizeSittingEvents({ sittingId: ulid(), events: [ev(4200)] })).toThrow(
+        /coach event is too large/,
+      );
     });
   });
   describe('a Run’s verdict', () => {

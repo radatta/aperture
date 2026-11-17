@@ -991,7 +991,8 @@ class StubClient implements ApiClient {
     const stored = fresh.flatMap((e) =>
       e.type === 'replay' ? [] : [{ ...row(e), type: e.type, payload: e.payload }],
     );
-    // A timer read is only its head row (backend parity); runs, submits and notes keep their payloads too.
+    // A timer read is only its head row (backend parity); runs, submits, notes and coach events keep their
+    // payloads too.
     this.writes.insertMany(
       this.store.sittingEvents,
       stored.filter((e) => e.type !== 'timer'),
@@ -999,7 +1000,7 @@ class StubClient implements ApiClient {
     this.writes.insertMany(
       this.store.sittingHeadRows,
       stored.flatMap((e) =>
-        e.type === 'run' || e.type === 'submit' || e.type === 'note' || e.type === 'timer'
+        e.type !== 'snapshot' && e.type !== 'submitDetails' && isHeadEvent(e.type)
           ? [
               {
                 ...row(e),
@@ -2816,15 +2817,17 @@ class StubClient implements ApiClient {
       places: this.alive(this.store.places),
       sittings: this.alive(this.store.sittings),
       sittingLive: this.alive(this.store.sittingLive),
-      // Head rows only (verdicts, timer reads) — payloads and the raw bulk stay out, as on the backend.
+      // Head rows only (verdicts, timer reads, coach marks) — payloads and the raw bulk stay out, as on the
+      // backend.
       sittingHeadRows: this.alive(this.store.sittingHeadRows).map(
-        ({ id, sittingId, type, at, verdict, timer, deletedAt }) => ({
+        ({ id, sittingId, type, at, verdict, timer, coach, deletedAt }) => ({
           id,
           sittingId,
           type,
           at,
           verdict,
           timer,
+          coach: coach ?? null,
           deletedAt,
         }),
       ),

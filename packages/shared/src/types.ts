@@ -383,6 +383,7 @@ export interface SittingSummary {
   lcTimer: LcTimerState | null;
   lastEventAt: number | null;
   headEvents: number; // how many head rows this summary folds — a recompute never writes over a larger one
+  coach?: SittingCoach; // only once a coach event folds: read it as `summary.coach ?? null`
 }
 
 // The user's LeetCode Start gate (one row): the day it counts (the user's zone, never the client's), that
@@ -396,17 +397,47 @@ export interface LcStartGate extends BaseEntity {
   openClaimedAt: number | null;
 }
 
-// A head event as the summary reads it: its type, time and the verdict or timer state taken from its
-// payload at write. Small (the summary's recompute reads every one); the run's, submit's or note's full
-// payload is kept beside it as a SittingEvent.
+// A head event as the summary reads it: its type, time and the verdict, timer state or coach mark taken
+// from its payload at write. Small (the summary's recompute reads every one); the run's, submit's, note's or
+// coach event's full payload is kept beside it as a SittingEvent.
 export interface SittingHeadRow {
   id: string;
   sittingId: string;
-  type: 'run' | 'submit' | 'note' | 'timer';
+  type: 'run' | 'submit' | 'note' | 'timer' | 'coach';
   at: number;
   verdict: SittingVerdict | null; // runs and submits
   timer: LcTimerState | null; // timer reads
+  coach?: CoachMark | null; // coach events; absent on rows written before them
   deletedAt: number | null;
+}
+
+// The extension's coaching, as events of type 'coach' (docs/areas/recruiting/index.md → _Coach events_).
+// The payload is the extension's; the server reads it defensively (coachMarkOf) and keeps it verbatim.
+export type CoachEventKind = 'config' | 'trace' | 'trace-skip' | 'untraced-submit' | 'nudge-shown';
+export type CoachEventPayload =
+  | { kind: 'config'; trace: boolean; hold: boolean; nudge: boolean } // once per sitting: what was on
+  | {
+      kind: 'trace';
+      // the user's hand-traced inputs, each ≤ 300 chars; an empty one wasn't traced
+      inputs: { empty: string | null; boundary: string | null; normal: string | null };
+      ms: number; // time spent on the card
+    }
+  | { kind: 'trace-skip'; ms: number }
+  | { kind: 'untraced-submit' } // a Submit seen with no trace or skip before it
+  | { kind: 'nudge-shown'; gapMs: number }; // a resubmit within ~60 s of a failed one
+// What a coach event's head row keeps: its kind (null when unknown — stored, folds nothing), how many
+// inputs a trace filled, and a config's switches.
+export interface CoachMark {
+  kind: CoachEventKind | null;
+  inputs: number | null;
+  config: { trace: boolean; hold: boolean; nudge: boolean } | null;
+}
+// The sitting's coaching, folded from its coach rows. `trace` is the state at the first submit: three
+// inputs traced, one or two, skipped, or a submit with no trace (`none`); null until any of those.
+export interface SittingCoach {
+  config: { trace: boolean; hold: boolean; nudge: boolean } | null;
+  trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
+  nudges: number;
 }
 
 // A sitting's capture budget: every event the extension sends is reserved here (a CAS increment) before
@@ -486,9 +517,10 @@ export interface SittingLive extends BaseEntity {
   facts: SittingFacts;
 }
 
-export type SittingEventType = 'snapshot' | 'run' | 'submit' | 'submitDetails' | 'note' | 'timer';
+export type SittingEventType =
+  'snapshot' | 'run' | 'submit' | 'submitDetails' | 'note' | 'timer' | 'coach';
 // One captured moment, payload kept verbatim. Snapshots and submitDetails carry expiresAt in the table
-// (they're raw bulk); runs, submits, notes and timer reads are kept forever.
+// (they're raw bulk); runs, submits, notes, timer reads and coach events are kept forever.
 export interface SittingEvent extends BaseEntity {
   sittingId: string;
   type: SittingEventType;

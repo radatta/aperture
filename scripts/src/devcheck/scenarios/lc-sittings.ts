@@ -338,6 +338,58 @@ export const lcSittings: Scenario = {
       kind: 'edge',
       what: 'Sending the same events again counts them as duplicates, nothing double-counted',
     },
+    // lc-coach C0: the extension's coach events (trace card, resubmit nudge) fold into summary.coach.
+    {
+      id: 'coach-fold',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Coach events (config, an untraced submit, a nudge) fold into the sitting’s coaching, each payload kept whole; a repeat is a duplicate',
+    },
+    {
+      id: 'coach-after-submit',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A trace sent after the first submit leaves the trace state as it stood at that submit',
+    },
+    {
+      id: 'coach-too-big',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A coach event over 4 KB is refused, with nothing written',
+    },
+    {
+      id: 'coach-trace-states',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Before the first submit, three inputs traced is traced, one or two partial, none or a skip skipped',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'three inputs before the first submit is traced; one or two partial; none or a skip, skipped',
+        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+      },
+    },
+    {
+      id: 'coach-trace-latest',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Of a skip and a trace before the first submit, the later one stands',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'the latest before the first submit wins; one after it changes nothing',
+        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+      },
+    },
+    {
+      id: 'coach-unknown-kind',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A coach event of a kind the server doesn’t know is stored and folds nothing',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'nudges count, the config is the latest readable one, and an unknown kind folds nothing',
+        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+      },
+    },
     {
       id: 'events-invalid',
       entry: 'api',
@@ -921,6 +973,62 @@ export const lcSittings: Scenario = {
         if (live?.version !== 3 || live.code !== 'class Solution:\n    def solve(self): ...')
           throw new Error(`live: ${JSON.stringify(live)}`);
         if (events.length !== 6) throw new Error(`${events.length} events stored, not 6`);
+      },
+    },
+    {
+      id: 'coach',
+      entry: 'api',
+      proves: ['coach-fold', 'coach-after-submit', 'coach-too-big'],
+      title:
+        'Coach events on A after its submits: the config, an untraced submit, a nudge, a late trace; then again; then one too big',
+      async run(ctx) {
+        const coach = (payload: unknown): DevSittingEvent => ({
+          id: devUlid(),
+          type: 'coach',
+          at: nextAt(),
+          payload,
+        });
+        const batch = [
+          coach({ kind: 'config', trace: true, hold: true, nudge: true }),
+          coach({ kind: 'untraced-submit' }),
+          coach({ kind: 'nudge-shown', gapMs: 30_000 }),
+          coach({
+            kind: 'trace',
+            inputs: { empty: '[]', boundary: '[1]', normal: '[2,1]' },
+            ms: 1,
+          }),
+        ];
+        const first = await ctx.api.writes.lcSittingEvents(state.a, batch);
+        if (first.accepted !== 4) throw new Error(`first: ${JSON.stringify(first)}`);
+        const again = await ctx.api.writes.lcSittingEvents(state.a, batch);
+        if (again.accepted !== 0 || again.duplicates !== 4)
+          throw new Error(`again: ${JSON.stringify(again)}`);
+        const read = await sittingA(ctx);
+        const kept = read.events.filter((e) => e.type === 'coach');
+        const keptTrace = kept.find((e) => JSON.stringify(e.payload).includes('"boundary":"[1]"'));
+        if (kept.length !== 4 || !keptTrace)
+          throw new Error(
+            `${kept.length} coach payloads kept, trace ${keptTrace ? 'kept' : 'missing'}`,
+          );
+        const before = read.sitting.summary;
+        const c = before.coach; // field by field: a stored map's key order isn't kept
+        if (
+          c?.trace !== 'none' ||
+          c.nudges !== 1 ||
+          c.config?.trace !== true ||
+          c.config.hold !== true ||
+          c.config.nudge !== true
+        )
+          throw new Error(`coach: ${JSON.stringify(c)}`);
+        const big = coach({ kind: 'trace-skip', pad: 'x'.repeat(4200) });
+        await refused(
+          'a coach event over 4 KB',
+          ctx.api.writes.lcSittingEvents(state.a, [big]),
+          /too large/,
+        );
+        const after = (await sittingA(ctx)).sitting.summary;
+        if (after.headEvents !== before.headEvents)
+          throw new Error(`headEvents ${before.headEvents} → ${after.headEvents} after a refusal`);
       },
     },
     {

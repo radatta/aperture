@@ -86,6 +86,7 @@ The shapes, caps and error strings are `packages/shared/src/sittings.ts`; the ex
 | GraphQL `updateNote`                                                                                       | `note`          | `{slug, content}`                                              |
 | GraphQL `PracticeReplayUploadEvents`                                                                       | `replay`        | its `events` text, split along the array past 60 KB            |
 | localStorage `QD_TIMER_STATE`, read every 2 s on change                                                    | `timer`         | `{state, heartbeat}`                                           |
+| The extension's own trace card and resubmit nudge (PR C; the server takes them since C0)                   | `coach`         | `CoachEventPayload` (`packages/shared/src/types.ts`), ≤ 4 KB   |
 
 ¹ `lib/batch.js`: at most one snapshot per 30 s window, the latest code when the window closes (trailing), so live code is at most 30 s behind and a long sitting stays well under A1's per-sitting event cap; the pending one also goes ahead of a run or submit, and on hide or navigation. Other events batch for 3 s; a run or submit goes at once. The first snapshot after Start therefore lands up to 30 s later.
 
