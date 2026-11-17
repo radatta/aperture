@@ -77,3 +77,11 @@
 {"expect": "deny", "why": "identity: a reset in a later command doesn't cover an earlier --amend", "ids": true, "head_author": {"name": "Someone", "email": "someone@example.com"}, "stage": "const answer = 42;", "cmd": "git commit --amend --no-edit && git rebase origin/main --exec 'git commit --amend --no-edit --reset-author'", "reason": "kept by --amend"}
 {"expect": "deny", "why": "identity: HOME pointed at other config", "ids": true, "stage": "const answer = 42;", "cmd": "HOME=/tmp/other git commit -m \"added the answer\"", "reason": "other config"}
 {"expect": "deny", "why": "identity: -c include.path pulls in other config", "ids": true, "stage": "const answer = 42;", "cmd": "git -c include.path=/tmp/other commit -m \"added the answer\"", "reason": "`-c` on an identity or include key"}
+{"expect": "deny", "why": "a backslash-newline between git and commit no longer skips the hook (secret scan included)", "stage": "aws_key = {FAKE_AWS_KEY}", "cmd": "git -C . \\\ncommit -m \"added config\"", "reason": "credential"}
+{"expect": "deny", "why": "a deploy-branch commit split by a backslash-newline", "branch": "main", "cmd": "git \\\ncommit -m \"fixed ttl\""}
+{"expect": "deny", "why": "identity: EMAIL= is git's identity fallback, which git var can't see", "ids": true, "stage": "const answer = 42;", "cmd": "EMAIL=someone@example.com git commit -m \"added the answer\"", "reason": "other config or identity"}
+{"expect": "deny", "why": "identifiers: a glued -am\"msg\" takes an unstaged edit along", "ids": true, "stage": "fine", "write": "asked by {ID_NAME}", "write_path": "staged.txt", "cmd": "git commit -am\"updated the staged file\"", "reason": "personal identifier"}
+{"expect": "deny", "why": "-F inside a short cluster is a message file", "cmd": "git commit -aF msg.txt", "reason": "comes from a file"}
+{"expect": "deny", "why": "--fil abbreviates --file", "cmd": "git commit --fil msg.txt", "reason": "comes from a file"}
+{"expect": "deny", "why": "--mess abbreviates --message", "cmd": "git commit --mess \"added a message that is clearly much too long\"", "reason": "words"}
+{"expect": "allow", "why": "--mess with a compliant message", "cmd": "git commit --mess \"fixed health check auth header\""}

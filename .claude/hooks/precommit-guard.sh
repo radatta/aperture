@@ -18,7 +18,9 @@
   # from grep -q and read as "no match".
   WORD="([^[:space:]'\"\\\\]|\\\\.|'[^']*'|\"([^\"\\\\]|\\\\.)*\")+"
   GITOPTS="git([[:space:]]+((-[Cc]|--git-dir|--work-tree|--namespace|--config-env)[[:space:]]+$WORD|-$WORD))*"
-  grep -Eq "$GITOPTS[[:space:]]+commit" <<<"$COMMAND" || exit 0
+  # Line continuations joined first: grep reads line by line, so `git -C /x \<newline>commit` would skip the hook.
+  FLAT=${COMMAND//$'\\\n'/ }
+  grep -Eq "$GITOPTS[[:space:]]+commit" <<<"$FLAT" || exit 0
 
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
   COMMIT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")  # also works on an unborn branch
@@ -56,7 +58,7 @@
       gd --cached
       # A `git add`/`stage` in the command, or a commit that takes the working tree (-a, --all, -i, -o); a commit
       # naming paths takes them too and isn't detected here — the push scan is the backstop (IDENTIFIERS.md).
-      if grep -Eq '(^|[[:space:];&|(])'"$GITOPTS"'[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]]|$)' <<<"$COMMAND"; then
+      if grep -Eq '(^|[[:space:];&|(])'"$GITOPTS"'[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]"'"'"']|$)' <<<"$FLAT"; then
         gd
         git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null |
           while IFS= read -r -d '' f; do gd --no-index -- /dev/null "$f"; done
@@ -116,7 +118,11 @@ except ValueError:
     raise SystemExit(0)
 
 SEPS = {"&&", "||", ";", "|", "&", "|&", ";;", "(", ")"}
-CLUSTER = re.compile(r"-[apqsnvzeio]*m(.*)")  # -m, -am, -qm, or -m"msg" glued on; not after -u (its own value)
+# As scripts/src/commit-identity.ts reads them: --m… is --message and --fil… is --file (git takes a unique prefix),
+# with the value glued by `=` or the next word; -m / -F also inside a short cluster (-am, -aF) or with the value glued
+# on (-m"msg"), but not after -u, which takes the rest of its word as its own value.
+MSG_LONG = re.compile(r"--(m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?|fil(?:e)?)(=.*)?", re.S)
+MSG_SHORT = re.compile(r"-[apqsnvzeio]*([mF])(.*)", re.S)
 problems = []
 i = 0
 while i < len(toks):
@@ -132,24 +138,19 @@ while i < len(toks):
     msgs, from_file, k = [], False, j + 1
     while k < len(toks) and toks[k] not in SEPS:
         t = toks[k]
-        if t in ("-m", "--message"):
-            if k + 1 < len(toks):
-                msgs.append(toks[k + 1])
-            k += 2
+        lm = MSG_LONG.fullmatch(t)
+        sm = None if lm else MSG_SHORT.fullmatch(t)
+        if not (lm or sm):
+            k += 1
             continue
-        if t.startswith("--message="):
-            msgs.append(t.split("=", 1)[1])
-        elif t in ("-F", "--file") or t.startswith("--file="):
+        is_file = lm.group(1).startswith("f") if lm else sm.group(1) == "F"
+        glued = (lm.group(2)[1:] if lm.group(2) is not None else None) if lm else (sm.group(2) or None)
+        value, k = (glued, k + 1) if glued is not None else (
+            (toks[k + 1], k + 2) if k + 1 < len(toks) and toks[k + 1] not in SEPS else (None, k + 1))
+        if is_file:
             from_file = True
-        elif not t.startswith("--"):
-            m = CLUSTER.fullmatch(t)
-            if m and m.group(1):
-                msgs.append(m.group(1))
-            elif m and k + 1 < len(toks):
-                msgs.append(toks[k + 1])
-                k += 2
-                continue
-        k += 1
+        elif value is not None:
+            msgs.append(value)
     i = k
     if from_file:
         problems.append("the message comes from a file (-F), so it can't be checked; use -m")

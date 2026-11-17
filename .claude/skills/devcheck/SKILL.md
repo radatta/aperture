@@ -43,7 +43,7 @@ docs, infra) runs without `--feature`; naming a scenario that isn't in the run i
    read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's push),
    `pnpm bot deploy-dev`, rerun.
 4. Leftovers must be 0. Never delete anything the report lists as "not in the ledger" — report it.
-5. Paste _This feature_'s _You don't need to test_ and _Needs you_ into `report-<branch>.md` and the `[pr-open]` message —
+5. Paste _This feature_'s _You don't need to test_ and _Needs you_ into `report-<branch>.md` (the `[pr-open]` message carries what `docs/ops/HUB.md` → _Checkpoints_ names) —
    never _Other scenarios_'. Without `--feature` (a branch with no scenario of its own) there are none: write "no
    feature rows".
 

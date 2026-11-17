@@ -137,6 +137,8 @@ describe('overrideProblems', () => {
     [`HOME=/tmp/other ${GIT} -m "x"`, 'other config'],
     [`XDG_CONFIG_HOME=/tmp/other ${GIT} -m "x"`, 'other config'],
     [`GIT_DIR=/tmp/other/.git ${GIT} -m "x"`, 'other config'],
+    [`GIT_COMMON_DIR=/tmp/other/.git ${GIT} -m "x"`, 'other config'],
+    [`EMAIL=someone@example.com ${GIT} -m "x"`, 'other config'],
     [`git -c include.path=/tmp/other commit -m "x"`, '`-c`'],
     [`git -c includeIf.gitdir:/x/.path=/tmp/other commit -m "x"`, '`-c`'],
     [`git config include.path /tmp/other && ${GIT} -m "x"`, '`git config`'],

@@ -150,7 +150,9 @@ export function withoutMessages(words: string[]): string[] {
 // messages: a GIT_AUTHOR_*/GIT_COMMITTER_* name or email set (`=` or `+=`) in it, `--author` (any prefix from `--au`,
 // which git takes), `-c`/`--config-env` on an identity or include key, a `git config` of one, and — failing closed,
 // whatever they hold — a GIT_CONFIG_KEY_<n>, GIT_CONFIG_PARAMETERS, GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM, or a
-// HOME, XDG_CONFIG_HOME or GIT_DIR (git pointed at other config) set in it. Names the shape, never the value.
+// HOME, XDG_CONFIG_HOME, GIT_DIR or GIT_COMMON_DIR (git pointed at other config) or EMAIL (git's identity fallback:
+// with no user.email it makes `git var` exit 128 — the hook fails open — and git commits as it) set in it. Names the
+// shape, never the value.
 const KEY = '(?:(?:user|author|committer)\\.(?:name|email)|include\\.path|includeif\\.)';
 const OVERRIDES: [string, RegExp][] = [
   [
@@ -162,8 +164,8 @@ const OVERRIDES: [string, RegExp][] = [
     /\bGIT_CONFIG_(?:KEY_\d+|PARAMETERS|GLOBAL|SYSTEM)\+?=/,
   ],
   [
-    'git pointed at other config (HOME, XDG_CONFIG_HOME or GIT_DIR set in the command)',
-    /(?<![\w$])(?:HOME|XDG_CONFIG_HOME|GIT_DIR)\+?=/,
+    'git pointed at other config or identity (HOME, XDG_CONFIG_HOME, GIT_DIR, GIT_COMMON_DIR or EMAIL set in the command)',
+    /(?<![\w$])(?:HOME|XDG_CONFIG_HOME|GIT_DIR|GIT_COMMON_DIR|EMAIL)\+?=/,
   ],
   ['`--author` on the commit', /\bcommit\b[^;&|]*\s--au(?:t(?:h(?:o(?:r)?)?)?)?(?=[=\s]|$)/],
   ['`-c` on an identity or include key', new RegExp(`(?:^|\\s)-c\\s*['"]?${KEY}`, 'i')],

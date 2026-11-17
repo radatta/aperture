@@ -428,8 +428,8 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json` (the same result for
 tooling: `codes` is the dedup'd list, `failures` the harness failures as `{code, message}`), `shots/`.
 `report.md`'s _Feature coverage_ splits _This feature_ (`--feature`) — its table and two lists, _You don't need to
-test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md` and the `[pr-open]` message
-paste as they are — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
+test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md`
+pastes as they are (the `[pr-open]` message carries what HUB.md → _Checkpoints_ names) — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
 since those belong to their own features. Without `--feature` there are no paste lists: the table is every
 scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
 carry its verdict: they hold only once a run passes.
