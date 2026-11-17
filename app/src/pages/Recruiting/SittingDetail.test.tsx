@@ -434,6 +434,39 @@ describe('the stub’s sittings', () => {
     expect(sitting.review?.cause).toBe('no-trace');
   });
 
+  it('the draft’s cause marks its chip and never picks it: Save keeps the old cause until it is tapped', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const draft = vi.spyOn(api, 'draftSittingReview');
+    draft.mockResolvedValue({ ok: true, mistakes: ['Submit 1: [] → 0'], cause: 'boundary' });
+    const id = await idOf(api, 'two-sum');
+    await open(api);
+    await user.click(await screen.findByRole('button', { name: 'Draft with Claude' }));
+    const hint = await screen.findByText('Claude suggests Boundary — tap it to use it.');
+    expect(pressed('Boundary')).toBe('false');
+    expect(pressed('No trace')).toBe('true'); // the form's own suggestion stands
+    expect(screen.getByRole('button', { name: 'Boundary' }).getAttribute('aria-describedby')).toBe(
+      hint.id,
+    );
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect((await api.getSitting(id)).sitting.review?.cause).toBe('no-trace');
+    expect(screen.queryByText(/Claude suggests/)).toBeNull(); // a Save clears the draft and its proposal
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    await user.click(await screen.findByRole('button', { name: 'Boundary' }));
+    expect(pressed('Boundary')).toBe('true');
+    expect(screen.queryByText(/Claude suggests/)).toBeNull(); // picked: nothing left to suggest
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await waitFor(async () =>
+      expect((await api.getSitting(id)).sitting.review?.cause).toBe('boundary'),
+    );
+    // A draft with no cause, or a failed one, proposes nothing.
+    draft.mockResolvedValueOnce({ ok: true, mistakes: ['x'], cause: null });
+    await user.click(screen.getByRole('button', { name: 'Draft with Claude' }));
+    await screen.findByRole('group', { name: 'Claude’s draft' });
+    expect(screen.queryByText(/Claude suggests/)).toBeNull();
+  });
+
   it('one cause at a time, a second tap clears it; Peeked and the cause read back after a reload', async () => {
     const user = userEvent.setup();
     const api = seeded();

@@ -118,7 +118,7 @@ LeetCode tags (`patternOfTags`), else `other`. The user's own problem history ne
 | `log_attempt {attempts[]}`                   | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration)                                                                                          |
 
 Every write's description opens with the same ask-first sentence and says what it returns to read back. Leave all
-four on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
+six (these four and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
 review's one cause) lives in the claude.ai project's instructions, kept outside the repo.
 
 ## RPCs
@@ -130,7 +130,7 @@ reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
 
 ## Not yet
 
-`coach_stats` and the remaining reads, the pattern dashboard, mocks, the
+The pattern dashboard, mocks, the
 history import, and countdown mode — each its own PR. `CoachToday.mode`, `target` and `arm` are already in the
 shape, and the gaps and cap are parameters, so countdown mode and an A/B arm add rather than change.
 
@@ -206,3 +206,7 @@ Run before the first Submit, the extension's trace state ([index.md](index.md) �
 The cause stays out of the mistake lines, and a signal is never a line of its own. No extra call; about 20 more output
 tokens, so the ≈ $0.0003 a draft stands. A stray value is null and keeps the lines. The stub stands in with a
 fixed rule: a failed first Submit with no Run before it proposes `no-trace`, else nothing.
+
+On the form (`ReviewForm.tsx`) the proposal marks its chip — a dashed outline and "Claude suggests Boundary — tap it
+to use it" — and never picks it, as draft lines arrive unticked: a Save keeps the cause as it was (the form's own
+`no-trace` suggestion included), and only a tap makes it the cause. A Save or a new draft clears the proposal.

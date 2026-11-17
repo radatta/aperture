@@ -396,6 +396,12 @@ export const lcCoach: Scenario = {
       what: 'The review draft (one Haiku call) answers a cause beside its lines — a tag or null — and writes nothing',
     },
     {
+      id: 'ui-draft-cause',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The draft’s cause marks its chip (“Claude suggests …”) and never picks it: a Save keeps the old cause; a tap picks it and the Save stores it',
+    },
+    {
       id: 'mcp-b-empty',
       entry: 'mcp',
       kind: 'edge',
@@ -1340,6 +1346,56 @@ export const lcCoach: Scenario = {
         } finally {
           await ctx.api.writes.linkLeetcodeRoll(null);
         }
+      },
+    },
+    {
+      id: 'ui-draft-cause',
+      title: 'The review form: a draft’s cause is marked, not picked; saved only once tapped',
+      entry: 'ui',
+      proves: ['ui-draft-cause'],
+      async run(ctx) {
+        const id = app.reviewId || fail('no review sitting — the ui-review step failed');
+        await ctx.ui.goto(`/recruiting/sittings/${id}`);
+        const p = ctx.page;
+        const chip = (name: string) => p.getByRole('button', { name, exact: true });
+        await chip('Boundary').waitFor({ timeout: 15_000 });
+        // The model can't be told what to say: the draft's reply is the harness's (b-draft-cause proves the real one).
+        const canned = await ctx.intercept('draftSittingReview', {
+          status: 200,
+          times: 1,
+          body: { ok: true, mistakes: ['devcheck draft line'], cause: 'off-by-one' },
+        });
+        await p.getByRole('button', { name: 'Draft with Claude' }).click();
+        await ctx.ui.expectText('Claude suggests Off by one — tap it to use it.', 10_000);
+        await canned.release();
+        if ((await chip('Off by one').getAttribute('aria-pressed')) !== 'false')
+          fail('the draft’s cause was picked for them');
+        if ((await chip('Boundary').getAttribute('aria-pressed')) !== 'true')
+          fail('the draft moved the saved cause');
+        await ctx.shot('lc-coach-draft-cause');
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        const causeNow = async () =>
+          (
+            (await ctx.api.reads.listSittings()).find((x) => x.id === id)?.review as
+              { cause?: string } | null | undefined
+          )?.cause;
+        if ((await causeNow()) !== 'boundary')
+          fail(`an untapped proposal was saved: ${await causeNow()}`);
+        const again = await ctx.intercept('draftSittingReview', {
+          status: 200,
+          times: 1,
+          body: { ok: true, mistakes: ['devcheck draft line'], cause: 'off-by-one' },
+        });
+        await p.getByRole('button', { name: 'Draft with Claude' }).click();
+        await ctx.ui.expectText('Claude suggests Off by one — tap it to use it.', 10_000);
+        await again.release();
+        await chip('Off by one').click();
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        for (let i = 0; i < 20 && (await causeNow()) !== 'off-by-one'; i++)
+          await new Promise((r) => setTimeout(r, 250));
+        if ((await causeNow()) !== 'off-by-one') fail(`the tapped cause: ${await causeNow()}`);
       },
     },
     noConsoleErrors,
