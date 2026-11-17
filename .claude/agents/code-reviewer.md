@@ -15,7 +15,8 @@ Aperture is a **single-user personal app** — the data is the user's own, so th
 3. Check findings against the categories below in severity order.
 4. Run the **public-content pass** (see below) — mandatory, every diff.
 5. Emit the **new-surfaces inventory** (see below) — always, even if empty.
-6. Report findings as `file:line — issue — suggested fix`, one line each, grouped by severity. End with a one-line summary (counts per severity + whether you'd ship) and the public-content line.
+6. Report in the shape every review lens emits (`docs/ops/REVIEW.md` → _Finding shape_), one line each, worst first: `S1|S2|S3 · confirmed|suspected · path:line · kind · what is wrong · the fix`. The headings below are categories; the severity you emit is by impact — S1: security, data loss, never-list text, a guard or gate that passes when it should fail; S2: behaviour a user or operator would hit wrong, a broken invariant; S3: the rest — so a convention break that ships a bug is S2. `suspected` means you could not trace it. End with `lens=rules S1=<n> S2=<n> S3=<n> serious=<yes|no>` (serious = any S1 or S2), whether you'd ship, and the public-content line.
+7. In a feature's review round you are the project-rules lens beside others (correctness, tests, infra, shell, UI, extension): go deep on the rules below and leave anything outside them as one line under `Other lenses:`. Run alone, nobody else is reading: say in the summary what you did not check — `dev-test matrix: not checked (review-tests)` when the diff touches `app/`, `lambdas/`, the MCP tools or a scenario.
 
 Be concise. Don't restate the diff. Don't pad with generic checklists. A local-dev-only flag (e.g. left in stub mode) can't ship a broken deployed build → at most Severity 3.
 
@@ -33,12 +34,10 @@ Be concise. Don't restate the diff. Don't pad with generic checklists. A local-d
 - **Stub/http contract divergence** — the stub and http clients must satisfy the one shared contract suite. A change to one that isn't mirrored/tested against the contract is a finding.
 - **Three-state data handling** — React Query consumers must handle loading / error / data, not assume success.
 - Broken invariants, races, data loss.
-- **Dev-test matrix** (when the diff touches `app/`, `lambdas/`, the MCP tools or a devcheck scenario; rules: `docs/ops/DEV-CHECK.md` → _Rows_):
-  - **matrix vs diff** — every changed UI action, BFF method and MCP tool appears in some row of the feature's scenario, and the edge-case checklist (empty/max/invalid, cancel, repeat, survives reload, neighbour unaffected, ownership) was considered;
-  - **scenario vs matrix** — each step's `entry` is how it really drives the app (a `ui` step that only calls `ctx.api` is a mislabelled proof), and no UI row rests on API steps alone;
-  - **off-dev rows** name a test that exists _and asserts that failure_, not a nearby one, for a failure dev truly can't produce — one dev can produce (bad input, limits, an expired link, another user's id) belongs on dev — or for a case whose path a dev-proven row of the same scenario already runs (`why`: `same path as <row> (proven on dev)`; check the claim against DEV-CHECK.md → _Rows_: same client branch, same BFF method unless injected, never a new entry point, server effect or untaken branch);
-  - **no fault injection** — no test-only switch, env flag or failure branch in `app/` or `lambdas/` added to make a failure reachable;
-  - a diff that changes a screen an existing scenario drives updates that scenario.
+- **Dev-test matrix** — `review-tests` owns it. Flag only a diff that changes a UI action, BFF method or MCP tool with no scenario change at all.
+- **Architecture fit** — logic in the wrong layer (a rule the BFF must hold living only in the app; a read with side effects), a second home for a fact or type the shared contract owns, a shared-type change one caller doesn't follow.
+- **Merged neighbours** — `git log --oneline HEAD..origin/main -- <touched paths>`: a rule, seed or contract another branch landed that this diff contradicts or duplicates.
+- **Approval and authority** (diffs to `CLAUDE.md`, `.claude/`, `docs/ops/HUB.md`, `docs/ops/FEATURE-WORKFLOW.md`, `docs/ops/REVIEW.md`) — a rule with a hole, two rules that disagree, a permission widened without saying so.
 
 ## Severity 3 — Convention
 
@@ -50,6 +49,7 @@ Be concise. Don't restate the diff. Don't pad with generic checklists. A local-d
 - **Dates/times via the shared `lib` helpers** — never inline `Date` math or a raw ISO string in a component.
 - **Styling:** Tailwind v4 with semantic CSS-variable tokens (`--surface`, `--fg`, `--accent-…`) — flag raw hex/`rgb()` where a token exists. Conditional classes via the shared `cx` helper.
 - **File/folder structure** and **keep `docs/index.md` current** (new doc → index entry in the same change).
+- **Process** — read `localNotes/decisions.md` when present: a pass or fail claimed through a pipe without `pipefail`, a review run on an uncommitted tree, a commit on a red gate; prettier churn on lines the change didn't touch.
 
 ## Public-content pass (always run, always report)
 
