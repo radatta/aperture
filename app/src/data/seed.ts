@@ -100,6 +100,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     fluxSets: {},
     leetcodeRollId: null, // linked below, once the LeetCode roll exists
     coachAiPick: true,
+    leetcodePremium: true,
     ...REMINDER_SETTINGS_DEFAULTS,
   };
 

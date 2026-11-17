@@ -74,6 +74,7 @@ export interface DevLoggedAttempt {
   slug: string;
   day: string;
   outcome: string;
+  historical?: boolean;
   nextDue: { dueDay: string; track: string } | null;
 }
 // What the coach's history and stats reads answer (coachTools.ts) — the fields the scenario reads.
@@ -92,7 +93,13 @@ export interface DevProblemRow {
 export interface DevProblemRead {
   problem: { slug: string; title: string; onRoadmap: boolean; url: string };
   record: { attempts: number } | null;
-  tries?: { day: string; outcome: string; sittingIds: string[]; attemptIds: string[] }[];
+  tries?: {
+    day: string;
+    outcome: string;
+    historical?: boolean;
+    sittingIds: string[];
+    attemptIds: string[];
+  }[];
   sittings?: { id: string }[];
 }
 export interface DevCoachStats {

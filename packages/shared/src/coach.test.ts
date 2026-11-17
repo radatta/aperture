@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   applySlotChange,
   attemptsOf,
+  ATTEMPT_HISTORY_DAYS,
+  coachScope,
   coachStats,
   countsAsPractice,
   easierIn,
@@ -18,6 +20,8 @@ import {
   peekOf,
   rankPatterns,
   resolveState,
+  sittingTryMinutes,
+  slotChangeInputs,
 } from './coach';
 import type { CoachInput } from './coach';
 import { addDays, USER_TIME_ZONE, zonedEpoch } from './dates';
@@ -962,6 +966,9 @@ describe('stats', () => {
         outcome: 'failed',
         help: 'solution',
         cause: null,
+        minutes: null,
+        note: null,
+        historical: false,
         sittingIds: [],
         attemptIds: [peek.id],
       },
@@ -1152,5 +1159,191 @@ describe('pattern detail (the Patterns tab)', () => {
       runBeforeSubmit: { hit: 0, of: 1 },
       weeks: [{ week: expect.any(String), firstTry: { hit: 0, of: 1 } }],
     });
+  });
+});
+
+describe('history-only solves', () => {
+  const old = (slug: string, on: string, outcome: CoachAttempt['outcome'] = 'solved') => ({
+    ...manual(slug, on, outcome),
+    historical: true as const,
+  });
+  const AH = NEETCODE_150.filter((c) => c.pattern === 'arrays-hashing' && !c.premium);
+
+  it('light a record with no schedule, and never reach the live attempts', () => {
+    const recs = listRecords({
+      now: NOW,
+      today: TODAY,
+      sittings: [],
+      attempts: [old('two-sum', day(-400))],
+    });
+    expect(recs).toHaveLength(1);
+    expect(recs[0]).toMatchObject({
+      slug: 'two-sum',
+      schedule: null,
+      historical: { tries: 1, firstDay: day(-400), lastDay: day(-400) },
+      lists: ['neetcode150'],
+      lastOutcome: 'solved',
+    });
+    expect(recs[0]!.tries).toEqual([
+      expect.objectContaining({ historical: true, outcome: 'solved' }),
+    ]);
+    expect(attemptsOf([], [old('two-sum', day(-400))], NOW)).toEqual([]);
+  });
+
+  it('leave the plan’s queue alone but are never offered as new', () => {
+    const focus = focusRow('arrays-hashing', day(-1));
+    const bare = planDay(input({ focus }));
+    expect(bare.slots.find((s) => s.kind === 'new')!.slug).toBe(AH[0]!.slug);
+    const t = planDay(
+      input({ focus, attempts: AH.slice(0, 3).map((c) => old(c.slug, day(-200))) }),
+    );
+    expect(t.slots.find((s) => s.kind === 'new')!.slug).toBe(AH[3]!.slug);
+    expect(t.due).toEqual([]);
+    expect(t.next48h).toEqual([]);
+    expect(t.momentum).toEqual(bare.momentum);
+  });
+
+  it('a later live try is a re-solve with a schedule of its own; stats never count the history', () => {
+    const attempts = [old('two-sum', day(-300))];
+    const sittings = [clean('two-sum', day(-5))];
+    const recs = listRecords({ now: NOW, today: TODAY, sittings, attempts });
+    expect(recs[0]!.schedule).toMatchObject({ track: 'clean', step: 0 });
+    expect(recs[0]!.historical).toMatchObject({ tries: 1 });
+    expect(recs[0]!.tries.map((t) => t.historical)).toEqual([true, false]);
+    const live = attemptsOf(sittings, attempts, NOW);
+    const ci = input({ sittings, attempts });
+    const stats = coachStats(live, TODAY, {}, coachScope(ci));
+    expect(stats).toMatchObject({
+      attempts: 1,
+      firstTry: { hit: 0, of: 0 },
+      resolve: { hit: 1, of: 1 },
+    });
+    expect(
+      coachStats(attemptsOf([], attempts, NOW), TODAY, {}, coachScope(input({ attempts }))),
+    ).toMatchObject({
+      attempts: 0,
+      problems: 0,
+    });
+  });
+
+  it('a history-only piece on a day with a live try leaves that day’s outcome and schedule alone', () => {
+    const sittings = [clean('two-sum', day(-4))];
+    const attempts = [old('two-sum', day(-4), 'failed')];
+    const [live] = attemptsOf(sittings, attempts, NOW);
+    expect(live).toMatchObject({ outcome: 'clean', historical: false, attemptIds: [] });
+    const [r] = listRecords({ now: NOW, today: TODAY, sittings, attempts });
+    expect(r).toMatchObject({ lastOutcome: 'clean', attempts: 1, historical: { tries: 1 } });
+    expect(r!.schedule).toEqual(
+      listRecords({ now: NOW, today: TODAY, sittings, attempts: [] })[0]!.schedule,
+    );
+  });
+
+  it('mark a problem seen for the focus ranking without counting as a first try', () => {
+    const all = AH.map((c) => old(c.slug, day(-100)));
+    const scope = coachScope(input({ attempts: all }));
+    expect(rankPatterns([], TODAY, scope).some((r) => r.pattern === 'arrays-hashing')).toBe(false);
+    expect(rankPatterns([], TODAY).find((r) => r.pattern === 'arrays-hashing')).toMatchObject({
+      of: 0,
+    });
+    expect(focusRoomError(input({ attempts: all }), 'arrays-hashing')).toMatch(/Nothing unseen/);
+  });
+
+  it('count as seen and known for a swap', () => {
+    const { seen, known } = slotChangeInputs(input({ attempts: [old('jump-game', day(-90))] }));
+    expect(seen.has('jump-game')).toBe(true);
+    expect(known('some-off-list-problem')).toBe(false);
+    const off = slotChangeInputs(input({ attempts: [old('some-off-list-problem', day(-90))] }));
+    expect(off.known('some-off-list-problem')).toBe(true);
+  });
+
+  it('the input: a flag, up to 10 years back; live stays at 60 days', () => {
+    expect(
+      normalizeCoachAttempt(
+        { slug: 'two-sum', outcome: 'solved', day: day(-400), historical: true },
+        TODAY,
+      ),
+    ).toMatchObject({ historical: true, day: day(-400) });
+    expect(normalizeCoachAttempt({ slug: 'two-sum', outcome: 'solved' }, TODAY)).not.toHaveProperty(
+      'historical',
+    );
+    expect(
+      normalizeCoachAttempt({ slug: 'two-sum', outcome: 'solved', historical: false }, TODAY),
+    ).not.toHaveProperty('historical');
+    expect(() =>
+      normalizeCoachAttempt({ slug: 'two-sum', outcome: 'solved', day: day(-61) }, TODAY),
+    ).toThrow(/last 60 days .*historical true/);
+    expect(() =>
+      normalizeCoachAttempt(
+        {
+          slug: 'two-sum',
+          outcome: 'solved',
+          day: day(-ATTEMPT_HISTORY_DAYS - 1),
+          historical: true,
+        },
+        TODAY,
+      ),
+    ).toThrow(/last 10 years/);
+    expect(() =>
+      normalizeCoachAttempt({ slug: 'two-sum', outcome: 'solved', historical: 'yes' }, TODAY),
+    ).toThrow(/historical must be true or false/);
+  });
+
+  it('a peek and a history-only peek on one day are two rows', () => {
+    const live = manual('two-sum', day(-3), 'failed', 'solution');
+    expect(peekOf([live], { slug: 'two-sum', day: day(-3), historical: true })).toBeNull();
+    expect(peekOf([live], { slug: 'two-sum', day: day(-3) })).toBe(live);
+  });
+});
+
+describe('LeetCode Premium', () => {
+  const AH = NEETCODE_150.filter((c) => c.pattern === 'arrays-hashing');
+  const premiumIdx = AH.findIndex((c) => c.premium);
+  const before = AH.slice(0, premiumIdx).map((c, i) => clean(c.slug, day(-40 + i)));
+  const focus = focusRow('arrays-hashing', day(-1));
+  const newPick = (premium?: boolean) =>
+    planDay(input({ sittings: before, focus, premium })).slots.find((s) => s.kind === 'new')?.slug;
+
+  it('off (or absent): a Premium problem is never picked', () => {
+    expect(newPick()).toBe(AH[premiumIdx + 1]!.slug);
+    expect(newPick(false)).toBe(AH[premiumIdx + 1]!.slug);
+  });
+  it('on: a Premium problem is picked in its turn', () => {
+    expect(newPick(true)).toBe(AH[premiumIdx]!.slug);
+  });
+  it('on: easier picks and the room check count Premium problems', () => {
+    const seen = new Set(AH.filter((c) => !c.premium).map((c) => c.slug));
+    expect(easierIn('arrays-hashing', 'Hard', seen, new Set())).toEqual([]);
+    expect(easierIn('arrays-hashing', 'Hard', seen, new Set(), true).map((c) => c.slug)).toEqual(
+      AH.filter((c) => c.premium).map((c) => c.slug),
+    );
+    const done = AH.filter((c) => !c.premium).map((c, i) => clean(c.slug, day(-60 + i)));
+    expect(focusRoomError(input({ sittings: done }), 'arrays-hashing')).toMatch(/Nothing unseen/);
+    expect(focusRoomError(input({ sittings: done, premium: true }), 'arrays-hashing')).toBeNull();
+  });
+});
+
+describe('minutes on a try', () => {
+  it('a sitting: to the first accept, else its length once ended, else none', () => {
+    expect(sittingTryMinutes(clean('two-sum', day(-1)))).toBe(1); // accepted at the first minute
+    expect(
+      sittingTryMinutes(
+        sit({ slug: 'two-sum', on: day(-1), submits: ['wrong_answer'], minutes: 42 }),
+      ),
+    ).toBe(42);
+    expect(sittingTryMinutes(sit({ slug: 'two-sum', on: day(-1), open: true }))).toBeNull();
+  });
+  it('a day’s pieces sum; a logged try keeps its minutes and note', () => {
+    const logged = {
+      ...manual('two-sum', day(-2), 'solved'),
+      minutes: 20,
+      note: 'used a hash map',
+    };
+    const sittings = [
+      sit({ slug: 'two-sum', on: day(-2), submits: ['wrong_answer'], minutes: 15 }),
+    ];
+    const [a] = attemptsOf(sittings, [logged], NOW);
+    expect(a).toMatchObject({ minutes: 35, note: 'used a hash map', historical: false });
+    const [r] = listRecords({ now: NOW, today: TODAY, sittings, attempts: [logged] });
+    expect(r!.tries[0]).toMatchObject({ minutes: 35, note: 'used a hash map' });
   });
 });

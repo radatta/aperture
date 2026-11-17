@@ -337,6 +337,7 @@ export const SETTINGS_PATCH_KEYS = [
   'financePaymentDay',
   'fluxRollId',
   'leetcodeRollId',
+  'leetcodePremium',
   'fluxDisclaimerAckAt',
   'fluxSets',
   'remindTimed',

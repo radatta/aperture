@@ -12,7 +12,9 @@ import {
   USER_TIME_ZONE,
   zonedEpoch,
 } from './dates';
-import { NEETCODE_150, PATTERNS, PATTERN_NAMES, isPatternId } from './neetcode150';
+import { CATALOGS, DEFAULT_CATALOG, catalogProblem, listsOf } from './catalogs';
+import type { CatalogId } from './catalogs';
+import { PATTERNS, PATTERN_NAMES, isPatternId } from './neetcode150';
 import type { CatalogProblem, Difficulty, PatternId } from './neetcode150';
 import {
   CAUSE_TAGS,
@@ -69,10 +71,8 @@ export const COACH_PARAMS: CoachParams = {
 const MAX_PER_KIND = 2;
 const MAX_SLOTS = 4;
 
-// --- The working catalog: NeetCode 150, plus any problem the user has a record on ---
-const CATALOG_BY_SLUG = new Map(NEETCODE_150.map((p) => [p.slug, p]));
-export const catalogProblem = (slug: string): CatalogProblem | null =>
-  CATALOG_BY_SLUG.get(slug) ?? null;
+// --- The working catalog: the plan's list (catalogs.ts), plus any problem the user has a record on ---
+const PLAN_LIST = CATALOGS[DEFAULT_CATALOG].problems;
 // A non-catalog problem's pattern from its LeetCode topic tags, the most specific tag first; else `other`.
 const TAG_PATTERNS: [string, PatternId][] = [
   ['Trie', 'tries'],
@@ -131,6 +131,19 @@ export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help:
 // hit; a sitting with no coach data, or with the card switched off in its config, counts nowhere.
 const tracedAtFirstSubmit = (c: Sitting['summary']['coach']): boolean | null =>
   !c?.trace || c.config?.trace === false ? null : c.trace === 'traced';
+// A sitting's minutes on its problem: to the first accept (both on the extension's clock), else the whole sitting
+// once it ended; null while it's open with no accept. At least 1.
+export function sittingTryMinutes(
+  s: Pick<Sitting, 'clientStartedAt' | 'startedAt' | 'endedAt' | 'summary'>,
+): number | null {
+  const ms =
+    s.summary.firstAcceptedAt !== null
+      ? s.summary.firstAcceptedAt - s.clientStartedAt
+      : s.endedAt !== null
+        ? s.endedAt - s.startedAt
+        : null;
+  return ms === null ? null : Math.max(1, Math.round(ms / 60_000));
+}
 // What one sitting says, as an attempt.
 export function sittingAttempt(s: Sitting): Attempt {
   const help = s.review?.help ?? 'none';
@@ -158,6 +171,9 @@ export function sittingAttempt(s: Sitting): Attempt {
       last && last.verdict !== 'accepted'
         ? { verdict: last.verdict, statusMsg: last.statusMsg }
         : null,
+    minutes: sittingTryMinutes(s),
+    note: null,
+    historical: false,
     sittingIds: [s.id],
     attemptIds: [],
     sources: ['sitting'],
@@ -182,6 +198,9 @@ export function manualAttempt(a: CoachAttempt): Attempt {
     runFirst: null,
     traced: null,
     lastError: null,
+    minutes: a.minutes,
+    note: a.note,
+    historical: a.historical === true,
     sittingIds: [],
     attemptIds: [a.id],
     sources: [a.source],
@@ -204,6 +223,9 @@ export interface Attempt {
   runFirst: boolean | null; // a Run before the first submit; null with no captured submit
   traced: boolean | null; // all three trace inputs stood at the first submit; null with no trace data or the card off
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
+  minutes: number | null; // the day's minutes on it: sittings to the first accept (else their length), logged ones as given
+  note: string | null; // the newest logged note
+  historical: boolean; // a history-only solve (CoachAttempt.historical): seen, never scheduled or counted
   sittingIds: string[]; // newest first
   attemptIds: string[]; // the logged attempts' (CoachAttempt) ids, newest first
   sources: ('sitting' | CoachAttempt['source'])[];
@@ -238,6 +260,11 @@ function foldDay(parts: Attempt[]): Attempt {
     runFirst: sorted.find((p) => p.runFirst !== null)?.runFirst ?? null,
     traced: sorted.find((p) => p.runFirst !== null)?.traced ?? null,
     lastError: [...sorted].reverse().find((p) => p.submits || p.runs)?.lastError ?? null,
+    minutes: sorted.some((p) => p.minutes !== null)
+      ? sorted.reduce((n, p) => n + (p.minutes ?? 0), 0)
+      : null,
+    note: [...sorted].reverse().find((p) => p.note)?.note ?? null,
+    historical: sorted.every((p) => p.historical),
     sittingIds: sorted.flatMap((p) => p.sittingIds).reverse(),
     attemptIds: sorted.flatMap((p) => p.attemptIds).reverse(),
     sources: [...new Set(sorted.flatMap((p) => p.sources))],
@@ -254,10 +281,19 @@ export function attemptsOf(
   today?: string,
 ): Attempt[] {
   const settled = (s: Sitting) => !isSittingOpen(s, now) || (today !== undefined && s.day < today);
-  const parts = [
+  return foldDays([
     ...sittings.filter((s) => settled(s) && countsAsPractice(s, now, params)).map(sittingAttempt),
-    ...manual.filter((a) => a.deletedAt === null).map(manualAttempt),
-  ];
+    ...manual.filter((a) => a.deletedAt === null && a.historical !== true).map(manualAttempt),
+  ]);
+}
+// The history-only solves (logged with `historical`), folded by day the same way, oldest first. They never reach
+// attemptsOf: a remembered result isn't a measured try, so they only mark a problem seen and show on Progress.
+export function historyAttemptsOf(manual: readonly CoachAttempt[]): Attempt[] {
+  return foldDays(
+    manual.filter((a) => a.deletedAt === null && a.historical === true).map(manualAttempt),
+  );
+}
+function foldDays(parts: Attempt[]): Attempt[] {
   const groups = new Map<string, Attempt[]>();
   for (const p of parts) {
     const k = `${p.day} ${p.slug}`;
@@ -339,31 +375,46 @@ export interface ProblemRecord {
   causes: Partial<Record<CauseTag, number>>;
   lastDay: string;
   lastOutcome: AttemptOutcome;
-  schedule: ResolveState | null;
-  historical: null; // the history import's, later
+  schedule: ResolveState | null; // over live tries only: a history-only problem has none
+  historical: { tries: number; firstDay: string; lastDay: string } | null; // its history-only solves
+  lists: CatalogId[]; // the problem lists it's on (catalogs.ts); [] = off every list
   sittingIds: string[]; // newest first, ≤ 10
-  tries: ProblemTry[]; // every attempt, oldest first — get_problem's history, and delete_attempt's ids
+  tries: ProblemTry[]; // every attempt, history-only ones too, oldest first — get_problem's history, delete_attempt's ids
 }
 export interface ProblemTry {
   day: string;
   outcome: AttemptOutcome;
   help: HelpLevel;
   cause: CauseTag | null;
+  minutes: number | null;
+  note: string | null;
+  historical: boolean;
   sittingIds: string[];
   attemptIds: string[];
 }
+// The base fields come from the live tries when there are any, else from the history-only ones; the schedule only
+// ever from live tries, so a history-only problem never comes due. `history` is historyAttemptsOf's.
 export function problemRecords(
   attempts: readonly Attempt[],
   params: CoachParams = COACH_PARAMS,
+  history: readonly Attempt[] = [],
 ): ProblemRecord[] {
-  const bySlug = new Map<string, Attempt[]>();
-  for (const a of attempts) bySlug.set(a.slug, [...(bySlug.get(a.slug) ?? []), a]);
-  return [...bySlug.entries()].map(([slug, list]) => {
+  const live = new Map<string, Attempt[]>();
+  for (const a of attempts) live.set(a.slug, [...(live.get(a.slug) ?? []), a]);
+  const past = new Map<string, Attempt[]>();
+  for (const a of history) past.set(a.slug, [...(past.get(a.slug) ?? []), a]);
+  return [...new Set([...live.keys(), ...past.keys()])].map((slug) => {
+    const own = live.get(slug) ?? [];
+    const old = past.get(slug) ?? [];
+    const list = own.length ? own : old;
     const first = list[0]!;
     const last = list[list.length - 1]!;
     const cat = catalogProblem(slug);
     const causes: Partial<Record<CauseTag, number>> = {};
-    for (const a of list) if (a.cause) causes[a.cause] = (causes[a.cause] ?? 0) + 1;
+    for (const a of own) if (a.cause) causes[a.cause] = (causes[a.cause] ?? 0) + 1;
+    const every = [...old, ...own].sort((a, b) =>
+      a.day < b.day ? -1 : a.day > b.day ? 1 : a.at - b.at,
+    );
     return {
       slug,
       title: cat?.title ?? last.title,
@@ -383,17 +434,23 @@ export function problemRecords(
       causes,
       lastDay: last.day,
       lastOutcome: last.outcome,
-      schedule: resolveState(list, params),
-      historical: null,
-      sittingIds: list
+      schedule: own.length ? resolveState(own, params) : null,
+      historical: old.length
+        ? { tries: old.length, firstDay: old[0]!.day, lastDay: old[old.length - 1]!.day }
+        : null,
+      lists: listsOf(slug),
+      sittingIds: own
         .flatMap((a) => a.sittingIds)
         .reverse()
         .slice(0, 10),
-      tries: list.map((a) => ({
+      tries: every.map((a) => ({
         day: a.day,
         outcome: a.outcome,
         help: a.help,
         cause: a.cause,
+        minutes: a.minutes,
+        note: a.note,
+        historical: a.historical,
         sittingIds: a.sittingIds,
         attemptIds: a.attemptIds,
       })),
@@ -409,11 +466,38 @@ export interface Ranked {
   misses: number;
   of: number;
 }
+// What the engine reads beyond the live attempts: whether Premium problems can be picked (Settings.leetcodePremium),
+// and the history-only solves, slug → its earliest day. Absent = Premium never picked, no history: the engine as
+// it was.
+export interface CoachScope {
+  premium: boolean;
+  history: ReadonlyMap<string, string>;
+}
+export const NO_SCOPE: CoachScope = { premium: false, history: new Map() };
+export function coachScope(ci: Pick<CoachInput, 'attempts' | 'premium'>): CoachScope {
+  const history = new Map<string, string>();
+  for (const a of historyAttemptsOf(ci.attempts))
+    if (!history.has(a.slug)) history.set(a.slug, a.day);
+  return { premium: ci.premium === true, history };
+}
+// Slugs seen before `day`: live attempts and history-only solves alike.
+const seenBefore = (attempts: readonly Attempt[], scope: CoachScope, day: string) =>
+  new Set([
+    ...attempts.filter((a) => a.day < day).map((a) => a.slug),
+    ...[...scope.history].filter(([, d]) => d < day).map(([slug]) => slug),
+  ]);
 // Patterns by a shrunk first-try miss rate, (misses + 1) / (first tries + 2), as of `day` (attempts before it),
-// ties by the roadmap order; a pattern with no unseen catalog problem left drops out.
-export function rankPatterns(attempts: readonly Attempt[], day: string): Ranked[] {
+// ties by the roadmap order; a pattern with no unseen catalog problem left drops out. A problem with a
+// history-only solve is seen but never a first try: a later live try on it is a re-solve.
+export function rankPatterns(
+  attempts: readonly Attempt[],
+  day: string,
+  scope: CoachScope = NO_SCOPE,
+): Ranked[] {
   const firsts = new Map<string, Attempt>();
-  for (const a of attempts) if (a.day < day && !firsts.has(a.slug)) firsts.set(a.slug, a);
+  for (const a of attempts)
+    if (a.day < day && !firsts.has(a.slug) && !scope.history.has(a.slug)) firsts.set(a.slug, a);
+  const seen = seenBefore(attempts, scope, day);
   const stat = new Map<PatternId, Ranked>();
   for (const a of firsts.values()) {
     const r = stat.get(a.pattern) ?? { pattern: a.pattern, misses: 0, of: 0 };
@@ -421,7 +505,7 @@ export function rankPatterns(attempts: readonly Attempt[], day: string): Ranked[
   }
   const score = (r: Ranked) => (r.misses + 1) / (r.of + 2);
   return PATTERNS.filter((p) =>
-    NEETCODE_150.some((c) => c.pattern === p && !c.premium && !firsts.has(c.slug)),
+    PLAN_LIST.some((c) => c.pattern === p && pickable(c, seen, scope.premium)),
   )
     .map((p) => stat.get(p) ?? { pattern: p, misses: 0, of: 0 })
     .sort(
@@ -448,13 +532,14 @@ export function focusOn(
   override: (Pick<CoachFocus, 'pattern' | 'sinceDay'> & Partial<Pick<CoachFocus, 'source'>>) | null,
   today: string,
   params: CoachParams = COACH_PARAMS,
+  scope: CoachScope = NO_SCOPE,
 ): CoachFocusState {
   const days = [...new Set(attempts.map((a) => a.day))].sort();
   const anchor = override?.sinceDay ?? days[0] ?? today;
   const active = days.filter((d) => d >= anchor && d < today);
   const blocks = Math.floor(active.length / params.blockDays);
   const top = (day: string, not: PatternId | null) =>
-    rankPatterns(attempts, day).find((r) => r.pattern !== not);
+    rankPatterns(attempts, day, scope).find((r) => r.pattern !== not);
   let ranked = override ? undefined : top(anchor, null);
   let pattern: PatternId = override?.pattern ?? ranked?.pattern ?? PATTERNS[0];
   for (let k = 1; k <= blocks; k++) {
@@ -558,15 +643,17 @@ export interface CoachInput {
   focus: CoachFocus | null;
   aiPick?: boolean; // the setting (and the feature) is on: a stored AI pick overlays the rule slots
   aiCanStart?: boolean; // and a pick may start now: the server's today, with a worker to run it
+  premium?: boolean; // Settings.leetcodePremium: Premium problems can be picked; absent = never
 }
 
 const UP: Record<Difficulty, Difficulty | null> = { Easy: 'Medium', Medium: 'Hard', Hard: null };
 const DIFF_RANK: Record<Difficulty, number> = { Easy: 0, Medium: 1, Hard: 2 };
 const dayStartHhmm = (h: number) => `${String(h).padStart(2, '0')}:00`;
 const dayStartAt = (day: string, h: number) => zonedEpoch(day, dayStartHhmm(h), USER_TIME_ZONE);
-// A catalog problem the plan may offer: not premium-only, never seen. The AI pick's candidates use it too.
-export const pickable = (c: CatalogProblem, seen: ReadonlySet<string>) =>
-  !c.premium && !seen.has(c.slug);
+// A catalog problem the plan may offer: never seen, and not Premium unless Premium can be picked
+// (Settings.leetcodePremium). The AI pick's candidates use it too.
+export const pickable = (c: CatalogProblem, seen: ReadonlySet<string>, premium = false) =>
+  (premium || !c.premium) && !seen.has(c.slug);
 
 // Every problem on the plan: each slot's, and each engine pick a swap replaced.
 const slotProblems = (slots: readonly Pick<CoachSlot, 'slug' | 'swappedFrom'>[]) =>
@@ -579,10 +666,11 @@ export function easierIn(
   than: Difficulty | null,
   seen: ReadonlySet<string>,
   not: ReadonlySet<string>,
+  premium = false,
 ): CatalogProblem[] {
   const cap = than ? DIFF_RANK[than] : 2;
-  const open = NEETCODE_150.filter(
-    (c) => c.pattern === pattern && pickable(c, seen) && !not.has(c.slug),
+  const open = PLAN_LIST.filter(
+    (c) => c.pattern === pattern && pickable(c, seen, premium) && !not.has(c.slug),
   );
   const easier = open
     .filter((c) => DIFF_RANK[c.difficulty] < cap)
@@ -634,10 +722,12 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
     (a) => a.day <= today,
   );
   const before = all.filter((a) => a.day < today);
-  const records = problemRecords(before, params);
+  const scope = coachScope(input);
+  const history = historyAttemptsOf(input.attempts).filter((a) => a.day < today);
+  const records = problemRecords(before, params, history);
   const seen = new Set(records.map((r) => r.slug));
-  const focus = focusOn(all, input.focus, today, params);
-  const ranks = rankPatterns(before, today);
+  const focus = focusOn(all, input.focus, today, params, scope);
+  const ranks = rankPatterns(before, today, scope);
 
   // carry-over
   const lastActive = before.length ? before[before.length - 1]!.day : null;
@@ -656,7 +746,9 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
   const swappedOut = new Set(
     recentDays.flatMap((d) => d.changes.filter((c) => c.action === 'swap').map((c) => c.from)),
   );
-  const unseen = NEETCODE_150.filter((c) => c.pattern === focus.pattern && pickable(c, seen));
+  const unseen = PLAN_LIST.filter(
+    (c) => c.pattern === focus.pattern && pickable(c, seen, scope.premium),
+  );
   const fresh = [
     ...unseen.filter((c) => !swappedOut.has(c.slug)),
     ...unseen.filter((c) => swappedOut.has(c.slug)),
@@ -682,8 +774,9 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
   const stretch = [
     ...fresh.filter((c) => c.difficulty === up),
     ...(next
-      ? NEETCODE_150.filter(
-          (c) => c.pattern === next && c.difficulty === 'Medium' && pickable(c, seen),
+      ? PLAN_LIST.filter(
+          (c) =>
+            c.pattern === next && c.difficulty === 'Medium' && pickable(c, seen, scope.premium),
         )
       : []),
   ];
@@ -861,7 +954,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       status,
       sittingId: sitting?.id ?? null,
       outcome: status === 'done' ? (done?.outcome ?? null) : null,
-      alternatives: easierIn(s.pattern, s.difficulty, seen, taken)
+      alternatives: easierIn(s.pattern, s.difficulty, seen, taken, input.premium === true)
         .slice(0, 2)
         .map((c) => ({ slug: c.slug, title: c.title, difficulty: c.difficulty })),
     };
@@ -986,11 +1079,16 @@ function aiViewOf(input: CoachInput, pools: CoachPools): CoachAiView | null {
 
 // Every problem the user has a record on, newest first, from all counted attempts (today's too).
 // `today`: a sitting left open overnight counts on its day, as the plan counts it.
+// History-only solves are records too (schedule null), so Progress and get_problem see them.
 export function listRecords(
-  input: Omit<CoachInput, 'today' | 'days' | 'focus' | 'dayStartHour'> & { today?: string },
+  input: Omit<CoachInput, 'today' | 'days' | 'focus' | 'dayStartHour' | 'premium'> & {
+    today?: string;
+  },
 ) {
   return problemRecords(
     attemptsOf(input.sittings, input.attempts, input.now, COACH_PARAMS, input.today),
+    COACH_PARAMS,
+    historyAttemptsOf(input.attempts),
   ).sort((a, b) => b.lastDay.localeCompare(a.lastDay) || a.slug.localeCompare(b.slug));
 }
 
@@ -1055,12 +1153,13 @@ export function coachStats(
   attempts: readonly Attempt[],
   today: string,
   range: CoachStatsRange = {},
+  scope: CoachScope = NO_SCOPE,
 ): CoachStats {
   const from = range.from ?? null;
   const to = range.to ?? today;
   if (from !== null && from > to) throw new Error('from must not be after to');
-  const seen = new Set<string>();
-  const ranked = rankPatterns(attempts, addDays(today, 1));
+  const seen = new Set<string>(scope.history.keys()); // a history-only problem's live tries are re-solves
+  const ranked = rankPatterns(attempts, addDays(today, 1), scope);
   const ranks = new Map(ranked.map((r, i) => [r.pattern, i + 1]));
   const out: CoachStats = {
     from,
@@ -1130,7 +1229,7 @@ export function coachStats(
   out.activeDays = days.size;
   out.problems = slugs.size;
   out.weeks = [...weeks.values()].sort((a, b) => a.week.localeCompare(b.week));
-  const detail = patternDetail(attempts, from, to);
+  const detail = patternDetail(attempts, from, to, scope);
   out.patterns = [...pats.values()]
     .map(({ slugs: s, ...p }) => ({ ...p, problems: s.size, ...detail.get(p.pattern)! }))
     .sort(
@@ -1153,8 +1252,9 @@ export function patternDetail(
   attempts: readonly Attempt[],
   from: string | null,
   to: string,
+  scope: CoachScope = NO_SCOPE,
 ): Map<PatternId, PatternDetail> {
-  const seen = new Set<string>();
+  const seen = new Set<string>(scope.history.keys());
   const acc = new Map<
     PatternId,
     PatternDetail & { submits: number; submitted: number; byWeek: Map<string, Rate> }
@@ -1208,6 +1308,7 @@ export const LOG_ATTEMPTS_MAX = 50;
 export const ATTEMPT_NOTE_MAX = 300;
 export const ATTEMPT_TITLE_MAX = 200;
 export const ATTEMPT_BACKDATE_DAYS = 60;
+export const ATTEMPT_HISTORY_DAYS = 3650; // a history-only solve: up to 10 years back
 export interface CoachAttemptInput {
   slug: string;
   title?: string | null;
@@ -1217,10 +1318,11 @@ export interface CoachAttemptInput {
   cause?: CauseTag | null;
   minutes?: number | null;
   note?: string | null;
+  historical?: boolean; // a solve from before the coach: lights up Progress, never scheduled or counted
 }
 export type NormalizedAttempt = Pick<
   CoachAttempt,
-  'slug' | 'title' | 'day' | 'outcome' | 'help' | 'cause' | 'minutes' | 'note'
+  'slug' | 'title' | 'day' | 'outcome' | 'help' | 'cause' | 'minutes' | 'note' | 'historical'
 >;
 const KNOWN_ATTEMPT_KEYS = new Set([
   'slug',
@@ -1231,9 +1333,11 @@ const KNOWN_ATTEMPT_KEYS = new Set([
   'cause',
   'minutes',
   'note',
+  'historical',
 ]);
 // One manual attempt, validated: a problem slug, an outcome, a day no later than today and at most
-// ATTEMPT_BACKDATE_DAYS back; `failed` with help `solution` is a peek. A clean attempt took no help.
+// ATTEMPT_BACKDATE_DAYS back (a history-only one ATTEMPT_HISTORY_DAYS); `failed` with help `solution` is a peek.
+// A clean attempt took no help.
 export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAttempt {
   if (!v || typeof v !== 'object' || Array.isArray(v))
     throw new Error('An attempt must be an object');
@@ -1256,8 +1360,16 @@ export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAtte
   const day = r.day ?? today;
   if (typeof day !== 'string' || !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
   if (day > today) throw new Error('day must not be after today');
-  if (day < addDays(today, -ATTEMPT_BACKDATE_DAYS))
-    throw new Error(`day must be within the last ${ATTEMPT_BACKDATE_DAYS} days`);
+  if (r.historical !== undefined && typeof r.historical !== 'boolean')
+    throw new Error('historical must be true or false');
+  const historical = r.historical === true;
+  const back = historical ? ATTEMPT_HISTORY_DAYS : ATTEMPT_BACKDATE_DAYS;
+  if (day < addDays(today, -back))
+    throw new Error(
+      historical
+        ? `day must be within the last ${ATTEMPT_HISTORY_DAYS / 365} years`
+        : `day must be within the last ${ATTEMPT_BACKDATE_DAYS} days (a solve from before the coach: historical true)`,
+    );
   const minutes = r.minutes ?? null;
   if (
     minutes !== null &&
@@ -1280,15 +1392,21 @@ export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAtte
     cause,
     minutes: minutes as number | null,
     note: text(r.note, 'note', ATTEMPT_NOTE_MAX),
+    ...(historical ? { historical: true as const } : {}),
   };
 }
 // A peek already logged for that problem and day (logCoachAttempts returns it instead of a second row).
 export const peekOf = (
   stored: readonly CoachAttempt[],
-  n: Pick<CoachAttempt, 'slug' | 'day'>,
+  n: Pick<CoachAttempt, 'slug' | 'day' | 'historical'>,
 ): CoachAttempt | null =>
   stored.find(
-    (a) => a.deletedAt === null && a.help === 'solution' && a.slug === n.slug && a.day === n.day,
+    (a) =>
+      a.deletedAt === null &&
+      a.help === 'solution' &&
+      a.slug === n.slug &&
+      a.day === n.day &&
+      (a.historical === true) === (n.historical === true),
   ) ?? null;
 export function normalizeCoachAttempts(v: unknown, today: string): NormalizedAttempt[] {
   if (!Array.isArray(v) || !v.length) throw new Error('attempts must be a non-empty list');
@@ -1312,6 +1430,7 @@ export function applySlotChange(
   known: (slug: string) => boolean,
   seen: ReadonlySet<string>,
   now: number,
+  premium = false,
 ): CoachSlotChange[] {
   if (!isProblemSlug(input.slug)) throw new Error('slug must be a LeetCode problem slug');
   if (!SLOT_ACTIONS.includes(input.action)) throw new Error('action must be swap, skip or restore');
@@ -1327,7 +1446,13 @@ export function applySlotChange(
     return [...rest, { kind: slot.kind, action: 'skip', from, to: null, at: now }];
   let to = input.toSlug;
   if (to === undefined) {
-    const easier = easierIn(slot.pattern, slot.difficulty, seen, slotProblems(today.slots))[0];
+    const easier = easierIn(
+      slot.pattern,
+      slot.difficulty,
+      seen,
+      slotProblems(today.slots),
+      premium,
+    )[0];
     if (!easier)
       throw new Error(
         `No unseen problem left in ${PATTERN_NAMES[slot.pattern]} at or under ${slot.difficulty ?? 'Hard'}; pass toSlug`,
@@ -1350,16 +1475,29 @@ export function applySlotChange(
 export function focusHolds(ci: CoachInput, cur: CoachFocus, pattern: PatternId): boolean {
   if (cur.deletedAt !== null || cur.pattern !== pattern) return false;
   const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
-  return focusOn(all, cur, ci.today).source === 'override';
+  return focusOn(all, cur, ci.today, COACH_PARAMS, coachScope(ci)).source === 'override';
+}
+// What a slot change reads: the problems seen before today (live and history-only), and whether a slug is a
+// problem at all (on a list, or tried).
+export function slotChangeInputs(ci: CoachInput): {
+  seen: Set<string>;
+  known: (slug: string) => boolean;
+} {
+  const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
+  const scope = coachScope(ci);
+  const seen = seenBefore(all, scope, ci.today);
+  const tried = new Set([...all.map((a) => a.slug), ...scope.history.keys()]);
+  return { seen, known: (slug) => !!catalogProblem(slug) || tried.has(slug) };
 }
 // An override on a pattern with nothing unseen left would leave no new slot: refused.
 export function focusRoomError(ci: CoachInput, pattern: PatternId): string | null {
-  const seen = new Set(
-    attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today)
-      .filter((a) => a.day < ci.today)
-      .map((a) => a.slug),
+  const scope = coachScope(ci);
+  const seen = seenBefore(
+    attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+    scope,
+    ci.today,
   );
-  return NEETCODE_150.some((c) => c.pattern === pattern && pickable(c, seen))
+  return PLAN_LIST.some((c) => c.pattern === pattern && pickable(c, seen, scope.premium))
     ? null
     : `Nothing unseen is left in ${PATTERN_NAMES[pattern]} — pick another pattern`;
 }

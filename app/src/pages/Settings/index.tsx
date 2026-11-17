@@ -883,6 +883,22 @@ function LeetcodeSection() {
             </Text>
           </span>
         </label>
+        {/* The coach's Premium picks (docs/areas/recruiting/coach.md → The catalog). Old rows read undefined = on. */}
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={settings.leetcodePremium !== false}
+            onChange={(e) => update.mutate({ leetcodePremium: e.target.checked })}
+          />
+          <span className="flex flex-col">
+            <Text size="sm">I have LeetCode Premium</Text>
+            <Text size="xs" tone="muted">
+              The coach can pick Premium problems, and Progress counts them like any other. Off, it
+              skips them and marks them Premium.
+            </Text>
+          </span>
+        </label>
         {update.isError && (
           <p role="alert" className="text-xs text-danger">
             Couldn&apos;t save that — try again.

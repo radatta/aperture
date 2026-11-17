@@ -20,6 +20,8 @@ export function useUpdateSettings() {
         void qc.invalidateQueries({ queryKey: qk.finance() });
       // The AI pick switch changes the day's plan (a stored pick shows or not; a pick may now be due).
       if ('coachAiPick' in patch) void qc.invalidateQueries({ queryKey: qk.coach() });
+      // LeetCode Premium moves the coach's picks — re-read the plan, the stats and the records.
+      if ('leetcodePremium' in patch) void qc.invalidateQueries({ queryKey: qk.coach() });
     },
   });
 }

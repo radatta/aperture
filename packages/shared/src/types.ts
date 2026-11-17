@@ -287,6 +287,8 @@ export interface Settings extends BaseEntity {
   // LeetCode: the Roll whose rep a sitting is (docs/areas/recruiting). Unset → the extension's Start is
   // refused (LC_ROLL_UNLINKED_ERROR). Rows from before read back undefined → `?? null`.
   leetcodeRollId: string | null; // default null
+  // LeetCode Premium: the coach may pick Premium problems. Rows from before read back undefined → the default.
+  leetcodePremium: boolean; // default true
   // Reminders (reminders.ts): which kinds ping this user's devices. Rows from before read back undefined
   // and count as on (reminderEnabled).
   remindTimed: boolean; // default true — a deadline with a clock time, at that time
@@ -520,6 +522,7 @@ export interface CoachAttempt extends BaseEntity {
   minutes: number | null;
   note: string | null;
   source: 'manual' | 'peek-seed';
+  historical?: true; // a solve from before the coach (log_attempt historical): seen, never scheduled or counted
 }
 export type SlotKind = 'carry-over' | 'new' | 're-solve' | 'stretch';
 // One change the user made to a day's plan: a slot (by the engine's pick, `from`) swapped to `to`, or skipped.
