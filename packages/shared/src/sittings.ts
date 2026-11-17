@@ -11,6 +11,7 @@ import { findOpenRollTask } from './rolls';
 import { isUlid } from './ulid';
 import type {
   BaseEntity,
+  CauseTag,
   CoachEventKind,
   CoachMark,
   HelpLevel,
@@ -826,6 +827,15 @@ export const REVIEW_HOW_MAX = 1000;
 export const REVIEW_TAGS_MAX = 10;
 export const REVIEW_TAG_MAX = 40;
 export const HELP_LEVELS: readonly HelpLevel[] = ['none', 'hint', 'solution'];
+// The coach's cause tags (docs/areas/recruiting/coach.md): one per sitting, the aggregate the mistakes can't be.
+export const CAUSE_TAGS: readonly CauseTag[] = [
+  'no-trace',
+  'api-slip',
+  'boundary',
+  'off-by-one',
+  'quit-early',
+];
+export const isCauseTag = (v: unknown): v is CauseTag => CAUSE_TAGS.includes(v as CauseTag);
 export type SittingReviewInput = Omit<SittingReview, 'updatedAt'>;
 
 const fold = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -861,15 +871,70 @@ export function normalizeSittingReview(input: unknown): SittingReviewInput | nul
   if (tags.length > REVIEW_TAGS_MAX) throw new Error(`Tags are limited to ${REVIEW_TAGS_MAX}`);
   if (tags.some((t) => t.length > REVIEW_TAG_MAX))
     throw new Error(`A tag is limited to ${REVIEW_TAG_MAX} characters`);
-  if (!insight && !howItWent && !mistakes.length && !tags.length && help === 'none') return null;
-  return {
+  if (r.cause !== undefined && r.cause !== null && !isCauseTag(r.cause))
+    throw new Error(`Cause must be one of ${CAUSE_TAGS.join(', ')}`);
+  if (r.test !== undefined && typeof r.test !== 'boolean')
+    throw new Error('Test must be true or false');
+  const out: SittingReviewInput = {
     insight,
     help,
     mistakes,
     howItWent,
     tags,
     draftUsed: r.draftUsed === true && mistakes.length > 0,
+    // Said only when sent: an absent cause or test keeps the stored one (mergeReview), an explicit null clears it.
+    ...(r.cause !== undefined ? { cause: r.cause as CauseTag | null } : {}),
+    ...(r.test !== undefined ? { test: r.test as boolean } : {}),
   };
+  return isEmptyReview(out) && r.cause === undefined && r.test === undefined ? null : out;
+}
+export const isEmptyReview = (r: SittingReviewInput): boolean =>
+  !r.insight &&
+  !r.howItWent &&
+  !r.mistakes.length &&
+  !r.tags.length &&
+  r.help === 'none' &&
+  !r.cause &&
+  r.test !== true;
+const EMPTY_REVIEW: SittingReviewInput = {
+  insight: null,
+  help: 'none',
+  mistakes: [],
+  howItWent: null,
+  tags: [],
+  draftUsed: false,
+};
+// The stored review after a write: `next`'s fields (null = the form cleared everything), with the cause and test
+// flag kept from `cur` unless `next` sends them, so the app form's Save never wipes a cause the coach set over MCP.
+// All empty → null. The cause and flag are stored only when set.
+export function mergeReview(
+  cur: SittingReview | null | undefined,
+  next: SittingReviewInput | null,
+  now: number,
+): SittingReview | null {
+  const cause = next?.cause !== undefined ? next.cause : (cur?.cause ?? null);
+  const test = next?.test !== undefined ? next.test : cur?.test === true;
+  const n = next ?? EMPTY_REVIEW;
+  const merged: SittingReviewInput = {
+    insight: n.insight,
+    help: n.help,
+    mistakes: n.mistakes,
+    howItWent: n.howItWent,
+    tags: n.tags,
+    draftUsed: n.draftUsed,
+    ...(cause ? { cause } : {}),
+    ...(test ? { test: true } : {}),
+  };
+  return isEmptyReview(merged) ? null : { ...merged, updatedAt: now };
+}
+// The coach's partial write (patchSittingReview): help, cause or the test flag onto the stored review, or onto
+// an empty one when there's none yet.
+export function patchReview(
+  cur: SittingReview | null | undefined,
+  patch: { cause?: CauseTag | null; help?: HelpLevel; test?: boolean },
+  now: number,
+): SittingReview | null {
+  return mergeReview(cur, { ...(cur ?? EMPTY_REVIEW), ...patch }, now);
 }
 // The help the form starts on when there's no review yet: a hint once a submit failed before the accepted one.
 export const suggestedHelp = (s: Pick<Sitting, 'summary'>): HelpLevel =>

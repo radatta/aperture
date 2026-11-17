@@ -19,6 +19,10 @@ import type {
   TaskStatus,
   CreateCategoryInput,
   SittingReviewInput,
+  SittingReviewPatch,
+  CoachSlotInput,
+  CoachAttemptInput,
+  PatternId,
   SubscribePushInput,
   UpdateCategoryInput,
   UpsertCategoryInput,
@@ -165,6 +169,20 @@ const SITTING_REVIEW_KEYS = keysOf<SittingReviewInput>({
   howItWent: true,
   tags: true,
   draftUsed: true,
+  cause: true,
+  test: true,
+});
+const REVIEW_PATCH_KEYS = keysOf<SittingReviewPatch>({ cause: true, help: true, test: true });
+const SLOT_KEYS = keysOf<CoachSlotInput>({ slug: true, action: true, toSlug: true });
+const ATTEMPT_KEYS = keysOf<CoachAttemptInput>({
+  slug: true,
+  title: true,
+  day: true,
+  outcome: true,
+  help: true,
+  cause: true,
+  minutes: true,
+  note: true,
 });
 const PUSH_KEYS = keysOf<SubscribePushInput>({ endpoint: true, keys: true, label: true });
 
@@ -421,6 +439,18 @@ export const RPC_ARGS = {
   setSittingReview: [id, owned('review', SITTING_REVIEW_KEYS)],
   draftSittingReview: [id],
   deleteSitting: [id],
+  patchSittingReview: [id, owned('patch', REVIEW_PATCH_KEYS, { object: true })],
+
+  // The LeetCode coach — the normalizers in coach.ts check every field with their own messages.
+  getCoachToday: [opt(day)],
+  listProblemRecords: [],
+  setCoachSlot: [owned('slot', SLOT_KEYS, { object: true })],
+  setCoachFloor: [named('on', bool)],
+  setCoachFocus: [nullable(strOf<PatternId>(KEY_MAX))],
+  logCoachAttempts: [
+    arr(owned<CoachAttemptInput>('attempt', ATTEMPT_KEYS, { object: true }), BATCH_MAX),
+  ],
+  deleteCoachAttempt: [id],
 
   // Flux — fluxSetError checks every field of a set and the row is rebuilt from them.
   recordFluxSet: [owned('flux set', undefined, { object: true })],

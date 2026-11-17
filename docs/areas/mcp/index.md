@@ -82,6 +82,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | flux (read)     | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                                                                                                                                                                                               |
 | log (read)      | `search_log {query,from?,to?,limit?,cursor?}`, `list_log {from,to,limit?,cursor?}`, `get_day {day}` — read-only                                                                                                                                                                                                               |
 | leetcode        | `live_sitting {sinceVersion?}` — the open sitting, live; counts the pull. `get_sitting {id?}`, `list_sittings {from?,to?,limit?}` — read-only ([recruiting](../recruiting/index.md) → _Claude watches live_, _Reading a sitting back_)                                                                                        |
+| leetcode coach  | `leetcode_today {day?}` (read); `mark_peeked {slug \| sittingId, day?}`, `set_cause_tag {sittingId?, cause, peeked?}`, `swap_slot {slug, action, toSlug?}`, `log_attempt {attempts[]}` — writes, each opening with the ask-first sentence; leave them on **Ask** ([recruiting/coach](../recruiting/coach.md))                 |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -230,8 +231,10 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   the page still lands in its sitting. Its one write is the pull's own count on that sitting ("Claude watched
   live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
   `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final
-  code, the user's review — and `list_sittings` lists heads with `reviewed` and the user's tags; both only read. No MCP write
-  for reviews: they're the user's own words, typed in the app.
+  code, the user's review — and `list_sittings` lists heads with `reviewed` and the user's tags; both only read. The
+  review's words stay the user's, typed in the app; the coach writes only its cause tag and the peek
+  (`set_cause_tag`, `mark_peeked`), and `live_sitting` carries the open sitting's `slot` in today's plan
+  ([recruiting/coach](../recruiting/coach.md) → _Over MCP_).
 
 ## Claude Code's standing approvals and the dev ledger
 
@@ -278,6 +281,7 @@ transport. See `lambdas/src/mcp/protocol.ts`.
   `listLogEntries`, `listTasks`, `getCalibration`, `listPlansForDay`, `getCalendarBusy`, `listFluxSets`,
   `listSittings` (`setRow` from `fluxTools.ts`); the `toMcpLogEntry` / `logEntryMatches` choke points.
 - `lambdas/src/mcp/leetcodeTools.ts` — `live_sitting`, over the `pullLiveSitting` RPC and `judgeDetail`; `get_sitting` and `list_sittings` over `getSitting` / `listSittings` and `timelineOf`
+- `lambdas/src/mcp/coachTools.ts` — the LeetCode coach's tools over the coach RPCs, and `live_sitting`'s `slot`
   (`packages/shared/src/sittings.ts`).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
   become `isError` results the model self-corrects from).

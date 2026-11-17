@@ -6,6 +6,7 @@ import type { AttachmentStatus } from './attachments';
 import type { Area } from './areas';
 import type { ExerciseId } from './flux/definitions';
 import type { CompetencyTag } from './stories';
+import type { PatternId } from './neetcode150';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 
 // Every stored item carries these. `deletedAt` is a soft-delete tombstone — we never hard-delete.
@@ -486,7 +487,52 @@ export interface SittingReview {
   howItWent: string | null;
   tags: string[]; // their own pattern tags: lowercased, deduped, order kept
   draftUsed: boolean; // a Claude draft line was ticked into `mistakes` (kept while any mistake remains)
+  // The coach's one cause tag (coach.ts CAUSE_TAGS) and the test-sitting flag. Absent on reviews written before
+  // the coach — read as `cause ?? null`, `test === true`.
+  cause?: CauseTag | null;
+  test?: boolean;
   updatedAt: number;
+}
+
+// --- Recruiting: the LeetCode coach (docs/areas/recruiting/coach.md) ---
+// Only the user's decisions are stored; the plan, the queue and every problem record are derived on read.
+// Why a problem went wrong, one tag per sitting.
+export type CauseTag = 'no-trace' | 'api-slip' | 'boundary' | 'off-by-one' | 'quit-early';
+// A clean first-submit accept; accepted otherwise (later submit or a hint); never accepted, or the solution read.
+export type AttemptOutcome = 'clean' | 'solved' | 'failed';
+// An attempt made outside the extension (paper, an editor, a mock), or a peeked problem seeded from the thread.
+export interface CoachAttempt extends BaseEntity {
+  slug: string;
+  title: string | null;
+  day: string; // the user's day it counts on
+  at: number; // when it was logged
+  outcome: AttemptOutcome;
+  help: HelpLevel;
+  cause: CauseTag | null;
+  minutes: number | null;
+  note: string | null;
+  source: 'manual' | 'peek-seed';
+}
+export type SlotKind = 'carry-over' | 'new' | 're-solve' | 'stretch';
+// One change the user made to a day's plan: a slot (by the engine's pick, `from`) swapped to `to`, or skipped.
+export interface CoachSlotChange {
+  kind: SlotKind;
+  action: 'swap' | 'skip';
+  from: string;
+  to: string | null;
+  at: number;
+}
+// A day's decisions, id = the day: the floor choice and the slot changes (one per slot, the newest kept).
+export interface CoachDay extends BaseEntity {
+  day: string;
+  floor: boolean;
+  changes: CoachSlotChange[];
+}
+// The focus override (one row): the pattern held from `sinceDay`, the anchor the focus replay starts from.
+export interface CoachFocus extends BaseEntity {
+  pattern: PatternId;
+  sinceDay: string;
+  source: 'override';
 }
 
 // What the extension's replay stream says about how the sitting went, folded at ingest so it outlives the

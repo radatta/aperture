@@ -128,6 +128,17 @@ import {
   normalizePrepTarget,
   normalizeSittingEvents,
   normalizeSittingReview,
+  mergeReview,
+  patchReview,
+  normalizeReviewPatch,
+  planDay,
+  listRecords,
+  attemptsOf,
+  catalogProblem,
+  applySlotChange,
+  normalizeFocusPattern,
+  normalizeCoachAttempts,
+  peekOf,
   normalizeSittingStart,
   draftMistakes,
   timelineOf,
@@ -149,6 +160,18 @@ import {
   newestOfType,
   sittingProblemUrl,
   sittingRepTitle,
+} from '@aperture/shared';
+import type {
+  CoachAttempt,
+  CoachAttemptInput,
+  CoachDay,
+  CoachFocus,
+  CoachInput,
+  CoachSlotInput,
+  CoachToday,
+  PatternId,
+  ProblemRecord,
+  SittingReviewPatch,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -344,6 +367,9 @@ export interface Store {
   lcStartGate: LcStartGate | null; // the Start gate: internal, never exported
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
+  coachDays: CoachDay[];
+  coachAttempts: CoachAttempt[];
+  coachFocus: CoachFocus[]; // at most one alive row (id 'focus')
   attachments: Attachment[];
   fluxSets: FluxSet[];
   fluxNotes: FluxWeekNoteRow[]; // the weekly note cache (D62) — the stub's note is the deterministic line
@@ -386,6 +412,9 @@ export function emptyStore(): Store {
     lcStartGate: null,
     leetcodeProblems: [],
     stories: [],
+    coachDays: [],
+    coachAttempts: [],
+    coachFocus: [],
     attachments: [],
     fluxSets: [],
     fluxNotes: [],
@@ -1106,10 +1135,100 @@ class StubClient implements ApiClient {
   }
   async setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting> {
     const r = normalizeSittingReview(review); // validates first, as the Lambda does
-    this.mustFind(this.store.sittings, id);
+    const cur = this.mustFind(this.store.sittings, id);
     return this.writes.patch(this.store.sittings, id, {
-      review: r && { ...r, updatedAt: this.now() },
+      review: mergeReview(cur.review, r, this.now()),
     });
+  }
+  async patchSittingReview(id: string, patch: SittingReviewPatch): Promise<Sitting> {
+    const p = normalizeReviewPatch(patch);
+    const cur = this.mustFind(this.store.sittings, id);
+    return this.writes.patch(this.store.sittings, id, {
+      review: patchReview(cur.review, p, this.now()),
+    });
+  }
+
+  // --- The LeetCode coach (coach.ts) — the Lambda's rules over the store --------
+  private coachInput(day?: string): CoachInput {
+    if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
+    const { dayStartHour } = this.ensureSettings();
+    const now = this.now();
+    return {
+      today: day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour),
+      now,
+      dayStartHour,
+      sittings: this.alive(this.store.sittings),
+      attempts: this.alive(this.store.coachAttempts),
+      days: this.alive(this.store.coachDays),
+      focus: this.alive(this.store.coachFocus)[0] ?? null,
+    };
+  }
+  async getCoachToday(day?: string): Promise<CoachToday> {
+    return planDay(this.coachInput(day));
+  }
+  async listProblemRecords(): Promise<ProblemRecord[]> {
+    const ci = this.coachInput();
+    return listRecords({ now: ci.now, sittings: ci.sittings, attempts: ci.attempts });
+  }
+  private changeCoachDay(fn: (cur: CoachDay, ci: CoachInput) => CoachDay): CoachToday {
+    const ci = this.coachInput();
+    const cur = ci.days.find((d) => d.day === ci.today) ?? {
+      ...this.baseAt(ci.now),
+      id: ci.today,
+      day: ci.today,
+      floor: false,
+      changes: [],
+    };
+    const row = this.writes.put(this.store.coachDays, { ...fn(cur, ci), updatedAt: ci.now });
+    return planDay({ ...ci, days: [...ci.days.filter((d) => d.day !== ci.today), row] });
+  }
+  async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
+    return this.changeCoachDay((cur, ci) => {
+      const all = attemptsOf(ci.sittings, ci.attempts, ci.now);
+      const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
+      const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
+      const changes = applySlotChange(planDay(ci), cur.changes, input, known, seen, ci.now);
+      return { ...cur, changes };
+    });
+  }
+  async setCoachFloor(on: boolean): Promise<CoachToday> {
+    if (typeof on !== 'boolean') throw new Error('on must be true or false');
+    return this.changeCoachDay((cur) => ({ ...cur, floor: on }));
+  }
+  async setCoachFocus(pattern: PatternId | null): Promise<CoachFocus | null> {
+    const p = normalizeFocusPattern(pattern);
+    const ci = this.coachInput();
+    const cur = ci.focus;
+    if (p === null) {
+      if (cur) this.writes.softDelete(this.store.coachFocus, cur.id);
+      return null;
+    }
+    if (cur?.pattern === p) return cur;
+    return this.writes.put(this.store.coachFocus, {
+      ...this.baseAt(ci.now),
+      id: 'focus',
+      pattern: p,
+      sinceDay: ci.today,
+      source: 'override',
+    });
+  }
+  async logCoachAttempts(inputs: CoachAttemptInput[]): Promise<CoachAttempt[]> {
+    const ci = this.coachInput();
+    const list = normalizeCoachAttempts(inputs, ci.today);
+    return list.map(
+      (n) =>
+        (n.help === 'solution' && peekOf(this.alive(this.store.coachAttempts), n)) ||
+        this.writes.insert(this.store.coachAttempts, {
+          ...this.baseAt(ci.now),
+          ...n,
+          at: ci.now,
+          source: n.help === 'solution' ? 'peek-seed' : 'manual',
+        }),
+    );
+  }
+  async deleteCoachAttempt(id: string): Promise<void> {
+    if (this.find(this.store.coachAttempts, id))
+      this.writes.softDelete(this.store.coachAttempts, id);
   }
   // Deterministic stand-in for the Haiku draft (same shape and rules, no model): one line per judged Run or
   // Submit that wasn't accepted, naming its failing case or error head.
@@ -2833,6 +2952,9 @@ class StubClient implements ApiClient {
       ),
       leetcodeProblems: this.alive(this.store.leetcodeProblems),
       stories: this.alive(this.store.stories),
+      coachDays: this.alive(this.store.coachDays),
+      coachAttempts: this.alive(this.store.coachAttempts),
+      coachFocus: this.alive(this.store.coachFocus)[0] ?? null,
       fluxSets: this.alive(this.store.fluxSets),
       attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
       financeItems: this.alive(this.store.financeItems),

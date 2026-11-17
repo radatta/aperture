@@ -7,6 +7,9 @@ import type {
   FinanceRule,
   FinanceSyncState,
   FinanceTransaction,
+  CoachAttempt,
+  CoachDay,
+  CoachFocus,
   FluxSet,
   Day,
   Habit,
@@ -390,6 +393,45 @@ export class Repo {
         toEntity<LeetcodeProblem>(i),
       ),
     );
+  }
+
+  // --- The LeetCode coach (keys.ts → coach*) ---
+  async listCoachDays(opts?: { consistent?: boolean }): Promise<CoachDay[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.coachDayPrefix(), opts)).map((i) => toEntity<CoachDay>(i)),
+    );
+  }
+  coachDayShape(day: string): CasShape<CoachDay> {
+    return {
+      sk: sk.coachDay(day),
+      read: (i) => toEntity<CoachDay>(i),
+      toItem: (d) => entityItem(this.userId, sk.coachDay(day), d),
+    };
+  }
+  async listCoachAttempts(opts?: { consistent?: boolean }): Promise<CoachAttempt[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.coachAttemptPrefix(), opts)).map((i) =>
+        toEntity<CoachAttempt>(i),
+      ),
+    );
+  }
+  async getCoachAttempt(id: string, opts?: { consistent?: boolean }): Promise<CoachAttempt | null> {
+    const it = await this.doc.get(this.p(), sk.coachAttempt(id), opts);
+    const a = it ? toEntity<CoachAttempt>(it) : null;
+    return a && a.deletedAt === null ? a : null;
+  }
+  async putCoachAttempt(a: CoachAttempt): Promise<CoachAttempt> {
+    await this.writes.put(entityItem(this.userId, sk.coachAttempt(a.id), a));
+    return a;
+  }
+  async getCoachFocus(opts?: { consistent?: boolean }): Promise<CoachFocus | null> {
+    const it = await this.doc.get(this.p(), sk.coachFocus(), opts);
+    const f = it ? toEntity<CoachFocus>(it) : null;
+    return f && f.deletedAt === null ? f : null;
+  }
+  async putCoachFocus(f: CoachFocus): Promise<CoachFocus> {
+    await this.writes.put(entityItem(this.userId, sk.coachFocus(), f));
+    return f;
   }
 
   // --- Flux sets ---
