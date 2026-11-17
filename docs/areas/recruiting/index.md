@@ -95,6 +95,20 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 - **Derived, never stored:** `sittingMetrics` — first submit accepted (headline), submits before accepted,
   time to first submit — and the elapsed time.
 
+### Coach events
+
+The extension's coaching (the trace card at the first Submit, the resubmit nudge — LeetCode coach epic, PR C) reports
+as events of type `coach`, a head event like a run: a compact head row (`coachMarkOf`: the kind, how many of the
+three inputs a trace filled, a config's switches) and the payload kept forever beside it. The payload is
+`CoachEventPayload` in `packages/shared/src/types.ts`: `config` (what was on: trace card, hold, nudge — once per
+sitting, so weeks with the gate on and off can be told apart), `trace` (his empty/boundary/normal inputs, each ≤ 300
+chars), `trace-skip`, `untraced-submit` (a Submit seen with neither) and `nudge-shown`; ≤ 2 KB each. They fold into
+`summary.coach` — `trace` is the state **at the first submit** (three inputs `traced`, one or two `partial`, none or a
+skip `skipped`, a submit seen untraced `none`; a trace after the first submit changes nothing), plus the config and
+a nudge count. A kind the server doesn't know is stored and folds nothing, so the extension can add one before the
+server reads it. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
+extension that sends none — so readers take `summary.coach ?? null`.
+
 ### Claude watches live
 
 The MCP tool `live_sitting` (`lambdas/src/mcp/leetcodeTools.ts`, over the `pullLiveSitting` RPC) is how Claude

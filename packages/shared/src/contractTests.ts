@@ -3434,6 +3434,53 @@ export function runApiContract(
         ).rejects.toThrow(SITTING_ENDED_ERROR);
       });
 
+      it('coach events fold into the head and keep their payload; a repeat counts as a duplicate', async () => {
+        const { sitting } = await startSitting(api);
+        const coachEv = (at: number, payload: unknown): SittingEventInput => ({
+          id: ulid(),
+          type: 'coach',
+          at,
+          payload,
+        });
+        const traced = coachEv(LC_T0 + 2000, {
+          kind: 'trace',
+          inputs: { empty: '[]', boundary: '[1]', normal: '[3,1,2]' },
+          ms: 45_000,
+        });
+        const events = [
+          coachEv(LC_T0 + 1000, { kind: 'config', trace: true, hold: true, nudge: true }),
+          traced,
+          lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 3000, 1, 3),
+          coachEv(LC_T0 + 4000, { kind: 'nudge-shown', gapMs: 30_000 }),
+        ];
+        await api.lcSittingEvents({ sittingId: sitting.id, events });
+        const again = await api.lcSittingEvents({ sittingId: sitting.id, events: [traced] });
+        expect(again).toMatchObject({ accepted: 0, duplicates: 1 });
+        const detail = await api.getSitting(sitting.id);
+        expect(detail.sitting.summary.coach).toEqual({
+          config: { trace: true, hold: true, nudge: true },
+          trace: 'traced',
+          nudges: 1,
+        });
+        expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 4 });
+        expect((await api.listSittings())[0]!.summary.coach?.trace).toBe('traced');
+        // Over its 2 KB cap: refused, nothing written.
+        const big = coachEv(LC_T0 + 5000, { kind: 'trace-skip', pad: 'x'.repeat(2100) });
+        await expect(api.lcSittingEvents({ sittingId: sitting.id, events: [big] })).rejects.toThrow(
+          /too large/,
+        );
+        expect((await api.getSitting(sitting.id)).sitting.summary.headEvents).toBe(4);
+      });
+
+      it('a sitting with no coach events reads no coach', async () => {
+        const { sitting } = await startSitting(api);
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [lcJudged('submit', 10, 'Accepted', LC_T0 + 1000, 3, 3)],
+        });
+        expect((await api.getSitting(sitting.id)).sitting.summary.coach ?? null).toBeNull();
+      });
+
       it('events stop a day after Start', async () => {
         const { sitting } = await startSitting(api);
         advance(SITTING_INGEST_WINDOW_MS + 1);

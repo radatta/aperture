@@ -308,6 +308,13 @@ export interface DevSitting {
     lastRun: DevVerdict | null;
     submitsBeforeAccepted: number | null;
     runsBeforeFirstSubmit: number;
+    headEvents: number;
+    // lc-coach C0 — absent until a coach event folds
+    coach?: {
+      config: { trace: boolean; hold: boolean; nudge: boolean } | null;
+      trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
+      nudges: number;
+    };
   };
 }
 export interface DevSittingReview {
@@ -344,7 +351,7 @@ export interface DevSittingStart {
 export type DevSittingEvent =
   | {
       id: string;
-      type: 'snapshot' | 'run' | 'submit' | 'submitDetails' | 'note' | 'timer';
+      type: 'snapshot' | 'run' | 'submit' | 'submitDetails' | 'note' | 'timer' | 'coach';
       at: number;
       payload: unknown;
     }

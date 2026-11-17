@@ -338,6 +338,25 @@ export const lcSittings: Scenario = {
       kind: 'edge',
       what: 'Sending the same events again counts them as duplicates, nothing double-counted',
     },
+    // lc-coach C0: the extension's coach events (trace card, resubmit nudge) fold into summary.coach.
+    {
+      id: 'coach-fold',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Coach events (config, an untraced submit, a nudge) fold into the sitting’s coaching; a repeat is a duplicate',
+    },
+    {
+      id: 'coach-after-submit',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A trace sent after the first submit leaves the trace state as it stood at that submit',
+    },
+    {
+      id: 'coach-too-big',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A coach event over 2 KB is refused, with nothing written',
+    },
     {
       id: 'events-invalid',
       entry: 'api',
@@ -921,6 +940,49 @@ export const lcSittings: Scenario = {
         if (live?.version !== 3 || live.code !== 'class Solution:\n    def solve(self): ...')
           throw new Error(`live: ${JSON.stringify(live)}`);
         if (events.length !== 6) throw new Error(`${events.length} events stored, not 6`);
+      },
+    },
+    {
+      id: 'coach',
+      entry: 'api',
+      proves: ['coach-fold', 'coach-after-submit', 'coach-too-big'],
+      title:
+        'Coach events on A after its submits: the config, an untraced submit, a nudge, a late trace; then again; then one too big',
+      async run(ctx) {
+        const coach = (payload: unknown): DevSittingEvent => ({
+          id: devUlid(),
+          type: 'coach',
+          at: nextAt(),
+          payload,
+        });
+        const batch = [
+          coach({ kind: 'config', trace: true, hold: true, nudge: true }),
+          coach({ kind: 'untraced-submit' }),
+          coach({ kind: 'nudge-shown', gapMs: 30_000 }),
+          coach({
+            kind: 'trace',
+            inputs: { empty: '[]', boundary: '[1]', normal: '[2,1]' },
+            ms: 1,
+          }),
+        ];
+        const first = await ctx.api.writes.lcSittingEvents(state.a, batch);
+        if (first.accepted !== 4) throw new Error(`first: ${JSON.stringify(first)}`);
+        const again = await ctx.api.writes.lcSittingEvents(state.a, batch);
+        if (again.accepted !== 0 || again.duplicates !== 4)
+          throw new Error(`again: ${JSON.stringify(again)}`);
+        const want = { config: { trace: true, hold: true, nudge: true }, trace: 'none', nudges: 1 };
+        const before = (await sittingA(ctx)).sitting.summary;
+        if (JSON.stringify(before.coach) !== JSON.stringify(want))
+          throw new Error(`coach: ${JSON.stringify(before.coach)}`);
+        const big = coach({ kind: 'trace-skip', pad: 'x'.repeat(2100) });
+        await refused(
+          'a coach event over 2 KB',
+          ctx.api.writes.lcSittingEvents(state.a, [big]),
+          /too large/,
+        );
+        const after = (await sittingA(ctx)).sitting.summary;
+        if (after.headEvents !== before.headEvents)
+          throw new Error(`headEvents ${before.headEvents} → ${after.headEvents} after a refusal`);
       },
     },
     {
