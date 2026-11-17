@@ -885,6 +885,12 @@ sfail('sim: a trial launch that fails before its tap still carries its settle', 
       tape=[{'m': 'describe-ui --udid', 'out': tree(page=1)}], fileHas=[[TRIAL, '"settle":3'], [TRIAL, '"un":"ICON_SCROLL_DROPPED"']], fileLines=[[TRIAL, 2]])
 spass('sim: a no-service line just after the tap (inside its 1 s slack, at the first look) is still that tap\'s', LV(),
       tape=[dtree(tree(), 3), {'m': 'describe-ui --udid', 'n': 1, 'out': tree(), 'log': NOSVC}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":1']])
+spass('sim: a log that says it lost messages is no count (loss): every hid null', LV(),
+      tape=[{'m': 'tap -x 371 -y 247', 'log': HEARD}, {'m': 'log stream', 'out': '{"timestamp":"2026-11-16 18:00:00.000000-0800","eventType":"lossEvent","eventMessage":"lost 12 messages"}'}],
+      fileHas=[[TRIAL, '"why":"loss"'], [TRIAL, '"hid":null']])
+spass('sim: a find\'s dropped home press during a reset adds to the launch\'s "home pressed", the reset\'s own press doesn\'t', [L],
+      tape=[dtree(tree(), 3), dtree(tree('SpringBoard'), 3), dtree(APPFRONT, 1), dtree(tree('SpringBoard'), 2)],
+      notes={'0': 'home pressed 2 times; icon tapped 2 times, Home pressed before each retap'})
 spass('sim: a -0800 timestamp is the same instant', LV(),
       tape=[{'m': 'tap -x 371 -y 247', 'n': 1, 'log': {**NOSVC, 'timestamp': '@NOW8@'}}], fileHas=[[TRIAL, '"taps":[{"d":0,"hid":1']])
 spass('sim: a sim log that died is no count: every hid null, the header says died', LV(), tape=[{'m': 'log stream', 'rc': 1}],

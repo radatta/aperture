@@ -425,7 +425,7 @@ export function trialTable(tag: string, rounds: TrialRound[]): string[] {
 
 // Every icon tap, the reset retaps too, with each dropped one attributed: `no service` (the guest logged that its HID
 // service had no session inside the tap's window: AXe issue 71), `no such line` (the capture worked and saw nothing),
-// `unproven` (a 0 from a capture that never showed it hears dtuhidd at all, anywhere in the trial), `unread` (no
+// `unproven` (a 0 from a round whose capture never showed it hears dtuhidd at all), `unread` (no
 // trustworthy count). Unproven and unread are never read as a 0.
 export interface TapSummary {
   target: string;

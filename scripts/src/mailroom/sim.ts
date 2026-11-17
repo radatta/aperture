@@ -135,6 +135,7 @@ export interface SimRead {
   enabled: boolean;
   frame: { x: number; y: number; w: number; h: number };
   at: { x: number; y: number }; // the point it was read at
+  typed?: string; // a field `keys` typed into: what it typed (erase reads a leftover run against it)
 }
 export interface SimStep {
   i: number;
