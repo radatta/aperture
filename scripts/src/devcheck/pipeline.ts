@@ -238,9 +238,15 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       }
     }
     // A killed run skips a step's `finally`, and the settings row isn't ledgered: a leftover 1-minute block
-    // would have every later timer hit Done at 60 s.
-    if ((await api.reads.getSettings()).pomodoroWorkMin !== DEV_WORK_MIN)
-      await api.writes.updateSettings({ pomodoroWorkMin: DEV_WORK_MIN });
+    // would have every later timer hit Done at 60 s. The coach's AI pick goes off too (absent reads as on): the
+    // first plan read of a pickable day starts the day's one Opus pick, so no scenario's Home or coach read may —
+    // only lc-coach-ai's steps, which turn it on for themselves.
+    const settings = await api.reads.getSettings();
+    const base = {
+      ...(settings.pomodoroWorkMin !== DEV_WORK_MIN ? { pomodoroWorkMin: DEV_WORK_MIN } : {}),
+      ...(settings.coachAiPick !== false ? { coachAiPick: false } : {}),
+    };
+    if (Object.keys(base).length) await api.writes.updateSettings(base);
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
     placeBaseline = new Set((await api.reads.listPlaces()).map((p) => p.id));
     categoryBaseline = new Set((await api.reads.listCategories()).map((c) => c.id));

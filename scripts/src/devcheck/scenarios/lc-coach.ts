@@ -1660,7 +1660,7 @@ const app = { reviewId: '', f169Id: '' };
 // recruitingHelpers.ts dueBeyondSlots: due re-solves not already a live (unskipped) slot.
 const dueBeyond = (t: DevCoachToday) =>
   t.due.filter((q) => !t.slots.some((x) => x.status !== 'skipped' && x.slug === q.slug));
-async function todayCard(ctx: Ctx) {
+export async function todayCard(ctx: Ctx) {
   await ctx.ui.goto('/recruiting');
   const c = ctx.page.getByRole('region', { name: 'Today’s practice' });
   await c
@@ -1669,12 +1669,12 @@ async function todayCard(ctx: Ctx) {
     .waitFor({ timeout: 15_000 });
   return c;
 }
-async function morning(ctx: Ctx) {
+export async function morning(ctx: Ctx) {
   await ctx.ui.goto('/');
   await ctx.page.getByRole('button', { name: 'Morning', exact: true }).click();
   await ctx.page.getByText('Plan today', { exact: true }).waitFor({ timeout: 15_000 });
 }
-async function until(what: string, ok: () => Promise<boolean>, ms = 15_000) {
+export async function until(what: string, ok: () => Promise<boolean>, ms = 15_000) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 500)))
     if (await ok()) return;
   fail(`timed out waiting for ${what}`);

@@ -7,7 +7,7 @@ import { liveWrites } from '../ddb/writes';
 import { BackendClient } from '../backend';
 import { handleRpc } from '../handler';
 import { FakeAnthropic } from '../anthropic/gateway';
-import type { CoachPickCall } from '../anthropic/gateway';
+import type { CoachPickCall, CoachPickRequest } from '../anthropic/gateway';
 import { handleCoachPick } from '../coachWorker';
 import { inlinePickInvoker } from './invoker';
 import type { CoachPickEvent, CoachPickInvoker } from './invoker';
@@ -57,14 +57,14 @@ async function setup(o: { mode?: Mode; history?: boolean } = {}) {
   return { doc, anthropic, b, clock, events, run };
 }
 const answer =
-  (pick: (req: { ctx: { candidates: { slug: string }[] } }) => unknown) => (req: never) =>
-    ({
-      ok: true,
-      fields: pick(req),
-      model: 'claude-opus-5-5',
-      usage: { input: 5000, output: 900 },
-      ms: 20_000,
-    }) as CoachPickCall;
+  (pick: (req: CoachPickRequest) => unknown) =>
+  (req: CoachPickRequest): CoachPickCall => ({
+    ok: true,
+    fields: pick(req),
+    model: 'claude-opus-5-5',
+    usage: { input: 5000, output: 900 },
+    ms: 20_000,
+  });
 const firstTwo = answer((req) => ({
   picks: req.ctx.candidates.slice(0, 2).map((c, i) => ({ slug: c.slug, why: `why ${i + 1}` })),
   note: 'A light day.',
@@ -144,10 +144,9 @@ describe('the AI pick, end to end', () => {
 
   it('applies a focus change to a top-3 pattern, and shows it', async () => {
     const { anthropic, b } = await setup();
-    let to = '';
+    let to: CoachPickRequest['ctx']['top3'][number] | '' = '';
     anthropic.nextPick = answer((req) => {
-      const ctx = (req as unknown as { ctx: { top3: string[]; focus: { pattern: string } } }).ctx;
-      to = ctx.top3.find((p) => p !== ctx.focus.pattern)!;
+      to = req.ctx.top3.find((p) => p !== req.ctx.focus.pattern)!;
       return {
         picks: [{ slug: 'two-sum', why: 'x' }],
         note: null,
@@ -216,7 +215,7 @@ describe('the claim', () => {
     const { anthropic, b, clock, events, run } = await setup({ mode: 'deferred' });
     anthropic.nextPick = (req) => {
       clock.at(NOW + AI_PICK_STALE_MS + 5_000); // the call ran long
-      return firstTwo(req as never);
+      return firstTwo(req);
     };
     await b.startCoachPick();
     expect(await run(events[0]!)).toBe('fallback');

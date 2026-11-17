@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   CATEGORY_VIA,
+  COACH_ATTEMPT_VIA,
+  COACH_FOCUS_VIA,
+  DEV_AI_PICK_NOTICE,
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
   FINANCE_MARK_VIA,
@@ -96,6 +100,7 @@ describe('createApiClient', () => {
       'exportLogEntries',
       'getAttachmentDownloadUrl',
       'getCalibration',
+      'getCoachDay',
       'getCoachFocusRow',
       'getCoachStats',
       'getCoachToday',
@@ -165,8 +170,10 @@ describe('createApiClient', () => {
       'lcSittingEventsToUnknown',
       'lcSittingStart',
       'linkLeetcodeRoll',
+      'logCoachAttempts',
       'mintScopedToken',
       'patchSittingReview',
+      'recordCoachPickFocus',
       'recordFinanceBucket',
       'recordFinanceLink',
       'recordFinanceMark',
@@ -197,6 +204,7 @@ describe('createApiClient', () => {
       'setTaskActual',
       'setTaskDue',
       'setTaskEstimate',
+      'startCoachPick',
       'startSession',
       'stopSession',
       'subscribeHarnessPush',
@@ -253,6 +261,80 @@ describe('createApiClient', () => {
       `${DEV_ORIGIN}/api/deleteFluxSet`,
       expect.objectContaining({ body: '{"args":["F1"]}' }),
     );
+  });
+
+  describe('the coach’s AI pick (lc-coach-ai)', () => {
+    it('keeps the notice copy equal to shared’s AI_PICK_NOTICE', () => {
+      const src = readFileSync(
+        new URL('../../../packages/shared/src/coach.ts', import.meta.url),
+        'utf8',
+      );
+      expect(src).toContain(`export const AI_PICK_NOTICE = '${DEV_AI_PICK_NOTICE}';`);
+    });
+
+    it('records the run’s focus before startCoachPick (an ok pick may move it), once a run', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => {
+        expect(ledger.entries.map((x) => x.op)).toEqual(['created']); // durable before the request
+        return reply(200, { day: '2026-11-17', slots: [] });
+      });
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await api.writes.startCoachPick();
+      api.writes.recordCoachPickFocus(); // the app's own start, recorded by the step: still one entry
+      await api.writes.startCoachPick();
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'coach-focus:r1',
+          via: COACH_FOCUS_VIA,
+          title: 'ai pick focus',
+        },
+      ]);
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/startCoachPick`,
+        expect.objectContaining({ body: '{"args":[]}' }),
+      );
+    });
+
+    it('logs attempts with an intent, then each id from the answer; a 4xx is a refusal', async () => {
+      const ledger = memLedger();
+      let status = 200;
+      const fetch = vi.fn<FetchLike>(async () =>
+        status === 200
+          ? reply(200, [
+              { id: 'A1', slug: 'two-sum', day: '2026-11-10', outcome: 'clean', help: 'none' },
+              { id: 'A2', slug: '3sum', day: '2026-11-11', outcome: 'failed', help: 'none' },
+            ])
+          : reply(status, { error: 'outcome must be one of …' }),
+      );
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await api.writes.logCoachAttempts([
+        { slug: 'two-sum', day: '2026-11-10', outcome: 'clean' },
+        { slug: '3sum', day: '2026-11-11', outcome: 'failed' },
+      ]);
+      const title = 'log two-sum,3sum';
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'intent', via: COACH_ATTEMPT_VIA, title },
+        { run: 'r1', op: 'created', id: 'A1', via: COACH_ATTEMPT_VIA, title },
+        { run: 'r1', op: 'created', id: 'A2', via: COACH_ATTEMPT_VIA, title },
+      ]);
+      expect(ledgerKind(ledger.read(), 'A2')).toBe('coachAttempt');
+      status = 400;
+      await expect(
+        api.writes.logCoachAttempts([{ slug: 'two-sum', outcome: 'clean' }]),
+      ).rejects.toThrow(/HTTP 400/);
+      expect(ledger.entries.slice(-2).map((e) => e.op)).toEqual(['intent', 'refused']);
+    });
+
+    it('reads one day’s stored row from the export', async () => {
+      const fetch = vi.fn<FetchLike>(async () =>
+        reply(200, { coachDays: [{ id: '2026-11-17', day: '2026-11-17', floor: false }] }),
+      );
+      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      expect((await api.reads.getCoachDay('2026-11-17'))?.day).toBe('2026-11-17');
+      expect(await api.reads.getCoachDay('2026-11-16')).toBeNull();
+    });
   });
 
   it('records intent before the create and created after, with the server id', async () => {

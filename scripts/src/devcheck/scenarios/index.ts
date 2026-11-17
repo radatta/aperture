@@ -25,6 +25,7 @@ import { identifierCleanup } from './identifier-cleanup';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcCoach } from './lc-coach';
+import { lcCoachAi } from './lc-coach-ai';
 import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
 import { partsV2 } from './parts-v2';
@@ -74,6 +75,7 @@ export const SCENARIOS: Scenario[] = [
   cognitoRefresh,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   lcCoach, // after lcSittings: it links its own roll, Starts on today's slot, and unlinks for the next
+  lcCoachAi, // after lcCoach: its pick (setting on for its own steps only) replaces the rules' slots lc-coach reads
   devConcurrencyCaps,
   bffHardening,
   bffShapes,
