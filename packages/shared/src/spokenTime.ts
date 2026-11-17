@@ -149,7 +149,9 @@ export function spokenTimeIn(line: string): SpokenTime | null {
         : null;
   // "at five twenty pm", "at 5 20": a minute the grammar doesn't read follows the hour — not a time it
   // can resolve, so none (the model's own clock takes over, quickParse.ts).
-  if (at && MORE_NUMBER.test(line.slice(at.index + at[0].length))) return null;
+  // No minute follows "o'clock": "at five o'clock one more time" is 5:00.
+  if (at && !/clock$/i.test(at[0]) && MORE_NUMBER.test(line.slice(at.index + at[0].length)))
+    return null;
   if (bare && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
     return { kind: 'bare', ...bare, part };
   return partMatch && part ? { said: partMatch[0], kind: 'part', part } : null;
