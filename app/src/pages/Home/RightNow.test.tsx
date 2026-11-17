@@ -449,6 +449,36 @@ describe('Right now — a LeetCode sitting', () => {
     expect(screen.getByText('22m in')).toBeTruthy(); // the unplanned rep's row, not its own 0m
   });
 
+  // Closed by idle (docs/areas/recruiting → Idle close): the rep stays in progress, its minutes stop at the close.
+  it('a sitting closed automatically: the link says so, and Done starts on its minutes, not the time since', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 10, 9, 13, 0) });
+    onTestFinished(() => void vi.useRealTimers());
+    const user = userEvent.setup();
+    let shift = -3 * 3600_000; // started three hours ago
+    const api = createStubClient({
+      seed: false,
+      storageKey: `rn-${Math.random()}`,
+      now: () => Date.now() + shift,
+    });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const { sitting } = await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZV',
+      problemSlug: 'rotting-oranges',
+      problemTitle: 'Rotting Oranges',
+      lang: 'python3',
+      startedAt: Date.now() + shift,
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    });
+    shift = 0; // nothing since the Start: Home's read closes it at Start + 5
+    renderApp({ api, path: '/' });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    const link = await screen.findByRole('link', { name: 'LeetCode sitting closed automatically →' });
+    expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect((await screen.findByLabelText<HTMLInputElement>('Actual (min)')).value).toBe('5');
+  });
+
   it('an ordinary task in progress has no link, and Done keeps its own prefill', async () => {
     const user = userEvent.setup();
     const api = stub();

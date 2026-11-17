@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isSittingOpen } from '@aperture/shared';
-import type { DateRange, SittingReviewInput, Task } from '@aperture/shared';
+import type { DateRange, Sitting, SittingReviewInput, Task } from '@aperture/shared';
 import { useApi } from '../api-context';
+import { invalidateTaskData } from './invalidate';
 import { qk } from '../queryKeys';
 import { useSettings } from './useSettings';
 
@@ -58,21 +59,40 @@ export function useSetSittingPrepTarget() {
   });
 }
 
+// Reopen an idle-closed sitting (the detail's button): it holds the Start gate again and its rep is started, so
+// the sittings, the coach's day and the task views all refresh.
+export function useReopenSitting() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.reopenSitting(id),
+    onSuccess: () => invalidateTaskData(qc),
+  });
+}
+
 // Claude's draft: a mutation, never a query — a model call only when the user presses the button, never on open.
 export function useDraftSittingReview() {
   const api = useApi();
   return useMutation({ mutationFn: (id: string) => api.draftSittingReview(id) });
 }
 
-// The open sitting a rep stands for, if any — Home's link and Done prefill. Only a LeetCode-roll rep in progress
-// asks, so an ordinary day costs no read; the list it reads is the Sittings page's own cache entry. `undefined`
-// while that read is still pending (a failed read is `null`: no link, the task's own Done).
-export function useOpenSittingFor(task: Task | null | undefined, now: number) {
+// The sitting a rep stands for, if any — Home's link and Done prefill: the open one, or its newest closed by idle
+// (its rep still in progress, its minutes stopped at the close). Only a LeetCode-roll rep in progress asks, so an
+// ordinary day costs no read; the list it reads is the Sittings page's own cache entry. `undefined` while that
+// read is still pending (a failed read is `null`: no link, the task's own Done).
+export function useOpenSittingFor(
+  task: Task | null | undefined,
+  now: number,
+): Sitting | null | undefined {
   const { data: settings } = useSettings();
   const lcRoll = settings?.leetcodeRollId ?? null;
   const wanted = !!task && !!lcRoll && task.rollId === lcRoll && task.status === 'in_progress';
   const q = useSittings(undefined, { enabled: wanted });
   if (!wanted) return null;
   if (q.isPending) return undefined; // not known yet — Home's Done waits rather than guess
-  return q.data?.find((s) => s.repTaskId === task.id && isSittingOpen(s, now)) ?? null;
+  const mine = q.data?.filter((s) => s.repTaskId === task.id) ?? [];
+  const open = mine.find((s) => isSittingOpen(s, now));
+  if (open) return open;
+  const newest = mine.sort((a, b) => b.startedAt - a.startedAt)[0]; // a fresh array: the cache stays as it is
+  return newest?.closedBy === 'idle' && newest.status === 'abandoned' ? newest : null;
 }

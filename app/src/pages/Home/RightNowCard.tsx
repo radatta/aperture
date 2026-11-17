@@ -13,7 +13,7 @@ import {
   sittingMinutes,
   todayKey,
 } from '@aperture/shared';
-import type { DueUrgency, Task } from '@aperture/shared';
+import type { DueUrgency, Sitting, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -168,7 +168,7 @@ export function RightNowCard() {
   const hero = rn.hero;
   const heroElapsed = hero ? liveElapsedMin(hero, timers) : 0;
   // A LeetCode rep with its sitting open shows, and Done starts on, the sitting's minutes, Start to now — what
-  // the sitting's own End offers — not the focus timer's.
+  // the sitting's own End offers — not the focus timer's; closed by idle, its minutes stopped at the close.
   const now = useNow();
   const heroSitting = useOpenSittingFor(hero, now);
   const heroMin = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
@@ -265,7 +265,7 @@ export function RightNowCard() {
                 Done
               </Button>
             </div>
-            {heroSitting && <SittingLink id={heroSitting.id} />}
+            {heroSitting && <SittingLink sitting={heroSitting} />}
             {doneOpen?.taskId === hero.id &&
               (doneOpen.rep ? (
                 <RepDoneForm
@@ -427,19 +427,22 @@ function FocusRow({
       {asking && open && (
         <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
       )}
-      {rep.sitting && <SittingLink id={rep.sitting.id} />}
+      {rep.sitting && <SittingLink sitting={rep.sitting} />}
     </div>
   );
 }
 
-// To the open sitting's page, where End sitting is — on a LeetCode rep whose sitting is still open.
-function SittingLink({ id }: { id: string }) {
+// To the sitting's page, where End sitting is — on a LeetCode rep whose sitting is still open, or closed by
+// idle (Reopen and the rep's Done are there).
+function SittingLink({ sitting }: { sitting: Sitting }) {
   return (
     <Link
-      to={`/recruiting/sittings/${id}`}
+      to={`/recruiting/sittings/${sitting.id}`}
       className="-my-1 self-start py-1 text-sm text-teal underline underline-offset-2"
     >
-      End the LeetCode sitting →
+      {sitting.status === 'active'
+        ? 'End the LeetCode sitting →'
+        : 'LeetCode sitting closed automatically →'}
     </Link>
   );
 }
@@ -525,7 +528,7 @@ function AlsoRow({
         </div>
       </div>
       {/* Its own line, as in a Big-3 row: inside RowText it wrapped and took the row's "·" at phone width. */}
-      {rep.sitting && <SittingLink id={rep.sitting.id} />}
+      {rep.sitting && <SittingLink sitting={rep.sitting} />}
     </div>
   );
 }

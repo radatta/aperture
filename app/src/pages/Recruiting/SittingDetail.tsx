@@ -14,18 +14,24 @@ import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useRolls } from '../../data/hooks/useRolls';
-import { useSitting } from '../../data/hooks/useSittings';
+import { useReopenSitting, useSitting } from '../../data/hooks/useSittings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { fmtDuration } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
 import { DoneForm } from '../../modules/tasks/DoneForm';
 import { REVIEW_ID, ReviewForm } from './ReviewForm';
-import { sittingOutcome } from './recruitingHelpers';
+import {
+  canOfferReopen,
+  IDLE_CLOSED_NOTICE,
+  isIdleClosed,
+  sittingOutcome,
+} from './recruitingHelpers';
 import { SittingTimeline } from './SittingTimeline';
 
 // One sitting (docs/areas/recruiting → The page): the problem, how it went in numbers, every Run and Submit
 // with its failing case, the final code, the review — and, while it's open, End sitting: the rep's Done form
-// prefilled with the sitting's minutes (Done on the rep is what ends a sitting).
+// prefilled with the sitting's minutes (Done on the rep is what ends a sitting). Closed by idle, it says so, with
+// Reopen and the rep's Done (its minutes stopped at the close) while the rep is still in progress.
 export function SittingDetail() {
   const { id = '' } = useParams();
   const { data, isPending, isError, error, refetch } = useSitting(id);
@@ -103,7 +109,7 @@ function Loaded({ detail }: { detail: Detail }) {
       {(liveReads > 0 || sitting.status !== 'done' || sitting.prepTarget !== 'General') && (
         <Text as="p" size="sm" tone="muted">
           {[
-            open ? 'In progress' : sitting.status === 'abandoned' ? 'Dropped' : null,
+            open ? 'In progress' : sitting.status === 'abandoned' && !isIdleClosed(sitting) ? 'Dropped' : null,
             sitting.status === 'active' && !open ? 'Past its 24 h window' : null,
             liveReads > 0
               ? `Claude watched live · ${liveReads} ${liveReads === 1 ? 'pull' : 'pulls'}`
@@ -115,13 +121,18 @@ function Loaded({ detail }: { detail: Detail }) {
         </Text>
       )}
 
-      {open && (
+      {isIdleClosed(sitting) && (
+        <IdleClosed id={sitting.id} repTaskId={sitting.repTaskId} offer={canOfferReopen(sitting, now)} />
+      )}
+
+      {(open || (isIdleClosed(sitting) && sitting.status === 'abandoned')) && (
         <EndSitting
           // Mark done takes End sitting away: focus goes on to the review, the next thing to do.
           onEnded={() => requestAnimationFrame(() => document.getElementById(REVIEW_ID)?.focus())}
           repTaskId={sitting.repTaskId}
           rollId={sitting.rollId}
           minutes={sittingMinutes(sitting, now)}
+          label={open ? 'End sitting' : 'Mark rep done'}
         />
       )}
 
@@ -143,6 +154,36 @@ function Loaded({ detail }: { detail: Detail }) {
 
       <ReviewForm key={sitting.id} sitting={sitting} />
     </article>
+  );
+}
+
+// Closed by idle: said outright, never silent, with Reopen while the server would take it (inside its window, its
+// rep still in progress). A refusal (another sitting open, its rep moved on) shows inline, the button kept.
+function IdleClosed({ id, repTaskId, offer }: { id: string; repTaskId: string; offer: boolean }) {
+  const reopen = useReopenSitting();
+  const { data: tasks } = useAllTasks();
+  const rep = tasks?.find((t) => t.id === repTaskId);
+  const show = offer && rep?.status === 'in_progress';
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Text size="sm">{IDLE_CLOSED_NOTICE}</Text>
+        {show && (
+          <Button
+            size="sm"
+            aria-disabled={reopen.isPending || undefined}
+            onClick={() => !reopen.isPending && reopen.mutate(id)}
+          >
+            Reopen
+          </Button>
+        )}
+      </div>
+      {reopen.isError && (
+        <p role="alert" className="text-sm text-danger">
+          {reopen.error instanceof Error ? reopen.error.message : 'Couldn’t reopen it.'}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -170,11 +211,13 @@ function EndSitting({
   rollId,
   minutes,
   onEnded,
+  label,
 }: {
   repTaskId: string;
   rollId: string;
   minutes: number;
   onEnded: () => void;
+  label: string;
 }) {
   const [ending, setEnding] = useState(false);
   const back = useRef(false); // Cancel hands focus back to End sitting
@@ -196,7 +239,7 @@ function EndSitting({
         aria-disabled={rolls.isPending || undefined}
         onClick={() => !rolls.isPending && setEnding(true)}
       >
-        End sitting
+        {label}
       </Button>
     );
   // Focus lands on the form, not its Actual field — no keyboard springs up on a phone.

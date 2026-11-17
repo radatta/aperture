@@ -287,13 +287,32 @@ describe('live_sitting', () => {
     });
   });
 
-  it('a sitting left open past its window: inactive, its last sitting marked expired with minutes stopped at the window', async () => {
+  it('a sitting left untouched: the pull closes it first, idle, its minutes stopped 5 past the last activity', async () => {
     const s = await open();
     t = T0 + 30 * 3600_000;
     expect(await run()).toMatchObject({
       active: false,
-      lastSitting: { id: s.id, status: 'active', expired: true, minutes: 24 * 60 },
+      lastSitting: {
+        id: s.id,
+        status: 'abandoned',
+        closedBy: 'idle',
+        expired: false,
+        minutes: 5,
+        liveReads: 0,
+      },
     });
+    expect(await call('get_sitting', { id: s.id })).toMatchObject({
+      sitting: { closedBy: 'idle', minutes: 5 },
+    });
+    expect((await call('list_sittings')).sittings[0]).toMatchObject({ closedBy: 'idle' });
+  });
+
+  it('a pull keeps the sitting open: 45 minutes from the pull, not the Start', async () => {
+    const s = await open();
+    t = T0 + 40 * 60_000;
+    expect(await run()).toMatchObject({ active: true, sitting: { id: s.id } });
+    t = T0 + 85 * 60_000;
+    expect(await run()).toMatchObject({ active: true, sitting: { id: s.id, elapsedMin: 85 } });
   });
 
   it('refuses a sinceVersion that is not a whole number ≥ 0, counting nothing', async () => {

@@ -1,4 +1,12 @@
-import { addDays, fmtDayHeading, isSittingOpen, sittingMetrics } from '@aperture/shared';
+import {
+  addDays,
+  fmtDayHeading,
+  isSittingOpen,
+  msToMin,
+  SITTING_IDLE_MS,
+  SITTING_INGEST_WINDOW_MS,
+  sittingMetrics,
+} from '@aperture/shared';
 import type {
   AttemptOutcome,
   CauseTag,
@@ -51,6 +59,19 @@ export function sittingOutcome(s: Sitting, now: number): SittingOutcome {
     tone: 'gold',
   };
 }
+
+// Idle close (docs/areas/recruiting → Idle close): said outright wherever an ended sitting shows, never as "dropped".
+export const IDLE_CLOSED_NOTICE = `Closed automatically: ${msToMin(SITTING_IDLE_MS)} min with no activity`;
+export const isIdleClosed = (s: Pick<Sitting, 'closedBy'>): boolean => s.closedBy === 'idle';
+// How an ended sitting ended, for a row: null while open or Done by its rep.
+export function endedNote(s: Pick<Sitting, 'status' | 'closedBy'>): string | null {
+  if (s.status !== 'abandoned') return null;
+  return isIdleClosed(s) ? 'closed automatically' : 'dropped';
+}
+// Reopen shows while the server would take it: closed by idle, still abandoned, inside its window (its rep's
+// state is the caller's — RepTie reads the tasks).
+export const canOfferReopen = (s: Sitting, now: number): boolean =>
+  isIdleClosed(s) && s.status === 'abandoned' && now - s.startedAt <= SITTING_INGEST_WINDOW_MS;
 
 export interface SittingsSummary {
   sittings: number;

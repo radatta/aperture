@@ -320,6 +320,82 @@ describe('End sitting', () => {
   });
 });
 
+// Closed by idle: the stub on a clock the test moves (the page's own clock stays real — the minutes are stopped).
+async function withIdleClosed() {
+  const clock = { t: Date.now() - 2 * 3600_000 };
+  const api = createStubClient({ seed: false, storageKey: `sit-${Math.random()}`, now: () => clock.t });
+  const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+  await api.updateSettings({ leetcodeRollId: roll.id });
+  const { sitting } = await api.lcSittingStart({
+    clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZX',
+    problemSlug: 'rotting-oranges',
+    problemTitle: 'Rotting Oranges',
+    difficulty: 'Medium',
+    lang: 'python3',
+    startedAt: clock.t,
+    tzOffsetMinutes: new Date().getTimezoneOffset(),
+  });
+  clock.t += 20 * 60_000;
+  await api.lcSittingEvents({
+    sittingId: sitting.id,
+    events: [{ id: '01HZZZZZZZZZZZZZZZZZZZZZZW', type: 'snapshot', at: clock.t, payload: { code: 'x' } }],
+  });
+  clock.t += 90 * 60_000; // idle since: the page's read closes it at 20 + 5
+  return { api, sitting, clock };
+}
+
+describe('closed automatically', () => {
+  it('says so, with Reopen, and the rep’s Done on the minutes up to the close', async () => {
+    const user = userEvent.setup();
+    const { api, sitting } = await withIdleClosed();
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText('Closed automatically: 45 min with no activity')).toBeTruthy();
+    expect(screen.queryByText(/Dropped/)).toBeNull();
+    expect(screen.getByText('25m')).toBeTruthy(); // Took: Start to the close, never to now
+    await user.click(await screen.findByRole('button', { name: 'Mark rep done' }));
+    expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('25');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Reopen' }));
+    await waitFor(async () =>
+      expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ status: 'active', closedBy: null }),
+    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull());
+    expect(await screen.findByRole('button', { name: 'End sitting' })).toBeTruthy();
+    expect(screen.queryByText(/Closed automatically/)).toBeNull();
+  });
+
+  it('a refused reopen shows why inline, and keeps the button', async () => {
+    const user = userEvent.setup();
+    const { api, sitting } = await withIdleClosed();
+    vi.spyOn(api, 'reopenSitting').mockRejectedValue(
+      new Error('Another sitting is still open — end it in Aperture first.'),
+    );
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    await user.click(await screen.findByRole('button', { name: 'Reopen' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Another sitting is still open/);
+    expect(screen.getByRole('button', { name: 'Reopen' })).toBeTruthy();
+  });
+
+  it('once its rep is done it reads done, with no Reopen', async () => {
+    const { api, sitting } = await withIdleClosed();
+    await api.listSittings(); // closed
+    await api.setTaskActual(sitting.repTaskId, 25);
+    await api.transitionTask(sitting.repTaskId, 'done');
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText('Closed automatically: 45 min with no activity')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mark rep done' })).toBeNull();
+  });
+
+  it('its list row says closed automatically, not dropped', async () => {
+    const { api } = await withIdleClosed();
+    renderApp({ api, path: '/recruiting' });
+    const row = await screen.findByRole('link', { name: /Rotting Oranges/ });
+    expect(row.textContent).toMatch(/closed automatically/);
+    expect(row.textContent).not.toMatch(/dropped/);
+  });
+});
+
 describe('the stub’s sittings', () => {
   it('its draft names a Run’s expected and output when no input was captured', async () => {
     const { api, sitting } = await withOpenSitting();

@@ -7,7 +7,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { useSittings } from '../../data/hooks/useSittings';
 import { useNow } from '../../lib/useNow';
 import { TodayCard } from './TodayCard';
-import { groupSittings, sittingOutcome, summarizeSittings } from './recruitingHelpers';
+import { endedNote, groupSittings, sittingOutcome, summarizeSittings } from './recruitingHelpers';
 
 // The Sittings tab: the coach's Today card, then every go at a LeetCode problem, captured by the extension
 // (docs/areas/recruiting). The open sitting sits on top with its running clock; the rest are grouped by day. Each
@@ -113,7 +113,7 @@ function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
           {sitting.summary.runs > 0
             ? ` · ${sitting.summary.runs} ${sitting.summary.runs === 1 ? 'run' : 'runs'}`
             : ''}
-          {sitting.status === 'abandoned' ? ' · dropped' : ''}
+          {endedNote(sitting) ? ` · ${endedNote(sitting)}` : ''}
           {sitting.prepTarget !== 'General' ? ` · ${sitting.prepTarget}` : ''}
         </Text>
       </div>

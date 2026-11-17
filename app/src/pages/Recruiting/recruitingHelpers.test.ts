@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { emptySummary } from '@aperture/shared';
 import type { CoachSlot, CoachToday, Sitting, SittingSummary } from '@aperture/shared';
 import {
+  canOfferReopen,
   coachGlance,
+  endedNote,
+  IDLE_CLOSED_NOTICE,
   dueBeyondSlots,
   dueLabel,
   groupSittings,
@@ -77,6 +80,21 @@ describe('summaries and grouping', () => {
     const g = groupSittings([old, open, recent]);
     expect(g.open).toEqual([open]);
     expect(g.days.map(([d]) => d)).toEqual(['2026-11-07', '2026-11-01']);
+  });
+});
+
+describe('idle close', () => {
+  const s = (over: Partial<Sitting>) => ({ status: 'abandoned', startedAt: 0, ...over }) as Sitting;
+  it('says closed automatically, never dropped, and offers Reopen only inside the window', () => {
+    expect(IDLE_CLOSED_NOTICE).toBe('Closed automatically: 45 min with no activity');
+    expect(endedNote(s({ closedBy: 'idle' }))).toBe('closed automatically');
+    expect(endedNote(s({}))).toBe('dropped');
+    expect(endedNote(s({ status: 'done', closedBy: 'idle' }))).toBeNull();
+    expect(endedNote(s({ status: 'active' }))).toBeNull();
+    expect(canOfferReopen(s({ closedBy: 'idle' }), 24 * 3600_000)).toBe(true);
+    expect(canOfferReopen(s({ closedBy: 'idle' }), 24 * 3600_000 + 1)).toBe(false);
+    expect(canOfferReopen(s({ status: 'done', closedBy: 'idle' }), 1)).toBe(false);
+    expect(canOfferReopen(s({}), 1)).toBe(false);
   });
 });
 
