@@ -1,8 +1,10 @@
 // lib/coach.js: the trace card's rules, the hold, the resubmit note — pure, on a given clock.
 import { describe, expect, it } from 'vitest';
+import { coachMarkOf, normalizeSittingEvents } from '@aperture/shared';
 import { lib } from './load';
 
 const coach = lib('coach');
+const ulid = lib('ulid');
 const ON = coach.settingsOf(null);
 let n = 0;
 const mint = () => `id${n++}`;
@@ -103,5 +105,31 @@ describe('the resubmit note', () => {
     expect(gap(null, failed.at)).toBeNull();
     expect(gap(failed, failed.at - 1)).toBeNull(); // a clock step back
     expect(gap(failed, failed.at + 30_000, coach.settingsOf({ coachNudge: false }))).toBeNull();
+  });
+});
+
+// What the extension makes, through the server's own rules (packages/shared): accepted, and read as meant.
+describe('against the shared contract', () => {
+  it('every coach payload passes the events normalizer and its head-row read', () => {
+    const big = 'é'.repeat(400); // clipped to 300, 2 bytes each in UTF-8
+    const payloads = [
+      coach.configPayload(ON),
+      coach.cardPayload({ empty: big, boundary: big, normal: '\u0001'.repeat(400) + 'x' }, 5000),
+      coach.cardPayload({ empty: '[]' }, 900),
+      coach.cardPayload({}, 900),
+      { kind: 'untraced-submit' },
+      { kind: 'nudge-shown', gapMs: 30_000 },
+    ];
+    const events = payloads.map((p, i) => coach.event(p, ulid.ulid, 1_800_000_000_000 + i));
+    expect(() => normalizeSittingEvents({ sittingId: ulid.ulid(), events })).not.toThrow();
+    expect(payloads[1].inputs.normal).toBe('x'); // control characters out
+    expect(payloads.map((p) => coachMarkOf(p))).toEqual([
+      { kind: 'config', inputs: null, config: { trace: true, hold: true, nudge: true } },
+      { kind: 'trace', inputs: 3, config: null },
+      { kind: 'trace', inputs: 1, config: null },
+      { kind: 'trace-skip', inputs: null, config: null },
+      { kind: 'untraced-submit', inputs: null, config: null },
+      { kind: 'nudge-shown', inputs: null, config: null },
+    ]);
   });
 });
