@@ -25,8 +25,10 @@ import {
 import type {
   AttemptOutcome,
   CauseTag,
+  CoachAiReason,
   CoachAttempt,
   CoachDay,
+  CoachDayAi,
   CoachFocus,
   CoachSlotChange,
   HelpLevel,
@@ -402,7 +404,7 @@ export function problemRecords(
 // --- Focus: one pattern held for blockDays active days ---
 const PATTERN_ORDER = new Map<PatternId, number>(PATTERNS.map((p, i) => [p, i]));
 const orderOf = (p: PatternId) => PATTERN_ORDER.get(p) ?? PATTERNS.length; // 'other' last
-interface Ranked {
+export interface Ranked {
   pattern: PatternId;
   misses: number;
   of: number;
@@ -431,7 +433,7 @@ export interface CoachFocusState {
   pattern: PatternId;
   day: number; // 1..blockDays
   of: number;
-  source: 'engine' | 'override';
+  source: 'engine' | 'override' | 'ai';
   why: string;
 }
 const whyRanked = (r: Ranked | undefined, p: PatternId) =>
@@ -443,7 +445,7 @@ const whyRanked = (r: Ranked | undefined, p: PatternId) =>
 // the anchor), each later block the top-ranked as of its first day, never the previous block's pattern.
 export function focusOn(
   attempts: readonly Attempt[],
-  override: Pick<CoachFocus, 'pattern' | 'sinceDay'> | null,
+  override: (Pick<CoachFocus, 'pattern' | 'sinceDay'> & Partial<Pick<CoachFocus, 'source'>>) | null,
   today: string,
   params: CoachParams = COACH_PARAMS,
 ): CoachFocusState {
@@ -464,9 +466,9 @@ export function focusOn(
     pattern,
     day: (active.length % params.blockDays) + 1,
     of: params.blockDays,
-    source: held ? 'override' : 'engine',
+    source: held ? (override.source === 'ai' ? 'ai' : 'override') : 'engine',
     why: held
-      ? `${PATTERN_NAMES[pattern]}: your pick since ${fmtSpokenDay(override.sinceDay, today)}`
+      ? `${PATTERN_NAMES[pattern]}: ${override.source === 'ai' ? 'Opus’s' : 'your'} pick since ${fmtSpokenDay(override.sinceDay, today)}`
       : whyRanked(ranked, pattern),
   };
 }
@@ -487,6 +489,7 @@ export interface CoachSlot {
   outcome: AttemptOutcome | null;
   swappedFrom: string | null; // the engine's pick, when the user swapped it
   alternatives: { slug: string; title: string; difficulty: Difficulty }[]; // easier, same pattern
+  aiWhy: string | null; // the AI pick's "why today"; null on a rule slot (and on a slot swapped in)
 }
 export interface QueueItem {
   slug: string;
@@ -524,7 +527,27 @@ export interface CoachToday {
     missedYesterday: boolean;
   };
   unreviewed: { sittingId: string; slug: string; title: string }[];
+  ai: CoachAiView | null; // null: the AI pick is off, or nothing to pick from
 }
+// The day's AI pick as the plan shows it. `due`: a pick should start (startCoachPick); `pending`: it's running —
+// the slots are the rules' until it lands, and a client shows neither; `fallback`: the rules, said out loud.
+export interface CoachAiView {
+  status: 'due' | 'pending' | 'ok' | 'fallback';
+  source: 'ai' | 'rules';
+  notice: string | null; // AI_PICK_NOTICE on a fallback — never silent
+  reason: CoachAiReason | null;
+  note: string | null; // the model's day note
+  focusChange: { from: PatternId; to: PatternId; why: string } | null; // only while the focus it set holds
+  model: string | null;
+  pickedAt: number | null;
+}
+export const AI_PICK_NOTICE = 'AI pick unavailable today, using the rules';
+// A claim older than this reads as a timeout: the worker's ≤ 20 s queue + 60 s call + writes end inside its 90 s
+// timeout, so a result can never land after readers saw the day fall back.
+export const AI_PICK_STALE_MS = 120_000;
+// Live: a claim the worker may still settle. A slot change waits for it (the slots are about to be replaced).
+export const aiPickPending = (ai: CoachDayAi | undefined, now: number): boolean =>
+  ai?.status === 'pending' && now - ai.claimedAt <= AI_PICK_STALE_MS;
 export interface CoachInput {
   today: string;
   now: number;
@@ -533,6 +556,8 @@ export interface CoachInput {
   attempts: readonly CoachAttempt[]; // alive
   days: readonly CoachDay[]; // alive
   focus: CoachFocus | null;
+  aiPick?: boolean; // the setting (and the feature) is on: a stored AI pick overlays the rule slots
+  aiCanStart?: boolean; // and a pick may start now: the server's today, with a worker to run it
 }
 
 const UP: Record<Difficulty, Difficulty | null> = { Easy: 'Medium', Medium: 'Hard', Hard: null };
@@ -581,13 +606,28 @@ const queueItem = (r: ProblemRecord, h: number): QueueItem => ({
   lastDay: r.schedule!.lastDay,
 });
 
+// Everything the day's plan picks from, as of the start of the day — the rules' pools, and the AI pick's
+// candidates (coachAi.ts) are cut from the same pools so the two can't drift.
+export interface CoachPools {
+  all: Attempt[]; // counted, through today
+  before: Attempt[]; // before today
+  records: ProblemRecord[]; // from `before`
+  seen: Set<string>;
+  focus: CoachFocusState;
+  ranks: Ranked[];
+  carry: Attempt[];
+  fresh: CatalogProblem[]; // unseen in the focus pattern, swapped-out last
+  due: ProblemRecord[]; // due re-solves, oldest first, the carry-over out
+  stretch: CatalogProblem[];
+  cands: Record<SlotKind, { slug: string; reason: string }[]>; // each kind's, in the rules' order
+  row: CoachDay | null; // today's
+}
 // From state as of the start of the day: carry-over (the last active day's unaccepted, unpeeked problem, if
 // within carryOverDays), new (the focus pattern's next unseen problem), re-solve (the oldest due, other patterns
 // first, peeked track first), stretch (one difficulty up in the focus pattern, else an unseen Medium from the
-// next-ranked pattern). One of each; an empty kind lets the next kind (stretch wraps to new) take a second; at
-// most 2 a kind and 4 in all, never padded. Then the day's changes, then today's sittings and attempts.
-export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): CoachToday {
-  const { today, now, dayStartHour: h } = input;
+// next-ranked pattern).
+export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS): CoachPools {
+  const { today, now } = input;
   const all = attemptsOf(input.sittings, input.attempts, now, params, today).filter(
     (a) => a.day <= today,
   );
@@ -596,8 +636,6 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   const seen = new Set(records.map((r) => r.slug));
   const focus = focusOn(all, input.focus, today, params);
   const ranks = rankPatterns(before, today);
-  const titleOf = (slug: string) =>
-    catalogProblem(slug)?.title ?? records.find((r) => r.slug === slug)?.title ?? slug;
 
   // carry-over
   const lastActive = before.length ? before[before.length - 1]!.day : null;
@@ -648,8 +686,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       : []),
   ];
 
-  type Cand = { slug: string; reason: string };
-  const cands: Record<SlotKind, Cand[]> = {
+  const cands: CoachPools['cands'] = {
     'carry-over': carry.map((a) => ({
       slug: a.slug,
       reason: `Carry-over from ${fmtSpokenDay(a.day, today)}: not accepted yet${a.lastError ? ` (${a.lastError.verdict.replace('_', ' ')})` : ''}; finish it before it goes cold`,
@@ -667,6 +704,37 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       reason: `Stretch: ${c.difficulty} in ${PATTERN_NAMES[c.pattern]}`,
     })),
   };
+  const row = input.days.find((d) => d.day === today) ?? null;
+  return {
+    all,
+    before,
+    records,
+    seen,
+    focus,
+    ranks,
+    carry,
+    fresh,
+    due: dueNow,
+    stretch,
+    cands,
+    row,
+  };
+}
+
+// The rules' pick: one of each kind; an empty kind lets the next kind (stretch wraps to new) take a second; at
+// most 2 a kind and 4 in all, never padded. A stored AI pick (coachAi.ts), when on, replaces it in its own order.
+// Then the day's changes, then today's sittings and attempts.
+export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): CoachToday {
+  const { today, now, dayStartHour: h } = input;
+  const pools = coachPools(input, params);
+  const { all, before, records, seen, focus, carry, fresh, cands, row } = pools;
+  const dueNow = pools.due;
+  const carrySlugs = new Set(carry.map((a) => a.slug));
+  const titleOf = (slug: string) =>
+    catalogProblem(slug)?.title ?? records.find((r) => r.slug === slug)?.title ?? slug;
+  const lastActive = before.length ? before[before.length - 1]!.day : null;
+
+  type Cand = { slug: string; reason: string };
   const picked: Record<SlotKind, Cand[]> = {
     'carry-over': [],
     new: [],
@@ -694,6 +762,23 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   let slots: CoachSlot[] = SLOT_KINDS.flatMap((kind) =>
     picked[kind].map((c) => slotOf(kind, c.slug, c.reason, null)),
   ).slice(0, MAX_SLOTS);
+  const ai = aiViewOf(input, pools);
+  if (ai?.status === 'ok')
+    slots = row!.ai!.picks.map((p) => ({
+      ...slotOf(p.kind, p.slug, pickReason(p.kind, p.slug), null),
+      aiWhy: p.why,
+    }));
+  // A pick's rule reason: its candidate's, else (a pattern the AI moved the focus to) what it is.
+  function pickReason(kind: SlotKind, slug: string): string {
+    const own =
+      cands[kind].find((c) => c.slug === slug) ??
+      SLOT_KINDS.flatMap((k) => cands[k]).find((c) => c.slug === slug);
+    if (own) return own.reason;
+    const cat = catalogProblem(slug);
+    return cat
+      ? `${kind === 'stretch' ? 'Stretch' : 'New'}: ${cat.difficulty} in ${PATTERN_NAMES[cat.pattern]}`
+      : 'Opus’s pick';
+  }
   function slotOf(kind: SlotKind, slug: string, reason: string, from: string | null): CoachSlot {
     const cat = catalogProblem(slug);
     const rec = records.find((r) => r.slug === slug);
@@ -714,6 +799,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       outcome: null,
       swappedFrom: from,
       alternatives: [],
+      aiWhy: null,
     };
   }
 
@@ -745,7 +831,6 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   }
 
   // The day's changes, by the engine's pick: a swap replaces it (the original stays in its queue), a skip marks it.
-  const row = input.days.find((d) => d.day === today) ?? null;
   for (const c of row?.changes ?? []) {
     // A change names its slot by the engine's pick alone (picks are unique across slots); its `kind` is the slot's
     // as shown when it was changed — a record, never matched on.
@@ -844,6 +929,47 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       missedYesterday: !!lastActive && lastActive < yesterday,
     },
     unreviewed,
+    ai,
+  };
+}
+
+// The AI pick's view of the day (see CoachAiView). A stale claim reads as a timeout; nothing is written.
+function aiViewOf(input: CoachInput, pools: CoachPools): CoachAiView | null {
+  if (!input.aiPick) return null;
+  const a = pools.row?.ai;
+  const base = {
+    notice: null,
+    reason: null,
+    note: null,
+    focusChange: null,
+    model: null,
+    pickedAt: null,
+  };
+  if (!a) {
+    const options = new Set(SLOT_KINDS.flatMap((k) => pools.cands[k].map((c) => c.slug)));
+    const due = input.aiCanStart === true && pools.before.length > 0 && options.size >= 2;
+    return due ? { ...base, status: 'due', source: 'rules' } : null;
+  }
+  if (aiPickPending(a, input.now)) return { ...base, status: 'pending', source: 'rules' };
+  if (a.status === 'ok') {
+    const f = pools.focus;
+    return {
+      ...base,
+      status: 'ok',
+      source: 'ai',
+      note: a.note,
+      focusChange: a.focus && f.source === 'ai' && f.pattern === a.focus.to ? a.focus : null,
+      model: a.model,
+      pickedAt: a.settledAt,
+    };
+  }
+  return {
+    ...base,
+    status: 'fallback',
+    source: 'rules',
+    notice: AI_PICK_NOTICE,
+    reason: a.status === 'pending' ? 'timeout' : a.reason,
+    model: a.model,
   };
 }
 

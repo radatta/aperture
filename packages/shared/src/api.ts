@@ -342,6 +342,7 @@ export const SETTINGS_PATCH_KEYS = [
   'remindTimed',
   'remindDueDay',
   'remindPlanned',
+  'coachAiPick',
 ] as const satisfies readonly (keyof Settings)[];
 export type SettingsPatch = Partial<Pick<Settings, (typeof SETTINGS_PATCH_KEYS)[number]>>;
 
