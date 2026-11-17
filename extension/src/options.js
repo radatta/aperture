@@ -1,5 +1,6 @@
-// The options page: the connection (origin + device token), the outbox's last send, debug mode and its
-// export, and selector overrides (lib/selectors.js merges them over the defaults).
+// The options page: the connection (origin + device token), the outbox's last send, the coach's switches
+// (lib/coach.js), debug mode and its export, and selector overrides (lib/selectors.js merges them over the
+// defaults).
 (() => {
   'use strict';
   const api =
@@ -11,6 +12,7 @@
     $(id).className = `status ${kind || ''}`;
   };
   const tell = (type) => api.runtime.sendMessage({ type }).catch(() => {});
+  const { coach } = globalThis.ApertureLC;
 
   // ---- connection ----
   async function load() {
@@ -21,7 +23,9 @@
       'selectors',
       'status',
       'outbox',
+      ...Object.values(coach.KEYS),
     ]);
+    showCoach(coach.settingsOf(got), got);
     if (typeof got.apiOrigin === 'string') $('apiOrigin').value = got.apiOrigin;
     if (typeof got.deviceToken === 'string') $('deviceToken').value = got.deviceToken;
     $('debug').checked = !!got.debug;
@@ -91,6 +95,25 @@
   $('clearFailed').addEventListener('click', () => {
     if (confirm('Drop the captures Aperture refused? They will not be sent.')) tell('clear-failed');
   });
+
+  // ---- the coach: each switch on unless stored false; the hold needs the card ----
+  function showCoach(on, got) {
+    $('coachTrace').checked = on.trace;
+    $('coachHold').checked = got[coach.KEYS.hold] !== false;
+    $('coachHold').disabled = !on.trace;
+    $('coachNudge').checked = on.nudge;
+  }
+  for (const k of Object.keys(coach.KEYS))
+    $(coach.KEYS[k]).addEventListener('change', async () => {
+      try {
+        await local.set({ [coach.KEYS[k]]: $(coach.KEYS[k]).checked });
+        const got = await local.get(Object.values(coach.KEYS));
+        showCoach(coach.settingsOf(got), got);
+        say('coachStatus', 'Saved.', 'ok');
+      } catch (err) {
+        say('coachStatus', `Couldn’t save: ${(err && err.message) || err}`, 'err');
+      }
+    });
 
   // ---- debug ----
   $('debug').addEventListener('change', () => local.set({ debug: $('debug').checked }));

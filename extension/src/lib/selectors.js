@@ -31,20 +31,26 @@
     timerReset: '[role="button"][aria-label="Reset"],button[aria-label="Reset"]',
     timerResetConfirm: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-secondary',
     lang: '[data-e2e-locator="lang-selector-button"]',
+    // LeetCode's Submit — never clicked: a real click on it is held once for the trace card (lib/coach.js).
+    // From the 2026-11-08 page dump, and Safari's own DOM in debug log 10 (2026-11-13: a <button>, aria-label
+    // Submit); `null` turns the hold off (the Submit then always passes).
+    submit: '[data-e2e-locator="console-submit-button"]',
   });
   const KEYS = Object.keys(DEFAULTS);
-  // The keys whose step `null` turns off; `dialog` and `lang` aren't steps, so a null there is ignored.
-  const CLICKS = [
+  // The keys `null` turns off: each click step, and `submit` (the hold); `dialog` and `lang` aren't steps, so a
+  // null there is ignored.
+  const OFFABLE = [
     'editorReset',
     'resetConfirm',
     'timerOpen',
     'timerStart',
     'timerReset',
     'timerResetConfirm',
+    'submit',
   ];
 
   // Overrides from storage (an object, or its JSON text) over the defaults: each key a non-empty string, or null
-  // on a click key.
+  // on an off-able key.
   // Unknown keys (a retired `timerClicks` too) and wrong types are ignored, so a bad paste can't break the overlay.
   function merge(overrides) {
     let o = overrides;
@@ -59,7 +65,7 @@
     if (!o || typeof o !== 'object' || Array.isArray(o)) return out;
     for (const k of KEYS) {
       const v = o[k];
-      if ((v === null && CLICKS.includes(k)) || (typeof v === 'string' && v.trim())) out[k] = v;
+      if ((v === null && OFFABLE.includes(k)) || (typeof v === 'string' && v.trim())) out[k] = v;
     }
     return out;
   }

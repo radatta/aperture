@@ -9,6 +9,7 @@
   function createServer() {
     const checks = new Map(); // id -> polls so far
     const submitted = new Map(); // submission id -> its problem's slug
+    const wrong = new Set(); // submission ids judged Wrong Answer: their code carried the marker `# wrong`
     let nextId = 900001;
     const question = (slug) => ({
       title: slug === 'two-sum' ? 'Two Sum' : 'Add Two Numbers',
@@ -45,6 +46,11 @@
       let m = path.match(/^\/problems\/([^/]+)\/submit\/$/);
       if (m) {
         submitted.set(String(nextId), m[1]);
+        let code = '';
+        try {
+          code = String(JSON.parse(reqText || '{}').typed_code || '');
+        } catch {}
+        if (code.includes('# wrong')) wrong.add(String(nextId));
         return { status: 200, body: JSON.stringify({ submission_id: nextId++ }) };
       }
       m = path.match(/^\/problems\/([^/]+)\/interpret_solution\/$/);
@@ -59,12 +65,13 @@
         checks.set(m[1], n);
         if (n === 1) return { status: 200, body: JSON.stringify({ state: 'STARTED' }) };
         const run = m[1].startsWith('runcode_');
+        const bad = wrong.has(m[1]);
         return {
           status: 200,
           body: JSON.stringify({
             state: 'SUCCESS',
-            status_code: 10,
-            status_msg: 'Accepted',
+            status_code: bad ? 11 : 10,
+            status_msg: bad ? 'Wrong Answer' : 'Accepted',
             total_correct: run ? 3 : 63,
             total_testcases: run ? 3 : 63,
             ...(run ? {} : { submission_id: m[1] }),

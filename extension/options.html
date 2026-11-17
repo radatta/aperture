@@ -149,6 +149,25 @@
       <button type="button" class="secondary" id="clearFailed">Clear failed</button>
     </div>
 
+    <h2>Coach</h2>
+    <label class="inline"
+      ><input type="checkbox" id="coachTrace" /> Trace card at the first Submit</label
+    >
+    <label class="inline"
+      ><input type="checkbox" id="coachHold" /> Hold that Submit until you Trace or Skip</label
+    >
+    <label class="inline"
+      ><input type="checkbox" id="coachNudge" /> A note on a resubmit within a minute of a failed
+      one</label
+    >
+    <p class="hint">
+      The card asks you to trace three inputs by hand before your first Submit in a sitting; with
+      the hold on, that Submit waits and you click it again yourself — the extension never submits.
+      Each Trace, Skip and note is recorded with the sitting. Open LeetCode tabs pick a change up at
+      once.
+    </p>
+    <div id="coachStatus" class="status" aria-live="polite"></div>
+
     <h2>Debug mode</h2>
     <label class="inline"><input type="checkbox" id="debug" /> Record LeetCode's controls</label>
     <p class="hint">
@@ -167,9 +186,9 @@
       Where LeetCode's reset, its confirm and its timer controls are, as JSON over the built-in
       defaults (keys: <code>editorReset</code>, <code>resetConfirm</code>, <code>dialog</code>,
       <code>timerOpen</code>, <code>timerStart</code>, <code>timerReset</code>,
-      <code>timerResetConfirm</code>, <code>lang</code>), each a CSS selector. <code>null</code> on
-      a click key (the reset, its confirm, the four timer keys) turns that step off. Empty means the
-      defaults.
+      <code>timerResetConfirm</code>, <code>lang</code>, <code>submit</code>), each a CSS selector.
+      <code>null</code> on a click key (the reset, its confirm, the four timer keys) turns that step
+      off, and on <code>submit</code> turns the Submit hold off. Empty means the defaults.
     </p>
     <textarea id="selectors" spellcheck="false" placeholder="{}"></textarea>
     <div class="row">
@@ -179,6 +198,7 @@
     <div id="selectorStatus" class="status" aria-live="polite"></div>
 
     <script src="src/lib/selectors.js"></script>
+    <script src="src/lib/coach.js"></script>
     <script src="src/options.js"></script>
   </body>
 </html>

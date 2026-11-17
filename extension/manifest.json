@@ -33,6 +33,7 @@
         "src/lib/selectors.js",
         "src/lib/outbox.js",
         "src/lib/batch.js",
+        "src/lib/coach.js",
         "src/debug.js",
         "src/overlay.js",
         "src/content.js"
