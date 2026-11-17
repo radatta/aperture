@@ -223,6 +223,11 @@ describe('dueClock — a stated clock phrased as a due', () => {
     // The model wrote the clock its own way: the line decides, the title strips what it can.
     expect(strip('call the bank at 1am', 'call the bank at 1 am')).toBe('call the bank');
     expect(strip('call the bank at 1 am', 'call the bank')).toBe('call the bank');
+    expect(strip('call the bank at 5 p.m.', 'call the bank at 5 PM')).toBe('call the bank');
+    expect(strip('call the bank at 5pm', 'call the bank at 5 p.m.')).toBe('call the bank');
+    // A title the model already cleaned is left exactly as it wrote it.
+    expect(strip('.env cleanup at 5pm', '.env cleanup')).toBe('.env cleanup');
+    expect(strip('--force flag docs by noon', '--force flag docs ,')).toBe('--force flag docs ,');
   });
   it('a clock not after at/by is not a due; a phrase that is the whole title leaves it whole', () => {
     expect(strip('watch 9pm show')).toBeNull();

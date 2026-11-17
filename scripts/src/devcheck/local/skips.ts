@@ -52,6 +52,7 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
       'api-typed',
       'api-typed-ahead',
       'api-typed-named-day',
+      'ui-typed-bar',
       'api-relative',
       'api-wrap',
       'api-roll',

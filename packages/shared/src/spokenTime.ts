@@ -139,14 +139,19 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // out, else null. Phrased so, it's the due time even when the model kept it in its title (quick-add.md
 // 2026-11-17); "watch 9pm show" or "the 3pm meeting" kept theirs, and weren't.
 export function dueClock(line: string, title: string, said: string): { title: string } | null {
-  const clock = escapeRe(
-    said
-      .replace(/\.$/, '')
-      .replace(/(\d)\s*(?=[a-z])/i, '$1 ')
-      .trim(),
-  ).replace(/\s+/g, '\\s*');
+  // Spelled any way: "5pm", "5 PM", "5 p.m." are one clock (Siri writes the last, a model the first).
+  const words = said
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/\s*([ap])m$/, ' $1m')
+    .trim();
+  const clock = escapeRe(words)
+    .replace(/\s+/g, '\\s*')
+    .replace(/([ap])m$/, '$1\\.?\\s*m');
   const re = new RegExp(`\\b(?:due\\s+)?(?:at|by)\\s+${clock}\\.?(?=\\s|$|[,;:!?])`, 'i');
   if (!re.test(line)) return null;
+  // The model already took the phrase out: its title stands as written.
+  if (!re.test(title)) return { title };
   const rest = title
     .replace(re, ' ')
     .replace(/\s+/g, ' ')

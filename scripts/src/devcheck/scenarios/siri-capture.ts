@@ -434,6 +434,12 @@ export const siriCapture: Scenario = {
       what: 'A typed “tomorrow at <clock>” keeps the day it names',
     },
     {
+      id: 'typed-bar',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The capture bar’s Review (a real parse, the app’s own route): a clock an hour ago previews on its next occurrence, the clock out of the title; nothing saved',
+    },
+    {
       id: 'typed-small-hours',
       entry: 'api',
       kind: 'edge',
@@ -933,7 +939,8 @@ export const siriCapture: Scenario = {
         await clearOfMidnight(ctx, untilLaMidnight, 'LA');
         const { dayStartHour } = await ctx.api.reads.getSettings();
         const t0 = Date.now();
-        const text = `${line(ctx, 'call the dentist typed')} tomorrow at ${aheadClock(laClock(t0).hour)}`;
+        // A daytime clock: "tomorrow at 1 am" said at 22:00 could be read as the night after tomorrow.
+        const text = `${line(ctx, 'call the dentist typed')} tomorrow at 5 pm`;
         const r = await capture(ctx, tokenB, text, 'the typed named day', { voice: false });
         // The model reads "tomorrow" against the app's today (dayStartHour) — in the small hours that's the
         // calendar's today, so the clock's next occurrence.
@@ -941,6 +948,47 @@ export const siriCapture: Scenario = {
           S.addDays(S.dayKeyInZone(now, S.USER_TIME_ZONE, dayStartHour), 1);
         const t1 = Date.now();
         await expectDue(ctx, S, r, spokenWant(S, text, t0, t1, tomorrow), t0, t1);
+      },
+    },
+    {
+      id: 'ui-typed-bar',
+      entry: 'ui',
+      proves: ['typed-bar'],
+      title:
+        'Capture bar › Review, a real parse: a clock an hour ago previews on its next occurrence',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA');
+        await ctx.ui.goto('/tasks');
+        await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
+        const field = ctx.page.locator('textarea[aria-label="Capture task"]');
+        const t0 = Date.now();
+        const text = `${line(ctx, 'call the bank bar')} at ${rollClock(laClock(t0).hour)}`;
+        await field.fill(text);
+        // The app's parse route (JWT parseTask), not /api/capture: armed before the press.
+        const parsed = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
+          timeout: 15_000,
+        });
+        await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
+        const res = await parsed;
+        const t1 = Date.now();
+        if (res.status() !== 200) throw new Error(`parseTask answered ${res.status()}`);
+        const r = (await res.json()) as {
+          ok?: boolean;
+          input?: { title?: string; dueDay?: string; dueTime?: string };
+        };
+        if (!r.ok || !r.input) throw new Error(`the parse failed: ${JSON.stringify(r)}`);
+        const { title = '', dueDay, dueTime } = r.input;
+        const want = spokenWant(S, text, t0, t1);
+        if (!want.some((w) => w.day === dueDay && w.time === dueTime))
+          throw new Error(`previewed ${dueDay} ${dueTime}, expected ${JSON.stringify(want[0])}`);
+        if (!title.includes(marker(ctx.nonce)) || TIME_WORDS.test(title))
+          throw new Error(`the title is “${title}” — the nonce kept, the clock taken out`);
+        await ctx.page
+          .getByRole('button', { name: 'Save reviewed task' })
+          .waitFor({ timeout: 10_000 });
+        await ctx.shot('review');
+        await field.fill(''); // a Review writes nothing; the line goes unsaved
       },
     },
     {

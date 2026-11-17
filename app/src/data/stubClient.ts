@@ -1558,6 +1558,7 @@ class StubClient implements ApiClient {
       .map(({ id, label }) => ({ id, label }));
     const places = this.alive(this.store.places).map(({ slug, name }) => ({ slug, name }));
     const now = this.now();
+    // `today` is the browser's; the clock rolls in USER_TIME_ZONE (spokenTime.ts) — one zone for an LA user.
     const today = todayKey(this.dayStartHour(), now);
     const ctx = { categories, places, today, now };
     return runQuickParse(text, ctx, async (line) =>
