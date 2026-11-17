@@ -133,9 +133,13 @@ leading "remind me to" from the title, `dueTime` always null, a day only when on
 
 Two checks keep the grammar honest:
 
-- **The model's title is the cross-check.** A time applies only when the model took its words out of the
-  title. "look at one of the leases", "email the morning team" or "read John 3:16" keep their words, so they
+- **The model's title is the cross-check** — for words that could be either. A bare hour, a day-part or a
+  short clock like "3:16" applies only when the model took its words out of the title; a stated clock ("6
+  pm", "noon", "17:00") or a delay ("in 20 minutes") is a time whatever the model did with its title. "look at one of the leases", "email the morning team" or "read John 3:16" keep their words, so they
   get no time.
+- **A stated clock the model missed is filled from the words** — typed lines too (Raycast, the app's quick
+  add): the 2026-11-16 dev check saw "call the bank at 6 pm" come back with today and no time. A different
+  time from the model stands on the typed path ("move the 3pm to 5pm" isn't the first clock's).
 - **A clock the grammar can't read is the model's** ("at quarter past five"): with no grammar match the model
   gets the typed prompt, and a clock it returns is taken and rolled forward like any stated time — but only
   when the line has a digit or an hour word in it, so an invented time is still dropped.

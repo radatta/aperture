@@ -101,6 +101,22 @@ describe('captureForToken — a spoken line', () => {
     expect(r.detail).toBe('Added: call mum · no category · due today 9am');
   });
 
+  it('a clock the model missed is filled from the words, typed and spoken, and said back', async () => {
+    const { anthropic, clock, mint, capture } = setup();
+    clock.now = zonedEpoch('2026-11-16', '19:40', USER_TIME_ZONE);
+    const token = await mint();
+    // The dev miss: the model gave today and no time for "at 6 pm".
+    anthropic.next = { ok: true, fields: fields({ title: 'call the bank', dueDay: '2026-11-16' }) };
+    const typed = await capture(token, 'call the bank at 6 pm', false);
+    expect(typed.due).toEqual({ day: '2026-11-16', time: '18:00' });
+    expect(typed.say).toBe('Added: call the bank, today 6 PM.');
+    // Spoken, with the model keeping the clock in its title: still a time, rolled forward.
+    anthropic.next = { ok: true, fields: fields({ title: 'call the vet at 6 pm' }) };
+    const spoken = await capture(token, 'call the vet at 6 pm');
+    expect(spoken.due).toEqual({ day: '2026-11-17', time: '18:00' });
+    expect(spoken.say).toBe('Added: call the vet at 6 pm, tomorrow 6 PM.');
+  });
+
   it('a failed or timed-out parse saves the line as typed and says so', async () => {
     const { anthropic, b, mint, capture } = setup();
     const token = await mint();

@@ -455,6 +455,33 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(voice('stretch 20 minutes in an hour', { estimateMin: 20 }).input.estimateMin).toBe(20);
   });
 
+  it('a stated clock the model kept in its title still applies', () => {
+    expect(voice('call the bank at 6 pm', { title: 'call the bank at 6 pm' }).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '18:00',
+    });
+  });
+
+  it('typed: a stated clock the model missed is filled from the words; a different one stands', () => {
+    const typed = (line: string, over: Record<string, unknown>) =>
+      validateParsedTask(fields({ title: 'call the bank', ...over }), {
+        ...ctx,
+        today: '2026-11-16',
+        line,
+      })!;
+    // The dev miss (2026-11-16): today, no time, for "at 6 pm".
+    const missed = typed('call the bank at 6 pm', { dueDay: '2026-11-16' });
+    expect(missed.input).toMatchObject({ dueDay: '2026-11-16', dueTime: '18:00' });
+    expect(missed.dropped).toEqual([]);
+    expect(typed('call the bank at 6 pm', {}).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '18:00',
+    });
+    expect(typed('move the 3pm to 5pm', { dueTime: '17:00' }).input.dueTime).toBe('17:00');
+    // Nothing stated outright: nothing filled.
+    expect(typed('call the bank at 6', {}).input.dueTime).toBeUndefined();
+  });
+
   it('typed lines keep the 2026-10-09 rule: a past clock lands today', () => {
     const v = validateParsedTask(fields({ title: 'call', dueTime: '09:00' }), {
       ...ctx,

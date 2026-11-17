@@ -140,8 +140,11 @@ export function validateParsedTask(
   if (ctx.voice) {
     const spoken = spokenTimeIn(ctx.line ?? '');
     // The model kept the words in its title: it read them as part of the task, not a time ("look at one
-    // of the leases", "email the morning team").
-    const kept = !!spoken && title.toLowerCase().includes(spoken.said.toLowerCase());
+    // of the leases", "email the morning team"). Only for words that could be either — a stated clock
+    // ("6 pm", "noon") or a delay ("in 20 minutes") is a time whatever the model did with its title.
+    const unambiguous = spoken?.kind === 'clock' || spoken?.kind === 'relative';
+    const kept =
+      !!spoken && !unambiguous && title.toLowerCase().includes(spoken.said.toLowerCase());
     const clock = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const resolve = (t: SpokenTime) => {
       const r = resolveSpoken(t, input.dueDay ?? null, {
@@ -162,13 +165,24 @@ export function validateParsedTask(
   }
   // A time with no day means today (a product call); a small-hours clock on today means tonight
   // (nightDueDay); a time whose day was dropped is dropped too.
-  else if (p.dueTime != null) {
+  // The model missing a clock the line states outright ("call the bank at 6 pm" back with no time — seen on
+  // dev, 2026-11-16) is filled in from the words; a different time from the model stands ("move the 3pm to
+  // 5pm" isn't the first clock's).
+  else {
     const t = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const stated = ctx.line === undefined || CLOCK_IN_LINE.test(ctx.line);
-    if (str(t) && isTimeKey(t) && stated && (input.dueDay != null || p.dueDay == null)) {
-      input.dueTime = t;
-      input.dueDay = nightDueDay(input.dueDay ?? ctx.today, t, ctx.today, ctx.dayStartHour);
-    } else dropped.push('dropped due time');
+    const dayKept = input.dueDay != null || p.dueDay == null;
+    const words = ctx.line === undefined ? null : spokenTimeIn(ctx.line);
+    const time =
+      p.dueTime != null && str(t) && isTimeKey(t) && stated
+        ? t
+        : words?.kind === 'clock'
+          ? words.hhmm
+          : null;
+    if (time && dayKept) {
+      input.dueTime = time;
+      input.dueDay = nightDueDay(input.dueDay ?? ctx.today, time, ctx.today, ctx.dayStartHour);
+    } else if (p.dueTime != null) dropped.push('dropped due time');
   }
 
   // 0 is "no estimate" (the grammar wants >= 1), so it clears quietly rather than reading as an error.

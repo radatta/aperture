@@ -296,7 +296,9 @@ async function expectDue(
     );
   const due = r.due;
   if (!due?.time || !want.some((w) => w.day === due.day && w.time === due.time))
-    throw new Error(`due ${JSON.stringify(due)}, expected ${JSON.stringify(want[0])}`);
+    throw new Error(
+      `due ${JSON.stringify(due)}, expected ${JSON.stringify(want[0])} — receipt: ${r.detail}`,
+    );
   const task = await getTask(ctx, r.id!);
   if (task.dueDay !== due.day || task.dueTime !== due.time)
     throw new Error(
