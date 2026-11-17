@@ -3,16 +3,24 @@
   #   1. Blocks a commit on a protected/deploy branch (main/master/dev) — branch first.
   #   2. Hard-blocks if the staged diff contains obvious credential patterns.
   #   3. Hard-blocks a personal identifier in an added line, a new path or the message (docs/ops/IDENTIFIERS.md).
-  #   4. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
-  #   5. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 4 and 5.
+  #   4. Hard-blocks an author or committer that isn't the maintainer's GitHub login and noreply address.
+  #   5. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
+  #   6. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 5 and 6.
   # set -euo pipefail; only acts on `git commit`, passes through otherwise.
 
   set -euo pipefail
   INPUT=$(cat)
   COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-  # `git commit`, also behind git's own -C <dir> / -c <k=v> (which used to slip past every check here). A here-string,
-  # not a pipe: under pipefail a long command's printf can take SIGPIPE from grep -q and read as "no match".
-  grep -Eq 'git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+commit' <<<"$COMMAND" || exit 0
+  # `git commit`, also behind any of git's own options (-C <dir>, -c <k=v>, --git-dir/--work-tree/--namespace/
+  # --config-env <value>, any bare -… word: --no-pager, -P, --git-dir=…), which used to skip every check here. A value
+  # is a shell word — bare characters, \-escapes and '…' / "…" spans — so `git -c "user.name=A B" commit` and
+  # `-c user.name=A\ B` are seen. A here-string, not a pipe: under pipefail a long command's printf can take SIGPIPE
+  # from grep -q and read as "no match".
+  WORD="([^[:space:]'\"\\\\]|\\\\.|'[^']*'|\"([^\"\\\\]|\\\\.)*\")+"
+  GITOPTS="git([[:space:]]+((-[Cc]|--git-dir|--work-tree|--namespace|--config-env)[[:space:]]+$WORD|-$WORD))*"
+  # Line continuations joined first: grep reads line by line, so `git -C /x \<newline>commit` would skip the hook.
+  FLAT=${COMMAND//$'\\\n'/ }
+  grep -Eq "$GITOPTS[[:space:]]+commit" <<<"$FLAT" || exit 0
 
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
   COMMIT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")  # also works on an unborn branch
@@ -50,7 +58,7 @@
       gd --cached
       # A `git add`/`stage` in the command, or a commit that takes the working tree (-a, --all, -i, -o); a commit
       # naming paths takes them too and isn't detected here — the push scan is the backstop (IDENTIFIERS.md).
-      if grep -Eq '(^|[[:space:];&|(])git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]]|$)' <<<"$COMMAND"; then
+      if grep -Eq '(^|[[:space:];&|(])'"$GITOPTS"'[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]"'"'"']|$)' <<<"$FLAT"; then
         gd
         git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null |
           while IFS= read -r -d '' f; do gd --no-index -- /dev/null "$f"; done
@@ -62,6 +70,31 @@
     if [ "$IDS_RC" = 1 ] && [ -n "$IDS_HITS" ]; then
       jq -n --arg h "$IDS_HITS" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
         "permissionDecisionReason":("This commit adds a personal identifier (docs/ops/IDENTIFIERS.md: the name, the personal mailbox, a Mac home path, the projects folder or an AWS account id belong only in identifiers.json; docs say \"the maintainer\" and <mac-repo>). Where:\n" + $h + "\nReword those lines (or the message) and commit again.")}}'
+      exit 0
+    fi
+  fi
+
+  # Commit identity (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity): author and committer are the
+  # maintainer's GitHub login (identifiers.json → maintainer.github) with its noreply address, WIP commits too.
+  # `git var` sees the config and this hook's environment; scripts/src/commit-identity.ts adds what it can't — an
+  # override in the command itself (GIT_AUTHOR_*/GIT_COMMITTER_*, GIT_CONFIG_*, HOME/XDG_CONFIG_HOME/GIT_DIR
+  # assignments, --author, -c/--config-env on user.*/include keys, a `git config` of one; read from the command's
+  # shell words minus its -m/-F values, so a message is only text) and the author an --amend keeps. Fails open like
+  # the block above, a missing or malformed maintainer.github included (the CLI exits 2). A rebase, cherry-pick or
+  # `commit -C <sha>`, and a `git -C <other dir> commit`: `pnpm bot push` and `open-pr` check every commit again.
+  WHO="$TOP/scripts/src/commit-identity.ts"
+  if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$WHO" ] && command -v node >/dev/null; then
+    idents() {
+      printf 'author %s\n' "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+      printf 'committer %s\n' "$(git var GIT_COMMITTER_IDENT 2>/dev/null || true)"
+      git log -1 --format='head-author %an <%ae>' 2>/dev/null || true
+    }
+    WHO_RC=0
+    WHO_HITS=$(idents | HOOK_CMD="$COMMAND" node "$WHO" 2>/dev/null) || WHO_RC=$?
+    if [ "$WHO_RC" = 1 ] && [ -n "$WHO_HITS" ]; then
+      LOGIN=$(jq -r '.maintainer.github // "<login>"' "$TOP/identifiers.json" 2>/dev/null || echo "<login>")
+      jq -n --arg h "$WHO_HITS" --arg l "$LOGIN" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+        "permissionDecisionReason":("This commit would not be authored and committed as the maintainer'"'"'s GitHub login with its noreply address (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity). What:\n" + $h + "\nSet this checkout'"'"'s identity — `git config user.name " + $l + "` and `git config user.email " + $l + "@users.noreply.github.com` (or its <id>+ form), each as its own command — drop any GIT_AUTHOR_*/GIT_COMMITTER_* or --author override, add --reset-author to an --amend of a wrongly authored commit, and commit again.")}}'
       exit 0
     fi
   fi
@@ -85,7 +118,11 @@ except ValueError:
     raise SystemExit(0)
 
 SEPS = {"&&", "||", ";", "|", "&", "|&", ";;", "(", ")"}
-CLUSTER = re.compile(r"-[apqsnvzeiou]*m(.*)")  # -m, -am, -qm, or -m"msg" glued on
+# As scripts/src/commit-identity.ts reads them: --m… is --message and --fil… is --file (git takes a unique prefix),
+# with the value glued by `=` or the next word; -m / -F also inside a short cluster (-am, -aF) or with the value glued
+# on (-m"msg"), but not after -u, which takes the rest of its word as its own value.
+MSG_LONG = re.compile(r"--(m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?|fil(?:e)?)(=.*)?", re.S)
+MSG_SHORT = re.compile(r"-[apqsnvzeio]*([mF])(.*)", re.S)
 problems = []
 i = 0
 while i < len(toks):
@@ -93,32 +130,27 @@ while i < len(toks):
         i += 1
         continue
     j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):  # git's own options, e.g. -C <path>
-        j += 2 if toks[j] in ("-C", "-c") else 1
+    while j < len(toks) and toks[j].startswith("-"):  # git's own options, e.g. -C <path>, --no-pager
+        j += 2 if toks[j] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env") else 1
     if j >= len(toks) or toks[j] != "commit":
         i += 1
         continue
     msgs, from_file, k = [], False, j + 1
     while k < len(toks) and toks[k] not in SEPS:
         t = toks[k]
-        if t in ("-m", "--message"):
-            if k + 1 < len(toks):
-                msgs.append(toks[k + 1])
-            k += 2
+        lm = MSG_LONG.fullmatch(t)
+        sm = None if lm else MSG_SHORT.fullmatch(t)
+        if not (lm or sm):
+            k += 1
             continue
-        if t.startswith("--message="):
-            msgs.append(t.split("=", 1)[1])
-        elif t in ("-F", "--file") or t.startswith("--file="):
+        is_file = lm.group(1).startswith("f") if lm else sm.group(1) == "F"
+        glued = (lm.group(2)[1:] if lm.group(2) is not None else None) if lm else (sm.group(2) or None)
+        value, k = (glued, k + 1) if glued is not None else (
+            (toks[k + 1], k + 2) if k + 1 < len(toks) and toks[k + 1] not in SEPS else (None, k + 1))
+        if is_file:
             from_file = True
-        elif not t.startswith("--"):
-            m = CLUSTER.fullmatch(t)
-            if m and m.group(1):
-                msgs.append(m.group(1))
-            elif m and k + 1 < len(toks):
-                msgs.append(toks[k + 1])
-                k += 2
-                continue
-        k += 1
+        elif value is not None:
+            msgs.append(value)
     i = k
     if from_file:
         problems.append("the message comes from a file (-F), so it can't be checked; use -m")

@@ -36,6 +36,8 @@ export function loadIdentifiers(path = IDENTIFIERS_PATH): Identifiers {
     throw new Error(
       `${path}: maintainer.name, repo, a 12-digit aws.devAccountId and aws.prodAccountSha256 are required`,
     );
+  // maintainer.github is checked where the commit identity is built (commit-identity.ts), not here: a bad login must
+  // stop only that check, never every importer (the identifier scan included).
   return ids;
 }
 

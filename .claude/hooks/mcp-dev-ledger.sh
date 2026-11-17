@@ -1,6 +1,6 @@
 #!/bin/bash
 # Pre/PostToolUse hook on the aperture-dev MCP task tools — the id ledger that makes "delete what this session
-# created" safe without asking each time (CLAUDE.md → Aperture MCP connector, standing approval 2).
+# created" safe without asking each time (CLAUDE.md → Aperture MCP connector, standing approval 1).
 #   PostToolUse create_task | create_tasks | split_task → record each NEW task id from the server's response
 #   PreToolUse  update_task (parentId set)             → record the attach BEFORE the call (it can half-apply)
 #   PostToolUse update_task (parentId null)            → record a detach once it succeeded

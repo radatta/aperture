@@ -6,7 +6,7 @@ the page is the commit under test, runs scenarios with screenshots in both theme
 created, and writes a report that leads with which of the feature's coverage rows were proven (_Rows_, below).
 It replaces the Claude-in-Chrome runbooks: a green full run with zero leftovers in which every row is proven,
 covered off dev or listed for the user, plus Claude reading the screenshots, is what "tested on dev" means
-(CLAUDE.md → _Feature workflow_, phases 8–9). Code: `scripts/src/devcheck/`.
+(FEATURE-WORKFLOW.md, phases 8–9). Code: `scripts/src/devcheck/`.
 
 Before the dev lock, the same scenarios run locally in seconds: `pnpm devcheck:local` (`docs/ops/LOCAL-CHECK.md`) — a
 pre-flight for step bugs, never a substitute for this check.
@@ -249,7 +249,7 @@ at cleanup; the row itself is the fixture's and stays. The MCP hook
 writes `{t, op, id, parent?, via, session}`, `op` one of `created`, `reparented`, `tainted` (the id has a part
 the hook never recorded — it never clears, so that parent stays undeletable), `deleted`. It denies an `aperture-dev` `delete_task` unless the id has a `created`
 line and no `tainted` one, and records the parts a parent's delete took with it (CLAUDE.md → _Aperture MCP
-connector_, standing approval 2; `docs/areas/mcp/index.md`). The MCP result shape it parses is inferred, not
+connector_, standing approval 1; `docs/areas/mcp/index.md`). The MCP result shape it parses is inferred, not
 yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
@@ -428,8 +428,8 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json` (the same result for
 tooling: `codes` is the dedup'd list, `failures` the harness failures as `{code, message}`), `shots/`.
 `report.md`'s _Feature coverage_ splits _This feature_ (`--feature`) — its table and two lists, _You don't need to
-test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md` and the `CC done` notes
-paste as they are — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
+test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md`
+pastes as they are (the `[pr-open]` message carries what HUB.md → _Checkpoints_ names) — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
 since those belong to their own features. Without `--feature` there are no paste lists: the table is every
 scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
 carry its verdict: they hold only once a run passes.

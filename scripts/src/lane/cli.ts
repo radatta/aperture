@@ -1,4 +1,4 @@
-// `pnpm lane <command>`: one lane = one branch = one worktree = one Claude session named after the branch, born at
+// `pnpm lanes <command>`: one lane = one branch = one worktree = one Claude session named after the branch, born at
 // kickoff and gone at cleanup. Plain node, builtins only. docs/ops/LANES.md.
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -25,8 +25,8 @@ import {
 } from './state.ts';
 import type { Deps, Lanes } from './state.ts';
 
-export const USAGE = `pnpm lane <command>   (run from the main checkout; docs/ops/LANES.md)
-  start <branch> [--kickoff <file>] [--skip-permissions] [--over-cap "<reason>"]
+export const USAGE = `pnpm lanes <command>   (run from the main checkout; docs/ops/LANES.md)
+  start <branch> [--kickoff <file>] [--over-cap "<reason>"]
         worktree off origin/main + install + a tmux window running Claude named <branch> (the kickoff its first
         message) + the board lane. Give it a 600 s timeout: the install is in it.
   end <branch> [--force-abandon "<reason>"]
@@ -101,7 +101,7 @@ export function status(d: Deps): number {
 
 // Each command's flags (bot/help.ts cliGuard): help or a stray argument runs nothing.
 export const FLAGS: Record<string, Spec> = {
-  start: { flags: ['kickoff', 'over-cap'], bare: ['skip-permissions'], args: 1 },
+  start: { flags: ['kickoff', 'over-cap'], args: 1 },
   end: { flags: ['force-abandon'], args: 1 },
   status: { args: 0 },
 };
@@ -123,7 +123,6 @@ export async function main(argv: string[], deps: () => Deps = realDeps): Promise
   return start(d, {
     branch: positional[0],
     kickoff: kickoff === null ? null : resolve(d.env.invokedIn, kickoff),
-    skipPermissions: flag(flags, 'skip-permissions') === 'true',
     overCap: flag(flags, 'over-cap'),
   });
 }

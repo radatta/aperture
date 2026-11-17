@@ -44,7 +44,6 @@ function script(w: World, over: [string, Answer][] = [], trees: string[] = []): 
 const args = (o: Partial<StartArgs> = {}): StartArgs => ({
   branch: B,
   kickoff: null,
-  skipPermissions: false,
   overCap: null,
   ...o,
 });
@@ -264,10 +263,10 @@ describe('lane start: the nominal run', () => {
         ['git switch', ''],
       ]),
     );
-    expect(await start(t.d, args({ skipPermissions: true }))).toBe(0);
+    expect(await start(t.d, args())).toBe(0);
     expect(mutated(t.calls)[0]).toBe(`git switch --detach ${SHA}`);
     expect(t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1)).toBe(
-      `claude -n ${B} --dangerously-skip-permissions`,
+      `claude -n ${B}`,
     );
   });
 
@@ -291,9 +290,11 @@ describe('lane start: the nominal run', () => {
   });
 
   it('the claude line varies only by the validated branch', () => {
-    expect(claudeLine('x', false, false)).toBe('claude -n x');
-    expect(claudeLine('x', true, false)).toBe(`claude -n x '${KICKOFF_PROMPT}'`);
+    expect(claudeLine('x', false)).toBe('claude -n x');
+    expect(claudeLine('x', true)).toBe(`claude -n x '${KICKOFF_PROMPT}'`);
     expect(KICKOFF_PROMPT).not.toMatch(/'/);
+    // The workflow doc isn't loaded on its own (CLAUDE.md → _Feature workflow_): every lane opens it first.
+    expect(KICKOFF_PROMPT).toMatch(/^Read docs\/ops\/FEATURE-WORKFLOW\.md first/);
   });
 });
 

@@ -2,6 +2,7 @@
 // Mac with the user's PR-only token, so it is theirs; the bot never opens one (docs/ops/CI-BOT.md). Never silent:
 // an unreachable Mac prints the hand-off command. docs/ops/MAILROOM.md.
 import { join } from 'node:path';
+import { IDENTITY_FIX, rangeIdentityHits } from '../commit-identity.ts';
 import { REPO_SLUG, describeHits, findIdentifiers } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
 import type { Clock } from '../bot/dispatch.ts';
@@ -49,7 +50,8 @@ export interface Fallback {
 }
 const openFallback = (d: Deps, branch: string, title: string): Fallback => ({
   line: `cd ${macPath(d.root)} && gh pr create --title "${title}" --body-file localNotes/pr-${branch}.md${MAC_NOTE}`,
-  late: `it may still open the PR. Check before opening it by hand: gh pr list --head ${branch}; then, only if none:`,
+  // --head matches a fork's same-named branch too: the jq keeps only this repo's PR.
+  late: `it may still open the PR. Check on the Mac first (empty output means none):\n  cd ${macPath(d.root)} && gh pr list --head ${branch} --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:`,
 });
 
 function unreachable(d: Deps, why: string, fb: Fallback, late = false): number {
@@ -206,6 +208,14 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   const start = d.clock.now();
   const branch = featureBranch(d.run);
   const sha = requirePushed(d.run, branch);
+  // Every commit the PR shows, not only the last push's (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity).
+  const who = rangeIdentityHits(d.run, ['origin/main..HEAD']);
+  if (who.length) {
+    d.log(
+      `refused before submit: COMMIT_IDENTITY — these commits are not authored and committed as the maintainer's GitHub login with its noreply address. ${IDENTITY_FIX()}, then open-pr again:\n${who.join('\n')}`,
+    );
+    return EXIT.failed;
+  }
   const body = prBody(d, branch, sha, title);
   if (body === null) return EXIT.failed;
   const job = makeOpenPrJob({ branch, sha, title, body }, d.clock.now());
@@ -213,19 +223,21 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   if (bad) return refuse(d, job, bad);
 
   // Best-effort, with the container's read-only token: an open PR needs no job. Offline → the Mac checks anyway.
+  // `--head` matches a fork's PR from a same-named branch too, which must never stand in for ours (F130).
   try {
-    const url = d.run('gh', [
-      'pr',
-      'list',
-      '--head',
-      branch,
-      '--state',
-      'open',
-      '--json',
-      'url',
-      '--jq',
-      '.[0].url // ""',
-    ]);
+    const rows = JSON.parse(
+      d.run('gh', [
+        'pr',
+        'list',
+        '--head',
+        branch,
+        '--state',
+        'open',
+        '--json',
+        'url,isCrossRepository',
+      ]) || '[]',
+    ) as { url: string; isCrossRepository: boolean }[];
+    const url = rows.find((r) => r.isCrossRepository === false)?.url;
     if (url) {
       d.log(`exists ${url} — ${editHint(title)}`);
       return EXIT.ok;

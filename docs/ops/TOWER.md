@@ -32,7 +32,7 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
 and never from a worktree. After a merge, `pnpm board sync-main` moves `/workspace` and restarts the tower only if
 its code changed. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
-file (a merge synced by hand, or `pnpm lane start` detaching `/workspace`), the sources chip reads "behind main" and
+file (a merge synced by hand, or `pnpm lanes start` detaching `/workspace`), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
@@ -182,7 +182,7 @@ and what the maintainer must do.
 | BUILDING · WAITING · NEXT FOR DEV · NEEDS YOU · READY · ON dev? | anything else: the lane file's phase and step; with no lane file, the queue's own `state` and its `waitingOn`                                                                                                                                                          |
 
 **The automatic HOLD** (`holdReason`, first match wins). A main merge redeploys dev over a dispatched branch
-(CLAUDE.md → _Git workflow_), so:
+(CI-BOT.md → _Dev deploys_), so:
 
 1. the `dev` lock is unknown: no cache, a failed or stale refresh (over 5 min), an unreadable expiry;
 2. another branch holds a live `dev` lock;
@@ -203,7 +203,7 @@ only for a fresh, free lock; an unknown one says why, in amber. A dev card with 
 ## Lane files
 
 Each feature session writes `/workspace/localNotes/board/lanes/<branch>.json` at its hub checkpoints and at each
-phase change (CLAUDE.md → _The hub_), from its worktree:
+phase change (FEATURE-WORKFLOW.md → _Lane status and checkpoints_), from its worktree:
 
 ```
 pnpm board lane <phase> [--step <text>] [--pr <n>] [--slot dev|devb] [--session <name>]

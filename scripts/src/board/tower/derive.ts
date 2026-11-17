@@ -260,8 +260,8 @@ export function slotDetail(
   return file?.step ?? (file ? file.phase : null);
 }
 
-// The automatic merge HOLD (TOWER.md → HOLD): a main merge redeploys dev over a dispatched branch (CLAUDE.md →
-// Git workflow), and devb only when the merge changes devb's shape (deploy-base.ts → SHAPE_PATHS). First match wins.
+// The automatic merge HOLD (TOWER.md → HOLD): a main merge redeploys dev over a dispatched branch (CI-BOT.md →
+// Dev deploys), and devb only when the merge changes devb's shape (deploy-base.ts → SHAPE_PATHS). First match wins.
 export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null {
   const dev = lockRead(i.tower.lock, i.now);
   if (dev.state === 'unknown') return `dev lock unknown (${dev.why})`;

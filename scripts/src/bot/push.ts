@@ -2,6 +2,7 @@
 // To the explicit HTTPS URL, so the pusher is the bot even where `origin` is SSH. The token reaches git through
 // an env-configured credential helper: never argv, never .git/config. GIT_CONFIG_* outranks every config file,
 // and an empty helper value clears the inherited list (the container's read-only `gh` helper).
+import { IDENTITY_FIX, rangeIdentityHits } from '../commit-identity.ts';
 import { scanRange } from '../identifiers-scan.ts';
 import { findIdentifiers } from '../identifiers.ts';
 import { REPO_URL } from './config.ts';
@@ -38,12 +39,10 @@ export function pushArgs(branch: string, afterRebase: boolean, leaseSha: string)
   return args;
 }
 
-// The last stop before the branch is public (docs/ops/IDENTIFIERS.md): every commit not yet on origin/main — its
-// message and its own diff, since a branch's history is visible on its PR — carries no personal identifier. The
-// commit hook can miss what a `git add` in the same command staged; this can't.
-export function identifierHits(run: Run, branch = ''): string[] {
-  // Commits already on origin/<branch> are public whatever this push does: only the new ones are checked, so a
-  // branch from before the rules can still push a fix on top (its rebase onto main then checks every commit).
+// The commits this push publishes, for both checks. Those already on origin/<branch> are public whatever this push
+// does: only the new ones are checked, so a branch from before the rules can still push a fix on top (its rebase onto
+// main then checks every commit).
+export function pushRange(run: Run, branch = ''): string[] {
   const published = (() => {
     try {
       return branch
@@ -53,7 +52,13 @@ export function identifierHits(run: Run, branch = ''): string[] {
       return '';
     }
   })();
-  const range = ['origin/main..HEAD', ...(published ? [`^${published}`] : [])];
+  return ['origin/main..HEAD', ...(published ? [`^${published}`] : [])];
+}
+
+// The last stop before the branch is public (docs/ops/IDENTIFIERS.md): every commit not yet on origin/main — its
+// message and its own diff, since a branch's history is visible on its PR — carries no personal identifier. The
+// commit hook can miss what a `git add` in the same command staged; this can't.
+export function identifierHits(run: Run, branch = '', range = pushRange(run, branch)): string[] {
   let shas: string[];
   try {
     shas = run('git', ['rev-list', '--reverse', ...range])
@@ -113,10 +118,17 @@ export function push(
         `--after-rebase needs origin/${branch} to lease against — it was never pushed; use a plain \`pnpm bot push\``,
       );
   }
-  const hits = identifierHits(run, branch);
+  const range = pushRange(run, branch);
+  const hits = identifierHits(run, branch, range);
   if (hits.length)
     throw new Error(
       `refusing to push: these commits carry a personal identifier (docs/ops/IDENTIFIERS.md → Push). Fix it in the commit that added it — a later commit removing it still leaves it in the pushed history: edit the line, \`git commit --fixup=<sha>\`, \`git rebase --autosquash origin/main\`, then \`pnpm bot push --after-rebase\` (a plain \`pnpm bot push\` if the branch was never pushed):\n${hits.join('\n')}`,
+    );
+  // The same commits, by who wrote and committed them (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity).
+  const who = rangeIdentityHits(run, range);
+  if (who.length)
+    throw new Error(
+      `refusing to push: these commits are not authored and committed as the maintainer's GitHub login with its noreply address (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity). ${IDENTITY_FIX()} (a plain \`pnpm bot push\` if the branch was never pushed):\n${who.join('\n')}`,
     );
   run('git', pushArgs(branch, opts.afterRebase, lease), { env: credentialEnv(token) });
   // Record what we pushed (the next lease) and track it — read-only fetch, no token.

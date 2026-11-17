@@ -1,6 +1,6 @@
 // `pnpm board sync-main` (docs/ops/TOWER.md → Run it): the main checkout to origin/main, detached, then the web tower
 // restarted only when the code it serves differs from the new HEAD in a file the tower runs. The base is the commit the
-// tower serves (board.sh tower version), not the old HEAD: a checkout moved by `pnpm lane start` is caught too. Never
+// tower serves (board.sh tower version), not the old HEAD: a checkout moved by `pnpm lanes start` is caught too. Never
 // starts a stopped tower. Idempotent: a second run says so and does nothing.
 import { dirname, join } from 'node:path';
 import { towerChanged } from './tower/behind.ts';

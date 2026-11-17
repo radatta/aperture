@@ -38,7 +38,7 @@ import { cognitoAuthority } from '../token';
 const exec = promisify(execFile);
 
 // The dev report's wording, retitled: every "on dev" a local report would claim is "locally" here, and the two
-// lists report-<branch>.md and the CC done notes paste are renamed so a local run can never fill them.
+// lists report-<branch>.md and the [pr-open] message paste are renamed so a local run can never fill them.
 export const LOCAL_NOT_PASTE = '— not a paste list: dev’s report is';
 export function toLocalReport(md: string): string {
   return md

@@ -105,7 +105,7 @@ describe('sync-main', () => {
     expect(f.did('switch') || f.did('restart')).toBe(false);
   });
 
-  it('restarts a tower serving an older commit even when the checkout already moved (pnpm lane start detached it)', () => {
+  it('restarts a tower serving an older commit even when the checkout already moved (pnpm lanes start detached it)', () => {
     const f = fake({
       head: B,
       origin: B,

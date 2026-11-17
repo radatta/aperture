@@ -40,12 +40,17 @@ after the hook ran) and "ledger_count" (its exact line count after);
 {PAD_200K} in "stage" expands to ~200 KB of filler (a diff past the 64 KiB pipe buffer);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
-"ids": true gives the throwaway repo the real identifiers.json and scripts/src/identifiers{,-scan}.ts (the
-personal-identifier block), and "stage_ids" stages that config; "write" puts a file in the tree unstaged
+"ids": true gives the throwaway repo the real identifiers.json, scripts/src/identifiers{,-scan}.ts (the
+personal-identifier block) and scripts/src/commit-identity.ts (the commit-identity block), and "stage_ids" stages that config; "write" puts a file in the tree unstaged
 (at "write_path"); "stage_path" names the staged file (default staged.txt). {ID_NAME}, {ID_MAILBOX},
-{ID_HOME}, {ID_FOLDER}, {ID_DEV_ACCOUNT} and {ID_DOMAIN} in "stage" or "cmd" expand from identifiers.json, so this file
-carries no identifier itself (docs/ops/IDENTIFIERS.md); {ID_FOLDER} is synthetic, matching the throwaway repo's own
-.local/mac-root.
+{ID_HOME}, {ID_FOLDER}, {ID_DEV_ACCOUNT}, {ID_DOMAIN} and {ID_LOGIN} in "stage", "cmd", "identity" or "env" expand from identifiers.json, so
+this file carries no identifier itself (docs/ops/IDENTIFIERS.md); {ID_FOLDER} is synthetic, matching the throwaway repo's
+own .local/mac-root.
+Every throwaway repo is configured as the maintainer's GitHub login with its noreply address (the commit-identity
+block), and the hook never inherits this process's GIT_AUTHOR_*/GIT_COMMITTER_*. A repo-suite case may set "identity"
+({"name", "email"} overriding that config), "head_author" ({"name", "email"}: a first commit by that author, for
+--amend), "env" (extra environment for the hook, e.g. GIT_COMMITTER_EMAIL) and "ids_patch" (merged into the copied
+identifiers.json; null deletes a key, e.g. maintainer.github, to prove the hook fails open).
 """
 
 import fcntl
@@ -69,7 +74,10 @@ ID_PLACEHOLDERS = {
     "{ID_HOME}": "/" + "Users/someone/repo",
     "{ID_DEV_ACCOUNT}": _IDS["aws"]["devAccountId"],
     "{ID_DOMAIN}": _IDS["domains"]["dev"],
+    "{ID_LOGIN}": _IDS["maintainer"]["github"],
 }
+# The identity every throwaway repo commits as: public (identifiers.json → maintainer.github), never a real mailbox.
+IDENTITY = {"name": _IDS["maintainer"]["github"], "email": _IDS["maintainer"]["github"] + "@users.noreply.github.com"}
 
 
 def expand_ids(s: str) -> str:
@@ -149,10 +157,32 @@ def decision_for(
         return f"ERROR(unparsable): {exc}", ""
 
 
-def make_repo(root: str, branch: str) -> str:
+def make_repo(root: str, branch: str, identity: dict | None = None) -> str:
     repo = tempfile.mkdtemp(dir=root)
     subprocess.run(["git", "init", "-q", "-b", branch, repo], check=True)
+    for key, value in {**IDENTITY, **(identity or {})}.items():
+        subprocess.run(["git", "-C", repo, "config", f"user.{key}", expand_ids(value)], check=True)
     return repo
+
+
+def patch(base: dict, change: dict) -> dict:
+    """`change` merged into `base`, recursively; a None value deletes the key."""
+    out = dict(base)
+    for k, v in change.items():
+        if v is None:
+            out.pop(k, None)
+        elif isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = patch(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def hook_env(extra: dict | None) -> dict:
+    """This process's environment minus any identity override, plus the case's own "env"."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
+    env.update({k: expand_ids(v) for k, v in (extra or {}).items()})
+    return env
 
 
 def claude_ancestor() -> str:
@@ -236,12 +266,19 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
         return decision_for(hook, tool, tool_input, None, case.get("payload"), env=board_env(case, root))
     if root is None:
         return decision_for(hook, tool, tool_input, case.get("cwd"), case.get("payload"))
-    repo = make_repo(root, case.get("branch", "fixture-branch"))
+    repo = make_repo(root, case.get("branch", "fixture-branch"), case.get("identity"))
+    if "head_author" in case:
+        who = case["head_author"]
+        author = {"GIT_AUTHOR_NAME": expand_ids(who["name"]), "GIT_AUTHOR_EMAIL": expand_ids(who["email"])}
+        subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "base"], check=True, env=hook_env(author))
     if case.get("ids"):
         shutil.copy2(REPO_ROOT / "identifiers.json", pathlib.Path(repo) / "identifiers.json")
+        if "ids_patch" in case:
+            patched = pathlib.Path(repo) / "identifiers.json"
+            patched.write_text(json.dumps(patch(json.loads(patched.read_text(encoding="utf-8")), case["ids_patch"])), encoding="utf-8")
         src = pathlib.Path(repo) / "scripts" / "src"
         src.mkdir(parents=True)
-        for name in ("identifiers.ts", "identifiers-scan.ts", "mac-root.ts"):
+        for name in ("identifiers.ts", "identifiers-scan.ts", "mac-root.ts", "commit-identity.ts"):
             shutil.copy2(REPO_ROOT / "scripts" / "src" / name, src / name)
         # A synthetic Mac root, so the projects-folder rule exists here ({ID_FOLDER}); excluded, not committed.
         local = pathlib.Path(repo) / ".local"
@@ -279,7 +316,7 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
         for name in (hook.name, "_hook-common.sh"):
             shutil.copy2(hook.parent / name, hooks / name)
         hook = hooks / hook.name
-    decision = decision_for(hook, tool, tool_input, repo, case.get("payload"))
+    decision = decision_for(hook, tool, tool_input, repo, case.get("payload"), env=hook_env(case.get("env")))
     if "expect_ledger" in case or "ledger_count" in case:
         lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
         parsed = []

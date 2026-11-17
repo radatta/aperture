@@ -129,7 +129,7 @@ An unavailable step turns off the run's later iOS steps (they don't wait on a sl
 
 A result also carries `device {name, udid, runtime, axe, xcode}`, `booted` (warm · cold · rebooted · off), `signedIn` (already · fresh · false), `buildsSeen`, per-op `steps` with notes, `reads` and `shots`; the result dir also keeps the job as `plan.json`.
 
-**iOS not run is never quiet.** When any iOS step came back unavailable, the devcheck report's status line says `iOS NOT RUN (<reason>): <n> iPhone rows untested`, `report.json` carries an `ios` block, and `pnpm mailroom open-pr` puts `> ⚠ **iPhone checks did not run** (<reason>): …` (plus "Mac asleep?" when it was `MAC_UNREACHABLE`/`MAC_STALLED`) as the PR body's **first line** when the head commit's newest devcheck had it (`open-pr.ts → iosBanner`). The hub's `[pr-open]` message and an autonomous `CC done` task repeat it.
+**iOS not run is never quiet.** When any iOS step came back unavailable, the devcheck report's status line says `iOS NOT RUN (<reason>): <n> iPhone rows untested`, `report.json` carries an `ios` block, and `pnpm mailroom open-pr` puts `> ⚠ **iPhone checks did not run** (<reason>): …` (plus "Mac asleep?" when it was `MAC_UNREACHABLE`/`MAC_STALLED`) as the PR body's **first line** when the head commit's newest devcheck had it (`open-pr.ts → iosBanner`). The lane's `[pr-open]` message to the hub and its `report-<branch>.md` repeat it.
 
 ## The build guard
 

@@ -32,11 +32,12 @@ function setup(
   opts: {
     pushed?: boolean;
     body?: string | null;
-    existing?: string;
+    existing?: string; // `gh pr list --json url,isCrossRepository` output
     offline?: boolean;
     mac?: (job: { id: string; params: { bodySha256: string } }) => Partial<Result> | 'late' | null;
     inbox?: boolean;
     diff?: string; // the branch's files vs origin/main (iOS paths decide a devb run's banner)
+    log?: string; // `git log` over origin/main..HEAD: each commit's author and committer
   } = {},
 ) {
   const fs = memFs(opts.inbox === false ? [] : [`${HJ}/inbox`]);
@@ -46,11 +47,12 @@ function setup(
     ['git rev-parse HEAD', SHA],
     ['git ls-remote', opts.pushed === false ? '' : `${SHA}\trefs/heads/mac-mailroom`],
     ['git diff', opts.diff ?? ''],
+    ['git log', opts.log ?? ''],
     [
       'gh pr list',
       () => {
         if (opts.offline) throw new Error('gh pr list failed: offline');
-        return opts.existing ?? '';
+        return opts.existing ?? '[]';
       },
     ],
   ]);
@@ -277,12 +279,25 @@ describe('openPr', () => {
   });
 
   it('short-circuits an already-open PR without a job', async () => {
-    const { d, fs, logs } = setup({ existing: PR.url, mac: opened });
+    const existing = JSON.stringify([{ url: PR.url, isCrossRepository: false }]);
+    const { d, fs, logs } = setup({ existing, mac: opened });
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
     expect(logs).toEqual([
       `exists ${PR.url} — to update its body (and title) after a push: pnpm mailroom edit-pr [--title "Mac mailroom opens PRs"]`,
     ]);
     expect(fs.files.size).toBe(1);
+  });
+
+  it("never takes a fork's PR from a same-named branch for ours: it opens the real one", async () => {
+    const fork = 'https://github.com/someone-else/aperture/pull/9';
+    const existing = JSON.stringify([{ url: fork, isCrossRepository: true }]);
+    const { d, calls, logs } = setup({ existing, mac: opened });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(logs.join('\n')).not.toContain(fork);
+    expect(logs.join('\n')).toMatch(/opened /);
+    expect(calls.find((c) => c.cmd === 'gh' && c.args[1] === 'list')?.args).toContain(
+      'url,isCrossRepository',
+    );
   });
 
   it('still submits when the container cannot reach GitHub', async () => {
@@ -305,7 +320,14 @@ describe('openPr', () => {
       if (to.includes('/inbox/')) fs.files.delete(to); // the Mac takes it, then goes quiet
     };
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
-    expect(logs.join('\n')).toMatch(/may still open the PR[\s\S]*gh pr list --head mac-mailroom/);
+    const out = logs.join('\n');
+    expect(out).toContain(
+      'may still open the PR. Check on the Mac first (empty output means none):',
+    );
+    // A real Mac line: the worktree's Mac path, and only this repo's PR (a fork's same-named branch is dropped).
+    expect(out).toContain(
+      `\n  cd ${macPath(ROOT)} && gh pr list --head mac-mailroom --json url,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | .url'\nthen, only if none:\n  cd ${macPath(ROOT)} && gh pr create`,
+    );
   });
 
   it('counts time spent before submit against the wait budget', async () => {
@@ -354,6 +376,26 @@ describe('openPr', () => {
       expect(out).toContain(where);
       expect(out).not.toContain('gh pr create');
     }
+  });
+
+  it('refuses a wrong author or committer anywhere on the branch before anything is queued or handed over', async () => {
+    const login = IDS.maintainer.github;
+    const ok = `${login}@users.noreply.github.com`;
+    const line = (c: string, ...f: string[]) => [c.repeat(40), ...f].join('\0');
+    const { d, fs, logs, calls } = setup({
+      mac: opened,
+      log: [
+        line('b', login, ok, login, `9+${ok}`),
+        line('c', 'Someone', 'someone@example.com', login, ok),
+      ].join('\n'),
+    });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.failed);
+    expect([...fs.files.keys()].some((k) => k.includes('/inbox/'))).toBe(false);
+    const out = logs.join('\n');
+    expect(out).toContain('COMMIT_IDENTITY');
+    expect(out).toContain('cccccccccccc author name\ncccccccccccc author email');
+    expect(out).not.toMatch(/someone|gh pr create|bbbbbbbbbbbb/i);
+    expect(calls.find((c) => c.args[0] === 'log')?.args.slice(3)).toEqual(['origin/main..HEAD']);
   });
 
   it('a large clean body passes the identifier check', async () => {
