@@ -196,6 +196,49 @@ describe('joinTrial', () => {
     expect(
       joinTrial(p.steps, [{ ...all[0]!, via: 'batch15' }, ...all.slice(1)]).cells[0],
     ).toMatchObject({ un: 'not run' });
+    // a keys line claiming another tap count is bad, not summed
+    const keysAt = vs.find(({ s }) => s.op === 'keys')?.i ?? -1;
+    const wrongN = all.map((l) => (l.i === keysAt ? { ...l, n: 60 } : l));
+    expect(joinTrial(p.steps, wrongN)).toMatchObject({ bad: 1 });
+    expect(joinTrial(p.steps, wrongN).cells.find((c) => c.i === keysAt)).toMatchObject({
+      drops: null,
+      n: 0,
+    });
+  });
+  it('a step with no line where the round failed carries that failure, not "not run"', () => {
+    const all = parseTrial(linesFor(p)).lines;
+    const keysAt = vs.find(({ s }) => s.op === 'keys')?.i ?? -1;
+    const res = {
+      detail: 'KEYBOARD_SETUP',
+      steps: [{ i: keysAt, op: 'keys', status: 'error', ms: 1 }],
+    } as unknown as SimResult;
+    const cells = joinTrial(
+      p.steps,
+      all.filter((l) => l.i < keysAt),
+      res,
+    ).cells;
+    expect(cells.find((c) => c.i === keysAt)).toMatchObject({ drops: null, un: 'KEYBOARD_SETUP' });
+    expect(cells.filter((c) => c.i > keysAt).every((c) => c.un === 'not run')).toBe(true);
+  });
+  it('a line with no time (no tap went out) parses, and stays out of ms per tap', () => {
+    const t = parseTrial(
+      JSON.stringify({ i: 5, op: 'tap', via: 'tap', n: 1, drops: null, sendMs: null, un: 'MISS' }),
+    );
+    expect(t).toMatchObject({ bad: 0 });
+    const rows = summarise([
+      {
+        round: 0,
+        id: 'x',
+        load: null,
+        cells: joinTrial(p.steps, t.lines).cells,
+        retried: [],
+        bad: 0,
+      },
+    ]);
+    expect(rows.find((r) => r.target === 'Bulk add' && r.via === 'tap')).toMatchObject({
+      uncounted: { MISS: 1 },
+      msPerTap: null,
+    });
   });
   it("a closes zero is unconfirmed when the next step can't find what it looks for", () => {
     const all = parseTrial(linesFor(p)).lines;

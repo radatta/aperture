@@ -22,7 +22,7 @@ import type { IosOp, SimDeps, SimJob, SimParams, SimResult, TapVia, Via } from '
 // Six distinct letters each, from all three rows, never one key twice in a row (a repeat can be coalesced: another failure).
 export const TRIAL_WORDS = ['fjqmzt', 'wkbpxa', 'rhculd', 'ygvoes', 'nimwtk'] as const;
 export const KEY_ROUNDS = TRIAL_WORDS.length;
-export const TAP_ROUNDS = 6; // 6 taps per target and variant (12 for the mode row), ~30 min
+export const TAP_ROUNDS = 6; // 6 taps per target and variant (12 for the mode row), ~40 min (a round ~6)
 const TAG_RE = /^[a-z0-9-]{1,16}$/;
 
 const at = <T>(xs: readonly T[], i: number): T => xs[i % xs.length] as T;
@@ -150,7 +150,7 @@ interface TrialLine {
   via: Via;
   n: number;
   drops: number | null;
-  sendMs: number;
+  sendMs: number | null; // null: no tap went out (already, or a failure before it)
   un?: string;
 }
 // What a via step came to: counted, uncounted (why), or not run (the round ended before it).
@@ -190,7 +190,7 @@ const okLine = (o: Record<string, unknown>): boolean =>
   typeof o.via === 'string' &&
   Number.isInteger(o.n) &&
   (o.n as number) >= 1 &&
-  typeof o.sendMs === 'number' &&
+  (typeof o.sendMs === 'number' || o.sendMs === null) &&
   ((Number.isInteger(o.drops) &&
     (o.drops as number) >= 0 &&
     (o.drops as number) <= (o.n as number)) ||
@@ -223,7 +223,11 @@ export const targetOf = (s: IosOp): string =>
 const viaOf = (s: IosOp): Via | undefined =>
   'via' in s && typeof s.via === 'string' ? (s.via as Via) : undefined;
 
-// Each via step of the plan gets its one line: none is not run, two (or a line for another op or variant) is bad. A
+// The taps a via step's line stands for: 1 for a tap or launch, the letters for keys, the deletes for erase.
+const nOf = (s: IosOp): number => (s.op === 'keys' ? s.text.length : s.op === 'erase' ? s.n : 1);
+
+// Each via step of the plan gets its one line: none is not run (or its failure, when that step is where the round
+// failed before the runner could write one), two (or a line for another op, variant or tap count) is bad. A
 // `closes` zero rests on the element's absence at its spot; if the next step then can't find what it looks for, the
 // page wasn't where the read assumed, so that zero is uncounted (unconfirmed).
 export function joinTrial(
@@ -233,15 +237,21 @@ export function joinTrial(
 ): { cells: TrialCell[]; bad: number } {
   let bad = 0;
   const cells: TrialCell[] = [];
-  const failed = (result?.steps ?? []).find((s) => s.status === 'fail');
+  const failed = (result?.steps ?? []).find((s) => s.status === 'fail' || s.status === 'error');
   steps.forEach((s, i) => {
     const via = viaOf(s);
     if (!via) return;
     const mine = lines.filter((l) => l.i === i);
     const target = targetOf(s);
-    if (mine.length !== 1 || mine[0]?.op !== s.op || mine[0]?.via !== via) {
+    if (
+      mine.length !== 1 ||
+      mine[0]?.op !== s.op ||
+      mine[0]?.via !== via ||
+      mine[0]?.n !== nOf(s)
+    ) {
       if (mine.length) bad += mine.length;
-      cells.push({ i, target, via, n: 0, drops: null, un: 'not run', sendMs: null });
+      const un = failed?.i === i ? (result?.detail ?? result?.reason ?? 'failed') : 'not run';
+      cells.push({ i, target, via, n: 0, drops: null, un, sendMs: null });
       return;
     }
     const l = mine[0];

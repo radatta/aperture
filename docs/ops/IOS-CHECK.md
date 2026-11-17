@@ -190,15 +190,15 @@ The first trial (2026-11-08) typed and erased words in the capture bar and found
   - On `keys` and `erase`, which need `in`: `tap`, `hid` and `batch` as above, plus `post` (`--post-delay 0.5`, a 0.1 s sleep after) and `batch15` (a 1.5 s lead).
     - `batch` and `batch15` read every key at its spot first. A key off its spot is `MISS`, and no tap is sent. Then one `axe batch` taps them all, 0.6 s apart: one HID session per word.
   - Retaps, retypes and extra deletes go the same way as the first.
-- **Held still before the tap:** a trial `tap` re-reads its target's centre until two reads 1 s apart give the same frame, at most 3 reads. A dock still settling (PR 156: taps at y 374 and 402 on a dock that settles at 464) is a moving target, not a dropped tap. A target that never holds still is tapped anyway, as a devcheck would, and its line is uncounted (`moving`).
-- **What gets counted:** each `via` op writes exactly one line to the job's `trial.jsonl` and its step note (`via batch, drops 1`), from its first read-back.
-  - **icon:** still the Home Screen at a poll means 1; the app up means 0.
+- **Held still before the tap:** a trial `tap` re-reads its target's centre until two reads 1 s apart give the same frame, at most 3 reads. A dock still settling (PR 156: taps at y 374 and 402 on a dock that settles at 464) is a moving target, not a dropped tap. A target that never holds still, or leaves its centre, is tapped where it was last seen and its line is uncounted (`moving`); a read that hangs is tapped at find's spot, uncounted (`unread`). A field whose keyboard is already up before the tap is uncounted too (`kbup`): the keyboard couldn't show the tap landed. The deny check runs on the element about to be tapped, after these reads.
+- **What gets counted:** each `via` tap or launch writes exactly one line to the job's `trial.jsonl` and its step note (`via batch, drops 1`), from its first read-back, or from its failure when it ends before one. Keys and erase write theirs at the read-back; one that fails before it leaves none, and the table names that step's failure (or `not run`, for a step the round never reached).
+  - **icon:** still the Home Screen at a poll means 1; the web app in front at a poll, or at the end, means 0. Anything else (a stale tree, Spotlight) counts nothing. A relaunch's icon tap (an app left mid-typing) isn't counted: the first one landed.
   - **closes:** the element gone means 0. Still there with the same frame on both looks means 1.
   - **selects:** the toggle on means 0. Still off on both looks, same frame, means 1.
   - **field:** the keyboard up, at once or late, means 0. None twice, with the field still at its spot, means 1.
   - **keys:** the letters missing, at least 1 when the field reads wrong. Only from a read that is the field: `in`'s role and label (empty, its placeholder the value), or an unlabelled run whose text is the typed text with letters missing. A checkbox's `0` where the field was counts nothing.
   - **erase:** the letters left.
-  - **Uncounted:** `drops` is `null`, and `un` says why: `moving`; `moved` (the frame changed between the tap and the look); `gone` (something else at the field's spot); `already` (the toggle was on, so no tap); `notfield` (a keys or erase read that wasn't the field); or the op's failure (`MISS`, `AX_TIMEOUT`, `AXE_FAILED`, …), when it ended before a read-back. A count that can't be read is never a zero.
+  - **Uncounted:** `drops` is `null`, and `un` says why: `moving`; `moved` (the frame changed between the tap and the look); `gone` (something else at the field's spot); `unread`; `kbup`; `already` (the toggle was on, so no tap); `notfield` (a keys or erase read that wasn't the field); or a tap's or launch's failure (`MISS`, `DENIED`, `AX_TIMEOUT`, `AXE_FAILED`, …), when it ended before a read-back. `sendMs` is `null` when no tap went out. A count that can't be read is never a zero.
   - The first line of `trial.jsonl` holds the Mac's `vm.loadavg` at the job's start and end.
   - The read-backs still retry, and fail as `ICON_TAP_DROPPED`, `TAP_DROPPED`, `TYPED` or `ERASED`. A trial hides nothing.
 - **A round** (`sim-trial.ts` → `tapPlan`) is one sim job of 62 ops, timeout 600 s. It launches with the round's first variant, signs in and goes to Tasks. Then one cycle per variant:
@@ -209,7 +209,7 @@ The first trial (2026-11-08) typed and erased words in the capture bar and found
   - `Capture` (the field);
   - the mode row's `Task`, then `Log` (`selects`);
   - `blur`.
-  - Every counted tap follows a `wait` of 3 s or more plus its own reads: 5–6 s with no touch. The variant order rotates each round, so a change in load lands on every variant alike.
+  - Every counted element tap follows a `wait` of 3 s or more plus its own reads: 5–6 s with no touch. The icon tap follows the home press and the icon's tree reads, as in a devcheck. The variant order rotates each round, so a change in load lands on every variant alike.
   - Bulk add, its field and Cancel need no dev data and make no writes: Cancel drops the draft.
   - Their spots come from the probe check against the stub app: Bulk add 318,212 102×34; Cancel 205,648 79×38 with the keyboard down; the field 40,422 360×210 down and 40,219 up. The smoke round is the proof on the Simulator.
 - **Running it:** `pnpm mailroom sim-trial --tag <t>`. This needs no dev lock and no deploy.
