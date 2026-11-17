@@ -24,6 +24,7 @@ describe('trialPlan', () => {
       const p = trialPlan(r, r === TRIAL_ROUNDS - 1);
       expect(validateSimParams(p)).toBeNull();
       expect(p.shutdown).toBe(r === TRIAL_ROUNDS - 1);
+      expect(p.steps.slice(0, 2)).toEqual([{ op: 'kill', method: 'terminate' }, { op: 'launch' }]);
       const keys = p.steps.filter((s) => s.op === 'keys');
       const erases = p.steps.filter((s) => s.op === 'erase');
       expect(keys).toHaveLength(VIAS.length);
