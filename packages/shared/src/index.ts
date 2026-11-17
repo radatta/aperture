@@ -10,6 +10,7 @@ export * from './leetcode';
 export * from './sittings';
 export * from './neetcode150';
 export * from './catalogs';
+export * from './lcCatalog';
 export * from './coach';
 export * from './coachAi';
 export * from './coachProgress';
