@@ -157,7 +157,8 @@ import {
   coachStats,
   normalizeStatsRange,
   attemptsOf,
-  catalogProblem,
+  coachScope,
+  slotChangeInputs,
   applySlotChange,
   normalizeFocusPattern,
   normalizeCoachAttempts,
@@ -323,7 +324,7 @@ const FINANCE_SETTINGS_DEFAULTS = {
   financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null, fluxSets: {} };
-const LC_SETTINGS_DEFAULTS = { leetcodeRollId: null, coachAiPick: true };
+const LC_SETTINGS_DEFAULTS = { leetcodeRollId: null, coachAiPick: true, leetcodePremium: true };
 const STORAGE_KEY = 'aperture.stub.v1';
 // The stub's VAPID public key: a real uncompressed P-256 point (65 bytes, base64url), generated once with
 // node:crypto, so the browser's pushManager.subscribe accepts it. Nothing holds its private half — the
@@ -1220,9 +1221,10 @@ class StubClient implements ApiClient {
   private coachInput(day?: string): CoachInput {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
     const settings = this.ensureSettings();
-    const { dayStartHour } = settings;
+    const { dayStartHour, leetcodePremium } = settings;
     const now = this.now();
     return {
+      premium: leetcodePremium !== false,
       today: day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour),
       now,
       dayStartHour,
@@ -1313,6 +1315,7 @@ class StubClient implements ApiClient {
       attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
       ci.today,
       r,
+      coachScope(ci),
     );
   }
   private changeCoachDay(fn: (cur: CoachDay, ci: CoachInput) => CoachDay): CoachToday {
@@ -1324,10 +1327,16 @@ class StubClient implements ApiClient {
   async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
     return this.changeCoachDay((cur, ci) => {
       if (aiPickPending(cur.ai, ci.now)) throw new Error(AI_PICK_BUSY_ERROR);
-      const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
-      const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
-      const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
-      const changes = applySlotChange(planDay(ci), cur.changes, input, known, seen, ci.now);
+      const { seen, known } = slotChangeInputs(ci);
+      const changes = applySlotChange(
+        planDay(ci),
+        cur.changes,
+        input,
+        known,
+        seen,
+        ci.now,
+        ci.premium,
+      );
       return { ...cur, changes };
     });
   }

@@ -269,6 +269,13 @@ export function fmtSpokenDay(key: string, today: string): string {
   const p = key.split('-');
   return `${MONTHS_LONG[Number(p[1]) - 1]} ${Number(p[2])}`;
 }
+// A past day as a person says it ("today", "yesterday", "October 2"); another year names it ("March 1, 2024").
+export function fmtPastDay(key: string, today: string): string {
+  const said = fmtSpokenDay(key, today);
+  return key.slice(0, 4) === today.slice(0, 4) || said === 'yesterday'
+    ? said
+    : `${said}, ${key.slice(0, 4)}`;
+}
 
 export function fmtWeekday(key: string): string {
   return WEEKDAYS[weekdayOf(key)]!;

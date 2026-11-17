@@ -4429,6 +4429,72 @@ export function runApiContract(
         expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['happy-number']);
       });
 
+      it('a history-only solve lights a record and marks it seen, and nothing else moves', async () => {
+        const before = await api.getCoachToday();
+        const [h] = await api.logCoachAttempts([
+          { slug: 'contains-duplicate', outcome: 'solved', day: '2022-10-01', historical: true },
+        ]);
+        expect(h).toMatchObject({ historical: true, day: '2022-10-01', source: 'manual' });
+        const [r] = await api.listProblemRecords();
+        expect(r).toMatchObject({
+          slug: 'contains-duplicate',
+          schedule: null,
+          historical: { tries: 1, firstDay: '2022-10-01', lastDay: '2022-10-01' },
+          lists: ['neetcode150'],
+        });
+        expect(r!.tries).toEqual([
+          expect.objectContaining({ historical: true, attemptIds: [h!.id] }),
+        ]);
+        const t = await api.getCoachToday();
+        expect(t.slots[0]!.slug).toBe('valid-anagram'); // seen, so never offered as new
+        expect(t).toMatchObject({ due: [], next48h: [], momentum: before.momentum });
+        expect(await api.getCoachStats()).toMatchObject({ attempts: 0, problems: 0 });
+        await expect(
+          api.logCoachAttempts([{ slug: 'two-sum', outcome: 'solved', day: '2023-09-01' }]),
+        ).rejects.toThrow(/last 60 days/);
+        await expect(
+          api.logCoachAttempts([
+            { slug: 'two-sum', outcome: 'solved', day: '2013-11-01', historical: true },
+          ]),
+        ).rejects.toThrow(/last 10 years/);
+        await expect(
+          api.logCoachAttempts([
+            { slug: 'two-sum', outcome: 'solved', day: TODAY, historical: true },
+          ]),
+        ).rejects.toThrow(/dated before today/);
+        const [y] = await api.logCoachAttempts([
+          { slug: 'two-sum', outcome: 'solved', historical: true },
+        ]);
+        expect(y!.day).toBe('2023-11-13'); // no day: yesterday, so it reads as seen before today's plan
+        expect((await api.getCoachToday()).slots.map((x) => x.slug)).not.toContain('two-sum');
+        await api.deleteCoachAttempt(y!.id);
+        await api.deleteCoachAttempt(h!.id);
+        expect(await api.listProblemRecords()).toEqual([]);
+        expect((await api.getCoachToday()).slots[0]!.slug).toBe('contains-duplicate');
+      });
+
+      it('a history-only solve on a problem with a sitting leaves its live outcome and schedule alone', async () => {
+        await finished('two-sum', true);
+        await api.logCoachAttempts([
+          { slug: 'two-sum', outcome: 'failed', historical: true, minutes: 50, note: 'long ago' },
+        ]);
+        const [r] = await api.listProblemRecords();
+        expect(r).toMatchObject({ lastOutcome: 'clean', attempts: 1, historical: { tries: 1 } });
+        expect(r!.schedule).toMatchObject({ track: 'clean', step: 0 });
+        expect(r!.tries.map((x) => [x.outcome, x.historical])).toEqual([
+          ['failed', true],
+          ['clean', false],
+        ]);
+        expect(r!.tries[0]).toMatchObject({ minutes: 50, note: 'long ago' });
+        expect(r!.tries[1]!.minutes).toEqual(expect.any(Number));
+      });
+
+      it('LeetCode Premium is on by default and round-trips', async () => {
+        expect((await api.getSettings()).leetcodePremium).toBe(true);
+        expect((await api.updateSettings({ leetcodePremium: false })).leetcodePremium).toBe(false);
+        expect((await api.getSettings()).leetcodePremium).toBe(false);
+      });
+
       it('stats carry the Patterns tab’s detail: submits a try, run first, traced, weekly first tries', async () => {
         // valid-palindrome: traced, ran, a wrong submit, then an accept. 3sum: trace skipped, accepted at once.
         const coach = (at: number, payload: unknown): SittingEventInput => ({

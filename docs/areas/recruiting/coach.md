@@ -13,7 +13,7 @@ decisions are stored; everything else is recomputed on every read.
 | Stored (`lcc#`)                            | What                                                                                                               |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `lcc#day#<day>` (`CoachDay`)               | that day's floor choice, slot changes (a swap or skip per slot, the newest), and its AI pick (`ai`, _The AI pick_) |
-| `lcc#att#<ulid>` (`CoachAttempt`)          | an attempt made outside the extension, or a peek seeded from the thread                                            |
+| `lcc#att#<ulid>` (`CoachAttempt`)          | an attempt made outside the extension, a peek seeded from the thread, or a history-only solve (`historical`)       |
 | `lcc#focus` (`CoachFocus`)                 | the focus override and the day it started (`source`: the user's, or `ai`)                                          |
 | the review's `cause`, `test` (on the head) | the one cause tag of a sitting, and the test-sitting flag                                                          |
 
@@ -30,6 +30,15 @@ day rows; no stored count can drift.
   value replaces it (a null cause clears it; `mergeReview`), so the app form's Save never wipes a peek or a cause set
   over MCP. `patchSittingReview` is the
   coach's partial write.
+- **History-only solves** (`CoachAttempt.historical`, logged with `log_attempt`'s `historical: true`, dated before
+  today — yesterday when no day is given — and up to 10 years back): a solve from before the coach. It never reaches `attemptsOf`; `historyAttemptsOf` folds them by day the same
+  way. A problem with one is _seen_ (never a new or stretch pick, never "unseen" for the focus ranking or the room
+  check; swapped in, it's a re-solve) and gets a record (`ProblemRecord.historical`, its tries flagged), but no
+  schedule, and a live try dated after it is no first try (a re-solve in the stats and the focus ranking; a live
+  try before it stays a first try), and no part of momentum, active days
+  or the stats counts. A day's live tries win over it: its base fields come from the live tries whenever there are
+  any. `CoachScope` carries the history and the Premium setting into the folds that need them; absent, the engine
+  is as it was. A live attempt stays at 60 days back.
 
 ## Attempts and outcomes
 
@@ -159,9 +168,18 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
 ## The catalog
 
 `packages/shared/src/neetcode150.ts`: the public NeetCode 150 list (slug, LeetCode title, roadmap pattern,
-difficulty), kept by hand and pinned by `neetcode150.test.ts`. The 7 LeetCode Premium problems are marked and never
-picked. A problem outside the list joins the working catalog from the user's own sittings, its pattern from its
-LeetCode tags (`patternOfTags`), else `other`. The user's own problem history never goes in the tracked file.
+difficulty), kept by hand and pinned by `neetcode150.test.ts`. `catalogs.ts` labels each list by its source
+(`CATALOGS`, `CatalogId`; NeetCode 150 alone today) and answers `catalogProblem` and `listsOf` across all of them; a
+problem on two lists has the same facts in each (`catalogs.test.ts`). The plan picks from `DEFAULT_CATALOG`; a
+second list adds a member there, and its picker a Settings field, since the plan, MCP and every device must agree.
+
+The 7 LeetCode Premium problems are marked `premium`. **`Settings.leetcodePremium`** (default on; an older row reads
+as on) lets the coach pick them like any other — `pickable`, `easierIn`, the ranking's "nothing unseen left" and
+the room check all honour it (`CoachInput.premium`); off, they're never picked. The focus replay reads the setting
+as it stands now, so flipping it can move the focus (a pattern whose only unseen problems are Premium drops in or
+out of the ranking), and today's new or stretch pick with it. A problem outside the list joins
+the working catalog from the user's own sittings, its pattern from its LeetCode tags (`patternOfTags`), else
+`other`. The user's own problem history never goes in the tracked file.
 
 ## Over MCP
 
@@ -174,7 +192,7 @@ LeetCode tags (`patternOfTags`), else `other`. The user's own problem history ne
 | `mark_peeked {slug \| sittingId, day?}`      | write  | that day's sitting's review → help `solution`; none → a peek attempt                                                                            |
 | `set_cause_tag {sittingId?, cause, peeked?}` | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                          |
 | `swap_slot {slug, action, toSlug?}`          | write  | `setCoachSlot`; a swap with no target → the next easier unseen problem                                                                          |
-| `log_attempt {attempts[]}`                   | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration)                                                                                          |
+| `log_attempt {attempts[]}`                   | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration); an item's `historical: true` is a history-only solve, up to 10 years back               |
 
 Every write's description opens with the same ask-first sentence and says what it returns to read back. Leave all
 six (these four and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
@@ -189,10 +207,10 @@ reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
 
 ## Not yet
 
-Mocks, the
-history import, and countdown mode — each its own PR. `CoachToday.mode`, `target` and `arm` are already in the
-shape, and the gaps and cap are parameters, so countdown mode and an A/B arm (the AI pick against the rules) add
-rather than change.
+Mocks, a bulk import of LeetCode's own submission history, a second problem list with its picker, and countdown
+mode — each its own PR. (History-only solves cover logging old solves by hand, in the thread.) `CoachToday.mode`,
+`target` and `arm` are already in the shape, and the gaps and cap are parameters, so countdown mode and an A/B arm
+(the AI pick against the rules) add rather than change.
 
 ## Files
 
@@ -201,7 +219,8 @@ rather than change.
 | `packages/shared/src/coach.ts`                                                        | the engine: attempts, records, `resolveState`, `focusOn`, `planDay`, the write normalizers |
 | `packages/shared/src/coachAi.ts`                                                      | the AI pick: candidates, context, guardrails, the stand-in, the day row's claim steps      |
 | `lambdas/src/anthropic/coachPickPrompt.ts`, `lambdas/src/coach/`, `coachWorker.ts`    | the AI pick's prompt, the worker and its invokers                                          |
-| `packages/shared/src/neetcode150.ts`                                                  | the catalog and the pattern ids                                                            |
+| `packages/shared/src/neetcode150.ts`, `catalogs.ts`                                   | the NeetCode 150 list and the pattern ids; the lists by source                             |
+| `packages/shared/src/coachProgress.ts`                                                | the Progress tab's folds: `problemStatus`, `coverage`, `PROGRESS_STAGES`, the trends       |
 | `packages/shared/src/sittings.ts`                                                     | `CAUSE_TAGS`, `mergeReview`, `patchReview`                                                 |
 | `packages/shared/src/contractTests.ts`                                                | `lc coach`, `lc coach ai` — run 3× (stub, backend direct, via handleRpc)                   |
 | `lambdas/src/backend.ts`, `app/src/data/stubClient.ts`                                | the coach RPCs                                                                             |
@@ -209,6 +228,7 @@ rather than change.
 | `lambdas/src/mcp/coachTools.ts`                                                       | the coach's MCP tools and `live_sitting`'s slot                                            |
 | `scripts/src/devcheck/scenarios/lc-coach.ts`, `lc-coach-ai.ts`                        | the dev check's rows                                                                       |
 | `app/src/pages/Recruiting/TodayCard.tsx`, `ReviewForm.tsx`, `Home/LeetcodeGlance.tsx` | the app: the Today card, the cause chips and Peeked, the morning line                      |
+| `app/src/pages/Recruiting/Progress*.tsx`, `SolvesList.tsx`, `ProblemPage.tsx`         | the Progress tab and a problem's page (helpers in `progressHelpers.ts`)                    |
 
 ## In the app
 
@@ -254,7 +274,7 @@ Added beside _Over MCP_'s table, in `coachTools.ts`; all six writes stay on **As
 | `delete_attempt {id}`                             | write | `deleteCoachAttempt`, after finding the id among the live logged attempts; none → `deleted: false`, nothing written        |
 
 **Stats** (`coachStats`, RPC `getCoachStats(range?)`): over the counted attempts, so test sittings never count. A
-first try is a problem's first attempt ever, so a range never turns a re-solve into one; every later day on it is
+first try is a problem's first attempt ever, with no history-only solve dated before it, so a range never turns a re-solve into one; every later day on it is
 a re-solve. Clean is the only hit for both — the gap is first-try accuracy. Per ISO week (the trend) and per
 pattern, weakest first by the focus ranking as of now (`rank`; null once the pattern has nothing untried). Also
 active days, peeks, the cause mix and `untagged` (went wrong, no cause). The pattern dashboard grows `PatternStat`
@@ -287,7 +307,7 @@ same fields ride `coach_stats` (rates with `pct`):
 
 | Field             | Counts                                                                                                                                        |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `firstTry`        | the problem's first attempt ever, clean                                                                                                       |
+| `firstTry`        | the problem's first attempt ever (none after a history-only solve), clean                                                                     |
 | `resolve`         | any later-day attempt, clean (derived from history, so no slot stamp)                                                                         |
 | `submitsPerTry`   | captured submits ÷ attempts with one (a re-solve is its own try), to 1 decimal; logged attempts carry none                                    |
 | `runBeforeSubmit` | attempts with a captured submit whose first submit had a Run before it                                                                        |
@@ -298,3 +318,44 @@ same fields ride `coach_stats` (rates with `pct`):
 Rates read "3 of 8"; a percentage joins from 5 tries, so a week of data stays honest. The weekly bars draw a week
 under 5 tries hollow. Charts are inline SVG, no dependency. Hooks: `app/src/data/hooks/useCoachStats.ts`, under
 the `coach` query prefix, which a task write and a review save invalidate.
+
+## The Progress tab
+
+`/recruiting/progress` (`ProgressSection.tsx`, `ProgressMap.tsx`, `SolvesList.tsx`, `ProgressTrends.tsx`; helpers in
+`progressHelpers.ts`, folds in `coachProgress.ts`, tests beside them): how much of the list is done, what's left,
+and every solve. On a wide screen the tab runs wider than the app's column (up to 72rem), since five stage columns
+and the tables need the room; the header, tabs and dock stay in the column. Patterns says how well; Progress says how much, and never repeats a per-pattern rate. It reads
+`listProblemRecords()` (hook `useCoachProgress.ts`, under the `coach` prefix) and the day's plan for today and the
+focus marker; the list is static shared data, so there is no RPC of its own. The view (`?view=map|solves|trends`),
+the open pattern (`?open=`), Left only (`?left=1`) and the Solves filters (`?pattern= &status= &difficulty=`) live in
+the URL, so a reload or Back keeps them.
+
+- **Status** (`problemStatus`): from the newest live try — clean, solved, peeked (the solution read) or not yet
+  (not accepted); a problem with only history-only solves reads _Solved before_ (or not yet, if none was
+  accepted); untried otherwise. **Done** is a clean or solved try, live or history-only (a try that read the solution
+  never counts), so a failed re-solve shows in its square but never takes a solved problem off the count. Due since / next due / graduated come
+  from the schedule. Teal for clean, gold for the rest that went somewhere, muted for history, never red; a due
+  re-solve is never "overdue".
+- **The map** (`coverage` against `DEFAULT_CATALOG`, `PROGRESS_STAGES`): a summary line (done, tried, not tried,
+  off the list, due) over a whole-list bar, then the 18 patterns in our own five stages, in roadmap order:
+  Foundations, Linked structures, Search, Dynamic programming, Toolkit. Each stage is a column on a wide screen
+  (one under another on a phone) with its meter and a card per pattern; a card's squares are its problems, shape
+  and fill carrying each state (hollow, dotted Premium when the setting is off, solid, ringed when due), and its
+  accessible name says it all in words. A card opens its problems in a panel — status, tries, last tried, re-solve,
+  LeetCode link, each title linking its page — under all five stages on a wide screen, under its own stage on a
+  phone; Close returns focus to the card. **Left only** lists what's left: the open pattern's untried problems, or
+  every pattern's. Problems off the list show under **Off the list**, never in the 150.
+- **Solves**: every touched problem, the newest try first: pattern, difficulty, status, first try, tries, last
+  cause, last tried, re-solve. Filters by pattern, status (incl. re-solve due, graduated, solved before) and
+  difficulty; no match offers Clear filters.
+- **Trends** (`progressWeeks`, `capTimes`), live tries only, the last 12 ISO weeks (all four cards): problems a week (clean / solved
+  / not yet), first tries clean and re-solves clean a week (a week under 5 tries hollow), and minutes a try against
+  the 30-minute cap (`capMin`) with the median. A try's minutes: a sitting's to its first accept (both on the
+  extension's clock), else its length once ended; a logged try's as given. Each card says what it needs when
+  there isn't enough yet.
+- **A problem's page** (`/recruiting/progress/:slug`, `ProblemPage.tsx`): its lists, status and re-solve, then
+  every try newest first — minutes (over the cap in gold), help, cause, the logged note, its sittings — a
+  history-only one tagged _Before the coach_ with its outcome. ← Progress returns to the view and filters it came from. A slug on no list and never
+  tried says so.
+- A failed records read is a `LoadError` with Retry, never an empty map; a failed plan read still draws the map,
+  with one line saying no pattern is marked. Settings → LeetCode's **I have LeetCode Premium** re-reads the coach.

@@ -265,6 +265,7 @@ export interface DevSettings extends Required<DevReminderSettings> {
   // The coach's AI pick (absent = on). Every run turns it off after the sweep (pipeline.ts) so no other scenario's
   // read starts the day's one pick; lc-coach-ai turns it on for its own steps and off again in their `finally`.
   coachAiPick?: boolean;
+  leetcodePremium?: boolean; // lc-coach's progress step switches it off and back on (absent = on)
 }
 
 // The slices of a Roll and a LeetCode sitting the lc-sittings scenario writes and reads
@@ -356,6 +357,7 @@ export interface DevCoachSlot {
   sittingId: string | null;
   outcome: string | null;
   swappedFrom: string | null;
+  alternatives?: { slug: string }[];
   aiWhy?: string | null; // the AI pick's "why today"; null on a rule slot
 }
 // The plan's view of the day's AI pick (packages/shared/src/coach.ts CoachAiView).
@@ -417,6 +419,8 @@ export interface DevCoachToday {
 // What getCoachStats answers — the fields the Patterns tab's steps read.
 export interface DevCoachStats {
   attempts: number;
+  firstTry: { hit: number; of: number };
+  resolve: { hit: number; of: number };
   ranking: string[];
   patterns: { pattern: string; attempts: number; firstTry: { hit: number; of: number } }[];
 }
@@ -429,9 +433,13 @@ export interface DevCoachAttempt {
 }
 export interface DevProblemRecord {
   slug: string;
+  title: string;
+  lastDay: string;
   sittingIds: string[];
   peeked: boolean;
   schedule: { track: string; dueDay: string; graduated: boolean } | null;
+  historical?: { tries: number; firstDay: string; lastDay: string } | null;
+  lists?: string[];
 }
 export interface DevSittingStart {
   clientSittingId: string;

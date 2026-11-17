@@ -11,7 +11,13 @@
 // a refused write, Set as focus and back, 390 px) runs just before the schedule step.
 import { PHONE } from '../browser';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
-import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
+import type {
+  DevCoachSlot,
+  DevCoachStats,
+  DevCoachToday,
+  DevSittingEvent,
+  DevSittingStart,
+} from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { devUlid } from './flux-history';
 
@@ -67,6 +73,49 @@ const slugs = (t: DevCoachToday) => t.slots.map((s) => s.slug);
 // The Patterns tab's rows: NeetCode's 18 (scripts doesn't depend on shared; neetcode150.test.ts pins the count).
 const PATTERN_COUNT = 18;
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+// The Progress step's history-only pick: Hard list problems no other step touches, the first with no record here
+// (public list facts: slug, title, pattern). PR F.
+const PROGRESS_PICKS = [
+  { slug: 'burst-balloons', title: 'Burst Balloons', pattern: 'dp-2d', patternName: '2-D DP' },
+  {
+    slug: 'regular-expression-matching',
+    title: 'Regular Expression Matching',
+    pattern: 'dp-2d',
+    patternName: '2-D DP',
+  },
+  {
+    slug: 'swim-in-rising-water',
+    title: 'Swim in Rising Water',
+    pattern: 'advanced-graphs',
+    patternName: 'Advanced Graphs',
+  },
+];
+// NeetCode 150's LeetCode Premium problems (public list facts; neetcode150.ts marks them `premium`).
+const PREMIUM_SLUGS = [
+  'encode-and-decode-strings',
+  'walls-and-gates',
+  'number-of-connected-components-in-an-undirected-graph',
+  'graph-valid-tree',
+  'alien-dictionary',
+  'meeting-rooms',
+  'meeting-rooms-ii',
+];
+const DESKTOP = { width: 1512, height: 860 }; // the 14" MacBook Pro's Safari content area
+// What the progress steps share: the pick, its history-only attempt id, and the plan and stats before it.
+const progress = {
+  pick: null as (typeof PROGRESS_PICKS)[number] | null,
+  id: '',
+  note: '',
+  planBefore: null as DevCoachToday | null,
+  statsBefore: null as DevCoachStats | null,
+};
+const progressState = () => ({
+  pick: progress.pick ?? fail('no history-only pick — the progress-mcp step failed'),
+  id: progress.id,
+  note: progress.note,
+  planBefore: progress.planBefore ?? fail('no plan read before the history-only solve'),
+  statsBefore: progress.statsBefore ?? fail('no stats read before the history-only solve'),
+});
 
 // What this run made and read, shared across steps (a scenario's steps run in order).
 const state = {
@@ -502,6 +551,236 @@ export const lcCoach: Scenario = {
       entry: 'mcp',
       kind: 'nominal',
       what: 'coach_stats carries each pattern’s submits a try, run-first and traced rates, and its weekly first tries',
+    },
+    // PR F: the Progress tab, history-only solves, LeetCode Premium.
+    {
+      id: 'progress-map',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Recruiting › Progress draws five stages and 18 pattern cards; the summary’s not-tried count is 150 less the list problems the server has records on',
+    },
+    {
+      id: 'progress-open',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A card opens its problems (status, re-solve, LeetCode link) in a panel; the open card survives a reload; Close hands keyboard focus back to the card',
+    },
+    {
+      id: 'progress-left',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Left only lists just the open pattern’s untried problems',
+    },
+    {
+      id: 'progress-history',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'log_attempt historical: true, 400 days back: stored as history with no next due; get_problem shows the try as historical',
+    },
+    {
+      id: 'progress-history-neighbours',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A history-only solve leaves today’s due list, the next 48 h, momentum and the stats counts as they were, and its problem is no slot',
+    },
+    {
+      id: 'progress-history-bad',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'historical "yes", a historical day 11 years back or today, and a live day 61 days back are refused with a reason; nothing written',
+    },
+    {
+      id: 'progress-history-delete',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'delete_attempt on the history-only id removes it; the problem has no record again',
+    },
+    {
+      id: 'progress-schema',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'tools/list shows `historical` on log_attempt',
+    },
+    {
+      id: 'progress-off-list',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A problem off the list (this run’s synthetic slug) shows under Off the list, never in the 150',
+    },
+    {
+      id: 'progress-solves',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Solves lists every touched problem newest first; a status filter narrows it and survives a reload; no match offers Clear filters, which clears the URL',
+    },
+    {
+      id: 'progress-problem',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A Solves row opens the problem’s page: each try with its minutes and logged note, the history-only one marked; ← Progress keeps the filters',
+    },
+    {
+      id: 'progress-trends',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Trends draws its four cards over the server’s records',
+    },
+    {
+      id: 'progress-desktop',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'At 1512 and 1024 px the wider tab (map with a card open, Solves, Trends) never scrolls sideways',
+    },
+    {
+      id: 'progress-390',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'At 390 px the map (a card open), Solves and Trends never scroll sideways, light and dark',
+    },
+    {
+      id: 'progress-load-error',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A failed records read shows the error with Retry, never an empty map; Retry recovers',
+    },
+    {
+      id: 'premium-toggle',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Settings › LeetCode “I have LeetCode Premium” saves off and on, each surviving a reload',
+    },
+    {
+      id: 'premium-off',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'With Premium switched off in Settings, no unseen pick in today’s plan is a Premium problem: no new or stretch slot, no alternative',
+    },
+    {
+      id: 'premium-picks',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'With Premium on, the plan picks a Premium problem in its turn',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'on: a Premium problem is picked in its turn',
+        why: 'which problem comes next depends on the dev account’s history; the plan is a pure fold, run the same by the stub and the Lambda (the lc coach contract test)',
+      },
+    },
+    {
+      id: 'progress-focus-load-error',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A failed focus read: the map still draws, with one line saying no pattern is marked',
+      offDev: {
+        file: 'app/src/pages/Recruiting/ProgressSection.test.tsx',
+        test: 'a failed focus read: the map still draws, with a line saying no pattern is marked',
+        why: 'same path as progress-load-error (proven on dev): a failed read of the day’s plan beside a good records read',
+      },
+    },
+    {
+      id: 'progress-empty',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'An account with no practice: the whole list not tried, every pattern a card',
+      offDev: {
+        file: 'app/src/pages/Recruiting/ProgressSection.test.tsx',
+        test: 'an empty account: the whole list untried, five stages, every pattern a card',
+        why: why.history,
+      },
+    },
+    {
+      id: 'progress-sparse',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Trends with under two active weeks, no re-solve or no timed try says so in each card',
+      offDev: {
+        file: 'app/src/pages/Recruiting/ProgressSection.test.tsx',
+        test: 'Trends: sparse lines with no data; charts with some',
+        why: why.history,
+      },
+    },
+    {
+      id: 'progress-max',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Every list problem done: 150 done, none left',
+      offDev: {
+        file: 'packages/shared/src/coachProgress.test.ts',
+        test: 'a full list: everything done',
+        why: 'a 150-problem seed on the dev account is all cleanup risk; the fold is pure and the map renders what it returns (progress-map, proven on dev)',
+      },
+    },
+    {
+      id: 'progress-long-history',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A problem with 40 tries lists all 40 on its page',
+      offDev: {
+        file: 'app/src/pages/Recruiting/ProblemPage.test.tsx',
+        test: 'a long history lists every try',
+        why: 'same path as progress-problem (proven on dev): one records read, a longer list',
+      },
+    },
+    {
+      id: 'progress-unknown',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'An untried list problem reads Not tried yet; a slug on no list and never tried says No problem by that name',
+      offDev: {
+        file: 'app/src/pages/Recruiting/ProblemPage.test.tsx',
+        test: 'an untried list problem reads Not tried yet; an unknown slug says so',
+        why: 'same path as progress-problem (proven on dev): one records read, a different slug',
+      },
+    },
+    {
+      id: 'progress-mixed',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A history-only solve on a problem with a live try (this run’s logged one): get_problem lists the history try first, flagged, and the live schedule stays as it was',
+    },
+    {
+      id: 'progress-swap-seen',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A swap counts a history-only problem as seen and known',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'count as seen and known for a swap',
+        why: 'mcp-swap runs setCoachSlot on dev; history and Premium only change the sets slotChangeInputs builds, a pure helper the stub and the Lambda share',
+      },
+    },
+    {
+      id: 'progress-swap-premium',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With Premium on, a swap’s default target (the next easier unseen problem) may be a Premium one',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'on: a swap’s default target may be a Premium problem; off, there is none',
+        why: 'mcp-swap runs setCoachSlot on dev; the default target is the pure applySlotChange with the Premium flag, shared by the stub and the Lambda',
+      },
+    },
+    {
+      id: 'progress-focus-room',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With Premium on, setting the focus counts Premium problems as room',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'on: easier picks and the room check count Premium problems',
+        why: 'floor-focus and patterns-set-focus run setCoachFocus on dev; the room check is the pure focusRoomError over the same input',
+      },
+    },
+    {
+      id: 'progress-focus-room-history',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Setting the focus counts history-only problems as seen: a pattern with nothing else unseen is refused',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'mark a problem seen for the focus ranking without counting as a first try',
+        why: 'floor-focus and patterns-set-focus run setCoachFocus on dev; the room check is the pure focusRoomError over the same input',
+      },
     },
   ],
   steps: [
@@ -1542,6 +1821,364 @@ export const lcCoach: Scenario = {
           fail('a refused call wrote an attempt');
         if ((await ctx.api.reads.getCoachToday()).focus.source !== 'engine')
           fail('a refused focus call set a focus');
+      },
+    },
+    {
+      id: 'progress-mcp',
+      title:
+        'log_attempt historical: the schema, three refusals, then a history-only solve 400 days back',
+      entry: 'mcp',
+      proves: ['progress-schema', 'progress-history-bad', 'progress-history'],
+      async run(ctx) {
+        // A catalog problem this account hasn't touched, logged as solved before (400 days back), ledgered by id:
+        // progress-undo deletes it, and cleanup does if a step fails first.
+        const records = await ctx.api.reads.listProblemRecords();
+        const pick =
+          PROGRESS_PICKS.find((p) => !records.some((r) => r.slug === p.slug)) ??
+          fail('every Progress candidate already has a record on this account');
+        const planBefore = await ctx.api.reads.getCoachToday();
+        const statsBefore = await ctx.api.reads.getCoachStats();
+        const note = `devcheck ${ctx.nonce}`;
+
+        // The schema, then the refusals: nothing written.
+        const tool = (await ctx.mcp.reads.toolSchemas()).find((t) => t.name === 'log_attempt');
+        const item = (
+          tool?.inputSchema as {
+            properties?: { attempts?: { items?: { properties?: Record<string, unknown> } } };
+          }
+        )?.properties?.attempts?.items?.properties;
+        if (!item || !('historical' in item)) fail('log_attempt has no historical in tools/list');
+        const countBefore = (await ctx.api.reads.listCoachAttempts()).length;
+        const refused = async (what: string, a: Record<string, unknown>, want: RegExp) => {
+          try {
+            await ctx.mcp.writes.logAttempt([a]);
+          } catch (err) {
+            if (err instanceof McpRpcError && err.code === PARAM_ERROR) return;
+            if (want.test(String(err))) return;
+            throw err;
+          }
+          fail(`${what}: accepted`);
+        };
+        await refused(
+          'historical "yes"',
+          { slug: pick.slug, outcome: 'solved', historical: 'yes' },
+          /historical must be true or false/,
+        );
+        await refused(
+          'a historical day 11 years back',
+          { slug: pick.slug, outcome: 'solved', historical: true, day: addDays(today(), -4020) },
+          /last 10 years/,
+        );
+        await refused(
+          'a historical day of today',
+          { slug: pick.slug, outcome: 'solved', historical: true, day: today() },
+          /dated before today/,
+        );
+        await refused(
+          'a live day 61 days back',
+          { slug: pick.slug, outcome: 'solved', day: addDays(today(), -61) },
+          /last 60 days/,
+        );
+        if ((await ctx.api.reads.listCoachAttempts()).length !== countBefore)
+          fail('a refused log_attempt wrote an attempt');
+
+        const out = await ctx.mcp.writes.logAttempt([
+          {
+            slug: pick.slug,
+            outcome: 'solved',
+            historical: true,
+            day: addDays(today(), -400),
+            note,
+          },
+        ]);
+        const logged = out.attempts[0] ?? fail('log_attempt stored nothing');
+        if (logged.historical !== true || logged.nextDue !== null)
+          fail(`the history-only attempt: ${JSON.stringify(logged)}`);
+        const read = await ctx.mcp.reads.getProblem({ slug: pick.slug });
+        if (!read.tries?.some((t) => t.historical === true && t.attemptIds.includes(logged.id)))
+          fail(`get_problem's tries lack the history-only one: ${JSON.stringify(read.tries)}`);
+        progress.pick = pick;
+        progress.id = logged.id;
+        progress.note = note;
+        progress.planBefore = planBefore;
+        progress.statsBefore = statsBefore;
+      },
+    },
+    {
+      id: 'progress-neighbours',
+      title:
+        'The history-only solve moved nothing: the due list, the next 48 h, momentum, the stats, the slots',
+      entry: 'api',
+      proves: ['progress-history-neighbours'],
+      async run(ctx) {
+        const { pick, planBefore, statsBefore } = progressState();
+        const after = await ctx.api.reads.getCoachToday();
+        if (
+          !same(due(after), due(planBefore)) ||
+          !same(
+            after.next48h.map((q) => q.slug),
+            planBefore.next48h.map((q) => q.slug),
+          ) ||
+          JSON.stringify(after.momentum) !== JSON.stringify(planBefore.momentum) ||
+          slugs(after).includes(pick.slug)
+        )
+          fail(`the plan moved: ${JSON.stringify({ before: planBefore, after })}`);
+        const statsAfter = await ctx.api.reads.getCoachStats();
+        const counts = (x: DevCoachStats) =>
+          JSON.stringify({ attempts: x.attempts, firstTry: x.firstTry, resolve: x.resolve });
+        if (counts(statsAfter) !== counts(statsBefore))
+          fail(`stats moved: ${counts(statsBefore)} → ${counts(statsAfter)}`);
+      },
+    },
+    {
+      id: 'progress',
+      title:
+        'Recruiting › Progress: the map, Left only, off the list, Solves, a problem’s page, Trends, a failed read, 390 px; Premium in Settings',
+      entry: 'ui',
+      proves: [
+        'progress-map',
+        'progress-open',
+        'progress-left',
+        'progress-off-list',
+        'progress-solves',
+        'progress-problem',
+        'progress-trends',
+        'progress-390',
+        'progress-desktop',
+        'progress-load-error',
+        'premium-toggle',
+        'premium-off',
+      ],
+      async run(ctx) {
+        const { pick, note } = progressState();
+        const recs = await ctx.api.reads.listProblemRecords();
+        const mine = recs.find((r) => r.slug === pick.slug);
+        if (!mine?.historical || mine.schedule !== null)
+          fail(`the record: ${JSON.stringify(mine)}`);
+        const onList = recs.filter((r) => r.lists?.includes('neetcode150')).length;
+        const offList = recs.find((r) => !r.lists?.length);
+
+        // A failed records read: the error with Retry, no map; released, Retry recovers.
+        const stage = ctx.page.getByRole('region', { name: 'Foundations' });
+        const down = await ctx.intercept('listProblemRecords', { status: 500 });
+        await ctx.ui.goto('/recruiting/progress');
+        await ctx.ui.expectText('Couldn’t load your progress.');
+        if (await stage.count()) fail('the map rendered over a failed read');
+        await ctx.shot('progress-load-error');
+        await down.release();
+        await ctx.page.getByRole('button', { name: 'Retry' }).click();
+        await stage.waitFor();
+
+        // The map: five stages, 18 cards, the server's count.
+        await ctx.ui.expectText(`${150 - onList} not tried`);
+        const cards = ctx.page.locator('button[data-pattern]');
+        if ((await cards.count()) !== PATTERN_COUNT)
+          fail(`${await cards.count()} pattern cards, want ${PATTERN_COUNT}`);
+        await ctx.page.setViewportSize(DESKTOP);
+        try {
+          // The pick's card opens its problems; the panel survives a reload; Close returns focus to the card.
+          const card = ctx.page.locator(`button[data-pattern="${pick.pattern}"]`);
+          await card.click();
+          const panel = ctx.page.getByRole('region', { name: `${pick.patternName} problems` });
+          const row = () => panel.getByRole('row').filter({ hasText: pick.title });
+          await row().getByText('Solved before', { exact: true }).waitFor();
+          await ctx.ui.settle();
+          await ctx.shot('progress-map-open');
+          await ctx.ui.goto(`/recruiting/progress?open=${pick.pattern}`);
+          await row().getByText('Solved before', { exact: true }).waitFor();
+          // Left only: the pick is gone from the open pattern's list, every row left untried.
+          await ctx.page.getByRole('button', { name: 'Left only' }).click();
+          // The panel re-renders from the URL: wait for the history-only row to go, then check what's left.
+          await row()
+            .waitFor({ state: 'hidden', timeout: 10_000 })
+            .catch(() => fail('Left only still lists the history-only problem'));
+          if (!(await panel.getByRole('row').count())) fail('Left only lists nothing');
+          await ctx.shot('progress-left-only');
+          await ctx.page.getByRole('button', { name: 'Left only' }).click();
+          await panel.getByRole('button', { name: 'Close' }).click();
+          await panel.waitFor({ state: 'hidden' });
+          const focused = await ctx.page.evaluate<string | null>(
+            '(() => document.activeElement?.getAttribute("data-pattern") ?? null)()',
+          );
+          if (focused !== pick.pattern) fail(`Close left focus on ${focused}`);
+          // Off the list: this run's synthetic slug, outside the 150.
+          if (offList) {
+            await ctx.page.locator('details > summary').click();
+            await ctx.ui.expectText(offList.title);
+          } else fail('no off-list record: this run’s logged synthetic problem is missing');
+
+          // Solves: newest first; Solved before narrows to the pick; a reload keeps it; no match, then Clear.
+          await ctx.ui.goto('/recruiting/progress?view=solves');
+          const table = ctx.page.getByRole('table', { name: 'Your solves' });
+          await table.waitFor();
+          const newest = [...recs].sort(
+            (a, b) => b.lastDay.localeCompare(a.lastDay) || a.title.localeCompare(b.title),
+          )[0]!;
+          const first = await table.getByRole('link').first().textContent();
+          if (first !== newest.title) fail(`Solves starts with "${first}", want "${newest.title}"`);
+          await ctx.page
+            .getByRole('combobox', { name: 'Status' })
+            .selectOption({ label: 'Solved before' });
+          await table.getByRole('link', { name: pick.title }).waitFor();
+          await ctx.page.reload();
+          await table.getByRole('link', { name: pick.title }).waitFor();
+          if ((await ctx.page.getByRole('combobox', { name: 'Status' }).inputValue()) !== 'earlier')
+            fail('the status filter didn’t survive a reload');
+          await ctx.shot('progress-solves');
+          await ctx.page
+            .getByRole('combobox', { name: 'Difficulty' })
+            .selectOption({ label: 'Easy' });
+          await ctx.ui.expectText('Nothing matches these filters.');
+          await ctx.page.getByRole('button', { name: 'Clear filters' }).click();
+          await table.waitFor();
+          if (new URL(ctx.page.url()).search !== '?view=solves')
+            fail(`Clear filters left ${new URL(ctx.page.url()).search}`);
+
+          // The problem's page from a filtered row; back keeps the filters.
+          await ctx.page
+            .getByRole('combobox', { name: 'Status' })
+            .selectOption({ label: 'Solved before' });
+          await table.getByRole('link', { name: pick.title }).click();
+          await ctx.page.getByRole('heading', { name: pick.title }).waitFor();
+          await ctx.ui.expectText(`Note: ${note}`);
+          await ctx.ui.expectText(/history only/);
+          await ctx.shot('progress-problem');
+          await ctx.page.getByRole('link', { name: '← Progress' }).click();
+          await table.waitFor();
+          if (!new URL(ctx.page.url()).search.includes('status=earlier'))
+            fail('← Progress dropped the filters');
+          // A live logged try's minutes and note: this run's 'paper' attempt (15 min).
+          await ctx.ui.goto(`/recruiting/progress/${slugOf(ctx, 'paper')}`);
+          await ctx.ui.expectText('15 min');
+          await ctx.ui.expectText(`Note: devcheck ${ctx.nonce}`);
+
+          // Trends: the four cards.
+          await ctx.ui.goto('/recruiting/progress?view=trends');
+          for (const h of [
+            'Problems a week',
+            'First tries that were clean',
+            'Re-solves that were clean',
+          ])
+            await ctx.page.getByRole('heading', { name: h }).waitFor();
+          await ctx.page.getByRole('heading', { name: /^Time against the \d+ min cap$/ }).waitFor();
+          await ctx.ui.settle();
+          await ctx.shot('progress-trends');
+
+          // The wider tab never scrolls sideways at 1512 and 1024.
+          for (const size of [DESKTOP, { width: 1024, height: 768 }]) {
+            await ctx.page.setViewportSize(size);
+            for (const path of [
+              `/recruiting/progress?open=${pick.pattern}`,
+              '/recruiting/progress?view=solves',
+              '/recruiting/progress?view=trends',
+            ]) {
+              await ctx.ui.goto(path);
+              await ctx.ui.settle();
+              const wide = await ctx.page.evaluate<boolean>(
+                '(() => document.documentElement.scrollWidth > window.innerWidth)()',
+              );
+              if (wide) fail(`${path} scrolls sideways at ${size.width}`);
+            }
+          }
+          await ctx.shot('progress-1024');
+        } finally {
+          await ctx.page.setViewportSize(PHONE);
+        }
+
+        // 390 px: the map with a card open, Solves and Trends, light then dark, never sideways.
+        await ctx.page.setViewportSize({ width: 390, height: 844 });
+        try {
+          for (const path of [
+            `/recruiting/progress?open=${pick.pattern}`,
+            '/recruiting/progress?view=solves',
+            '/recruiting/progress?view=trends',
+          ]) {
+            await ctx.ui.goto(path);
+            await ctx.ui.settle();
+            for (const theme of ['light', 'dark'] as const) {
+              await ctx.ui.setTheme(theme);
+              const wide = await ctx.page.evaluate<boolean>(
+                '(() => document.documentElement.scrollWidth > window.innerWidth)()',
+              );
+              if (wide) fail(`${path}, ${theme}: the page scrolls sideways at 390`);
+            }
+          }
+          await ctx.ui.goto(`/recruiting/progress?open=${pick.pattern}`);
+          await ctx.ui.settle();
+          await ctx.shot('progress-390');
+        } catch (err) {
+          await ctx.shot('progress-fail-at-390').catch(() => null);
+          throw err;
+        } finally {
+          await ctx.ui.setTheme('light');
+          await ctx.page.setViewportSize(PHONE);
+        }
+
+        // Premium in Settings: off, then on, each surviving a reload. On is the default and is restored.
+        try {
+          const box = () => ctx.page.getByRole('checkbox', { name: /I have LeetCode Premium/ });
+          await ctx.ui.goto('/settings');
+          if (!(await box().isChecked())) fail('LeetCode Premium starts off');
+          await box().click();
+          for (let i = 0; (await ctx.api.reads.getSettings()).leetcodePremium !== false; i++)
+            if (i > 20) fail('LeetCode Premium off never saved');
+            else await new Promise((r) => setTimeout(r, 250));
+          await ctx.page.reload();
+          if (await box().isChecked()) fail('LeetCode Premium off didn’t survive a reload');
+          await ctx.shot('premium-off');
+          // Off, no unseen pick is a Premium problem: no new or stretch slot, no alternative. (A Premium problem
+          // already tried may still come back as a re-solve.)
+          const off = await ctx.api.reads.getCoachToday();
+          const offered = off.slots.flatMap((x) => [
+            ...(x.kind === 'new' || x.kind === 'stretch' ? [x.slug] : []),
+            ...(x.alternatives ?? []).map((a) => a.slug),
+          ]);
+          const hit = offered.filter((x) => PREMIUM_SLUGS.includes(x));
+          if (hit.length) fail(`Premium off, yet the plan offers ${hit.join(', ')}`);
+          await box().click();
+          for (let i = 0; (await ctx.api.reads.getSettings()).leetcodePremium !== true; i++)
+            if (i > 20) fail('LeetCode Premium on never saved');
+            else await new Promise((r) => setTimeout(r, 250));
+          await ctx.page.reload();
+          if (!(await box().isChecked())) fail('LeetCode Premium on didn’t survive a reload');
+        } finally {
+          await ctx.api.writes.updateSettings({ leetcodePremium: true });
+        }
+      },
+    },
+    {
+      id: 'progress-undo',
+      title:
+        'A history-only solve on a problem with a live try; then delete_attempt on both history-only ids',
+      entry: 'mcp',
+      proves: ['progress-mixed', 'progress-history-delete'],
+      async run(ctx) {
+        const { pick, id } = progressState();
+        // The mixed branch: a history-only solve on this run's logged problem, which has a live try today.
+        const paper = slugOf(ctx, 'paper');
+        const liveBefore =
+          (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper && r.schedule) ??
+          fail(`no live record with a schedule on ${paper}`);
+        const mixed = await ctx.mcp.writes.logAttempt([
+          { slug: paper, outcome: 'failed', historical: true, day: addDays(today(), -400) },
+        ]);
+        const paperId =
+          mixed.attempts[0]?.id ?? fail('the mixed history-only solve stored nothing');
+        const both = await ctx.mcp.reads.getProblem({ slug: paper });
+        const flags = (both.tries ?? []).map((t) => `${t.historical === true}:${t.outcome}`);
+        if (flags[0] !== 'true:failed' || flags.slice(1).some((f) => f.startsWith('true')))
+          fail(`get_problem's tries, oldest first: ${flags.join(', ')}`);
+        const liveAfter = (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === paper);
+        if (JSON.stringify(liveAfter?.schedule) !== JSON.stringify(liveBefore.schedule))
+          fail(
+            `the live schedule moved: ${JSON.stringify([liveBefore.schedule, liveAfter?.schedule])}`,
+          );
+        const gone = await ctx.mcp.writes.deleteAttempt(id);
+        if (!gone.deleted) fail(`delete_attempt on the history-only id: ${JSON.stringify(gone)}`);
+        if (!(await ctx.mcp.writes.deleteAttempt(paperId)).deleted)
+          fail('delete_attempt on the mixed history-only id deleted nothing');
+        if ((await ctx.api.reads.listProblemRecords()).some((r) => r.slug === pick.slug))
+          fail('the history-only problem still has a record after delete_attempt');
       },
     },
     {

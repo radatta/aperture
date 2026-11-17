@@ -183,6 +183,7 @@ const ATTEMPT_KEYS = keysOf<CoachAttemptInput>({
   cause: true,
   minutes: true,
   note: true,
+  historical: true,
 });
 const PUSH_KEYS = keysOf<SubscribePushInput>({ endpoint: true, keys: true, label: true });
 
@@ -389,6 +390,7 @@ export const RPC_ARGS = {
         financePaymentDay: opt(num),
         fluxRollId: opt(nullable(str(ID_MAX))),
         leetcodeRollId: opt(nullable(str(ID_MAX))),
+        leetcodePremium: opt(bool),
         fluxDisclaimerAckAt: opt(nullable(num)),
         fluxSets: opt(owned('fluxSets')),
         remindTimed: opt(bool),

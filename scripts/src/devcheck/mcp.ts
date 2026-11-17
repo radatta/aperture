@@ -74,6 +74,7 @@ export interface DevLoggedAttempt {
   slug: string;
   day: string;
   outcome: string;
+  historical?: boolean;
   nextDue: { dueDay: string; track: string } | null;
 }
 // What the coach's history and stats reads answer (coachTools.ts) — the fields the scenario reads.
@@ -92,7 +93,13 @@ export interface DevProblemRow {
 export interface DevProblemRead {
   problem: { slug: string; title: string; onRoadmap: boolean; url: string };
   record: { attempts: number } | null;
-  tries?: { day: string; outcome: string; sittingIds: string[]; attemptIds: string[] }[];
+  tries?: {
+    day: string;
+    outcome: string;
+    historical?: boolean;
+    sittingIds: string[];
+    attemptIds: string[];
+  }[];
   sittings?: { id: string }[];
 }
 export interface DevCoachStats {
@@ -291,7 +298,7 @@ export function createMcpClient({
   const refusedBeforeWrite = (err: unknown) =>
     (err instanceof McpRpcError && err.code === PARAM_ERROR) ||
     (err instanceof Error &&
-      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read)/.test(
+      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read|A solve from before the coach)/.test(
         err.message,
       ));
   // A write may only touch a row this harness created, through its own kind's methods — as api.ts.

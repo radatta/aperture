@@ -3,6 +3,7 @@ import {
   addDays,
   fmtClockSpoken,
   fmtSpokenDay,
+  fmtPastDay,
   beforeDayStart,
   dayKey,
   dayKeyForOffset,
@@ -359,5 +360,15 @@ describe('spoken formatting — fmtClockSpoken, fmtSpokenDay', () => {
     expect(fmtSpokenDay('2026-11-22', today)).toBe('Sunday');
     expect(fmtSpokenDay('2026-11-23', today)).toBe('November 23');
     expect(fmtSpokenDay('2027-01-02', today)).toBe('January 2');
+  });
+});
+
+describe('fmtPastDay', () => {
+  it('says a past day as a person would, naming another year', () => {
+    const today = '2026-11-17';
+    expect(fmtPastDay(today, today)).toBe('today');
+    expect(fmtPastDay('2026-11-16', today)).toBe('yesterday');
+    expect(fmtPastDay('2026-10-02', today)).toBe('October 2');
+    expect(fmtPastDay('2024-03-01', today)).toBe('March 1, 2024');
   });
 });

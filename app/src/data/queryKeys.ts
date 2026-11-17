@@ -20,6 +20,7 @@ export const qk = {
   coach: () => ['coach'] as const,
   coachToday: () => ['coach', 'today'] as const,
   coachStats: () => ['coach', 'stats'] as const,
+  coachRecords: () => ['coach', 'records'] as const,
   stories: () => ['stories'] as const,
   // Flux sets: one prefix, so a save or delete refreshes every History / night-line read.
   fluxSetsAll: () => ['fluxSets'] as const,

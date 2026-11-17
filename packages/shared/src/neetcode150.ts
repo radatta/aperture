@@ -1,7 +1,8 @@
 // The coach's catalog (docs/areas/recruiting/coach.md): the public NeetCode 150 list — slug, LeetCode title, its
 // roadmap pattern and difficulty — in NeetCode's roadmap order, patterns and problems alike. Facts only, kept by
-// hand; neetcode150.test.ts pins its shape. `premium` marks a LeetCode Premium problem, never picked. Problems
-// outside it join the working catalog at read time from the user's own sittings (coach.ts → patternOfTags).
+// hand; neetcode150.test.ts pins its shape. `premium` marks a LeetCode Premium problem, picked only while
+// Settings.leetcodePremium is on. Problems outside it join the working catalog at read time from the user's own
+// sittings (coach.ts → patternOfTags).
 
 export const PATTERNS = [
   'arrays-hashing',

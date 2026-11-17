@@ -3,11 +3,12 @@ import { cx } from '../../lib/cx';
 
 // The recruiting hub's tab bar. Styled like the ModeToggle segmented control, but each tab is a real link to a
 // route — so the active tab comes from the URL, it's linkable, and back/forward moves between tabs. Sittings
-// owns /recruiting and a sitting's own page under it; Patterns owns /recruiting/patterns, Stories
-// /recruiting/stories.
+// owns /recruiting and a sitting's own page under it; Patterns owns /recruiting/patterns, Progress
+// /recruiting/progress and a problem's page under it, Stories /recruiting/stories.
 const TABS = [
   { to: '/recruiting', label: 'Sittings' },
   { to: '/recruiting/patterns', label: 'Patterns' },
+  { to: '/recruiting/progress', label: 'Progress' },
   { to: '/recruiting/stories', label: 'Stories' },
 ];
 const activeTab = (path: string) =>

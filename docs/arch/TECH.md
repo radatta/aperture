@@ -146,7 +146,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **gcalSyncStates** — the two-way calendar cursor, one per connected Google account (`id = sub`): `calendarId · syncToken · lastPulledAt · lastSyncedAt · lastPullError · lastPullErrorAt`. Exported, no credentials; a null token means a full resync ([calendar](../areas/calendar/index.md) → Two-way sync).
 
-**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc. Also the calendar wiring — `googleAccounts` (up to two, `sub · email`; `sub` is the key and the refresh token lives in SSM under it; written server-side only, never client-patched), `calendarShapeRefs`, `calendarWriteDefault`, `autoCalendar`, the waking window `dayFocusStart` / `dayEndHour` — and the Roll links `fluxRollId` / `leetcodeRollId`.
+**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc. Also the calendar wiring — `googleAccounts` (up to two, `sub · email`; `sub` is the key and the refresh token lives in SSM under it; written server-side only, never client-patched), `calendarShapeRefs`, `calendarWriteDefault`, `autoCalendar`, the waking window `dayFocusStart` / `dayEndHour` — and the Roll links `fluxRollId` / `leetcodeRollId`, and `leetcodePremium` (default on: the LeetCode coach may pick Premium problems).
 
 ### 2.3 Rules distilled (from the poke-holes pass)
 
@@ -228,7 +228,7 @@ PK = push / SK = user#<userId> · health
 **Routes (React Router):**
 
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /recruiting (+ /recruiting/sittings/:id, /recruiting/patterns, /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId, /flux/history) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode sittings, the coach's patterns + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /recruiting (+ /recruiting/sittings/:id, /recruiting/patterns, /recruiting/progress (+ /:slug), /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId, /flux/history) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode sittings, the coach's patterns + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route (hidden on a Flux exercise view, `/flux/:exerciseId`, through the route's `handle.hideCapture`).
 

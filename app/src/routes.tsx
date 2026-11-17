@@ -5,6 +5,8 @@ import { LogPage } from './pages/Log';
 import { TasksPage } from './pages/Tasks';
 import { RecruitingPage } from './pages/Recruiting';
 import { PatternsSection } from './pages/Recruiting/PatternsSection';
+import { ProblemPage } from './pages/Recruiting/ProblemPage';
+import { ProgressSection } from './pages/Recruiting/ProgressSection';
 import { SittingDetail } from './pages/Recruiting/SittingDetail';
 import { SittingsSection } from './pages/Recruiting/SittingsSection';
 import { StoryBank } from './pages/Recruiting/StoryBank';
@@ -39,6 +41,8 @@ export const routes: RouteObject[] = [
           { index: true, element: <SittingsSection /> },
           { path: 'sittings/:id', element: <SittingDetail /> },
           { path: 'patterns', element: <PatternsSection /> },
+          { path: 'progress', element: <ProgressSection /> },
+          { path: 'progress/:slug', element: <ProblemPage /> },
           { path: 'stories', element: <StoryBank /> },
         ],
       },

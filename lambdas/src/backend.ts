@@ -119,7 +119,8 @@ import {
   coachStats,
   normalizeStatsRange,
   attemptsOf,
-  catalogProblem,
+  coachScope,
+  slotChangeInputs,
   applySlotChange,
   normalizeFocusPattern,
   normalizeCoachAttempts,
@@ -600,6 +601,7 @@ export class BackendClient implements ApiClient {
       fluxSets: {},
       leetcodeRollId: null,
       coachAiPick: true,
+      leetcodePremium: true,
       ...REMINDER_SETTINGS_DEFAULTS,
     };
     const row = await this.repo.getSettingsRow(opts);
@@ -1454,7 +1456,7 @@ export class BackendClient implements ApiClient {
   private async coachInput(day?: string, consistent = false): Promise<CoachInput> {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
     const settings = await this.ensureSettings();
-    const { dayStartHour } = settings;
+    const { dayStartHour, leetcodePremium } = settings;
     const now = this.now();
     const opts = { consistent };
     const [sittings, attempts, days, focus] = await Promise.all([
@@ -1474,6 +1476,7 @@ export class BackendClient implements ApiClient {
       focus,
       aiPick: coachAiPickOn(settings),
       aiCanStart: day === undefined && this.coachPick.enabled,
+      premium: leetcodePremium !== false,
     };
   }
   // Consistent: a read right after a coach write (a focus, a floor, a logged attempt) must see it.
@@ -1551,6 +1554,7 @@ export class BackendClient implements ApiClient {
       attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
       ci.today,
       r,
+      coachScope(ci),
     );
   }
   // Today's row, changed by `fn` against the plan as it stands with the row's freshest copy; created on first use.
@@ -1582,10 +1586,16 @@ export class BackendClient implements ApiClient {
   async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
     return this.changeCoachDay((cur, ci) => {
       if (aiPickPending(cur.ai, ci.now)) throw new Error(AI_PICK_BUSY_ERROR);
-      const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
-      const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
-      const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
-      const changes = applySlotChange(planDay(ci), cur.changes, input, known, seen, ci.now);
+      const { seen, known } = slotChangeInputs(ci);
+      const changes = applySlotChange(
+        planDay(ci),
+        cur.changes,
+        input,
+        known,
+        seen,
+        ci.now,
+        ci.premium,
+      );
       return { ...cur, changes };
     });
   }

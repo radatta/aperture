@@ -6,12 +6,13 @@
 import {
   AI_PICK_STALE_MS,
   COACH_PARAMS,
-  catalogProblem,
   coachPools,
+  coachScope,
   coachStats,
   pickable,
   planDay,
 } from './coach';
+import { catalogProblem } from './catalogs';
 import type { CoachInput, CoachParams, CoachToday } from './coach';
 import { addDays } from './dates';
 import { NEETCODE_150, PATTERN_NAMES } from './neetcode150';
@@ -152,10 +153,9 @@ export function coachPickContext(
     add(c.slug, 'stretch', null, ruleOf('stretch', c.slug));
   if (!locked)
     for (const p of top3.filter((p) => p !== focus.pattern))
-      for (const c of NEETCODE_150.filter((c) => c.pattern === p && pickable(c, seen)).slice(
-        0,
-        CAPS.ifFocus,
-      ))
+      for (const c of NEETCODE_150.filter(
+        (c) => c.pattern === p && pickable(c, seen, input.premium === true),
+      ).slice(0, CAPS.ifFocus))
         add(c.slug, 'new', p, `New in ${PATTERN_NAMES[p]}, only with the focus moved there`);
 
   const prev = prevAiDay(input);
@@ -200,7 +200,7 @@ export function coachPickContext(
         notes: words.length ? cut(words.join(' · '), NOTE_MAX) : null,
       };
     });
-  const stats = coachStats(pools.all, today);
+  const stats = coachStats(pools.all, today, {}, coachScope(input));
   return {
     today,
     candidates: [...out.values()],
