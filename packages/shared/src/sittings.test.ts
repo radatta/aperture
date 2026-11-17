@@ -26,6 +26,7 @@ import {
   reclaimStart,
   countStartAttempt,
   idleCloseAt,
+  idleEnd,
   idleClosedSitting,
   finishIdleClosed,
   mayBeIdle,
@@ -824,6 +825,26 @@ describe('idle close', () => {
     expect(idleCloseAt(head(), a, 65 * M + 1)).toBe(25 * M);
     expect(idleCloseAt(head({ reopenedAt: 30 * M }), a, 70 * M)).toBeNull();
   });
+  it('an idle sitting whose rep finished meanwhile ends as its rep did, no later than the idle end', () => {
+    const a = { budgetAt: 10 * M, readsAt: null };
+    expect(idleEnd(head(), undefined, a, 60 * M)).toEqual({
+      to: 'abandoned',
+      at: 15 * M,
+      idle: true,
+    });
+    const done = { status: 'done', completedAt: 12 * M, cancelledAt: null } as Task;
+    expect(idleEnd(head(), done, a, 60 * M)).toEqual({ to: 'done', at: 12 * M, idle: false });
+    expect(idleEnd(head(), { ...done, completedAt: 50 * M }, a, 60 * M)).toMatchObject({
+      at: 15 * M,
+    });
+    const dropped = { status: 'cancelled', completedAt: null, cancelledAt: 11 * M } as Task;
+    expect(idleEnd(head(), dropped, a, 60 * M)).toEqual({
+      to: 'abandoned',
+      at: 11 * M,
+      idle: false,
+    });
+    expect(idleEnd(head(), done, a, 50 * M)).toBeNull(); // not idle: Start or the hook decides, as before
+  });
   it('the precheck is free and never closes an ended sitting', () => {
     expect(mayBeIdle(head(), 45 * M)).toBe(false);
     expect(mayBeIdle(head({ reopenedAt: 10 * M }), 50 * M)).toBe(false);
@@ -937,7 +958,13 @@ describe('idle close', () => {
     const g0 = { ...emptyGate('d'), starts: 3 };
     const g = reclaimStart(g0, 'A', [closed], T)!;
     expect(g).toMatchObject({ openSittingId: 'A', openClaimedAt: T, starts: 3 });
-    expect(reclaimStart(g, 'A', [closed], T)).toBeNull();
+    // Still held by A (its idle close not yet released): stamped afresh, so that release can't free the reopen.
+    expect(reclaimStart(g, 'A', [closed], T + 5)).toMatchObject({
+      openSittingId: 'A',
+      openClaimedAt: T + 5,
+    });
+    expect(releaseStart({ ...g, openClaimedAt: T + 5 }, 'A', T)).toBeNull();
+    expect(releaseStart(g, 'A', T)).toMatchObject({ openSittingId: null });
     // A Start that read A as ended: refused while the reclaim may still be writing A's head.
     expect(() => claimStart(g, 'd', 'B', [closed], new Set(), T + 1000)).toThrow(
       SITTING_ACTIVE_ERROR,

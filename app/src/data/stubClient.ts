@@ -123,7 +123,7 @@ import {
   emptySummary,
   endedSitting,
   mayBeIdle,
-  idleCloseAt,
+  idleEnd,
   idleClosedSitting,
   reopenedSitting,
   finishIdleClosed,
@@ -131,6 +131,9 @@ import {
   sittingReopenError,
   reclaimStart,
   SITTING_REOPEN_REP_ERROR,
+  SITTING_REOPEN_ERROR,
+  SITTING_ACTIVE_ERROR,
+  SITTING_ENDED_ERROR,
   foldLive,
   isHeadEvent,
   LC_ROLL_UNLINKED_ERROR,
@@ -532,6 +535,14 @@ function stubCoachPickMode(): string | null {
   }
 }
 const STUB_SLOW_PICK_MS = 4_000;
+
+// The refusals a returning events call ingests past (backend parity: comeBack).
+const REOPEN_REFUSALS = new Set([
+  SITTING_ACTIVE_ERROR,
+  SITTING_REOPEN_REP_ERROR,
+  SITTING_ENDED_ERROR,
+  SITTING_REOPEN_ERROR,
+]);
 
 export function createStubClient(options: StubOptions = {}): ApiClient {
   return new StubClient(options);
@@ -1017,13 +1028,10 @@ class StubClient implements ApiClient {
   async lcSittingEvents(input: SittingEventsInput): Promise<SittingEventsResult> {
     const { sittingId, events: all } = normalizeSittingEvents(input);
     const now = this.now();
-    const sitting = await this.comeBack(
-      this.closeIdle(this.mustFind(this.store.sittings, sittingId), now),
-      all,
-      now,
-    );
-    const err = sittingIngestError(sitting, all, now);
+    const closed = this.closeIdle(this.mustFind(this.store.sittings, sittingId), now);
+    const err = sittingIngestError(closed, all, now); // before a return reopens anything (backend parity)
     if (err) throw new Error(err);
+    const sitting = await this.comeBack(closed, all, now);
     // Inside an ended sitting's grace only the events stamped before its end are kept; none kept writes nothing.
     const events = eventsBeforeEnd(sitting, all);
     const skipped = all.length - events.length;
@@ -1439,12 +1447,17 @@ class StubClient implements ApiClient {
   }
   private closeIdle(s: Sitting, now: number): Sitting {
     if (!mayBeIdle(s, now)) return s;
-    const at = idleCloseAt(s, this.sittingActivityOf(s.id), now);
-    if (at === null) return s;
+    const rep = this.find(this.store.tasks, s.repTaskId);
+    const end = idleEnd(s, rep, this.sittingActivityOf(s.id), now);
+    if (!end) return s;
+    if (!end.idle) {
+      this.endSitting(s.id, end.to, end.at); // its rep's finish, missed by the hook
+      return this.mustFind(this.store.sittings, s.id);
+    }
     this.refoldHead(s.id);
     const head = this.writes.put(
       this.store.sittings,
-      idleClosedSitting(this.mustFind(this.store.sittings, s.id), at, now),
+      idleClosedSitting(this.mustFind(this.store.sittings, s.id), end.at, now),
     );
     this.releaseStartGate(s.id);
     return head;
@@ -1464,7 +1477,8 @@ class StubClient implements ApiClient {
     if (day(s.startedAt) !== day(now)) return s;
     try {
       return await this.reopen(s, now);
-    } catch {
+    } catch (err) {
+      if (!(err instanceof Error && REOPEN_REFUSALS.has(err.message))) throw err; // backend parity
       return this.mustFind(this.store.sittings, s.id); // refused: ingests against it ended
     }
   }
@@ -1474,8 +1488,7 @@ class StubClient implements ApiClient {
     if (err) throw new Error(err);
     const gateDay = dayKeyInZone(now, USER_TIME_ZONE, this.ensureSettings().dayStartHour);
     const gate = this.store.lcStartGate ?? { ...this.base(), id: 'lcstart', ...emptyGate(gateDay) };
-    const claimed = reclaimStart(gate, s.id, sittings, now);
-    if (claimed) this.store.lcStartGate = { ...claimed, updatedAt: now };
+    this.store.lcStartGate = { ...reclaimStart(gate, s.id, sittings, now), updatedAt: now };
     const cur = this.mustFind(this.store.sittings, s.id);
     if (cur.status !== 'abandoned' || cur.closedBy !== 'idle') {
       this.releaseStartGate(s.id);

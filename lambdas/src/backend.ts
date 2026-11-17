@@ -139,7 +139,7 @@ import {
   sittingRawExpiresAt,
   sittingRepTitle,
   mayBeIdle,
-  idleCloseAt,
+  idleEnd,
   idleClosedSitting,
   reopenedSitting,
   finishIdleClosed,
@@ -148,6 +148,9 @@ import {
   reclaimStart,
   SITTING_IDLE_TAIL_MS,
   SITTING_REOPEN_REP_ERROR,
+  SITTING_REOPEN_ERROR,
+  SITTING_ACTIVE_ERROR,
+  SITTING_ENDED_ERROR,
 } from '@aperture/shared';
 import type {
   CoachAttempt,
@@ -311,6 +314,8 @@ import { SITTING_DRAFT_TIMEOUT_MS, sittingDraftData } from './anthropic/sittingR
 export interface BackendOptions {
   userId?: string;
   now?: () => number;
+  // MCP and smoke: a sitting found idle on a read reads closed, nothing written (handler.ts RpcCall.idlePeek).
+  idlePeek?: boolean;
   google?: GoogleGateway; // gated external calendar seam; defaults to the inert noop
   stateSecret?: string; // HMAC key for the OAuth state (derived from ORIGIN_SECRET in prod)
   presigner?: Presigner;
@@ -432,6 +437,14 @@ function captureDetail(task: Task, parsed: ParseTaskResult, appToday: string): s
   ].join(' · ');
 }
 
+// The refusals a returning events call ingests past (comeBack); anything else is a fault and fails the call.
+const REOPEN_REFUSALS = new Set([
+  SITTING_ACTIVE_ERROR,
+  SITTING_REOPEN_REP_ERROR,
+  SITTING_ENDED_ERROR,
+  SITTING_REOPEN_ERROR,
+]);
+
 // The note's model budget: well inside the Lambda's 15 s with the reads in front of it (D62).
 const FLUX_NOTE_TIMEOUT_MS = 6_000;
 
@@ -450,6 +463,7 @@ export class BackendClient implements ApiClient {
   private readonly placeTokens: PlaceTokenStore;
   private readonly scopedTokens: ScopedTokenStore;
   private readonly push: PushService;
+  private readonly idlePeek: boolean;
 
   constructor(
     private readonly repo: Repo,
@@ -457,6 +471,7 @@ export class BackendClient implements ApiClient {
   ) {
     this.userId = opts.userId ?? 'local';
     this.now = opts.now ?? (() => Date.now());
+    this.idlePeek = opts.idlePeek ?? false;
     this.ulid = createUlid(this.now);
     this.google = opts.google ?? noopGoogle();
     this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
@@ -826,6 +841,7 @@ export class BackendClient implements ApiClient {
     const sittings = await this.closeIdleAll(
       await this.repo.listSittings({ consistent: true }),
       now,
+      true,
     );
     const plan = planSittingStart(
       n,
@@ -987,9 +1003,11 @@ export class BackendClient implements ApiClient {
     const head = await this.repo.getSitting(sittingId, { consistent: true });
     if (!head) throw new Error(`Not found: ${sittingId}`);
     const now = this.now();
-    const sitting = await this.comeBack(await this.closeIdle(head, now), all, now);
-    const err = sittingIngestError(sitting, all, now);
+    const closed = await this.closeIdle(head, now, true);
+    // Refused before a return reopens anything: a refused call writes nothing (an idle close aside).
+    const err = sittingIngestError(closed, all, now);
     if (err) throw new Error(err);
+    const sitting = await this.comeBack(closed, all, now);
     const events = eventsBeforeEnd(sitting, all);
     const skipped = all.length - events.length;
     const late = sitting.status !== 'active';
@@ -1243,9 +1261,9 @@ export class BackendClient implements ApiClient {
     // Best-effort: the task's own change is already saved, so a failure here (a lost race under ingest) is
     // logged, never thrown back as a failed Done — the next Start ends a sitting whose rep finished.
     try {
-      // An idle one unnoticed till now ends at its last activity, never at this Done.
+      // An idle one unnoticed till now ends at its last activity, never at this Done (idleEnd: done, as its rep).
       const mine = (
-        await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now)
+        await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now, true)
       ).filter((x) => x.repTaskId === task.id);
       for (const x of mine)
         if (x.status === 'active')
@@ -1283,13 +1301,23 @@ export class BackendClient implements ApiClient {
 
   // --- Idle close (sittings.ts → Idle close; docs/areas/recruiting → Idle close) ---
   // Every read of sittings, Start and events run this first. Free below mayBeIdle; past it, the two activity stamps
-  // (consistent) decide, and an idle sitting ends at its last activity + the tail as endSitting ends one (refold,
-  // a CAS that only an unchanged open head passes — a reopen or a fresher activity since wins — then the gate). Two
-  // reads at once write one close. Returns the head as it stands.
-  private async closeIdle(s: Sitting, now: number): Promise<Sitting> {
+  // and the rep (consistent) decide (idleEnd). `persist` false (an MCP read, a smoke run) answers the closed view
+  // and writes nothing — the next app read, Start or event writes the same end. Persisted, it ends as endSitting
+  // ends one: refold, a CAS only an unchanged open head passes (a reopen or fresher activity since wins), then the
+  // gate — released only from a claim no newer than the close, so a reopen's fresh claim survives. Reads at once
+  // write one close. Returns the head as it stands.
+  private async closeIdle(s: Sitting, now: number, persist = !this.idlePeek): Promise<Sitting> {
     if (!mayBeIdle(s, now)) return s;
-    const at = idleCloseAt(s, await this.repo.getSittingActivity(s.id), now);
-    if (at === null) return s;
+    const [activity, rep] = await Promise.all([
+      this.repo.getSittingActivity(s.id),
+      this.repo.getTask(s.repTaskId, { consistent: true }),
+    ]);
+    const end = idleEnd(s, rep ?? undefined, activity, now);
+    if (!end) return s;
+    if (!persist)
+      return end.idle ? idleClosedSitting(s, end.at, now) : endedSitting(s, end.to, end.at);
+    if (!end.idle) return this.endSitting(s.id, end.to, end.at); // its rep's finish, missed by the hook
+    const at = end.at;
     await this.refoldHead(s.id, now);
     let wrote = false; // this call's close won the CAS (its last try decides)
     const head = await this.repo.casUpdate(
@@ -1304,21 +1332,21 @@ export class BackendClient implements ApiClient {
       { consistent: true },
     );
     if (!wrote) return head; // another call closed it first, or it came back meanwhile
-    await this.releaseStartGate(s.id, now);
+    await this.releaseStartGate(s.id, now, now);
     console.log(
       JSON.stringify({ event: 'lc_sitting_idle_close', sittingId: s.id, idleMs: now - at }),
     );
     return head;
   }
-  private async closeIdleAll(list: Sitting[], now: number): Promise<Sitting[]> {
+  private async closeIdleAll(list: Sitting[], now: number, persist = !this.idlePeek) {
     const out: Sitting[] = [];
-    for (const s of list) out.push(await this.closeIdle(s, now));
+    for (const s of list) out.push(await this.closeIdle(s, now, persist));
     return out;
   }
   // The Reopen button: an idle-closed sitting open again (sittingReopenError's refusals); an open one as it is.
   async reopenSitting(id: string): Promise<Sitting> {
     const now = this.now();
-    const s = await this.closeIdle(await this.mustSitting(id), now);
+    const s = await this.closeIdle(await this.mustSitting(id), now, true);
     return s.status === 'active' ? s : this.reopen(s, now, 'button');
   }
   // An events call that comes back to its idle-closed sitting (an event stamped after the end, the same app day)
@@ -1335,6 +1363,9 @@ export class BackendClient implements ApiClient {
     try {
       return await this.reopen(s, now, 'event');
     } catch (err) {
+      // Only a refusal ingests against it ended; a fault (DynamoDB, a lost race) fails the call, so the extension
+      // retries rather than seeing its events skipped.
+      if (!(err instanceof Error && REOPEN_REFUSALS.has(err.message))) throw err;
       console.log(
         JSON.stringify({ event: 'lc_sitting_reopen_refused', sittingId: s.id, error: String(err) }),
       );
@@ -1351,6 +1382,7 @@ export class BackendClient implements ApiClient {
     const sittings = await this.closeIdleAll(
       await this.repo.listSittings({ consistent: true }),
       now,
+      true,
     );
     const rep = (await this.repo.getTask(s.repTaskId, { consistent: true })) ?? undefined;
     const err = sittingReopenError(s, rep, sittings, now);
@@ -1397,12 +1429,12 @@ export class BackendClient implements ApiClient {
     );
     return head;
   }
-  private async releaseStartGate(id: string, now: number): Promise<void> {
+  private async releaseStartGate(id: string, now: number, claimedBy?: number): Promise<void> {
     try {
       await this.repo.casUpdate(
         this.repo.lcStartShape(),
         'lcstart',
-        (g) => releaseStart(g, id),
+        (g) => releaseStart(g, id, claimedBy),
         now,
         {
           consistent: true,

@@ -402,7 +402,8 @@ function FocusRow({
             </Text>
           ) : t.status === 'in_progress' ? (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(rep.min)} in
+              {fmtDuration(rep.min)}
+              {rep.stopped ? '' : ' in'}
             </Text>
           ) : (
             <>
@@ -471,7 +472,11 @@ function RepDoneForm(props: {
 function useRepSitting(t: Task) {
   const now = useNow();
   const sitting = useOpenSittingFor(t, now) ?? null;
-  return { sitting, min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin };
+  return {
+    sitting,
+    min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin,
+    stopped: sitting?.status === 'abandoned', // closed by idle: its minutes no longer run ("25m", not "25m in")
+  };
 }
 
 // A lighter "also today" row — the plan's tail + any off-plan in-progress task. "Focus this" is the
@@ -517,7 +522,8 @@ function AlsoRow({
         <div className="flex shrink-0 items-center gap-2">
           {t.status === 'in_progress' && (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(rep.min)} in
+              {fmtDuration(rep.min)}
+              {rep.stopped ? '' : ' in'}
             </Text>
           )}
           {canFocus && (

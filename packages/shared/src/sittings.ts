@@ -782,8 +782,15 @@ export function claimStart<G extends GateFields>(
   if (d.starts >= SITTING_STARTS_PER_DAY) throw new Error(SITTING_START_CAP_ERROR);
   return { ...d, starts: d.starts + 1, openSittingId: self, openClaimedAt: now };
 }
-export const releaseStart = <G extends GateFields>(g: G, id: string): G | null =>
-  g.openSittingId === id ? { ...g, openSittingId: null, openClaimedAt: null } : null;
+// `claimedBy`: release only a claim made no later than it — an idle close never frees a reopen's newer claim.
+export const releaseStart = <G extends GateFields>(
+  g: G,
+  id: string,
+  claimedBy?: number,
+): G | null =>
+  g.openSittingId === id && (claimedBy === undefined || (g.openClaimedAt ?? 0) <= claimedBy)
+    ? { ...g, openSittingId: null, openClaimedAt: null }
+    : null;
 // A claim made after the sitting's end is a reopen (reclaimStart), maybe still writing its head: a Start that
 // read the sitting ended must not take the gate from it while that claim is young.
 const reclaimedSince = (
@@ -797,18 +804,19 @@ const reclaimedSince = (
   now - (g.openClaimedAt ?? 0) < CLAIM_IN_FLIGHT_MS;
 // The claim for a reopen of `self`: as claimStart's, but it starts nothing new, so it counts no Start. Refused while
 // the gate holds another sitting that's open by `sittings` (idle ones already closed), or one claimed moments ago.
+// Still held by `self` (an idle close not yet released), it's stamped afresh, so that release can't free it.
 export function reclaimStart<G extends GateFields>(
   g: G,
   self: string,
-  sittings: readonly Pick<Sitting, 'id' | 'status' | 'startedAt' | 'endedAt'>[],
+  sittings: readonly Pick<Sitting, 'id' | 'status' | 'endedAt'>[],
   now: number,
-): G | null {
-  if (g.openSittingId === self) return null;
+): G {
+  if (g.openSittingId === self) return { ...g, openClaimedAt: now };
   const held = g.openSittingId;
   if (held) {
     const known = sittings.find((x) => x.id === held);
     const open = known
-      ? isSittingOpen(known, now) || reclaimedSince(g, known, now)
+      ? known.status === 'active' || reclaimedSince(g, known, now)
       : now - (g.openClaimedAt ?? 0) < CLAIM_IN_FLIGHT_MS;
     if (open) throw new Error(SITTING_ACTIVE_ERROR);
   }
@@ -837,6 +845,23 @@ export const mayBeIdle = (
   now: number,
 ): boolean =>
   s.status === 'active' && now - Math.max(s.startedAt, s.reopenedAt ?? 0) > SITTING_IDLE_MS;
+// How an idle sitting ends, or null when it isn't idle: its rep finished meanwhile (a Done or Drop whose hook
+// missed) → as the rep did, at its finish and no later than the idle end; else closed by idle at the last
+// activity + the tail.
+export function idleEnd(
+  s: Pick<Sitting, 'status' | 'startedAt' | 'reopenedAt'>,
+  rep: Pick<Task, 'status' | 'completedAt' | 'cancelledAt'> | undefined,
+  a: SittingActivity,
+  now: number,
+): { to: 'done' | 'abandoned'; at: number; idle: boolean } | null {
+  const at = idleCloseAt(s, a, now);
+  if (at === null) return null;
+  if (rep?.status === 'done')
+    return { to: 'done', at: Math.min(at, rep.completedAt ?? at), idle: false };
+  if (rep?.status === 'cancelled')
+    return { to: 'abandoned', at: Math.min(at, rep.cancelledAt ?? at), idle: false };
+  return { to: 'abandoned', at, idle: true };
+}
 // When an idle sitting ends, or null when it isn't idle.
 export function idleCloseAt(
   s: Pick<Sitting, 'status' | 'startedAt' | 'reopenedAt'>,
@@ -860,7 +885,7 @@ export function sittingReopenError(
   if (now - s.startedAt > SITTING_INGEST_WINDOW_MS) return SITTING_ENDED_ERROR;
   if (!rep || rep.status === 'done' || rep.status === 'cancelled') return SITTING_REOPEN_REP_ERROR;
   const others = sittings.filter((x) => x.id !== s.id);
-  if (others.some((x) => isSittingOpen(x, now))) return SITTING_ACTIVE_ERROR;
+  if (others.some((x) => x.status === 'active')) return SITTING_ACTIVE_ERROR; // as claimStart reads open
   if (others.some((x) => x.repTaskId === s.repTaskId && x.startedAt > s.startedAt))
     return SITTING_REOPEN_REP_ERROR; // a later sitting took its rep
   return null;

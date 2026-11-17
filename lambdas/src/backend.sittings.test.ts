@@ -610,4 +610,60 @@ describe('idle close on the table', () => {
     await expect(backend.reopenSitting(sitting.id)).rejects.toThrow(/moved on/);
     expect((await doc.get(pk('u1'), sk.lcStart()))?.openSittingId).toBeNull();
   });
+
+  it('an MCP read (idlePeek) reads it closed and writes nothing; the app’s next read writes the same end', async () => {
+    const { doc, now, backend, sitting } = await idle();
+    const rows = doc.snapshot();
+    const peek = new BackendClient(new Repo(doc, liveWrites(doc, 'prod'), 'u1'), {
+      userId: 'u1',
+      now: () => now.t,
+      idlePeek: true,
+    });
+    const seen = (await peek.listSittings())[0];
+    expect(seen).toMatchObject({
+      id: sitting.id,
+      closedBy: 'idle',
+      endedAt: T0 + SITTING_IDLE_TAIL_MS,
+    });
+    expect((await peek.pullLiveSitting()).lastSitting).toMatchObject({ closedBy: 'idle' });
+    expect(doc.snapshot()).toEqual(rows);
+    expect((await backend.listSittings())[0]).toMatchObject({
+      closedBy: 'idle',
+      endedAt: seen!.endedAt,
+    });
+  });
+
+  it('a rep finished with its hook missed: the idle read ends the sitting as its rep did, not as idle', async () => {
+    const { doc, backend, sitting } = await idle();
+    const rep = await doc.get(pk('u1'), sk.task(sitting.repTaskId));
+    await doc.put({ ...rep!, status: 'done', completedAt: T0 + 2 * 60_000 }); // Done, no sitting hook
+    const [s] = await backend.listSittings();
+    expect(s).toMatchObject({ status: 'done', endedAt: T0 + 2 * 60_000 });
+    expect(s!.closedBy ?? null).toBeNull();
+  });
+
+  it('a fault reopening on an event fails the call, so the extension retries; a refusal ingests', async () => {
+    const { backend, now, sitting } = await idle();
+    await backend.listSittings(); // closed
+    const real = Repo.prototype.casUpdate;
+    const spy = vi.spyOn(Repo.prototype, 'casUpdate').mockImplementation(async function (
+      this: Repo,
+      ...args: Parameters<Repo['casUpdate']>
+    ) {
+      if (args[0].sk === sk.lcStart()) throw new Error('DynamoDB fault');
+      return real.apply(this, args as never);
+    } as never);
+    const ev = () => ({ id: ulid(), type: 'snapshot', at: now.t, payload: { code: 'b' } });
+    try {
+      await expect(
+        backend.lcSittingEvents({ sittingId: sitting.id, events: [ev()] as never }),
+      ).rejects.toThrow('DynamoDB fault');
+    } finally {
+      spy.mockRestore();
+    }
+    // Refused (another sitting open): the events after the end are skipped, the call answers.
+    await backend.lcSittingStart({ ...start(), problemSlug: 'add-two-numbers', startedAt: now.t });
+    const r = await backend.lcSittingEvents({ sittingId: sitting.id, events: [ev()] as never });
+    expect(r).toMatchObject({ accepted: 0, skipped: 1, status: 'abandoned' });
+  });
 });

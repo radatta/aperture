@@ -42,6 +42,7 @@ import {
   SITTING_END_GRACE_MS,
   SITTING_END_SKEW_MS,
   SITTING_EVENTS_PER_CALL,
+  SITTING_EVENT_TIME_ERROR,
   SITTING_INGEST_WINDOW_MS,
   SITTING_MAX_EVENTS,
   SITTING_START_TIME_ERROR,
@@ -4032,6 +4033,9 @@ export function runApiContract(
           status: 'abandoned',
         });
         expect((await api.getSitting(sitting.id)).sitting.endedAt).toBe(closed.endedAt);
+        // An event off the sitting's clock refuses the call before anything reopens.
+        await expect(call([lcSnap('junk', 1e15)])).rejects.toThrow(SITTING_EVENT_TIME_ERROR);
+        expect((await api.getSitting(sitting.id)).sitting.status).toBe('abandoned');
         expect(await call([lcSnap('c', clock)])).toMatchObject({ accepted: 1, status: 'active' });
         const { sitting: back, live } = await api.getSitting(sitting.id);
         expect(back).toMatchObject({
@@ -4061,7 +4065,9 @@ export function runApiContract(
 
       it('Done after an idle close keeps its end and reads done; Drop leaves it abandoned', async () => {
         const { sitting } = await startSitting(api);
-        advance(SITTING_IDLE_MS + 1 + 60 * M); // never noticed until the Done
+        advance(SITTING_IDLE_MS + 1);
+        await api.listSittings(); // noticed: closed by idle
+        advance(60 * M);
         await api.setTaskActual(sitting.repTaskId, 5);
         await api.transitionTask(sitting.repTaskId, 'done');
         expect((await api.getSitting(sitting.id)).sitting).toMatchObject({
@@ -4070,8 +4076,19 @@ export function runApiContract(
           endedAt: LC_T0 + SITTING_IDLE_TAIL_MS,
         });
         await expect(api.reopenSitting(sitting.id)).rejects.toThrow(SITTING_REOPEN_ERROR);
+        // Never noticed until the Done: it ends done as its rep, at the idle end, never at the Done.
+        const quiet = await api.lcSittingStart(sittingStart({ startedAt: clock }));
+        const quietAt = clock;
+        advance(SITTING_IDLE_MS + 1 + 60 * M);
+        await api.setTaskActual(quiet.sitting.repTaskId, 5);
+        await api.transitionTask(quiet.sitting.repTaskId, 'done');
+        expect((await api.getSitting(quiet.sitting.id)).sitting).toMatchObject({
+          status: 'done',
+          endedAt: quietAt + SITTING_IDLE_TAIL_MS,
+        });
         const next = await api.lcSittingStart(sittingStart({ startedAt: clock }));
         advance(SITTING_IDLE_MS + 1);
+        await api.listSittings();
         await api.transitionTask(next.sitting.repTaskId, 'cancelled');
         expect((await api.getSitting(next.sitting.id)).sitting).toMatchObject({
           status: 'abandoned',

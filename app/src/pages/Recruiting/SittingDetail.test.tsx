@@ -359,6 +359,7 @@ describe('closed automatically', () => {
     expect(screen.queryByText(/Dropped/)).toBeNull();
     expect(screen.getByText('25m')).toBeTruthy(); // Took: Start to the close, never to now
     await user.click(await screen.findByRole('button', { name: 'Mark rep done' }));
+    expect(screen.getByRole('group', { name: 'Mark its rep done' })).toBeTruthy();
     expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('25');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await user.click(screen.getByRole('button', { name: 'Reopen' }));
@@ -369,7 +370,8 @@ describe('closed automatically', () => {
       }),
     );
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull());
-    expect(await screen.findByRole('button', { name: 'End sitting' })).toBeTruthy();
+    const end = await screen.findByRole('button', { name: 'End sitting' });
+    await waitFor(() => expect(document.activeElement).toBe(end)); // focus goes on, not to the body
     expect(screen.queryByText(/Closed automatically/)).toBeNull();
   });
 
@@ -392,6 +394,24 @@ describe('closed automatically', () => {
     await api.transitionTask(sitting.repTaskId, 'done');
     renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
     expect(await screen.findByText('Closed automatically: 45 min with no activity')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mark rep done' })).toBeNull();
+  });
+
+  it('once a later sitting took its rep, neither Reopen nor Mark rep done is offered', async () => {
+    const { api, sitting, clock } = await withIdleClosed();
+    await api.listSittings(); // closed
+    await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZT',
+      problemSlug: 'two-sum',
+      problemTitle: 'Two Sum',
+      lang: 'python3',
+      startedAt: clock.t,
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    }); // attaches the same rep
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText('Closed automatically: 45 min with no activity')).toBeTruthy();
+    await screen.findByRole('heading', { name: 'Rotting Oranges' });
     expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Mark rep done' })).toBeNull();
   });

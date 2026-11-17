@@ -27,7 +27,7 @@ beforeEach(() => {
   backend = new BackendClient(repo, { userId: U, now });
   ctx = {
     dispatch: (method: ApiMethod, args: unknown[]) =>
-      handleRpc(doc, { userId: U, method, args, now }),
+      handleRpc(doc, { userId: U, method, args, now, idlePeek: true }), // as mcp/index.ts dispatches
     upload: async () => {},
     now,
   };
@@ -287,9 +287,10 @@ describe('live_sitting', () => {
     });
   });
 
-  it('a sitting left untouched: the pull closes it first, idle, its minutes stopped 5 past the last activity', async () => {
+  it('a sitting left untouched reads closed by idle, its minutes stopped 5 past the last activity — nothing written', async () => {
     const s = await open();
     t = T0 + 30 * 3600_000;
+    const rows = doc.snapshot();
     expect(await run()).toMatchObject({
       active: false,
       lastSitting: {
@@ -305,6 +306,12 @@ describe('live_sitting', () => {
       sitting: { closedBy: 'idle', minutes: 5 },
     });
     expect((await call('list_sittings')).sittings[0]).toMatchObject({ closedBy: 'idle' });
+    expect(doc.snapshot()).toEqual(rows); // MCP reads stay free: the app's next read writes the close
+    // The app's read (no idlePeek) writes the same end.
+    expect((await backend.listSittings())[0]).toMatchObject({
+      closedBy: 'idle',
+      endedAt: T0 + 5 * 60_000,
+    });
   });
 
   it('a pull keeps the sitting open: 45 minutes from the pull, not the Start', async () => {

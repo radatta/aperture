@@ -477,6 +477,7 @@ describe('Right now — a LeetCode sitting', () => {
       name: 'LeetCode sitting closed automatically →',
     });
     expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
+    expect(screen.queryByText(/^5m in$/)).toBeNull(); // stopped: not a running clock
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect((await screen.findByLabelText<HTMLInputElement>('Actual (min)')).value).toBe('5');
   });

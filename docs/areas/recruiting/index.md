@@ -77,13 +77,21 @@ by the next read, never by a scheduled job ($0, no new resource).
 - **The end is the last activity + 5 minutes** (`SITTING_IDLE_TAIL_MS`), never the moment it's noticed, so its
   minutes, the cap and the rep's Done prefill aren't inflated. The head records `closedBy: 'idle'`; status
   `abandoned`, its rep left in progress (as a stale sitting's is), the Start gate released.
-- **Every read closes first** (`closeIdle` in the backend and the stub, the same shared helpers): `listSittings`
+- **Every read closes first** (`closeIdle` in the backend and the stub, on the shared `idleEnd`): `listSittings`
   (the Recruiting list, Home, `list_sittings`, `get_day`, the coach tools), `getSitting` (`get_sitting`),
   `pullLiveSitting` (before the pull counts), the coach's reads (`leetcode_today`, `coach_stats`), Start, events,
-  and a rep's Done or Drop. Below the line (`mayBeIdle`, the head's own times) it costs nothing; past it, two
-  consistent gets. The close is a CAS that only an unchanged open head passes, so reads at once write one close,
-  and a reopen or newer activity since wins. Accepted race: a snapshot landing between the activity read and the
-  CAS doesn't stop the close; the next event reopens it.
+  and a rep's Done or Drop. Below the line (`mayBeIdle`, the head's own times) it costs nothing; past it, three
+  consistent gets (the two stamps and the rep). The close is a CAS that only an unchanged open head passes, so reads
+  at once write one close, and a reopen or newer activity since wins; its gate release frees only a claim no newer
+  than the close (`releaseStart`'s `claimedBy`), so a reopen racing it keeps the gate. Accepted race: a snapshot
+  landing between the activity read and the CAS doesn't stop the close; the next event reopens it.
+- **MCP reads stay free.** Through `/mcp` (`RpcCall.idlePeek`) and on a smoke run, a read answers the closed view —
+  the same end — and writes nothing; the app's next read, a Start or an event writes it. So CLAUDE.md's MCP rules
+  hold: reads write nothing, `live_sitting` writes only its count (and none on an idle sitting). An MCP write that
+  ends a rep (`complete_task`) still writes the close first, as any Done does.
+- **A rep finished elsewhere** (a Done or Drop whose best-effort hook missed) ends its idle sitting as the rep did —
+  `done` at its `completedAt`, or abandoned at its `cancelledAt`, never later than the idle end — not as idle, as the
+  next Start used to.
 - **Reopen** (`reopenSitting`, the button on its page) — refused unless closed by idle, inside its 24 h window,
   its rep still in progress, no other sitting open (`SITTING_ACTIVE_ERROR`) and no later sitting on its rep
   (`sittingReopenError`). In Start's order: the gate (`reclaimStart`, no Start counted), then the head, then its
@@ -96,7 +104,13 @@ by the next read, never by a scheduled job ($0, no new resource).
   user's go, and returning through the extension already reopens).
 - **Stragglers**: an idle-closed sitting takes the events stamped before its end for its whole 24 h window (its end
   is already old when noticed, so the 10-minute grace would refuse the outbox's retries).
-- **Done on its rep afterwards** turns it `done`, its end and `closedBy` kept; Drop leaves it abandoned.
+- **Done on its rep afterwards** turns it `done`, its end and `closedBy` kept; Drop leaves it abandoned. Unnoticed
+  until the Done, it ends `done` at the idle end (as its rep, above).
+- **The app never prefills from a stale head**: a page or Home left open holds the sitting as cached. Once a cached
+  open head is past the line and older than 30 s (`useIdleRecheck`), it's read again and Done waits for it, so a
+  morning's tab never prefills the hours since. A sitting a later Start took the rep from offers neither Reopen nor
+  the rep's Done on its page; Home links a rep to its newest sitting closed by idle however old (the rep is still in
+  progress, and its minutes are that sitting's).
 
 ### What's stored, what's derived
 

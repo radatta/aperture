@@ -14,7 +14,12 @@ import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useRolls } from '../../data/hooks/useRolls';
-import { useReopenSitting, useSitting } from '../../data/hooks/useSittings';
+import {
+  useIdleRecheck,
+  useReopenSitting,
+  useSitting,
+  useSittings,
+} from '../../data/hooks/useSittings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { fmtDuration } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
@@ -34,7 +39,10 @@ import { SittingTimeline } from './SittingTimeline';
 // Reopen and the rep's Done (its minutes stopped at the close) while the rep is still in progress.
 export function SittingDetail() {
   const { id = '' } = useParams();
-  const { data, isPending, isError, error, refetch } = useSitting(id);
+  const { data, isPending, isError, error, refetch, dataUpdatedAt, isFetching } = useSitting(id);
+  const now = useNow();
+  // A page left open: its cached head may have closed by idle since — read again before End sitting prefills.
+  const stale = useIdleRecheck(data?.sitting, dataUpdatedAt, now, isFetching, refetch);
   const missing = isError && /Not found/.test(String(error?.message));
   if (!data)
     return (
@@ -52,16 +60,36 @@ export function SittingDetail() {
         It may have been deleted with its rep.
       </EmptyState>
     );
-  return <Loaded detail={data} />;
+  return <Loaded detail={data} now={now} stale={stale} />;
 }
 
-function Loaded({ detail }: { detail: Detail }) {
+function Loaded({ detail, now, stale }: { detail: Detail; now: number; stale: boolean }) {
   const { sitting, live, events, problem, liveReads } = detail;
-  const now = useNow();
+  // A later sitting took its rep (a Start on another problem attached it): this one's rep is that one's now.
+  const { data: all } = useSittings();
+  const superseded = !!all?.some(
+    (x) => x.repTaskId === sitting.repTaskId && x.startedAt > sitting.startedAt,
+  );
+  const idleOpen = isIdleClosed(sitting) && sitting.status === 'abandoned' && !superseded;
   const outcome = sittingOutcome(sitting, now);
   const m = sittingMetrics(sitting);
   const companies = problemCompanies(problem);
   const open = isSittingOpen(sitting, now);
+  // Closed by idle, the boxed notice below says so: no "Dropped" here, and no empty line.
+  const statusLine = [
+    open
+      ? 'In progress'
+      : sitting.status === 'abandoned' && !isIdleClosed(sitting)
+        ? 'Dropped'
+        : null,
+    sitting.status === 'active' && !open ? 'Past its 24 h window' : null,
+    liveReads > 0
+      ? `Claude watched live · ${liveReads} ${liveReads === 1 ? 'pull' : 'pulls'}`
+      : null,
+    sitting.prepTarget !== 'General' ? `For ${sitting.prepTarget}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <article className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">
@@ -106,22 +134,9 @@ function Loaded({ detail }: { detail: Detail }) {
           {sitting.summary.runs} · {sitting.summary.submits}
         </Metric>
       </dl>
-      {(liveReads > 0 || sitting.status !== 'done' || sitting.prepTarget !== 'General') && (
+      {statusLine && (
         <Text as="p" size="sm" tone="muted">
-          {[
-            open
-              ? 'In progress'
-              : sitting.status === 'abandoned' && !isIdleClosed(sitting)
-                ? 'Dropped'
-                : null,
-            sitting.status === 'active' && !open ? 'Past its 24 h window' : null,
-            liveReads > 0
-              ? `Claude watched live · ${liveReads} ${liveReads === 1 ? 'pull' : 'pulls'}`
-              : null,
-            sitting.prepTarget !== 'General' ? `For ${sitting.prepTarget}` : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
+          {statusLine}
         </Text>
       )}
 
@@ -129,11 +144,13 @@ function Loaded({ detail }: { detail: Detail }) {
         <IdleClosed
           id={sitting.id}
           repTaskId={sitting.repTaskId}
-          offer={canOfferReopen(sitting, now)}
+          offer={canOfferReopen(sitting, now) && !superseded}
+          // Reopen takes its button away: focus goes on to End sitting, the same button renamed.
+          onReopened={() => requestAnimationFrame(() => document.getElementById(END_ID)?.focus())}
         />
       )}
 
-      {(open || (isIdleClosed(sitting) && sitting.status === 'abandoned')) && (
+      {(open || idleOpen) && (
         <EndSitting
           // Mark done takes End sitting away: focus goes on to the review, the next thing to do.
           onEnded={() => requestAnimationFrame(() => document.getElementById(REVIEW_ID)?.focus())}
@@ -141,6 +158,8 @@ function Loaded({ detail }: { detail: Detail }) {
           rollId={sitting.rollId}
           minutes={sittingMinutes(sitting, now)}
           label={open ? 'End sitting' : 'Mark rep done'}
+          heading={open ? 'End the sitting — mark its rep done' : 'Mark its rep done'}
+          waiting={stale}
         />
       )}
 
@@ -167,20 +186,29 @@ function Loaded({ detail }: { detail: Detail }) {
 
 // Closed by idle: said outright, never silent, with Reopen while the server would take it (inside its window, its
 // rep still in progress). A refusal (another sitting open, its rep moved on) shows inline, the button kept.
-function IdleClosed({ id, repTaskId, offer }: { id: string; repTaskId: string; offer: boolean }) {
+function IdleClosed({
+  id,
+  repTaskId,
+  offer,
+  onReopened,
+}: {
+  id: string;
+  repTaskId: string;
+  offer: boolean;
+  onReopened: () => void;
+}) {
   const reopen = useReopenSitting();
   const { data: tasks } = useAllTasks();
   const rep = tasks?.find((t) => t.id === repTaskId);
   const show = offer && rep?.status === 'in_progress';
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface px-3 py-2">
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-panel px-3 py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Text size="sm">{IDLE_CLOSED_NOTICE}</Text>
         {show && (
           <Button
-            size="sm"
             aria-disabled={reopen.isPending || undefined}
-            onClick={() => !reopen.isPending && reopen.mutate(id)}
+            onClick={() => !reopen.isPending && reopen.mutate(id, { onSuccess: onReopened })}
           >
             Reopen
           </Button>
@@ -213,6 +241,7 @@ function Metric({ label, children }: { label: string; children: React.ReactNode 
 // Done on the rep ends the sitting (the server's hook); the form starts on the sitting's own minutes, and the
 // Roll's estimate when the rep lost one — RepTie's call.
 const focusOnMount = (el: HTMLElement | null) => el?.focus();
+const END_ID = 'end-sitting';
 
 function EndSitting({
   repTaskId,
@@ -220,12 +249,16 @@ function EndSitting({
   minutes,
   onEnded,
   label,
+  heading,
+  waiting,
 }: {
   repTaskId: string;
   rollId: string;
   minutes: number;
   onEnded: () => void;
   label: string;
+  heading: string;
+  waiting: boolean; // its minutes are being read again (useIdleRecheck)
 }) {
   const [ending, setEnding] = useState(false);
   const back = useRef(false); // Cancel hands focus back to End sitting
@@ -238,14 +271,15 @@ function EndSitting({
   if (!ending)
     return (
       <Button
+        id={END_ID}
         className="self-start"
         ref={(el) => {
           if (el && back.current) el.focus();
           back.current = false;
         }}
         // The form waits for the Rolls: its estimate is copied once, and must be the Roll's, not the fallback.
-        aria-disabled={rolls.isPending || undefined}
-        onClick={() => !rolls.isPending && setEnding(true)}
+        aria-disabled={rolls.isPending || waiting || undefined}
+        onClick={() => !rolls.isPending && !waiting && setEnding(true)}
       >
         {label}
       </Button>
@@ -260,7 +294,7 @@ function EndSitting({
       className="outline-none"
     >
       <Text size="sm" weight="medium" id={`${id}-end`}>
-        End the sitting — mark its rep done
+        {heading}
       </Text>
       <DoneForm
         task={rep}

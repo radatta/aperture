@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { isSittingOpen } from '@aperture/shared';
+import { isSittingOpen, mayBeIdle } from '@aperture/shared';
 import type { DateRange, Sitting, SittingReviewInput, Task } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { invalidateTaskData } from './invalidate';
@@ -70,6 +71,24 @@ export function useReopenSitting() {
   });
 }
 
+// A cached open head may be idle on the server by now (the close happens on read): before a Done prefills from it,
+// a cache older than this is read again — else a page left open for hours would prefill the hours.
+export const IDLE_RECHECK_MS = 30_000;
+// Whether `s`, as cached at `fetchedAt`, may have closed since; refetches it (once per staleness) while so.
+export function useIdleRecheck(
+  s: Sitting | null | undefined,
+  fetchedAt: number,
+  now: number,
+  fetching: boolean,
+  refetch: () => unknown,
+): boolean {
+  const stale = !!s && mayBeIdle(s, now) && now - fetchedAt > IDLE_RECHECK_MS;
+  useEffect(() => {
+    if (stale && !fetching) void refetch();
+  }, [stale, fetching, refetch]);
+  return stale;
+}
+
 // Claude's draft: a mutation, never a query — a model call only when the user presses the button, never on open.
 export function useDraftSittingReview() {
   const api = useApi();
@@ -88,10 +107,12 @@ export function useOpenSittingFor(
   const lcRoll = settings?.leetcodeRollId ?? null;
   const wanted = !!task && !!lcRoll && task.rollId === lcRoll && task.status === 'in_progress';
   const q = useSittings(undefined, { enabled: wanted });
+  const mine = wanted ? (q.data?.filter((s) => s.repTaskId === task.id) ?? []) : [];
+  const open = mine.find((s) => isSittingOpen(s, now));
+  const stale = useIdleRecheck(open, q.dataUpdatedAt, now, q.isFetching, q.refetch);
   if (!wanted) return null;
   if (q.isPending) return undefined; // not known yet — Home's Done waits rather than guess
-  const mine = q.data?.filter((s) => s.repTaskId === task.id) ?? [];
-  const open = mine.find((s) => isSittingOpen(s, now));
+  if (stale) return undefined; // may have closed by idle: Done waits for the fresh read
   if (open) return open;
   const newest = mine.sort((a, b) => b.startedAt - a.startedAt)[0]; // a fresh array: the cache stays as it is
   return newest?.closedBy === 'idle' && newest.status === 'abandoned' ? newest : null;
