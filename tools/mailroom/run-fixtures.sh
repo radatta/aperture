@@ -88,11 +88,15 @@ sim_stub_log() {
   printf '%s\n' "$1" | sed -e "s/@NOW@/$now/g" -e "s/@NOW8@/$now8/g" >>"$MAILROOM_FIXTURE_TAPE.hid"
 }
 # The sim's log stream: its answer (a header, say), then it blocks until stopped, and prints what the rules logged.
+# On the Mac's bash 3.2 a backgrounded loop of fractional sleeps dies at its first sleep (axe-diag, 2026-11-16: "s", then
+# gone, rc 0), so it blocks on one sleep it waits for: `wait` answers TERM at once, and 120 s caps it (log's --timeout).
 sim_stub_stream() {
-  trap 'cat "$MAILROOM_FIXTURE_TAPE.hid" 2>/dev/null; exit 0' TERM
+  local s
+  trap 'kill "$s" 2>/dev/null; cat "$MAILROOM_FIXTURE_TAPE.hid" 2>/dev/null; exit 0' TERM
   [ -z "$1" ] || printf '%s\n' "$1"
-  local n=0
-  while [ "$n" -lt 1200 ]; do command sleep 0.1; n=$((n + 1)); done # never past 120 s in a shared container (log's --timeout)
+  command sleep 120 &
+  s=$!
+  wait "$s"
 }
 sim_stub() {
   local argv="$*" idx=0 m rc n out log cnt o=""
