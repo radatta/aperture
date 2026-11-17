@@ -36,9 +36,9 @@ tower needs `board.sh tower start`. The page's header shows the commit it serves
 file (a checkout moved by hand or by a rolled-back `lanes start`, or a sync-main whose restart failed), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
-inside). It serves read-only routes only: `/`, `/app.js`, `/api/state` (`?history=1` adds the chart series) and the
+inside). It serves read-only routes only: `/`, `/app.js`, `/manifest.webmanifest`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, `/manifest.webmanifest`, plus the same four of the trial variants
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, plus the same four of the trial variants
 `favicon-a…` and `favicon-b…`; `/?favicon=a|b` serves the page linking those), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels

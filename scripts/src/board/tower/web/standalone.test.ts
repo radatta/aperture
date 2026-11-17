@@ -28,6 +28,12 @@ function block(from: number): [number, number] {
 }
 
 describe('the tower as a Home Screen app', () => {
+  it('app.js marks the page installed from navigator.standalone or display-mode', () => {
+    const js = readFileSync(join(import.meta.dirname, 'app.js'), 'utf8');
+    expect(js).toContain('navigator.standalone === true');
+    expect(js).toContain("document.documentElement.classList.add('installed')");
+  });
+
   it("carries the Aperture app's two status-bar metas, word for word", () => {
     for (const m of META) {
       expect(app).toContain(m);
@@ -62,7 +68,12 @@ describe('the tower as a Home Screen app', () => {
     expect(html.slice(qb, at2)).toMatch(
       /^\s*\/\*[^*]*\*\/\s*@media \(orientation: portrait\) \{\s*html\.installed header \{\s*$/,
     );
-    expect(html.slice(at2, phone![1])).toContain(`html.installed #strip {\n            ${STRIP}`);
+    // both class rules inside that portrait block, never loose in the phone block (a sideways phone has no bar)
+    const [pa, pb] = block(qb + html.slice(qb).indexOf('@media (orientation: portrait)'));
+    expect(pa < at2 && at2 < pb).toBe(true);
+    const strip2 = html.indexOf(STRIP, html.indexOf(STRIP) + 1);
+    expect(pa < strip2 && strip2 < pb).toBe(true);
+    expect(html.slice(pa, pb)).toContain('html.installed #strip {');
     // nothing later sets the header's top padding again
     expect(html.slice(at2 + FLOOR.length)).not.toMatch(/header \{[^}]*padding(-top)?:/);
     // the tab layout keeps its own inset plus gap
