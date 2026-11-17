@@ -120,7 +120,12 @@ export function suggestedCause(s: Pick<Sitting, 'summary'>): CauseTag | null {
   return null;
 }
 
-// Home's morning line: "LeetCode · 4 today · 1 more re-solve due". A floor day names its one problem; a day with
+// The due re-solves beyond today's live slots: one that's a slot today is counted there; one skipped, or swapped
+// away, is still due and counted here. The card's 48-hour list and Home's line use the same rule.
+export const dueBeyondSlots = (t: Pick<CoachToday, 'due' | 'slots'>) =>
+  t.due.filter((q) => !t.slots.some((s) => s.status !== 'skipped' && s.slug === q.slug));
+
+// Home's morning line: "LeetCode · 4 today · +1 re-solve due". A floor day names its one problem; a day with
 // every slot done or skipped says so.
 export function coachGlance(t: CoachToday): string {
   const live = t.slots.filter((s) => s.status !== 'skipped');
@@ -135,7 +140,6 @@ export function coachGlance(t: CoachToday): string {
           : left < live.length
             ? `${left} left today`
             : `${left} today`;
-  // Due re-solves beyond today's slots (one already a slot is counted there).
-  const due = t.due.filter((q) => !t.slots.some((s) => s.slug === q.slug)).length;
-  return `LeetCode · ${head}${due ? ` · ${due} more ${due === 1 ? 're-solve' : 're-solves'} due` : ''}`;
+  const due = dueBeyondSlots(t).length;
+  return `LeetCode · ${head}${due ? ` · +${due} ${due === 1 ? 're-solve' : 're-solves'} due` : ''}`;
 }

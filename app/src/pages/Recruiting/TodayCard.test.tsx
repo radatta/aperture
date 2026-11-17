@@ -129,6 +129,10 @@ describe('the Today card', () => {
     await user.click(within(c).getByRole('button', { name: 'Change' }));
     await user.selectOptions(within(c).getByLabelText('Focus pattern'), 'two-pointers');
     expect(await within(c).findByText('Two Pointers · day 1 of 3 · your pick')).toBeTruthy();
+    // The picker closed: focus is back on Change, not <body>.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(c).getByRole('button', { name: 'Change' })),
+    );
     expect((await api.getCoachToday()).focus.source).toBe('override');
     await user.click(within(c).getByRole('button', { name: 'Change' }));
     await user.selectOptions(within(c).getByLabelText('Focus pattern'), '');

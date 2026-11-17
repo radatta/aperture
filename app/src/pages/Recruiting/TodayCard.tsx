@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { PATTERN_NAMES, PATTERNS } from '@aperture/shared';
 import type { CoachSlot, CoachToday, PatternId } from '@aperture/shared';
@@ -14,8 +14,8 @@ import {
   useSetCoachSlot,
 } from '../../data/hooks/useCoach';
 import { cx } from '../../lib/cx';
-import { returnFocus } from '../../lib/useDisclosure';
-import { dueLabel, SLOT_KIND_LABEL, slotState } from './recruitingHelpers';
+import { returnFocus, useDisclosure } from '../../lib/useDisclosure';
+import { dueBeyondSlots, dueLabel, SLOT_KIND_LABEL, slotState } from './recruitingHelpers';
 
 const sittingPath = (id: string) => `/recruiting/sittings/${id}`;
 const ENGINE = ''; // the focus picker's "the coach's pick" option (clears the override)
@@ -53,24 +53,24 @@ function TodayBody({ today }: { today: CoachToday }) {
   // One write at a time: a second tap while one is in flight does nothing, so a double tap is one change. A ref,
   // since both taps of a double tap land before the pending state renders.
   const inFlight = useRef(false);
-  async function run(write: () => Promise<unknown>) {
-    if (inFlight.current) return;
+  // True when the write landed.
+  async function run(write: () => Promise<unknown>): Promise<boolean> {
+    if (inFlight.current) return false;
     inFlight.current = true;
     setError(null);
     try {
       await write();
+      return true;
     } catch (e) {
       setError((e as Error).message || 'Couldn’t change the plan — try again.');
+      return false;
     } finally {
       inFlight.current = false;
     }
   }
   const change = (s: CoachSlot, action: 'swap' | 'skip' | 'restore') =>
     run(() => slot.mutateAsync({ slug: s.slug, action }));
-  const queue = [
-    ...today.due.filter((q) => !today.slots.some((s) => s.slug === q.slug)),
-    ...today.next48h,
-  ];
+  const queue = [...dueBeyondSlots(today), ...today.next48h];
 
   return (
     <div className="flex flex-col gap-4">
@@ -203,7 +203,9 @@ function TodayBody({ today }: { today: CoachToday }) {
 
 function FocusLine({ today }: { today: CoachToday }) {
   const focus = useSetCoachFocus();
-  const [picking, setPicking] = useState(false);
+  // A pick or Cancel closes the picker and hands focus back to Change (useDisclosure).
+  const picker = useDisclosure();
+  const picking = picker.open;
   const [error, setError] = useState<string | null>(null);
   const f = today.focus;
   async function pick(v: string) {
@@ -211,7 +213,7 @@ function FocusLine({ today }: { today: CoachToday }) {
     setError(null);
     try {
       await focus.mutateAsync(v === ENGINE ? null : (v as PatternId));
-      setPicking(false);
+      picker.onClose();
     } catch (e) {
       setError((e as Error).message || 'Couldn’t change the focus — try again.');
     }
@@ -226,10 +228,12 @@ function FocusLine({ today }: { today: CoachToday }) {
         <Button
           variant="quiet"
           size="sm"
+          ref={picker.triggerRef}
           aria-expanded={picking}
           onClick={() => {
             setError(null);
-            setPicking(!picking);
+            if (picking) picker.onClose();
+            else picker.onOpen();
           }}
         >
           {picking ? 'Cancel' : 'Change'}
@@ -267,20 +271,25 @@ function SlotRow({
 }: {
   slot: CoachSlot;
   busy: boolean;
-  onChange: (s: CoachSlot, action: 'swap' | 'skip' | 'restore') => Promise<void>;
+  onChange: (s: CoachSlot, action: 'swap' | 'skip' | 'restore') => Promise<boolean>;
 }) {
   const state = slotState(s);
   const row = useRef<HTMLLIElement>(null);
-  // The pressed button usually goes with the change (Skip → Restore): focus stays in the row, on its first
-  // button, else its title — never dropped to <body> (CONVENTIONS → focus-return).
+  // The pressed button usually goes with the change (Skip → Restore), and the new plan commits after the write
+  // resolves. So the row re-homes focus as that commit lands: on its first button, else its title — never left on
+  // <body> (CONVENTIONS → focus-return). A refused change keeps its button, and focus with it.
+  const refocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    const li = row.current;
+    if (!li || li.contains(document.activeElement)) return;
+    const next = li.querySelector<HTMLElement>('button') ?? li.querySelector<HTMLElement>('a');
+    if (next) returnFocus(next);
+  }, [s.status, s.slug, s.swappedFrom]);
   const act = (action: 'swap' | 'skip' | 'restore') => async () => {
-    await onChange(s, action);
-    requestAnimationFrame(() => {
-      const li = row.current;
-      if (!li || li.contains(document.activeElement)) return;
-      const next = li.querySelector<HTMLElement>('button') ?? li.querySelector<HTMLElement>('a');
-      if (next) returnFocus(next);
-    });
+    refocus.current = true;
+    if (!(await onChange(s, action))) refocus.current = false;
   };
   const quiet = (label: string, action: 'swap' | 'skip' | 'restore', name: string) => (
     <Button
@@ -311,9 +320,10 @@ function SlotRow({
             )}
           >
             {s.title}
+            {/* A no-break space keeps ↗ on its title's last line; inline-block keeps a skip's strike off it. */}
             <span aria-hidden className="text-ink-subtle">
-              {' '}
-              ↗
+              {'\u00A0'}
+              <span className="inline-block">↗</span>
             </span>
           </a>
         </div>

@@ -5,7 +5,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { coachGlance } from '../Recruiting/recruitingHelpers';
 
 // LeetCode on the morning home is one line, not a card — FinanceGlance's posture: the coach's day
-// ("LeetCode · 4 today · 1 more re-solve due"), linking to the Today card. Read only once a LeetCode roll is linked,
+// ("LeetCode · 4 today · +1 re-solve due"), linking to the Today card. Read only once a LeetCode roll is linked,
 // so a day without LeetCode costs no read and shows nothing.
 export function LeetcodeGlance() {
   const { data: settings } = useSettings();
@@ -31,7 +31,7 @@ export function LeetcodeGlance() {
         {coachGlance(today)}
       </Text>
       <Text size="sm" tone="muted" aria-hidden className="shrink-0 whitespace-nowrap">
-        Practice →
+        Today →
       </Text>
     </Link>
   );

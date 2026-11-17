@@ -121,7 +121,7 @@ describe('the LeetCode morning line', () => {
   it('reads the coach’s day and links to it', async () => {
     const api = createStubClient({ seed: true, storageKey: `lc-${Math.random()}` });
     await morning(api);
-    const line = await screen.findByText('LeetCode · 4 today · 1 more re-solve due');
+    const line = await screen.findByText('LeetCode · 4 today · +1 re-solve due');
     expect(line.closest('a')?.getAttribute('href')).toBe('/recruiting');
   });
 

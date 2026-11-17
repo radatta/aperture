@@ -3,6 +3,7 @@ import { emptySummary } from '@aperture/shared';
 import type { CoachSlot, CoachToday, Sitting, SittingSummary } from '@aperture/shared';
 import {
   coachGlance,
+  dueBeyondSlots,
   dueLabel,
   groupSittings,
   slotState,
@@ -141,9 +142,9 @@ describe('the coach’s view helpers', () => {
           due: [{ slug: 'two-sum' }, { slug: 'x' }, { slug: 'y' }] as never,
         }),
       ),
-    ).toBe('LeetCode · 4 today · 2 more re-solves due'); // two-sum is a slot already
+    ).toBe('LeetCode · 4 today · +2 re-solves due'); // two-sum is a slot already
     expect(coachGlance(day({ slots: four.map(slot), due: [{ slug: 'x' }] as never }))).toBe(
-      'LeetCode · 4 today · 1 more re-solve due',
+      'LeetCode · 4 today · +1 re-solve due',
     );
     expect(
       coachGlance(
@@ -152,7 +153,7 @@ describe('the coach’s view helpers', () => {
           due: [{ slug: 'x' }] as never,
         }),
       ),
-    ).toBe('LeetCode · 1 left today · 1 more re-solve due');
+    ).toBe('LeetCode · 1 left today · +1 re-solve due');
     expect(coachGlance(day({ slots: [slot('done'), slot('skipped')] }))).toBe(
       'LeetCode · 1 of 1 done',
     );
@@ -165,5 +166,15 @@ describe('the coach’s view helpers', () => {
         }),
       ),
     ).toBe('LeetCode · floor day · Two Sum');
+  });
+
+  it('due beyond the slots: a live slot counts there; a skipped one, or one swapped away, is still due', () => {
+    const due = [{ slug: 'a' }, { slug: 'b' }, { slug: 'c' }] as CoachToday['due'];
+    const slots = [
+      { slug: 'a', status: 'open' },
+      { slug: 'b', status: 'skipped' },
+      { slug: 'z', status: 'open', swappedFrom: 'c' },
+    ] as CoachSlot[];
+    expect(dueBeyondSlots({ due, slots }).map((q) => q.slug)).toEqual(['b', 'c']);
   });
 });

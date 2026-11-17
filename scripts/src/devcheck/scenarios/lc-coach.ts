@@ -1,10 +1,12 @@
 // The LeetCode coach on dev (docs/areas/recruiting/coach.md): today's plan through the API and leetcode_today,
 // a sitting on a slot moving it in progress then done, an off-plan sitting leaving the queue alone, the review
-// merge, the four MCP writes as the test user, the floor and focus, and the schedule over backdated attempts.
-// Everything this run makes is ledgered by id and cleaned by the pipeline: sittings (with their reps), attempts
-// (deleteCoachAttempt), slot changes (restored), the floor (off) and the focus (cleared). Problem slugs outside the
-// catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The schedule step runs
-// last: its backdated attempts change the plan for any read after it.
+// merge, the four MCP writes as the test user, the floor and focus, and the schedule over backdated attempts; then
+// the app (PR A-app): the Today card, the review's cause and Peeked, F169, Home's morning line.
+// Everything this run makes is ledgered by id and cleaned by the pipeline: sittings (with their reps), rolls and the
+// roll link, attempts (deleteCoachAttempt), slot changes (restored), the floor (off) and the focus (cleared). Problem
+// slugs outside the catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The
+// schedule step's backdated attempts change the plan for any read after it, so the app steps after it read the plan
+// live, never an earlier step's.
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
@@ -35,6 +37,15 @@ const accepted = (at: number): DevSittingEvent => ({
   payload: {
     request: { lang: 'python3', typed_code: 'print("devcheck")' },
     result: { status_code: 10, status_msg: 'Accepted', total_correct: 3, total_testcases: 3 },
+  },
+});
+const wrong = (at: number): DevSittingEvent => ({
+  id: devUlid(),
+  type: 'submit',
+  at,
+  payload: {
+    request: { lang: 'python3', typed_code: 'print("devcheck")' },
+    result: { status_code: 11, status_msg: 'Wrong Answer', total_correct: 1, total_testcases: 3 },
   },
 });
 const fail = (msg: string): never => {
@@ -264,6 +275,18 @@ export const lcCoach: Scenario = {
       what: 'A Save in a review form opened before Claude’s mark_peeked keeps the peek (F169)',
     },
     {
+      id: 'ui-suggested',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A first submit that failed with no Run opens the form on a suggested No trace; an untouched Save stores it, and clearing the chip stores none',
+    },
+    {
+      id: 'ui-unreviewed',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'An ended sitting with no cause yet is listed on the card, linking to its review',
+    },
+    {
       id: 'ui-failed',
       entry: 'ui',
       kind: 'edge',
@@ -308,7 +331,7 @@ export const lcCoach: Scenario = {
       id: 'ui-focus',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Change on the focus line: the coach’s pick clears an override, and a pattern sets one',
+      what: 'Change on the focus line: the coach’s pick clears an override, a pattern sets one, Cancel closes it',
     },
   ],
   steps: [
@@ -805,6 +828,16 @@ export const lcCoach: Scenario = {
         await line.waitFor({ state: 'visible', timeout: 15_000 });
         const text = (await line.textContent()) ?? '';
         if (/couldn’t load/.test(text)) fail(`the line: ${text}`);
+        // The line names the plan's own numbers (recruitingHelpers.ts coachGlance).
+        const t = await ctx.api.reads.getCoachToday();
+        const live = t.slots.filter((x) => x.status !== 'skipped');
+        const left = live.filter((x) => x.status !== 'done').length;
+        const want = t.floor?.on
+          ? 'floor day'
+          : left === 0
+            ? `${live.length} of ${live.length} done`
+            : `${left} ${left < live.length ? 'left today' : 'today'}`;
+        if (live.length && !text.includes(want)) fail(`the line "${text}" doesn’t say "${want}"`);
         if ((await line.getAttribute('href')) !== '/recruiting')
           fail('the line doesn’t link to the card');
         await ctx.shot('lc-coach-home-line');
@@ -860,6 +893,7 @@ export const lcCoach: Scenario = {
         const slug = slugOf(ctx, 'f169');
         const { sitting } = await ctx.api.writes.lcSittingStart(start(slug, titleOf(ctx, 'f169')));
         await finish(ctx, sitting.id, sitting.repTaskId);
+        app.f169Id = sitting.id;
         await ctx.ui.goto(`/recruiting/sittings/${sitting.id}`);
         const p = ctx.page;
         const none = p.getByRole('button', { name: 'No help', exact: true });
@@ -879,6 +913,58 @@ export const lcCoach: Scenario = {
           'the form shows the peek',
           async () => (await peeked.getAttribute('aria-pressed')) === 'true',
         );
+      },
+    },
+    {
+      id: 'ui-suggested',
+      title: 'A failed first submit, no Run: the suggested No trace, saved untouched, then cleared',
+      entry: 'ui',
+      proves: ['ui-suggested'],
+      async run(ctx) {
+        const slug = slugOf(ctx, 'suggest');
+        const { sitting } = await ctx.api.writes.lcSittingStart(
+          start(slug, titleOf(ctx, 'suggest')),
+        );
+        const t = Date.now();
+        await ctx.api.writes.lcSittingEvents(sitting.id, [wrong(t), accepted(t + 1_000)]);
+        await finish(ctx, sitting.id, sitting.repTaskId, false); // accepted above; Done with the actual
+        const cause = async () => {
+          const head = (await ctx.api.reads.listSittings()).find((x) => x.id === sitting.id);
+          return (head?.review as { cause?: string | null } | null | undefined)?.cause ?? null;
+        };
+        await ctx.ui.goto(`/recruiting/sittings/${sitting.id}`);
+        const p = ctx.page;
+        const chip = p.getByRole('button', { name: 'No trace', exact: true });
+        await chip.waitFor({ timeout: 15_000 });
+        if ((await chip.getAttribute('aria-pressed')) !== 'true') fail('No trace isn’t suggested');
+        await p.getByText('· suggested').waitFor({ timeout: 5_000 });
+        await ctx.shot('lc-coach-review-suggested');
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await ctx.ui.expectText('Saved.', 15_000);
+        if ((await cause()) !== 'no-trace') fail(`untouched Save stored ${String(await cause())}`);
+        await chip.click();
+        await p.getByRole('button', { name: 'Save review' }).click();
+        await until('the cleared cause saved', async () => (await cause()) === null);
+        await p.reload({ waitUntil: 'load' });
+        await chip.waitFor({ timeout: 15_000 });
+        if ((await chip.getAttribute('aria-pressed')) !== 'false')
+          fail('the cleared cause came back');
+        if (await p.getByText('· suggested').count())
+          fail('the suggestion came back after a clear');
+      },
+    },
+    {
+      id: 'ui-unreviewed',
+      title: 'The card lists the F169 sitting under No cause yet, linking to its review',
+      entry: 'ui',
+      proves: ['ui-unreviewed'],
+      async run(ctx) {
+        const id = app.f169Id || fail('no F169 sitting — the ui-f169 step failed');
+        const c = await todayCard(ctx);
+        await c.getByText(/^No cause yet:/).waitFor({ timeout: 15_000 });
+        const link = c.getByRole('link', { name: titleOf(ctx, 'f169'), exact: true });
+        if ((await link.getAttribute('href')) !== `/recruiting/sittings/${id}`)
+          fail(`its link: ${String(await link.getAttribute('href'))}`);
       },
     },
     {
@@ -917,6 +1003,7 @@ export const lcCoach: Scenario = {
         } finally {
           await i.release();
         }
+        await ctx.api.writes.linkLeetcodeRoll(null); // the roll ui-home linked: the last step that needs it
       },
     },
     {
@@ -962,16 +1049,19 @@ export const lcCoach: Scenario = {
         );
         await pick('Intervals');
         await c.getByText('Intervals · day 1 of 3 · your pick').waitFor({ timeout: 15_000 });
+        await c.getByRole('button', { name: 'Change', exact: true }).click();
+        await c.getByRole('button', { name: 'Cancel', exact: true }).click();
+        if (await c.getByLabel('Focus pattern').count()) fail('Cancel left the picker open');
         await ctx.shot('lc-coach-focus-pick');
         await ctx.api.writes.setCoachFocus(null);
-        await ctx.api.writes.linkLeetcodeRoll(null); // the roll ui-home linked, for the scenarios after
       },
     },
     noConsoleErrors,
   ],
 };
 
-const app = { reviewId: '' }; // the app steps' own state (the sitting ui-review saved)
+// The app steps' own state: the sittings ui-review and ui-f169 saved.
+const app = { reviewId: '', f169Id: '' };
 async function todayCard(ctx: Ctx) {
   await ctx.ui.goto('/recruiting');
   const c = ctx.page.getByRole('region', { name: 'Today’s practice' });

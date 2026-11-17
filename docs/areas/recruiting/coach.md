@@ -168,8 +168,8 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
   `set_cause_tag`). Until the user touches one, the field follows the stored review as it refreshes. Save re-reads
   the review first: an untouched help is sent as stored, an untouched cause isn't sent (the server keeps it), and
   the suggestion is sent only while there's still no review. Help and the chips refuse taps while a Save runs. A failed re-read fails the Save, keeping every field.
-- **Home's morning line** (`Home/LeetcodeGlance.tsx`, the `FinanceGlance` posture): "LeetCode · 4 today · 1
-  more re-solve due" (due re-solves beyond the slots) → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
+- **Home's morning line** (`Home/LeetcodeGlance.tsx`, the `FinanceGlance` posture): "LeetCode · 4 today · +1
+  re-solve due" (due re-solves beyond the slots) → `/recruiting`. It is read only while a LeetCode roll is linked. A floor day names its one
   problem. A failed read is one visible line, never silence.
 - A review or task write in the app (a rep's Done included) invalidates the `coach` query prefix. The
   extension's writes don't reach the app's cache: the card catches up when it next mounts with data over 30 s old (a later visit).
