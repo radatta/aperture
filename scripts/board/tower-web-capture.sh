@@ -77,6 +77,9 @@ function stress(v) {
   return v;
 }
 function empty(v) {
+  // a server older than the page (a rollback): no power or slowdown in HEALTH must not break the render
+  delete v.health.power;
+  delete v.health.slowdown;
   v.needs = [];
   v.active = [];
   v.next = { order: [], queue: [], merge: [], maintainer: null, more: 0, parked: [], table: [], nowIndex: 0, soon: [], notes: [], planAt: null, ask: null };

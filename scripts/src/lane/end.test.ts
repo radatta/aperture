@@ -141,7 +141,7 @@ describe('lane end: gates', () => {
           },
         ],
       ],
-      /could not fetch PR 42's head to compare/,
+      /could not fetch PR 42's head to compare: git fetch timed out after 60 s/,
       1,
     ],
     [

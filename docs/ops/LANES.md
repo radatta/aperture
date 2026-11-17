@@ -49,8 +49,9 @@ its dirty check through its switch. Before it, `lanes end`'s sync-main could mov
 failed with "cannot lock ref", or the switch on an `index.lock`, rolling back with a misleading message. It is
 `flock(1)` on an fd the process keeps, released when it exits, so it never goes stale. It lives on the rootfs like
 `lib.sh`'s locks, since one container is every session that can race. A wait says so at once. Every `git fetch` here
-(start's, sync-main's, end's PR-head fetch) times out after 60 s, and start's `ls-remote` after 30 s: SIGTERM, which
-git cleans its lock files up on, then a refusal (exit 1, nothing changed). With the Mac on battery under 30% or in Low Power
+(start's, sync-main's, end's PR-head fetch) times out after 60 s, and start's `ls-remote` after 30 s, by SIGTERM,
+which git cleans its lock files up on. In start or end that is a refusal naming the timeout (exit 1, nothing changed);
+sync-main's own run at the end of either only warns, like any sync-main failure there. With the Mac on battery under 30% or in Low Power
 Mode and 3 lanes already active, start prints a `note:` with the ≤ 3 advice and still starts.
 
 Then it runs these steps, each registering an undo:

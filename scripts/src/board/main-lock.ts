@@ -43,7 +43,8 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
         warn(`main checkout busy (another lanes start or sync-main): waiting up to ${wait} s`);
         try {
           take(['-w', String(wait)]);
-        } catch {
+        } catch (e2) {
+          if ((e2 as { status?: number }).status !== 1) throw e2;
           throw new MainBusy(
             `main checkout busy: another lanes start or sync-main held ${file} for ${wait} s`,
           );

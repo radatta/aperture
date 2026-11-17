@@ -126,7 +126,7 @@ function deployGate(
 
 // The local branch holds nothing the PR lacks: its head is the PR's, or an ancestor of it (the PR's head moved on
 // GitHub, e.g. "Update branch"). The PR head is fetched into FETCH_HEAD only.
-function headCovered(d: Deps, head: string, pr: Pr): boolean | 'fetch-failed' {
+function headCovered(d: Deps, head: string, pr: Pr): boolean | { failed: string } {
   if (head === pr.headRefOid) return true;
   const at = d.env.mainRoot;
   try {
@@ -134,8 +134,8 @@ function headCovered(d: Deps, head: string, pr: Pr): boolean | 'fetch-failed' {
       cwd: at,
       timeoutMs: FETCH_TIMEOUT_MS,
     });
-  } catch {
-    return 'fetch-failed';
+  } catch (err) {
+    return { failed: (err as Error).message.split('\n')[0]! }; // a timeout says so
   }
   return tryRun(d, 'git', ['merge-base', '--is-ancestor', head, pr.headRefOid], at) !== null;
 }
@@ -210,8 +210,12 @@ export function end(d: Deps, a: EndArgs): number {
         `PR ${pr.number} is ${pr.state === 'CLOSED' ? 'closed unmerged' : pr.state} (or --force-abandon "<reason>")`,
       );
     const covered = head ? headCovered(d, head, pr) : true;
-    if (covered === 'fetch-failed')
-      return refuse(d, `could not fetch PR ${pr.number}'s head to compare`, EXIT.failed);
+    if (typeof covered === 'object')
+      return refuse(
+        d,
+        `could not fetch PR ${pr.number}'s head to compare: ${covered.failed}`,
+        EXIT.failed,
+      );
     if (head && !covered)
       return refuse(
         d,

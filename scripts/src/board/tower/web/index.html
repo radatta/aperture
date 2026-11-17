@@ -421,6 +421,10 @@
       .t-dim {
         color: var(--ink2);
       }
+      .serving {
+        cursor: pointer; /* tappable on iOS (five taps: the status-bar readout) */
+        touch-action: manipulation;
+      }
       .empty {
         color: var(--ink2);
         padding: 4px 0 4px 13px;

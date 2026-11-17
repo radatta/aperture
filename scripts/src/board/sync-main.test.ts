@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MainBusy } from './main-lock.ts';
-import { FETCH_TIMEOUT_MS, syncMain, type Run } from './sync-main.ts';
+import { FETCH_TIMEOUT_MS, execRun, syncMain, type Run } from './sync-main.ts';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -228,6 +228,10 @@ describe('sync-main', () => {
     syncMain(f.run, MAIN);
     expect(f.calls.find((c) => c.args[0] === 'fetch')!.timeoutMs).toBe(FETCH_TIMEOUT_MS);
     expect(FETCH_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it('the real runner kills a child past its timeout and says so', () => {
+    expect(() => execRun('sleep', ['5'], '/', 200)).toThrow('sleep 5 timed out after 0.2 s');
   });
 
   it('a busy lock throws before any git write', () => {

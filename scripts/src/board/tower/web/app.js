@@ -700,7 +700,13 @@ function health(v) {
   box.append(today);
 
   const c = h.container;
-  const sd = h.slowdown; // heavy.sh wall times, last 30 min vs the 24 h before (slowdown.ts)
+  // heavy.sh wall times, last 30 min vs the 24 h before (slowdown.ts); absent from a server older than this page
+  const sd = h.slowdown ?? {
+    windowMin: 30,
+    worst: null,
+    tone: 'ok',
+    line: 'unknown (server too old)',
+  };
   if (!c) box.append(tile('h:c', 'CONTAINER', 'no data', 'the sampler has no sample', 'c-bad', []));
   else {
     const stale = src('sampler')?.state !== 'ok'; // the server's rule (derive.ts STALE.sampler)
@@ -783,7 +789,7 @@ function health(v) {
             ? m.error // e.g. a time ahead of ours: never "silent since <the future>"
             : `silent since ${hhmm(s.t)}`;
     // battery / Low Power Mode / thermal (F120): red on an alert; an older agent shows nothing here
-    const pw = h.power;
+    const pw = h.power ?? { known: false, line: '', alerts: [], advice: null };
     const mt = tile(
       'h:m',
       'MAC',
@@ -803,7 +809,9 @@ function health(v) {
           'power',
           pw.known
             ? `${pw.line}${pw.alerts.length ? ` — red: ${pw.alerts.join(', ')}` : ''}`
-            : 'unknown (an older agent: reinstall, NEEDS YOU)',
+            : s.power === undefined
+              ? 'unknown (an older agent: reinstall, NEEDS YOU)'
+              : `unknown (stats ${m.state})`,
         ],
         ...(pw.advice ? [['lanes', pw.advice]] : []),
         ['as of', `${hhmm(s.t)} (${ago(s.t, v.now)} ago)`],
@@ -918,13 +926,15 @@ function sources(v) {
     b.append(row);
   }
   // the code this server runs: read at its start (a restart moves it)
-  b.append(
-    el(
-      'div',
-      'empty serving', // five taps open the status-bar readout (debugReadout)
-      `serving ${v.version ? v.version.slice(0, 8) : 'an unknown commit'}${v.startedAt ? `, started ${hhmm(v.startedAt)}` : ''}`,
-    ),
+  const serving = el(
+    'div',
+    'empty serving',
+    `serving ${v.version ? v.version.slice(0, 8) : 'an unknown commit'}${v.startedAt ? `, started ${hhmm(v.startedAt)}` : ''}`,
   );
+  // five taps open the status-bar readout: a listener on the element itself, since iOS sends no click up from a
+  // tap on a plain div to a document listener
+  serving.addEventListener('click', servingTap);
+  b.append(serving);
   for (const id of ['needs', 'now', 'done']) {
     const a = $(`#${id} .age`);
     // NOW's lock sources speak on their own slot cards: not repeated in its header
@@ -1267,8 +1277,8 @@ function setDebug(on) {
     else sessionStorage.removeItem(DEBUG_KEY);
   } catch {
     // no storage (a private window): the box still follows this tap
-    debugForced = on;
   }
+  debugForced = on; // this tab's word wins over storage, which may have failed one way and not the other
   debugReadout();
 }
 let debugForced = null;
@@ -1307,15 +1317,14 @@ function debugReadout() {
   ].join('\n');
 }
 let taps = [];
-document.addEventListener('click', (e) => {
-  if (!e.target.closest?.('.serving')) return;
+function servingTap() {
   const t = Date.now();
   taps = taps.filter((x) => t - x < 3000).concat(t);
   if (taps.length >= 5) {
     taps = [];
     setDebug(!(debugForced ?? debugOn()));
   }
-});
+}
 window.addEventListener('resize', debugReadout);
 if (new URLSearchParams(location.search).get('debug') === '1') setDebug(true);
 
@@ -1339,6 +1348,7 @@ tick().then(() => {
     // no storage (a private window): the top
   }
   window.scrollTo(0, y); // also over the browser's own jump to the #next anchor, which the strip would cover
+  debugReadout(); // back at once after the version reload, not a poll later
 });
 setInterval(() => tick().then(debugReadout), POLL_MS);
 // the live timers: every second, against the server's clock

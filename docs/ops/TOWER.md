@@ -353,7 +353,7 @@ and `pmset -g batt`, `pmset -g` and `pmset -g therm` (none needs sudo), and writ
            "freePct": …, "pressure": "normal|warn|critical" },
   "swap": { "totalMiB": …, "usedMiB": … }, "load": [1, 5, 15], "cpus": 12,
   "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": … },
-  "power": { "source": "ac|battery|null", "batteryPct": 12, "state": "charging", "remainingMin": 542,
+  "power": { "source": "ac|battery|ups|null", "batteryPct": 12, "state": "charging", "remainingMin": 542,
              "lowPowerMode": false,
              "thermal": { "warningLevel": null, "performanceWarningLevel": null, "cpuSpeedLimit": null,
                           "cpuSchedulerLimit": null, "cpuAvailableCpus": null } } }

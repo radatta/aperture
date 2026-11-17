@@ -270,6 +270,25 @@ describe('macstats.sh --render: power', () => {
     }
   });
 
+  it('CRLF line ends read the same; a UPS is source ups', () => {
+    const crlf = render(
+      variant((f) => {
+        for (const n of PM) f[n] = f[n]!.replace(/\n/g, '\r\n');
+        f['pmset.txt'] = f['pmset.txt']!.replace(/lowpowermode +0/, 'lowpowermode 1');
+      }),
+    ).power;
+    expect(crlf).toMatchObject({
+      source: 'ac',
+      batteryPct: 12,
+      remainingMin: 542,
+      lowPowerMode: true,
+    });
+    expect(
+      power((f) => (f['pmset-batt.txt'] = f['pmset-batt.txt']!.replace('AC Power', 'UPS Power')))
+        .source,
+    ).toBe('ups');
+  });
+
   it('the battery id never reaches the JSON', () => {
     expect(JSON.stringify(render(FX))).not.toContain('1234567');
   });

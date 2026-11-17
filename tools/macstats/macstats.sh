@@ -40,7 +40,9 @@ power() {
     function num(s) { return s ~ /^[0-9]+$/ ? s : "" }
     function level(s,   v) { if (s ~ /No .* has been recorded/) return ""; v = s; sub(/.*[=:] */, "", v)
       sub(/ +$/, "", v); return v ~ /^[0-9]+$/ ? v : "recorded" }
-    $1 == "B" && /Now drawing from/ { src = /AC Power/ ? "ac" : (/Battery Power/ ? "battery" : "") }
+    { sub(/\r$/, "") } # a CR would hide every value below
+    $1 == "B" && /Now drawing from/ {
+      src = /AC Power/ ? "ac" : (/Battery Power/ ? "battery" : (/UPS Power/ ? "ups" : "")) }
     $1 == "B" && /InternalBattery/ && !seen { seen = 1; l = $0; sub(/ present:.*$/, "", l)
       if (match(l, /[0-9]+%/)) { pct = substr(l, RSTART, RLENGTH - 1); l = substr(l, RSTART + RLENGTH) }
       n = split(l, f, /; */)

@@ -207,6 +207,15 @@ describe('powerSummary', () => {
     ).toEqual([]);
   });
 
+  it('a charged battery on AC drops the "(0:00 to full)"; a UPS says UPS', () => {
+    expect(sum({ ...calm, batteryPct: 100, state: 'charged', remainingMin: 0 }).line).toBe(
+      'AC 100% charged · no thermal limit',
+    );
+    expect(sum({ ...calm, source: 'ups', remainingMin: null }).line).toBe(
+      'UPS 82% charging · no thermal limit',
+    );
+  });
+
   it('an unreadable Low Power Mode says so on the line (never a silent "off")', () => {
     expect(sum({ ...calm, lowPowerMode: null }).line).toBe(
       'AC 82% charging (0:40 to full) · Low Power Mode unknown · no thermal limit',

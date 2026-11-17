@@ -38,7 +38,7 @@ export type Thermal = {
   cpuAvailableCpus: number | null;
 };
 export type Power = {
-  source: 'ac' | 'battery' | null;
+  source: 'ac' | 'battery' | 'ups' | null;
   batteryPct: number | null;
   state: string | null; // charging | discharging | charged | finishing | not-charging
   remainingMin: number | null; // to full on AC, to empty on battery
@@ -113,7 +113,7 @@ function parsePower(p: unknown): Power {
   const lvl = (x: unknown) => (typeof x === 'string' ? clean(x).slice(0, 24) : num(x));
   const pct = num(o.batteryPct);
   return {
-    source: o.source === 'ac' || o.source === 'battery' ? o.source : null,
+    source: o.source === 'ac' || o.source === 'battery' || o.source === 'ups' ? o.source : null,
     batteryPct: pct !== null && pct >= 0 && pct <= 100 ? pct : null,
     state: typeof o.state === 'string' ? clean(o.state).slice(0, 16) : null,
     remainingMin: num(o.remainingMin),
@@ -149,13 +149,15 @@ export function powerSummary(read: MacRead): PowerSummary {
   const alerts: string[] = [];
   const bits: string[] = [];
   const onBatt = p.source === 'battery';
+  const from = onBatt ? 'battery' : p.source === 'ups' ? 'UPS' : 'AC';
   if (p.batteryPct !== null) {
+    // "100%; charged; 0:00 remaining" is the desk's everyday line: no "(0:00 to full)"
     const left =
-      p.remainingMin === null ? '' : ` (${hm(p.remainingMin)} ${onBatt ? 'left' : 'to full'})`;
-    bits.push(
-      `${onBatt ? 'battery' : 'AC'} ${p.batteryPct}%${p.state ? ` ${p.state}` : ''}${left}`,
-    );
-  } else if (p.source) bits.push(onBatt ? 'battery' : 'AC');
+      p.remainingMin === null || (!onBatt && (p.remainingMin === 0 || p.state === 'charged'))
+        ? ''
+        : ` (${hm(p.remainingMin)} ${onBatt ? 'left' : 'to full'})`;
+    bits.push(`${from} ${p.batteryPct}%${p.state ? ` ${p.state}` : ''}${left}`);
+  } else if (p.source) bits.push(from);
   if (onBatt && p.batteryPct !== null && p.batteryPct < BATTERY_LOW_PCT)
     alerts.push(`battery ${p.batteryPct}%`);
   if (p.lowPowerMode) {
