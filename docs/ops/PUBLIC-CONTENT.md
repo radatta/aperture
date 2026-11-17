@@ -40,4 +40,4 @@ Device names, models and viewport sizes · Flux's exercise framing and wording �
 
 ## What enforces it
 
-The regex guard (IDENTIFIERS.md → _The checks_) blocks only the hard identifiers. Course-code, card-digit and dated-quote shapes were measured on 2026-11-14 and left to review: the first two match HTTP, RFC, ISO and test tokens far more often than real values, and the quote shape catches one form of many. A session that skips the reviewer skips this screen, so phase 10's scan of the PR body and report is the author's own check.
+The regex guard (IDENTIFIERS.md → _The checks_) blocks only the hard identifiers. Course-code, card-digit and dated-quote shapes were measured on 2026-11-14 and left to review: the first two match HTTP, RFC, ISO and test tokens far more often than real values, and the quote shape catches one form of many. A session that skips the reviewer skips this screen, so the author scans twice: **before a branch's first push** — its name, every commit message and the diff, since a push publishes and an amend doesn't recall it — and at phase 10, the PR title, body and report (FEATURE-WORKFLOW.md → phases 8, 10).

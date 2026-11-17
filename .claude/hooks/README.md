@@ -76,6 +76,12 @@ allow.
 `precommit-guard`'s personal-identifier block runs the checkout's own `scripts/src/identifiers-scan.ts`; its
 fixtures (`"ids": true`) copy the real `identifiers.json` and the scanner into the throwaway repo and spell every
 identifier as a placeholder (`docs/ops/IDENTIFIERS.md`).
+Its commit-identity block (`docs/ops/IDENTIFIERS.md` → _The checks_ → _Commit identity_) pipes `git var GIT_AUTHOR_IDENT`,
+`GIT_COMMITTER_IDENT` and HEAD's author into `scripts/src/commit-identity.ts`, with the command in `HOOK_CMD` for the
+overrides `git var` can't see; it fails open the same way. Every throwaway repo the runner makes is configured as the
+login from `identifiers.json` with its noreply address, and the hook never inherits the runner's
+`GIT_AUTHOR_*`/`GIT_COMMITTER_*`, so the `ids` cases pass on identity; the `identity:` fixtures set `"identity"` (a
+wrong config), `"env"` (the hook's environment) or `"head_author"` (a wrongly authored HEAD, for `--amend`).
 
 ## Board hooks
 

@@ -3,8 +3,9 @@
   #   1. Blocks a commit on a protected/deploy branch (main/master/dev) — branch first.
   #   2. Hard-blocks if the staged diff contains obvious credential patterns.
   #   3. Hard-blocks a personal identifier in an added line, a new path or the message (docs/ops/IDENTIFIERS.md).
-  #   4. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
-  #   5. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 4 and 5.
+  #   4. Hard-blocks an author or committer that isn't the maintainer's GitHub login and noreply address.
+  #   5. Hard-blocks a message that breaks the CLAUDE.md commit rule (>6 words, a body, a trailer).
+  #   6. Else soft-reminds to run code-reviewer + a validation pass. WIP commits exempt from 5 and 6.
   # set -euo pipefail; only acts on `git commit`, passes through otherwise.
 
   set -euo pipefail
@@ -62,6 +63,29 @@
     if [ "$IDS_RC" = 1 ] && [ -n "$IDS_HITS" ]; then
       jq -n --arg h "$IDS_HITS" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
         "permissionDecisionReason":("This commit adds a personal identifier (docs/ops/IDENTIFIERS.md: the name, the personal mailbox, a Mac home path, the projects folder or an AWS account id belong only in identifiers.json; docs say \"the maintainer\" and <mac-repo>). Where:\n" + $h + "\nReword those lines (or the message) and commit again.")}}'
+      exit 0
+    fi
+  fi
+
+  # Commit identity (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity): author and committer are the maintainer's GitHub
+  # login (identifiers.json → maintainer.github) with its noreply address, WIP commits too. `git var` sees the config
+  # and this hook's environment; scripts/src/commit-identity.ts adds what it can't — an override in the command itself
+  # (GIT_AUTHOR_*/GIT_COMMITTER_* assignments, --author, -c user.*, a `git config` of one in the same line) and the
+  # author an --amend keeps. Fails open like the block above. A rebase, cherry-pick or `commit -C <sha>`, and a
+  # `git -C <other dir> commit`: `pnpm bot push` and `open-pr` check every commit's identity again.
+  WHO="$TOP/scripts/src/commit-identity.ts"
+  if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$WHO" ] && command -v node >/dev/null; then
+    idents() {
+      printf 'author %s\n' "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+      printf 'committer %s\n' "$(git var GIT_COMMITTER_IDENT 2>/dev/null || true)"
+      git log -1 --format='head-author %an <%ae>' 2>/dev/null || true
+    }
+    WHO_RC=0
+    WHO_HITS=$(idents | HOOK_CMD="$COMMAND" node "$WHO" 2>/dev/null) || WHO_RC=$?
+    if [ "$WHO_RC" = 1 ] && [ -n "$WHO_HITS" ]; then
+      LOGIN=$(jq -r '.maintainer.github // "<login>"' "$TOP/identifiers.json" 2>/dev/null || echo "<login>")
+      jq -n --arg h "$WHO_HITS" --arg l "$LOGIN" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
+        "permissionDecisionReason":("This commit would not be authored and committed as the maintainer'"'"'s GitHub login with its noreply address (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity). What:\n" + $h + "\nSet this checkout'"'"'s identity — `git config user.name " + $l + "` and `git config user.email " + $l + "@users.noreply.github.com` (or its <id>+ form), each as its own command — drop any GIT_AUTHOR_*/GIT_COMMITTER_* or --author override, add --reset-author to an --amend of a wrongly authored commit, and commit again.")}}'
       exit 0
     fi
   fi

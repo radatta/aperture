@@ -108,7 +108,7 @@ Other uses:
 
 `open-pr` works through these steps:
 
-1. Refuses a detached HEAD, a deploy branch, or an unpushed branch (`pnpm bot push` first).
+1. Refuses a detached HEAD, a deploy branch, or an unpushed branch (`pnpm bot push` first), and `COMMIT_IDENTITY` when any commit on `origin/main..HEAD` isn't authored and committed as the maintainer's GitHub login with its noreply address — before anything is queued or a hand-off line printed (IDENTIFIERS.md → _The checks_ → _Commit identity_).
 2. Lints the title and body with the runner's fast-pass rules and prints a fix-it hint on failure.
 3. Skips the job if the container's read-only `gh` already sees an open PR. This check is best-effort.
 4. Submits the job and waits **75 s plus 30 s of grace**, counted from when the command started. That keeps it under the Bash tool's 120 s default timeout, because a killed caller would leave the job queued. If the pre-submit checks have left under 10 s of that budget, it queues nothing and exits 3.
@@ -120,7 +120,9 @@ Exit codes: 1 is a refusal or failure, printing the code and the renewal line fo
 cd <Mac worktree> && gh pr create --title "…" --body-file localNotes/pr-<branch>.md
 ```
 
-The title rule excludes `"`, `$`, backticks and `!`, so that line always pastes cleanly. In autonomous mode, exit 3 is the `CC blocked` path (CLAUDE.md → _Feature workflow_).
+The title rule excludes `"`, `$`, backticks and `!`, so that line always pastes cleanly. On exit 3 or a token error, the maintainer gets that line: from a lane, as an `[ask-maintainer]` to the hub, in either mode (FEATURE-WORKFLOW.md → _Talking to the maintainer_). `edit-pr`'s `MAC_UNREACHABLE` prints the matching `gh pr edit` line, which goes the same way.
+
+A branch that changes `.github/workflows/` can't be pushed by the bot (no `workflows` permission), so the maintainer's line then also starts with `git push -u origin <branch>` — after a rebase, `git push --force-with-lease -u origin <branch>` (FEATURE-WORKFLOW.md → phase 8).
 
 ## Job and result
 

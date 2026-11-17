@@ -157,7 +157,7 @@ function deferredList(rs: RowResult[], h: string): string[] {
   ];
 }
 
-// The two lists report-<branch>.md and the CC done notes paste. They stand on a FAIL too, but never without the
+// The two lists report-<branch>.md and the [pr-open] message paste. They stand on a FAIL too, but never without the
 // run's verdict beside them.
 function pasteLists(rs: RowResult[], h: string, status: RunResult['status']): string[] {
   const done = rs.filter((x) => x.status === 'pass' || x.status === 'off-dev');
@@ -224,7 +224,7 @@ function renderCoverage(
       '',
       '### Other scenarios (regression)',
       '',
-      '_Their lists belong to their own features — nothing here is this feature’s paste. A row not proven here is a regression to triage (CLAUDE.md → phase 9) unless its reason says otherwise._',
+      '_Their lists belong to their own features — nothing here is this feature’s paste. A row not proven here is a regression to triage (FEATURE-WORKFLOW.md → phase 9) unless its reason says otherwise._',
       '',
       ...[...new Set(others.map((x) => x.scenario))].map(
         (id) =>

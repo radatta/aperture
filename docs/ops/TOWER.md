@@ -182,7 +182,7 @@ and what the maintainer must do.
 | BUILDING · WAITING · NEXT FOR DEV · NEEDS YOU · READY · ON dev? | anything else: the lane file's phase and step; with no lane file, the queue's own `state` and its `waitingOn`                                                                                                                                                          |
 
 **The automatic HOLD** (`holdReason`, first match wins). A main merge redeploys dev over a dispatched branch
-(CLAUDE.md → _Git workflow_), so:
+(CI-BOT.md → _Dev deploys_), so:
 
 1. the `dev` lock is unknown: no cache, a failed or stale refresh (over 5 min), an unreadable expiry;
 2. another branch holds a live `dev` lock;
@@ -203,7 +203,7 @@ only for a fresh, free lock; an unknown one says why, in amber. A dev card with 
 ## Lane files
 
 Each feature session writes `/workspace/localNotes/board/lanes/<branch>.json` at its hub checkpoints and at each
-phase change (CLAUDE.md → _The hub_), from its worktree:
+phase change (FEATURE-WORKFLOW.md → _Lane status and checkpoints_), from its worktree:
 
 ```
 pnpm board lane <phase> [--step <text>] [--pr <n>] [--slot dev|devb] [--session <name>]

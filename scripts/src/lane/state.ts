@@ -161,7 +161,7 @@ export type Lifecycle = {
   baseSha: string | null;
   kickoff: string | null;
   overCap: string | null;
-  archive: string | null; // where `lane end` archived localNotes, so a rerun writes there
+  archive: string | null; // where `lanes end` archived localNotes, so a rerun writes there
   startedAt: string;
 };
 

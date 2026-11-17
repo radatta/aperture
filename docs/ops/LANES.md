@@ -1,14 +1,14 @@
 # Lanes — one branch, one worktree, one session
 
 A **lane** is one feature: one branch, one worktree at `.claude/worktrees/<branch>`, and one Claude session in a tmux
-window, all named after the branch. It is born at kickoff with `pnpm lane start` and gone at cleanup with
-`pnpm lane end`. Lanes report to the one hub, named in `scripts/board/hub.json` (`docs/ops/HUB.md`). Both commands run from the main checkout (`/workspace`), so main's code always runs them. Code:
+window, all named after the branch. It is born at kickoff with `pnpm lanes start` and gone at cleanup with
+`pnpm lanes end`. Lanes report to the one hub, named in `scripts/board/hub.json` (`docs/ops/HUB.md`). Both commands run from the main checkout (`/workspace`), so main's code always runs them. Code:
 `scripts/src/lane/`.
 
 ```
-pnpm lane start <branch> [--kickoff <file>] [--skip-permissions] [--over-cap "<reason>"]
-pnpm lane end <branch> [--force-abandon "<reason>"]
-pnpm lane status
+pnpm lanes start <branch> [--kickoff <file>] [--over-cap "<reason>"]
+pnpm lanes end <branch> [--force-abandon "<reason>"]
+pnpm lanes status
 ```
 
 Exit codes:
@@ -20,7 +20,7 @@ Exit codes:
 - 75: refused for now (cap full, deploy still running): wait or act, then rerun
 
 **Names.** `^[a-z0-9][a-z0-9-]{0,62}$` (the mailroom's rule). Not `main`, `master`, `dev`, `devb`, `test` (the heavy
-guard would read `pnpm lane start test` as a suite), or the hub's `hub.json` name. Such a name is safe in a path, a
+guard would read `pnpm lanes start test` as a suite), or the hub's `hub.json` name. Such a name is safe in a path, a
 tmux target and an unquoted zsh word. The window name is the session's board name and its `SendMessage` address
 (`board.sh` `me_ident`), so it must be unique.
 
@@ -53,8 +53,8 @@ Then it runs these steps, each registering an undo:
 8. Types `claude -n <branch> '<constant prompt>'` into that window's shell. The prompt only says "Read
    localNotes/kickoff.md and follow it". **No kickoff text ever reaches an argv**: COI reads every process's argv,
    and a kickoff quoting the safety rules would kill the container. The window starts a shell, not Claude, so
-   `tools/coi/tmux-restore.sh save` finds Claude as the shell's child. `--skip-permissions` adds
-   `--dangerously-skip-permissions`; it is off unless asked for.
+   `tools/coi/tmux-restore.sh save` finds Claude as the shell's child. No permission flag: sessions here start in
+   bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15).
 9. Writes the board lane: phase `plan`, step `kickoff sent`, after clearing a past same-name file (`writeLane` would
    carry its PR number on).
 10. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a
@@ -65,6 +65,21 @@ A failure in steps 1–8 runs the undos in reverse (kill the window by id, `git 
 left behind. The script never force-deletes. Steps 9–10 never roll back a live session. Because the install is in
 it, a caller gives it a **600 s timeout** or runs it in the background.
 
+**By hand**, only when `lanes start` can't run:
+
+1. `git fetch`, then `git switch --detach origin/main` in `/workspace`.
+2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree`
+   would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.
+3. `CI=true pnpm install` inside the worktree, so it has its own real `node_modules` — never a symlink to the main
+   checkout's (running pnpm through one rewires the main checkout).
+
+**Relative worktree paths.** Worktrees are created with relative paths (repo config `worktree.useRelativePaths` +
+`extensions.relativeWorktrees`; needs git ≥ 2.48 on both the container and the Mac — an older git refuses the repo
+outright), so one checkout works from both sides: worktrees live under the workspace mount, where the Mac reaches
+them too, and a command handed to the maintainer runs from the worktree's Mac path. By hand, check the new worktree's `.git`
+reads `gitdir: ../../../.git/worktrees/<name>` (step 4 above is the script's own check). If the container is ever rebuilt with an older git, upgrade
+it (git-core PPA) before touching worktrees.
+
 **The cap.** `scripts/board/limits.json` → `lanes.maxActive` (5: 2 dev slots, 2 full suites). A lane counts as
 **active** when all of these hold:
 
@@ -74,7 +89,7 @@ it, a caller gives it a **600 s timeout** or runs it in the background.
   whose pid is alive and has the same start tick.
 
 So a stale worktree with no session doesn't count. `--over-cap "<reason>"` goes past the cap and keeps the reason in
-the lifecycle record (`pnpm lane status` shows it). The cap is counted before the claim, so two starts racing at
+the lifecycle record (`pnpm lanes status` shows it). The cap is counted before the claim, so two starts racing at
 one below it can both pass: accepted, as one hub starts lanes.
 
 ## End
@@ -139,12 +154,12 @@ the same reason, an abandon reason must not quote the delete command.
 
 ## State
 
-| What                       | Where                                                                                                                                                                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Phase (the tower reads)    | `<board>/lanes/<branch>.json` (`docs/ops/TOWER.md` → _Lane files_)                                                                                                                                                                               |
-| Window identity, the start | `<board>/lifecycle/<branch>.json`: window and pane ids, the tmux server's pid and start time, base sha, kickoff path, over-cap reason, the archive `lane end` chose. Its own directory, because `writeLane` rebuilds a lane file from known keys |
-| The cap                    | `scripts/board/limits.json` → `lanes.maxActive`                                                                                                                                                                                                  |
-| The end record             | `/workspace/localNotes/archive/<branch>/` → `mac-cleanup.txt`, `lane-end.txt`                                                                                                                                                                    |
+| What                       | Where                                                                                                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase (the tower reads)    | `<board>/lanes/<branch>.json` (`docs/ops/TOWER.md` → _Lane files_)                                                                                                                                                                                |
+| Window identity, the start | `<board>/lifecycle/<branch>.json`: window and pane ids, the tmux server's pid and start time, base sha, kickoff path, over-cap reason, the archive `lanes end` chose. Its own directory, because `writeLane` rebuilds a lane file from known keys |
+| The cap                    | `scripts/board/limits.json` → `lanes.maxActive`                                                                                                                                                                                                   |
+| The end record             | `/workspace/localNotes/archive/<branch>/` → `mac-cleanup.txt`, `lane-end.txt`                                                                                                                                                                     |
 
-**Legacy lanes.** A lane started before these commands has no lifecycle record. `lane end` still archives
+**Legacy lanes.** A lane started before these commands has no lifecycle record. `lanes end` still archives
 (recording a bare record for the archive), removes and prints, but leaves the window for its owner to close.

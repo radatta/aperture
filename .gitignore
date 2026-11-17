@@ -24,3 +24,5 @@ nohup.out
 .codex/
 
 .metals
+# Python bytecode (the hook fixture runner)
+__pycache__/

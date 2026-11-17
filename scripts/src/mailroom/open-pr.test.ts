@@ -37,6 +37,7 @@ function setup(
     mac?: (job: { id: string; params: { bodySha256: string } }) => Partial<Result> | 'late' | null;
     inbox?: boolean;
     diff?: string; // the branch's files vs origin/main (iOS paths decide a devb run's banner)
+    log?: string; // `git log` over origin/main..HEAD: each commit's author and committer
   } = {},
 ) {
   const fs = memFs(opts.inbox === false ? [] : [`${HJ}/inbox`]);
@@ -46,6 +47,7 @@ function setup(
     ['git rev-parse HEAD', SHA],
     ['git ls-remote', opts.pushed === false ? '' : `${SHA}\trefs/heads/mac-mailroom`],
     ['git diff', opts.diff ?? ''],
+    ['git log', opts.log ?? ''],
     [
       'gh pr list',
       () => {
@@ -354,6 +356,26 @@ describe('openPr', () => {
       expect(out).toContain(where);
       expect(out).not.toContain('gh pr create');
     }
+  });
+
+  it('refuses a wrong author or committer anywhere on the branch before anything is queued or handed over', async () => {
+    const login = IDS.maintainer.github;
+    const ok = `${login}@users.noreply.github.com`;
+    const line = (c: string, ...f: string[]) => [c.repeat(40), ...f].join('\0');
+    const { d, fs, logs, calls } = setup({
+      mac: opened,
+      log: [
+        line('b', login, ok, login, `9+${ok}`),
+        line('c', 'Someone', 'someone@example.com', login, ok),
+      ].join('\n'),
+    });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.failed);
+    expect([...fs.files.keys()].some((k) => k.includes('/inbox/'))).toBe(false);
+    const out = logs.join('\n');
+    expect(out).toContain('COMMIT_IDENTITY');
+    expect(out).toContain('cccccccccccc author name\ncccccccccccc author email');
+    expect(out).not.toMatch(/someone|gh pr create|bbbbbbbbbbbb/i);
+    expect(calls.find((c) => c.args[0] === 'log')?.args.slice(2)).toEqual(['origin/main..HEAD']);
   });
 
   it('a large clean body passes the identifier check', async () => {

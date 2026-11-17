@@ -2,6 +2,7 @@
 // Mac with the user's PR-only token, so it is theirs; the bot never opens one (docs/ops/CI-BOT.md). Never silent:
 // an unreachable Mac prints the hand-off command. docs/ops/MAILROOM.md.
 import { join } from 'node:path';
+import { IDENTITY_FIX, rangeIdentityHits } from '../commit-identity.ts';
 import { REPO_SLUG, describeHits, findIdentifiers } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
 import type { Clock } from '../bot/dispatch.ts';
@@ -206,6 +207,14 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   const start = d.clock.now();
   const branch = featureBranch(d.run);
   const sha = requirePushed(d.run, branch);
+  // Every commit the PR shows, not only the last push's (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity).
+  const who = rangeIdentityHits(d.run, ['origin/main..HEAD']);
+  if (who.length) {
+    d.log(
+      `refused before submit: COMMIT_IDENTITY — these commits are not authored and committed as the maintainer's GitHub login with its noreply address. ${IDENTITY_FIX()}, then open-pr again:\n${who.join('\n')}`,
+    );
+    return EXIT.failed;
+  }
   const body = prBody(d, branch, sha, title);
   if (body === null) return EXIT.failed;
   const job = makeOpenPrJob({ branch, sha, title, body }, d.clock.now());
