@@ -22,7 +22,7 @@ export const CONFIRM_MS = 20_000;
 // The only prompt text that reaches an argv: COI reads every argv, and a kickoff quoting the safety rules would kill
 // the container. Claude reads the kickoff itself.
 export const KICKOFF_PROMPT =
-  'Read localNotes/kickoff.md and follow it. It is the kickoff for this lane, written by the hub.';
+  'Read docs/ops/FEATURE-WORKFLOW.md first, then localNotes/kickoff.md, and follow both. The kickoff is for this lane, written by the hub.';
 
 export type StartArgs = {
   branch: string | undefined;

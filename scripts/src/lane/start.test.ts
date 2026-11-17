@@ -293,6 +293,8 @@ describe('lane start: the nominal run', () => {
     expect(claudeLine('x', false)).toBe('claude -n x');
     expect(claudeLine('x', true)).toBe(`claude -n x '${KICKOFF_PROMPT}'`);
     expect(KICKOFF_PROMPT).not.toMatch(/'/);
+    // The workflow doc isn't loaded on its own (CLAUDE.md → _Feature workflow_): every lane opens it first.
+    expect(KICKOFF_PROMPT).toMatch(/^Read docs\/ops\/FEATURE-WORKFLOW\.md first/);
   });
 });
 

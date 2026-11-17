@@ -11,6 +11,8 @@ export const meta = {
 };
 // Run from the research-panel skill:
 // Workflow({scriptPath: '<skill dir>/panel.js', args: {question, context, researchers?, models?}})
+// The Workflow runtime provides these (and allows the top-level return); meta must stay the first statement.
+/* global args, log, phase, agent, parallel */
 
 const A = typeof args === 'string' ? { question: args } : args || {};
 const QUESTION = String(A.question || '').trim();

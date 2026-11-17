@@ -51,7 +51,8 @@ Then it runs these steps, each registering an undo:
 6. Copies the kickoff to `<worktree>/localNotes/kickoff.md`.
 7. Opens `tmux new-window -d` in the worktree, named `<branch>`, and records the window and pane ids.
 8. Types `claude -n <branch> '<constant prompt>'` into that window's shell. The prompt only says "Read
-   localNotes/kickoff.md and follow it". **No kickoff text ever reaches an argv**: COI reads every process's argv,
+   docs/ops/FEATURE-WORKFLOW.md first, then localNotes/kickoff.md, and follow both" — the workflow doc first, since
+   nothing loads it on its own. **No kickoff text ever reaches an argv**: COI reads every process's argv,
    and a kickoff quoting the safety rules would kill the container. The window starts a shell, not Claude, so
    `tools/coi/tmux-restore.sh save` finds Claude as the shell's child. No permission flag: sessions here start in
    bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15).

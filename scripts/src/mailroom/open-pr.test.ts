@@ -32,7 +32,7 @@ function setup(
   opts: {
     pushed?: boolean;
     body?: string | null;
-    existing?: string;
+    existing?: string; // `gh pr list --json url,isCrossRepository` output
     offline?: boolean;
     mac?: (job: { id: string; params: { bodySha256: string } }) => Partial<Result> | 'late' | null;
     inbox?: boolean;
@@ -52,7 +52,7 @@ function setup(
       'gh pr list',
       () => {
         if (opts.offline) throw new Error('gh pr list failed: offline');
-        return opts.existing ?? '';
+        return opts.existing ?? '[]';
       },
     ],
   ]);
@@ -279,12 +279,25 @@ describe('openPr', () => {
   });
 
   it('short-circuits an already-open PR without a job', async () => {
-    const { d, fs, logs } = setup({ existing: PR.url, mac: opened });
+    const existing = JSON.stringify([{ url: PR.url, isCrossRepository: false }]);
+    const { d, fs, logs } = setup({ existing, mac: opened });
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
     expect(logs).toEqual([
       `exists ${PR.url} — to update its body (and title) after a push: pnpm mailroom edit-pr [--title "Mac mailroom opens PRs"]`,
     ]);
     expect(fs.files.size).toBe(1);
+  });
+
+  it("never takes a fork's PR from a same-named branch for ours: it opens the real one", async () => {
+    const fork = 'https://github.com/someone-else/aperture/pull/9';
+    const existing = JSON.stringify([{ url: fork, isCrossRepository: true }]);
+    const { d, calls, logs } = setup({ existing, mac: opened });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(logs.join('\n')).not.toContain(fork);
+    expect(logs.join('\n')).toMatch(/opened /);
+    expect(calls.find((c) => c.cmd === 'gh' && c.args[1] === 'list')?.args).toContain(
+      'url,isCrossRepository',
+    );
   });
 
   it('still submits when the container cannot reach GitHub', async () => {

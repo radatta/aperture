@@ -156,7 +156,21 @@ Merges to `main` happen via PR, not a local push.
 
 ### Feature workflow
 
-Every feature runs the same eleven phases — worktree, plan, questions, build, gate, review rounds, ready for dev, dev test, dev feedback, PR, cleanup — in one of **two modes** the user names: **collaborative** (the default: Claude stops at decision points) or **autonomous** (only when the user says so: Claude decides everything itself and logs every decision in the worktree's `localNotes/decisions.md`). **Read `docs/ops/FEATURE-WORKFLOW.md` at kickoff and before each phase**: the modes, the round-sizing rule, every phase's steps, the checkpoints and the report each feature ends with.
+Every feature runs eleven phases in one of **two modes** the user names: **collaborative** (the default: Claude stops at decision points) or **autonomous** (only when the user says so: Claude decides everything itself and logs every decision in the worktree's `localNotes/decisions.md`). **Read `docs/ops/FEATURE-WORKFLOW.md` at kickoff and again before each of phases 8–11** (`pnpm lanes start`'s first prompt opens it): the how-to of every step below, the round-sizing rule, the checkpoints. The must-dos — none is skippable:
+
+1. **Worktree** — `pnpm lanes start`, off `origin/main`.
+2. **Plan** — the `Plan` agent (always, and mandatory above 5 files), with the dev-test matrix. → hub `[kickoff]`.
+3. **Questions** — answered (autonomous: logged).
+4. **Build** — only on the execute plus n review rounds; each section's tests and a typecheck.
+5. **Gate** — `pnpm typecheck`, `pnpm lint`, `pnpm test`, each under `heavy.sh`, real exit codes.
+6. **Review** — n rounds of `code-reviewer` (plus each touched package's agent); fixes re-gated.
+7. **Ready for dev** — committed, gate green, PR body current.
+8. **Dev test** — on latest main; green `pnpm devcheck:local`; **the public-content scan before the first push**; `pnpm bot push`, `deploy-dev` under its lock; `pnpm devcheck` and its screenshots.
+9. **Dev feedback** — every defect fixed; the all-clear needs every matrix row proven, off dev or _Needs you_.
+10. **PR** — the public-content scan of title, body and report; lock released; `pnpm mailroom open-pr`. → hub `[pr-open]`.
+11. **Cleanup** — once merged and main's deploy is green: `pnpm lanes end`. → hub `[merged]`.
+
+Every feature ends with `localNotes/report-<branch>.md`, even one that never reached a PR.
 
 **In a lane, the user is reached only through the hub.** One long-lived session, named in `scripts/board/hub.json` (`dispatch` today), holds the big picture; every lane reports to it at fixed checkpoints and writes its lane status file (`docs/ops/HUB.md`, `docs/ops/TOWER.md`). A lane never sends a phone ping and never asks the user in its own pane, in either mode: every need goes to the hub as `[ask-maintainer]` with the options and a pick, so "ask", "tell" or "hand the user" anywhere here means that message; anything the user types in the lane's pane goes to the hub as `[info]` at once. Only the hub writes `/workspace/localNotes/roadmap.md`.
 

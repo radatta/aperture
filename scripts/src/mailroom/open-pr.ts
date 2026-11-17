@@ -222,19 +222,21 @@ export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<
   if (bad) return refuse(d, job, bad);
 
   // Best-effort, with the container's read-only token: an open PR needs no job. Offline → the Mac checks anyway.
+  // `--head` matches a fork's PR from a same-named branch too, which must never stand in for ours (F130).
   try {
-    const url = d.run('gh', [
-      'pr',
-      'list',
-      '--head',
-      branch,
-      '--state',
-      'open',
-      '--json',
-      'url',
-      '--jq',
-      '.[0].url // ""',
-    ]);
+    const rows = JSON.parse(
+      d.run('gh', [
+        'pr',
+        'list',
+        '--head',
+        branch,
+        '--state',
+        'open',
+        '--json',
+        'url,isCrossRepository',
+      ]) || '[]',
+    ) as { url: string; isCrossRepository: boolean }[];
+    const url = rows.find((r) => r.isCrossRepository === false)?.url;
     if (url) {
       d.log(`exists ${url} — ${editHint(title)}`);
       return EXIT.ok;

@@ -1,8 +1,9 @@
 # Feature workflow — the phases every feature runs
 
 Every feature runs the same eleven phases, in a lane (`docs/ops/LANES.md`) that reports to the hub
-(`docs/ops/HUB.md`). Root `CLAUDE.md` → _Feature workflow_ keeps the rules every session needs; this is the detail.
-**Read it at kickoff, and again before each phase** — it is not loaded on its own.
+(`docs/ops/HUB.md`). Root `CLAUDE.md` → _Feature workflow_ keeps the rules every session needs and each phase's
+must-dos; this is the how-to. **Read it at kickoff, and again before each of phases 8–11** — nothing loads it on its
+own, so `pnpm lanes start`'s first prompt opens it before the kickoff.
 
 ## Talking to the maintainer: through the hub only
 
