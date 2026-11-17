@@ -74,7 +74,8 @@ export interface PipelineDeps {
 }
 
 // A dropped connection, not an answer: undici's `terminated` (the socket closed mid-response) or a socket-level
-// cause (`fetch failed`'s). Never an HTTP status (the server answered), a DNS miss or the harness's own refusal.
+// cause (`fetch failed`'s; EAI_AGAIN is DNS's own "try again"). Never an HTTP status (the server answered), a name
+// that doesn't resolve (ENOTFOUND) or the harness's own refusal.
 const TRANSIENT_CODES = new Set([
   'ECONNRESET',
   'EPIPE',
@@ -689,7 +690,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // throw (a revoke racing another device, any delete's error) is caught here, so the loop goes on to the rest:
   // the id stays pending (the next run's sweep retries it), the error is reported, and the run fails LEFTOVERS.
   async function clean(client: ApiClient, id: string): Promise<'gone' | 'removed' | 'kept'> {
-    let sent = false; // a removal went out: found gone on a retry, it landed and only its answer was lost
+    // A removal was under way: found gone on a retry, it landed and only its answer was lost — or, rarely, a read
+    // before its write dropped and something else took the row; either way it's recorded removed, never re-sent.
+    let sent = false;
     for (let attempt = 1; ; attempt++) {
       try {
         if (!(await exists(client, id))) return sent ? 'removed' : 'gone';
@@ -729,6 +732,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       );
       const holders = [
         ...(await client.reads.listTasks()).map((x) => ({ ...x, kind: 'task' })),
+        ...(await client.reads.listSeries()).map((x) => ({ ...x, kind: 'series' })),
         ...(await client.reads.listHabits()).map((x) => ({ ...x, kind: 'habit' })),
         ...(await client.reads.listRolls()).map((x) => ({ ...x, kind: 'roll' })),
       ].filter((x) => x.categoryId === id);

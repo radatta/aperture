@@ -36,6 +36,7 @@ export interface DevSeries {
   id: string;
   title: string;
   rule: { kind: string; daysOfWeek?: number[]; interval?: number };
+  categoryId?: string | null; // what a refused deleteCategory names (pipeline.ts referencesOf)
   active: boolean;
   anchorDate: string;
   dueOffsetDays?: number | null;

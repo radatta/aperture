@@ -245,7 +245,7 @@ The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](
 | `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) |
 | `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`              |
 
-Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?}`, `op`
+Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?, of?}`, `op`
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` or `refused` after it is
 reported as a possible leak; `refused` is a param error, or a domain normalizer's refusal, the server raised before any write), `created`,
 `deleted`, `gone`, `swept`, `reported` (a killed earlier run's orphan `intent`, shown once; `of` names that

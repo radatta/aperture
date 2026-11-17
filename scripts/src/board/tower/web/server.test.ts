@@ -204,7 +204,9 @@ describe('--once on the fixtures', () => {
     expect(v.health.actions).toBeUndefined();
     expect(v.sources.some((s: V) => /actions minutes/i.test(s.name))).toBe(false);
     expect(v.problems).toEqual([]);
-  });
+    // A fresh node type-stripping the tower's graph: ~0.35 s alone, but its wall time is the container's contention
+    // (F212: past 5 s in a full suite at 8.7 cores), as for this file's other spawned towers.
+  }, 20_000);
 });
 
 describe('liveTests', () => {

@@ -1429,6 +1429,14 @@ describe('runPipeline', () => {
       w.tasks.get('old1')!.categoryId = 'c0';
       w.tasks.get('users-own')!.categoryId = 'c0';
       w.categories.set('c0', cat('c0'));
+      const series = {
+        id: 's9',
+        title: 's9',
+        rule: { kind: 'daily' },
+        active: true,
+        anchorDate: '2026-11-17',
+      };
+      w.api.reads.listSeries = async () => [{ ...series, categoryId: 'c0' }];
       const ledger = memLedger([
         { run: 'run0', op: 'created', id: 'c0', via: CATEGORY_VIA },
         { run: 'run0', op: 'created', id: 'old1' },
@@ -1438,7 +1446,7 @@ describe('runPipeline', () => {
       expect(w.categoriesDeleted).toEqual([]);
       expect(w.tasks.has('users-own')).toBe(true);
       expect(r.failedDeletes).toEqual([
-        'c0: deleteCategory → HTTP 400: {"error":"Category has references"} — still referenced by ledgered: none; not in the ledger (never touched): task users-own',
+        'c0: deleteCategory → HTTP 400: {"error":"Category has references"} — still referenced by ledgered: none; not in the ledger (never touched): task users-own, series s9',
       ]);
       expect(r.retried).toEqual([]);
       expect(r.codes).toContain('LEFTOVERS');

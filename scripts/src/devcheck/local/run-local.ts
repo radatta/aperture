@@ -78,10 +78,14 @@ async function main(): Promise<number> {
         (r) => r.stdout,
       );
     try {
-      return createHash('sha256')
-        .update(await out(['diff', 'HEAD', '--binary']))
-        .update(await out(['ls-files', '--others', '--exclude-standard']))
-        .digest('hex');
+      const h = createHash('sha256').update(await out(['diff', 'HEAD', '--binary']));
+      // Untracked files by name, size and mtime: an edit to one (a new test between rounds) moves the stamp too.
+      for (const f of (await out(['ls-files', '--others', '--exclude-standard'])).split('\n'))
+        if (f) {
+          const st = statSync(join(worktree, f), { throwIfNoEntry: false });
+          h.update(`${f}\0${st?.size}\0${st?.mtimeMs}\n`);
+        }
+      return h.digest('hex');
     } catch {
       return null;
     }
@@ -158,7 +162,7 @@ async function main(): Promise<number> {
       },
     });
     const viteLog = join(out, 'vite.log');
-    let viteMark = 0; // vite.log's length once signed in: the first load's optimizer reload is expected before it
+    let viteMark: number | null = null; // vite.log's bytes once signed in: the first load's optimizer reload comes before
     useLocalOrigin(origin);
     log(
       `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} — server :${server.port} (pid ${server.proc.pid}), app ${origin}, up in ${Date.now() - t0} ms → ${out}`,
@@ -223,7 +227,11 @@ async function main(): Promise<number> {
       log,
     });
     // What a step failing mid-run may have failed on instead of the code: a reload Vite did, or the tree moving.
-    const reloads = viteReloads(readFileSync(viteLog, 'utf8').slice(viteMark));
+    // Never signed in: no step ran on the page, and the first load's reload is expected.
+    const reloads =
+      viteMark === null
+        ? []
+        : viteReloads(readFileSync(viteLog).subarray(viteMark).toString('utf8'));
     const treeAtEnd = await treeStamp();
     const treeChanged = !!treeAtStart && !!treeAtEnd && treeAtEnd !== treeAtStart;
     const notes = [
