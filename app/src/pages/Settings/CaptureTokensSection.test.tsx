@@ -47,7 +47,7 @@ describe('Settings › Capture: tokens', () => {
     renderWithProviders(<CaptureTokensSection />, { api });
     await screen.findByText('iPhone');
     await user.type(screen.getByLabelText('New token for'), 'iphone');
-    expect(screen.getByText('Another token is already called "iphone"')).toBeTruthy();
+    expect(screen.getByText('Another token is already called “iPhone”')).toBeTruthy();
     expect(
       screen.getByRole<HTMLButtonElement>('button', { name: 'Make capture token' }).disabled,
     ).toBe(true);

@@ -483,12 +483,14 @@ export function TokenReveal({
         Your new token — shown this once. Paste it into {where} now; Aperture keeps only a
         fingerprint of it.
       </Text>
-      <input
+      {/* A wrapping box, not a one-line input: on a phone a 47-character token would be cut off. */}
+      <textarea
         readOnly
+        rows={2}
         value={token}
         aria-label={label}
         onFocus={(e) => e.currentTarget.select()}
-        className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-ink outline-none focus:border-teal"
+        className="w-full resize-none break-all rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-ink outline-none focus:border-teal"
       />
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={() => void copyToken()}>

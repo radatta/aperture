@@ -41,8 +41,8 @@ export function scopedTokenNameError(
   if (!n) return 'A token needs a name';
   if (n.length > SCOPED_TOKEN_NAME_MAX)
     return `A token name is at most ${SCOPED_TOKEN_NAME_MAX} characters`;
-  if (others.some((o) => o.name.toLowerCase() === n.toLowerCase()))
-    return `Another token is already called "${n}"`;
+  const clash = others.find((o) => o.name.toLowerCase() === n.toLowerCase());
+  if (clash) return `Another token is already called “${clash.name}”`;
   return null;
 }
 

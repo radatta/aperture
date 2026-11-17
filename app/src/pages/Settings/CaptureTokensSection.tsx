@@ -41,7 +41,8 @@ export function CaptureTokensSection() {
       </Text>
       <Text size="sm" tone="muted">
         Add a task by voice — “Hey Siri, Aperture” or the Action Button — or from Raycast. Each
-        device gets its own token; revoking one stops only that device.
+        device gets its own token; revoking one stops only that device. These aren’t the Places
+        Shortcut token above, which only reads errand lists.
       </Text>
       {failed && (
         <LoadError onRetry={() => void listQ.refetch()}>Couldn’t load capture tokens.</LoadError>
@@ -138,7 +139,7 @@ function tokenLine(t: ScopedTokenInfo): string {
     `ends …${t.hint}`,
     `created ${fmtDateTime(t.createdAt)}`,
     t.lastUsedAt !== null ? `last used ${fmtDateTime(t.lastUsedAt)}` : 'never used',
-    `${t.usedToday} today`,
+    `${t.usedToday}\u00a0today`, // never "0" on one line and "today" on the next
   ].join(' · ');
 }
 
@@ -147,29 +148,31 @@ function TokenRow({ token }: { token: ScopedTokenInfo }) {
   const [confirm, setConfirm] = useState(false);
   return (
     <Card className="flex flex-col gap-2 px-3.5 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-col">
-          <Text weight="medium" className="break-words">
+      {/* The name and Revoke share the first line; the details take the full width under them, so a
+          phone never pushes Revoke onto a line of its own. */}
+      <div className="flex flex-col">
+        <div className="flex items-center justify-between gap-2">
+          <Text weight="medium" className="min-w-0 break-words">
             {token.name}
           </Text>
-          <Text size="xs" tone="muted" tabular>
-            {tokenLine(token)}
-          </Text>
+          {!confirm && (
+            <Button
+              variant="quiet"
+              size="sm"
+              aria-label={`Revoke ${token.name}`}
+              onClick={() => setConfirm(true)}
+            >
+              Revoke…
+            </Button>
+          )}
         </div>
-        {!confirm && (
-          <Button
-            variant="quiet"
-            size="sm"
-            aria-label={`Revoke ${token.name}`}
-            onClick={() => setConfirm(true)}
-          >
-            Revoke…
-          </Button>
-        )}
+        <Text size="xs" tone="muted" tabular>
+          {tokenLine(token)}
+        </Text>
       </div>
       {confirm && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3">
-          <Text size="sm" tone="muted">
+          <Text size="sm" tone="muted" className="basis-full">
             {token.name} stops adding tasks at once.
           </Text>
           <Button
@@ -185,7 +188,7 @@ function TokenRow({ token }: { token: ScopedTokenInfo }) {
           </Button>
         </div>
       )}
-      <span role="alert">
+      <span role="alert" className="empty:hidden">
         {revoke.isError && (
           <Text size="xs" tone="danger">
             Couldn’t revoke — try again.
@@ -250,7 +253,7 @@ function CaptureRecipe() {
           <li>
             Add <b>Get Dictionary Value</b>: <b>say</b> from Contents of URL. Then <b>If</b>{' '}
             Dictionary Value <b>has any value</b>: <b>Speak Text</b> Dictionary Value.{' '}
-            <b>Otherwise</b>: <b>Speak Text</b> “{CAPTURE_SAY.noAnswer}”. End If.
+            <b>Otherwise</b>: <b>Speak Text</b> “{CAPTURE_SAY.noAnswer}” End If.
           </li>
           <li>
             In the shortcut’s ⓘ, turn on <b>Allow Running When Locked</b> if it’s offered. Then
