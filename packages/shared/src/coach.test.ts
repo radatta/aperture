@@ -915,6 +915,7 @@ describe('stats', () => {
     });
   });
   it('no attempts: zeros and empty lists, never a missing field', () => {
+    expect(() => coachStats([], TODAY, { from: day(1) })).toThrow(/not be after/); // to defaults to today
     expect(coachStats([], TODAY)).toMatchObject({
       attempts: 0,
       firstTry: { hit: 0, of: 0 },

@@ -418,6 +418,16 @@ describe('get_problem', () => {
       expect.objectContaining({ id: s.id, day: '2026-11-05', submits: 1, accepted: false }),
     ]);
   });
+  it('a problem whose only sitting is a test is record: null, with that sitting listed', async () => {
+    const s = await ended('some-synthetic-problem', TODAY, false);
+    await backend.patchSittingReview(s.id, { test: true });
+    const out = await call('get_problem', { slug: 'some-synthetic-problem' });
+    expect(out).toMatchObject({ problem: { onRoadmap: false, patternId: 'other' }, record: null });
+    expect(out.sittings).toEqual([
+      expect.objectContaining({ id: s.id, review: expect.objectContaining({ test: true }) }),
+    ]);
+    expect(out.note).toMatch(/tests or too short/);
+  });
   it('a roadmap problem never tried is record: null; an unknown one is an error', async () => {
     expect(await call('get_problem', { slug: 'valid-sudoku' })).toMatchObject({
       problem: { title: 'Valid Sudoku', difficulty: 'Medium' },
@@ -463,6 +473,7 @@ describe('coach_stats', () => {
   it('refuses a bad range', async () => {
     for (const args of [{ from: 'monday' }, { to: '11/09' }, { from: TODAY, to: '2026-11-01' }])
       await expect(call('coach_stats', args)).rejects.toBeInstanceOf(RpcParamError);
+    await expect(call('coach_stats', { from: '2026-11-20' })).rejects.toThrow(/not be after/);
   });
 });
 

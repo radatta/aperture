@@ -201,7 +201,8 @@ additively.
 ### The draft's cause
 
 The review draft's one Haiku call also proposes the cause (`ReviewDraft.cause`, a tag or null): the prompt gives
-each tag's meaning and three signals beside the cases — accepted at all, a Run before the first Submit, the
-extension's trace state ([index.md](index.md) → _Review and the Claude draft_). No extra call; about 20 more output
+each tag's meaning and four signals beside the cases — accepted at all, the sitting ended (quit-early needs it), a
+Run before the first Submit, the extension's trace state ([index.md](index.md) → _Review and the Claude draft_).
+The cause stays out of the mistake lines, and a signal is never a line of its own. No extra call; about 20 more output
 tokens, so the ≈ $0.0003 a draft stands. A stray value is null and keeps the lines. The stub stands in with a
 fixed rule: a failed first Submit with no Run before it proposes `no-trace`, else nothing.

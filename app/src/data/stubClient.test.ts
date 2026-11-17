@@ -215,3 +215,49 @@ describe('stub — reminders', () => {
     expect(status.devices).toEqual([expect.objectContaining({ id: d.id, lastOkAt: t })]);
   });
 });
+
+describe('stub — the review draft’s cause', () => {
+  // The stub's stand-in for the model's pick: a failed first Submit with no Run before it reads as no-trace.
+  async function draftAfter(events: { type: 'run' | 'submit'; status: number; msg: string }[]) {
+    const api = createStubClient({ seed: false, storageKey: `draft-cause-${Math.random()}` });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const { sitting } = await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZZ',
+      problemSlug: 'two-sum',
+      problemTitle: 'Two Sum',
+      difficulty: 'Easy',
+      lang: 'python3',
+      startedAt: Date.now(),
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    });
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: events.map((e, i) => ({
+        id: `01HZZZZZZZZZZZZZZZZZZZZZ${String(i).padStart(2, '0')}`,
+        type: e.type,
+        at: sitting.clientStartedAt + (i + 1) * 60_000,
+        payload: { result: { status_code: e.status, status_msg: e.msg, correct_answer: false } },
+      })),
+    });
+    return api.draftSittingReview(sitting.id);
+  }
+  it('a failed first Submit with no Run before it proposes no-trace', async () => {
+    expect(await draftAfter([{ type: 'submit', status: 11, msg: 'Wrong Answer' }])).toMatchObject({
+      ok: true,
+      cause: 'no-trace',
+    });
+  });
+  it('a Run before it, or an accepted first Submit, proposes nothing', async () => {
+    expect(
+      await draftAfter([
+        { type: 'run', status: 10, msg: 'Accepted' },
+        { type: 'submit', status: 11, msg: 'Wrong Answer' },
+      ]),
+    ).toMatchObject({ ok: true, cause: null });
+    expect(await draftAfter([{ type: 'submit', status: 10, msg: 'Accepted' }])).toMatchObject({
+      ok: true,
+      cause: null,
+    });
+  });
+});

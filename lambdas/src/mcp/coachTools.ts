@@ -14,6 +14,7 @@ import {
   PATTERNS,
   catalogProblem,
   isPatternId,
+  patternOfTags,
   sittingMinutes,
   sittingProblemUrl,
 } from '@aperture/shared';
@@ -537,7 +538,7 @@ export const COACH_TOOLS: Tool[] = [
     name: 'get_problem',
     description: [
       'One problem in full, by slug: its catalog place (pattern, difficulty, link), every day tried oldest first (outcome, help, cause, and the sitting and logged-attempt ids — `delete_attempt` takes a logged one), its sittings (minutes, submits, runs, accepted, review), and the re-solve state with its due day.',
-      'A roadmap problem never tried comes back with `record: null`. Read-only.',
+      'A problem with no counted attempt comes back with `record: null` (its uncounted sittings still listed). Read-only.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -551,27 +552,39 @@ export const COACH_TOOLS: Tool[] = [
       const { slug } = args;
       if (!isProblemSlug(slug))
         throw new RpcParamError('"slug" must be a LeetCode problem slug (lowercase, dashes)');
-      const records = (await ctx.dispatch('listProblemRecords', [])) as ProblemRecord[];
+      const [records, all] = await Promise.all([
+        ctx.dispatch('listProblemRecords', []) as Promise<ProblemRecord[]>,
+        ctx.dispatch('listSittings', []) as Promise<Sitting[]>,
+      ]);
       const r = records.find((x) => x.slug === slug);
       const cat = catalogProblem(slug);
-      if (!r && !cat)
+      const mine = all.filter((s) => s.problemSlug === slug);
+      if (!r && !cat && !mine.length)
         throw new Error(
           `No record of "${slug}" and it isn\u2019t on the roadmap — list_problems lists the ones tried`,
         );
+      const t = now(ctx);
+      const sittings = mine.map((s) => problemSitting(s, t));
+      const pattern = r?.pattern ?? cat?.pattern ?? patternOfTags(mine[0]!.topicTags);
       const problem = {
         slug,
-        title: r?.title ?? cat!.title,
-        pattern: PATTERN_NAMES[r?.pattern ?? cat!.pattern],
-        patternId: r?.pattern ?? cat!.pattern,
-        difficulty: r?.difficulty ?? cat!.difficulty,
+        title: r?.title ?? cat?.title ?? mine[0]!.problemTitle,
+        pattern: PATTERN_NAMES[pattern],
+        patternId: pattern,
+        difficulty: r?.difficulty ?? cat?.difficulty ?? mine[0]!.difficulty,
         onRoadmap: !!cat,
         url: sittingProblemUrl(slug),
       };
-      if (!r) return { problem, record: null, note: 'Not tried yet.' };
-      const t = now(ctx);
-      const sittings = ((await ctx.dispatch('listSittings', [])) as Sitting[])
-        .filter((s) => s.problemSlug === slug)
-        .map((s) => problemSitting(s, t));
+      // Sittings that never counted (a test, or too short with no accept) still show, so they can be talked about.
+      if (!r)
+        return {
+          problem,
+          record: null,
+          sittings,
+          note: sittings.length
+            ? 'No counted attempt yet: these sittings were tests or too short.'
+            : 'Not tried yet.',
+        };
       return {
         problem,
         record: {

@@ -907,6 +907,7 @@ export function coachStats(
 ): CoachStats {
   const from = range.from ?? null;
   const to = range.to ?? today;
+  if (from !== null && from > to) throw new Error('from must not be after to');
   const seen = new Set<string>();
   const ranked = rankPatterns(attempts, addDays(today, 1));
   const ranks = new Map(ranked.map((r, i) => [r.pattern, i + 1]));

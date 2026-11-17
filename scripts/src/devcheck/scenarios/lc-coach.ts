@@ -94,6 +94,12 @@ export const lcCoach: Scenario = {
   id: 'lc-coach',
   title: 'The LeetCode coach: today’s plan, slots by sitting, and the MCP tools',
   tiers: ['full'],
+  // The draft's cause (a real Haiku call) runs when a branch touches the draft or this scenario.
+  slowPaths: [
+    'lambdas/src/anthropic/sittingReviewPrompt.ts',
+    'packages/shared/src/sittings.ts',
+    'scripts/src/devcheck/scenarios/lc-coach.ts',
+  ],
   rows: [
     {
       id: 'plan',
@@ -1195,7 +1201,14 @@ export const lcCoach: Scenario = {
           situation: `devcheck ${ctx.nonce}`,
           competencyTags: ['ownership'],
         });
-        const listed = (await ctx.mcp.reads.listStories()).stories.find((x) => x.id === story.id);
+        // The list read is eventually consistent: give a just-written story a moment.
+        let listed:
+          Awaited<ReturnType<typeof ctx.mcp.reads.listStories>>['stories'][number] | undefined;
+        for (let i = 0; i < 20; i++) {
+          listed = (await ctx.mcp.reads.listStories()).stories.find((x) => x.id === story.id);
+          if (listed?.situation === `devcheck ${ctx.nonce}`) break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
         if (
           listed?.title !== titleOf(ctx, 'story') ||
           listed.situation !== `devcheck ${ctx.nonce}` ||
@@ -1267,7 +1280,8 @@ export const lcCoach: Scenario = {
         } catch (err) {
           if (!/No record of/.test(String(err))) throw err;
         }
-        if ((await ctx.api.reads.listCoachAttempts()).length !== before)
+        // Only a growth is a write: a stale read may still count the attempt deleted just above.
+        if ((await ctx.api.reads.listCoachAttempts()).length > before)
           fail('a refused call wrote an attempt');
         if ((await ctx.api.reads.getCoachToday()).focus.source !== 'engine')
           fail('a refused focus call set a focus');
@@ -1277,6 +1291,7 @@ export const lcCoach: Scenario = {
       id: 'b-draft-cause',
       title: 'A sitting with a failed submit; the review draft answers its lines and a cause',
       entry: 'api',
+      cost: 'slow',
       proves: ['draft-cause'],
       async run(ctx) {
         const roll = await ctx.api.writes.upsertRoll({
@@ -1308,7 +1323,12 @@ export const lcCoach: Scenario = {
             },
           ]);
           await finish(ctx, sitting.id, sitting.repTaskId, false);
-          const out = await ctx.api.reads.draftSittingReview(sitting.id);
+          let out = await ctx.api.reads.draftSittingReview(sitting.id);
+          // An outage isn't this feature's bug — one more try; a second failure is the row's.
+          if (!out.ok && ['timeout', 'network', 'api'].includes(out.reason)) {
+            ctx.log(`the real draft failed once (${out.reason}); one more try`);
+            out = await ctx.api.reads.draftSittingReview(sitting.id);
+          }
           const draft = out.ok ? out : fail(`draft failed: ${out.reason}`);
           if (!('cause' in draft)) fail('the draft has no cause field');
           const tags = ['no-trace', 'api-slip', 'boundary', 'off-by-one', 'quit-early'];
