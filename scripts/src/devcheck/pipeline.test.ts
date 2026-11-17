@@ -298,6 +298,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listCoachAttempts: async () => [],
       getCoachFocusRow: async () => null,
       getCoachDay: async () => null,
+      listCoachVoids: async () => [],
       draftSittingReview: async () => {
         throw new Error('unused');
       },
@@ -791,6 +792,24 @@ describe('runPipeline', () => {
     };
     await runPipeline(deps(w, [scenario(async () => undefined)(w)], memLedger()));
     expect(patches).toEqual([{ pomodoroWorkMin: 25, coachAiPick: false }]);
+  });
+
+  it('a plan mode a killed run left goes back to auto in the baseline write', async () => {
+    const w = world();
+    await w.api.writes.updateSettings({ coachPlanMode: 'catch-up', coachAiPick: false });
+    const patches: unknown[] = [];
+    const update = w.api.writes.updateSettings;
+    w.api.writes.updateSettings = async (patch) => {
+      patches.push(patch);
+      return update(patch);
+    };
+    let seen: string | undefined;
+    const s = scenario(async () => {
+      seen = (await w.api.reads.getSettings()).coachPlanMode;
+    })(w);
+    await runPipeline(deps(w, [s], memLedger()));
+    expect(seen).toBe('auto');
+    expect(patches).toEqual([{ coachPlanMode: 'auto' }]);
   });
 
   it('records every 429 by method (or path), and nothing else', async () => {

@@ -11,6 +11,7 @@ import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
 import { captureTitles } from './capture-titles';
 import { categorySuggest } from './category-suggest';
+import { coachFixes } from './coach-fixes';
 import { cognitoRefresh } from './cognito-refresh';
 import { deadRows } from './dead-rows';
 import { errandRowsNight } from './errand-rows-night';
@@ -82,6 +83,7 @@ export const SCENARIOS: Scenario[] = [
   lcCoachAi,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   lcCoach, // after lcSittings: it links its own roll, Starts on today's slot, and unlinks for the next
+  coachFixes, // after lcCoach: its plan-mode counts start from what lcCoach (and lcCoachAi) left due; links its own roll
   devConcurrencyCaps,
   bffHardening,
   bffShapes,

@@ -60,6 +60,7 @@ export interface DevLiveSitting {
   } | null;
   slot?: DevLiveSlot | null;
   trace?: string | null;
+  traceBy?: 'comment' | 'card' | null; // coach-fixes: a trace comment in the code reads `comment`
 }
 
 // What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
@@ -76,6 +77,7 @@ export interface DevLoggedAttempt {
   day: string;
   outcome: string;
   historical?: boolean;
+  help?: string;
   nextDue: { dueDay: string; track: string } | null;
 }
 // What the coach's history and stats reads answer (coachTools.ts) — the fields the scenario reads.
@@ -86,22 +88,49 @@ export interface DevRate {
 }
 export interface DevProblemRow {
   slug: string;
+  title?: string;
+  everAccepted?: boolean;
   patternId: string;
   attempts: number;
   peeked: boolean;
   reSolve: { track: string; dueDay: string | null; graduated: boolean } | null;
 }
 export interface DevProblemRead {
-  problem: { slug: string; title: string; onRoadmap: boolean; url: string };
-  record: { attempts: number } | null;
+  problem: {
+    slug: string;
+    title: string;
+    difficulty?: string | null;
+    onRoadmap: boolean;
+    url: string;
+  };
+  record: {
+    attempts: number;
+    everAccepted?: boolean;
+    reSolve?: { track: string; dueDay: string | null; graduated: boolean } | null;
+  } | null;
   tries?: {
     day: string;
     outcome: string;
     historical?: boolean;
     sittingIds: string[];
     attemptIds: string[];
+    claudeNotes?: string[]; // coach-fixes: Claude's notes on that day's sittings
   }[];
-  sittings?: { id: string }[];
+  sittings?: { id: string; claudeNotes?: string | null }[];
+}
+// What set_void and set_claude_notes answer (coach-fixes) — the fields the scenario reads.
+export interface DevVoided {
+  sittings: {
+    sittingId: string;
+    slug: string;
+    day: string;
+    void: boolean;
+    nextDue: { dueDay: string; track: string } | null;
+  }[];
+  legacy: { day: string; slug: string; void: boolean }[];
+}
+export interface DevNotesSaved {
+  saved: { sittingId: string; day: string; claudeNotes: string | null }[];
 }
 export interface DevCoachStats {
   from: string | null;
@@ -203,7 +232,10 @@ export interface DevSittingRead {
       }
   )[];
   code?: { final: string | null; version: number; lang: string | null };
-  review?: { insight: string | null; tags: string[] } | null;
+  review?: { insight: string | null; tags: string[]; test?: boolean } | null;
+  trace?: string | null; // coach-fixes: the trace before the first judged event, and who set it
+  traceBy?: 'comment' | 'card' | null;
+  claudeNotes?: { text: string; updatedAt: string } | null;
 }
 export interface DevSittingRow {
   id: string;
@@ -225,7 +257,7 @@ export interface McpDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-interface ToolResult {
+export interface ToolResult {
   text: string;
   isError: boolean;
 }
@@ -311,6 +343,25 @@ export function createMcpClient({
       );
   }
   const assertLedgerTask = (id: string) => assertLedger(id, 'task');
+  // A refusal call's sitting ids: a recorded one must be a sitting this run made; any other must be one the server
+  // doesn't have (get_sitting answers Not found) — so a regression that took the call can only touch this run's rows.
+  async function assertMineOrUnknown(ids: unknown[]): Promise<void> {
+    for (const id of ids) {
+      if (typeof id !== 'string') continue; // malformed: refused at the param check, before any dispatch
+      if (ledger.has(id)) {
+        assertLedger(id, 'sitting');
+        continue;
+      }
+      const r = await tool('get_sitting', { id });
+      if (!(r.isError && /Not found/.test(r.text)))
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          `refusing to aim at sitting ${id} — the ledger never recorded it and the server has it`,
+        );
+    }
+  }
+  const sittingIdsOf = (items: Record<string, unknown>[]) =>
+    items.flatMap((x) => (x && 'sittingId' in x ? [x.sittingId] : []));
 
   const reads = {
     toolsList: async () =>
@@ -587,6 +638,31 @@ export function createMcpClient({
       }
       if (pattern === null && ledger.has(id)) ledger.append({ run, op: 'deleted', id });
       return out;
+    },
+    // set_void on sittings this run started (coach-fixes): the void is the review's test flag on the head, so it
+    // goes with the sitting at cleanup — nothing new to record.
+    async setVoid(targets: { sittingId: string; void: boolean }[]): Promise<DevVoided> {
+      for (const t of targets) assertLedger(t.sittingId, 'sitting');
+      return data<DevVoided>('set_void', { targets });
+    },
+    // A set_void the server must refuse — targets as given: an id no row has, a legacy day (dev has no legacy rows:
+    // nothing writes lc#), a malformed target, beside this run's own sittings to prove all-or-nothing. Answers the
+    // tool's result; a param error throws McpRpcError. Only a regression could write, and only on this run's rows.
+    async setVoidRefused(targets: Record<string, unknown>[]): Promise<ToolResult> {
+      await assertMineOrUnknown(sittingIdsOf(targets));
+      return tool('set_void', { targets });
+    },
+    // set_claude_notes on sittings this run started: the notes live on the sitting's head and go with it.
+    async setClaudeNotes(
+      notes: { sittingId: string; text: string | null }[],
+    ): Promise<DevNotesSaved> {
+      for (const n of notes) assertLedger(n.sittingId, 'sitting');
+      return data<DevNotesSaved>('set_claude_notes', { notes });
+    },
+    // A set_claude_notes the server must refuse (over the cap, an open sitting, an id no row has), as setVoidRefused.
+    async setClaudeNotesRefused(notes: Record<string, unknown>[]): Promise<ToolResult> {
+      await assertMineOrUnknown(sittingIdsOf(notes));
+      return tool('set_claude_notes', { notes });
     },
     // delete_attempt on an attempt this run logged; the ledger resolves when the tool says it went.
     async deleteAttempt(
