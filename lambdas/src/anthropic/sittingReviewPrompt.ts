@@ -34,7 +34,7 @@ export interface DraftJudged {
 export interface SittingDraftData {
   problem: { title: string; difficulty: string | null; tags: string[] };
   // What the cause needs beyond the judged list (which is cut to the newest): whether it was ever accepted,
-  // whether a Run came before the first Submit (null: no submit), the extension's trace state, and whether the
+  // whether a Run came before the first Submit (null: no submit), the trace state (a trace comment in the code wins over the extension's card), and whether the
   // sitting is over (quit-early only then).
   signals: {
     accepted: boolean;

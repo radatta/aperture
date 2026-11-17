@@ -86,7 +86,7 @@ describe('draftSittingReview', () => {
     const { data } = anthropic.draftCalls[0]!;
     expect(data).toMatchObject({
       problem: { title: 'Two Sum', difficulty: 'Easy', tags: ['Array'] },
-      signals: { accepted: true, ended: false, ranBeforeFirstSubmit: false, trace: null }, // still open
+      signals: { accepted: true, ended: false, ranBeforeFirstSubmit: false, trace: 'none' }, // still open; no trace comment
       judged: [
         {
           type: 'submit',
@@ -193,7 +193,7 @@ describe('draftSittingReview', () => {
       accepted: false,
       ended: false,
       ranBeforeFirstSubmit: true,
-      trace: null,
+      trace: 'none', // scanned at the first judged event, no trace comment: untraced
     });
     for (const cause of ['careless', 3, ['boundary']]) {
       anthropic.nextDraft = { ok: true, fields: { mistakes: ['a'], cause } };

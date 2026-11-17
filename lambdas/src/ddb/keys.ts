@@ -37,8 +37,9 @@ export const sk = {
   logPrefix: (day: string) => `log#${day}#`,
   logAllPrefix: () => `log#`,
 
-  // `lc#<day>#<id>` is taken: the legacy LeetCode attempts lie there, dormant (no reader or writer since PR D, 2026-11).
-  // Never reuse the prefix.
+  // `lc#<day>#<id>`: the legacy LeetCode attempts (the pre-sittings capture, one row per submission). No writer since
+  // PR D (2026-11); read by the coach's fold since coach-fixes (coach.ts legacyAttempts). Never reuse the prefix.
+  legacyLcPrefix: () => `lc#`,
 
   // LeetCode sittings (docs/areas/recruiting). The head is `lcsit#<id>` (id = the Start's clientSittingId,
   // so a double-fired Start can't make two); its children sit under `lcs#<id>#` — the live row, the capture
@@ -74,6 +75,9 @@ export const sk = {
   coachAttempt: (id: string) => `lcc#att#${id}`,
   coachAttemptPrefix: () => `lcc#att#`,
   coachFocus: () => `lcc#focus`,
+  // A legacy (day, slug) group's void state (coach.md → Legacy history); id = `<day>#<slug>`.
+  coachVoid: (id: string) => `lcc#void#${id}`,
+  coachVoidPrefix: () => `lcc#void#`,
   // The user's Start gate (one row): today's Start attempts and Starts, and the open sitting it let through —
   // the single decision point that keeps parallel Starts to one open sitting and the daily caps.
   lcStart: () => `lcstart`,

@@ -302,9 +302,9 @@ function VoidControl({ sitting }: { sitting: Sitting }) {
         {voided ? 'Count it again' : 'Doesn’t count'}
       </Button>
       {v.isError && (
-        <Text as="p" size="xs" tone="danger" role="alert">
+        <p role="alert" className="text-xs text-danger">
           Couldn’t change that — {(v.error as Error).message || 'try again'}.
-        </Text>
+        </p>
       )}
     </div>
   );
