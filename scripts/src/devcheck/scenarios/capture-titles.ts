@@ -104,7 +104,7 @@ const captured = (m: string): Sample[] => [
 // Long enough that the model moves the rest to notes: the title is the model's, never grown by the guard.
 const OVERFLOW = `plan the garden makeover typed at 9 am: ${'compost bins, raised beds, drip lines, mulch, trellis, '.repeat(5)}and a bench`;
 // Leading words that name none of the test user's categories (checked against the live list: a clash is left out).
-const leads = (m: string, label: string, live: Set<string>): Sample[] => [
+const leads = (label: string, live: Set<string>): Sample[] => [
   { line: `${label}, buy oat milk`, title: 'buy oat milk', category: true },
   { line: `${label}: renew the parking permit`, title: 'renew the parking permit', category: true },
   {
@@ -121,7 +121,8 @@ const leads = (m: string, label: string, live: Set<string>): Sample[] => [
     { line: 'aperture, fix login bug due fri 30m', title: 'aperture, fix login bug' },
     { line: 'work, email sam about the lease', title: 'work, email sam about the lease' },
     { line: 'errands buy stamps', title: 'errands buy stamps' },
-    { line: `devcheck ${m} call the bank at 7 pm`, title: `devcheck ${m} call the bank` },
+    // No run marker: the run's category is named after it, and the model files a line that shares it there.
+    { line: 'devcheck call the bank at 7 pm', title: 'devcheck call the bank' },
   ].filter((s) => !live.has(s.line.split(/[\s,:]/)[0]!)),
 ];
 
@@ -280,7 +281,7 @@ export const captureTitles: Scenario = {
           const fails = [
             ...(await sample(ctx, 'verbatim', verbatim(m), parsed(parse))),
             ...(await sample(ctx, 'due phrase', dueOut, parsed(parse))),
-            ...(await sample(ctx, 'leading word', leads(m, label, live), parsed(parse, cat.id))),
+            ...(await sample(ctx, 'leading word', leads(label, live), parsed(parse, cat.id))),
           ];
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
         } finally {
@@ -300,7 +301,7 @@ export const captureTitles: Scenario = {
         const live = new Set(
           (await ctx.mcp.reads.listCategories()).map((c) => c.label.toLowerCase()),
         );
-        const picks = [verbatim(m)[0]!, dueOut[0]!, leads(m, '', live).at(-1)!];
+        const picks = [verbatim(m)[0]!, dueOut[0]!, leads('', live).at(-1)!];
         const fails = await sample(
           ctx,
           'mcp',
