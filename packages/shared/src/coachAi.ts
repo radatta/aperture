@@ -37,6 +37,7 @@ export const AI_PICK_QUEUE_MS = 20_000;
 const CAPS = { due: 15, fresh: 5, stretch: 3, ifFocus: 3 };
 const RECENT_DAYS = 14;
 const NOTE_MAX = 160; // each attempt's notes sent
+const CLAUDE_NOTES_SENT_MAX = 300; // each attempt's Claude's notes sent
 
 // A slot change while the pick is still landing (the slots are about to be replaced).
 export const AI_PICK_BUSY_ERROR = 'Today’s problems are still being picked — try again in a moment';
@@ -72,6 +73,7 @@ export interface CoachAiRecent {
   minutes: number | null;
   capMin: number;
   notes: string | null;
+  claudeNotes: string | null; // Claude's own notes on the day's sittings (set_claude_notes), cut
 }
 export interface CoachPickContext {
   today: string;
@@ -90,6 +92,8 @@ export interface CoachPickContext {
     rank: number | null;
   }[];
   recent: CoachAiRecent[]; // the last RECENT_DAYS days, oldest first
+  // The plan mode as the rules read it today: a catch-up pick keeps the mix (validateCoachPick → 'mix').
+  planMode: { mode: 'balanced' | 'catch-up'; due: number };
 }
 
 const cut = (s: string, max: number) => {
@@ -149,8 +153,10 @@ export function coachPickContext(
   for (const r of pools.due.slice(0, CAPS.due))
     add(r.slug, 're-solve', null, ruleOf('re-solve', r.slug));
   for (const c of pools.fresh.slice(0, CAPS.fresh)) add(c.slug, 'new', null, ruleOf('new', c.slug));
-  for (const c of pools.stretch.slice(0, CAPS.stretch))
-    add(c.slug, 'stretch', null, ruleOf('stretch', c.slug));
+  // Catch-up takes no stretch (coach.ts → Plan mode), so none is offered.
+  if (pools.planMode.mode !== 'catch-up')
+    for (const c of pools.stretch.slice(0, CAPS.stretch))
+      add(c.slug, 'stretch', null, ruleOf('stretch', c.slug));
   if (!locked)
     for (const p of top3.filter((p) => p !== focus.pattern))
       for (const c of NEETCODE_150.filter(
@@ -186,6 +192,7 @@ export function coachPickContext(
           [s.review?.insight ?? [], ...(s.review?.mistakes ?? []).slice(0, 3)].flat(),
         ),
       ].filter(Boolean);
+      const claude = sits.flatMap((s) => s.claudeNotes?.text ?? []);
       return {
         day: a.day,
         slug: a.slug,
@@ -198,6 +205,7 @@ export function coachPickContext(
         minutes,
         capMin: params.capMin,
         notes: words.length ? cut(words.join(' · '), NOTE_MAX) : null,
+        claudeNotes: claude.length ? cut(claude.join(' · '), CLAUDE_NOTES_SENT_MAX) : null,
       };
     });
   const stats = coachStats(pools.all, today, {}, coachScope(input));
@@ -218,6 +226,7 @@ export function coachPickContext(
       rank: p.rank,
     })),
     recent,
+    planMode: { mode: pools.planMode.mode, due: pools.planMode.due },
   };
 }
 
@@ -258,6 +267,18 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   }
   if (ctx.mustInclude && !picks.some((p) => p.slug === ctx.mustInclude))
     return fail('skipped-oldest-due');
+  // Catch-up's mix: at most one new, no stretch, and no fewer re-solves than the rules' own plan.
+  if (ctx.planMode.mode === 'catch-up') {
+    const n = (k: SlotKind, list: readonly { kind: SlotKind }[]) =>
+      list.filter((x) => x.kind === k).length;
+    const ruleKinds = ctx.rules.flatMap((slug) => byslug.get(slug) ?? []);
+    if (
+      n('new', picks) > 1 ||
+      n('stretch', picks) > 0 ||
+      n('re-solve', picks) < n('re-solve', ruleKinds)
+    )
+      return fail('mix');
+  }
   let focus: { from: PatternId; to: PatternId; why: string } | null = null;
   if (r.focus !== undefined && r.focus !== null) {
     if (typeof r.focus !== 'object' || Array.isArray(r.focus)) return fail('shape');

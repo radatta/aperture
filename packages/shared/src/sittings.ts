@@ -420,6 +420,12 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     total: null,
     at: r.at,
   };
+  // The first judged event closes the trace-comment window: the server scanned the code before it (lcSittingEvents),
+  // so with no trace by then the sitting reads untraced — unless the card traces before the first submit.
+  if ((r.type === 'run' || r.type === 'submit') && s.runs + s.submits === 0) {
+    next.firstJudgedAt = r.at;
+    next.coach = { ...(s.coach ?? emptyCoach()), scanned: true, trace: s.coach?.trace ?? 'none' };
+  }
   if (r.type === 'run') {
     next.runs = s.runs + 1;
     if (s.submits === 0) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
@@ -434,7 +440,8 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     }
   } else if (r.type === 'note') next.notes = s.notes + 1;
   else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
-  else if (r.type === 'coach' && r.coach?.kind) next.coach = foldCoach(s.coach, r.coach, s.submits);
+  else if (r.type === 'coach' && r.coach?.kind)
+    next.coach = foldCoach(s.coach, r.coach, s.submits, s.runs + s.submits);
   return next;
 }
 
@@ -470,18 +477,47 @@ export function coachMarkOf(payload: unknown): CoachMark {
         : null,
   };
 }
+const emptyCoach = (): SittingCoach => ({ config: null, trace: null, nudges: 0 });
 // One coach row into the sitting's coaching. The trace state is what stood at the first submit: a trace or
 // a skip counts only before it (the latest wins), and a submit seen untraced marks `none` unless one came first.
-function foldCoach(c: SittingCoach | undefined, m: CoachMark, submits: number): SittingCoach {
-  const next: SittingCoach = c ? { ...c } : { config: null, trace: null, nudges: 0 };
+// A trace comment (the server's row, at the snapshot's time) counts only before the first judged event, and once
+// it stands the card can't change it: the comment wins.
+function foldCoach(
+  c: SittingCoach | undefined,
+  m: CoachMark,
+  submits: number,
+  judged: number,
+): SittingCoach {
+  const next: SittingCoach = c ? { ...c } : emptyCoach();
   if (m.kind === 'config') next.config = m.config ?? next.config;
   else if (m.kind === 'nudge-shown') next.nudges += 1;
+  else if (m.kind === 'trace-comment') {
+    if (judged === 0) Object.assign(next, { trace: 'traced', traceBy: 'comment' });
+  } else if (next.traceBy === 'comment') return next;
   else if (m.kind === 'untraced-submit') next.trace ??= 'none';
   else if (submits === 0)
-    next.trace =
-      m.kind === 'trace-skip' || !m.inputs ? 'skipped' : m.inputs === 3 ? 'traced' : 'partial';
+    Object.assign(next, {
+      trace:
+        m.kind === 'trace-skip' || !m.inputs ? 'skipped' : m.inputs === 3 ? 'traced' : 'partial',
+      traceBy: 'card',
+    });
   return next;
 }
+// The server's head row for a snapshot whose code holds a trace comment (traceComment.ts): a coach row at the
+// snapshot's time, keyed by its event id so a retry writes it once.
+export const traceCommentRow = (
+  sittingId: string,
+  e: { id: string; at: number },
+): SittingHeadRow => ({
+  id: e.id,
+  sittingId,
+  type: 'coach',
+  at: e.at,
+  verdict: null,
+  timer: null,
+  coach: { kind: 'trace-comment', inputs: null, config: null },
+  deletedAt: null,
+});
 // The head's summary, recomputed from every stored head row in time order — never an increment, so a retry
 // or a lost write can't skew it: the next call carrying any head event, fresh or a repeat, rebuilds it, and the
 // write is skipped when the stored one already folds more rows (headEvents) — a slower call never rolls it back.

@@ -154,6 +154,17 @@ import {
   standInCoachPick,
   startAiRow,
   listRecords,
+  legacyGroups,
+  normalizeCoachVoids,
+  normalizeClaudeNotes,
+  coachVoidId,
+  COACH_PLAN_MODES,
+  COACH_PLAN_MODE_ERROR,
+  CLAUDE_NOTES_OPEN_ERROR,
+  peekFill,
+  traceCommentIn,
+  traceCommentRow,
+  snapshotCode,
   coachStats,
   normalizeStatsRange,
   attemptsOf,
@@ -194,6 +205,11 @@ import type {
   CoachAttemptInput,
   CoachPickResult,
   CoachDay,
+  CoachVoid,
+  CoachVoidInput,
+  ClaudeNotesInput,
+  LegacyGroup,
+  LegacyLeetcodeAttempt,
   CoachFocus,
   CoachInput,
   CoachSlotInput,
@@ -324,7 +340,12 @@ const FINANCE_SETTINGS_DEFAULTS = {
   financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null, fluxSets: {} };
-const LC_SETTINGS_DEFAULTS = { leetcodeRollId: null, coachAiPick: true, leetcodePremium: true };
+const LC_SETTINGS_DEFAULTS = {
+  leetcodeRollId: null,
+  coachAiPick: true,
+  leetcodePremium: true,
+  coachPlanMode: 'auto' as const,
+};
 const STORAGE_KEY = 'aperture.stub.v1';
 // The stub's VAPID public key: a real uncompressed P-256 point (65 bytes, base64url), generated once with
 // node:crypto, so the browser's pushManager.subscribe accepts it. Nothing holds its private half — the
@@ -402,6 +423,8 @@ export interface Store {
   coachDays: CoachDay[];
   coachAttempts: CoachAttempt[];
   coachFocus: CoachFocus[]; // at most one alive row (id 'focus')
+  legacyLeetcodeAttempts: LegacyLeetcodeAttempt[]; // the pre-sittings capture: read-only, no writer (seed and tests only)
+  coachVoids: CoachVoid[];
   attachments: Attachment[];
   fluxSets: FluxSet[];
   fluxNotes: FluxWeekNoteRow[]; // the weekly note cache (D62) — the stub's note is the deterministic line
@@ -447,6 +470,8 @@ export function emptyStore(): Store {
     coachDays: [],
     coachAttempts: [],
     coachFocus: [],
+    legacyLeetcodeAttempts: [],
+    coachVoids: [],
     attachments: [],
     fluxSets: [],
     fluxNotes: [],
@@ -464,6 +489,8 @@ export interface StubOptions {
   now?: () => number;
   storageKey?: string;
   seed?: boolean;
+  // Legacy LeetCode rows to start with (tests): nothing writes them, so this stands in for the old capture.
+  legacy?: LegacyLeetcodeAttempt[];
 }
 
 // Dev/test hook: set this localStorage key to a Plaid error code (e.g. INSTITUTION_NOT_RESPONDING, or
@@ -568,6 +595,10 @@ class StubClient implements ApiClient {
         seedStore(this.store, this.now(), this.ulid);
         this.seedFinance();
       }
+      this.persist();
+    }
+    if (opts.legacy) {
+      this.store.legacyLeetcodeAttempts = opts.legacy;
       this.persist();
     }
   }
@@ -1106,7 +1137,9 @@ class StubClient implements ApiClient {
           : [],
       ),
     );
-    if (events.some((e) => isHeadEvent(e.type))) this.refoldHead(sittingId);
+    const traced = this.traceCommentRows(sittingId, fresh);
+    if (traced.length) this.writes.insertMany(this.store.sittingHeadRows, traced);
+    if (events.some((e) => isHeadEvent(e.type)) || traced.length) this.refoldHead(sittingId);
     const bulk = events.filter((e) => !isHeadEvent(e.type));
     let live = this.sittingLiveOf(sittingId);
     if (bulk.length) {
@@ -1127,6 +1160,22 @@ class StubClient implements ApiClient {
       version: live?.version ?? 0,
       status: this.mustFind(this.store.sittings, sittingId).status,
     };
+  }
+  // Backend parity (traceCommentRowFor): the earliest fresh snapshot before the sitting's first judged event (stored or
+  // in this batch) whose code holds a trace comment becomes one server head row, once per sitting.
+  private traceCommentRows(
+    sittingId: string,
+    fresh: readonly { id: string; type: string; at: number; payload?: unknown }[],
+  ) {
+    const rows = this.alive(this.store.sittingHeadRows).filter((x) => x.sittingId === sittingId);
+    if (rows.some((x) => x.coach?.kind === 'trace-comment')) return [];
+    const judged = [...rows, ...fresh].filter((x) => x.type === 'run' || x.type === 'submit');
+    const cut = Math.min(...judged.map((x) => x.at));
+    const hit = fresh
+      .filter((e) => e.type === 'snapshot' && e.at < cut)
+      .sort((a, b) => a.at - b.at)
+      .find((e) => traceCommentIn(snapshotCode(e.payload) ?? ''));
+    return hit ? [{ ...this.base(), ...traceCommentRow(sittingId, hit) }] : [];
   }
   private refoldHead(id: string): void {
     const summary = summarizeHeadRows(
@@ -1234,6 +1283,9 @@ class StubClient implements ApiClient {
       focus: this.alive(this.store.coachFocus)[0] ?? null,
       aiPick: coachAiPickOn(settings),
       aiCanStart: day === undefined,
+      legacy: this.alive(this.store.legacyLeetcodeAttempts),
+      voids: this.alive(this.store.coachVoids),
+      planMode: settings.coachPlanMode ?? 'auto',
     };
   }
   async getCoachToday(day?: string): Promise<CoachToday> {
@@ -1306,13 +1358,15 @@ class StubClient implements ApiClient {
       today: ci.today,
       sittings: ci.sittings,
       attempts: ci.attempts,
+      legacy: ci.legacy,
+      voids: ci.voids,
     });
   }
   async getCoachStats(range?: CoachStatsRange): Promise<CoachStats> {
     const r = normalizeStatsRange(range);
     const ci = this.coachInput();
     return coachStats(
-      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today, ci),
       ci.today,
       r,
       coachScope(ci),
@@ -1367,15 +1421,62 @@ class StubClient implements ApiClient {
   async logCoachAttempts(inputs: CoachAttemptInput[]): Promise<CoachAttempt[]> {
     const ci = this.coachInput();
     const list = normalizeCoachAttempts(inputs, ci.today);
-    return list.map(
-      (n) =>
-        (n.help === 'solution' && peekOf(this.alive(this.store.coachAttempts), n)) ||
-        this.writes.insert(this.store.coachAttempts, {
-          ...this.baseAt(ci.now),
-          ...n,
-          at: ci.now,
-          source: n.help === 'solution' ? 'peek-seed' : 'manual',
-        }),
+    return list.map((n) => {
+      const had = n.help === 'solution' ? peekOf(this.alive(this.store.coachAttempts), n) : null;
+      if (had) {
+        // Backend parity: a repeated peek fills what the stored one lacks (a title, a difficulty, an accept).
+        const fill = peekFill(had, n);
+        return fill ? this.writes.patch(this.store.coachAttempts, had.id, fill) : had;
+      }
+      return this.writes.insert(this.store.coachAttempts, {
+        ...this.baseAt(ci.now),
+        ...n,
+        at: ci.now,
+        source: n.help === 'solution' ? 'peek-seed' : 'manual',
+      });
+    });
+  }
+  async listLegacyGroups(slug?: string): Promise<LegacyGroup[]> {
+    if (slug !== undefined && typeof slug !== 'string') throw new Error('slug must be text');
+    return legacyGroups(
+      this.alive(this.store.legacyLeetcodeAttempts),
+      this.alive(this.store.coachVoids),
+    ).filter((g) => slug === undefined || g.slug === slug);
+  }
+  async setCoachVoids(inputs: CoachVoidInput[]): Promise<LegacyGroup[]> {
+    const list = normalizeCoachVoids(inputs);
+    const rows = this.alive(this.store.legacyLeetcodeAttempts);
+    for (const v of list)
+      if (!rows.some((r) => r.day === v.day && r.problemSlug === v.slug))
+        throw new Error(`No legacy history for ${v.slug} on ${v.day}`);
+    const now = this.now();
+    for (const v of list) {
+      const id = coachVoidId(v.day, v.slug);
+      const cur = this.find(this.store.coachVoids, id);
+      this.writes.put(this.store.coachVoids, {
+        ...this.baseAt(now),
+        ...(cur ? { createdAt: cur.createdAt } : {}),
+        id,
+        day: v.day,
+        slug: v.slug,
+        void: v.void,
+      });
+    }
+    const touched = new Set(list.map((v) => coachVoidId(v.day, v.slug)));
+    return (await this.listLegacyGroups()).filter((g) => touched.has(coachVoidId(g.day, g.slug)));
+  }
+  async setSittingClaudeNotes(items: ClaudeNotesInput[]): Promise<Sitting[]> {
+    const list = normalizeClaudeNotes(items);
+    const now = this.now();
+    // Every sitting checked before any write: all or nothing.
+    for (const n of list) {
+      const s = this.mustFind(this.store.sittings, n.sittingId);
+      if (isSittingOpen(s, now)) throw new Error(CLAUDE_NOTES_OPEN_ERROR);
+    }
+    return list.map((n) =>
+      this.writes.patch(this.store.sittings, n.sittingId, {
+        claudeNotes: n.text === null ? null : { text: n.text, updatedAt: now },
+      }),
     );
   }
   async deleteCoachAttempt(id: string): Promise<void> {
@@ -2562,6 +2663,8 @@ class StubClient implements ApiClient {
       const v = (patch as Record<string, unknown>)[k];
       if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
     }
+    if (patch.coachPlanMode !== undefined && !COACH_PLAN_MODES.includes(patch.coachPlanMode))
+      throw new Error(COACH_PLAN_MODE_ERROR);
     const current = this.ensureSettings();
     const next: Settings = { ...current, ...patch, updatedAt: this.now() };
     this.store.settings = next;
@@ -3185,6 +3288,8 @@ class StubClient implements ApiClient {
       coachDays: this.alive(this.store.coachDays),
       coachAttempts: this.alive(this.store.coachAttempts),
       coachFocus: this.alive(this.store.coachFocus)[0] ?? null,
+      legacyLeetcodeAttempts: this.alive(this.store.legacyLeetcodeAttempts),
+      coachVoids: this.alive(this.store.coachVoids),
       fluxSets: this.alive(this.store.fluxSets),
       attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
       financeItems: this.alive(this.store.financeItems),

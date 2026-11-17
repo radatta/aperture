@@ -63,6 +63,7 @@ import {
   headRowOf,
   payloadError,
   summarizeHeadRows,
+  traceCommentRow,
   utf8Bytes,
 } from './sittings';
 import type { NormalizedSittingEvent, SittingStartInput } from './sittings';
@@ -227,7 +228,13 @@ describe('folds', () => {
     });
     it('three inputs before the first submit is traced; one or two partial; none or a skip, skipped', () => {
       const at = (p: unknown) => summarizeHeadRows([coach('a', 1, p), submit('b', 2)]).coach;
-      expect(at(trace('[]', '[0]', '[1,2]'))).toEqual({ config: null, trace: 'traced', nudges: 0 });
+      expect(at(trace('[]', '[0]', '[1,2]'))).toEqual({
+        config: null,
+        trace: 'traced',
+        nudges: 0,
+        traceBy: 'card',
+        scanned: true,
+      });
       expect(at(trace('[]', null, '[1,2]'))!.trace).toBe('partial');
       expect(at(trace('', null, ' '))!.trace).toBe('skipped');
       expect(at({ kind: 'trace-skip', ms: 900 })!.trace).toBe('skipped');
@@ -271,8 +278,46 @@ describe('folds', () => {
       expect(unknown.coach).toBeUndefined();
       expect(unknown.headEvents).toBe(1);
     });
-    it('a sitting with no coach events has no coach on its summary', () => {
-      expect(summarizeHeadRows([submit('a', 1)]).coach).toBeUndefined();
+    it('a sitting with no coach events and no judged event has no coach on its summary', () => {
+      expect(summarizeHeadRows([]).coach).toBeUndefined();
+      const note = headRowOf('s', { id: 'n', type: 'note', at: 1, payload: {} });
+      expect(summarizeHeadRows([note]).coach).toBeUndefined();
+    });
+    it('the first judged event marks the code scanned: no trace by then reads none', () => {
+      const s = summarizeHeadRows([submit('a', 5)]);
+      expect(s.coach).toEqual({ config: null, trace: 'none', nudges: 0, scanned: true });
+      expect(s.firstJudgedAt).toBe(5);
+      const run = headRowOf('s', { id: 'r', type: 'run', at: 3, payload: {} });
+      expect(summarizeHeadRows([run, submit('a', 5)]).firstJudgedAt).toBe(3);
+    });
+    it('a trace comment before the first judged event reads traced, by comment', () => {
+      const s = summarizeHeadRows([traceCommentRow('s', { id: 'c', at: 1 }), submit('a', 2)]);
+      expect(s.coach).toMatchObject({ trace: 'traced', traceBy: 'comment', scanned: true });
+    });
+    it('a trace comment after the first judged event changes nothing', () => {
+      const run = headRowOf('s', { id: 'r', type: 'run', at: 1, payload: {} });
+      const s = summarizeHeadRows([run, traceCommentRow('s', { id: 'c', at: 2 }), submit('a', 3)]);
+      expect(s.coach).toMatchObject({ trace: 'none', scanned: true });
+      expect(s.coach!.traceBy).toBeUndefined();
+    });
+    it('the comment wins over the card, whichever lands first', () => {
+      const skipFirst = summarizeHeadRows([
+        coach('k', 1, { kind: 'trace-skip', ms: 1 }),
+        traceCommentRow('s', { id: 'c', at: 2 }),
+        submit('a', 3),
+      ]);
+      expect(skipFirst.coach).toMatchObject({ trace: 'traced', traceBy: 'comment' });
+      const skipAfter = summarizeHeadRows([
+        traceCommentRow('s', { id: 'c', at: 1 }),
+        coach('k', 2, { kind: 'trace-skip', ms: 1 }),
+        submit('a', 3),
+        coach('u', 4, { kind: 'untraced-submit' }),
+      ]);
+      expect(skipAfter.coach).toMatchObject({ trace: 'traced', traceBy: 'comment' });
+    });
+    it('a tie on time folds by id, so a retry lands the same way', () => {
+      const rows = [submit('b', 2), traceCommentRow('s', { id: 'a', at: 2 })];
+      expect(summarizeHeadRows(rows)).toEqual(summarizeHeadRows([...rows].reverse()));
     });
     it('a coach event is taken up to 4 KB, refused past it', () => {
       const ev = (n: number) => ({

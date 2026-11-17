@@ -523,3 +523,47 @@ describe('the day row’s steps', () => {
     expect(coachAiPickOn({ coachAiPick: false })).toBe(false);
   });
 });
+
+describe('the plan mode in the pick', () => {
+  // Ten failed problems → ten due re-solves → Auto reads catch-up.
+  const TEN = [
+    'contains-duplicate',
+    'valid-anagram',
+    'group-anagrams',
+    'top-k-frequent-elements',
+    'valid-palindrome',
+    'valid-parentheses',
+    'binary-search',
+    'reverse-linked-list',
+    'climbing-stairs',
+    'invert-binary-tree',
+  ].map((s) => manual(s, day(-3), 'failed'));
+  const ctx = ctxOf({ attempts: TEN });
+
+  it('catch-up offers no stretch and says so in the context', () => {
+    expect(ctx.planMode).toEqual({ mode: 'catch-up', due: 10 });
+    expect(ctx.candidates.some((c) => c.kind === 'stretch')).toBe(false);
+    expect(ctxOf().planMode.mode).toBe('balanced');
+  });
+
+  it('a catch-up pick keeps the mix: one new at most, no fewer re-solves than the rules', () => {
+    const news = ctx.candidates.filter((c) => c.kind === 'new' && !c.ifFocus);
+    const resolves = ctx.candidates.filter((c) => c.kind === 're-solve');
+    const pick = (slugs: string[]) =>
+      validateCoachPick({ picks: slugs.map((slug) => ({ slug, why: 'x' })), focus: null }, ctx);
+    expect(pick([news[0]!.slug, ...resolves.slice(0, 3).map((c) => c.slug)]).ok).toBe(true);
+    expect(pick([news[0]!.slug, news[1]!.slug, resolves[0]!.slug])).toEqual({
+      ok: false,
+      code: 'mix',
+    });
+    expect(pick([news[0]!.slug, resolves[0]!.slug])).toEqual({ ok: false, code: 'mix' });
+  });
+
+  it('the stand-in stays within the mix', () => {
+    expect(validateCoachPick(standInCoachPick(ctx), ctx).ok).toBe(true);
+  });
+
+  it("carries Claude's notes on recent sittings, null when none", () => {
+    expect(ctxOf().recent.every((r) => r.claudeNotes === null)).toBe(true);
+  });
+});

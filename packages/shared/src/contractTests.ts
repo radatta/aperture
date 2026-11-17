@@ -140,9 +140,14 @@ async function startSitting(api: ApiClient, over: Partial<SittingStartInput> = {
 // matching scenarios: lambdas/src/backend.calendar.test.ts and app/src/data/stubClient.calendar.test.ts.
 // parseTask is out for the same reason (it rides a model gateway — Haiku in the Lambda, a heuristic in the
 // stub): lambdas/src/backend.parse.test.ts and app/src/data/stubParse.test.ts.
+// `seed.legacy`: rows of the pre-sittings capture (`lc#`), which no ApiClient method writes — each maker puts them
+// in its store directly (test infrastructure only), so the legacy fold's cases run against every implementation.
+export interface ContractSeed {
+  legacy?: LegacyLeetcodeAttempt[];
+}
 export function runApiContract(
   label: string,
-  makeClient: (now: () => number) => ApiClient | Promise<ApiClient>,
+  makeClient: (now: () => number, seed?: ContractSeed) => ApiClient | Promise<ApiClient>,
 ) {
   describe(`ApiClient contract — ${label}`, () => {
     let clock: number;

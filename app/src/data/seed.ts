@@ -15,6 +15,7 @@ import {
   foldLive,
   foldSummary,
   headRowOf,
+  legacyFixture,
   isHeadEvent,
   normalizeSittingEvents,
   PREP_TARGET_DEFAULT,
@@ -101,6 +102,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     leetcodeRollId: null, // linked below, once the LeetCode roll exists
     coachAiPick: true,
     leetcodePremium: true,
+    coachPlanMode: 'auto',
     ...REMINDER_SETTINGS_DEFAULTS,
   };
 
@@ -986,4 +988,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       }),
     );
   });
+
+  // The pre-sittings capture's rows (read-only, legacy attempts in the coach) — synthetic, a month back.
+  store.legacyLeetcodeAttempts = legacyFixture(dayKey(nowMs, START_HOUR), nowMs - 30 * DAY);
 }

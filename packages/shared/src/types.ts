@@ -6,7 +6,7 @@ import type { AttachmentStatus } from './attachments';
 import type { Area } from './areas';
 import type { ExerciseId } from './flux/definitions';
 import type { CompetencyTag } from './stories';
-import type { PatternId } from './neetcode150';
+import type { Difficulty, PatternId } from './neetcode150';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 
 // Every stored item carries these. `deletedAt` is a soft-delete tombstone — we never hard-delete.
@@ -297,6 +297,9 @@ export interface Settings extends BaseEntity {
   // LeetCode coach: Opus picks the day's problems from the rules' candidates (coachAi.ts). Rows from before read
   // back undefined and count as on (coachAiPickOn). Off → the rule plan, no call.
   coachAiPick: boolean; // default true
+  // LeetCode coach: the plan's slot mix (coach.md → Plan mode). Rows from before read back undefined and count as
+  // 'auto' (coachPlanModeOf).
+  coachPlanMode: CoachPlanMode; // default 'auto'
 }
 
 // One device's Web Push subscription (reminders.ts). Never exported or returned: endpoint + p256dh + auth
@@ -389,7 +392,8 @@ export interface SittingSummary {
   lcTimer: LcTimerState | null;
   lastEventAt: number | null;
   headEvents: number; // how many head rows this summary folds — a recompute never writes over a larger one
-  coach?: SittingCoach; // only once a coach event folds: read it as `summary.coach ?? null`
+  coach?: SittingCoach; // only once a coach event or a judged event folds: read it as `summary.coach ?? null`
+  firstJudgedAt?: number | null; // the first Run's or Submit's `at`; absent on summaries folded before it
 }
 
 // The user's LeetCode Start gate (one row): the day it counts (the user's zone, never the client's), that
@@ -434,16 +438,21 @@ export type CoachEventPayload =
 // What a coach event's head row keeps: its kind (null when unknown — stored, folds nothing), how many
 // inputs a trace filled, and a config's switches.
 export interface CoachMark {
-  kind: CoachEventKind | null;
+  // `trace-comment` is the server's own (a snapshot before the first Run or Submit held a trace comment,
+  // traceComment.ts); coachMarkOf never yields it, so the extension can't forge one.
+  kind: CoachEventKind | 'trace-comment' | null;
   inputs: number | null;
   config: { trace: boolean; hold: boolean; nudge: boolean } | null;
 }
 // The sitting's coaching, folded from its coach rows. `trace` is the state at the first submit: three
-// inputs traced, one or two, skipped, or a submit with no trace (`none`); null until any of those.
+// inputs traced, one or two, skipped, or a submit with no trace (`none`); null until any of those. A trace
+// comment in the code before the first Run or Submit reads `traced` by `comment`, and beats the card.
 export interface SittingCoach {
   config: { trace: boolean; hold: boolean; nudge: boolean } | null;
   trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
   nudges: number;
+  traceBy?: 'comment' | 'card'; // who set `trace`; absent before the comment rule
+  scanned?: boolean; // the server read the code for a trace comment before the first judged event
 }
 
 // A sitting's capture budget: every event the extension sends is reserved here (a CAS increment) before
@@ -485,6 +494,13 @@ export interface Sitting extends BaseEntity {
   // The user's review (setSittingReview), on the head so the list and list_sittings read it free; a refold spreads the
   // head, so it survives ingest. Absent on heads written before reviews existed — read it as `review ?? null`.
   review?: SittingReview | null;
+  // Claude's own notes on how the sitting went (set_claude_notes), never mixed into the user's review. Absent on
+  // heads from before them; null once cleared.
+  claudeNotes?: ClaudeNotes | null;
+}
+export interface ClaudeNotes {
+  text: string; // ≤ CLAUDE_NOTES_MAX, newlines kept
+  updatedAt: number;
 }
 
 // How much help a sitting took: none, a hint (a nudge, a topic), or the solution read.
@@ -523,6 +539,36 @@ export interface CoachAttempt extends BaseEntity {
   note: string | null;
   source: 'manual' | 'peek-seed';
   historical?: true; // a solve from before the coach (log_attempt historical): seen, never scheduled or counted
+  // An off-catalog problem's difficulty as logged; absent on rows from before. The catalog's wins.
+  difficulty?: Difficulty | null;
+  // Accepted that day even though the outcome is failed (a peek after an accept): absent → outcome !== 'failed'.
+  accepted?: boolean;
+}
+// The plan's slot mix (coach.md → Plan mode): balanced is one of each kind; catch-up fills with re-solves; auto
+// switches between them on the due count, with hysteresis.
+export type CoachPlanMode = 'auto' | 'balanced' | 'catch-up';
+// A legacy (day, slug) group's stored void state (coach.md → Legacy history): `void: false` lifts the default
+// exclusion (LEGACY_TEST_DEFAULTS), `void: true` excludes any group. id = `<day>#<slug>`.
+export interface CoachVoid extends BaseEntity {
+  day: string;
+  slug: string;
+  void: boolean;
+}
+// One submission the pre-sittings extension captured (until PR 147, 2026-11-10), under the legacy `lc#` SK.
+// Read-only: nothing writes these any more; the coach folds them as `legacy` attempts (coach.ts legacyAttempts).
+export interface LegacyLeetcodeAttempt extends BaseEntity {
+  day: string; // YYYY-MM-DD, bucketed via dayStartHour + the client's reported tz offset
+  problemSlug: string;
+  problemTitle: string;
+  verdict: LeetcodeVerdict;
+  submittedAt: number; // epoch ms from LeetCode
+  lang: string;
+  runtimeMs: number | null;
+  memory: number | null; // bytes
+  leetcodeSubmissionId: string;
+  frontendId: string | null;
+  difficulty: string | null; // 'Easy' | 'Medium' | 'Hard' | null
+  topicTags: string[] | null;
 }
 export type SlotKind = 'carry-over' | 'new' | 're-solve' | 'stretch';
 // One change the user made to a day's plan: a slot (by the engine's pick, `from`) swapped to `to`, or skipped.
