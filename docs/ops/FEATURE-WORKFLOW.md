@@ -59,10 +59,12 @@ At those same checkpoints, and at each phase change between them, it also writes
 NEEDS YOU read (`docs/ops/TOWER.md` → _Lane files_); a `[blocked]` or `[ask-maintainer]` is also `--needs` with the
 command or link.
 
-**The lane file carries the estimate.** At every phase change the lane updates its file with the phase, the step,
-and the ETA ranges to the next step and to the PR, re-derived from what each step really took so far; the tower
-reads lane files directly, so status needs no extra hub message (the checkpoints stay). Until `pnpm board lane` has
-fields for the step plan and ETA ranges, they ride in `--step` text (`review r1 · next 25–40 min · PR 2–3 h`).
+**The lane file carries the estimate.** Right after Plan, the lane writes its step plan with
+`pnpm board lane plan --plan <step>=<lo>-<hi>[?],… --files <n>` (minutes, `?` a guess); at every phase change after,
+a plain `pnpm board lane <phase> --step …` accrues the time each step took and re-derives the ETA ranges to the next
+step and to the PR from it, and a fresh `--plan` replaces the ranges when they move (`docs/ops/TOWER.md` → _Lane
+files_). The tower reads lane files directly — a step bar, `PR ~HH:MM–HH:MM`, the next ask — so status needs no extra
+hub message (the checkpoints stay).
 
 ## Phases
 

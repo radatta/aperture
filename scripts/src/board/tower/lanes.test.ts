@@ -139,14 +139,22 @@ describe('laneEta', () => {
     expect(laneEta(plan, none, 'build', 120 * M, now)!.next).toEqual({ lo: now, hi: now });
   });
   it('flags win over the plan, each its own; no plan and no flags is none', () => {
-    const e = laneEta(plan, { etaNext: null, etaPr: { lo: 5, hi: 10, guess: false } }, 'pr', 0, now);
+    const e = laneEta(
+      plan,
+      { etaNext: null, etaPr: { lo: 5, hi: 10, guess: false } },
+      'pr',
+      0,
+      now,
+    );
     expect(e).toEqual({
       next: { lo: now + 10 * M, hi: now + 20 * M },
       pr: { lo: now + 5 * M, hi: now + 10 * M },
       source: 'guess',
     });
     expect(laneEta(null, none, 'build', 0, now)).toBeNull();
-    expect(laneEta(null, { etaNext: { lo: 1, hi: 2, guess: false }, etaPr: null }, 'build', 0, now)).toEqual({
+    expect(
+      laneEta(null, { etaNext: { lo: 1, hi: 2, guess: false }, etaPr: null }, 'build', 0, now),
+    ).toEqual({
       next: { lo: now + M, hi: now + 2 * M },
       pr: null,
       source: 'measured',
@@ -199,7 +207,11 @@ describe('writeLane', () => {
   it('keeps the plan across writes and accrues the time per phase on a change; parked time counts to no step', () => {
     const d = dir();
     const at = (min: number) => new Date(T0.getTime() + min * 60e3);
-    writeLane(d, args(['build', '--plan', 'build=60-90,review=20-40,pr=10-20', '--files', '12']), env(at(0)));
+    writeLane(
+      d,
+      args(['build', '--plan', 'build=60-90,review=20-40,pr=10-20', '--files', '12']),
+      env(at(0)),
+    );
     expect(read(d)).toMatchObject({
       files: 12,
       plan: [
@@ -226,7 +238,11 @@ describe('writeLane', () => {
     expect(read(d).plan[1].spentMs).toBe(10 * 60e3);
     expect(read(d).eta).toBeNull();
     writeLane(d, args(['review']), env(at(200))); // 120 min parked: no step
-    expect(read(d).plan.map((s: { spentMs: number }) => s.spentMs)).toEqual([70 * 60e3, 10 * 60e3, 0]);
+    expect(read(d).plan.map((s: { spentMs: number }) => s.spentMs)).toEqual([
+      70 * 60e3,
+      10 * 60e3,
+      0,
+    ]);
     // a new plan keeps what each step has taken
     writeLane(d, args(['review', '--plan', 'review=30-50,pr=10-20?']), env(at(200)));
     expect(read(d).plan).toEqual([
@@ -320,10 +336,17 @@ describe('readLanes / parseLane', () => {
     ]) {
       const l = parseLane(JSON.stringify({ ...base, ...bad }), 'x.json');
       expect(l).toMatchObject({ phase: 'build' });
-      expect(l).toMatchObject({ ...('plan' in bad ? { plan: null } : {}), ...('eta' in bad ? { eta: null } : {}) });
+      expect(l).toMatchObject({
+        ...('plan' in bad ? { plan: null } : {}),
+        ...('eta' in bad ? { eta: null } : {}),
+      });
       if ('files' in bad) expect(l).toMatchObject({ files: null });
     }
     // an old file without them reads as before
-    expect(parseLane(JSON.stringify(base), 'x.json')).toMatchObject({ files: null, plan: null, eta: null });
+    expect(parseLane(JSON.stringify(base), 'x.json')).toMatchObject({
+      files: null,
+      plan: null,
+      eta: null,
+    });
   });
 });

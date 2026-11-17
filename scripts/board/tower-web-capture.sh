@@ -4,7 +4,9 @@
 # 390×844, dpr 3, touch) and the Mac (1512×860), light and dark. Asserts what a phone must never do — hide text,
 # scroll sideways, wrap the header, draw a spark over its numbers, offer a Mac-only button — and exits 1 naming each
 # failure. Variants: `plain` (the view as served), `stress` (the same view with every string long and every source
-# off), `empty` (nothing in flight); plus an installed and a tab frame at 440 per engine for the status-bar floor.
+# off), `empty` (nothing in flight), and expanded (TOWER.md → Expand): `xnext` and `xneeds` (the plain view at #next,
+# #needs), `xstress` (stress at #next). One pass per engine also drives the expand: a poll, a reload, Esc, Back, keys.
+# Plus an installed and a tab frame at 440 per engine for the status-bar floor.
 #   scripts/board/tower-web-capture.sh <out-dir>                 the fixtures at a fixed clock, on a spare port
 #   scripts/board/tower-web-capture.sh <out-dir> --url <base>    a running server (a live proof server)
 # Run it under scripts/board/heavy.sh -- (it starts browsers).
@@ -60,7 +62,12 @@ function stress(v) {
   v.behind = { head: 'f'.repeat(40), files: 12 }; // the header chip reads "behind main · N off"
   v.slots[1] = { ...v.slots[1], branch: null, live: false, state: 'unknown', why: `refresh failed (${LONG('why')}), last read 05:59`, asOf: now - 400000 };
   v.sources = v.sources.map((s, i) => (i < 12 ? { ...s, state: 'failed', detail: LONG('src') } : s));
-  v.next.plan = [LONG('plan')];
+  v.next.table = v.next.table.map((r) => ({ ...r, what: LONG('plan'), you: LONG('you').slice(0, 70) }));
+  v.next.soon = v.next.table.filter((r) => !r.done).slice(0, 3);
+  v.next.notes = [LONG('note'), LONG('note2')];
+  v.next.ask = { lo: now - 600000, hi: now - 60000, what: LONG('ask'), branch: 'echo-branch', source: 'lane', late: true };
+  for (const r of v.active) if (r.eta?.pr) r.eta = { ...r.eta, late: true };
+  v.heads = Object.fromEntries(Object.keys(v.heads).map((k) => [k, '12 lanes · ask late']));
   v.next.more = 4;
   v.slipping.push({ kind: 'fired', what: `F99: ${LONG('fired')}`, owner: 'lane', since: now - 7200000, after: 'tower-web merge' });
   if (v.sparks) v.sparks.mac = Array(58).fill(null).concat([30000, 31000]); // two points: no line to draw
@@ -69,7 +76,7 @@ function stress(v) {
 function empty(v) {
   v.needs = [];
   v.active = [];
-  v.next = { order: [], queue: [], merge: [], maintainer: null, more: 0, plan: [], parked: [] };
+  v.next = { order: [], queue: [], merge: [], maintainer: null, more: 0, parked: [], table: [], nowIndex: 0, soon: [], notes: [], planAt: null, ask: null };
   v.done = [];
   v.slipping = [];
   return v;
@@ -145,6 +152,103 @@ async function standalone(b, name) {
   }
 }
 
+// An expanded frame: the open panel alone, the strip of the five others on top; NEXT's plan table carries a struck
+// row, a slipping one and the now-line (the fixtures have each).
+async function expandChecks(page, tag, id) {
+  const r = await page.evaluate((id) => {
+    const bad = [];
+    const shown = (sel) => {
+      const e = document.querySelector(sel);
+      return !!e && getComputedStyle(e).display !== 'none';
+    };
+    if (document.body.dataset.open !== id) bad.push(`not expanded: data-open ${document.body.dataset.open}`);
+    if (shown('#health')) bad.push('HEALTH shows behind an expanded panel');
+    if (!shown('#strip')) bad.push('no strip');
+    const chips = document.querySelectorAll('#strip .chip').length;
+    if (chips !== 5) bad.push(`strip has ${chips} chips, want 5`);
+    for (const s of document.querySelectorAll('main > section'))
+      if (s.id !== id && shown(`#${s.id}`)) bad.push(`#${s.id} shows behind #${id}`);
+    if (id === 'next') {
+      const struck = document.querySelector('table.plan tr.done td.time');
+      if (!struck || !getComputedStyle(struck).textDecorationLine.includes('line-through')) bad.push('no struck plan row');
+      if (![...document.querySelectorAll('table.plan .slip')].some((e) => /now \d\d:\d\d/.test(e.textContent)))
+        bad.push('no slip marker');
+      if (!document.querySelector('table.plan tr.nowline')) bad.push('no now-line');
+      if (document.querySelector('#next .showall')) bad.push('an expanded panel still caps its rows');
+    }
+    return bad;
+  }, id);
+  for (const b of r) fails.push(`${tag}: ${b}`);
+}
+
+// Drives the expand in one engine at the phone's size: a poll keeps it and its scroll, a reload keeps it, Esc and
+// Back close it, keys open and close it, a bad hash is the glance, a slot card opened on the glance stays open.
+async function expandPass(b, name) {
+  const tag = `${name}-expand`;
+  const ctx = await b.newContext({ ...SIZES.p390, colorScheme: 'light' });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => fails.push(`${tag}: page error ${e.message}`));
+  const state = () => page.evaluate(() => ({ hash: location.hash, open: document.body.dataset.open ?? null, y: Math.round(scrollY) }));
+  const want = async (step, open) => {
+    await page.waitForTimeout(300);
+    const s = await state();
+    if (s.open !== open || s.hash !== (open ? `#${open}` : '')) fails.push(`${tag}: ${step}: ${JSON.stringify(s)}, want ${open ?? 'closed'}`);
+    return s;
+  };
+  await page.goto(BASE + '/');
+  await page.waitForSelector('#meta .ver', { state: 'attached' });
+  await page.locator('.slot').first().click(); // opened on the glance
+  await page.click('#next h2');
+  await want('a title tap', 'next');
+  await page.evaluate(() => scrollTo(0, 120));
+  const y0 = (await state()).y;
+  await page.waitForTimeout(6000); // a poll redraws everything
+  const s1 = await want('after a poll', 'next');
+  if (s1.y !== y0) fails.push(`${tag}: a poll moved the scroll ${y0} → ${s1.y}`);
+  await page.reload();
+  await page.waitForSelector('#meta .ver', { state: 'attached' });
+  await page.waitForTimeout(400);
+  const s2 = await want('after a reload', 'next');
+  if (Math.abs(s2.y - y0) > 2) fails.push(`${tag}: a reload lost the scroll ${y0} → ${s2.y}`);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#meta .ver', { state: 'attached' });
+  await want('Esc', null);
+  if (!(await page.locator('.slot').first().evaluate((e) => e.classList.contains('open'))))
+    fails.push(`${tag}: a slot card opened on the glance closed across the expand`);
+  await page.keyboard.press('3');
+  await want('key 3', 'next');
+  await page.keyboard.press('2');
+  await want('key 2 switches', 'now');
+  await page.keyboard.press('2');
+  await want('key 2 again closes', null);
+  await page.keyboard.press('1');
+  await want('key 1', 'needs');
+  await page.goBack();
+  await page.waitForSelector('#meta .ver', { state: 'attached' });
+  await want('Back', null);
+  await page.keyboard.press('Control+3');
+  await want('a key with a modifier', null);
+  await page.goto(BASE + '/#zzz');
+  await page.waitForSelector('#meta .ver', { state: 'attached' });
+  const z = await page.evaluate(() => document.body.dataset.open ?? null);
+  if (z !== null) fails.push(`${tag}: #zzz opened ${z}`);
+  // loaded straight at #next (no entry of ours to go back to): Esc stays on the page
+  const fresh = await ctx.newPage();
+  await fresh.goto(BASE + '/#next');
+  await fresh.waitForSelector('#meta .ver', { state: 'attached' });
+  await fresh.keyboard.press('Escape');
+  await fresh.waitForTimeout(300);
+  const f = await fresh.evaluate(() => ({ url: location.href, open: document.body.dataset.open ?? null }));
+  if (f.open !== null || !f.url.startsWith(BASE) || f.url.includes('#')) fails.push(`${tag}: Esc on a direct #next: ${JSON.stringify(f)}`);
+  // the favicon trial pages
+  for (const v of ['a', 'b']) {
+    const html = await (await fetch(`${BASE}/?favicon=${v}`)).text();
+    if (!html.includes(`href="/favicon-${v}-32.png"`)) fails.push(`${tag}: /?favicon=${v} doesn't link its icons`);
+  }
+  console.log(`${tag}: done`);
+  await ctx.close();
+}
+
 // A tap opens a row with details, which then shows them in full; a slot card stays open across a poll.
 async function taps(page, tag) {
   const n = await page.locator('#needs .item.has-more').count();
@@ -178,23 +282,26 @@ async function taps(page, tag) {
     for (const [size, opts] of Object.entries(SIZES)) {
       if (name === 'webkit' && size === 'desk') continue;
       for (const scheme of ['light', 'dark'])
-        for (const variant of ['plain', 'stress', 'empty']) {
+        for (const variant of ['plain', 'stress', 'empty', 'xnext', 'xneeds', 'xstress']) {
           const ctx = await b.newContext({ ...opts, colorScheme: scheme });
           const page = await ctx.newPage();
           page.on('pageerror', (e) => fails.push(`${name}-${variant}-${size}-${scheme}: page error ${e.message}`));
-          if (variant !== 'plain')
+          const data = variant === 'xstress' ? 'stress' : variant.startsWith('x') ? 'plain' : variant;
+          const at = variant === 'xneeds' ? 'needs' : variant.startsWith('x') ? 'next' : null;
+          if (data !== 'plain')
             await page.route('**/api/state*', async (route) => {
               const res = await route.fetch();
               const v = await res.json();
-              await route.fulfill({ response: res, json: variant === 'stress' ? stress(v) : empty(v) });
+              await route.fulfill({ response: res, json: data === 'stress' ? stress(v) : empty(v) });
             });
-          await page.goto(BASE + '/');
+          await page.goto(BASE + '/' + (at ? `#${at}` : ''));
           await page.waitForSelector('#meta .ver', { state: 'attached' });
           await page.waitForTimeout(400);
           const tag = `${name}-${variant}-${size}-${scheme}`;
           // the folded panels open, so the frame shows (and checks) them too
           if (variant === 'stress') for (const id of ['slipping', 'sources']) await page.click(`#${id} h2`);
           await check(page, tag, size !== 'desk');
+          if (at) await expandChecks(page, tag, at);
           await page.screenshot({ path: `${OUT}/${tag}.png`, fullPage: true });
           if (variant === 'stress' && scheme === 'light' && size !== 'desk') await taps(page, tag);
           console.log(`${OUT}/${tag}.png`);
@@ -202,6 +309,7 @@ async function taps(page, tag) {
         }
     }
     await standalone(b, name);
+    await expandPass(b, name);
     await b.close();
   }
   if (fails.length) {

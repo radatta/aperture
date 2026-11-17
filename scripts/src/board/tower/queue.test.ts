@@ -55,7 +55,19 @@ describe('parseQueue', () => {
       target: 12,
       excludedRuns: [],
     });
-    expect(q.data!.plan.map((p) => p.kind)).toEqual(['maintainer', 'merge', 'dev', 'ci']);
+    expect(q.data!.plan.map((p) => p.kind)).toEqual(['dev', 'maintainer', 'merge', 'dev', 'ci']);
+    // the plan-table fields, one of each
+    expect(q.data!.plan[0]).toMatchObject({
+      done: true,
+      doneAt: Date.parse('2026-11-08T05:48:00Z'),
+    });
+    expect(q.data!.plan[2]).toMatchObject({
+      you: '2 min',
+      lane: 'charlie-branch',
+      eta: { source: 'measured' },
+    });
+    expect(q.data!.planNotes).toHaveLength(1);
+    expect(q.data!.planAt).toBe(Date.parse('2026-11-08T06:00:00Z'));
   });
 
   it('sorts the plan by time, the unscheduled last in file order', () => {
@@ -108,7 +120,12 @@ describe('parseQueue', () => {
             },
           },
           { at: '2026-11-08T05:00:00Z', what: 'done flag', kind: 'dev', done: true },
-          { at: '2026-11-08T05:10:00Z', what: 'done at', kind: 'dev', done: '2026-11-08T05:25:00Z' },
+          {
+            at: '2026-11-08T05:10:00Z',
+            what: 'done at',
+            kind: 'dev',
+            done: '2026-11-08T05:25:00Z',
+          },
           { at: '2026-11-08T05:20:00Z', what: 'not done', kind: 'dev', done: false },
         ],
       }),

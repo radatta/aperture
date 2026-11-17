@@ -78,7 +78,8 @@ function parsePlan(x: unknown): Step[] | null {
     if (!y || !isStepPhase(y.phase) || !mins(y.lo) || !mins(y.hi)) return null;
     if ((y.lo as number) > (y.hi as number) || !SOURCES.includes(y.source as string)) return null;
     if (steps.some((t) => t.phase === y.phase)) return null;
-    const spent = Number.isInteger(y.spentMs) && (y.spentMs as number) >= 0 ? (y.spentMs as number) : 0;
+    const spent =
+      Number.isInteger(y.spentMs) && (y.spentMs as number) >= 0 ? (y.spentMs as number) : 0;
     steps.push({
       phase: y.phase,
       lo: y.lo as number,
@@ -198,7 +199,8 @@ export const LANE_USAGE =
 const RANGE = /^(\d{1,5})-(\d{1,5})(\?)?$/;
 function range(v: string, k: string) {
   const m = RANGE.exec(v);
-  if (!m || +m[1]! > +m[2]!) throw new Error(`${k} wants <lo>-<hi> minutes, lo ≤ hi (e.g. 20-35 or 20-35?)`);
+  if (!m || +m[1]! > +m[2]!)
+    throw new Error(`${k} wants <lo>-<hi> minutes, lo ≤ hi (e.g. 20-35 or 20-35?)`);
   return { lo: +m[1]!, hi: +m[2]!, guess: !!m[3] };
 }
 function planSpec(v: string): NonNullable<LaneArgs['plan']> {
@@ -252,8 +254,7 @@ export function parseLaneArgs(argv: string[]): LaneArgs {
       const v = val(++i, k);
       if (!/^\d{1,5}$/.test(v)) throw new Error('--files wants a number');
       a.files = Number(v);
-    }
-    else if (k === '--pr') {
+    } else if (k === '--pr') {
       const v = val(++i, k);
       if (!/^\d+$/.test(v)) throw new Error('--pr wants a number');
       a.pr = Number(v);
@@ -380,10 +381,7 @@ export function laneEta(
     next = cur ? { lo: now + left(cur.lo), hi: now + left(cur.hi) } : { lo: now, hi: now };
     guess = cur?.source === 'guess';
     const later = plan.filter((s) => STEP_PHASES.indexOf(s.phase) > at);
-    pr = later.reduce(
-      (r, s) => ({ lo: r.lo + s.lo * 60e3, hi: r.hi + s.hi * 60e3 }),
-      { ...next },
-    );
+    pr = later.reduce((r, s) => ({ lo: r.lo + s.lo * 60e3, hi: r.hi + s.hi * 60e3 }), { ...next });
     if (later.some((s) => s.source === 'guess')) guess = true;
     if (!cur && !later.length) next = pr = null;
   }
@@ -391,6 +389,9 @@ export function laneEta(
   if (fPr) pr = fPr.range;
   if (!next && !pr) return null;
   // a flag's own `?` decides its part; the plan's guesses count only for what the plan set
-  const src = [fNext ? fNext.guess : plan && next ? guess : false, fPr ? fPr.guess : plan && pr ? guess : false];
+  const src = [
+    fNext ? fNext.guess : plan && next ? guess : false,
+    fPr ? fPr.guess : plan && pr ? guess : false,
+  ];
   return { next, pr, source: src.some(Boolean) ? 'guess' : 'measured' };
 }

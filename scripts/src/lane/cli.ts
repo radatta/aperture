@@ -52,7 +52,16 @@ export function lanesAt(dir: string): Lanes {
     clear: (branch) =>
       void writeLane(
         dir,
-        { clear: true, phase: null, step: null, pr: null, slot: null, session: null, needs: null, ...NO_PLAN },
+        {
+          clear: true,
+          phase: null,
+          step: null,
+          pr: null,
+          slot: null,
+          session: null,
+          needs: null,
+          ...NO_PLAN,
+        },
         { branch, sha: null, session: null, now: new Date() },
       ),
   };

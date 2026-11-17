@@ -1156,7 +1156,12 @@ describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, for
     expect(v.next.soon.map((r) => r.what)).toEqual(['echo dev', 'merge echo']);
     // the lane's PR window starts before the slipped merge row: it's the next ask
     expect(v.next.ask).toMatchObject({ lo: NOW + 60 * MIN, what: 'echo PR', source: 'lane' });
-    expect(v.heads).toMatchObject({ needs: '0', now: '1 lane', done: '0', sources: expect.any(String) });
+    expect(v.heads).toMatchObject({
+      needs: '0',
+      now: '1 lane',
+      done: '0',
+      sources: expect.any(String),
+    });
     expect(v.heads.next).toMatch(/^ask ~\d\d:\d\d$/);
     expect(derive(inputs()).heads.next).toBe('0 to land');
   });

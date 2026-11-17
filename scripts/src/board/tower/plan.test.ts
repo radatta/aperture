@@ -170,9 +170,7 @@ describe('nextAsk', () => {
         row({ at: T('19:30'), what: 'merge y', kind: 'merge', lane: 'y' }),
       ],
       (b) =>
-        b === 'y'
-          ? { next: null, pr: { lo: T('19:40'), hi: T('20:05') }, source: 'guess' }
-          : null,
+        b === 'y' ? { next: null, pr: { lo: T('19:40'), hi: T('20:05') }, source: 'guess' } : null,
       noPr,
       NOW,
     );

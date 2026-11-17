@@ -24,28 +24,26 @@ export const parsePrs = (text: string): Pr[] => readPrs(text).list;
 export function readPrs(text: string): { list: Pr[]; forks: number } {
   const raw = JSON.parse(text) as unknown;
   if (!Array.isArray(raw)) throw new Error('gh pr list: not an array');
-  const rows = raw.map((x) => x as Record<string, unknown>).filter((x) => Number.isInteger(x.number));
+  const rows = raw
+    .map((x) => x as Record<string, unknown>)
+    .filter((x) => Number.isInteger(x.number));
   const forks = rows.filter((x) => x.isCrossRepository === true).length;
-  const list = (
-    rows
-      // a fork's head branch name is the fork owner's choice: it never stands for a lane
-      .filter((x) => x.isCrossRepository !== true)
-      .map((x) => ({
-        number: x.number as number,
-        title: typeof x.title === 'string' ? clean(x.title) : '',
-        branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
-        state: typeof x.state === 'string' ? x.state : '',
-        mergedAt: parseTime(x.mergedAt),
-        createdAt: parseTime(x.createdAt),
-        sha: oid(x.headRefOid),
-        mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
-        url:
-          typeof x.url === 'string' && x.url.startsWith('https://github.com/')
-            ? clean(x.url)
-            : null,
-        draft: x.isDraft === true,
-      }))
-  );
+  const list = rows
+    // a fork's head branch name is the fork owner's choice: it never stands for a lane
+    .filter((x) => x.isCrossRepository !== true)
+    .map((x) => ({
+      number: x.number as number,
+      title: typeof x.title === 'string' ? clean(x.title) : '',
+      branch: typeof x.headRefName === 'string' ? clean(x.headRefName) : '',
+      state: typeof x.state === 'string' ? x.state : '',
+      mergedAt: parseTime(x.mergedAt),
+      createdAt: parseTime(x.createdAt),
+      sha: oid(x.headRefOid),
+      mergeSha: oid((x.mergeCommit as { oid?: unknown } | null)?.oid),
+      url:
+        typeof x.url === 'string' && x.url.startsWith('https://github.com/') ? clean(x.url) : null,
+      draft: x.isDraft === true,
+    }));
   return { list, forks };
 }
 

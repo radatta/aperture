@@ -9,5 +9,54 @@
   "pr": null,
   "slot": "dev",
   "needs": null,
-  "updatedAt": "2026-11-08T06:00:00Z"
+  "updatedAt": "2026-11-08T06:00:00Z",
+  "files": 14,
+  "plan": [
+    {
+      "phase": "build",
+      "lo": 40,
+      "hi": 70,
+      "source": "measured",
+      "spentMs": 3300000
+    },
+    {
+      "phase": "gate",
+      "lo": 3,
+      "hi": 6,
+      "source": "measured",
+      "spentMs": 240000
+    },
+    {
+      "phase": "review",
+      "lo": 15,
+      "hi": 30,
+      "source": "measured",
+      "spentMs": 1500000
+    },
+    {
+      "phase": "dev",
+      "lo": 25,
+      "hi": 45,
+      "source": "measured",
+      "spentMs": 0
+    },
+    {
+      "phase": "pr",
+      "lo": 10,
+      "hi": 20,
+      "source": "guess",
+      "spentMs": 0
+    }
+  ],
+  "eta": {
+    "next": {
+      "lo": "2026-11-08T06:35:00Z",
+      "hi": "2026-11-08T06:50:00Z"
+    },
+    "pr": {
+      "lo": "2026-11-08T06:45:00Z",
+      "hi": "2026-11-08T07:10:00Z"
+    },
+    "source": "guess"
+  }
 }

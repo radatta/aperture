@@ -353,7 +353,14 @@ function laneSteps(file: LaneFile | null, now: number, pr: Pr | null) {
       hi: s.hi,
       source: s.source,
       spentMin: Math.round((s.spentMs + Math.max(0, live)) / 60e3),
-      state: s.phase === file.phase ? 'now' : at >= 0 && k < at ? 'done' : at < 0 && s.spentMs ? 'done' : 'todo',
+      state:
+        s.phase === file.phase
+          ? 'now'
+          : at >= 0 && k < at
+            ? 'done'
+            : at < 0 && s.spentMs
+              ? 'done'
+              : 'todo',
     };
   });
   return { steps, eta: lateEta(file, now, pr) };
@@ -362,7 +369,8 @@ const lateEta = (file: LaneFile | null, now: number, pr: Pr | null) =>
   file?.eta
     ? {
         ...file.eta,
-        late: !!file.eta.pr && file.eta.pr.hi < now && pr?.state !== 'OPEN' && pr?.state !== 'MERGED',
+        late:
+          !!file.eta.pr && file.eta.pr.hi < now && pr?.state !== 'OPEN' && pr?.state !== 'MERGED',
       }
     : null;
 
@@ -795,7 +803,8 @@ export function derive(i: Inputs): View {
   // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
   // within 2 h of now either way: tomorrow evening's step never jumps the undated ones); the rest follow it
   const mine = (q?.plan ?? []).filter(
-    (p) => p.kind === 'maintainer' && !p.done && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
+    (p) =>
+      p.kind === 'maintainer' && !p.done && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
   );
   const first = needs[0]?.what ?? mine[0]?.what ?? null;
   const next = {

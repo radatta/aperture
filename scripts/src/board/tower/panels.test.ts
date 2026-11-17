@@ -342,6 +342,17 @@ describe('tower v2', () => {
     expect(f).toContain('YOU    india-branch india  on you: admit to dev');
   });
 
+  it('a pr-open lane gets its PR badge', () => {
+    const q = state.queue.data!;
+    const devQueue = q.devQueue.map((l) =>
+      l.branch === 'hotel-branch' ? { ...l, state: 'pr-open' as const } : l,
+    );
+    const f = text(
+      compose({ ...state, queue: { ...state.queue, data: { ...q, devQueue } } }, live, 210, 55),
+    );
+    expect(f).toContain('PR     hotel-branch PR 42 hotel');
+  });
+
   it("the maintainer's to-dos show an age only past a day", () => {
     const f = text(compose(state, live, 210, 55));
     expect(f).not.toContain('today');
@@ -424,9 +435,7 @@ describe('tower v2', () => {
   });
 
   it('PLAN without a plan, and without a merge', () => {
-    const withPlan = (
-      loose: Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'>[],
-    ): string => {
+    const withPlan = (loose: Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'>[]): string => {
       const plan = loose.map((p) => ({ ...PLAN_DEFAULTS, ...p }));
       return text(
         compose(
