@@ -363,6 +363,12 @@ export interface DevCoachToday {
   momentum: { activeDays: number; lastActiveDay: string | null };
   unreviewed: { sittingId: string; slug: string }[];
 }
+// What getCoachStats answers — the fields the Patterns tab's steps read.
+export interface DevCoachStats {
+  attempts: number;
+  ranking: string[];
+  patterns: { pattern: string; attempts: number; firstTry: { hit: number; of: number } }[];
+}
 export interface DevCoachAttempt {
   id: string;
   slug: string;
@@ -696,6 +702,7 @@ export function createApiClient({
     listSittings: () => call<DevSitting[]>('listSittings', []),
     getCoachToday: () => call<DevCoachToday>('getCoachToday', []),
     listProblemRecords: () => call<DevProblemRecord[]>('listProblemRecords', []),
+    getCoachStats: () => call<DevCoachStats>('getCoachStats', []),
     // The coach's stored attempts, alive (the export's; the test user's are a handful).
     listCoachAttempts: async () =>
       (await call<{ coachAttempts: DevCoachAttempt[] }>('exportData', [])).coachAttempts,

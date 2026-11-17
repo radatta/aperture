@@ -97,6 +97,7 @@ describe('createApiClient', () => {
       'getAttachmentDownloadUrl',
       'getCalibration',
       'getCoachFocusRow',
+      'getCoachStats',
       'getCoachToday',
       'getDay',
       'getFinanceTransaction',

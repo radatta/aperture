@@ -130,7 +130,7 @@ reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
 
 ## Not yet
 
-The pattern dashboard, mocks, the
+Mocks, the
 history import, and countdown mode — each its own PR. `CoachToday.mode`, `target` and `arm` are already in the
 shape, and the gaps and cap are parameters, so countdown mode and an A/B arm add rather than change.
 
@@ -210,3 +210,28 @@ fixed rule: a failed first Submit with no Run before it proposes `no-trace`, els
 On the form (`ReviewForm.tsx`) the proposal marks its chip — a dashed outline and "Claude suggests Boundary — tap it
 to use it" — and never picks it, as draft lines arrive unticked: a Save keeps the cause as it was (the form's own
 `no-trace` suggestion included), and only a tap makes it the cause. A Save or a new draft clears the proposal.
+
+## The Patterns tab
+
+`/recruiting/patterns` (`app/src/pages/Recruiting/PatternsSection.tsx`, its test beside it): all 18 patterns in
+the order the focus ranks them (`getCoachStats().ranking`, weakest first tries first), then any pattern with
+nothing unseen left, then the rest in roadmap order. The day's focus is marked (`getCoachToday().focus`, the Today
+card's query); every other ranked pattern has **Set as focus** (`setCoachFocus`), and an override shows **Back to
+the coach's pick** (`setCoachFocus(null)`). A refused write says why inline; a failed read is a `LoadError` with
+Retry.
+
+Per pattern, over counted attempts only (test sittings never count), from `coachStats` plus `patternDetail`:
+
+| Field               | Counts                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `firstTry`          | the problem's first attempt ever, clean                                                                                |
+| `resolve`           | any later-day attempt, clean (derived from history, so no slot stamp)                                                  |
+| `submitsPerProblem` | captured submits ÷ problems with one, to 1 decimal; logged attempts carry none                                         |
+| `runBeforeSubmit`   | attempts with a captured submit whose first submit had a Run before it                                                 |
+| `traced`            | attempts with trace data whose trace stood at all three inputs at the first submit (`partial`, `skipped`, `none` miss) |
+| `causes`            | cause tags                                                                                                             |
+| `weeks`             | first tries per ISO week                                                                                               |
+
+Rates read "3 of 8"; a percentage joins from 5 tries, so a week of data stays honest. The weekly bars draw a week
+under 5 tries hollow. Charts are inline SVG, no dependency. Hooks: `app/src/data/hooks/useCoachStats.ts`, under
+the `coach` query prefix.

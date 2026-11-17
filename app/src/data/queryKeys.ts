@@ -19,6 +19,7 @@ export const qk = {
   // The LeetCode coach: one prefix, so a sitting or task write (a slot's status) refreshes the plan.
   coach: () => ['coach'] as const,
   coachToday: () => ['coach', 'today'] as const,
+  coachStats: () => ['coach', 'stats'] as const,
   stories: () => ['stories'] as const,
   // Flux sets: one prefix, so a save or delete refreshes every History / night-line read.
   fluxSetsAll: () => ['fluxSets'] as const,

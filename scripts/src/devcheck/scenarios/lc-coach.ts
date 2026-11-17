@@ -7,7 +7,8 @@
 // roll link, attempts (deleteCoachAttempt), slot changes (restored), the floor (off), the focus (cleared) and a story.
 // Problem slugs outside the catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The
 // schedule step's backdated attempts change the plan for any read after it, so the app steps after it read the plan
-// live, never an earlier step's; PR B's reads run over what it logged.
+// live, never an earlier step's; PR B's reads run over what it logged. PR D's Patterns tab (its ranking, failed reads,
+// a refused write, Set as focus and back, 390 px) runs just before the schedule step.
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import type { DevCoachSlot, DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
@@ -62,6 +63,8 @@ const expectParamError = async (what: string, call: () => Promise<unknown>) => {
   fail(`${what}: expected a param error (-32602), got a result`);
 };
 const slugs = (t: DevCoachToday) => t.slots.map((s) => s.slug);
+// The Patterns tab's rows: NeetCode's 18 (scripts doesn't depend on shared; neetcode150.test.ts pins the count).
+const PATTERN_COUNT = 18;
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 // What this run made and read, shared across steps (a scenario's steps run in order).
@@ -410,6 +413,84 @@ export const lcCoach: Scenario = {
         file: 'lambdas/src/mcp/coachTools.test.ts',
         test: 'is an empty list with a note',
         why: why.history,
+      },
+    },
+      id: 'patterns-table',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Recruiting › Patterns lists every pattern weakest first, the focus row marked; a practised pattern shows its server-counted first tries',
+    },
+    {
+      id: 'patterns-set-focus',
+      entry: 'ui',
+      kind: 'nominal',
+      what: '“Set as focus” on a pattern → the day’s plan holds it, day 1 of 3; “Back to the coach’s pick” hands back to the engine',
+    },
+    {
+      id: 'patterns-390',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'At 390 px all 18 rows and every “Set as focus” sit on screen, no sideways scroll (light and dark)',
+    },
+    {
+      id: 'patterns-load-error',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A failed stats read shows the error with Retry, never an empty ranking; Retry recovers',
+    },
+    {
+      id: 'patterns-empty',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'An account with no practice says nothing is ranked yet and lists every pattern not started',
+      offDev: {
+        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
+        test: 'an empty account: says nothing is ranked yet, lists every pattern not started, focus line shown',
+        why: why.history,
+      },
+    },
+    {
+      id: 'patterns-small-counts',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A pattern with 2 tries shows “1 of 2” and no percentage; 5 or more adds one',
+      offDev: {
+        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
+        test: 'a pattern with 2 tries shows counts and no percentage; 5 or more adds one',
+        why: 'the test user’s per-pattern counts depend on earlier runs; the same render path as patterns-table (proven on dev)',
+      },
+    },
+    {
+      id: 'patterns-focus-refused',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A refused focus write says why inline and changes nothing',
+      offDev: {
+        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
+        test: 'a refused focus write says why inline and changes nothing',
+        why: 'only a pattern with nothing unseen refuses, and those carry no button; the server half is floor-focus’s refusal (proven on dev)',
+      },
+    },
+    {
+      id: 'patterns-stats-detail',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Stats carry submits a problem, run-before-submit, trace rate and weekly first tries; test sittings never count',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'test sittings never count, and the range bounds every field',
+        why: 'the per-pattern counts on dev mix earlier runs’ history; the contract test runs the same fold on both clients',
+      },
+    },
+    {
+      id: 'patterns-sittings-unchanged',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The Sittings tab beside it is unchanged',
+      offDev: {
+        file: 'app/src/pages/Recruiting/PatternsSection.test.tsx',
+        test: 'the Sittings tab is unchanged next to it',
+        why: 'the Recruiting test suite renders it on the same route tree; the step opens /recruiting on dev as well',
       },
     },
   ],
@@ -761,6 +842,89 @@ export const lcCoach: Scenario = {
         if (records.some((r) => r.sittingIds.includes(state.sittingId)))
           fail('the flagged sitting still counts');
         await ctx.api.writes.linkLeetcodeRoll(null); // for the scenarios after
+      },
+    },
+    {
+      id: 'patterns',
+      title: 'Recruiting › Patterns: the ranking, a failed read, Set as focus and back, at 390 px',
+      entry: 'ui',
+      proves: ['patterns-table', 'patterns-set-focus', 'patterns-390', 'patterns-load-error'],
+      async run(ctx) {
+        const stats = await ctx.api.reads.getCoachStats();
+        const row = (p: string) => ctx.page.locator(`li[data-pattern="${p}"]`);
+        const setButton = (p: string) => row(p).getByRole('button', { name: /^Set .* as focus$/ });
+        // A failed read first: the error with Retry, no list; released, Retry recovers.
+        const down = await ctx.intercept('getCoachStats', { status: 500 });
+        await ctx.ui.goto('/recruiting/patterns');
+        await ctx.ui.expectText('Couldn’t load the patterns.');
+        if (await ctx.page.getByRole('list', { name: /^Patterns/ }).count())
+          fail('the ranking rendered over a failed read');
+        await ctx.shot('patterns-load-error');
+        await down.release();
+        await ctx.page.getByRole('button', { name: 'Retry' }).click();
+        const list = ctx.page.getByRole('list', { name: /^Patterns/ });
+        await list.waitFor();
+        const shown = await list.getByRole('listitem').count();
+        if (shown !== PATTERN_COUNT) fail(`${shown} pattern rows, want ${PATTERN_COUNT}`);
+        const today = await ctx.api.reads.getCoachToday();
+        if ((await row(today.focus.pattern).getAttribute('aria-current')) !== 'true')
+          fail(`the focus row (${today.focus.pattern}) isn’t marked`);
+        const practised = stats.patterns[0];
+        if (practised) {
+          const f = practised.firstTry;
+          const text = (await row(practised.pattern).textContent()) ?? '';
+          if (!text.includes(`First try ${f.hit} of ${f.of}`))
+            fail(
+              `${practised.pattern}: the row reads "${text}", the server counts ${f.hit} of ${f.of}`,
+            );
+        }
+        await ctx.ui.settle();
+        await ctx.shot('patterns');
+
+        // Set as focus through the page. The override is ledgered first by setting it through the API on another
+        // ranked pattern (the focus row is one id), so cleanup clears it whatever the page leaves.
+        const [a, b] = stats.ranking.filter((p) => p !== today.focus.pattern);
+        if (!a || !b) fail(`too few ranked patterns: ${stats.ranking.join(', ')}`);
+        await ctx.api.writes.setCoachFocus(a!);
+        await ctx.ui.goto('/recruiting/patterns');
+        await setButton(b!).click();
+        await ctx.page.locator(`li[data-pattern="${b}"][aria-current="true"]`).waitFor();
+        await ctx.ui.expectText(/Focus · .* · day 1 of 3/);
+        const held = (await ctx.api.reads.getCoachToday()).focus;
+        if (held.pattern !== b || held.day !== 1 || held.source !== 'override')
+          fail(`the plan's focus after Set as focus: ${JSON.stringify(held)}`);
+        await ctx.shot('patterns-focus-set');
+        await ctx.page.getByRole('button', { name: 'Back to the coach’s pick' }).click();
+        await ctx.page
+          .getByRole('button', { name: 'Back to the coach’s pick' })
+          .waitFor({ state: 'hidden' });
+        if ((await ctx.api.reads.getCoachToday()).focus.source !== 'engine')
+          fail('“Back to the coach’s pick” left the override');
+        await ctx.api.writes.setCoachFocus(null); // resolves the ledger entry; a no-op on the server now
+
+        // 390 px, before any typing: every row and its button on screen, no sideways scroll, both themes.
+        await ctx.page.setViewportSize({ width: 390, height: 844 });
+        for (const theme of ['light', 'dark'] as const) {
+          await ctx.ui.setTheme(theme);
+          await ctx.ui.goto('/recruiting/patterns');
+          await list.waitFor();
+          const wide = await ctx.page.evaluate<boolean>(
+            '(() => document.documentElement.scrollWidth > window.innerWidth)()',
+          );
+          if (wide) fail(`${theme}: the page scrolls sideways at 390`);
+          const buttons = ctx.page.getByRole('button', { name: /^Set .* as focus$/ });
+          for (let i = 0; i < (await buttons.count()); i++) {
+            const btn = buttons.nth(i);
+            await btn.scrollIntoViewIfNeeded();
+            const box = await btn.boundingBox();
+            if (!box || box.x < 0 || box.x + box.width > 390)
+              fail(`${theme}: ${await btn.getAttribute('aria-label')} is off screen at 390`);
+          }
+          await ctx.ui.settle();
+          await ctx.shot(`patterns-390-${theme}`);
+        }
+        await ctx.ui.goto('/recruiting'); // the Sittings tab still opens beside it
+        await ctx.page.getByRole('link', { name: 'Sittings' }).waitFor();
       },
     },
     {

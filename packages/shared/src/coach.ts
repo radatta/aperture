@@ -146,6 +146,8 @@ export function sittingAttempt(s: Sitting): Attempt {
     firstSubmitAccepted,
     submits: s.summary.submits,
     runs: s.summary.runs,
+    runFirst: first ? s.summary.runsBeforeFirstSubmit > 0 : null,
+    traced: first && s.summary.coach?.trace ? s.summary.coach.trace === 'traced' : null,
     lastError:
       last && last.verdict !== 'accepted'
         ? { verdict: last.verdict, statusMsg: last.statusMsg }
@@ -171,6 +173,8 @@ export function manualAttempt(a: CoachAttempt): Attempt {
     firstSubmitAccepted: a.outcome === 'clean', // a manual solved or failed was no first-try accept
     submits: 0,
     runs: 0,
+    runFirst: null,
+    traced: null,
     lastError: null,
     sittingIds: [],
     attemptIds: [a.id],
@@ -191,6 +195,8 @@ export interface Attempt {
   firstSubmitAccepted: boolean | null;
   submits: number;
   runs: number;
+  runFirst: boolean | null; // a Run before the first submit; null with no captured submit
+  traced: boolean | null; // all three trace inputs written before the first submit; null with no trace data
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
   sittingIds: string[]; // newest first
   attemptIds: string[]; // the logged attempts' (CoachAttempt) ids, newest first
@@ -222,6 +228,8 @@ function foldDay(parts: Attempt[]): Attempt {
     firstSubmitAccepted: first?.firstSubmitAccepted ?? null,
     submits: sorted.reduce((n, p) => n + p.submits, 0),
     runs: sorted.reduce((n, p) => n + p.runs, 0),
+    runFirst: first?.runFirst ?? null, // the first try's, like firstSubmitAccepted
+    traced: first?.traced ?? null,
     lastError: [...sorted].reverse().find((p) => p.submits || p.runs)?.lastError ?? null,
     sittingIds: sorted.flatMap((p) => p.sittingIds).reverse(),
     attemptIds: sorted.flatMap((p) => p.attemptIds).reverse(),
@@ -849,7 +857,7 @@ export interface Rate {
   hit: number;
   of: number;
 }
-export interface PatternStat {
+export interface PatternStat extends PatternDetail {
   pattern: PatternId;
   problems: number; // with an attempt in range
   attempts: number;
@@ -873,6 +881,7 @@ export interface CoachStats {
   weeks: { week: string; attempts: number; firstTry: Rate; resolve: Rate }[]; // ISO weeks in range, oldest first
   patterns: PatternStat[]; // those with an attempt in range: weakest first (rank), then the roadmap order
   weakest: PatternId | null; // the ranking's top now, whatever the range (it may have no row in `patterns`)
+  ranking: PatternId[]; // the focus ranking now, every pattern with something unseen left, weakest first
 }
 export interface CoachStatsRange {
   from?: string;
@@ -925,8 +934,12 @@ export function coachStats(
     weeks: [],
     patterns: [],
     weakest: ranked[0]?.pattern ?? null,
+    ranking: [...ranks.keys()],
   };
-  const pats = new Map<PatternId, PatternStat & { slugs: Set<string> }>();
+  const pats = new Map<
+    PatternId,
+    Omit<PatternStat, keyof PatternDetail> & { slugs: Set<string> }
+  >();
   const weeks = new Map<string, CoachStats['weeks'][number]>();
   const days = new Set<string>();
   const slugs = new Set<string>();
@@ -975,13 +988,75 @@ export function coachStats(
   out.activeDays = days.size;
   out.problems = slugs.size;
   out.weeks = [...weeks.values()].sort((a, b) => a.week.localeCompare(b.week));
+  const detail = patternDetail(attempts, from, to);
   out.patterns = [...pats.values()]
-    .map(({ slugs: s, ...p }) => ({ ...p, problems: s.size }))
+    .map(({ slugs: s, ...p }) => ({ ...p, problems: s.size, ...detail.get(p.pattern)! }))
     .sort(
       (a, b) =>
         (a.rank ?? Infinity) - (b.rank ?? Infinity) || orderOf(a.pattern) - orderOf(b.pattern),
     );
   return out;
+}
+
+// --- The Patterns tab's per-pattern detail (coach_stats grows it): how each try went, over the same range ---
+export interface PatternDetail {
+  submitsPerProblem: number | null; // captured submits ÷ problems with one, to 1 decimal; null with none
+  runBeforeSubmit: Rate; // first tries with a captured submit that ran first
+  traced: Rate; // first tries with trace data that traced all three inputs
+  weeks: { week: string; firstTry: Rate }[]; // ISO weeks in range with an attempt, oldest first
+}
+// Every attempt is a try here (a re-solve is one too); the first-try rate per week reuses coachStats' rule — the
+// problem's first attempt ever.
+export function patternDetail(
+  attempts: readonly Attempt[],
+  from: string | null,
+  to: string,
+): Map<PatternId, PatternDetail> {
+  const seen = new Set<string>();
+  const acc = new Map<
+    PatternId,
+    PatternDetail & { submits: number; submitted: Set<string>; byWeek: Map<string, Rate> }
+  >();
+  for (const a of attempts) {
+    const first = !seen.has(a.slug);
+    seen.add(a.slug);
+    if ((from !== null && a.day < from) || a.day > to) continue;
+    const d =
+      acc.get(a.pattern) ??
+      acc
+        .set(a.pattern, {
+          submitsPerProblem: null,
+          runBeforeSubmit: blankRate(),
+          traced: blankRate(),
+          weeks: [],
+          submits: 0,
+          submitted: new Set(),
+          byWeek: new Map(),
+        })
+        .get(a.pattern)!;
+    if (a.submits > 0) {
+      d.submits += a.submits;
+      d.submitted.add(a.slug);
+    }
+    if (a.runFirst !== null) bump(d.runBeforeSubmit, a.runFirst);
+    if (a.traced !== null) bump(d.traced, a.traced);
+    if (first) {
+      const wk = isoWeekKey(a.day);
+      bump(d.byWeek.get(wk) ?? d.byWeek.set(wk, blankRate()).get(wk)!, a.outcome === 'clean');
+    }
+  }
+  return new Map(
+    [...acc].map(([p, { submits, submitted, byWeek, ...d }]) => [
+      p,
+      {
+        ...d,
+        submitsPerProblem: submitted.size ? Math.round((submits / submitted.size) * 10) / 10 : null,
+        weeks: [...byWeek]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([week, firstTry]) => ({ week, firstTry })),
+      },
+    ]),
+  );
 }
 
 // --- Writes' inputs ---

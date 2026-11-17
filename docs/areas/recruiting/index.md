@@ -225,7 +225,7 @@ ever does must sanitise it.
 
 `/recruiting` → **Sittings**: the open sitting pinned with its running clock, the rest by day with the
 outcome (`first submit accepted` / `accepted on submit N` / `not accepted` / `no submit yet`, or `no submit` once ended), runs, and
-`dropped`; a dot marks a reviewed one. Stories is the other tab.
+`dropped`; a dot marks a reviewed one. Patterns ([coach.md](coach.md) → _The Patterns tab_) and Stories are the other tabs.
 
 Each row opens **`/recruiting/sittings/:id`**: the problem (linked to LeetCode) with its tags and companies; the
 outcome, time to first submit, duration, runs and submits, and "Claude watched live · N pulls"; the timeline
