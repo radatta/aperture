@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { REPO_SLUG } from '../../../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../../../mac-root.ts';
 import { sessionNames } from '../../sessions.ts';
+import { behindCheck, type Behind } from '../behind.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
 import {
   ChecksCache,
@@ -128,7 +129,7 @@ export const dayStart = (now: number) => {
   return Math.min(d.getTime(), now - 12 * 3600e3);
 };
 
-export function build(a: Args) {
+export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
   const fx = a.fixtures;
   const paths: Paths = fx ? fixturePaths(fx) : defaultPaths(REPO);
   const clock = () => a.now ?? Date.now();
@@ -177,6 +178,21 @@ export function build(a: Args) {
     }).trim();
   } catch {
     // not a checkout
+  }
+  // Behind main: the served commit against the checkout's HEAD, asked on each page poll (behind.ts). Fixtures never.
+  const repoGit = (args: string[]) =>
+    execFileSync('git', ['-C', REPO, ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  let behind = deps.behind ?? (() => null);
+  if (!deps.behind && version && !fx) {
+    try {
+      const gitDir = repoGit(['rev-parse', '--absolute-git-dir']).trim();
+      behind = behindCheck({ version, gitDir, git: repoGit });
+    } catch {
+      // no git dir: the chip never shows
+    }
   }
   const macHist: { t: number; usedMiB: number; totalMiB: number }[] = [];
   const startedAt = clock();
@@ -233,6 +249,7 @@ export function build(a: Args) {
     const inputs: Inputs = {
       now,
       version,
+      behind: behind(),
       tower,
       lanes: lanes.lanes,
       laneProblems: lanes.problems,
@@ -270,7 +287,7 @@ export function build(a: Args) {
       },
     };
   }
-  return { poll, view, sample, clock, paths };
+  return { poll, view, sample, clock, paths, version };
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -302,7 +319,10 @@ async function run(a: Args) {
   // The pidfile is written only once the port is bound: `board.sh tower` reads "running" from it, and the port
   // itself is the one-server lock (a second server fails with EADDRINUSE). Fixture servers never write it.
   const pidFile = process.env.APERTURE_TOWER_PID;
-  if (pidFile && !a.fixtures) writeFileSync(pidFile, `${process.pid}\n`);
+  if (pidFile && !a.fixtures) {
+    writeFileSync(`${pidFile}.sha`, `${t.version ?? ''}\n`); // the commit it serves: board.sh tower version
+    writeFileSync(pidFile, `${process.pid}\n`);
+  }
   void t.poll(t.clock());
   setInterval(() => {
     void t.poll(t.clock());

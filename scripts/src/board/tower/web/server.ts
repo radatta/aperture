@@ -30,7 +30,8 @@ const HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
 
 // Pure of sockets: tests call it with stand-in req/res. The page and its script are read once, here: they must be
 // the same commit as the View code in this process (/workspace moves at every kickoff, and nothing restarts the
-// tower then), so an edit needs `board.sh tower restart`, and the page's version check then reloads it.
+// tower then: the page says "behind main"), so an edit needs `pnpm board sync-main` (or `board.sh tower restart`),
+// and the page's version check then reloads it.
 export function createHandler(getState: GetState, dir = HERE) {
   const files = Object.fromEntries(
     Object.entries(STATIC).map(([path, [name, type]]) => [

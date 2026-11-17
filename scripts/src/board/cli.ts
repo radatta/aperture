@@ -17,6 +17,7 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
+import { syncMain } from './sync-main.ts';
 import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
@@ -28,7 +29,8 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   overlap <repo> <boardDir>             writes <boardDir>/overlap.json
   report <historyDir> [days] [--json]   usage by mix + job peaks
   barriers <historyDir> [days] [--json] how limiting the cap is
-  lane <phase> [--step …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)`;
+  lane <phase> [--step …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
+  sync-main                             the main checkout to origin/main; restarts the web tower if its code changed`;
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
 export const FLAGS: Record<string, Spec> = {
@@ -38,6 +40,7 @@ export const FLAGS: Record<string, Spec> = {
   report: { bare: ['json'], args: 2 },
   barriers: { bare: ['json'], args: 2 },
   lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
+  'sync-main': {},
 };
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.
@@ -189,9 +192,15 @@ export function main(argv: string[], stdin: () => string): string {
         now,
       });
     }
+    case 'sync-main':
+      return syncMain(
+        (c, a, cwd) =>
+          execFileSync(c, a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+        process.env.INIT_CWD ?? process.cwd(), // pnpm runs scripts from the root; INIT_CWD is where it was typed
+      );
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | lane (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | lane | sync-main (got ${cmd ?? 'nothing'})`,
       );
   }
 }

@@ -3,6 +3,7 @@
 // Truth comes from locks, PRs and Actions runs; lane files add the phase, the step and what the maintainer must do.
 import { SHAPE_PATHS } from '../../deploy-base.ts';
 import { hhmm } from './fmt.ts';
+import type { Behind } from './behind.ts';
 import type { Checks, Cached, GhRun } from './gh.ts';
 import type { Costs, MacRead } from './health.ts';
 import type { LaneFile, LaneProblem, Needs } from './lanes.ts';
@@ -96,9 +97,10 @@ export type View = {
   v: 1;
   now: number;
   version: string | null;
+  behind: Behind | null; // the checkout moved past the served commit in a tower file: run `pnpm board sync-main`
   needs: NeedItem[];
   slots: SlotCard[];
-  active: LaneRow[]; // NOW: building, testing, PR, checks failed, merged, deploying
+  active: LaneRow[]; // NOW: in-flight lanes (needs you, ready, on dev, building, testing, PR, checks failed)
   next: {
     // dispatch's landing order (queue.json mergeOrder), each entry with its lane's row; merged ones dropped
     order: { branch: string; pr: number | null; note: string | null; row: LaneRow }[];
@@ -135,6 +137,7 @@ export type View = {
 export type Inputs = {
   now: number;
   version: string | null;
+  behind: Behind | null;
   tower: TowerState;
   lanes: LaneFile[];
   laneProblems: LaneProblem[];
@@ -392,6 +395,19 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     );
   }
 
+  // a lane file past its merge, with no open PR (none in the newest 40, or a closed one): finished, so off NOW even
+  // while it still holds a lock (its slot card shows that). An open PR wins: PRs are truth over lane files.
+  if (file && (file.phase === 'merged' || file.phase === 'cleanup') && pr?.state !== 'OPEN')
+    return row(
+      'MERGED',
+      'MERGED',
+      pr
+        ? `lane file says ${file.phase}; PR ${pr.number} is ${pr.state.toLowerCase()}`
+        : 'PR not in the newest 40 read; `pnpm board lane --clear` at Cleanup',
+      'warn',
+      file.phaseSince,
+    );
+
   for (const slot of ['dev', 'devb'] as const) {
     const lock = slot === 'dev' ? i.tower.lock : i.tower.lockB;
     if (liveLock(lock, i.now) && lock.branch === branch) {
@@ -481,15 +497,6 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
         return row('BUILDING', 'BUILDING', words, 'normal', null);
     }
   }
-  // a lane file past its merge whose PR is no longer in the PR list (the newest 40): Cleanup clears it
-  if ((file.phase === 'merged' || file.phase === 'cleanup') && !pr)
-    return row(
-      'MERGED',
-      'MERGED',
-      'PR not in the newest 40 read; `pnpm board lane --clear` at Cleanup',
-      'warn',
-      file.phaseSince,
-    );
   const word: Record<string, string> = {
     plan: 'Plan',
     build: 'Build',
@@ -606,7 +613,13 @@ export function derive(i: Inputs): View {
 
   // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for the maintainer, sources only the maintainer can fix.
   const needs: NeedItem[] = [];
-  for (const l of i.lanes) if (l.needs) needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
+  for (const l of i.lanes) {
+    if (!l.needs) continue;
+    // an ask written before its lane's PR merged is finished with the lane; one written after is deliberate
+    const p = prFor(l.branch, prs, queued.get(l.branch)?.pr ?? null, l.pr ?? null);
+    if (p?.state === 'MERGED' && p.mergedAt !== null && l.updatedAt < p.mergedAt) continue;
+    needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
+  }
   // an unreadable lane file may have carried a needs item: say so where the maintainer looks first
   for (const p of i.laneProblems)
     needs.push({
@@ -709,7 +722,8 @@ export function derive(i: Inputs): View {
     };
   });
 
-  // WAITING lanes show in NEXT's dev order, not in NOW
+  // WAITING lanes show in NEXT's dev order, not in NOW; finished ones (merged, deploying, deployed, failed) only in
+  // DONE TODAY, whose deploy marks and the DEPLOY FAILED need come from the PRs, not from NOW
   const nowStates: State[] = [
     'NEEDS YOU',
     'READY',
@@ -718,9 +732,6 @@ export function derive(i: Inputs): View {
     'TESTING',
     'PR',
     'CHECKS FAILED',
-    'MERGED',
-    'DEPLOYING',
-    'DEPLOY FAILED',
   ];
   const byBranch = new Map(rows.map((r) => [r.branch, r]));
   // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
@@ -829,6 +840,7 @@ export function derive(i: Inputs): View {
     v: 1,
     now: i.now,
     version: i.version,
+    behind: i.behind,
     needs,
     slots,
     active: rows.filter((r) => nowStates.includes(r.state)),

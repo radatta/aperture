@@ -164,6 +164,9 @@ describe('--once on the fixtures', () => {
     expect(v.slipping.map((s: V) => s.kind)).toEqual(['followup', 'parked', 'quiet']);
     expect(v.health.mac.state).toBe('stale');
     expect(v.health.aws.total).toBeCloseTo(0.35);
+    expect(v.behind).toBeNull(); // fixtures never compare commits
+    // fixtures/board/lanes/mike-branch.json is merged with no PR in the list: finished, so not in NOW
+    expect(v.active.map((r: V) => r.branch)).not.toContain('mike-branch');
     // fixtures/prs.json has a fork's open PR on echo-branch's name: no lane, slot or row picks it up
     expect(JSON.stringify(v)).not.toContain('/pull/43');
     // the Actions-minutes estimate is gone (public repo, free runners): no tile, no source row
@@ -239,7 +242,7 @@ describe('board.sh tower status', () => {
   });
 
   // A tower on a free port: the board's own (a temp board, no GitHub) or a fixtures proof server.
-  async function web(port: number, fixtures: boolean) {
+  async function web(port: number, fixtures: boolean, extra: NodeJS.ProcessEnv = {}) {
     const board = mkdtempSync(join(tmpdir(), 'tower-board-'));
     const args = fixtures ? ['--fixtures', FIXTURES, '--now', '2026-11-08T06:10:00Z'] : [];
     const c = spawn(
@@ -259,6 +262,7 @@ describe('board.sh tower status', () => {
           ...process.env,
           APERTURE_BOARD_DIR: board,
           APERTURE_DEVLOCK_SOURCE: `file:${join(board, 'missing')}`, // its lock refresh never asks GitHub
+          ...extra,
         },
       },
     );
@@ -284,6 +288,30 @@ describe('board.sh tower status', () => {
     } finally {
       c.kill();
       rmSync(pidFile, { force: true });
+      rmSync(board, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('records the commit it serves beside the pidfile: tower version prints it, stop removes it', async () => {
+    const port = await freePort();
+    const pidFile = join(tmpdir(), `tower-pid-sha-${process.pid}`);
+    rmSync(pidFile, { force: true });
+    const e = { APERTURE_TOWER_PID: pidFile, APERTURE_TOWER_PORT: `${port}` };
+    const { c, board } = await web(port, false, { APERTURE_TOWER_PID: pidFile });
+    try {
+      for (let i = 0; i < 50 && !existsSync(pidFile); i++)
+        await new Promise((r) => setTimeout(r, 100));
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const r = tower('version', e);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe(head);
+      tower('stop', e);
+      expect(existsSync(`${pidFile}.sha`)).toBe(false);
+      expect(tower('version', e).status).toBe(1); // stopped
+    } finally {
+      c.kill();
+      rmSync(pidFile, { force: true });
+      rmSync(`${pidFile}.sha`, { force: true });
       rmSync(board, { recursive: true, force: true });
     }
   }, 20_000);
@@ -378,5 +406,25 @@ describe('the day boundary and the Mac series (2026-11-14)', () => {
     } finally {
       rmSync(fx, { recursive: true, force: true });
     }
+  });
+});
+
+describe('behind main (the served commit vs the checkout)', () => {
+  it('reaches the View on each request, from the check build was given', () => {
+    let calls = 0;
+    const t = build(
+      {
+        port: 0,
+        bind: '127.0.0.1',
+        fixtures: FIXTURES,
+        now: Date.parse('2026-11-08T06:10:00Z'),
+        gh: false,
+        once: true,
+      },
+      { behind: () => (calls++, { head: 'b'.repeat(40), files: 2 }) },
+    );
+    expect(t.view(false).behind).toEqual({ head: 'b'.repeat(40), files: 2 });
+    t.view(false);
+    expect(calls).toBe(2); // asked per request: no timer
   });
 });
