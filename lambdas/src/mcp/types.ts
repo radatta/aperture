@@ -16,6 +16,8 @@ export interface ToolContext {
   upload: (url: string, bytes: Buffer, contentType: string) => Promise<void>;
   // The clock, for tools that resolve "today" server-side (finance). Defaults to Date.now.
   now?: () => number;
+  // A wait between polls (leetcode_today waiting on the day's AI pick). Defaults to a real timer; tests skip it.
+  sleep?: (ms: number) => Promise<void>;
 }
 
 // A minimal JSON-Schema object shape — enough for tools/list. We EMIT this for the client's benefit; we

@@ -20,6 +20,9 @@ import { createS3ObjectStore } from '../s3/objects';
 import { noopPlaid } from '../plaid/gateway';
 import { noopInvoker } from '../finance/invoker';
 import { createLiveAnthropic } from '../anthropic/liveAnthropic';
+import { noopPickInvoker } from '../coach/invoker';
+import type { CoachPickInvoker } from '../coach/invoker';
+import { livePickInvoker } from '../coach/liveInvoker';
 import { handleMcpMessage } from './protocol';
 import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
@@ -35,6 +38,10 @@ const APP_URL = process.env.APP_URL ?? '';
 const google = createLiveGoogle({ stage: STAGE, appUrl: APP_URL });
 // parse_task's model call (Raycast quick add) — the same gateway and SSM key as the BFF.
 const anthropic = createLiveAnthropic({ stage: STAGE });
+// leetcode_today starts the day's AI pick when it's the first reader (cdk coach-worker; none → disabled).
+const coachPickInvoker = process.env.COACH_WORKER_FN
+  ? livePickInvoker(process.env.COACH_WORKER_FN)
+  : noopPickInvoker();
 
 interface HttpEvent {
   requestContext?: { http?: { path?: string; method?: string } };
@@ -103,6 +110,7 @@ export interface McpDeps {
   presigner: Presigner;
   objects: ObjectStore;
   anthropic: AnthropicGateway;
+  coachPickInvoker: CoachPickInvoker;
   mcpVerifier: () => Verifier;
   upload: ToolContext['upload'];
 }
@@ -112,6 +120,7 @@ const live: McpDeps = {
   presigner,
   objects,
   anthropic,
+  coachPickInvoker,
   mcpVerifier: requireMcpVerifier,
   upload: uploadToPresigned,
 };
@@ -232,6 +241,7 @@ async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
           plaid: noopPlaid(),
           financeInvoker: noopInvoker(),
           anthropic: d.anthropic,
+          coachPickInvoker: d.coachPickInvoker,
         },
       ),
     upload: d.upload,

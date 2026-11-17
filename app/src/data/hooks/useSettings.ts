@@ -18,6 +18,8 @@ export function useUpdateSettings() {
       // The finance overview is computed from the budget and payment day — re-read it.
       if ('financeBudgetCents' in patch || 'financePaymentDay' in patch)
         void qc.invalidateQueries({ queryKey: qk.finance() });
+      // The AI pick switch changes the day's plan (a stored pick shows or not; a pick may now be due).
+      if ('coachAiPick' in patch) void qc.invalidateQueries({ queryKey: qk.coach() });
     },
   });
 }

@@ -564,7 +564,9 @@ const UP: Record<Difficulty, Difficulty | null> = { Easy: 'Medium', Medium: 'Har
 const DIFF_RANK: Record<Difficulty, number> = { Easy: 0, Medium: 1, Hard: 2 };
 const dayStartHhmm = (h: number) => `${String(h).padStart(2, '0')}:00`;
 const dayStartAt = (day: string, h: number) => zonedEpoch(day, dayStartHhmm(h), USER_TIME_ZONE);
-const pickable = (c: CatalogProblem, seen: ReadonlySet<string>) => !c.premium && !seen.has(c.slug);
+// A catalog problem the plan may offer: not premium-only, never seen. The AI pick's candidates use it too.
+export const pickable = (c: CatalogProblem, seen: ReadonlySet<string>) =>
+  !c.premium && !seen.has(c.slug);
 
 // Every problem on the plan: each slot's, and each engine pick a swap replaced.
 const slotProblems = (slots: readonly Pick<CoachSlot, 'slug' | 'swappedFrom'>[]) =>

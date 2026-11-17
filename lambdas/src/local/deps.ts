@@ -11,6 +11,12 @@ import { noopObjectStore } from '../s3/objects';
 import { noopPlaid } from '../plaid/gateway';
 import { noopInvoker } from '../finance/invoker';
 import { noopAnthropic } from '../anthropic/gateway';
+import type { AnthropicGateway } from '../anthropic/gateway';
+import { inlinePickInvoker } from '../coach/invoker';
+import { runCoachPick } from '../coach/pick';
+import { Repo } from '../ddb/repo';
+import { liveWrites } from '../ddb/writes';
+import { standInCoachPick } from '@aperture/shared';
 import { createECDH } from 'node:crypto';
 import type { PublicKeyReader } from '../push/publicKey';
 import type { BffDeps } from '../index';
@@ -24,12 +30,31 @@ export interface LocalAuth {
 
 export function localDeps(auth: LocalAuth): { bff: BffDeps; mcp: McpDeps; doc: InMemoryDoc } {
   const doc = new InMemoryDoc();
+  // The coach's AI pick runs the real worker inline, answered by the shared stand-in through the real guardrails:
+  // every step but the model (the real call is dev's slow row).
+  const standIn: AnthropicGateway = {
+    ...noopAnthropic(),
+    coachPick: async (req) => ({
+      ok: true,
+      fields: standInCoachPick(req.ctx),
+      model: 'local-stand-in',
+      usage: null,
+      ms: 0,
+    }),
+  };
+  const coachPickInvoker = inlinePickInvoker((e) =>
+    runCoachPick(
+      { repo: new Repo(doc, liveWrites(doc), e.userId), anthropic: standIn, now: Date.now },
+      e,
+    ),
+  );
   const shared = {
     doc,
     google: noopGoogle(),
     presigner: fakePresigner(),
     objects: noopObjectStore(),
     anthropic: noopAnthropic(), // raw save, as a stage with no key; real-model rows run on dev
+    coachPickInvoker,
   };
   // The deployed construction exactly: the BFF's un-bound verifier denying the claude client, and the MCP
   // verifier bound to it (index.ts, mcp/index.ts requireMcpVerifier).

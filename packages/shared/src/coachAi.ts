@@ -9,6 +9,7 @@ import {
   catalogProblem,
   coachPools,
   coachStats,
+  pickable,
   planDay,
 } from './coach';
 import type { CoachInput, CoachParams, CoachToday } from './coach';
@@ -144,9 +145,10 @@ export function coachPickContext(
     add(c.slug, 'stretch', null, ruleOf('stretch', c.slug));
   if (!locked)
     for (const p of top3.filter((p) => p !== focus.pattern))
-      for (const c of NEETCODE_150.filter(
-        (c) => c.pattern === p && !c.premium && !seen.has(c.slug),
-      ).slice(0, CAPS.ifFocus))
+      for (const c of NEETCODE_150.filter((c) => c.pattern === p && pickable(c, seen)).slice(
+        0,
+        CAPS.ifFocus,
+      ))
         add(c.slug, 'new', p, `New in ${PATTERN_NAMES[p]}, only with the focus moved there`);
 
   const prev = prevAiDay(input);
@@ -336,7 +338,8 @@ export type CoachPickResult =
       usage: CoachDayAi['usage'];
       ms: number | null;
     };
-// The result lands only on the claim that asked for it, still pending.
+// The result lands only on the claim that asked for it, still pending. One that comes back after readers saw the
+// claim go stale is kept as that timeout (with its tokens), so a day never flips from the rules to a pick.
 export function settleAiRow(
   cur: CoachDay,
   claimId: string,
@@ -344,6 +347,7 @@ export function settleAiRow(
   now: number,
 ): CoachDay | null {
   if (cur.ai?.status !== 'pending' || cur.ai.claimId !== claimId) return null;
+  const late = now - cur.ai.claimedAt > AI_PICK_STALE_MS;
   const common = {
     settledAt: now,
     model: res.model,
@@ -353,9 +357,16 @@ export function settleAiRow(
   };
   return {
     ...cur,
-    ai: res.ok
-      ? { ...cur.ai, ...common, status: 'ok', picks: res.picks, note: res.note, focus: res.focus }
-      : { ...cur.ai, ...common, status: 'fallback', reason: res.reason, detail: res.detail },
+    ai:
+      res.ok && !late
+        ? { ...cur.ai, ...common, status: 'ok', picks: res.picks, note: res.note, focus: res.focus }
+        : {
+            ...cur.ai,
+            ...common,
+            status: 'fallback',
+            reason: late ? 'timeout' : (res as Extract<CoachPickResult, { ok: false }>).reason,
+            detail: late ? 'late' : (res as Extract<CoachPickResult, { ok: false }>).detail,
+          },
   };
 }
 

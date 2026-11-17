@@ -128,6 +128,8 @@ export const dueBeyondSlots = (t: Pick<CoachToday, 'due' | 'slots'>) =>
 // Home's morning line: "LeetCode · 4 today · +1 re-solve due". A floor day names its one problem; a day with
 // every slot done or skipped says so.
 export function coachGlance(t: CoachToday): string {
+  if (t.ai?.status === 'due' || t.ai?.status === 'pending')
+    return 'LeetCode · picking today’s problems…';
   const live = t.slots.filter((s) => s.status !== 'skipped');
   const left = live.filter((s) => s.status !== 'done').length;
   const head =

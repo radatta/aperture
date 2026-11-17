@@ -59,7 +59,12 @@ export const SLOT_RULES: Record<CoachSlot['kind'] | 'off-plan', string> = {
 const SOLUTION_RULE =
   'Asked for the solution: push back once with the live numbers (passed/total, the failing input — "trace it"). If they still want it, give it, then offer mark_peeked (it schedules the re-solve) and say when it is due.';
 const TODAY_NOTE =
-  'Say "due", never "overdue", and never count missed days or streaks — momentum is "N of the last 7 days". Offer the floor (one problem) when they are short on time or back after a gap. Open slot 1 with its link when they are ready. A new sitting starts from Start on the LeetCode page, never from here.';
+  'Say "due", never "overdue", and never count missed days or streaks — momentum is "N of the last 7 days". Offer the floor (one problem) when they are short on time or back after a gap. Open slot 1 with its link when they are ready. A new sitting starts from Start on the LeetCode page, never from here. When ai.source is "ai", Opus picked today’s slots: coach from ai.note and each slot’s `why` (its `reason` is the rules’ facts). When ai.notice is set, say it once, plainly, and coach from the rules’ slots.';
+const PICKING_NOTE =
+  'Opus is still picking today’s problems: say so, call leetcode_today again in about 10 seconds, and don’t coach from a plan until it lands.';
+// leetcode_today waits this long for a pick it started (or found running) before answering `pending`.
+const PICK_WAIT_MS = 9_000;
+const PICK_POLL_MS = 1_500;
 
 const slotView = (s: CoachSlot, n: number) => ({
   n,
@@ -70,6 +75,7 @@ const slotView = (s: CoachSlot, n: number) => ({
   pattern: PATTERN_NAMES[s.pattern],
   difficulty: s.difficulty,
   reason: s.reason,
+  why: s.aiWhy, // the AI pick's "why today"; null on a rule slot
   capMin: s.capMin,
   status: s.status,
   outcome: s.outcome,
@@ -77,12 +83,28 @@ const slotView = (s: CoachSlot, n: number) => ({
   swappedFrom: s.swappedFrom,
   easier: s.alternatives,
 });
+// While the pick is due or running the slots aren't shown: they are about to be replaced.
 export function todayView(t: CoachToday) {
+  const picking = t.ai?.status === 'due' || t.ai?.status === 'pending';
   return {
     day: t.day,
     mode: t.mode,
     focus: { ...t.focus, pattern: PATTERN_NAMES[t.focus.pattern], patternId: t.focus.pattern },
-    slots: t.slots.map((s, i) => slotView(s, i + 1)),
+    ai: t.ai && {
+      status: t.ai.status,
+      source: t.ai.source,
+      notice: t.ai.notice,
+      reason: t.ai.reason,
+      note: t.ai.note,
+      focusChange: t.ai.focusChange && {
+        from: PATTERN_NAMES[t.ai.focusChange.from],
+        to: PATTERN_NAMES[t.ai.focusChange.to],
+        why: t.ai.focusChange.why,
+      },
+      model: t.ai.model,
+      ...(picking ? { next: PICKING_NOTE } : {}),
+    },
+    slots: picking ? [] : t.slots.map((s, i) => slotView(s, i + 1)),
     floor: t.floor,
     offPlan: t.offPlan,
     due: t.due.map((q) => ({ title: q.title, slug: q.slug, dueDay: q.dueDay, track: q.track })),
@@ -118,6 +140,7 @@ export function slotOfSitting(
     kind,
     floor: !slot && !!floor,
     reason: slot?.reason ?? floor?.reason ?? 'Not one of today’s slots',
+    why: slot?.aiWhy ?? null,
     capMin,
     overCap: sittingMinutes(sitting, at) >= capMin,
     rules: `${SLOT_RULES[kind]} ${SOLUTION_RULE}`,
@@ -264,7 +287,8 @@ export const COACH_TOOLS: Tool[] = [
     description: [
       'The LeetCode coach’s plan for today — open every practice conversation with it ("what’s today?", "continue"). Up to 4 slots in order (carry-over, new in the focus pattern, re-solve due, stretch), each with its reason, 30-minute cap, status (open / in-progress / done / skipped) and easier alternatives; the focus pattern and its day of 3 with why; the floor (one problem that counts as showing up); sittings off the plan; the re-solves due and due in the next 48 h; momentum (active days of the last 7); ended sittings with no cause tag yet.',
       'Recomputed on every call from their sittings, so a new conversation picks up exactly where the last left off. `rules` says how to coach each slot kind; `note` how to talk about it.',
-      'Read-only.',
+      '`ai`: with their AI pick on, Opus picks the day’s slots once a day, from the rules’ candidates, with a `why` per slot and an optional day `note`; the first read of the day starts it (their setting, decided once — no yes needed) and this waits up to ~9 s for it. `ai.status` pending: slots are empty, call again shortly. `ai.notice`: the pick failed and the slots are the rules’.',
+      'Otherwise read-only.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -275,9 +299,17 @@ export const COACH_TOOLS: Tool[] = [
     },
     async run(args, ctx) {
       const day = optDay(args.day, 'day');
-      return todayView(
-        (await ctx.dispatch('getCoachToday', day === undefined ? [] : [day])) as CoachToday,
-      );
+      if (day !== undefined)
+        return todayView((await ctx.dispatch('getCoachToday', [day])) as CoachToday);
+      let t = (await ctx.dispatch('getCoachToday', [])) as CoachToday;
+      if (t.ai?.status === 'due') t = (await ctx.dispatch('startCoachPick', [])) as CoachToday;
+      const sleep = ctx.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+      for (let waited = 0; t.ai?.status === 'pending' && waited < PICK_WAIT_MS;) {
+        await sleep(PICK_POLL_MS);
+        waited += PICK_POLL_MS;
+        t = (await ctx.dispatch('getCoachToday', [])) as CoachToday;
+      }
+      return todayView(t);
     },
   },
   {

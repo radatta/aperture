@@ -1,9 +1,16 @@
-import type { ModelOutcome, ParseCategory } from '@aperture/shared';
+import type {
+  CoachAiReason,
+  CoachDayAi,
+  CoachPickContext,
+  ModelOutcome,
+  ParseCategory,
+} from '@aperture/shared';
 import type { FluxWeekSummary } from '@aperture/shared/flux';
 import type { SittingDraftData } from './sittingReviewPrompt';
 
 // The gated seam for the Claude API — quick add's parse (docs/areas/tasks/quick-add.md), Flux's weekly
-// note (docs/areas/flux D62) and a LeetCode sitting's review draft (docs/areas/recruiting → Review). Like Google and Plaid, READS ARE GATED: the call carries a secret and a
+// note (docs/areas/flux D62), a LeetCode sitting's review draft (docs/areas/recruiting → Review) and the coach's
+// daily AI pick (docs/areas/recruiting/coach.md → The AI pick, run by the coach worker). Like Google and Plaid, READS ARE GATED: the call carries a secret and a
 // cost, so a testMode/smoke request gets `noopAnthropic` (no SSM read, no fetch), tests get
 // `FakeAnthropic`, and `createLiveAnthropic` (fetch + SSM) is wired only in the two Lambda entrypoints.
 // It writes nothing, so it isn't a `writes` entry. It never throws: every failure is an outcome, and
@@ -28,6 +35,17 @@ export interface SittingDraftRequest {
   timeoutMs: number;
 }
 
+export interface CoachPickRequest {
+  ctx: CoachPickContext; // coachPickContext: the candidates and the last two weeks
+  timeoutMs: number;
+}
+// The pick's outcome carries what the day row records: the model, the tokens and the time, even on a failure
+// (a refusal or a timeout may still have been billed). `refusal` is its own reason here.
+export type CoachPickCall = (
+  | { ok: true; fields: unknown }
+  | { ok: false; reason: Exclude<CoachAiReason, 'invalid'>; detail?: string }
+) & { model: string; usage: CoachDayAi['usage']; ms: number };
+
 export interface AnthropicGateway {
   parseTask(req: ParseRequest): Promise<ModelOutcome>;
   // `fields` is `{ note }` on success; the backend validates it (fluxNoteText) before storing anything.
@@ -35,6 +53,8 @@ export interface AnthropicGateway {
   // `fields` is `{ mistakes, cause }` on success; the backend makes it fit (draftMistakes, draftCause) and stores
   // nothing.
   sittingReviewDraft(req: SittingDraftRequest): Promise<ModelOutcome>;
+  // `fields` is the raw answer on success; the worker checks it (validateCoachPick) before storing anything.
+  coachPick(req: CoachPickRequest): Promise<CoachPickCall>;
 }
 
 export function noopAnthropic(): AnthropicGateway {
@@ -49,6 +69,14 @@ export function noopAnthropic(): AnthropicGateway {
       ok: false,
       reason: 'unavailable',
       detail: 'the model is off here',
+    }),
+    coachPick: async () => ({
+      ok: false,
+      reason: 'unavailable',
+      detail: 'the model is off here',
+      model: 'none',
+      usage: null,
+      ms: 0,
     }),
   };
 }
@@ -86,5 +114,19 @@ export class FakeAnthropic implements AnthropicGateway {
   async sittingReviewDraft(req: SittingDraftRequest): Promise<ModelOutcome> {
     this.draftCalls.push(req);
     return typeof this.nextDraft === 'function' ? this.nextDraft(req) : this.nextDraft;
+  }
+
+  pickCalls: CoachPickRequest[] = [];
+  nextPick: CoachPickCall | ((req: CoachPickRequest) => CoachPickCall) = {
+    ok: false,
+    reason: 'unavailable',
+    detail: 'FakeAnthropic: no pick set',
+    model: 'fake',
+    usage: null,
+    ms: 0,
+  };
+  async coachPick(req: CoachPickRequest): Promise<CoachPickCall> {
+    this.pickCalls.push(req);
+    return typeof this.nextPick === 'function' ? this.nextPick(req) : this.nextPick;
   }
 }
