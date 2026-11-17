@@ -252,7 +252,7 @@ function renderIos(ios: RunResult['ios']): string[] {
       : []),
     ...(dev
       ? [
-          `${dev.name} · ${dev.runtime ?? '?'} · axe ${dev.axe} · ${dev.xcode ?? 'Xcode ?'} · runner \`${ios.jobs.find((j) => j.runnerVersion)?.runnerVersion?.slice(0, 12) ?? '?'}\``,
+          `${dev.name} · ${dev.runtime ?? '?'} · axe ${dev.axe ?? '?'} · ${dev.xcode ?? 'Xcode ?'} · runner \`${ios.jobs.find((j) => j.runnerVersion)?.runnerVersion?.slice(0, 12) ?? '?'}\``,
           '',
         ]
       : []),

@@ -158,7 +158,7 @@ export interface SimResult {
     name: string;
     udid: string | null;
     runtime: string | null;
-    axe: string;
+    axe: string | null; // the version that ran; null when readiness never ran
     xcode?: string | null;
   };
   booted?: string;

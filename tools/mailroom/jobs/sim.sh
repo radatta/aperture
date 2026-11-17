@@ -424,7 +424,7 @@ sim_ready() {
     v="$(printf '%s' "$v" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed -E 's/^([Aa][Xx][Ee]|[Vv][Ee][Rr][Ss][Ii][Oo][Nn])[[:space:]]+//' | sed -E 's/^[Vv]([0-9])/\1/')"
     case " $SIM_AXE_VERSIONS " in
       *" $v "*) SIM_AXE_VERSION="$v" ;;
-      *) sim_err SIM_UNAVAILABLE "AXE_VERSION($(printf '%s' "$v" | tr -cd '0-9.' | cut -c1-12))" "want axe ${SIM_AXE_VERSIONS// / or }"; return 1 ;;
+      *) sim_err SIM_UNAVAILABLE "AXE_VERSION($(printf '%s' "$v" | tr -cd '0-9A-Za-z.-' | cut -c1-16))" "want axe ${SIM_AXE_VERSIONS// / or }"; return 1 ;;
     esac
     SIM_AXE_OK=1
     SIM_XCODE="$(sim_cap 30 xcodebuild -version 2>/dev/null | head -2 | tr '\n' ' ' | tr -cd 'A-Za-z0-9. ' | sed 's/ *$//' | cut -c1-40)" || SIM_XCODE=""
@@ -605,10 +605,21 @@ sim_icon_look() {
   fi
   printf '%s' "$v"
 }
+# One tree read: web, home or unknown.
+sim_icon_peek() {
+  local t
+  t="$(sim_tree)" || t=""
+  if [ -n "$t" ] && sim_tree_web "$t"; then printf web; elif [ -n "$t" ] && sim_tree_home "$t"; then printf home; else printf unknown; fi
+}
 sim_icon_land() {
   local v
   while :; do
     v="$(sim_icon_look)"
+    # Home at both looks: one more 2 s on, so a launch slow to draw (a cold boot, load) isn't pressed Home mid-launch
+    if [ "$v" = home ]; then
+      sleep 2
+      v="$(sim_icon_peek)"
+    fi
     sim_tap_mark "$v"
     case "$v" in
       web) sim_trial_tap 0; return 0 ;;
@@ -617,8 +628,8 @@ sim_icon_land() {
     esac
     if [ "$SIM_TAPS" -ge 4 ]; then
       sleep 2
-      v="$(sim_icon_look)"
-      [ "$v" = home ] || return 0
+      v="$(sim_icon_peek)"
+      if [ "$v" != home ]; then sim_tap_mark "$v"; return 0; fi
       sim_fail ICON_TAP_DROPPED "still the Home Screen after $SIM_TAPS icon taps AXe reported done: iOS dropped the input; rerun the step, don't debug the app"
       return 1
     fi
@@ -701,7 +712,7 @@ sim_op_launch() {
         elif [ -z "$again" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
           && sim_kb_up; then
           sim_launch_again || { SIM_NOTE="${SIM_NOTE:-$SIM_DT} (in launch's relaunch of an app left mid-typing)"; return 1; }
-          again=1 i=0 clean="" SIM_TAPS=1
+          again=1 i=0 clean="" SIM_TAPS=1 SIM_RESETS=0
           sleep 2
           continue
         elif [ -z "$cleared" ] && [ -n "$t" ] && jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
@@ -1082,8 +1093,11 @@ sim_op_nav() {
   sim_nav_on "$tab"; rc=$?
   [ "$rc" != 1 ] || return 1
   if [ "$rc" = 0 ]; then SIM_NOTE="$SIM_NOTE; the page came up late"; return 0; fi
-  # still not there: one more tap, from the top of the page (the full path)
+  # still not there: one more tap, from the top of the page (the full path); a page that was only scrolled shows it now
   sim_to_top
+  sim_nav_on "$tab"; rc=$?
+  [ "$rc" != 1 ] || return 1
+  if [ "$rc" = 0 ]; then SIM_NOTE="$SIM_NOTE; its landmark showed once the page was scrolled to the top"; return 0; fi
   rm -f "$SIM_P.unread"
   sim_nav_probe "$tab"; rc=$?
   [ "$rc" != 1 ] || return 1
@@ -1411,14 +1425,15 @@ sim_hid_stop() {
   sleep 2 # the last tap's lines
   if kill -0 "$SIM_HID_PID" 2>/dev/null; then SIM_HID_ALIVE=1; fi
   kill -TERM "$SIM_HID_PID" 2>/dev/null || true
-  (command sleep 5; kill -KILL "$SIM_HID_PID" 2>/dev/null) &
+  (command sleep 5; kill -KILL "$SIM_HID_PID" 2>/dev/null) >/dev/null 2>&1 & # never holding $(run_sim)'s pipe
   w=$!
   wait "$SIM_HID_PID" 2>/dev/null || true
   kill "$w" 2>/dev/null || true
 }
 # The trial lines with their taps (verdict, the guest's no-service count, time to front), each launch's settle and the
 # op's other no-service lines; the header's hid says whether the counts can be trusted (ok) and why not. A count it
-# can't stand behind is null, never 0.
+# can't stand behind is null, never 0: a tap's 0 also needs the capture shown listening through its window (`heard`: a
+# line inside it, or lines on both sides), since the stream can start late on a cold boot and lose its buffered tail.
 sim_trial_out() {
   local ok=false why=""
   if [ -n "$SIM_HID_TRIED" ]; then
@@ -1430,12 +1445,15 @@ sim_trial_out() {
   jq -c -n --arg a "$1" --arg b "$(sim_load)" --argjson tried "$([ -n "$SIM_HID_TRIED" ] && echo true || echo false)" \
     --argjson ok "$ok" --arg why "$why" --rawfile hid "$SIM_P.hid" --slurpfile taps "$SIM_P.taps" --slurpfile spans "$SIM_P.spans" \
     --slurpfile tr "$SIM_P.trial" --slurpfile plan "$2" '
-    def ms: capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})[ T](?<t>[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<f>[0-9]+))?(?<z>[+-][0-9]{2}:?[0-9]{2})$") as $c
+    def heard($all; $a; $b): ($all | any(. >= $a and . <= $b)) or (($all | any(. < $a)) and ($all | any(. > $b)));
+    def ms: [capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})[ T](?<t>[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<f>[0-9]+))?(?<z>[+-][0-9]{2}:?[0-9]{2})$")]
+      | if length == 0 then error("timestamp") else .[0] end | . as $c
       | (($c.d + "T" + $c.t + "Z") | fromdateiso8601) * 1000 + ((($c.f // "0") + "000")[0:3] | tonumber)
         - (($c.z | sub(":"; "")) as $z | (($z[1:3] | tonumber) * 60 + ($z[3:5] | tonumber)) * 60000 * (if $z[0:1] == "-" then -1 else 1 end));
     ($hid | split("\n") | map(select(length > 0 and (startswith("Filtering") | not)))
       | map(try (fromjson | {t: (.timestamp | ms), no: ((.eventMessage // "") | contains("No active service"))}) catch null)) as $ev
     | ($ok and ($ev | all(. != null))) as $good
+    | ($ev | map(select(. != null) | .t)) as $all
     | ($ev | map(select(. != null and .no) | .t)) as $no
     | ($taps | map(select(has("t0")))) as $win
     | ($taps | map(select(has("d")))) as $ver
@@ -1444,14 +1462,14 @@ sim_trial_out() {
       ($tr[] | . as $l
         | ($win | map(select(.i == $l.i)) | sort_by(.k)) as $w
         | if ($l.op == "tap" or $l.op == "launch") and ($w | length) > 0 then
-            . + (if $l.op == "launch" then {settle: ($plan[0].params.steps[$l.i].settle // 1)} else {} end)
-              + {taps: [$w[] | . as $x | ($ver | map(select(.i == $x.i and .k == $x.k)) | last) as $v
-                  | {d: ($v.d // null), hid: (if $good then ($no | map(select(. >= $x.t0 and . <= $x.t1 + 1000)) | length) else null end)}
+            . + {taps: [$w[] | . as $x | ($ver | map(select(.i == $x.i and .k == $x.k)) | last) as $v
+                  | {d: ($v.d // null), hid: (if $good and heard($all; $x.t0; $x.t1 + 1000) then ($no | map(select(. >= $x.t0 and . <= $x.t1 + 1000)) | length) else null end)}
                     + (if $v.frontMs then {frontMs: $v.frontMs} else {} end)]}
               + (($spans | map(select(.i == $l.i)) | first) as $s
                   | {hidOther: (if $good and $s then ($no | map(. as $t | select($t >= $s.s and $t <= $s.e + 1000
                       and ($w | all($t < .t0 or $t > .t1 + 1000)))) | length) else null end)})
-          else . end)'
+          else . end
+        | if .op == "launch" then . + {settle: ($plan[0].params.steps[.i].settle // 1)} else . end)'
 }
 
 # A trial tap goes where its target holds still: its centre is read until two reads 1 s apart give the same frame (at
@@ -1585,6 +1603,7 @@ sim_op_keys() {
     1) SIM_NOTE="$SIM_NOTE; retyped once (first read $first)" ;;
     2) SIM_NOTE="$SIM_NOTE; retyped twice (first read $first)" ;;
   esac
+  sim_read_put "$field" "$(jq -c --arg t "$text" '. + {typed: $t}' <<<"$r")" # what erase may find left of it
 }
 
 # The field read where `in` found it: SIM_ERASED_OK=1 when it is the same role (and label) and holds nothing: "" or the
@@ -1600,8 +1619,10 @@ sim_erased_read() {
   if ! jq -e --argjson r "$1" '(.role // "") != "" and (.role // "") == ($r.role // "")
     and (($r.label // "") == "" or ((.label // "") | ascii_downcase) == (($r.label // "") | ascii_downcase))' <<<"$e" >/dev/null 2>&1; then
     # A field holding text reads as an unlabelled run of that text (smoke round 2026-11-17: Bulk add's field holding
-    # "f" read AXStaticText "f"): inside the field's recorded frame, it is the field, with that many letters left.
+    # "f" read AXStaticText "f"): inside the field's recorded frame, and the start of what `keys` typed into it (deletes
+    # take letters off the end), it is the field, with that many letters left. Other text there is not.
     if jq -e --argjson r "$1" '(.role // "") == "AXStaticText" and (.label // "") == "" and (.value // "") != ""
+      and (.value as $v | ($r.typed // "") as $ty | $ty != "" and ($ty | ascii_downcase | startswith($v | ascii_downcase)))
       and (((.frame.x // 0) + (.frame.w // 0) / 2) as $cx | ((.frame.y // 0) + (.frame.h // 0) / 2) as $cy | ($r.frame // {}) as $f
         | ($f.w // 0) > 0 and $cx >= $f.x and $cx <= ($f.x + $f.w) and $cy >= $f.y and $cy <= ($f.y + $f.h))' <<<"$e" >/dev/null 2>&1; then
       SIM_ERASED_FIELD=1
@@ -1644,6 +1665,8 @@ sim_op_erase() {
       sim_erased_read "$r" "$cx" "$cy" || return 1
       [ -z "$SIM_ERASED_FIELD" ] || found=1
       [ "$SIM_LEFT" -le "$left" ] || left="$SIM_LEFT" # the most either look saw: the centre can hit another element
+      # letters the first look saw aren't cancelled by an empty second one: more deletes (harmless on an empty field)
+      if [ -n "$SIM_ERASED_OK" ] && [ "$left" -gt 0 ]; then SIM_ERASED_OK=""; fi
     fi
     [ "$left" -ge 1 ] || left=1
     if [ -n "$via" ] && [ "$rounds" = 0 ] && [ -n "$found" ] && { [ -n "$SIM_ERASED_OK" ] || [ "$left" -le "$n" ]; }; then
@@ -1678,7 +1701,7 @@ sim_op_erase() {
 
 # Done is a tap like any other: the keyboard must be gone afterwards (one retap), or the next op aims at a moved page.
 sim_op_blur() {
-  local rc at f1 again=""
+  local rc at at2 f1 again=""
   sim_accessory_top >/dev/null; rc=$?
   [ "$rc" != 1 ] || return 1
   if [ "$rc" != 0 ]; then
@@ -1697,18 +1720,19 @@ sim_op_blur() {
     sim_accessory_top >/dev/null; rc=$?
     [ "$rc" != 1 ] || return 1
     if [ "$rc" = 0 ]; then
-      [ "$(jq -c '.frame // {}' <<<"$SIM_HIT")" != "$f1" ] || again=1
+      if [ "$(jq -c '.frame // {}' <<<"$SIM_HIT")" = "$f1" ]; then again=same; else again=moved; fi
+      at2="$(jq -r '"\((.frame.x // 0) + (.frame.w // 0) / 2 | floor),\((.frame.y // 0) + (.frame.h // 0) / 2 | floor)"' <<<"$SIM_HIT")"
       sim_tap_el "$SIM_HIT" || return 1
       sleep 1
-      SIM_NOTE="keyboard dismissed on the second tap (Done at $at)"
+      SIM_NOTE="keyboard dismissed on the second tap (Done at $at, then $at2)"
     fi
     if sim_kb_up; then
-      # which it was decides the next step: Done still where it was is input iOS dropped; Done gone is something else
-      if [ -n "$again" ]; then
-        sim_fail BLUR "the keyboard stayed up after 2 Done taps at $at, Done read at the same frame both times: iOS dropped the input; rerun the step, don't debug the app"
-      else
-        sim_fail BLUR "the keyboard stayed up after Done at $at, and Done wasn't there to tap again"
-      fi
+      # which it was decides the next step: Done still where it was is input iOS dropped; moved or gone is something else
+      case "$again" in
+        same) sim_fail BLUR "the keyboard stayed up after 2 Done taps at $at, Done read at the same frame both times: iOS dropped the input; rerun the step, don't debug the app" ;;
+        moved) sim_fail BLUR "the keyboard stayed up after Done at $at and again at $at2, where Done had moved to" ;;
+        *) sim_fail BLUR "the keyboard stayed up after Done at $at, and Done wasn't there to tap again" ;;
+      esac
       return 1
     fi
   fi
@@ -1892,7 +1916,7 @@ run_sim() {
     --slurpfile steps "$SIM_P.steps" --slurpfile reads "$SIM_P.reads" \
     --rawfile builds "$SIM_P.builds" --rawfile shots "$SIM_P.shots" \
     '{detail: (if $detail == "" then null else $detail end),
-      device: {name: $name, udid: (if $udid == "" then null else $udid end), runtime: (if $rt == "" then null else $rt end), axe: $axe,
+      device: {name: $name, udid: (if $udid == "" then null else $udid end), runtime: (if $rt == "" then null else $rt end), axe: ($axe|if . == "" then null else . end),
         xcode: (if $xcode == "" then null else $xcode end)},
       booted: $booted, signedIn: $signed,
       buildsSeen: ($builds | split("\n") | map(select(test("^[0-9a-f]{7}$")))),

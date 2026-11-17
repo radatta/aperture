@@ -57,6 +57,11 @@ export const SAFE = { top: 59, bottom: 34 };
 export const NAV_XS = [38, 88, 136, 205, 276, 332, 380, 268, 395];
 export const NAV_Y = 168;
 const SWIPED_TABS = ['Finances', 'Inbox', 'Settings'];
+// sim.sh's sim_nav_mark: the page landmark nav reads back after the tab tap (check.test.ts reads it out of sim.sh). A
+// tab without one is noted "page not confirmed" by the runner, and passes here as there.
+export const NAV_MARKS: Record<string, { label: string; role: string; x: number; ys: number[] }> = {
+  Tasks: { label: 'Bulk add', role: 'AXButton', x: 369, ys: [232, 212, 252] },
+};
 // sim.sh's write-button guard on the matched element (sim_op_tap → DENIED), as sim.ts validates the op's label.
 const denied = (label: string) => {
   const l = label.toLowerCase().replace(/^ +/, '').replace(/ +$/, '');
@@ -248,6 +253,21 @@ export async function checkJob(
         }
         await page.click({ x: hit.frame.x + hit.frame.w / 2, y: hit.frame.y + hit.frame.h / 2 });
         await page.settle();
+        const mark = NAV_MARKS[op.tab];
+        if (mark) {
+          let seen = false;
+          for (const y of mark.ys)
+            if (matches(await page.read({ x: mark.x, y }), mark.label, mark.role)) {
+              seen = true;
+              break;
+            }
+          if (!seen) {
+            await fail(
+              `NAV_UNCONFIRMED: no ${mark.label} (${mark.role}) at ${mark.x} × ${mark.ys.join('/')}, the ${op.tab} page's landmark sim.sh reads back`,
+            );
+            break;
+          }
+        }
         add(i, op, 'pass', `on ${op.tab}`);
         break;
       }
