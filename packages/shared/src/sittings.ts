@@ -61,7 +61,7 @@ export const SITTING_PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = 
   submitDetails: 96 * 1024,
   note: 16 * 1024,
   timer: 1024,
-  coach: 2 * 1024,
+  coach: 4 * 1024, // three ≤ 300-char inputs, even at 4 UTF-8 bytes a character
   replay: 64 * 1024,
 };
 export const SITTING_PROBLEM_MAX = 64 * 1024;

@@ -3464,8 +3464,16 @@ export function runApiContract(
         });
         expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 4 });
         expect((await api.listSittings())[0]!.summary.coach?.trace).toBe('traced');
-        // Over its 2 KB cap: refused, nothing written.
-        const big = coachEv(LC_T0 + 5000, { kind: 'trace-skip', pad: 'x'.repeat(2100) });
+        // The export carries each coach row's mark (never its text), on both clients.
+        const exported = (await api.exportData()).sittingHeadRows.filter((r) => r.type === 'coach');
+        expect(exported.map((r) => r.coach?.kind).sort()).toEqual([
+          'config',
+          'nudge-shown',
+          'trace',
+        ]);
+        expect(exported.find((r) => r.coach?.kind === 'trace')?.coach?.inputs).toBe(3);
+        // Over its 4 KB cap: refused, nothing written.
+        const big = coachEv(LC_T0 + 5000, { kind: 'trace-skip', pad: 'x'.repeat(4200) });
         await expect(api.lcSittingEvents({ sittingId: sitting.id, events: [big] })).rejects.toThrow(
           /too large/,
         );

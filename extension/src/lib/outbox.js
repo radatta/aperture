@@ -24,7 +24,7 @@
     submitDetails: 96 * 1024,
     note: 16 * 1024,
     timer: 1024,
-    coach: 2 * 1024,
+    coach: 4 * 1024,
     replay: 64 * 1024,
   };
   const QUEUE_MAX_ENTRIES = 2000;

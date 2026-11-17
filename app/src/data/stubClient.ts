@@ -2817,15 +2817,17 @@ class StubClient implements ApiClient {
       places: this.alive(this.store.places),
       sittings: this.alive(this.store.sittings),
       sittingLive: this.alive(this.store.sittingLive),
-      // Head rows only (verdicts, timer reads) — payloads and the raw bulk stay out, as on the backend.
+      // Head rows only (verdicts, timer reads, coach marks) — payloads and the raw bulk stay out, as on the
+      // backend.
       sittingHeadRows: this.alive(this.store.sittingHeadRows).map(
-        ({ id, sittingId, type, at, verdict, timer, deletedAt }) => ({
+        ({ id, sittingId, type, at, verdict, timer, coach, deletedAt }) => ({
           id,
           sittingId,
           type,
           at,
           verdict,
           timer,
+          coach: coach ?? null,
           deletedAt,
         }),
       ),

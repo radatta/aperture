@@ -418,7 +418,7 @@ export type CoachEventPayload =
   | { kind: 'config'; trace: boolean; hold: boolean; nudge: boolean } // once per sitting: what was on
   | {
       kind: 'trace';
-      // his hand-traced inputs, each ≤ 300 chars; an empty one wasn't traced
+      // the user's hand-traced inputs, each ≤ 300 chars; an empty one wasn't traced
       inputs: { empty: string | null; boundary: string | null; normal: string | null };
       ms: number; // time spent on the card
     }

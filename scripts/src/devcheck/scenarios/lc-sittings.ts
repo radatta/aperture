@@ -355,7 +355,29 @@ export const lcSittings: Scenario = {
       id: 'coach-too-big',
       entry: 'api',
       kind: 'edge',
-      what: 'A coach event over 2 KB is refused, with nothing written',
+      what: 'A coach event over 4 KB is refused, with nothing written',
+    },
+    {
+      id: 'coach-trace-states',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Before the first submit, three inputs traced is traced, one or two partial, none or a skip skipped, the latest winning',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'three inputs before the first submit is traced; one or two partial; none or a skip, skipped',
+        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+      },
+    },
+    {
+      id: 'coach-unknown-kind',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A coach event of a kind the server doesn’t know is stored and folds nothing',
+      offDev: {
+        file: 'packages/shared/src/sittings.test.ts',
+        test: 'nudges count, the config is the latest readable one, and an unknown kind folds nothing',
+        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+      },
     },
     {
       id: 'events-invalid',
@@ -970,13 +992,19 @@ export const lcSittings: Scenario = {
         const again = await ctx.api.writes.lcSittingEvents(state.a, batch);
         if (again.accepted !== 0 || again.duplicates !== 4)
           throw new Error(`again: ${JSON.stringify(again)}`);
-        const want = { config: { trace: true, hold: true, nudge: true }, trace: 'none', nudges: 1 };
         const before = (await sittingA(ctx)).sitting.summary;
-        if (JSON.stringify(before.coach) !== JSON.stringify(want))
-          throw new Error(`coach: ${JSON.stringify(before.coach)}`);
-        const big = coach({ kind: 'trace-skip', pad: 'x'.repeat(2100) });
+        const c = before.coach; // field by field: a stored map's key order isn't kept
+        if (
+          c?.trace !== 'none' ||
+          c.nudges !== 1 ||
+          c.config?.trace !== true ||
+          c.config.hold !== true ||
+          c.config.nudge !== true
+        )
+          throw new Error(`coach: ${JSON.stringify(c)}`);
+        const big = coach({ kind: 'trace-skip', pad: 'x'.repeat(4200) });
         await refused(
-          'a coach event over 2 KB',
+          'a coach event over 4 KB',
           ctx.api.writes.lcSittingEvents(state.a, [big]),
           /too large/,
         );

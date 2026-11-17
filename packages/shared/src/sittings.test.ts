@@ -260,17 +260,17 @@ describe('folds', () => {
     it('a sitting with no coach events has no coach on its summary', () => {
       expect(summarizeHeadRows([submit('a', 1)]).coach).toBeUndefined();
     });
-    it('a coach event is taken up to 2 KB, refused past it', () => {
+    it('a coach event is taken up to 4 KB, refused past it', () => {
       const ev = (n: number) => ({
         id: ulid(),
         type: 'coach' as const,
         at: 1,
         payload: { kind: 'trace', note: 'x'.repeat(n) },
       });
-      expect(normalizeSittingEvents({ sittingId: ulid(), events: [ev(1900)] }).events).toHaveLength(
+      expect(normalizeSittingEvents({ sittingId: ulid(), events: [ev(4000)] }).events).toHaveLength(
         1,
       );
-      expect(() => normalizeSittingEvents({ sittingId: ulid(), events: [ev(2100)] })).toThrow(
+      expect(() => normalizeSittingEvents({ sittingId: ulid(), events: [ev(4200)] })).toThrow(
         /coach event is too large/,
       );
     });
