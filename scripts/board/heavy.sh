@@ -34,9 +34,10 @@ rm -f "$work".*  # a reused pid's leftovers (a stale `duration` stop would turn 
 eval "$(sb_thresholds)"
 
 # Container-only tuning, per limits.json `tuning.test` (`maxWorkers: 4` since 2026-11-13 — SESSION-BOARD.md → Results).
-if [ "$class" = test ] && sb_in_container; then
+# test-fast (pnpm gate:fast's per-package related runs) takes the same cap, unless its caller set one (scripts: 2).
+if { [ "$class" = test ] || [ "$class" = test-fast ]; } && sb_in_container; then
   wc=$(sb_limit '.tuning.test.workspaceConcurrency'); mw=$(sb_limit '.tuning.test.maxWorkers')
-  [ -n "$mw" ] && export VITEST_MAX_WORKERS="$mw"
+  if [ -n "$mw" ] && { [ "$class" = test ] || [ -z "${VITEST_MAX_WORKERS:-}" ]; }; then export VITEST_MAX_WORKERS="$mw"; fi
   if [ -n "$wc" ] && [ "$cmd" = "pnpm test" ]; then set -- pnpm -r --workspace-concurrency="$wc" test; cmd="$*"; fi
 fi
 
