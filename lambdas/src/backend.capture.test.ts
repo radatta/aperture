@@ -209,8 +209,8 @@ describe('captureForToken — caps and the duplicate guard', () => {
     const { b, mint, capture } = setup();
     const token = await mint();
     const spy = vi
-      .spyOn(b, 'ensureSettings' as never)
-      .mockRejectedValueOnce(new Error('ddb') as never);
+      .spyOn(b as unknown as { ensureSettings: () => Promise<unknown> }, 'ensureSettings')
+      .mockRejectedValueOnce(new Error('ddb'));
     await expect(capture(token, 'milk | ~5')).rejects.toThrow('ddb');
     spy.mockRestore();
     expect(await capture(token, 'milk | ~5')).toMatchObject({ duplicate: false });

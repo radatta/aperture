@@ -11,6 +11,7 @@ import {
   PLACE_TOKEN_VIA,
   PUSH_SUB_VIA,
   REMINDER_TOGGLES_VIA,
+  SCOPED_TOKEN_VIA,
   type ApiClient,
   type DevCategory,
   type DevFinanceRule,
@@ -18,6 +19,7 @@ import {
   type DevFluxSet,
   type DevLogEntry,
   type DevPlace,
+  type DevScopedToken,
   type DevStory,
   type DevTask,
 } from './api';
@@ -49,6 +51,16 @@ function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & { entries: 
   };
 }
 
+const scopedInfo = (id: string, name: string): DevScopedToken => ({
+  id,
+  scope: 'capture',
+  name,
+  hint: 'ssss',
+  createdAt: 0,
+  lastUsedAt: null,
+  usedToday: 0,
+});
+
 // A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a request
 // whose response arrives when `respond` says (immediately by default).
 function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[] } = {}) {
@@ -75,6 +87,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const categories = new Map<string, DevCategory>();
   const categoriesDeleted: string[] = [];
   const placeToken = { active: false, revokes: 0 };
+  const scopedTokens = new Map<string, DevScopedToken>(); // the test user's live capture tokens
+  const scopedRevoked: string[] = [];
   // The fixture bank's rows and the run's rules: cleanup clears a bucket / a link / a mark, deletes a rule.
   const finance = {
     rows: new Map<string, DevFinanceTransaction>(),
@@ -156,6 +170,28 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       url: () => url,
       method: () => 'POST',
       postData: () => JSON.stringify({ args: [editId ? { id: editId, name } : { name }] }),
+      response: async () => res,
+    };
+    for (const l of listeners) l(req);
+    return id;
+  };
+  // Settings › Capture's Make token — the browser's mintScopedToken, whose answer carries the plaintext beside
+  // the row.
+  const uiMint = (name: string) => {
+    const id = `k${++n}`;
+    const info = scopedInfo(id, name);
+    scopedTokens.set(id, info);
+    const url = 'https://dev.aperture.rahuldatta.dev/api/mintScopedToken';
+    const res = {
+      url: () => url,
+      status: () => 200,
+      request: () => ({ method: () => 'POST' }),
+      json: async () => ({ token: `apc_${'s'.repeat(43)}`, info }),
+    };
+    const req = {
+      url: () => url,
+      method: () => 'POST',
+      postData: () => JSON.stringify({ args: ['capture', name] }),
       response: async () => res,
     };
     for (const l of listeners) l(req);
@@ -279,6 +315,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         hint: null,
         readsToday: 0,
       }),
+      listScopedTokens: async () => [...scopedTokens.values()],
       getPushStatus: async () => ({
         configured: true,
         vapidPublicKey: 'B',
@@ -452,6 +489,16 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       rotatePlaceToken: async () => {
         throw new Error('unused');
       },
+      mintScopedToken: async () => {
+        throw new Error('unused');
+      },
+      revokeScopedToken: async (id) => {
+        scopedRevoked.push(id);
+        scopedTokens.delete(id);
+      },
+      captureRaw: async () => {
+        throw new Error('unused');
+      },
       revokePlaceToken: async () => {
         placeToken.revokes++;
         placeToken.active = false;
@@ -569,6 +616,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     places,
     placesDeleted,
     placeToken,
+    scopedTokens,
+    scopedRevoked,
     finance,
     pushDevices,
     pushRemoved,
@@ -576,6 +625,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     reminderWrites,
     uiCreate,
     uiPlace,
+    uiMint,
     respond,
     requestFailed,
     consoleError,
@@ -1217,6 +1267,47 @@ describe('runPipeline', () => {
       { id: 'place-token:run1', via: PLACE_TOKEN_VIA, title: undefined, final: 'deleted' },
     ]);
     expect(r.status).toBe('PASS');
+  });
+
+  it('revokes a capture token Settings minted by its recorded id, never the plaintext; one revoked mid-run is "gone"', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      x.uiMint('phone');
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'k-api',
+        via: SCOPED_TOKEN_VIA,
+        title: 'mac',
+      });
+      // minted through the API and revoked by the step itself: not listed at cleanup
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.scopedRevoked).toEqual(['k1']);
+    // The browser's mint is recorded when its answer lands, after the step's own API record.
+    expect(r.created.map((c) => [c.id, c.via, c.final])).toEqual([
+      ['k-api', SCOPED_TOKEN_VIA, 'gone'],
+      ['k1', 'ui:mintScopedToken', 'deleted'],
+    ]);
+    expect(JSON.stringify(ledger.entries)).not.toContain('apc_');
+    expect(w.deleted).toEqual([]); // never through the task methods
+    expect(r.status).toBe('PASS');
+  });
+
+  it('sweeps a crashed run’s capture token first; one that appears unrecorded fails the run and stays', async () => {
+    const w = world();
+    w.scopedTokens.set('k-old', scopedInfo('k-old', 'old'));
+    w.scopedTokens.set('users', scopedInfo('users', 'phone')); // the test user's own, before the run
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'k-old', via: SCOPED_TOKEN_VIA }]);
+    const sc = scenario(async (x) => void x.scopedTokens.set('ghost', scopedInfo('ghost', 'g')))(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.swept).toEqual(['k-old']);
+    expect(w.scopedRevoked).toEqual(['k-old']);
+    expect(r.unrecorded).toEqual(['users']);
+    expect(r.appeared).toEqual(['ghost']);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(w.scopedTokens.has('ghost')).toBe(true);
   });
 
   it('removes a push device this run subscribed by its id; one the poller already dropped is "gone"', async () => {

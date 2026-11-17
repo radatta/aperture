@@ -187,6 +187,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   The scenario drives the daily read cap on dev (sequential GETs to the server's own 429, ~40–60 s).
   Every run, smoke included, lists places after the sweep — so this harness needs a dev build with the places
   methods.
+- **Capture tokens are one more kind** (`scenarios/siri-capture.ts`, [tasks/capture](../areas/tasks/capture.md)): recorded by the id the mint answered with — never the token — through the API (`via: api:mintScopedToken`) or Settings › Capture's Make token (the browser's response, `ui:mintScopedToken`), and revoked by that id (`revokeScopedToken` refuses any other); "exists" means listed. A task the capture route made is recorded from its 200's `id` (`api:capture`) and deleted like any task. Every run lists the tokens after the sweep, and one that appears unrecorded is a `LEFTOVERS` failure, like a place — so this harness needs a dev build with the scoped-token methods.
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't

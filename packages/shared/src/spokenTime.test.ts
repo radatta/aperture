@@ -113,7 +113,7 @@ describe('spokenTimeIn', () => {
 describe('resolveSpoken — the voice rules', () => {
   it('relative: now + N, rounded up to the minute, on whatever day that lands', () => {
     expect(said('in 20 minutes', MON, '14:10')).toBe('2026-11-16 14:30');
-    const r = resolveSpoken({ kind: 'relative', minutes: 20 }, null, {
+    const r = resolveSpoken({ said: 'in 20 minutes', kind: 'relative', minutes: 20 }, null, {
       now: at(MON, '14:10') + 30_000,
       today: MON,
     });

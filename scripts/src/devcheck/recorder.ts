@@ -4,7 +4,8 @@
 // recorded the same way; an upsert naming an id is an edit of an existing row and is never recorded — cleanup would
 // delete a row the run didn't make.
 // A push device Settings' Enable subscribed (subscribePush) is recorded by the id the server answered with,
-// so cleanup removes it like one the API subscribed.
+// so cleanup removes it like one the API subscribed. A capture token Settings › Capture's Make token minted
+// (mintScopedToken) is recorded by its `info.id` — the plaintext beside it in the response is never kept.
 export const CREATE_METHODS = [
   'createTask',
   'createTasks',
@@ -14,6 +15,7 @@ export const CREATE_METHODS = [
   'upsertCategory',
   'subscribePush',
   'createLogEntry',
+  'mintScopedToken',
 ] as const;
 const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries', 'upsertCategory'];
 type CreateMethod = (typeof CREATE_METHODS)[number];
@@ -54,6 +56,8 @@ export function idsFromCreateResponse(
   ownsSplitParent: (original: string, parent: string) => boolean = () => false,
 ): string[] {
   if (!isCreate(method)) return [];
+  if (method === 'mintScopedToken')
+    return [idOf((json as { info?: unknown } | null)?.info)].filter((x): x is string => !!x);
   if (
     method === 'createTask' ||
     method === 'subscribePush' ||
