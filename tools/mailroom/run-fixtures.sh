@@ -91,7 +91,8 @@ sim_stub_log() {
 sim_stub_stream() {
   trap 'cat "$MAILROOM_FIXTURE_TAPE.hid" 2>/dev/null; exit 0' TERM
   [ -z "$1" ] || printf '%s\n' "$1"
-  while :; do command sleep 0.1; done
+  local n=0
+  while [ "$n" -lt 1200 ]; do command sleep 0.1; n=$((n + 1)); done # never past 120 s in a shared container (log's --timeout)
 }
 sim_stub() {
   local argv="$*" idx=0 m rc n out log cnt o=""

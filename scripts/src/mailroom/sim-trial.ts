@@ -158,7 +158,8 @@ const PLANS = { taps: tapPlan, keys: keysPlan, icon: iconPlan } as const;
 const ROUNDS = { taps: TAP_ROUNDS, keys: KEY_ROUNDS, icon: ICON_ROUNDS } as const;
 
 // One tap of a trial op, at the job's end: its verdict (0 landed, 1 dropped, null unknown), the guest's "No active
-// service" lines in its window (null: the capture can't be trusted), and how soon a landed one put the app in front.
+// service" lines in its window (null: the capture wasn't shown listening through it), and for a landed one the time to
+// the look that saw the app in front (an upper bound, in about 1 s steps).
 export interface TapRecord {
   d: 0 | 1 | null;
   hid: number | null;
@@ -430,6 +431,7 @@ export interface TapSummary {
   target: string;
   sent: number;
   landed: number;
+  landedNoService: number; // the control: landed taps that logged no-service lines too
   dropped: number;
   unknown: number;
   frontMs: number | null;
@@ -439,25 +441,34 @@ export interface TapSummary {
   unread: number;
 }
 export function tapSummary(rounds: TrialRound[]): TapSummary[] {
-  const proven = rounds.some((r) => r.hid?.ok && r.hid.lines > 0);
+  // only the icon's taps get a verdict (launch's looks); a round's 0 is proven only by that round's own capture
   const targets = [
-    ...new Set(rounds.flatMap((r) => r.cells.filter((c) => c.taps).map((c) => c.target))),
+    ...new Set(
+      rounds.flatMap((r) =>
+        r.cells.filter((c) => c.taps && c.target.startsWith('icon')).map((c) => c.target),
+      ),
+    ),
   ];
   return targets.map((target) => {
     const ts = rounds.flatMap((r) =>
-      r.cells.filter((c) => c.target === target).flatMap((c) => c.taps ?? []),
+      r.cells
+        .filter((c) => c.target === target)
+        .flatMap((c) =>
+          (c.taps ?? []).map((x) => ({ ...x, proven: !!(r.hid?.ok && r.hid.lines > 0) })),
+        ),
     );
     const dropped = ts.filter((x) => x.d === 1);
     return {
       target,
       sent: ts.length,
       landed: ts.filter((x) => x.d === 0).length,
+      landedNoService: ts.filter((x) => x.d === 0 && (x.hid ?? 0) >= 1).length,
       dropped: dropped.length,
       unknown: ts.filter((x) => x.d === null).length,
       frontMs: median(ts.flatMap((x) => (x.d === 0 && x.frontMs !== undefined ? [x.frontMs] : []))),
       noService: dropped.filter((x) => (x.hid ?? 0) >= 1).length,
-      noSuchLine: dropped.filter((x) => x.hid === 0 && proven).length,
-      unproven: dropped.filter((x) => x.hid === 0 && !proven).length,
+      noSuchLine: dropped.filter((x) => x.hid === 0 && x.proven).length,
+      unproven: dropped.filter((x) => x.hid === 0 && !x.proven).length,
       unread: dropped.filter((x) => x.hid === null).length,
     };
   });
@@ -468,11 +479,12 @@ export function tapTable(rounds: TrialRound[]): string[] {
   const pad = (s: string | number, n: number) => String(s).padEnd(n);
   return [
     'every icon tap (first tries and the reset retaps):',
-    `${pad('target', 13)}${pad('sent', 6)}${pad('landed', 8)}${pad('dropped', 9)}${pad('unknown', 9)}${pad('frontMs', 9)}dropped: no service / no such line / unproven / unread`,
+    `${pad('target', 13)}${pad('sent', 6)}${pad('landed', 8)}${pad('(no-svc)', 10)}${pad('dropped', 9)}${pad('unknown', 9)}${pad('≤frontMs', 10)}dropped: no service / no such line / unproven / unread`,
     ...rows.map(
       (r) =>
-        `${pad(r.target, 13)}${pad(r.sent, 6)}${pad(r.landed, 8)}${pad(r.dropped, 9)}${pad(r.unknown, 9)}${pad(r.frontMs ?? '-', 9)}${r.noService} / ${r.noSuchLine} / ${r.unproven} / ${r.unread}`,
+        `${pad(r.target, 13)}${pad(r.sent, 6)}${pad(r.landed, 8)}${pad(r.landedNoService, 10)}${pad(r.dropped, 9)}${pad(r.unknown, 9)}${pad(r.frontMs ?? '-', 10)}${r.noService} / ${r.noSuchLine} / ${r.unproven} / ${r.unread}`,
     ),
+    '(no-svc: landed taps that logged no-service lines too, the control; ≤frontMs: the median time to the look that saw the app, an upper bound)',
     ...rounds.map(
       (r) =>
         `  round ${r.round} capture: ${r.hid ? (r.hid.ok ? `ok, ${r.hid.lines} dtuhidd line(s), ${r.hid.noSvc} no-service` : `not trusted (${r.hid.why})`) : 'none'}`,

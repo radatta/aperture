@@ -2,7 +2,16 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { IosOp } from '../mailroom/sim';
 import type { AxEl, Frame } from './ax';
-import { checkJob, DEV_DATA, NAV_XS, NAV_Y, SKIP, staleDevData, type ProbePage } from './check';
+import {
+  checkJob,
+  DEV_DATA,
+  NAV_MARKS,
+  NAV_XS,
+  NAV_Y,
+  SKIP,
+  staleDevData,
+  type ProbePage,
+} from './check';
 import type { Pt } from './points';
 
 // A static page: elements by frame, the last one listed on top. Typing goes into the field last clicked.
@@ -357,9 +366,16 @@ describe('checkJob mirrors sim.sh', () => {
   });
 
   it("navigates by the runner's tab points and exact label", async () => {
+    const BULK = {
+      role: 'AXButton',
+      label: 'Bulk add',
+      value: '',
+      frame: { x: 318, y: 212, w: 102, h: 34 },
+    };
     const page = fakePage([
       { role: 'AXLink', label: 'tasks', value: '', frame: { x: 110, y: 155, w: 50, h: 26 } },
       { role: 'AXLink', label: 'Tasksmith', value: '', frame: { x: 180, y: 155, w: 60, h: 26 } },
+      BULK,
     ]);
     expect((await checkJob(page, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]).toMatchObject({
       status: 'pass',
@@ -371,6 +387,29 @@ describe('checkJob mirrors sim.sh', () => {
     expect((await checkJob(only, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]!.note).toBe(
       'MISS: no Tasks tab in the nav row',
     );
+    // the Tasks page's landmark, as sim.sh reads it back after the tap: moved, it fails here before the Simulator
+    const moved = fakePage([
+      { role: 'AXLink', label: 'Tasks', value: '', frame: { x: 110, y: 155, w: 50, h: 26 } },
+      { ...BULK, frame: { x: 200, y: 212, w: 102, h: 34 } },
+    ]);
+    expect((await checkJob(moved, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]!.note).toMatch(
+      /^NAV_UNCONFIRMED: no Bulk add \(AXButton\) at 369 × 232\/212\/252/,
+    );
+  });
+
+  it("models sim.sh's nav landmarks exactly (sim_nav_mark)", () => {
+    const sh = readFileSync(
+      new URL('../../../tools/mailroom/jobs/sim.sh', import.meta.url),
+      'utf8',
+    );
+    const line = sh.match(/^sim_nav_mark\(\) \{ case "\$1" in (.*) esac; \}$/m)?.[1] ?? '';
+    const marks = [...line.matchAll(/(\w+)\) echo "([^|]+)\|(\w+)\|(\d+)\|([\d ]+)" ;;/g)].map(
+      (m) => [
+        m[1],
+        { label: m[2], role: m[3], x: Number(m[4]), ys: (m[5] ?? '').split(' ').map(Number) },
+      ],
+    );
+    expect(Object.fromEntries(marks)).toEqual(NAV_MARKS);
   });
 
   it("skips an absent while a page field's keyboard is up, rather than passing on an unmodelled layout", async () => {

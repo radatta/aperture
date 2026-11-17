@@ -514,7 +514,7 @@ describe('the icon attribution', () => {
     });
     expect(s3).toMatchObject({ sent: 6, dropped: 1, noService: 0, noSuchLine: 1 });
     const out = tapTable([r]).join('\n');
-    expect(out).toMatch(/^icon s1 +7 +5 +2 +0 +1200 +1 \/ 1 \/ 0 \/ 0/m);
+    expect(out).toMatch(/^icon s1 +7 +5 +0 +2 +0 +1200 +1 \/ 1 \/ 0 \/ 0/m); // (no-svc) 0: the control
     expect(out).toContain('round 0 capture: ok, 40 dtuhidd line(s), 1 no-service');
   });
   it('a zero from a capture that never heard dtuhidd is unproven, never "no such line"', () => {
