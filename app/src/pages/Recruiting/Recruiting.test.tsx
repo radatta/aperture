@@ -23,7 +23,8 @@ describe('Recruiting page', () => {
     expect(screen.getByRole('heading', { name: 'Recruiting' })).toBeTruthy();
     // The seed folds three ended sittings with the shared folds: runtime error → accepted, a first-submit
     // accept, and a run before a wrong submit → accepted.
-    expect(await screen.findByText('Two Sum')).toBeTruthy();
+    const list = await screen.findByRole('region', { name: 'All sittings' });
+    expect(within(list).getByText('Two Sum')).toBeTruthy();
     expect(screen.getByText('first submit accepted')).toBeTruthy();
     expect(screen.getAllByText('accepted on submit 2')).toHaveLength(2);
     expect(screen.getByText(/1 run/)).toBeTruthy();
@@ -31,9 +32,11 @@ describe('Recruiting page', () => {
     expect(screen.getByText(/3 sittings · 3 problems · 1 first-submit accepted/)).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Now' })).toBeNull(); // none open in the seed
     // Each row is a link to its sitting; the reviewed one carries the dot.
-    const reviewed = screen.getByRole('link', { name: /Add Two Numbers/ });
+    const reviewed = within(list).getByRole('link', { name: /Add Two Numbers/ });
     expect(within(reviewed).getByRole('img', { name: 'reviewed' })).toBeTruthy();
-    expect(within(screen.getByRole('link', { name: /Two Sum/ })).queryByRole('img')).toBeNull();
+    expect(
+      within(within(list).getByRole('link', { name: /Two Sum/ })).queryByRole('img'),
+    ).toBeNull();
   });
 
   it('pins an open sitting above the days with its running clock', async () => {

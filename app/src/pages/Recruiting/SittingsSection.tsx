@@ -6,12 +6,23 @@ import { Text } from '../../components/Text';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useSittings } from '../../data/hooks/useSittings';
 import { useNow } from '../../lib/useNow';
+import { TodayCard } from './TodayCard';
 import { groupSittings, sittingOutcome, summarizeSittings } from './recruitingHelpers';
 
-// The Sittings tab: every go at a LeetCode problem, captured by the extension (docs/areas/recruiting).
-// The open sitting sits on top with its running clock; the rest are grouped by day. Each row opens the
-// sitting's page (its timeline, review, and End sitting); a sitting starts from the extension's overlay.
+// The Sittings tab: the coach's Today card, then every go at a LeetCode problem, captured by the extension
+// (docs/areas/recruiting). The open sitting sits on top with its running clock; the rest are grouped by day. Each
+// row opens the sitting's page (its timeline, review, and End sitting); a sitting starts from the extension's
+// overlay.
 export function SittingsSection() {
+  return (
+    <div className="flex flex-col gap-6">
+      <TodayCard />
+      <SittingsList />
+    </div>
+  );
+}
+
+function SittingsList() {
   const { data: sittings = [], isPending, isError, refetch } = useSittings();
   const now = useNow();
   const { data: settings } = useSettings();
@@ -34,7 +45,7 @@ export function SittingsSection() {
     );
 
   return (
-    <div className="flex flex-col gap-4">
+    <section aria-label="All sittings" className="flex flex-col gap-4">
       {/* Only once there's something to count — a zero summary would assert a total while loading. */}
       <Text as="p" size="sm" tone="muted">
         {s.sittings} {s.sittings === 1 ? 'sitting' : 'sittings'} · {s.problems}{' '}
@@ -64,7 +75,7 @@ export function SittingsSection() {
           </div>
         </section>
       ))}
-    </div>
+    </section>
   );
 }
 

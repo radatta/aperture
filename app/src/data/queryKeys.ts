@@ -16,6 +16,9 @@ export const qk = {
   // LeetCode sittings: one prefix, so a task write (a rep's Done ends its sitting) refreshes them all.
   sittings: (from = 'all', to = 'all') => ['sittings', from, to] as const,
   sitting: (id: string) => ['sittings', 'one', id] as const,
+  // The LeetCode coach: one prefix, so a sitting or task write (a slot's status) refreshes the plan.
+  coach: () => ['coach'] as const,
+  coachToday: () => ['coach', 'today'] as const,
   stories: () => ['stories'] as const,
   // Flux sets: one prefix, so a save or delete refreshes every History / night-line read.
   fluxSetsAll: () => ['fluxSets'] as const,

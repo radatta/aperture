@@ -1,5 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import {
+  CAUSE_NAMES,
+  CAUSE_TAGS,
   normalizePrepTarget,
   normalizeSittingReview,
   REVIEW_HOW_MAX,
@@ -9,16 +11,19 @@ import {
   REVIEW_TAGS_MAX,
   suggestedHelp,
 } from '@aperture/shared';
-import type { DraftFailReason, HelpLevel, Sitting } from '@aperture/shared';
+import type { CauseTag, DraftFailReason, HelpLevel, Sitting } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
 import { ModeToggle } from '../../components/ModeToggle';
 import { Text } from '../../components/Text';
 import {
   useDraftSittingReview,
+  useReadSittingReview,
   useSetSittingPrepTarget,
   useSetSittingReview,
 } from '../../data/hooks/useSittings';
+import { cx } from '../../lib/cx';
+import { suggestedCause } from './recruitingHelpers';
 import { NotesField } from '../../modules/tasks/notes/NotesField';
 import { notesValue } from '../../modules/tasks/notes/parseNotes';
 import { Textarea } from '../../components/Textarea';
@@ -26,7 +31,7 @@ import { Textarea } from '../../components/Textarea';
 const HELP: { value: HelpLevel; label: string }[] = [
   { value: 'none', label: 'No help' },
   { value: 'hint', label: 'A hint' },
-  { value: 'solution', label: 'The solution' },
+  { value: 'solution', label: 'Peeked' }, // the coach's "peeked": the solution was read
 ];
 const DRAFT_FAILED: Record<DraftFailReason, string> = {
   'nothing-to-draft': 'Nothing to draft yet — no run or submit was judged.',
@@ -42,14 +47,32 @@ export const REVIEW_ID = 'sitting-review'; // End sitting's Mark done sends focu
 const folded = (s: string) => s.replace(/\s+/g, ' ').trim(); // as the server counts it
 const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 
-// The sitting's review (docs/areas/recruiting → Review): the user's one-liner, how much help it took, the mistakes,
-// how it went, their own pattern tags and the prep target — one Save for all of it. "Draft with Claude" only
-// proposes mistake lines, unticked; only the ones they tick (edited or not) are saved. A failed save keeps every
-// field and says why.
+// The sitting's review (docs/areas/recruiting → Review): the user's one-liner, how much help it took (Peeked is
+// the coach's peeked), the coach's one cause tag, the mistakes, how it went, their own pattern tags and the prep
+// target — one Save for all of it. "Draft with Claude" only proposes mistake lines, unticked; only the ones they
+// tick (edited or not) are saved. A failed save keeps every field and says why.
+//
+// Help and the cause are also Claude's to set over MCP (mark_peeked, set_cause_tag), maybe after this form
+// opened. So until the user touches one, it follows the stored review as it refreshes, and Save doesn't send it —
+// the server keeps what's stored (mergeReview), never the stale value the form opened on (F169). Help and the cause
+// are only suggested while there's no review at all: once one is stored, its own values (none included) show.
+const startCause = (s: Sitting): CauseTag | null =>
+  s.review ? (s.review.cause ?? null) : suggestedCause(s);
+
 export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const saved = sitting.review ?? null;
   const [insight, setInsight] = useState(saved?.insight ?? '');
   const [help, setHelp] = useState<HelpLevel>(saved?.help ?? suggestedHelp(sitting));
+  const [cause, setCause] = useState<CauseTag | null>(startCause(sitting));
+  const [touched, setTouched] = useState({ help: false, cause: false });
+  const [syncedAt, setSyncedAt] = useState(saved?.updatedAt ?? null);
+  if ((saved?.updatedAt ?? null) !== syncedAt) {
+    // The stored review moved (a save here, or Claude's write elsewhere): untouched fields follow it.
+    setSyncedAt(saved?.updatedAt ?? null);
+    if (!touched.help) setHelp(saved?.help ?? suggestedHelp(sitting));
+    if (!touched.cause) setCause(startCause(sitting));
+  }
+  const readReview = useReadSittingReview();
   const [mistakes, setMistakes] = useState<string[]>(saved?.mistakes ?? []);
   const [draft, setDraft] = useState<DraftLine[]>([]);
   const [howItWent, setHowItWent] = useState(saved?.howItWent ?? '');
@@ -60,6 +83,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false); // a double click lands both clicks before `busy` renders
   const setReview = useSetSittingReview();
   const setPrepTarget = useSetSittingPrepTarget();
   const drafting = useDraftSittingReview();
@@ -114,11 +138,12 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
     const usedDraft = ticked.length > 0 || (!!saved?.draftUsed && mistakes.length > 0);
     const input = {
       insight: insight || null,
-      help,
       mistakes: all,
       howItWent: howItWent || null,
       tags: tagText.trim() ? [...tags, tagText.trim().toLowerCase()] : tags,
       draftUsed: usedDraft,
+      ...(touched.help ? { help } : {}),
+      ...(touched.cause ? { cause } : {}),
     };
     let prepTag: string;
     let normal: ReturnType<typeof normalizeSittingReview>;
@@ -129,9 +154,21 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       setError(`${(e as Error).message}.`);
       return;
     }
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
     let step: 'review' | 'prep' = 'review';
     try {
+      // A first review sends the untouched suggestions (a hint, No trace) — but only if there's still no review
+      // as of now: one Claude wrote since the form opened wins. Help and the cause refuse taps while this runs, so
+      // `touched` is the one Save was pressed on.
+      const suggests =
+        !saved && ((!touched.help && help !== 'none') || (!touched.cause && !!cause));
+      if (suggests && !(await readReview(sitting.id)))
+        Object.assign(input, {
+          ...(touched.help ? {} : { help }),
+          ...(touched.cause || !cause ? {} : { cause }),
+        });
       await setReview.mutateAsync({ id: sitting.id, review: input });
       step = 'prep';
       if (prepTag !== sitting.prepTarget)
@@ -142,6 +179,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       setTags(normal?.tags ?? []);
       setDraft([]);
       setTagText('');
+      setTouched({ help: false, cause: false });
       setStatus('Saved.');
     } catch {
       setError(
@@ -150,6 +188,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
           : 'The review saved, but the prep target didn’t — try Save again.',
       );
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   }
@@ -187,11 +226,51 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
         <ModeToggle
           options={HELP}
           value={help}
-          onChange={setHelp}
+          onChange={(v) => {
+            if (busy) return;
+            setHelp(v);
+            setTouched((t) => ({ ...t, help: true }));
+          }}
           size="sm"
           aria-labelledby={`${id}-help`}
           className="self-start"
         />
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Text size="sm" tone="muted" id={`${id}-cause`}>
+          Cause
+          {!touched.cause && !saved && cause && (
+            <Text as="span" size="xs" tone="subtle">
+              {' '}
+              · suggested
+            </Text>
+          )}
+        </Text>
+        {/* One choice; tapping the chosen one clears it. */}
+        <div role="group" aria-labelledby={`${id}-cause`} className="flex flex-wrap gap-1.5">
+          {CAUSE_TAGS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={cause === c}
+              aria-disabled={busy || undefined}
+              onClick={() => {
+                if (busy) return;
+                setCause(cause === c ? null : c);
+                setTouched((t) => ({ ...t, cause: true }));
+              }}
+              className={cx(
+                'rounded-full border px-3 py-1.5 text-sm transition',
+                cause === c
+                  ? 'border-teal-soft bg-teal-soft font-medium text-ink'
+                  : 'border-line bg-surface text-ink-muted hover:text-ink',
+              )}
+            >
+              {CAUSE_NAMES[c]}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">

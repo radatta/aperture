@@ -109,3 +109,36 @@ describe('Plan today › the waiting count', () => {
     await waitFor(() => expect(line()).toBe('3 waiting in the backlog'), { timeout: 15_000 });
   }, 20_000);
 });
+
+// The morning line for LeetCode (scenario 15): the coach's day in one line, linking to the Today card.
+describe('the LeetCode morning line', () => {
+  const morning = async (api: ReturnType<typeof createStubClient>) => {
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+  };
+
+  it('reads the coach’s day and links to it', async () => {
+    const api = createStubClient({ seed: true, storageKey: `lc-${Math.random()}` });
+    await morning(api);
+    const line = await screen.findByText('LeetCode · 4 today · +1 re-solve due');
+    expect(line.closest('a')?.getAttribute('href')).toBe('/recruiting');
+  });
+
+  it('shows nothing, and reads nothing, with no LeetCode roll linked', async () => {
+    const api = createStubClient({ seed: false, storageKey: `lc-${Math.random()}` });
+    const read = vi.spyOn(api, 'getCoachToday');
+    await morning(api);
+    expect(await screen.findByText('Plan today')).toBeTruthy();
+    expect(screen.queryByText(/^LeetCode ·/)).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('a failed read is one visible line, never silence', async () => {
+    const api = createStubClient({ seed: true, storageKey: `lc-${Math.random()}` });
+    vi.spyOn(api, 'getCoachToday').mockRejectedValue(new Error('offline'));
+    await morning(api);
+    const line = await screen.findByText('LeetCode · couldn’t load today’s plan');
+    expect(line.closest('a')?.getAttribute('href')).toBe('/recruiting');
+  });
+});

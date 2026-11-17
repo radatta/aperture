@@ -69,8 +69,9 @@ const review = (over: Partial<DevSittingReview> = {}): DevSittingReview => ({
   draftUsed: false,
   ...over,
 });
+// A row of the sittings list itself: the coach's Today card above it links some sittings by title too.
 const sittingLink = (ctx: Ctx, which: string) =>
-  ctx.page.getByRole('link', {
+  ctx.page.getByRole('region', { name: 'All sittings' }).getByRole('link', {
     name: new RegExp(titleOf(ctx, which).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
   });
 // The computed font-size of every field inside a container, in px — iOS Safari zooms one under 16.
