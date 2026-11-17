@@ -9,6 +9,7 @@ export const qk = {
   places: () => ['places'] as const,
   placeDigest: (slug: string) => ['places', 'digest', slug] as const,
   placeToken: () => ['placeToken'] as const,
+  scopedTokens: (scope: string) => ['scopedTokens', scope] as const,
   pushStatus: () => ['pushStatus'] as const,
   series: () => ['series'] as const,
   calibration: (from: string, to: string) => ['calibration', from, to] as const,

@@ -156,7 +156,7 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
       const started = Date.now();
       const { meta, ...out } = await call({
         model: PARSE_MODEL,
-        system: parseSystemPrompt(req.today, req.categories),
+        system: parseSystemPrompt(req.today, req.categories, { voice: req.voice }),
         user: req.text,
         schema: parseOutputSchema(req.categories.map((c) => c.id)),
         maxTokens: 2048,

@@ -123,6 +123,25 @@ export interface DevPlaceTokenStatus {
   hint: string | null;
   readsToday: number;
 }
+// The slices of @aperture/shared's capture contract the check reads (packages/shared/src/capture.ts): a scoped
+// token as Settings lists it (never the token or its hash — `hint` is its last 4), and the capture route's answer.
+export interface DevScopedToken {
+  id: string;
+  scope: string;
+  name: string;
+  hint: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  usedToday: number;
+}
+export interface DevCaptureResult {
+  id: string | null;
+  say: string;
+  detail: string;
+  raw: boolean;
+  duplicate: boolean;
+  due: { day: string; time: string | null } | null;
+}
 // The slices of @aperture/shared's reminders contract the check reads (packages/shared/src/reminders.ts).
 // A device never carries its endpoint or keys back; the check's own subscription input is the only place
 // they exist, in the step's memory.
@@ -389,6 +408,13 @@ export const MCP_SERIES_VIA = 'mcp:create_series';
 const SERIES_VIAS: readonly string[] = [SERIES_VIA, UI_SERIES_VIA, MCP_SERIES_VIA];
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
 export const placeTokenId = (run: string): string => `place-token:${run}`;
+// A capture token (capture.md → Token) this harness minted — through the API, or Settings › Capture's Make
+// token (the browser's mintScopedToken response, recorder.ts) — by the id the mint answered with, never the
+// token. Cleanup revokes it by that id; one already revoked (or never listed) reads as gone.
+export const SCOPED_TOKEN_VIA = 'api:mintScopedToken';
+export const UI_SCOPED_TOKEN_VIA = 'ui:mintScopedToken';
+// A task the capture route made (POST /api/capture, recorded from its 200's `id`) — a task like any other.
+export const CAPTURE_VIA = 'api:capture';
 // A push device this harness subscribed — by the id the server answered with (a sha256(endpoint) prefix) —
 // through the API, or Settings' Enable (the browser's subscribePush response, recorder.ts).
 export const PUSH_SUB_VIA = 'api:subscribePush';
@@ -446,7 +472,8 @@ export type LedgerKind =
   | 'series'
   | 'roll'
   | 'sitting'
-  | 'lcRollLink';
+  | 'lcRollLink'
+  | 'scopedToken';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
@@ -466,6 +493,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FINANCE_RULE_VIA) return 'financeRule';
   if (via === PUSH_SUB_VIA || via === UI_PUSH_SUB_VIA) return 'pushsub';
   if (via === REMINDER_TOGGLES_VIA) return 'reminderToggles';
+  if (via === SCOPED_TOKEN_VIA || via === UI_SCOPED_TOKEN_VIA) return 'scopedToken';
   return via === PLACE_TOKEN_VIA ? 'placeToken' : 'task';
 }
 
@@ -581,6 +609,9 @@ export function createApiClient({
   }
   // Attachments this client created; deleteAttachment refuses any other id.
   const attachmentIds = new Set<string>();
+  // Task ids captureRaw has recorded: the cap's 200 calls answer the same id, and the shared ledger is too big
+  // to re-read per call.
+  const capturedIds = new Set<string>();
 
   const reads = {
     listTasks: () => call<DevTask[]>('listTasks', []),
@@ -651,6 +682,8 @@ export function createApiClient({
     // The digest as an RPC read — no heartbeat, no count (the Shortcut route below is the one that counts).
     listPlaceTasks: (slug: string) => call<DevPlaceDigest>('listPlaceTasks', [slug]),
     getPlaceTokenStatus: () => call<DevPlaceTokenStatus>('getPlaceTokenStatus', []),
+    // The test user's live capture tokens, oldest first — `capture` is the only scope.
+    listScopedTokens: () => call<DevScopedToken[]>('listScopedTokens', ['capture']),
     // Devices (never their endpoint or keys), the removed list, and the poller's health line.
     getPushStatus: () => call<DevPushStatus>('getPushStatus', []),
     getCalibration: (range: { from: string; to: string }) =>
@@ -1204,6 +1237,98 @@ export function createApiClient({
           'refusing to revoke the place token — no run recorded minting it',
         );
       await call<null>('revokePlaceToken', []);
+    },
+    // A capture token, ledgered like a place — intent, then the id the mint answered with (never the token,
+    // whose plaintext comes back once and lives in the step's memory only). A refusal (the name rules, the
+    // 5-token limit) resolves the intent as `refused` and throws with the BFF's error, for a step to read.
+    async mintScopedToken(name: string): Promise<{ token: string; info: DevScopedToken }> {
+      const url = `${targetOrigin()}/api/mintScopedToken`;
+      assertDevOrigin(url);
+      ledger.append({ run, op: 'intent', via: SCOPED_TOKEN_VIA, title: name });
+      const { status, text } = await backoff(() =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token()}` },
+          body: JSON.stringify({ args: ['capture', name] }),
+        }),
+      );
+      if (status === 200) {
+        const minted = JSON.parse(text) as { token: string; info: DevScopedToken };
+        ledger.append({
+          run,
+          op: 'created',
+          id: minted.info.id,
+          via: SCOPED_TOKEN_VIA,
+          title: name,
+        });
+        return minted;
+      }
+      // Only a 4xx is a refusal before any write; a 5xx may have landed, so its intent stays open.
+      if (status >= 400 && status < 500)
+        ledger.append({ run, op: 'refused', via: SCOPED_TOKEN_VIA, title: name });
+      throw new Error(`mintScopedToken → HTTP ${status}: ${text.slice(0, 200)}`);
+    },
+    async revokeScopedToken(id: string): Promise<void> {
+      assertLedger(id, 'scopedToken');
+      await call<null>('revokeScopedToken', [id]);
+    },
+    // The voice Shortcut's route, raw (capture.md → The route): POST /api/capture with `token` in the BFF
+    // header — a capture token, 'jwt' for the test user's session (it must be refused), or none — and `body`
+    // as JSON (a string goes as sent: malformed on purpose). Returns the status and parsed body, whatever they
+    // are. Every POST to the route itself is ledgered like a create, whatever the bearer (a JWT or a revoked
+    // token wrongly let through would still make a task): an intent, then the 200's `id` as a task
+    // (CAPTURE_VIA) when it's new — so cleanup deletes it — or `refused` (a refusal, or a duplicate naming a
+    // recorded task); a 5xx leaves the intent open, a possible leak. `tag` goes on the ledger title, so
+    // same-text calls (the cap's 200) can't resolve each other's intents. `path` is the capture route's (a
+    // wrong /api/capture… path proves its 422) or /api/listTasks (a read: a capture token must open nothing
+    // else); `method` proves the 405. A 429 carrying the route's own `{error, say}` is the daily cap, returned
+    // as is; any other is Lambda throttling, backed off like call()'s.
+    async captureRaw(
+      bearer: string | null,
+      body: string | object,
+      opts: { method?: 'POST' | 'GET' | 'PUT'; path?: string; tag?: string } = {},
+    ): Promise<{ status: number; body: unknown }> {
+      const path = opts.path ?? '/api/capture';
+      if (!/^\/api\/capture(\/|$)/.test(path) && path !== '/api/listTasks')
+        throw new Error(`captureRaw only reaches the capture route or /api/listTasks, not ${path}`);
+      const url = `${targetOrigin()}${path}`;
+      assertDevOrigin(url);
+      const method = opts.method ?? 'POST';
+      const raw = typeof body === 'string' ? body : JSON.stringify(body);
+      const text0 =
+        typeof body === 'string' ? body : String((body as { text?: unknown }).text ?? '');
+      const title = `${text0.slice(0, 80)}${opts.tag ? ` ${opts.tag}` : ''}`;
+      const creates = method === 'POST' && path === '/api/capture';
+      if (creates) ledger.append({ run, op: 'intent', via: CAPTURE_VIA, title });
+      const send = () => {
+        const headers: Record<string, string> = {};
+        if (method !== 'GET') headers['content-type'] = 'application/json';
+        if (bearer !== null) headers[AUTH_HEADER] = `Bearer ${bearer === 'jwt' ? token() : bearer}`;
+        return fetch(url, {
+          method,
+          headers,
+          ...(method === 'GET' ? {} : { body: raw }),
+          redirect: 'error',
+        });
+      };
+      const { status, text } = await backoff(send, (s, t) => s === 429 && !bffError(t));
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        parsed = text.slice(0, 200);
+      }
+      if (creates) {
+        const id = (parsed as { id?: unknown } | null)?.id;
+        if (status === 200 && typeof id === 'string' && !capturedIds.has(id) && !ledger.has(id)) {
+          ledger.append({ run, op: 'created', id, via: CAPTURE_VIA, title });
+          capturedIds.add(id);
+        } else if (status === 200 || (status >= 400 && status < 500))
+          // `refused` here means "nothing new to clean": a refusal, or a duplicate naming a recorded task.
+          ledger.append({ run, op: 'refused', via: CAPTURE_VIA, title });
+        // A 5xx may have created the task: its intent stays open, reported as a possible leak.
+      }
+      return { status, body: parsed };
     },
     // Reminders. A subscribe is ledgered like createTask — intent, then the server's id — so cleanup removes
     // the device by id; a device the poller already dropped (a 404/410 from the push service) reads as gone.

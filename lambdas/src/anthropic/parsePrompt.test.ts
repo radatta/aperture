@@ -18,6 +18,15 @@ describe('parseSystemPrompt', () => {
     expect(p).toContain('Today is 2026-10-16 (Friday)');
     expect(p).toContain('(none — categoryId must be null)');
   });
+
+  it('a spoken line adds the voice rules after the typed ones, which stay word for word', () => {
+    const cats = [{ id: 'c1', label: 'Aperture' }];
+    const typed = parseSystemPrompt('2026-11-16', cats);
+    const voice = parseSystemPrompt('2026-11-16', cats, { voice: true });
+    expect(parseSystemPrompt('2026-11-16', cats, { voice: false })).toBe(typed);
+    expect(voice.startsWith(typed)).toBe(true);
+    expect(voice.slice(typed.length)).toMatchSnapshot();
+  });
 });
 
 describe('parseOutputSchema', () => {

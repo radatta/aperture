@@ -462,10 +462,11 @@ check if voice capture suddenly fails.
 ## Raycast quick-add — a Mac capture surface
 
 `tools/raycast/aperture-add.sh` ([README](../../../tools/raycast/README.md)): a Raycast hotkey → one
-line → `parse_task` (**Claude Haiku 5.5**, server-side — the same parse as the app's quick add,
-[quick-add](../tasks/quick-add.md)) turns it into `create_task` fields (short title + notes, category id,
-due day/time, estimate) → `create_task`. Each Aperture call is a plain `curl` of one stateless `tools/call`
-(no `initialize` needed) with the prod agent token from Keychain. Capture only, by decision (2026-10-09):
+line → since 2026-11-16 one `POST /api/capture` with a **capture token** ([capture](../tasks/capture.md)), no
+longer the agent token or `/mcp`. The server parses it (**Claude Haiku 5.5** — the same parse as the app's
+quick add, [quick-add](../tasks/quick-add.md)) and creates the task. Until then it was two stateless
+`tools/call`s — `parse_task`, then `create_task` — with the prod agent token from Keychain, and the
+decisions below were made for that shape; they still hold. Capture only, by decision (2026-10-09):
 updates and reorganizing stay in the claude.ai chat and the app. The script checks the HTTP status **and**
 the body — MCP returns a param error (`error`) and a tool failure (`result.isError`) inside a 200 — and
 trims and rejects a blank title itself, since `createTask` stores the title verbatim.
@@ -501,8 +502,9 @@ parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is q
 
 ## Deferred
 
-- A **create-only token** for Raycast (scoped to `parse_task` + `create_task`, like the recruiting
-  device token's `LC_INGEST_METHODS`) — the Mac's Keychain holds the full agent token until then.
+- ~~A **create-only token** for Raycast~~ — done 2026-11-16: Raycast posts to `/api/capture` with a
+  capture-scoped token ([capture → Token](../tasks/capture.md#3-token)); the agent token can leave the Mac's
+  Keychain.
 - **`create_task` doesn't check that `categoryId` exists.** A category deleted between Raycast's
   `parse_task` and its `create_task` (seconds, since 2026-10-12; a day while the script cached
   categories) can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix

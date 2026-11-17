@@ -158,6 +158,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   let baseline: Set<string> | undefined; // the partition's task ids right after the sweep
   let placeBaseline: Set<string> | undefined; // and its place ids
   let categoryBaseline: Set<string> | undefined; // and its category ids
+  let tokenBaseline: Set<string> | undefined; // and its capture tokens' ids
   let browser: BrowserSession | undefined;
   let session: Session | undefined;
   let api: ApiClient | undefined;
@@ -243,6 +244,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
     placeBaseline = new Set((await api.reads.listPlaces()).map((p) => p.id));
     categoryBaseline = new Set((await api.reads.listCategories()).map((c) => c.id));
+    tokenBaseline = new Set((await api.reads.listScopedTokens()).map((t) => t.id));
     // After the sweep (whose writes use the checked app session), before any step: the MCP token is the
     // test user's — WRONG_USER otherwise — before a step can write through it.
     const mcpSession = await browser.signInMcp((p) =>
@@ -494,6 +496,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // A push device exists while it's among the status's alive devices (a removed one is a keyless
   // tombstone; one the poller dropped is gone).
   // The reminder toggles, `reminder-toggles:<run>`, exist while any reads off; removing them switches all on.
+  // A capture token exists while it's listed (a revoke cut short leaves it listed but dead — revoking again
+  // finishes it); removing it revokes it by its recorded id.
   async function exists(client: ApiClient, id: string): Promise<boolean> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
@@ -532,6 +536,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         const st = await client.reads.getSettings();
         return !st.remindTimed || !st.remindDueDay || !st.remindPlanned;
       }
+      case 'scopedToken':
+        return (await client.reads.listScopedTokens()).some((t) => t.id === id);
       case 'task':
         return (await client.reads.getTask(id)) !== null;
     }
@@ -588,6 +594,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'reminderToggles':
         await client.writes.restoreReminderToggles();
+        return true;
+      case 'scopedToken':
+        await client.writes.revokeScopedToken(id);
         return true;
       case 'task':
         return safeDelete(client, id);
@@ -683,6 +692,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const cats = (await api.reads.listCategories()).map((c) => c.id).filter((id) => !known.has(id));
     r.unrecorded.push(...cats.filter((id) => !categoryBaseline || categoryBaseline.has(id)));
     if (categoryBaseline) r.appeared.push(...cats.filter((id) => !categoryBaseline!.has(id)));
+    // And capture tokens (Settings › Capture's Make token): one minted by a path the recorder missed would stay
+    // live, opening the capture route, until someone revoked it by hand.
+    const toks = (await api.reads.listScopedTokens())
+      .map((t) => t.id)
+      .filter((id) => !known.has(id));
+    r.unrecorded.push(...toks.filter((id) => !tokenBaseline || tokenBaseline.has(id)));
+    if (tokenBaseline) r.appeared.push(...toks.filter((id) => !tokenBaseline!.has(id)));
     if (r.appeared.length)
       fail('LEFTOVERS', `appeared during the run, not in the ledger: ${r.appeared.join(', ')}`);
     // Sessions aren't ledgered: a timer a run leaves running breaks every later timer scenario (and, on dev,

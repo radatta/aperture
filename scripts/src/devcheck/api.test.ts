@@ -15,10 +15,13 @@ import {
   MCP_SERIES_VIA,
   PUSH_SUB_VIA,
   REMINDER_TOGGLES_VIA,
+  SCOPED_TOKEN_VIA,
+  CAPTURE_VIA,
   SERIES_VIA,
   UI_CATEGORY_VIA,
   UI_PLACE_VIA,
   UI_PUSH_SUB_VIA,
+  UI_SCOPED_TOKEN_VIA,
   UI_SERIES_VIA,
   harnessPushId,
   isHarnessPushId,
@@ -29,7 +32,7 @@ import {
   type FetchLike,
 } from './api';
 import { DEV_ORIGIN } from './config';
-import type { Ledger, LedgerEntry } from './ledger';
+import { orphanIntents, type Ledger, type LedgerEntry } from './ledger';
 
 function memLedger(): Ledger & { entries: Omit<LedgerEntry, 't'>[] } {
   const entries: Omit<LedgerEntry, 't'>[] = [];
@@ -118,6 +121,7 @@ describe('createApiClient', () => {
       'listPlansForDay',
       'listRolls',
       'listRunningSessions',
+      'listScopedTokens',
       'listSeries',
       'listSessionsForDay',
       'listSittingReplay',
@@ -130,6 +134,7 @@ describe('createApiClient', () => {
     expect(Object.keys(api.writes).sort()).toEqual([
       'archiveHabit',
       'archiveRoll',
+      'captureRaw',
       'checkHabit',
       'createAttachment',
       'createLogEntry',
@@ -152,6 +157,7 @@ describe('createApiClient', () => {
       'lcSittingEventsToUnknown',
       'lcSittingStart',
       'linkLeetcodeRoll',
+      'mintScopedToken',
       'recordFinanceBucket',
       'recordFinanceLink',
       'recordFinanceMark',
@@ -163,6 +169,7 @@ describe('createApiClient', () => {
       'removeSitting',
       'restoreReminderToggles',
       'revokePlaceToken',
+      'revokeScopedToken',
       'rotatePlaceToken',
       'rpcRaw',
       'sendTestPush',
@@ -636,6 +643,202 @@ describe('createApiClient', () => {
         `${DEV_ORIGIN}/api/revokePlaceToken`,
         expect.objectContaining({ body: '{"args":[]}' }),
       );
+    });
+  });
+
+  describe('voice capture (scoped tokens and the capture route)', () => {
+    const CAP = `apc_${'c'.repeat(43)}`;
+    const info = (id: string) => ({
+      id,
+      scope: 'capture',
+      name: 'mac',
+      hint: 'cccc',
+      createdAt: 0,
+      lastUsedAt: null,
+      usedToday: 0,
+    });
+
+    it('names a capture token by its via — API or Settings — and a captured task as a task', () => {
+      const entries = [
+        { run: 'r', op: 'created' as const, id: 'K1', via: SCOPED_TOKEN_VIA },
+        { run: 'r', op: 'created' as const, id: 'K2', via: UI_SCOPED_TOKEN_VIA },
+        { run: 'r', op: 'created' as const, id: 'T', via: CAPTURE_VIA },
+      ].map((e) => ({ t: '', ...e }));
+      expect(['K1', 'K2', 'T'].map((id) => ledgerKind(entries, id))).toEqual([
+        'scopedToken',
+        'scopedToken',
+        'task',
+      ]);
+    });
+
+    it('ledgers a mint by the id it answered with (intent first), never the token', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { token: CAP, info: info('K1') }));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger, run: 'r1' });
+      expect((await api.writes.mintScopedToken('mac')).token).toBe(CAP);
+      expect(fetch.mock.calls[0]![1].body).toBe('{"args":["capture","mac"]}');
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'intent', via: SCOPED_TOKEN_VIA, title: 'mac' },
+        { run: 'r1', op: 'created', id: 'K1', via: SCOPED_TOKEN_VIA, title: 'mac' },
+      ]);
+      expect(JSON.stringify(ledger.entries)).not.toContain('apc_');
+    });
+
+    it('a refused mint resolves its intent and throws the BFF’s error; a 5xx leaves the intent open', async () => {
+      const ledger = memLedger();
+      const refused = vi.fn<FetchLike>(async () =>
+        reply(400, { error: 'At most 5 tokens — revoke one first' }),
+      );
+      const api = createApiClient({ fetch: refused, token: () => 'jwt', ledger, run: 'r1' });
+      await expect(api.writes.mintScopedToken('six')).rejects.toThrow(/At most 5 tokens/);
+      expect(ledger.entries.map((e) => e.op)).toEqual(['intent', 'refused']);
+      const broke = createApiClient({
+        fetch: vi.fn<FetchLike>(async () => reply(500, { error: 'Internal error' })),
+        token: () => 'jwt',
+        ledger,
+        run: 'r1',
+      });
+      await expect(broke.writes.mintScopedToken('seven')).rejects.toThrow(/HTTP 500/);
+      expect(ledger.entries.map((e) => e.op)).toEqual(['intent', 'refused', 'intent']);
+    });
+
+    it('revokes only a token the ledger recorded as one — without a request otherwise', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger, run: 'r1' });
+      await expect(api.writes.revokeScopedToken('K9')).rejects.toThrow(/LEDGER_GUARD/);
+      ledger.append({ run: 'r1', op: 'created', id: 'T1', via: CAPTURE_VIA });
+      await expect(api.writes.revokeScopedToken('T1')).rejects.toThrow(/LEDGER_GUARD/);
+      expect(fetch).not.toHaveBeenCalled();
+      ledger.append({ run: 'r1', op: 'created', id: 'K1', via: UI_SCOPED_TOKEN_VIA });
+      await api.writes.revokeScopedToken('K1');
+      expect(fetch).toHaveBeenCalledWith(`${DEV_ORIGIN}/api/revokeScopedToken`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-aperture-authorization': 'Bearer jwt' },
+        body: '{"args":["K1"]}',
+      });
+    });
+
+    it('posts the line with the capture token — the session’s only when asked, or none — never following a redirect', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(401, { error: 'Unauthorized', say: 'x' }));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger: memLedger(), run: 'r1' });
+      await api.writes.captureRaw(CAP, { text: 'milk', voice: true });
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/capture`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-aperture-authorization': `Bearer ${CAP}`,
+        },
+        body: '{"text":"milk","voice":true}',
+        redirect: 'error',
+      });
+      await api.writes.captureRaw('jwt', '{"text":', {});
+      expect(fetch.mock.calls.at(-1)![1]).toMatchObject({
+        headers: { 'x-aperture-authorization': 'Bearer jwt' },
+        body: '{"text":',
+      });
+      await api.writes.captureRaw(null, {}, { method: 'GET' });
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/capture`, {
+        method: 'GET',
+        headers: {},
+        redirect: 'error',
+      });
+      await api.writes.captureRaw(CAP, { args: [] }, { path: '/api/listTasks' });
+      expect(fetch.mock.calls.at(-1)![0]).toBe(`${DEV_ORIGIN}/api/listTasks`);
+      await expect(
+        api.writes.captureRaw(CAP, { args: ['x'] }, { path: '/api/deleteTask' }),
+      ).rejects.toThrow(/only reaches/);
+      expect(fetch).toHaveBeenCalledTimes(4);
+    });
+
+    it('a session JWT the route wrongly took still has its task recorded', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'T9', say: 'Added: a.' }));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger, run: 'r1' });
+      await api.writes.captureRaw('jwt', { text: 'a' });
+      expect(ledger.entries.filter((e) => e.op === 'created').map((e) => e.id)).toEqual(['T9']);
+    });
+
+    it('ledgers each task the route made once — a duplicate’s id isn’t new — and resolves every intent', async () => {
+      const ledger = memLedger();
+      const answers = [
+        reply(200, { id: 'T1', say: 'Added: a.', duplicate: false }),
+        reply(200, { id: 'T1', say: 'Already added: a.', duplicate: true }),
+        reply(200, { id: null, say: 'Already got that a moment ago.', duplicate: true }),
+        reply(422, { error: 'Empty text', say: 'x' }),
+      ];
+      const fetch = vi.fn<FetchLike>(async () => answers.shift()!);
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger, run: 'r1' });
+      for (const text of ['a', 'a', 'a', ' ']) await api.writes.captureRaw(CAP, { text });
+      expect(ledger.entries.filter((e) => e.op === 'created')).toEqual([
+        { run: 'r1', op: 'created', id: 'T1', via: CAPTURE_VIA, title: 'a' },
+      ]);
+      expect(ledger.entries.map((e) => e.op)).toEqual([
+        'intent',
+        'created',
+        'intent',
+        'refused',
+        'intent',
+        'refused',
+        'intent',
+        'refused',
+      ]);
+    });
+
+    it('a 5xx leaves the capture’s intent open; a refusal to any bearer resolves its own, by its tag', async () => {
+      const ledger = memLedger();
+      const answers = [
+        reply(500, { error: 'Internal error', say: 'x' }),
+        reply(401, { error: 'Unauthorized', say: 'x' }),
+        reply(401, { error: 'Unauthorized', say: 'x' }),
+      ];
+      const api = createApiClient({
+        fetch: vi.fn<FetchLike>(async () => answers.shift()!),
+        token: () => 'jwt',
+        ledger,
+        run: 'r1',
+      });
+      await api.writes.captureRaw(CAP, { text: 'a' }, { tag: '#1' });
+      await api.writes.captureRaw(null, { text: 'a' }, { tag: '#2' });
+      await api.writes.captureRaw('jwt', { text: 'a' }, { tag: '#3' });
+      expect(ledger.entries.map((e) => [e.op, e.title])).toEqual([
+        ['intent', 'a #1'],
+        ['intent', 'a #2'],
+        ['refused', 'a #2'],
+        ['intent', 'a #3'],
+        ['refused', 'a #3'],
+      ]);
+      // #1's intent stays open — a sibling's answer under another tag can't close it.
+      expect(orphanIntents(ledger.read()).map((e) => e.title)).toEqual(['a #1']);
+    });
+
+    it('returns the route’s own 429 (the daily cap) at once, but backs off a Lambda throttle', async () => {
+      const sleep = vi.fn<(ms: number) => Promise<void>>(async () => undefined);
+      const cap = { error: 'Daily capture cap reached', say: 'Daily capture limit reached.' };
+      const capped = vi.fn<FetchLike>(async () => reply(429, cap));
+      const api = createApiClient({
+        fetch: capped,
+        token: () => 'jwt',
+        ledger: memLedger(),
+        run: 'r1',
+        sleep,
+      });
+      expect(await api.writes.captureRaw(CAP, { text: 'a' })).toEqual({ status: 429, body: cap });
+      expect(capped).toHaveBeenCalledTimes(1);
+      let n = 0;
+      const throttled = vi.fn<FetchLike>(async () =>
+        ++n < 2 ? reply(429, { Message: 'Rate Exceeded.' }) : reply(401, { error: 'U', say: 'x' }),
+      );
+      const again = createApiClient({
+        fetch: throttled,
+        token: () => 'jwt',
+        ledger: memLedger(),
+        run: 'r1',
+        sleep,
+      });
+      expect((await again.writes.captureRaw(CAP, { text: 'a' })).status).toBe(401);
+      expect(throttled).toHaveBeenCalledTimes(2);
+      expect(again.throttles()).toBe(1);
     });
   });
 

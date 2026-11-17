@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   addDays,
+  fmtClockSpoken,
+  fmtSpokenDay,
   beforeDayStart,
   dayKey,
   dayKeyForOffset,
@@ -337,5 +339,25 @@ describe('duePresets', () => {
     const days = duePresets('2026-10-31').map((p) => p.day);
     expect(days).toContain('2026-11-02');
     expect(days.at(-1)).toBe('2026-11-07');
+  });
+});
+
+describe('spoken formatting — fmtClockSpoken, fmtSpokenDay', () => {
+  it('says a clock the way Siri reads it', () => {
+    expect(fmtClockSpoken('17:00')).toBe('5 PM');
+    expect(fmtClockSpoken('09:30')).toBe('9:30 AM');
+    expect(fmtClockSpoken('00:00')).toBe('12 AM');
+    expect(fmtClockSpoken('12:05')).toBe('12:05 PM');
+  });
+
+  it('says a day relative to today, by name within the week, by date beyond', () => {
+    const today = '2026-11-16'; // Monday
+    expect(fmtSpokenDay(today, today)).toBe('today');
+    expect(fmtSpokenDay('2026-11-17', today)).toBe('tomorrow');
+    expect(fmtSpokenDay('2026-11-15', today)).toBe('yesterday');
+    expect(fmtSpokenDay('2026-11-18', today)).toBe('Wednesday');
+    expect(fmtSpokenDay('2026-11-22', today)).toBe('Sunday');
+    expect(fmtSpokenDay('2026-11-23', today)).toBe('November 23');
+    expect(fmtSpokenDay('2027-01-02', today)).toBe('January 2');
   });
 });

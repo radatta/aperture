@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, afterAll, beforeEach, vi } from 'vitest';
 import {
   API_METHODS,
+  CAPTURE_DAILY_CAP,
+  CAPTURE_SAY,
   dayKey,
   PLACE_READ_DAILY_CAP,
   PLACE_READ_TEXT,
@@ -50,6 +52,7 @@ import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { PlaceTokenStore } from './ddb/placeTokens';
+import { ScopedTokenStore } from './ddb/scopedTokens';
 import { BackendClient } from './backend';
 import { hashPlaceToken } from './auth/placeToken';
 import { placeTokenPk, PLACE_TOKEN_SK } from './ddb/keys';
@@ -698,6 +701,222 @@ describe('handler place route', () => {
 });
 
 // testMode is the CI smoke's dry run over a DIRECT invoke; over the Function URL it opens nothing.
+// Voice capture: POST /api/capture with a capture token (capture.md). Grammar lines only here — the edge's
+// live model is never called in a test; the model path is backend.capture.test.ts's.
+describe('handler capture route', () => {
+  const ORIGIN = { 'x-aperture-origin-secret': 's3cr3t' };
+  let doc: InMemoryDoc;
+  let backend: BackendClient;
+  let logs: string[];
+
+  beforeEach(() => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    doc = new InMemoryDoc();
+    h.doc = doc;
+    backend = userBackend('u1');
+    logs = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => void logs.push(String(line)));
+  });
+  afterEach(() => {
+    delete process.env.ORIGIN_SECRET;
+    vi.restoreAllMocks();
+  });
+
+  const userBackend = (userId: string) =>
+    new BackendClient(new Repo(doc, liveWrites(doc), userId), {
+      userId,
+      placeTokens: new PlaceTokenStore(doc, liveWrites(doc)),
+      scopedTokens: new ScopedTokenStore(doc, liveWrites(doc)),
+    });
+  const post = (
+    headers: Record<string, string | undefined>,
+    body: unknown,
+    opts: { method?: string; path?: string; raw?: boolean } = {},
+  ) => {
+    const path = opts.path ?? '/api/capture';
+    return handler({
+      rawPath: path,
+      requestContext: { http: { method: opts.method ?? 'POST', path } },
+      headers: { ...ORIGIN, ...headers },
+      body: opts.raw ? (body as string) : JSON.stringify(body),
+    });
+  };
+  const bearer = (token: string) => ({ 'x-aperture-authorization': `Bearer ${token}` });
+  const mint = async (name = 'iPhone') => (await backend.mintScopedToken('capture', name)).token;
+  const said = (res: { body: string }) => (JSON.parse(res.body) as { say: string }).say;
+
+  it('200: a grammar line becomes a task, answered with a sentence to speak and the receipt', async () => {
+    const token = await mint();
+    const res = await post(bearer(token), { text: 'call mum | ~15' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      say: 'Added: call mum.',
+      raw: false,
+      duplicate: false,
+      due: null,
+    });
+    expect(body.detail).toBe('Added: call mum · no category · 15m');
+    const task = await backend.getTask(body.id as string);
+    expect(task).toMatchObject({ title: 'call mum', estimateMin: 15 });
+    expect((await backend.listScopedTokens('capture'))[0]).toMatchObject({ usedToday: 1 });
+    expect((await backend.listScopedTokens('capture'))[0]!.lastUsedAt).not.toBeNull();
+  });
+
+  it('the same line within a minute is the first one again — one task, the same id', async () => {
+    const token = await mint();
+    const first = JSON.parse((await post(bearer(token), { text: 'milk | ~5' })).body);
+    const again = await post(bearer(token), { text: '  MILK  |  ~5 ' });
+    expect(again.statusCode).toBe(200);
+    expect(JSON.parse(again.body)).toMatchObject({ id: first.id, duplicate: true });
+    expect(said(again)).toBe('Already added: milk.');
+    expect((await backend.listTasks()).filter((t) => t.title === 'milk')).toHaveLength(1);
+    // A different line is a new capture.
+    const other = JSON.parse((await post(bearer(token), { text: 'eggs | ~5' })).body);
+    expect(other.id).not.toBe(first.id);
+  });
+
+  it('401s a missing, malformed, unknown or revoked token with a say — writing nothing', async () => {
+    const token = await mint();
+    await backend.mintScopedToken('capture', 'Raycast');
+    const placeToken = (await backend.rotatePlaceToken()).token;
+    const before = doc.snapshot();
+    const gets = doc.gets.length;
+    for (const headers of [{}, bearer('good-jwt'), bearer('apc_short'), bearer(placeToken)]) {
+      const res = await post(headers, { text: 'x | ~5' });
+      expect(res.statusCode).toBe(401);
+      expect(JSON.parse(res.body)).toEqual({
+        error: 'Unauthorized',
+        say: CAPTURE_SAY.unauthorized,
+      });
+    }
+    expect(doc.gets.length).toBe(gets); // none of those cost a read
+    expect((await post(bearer(`apc_${'A'.repeat(43)}`), { text: 'x | ~5' })).statusCode).toBe(401);
+    expect(doc.snapshot()).toEqual(before);
+
+    const [phone, mac] = await backend.listScopedTokens('capture');
+    await backend.revokeScopedToken(phone!.id);
+    expect((await post(bearer(token), { text: 'x | ~5' })).statusCode).toBe(401);
+    // The neighbour still works.
+    const other = await backend.mintScopedToken('capture', 'Spare');
+    expect((await post(bearer(other.token), { text: 'x | ~5' })).statusCode).toBe(200);
+    expect(mac).toBeDefined();
+    expect(
+      logs.some((l) => l.includes('"reason":"revoked"') || l.includes('"reason":"unknown"')),
+    ).toBe(true);
+  });
+
+  it('a capture token opens nothing else: the RPC path and the place route refuse it', async () => {
+    const token = await mint();
+    const rpc = await handler({
+      rawPath: '/api/listTasks',
+      requestContext: { http: { method: 'POST', path: '/api/listTasks' } },
+      headers: { ...ORIGIN, ...bearer(token) },
+      body: JSON.stringify({ args: [] }),
+    });
+    expect(rpc.statusCode).toBe(401);
+    const place = await handler({
+      rawPath: '/api/places/grocer/tasks',
+      requestContext: { http: { method: 'GET', path: '/api/places/grocer/tasks' } },
+      headers: { ...ORIGIN, ...bearer(token) },
+    });
+    expect(place.statusCode).toBe(401);
+  });
+
+  it('405s anything but POST and 422s a bad path or body — after auth, uncounted, all with a say', async () => {
+    const token = await mint();
+    const get = await post(bearer(token), null, { method: 'GET' });
+    expect(get.statusCode).toBe(405);
+    expect(get.headers.allow).toBe('POST');
+    expect(said(get)).toBe(CAPTURE_SAY.method);
+    expect((await post({}, { text: 'x' }, { path: '/api/capture/x' })).statusCode).toBe(401);
+    const cases: [unknown, boolean, string, string][] = [
+      [{ text: 'x' }, false, '/api/capture/x', CAPTURE_SAY.path],
+      ['{not json', true, '/api/capture', CAPTURE_SAY.empty],
+      [['x'], false, '/api/capture', CAPTURE_SAY.empty],
+      [{ text: 5 }, false, '/api/capture', CAPTURE_SAY.empty],
+      [{ text: 'x', voice: 'yes' }, false, '/api/capture', CAPTURE_SAY.empty],
+      [{ text: '   ' }, false, '/api/capture', CAPTURE_SAY.empty],
+      [{ text: 'x'.repeat(2_501) }, false, '/api/capture', CAPTURE_SAY.tooLong],
+    ];
+    for (const [body, raw, path, say] of cases) {
+      const res = await post(bearer(token), body, { raw, path });
+      expect(res.statusCode).toBe(422);
+      expect(said(res)).toBe(say);
+    }
+    const big = await post(bearer(token), { text: 'x'.repeat(20_000) });
+    expect(big.statusCode).toBe(413);
+    expect(said(big)).toBe(CAPTURE_SAY.tooLong);
+    expect((await backend.listScopedTokens('capture'))[0]!.usedToday).toBe(0);
+    expect(await backend.listTasks()).toEqual([]);
+  });
+
+  it('a voice flag sent as the text "true" counts, and a base64 body reads', async () => {
+    const token = await mint();
+    const res = await post(bearer(token), { text: 'a | ~5', voice: 'true' });
+    expect(res.statusCode).toBe(200);
+    const b64 = await handler({
+      rawPath: '/api/capture',
+      requestContext: { http: { method: 'POST', path: '/api/capture' } },
+      headers: { ...ORIGIN, ...bearer(token) },
+      body: Buffer.from(JSON.stringify({ text: 'b | ~5' })).toString('base64'),
+      isBase64Encoded: true,
+    });
+    expect(b64.statusCode).toBe(200);
+    expect(said(b64)).toBe('Added: b.');
+  });
+
+  it(`429s past ${CAPTURE_DAILY_CAP} a day with a say, adding nothing`, async () => {
+    const token = await mint();
+    const store = new ScopedTokenStore(doc, liveWrites(doc));
+    const [info] = await backend.listScopedTokens('capture');
+    const row = (await store.row('u1', info!.id))!;
+    const day = dayKey(Date.now(), 0);
+    await store.replaceRow('u1', row, {
+      ...row,
+      usesDay: day,
+      uses: CAPTURE_DAILY_CAP,
+      updatedAt: row.updatedAt + 1,
+    });
+    const res = await post(bearer(token), { text: 'x | ~5' });
+    expect(res.statusCode).toBe(429);
+    expect(JSON.parse(res.body)).toEqual({
+      error: 'Daily capture cap reached',
+      say: CAPTURE_SAY.cap,
+    });
+    expect(await backend.listTasks()).toEqual([]);
+  });
+
+  it('never logs the text, the token or its hash — the outcome only', async () => {
+    const token = await mint();
+    await post(bearer(token), { text: 'secret plan | ~5' });
+    await post(bearer(`apc_${'B'.repeat(43)}`), { text: 'secret plan | ~5' });
+    const all = logs.join('\n');
+    for (const leak of ['secret plan', token, token.slice(4)]) expect(all).not.toContain(leak);
+    const lines = logs.map((l) => JSON.parse(l) as Record<string, unknown>);
+    const cap = lines.filter((l) => l.event === 'capture');
+    expect(cap.map((l) => [l.ok, l.reason])).toEqual([
+      [true, 'ok'],
+      [false, 'unknown'],
+    ]);
+  });
+
+  it('a 500 still says something, and logs only the error name', async () => {
+    const token = await mint();
+    vi.spyOn(BackendClient.prototype, 'createTask').mockRejectedValueOnce(
+      new Error('secret detail'),
+    );
+    const res = await post(bearer(token), { text: 'x | ~5' });
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body)).toEqual({ error: 'Internal error', say: CAPTURE_SAY.error });
+    expect(logs.join('\n')).not.toContain('secret detail');
+    // The failed line is forgotten: a retry is a new capture, not "already got that".
+    const retry = await post(bearer(token), { text: 'x | ~5' });
+    expect(retry.statusCode).toBe(200);
+    expect(JSON.parse(retry.body)).toMatchObject({ duplicate: false });
+  });
+});
+
 describe('handler testMode and body parsing', () => {
   let logs: string[];
   beforeEach(() => {

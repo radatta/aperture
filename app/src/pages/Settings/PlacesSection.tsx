@@ -456,7 +456,18 @@ function TokenCard() {
 }
 
 // The plaintext, once. Copy goes through the clipboard; where that's refused, the field is selectable.
-function TokenReveal({ token, onDone }: { token: string; onDone: () => void }) {
+// Settings › Capture tokens shows its own the same way, with its own label.
+export function TokenReveal({
+  token,
+  onDone,
+  label = 'Shortcut token',
+  where = 'the Shortcut’s header',
+}: {
+  token: string;
+  onDone: () => void;
+  label?: string;
+  where?: string;
+}) {
   const [copy, setCopy] = useState<null | 'copied' | 'failed'>(null);
   async function copyToken() {
     try {
@@ -469,15 +480,17 @@ function TokenReveal({ token, onDone }: { token: string; onDone: () => void }) {
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-teal bg-surface p-3">
       <Text size="sm">
-        Your new token — shown this once. Paste it into the Shortcut’s header now; Aperture keeps
-        only a fingerprint of it.
+        Your new token — shown this once. Paste it into {where} now; Aperture keeps only a
+        fingerprint of it.
       </Text>
-      <input
+      {/* A wrapping box, not a one-line input: on a phone a 47-character token would be cut off. */}
+      <textarea
         readOnly
+        rows={2}
         value={token}
-        aria-label="Shortcut token"
+        aria-label={label}
         onFocus={(e) => e.currentTarget.select()}
-        className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-ink outline-none focus:border-teal"
+        className="w-full resize-none break-all rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-ink outline-none focus:border-teal"
       />
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={() => void copyToken()}>
@@ -591,7 +604,7 @@ function ShortcutRecipe({ places }: { places: Place[] }) {
 // A value to paste into the Shortcut, shown whole — it wraps rather than scroll or truncate, so the URL's
 // tail ("…/tasks") is readable on a phone. Copy goes through the clipboard; where that's refused, the text
 // selects in one tap.
-function CopyField({ label, value }: { label: string; value: string }) {
+export function CopyField({ label, value }: { label: string; value: string }) {
   const [copy, setCopy] = useState<null | 'copied' | 'failed'>(null);
   const id = useId();
   async function onCopy() {

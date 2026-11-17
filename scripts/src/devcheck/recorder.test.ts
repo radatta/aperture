@@ -65,6 +65,17 @@ describe('recorder', () => {
     expect(isCreateRequest('updateLogEntry', JSON.stringify({ args: ['L1', 'y'] }))).toBe(false);
   });
 
+  it('records a capture token Settings minted by its info.id — never the plaintext beside it', () => {
+    expect(isCreateRequest('mintScopedToken', JSON.stringify({ args: ['capture', 'phone'] }))).toBe(
+      true,
+    );
+    const answer = { token: `apc_${'x'.repeat(43)}`, info: { id: 'K1', hint: 'xxxx' } };
+    expect(idsFromCreateResponse('mintScopedToken', answer)).toEqual(['K1']);
+    expect(idsFromCreateResponse('mintScopedToken', { error: 'At most 5 tokens' })).toEqual([]);
+    expect(idsFromCreateResponse('mintScopedToken', null)).toEqual([]);
+    expect(isCreateRequest('revokeScopedToken', JSON.stringify({ args: ['K1'] }))).toBe(false);
+  });
+
   it('ignores other methods and malformed bodies', () => {
     expect(idsFromCreateResponse('listTasks', [{ id: 'a' }])).toEqual([]);
     expect(idsFromCreateResponse('createTask', null)).toEqual([]);

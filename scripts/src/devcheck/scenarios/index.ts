@@ -36,6 +36,7 @@ import { places } from './places';
 import { planWriteRefetch } from './plan-write-refetch';
 import { reflectionLine } from './reflection-line';
 import { recurring } from './recurring';
+import { siriCapture } from './siri-capture';
 import { smoke } from './smoke';
 import { timedReminders } from './timed-reminders';
 import { timerCredit } from './timer-credit';
@@ -76,6 +77,7 @@ export const SCENARIOS: Scenario[] = [
   bffShapes,
   perSlotRuns,
   identifierCleanup,
+  siriCapture, // late, and tears its tokens and tasks down itself: no later scenario sees its captures
   lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

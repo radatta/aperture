@@ -10,6 +10,13 @@ import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bu
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
+import {
+  DAY_WORD,
+  resolveSpoken,
+  spokenTimeIn,
+  withoutRelative,
+  type SpokenTime,
+} from './spokenTime';
 
 // Longer than this is never sent to the model; the raw save still takes the whole line as the title.
 // Sized to the model's output: the overflow comes back as notes, so a much longer line can't fit in
@@ -57,6 +64,9 @@ export interface ParseContext {
   today: string;
   dayStartHour: number; // the day start `today` was resolved with — a small-hours clock is tonight's
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
+  // A spoken line (voice capture, capture.md): its time comes from the words, resolved against `now` by
+  // spokenTime.ts — the model's dueTime is ignored, a past time rolls forward. Absent: the typed rules.
+  voice?: { now: number };
 }
 
 // A clock the user actually wrote: "4pm", "9:30am", "4 p", "16:00", "noon", "midnight". A model has read
@@ -68,6 +78,11 @@ const CLOCK_IN_LINE =
 // 2026-10-13: "call dentist tonight" came back with a 15m estimate nobody typed — dropped the same way.
 const DURATION_IN_LINE =
   /\b\d+(\.\d+)?\s*(m|mins?|minutes?|h|hrs?|hours?)\b|\b(an?|one|two|three|half an?)\s+hours?\b|\bhalf\s+hour\b/i;
+
+// Something a spoken clock the voice grammar can't read is made of: a digit, an hour word, a quarter or a
+// half ("quarter past five", "half 6").
+const SPOKEN_CLOCK_HINT =
+  /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
 
 // The model's outcome, as the flow sees it. A failure never throws — every one is a raw save.
 export type ModelOutcome =
@@ -120,20 +135,62 @@ export function validateParsedTask(
     else dropped.push('dropped due day');
   }
 
+  // Spoken: the time is the words', never the model's (spokenTime.ts) — and with it the day, when the words
+  // were relative or the time had already passed. A day the model gave stays only as "the day named".
+  if (ctx.voice) {
+    const spoken = spokenTimeIn(ctx.line ?? '');
+    // The model kept the words in its title: it read them as part of the task, not a time ("look at one
+    // of the leases", "email the team about the 3pm meeting"). A delay ("in 20 minutes") is a time whatever
+    // the model did with its title.
+    const kept =
+      !!spoken &&
+      spoken.kind !== 'relative' &&
+      title.toLowerCase().includes(spoken.said.toLowerCase());
+    const clock = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
+    const resolve = (t: SpokenTime) => {
+      const r = resolveSpoken(t, input.dueDay ?? null, {
+        now: ctx.voice!.now,
+        today: ctx.today,
+        dayInWords: DAY_WORD.test(ctx.line ?? ''),
+      });
+      input.dueDay = r.day;
+      input.dueTime = r.time;
+    };
+    if (spoken && !kept) resolve(spoken);
+    // Words the grammar can't read ("quarter past five"): the model was given the typed prompt, which
+    // sets a clock only when one was said — taken, and rolled forward like any stated time.
+    // A line with no number or hour word in it had no clock to read: a time there is one the model made up.
+    else if (!spoken && str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(ctx.line ?? ''))
+      resolve({ said: '', kind: 'clock', hhmm: clock });
+    else if (p.dueTime != null) dropped.push('dropped due time');
+  }
   // A time with no day means today (a product call); a small-hours clock on today means tonight
   // (nightDueDay); a time whose day was dropped is dropped too.
-  if (p.dueTime != null) {
+  // The model missing a clock the line states outright ("call the bank at 6 pm" back with no time — seen on
+  // dev, 2026-11-16) is filled in from the words — only when the model took those words out of its title
+  // (kept there, "watch 9pm show" or "move the 3pm to 5pm", they weren't the due time). A different time from
+  // the model stands.
+  else {
     const t = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const stated = ctx.line === undefined || CLOCK_IN_LINE.test(ctx.line);
-    if (str(t) && isTimeKey(t) && stated && (input.dueDay != null || p.dueDay == null)) {
-      input.dueTime = t;
-      input.dueDay = nightDueDay(input.dueDay ?? ctx.today, t, ctx.today, ctx.dayStartHour);
-    } else dropped.push('dropped due time');
+    const dayKept = input.dueDay != null || p.dueDay == null;
+    const words = ctx.line === undefined ? null : spokenTimeIn(ctx.line);
+    const time =
+      p.dueTime != null && str(t) && isTimeKey(t) && stated
+        ? t
+        : words?.kind === 'clock' && !title.toLowerCase().includes(words.said.toLowerCase())
+          ? words.hhmm
+          : null;
+    if (time && dayKept) {
+      input.dueTime = time;
+      input.dueDay = nightDueDay(input.dueDay ?? ctx.today, time, ctx.today, ctx.dayStartHour);
+    } else if (p.dueTime != null) dropped.push('dropped due time');
   }
 
   // 0 is "no estimate" (the grammar wants >= 1), so it clears quietly rather than reading as an error.
   if (p.estimateMin != null && p.estimateMin !== 0) {
-    const statedEst = ctx.line === undefined || DURATION_IN_LINE.test(ctx.line);
+    const estLine = ctx.line !== undefined && ctx.voice ? withoutRelative(ctx.line) : ctx.line;
+    const statedEst = estLine === undefined || DURATION_IN_LINE.test(estLine);
     if (
       statedEst &&
       typeof p.estimateMin === 'number' &&

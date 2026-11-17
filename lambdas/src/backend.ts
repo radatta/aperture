@@ -72,6 +72,14 @@ import {
   userDueEpoch,
   placeDigestOf,
   placeError,
+  scopedTokenNameError,
+  CAPTURE_PARSE_DEADLINE_MS,
+  CAPTURE_SAY,
+  captureSay,
+  spokenTimeIn,
+  fmtDueDay,
+  fmtDuration,
+  parseFailText,
   placeUnknownError,
   PLACE_FINISHED_ERROR,
   PLACE_PART_ERROR,
@@ -155,6 +163,9 @@ import type {
   Place,
   PlaceDigest,
   PlaceTokenStatus,
+  ScopedTokenInfo,
+  TokenScope,
+  CaptureResult,
   PomodoroSession,
   PushDevice,
   PushStatus,
@@ -214,6 +225,17 @@ import type { Repo } from './ddb/repo';
 import type { PushRegistry } from './ddb/pushRegistry';
 import type { PublicKeyReader } from './push/publicKey';
 import type { PlaceTokenPointer, PlaceTokenStore } from './ddb/placeTokens';
+import type { ScopedTokenRow, ScopedTokenStore } from './ddb/scopedTokens';
+import {
+  claimParse,
+  forgetCapture,
+  newScopedToken,
+  recordCaptureTask,
+  reserveCapture,
+  sha256Hex,
+  usesToday,
+} from './auth/scopedToken';
+import type { ScopedAuth } from './auth/scopedToken';
 import { ConditionFailedError } from './ddb/DocClient';
 import {
   countPlaceRead,
@@ -249,6 +271,7 @@ export interface BackendOptions {
   financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
   anthropic?: AnthropicGateway; // gated Claude API seam (quick add's parse); defaults to the inert noop
   placeTokens?: PlaceTokenStore; // the Shortcut token's lookup rows (outside the user partition)
+  scopedTokens?: ScopedTokenStore; // scoped device tokens (capture.md): rows + their lookups
   pushRegistry?: PushRegistry; // the reminder poller's user list + heartbeat (outside the user partition)
   pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM); none → reminders unconfigured
 }
@@ -280,6 +303,11 @@ const unconfiguredPlaceTokens = {
   delete: noPlaceTokens,
   pointer: noPlaceTokens,
 } as unknown as PlaceTokenStore;
+const unconfiguredScopedTokens = new Proxy({} as ScopedTokenStore, {
+  get: () => () => {
+    throw new Error('Scoped tokens unavailable: no token store configured.');
+  },
+});
 const INACTIVE_TOKEN: PlaceTokenStatus = {
   active: false,
   createdAt: null,
@@ -329,6 +357,32 @@ const REMINDER_KEYS: readonly string[] = Object.keys(REMINDER_SETTINGS_DEFAULTS)
 const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
   prev ? [...new Set([...(prev.hash ? [prev.hash] : []), ...prev.retiring])] : [];
 
+// A capture that made nothing (an in-flight duplicate): the rest of its answer.
+const NO_CAPTURE: CaptureResult = {
+  id: null,
+  say: '',
+  detail: '',
+  raw: false,
+  duplicate: false,
+  due: null,
+};
+// The typed receipt (Raycast's toast): what was saved, field by field, so a wrong guess shows at once — or
+// that it was saved as typed, and why.
+function captureDetail(task: Task, parsed: ParseTaskResult, appToday: string): string {
+  const title = task.title.length > 40 ? `${task.title.slice(0, 40)}…` : task.title;
+  if (!parsed.ok) return `Added RAW (couldn't parse: ${parseFailText(parsed)}): ${title}`;
+  return [
+    `Added: ${title}`,
+    parsed.categoryLabel ?? 'no category',
+    ...(parsed.placeName ? [`@${task.place}`] : []),
+    ...(task.dueDay ? [fmtDueDay(task.dueDay, appToday, task.dueTime)] : []),
+    ...(task.estimateMin ? [fmtDuration(task.estimateMin)] : []),
+    ...(task.notes ? ['+notes'] : []),
+    ...(task.gcalSyncError ? ['calendar sync failed'] : []),
+    ...parsed.dropped,
+  ].join(' · ');
+}
+
 // The note's model budget: well inside the Lambda's 15 s with the reads in front of it (D62).
 const FLUX_NOTE_TIMEOUT_MS = 6_000;
 
@@ -344,6 +398,7 @@ export class BackendClient implements ApiClient {
   private readonly sessions: SessionService;
   private readonly anthropic: AnthropicGateway;
   private readonly placeTokens: PlaceTokenStore;
+  private readonly scopedTokens: ScopedTokenStore;
   private readonly push: PushService;
 
   constructor(
@@ -359,6 +414,7 @@ export class BackendClient implements ApiClient {
     this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
     this.placeTokens = opts.placeTokens ?? unconfiguredPlaceTokens;
+    this.scopedTokens = opts.scopedTokens ?? unconfiguredScopedTokens;
     this.finance = new FinanceService({
       repo,
       userId: this.userId,
@@ -2303,6 +2359,160 @@ export class BackendClient implements ApiClient {
       );
     } catch (err) {
       if (!(err instanceof ConditionFailedError)) throw err;
+    }
+  }
+
+  // --- Scoped device tokens (capture.ts; capture.md → Token) ---
+  // Never the token or its hash out — the hint (last 4), timestamps and today's count.
+  private scopedInfo(r: ScopedTokenRow): ScopedTokenInfo {
+    const { id, scope, name, hint, createdAt, lastUsedAt } = r;
+    return { id, scope, name, hint, createdAt, lastUsedAt, usedToday: usesToday(r, this.now()) };
+  }
+  async listScopedTokens(scope: TokenScope): Promise<ScopedTokenInfo[]> {
+    const rows = await this.scopedTokens.list(this.userId);
+    return rows
+      .filter((r) => r.scope === scope)
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
+      .map((r) => this.scopedInfo(r));
+  }
+  // The token's row first, then its lookup — both only-if-absent; a lookup that fails takes the row back
+  // out. Until the lookup lands the token can't authenticate, so a mint cut short leaves at worst a listed
+  // token that never works (revoke clears it). The plaintext leaves here once and is never stored or logged.
+  async mintScopedToken(
+    scope: TokenScope,
+    name: string,
+  ): Promise<{ token: string; info: ScopedTokenInfo }> {
+    const err = scopedTokenNameError(name, await this.listScopedTokens(scope));
+    if (err) throw new Error(err);
+    const now = this.now();
+    const token = newScopedToken(scope);
+    const hash = sha256Hex(token);
+    const row: ScopedTokenRow = {
+      id: this.ulid(),
+      scope,
+      name: name.trim(),
+      hash,
+      hint: token.slice(-4),
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: null,
+      usesDay: null,
+      uses: 0,
+      parses: 0,
+      lastTextHash: null,
+      lastAt: null,
+      lastTaskId: null,
+    };
+    await this.scopedTokens.createRow(this.userId, row);
+    try {
+      await this.scopedTokens.createLookup(hash, { userId: this.userId, tokenId: row.id, scope });
+    } catch (e) {
+      await this.scopedTokens.deleteRow(this.userId, row.id);
+      throw e;
+    }
+    return { token, info: this.scopedInfo(row) };
+  }
+  // The lookup first — the token stops working at once — then the row. A revoke cut short between them
+  // leaves the row listed (already dead: no lookup); revoking it again finishes. Unknown id: a no-op.
+  async revokeScopedToken(id: string): Promise<void> {
+    const row = await this.scopedTokens.row(this.userId, id);
+    if (!row) return;
+    await this.scopedTokens.deleteLookup(row.hash);
+    await this.scopedTokens.deleteRow(this.userId, id);
+  }
+
+  // Voice capture (index.ts → /api/capture, NOT via RPC — like readPlaceForShortcut): the edge resolved the
+  // token and built this backend for its user. Order: count the capture (reserveCapture — at the cap it
+  // throws before anything is spent; the same line within a minute is the first one answered again) →
+  // parse with a deadline (a model call is claimed first, so past the daily parse cap the line saves as
+  // typed) → createTask → remember the task for the duplicate guard. A failed parse saves the line as
+  // typed and says so; a failed create forgets the line, so a retry isn't mistaken for a duplicate. The
+  // text is never logged.
+  async captureForToken(text: string, voice: boolean, auth: ScopedAuth): Promise<CaptureResult> {
+    if (auth.userId !== this.userId) throw new Error('Unauthorized: token is for another user');
+    const now = this.now();
+    const line = text.trim();
+    const textHash = sha256Hex(`${voice ? 'v' : 't'}|${line.toLowerCase().replace(/\s+/g, ' ')}`);
+    const reserved = await reserveCapture(this.scopedTokens, auth, textHash, now);
+    const calendarToday = zonedDayTime(now, USER_TIME_ZONE).day;
+    if (reserved.kind === 'duplicate') {
+      const settings = await this.ensureSettings();
+      const appToday = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
+      const first = reserved.taskId ? await this.repo.getTask(reserved.taskId) : null;
+      if (!first)
+        return { ...NO_CAPTURE, id: reserved.taskId, say: CAPTURE_SAY.inFlight, duplicate: true };
+      const due = first.dueDay ? { day: first.dueDay, time: first.dueTime } : null;
+      const say = captureSay({
+        title: first.title,
+        due,
+        placeName: null,
+        calendarToday,
+        appToday,
+        raw: false,
+        duplicate: true,
+      });
+      return { id: first.id, say, detail: say, raw: false, duplicate: true, due };
+    }
+    try {
+      const settings = await this.ensureSettings();
+      const appToday = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
+      const [all, alivePlaces] = await Promise.all([
+        this.repo.listCategories(),
+        this.repo.listPlaces({ consistent: true }),
+      ]);
+      const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
+      const places = alivePlaces.map(({ slug, name }) => ({ slug, name }));
+      const ctx = {
+        categories,
+        places,
+        today: appToday,
+        dayStartHour: settings.dayStartHour,
+        ...(voice ? { voice: { now } } : {}),
+      };
+      const parsed = await runQuickParse(line, ctx, async (l) => {
+        if (!(await claimParse(this.scopedTokens, auth, now)))
+          return { ok: false, reason: 'unavailable', detail: 'daily parse limit reached' };
+        const timeoutMs = Math.min(parseBudgetMs(l), CAPTURE_PARSE_DEADLINE_MS);
+        // The voice prompt (time words out, no dueTime) only when the grammar can read the time back;
+        // otherwise the typed prompt, so a clock it can't read ("quarter past five") isn't lost.
+        const spoken = voice && spokenTimeIn(l) !== null;
+        return this.anthropic.parseTask({
+          text: l,
+          today: appToday,
+          categories,
+          timeoutMs,
+          voice: spoken,
+        });
+      });
+      const task = await this.createTask(parsed.ok ? parsed.input : { title: line });
+      try {
+        await recordCaptureTask(this.scopedTokens, auth, textHash, task.id, this.now());
+      } catch (err) {
+        // The task is saved; only the duplicate guard misses it (a repeat within the minute adds a twin).
+        const name = err instanceof Error ? err.name : 'unknown';
+        console.log(JSON.stringify({ event: 'capture_record_failed', name }));
+      }
+      const due = task.dueDay ? { day: task.dueDay, time: task.dueTime } : null;
+      const say = captureSay({
+        title: task.title,
+        due,
+        placeName: parsed.ok ? parsed.placeName : null,
+        calendarToday,
+        appToday,
+        raw: !parsed.ok,
+        duplicate: false,
+      });
+      return {
+        id: task.id,
+        say,
+        detail: captureDetail(task, parsed, appToday),
+        raw: !parsed.ok,
+        duplicate: false,
+        due,
+      };
+    } catch (err) {
+      await forgetCapture(this.scopedTokens, auth, textHash, this.now()).catch(() => {});
+      throw err;
     }
   }
 
