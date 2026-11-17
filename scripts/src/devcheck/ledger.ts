@@ -13,6 +13,7 @@ export type LedgerOp =
   | 'deleted'
   | 'gone' // the server already had no such task (deleted with its parent, or by hand)
   | 'swept' // a previous run's leftover, cleaned by this one
+  | 'reported' // a killed earlier run's orphan intent (`of` names that run), shown once in a report
   | 'run-end';
 
 export interface LedgerEntry {
@@ -23,6 +24,7 @@ export interface LedgerEntry {
   via?: string; // 'api:createTask', 'ui:createTask', 'ui:splitTask', 'api:subscribePush' (a push device), …
   title?: string; // for the human report only — never matched on
   status?: string; // run-end: PASS / FAIL / CRASH
+  of?: string; // reported: the run whose intent it was
 }
 
 export interface Ledger {
@@ -67,6 +69,25 @@ export function orphanIntents(entries: LedgerEntry[]): LedgerEntry[] {
           n.title === e.title,
       );
     if (!followed) out.push(e);
+  }
+  return out;
+}
+
+// A killed earlier run's orphan intents (its `run-end` never came, so no report named them), less those a
+// later run already `reported`. Per run: orphanIntents is quadratic, a run is a few hundred lines.
+export function earlierOrphans(entries: LedgerEntry[], runId: string): LedgerEntry[] {
+  const byRun = new Map<string, LedgerEntry[]>();
+  for (const e of entries) {
+    const own = byRun.get(e.run);
+    if (own) own.push(e);
+    else byRun.set(e.run, [e]);
+  }
+  const key = (run: string | undefined, e: LedgerEntry) => `${run}\n${e.via}\n${e.title}`;
+  const seen = new Set(entries.filter((e) => e.op === 'reported').map((e) => key(e.of, e)));
+  const out: LedgerEntry[] = [];
+  for (const [run, own] of byRun) {
+    if (run === runId || own.some((e) => e.op === 'run-end')) continue;
+    out.push(...orphanIntents(own).filter((e) => !seen.has(key(run, e))));
   }
   return out;
 }

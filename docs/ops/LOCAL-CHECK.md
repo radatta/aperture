@@ -14,7 +14,7 @@ pnpm devcheck:local
     │    ├─ /api/*  → the real BFF handler    (createBffHandler)
     │    └─ /mcp    → the real MCP handler    (createMcpHandler)
     │         real Cognito verifier fed the JWKS (D14 holds) · one InMemoryDoc · inert Google/Claude/Plaid/S3
-    ├─ vite dev (child) — http mode, proxies /api /mcp to the edge, BUILD_SHA = HEAD
+    ├─ vite dev (child) — http mode, proxies /api /mcp to the edge, BUILD_SHA = HEAD, not watching
     └─ Chromium, signed in by a seeded oidc store → the same pipeline: scenarios → cleanup by ledger id
          → localNotes/devcheck-local/<run>/report.md  "# Local check — … (pre-flight; dev remains the proof)"
 ```
@@ -54,6 +54,17 @@ one more Chromium): its result is the report's last section, and a failed probe 
 
 Beyond dev's checks, the end of a local run fails `LEFTOVERS` on any **running timer** — the table is fresh, so one
 left running is this run's leak (the class that broke phone-nits and timer-credit on dev, 2026-11-06).
+
+## Vite doesn't watch
+
+The check's Vite runs with `APERTURE_NO_WATCH` (`app/vite.config.ts` → `server.watch: null`; the probe's stub Vite
+too): an edit to the worktree mid-run — the session's own, between rounds — used to full-reload the page under a
+step (F168/F170, 2026-11-17: siri-capture's mint lost its page, failed-reads' stop its error line, at the second
+Vite logged `page reload`). Not `hmr: false`, which would strand the dep optimizer's own reload. A module first
+loaded after an edit is still served edited, so the report says when it can't vouch for the run: under `Target:`,
+**Vite reloaded the page mid-run** (any reload, optimizer or restart line in `vite.log` after sign-in) and **The
+working tree changed during the run** (its uncommitted diff and untracked files, start vs end); the probe's text
+names a `page reload` in `vite-probe.log`. Don't edit the worktree during a local run.
 
 ## Guarantees
 

@@ -112,8 +112,19 @@ export async function startLocalServer(o: {
   return { port, proc };
 }
 
+// Vite's own lines saying it reloaded or updated the page (a watched edit, the dep optimizer's late discovery, a
+// restart) — what a step failing near one failed on.
+const RELOAD =
+  /page reload|optimized dependencies changed\. reloading|hmr update|server restarted/i;
+export const viteReloads = (log: string): string[] =>
+  stripVTControlCharacters(log)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => RELOAD.test(l));
+
 // Vite dev over the worktree's app, in http mode against the local Cognito stand-in, proxying the edge paths
-// to the local server (app/vite.config.ts → APERTURE_LOCAL_EDGE). Ready once it serves the shell.
+// to the local server (app/vite.config.ts → APERTURE_LOCAL_EDGE). Ready once it serves the shell. Never watching
+// (APERTURE_NO_WATCH): an edit mid-run would reload the page under a step.
 export async function startVite(o: {
   worktree: string;
   track: (p: Proc) => void;
@@ -139,8 +150,13 @@ export async function startVite(o: {
     {
       cwd: app,
       env: o.edgePort
-        ? { ...process.env, ...o.env, APERTURE_LOCAL_EDGE: `http://127.0.0.1:${o.edgePort}` }
-        : { ...process.env, VITE_API_MODE: 'stub', ...o.env }, // over any app/.env.local
+        ? {
+            ...process.env,
+            ...o.env,
+            APERTURE_LOCAL_EDGE: `http://127.0.0.1:${o.edgePort}`,
+            APERTURE_NO_WATCH: '1',
+          }
+        : { ...process.env, VITE_API_MODE: 'stub', ...o.env, APERTURE_NO_WATCH: '1' }, // over any app/.env.local
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

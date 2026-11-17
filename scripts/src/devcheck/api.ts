@@ -531,7 +531,7 @@ export const PLACE_VIA = 'api:upsertPlace';
 export const UI_PLACE_VIA = 'ui:upsertPlace';
 // A category this harness created — through the API (upsertCategory with no id), Settings' Add (the browser's
 // upsertCategory create, recorder.ts) or MCP create_category. Cleaned by deleteCategory on the recorded id
-// (newest-first, so after the run's tasks on it); never an existing category of the test user's.
+// (after every other kind, so after the run's tasks on it); never an existing category of the test user's.
 export const CATEGORY_VIA = 'api:upsertCategory';
 export const UI_CATEGORY_VIA = 'ui:upsertCategory';
 export const MCP_CATEGORY_VIA = 'mcp:create_category';
@@ -1373,10 +1373,9 @@ export function createApiClient({
       ledger.append({ run, op: 'created', id: cat.id, via: CATEGORY_VIA, title: input.label });
       return cat;
     },
-    // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null. Cleanup runs
-    // newest-first: a run task on a run category is fine when the category was made first (the areas
-    // scenario — its tasks go before it), and refused when the task was made first, so a scenario that
-    // makes the category last puts no task on it.
+    // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null. The server refuses
+    // while a task, habit, series or roll is on it, so cleanup and the sweep remove categories after every
+    // other kind (pipeline.ts categoriesLast).
     async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
       assertLedger(id, 'category');
       await call<null>('deleteCategory', [id, reassignToId]);

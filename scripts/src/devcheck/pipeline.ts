@@ -8,12 +8,12 @@ import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, detailOf, type ReasonCode } from './errors';
 import { IOS_NOTE, type Ios, type IosClient } from './ios';
-import { orphanIntents, pendingIds, type Ledger } from './ledger';
+import { earlierOrphans, orphanIntents, pendingIds, type Ledger, type LedgerEntry } from './ledger';
 import { coverageOf } from './matrix';
 import type { McpClient } from './mcp';
 import { mcpToken, type McpSession } from './mcp-login';
 import { CREATE_METHODS, idsFromCreateResponse, isCreateRequest, methodOf } from './recorder';
-import type { CreatedRecord, RunResult, StepResult } from './report';
+import type { RunResult, StepResult } from './report';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
 import {
   createUi,
@@ -70,7 +70,27 @@ export interface PipelineDeps {
   // on dev', local/run-local.ts), or on dev the probe job when ios-standalone runs in full (scenarios → probeSkip).
   skip?: (scenario: string, step: { id: string; entry: string }) => string | null;
   checkSessions?: boolean; // the local check: the end of the run asserts no timer was left running
+  sleep?: (ms: number) => Promise<void>; // a cleanup retry's backoff (tests pass a no-op)
 }
+
+// A dropped connection, not an answer: undici's `terminated` (the socket closed mid-response) or a socket-level
+// cause (`fetch failed`'s). Never an HTTP status (the server answered), a DNS miss or the harness's own refusal.
+const TRANSIENT_CODES = new Set([
+  'ECONNRESET',
+  'EPIPE',
+  'ETIMEDOUT',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'EAI_AGAIN',
+]);
+export function transient(err: unknown): boolean {
+  if (err instanceof DevcheckError || !(err instanceof Error)) return false;
+  const code = (err.cause as { code?: unknown } | undefined)?.code;
+  if (typeof code === 'string' && TRANSIENT_CODES.has(code)) return true;
+  return err instanceof TypeError && err.message === 'terminated';
+}
+// A removal or read-back that hit one is tried again after these waits, each retry reported (F177).
+const CLEAN_BACKOFF_MS = [500, 2000];
 
 export const DEFER_NOTE = 'slow tier: the branch touches none of its paths — run --tier all';
 const NO_IOS: IosClient = {
@@ -113,6 +133,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     orphanIntents: [],
     blockedDeletes: [],
     failedDeletes: [],
+    retried: [],
+    earlierOrphans: [],
     consoleErrors: [],
     throttled: [],
     failedLoads: [],
@@ -159,6 +181,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const runIds: string[] = []; // created in this run, oldest first
   const pendingRecords: Promise<void>[] = []; // one per create request, from the moment it's SENT
   let baseline: Set<string> | undefined; // the partition's task ids right after the sweep
+  let killedOrphans: LedgerEntry[] = []; // r.earlierOrphans' entries, marked `reported` at run-end
+  const sleep = d.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
   let placeBaseline: Set<string> | undefined; // and its place ids
   let categoryBaseline: Set<string> | undefined; // and its category ids
   let tokenBaseline: Set<string> | undefined; // and its capture tokens' ids
@@ -232,7 +256,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     api = d.makeApi(() => session!.accessToken, fresh);
 
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
-    for (const id of pendingIds(d.ledger.read())) {
+    for (const id of categoriesLast(pendingIds(d.ledger.read()))) {
       const out = await clean(api, id);
       if (out === 'gone') d.ledger.append({ run: d.runId, op: 'gone', id });
       else if (out === 'removed') {
@@ -240,6 +264,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         r.swept.push(id);
       }
     }
+    // A killed run's in-flight creates (its report never came): listed once, acknowledged at run-end.
+    killedOrphans = earlierOrphans(d.ledger.read(), d.runId);
+    r.earlierOrphans!.push(
+      ...killedOrphans.map((e) => `${e.run}: ${e.via ?? '?'} "${e.title ?? ''}"`),
+    );
     // A killed run skips a step's `finally`, and the settings row isn't ledgered: a leftover 1-minute block
     // would have every later timer hit Done at 60 s. The coach's AI pick goes off too (absent reads as on): the
     // first plan read of a pickable day starts the day's one Opus pick, so no scenario's Home or coach read may —
@@ -418,6 +447,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       };
     await browser?.close().catch(() => undefined);
     r.durationMs = d.now() - t0;
+    for (const e of killedOrphans)
+      d.ledger.append({ run: d.runId, op: 'reported', of: e.run, via: e.via, title: e.title });
     d.ledger.append({ run: d.runId, op: 'run-end', status: r.status });
   }
   return r;
@@ -596,7 +627,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         await client.writes.deletePlace(id, null); // any task still on it just leaves the list
         return true;
       case 'category':
-        await client.writes.deleteCategory(id, null); // newest-first: a run's tasks made after it went first
+        await client.writes.deleteCategory(id, null); // categoriesLast: every ledgered task on it went first
         return true;
       case 'habit':
         await client.writes.archiveHabit(id);
@@ -654,21 +685,69 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
   }
 
-  // One id's read-back and removal. A throw (a revoke racing another device, any delete's error) is caught
-  // here, so the loop goes on to the rest: the id stays pending (the next run's sweep retries it), the error
-  // is reported, and the run fails LEFTOVERS.
+  // One id's read-back and removal. A dropped connection is retried (CLEAN_BACKOFF_MS, each reported); any other
+  // throw (a revoke racing another device, any delete's error) is caught here, so the loop goes on to the rest:
+  // the id stays pending (the next run's sweep retries it), the error is reported, and the run fails LEFTOVERS.
   async function clean(client: ApiClient, id: string): Promise<'gone' | 'removed' | 'kept'> {
-    try {
-      if (!(await exists(client, id))) return 'gone';
-      return (await removeRecorded(client, id)) ? 'removed' : 'kept';
-    } catch (err) {
-      const what = `${id}: ${err instanceof Error ? err.message : String(err)}`;
-      r.failedDeletes.push(what);
-      const code = codeOf(err); // a guard's refusal (LEDGER_GUARD…) keeps its own code too
-      if (code && code !== 'LEFTOVERS') fail(code, detailOf(err));
-      fail('LEFTOVERS', what); // a swept id has no `left:` verdict later, so the why is recorded here
-      return 'kept';
+    let sent = false; // a removal went out: found gone on a retry, it landed and only its answer was lost
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (!(await exists(client, id))) return sent ? 'removed' : 'gone';
+        sent = true;
+        return (await removeRecorded(client, id)) ? 'removed' : 'kept';
+      } catch (err) {
+        if (await retrying(id, err, attempt)) continue;
+        const refs = /has references/i.test(String(err)) ? await referencesOf(client, id) : '';
+        const what = `${id}: ${err instanceof Error ? err.message : String(err)}${refs}`;
+        r.failedDeletes.push(what);
+        const code = codeOf(err); // a guard's refusal (LEDGER_GUARD…) keeps its own code too
+        if (code && code !== 'LEFTOVERS') fail(code, detailOf(err));
+        fail('LEFTOVERS', what); // a swept id has no `left:` verdict later, so the why is recorded here
+        return 'kept';
+      }
     }
+  }
+  // Waits and says so when `err` is a dropped connection with a try left; false when it's the caller's to report.
+  async function retrying(id: string, err: unknown, attempt: number): Promise<boolean> {
+    const tries = CLEAN_BACKOFF_MS.length + 1;
+    if (attempt >= tries || !transient(err)) return false;
+    const line = `${id}: ${(err as Error).message} (attempt ${attempt} of ${tries})`;
+    r.retried!.push(line);
+    d.log(`  cleanup retry — ${line}`);
+    await sleep(CLEAN_BACKOFF_MS[attempt - 1]!);
+    return true;
+  }
+  // A category the server still finds in use after every ledgered task went first: name what holds it. Read
+  // only — a row the ledger never recorded is never touched (api.ts LEDGER_GUARD).
+  async function referencesOf(client: ApiClient, id: string): Promise<string> {
+    try {
+      const known = new Set(
+        d.ledger
+          .read()
+          .filter((e) => e.op === 'created')
+          .map((e) => e.id),
+      );
+      const holders = [
+        ...(await client.reads.listTasks()).map((x) => ({ ...x, kind: 'task' })),
+        ...(await client.reads.listHabits()).map((x) => ({ ...x, kind: 'habit' })),
+        ...(await client.reads.listRolls()).map((x) => ({ ...x, kind: 'roll' })),
+      ].filter((x) => x.categoryId === id);
+      const named = (k: boolean) =>
+        holders
+          .filter((x) => known.has(x.id) === k)
+          .map((x) => `${x.kind} ${x.id}`)
+          .join(', ') || 'none';
+      return ` — still referenced by ledgered: ${named(true)}; not in the ledger (never touched): ${named(false)}`;
+    } catch (err) {
+      return ` — its references couldn't be read: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  // Categories after every other kind: deleteCategory refuses while a task, habit, series or roll is on one, and
+  // a task can predate the category it was later moved to, so creation order (either way) isn't enough (F203).
+  function categoriesLast(ids: string[]): string[] {
+    const entries = d.ledger.read();
+    const cat = (id: string) => ledgerKind(entries, id) === 'category';
+    return [...ids.filter((id) => !cat(id)), ...ids.filter(cat)];
   }
 
   async function cleanup(): Promise<void> {
@@ -698,10 +777,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
 
     const pending = new Set(pendingIds(entries));
-    for (const e of [...mine].reverse()) {
-      const id = e.id!;
-      const rec: CreatedRecord = { id, via: e.via ?? '?', title: e.title, final: 'left' };
-      r.created.unshift(rec);
+    for (const e of mine)
+      r.created.push({ id: e.id!, via: e.via ?? '?', title: e.title, final: 'left' });
+    // Newest-first (a part before its parent), categories after everything.
+    for (const id of categoriesLast(mine.map((e) => e.id!).reverse())) {
       if (!pending.has(id)) continue;
       const out = await clean(api, id);
       if (out === 'gone') d.ledger.append({ run: d.runId, op: 'gone', id });
@@ -709,13 +788,18 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
     // Verify by reading back, not by trusting the deletes. A read-back that throws proves nothing: 'left'.
     const after = d.ledger.read();
-    const stillThere = (id: string) =>
-      exists(api!, id).catch((err: unknown) => {
-        r.failedDeletes.push(
-          `${id}: read-back: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return true;
-      });
+    const stillThere = async (id: string): Promise<boolean> => {
+      for (let attempt = 1; ; attempt++)
+        try {
+          return await exists(api!, id);
+        } catch (err) {
+          if (await retrying(id, err, attempt)) continue;
+          r.failedDeletes.push(
+            `${id}: read-back: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return true;
+        }
+    };
     for (const rec of r.created) {
       if (await stillThere(rec.id)) continue; // stays 'left'
       // This run's own `gone` — a reused id (a push device) may carry an older run's.

@@ -41,9 +41,17 @@ const localProxy = LOCAL_EDGE
     )
   : undefined;
 
+// The local check's Vite doesn't watch (docs/ops/LOCAL-CHECK.md → Vite): a session editing its tree mid-run had it
+// full-reload the page under a step. Unset everywhere else.
+const NO_WATCH = !!process.env.APERTURE_NO_WATCH;
+
 // https://vite.dev/config/
 export default defineConfig({
-  server: { port: DEV_PORT, ...(localProxy ? { proxy: localProxy } : {}) },
+  server: {
+    port: DEV_PORT,
+    ...(localProxy ? { proxy: localProxy } : {}),
+    ...(NO_WATCH ? { watch: null } : {}),
+  },
   preview: { port: DEV_PORT },
   // Flux's tracking worker is a module worker: MediaPipe's module glue sets ModuleFactory via ESM, and
   // Vite's default IIFE worker would make it silently no-op ("ModuleFactory not set").

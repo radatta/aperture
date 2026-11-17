@@ -57,6 +57,9 @@ export const SAFE = { top: 59, bottom: 34 };
 export const NAV_XS = [38, 88, 136, 205, 276, 332, 380, 268, 395];
 export const NAV_Y = 168;
 const SWIPED_TABS = ['Finances', 'Inbox', 'Settings'];
+// sim_op_nav's `sleep 2` before each read-back, in engine settles (SETTLE_MS, 300 ms): the landmark may show any
+// time within it.
+export const NAV_READS = 7;
 // sim.sh's sim_nav_mark: the page landmark nav reads back after the tab tap (check.test.ts reads it out of sim.sh). A
 // tab without one is noted "page not confirmed" by the runner, and passes here as there.
 export const NAV_MARKS: Record<string, { label: string; role: string; x: number; ys: number[] }> = {
@@ -234,15 +237,17 @@ export async function checkJob(
         break;
       case 'nav': {
         // sim_op_nav: to the top, then the tab centres on the nav row, an AXLink whose label is the tab.
-        await page.scrollTop();
-        let hit: AxEl | null = null;
-        for (const x of NAV_XS) {
-          const el = await page.read({ x, y: NAV_Y });
-          if (el?.role === 'AXLink' && el.label.toLowerCase() === op.tab.toLowerCase()) {
-            hit = el;
-            break;
+        const tabHit = async (): Promise<AxEl | null> => {
+          for (const x of NAV_XS) {
+            const el = await page.read({ x, y: NAV_Y });
+            if (el?.role === 'AXLink' && el.label.toLowerCase() === op.tab.toLowerCase()) return el;
           }
-        }
+          return null;
+        };
+        const tap = (el: AxEl) =>
+          page.click({ x: el.frame.x + el.frame.w / 2, y: el.frame.y + el.frame.h / 2 });
+        await page.scrollTop();
+        const hit = await tabHit();
         if (!hit) {
           await fail(
             SWIPED_TABS.includes(op.tab)
@@ -251,24 +256,49 @@ export async function checkJob(
           );
           break;
         }
-        await page.click({ x: hit.frame.x + hit.frame.w / 2, y: hit.frame.y + hit.frame.h / 2 });
-        await page.settle();
+        await tap(hit);
         const mark = NAV_MARKS[op.tab];
-        if (mark) {
-          let seen = false;
-          for (const y of mark.ys)
-            if (matches(await page.read({ x: mark.x, y }), mark.label, mark.role)) {
-              seen = true;
-              break;
-            }
-          if (!seen) {
-            await fail(
-              `NAV_UNCONFIRMED: no ${mark.label} (${mark.role}) at ${mark.x} × ${mark.ys.join('/')}, the ${op.tab} page's landmark sim.sh reads back`,
-            );
-            break;
-          }
+        if (!mark) {
+          await page.settle();
+          add(i, op, 'pass', `on ${op.tab}`);
+          break;
         }
-        add(i, op, 'pass', `on ${op.tab}`);
+        const on = async () => {
+          for (const y of mark.ys)
+            if (matches(await page.read({ x: mark.x, y }), mark.label, mark.role)) return true;
+          return false;
+        };
+        // sim_op_nav's read-back ladder, its `sleep 2`s as NAV_READS settles (F198: a lazy route under load missed
+        // one 300 ms settle that sim.sh's 2 s would have waited out): a read, a late read, from the top, a re-tap.
+        const within = async () => {
+          for (let k = 0; k < NAV_READS; k++) {
+            await page.settle();
+            if (await on()) return true;
+          }
+          return false;
+        };
+        const missed = `NAV_UNCONFIRMED: no ${mark.label} (${mark.role}) at ${mark.x} × ${mark.ys.join('/')}, the ${op.tab} page's landmark sim.sh reads back`;
+        let note = `on ${op.tab}`;
+        if (!(await within()))
+          if (await within()) note += '; the page came up late';
+          else {
+            await page.scrollTop();
+            if (await on()) note += '; its landmark showed once the page was scrolled to the top';
+            else {
+              const again = await tabHit();
+              if (!again) {
+                await fail(`${missed}; the tab wasn't there to tap again`);
+                break;
+              }
+              await tap(again);
+              if (!(await within())) {
+                await fail(`${missed}; tapped twice`);
+                break;
+              }
+              note = `on ${op.tab}; tapped again (the page wasn't ${op.tab} after the first tap)`;
+            }
+          }
+        add(i, op, 'pass', note);
         break;
       }
       case 'scroll':

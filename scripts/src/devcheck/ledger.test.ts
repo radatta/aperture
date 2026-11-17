@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { openLedger, orphanIntents, pendingIds, type LedgerEntry } from './ledger';
+import { earlierOrphans, openLedger, orphanIntents, pendingIds, type LedgerEntry } from './ledger';
 
 const e = (op: LedgerEntry['op'], id?: string, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
   t: '2026-10-13T00:00:00.000Z',
@@ -36,6 +36,42 @@ describe('pendingIds', () => {
     expect(
       pendingIds([e('created', 'a'), e('gone', 'a'), later('created', 'a'), later('deleted', 'a')]),
     ).toEqual([]);
+  });
+});
+
+describe('earlierOrphans', () => {
+  const intent = (run: string, title: string) =>
+    e('intent', undefined, { run, via: 'api:createTask', title });
+  it('flags a killed run’s unresolved intent, not a finished run’s or this run’s', () => {
+    const entries = [
+      intent('killed', 'x'),
+      intent('done', 'y'),
+      e('run-end', undefined, { run: 'done', status: 'FAIL' }),
+      intent('now', 'z'),
+    ];
+    expect(earlierOrphans(entries, 'now').map((x) => [x.run, x.title])).toEqual([['killed', 'x']]);
+  });
+  it('a killed run’s intent that got its created is no orphan', () => {
+    const entries = [
+      intent('killed', 'x'),
+      e('created', 'a', { run: 'killed', via: 'api:createTask', title: 'x' }),
+    ];
+    expect(earlierOrphans(entries, 'now')).toEqual([]);
+  });
+  it('one already reported by a later run is not reported again', () => {
+    const entries = [
+      intent('killed', 'x'),
+      intent('killed', 'y'),
+      e('reported', undefined, { run: 'later', of: 'killed', via: 'api:createTask', title: 'x' }),
+    ];
+    expect(earlierOrphans(entries, 'now').map((x) => x.title)).toEqual(['y']);
+  });
+  it('pendingIds ignores reported lines', () => {
+    const entries = [
+      e('created', 'a'),
+      e('reported', undefined, { of: 'killed', via: 'api:createTask', title: 'x' }),
+    ];
+    expect(pendingIds(entries)).toEqual(['a']);
   });
 });
 
