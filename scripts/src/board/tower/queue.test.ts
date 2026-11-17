@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { IDS } from '../../identifiers.ts';
-import { firedAt, parseQueue, planAt, queueAgeTone, sinceTime, staleFollowups } from './queue.ts';
+import {
+  firedAt,
+  LANE_STATES,
+  parseQueue,
+  planAt,
+  queueAgeTone,
+  sinceTime,
+  staleFollowups,
+} from './queue.ts';
 
 const example = readFileSync(
   join(import.meta.dirname, '../../../board/queue.example.json'),
@@ -65,7 +73,7 @@ describe('parseQueue', () => {
       }),
     );
     expect(q.status).toBe('ok');
-    expect(q.data!.plan).toEqual([
+    expect(q.data!.plan.map(({ at, what, kind, who }) => ({ at, what, kind, who }))).toEqual([
       { at: Date.parse('2026-11-08T06:30:00Z'), what: 'first', kind: 'merge', who: null },
       { at: Date.parse('2026-11-08T07:00:00Z'), what: 'second', kind: 'dev', who: 'auto-1' },
       {
@@ -79,6 +87,113 @@ describe('parseQueue', () => {
     ]);
   });
 
+  it('reads the plan table fields: you, eta, lane, done, planNotes, planAt', () => {
+    const q = parseQueue(
+      JSON.stringify({
+        v: 1,
+        updatedAt: '2026-11-08T06:00:00Z',
+        planAt: '2026-11-08T05:55:00Z',
+        planNotes: ['bravo slips 15 min', 'golf moved to tomorrow'],
+        plan: [
+          {
+            at: '2026-11-08T06:30:00Z',
+            what: 'merge bravo',
+            kind: 'merge',
+            you: '2 min',
+            lane: 'bravo-branch',
+            eta: {
+              from: '2026-11-08T06:30:00Z',
+              to: '2026-11-08T06:45:00Z',
+              source: 'measured',
+            },
+          },
+          { at: '2026-11-08T05:00:00Z', what: 'done flag', kind: 'dev', done: true },
+          { at: '2026-11-08T05:10:00Z', what: 'done at', kind: 'dev', done: '2026-11-08T05:25:00Z' },
+          { at: '2026-11-08T05:20:00Z', what: 'not done', kind: 'dev', done: false },
+        ],
+      }),
+    );
+    expect(q.problems).toEqual([]);
+    expect(q.data!.planNotes).toEqual(['bravo slips 15 min', 'golf moved to tomorrow']);
+    expect(q.data!.planAt).toBe(Date.parse('2026-11-08T05:55:00Z'));
+    const [a, b, c, d] = q.data!.plan;
+    expect(a).toMatchObject({ what: 'done flag', done: true, doneAt: null, you: null, eta: null });
+    expect(b).toMatchObject({ done: true, doneAt: Date.parse('2026-11-08T05:25:00Z') });
+    expect(c).toMatchObject({ done: false, doneAt: null });
+    expect(d).toEqual({
+      at: Date.parse('2026-11-08T06:30:00Z'),
+      what: 'merge bravo',
+      kind: 'merge',
+      who: null,
+      you: '2 min',
+      lane: 'bravo-branch',
+      eta: {
+        from: Date.parse('2026-11-08T06:30:00Z'),
+        to: Date.parse('2026-11-08T06:45:00Z'),
+        source: 'measured',
+      },
+      done: false,
+      doneAt: null,
+    });
+  });
+
+  it('names a bad plan-table field and drops it, keeping the row', () => {
+    const q = parseQueue(
+      JSON.stringify({
+        v: 1,
+        updatedAt: '2026-11-08T06:00:00Z',
+        planAt: 'tonight',
+        planNotes: ['ok', 7],
+        plan: [
+          { what: 'loose eta', kind: 'dev', eta: { from: '06:30', to: '06:45', source: 'guess' } },
+          {
+            what: 'backwards eta',
+            kind: 'dev',
+            eta: { from: '2026-11-08T07:00:00Z', to: '2026-11-08T06:00:00Z', source: 'guess' },
+          },
+          {
+            what: 'odd source',
+            kind: 'dev',
+            eta: { from: '2026-11-08T06:00:00Z', to: '2026-11-08T07:00:00Z', source: 'hunch' },
+          },
+          { what: 'bad done', kind: 'dev', done: 'yes' },
+          { what: 'bad lane', kind: 'dev', lane: 'Not A Branch' },
+          { what: 'bad you', kind: 'dev', you: 5 },
+        ],
+      }),
+    );
+    expect(q.status).toBe('bad');
+    expect(q.problems).toEqual([
+      'plan[0]: eta wants from and to as ISO times',
+      'plan[1]: eta ends before it starts',
+      'plan[2]: eta source "hunch"',
+      'plan[3]: done wants true or an ISO time',
+      'plan[4]: lane is not a branch name',
+      'plan[5]: you is not text',
+      'planNotes[1]: not text',
+      'planAt is not an ISO time',
+    ]);
+    expect(q.data!.plan).toHaveLength(6);
+    expect(q.data!.plan.every((p) => p.eta === null && p.lane === null && !p.done)).toBe(true);
+    expect(q.data!.planNotes).toEqual(['ok']);
+    expect(q.data!.planAt).toBeNull();
+  });
+
+  it('says so when planNotes is not an array', () => {
+    const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","planNotes":"one note"}');
+    expect(q.problems).toEqual(['planNotes is not an array']);
+  });
+
+  it('knows pr-open, between building and ready', () => {
+    expect(LANE_STATES.indexOf('pr-open')).toBe(LANE_STATES.indexOf('building') + 1);
+    expect(LANE_STATES.indexOf('ready')).toBe(LANE_STATES.indexOf('pr-open') + 1);
+    const q = parseQueue(
+      '{"v":1,"updatedAt":"2026-11-08T06:00:00Z","devQueue":[{"branch":"x","state":"pr-open","pr":7}]}',
+    );
+    expect(q.problems).toEqual([]);
+    expect(q.data!.devQueue[0]).toMatchObject({ branch: 'x', state: 'pr-open', pr: 7 });
+  });
+
   it('needs only v and updatedAt', () => {
     const q = parseQueue('{"v":1,"updatedAt":"2026-11-08T06:00:00Z","extra":true}');
     expect(q).toMatchObject({
@@ -89,6 +204,8 @@ describe('parseQueue', () => {
         wave: null,
         deadRows: null,
         plan: [],
+        planNotes: [],
+        planAt: null,
         followups: [],
         mergeOrder: [],
       },

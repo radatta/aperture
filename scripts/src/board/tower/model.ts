@@ -86,7 +86,7 @@ export type TowerState = {
   jobs: Job[]; // oldest first, the last 7 d
   runs: Run[]; // devcheck runs, oldest first
   queue: Queue;
-  prs: { list: Pr[]; at: number | null; error: string | null };
+  prs: { list: Pr[]; at: number | null; error: string | null; forks?: number }; // forks: dropped fork PRs
   bench: Bench | null;
   lockFeed: FeedItem[]; // transitions this tower saw
   leaseFeed: FeedItem[];

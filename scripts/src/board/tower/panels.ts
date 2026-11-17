@@ -155,6 +155,7 @@ const LANE_BADGE: Record<Lane['state'], string> = {
   next: c(NORD.accent, 'NEXT  ', true),
   waiting: c(NORD.amber, 'WAIT  ', true),
   building: c(NORD.frost, 'BUILD ', true),
+  'pr-open': c(NORD.frost, 'PR    ', true), // PR opened, checks not green yet
   ready: c(NORD.green, 'READY ', true), // PR check green, the maintainer's merge
   'needs-you': c(NORD.amber, 'YOU   ', true), // blocked on a step only the maintainer can take
 };
@@ -634,8 +635,9 @@ const PLAN_KIND: Record<PlanKind, string> = {
   ci: c(NORD.frost, 'ci   '),
 };
 
+// a done row (`done` in queue.json) is finished, not planned
 export const livePlan = (plan: PlanItem[], now: number) =>
-  plan.filter((p) => p.at === null || p.at >= now - PLAN_STALE);
+  plan.filter((p) => !p.done && (p.at === null || p.at >= now - PLAN_STALE));
 
 // The first merge with a time not dropped as stale: the PLAN title. The statusline
 // (localNotes/board/next-merge.sh) takes the same item.

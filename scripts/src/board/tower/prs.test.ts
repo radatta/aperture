@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GH_ARGS, PrCache, parsePrs } from './prs.ts';
+import { GH_ARGS, PrCache, parsePrs, readPrs } from './prs.ts';
 
 const json = JSON.stringify([
   { number: 41, title: 'Open one\n🚀', headRefName: 'a', state: 'OPEN', mergedAt: null },
@@ -53,6 +53,26 @@ describe('prs', () => {
     ]);
     expect(parsePrs(rows).map((p) => p.number)).toEqual([6, 5]);
     expect(GH_ARGS.at(-1)!.split(',')).toContain('isCrossRepository');
+  });
+
+  it('counts the fork PRs it dropped, and the cache keeps the count of its last good read', async () => {
+    const rows = (forks: number) =>
+      JSON.stringify([
+        ...Array.from({ length: forks }, (_, k) => ({ number: 100 + k, isCrossRepository: true })),
+        { number: 6, headRefName: 'a', state: 'OPEN' },
+      ]);
+    expect(readPrs(rows(3))).toMatchObject({ forks: 3, list: [{ number: 6 }] });
+    expect(readPrs(rows(0)).forks).toBe(0);
+    let fail = false;
+    const cache = new PrCache(async () => {
+      if (fail) throw new Error('HTTP 502');
+      return rows(2);
+    });
+    await cache.poll(0);
+    expect(cache.forks).toBe(2);
+    fail = true;
+    await cache.poll(61000);
+    expect(cache.forks).toBe(2);
   });
 
   it('fetches at most once a minute and keeps the last list on a failure', async () => {
