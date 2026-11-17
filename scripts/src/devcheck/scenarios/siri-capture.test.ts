@@ -71,3 +71,11 @@ describe('siri-capture’s spoken lines', () => {
     expect(untilUtcMidnight(Date.parse('2026-11-16T23:58:30Z'))).toBe(90_000);
   });
 });
+
+describe('marker', () => {
+  it('spells the nonce’s digits as letters, so no capture line carries a time-like number', async () => {
+    const { marker } = await import('./siri-capture');
+    expect(marker('035227full')).toBe('adfcchfull');
+    expect(marker('abc')).toBe('abc');
+  });
+});

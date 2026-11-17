@@ -88,7 +88,12 @@ const HOUR = 60 * MIN;
 const TIME_WORDS =
   /\bat\s+\d|\b\d{1,2}(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)(?=\s|$)|o['’]?\s?clock|\bin\s+\d+\s*min/i;
 
-const line = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
+// A capture line's marker: the nonce with its digits spelled as letters. The nonce comes from the run's
+// start time ("035227full" = 03:52:27), and the voice prompt strips spoken times from a title — a dev run
+// (2026-11-16) had the model drop "devcheck 035227full" as one. Siri never dictates such a token.
+export const marker = (nonce: string): string =>
+  nonce.replace(/\d/g, (d) => 'abcdefghij'[Number(d)]!);
+const line = (ctx: Ctx, what: string) => `devcheck ${marker(ctx.nonce)} ${what}`;
 const nameA = (ctx: Ctx) => `devcheck ${ctx.nonce} phone`; // made and revoked in Settings
 const nameB = (ctx: Ctx) => `devcheck ${ctx.nonce} mac`; // the neighbour, minted through the API
 const nameC = (ctx: Ctx) => `devcheck ${ctx.nonce} cap`; // the capture cap's own
@@ -304,7 +309,7 @@ async function expectDue(
     throw new Error(
       `the answer says ${JSON.stringify(due)}, the task holds ${task.dueDay} ${task.dueTime}`,
     );
-  if (!task.title.includes(ctx.nonce) || TIME_WORDS.test(task.title))
+  if (!task.title.includes(marker(ctx.nonce)) || TIME_WORDS.test(task.title))
     throw new Error(`the title is “${task.title}” — the nonce kept, the spoken time taken out`);
   const whens = [t0, t1].map((t) => S.captureWhen(due, laDay(new Date(t)), laDay(new Date(t))));
   if (!r.say.startsWith('Added: ') || !whens.some((w) => w && r.say.endsWith(`, ${w}.`)))
