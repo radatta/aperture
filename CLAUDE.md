@@ -34,6 +34,7 @@ Editing a path with its own rules loads them from `.claude/rules/` (`lambdas/`; 
 | `pnpm devcheck --tier …`      | The dev check: headless Chromium as the dev test user on the deployed dev stage (`docs/ops/DEV-CHECK.md`), plus `ios` rows on the Simulator (`docs/ops/IOS-CHECK.md`). Never alongside tests or a dev server; one run per dev slot. |
 | `pnpm devcheck:local …`       | The same scenarios against the real Lambda edges in the container — no deploy, no lock (`docs/ops/LOCAL-CHECK.md`). The pre-flight before `pnpm bot deploy-dev`; never a substitute for dev.                                        |
 | `pnpm lanes …`                | A lane's start and end (`docs/ops/LANES.md`). `lanes`, not `lane`: pnpm has a built-in `lane`.                                                                                                                                      |
+| `pnpm gate:fast` / `gate:ci`  | The lane gate: full typecheck + lint, then only the tests the diff reaches; the full suite runs on GitHub per push and `gate:ci` reads it (`docs/ops/GATE.md`).                                                                     |
 
 **Inside the COI container (the usual case), five things bite:**
 
@@ -163,11 +164,11 @@ Every feature runs eleven phases in one of **two modes** the user names: **colla
 2. **Plan** — the `Plan` agent (always, and mandatory above 5 files), with the dev-test matrix (a UI change also moves its iOS probe points: `pnpm sim-bench:plans`) and a step plan whose ETA ranges come from measured history, never a guess; the step plan goes into the lane status file, updated at every phase change. → hub `[kickoff]`.
 3. **Questions** — answered (autonomous: logged).
 4. **Build** — only on the execute plus n review rounds; each section's tests and a typecheck.
-5. **Gate** — `pnpm typecheck`, `pnpm lint`, `pnpm test`, each under `heavy.sh`, real exit codes.
+5. **Gate** — `pnpm gate:fast`: full typecheck and lint, the tests the diff reaches (`docs/ops/GATE.md`), real exit codes; the full suite runs on GitHub per push.
 6. **Review** — n rounds of `code-reviewer`, plus the headless UI agent for `app/` and the `cdk synth` pass for `cdk/`; fixes re-gated.
 7. **Ready for dev** — committed, gate green, PR body current.
 8. **Dev test** — on latest main; green `pnpm devcheck:local`; **the public-content scan before the first push**; `pnpm bot push`, `deploy-dev` under its lock (→ hub `[lock]`); `pnpm devcheck` and its screenshots.
-9. **Dev feedback** — every defect fixed; the all-clear needs every matrix row, and every other scenario's, proven, off dev or _Needs you_.
+9. **Dev feedback** — every defect fixed; the all-clear needs `pnpm gate:ci` green on the head sha and every matrix row, and every other scenario's, proven, off dev or _Needs you_.
 10. **PR** — the public-content scan of title, body and report; lock released (→ hub `[lock]`); `pnpm mailroom open-pr`. → hub `[pr-open]`.
 11. **Cleanup** — once merged and main's deploy is green: `pnpm lanes end`. → hub `[merged]`.
 
