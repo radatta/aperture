@@ -17,7 +17,7 @@ variant() {
   case "$SHARD" in
     1) echo "restore card" ;;
     2) echo "restore card" ;;
-    *) echo "seed card" ;;
+    *) echo "restore card" ;;
   esac
 }
 KEY="ios-probe-dev-26.5-v2" # the cached device; bump to re-save (cache keys are immutable)
@@ -223,6 +223,7 @@ s_restore() {
   [ -n "$d" ] || { note "no cached device ($KEY) restored"; return 1; }
   u="$(basename "$d")"
   note "cache holds $u ($(du -sh "$d" | cut -f1))"
+  du -sk "$d"/data/* "$d"/data/Library/* "$d"/data/Containers/*/* 2>/dev/null | sort -rn | head -25 >"$OUT/device-du.txt" || true
   mv "$d" "$DEVICES/$u" || { note "move into the set failed"; return 1; }
   killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
   sleep 1
@@ -622,15 +623,18 @@ esac
 step env s_env # beside the boot
 step axe-install s_axe_install
 step boot s_boot_wait
-step axe-ready s_axe_ready
+# A rows shard leaves the readiness tree, the icon and the launch to sim.sh's own `launch` op (the same reads).
+[ "$AFTER" = rows ] || step axe-ready s_axe_ready
 step origin s_origin
 if [ "$SRC" = cold ]; then
   step safari s_safari
   step add-to-home-screen s_a2hs
   step export export_webclip
 fi
-step home-screen-icon s_icon
-step launch-to-sign-in s_launch && CARD_MS=$(($(now_ms) - T0))
+if [ "$AFTER" != rows ]; then
+  step home-screen-icon s_icon
+  step launch-to-sign-in s_launch && CARD_MS=$(($(now_ms) - T0))
+fi
 case "$AFTER" in
   save) step save s_save ;;
   rows) step rows s_rows ;;
