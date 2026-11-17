@@ -211,6 +211,27 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
       { title: 'call the bank', dueDay: '2026-11-18', dueTime: '01:00' },
       'call the bank typed',
     ],
+    // The recheck: a day after tomorrow with a clock, an untimed dangling connector, a model day of tomorrow for a
+    // clock not yet past, the second-clock guard in the tail, clock ranges.
+    [
+      'call mom the day after tomorrow at 5pm',
+      { title: 'call mom', dueDay: '2026-11-19', dueTime: '17:00' },
+      'call mom',
+    ],
+    ['send invoice until friday', { title: 'send invoice until', dueDay: FRI }, 'send invoice'],
+    ['pay rent by tomorrow', { title: 'pay rent by', dueDay: '2026-11-18' }, 'pay rent'],
+    [
+      'call the bank tomorow 3pm',
+      { title: 'call the bank', dueDay: '2026-11-18', dueTime: '15:00' },
+      'call the bank',
+    ],
+    ['noon standup at 5pm', { dueTime: '17:00' }, 'noon standup at 5pm'],
+    ['team sync 3pm to 4pm', { title: 'team sync', dueDay: TODAY, dueTime: '15:00' }, 'team sync'],
+    [
+      'block focus from 3pm to 5pm',
+      { title: 'block focus', dueDay: TODAY, dueTime: '15:00' },
+      'block focus',
+    ],
     [
       'buy cake 🎂 for sam typed at 6 pm',
       { title: 'buy cake for sam', dueTime: '18:00' },
@@ -257,6 +278,13 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
     expect(title('Remind me at 5 to call mum', { title: 'call mum' }, true)).toBe('call mum');
     expect(
       title(
+        'call mom the day after tomorrow at 5 pm',
+        { title: 'call mom', dueDay: '2026-11-19' },
+        true,
+      ),
+    ).toBe('call mom');
+    expect(
+      title(
         'remind me tomorrow at 9 am to water the ferns done',
         { title: 'remind me tomorrow at 9 am to water the ferns done', dueDay: '2026-11-18' },
         true,
@@ -275,6 +303,19 @@ describe('quick-add titles keep the typed words (titleWords.ts)', () => {
     expect(title('update the flat 2 lease at 2', { title: 'update the flat 2 lease' }, true)).toBe(
       'update the flat 2 lease',
     );
+  });
+
+  it('a half-past clock is the due time and leaves the title, spoken or typed', () => {
+    expect(
+      parse('call mum at half past five pm', { title: 'call mum' }, true)?.input,
+    ).toMatchObject({
+      title: 'call mum',
+      dueTime: '17:30',
+    });
+    expect(parse('call mum typed at half past 5 pm', { title: 'call mum' })?.input).toMatchObject({
+      title: 'call mum typed',
+      dueTime: '17:30',
+    });
   });
 
   it('the day and time still land as before', () => {

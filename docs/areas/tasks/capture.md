@@ -163,6 +163,7 @@ Two checks keep the grammar honest:
 | at 12 tonight / at 1 tonight / at 11 tonight | 9 PM        | tomorrow 12 AM / tomorrow 1 AM / today 11 PM     |
 | at five thirty / five thirty pm              | 6 AM        | today 5:30 PM                                    |
 | noon / midnight / 17:00                      | any         | as said, rolled if past                          |
+| half past five pm / quarter to six pm        | any         | 17:30 / 17:45 (2026-11-17), rolled if past       |
 
 - A time equal to now is past ("at 5" at 5:00 PM → tomorrow 5 AM).
 - A day the model gives is trusted unless it's calendar tomorrow and the words name no day (`DAY_WORD`:

@@ -77,7 +77,12 @@ export function keepTitleWords(line: string, title: string, m: TitleMeta): strin
     const w = words[i]!;
     const next = words[i + 1];
     if (inside(w, m.tail)) drop(i);
-    else if (CONNECTOR.has(w.key || w.raw) && next && !kept[i + 1] && touches(next, m.tail))
+    else if (
+      CONNECTOR.has(w.key || w.raw) &&
+      next &&
+      !kept[i + 1] &&
+      touches(next, [...m.meta, ...m.tail])
+    )
       drop(i);
     else if (w.key === '')
       continue; // a dash before the phrase: the rebuild trims it

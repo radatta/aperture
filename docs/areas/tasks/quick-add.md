@@ -142,7 +142,7 @@ stripped "aperture," with no category set — the prompt's own example. The mode
 against the typed words; then:
 
 - **A word the parse didn't use goes back**, in place, as typed — and a word the model only recapitalized takes
-  the user's casing again. The parse used a clock (when a time was set), "today" / "tomorrow" when they name the
+  the user's casing again. The parse used a clock or clock range ("3pm to 4pm") when a time was set, "today" / "tomorrow" when they name the
   due day ("the day after tomorrow" doesn't) or the date it named, a day part ("morning", "this afternoon"), a
   duration whole ("an hour and a half"), a lone "due", and the leading category word (when the parse set that
   category) — each with the word that leads it ("before", "due by", "this coming", "around", "~"); on a spoken

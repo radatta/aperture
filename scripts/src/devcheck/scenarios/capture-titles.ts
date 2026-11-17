@@ -1,10 +1,10 @@
 // Typed quick add keeps every title word (quick-add.md → 2026-11-17, titles): a sample of synthetic lines through
 // the real model as the test user — the app's parse route (parseTask, which parse_task shares), MCP, the capture
-// bar's Review, and spoken lines through the capture route. Three classes, each a dev finding: a word the model
-// dropped ("…typed at 1 am", 10 of 10), a due phrase it kept ("before 3pm"), and a leading word taken as a category
-// the parse never set. parseTask writes nothing; the spoken captures are ledgered tasks. Each step logs its
-// first-try tally — the before/after rate in the PR. About 45 model calls, so its steps are slow-tier: they run when
-// the branch touches the parse (slowPaths) or --feature names it.
+// bar's Review, and spoken and typed lines through the capture route (the Shortcut's and Raycast's bodies). Three
+// classes, each a dev finding: a word the model dropped ("…typed at 1 am", 10 of 10), a due phrase it kept ("before
+// 3pm"), and a leading word taken as a category the parse never set. parseTask writes nothing; the captures are
+// ledgered tasks. Each step logs its first-try tally — the before/after rate in the PR. About 50 model calls, so its
+// steps are slow-tier: they run when the branch touches the parse (slowPaths) or --feature names it.
 import type { DevCaptureResult, DevParseResult } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { marker } from './siri-capture';

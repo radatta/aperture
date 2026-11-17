@@ -4,7 +4,15 @@
 // contract, the validator for Haiku's untrusted JSON, and the flow (grammar bypass → model → validate).
 // Design record: docs/areas/tasks/quick-add.md.
 
-import { addDays, isDayKey, isTimeKey, USER_TIME_ZONE, weekdayOf, zonedDayTime } from './dates';
+import {
+  addDays,
+  isDayKey,
+  isTimeKey,
+  USER_TIME_ZONE,
+  weekdayOf,
+  zonedDayTime,
+  zonedEpoch,
+} from './dates';
 import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
@@ -109,7 +117,8 @@ const present = (input: CreateTaskInput): CreateTaskInput =>
   Object.fromEntries(Object.entries(input).filter(([, v]) => v != null)) as CreateTaskInput;
 
 const TODAY_WORD = /\b(today|tdy|tonight)\b/i;
-const TOMORROW_WORD = /\b(tomorrow|tmrw?|tmw)\b/i;
+// Not "the day after tomorrow": that names another day (its own words, the model's).
+const TOMORROW_WORD = /(?<!\bday\s+after\s+)\b(tomorrow|tmrw?|tmw)\b/i;
 const MONTH_WORDS = [
   'jan(uary)?',
   'feb(ruary)?',
@@ -286,7 +295,7 @@ export function validateParsedTask(
 // "around 5pm", "for about 30m".
 const ABOUT = String.raw`(?:\b(?:around|about|approx(?:imately)?|roughly|after)\s+|~\s*)?`;
 const CLOCK_LEAD = new RegExp(
-  String.raw`(?:(?:\bdue\s+)?\b(?:at|by|before|until|till)\s+|\bdue\s+|@\s*)?${ABOUT}$`,
+  String.raw`(?:(?:\bdue\s+)?\b(?:at|by|before|until|till|from)\s+|\bdue\s+|@\s*)?${ABOUT}$`,
   'i',
 );
 const DAY_LEAD =
@@ -302,7 +311,7 @@ function led(line: string, [s, e]: Range, lead: RegExp): Range {
 }
 const CLOCKS = new RegExp(CLOCK_IN_LINE.source, 'gi');
 const DURATIONS = new RegExp(DURATION_IN_LINE.source, 'gi');
-const DAY_WORDS = /\b(today|tdy|tonight|tomorrow|tmrw?|tmw)\b/gi;
+const DAY_WORDS = /\b(today|tdy|tonight)\b|(?<!\bday\s+after\s+)\b(tomorrow|tmrw?|tmw)\b/gi;
 const DAY_PARTS =
   /\b(?:(?:this|tomorrow|in the)\s+)?(?:morning|afternoon|evening|night)\b|\btonight\b/gi;
 // A clock or day the task is about, not when it's due: "move standup to 5pm", "prep for this friday 5pm".
@@ -310,6 +319,11 @@ const OBJECT_OF = /\b(?:to|for|of|about|from|than)\s+$/i;
 // A clock used as a noun is the task's too: "prep notes for the 3pm", "skip my 9am".
 const CLOCK_OBJECT = /\b(?:to|for|of|about|from|than|the|my|our|your|that)\s+$/i;
 // The rest of a compound duration: "an hour and a half", "1 hour and 30 minutes", "2h and 30m".
+// The rest of a clock range: "3pm to 4pm", "3-4pm" is one token already.
+const MORE_CLOCK = new RegExp(
+  String.raw`^\s*(?:to|until|till|[-–])\s*(?:${CLOCK_IN_LINE.source})`,
+  'i',
+);
 const MORE_DURATION = /^\s+and\s+(?:a\s+half|\d+\s*(?:m|mins?|minutes?))\b/i;
 // A spoken line's lead-in, and the "to" / "that" / "about" after it once the time is said: "remind me tomorrow to …".
 const REMIND = /^\s*remind me\b/i;
@@ -336,7 +350,8 @@ function titleMeta(
   if (input.notes) return null;
   const clocks: Range[] = [];
   if (input.dueTime) {
-    clocks.push(...rangesOf(line, CLOCKS));
+    for (const [s0, e0] of rangesOf(line, CLOCKS))
+      clocks.push([s0, e0 + (MORE_CLOCK.exec(line.slice(e0))?.[0].length ?? 0)]);
     const said =
       spoken && (ctx.voice || spoken.kind === 'clock') ? saidAt(line, spoken.said) : null;
     if (said) clocks.push(said);
@@ -360,19 +375,22 @@ function titleMeta(
     ).some((d) => parsedDays.includes(d));
   if (input.dueDay || (ctx.voice && input.dueTime)) {
     for (const m of line.matchAll(DAY_WORDS))
-      if (named(m[0]) || (ctx.voice && input.dueTime))
+      if (named(m[0]) || (ctx.voice && input.dueTime && TODAY_WORD.test(m[0])))
         days.push(led(line, [m.index, m.index + m[0].length], REL_DAY_LEAD));
     for (const d of parsedDays)
       days.push(...dateRanges(line, d).map((r) => led(line, r, DAY_LEAD)));
   }
   // A day with no words for it is the model's reading of a phrase no list knows — unless it's the day a bare
   // clock lands on ("call 9am": today, or tomorrow when the model rolled a past one itself).
+  const dueTime = input.dueTime;
   const clockDay =
-    input.dueTime != null &&
+    dueTime != null &&
     (modelDay == null ||
       modelDay === ctx.today ||
-      modelDay === addDays(ctx.today, 1) ||
-      modelDay === calToday);
+      modelDay === calToday ||
+      // tomorrow only when the clock had passed today: the model rolled it as the server would
+      (modelDay === addDays(calToday, 1) &&
+        zonedEpoch(calToday, dueTime, USER_TIME_ZONE) <= ctx.now));
   if (input.dueDay && !days.length && !clockDay) return null;
   const meta: Range[] = [...due, ...days];
   if (input.dueDay) meta.push(...rangesOf(line, DAY_PARTS)); // "tomorrow morning", typed with no clock

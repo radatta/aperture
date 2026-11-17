@@ -60,6 +60,12 @@ const AMPM = new RegExp(
   `\\b(\\d{1,2}|${HOUR_WORD})(?::(\\d{2})|${MINUTE_WORD})?\\s*(a\\.?m\\.?|p\\.?m\\.?)(?=\\s|$|[,.;!?])`,
   'i',
 );
+// "half past five pm", "quarter past 9 am", "quarter to six pm": the am/pm belongs to the hour named — read
+// alone, "five pm" would be 17:00, half an hour early (F208, 2026-11-17).
+const PAST_TO = new RegExp(
+  `\\b(half\\s+past|quarter\\s+past|quarter\\s+to)\\s+(\\d{1,2}|${HOUR_WORD})\\s*(a\\.?m\\.?|p\\.?m\\.?)(?=\\s|$|[,.;!?])`,
+  'i',
+);
 const H24 = /\b([01]?\d|2[0-3]):([0-5]\d)\b/;
 const NOON = /\bnoon\b/i;
 const MIDNIGHT = /\bmidnight\b/i;
@@ -100,6 +106,20 @@ export function spokenTimeIn(line: string): SpokenTime | null {
   // A minute given as digits ("5:30") or as a word ("five thirty").
   const minuteOf = (digits: string | undefined, word: string | undefined) =>
     digits ? Number(digits) : word ? num(word.replace(' ', '-')) : 0;
+  const pastTo = PAST_TO.exec(line);
+  if (pastTo) {
+    const h = num(pastTo[2]!);
+    if (h >= 1 && h <= 12) {
+      const pm = /^p/i.test(pastTo[3]!);
+      const by = /^half/i.test(pastTo[1]!) ? 30 : /past$/i.test(pastTo[1]!) ? 15 : -15;
+      const min = (((((h % 12) + (pm ? 12 : 0)) * 60 + by) % 1440) + 1440) % 1440;
+      return {
+        said: pastTo[0],
+        kind: 'clock',
+        hhmm: `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`,
+      };
+    }
+  }
   const ampm = AMPM.exec(line);
   if (ampm) {
     const h = num(ampm[1]!);
