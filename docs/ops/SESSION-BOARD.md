@@ -137,6 +137,9 @@ typecheck ×1.8, lint ×2, test ×1.2.
 - **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
   measured, no slot), `typecheck`, `lint`, `build`, `dev`, `ui`, `other` (no slot). `HEAVY_CLASS` overrides;
   `HEAVY_LABEL` names the run — **never on argv** (a `pkill -f <label>` once killed the wrong process).
+  `pnpm gate:fast` sets `test-fast` on its per-package `vitest related` runs (`docs/ops/GATE.md`): a slot and the
+  `tuning.test` worker cap (unless the caller set `VITEST_MAX_WORKERS`, as it does for scripts' 2), but not the 2-suite
+  cap, and not a slowdown class (its runs differ too much in size to compare).
 - Takes a **heavy slot** (below), runs the command in the background, and samples at 1 Hz: container
   pids / anon / current / PSI / cores, and the command's own process subtree (threads, RSS). Renews the slot
   every 30 s.
@@ -230,7 +233,9 @@ a 6th concurrent suite timed out (_Results_). On 2026-11-13 the cap became 2, wi
 `measuredAt` still date from 2026-10-13. Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
 `lanes.maxActive` (5) is the lane cap `pnpm lanes start` enforces: a policy key, top-level like `concurrency`. What
-counts as active: `docs/ops/LANES.md` → _Start_.
+counts as active: `docs/ops/LANES.md` → _Start_. It was set when every lane ran the full suite 4–6 times; since
+`gate:fast` (2026-11-17) a lane runs affected tests locally and the full suite on GitHub, so re-measure it from a day
+of `cli.ts report` and `barriers` data before raising it.
 
 ## Hooks
 

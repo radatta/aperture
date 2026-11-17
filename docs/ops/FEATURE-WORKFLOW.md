@@ -41,7 +41,8 @@ The user names the mode; collaborative is the default.
   - **Dev test is Claude's after the push:** run `pnpm devcheck --tier full --feature <the feature's scenario>` (it
     waits for the deploy itself; a branch with no scenario of its own runs without `--feature`), Read the screenshots.
     A green full run with zero leftovers, every _Feature coverage_ row `pass`, `off dev`, `needs you` or `deferred`
-    (under _This feature_ and _Other scenarios_ alike), plus that review is the all-clear (phase 9). On
+    (under _This feature_ and _Other scenarios_ alike), `pnpm gate:ci` green on the head sha, plus that review is the
+    all-clear (phase 9). On
     `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a
     `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
   - **Finished:** `[pr-open]` to the hub — or `[pr-ready]` when the mailroom was unreachable, then the hand-off line
@@ -93,8 +94,11 @@ hub message (the checkpoints stay).
    estimate of how many files the change will touch — a gauge of size, not a commitment. While building, after each
    section run the touched files' tests (`vitest run <file>`) and a typecheck. Autonomous: n per the sizing rule
    above, logged.
-5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, each under `scripts/board/heavy.sh --`,
-   real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
+5. **Gate** — `pnpm gate:fast` (`docs/ops/GATE.md`): full typecheck and lint, then the tests the branch's diff can
+   reach, each step under `heavy.sh` by itself; it runs a package's whole suite, or all of them, when its rules say so,
+   and prints why. Its exit code is real (`pipefail` if piped). The full suite runs on GitHub on every push (phase 8);
+   `pnpm gate:fast --full` locally only to reproduce a red Branch run a single file can't, or when GitHub is
+   unreachable. Nothing goes to a subagent on a red gate.
 6. **Review round** — the read-only `code-reviewer` (no tests, no servers) in parallel with whatever each touched
    package adds:
 
@@ -110,7 +114,7 @@ hub message (the checkpoints stay).
    also starts the next round.
 
 7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's
-   fixes), gate green, PR body current.
+   fixes), `gate:fast` green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
    rebase (CLAUDE.md → _Claude behavior_), then re-run the gate. Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
@@ -119,7 +123,10 @@ hub message (the checkpoints stay).
      or a later force-push doesn't recall it. Check the branch name, every commit message and the diff against
      `origin/main` against `docs/ops/PUBLIC-CONTENT.md` — the judgment half; the identifier and identity checks are
      `pnpm bot push`'s own. Phase 10 scans the PR text again.
-   - Then `pnpm bot push`, and `pnpm bot deploy-dev`: it takes a dev slot's lock (slot A only when the branch touches
+   - Then `pnpm bot push` — every push starts the full suite on GitHub (the `Branch` workflow; GATE.md); start
+     `pnpm gate:ci --wait` in the background beside the dev steps. A red one is a gate failure: fix, `gate:fast`, push.
+     A branch with no dev deploy (nothing deployed changes) waits for it here.
+   - `pnpm bot deploy-dev`: it takes a dev slot's lock (slot A only when the branch touches
      iOS paths), which stays held through dev testing — `pnpm bot lock renew` before it runs out (**→ hub:** `[lock]`
      taken until when, ETA). Slots and locks: `docs/ops/CI-BOT.md` → _Dev slots_, _Dev lock_.
    - **Another branch's lock means wait, never work around it:** the refusal prints two messages — send them at once,
@@ -154,7 +161,7 @@ hub message (the checkpoints stay).
    only where (this branch when it's the same surface, else its own small PR), never whether; triage by reading the
    code path or reproducing, never "automation artifact" or "by design" unverified. Fixes go back through the gate
    (plus a review round if non-trivial), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
-   every row of the feature's matrix proven on dev, covered off dev, or listed under _Needs you_, and every other
+   `pnpm gate:ci` green on the head sha (the full suite), every row of the feature's matrix proven on dev, covered off dev, or listed under _Needs you_, and every other
    scenario's row likewise (_Other scenarios (regression)_) — a row the report shows `fail` or `skipped` is untested
    (a `deferred` slow row counts like off dev, with `ios-standalone`'s caveat: `docs/ops/DEV-CHECK.md` → _Slow
    tier_), whatever the status line says. Autonomous: the all-clear is the green full run with every row so.
@@ -163,7 +170,8 @@ hub message (the checkpoints stay).
     (`docs/ops/MAILROOM.md` → _Using it_; **→ hub:** `[pr-open]` with the URL, or `[pr-ready]` when the mailroom was
     unreachable). A push to an open PR after a rebase is `pnpm bot push --after-rebase` (a `.github/workflows/`
     branch: the user's `git push --force-with-lease -u origin <branch>`); after any push to an open PR,
-    `pnpm mailroom edit-pr` brings its body up to date.
+    `pnpm mailroom edit-pr` brings its body up to date. Once the PR is open its PR run is the one that counts
+    (`gate:ci` picks it): cancel the push's `Branch` twin with `pnpm bot run cancel <id>`.
 11. **Cleanup** — once `gh pr view <branch>` shows it merged and main's deploy run is green, without asking the
     user (the user, 2026-11-08), the session or the hub runs `pnpm lanes end <branch>` from `/workspace`
     (`docs/ops/LANES.md` → _End_: it checks both gates, archives `localNotes/` to
