@@ -59,18 +59,19 @@ cap() {
   if [ "$rc" = 143 ]; then return 124; fi
   return "$rc"
 }
-ax() { cap 30 "$AXE" "$@" --udid "$U"; }
+ax() { cap "${AX_CAP:-30}" "$AXE" "$@" --udid "$U"; }
 NOTE=""
 note() { local m; m="$(printf '%s' "$*" | tr '\n|' ' /')"; NOTE="${NOTE:+$NOTE; }$m"; log "  note: $m"; }
 
 # Evidence for one moment: a simctl screenshot (no AXe needed) and AXe's full tree.
+# Trees cost up to 30 s each on a busy runner (run 2), so only failures and the add flow keep one.
 evidence() {
   local tag
   N=$((N + 1))
   tag="$(printf '%02d' "$N")-$1"
   [ -n "$U" ] || return 0
   cap 30 xcrun simctl io "$U" screenshot "$OUT/shots/$tag.png" >/dev/null 2>&1 || log "  screenshot failed ($tag)"
-  if [ -n "$AXE" ]; then ax describe-ui >"$OUT/trees/$tag.json" 2>/dev/null || log "  tree failed ($tag)"; fi
+  if [ -n "$AXE" ] && [ -n "${2:-}" ]; then ax describe-ui >"$OUT/trees/$tag.json" 2>/dev/null || log "  tree failed ($tag)"; fi
 }
 
 # step <name> <fn>: time it, record it, keep evidence. A failed step stops the run; later ones read skip.
@@ -88,7 +89,7 @@ step() {
   case "$rc" in 0) st=pass ;; 2) st=soft ;; *) st=fail; FAILED="$name" ;; esac # soft: went on, but short of its check
   printf '%s\t%s\t%s\t%s\n' "$name" "$st" "$((t1 - t0))" "$NOTE" >>"$OUT/steps.tsv"
   log "== $name: $st in $((t1 - t0)) ms"
-  evidence "$name"
+  if [ "$st" = pass ]; then evidence "$name"; else evidence "$name" tree; fi
   [ "$st" != fail ]
 }
 
@@ -96,7 +97,7 @@ tree() {
   local t i
   for i in 1 2 3 4 5 6 7 8; do # the first reads after a boot can time out (sim.sh → sim_tree)
     late && return 1
-    if t="$(ax describe-ui 2>>"$OUT/axe.err")" && [ -n "$t" ]; then printf '%s' "$t"; return 0; fi
+    if t="$(AX_CAP=15 ax describe-ui 2>>"$OUT/axe.err")" && [ -n "$t" ]; then printf '%s' "$t"; return 0; fi
     sleep 2
   done
   return 1
@@ -134,13 +135,13 @@ tap_label() {
   note "no '$re' in the tree; it had: $(labels "$t")"
   return 1
 }
-# scan_text <prefix> [from] [to]: point reads down x 220 (web content is only in point reads, IOS-CHECK.md →
+# scan_text <prefix> [from] [to] [x]: point reads down x (220) (web content is only in point reads, IOS-CHECK.md →
 # Reading the page) until an element whose label or value starts with <prefix>; prints "y role label|value"
 scan_text() {
   local want y raw
   want="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   for y in $(seq "${2:-250}" 30 "${3:-850}"); do
-    raw="$(cap 8 "$AXE" describe-ui --point "$X_MID,$y" --udid "$U" 2>/dev/null)" || continue
+    raw="$(cap 8 "$AXE" describe-ui --point "${4:-$X_MID},$y" --udid "$U" 2>/dev/null)" || continue
     if jq -e --arg w "$want" '(if type == "array" then .[0] else . end) as $e
       | [($e.AXLabel // ""), ($e.AXValue // "")] | map(tostring | ascii_downcase | ltrimstr(" ")) | any(startswith($w))' \
       <<<"$raw" >/dev/null 2>&1; then
@@ -216,8 +217,13 @@ s_origin() {
 }
 
 s_safari() {
-  local t i s app=""
-  xcrun simctl openurl "$U" "$ORIGIN/" || { note "openurl failed"; return 1; }
+  local t i s err app=""
+  for i in 1 2 3; do # run 2: one shard's first openurl failed 10 s after boot
+    if err="$(cap 60 xcrun simctl openurl "$U" "$ORIGIN/" 2>&1)"; then break; fi
+    note "openurl try $i failed: $(head -c 200 <<<"$err")"
+    [ "$i" = 3 ] && return 1
+    sleep 5
+  done
   for i in $(seq 1 30); do
     late && break
     sleep 2
@@ -242,30 +248,42 @@ s_safari() {
 # Share → Add to Home Screen → Add. iOS 26 Safari puts Share behind its "…" page menu; both shapes are tried, and
 # every screen on the way is kept (a2hs-*), so a miss shows exactly what was offered.
 s_a2hs() {
-  local t i
+  local i hit y x
   # iOS 26 Safari: Share sits in the … menu (AXButton "More", right of the address bar); "Page Menu" is the left one
   tap_label '^More$' AXButton 3 || return 1
   sleep 1
-  evidence a2hs-menu
-  t="$(tree)" || return 1
-  note "… menu: $(labels "$t" | cut -c1-400)"
-  if [ -z "$(find_el "$t" '^Add to Home Screen$')" ]; then tap_label '^Share' '' 4 || return 1; fi
-  sleep 2
-  evidence a2hs-share
-  for i in 1 2 3 4; do
-    t="$(tree)" || return 1
-    if [ -n "$(find_el "$t" '^Add to Home Screen$')" ]; then break; fi
-    # the action list sits under the share sheet's app row: scroll it up and look again
-    note "Add to Home Screen not visible (pass $i), scrolling the sheet"
-    ax swipe --start-x "$X_MID" --start-y 820 --end-x "$X_MID" --end-y 420 --duration 0.3 >/dev/null 2>&1 || true
-    sleep 1
+  evidence a2hs-menu tree
+  tap_label '^Share$' AXButton 4 || return 1
+  # The share sheet is another process: absent from the full tree, so point reads find its rows (run 2's shot:
+  # "Add to Home Screen" at about x 157, y 655). It took ~60 s to draw on a busy runner.
+  hit=""
+  for i in $(seq 1 15); do
+    late && break
+    sleep 3
+    if hit="$(scan_text 'Add to Home Screen' 300 920 150)"; then break; fi
+    hit=""
+    [ "$i" = 6 ] && evidence a2hs-share-wait
   done
-  tap_label '^Add to Home Screen$' '' 2 || return 1
-  sleep 2
-  evidence a2hs-sheet
-  t="$(tree)"
-  note "add sheet: $(labels "$t" | cut -c1-300)"
-  tap_label '^Add$' AXButton 4 || return 1
+  [ -n "$hit" ] || { note "no Add to Home Screen row by point reads"; evidence a2hs-share tree; return 1; }
+  y="${hit%% *}"
+  note "Add to Home Screen row at y $y on poll $i ($hit)"
+  evidence a2hs-share
+  tap_at 150 "$y" || return 1
+  sleep 3
+  evidence a2hs-sheet tree
+  # The Add sheet's confirm: in the tree if it's Safari's own, else by point reads along its top bar
+  if tap_label '^Add$' AXButton 3; then :
+  else
+    for x in 400 390 380 410 370; do
+      if hit="$(scan_text 'Add' 60 140 "$x")"; then
+        note "Add by point read at $x,${hit%% *} ($hit)"
+        tap_at "$x" "${hit%% *}" || return 1
+        break
+      fi
+      hit=""
+    done
+    [ -n "$hit" ] || return 1
+  fi
   sleep 3
 }
 
