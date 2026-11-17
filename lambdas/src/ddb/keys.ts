@@ -66,6 +66,14 @@ export const sk = {
   sittingReplayPrefix: (id: string) => `lcs#${id}#rp#`,
   lcProblem: (slug: string) => `lcq#${slug}`,
   lcProblemPrefix: () => `lcq#`,
+  // The LeetCode coach's stored decisions (docs/areas/recruiting/coach.md): a day's floor + slot changes, manual
+  // attempts, the one focus override. Everything else the coach shows is derived. `lcc#` matches no other
+  // prefix; `lcc#mock#` and `lcc#imp#` are reserved for later rows.
+  coachDay: (day: string) => `lcc#day#${day}`,
+  coachDayPrefix: () => `lcc#day#`,
+  coachAttempt: (id: string) => `lcc#att#${id}`,
+  coachAttemptPrefix: () => `lcc#att#`,
+  coachFocus: () => `lcc#focus`,
   // The user's Start gate (one row): today's Start attempts and Starts, and the open sitting it let through —
   // the single decision point that keeps parallel Starts to one open sitting and the daily caps.
   lcStart: () => `lcstart`,

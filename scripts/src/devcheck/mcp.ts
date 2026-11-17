@@ -4,8 +4,12 @@
 // stateless JSON-RPC (lambdas/src/mcp/protocol.ts): no initialize or session needed; a tool's result is
 // `{content: [{type: 'text', text}], isError?}` inside HTTP 200, the text JSON (or 'ok').
 import {
+  COACH_ATTEMPT_VIA,
+  COACH_SLOT_VIA,
+  coachSlotId,
   MCP_SERIES_VIA,
   ledgerKind,
+  type DevCoachToday,
   type CreateSeriesInput,
   MCP_CATEGORY_VIA,
   type DevAttachment,
@@ -19,7 +23,7 @@ import {
 } from './api';
 import { assertDevOrigin, targetOrigin } from './config';
 import { DevcheckError } from './errors';
-import type { Ledger } from './ledger';
+import { pendingIds, type Ledger } from './ledger';
 
 // What live_sitting answers (lambdas/src/mcp/leetcodeTools.ts) — the fields the scenario reads.
 export interface DevJudged {
@@ -50,6 +54,32 @@ export interface DevLiveSitting {
     liveReads: number;
     problem: { slug: string };
   } | null;
+  slot?: DevLiveSlot | null;
+  trace?: string | null;
+}
+
+// What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
+export interface DevPeeked {
+  slug: string;
+  peeked: boolean;
+  sittingId?: string;
+  attemptId?: string;
+  nextDue: { dueDay: string; track: string } | null;
+}
+export interface DevLoggedAttempt {
+  id: string;
+  slug: string;
+  day: string;
+  outcome: string;
+  nextDue: { dueDay: string; track: string } | null;
+}
+// live_sitting's slot in today's plan.
+export interface DevLiveSlot {
+  kind: string;
+  reason: string;
+  capMin: number;
+  overCap: boolean;
+  rules: string;
 }
 
 // What search_log / list_log answer (lambdas/src/mcp/logTools.ts) — the fields the scenario reads.
@@ -202,6 +232,14 @@ export function createMcpClient({
     }
   }
 
+  // A coach write the server refused before writing: a param error, or a normalizer's refusal (normalizeCoachAttempt
+  // checks the whole list before any row). Any other error may follow a write, so its intent stays open.
+  const refusedBeforeWrite = (err: unknown) =>
+    (err instanceof McpRpcError && err.code === PARAM_ERROR) ||
+    (err instanceof Error &&
+      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read)/.test(
+        err.message,
+      ));
   // A write may only touch a row this harness created, through its own kind's methods — as api.ts.
   function assertLedger(id: string, kind: LedgerKind): void {
     if (!ledger.has(id) || ledgerKind(ledger.read(), id) !== kind)
@@ -252,6 +290,8 @@ export function createMcpClient({
     searchLog: (args: Record<string, unknown>) => data<DevLogPage>('search_log', args),
     listLog: (args: Record<string, unknown>) => data<DevLogPage>('list_log', args),
     getDay: (args: Record<string, unknown>) => data<DevDayView>('get_day', args),
+    leetcodeToday: (args: Record<string, unknown> = {}) =>
+      data<DevCoachToday>('leetcode_today', args),
   };
 
   const writes = {
@@ -403,6 +443,74 @@ export function createMcpClient({
           `refusing to delete attachment ${id} — not on recorded task ${taskId}`,
         );
       return data<{ deleted: string }>('delete_attachment', { id });
+    },
+
+    // The LeetCode coach's writes (lambdas/src/mcp/coachTools.ts). Args go as given — the param-error rows send
+    // bad ones on purpose. An attempt is recorded from the answer; a slot change before the call (coachSlotId).
+    async markPeeked(args: Record<string, unknown>): Promise<DevPeeked> {
+      if (typeof args.sittingId === 'string') assertLedger(args.sittingId, 'sitting');
+      const title = `peek ${String(args.slug ?? args.sittingId)}`;
+      ledger.append({ run, op: 'intent', via: COACH_ATTEMPT_VIA, title });
+      let out: DevPeeked;
+      try {
+        out = await data<DevPeeked>('mark_peeked', args);
+      } catch (err) {
+        if (refusedBeforeWrite(err))
+          ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        throw err; // anything else may have written: the intent stays open, reported as an orphan
+      }
+      // On a sitting there is no attempt: the intent resolves as a refusal (nothing of its kind was made).
+      if (out.attemptId)
+        ledger.append({ run, op: 'created', id: out.attemptId, via: COACH_ATTEMPT_VIA, title });
+      else ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+      return out;
+    },
+    // mark_peeked on an id that isn't the user's: must be refused, so nothing can be written (lc-coach ownership).
+    markPeekedUnknown: (unknownId: string) =>
+      data<DevPeeked>('mark_peeked', { sittingId: unknownId }),
+    setCauseTagUnknown: (unknownId: string) =>
+      data<unknown>('set_cause_tag', { sittingId: unknownId, cause: 'boundary' }),
+    async setCauseTag(
+      args: Record<string, unknown>,
+    ): Promise<{ sittingId: string; review: unknown }> {
+      if (typeof args.sittingId !== 'string')
+        throw new DevcheckError('LEDGER_GUARD', 'set_cause_tag needs a recorded sittingId here');
+      assertLedger(args.sittingId, 'sitting');
+      return data('set_cause_tag', args);
+    },
+    // swap or skip on today's slot `origin` (the engine's pick); a restore resolves the recorded change.
+    async swapSlot(
+      day: string,
+      origin: string,
+      args: Record<string, unknown>,
+    ): Promise<DevCoachToday> {
+      const id = coachSlotId(run, day, origin);
+      if (args.action === 'restore') {
+        assertLedger(id, 'coachSlot');
+        const t = await data<DevCoachToday>('swap_slot', args);
+        ledger.append({ run, op: 'deleted', id });
+        return t;
+      }
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: COACH_SLOT_VIA, title: origin });
+      return data<DevCoachToday>('swap_slot', args);
+    },
+    async logAttempt(
+      attempts: Record<string, unknown>[],
+    ): Promise<{ attempts: DevLoggedAttempt[] }> {
+      const title = `log ${attempts.map((a) => String(a.slug)).join(',')}`;
+      ledger.append({ run, op: 'intent', via: COACH_ATTEMPT_VIA, title });
+      let out: { attempts: DevLoggedAttempt[] };
+      try {
+        out = await data<{ attempts: DevLoggedAttempt[] }>('log_attempt', { attempts });
+      } catch (err) {
+        if (refusedBeforeWrite(err))
+          ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        throw err;
+      }
+      for (const a of out.attempts)
+        ledger.append({ run, op: 'created', id: a.id, via: COACH_ATTEMPT_VIA, title });
+      return out;
     },
   };
 

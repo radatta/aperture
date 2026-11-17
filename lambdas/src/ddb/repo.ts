@@ -7,6 +7,9 @@ import type {
   FinanceRule,
   FinanceSyncState,
   FinanceTransaction,
+  CoachAttempt,
+  CoachDay,
+  CoachFocus,
   FluxSet,
   Day,
   Habit,
@@ -229,9 +232,10 @@ export class Repo {
   // head row under `hd#` (what the summary reads) and its full payload under `jd#`; a timer read is only its row.
   // `expiresAt` (epoch s) marks the raw bulk for DynamoDB's TTL — the one row kind stamped on prod.
   async putSittingEventIfAbsent(e: SittingEvent, expiresAt: number | null): Promise<boolean> {
-    if (!isHeadEvent(e.type))
+    const { type } = e;
+    if (!isHeadEvent(type))
       return this.putChildIfAbsent(sk.sittingEvent(e.sittingId, e.id), e, expiresAt);
-    const row = headRowOf(e.sittingId, e as Parameters<typeof headRowOf>[1]);
+    const row = headRowOf(e.sittingId, { id: e.id, type, at: e.at, payload: e.payload });
     const fresh = await this.putChildIfAbsent(
       sk.sittingHeadRow(e.sittingId, e.id),
       { ...row, userId: e.userId, createdAt: e.createdAt, updatedAt: e.updatedAt },
@@ -390,6 +394,59 @@ export class Repo {
         toEntity<LeetcodeProblem>(i),
       ),
     );
+  }
+
+  // --- The LeetCode coach (keys.ts → coach*) ---
+  async listCoachDays(opts?: { consistent?: boolean }): Promise<CoachDay[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.coachDayPrefix(), opts)).map((i) => toEntity<CoachDay>(i)),
+    );
+  }
+  coachDayShape(day: string): CasShape<CoachDay> {
+    return {
+      sk: sk.coachDay(day),
+      read: (i) => toEntity<CoachDay>(i),
+      toItem: (d) => entityItem(this.userId, sk.coachDay(day), d),
+    };
+  }
+  async listCoachAttempts(opts?: { consistent?: boolean }): Promise<CoachAttempt[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.coachAttemptPrefix(), opts)).map((i) =>
+        toEntity<CoachAttempt>(i),
+      ),
+    );
+  }
+  async getCoachAttempt(id: string, opts?: { consistent?: boolean }): Promise<CoachAttempt | null> {
+    const it = await this.doc.get(this.p(), sk.coachAttempt(id), opts);
+    const a = it ? toEntity<CoachAttempt>(it) : null;
+    return a && a.deletedAt === null ? a : null;
+  }
+  coachAttemptShape(id: string): CasShape<CoachAttempt> {
+    return {
+      sk: sk.coachAttempt(id),
+      read: (i) => toEntity<CoachAttempt>(i),
+      toItem: (a) => entityItem(this.userId, sk.coachAttempt(id), a),
+    };
+  }
+  coachFocusShape(): CasShape<CoachFocus> {
+    return {
+      sk: sk.coachFocus(),
+      read: (i) => toEntity<CoachFocus>(i),
+      toItem: (f) => entityItem(this.userId, sk.coachFocus(), f),
+    };
+  }
+  async putCoachAttempt(a: CoachAttempt): Promise<CoachAttempt> {
+    await this.writes.put(entityItem(this.userId, sk.coachAttempt(a.id), a));
+    return a;
+  }
+  async getCoachFocus(opts?: { consistent?: boolean }): Promise<CoachFocus | null> {
+    const it = await this.doc.get(this.p(), sk.coachFocus(), opts);
+    const f = it ? toEntity<CoachFocus>(it) : null;
+    return f && f.deletedAt === null ? f : null;
+  }
+  async putCoachFocus(f: CoachFocus): Promise<CoachFocus> {
+    await this.writes.put(entityItem(this.userId, sk.coachFocus(), f));
+    return f;
   }
 
   // --- Flux sets ---

@@ -239,14 +239,17 @@ The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](
 
 Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?}`, `op`
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` or `refused` after it is
-reported as a possible leak; `refused` is a param error the server raised before any write), `created`,
+reported as a possible leak; `refused` is a param error, or a domain normalizer's refusal, the server raised before any write), `created`,
 `deleted`, `gone`, `swept`, `run-end`; `title` is for the report only. A `created`
 line's `via` names what cleanup reads back and removes (`api.ts` `ledgerKind`): a task, a Flux set, a place, the
 place token (`place-token:<run>`), a finance rule, a recurring series (deleted with the occurrences `getDay`
 spawned for it — the series id is their record, [tasks/recurring](../areas/tasks/recurring.md) §6), and on the fixture bank's rows a bucket set
 (`finance-bucket:<run>:<row>`), a refund link (`finance-link:<run>:<row>`) or a period mark
 (`finance-mark:<run>:<row>`) — recorded before the click that makes it, cleared (unsorted / unlinked / unmarked)
-at cleanup; the row itself is the fixture's and stays. The MCP hook
+at cleanup; the row itself is the fixture's and stays. The LeetCode coach's: an attempt (`coach:attempt`, its id from
+the answer, deleted), and, with no id of their own, a slot change (`coach-slot:<run>:<day>:<slug>`, restored), the
+floor (`coach-floor:<run>:<day>`, turned off) and the focus override (`coach-focus:<run>`, cleared) — each recorded
+before its call; a past day's slot change or floor reads as gone. The MCP hook
 writes `{t, op, id, parent?, via, session}`, `op` one of `created`, `reparented`, `tainted` (the id has a part
 the hook never recorded — it never clears, so that parent stays undeletable), `deleted`. It denies an `aperture-dev` `delete_task` unless the id has a `created`
 line and no `tainted` one, and records the parts a parent's delete took with it (CLAUDE.md → _Aperture MCP

@@ -21,6 +21,7 @@ import type {
   SittingEvent,
   SittingVerdict,
 } from '@aperture/shared';
+import { slotOfSitting, todayOrNull } from './coachTools';
 import { RpcParamError } from './types';
 import type { Tool } from './types';
 
@@ -107,6 +108,9 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
     runCount: s.summary.runs,
     submitCount: s.summary.submits,
     outcome: outcomeOf(s),
+    // The extension's trace card (summary.coach): traced / partial / skipped / none before the first submit, null
+    // until any — don't ask for a trace they already wrote.
+    trace: s.summary.coach?.trace ?? null,
     lastRun: judged(s.summary.lastRun, pull.lastRun, 'run', now),
     lastSubmit: judged(s.summary.lastSubmit, pull.lastSubmit, 'submit', now),
     lcTimer: t
@@ -257,6 +261,8 @@ export const LEETCODE_TOOLS: Tool[] = [
       FRESHNESS,
       'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are their Mac’s clock, so their ages can be off by its skew.',
       'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste their code back at them — point at a line, a name or a case.',
+      '`slot` says where the open sitting sits in today’s plan (leetcode_today): its kind (re-solve, carry-over, new, stretch, or off-plan), reason, the 30-minute cap and whether it is past it, and the coaching `rules` for that kind — follow them.',
+      '`trace` is what the extension’s trace card recorded before the first submit (traced, partial, skipped, none; null until then) — don’t ask for a trace already written.',
       '`active: false` carries `lastSitting`, the most recent one.',
       '`expired: true` marks a last sitting left open past its 24 h window (no longer capturing; the next Start ends it).',
       'Not read-only: each pull of an open sitting writes one count on it ("Claude watched live") — nothing else.',
@@ -282,14 +288,20 @@ export const LEETCODE_TOOLS: Tool[] = [
       )
         throw new RpcParamError('"sinceVersion" must be a whole number ≥ 0');
       const now = ctx.now?.() ?? Date.now();
-      const pull = (await ctx.dispatch('pullLiveSitting', [])) as LiveSittingPull;
-      return pull.sitting
-        ? active(
-            { ...pull, sitting: pull.sitting },
-            now,
-            (sinceVersion as number | undefined) ?? null,
-          )
-        : inactive(pull, now);
+      // Today's plan beside the pull (coachTools), for the open sitting's slot; it never fails the pull.
+      const [pull, today] = await Promise.all([
+        ctx.dispatch('pullLiveSitting', []) as Promise<LiveSittingPull>,
+        todayOrNull(ctx),
+      ]);
+      if (!pull.sitting) return inactive(pull, now);
+      return {
+        ...active(
+          { ...pull, sitting: pull.sitting },
+          now,
+          (sinceVersion as number | undefined) ?? null,
+        ),
+        slot: slotOfSitting(today, pull.sitting, now),
+      };
     },
   },
   {

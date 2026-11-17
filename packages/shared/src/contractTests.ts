@@ -2230,6 +2230,9 @@ export function runApiContract(
         [
           'attachments',
           'categories',
+          'coachAttempts',
+          'coachDays',
+          'coachFocus',
           'days',
           'exportedAt',
           'financeAccounts',
@@ -3889,6 +3892,260 @@ export function runApiContract(
           liveReads: 0,
         });
         expect((await api.getSitting(next.sitting.id)).liveReads).toBe(0);
+      });
+    });
+
+    // The LeetCode coach (coach.ts): a plan derived on read from the sittings, and the few decisions it stores.
+    describe('lc coach', () => {
+      const TODAY = '2023-11-14'; // the suite's clock, in the user's zone
+      // A finished sitting on `slug`: Start, one Submit (accepted or not), Done on its rep.
+      async function finished(slug: string, accepted: boolean) {
+        const { sitting } = await startSitting(api, { problemSlug: slug, problemTitle: slug });
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [
+            accepted
+              ? lcJudged('submit', 10, 'Accepted', LC_T0 + 600_000, 3, 3)
+              : lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 600_000, 1, 3),
+          ],
+        });
+        advance(20 * 60_000);
+        await api.setTaskActual(sitting.repTaskId, 20);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        return sitting;
+      }
+
+      it('an empty account: four slots with reasons, a floor, no queue, no records', async () => {
+        const t = await api.getCoachToday();
+        expect(t.day).toBe(TODAY);
+        expect(t.slots.map((x) => x.kind)).toEqual(['new', 'new', 'stretch', 'stretch']);
+        expect(t.slots[0]).toMatchObject({
+          slug: 'contains-duplicate',
+          status: 'open',
+          capMin: 30,
+        });
+        for (const x of t.slots) expect(x.reason).not.toBe('');
+        expect(t.floor).toMatchObject({ slug: 'contains-duplicate', on: false, done: false });
+        expect(t).toMatchObject({ mode: 'general', due: [], offPlan: [], unreviewed: [] });
+        expect(await api.listProblemRecords()).toEqual([]);
+      });
+
+      it('the user’s day turns at dayStartHour in their zone', async () => {
+        clock = Date.parse('2023-11-15T11:30:00Z'); // 03:30 in Los Angeles
+        expect((await api.getCoachToday()).day).toBe('2023-11-14');
+        clock = Date.parse('2023-11-15T12:30:00Z'); // 04:30
+        expect((await api.getCoachToday()).day).toBe('2023-11-15');
+        await expect(api.getCoachToday('soon')).rejects.toThrow(/YYYY-MM-DD/);
+      });
+
+      it('a sitting on a slot’s problem is in progress, then done; one on another problem is off the plan', async () => {
+        const { sitting } = await startSitting(api, {
+          problemSlug: 'contains-duplicate',
+          problemTitle: 'Contains Duplicate',
+        });
+        expect((await api.getCoachToday()).slots[0]).toMatchObject({
+          status: 'in-progress',
+          sittingId: sitting.id,
+        });
+        await api.lcSittingEvents({
+          sittingId: sitting.id,
+          events: [lcJudged('submit', 10, 'Accepted', LC_T0 + 600_000, 3, 3)],
+        });
+        advance(20 * 60_000);
+        await api.setTaskActual(sitting.repTaskId, 20);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        const done = await api.getCoachToday();
+        expect(done.slots[0]).toMatchObject({ status: 'done', outcome: 'clean' });
+        const off = await finished('rotting-oranges', true);
+        const after = await api.getCoachToday();
+        expect(after.offPlan.map((x) => x.sittingId)).toEqual([off.id]);
+        expect(after.slots.map((x) => x.slug)).toEqual(done.slots.map((x) => x.slug));
+        expect(after.unreviewed.map((x) => x.slug).sort()).toEqual([
+          'contains-duplicate',
+          'rotting-oranges',
+        ]);
+        expect((await api.listProblemRecords()).map((r) => r.slug).sort()).toEqual([
+          'contains-duplicate',
+          'rotting-oranges',
+        ]);
+      });
+
+      it('a cause set by patch survives a form save that doesn’t send it; null clears it', async () => {
+        const s = await finished('two-sum', false);
+        const patched = await api.patchSittingReview(s.id, { cause: 'boundary', help: 'solution' });
+        expect(patched.review).toMatchObject({ cause: 'boundary', help: 'solution' });
+        const form = {
+          insight: 'hash map',
+          help: 'solution' as const,
+          mistakes: [],
+          howItWent: null,
+          tags: [],
+          draftUsed: false,
+        };
+        expect((await api.setSittingReview(s.id, form)).review).toMatchObject({
+          cause: 'boundary',
+          insight: 'hash map',
+        });
+        expect(
+          (await api.setSittingReview(s.id, { ...form, cause: null })).review,
+        ).not.toHaveProperty('cause');
+        // A save that doesn't send help keeps the peek (a mark_peeked landing while the form was open).
+        const noHelp = { ...form, help: undefined };
+        expect((await api.setSittingReview(s.id, noHelp)).review).toMatchObject({
+          help: 'solution',
+        });
+        expect((await api.setSittingReview(s.id, { ...form, help: 'hint' })).review).toMatchObject({
+          help: 'hint',
+        });
+        expect((await api.patchSittingReview(s.id, { test: true })).review).toMatchObject({
+          test: true,
+        });
+        await expect(api.patchSittingReview(s.id, { cause: 'tired' as never })).rejects.toThrow(
+          /cause/,
+        );
+        await expect(api.patchSittingReview(s.id, {})).rejects.toThrow(/cause, help or test/);
+        await expect(api.patchSittingReview(ulid(), { cause: 'boundary' })).rejects.toThrow(
+          /Not found/,
+        );
+        // A test sitting leaves the plan and the records.
+        expect(await api.listProblemRecords()).toEqual([]);
+      });
+
+      it('slots swap, skip and restore; a refused change writes nothing', async () => {
+        const t = await api.getCoachToday();
+        const first = t.slots[0]!.slug;
+        const swapped = await api.setCoachSlot({ slug: first, action: 'swap', toSlug: 'two-sum' });
+        expect(swapped.slots[0]).toMatchObject({ slug: 'two-sum', swappedFrom: first });
+        const again = await api.setCoachSlot({
+          slug: 'two-sum',
+          action: 'swap',
+          toSlug: 'two-sum',
+        });
+        expect(again.slots).toEqual(swapped.slots); // a repeat is one change
+        expect((await api.setCoachSlot({ slug: first, action: 'skip' })).slots[0]!.status).toBe(
+          'skipped',
+        );
+        await expect(api.setCoachSlot({ slug: 'jump-game', action: 'skip' })).rejects.toThrow(
+          /No slot/,
+        );
+        await expect(
+          api.setCoachSlot({ slug: first, action: 'swap', toSlug: 'not-a-known-problem' }),
+        ).rejects.toThrow(/Unknown problem/);
+        await expect(
+          api.setCoachSlot({ slug: first, action: 'swap', toSlug: t.slots[1]!.slug }),
+        ).rejects.toThrow(/already/);
+        expect((await api.getCoachToday()).slots[0]!.status).toBe('skipped');
+        expect((await api.setCoachSlot({ slug: first, action: 'restore' })).slots).toEqual(t.slots);
+        expect((await api.setCoachFloor(true)).floor?.on).toBe(true);
+        expect((await api.exportData()).coachDays).toEqual([
+          expect.objectContaining({ day: TODAY, floor: true, changes: [] }),
+        ]);
+      });
+
+      it('the focus override holds from today; the same pattern again is one state; null clears it', async () => {
+        const f = await api.setCoachFocus('graphs');
+        expect(f).toMatchObject({ pattern: 'graphs', sinceDay: TODAY, source: 'override' });
+        expect((await api.getCoachToday()).focus).toMatchObject({
+          pattern: 'graphs',
+          day: 1,
+          source: 'override',
+        });
+        expect(await api.setCoachFocus('graphs')).toEqual(f);
+        await expect(api.setCoachFocus('other' as never)).rejects.toThrow(/pattern/);
+        expect(await api.setCoachFocus(null)).toBeNull();
+        expect((await api.getCoachToday()).focus.source).toBe('engine');
+        expect((await api.exportData()).coachFocus).toBeNull();
+      });
+
+      it('an override on a pattern with nothing unseen left is refused; one already holding there stays', async () => {
+        const held = await api.setCoachFocus('tries');
+        const tries = [
+          'implement-trie-prefix-tree',
+          'design-add-and-search-words-data-structure',
+          'word-search-ii',
+        ];
+        await api.logCoachAttempts(
+          tries.map((slug, i) => ({
+            slug,
+            outcome: 'clean' as const,
+            day: addDays(TODAY, -3 + i),
+          })),
+        );
+        expect(await api.setCoachFocus('tries')).toEqual(held); // still holding: no-op, never refused
+        await api.setCoachFocus(null);
+        await expect(api.setCoachFocus('tries')).rejects.toThrow(/Nothing unseen/);
+        expect((await api.exportData()).coachFocus).toBeNull();
+      });
+
+      it('picking the same pattern again after the engine moved on re-stamps it from today', async () => {
+        const today = TODAY;
+        clock -= 3 * 86_400_000;
+        expect(await api.setCoachFocus('graphs')).toMatchObject({ sinceDay: addDays(today, -3) });
+        clock += 3 * 86_400_000;
+        await api.logCoachAttempts(
+          [-3, -2, -1].map((n) => ({
+            slug: 'two-sum',
+            outcome: 'clean' as const,
+            day: addDays(today, n),
+          })),
+        );
+        expect((await api.getCoachToday()).focus).toMatchObject({ source: 'engine' });
+        expect(await api.setCoachFocus('graphs')).toMatchObject({
+          pattern: 'graphs',
+          sinceDay: today,
+        });
+        expect((await api.getCoachToday()).focus).toMatchObject({
+          pattern: 'graphs',
+          day: 1,
+          source: 'override',
+        });
+      });
+
+      it('manual attempts log, count, and delete idempotently; a bad list writes nothing', async () => {
+        const [a] = await api.logCoachAttempts([
+          { slug: 'counting-bits', outcome: 'clean', day: '2023-11-13' },
+        ]);
+        expect(a).toMatchObject({
+          slug: 'counting-bits',
+          day: '2023-11-13',
+          source: 'manual',
+          help: 'none',
+        });
+        const t = await api.getCoachToday();
+        expect(t.momentum).toMatchObject({ activeDays: 1, lastActiveDay: '2023-11-13' });
+        expect(t.next48h.map((q) => q.slug)).toEqual(['counting-bits']);
+        const [p1] = await api.logCoachAttempts([
+          { slug: 'happy-number', outcome: 'failed', help: 'solution' },
+        ]);
+        const [p2] = await api.logCoachAttempts([
+          { slug: 'happy-number', outcome: 'failed', help: 'solution' },
+        ]);
+        expect(p2!.id).toBe(p1!.id); // a peek logged twice is one
+        const pair = await api.logCoachAttempts([
+          { slug: 'meeting-rooms-iii', outcome: 'failed', help: 'solution' },
+          { slug: 'meeting-rooms-iii', outcome: 'failed', help: 'solution' },
+        ]);
+        expect(pair[1]!.id).toBe(pair[0]!.id); // …in one list too
+        await api.deleteCoachAttempt(pair[0]!.id);
+        expect(p1!.source).toBe('peek-seed');
+        await expect(
+          api.logCoachAttempts([
+            { slug: 'two-sum', outcome: 'clean' },
+            { slug: 'two-sum', outcome: 'great' as never },
+          ]),
+        ).rejects.toThrow(/outcome/);
+        await expect(
+          api.logCoachAttempts(
+            Array.from({ length: 51 }, () => ({ slug: 'two-sum', outcome: 'clean' as const })),
+          ),
+        ).rejects.toThrow(/At most 50/);
+        expect((await api.exportData()).coachAttempts.map((x) => x.id).sort()).toEqual(
+          [a!.id, p1!.id].sort(),
+        );
+        await api.deleteCoachAttempt(a!.id);
+        await api.deleteCoachAttempt(a!.id);
+        await api.deleteCoachAttempt(ulid());
+        expect((await api.listProblemRecords()).map((r) => r.slug)).toEqual(['happy-number']);
       });
     });
 

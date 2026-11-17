@@ -37,8 +37,19 @@ import type {
   TaskSeries,
   TaskStatus,
   FluxWeekNote,
+  CoachAttempt,
+  CoachDay,
+  CoachFocus,
 } from './types';
 import type { Area } from './areas';
+import type {
+  CoachAttemptInput,
+  CoachSlotInput,
+  CoachToday,
+  ProblemRecord,
+  SittingReviewPatch,
+} from './coach';
+import type { PatternId } from './neetcode150';
 import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
@@ -292,6 +303,10 @@ export interface ExportBundle {
   sittingHeadRows: SittingHeadRow[]; // runs/submits/notes/timer/coach as verdicts and marks — payloads stay in the table
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
+  // The coach's stored decisions (the plan and the records are derived from them and the sittings).
+  coachDays: CoachDay[];
+  coachAttempts: CoachAttempt[];
+  coachFocus: CoachFocus | null;
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
   fluxSets: FluxSet[];
   // Finances. Access tokens never leave SSM, so they're never exported.
@@ -616,13 +631,31 @@ export interface ApiClient {
   pullLiveSitting(): Promise<LiveSittingPull>; // Claude's live read (live_sitting) — counts itself
   listSittingReplay(id: string): Promise<SittingReplayChunk[]>; // at asc; empty once the raw bulk expired
   setSittingPrepTarget(id: string, prepTarget: string): Promise<Sitting>;
-  // The user's review, whole-replaced (normalizeSittingReview; all-empty clears it to null). On the head, at any status.
+  // The user's review, whole-replaced (normalizeSittingReview) except the coach's cause and test flag, kept when not
+  // sent (mergeReview); all-empty with neither clears it to null — so a cause alone is a review. On the head.
   setSittingReview(id: string, review: SittingReviewInput): Promise<Sitting>;
   // Claude's draft of mistake lines from the sitting's runs, submits and code (one Haiku call). Never automatic —
   // the form's button — and it writes nothing: only the lines the user ticks reach the review, through setSittingReview.
   draftSittingReview(id: string): Promise<ReviewDraft>;
   // Tombstones the sitting and every child row. No UI: the dev check's cleanup, and deleteTask's cascade.
   deleteSitting(id: string): Promise<void>;
+  // The coach's partial review write (cause, help, the test flag), merged onto the stored review — the MCP
+  // tools' path; setSittingReview keeps a cause or flag it isn't sent (mergeReview).
+  patchSittingReview(id: string, patch: SittingReviewPatch): Promise<Sitting>;
+
+  // The LeetCode coach (coach.ts; docs/areas/recruiting/coach.md). Reads are derived on read and write nothing.
+  // Day-scoped writes act on the user's day as the server reads it (their zone, dayStartHour).
+  getCoachToday(day?: string): Promise<CoachToday>; // no day → the user's today
+  listProblemRecords(): Promise<ProblemRecord[]>; // every problem with a counted attempt, newest first
+  // One slot change today (applySlotChange): swap (no toSlug → the next easier unseen problem in its pattern),
+  // skip, or restore; returns the day's plan after it.
+  setCoachSlot(input: CoachSlotInput): Promise<CoachToday>;
+  setCoachFloor(on: boolean): Promise<CoachToday>; // today is a floor day
+  // The focus override from today (sinceDay stamped server side); null clears it.
+  setCoachFocus(pattern: PatternId | null): Promise<CoachFocus | null>;
+  // Attempts outside the extension, ≤ LOG_ATTEMPTS_MAX at once (normalizeCoachAttempt).
+  logCoachAttempts(inputs: CoachAttemptInput[]): Promise<CoachAttempt[]>;
+  deleteCoachAttempt(id: string): Promise<void>; // idempotent
 
   // Flux — one row per finished set (D47). record is idempotent on the client's id (a retry returns the
   // stored row) and refuses per fluxSetError; list is alive, completedAt desc, from/to both or neither;

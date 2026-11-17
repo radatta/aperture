@@ -1,0 +1,624 @@
+// The LeetCode coach on dev (docs/areas/recruiting/coach.md): today's plan through the API and leetcode_today,
+// a sitting on a slot moving it in progress then done, an off-plan sitting leaving the queue alone, the review
+// merge, the four MCP writes as the test user, the floor and focus, and the schedule over backdated attempts.
+// Everything this run makes is ledgered by id and cleaned by the pipeline: sittings (with their reps), attempts
+// (deleteCoachAttempt), slot changes (restored), the floor (off) and the focus (cleared). Problem slugs outside the
+// catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The schedule step runs
+// last: its backdated attempts change the plan for any read after it.
+import { McpRpcError, PARAM_ERROR } from '../mcp';
+import type { DevCoachToday, DevSittingEvent, DevSittingStart } from '../api';
+import type { Ctx, Scenario } from '../scenario';
+import { devUlid } from './flux-history';
+
+const addDays = (day: string, n: number): string => {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const tag = (ctx: Ctx) => ctx.nonce.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+const slugOf = (ctx: Ctx, which: string) => `devcheck-coach-${tag(ctx)}-${which}`;
+const titleOf = (ctx: Ctx, which: string) => `devcheck-coach ${ctx.nonce} ${which}`;
+const start = (slug: string, title: string): DevSittingStart => ({
+  clientSittingId: devUlid(),
+  problemSlug: slug,
+  problemTitle: title,
+  difficulty: 'Easy',
+  topicTags: ['Array'],
+  lang: 'python3',
+  startedAt: Date.now(),
+  tzOffsetMinutes: 480, // the test user's day is LA's
+});
+const accepted = (at: number): DevSittingEvent => ({
+  id: devUlid(),
+  type: 'submit',
+  at,
+  payload: {
+    request: { lang: 'python3', typed_code: 'print("devcheck")' },
+    result: { status_code: 10, status_msg: 'Accepted', total_correct: 3, total_testcases: 3 },
+  },
+});
+const fail = (msg: string): never => {
+  throw new Error(msg);
+};
+const expectParamError = async (what: string, call: () => Promise<unknown>) => {
+  try {
+    await call();
+  } catch (err) {
+    if (err instanceof McpRpcError && err.code === PARAM_ERROR) return;
+    throw err;
+  }
+  fail(`${what}: expected a param error (-32602), got a result`);
+};
+const slugs = (t: DevCoachToday) => t.slots.map((s) => s.slug);
+const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+// What this run made and read, shared across steps (a scenario's steps run in order).
+const state = {
+  plan: null as DevCoachToday | null,
+  slotSlug: '',
+  slotKind: '',
+  sittingId: '',
+  repId: '',
+  offId: '',
+  offRep: '',
+  offBefore: null as DevCoachToday | null,
+};
+const plan = () => state.plan ?? fail('no plan read — the plan step failed');
+const today = () => plan().day;
+
+// A sitting through to Done: an accepted submit (unless `accept` is false), the actual, Done on its rep.
+async function finish(ctx: Ctx, sittingId: string, repId: string, accept = true) {
+  if (accept) await ctx.api.writes.lcSittingEvents(sittingId, [accepted(Date.now())]);
+  await ctx.api.writes.setTaskActual(repId, accept ? 15 : 1);
+  await ctx.api.writes.finishTask(repId, 'done');
+}
+const due = (x: DevCoachToday) => x.due.map((q) => `${q.slug}@${q.dueDay}`);
+const why = {
+  history:
+    'whether the dev test user has coach history depends on what earlier runs and other scenarios left; a run can’t make the account empty',
+};
+
+export const lcCoach: Scenario = {
+  id: 'lc-coach',
+  title: 'The LeetCode coach: today’s plan, slots by sitting, and the MCP tools',
+  tiers: ['full'],
+  rows: [
+    {
+      id: 'plan',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'getCoachToday answers today’s plan: 1–4 slots, each with a kind, a reason and the 30-minute cap, and a floor',
+    },
+    {
+      id: 'today-mcp',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"what’s today?" — tools/list has the coach’s five tools; leetcode_today answers the same slots with their coaching rules',
+    },
+    {
+      id: 'slot-in-progress',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A Start on a slot’s problem marks that slot in progress, with its sitting',
+    },
+    {
+      id: 'live-slot',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'live_sitting on that sitting names its slot kind, the cap and the rules for it, and no trace yet',
+    },
+    {
+      id: 'slot-done',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Done on its rep marks the slot done with its outcome; the plan’s problems don’t move',
+    },
+    {
+      id: 'review-merge',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A cause set by patchSittingReview survives a review save that doesn’t send it',
+    },
+    {
+      id: 'mcp-peek-sitting',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"I looked at the solution" mid-sitting — mark_peeked on the open sitting records it and says the re-solve is due tomorrow; a form save after it without help keeps the peek',
+    },
+    {
+      id: 'mcp-cause',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"it was a boundary case" — set_cause_tag saves the one cause on the sitting’s review',
+    },
+    {
+      id: 'off-plan',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A sitting on a problem off the plan lands in offPlan; the slots and the due list are unchanged',
+    },
+    {
+      id: 'mcp-peeked',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'mark_peeked on a problem with no sitting puts it on the peeked track, due tomorrow; a repeat is one state',
+    },
+    {
+      id: 'mcp-swap',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"too hard, an easier one" — swap_slot swaps a slot to an easier problem; restore brings the original back',
+    },
+    {
+      id: 'mcp-skip',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"skip it today" — swap_slot skip marks the slot skipped; restore opens it again',
+    },
+    {
+      id: 'mcp-log',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '"I did one on paper, clean" — log_attempt counts toward momentum and schedules the re-solve in 3 days',
+    },
+    {
+      id: 'floor-focus',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'The floor turns on and off; a focus override holds from today on its pattern, and clearing it hands back to the engine',
+    },
+    {
+      id: 'mcp-bad-args',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'Bad arguments are param errors and an unknown slot is refused, with nothing written',
+    },
+    {
+      id: 'ownership',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A peek or a cause aimed at a sitting that isn’t the user’s is refused, nothing written',
+    },
+    {
+      id: 'test-sitting',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A test sitting — under 3 minutes with no accept, or flagged — never becomes a problem record',
+    },
+    {
+      id: 'scheduler',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'Backdated attempts schedule by the table: clean steps on, solved repeats the gap, failed restarts the peeked track, past the last step graduates',
+    },
+    {
+      id: 'empty-account',
+      entry: 'api',
+      kind: 'edge',
+      what: 'An account with no history gets new problems and a stretch, no carry-over; the floor is the new pick',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'empty account: new problems in the first pattern, a stretch, no carry-over; floor = the new pick',
+        why: why.history,
+      },
+    },
+    {
+      id: 'stretch-two',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With no re-solve due, the stretch takes a second slot; never more than 4',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'an empty re-solve queue lets the stretch take two; never more than 4, never padded',
+        why: why.history,
+      },
+    },
+    {
+      id: 'day-boundary',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'The plan’s day turns at dayStartHour in the user’s zone',
+      offDev: {
+        file: 'lambdas/src/mcp/coachTools.test.ts',
+        test: 'turns its day at dayStartHour in the user’s zone',
+        why: 'dev’s clock can’t be moved to the boundary',
+      },
+    },
+    {
+      id: 'claude-asks',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'In a real claude.ai thread, Claude says what it will write and waits for a yes before each coach write',
+      needsYou:
+        'the claude.ai connector and the model’s behaviour are the user’s to watch (the dev thread walk)',
+    },
+  ],
+  steps: [
+    {
+      id: 'plan',
+      title: 'Read today’s plan through the API',
+      entry: 'api',
+      proves: ['plan'],
+      async run(ctx) {
+        const t = await ctx.api.reads.getCoachToday();
+        if (t.day !== ctx.dates.today && t.day !== addDays(ctx.dates.today, -1))
+          fail(`plan day ${t.day}, the run's day ${ctx.dates.today}`);
+        if (!t.slots.length || t.slots.length > 4) fail(`${t.slots.length} slots`);
+        const kinds = ['carry-over', 'new', 're-solve', 'stretch'];
+        for (const s of t.slots)
+          if (!kinds.includes(s.kind) || !s.reason.trim() || s.capMin !== 30)
+            fail(`slot ${JSON.stringify(s)}`);
+        if (!t.floor || t.mode !== 'general') fail(`floor/mode: ${JSON.stringify(t)}`);
+        state.plan = t;
+      },
+    },
+    {
+      id: 'tools',
+      title: 'tools/list has the coach’s tools; leetcode_today answers the same plan',
+      entry: 'mcp',
+      proves: ['today-mcp'],
+      async run(ctx) {
+        const names = await ctx.mcp.reads.toolsList();
+        for (const n of [
+          'leetcode_today',
+          'mark_peeked',
+          'set_cause_tag',
+          'swap_slot',
+          'log_attempt',
+        ])
+          if (!names.includes(n)) fail(`tools/list has no ${n}`);
+        const t = (await ctx.mcp.reads.leetcodeToday()) as DevCoachToday & {
+          rules?: Record<string, string>;
+        };
+        if (t.day !== today() || !same(slugs(t), slugs(plan())))
+          fail(`leetcode_today ${slugs(t).join(',')} vs the API's ${slugs(plan()).join(',')}`);
+        if (!t.rules?.['re-solve']?.includes('no hints'))
+          fail('leetcode_today has no coaching rules');
+      },
+    },
+    {
+      id: 'start-on-slot',
+      title: 'Link a roll; Start a sitting on the first open slot’s problem',
+      entry: 'api',
+      proves: ['slot-in-progress'],
+      async run(ctx) {
+        const slot = plan().slots.find((s) => s.status === 'open') ?? fail('no open slot to start');
+        const roll = await ctx.api.writes.upsertRoll({
+          name: titleOf(ctx, 'roll'),
+          estimateMin: 45,
+        });
+        await ctx.api.writes.linkLeetcodeRoll(roll.id);
+        const { sitting } = await ctx.api.writes.lcSittingStart(start(slot.slug, slot.title));
+        Object.assign(state, {
+          slotSlug: slot.slug,
+          slotKind: slot.kind,
+          sittingId: sitting.id,
+          repId: sitting.repTaskId,
+        });
+        const t = await ctx.api.reads.getCoachToday();
+        const now = t.slots.find((s) => s.slug === slot.slug);
+        if (now?.status !== 'in-progress' || now.sittingId !== sitting.id)
+          fail(`slot after Start: ${JSON.stringify(now)}`);
+      },
+    },
+    {
+      id: 'live-slot',
+      title: 'live_sitting names the sitting’s slot',
+      entry: 'mcp',
+      proves: ['live-slot'],
+      async run(ctx) {
+        const live = await ctx.mcp.reads.liveSitting();
+        if (!live.active || live.sitting?.id !== state.sittingId)
+          fail('live_sitting isn’t on this run’s sitting');
+        const slot = live.slot ?? fail('live_sitting has no slot');
+        if (
+          slot.kind !== state.slotKind ||
+          slot.capMin !== 30 ||
+          slot.overCap ||
+          !slot.rules.trim()
+        )
+          fail(`slot: ${JSON.stringify(slot)}`);
+        if (live.trace !== null) fail(`trace before any coach event: ${String(live.trace)}`);
+      },
+    },
+    {
+      id: 'finish-slot',
+      title: 'Accepted submit and Done: the slot is done; a patched cause survives a review save',
+      entry: 'api',
+      proves: ['slot-done', 'review-merge'],
+      async run(ctx) {
+        await finish(ctx, state.sittingId, state.repId);
+        const t = await ctx.api.reads.getCoachToday();
+        const slot = t.slots.find((s) => s.slug === state.slotSlug);
+        if (slot?.status !== 'done' || slot.outcome !== 'clean')
+          fail(`slot after Done: ${JSON.stringify(slot)}`);
+        if (!same(slugs(t), slugs(plan()))) fail('the plan’s problems moved after a sitting');
+        await ctx.api.writes.patchSittingReview(state.sittingId, { cause: 'boundary' });
+        const saved = await ctx.api.writes.setSittingReview(state.sittingId, {
+          insight: `devcheck ${ctx.nonce}`,
+          help: 'none',
+          mistakes: [],
+          howItWent: null,
+          tags: [],
+          draftUsed: false,
+        });
+        const cause = (saved.review as { cause?: string } | null | undefined)?.cause;
+        if (cause !== 'boundary') fail(`cause after a form save: ${String(cause)}`);
+      },
+    },
+    {
+      id: 'off-plan-start',
+      title: 'Start a sitting on a problem off the plan',
+      entry: 'api',
+      async run(ctx) {
+        state.offBefore = await ctx.api.reads.getCoachToday();
+        const { sitting } = await ctx.api.writes.lcSittingStart(
+          start(slugOf(ctx, 'off'), titleOf(ctx, 'off')),
+        );
+        Object.assign(state, { offId: sitting.id, offRep: sitting.repTaskId });
+      },
+    },
+    {
+      id: 'off-plan-mcp',
+      title: 'mark_peeked and set_cause_tag on the open off-plan sitting',
+      entry: 'mcp',
+      proves: ['mcp-peek-sitting', 'mcp-cause'],
+      async run(ctx) {
+        const p = await ctx.mcp.writes.markPeeked({ sittingId: state.offId });
+        if (p.sittingId !== state.offId || p.attemptId)
+          fail(`mark_peeked on a sitting: ${JSON.stringify(p)}`);
+        if (p.nextDue?.dueDay !== addDays(today(), 1) || p.nextDue.track !== 'peeked')
+          fail(`mark_peeked's due: ${JSON.stringify(p.nextDue)}`);
+        const c = await ctx.mcp.writes.setCauseTag({ sittingId: state.offId, cause: 'boundary' });
+        const review = c.review as { cause?: string; help?: string } | null;
+        if (review?.cause !== 'boundary' || review.help !== 'solution')
+          fail(`set_cause_tag: ${JSON.stringify(c)}`);
+        // The app form's Save landing after the peek, without help: the peek and the cause stay.
+        const saved = await ctx.api.writes.setSittingReview(state.offId, {
+          insight: `devcheck ${ctx.nonce} off`,
+          mistakes: [],
+          howItWent: null,
+          tags: [],
+          draftUsed: false,
+        });
+        const kept = saved.review as { cause?: string; help?: string } | null | undefined;
+        if (kept?.help !== 'solution' || kept.cause !== 'boundary')
+          fail(`a save without help: ${JSON.stringify(kept)}`);
+      },
+    },
+    {
+      id: 'off-plan-finish',
+      title: 'Done on the off-plan sitting: it’s off the plan, the slots and due list unchanged',
+      entry: 'api',
+      proves: ['off-plan'],
+      async run(ctx) {
+        await finish(ctx, state.offId, state.offRep);
+        const before = state.offBefore ?? fail('no plan before the off-plan Start');
+        const t = await ctx.api.reads.getCoachToday();
+        if (!t.offPlan.some((o) => o.sittingId === state.offId))
+          fail('the off-plan sitting isn’t in offPlan');
+        if (!same(slugs(t), slugs(before))) fail('an off-plan sitting moved the slots');
+        if (!same(due(t), due(before)))
+          fail(`due changed: ${due(before).join(',')} → ${due(t).join(',')}`);
+      },
+    },
+    {
+      id: 'peeked',
+      title: 'mark_peeked on a problem with no sitting today, twice',
+      entry: 'mcp',
+      proves: ['mcp-peeked'],
+      async run(ctx) {
+        const slug = slugOf(ctx, 'peek');
+        const a = await ctx.mcp.writes.markPeeked({ slug });
+        if (
+          !a.attemptId ||
+          a.nextDue?.dueDay !== addDays(today(), 1) ||
+          a.nextDue.track !== 'peeked'
+        )
+          fail(`mark_peeked: ${JSON.stringify(a)}`);
+        const b = await ctx.mcp.writes.markPeeked({ slug });
+        if (b.attemptId !== a.attemptId) fail('a repeated mark_peeked logged a second attempt');
+        const rec = (await ctx.api.reads.listProblemRecords()).find((r) => r.slug === slug);
+        if (!rec?.peeked) fail('the record isn’t peeked');
+      },
+    },
+    {
+      id: 'swap',
+      title: 'swap_slot on an open slot then restore; skip then restore',
+      entry: 'mcp',
+      proves: ['mcp-swap', 'mcp-skip'],
+      async run(ctx) {
+        const t0 = await ctx.mcp.reads.leetcodeToday();
+        const open = t0.slots.filter((s) => s.status === 'open');
+        const slot =
+          [...open].reverse().find((s) => s.kind !== 're-solve') ??
+          open[0] ??
+          fail('no open slot to swap');
+        const t1 = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
+          slug: slot.slug,
+          action: 'swap',
+        });
+        const swapped =
+          t1.slots.find((s) => s.swappedFrom === slot.slug && s.slug !== slot.slug) ??
+          fail(`no swapped slot: ${slugs(t1).join(',')}`);
+        // The default swap takes an unseen problem: a stretch slot stays a stretch, any other is new.
+        const wantKind = slot.kind === 'stretch' ? 'stretch' : 'new';
+        if (swapped.kind !== wantKind) fail(`swapped-in kind ${swapped.kind}, want ${wantKind}`);
+        const t2 = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
+          slug: swapped.slug,
+          action: 'restore',
+        });
+        if (!same(slugs(t2), slugs(t0)))
+          fail(`restore: ${slugs(t2).join(',')} vs ${slugs(t0).join(',')}`);
+        const t3 = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
+          slug: slot.slug,
+          action: 'skip',
+        });
+        if (t3.slots.find((s) => s.slug === slot.slug)?.status !== 'skipped')
+          fail('skip didn’t mark it');
+        const t4 = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
+          slug: slot.slug,
+          action: 'restore',
+        });
+        if (t4.slots.find((s) => s.slug === slot.slug)?.status !== 'open')
+          fail('restore didn’t reopen it');
+      },
+    },
+    {
+      id: 'log',
+      title: 'log_attempt: a clean attempt today',
+      entry: 'mcp',
+      proves: ['mcp-log'],
+      async run(ctx) {
+        const slug = slugOf(ctx, 'paper');
+        const out = await ctx.mcp.writes.logAttempt([
+          { slug, outcome: 'clean', minutes: 15, note: `devcheck ${ctx.nonce}` },
+        ]);
+        const a = out.attempts[0] ?? fail('log_attempt stored nothing');
+        if (a.slug !== slug || a.nextDue?.dueDay !== addDays(today(), 3))
+          fail(`log_attempt: ${JSON.stringify(a)}`);
+        const t = await ctx.mcp.reads.leetcodeToday();
+        if (t.momentum.lastActiveDay !== t.day || t.momentum.activeDays < 1)
+          fail(`momentum: ${JSON.stringify(t.momentum)}`);
+      },
+    },
+    {
+      id: 'floor-focus',
+      title: 'Floor on and off; a focus override on, then cleared',
+      entry: 'api',
+      proves: ['floor-focus'],
+      async run(ctx) {
+        const w = ctx.api.writes;
+        if ((await w.setCoachFloor(today(), true)).floor?.on !== true)
+          fail('the floor didn’t turn on');
+        if ((await w.setCoachFloor(today(), false)).floor?.on !== false)
+          fail('the floor didn’t turn off');
+        // Only this scenario sets a focus on the test user, so clearing "the" override clears this run's.
+        const f = await w.setCoachFocus('intervals');
+        if (f?.pattern !== 'intervals' || f.sinceDay !== today())
+          fail(`focus: ${JSON.stringify(f)}`);
+        const held = await ctx.api.reads.getCoachToday();
+        if (
+          held.focus.pattern !== 'intervals' ||
+          held.focus.source !== 'override' ||
+          held.focus.day !== 1
+        )
+          fail(`focus in the plan: ${JSON.stringify(held.focus)}`);
+        if ((await w.setCoachFocus(null)) !== null) fail('clearing the focus answered a row');
+        if ((await ctx.api.reads.getCoachToday()).focus.source !== 'engine')
+          fail('the focus didn’t clear');
+      },
+    },
+    {
+      id: 'bad-args',
+      title: 'Bad arguments and an unknown slot write nothing',
+      entry: 'mcp',
+      proves: ['mcp-bad-args'],
+      async run(ctx) {
+        const before = (await ctx.api.reads.listCoachAttempts()).length;
+        await expectParamError('mark_peeked {}', () => ctx.mcp.writes.markPeeked({}));
+        await expectParamError('log_attempt []', () => ctx.mcp.writes.logAttempt([]));
+        await expectParamError('swap_slot flip', () =>
+          ctx.mcp.writes.swapSlot(today(), slugOf(ctx, 'none'), {
+            slug: slugOf(ctx, 'none'),
+            action: 'flip',
+          }),
+        );
+        try {
+          await ctx.mcp.writes.swapSlot(today(), slugOf(ctx, 'none'), {
+            slug: slugOf(ctx, 'none'),
+            action: 'skip',
+          });
+          fail('a skip on no slot was accepted');
+        } catch (err) {
+          if (!/No slot/.test(String(err))) throw err;
+        }
+        if ((await ctx.api.reads.listCoachAttempts()).length !== before)
+          fail('a refused call wrote an attempt');
+      },
+    },
+    {
+      id: 'ownership',
+      title: 'A peek and a cause aimed at a sitting id that isn’t the user’s are refused',
+      entry: 'mcp',
+      proves: ['ownership'],
+      async run(ctx) {
+        const stranger = devUlid();
+        const before = (await ctx.api.reads.listCoachAttempts()).length;
+        try {
+          await ctx.mcp.writes.markPeekedUnknown(stranger);
+          fail('mark_peeked on an unknown sitting was accepted');
+        } catch (err) {
+          if (!/Not found/.test(String(err))) throw err;
+        }
+        try {
+          await ctx.mcp.writes.setCauseTagUnknown(stranger);
+          fail('set_cause_tag on an unknown sitting was accepted');
+        } catch (err) {
+          if (!/Not found/.test(String(err))) throw err;
+        }
+        if ((await ctx.api.reads.listSittings()).some((x) => x.id === stranger))
+          fail('a refused patch made a sitting');
+        if ((await ctx.api.reads.listCoachAttempts()).length !== before)
+          fail('a refused peek wrote an attempt');
+      },
+    },
+    {
+      id: 'test-sitting',
+      title: 'A short unaccepted sitting and a flagged one never become problem records',
+      entry: 'api',
+      proves: ['test-sitting'],
+      async run(ctx) {
+        const short = slugOf(ctx, 'short');
+        const { sitting } = await ctx.api.writes.lcSittingStart(
+          start(short, titleOf(ctx, 'short')),
+        );
+        await finish(ctx, sitting.id, sitting.repTaskId, false);
+        await ctx.api.writes.patchSittingReview(state.sittingId, { test: true });
+        const records = await ctx.api.reads.listProblemRecords();
+        if (records.some((r) => r.slug === short))
+          fail('a 1-minute sitting with no accept counted');
+        if (records.some((r) => r.sittingIds.includes(state.sittingId)))
+          fail('the flagged sitting still counts');
+        await ctx.api.writes.linkLeetcodeRoll(null); // for the scenarios after
+      },
+    },
+    {
+      id: 'scheduler',
+      title: 'Backdated attempts through log_attempt: each lands where the table says',
+      entry: 'mcp',
+      proves: ['scheduler'],
+      async run(ctx) {
+        const d = (n: number) => addDays(today(), n);
+        const [step, solved, failed, grad] = ['step', 'solved', 'failed', 'grad'].map((w) =>
+          slugOf(ctx, w),
+        );
+        const at = (slug: string, outcome: string, n: number) => ({ slug, outcome, day: d(n) });
+        const out = await ctx.mcp.writes.logAttempt([
+          at(step!, 'clean', -10), // clean track, due -7 …
+          at(step!, 'clean', -7), // … a clean re-solve steps on: due -7 + 7 = today
+          at(solved!, 'clean', -6), // due -3 …
+          at(solved!, 'solved', -3), // … solved repeats the gap: -3 + 3 = today
+          at(failed!, 'clean', -5),
+          at(failed!, 'failed', -3), // the peeked track from the start: -3 + 1
+          at(grad!, 'clean', -40),
+          at(grad!, 'clean', -37),
+          at(grad!, 'clean', -30),
+          at(grad!, 'clean', -16), // past the last step: graduated, nothing due
+        ]);
+        const next = (slug: string) => out.attempts.find((a) => a.slug === slug)?.nextDue ?? null;
+        const want: [string, { dueDay: string; track: string } | null][] = [
+          [step!, { dueDay: today(), track: 'clean' }],
+          [solved!, { dueDay: today(), track: 'clean' }],
+          [failed!, { dueDay: d(-2), track: 'peeked' }],
+          [grad!, null],
+        ];
+        for (const [slug, w] of want) {
+          const got = next(slug);
+          if (JSON.stringify(got && { dueDay: got.dueDay, track: got.track }) !== JSON.stringify(w))
+            fail(`${slug}: ${JSON.stringify(got)}, want ${JSON.stringify(w)}`);
+        }
+      },
+    },
+  ],
+};

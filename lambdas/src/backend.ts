@@ -106,6 +106,20 @@ import {
   LC_ROLL_UNLINKED_ERROR,
   normalizePrepTarget,
   normalizeSittingReview,
+  mergeReview,
+  patchReview,
+  normalizeReviewPatch,
+  planDay,
+  listRecords,
+  attemptsOf,
+  catalogProblem,
+  applySlotChange,
+  normalizeFocusPattern,
+  normalizeCoachAttempts,
+  peekOf,
+  focusHolds,
+  focusRoomError,
+  COACH_PARAMS,
   draftMistakes,
   normalizeSittingEvents,
   normalizeSittingStart,
@@ -116,6 +130,18 @@ import {
   sittingProblemUrl,
   sittingRawExpiresAt,
   sittingRepTitle,
+} from '@aperture/shared';
+import type {
+  CoachAttempt,
+  CoachAttemptInput,
+  CoachDay,
+  CoachFocus,
+  CoachInput,
+  CoachSlotInput,
+  CoachToday,
+  PatternId,
+  ProblemRecord,
+  SittingReviewPatch,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -1122,7 +1148,17 @@ export class BackendClient implements ApiClient {
     return this.repo.casUpdate(
       this.repo.sittingShape(id),
       id,
-      (cur) => ({ ...cur, review: r && { ...r, updatedAt: now } }),
+      (cur) => ({ ...cur, review: mergeReview(cur.review, r, now) }),
+      now,
+    );
+  }
+  async patchSittingReview(id: string, patch: SittingReviewPatch): Promise<Sitting> {
+    const p = normalizeReviewPatch(patch);
+    const now = this.now();
+    return this.repo.casUpdate(
+      this.repo.sittingShape(id),
+      id,
+      (cur) => ({ ...cur, review: patchReview(cur.review, p, now) }),
       now,
     );
   }
@@ -1204,6 +1240,148 @@ export class BackendClient implements ApiClient {
       );
     } catch (err) {
       if (!(err instanceof Error && err.message.startsWith('Not found'))) throw err; // no gate yet: nothing held
+    }
+  }
+
+  // --- The LeetCode coach (coach.ts; docs/areas/recruiting/coach.md) ---
+  // Everything the plan reads, for the user's day as the server reads it (or `day`). Consistent for a write's
+  // read-modify-write, so a change made a moment ago is in the plan it changes.
+  private async coachInput(day?: string, consistent = false): Promise<CoachInput> {
+    if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
+    const { dayStartHour } = await this.ensureSettings();
+    const now = this.now();
+    const opts = { consistent };
+    const [sittings, attempts, days, focus] = await Promise.all([
+      this.repo.listSittings(opts),
+      this.repo.listCoachAttempts(opts),
+      this.repo.listCoachDays(opts),
+      this.repo.getCoachFocus(opts),
+    ]);
+    const today = day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
+    return { today, now, dayStartHour, sittings, attempts, days, focus };
+  }
+  // Consistent: a read right after a coach write (a focus, a floor, a logged attempt) must see it.
+  async getCoachToday(day?: string): Promise<CoachToday> {
+    return planDay(await this.coachInput(day, true));
+  }
+  // Consistent: the coach tools read it right after a write (a peek, a logged attempt) to say what's due next.
+  async listProblemRecords(): Promise<ProblemRecord[]> {
+    const ci = await this.coachInput(undefined, true);
+    return listRecords({
+      now: ci.now,
+      today: ci.today,
+      sittings: ci.sittings,
+      attempts: ci.attempts,
+    });
+  }
+  // Today's row, changed by `fn` against the plan as it stands with the row's freshest copy; created on first use.
+  private async changeCoachDay(
+    fn: (cur: CoachDay, ci: CoachInput) => CoachDay,
+  ): Promise<CoachToday> {
+    const ci = await this.coachInput(undefined, true);
+    const now = ci.now;
+    const withRow = (row: CoachDay): CoachInput => ({
+      ...ci,
+      days: [...ci.days.filter((d) => d.day !== ci.today), row],
+    });
+    const empty: CoachDay = {
+      ...this.baseAt(now),
+      id: ci.today,
+      day: ci.today,
+      floor: false,
+      changes: [],
+    };
+    const row = await this.repo.casUpdate(
+      this.repo.coachDayShape(ci.today),
+      ci.today,
+      (cur) => fn(cur, withRow(cur)),
+      now,
+      { create: () => fn(empty, withRow(empty)), consistent: true },
+    );
+    return planDay(withRow(row));
+  }
+  async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
+    return this.changeCoachDay((cur, ci) => {
+      const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
+      const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
+      const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
+      const changes = applySlotChange(planDay(ci), cur.changes, input, known, seen, ci.now);
+      return { ...cur, changes };
+    });
+  }
+  async setCoachFloor(on: boolean): Promise<CoachToday> {
+    if (typeof on !== 'boolean') throw new Error('on must be true or false');
+    return this.changeCoachDay((cur) => ({ ...cur, floor: on }));
+  }
+  // The override starts today; the same pattern again keeps its day (a repeat is one state). null clears it.
+  async setCoachFocus(pattern: PatternId | null): Promise<CoachFocus | null> {
+    const p = normalizeFocusPattern(pattern);
+    const ci = await this.coachInput(undefined, true);
+    const shape = this.repo.coachFocusShape();
+    if (p === null) {
+      if (!ci.focus) return null;
+      await this.repo.casUpdate(
+        shape,
+        'focus',
+        (cur) => (cur.deletedAt === null ? { ...cur, deletedAt: ci.now } : null),
+        ci.now,
+        { allowDeleted: true },
+      );
+      return null;
+    }
+    const room = focusRoomError(ci, p);
+    if (room && !(ci.focus && focusHolds(ci, ci.focus, p))) throw new Error(room);
+    const fresh: CoachFocus = {
+      ...this.baseAt(ci.now),
+      id: 'focus',
+      pattern: p,
+      sinceDay: ci.today,
+      source: 'override',
+    };
+    return this.repo.casUpdate(
+      shape,
+      'focus',
+      (cur) => (focusHolds(ci, cur, p) ? null : { ...fresh, createdAt: cur.createdAt }),
+      ci.now,
+      { allowDeleted: true, create: () => fresh },
+    );
+  }
+  // A peek (help `solution`) already logged for that problem and day is returned, not logged twice.
+  async logCoachAttempts(inputs: CoachAttemptInput[]): Promise<CoachAttempt[]> {
+    const { dayStartHour } = await this.ensureSettings();
+    const now = this.now();
+    const list = normalizeCoachAttempts(inputs, dayKeyInZone(now, USER_TIME_ZONE, dayStartHour));
+    const stored = await this.repo.listCoachAttempts({ consistent: true });
+    const out: CoachAttempt[] = [];
+    for (const n of list) {
+      const dup = n.help === 'solution' && peekOf(stored, n);
+      if (dup) {
+        out.push(dup);
+        continue;
+      }
+      const row = await this.repo.putCoachAttempt({
+        ...this.baseAt(now),
+        ...n,
+        at: now,
+        source: n.help === 'solution' ? 'peek-seed' : 'manual',
+      });
+      stored.push(row); // a second peek on it in the same list is the same peek
+      out.push(row);
+    }
+    return out;
+  }
+  async deleteCoachAttempt(id: string): Promise<void> {
+    const now = this.now();
+    try {
+      await this.repo.casUpdate(
+        this.repo.coachAttemptShape(id),
+        id,
+        (cur) => (cur.deletedAt === null ? { ...cur, deletedAt: now } : null),
+        now,
+        { allowDeleted: true },
+      );
+    } catch (err) {
+      if (!(err instanceof Error && err.message.startsWith('Not found'))) throw err; // idempotent
     }
   }
 
@@ -2928,6 +3106,9 @@ export class BackendClient implements ApiClient {
       ...(await this.sittingExport()),
       leetcodeProblems: await this.repo.listLeetcodeProblems(),
       stories: await this.repo.listStories(),
+      coachDays: await this.repo.listCoachDays(),
+      coachAttempts: await this.repo.listCoachAttempts(),
+      coachFocus: await this.repo.getCoachFocus(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
       fluxSets: inRange(await this.repo.listAllFluxSets()),
       ...(await this.finance.exportCollections()),

@@ -702,7 +702,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         receivedAt: e.at,
         payload: e.payload,
       });
-      if (e.type !== 'snapshot' && e.type !== 'submitDetails' && isHeadEvent(e.type)) {
+      if (isHeadEvent(e.type)) {
         const row = headRowOf(sitting.id, { id: e.id, type: e.type, at: e.at, payload: e.payload });
         store.sittingHeadRows.push({ ...mk(e.at), ...row });
         sitting.summary = foldSummary(sitting.summary, row);

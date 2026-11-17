@@ -8,6 +8,8 @@ export * from './recurrence';
 export * from './calendar';
 export * from './leetcode';
 export * from './sittings';
+export * from './neetcode150';
+export * from './coach';
 export * from './stories';
 export * from './rolls';
 export * from './split';
