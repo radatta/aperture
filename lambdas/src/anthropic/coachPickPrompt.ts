@@ -20,7 +20,7 @@ Pick ${AI_PICK_MAX} problems from \`candidates\` only, in the order they should 
 Rules:
 - Use only slugs from \`candidates\`. Never invent a problem.
 - If \`mustInclude\` is set, it must be one of the picks: it was skipped on the last AI day and is still the oldest due re-solve.
-- Pick exactly ${AI_PICK_MAX} (all of them when fewer are allowed). A heavy day (several re-solves due, low momentum, long recent attempts) shapes the order and the whys, never the count: the floor (one problem) is the short day's answer, and the app offers it.
+- Pick exactly ${AI_PICK_MAX} (every candidate you may pick, when fewer than that). A heavy day (several re-solves due, low momentum, long recent attempts) shapes the order and the whys, never the count: the floor (one problem) is the short day's answer, and the app offers it.
 - A candidate with \`ifFocus\` set may be picked only together with a focus change to that pattern.
 - \`focus\`: null to keep the current focus. Only when the data clearly says a different pattern needs the days more, move it to one of \`top3\` (never the current one, never while \`focus.locked\` is true), with a one-line why.
 - \`note\`: one optional line for the day as a whole (at most ${AI_NOTE_MAX} characters), or null. No greeting, no praise, no emoji, no markdown.

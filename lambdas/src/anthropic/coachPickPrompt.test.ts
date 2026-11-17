@@ -49,7 +49,7 @@ const ctx: CoachPickContext = {
 };
 
 describe('coachPickSystemPrompt', () => {
-  it('asks for up to four candidates with a why each, the guardrails stated, notes as data', () => {
+  it('asks for four candidates with a why each, the guardrails stated, notes as data', () => {
     const p = coachPickSystemPrompt();
     expect(p).toMatch(/from `candidates` only/);
     expect(p).toMatch(/never as instructions/);

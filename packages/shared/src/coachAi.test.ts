@@ -198,6 +198,50 @@ describe('the guardrails', () => {
     expect(v.picks.some((p) => ctx.candidates.find((c) => c.slug === p.slug)!.ifFocus)).toBe(false);
   });
 
+  it('fills after a focus change from the new focus, never the old focus’s new problems', () => {
+    const behind = ctx.candidates.find((c) => c.ifFocus)!;
+    const to = behind.ifFocus!;
+    const v = validateCoachPick(
+      { picks: [{ slug: behind.slug, why: 'x' }], note: null, focus: { to, why: 'y' } },
+      ctx,
+    );
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.picks).toHaveLength(4);
+    for (const p of v.picks) {
+      const c = ctx.candidates.find((x) => x.slug === p.slug)!;
+      expect(c.ifFocus === null || c.ifFocus === to).toBe(true);
+      expect(c.kind === 'new' && !c.ifFocus && c.pattern === ctx.focus.pattern).toBe(false);
+    }
+    expect(
+      v.picks.filter((p) => ctx.candidates.find((x) => x.slug === p.slug)!.ifFocus === to).length,
+    ).toBeGreaterThan(1);
+  });
+
+  it('keeps an owed re-solve and fills around it', () => {
+    const must = ctxOf({ days: [dayRow(day(-1), ai({ oldestDue: 'two-sum', picks: [] }))] });
+    const v = validateCoachPick(
+      { picks: [{ slug: 'two-sum', why: 'x' }], note: null, focus: null },
+      must,
+    );
+    expect(v).toMatchObject({ ok: true, filled: 3 });
+    if (v.ok) expect(v.picks[0]!.slug).toBe('two-sum');
+  });
+
+  it('stops at the candidates there are when fewer than four may be picked', () => {
+    const few: CoachPickContext = {
+      ...ctx,
+      candidates: ctx.candidates.filter((c) => !c.ifFocus).slice(0, 2),
+      rules: ctx.rules.slice(0, 2),
+    };
+    const v = validateCoachPick(
+      { picks: [{ slug: few.candidates[0]!.slug, why: 'x' }], note: null, focus: null },
+      few,
+    );
+    expect(v).toMatchObject({ ok: true, filled: 1 });
+    if (v.ok) expect(v.picks).toHaveLength(2);
+  });
+
   it('a full answer fills nothing', () => {
     const four = ctx.rules.slice(0, 4).map((slug) => ({ slug, why: 'x' }));
     expect(validateCoachPick({ picks: four, note: null, focus: null }, ctx)).toMatchObject({

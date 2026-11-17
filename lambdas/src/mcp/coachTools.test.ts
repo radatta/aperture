@@ -190,6 +190,7 @@ describe('leetcode_today and the AI pick', () => {
       note: 'One re-solve, then rest.',
       notice: null,
     });
+    expect(out.slots).toHaveLength(4); // one answered, three filled from the rules
     expect(out.slots[0]).toEqual(
       expect.objectContaining({ slug: 'two-sum', why: 'Due since Thursday' }),
     );

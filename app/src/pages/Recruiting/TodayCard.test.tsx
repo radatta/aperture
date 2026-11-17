@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
@@ -322,7 +322,6 @@ describe('the AI pick on the Today card', () => {
 
   it('a start that failed on Home shows the Retry on the card, never a stuck “picking”', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true, now: MORNING }); // Home's LeetCode line is morning-only
-    onTestFinished(() => void vi.useRealTimers());
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const api = stub(true);
     vi.spyOn(api, 'startCoachPick').mockRejectedValueOnce(new Error('offline'));

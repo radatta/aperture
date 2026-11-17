@@ -281,9 +281,10 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   return { ok: true, picks: full, note, focus, filled: full.length - picks.length };
 }
 
-// The day is four problems, as the rules' (fewer only when fewer are allowed): a short answer keeps the model's picks
-// in its order and takes the rest from the rules' own pick, then the other candidates — each with its rule reason as
-// its why. Never a slot dropped; never another problem than a candidate the answer's focus allows.
+// The day is four problems (fewer only when fewer may be picked): a short answer keeps the model's picks in its order
+// and takes the rest from the rules' own pick, then the other candidates — each with its rule reason as its why. After a
+// focus change, the new focus's problems come before the rest, and the old focus's new ones are out (the day follows
+// the move). Never a slot dropped; never anything but a candidate the answer may take.
 export function fillToFull(
   picks: readonly CoachAiPick[],
   ctx: CoachPickContext,
@@ -291,9 +292,15 @@ export function fillToFull(
 ): CoachAiPick[] {
   const allowed = ctx.candidates.filter((c) => !c.ifFocus || c.ifFocus === focus?.to);
   const want = Math.min(AI_PICK_MAX, allowed.length);
-  const taken = new Set(picks.map((p) => p.slug));
+  const left = (c: CoachAiCandidate) =>
+    !(focus && c.kind === 'new' && !c.ifFocus && c.pattern === ctx.focus.pattern);
   const byslug = new Map(allowed.map((c) => [c.slug, c]));
-  const pool = [...ctx.rules.flatMap((s) => byslug.get(s) ?? []), ...allowed];
+  const pool = [
+    ...allowed.filter((c) => focus && c.ifFocus === focus.to),
+    ...ctx.rules.flatMap((s) => byslug.get(s) ?? []),
+    ...allowed,
+  ].filter(left);
+  const taken = new Set(picks.map((p) => p.slug));
   const out = [...picks];
   for (const c of pool) {
     if (out.length >= want) break;
@@ -305,8 +312,8 @@ export function fillToFull(
 }
 
 // The stub's (and the local check's) deterministic stand-in for the model: the rules' own pick, with the rules'
-// reasons as its whys and no note — so a stub day reads exactly like the rules' — plus the skipped oldest due re-solve
-// up front when one is owed. Never a focus change.
+// reasons as its whys and no note — so a stub day reads like the rules' (filled to four when the rules had fewer) —
+// plus the skipped oldest due re-solve up front when one is owed. Never a focus change.
 export function standInCoachPick(ctx: CoachPickContext): Record<string, unknown> {
   const order = [...new Set([...(ctx.mustInclude ? [ctx.mustInclude] : []), ...ctx.rules])];
   const byslug = new Map(ctx.candidates.map((c) => [c.slug, c]));

@@ -712,9 +712,10 @@ export const lcCoachAi: Scenario = {
         if (ai.picks.some((p) => !p.why.trim())) fail('a pick with no why');
         // The coach's wording rule (coachTools TODAY_NOTE, the pick's prompt): due, never overdue; no missed days or
         // streaks. The model's words are checked, not trusted.
-        const words = [...ai.picks.map((p) => p.why), ai.note ?? ''].join(' ');
+        const words = [...ai.picks.map((p) => p.why), ai.note ?? '', ai.focus?.why ?? ''].join(' ');
+        // Missed *days* and streaks, not the word: "missed the empty-input case" is a fair why.
         const banned = words.match(
-          /\boverdue\b|\bmissed\b|\bstreaks?\b|\bskipped (?:a |the )?days?\b/i,
+          /\boverdue\b|\bstreaks?\b|\bmissed (?:yesterday|today|(?:a|one|two|three|\d+) days?|days?|a session|sessions)\b|\bskipped (?:a |the )?days?\b|\bdays? since\b|\bhaven'?t practi[sc]ed\b/i,
         );
         if (banned) fail(`the wording rule: “${banned[0]}” in ${JSON.stringify(words)}`);
         const t = await withAi(ctx, () => ctx.api.reads.getCoachToday());
