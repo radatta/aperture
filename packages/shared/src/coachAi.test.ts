@@ -556,7 +556,18 @@ describe('the plan mode in the pick', () => {
       ok: false,
       code: 'mix',
     });
-    expect(pick([news[0]!.slug, resolves[0]!.slug])).toEqual({ ok: false, code: 'mix' });
+  });
+
+  it('a short catch-up answer is filled within the mix: re-solves, never a second new or a stretch', () => {
+    const news = ctx.candidates.filter((c) => c.kind === 'new' && !c.ifFocus);
+    const v = validateCoachPick(
+      { picks: [{ slug: news[0]!.slug, why: 'x' }], focus: null, note: null },
+      ctx,
+    );
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.picks.map((p) => p.kind)).toEqual(['new', 're-solve', 're-solve', 're-solve']);
+    expect(v.filled).toBe(3);
   });
 
   it('the stand-in stays within the mix', () => {

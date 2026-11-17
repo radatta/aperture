@@ -267,18 +267,6 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   }
   if (ctx.mustInclude && !picks.some((p) => p.slug === ctx.mustInclude))
     return fail('skipped-oldest-due');
-  // Catch-up's mix: at most one new, no stretch, and no fewer re-solves than the rules' own plan.
-  if (ctx.planMode.mode === 'catch-up') {
-    const n = (k: SlotKind, list: readonly { kind: SlotKind }[]) =>
-      list.filter((x) => x.kind === k).length;
-    const ruleKinds = ctx.rules.flatMap((slug) => byslug.get(slug) ?? []);
-    if (
-      n('new', picks) > 1 ||
-      n('stretch', picks) > 0 ||
-      n('re-solve', picks) < n('re-solve', ruleKinds)
-    )
-      return fail('mix');
-  }
   let focus: { from: PatternId; to: PatternId; why: string } | null = null;
   if (r.focus !== undefined && r.focus !== null) {
     if (typeof r.focus !== 'object' || Array.isArray(r.focus)) return fail('shape');
@@ -299,13 +287,26 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   const note = typeof r.note === 'string' && r.note.trim() ? cut(r.note, AI_NOTE_MAX) : null;
   if (r.note !== undefined && r.note !== null && typeof r.note !== 'string') return fail('shape');
   const full = fillToFull(picks, ctx, focus);
+  // Catch-up's mix, on the day as filled: at most one new, no stretch, and no fewer re-solves than the rules' plan.
+  if (ctx.planMode.mode === 'catch-up') {
+    const n = (k: SlotKind, list: readonly { kind: SlotKind }[]) =>
+      list.filter((x) => x.kind === k).length;
+    const ruleKinds = ctx.rules.flatMap((slug) => byslug.get(slug) ?? []);
+    if (
+      n('new', full) > 1 ||
+      n('stretch', full) > 0 ||
+      n('re-solve', full) < n('re-solve', ruleKinds)
+    )
+      return fail('mix');
+  }
   return { ok: true, picks: full, note, focus, filled: full.length - picks.length };
 }
 
 // The day is four problems (fewer only when fewer may be picked): a short answer keeps the model's picks in its order
 // and takes the rest from the rules' own pick, then the other candidates — each with its rule reason as its why. After a
 // focus change, the new focus's problems come before the rest, and the old focus's new ones are out (the day follows
-// the move). Never a slot dropped; never anything but a candidate the answer may take.
+// the move). Never a slot dropped; never anything but a candidate the answer may take. In catch-up the fill keeps the
+// mix: no stretch, and a new only while the day has none.
 export function fillToFull(
   picks: readonly CoachAiPick[],
   ctx: CoachPickContext,
@@ -323,9 +324,15 @@ export function fillToFull(
   ].filter(left);
   const taken = new Set(picks.map((p) => p.slug));
   const out = [...picks];
+  const catchUp = ctx.planMode.mode === 'catch-up';
   for (const c of pool) {
     if (out.length >= want) break;
     if (taken.has(c.slug)) continue;
+    if (
+      catchUp &&
+      (c.kind === 'stretch' || (c.kind === 'new' && out.some((p) => p.kind === 'new')))
+    )
+      continue;
     taken.add(c.slug);
     out.push({ slug: c.slug, kind: c.kind, why: cut(c.rule || c.kind, AI_WHY_MAX) });
   }
