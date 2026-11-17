@@ -24,5 +24,19 @@
     "pid": 512,
     "rssMiB": 22528,
     "comm": "com.apple.Virtualization.VirtualMachine"
+  },
+  "power": {
+    "source": "ac",
+    "batteryPct": 82,
+    "state": "charging",
+    "remainingMin": 40,
+    "lowPowerMode": false,
+    "thermal": {
+      "warningLevel": null,
+      "performanceWarningLevel": null,
+      "cpuSpeedLimit": null,
+      "cpuSchedulerLimit": null,
+      "cpuAvailableCpus": null
+    }
   }
 }

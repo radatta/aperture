@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { IDS } from '../../identifiers.ts';
-import { accountKind, readCosts, readMacStats, sumCosts } from './health.ts';
+import { accountKind, powerSummary, readCosts, readMacStats, sumCosts } from './health.ts';
 
 const T = Date.parse('2026-11-13T20:00:00Z');
 const stats = (t: number, over: object = {}) =>
@@ -139,5 +139,111 @@ describe('round 1 health fixes', () => {
       total: 0,
       error: 'no rows for 2026-11: re-pull',
     });
+  });
+});
+
+// F120: the battery / Low Power Mode / thermal line (docs/ops/TOWER.md → HEALTH)
+describe('powerSummary', () => {
+  const calm = {
+    source: 'ac',
+    batteryPct: 82,
+    state: 'charging',
+    remainingMin: 40,
+    lowPowerMode: false,
+    thermal: {
+      warningLevel: null,
+      performanceWarningLevel: null,
+      cpuSpeedLimit: null,
+      cpuSchedulerLimit: null,
+      cpuAvailableCpus: null,
+    },
+  };
+  const sum = (power: object | undefined, t = T) =>
+    powerSummary(readMacStats('x', T, at(stats(t, power === undefined ? {} : { power }))));
+  const thermal = (o: object) => ({ ...calm, thermal: { ...calm.thermal, ...o } });
+
+  it("an old agent's JSON (no power key) is unknown, never red", () => {
+    expect(sum(undefined)).toEqual({ known: false, line: '', alerts: [], advice: null });
+  });
+
+  it('a silent, missing or bad read is unknown', () => {
+    expect(sum(calm, T - 400_000).known).toBe(false);
+    expect(powerSummary(readMacStats('x', T, at('{oops'))).known).toBe(false);
+  });
+
+  it('calm on AC: one line, no alerts, no advice', () => {
+    expect(sum(calm)).toEqual({
+      known: true,
+      line: 'AC 82% charging (0:40 to full) · no thermal limit',
+      alerts: [],
+      advice: null,
+    });
+  });
+
+  it('red on Low Power Mode, on battery under 20%, a limit under 100, a recorded warning level', () => {
+    expect(sum({ ...calm, lowPowerMode: true }).alerts).toEqual(['Low Power Mode']);
+    const low = sum({
+      ...calm,
+      source: 'battery',
+      batteryPct: 12,
+      state: 'discharging',
+      remainingMin: 50,
+    });
+    expect(low.alerts).toEqual(['battery 12%']);
+    expect(low.line).toBe('battery 12% discharging (0:50 left) · no thermal limit');
+    expect(sum(thermal({ cpuSpeedLimit: 80 })).alerts).toEqual(['CPU speed 80%']);
+    expect(sum(thermal({ cpuSchedulerLimit: 50 })).alerts).toEqual(['scheduler 50%']);
+    expect(sum(thermal({ warningLevel: 2 })).line).toMatch(/limit: thermal warning 2$/);
+    // a level that isn't a number: shown, not red (an unseen layout, never a guess)
+    const odd = sum(thermal({ performanceWarningLevel: 'recorded' }));
+    expect(odd.alerts).toEqual([]);
+    expect(odd.line).toBe(
+      'AC 82% charging (0:40 to full) · performance warning unreadable · no thermal limit',
+    );
+  });
+
+  it('not red: 20% on battery, 12% on AC, limits at 100, a warning level of 0', () => {
+    expect(sum({ ...calm, source: 'battery', batteryPct: 20 }).alerts).toEqual([]);
+    expect(sum({ ...calm, batteryPct: 12 }).alerts).toEqual([]);
+    expect(
+      sum(thermal({ cpuSpeedLimit: 100, cpuSchedulerLimit: 100, warningLevel: 0 })).alerts,
+    ).toEqual([]);
+  });
+
+  it('a charged battery on AC drops the "(0:00 to full)"; a UPS says UPS', () => {
+    expect(sum({ ...calm, batteryPct: 100, state: 'charged', remainingMin: 0 }).line).toBe(
+      'AC 100% charged · no thermal limit',
+    );
+    expect(sum({ ...calm, source: 'ups', remainingMin: null }).line).toBe(
+      'UPS 82% charging · no thermal limit',
+    );
+  });
+
+  it('an unreadable Low Power Mode says so on the line (never a silent "off")', () => {
+    expect(sum({ ...calm, lowPowerMode: null }).line).toBe(
+      'AC 82% charging (0:40 to full) · Low Power Mode unknown · no thermal limit',
+    );
+  });
+
+  it('advice: ≤ 3 lanes on battery under 30% or with Low Power Mode on', () => {
+    expect(sum({ ...calm, source: 'battery', batteryPct: 29 }).advice).toMatch(/^≤ 3 lanes/);
+    expect(sum({ ...calm, source: 'battery', batteryPct: 30 }).advice).toBeNull();
+    expect(sum({ ...calm, batteryPct: 10 }).advice).toBeNull(); // on AC
+    expect(sum({ ...calm, lowPowerMode: true }).advice).toMatch(/^≤ 3 lanes/);
+  });
+
+  it('pmset gave nothing: all null is known, says thermal unknown; wrong types read as null', () => {
+    const none = {
+      source: null,
+      batteryPct: null,
+      state: null,
+      remainingMin: null,
+      lowPowerMode: null,
+      thermal: null,
+    };
+    expect(sum(none)).toEqual({ known: true, line: 'thermal unknown', alerts: [], advice: null });
+    expect(sum({ ...calm, batteryPct: '82', lowPowerMode: 'yes', source: 'mains' }).line).toBe(
+      'no thermal limit',
+    );
   });
 });

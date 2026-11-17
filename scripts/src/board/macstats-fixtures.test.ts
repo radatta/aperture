@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -22,13 +23,20 @@ const INSTALL = join(ROOT, 'tools/macstats/install.sh');
 const FX = join(import.meta.dirname, 'tower/fixtures/mac');
 const render = (dir: string) =>
   JSON.parse(execFileSync('bash', [AGENT, '--render', dir], { encoding: 'utf8' }));
-const variant = (edit: (f: Record<string, string>) => void) => {
+const PM = ['pmset-batt.txt', 'pmset.txt', 'pmset-therm.txt'];
+// the one true awk is macOS's; the container may have it (`apt-get install original-awk`), CI doesn't (skipped there)
+const ONE_TRUE_AWK = existsSync('/usr/bin/original-awk') ? '/usr/bin/original-awk' : null;
+// a copy of the fixtures, edited; null deletes a file
+const variant = (edit: (f: Record<string, string | null>) => void) => {
   const d = mkdtempSync(join(tmpdir(), 'mac-'));
   cpSync(FX, d, { recursive: true });
-  const f: Record<string, string> = {};
-  for (const n of ['vm_stat.txt', 'sysctl.txt', 'ps.txt']) f[n] = readFileSync(join(d, n), 'utf8');
+  const f: Record<string, string | null> = {};
+  for (const n of PM.concat(['vm_stat.txt', 'sysctl.txt', 'ps.txt']))
+    f[n] = readFileSync(join(d, n), 'utf8');
   edit(f);
-  for (const [n, t] of Object.entries(f)) writeFileSync(join(d, n), t);
+  for (const [n, t] of Object.entries(f))
+    if (t === null) rmSync(join(d, n));
+    else writeFileSync(join(d, n), t);
   return d;
 };
 
@@ -94,6 +102,198 @@ describe('macstats.sh --render', () => {
   });
 });
 
+// F120: pmset -g batt / -g / -g therm, no sudo. Shapes: docs/ops/TOWER.md → Mac stats.
+describe('macstats.sh --render: power', () => {
+  const batt = (line: string, from = 'AC Power') =>
+    `Now drawing from '${from}'\n -InternalBattery-0 (id=1234567)\t${line} present: true\n`;
+  const power = (edit: (f: Record<string, string | null>) => void) => render(variant(edit)).power;
+
+  it('the 11-17 shape: AC, 12% charging, 9:02 to full; LPM 0; nothing recorded', () => {
+    expect(render(FX).power).toEqual({
+      source: 'ac',
+      batteryPct: 12,
+      state: 'charging',
+      remainingMin: 542,
+      lowPowerMode: false,
+      thermal: {
+        warningLevel: null,
+        performanceWarningLevel: null,
+        cpuSpeedLimit: null,
+        cpuSchedulerLimit: null,
+        cpuAvailableCpus: null,
+      },
+    });
+  });
+
+  it('on battery: discharging with an estimate, and "(no estimate)"', () => {
+    expect(
+      power(
+        (f) => (f['pmset-batt.txt'] = batt('24%; discharging; 2:10 remaining', 'Battery Power')),
+      ),
+    ).toMatchObject({ source: 'battery', batteryPct: 24, state: 'discharging', remainingMin: 130 });
+    expect(
+      power(
+        (f) => (f['pmset-batt.txt'] = batt('88%; discharging; (no estimate)', 'Battery Power')),
+      ),
+    ).toMatchObject({
+      source: 'battery',
+      batteryPct: 88,
+      state: 'discharging',
+      remainingMin: null,
+    });
+  });
+
+  it('charged, finishing charge, "AC attached; not charging", and spaces instead of the tab', () => {
+    expect(
+      power((f) => (f['pmset-batt.txt'] = batt('100%; charged; 0:00 remaining'))),
+    ).toMatchObject({
+      batteryPct: 100,
+      state: 'charged',
+      remainingMin: 0,
+    });
+    expect(
+      power((f) => (f['pmset-batt.txt'] = batt('99%; finishing charge; 0:05 remaining'))),
+    ).toMatchObject({
+      state: 'finishing',
+      remainingMin: 5,
+    });
+    expect(
+      power((f) => (f['pmset-batt.txt'] = batt('80%; AC attached; not charging'))),
+    ).toMatchObject({
+      batteryPct: 80,
+      state: 'not-charging',
+      remainingMin: null,
+    });
+    expect(
+      power(
+        (f) =>
+          (f['pmset-batt.txt'] =
+            "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)        93%; charging; 0:32 remaining present: true\n"),
+      ),
+    ).toMatchObject({ batteryPct: 93, state: 'charging', remainingMin: 32 });
+  });
+
+  it('the older shape with no id and no present: still parses', () => {
+    expect(
+      power(
+        (f) =>
+          (f['pmset-batt.txt'] =
+            "Now drawing from 'Battery Power'\n -InternalBattery-0\t90%; discharging; 6:32 remaining\n"),
+      ),
+    ).toMatchObject({ source: 'battery', batteryPct: 90, state: 'discharging', remainingMin: 392 });
+  });
+
+  it('no internal battery (a desktop Mac) is source ac, the battery fields null', () => {
+    expect(power((f) => (f['pmset-batt.txt'] = "Now drawing from 'AC Power'\n"))).toMatchObject({
+      source: 'ac',
+      batteryPct: null,
+      state: null,
+      remainingMin: null,
+    });
+  });
+
+  it('lowpowermode 1 is true; no such line is null', () => {
+    expect(
+      power(
+        (f) =>
+          (f['pmset.txt'] = f['pmset.txt']!.replace(/lowpowermode +0/, 'lowpowermode         1')),
+      ).lowPowerMode,
+    ).toBe(true);
+    expect(
+      power((f) => (f['pmset.txt'] = f['pmset.txt']!.replace(/.*lowpowermode.*\n/, '')))
+        .lowPowerMode,
+    ).toBeNull();
+  });
+
+  it('a recorded CPU power status and warning levels are read; an odd level is "recorded"', () => {
+    const t = power(
+      (f) =>
+        (f['pmset-therm.txt'] =
+          '2026-11-17 10:00:00 -0800 CPU Power notify\n\tCPU_Scheduler_Limit \t= 100\n\tCPU_Available_CPUs \t= 8\n\tCPU_Speed_Limit \t= 80\nThermal Warning Level = 2\nPerformance Warning Level: elevated\n'),
+    ).thermal;
+    expect(t).toEqual({
+      warningLevel: 2,
+      performanceWarningLevel: 'recorded',
+      cpuSpeedLimit: 80,
+      cpuSchedulerLimit: 100,
+      cpuAvailableCpus: 8,
+    });
+  });
+
+  it('missing pmset files give nulls, never a failed render', () => {
+    const j = render(variant((f) => PM.forEach((n) => (f[n] = null))));
+    expect(j.power).toEqual({
+      source: null,
+      batteryPct: null,
+      state: null,
+      remainingMin: null,
+      lowPowerMode: null,
+      thermal: null,
+    });
+    expect(j.mem.usedMiB).toBe(15360);
+  });
+
+  it('powermode (a Mac with High Power Mode): 1 is Low Power Mode, 0 and 2 are not; lowpowermode wins', () => {
+    const pm = (lines: string) => power((f) => (f['pmset.txt'] = lines)).lowPowerMode;
+    expect(pm(' powermode            1\n')).toBe(true);
+    expect(pm(' powermode            2\n')).toBe(false);
+    expect(pm(' powermode            0\n')).toBe(false);
+    expect(pm(' lowpowermode         0\n powermode            1\n')).toBe(false);
+  });
+
+  // macOS runs the one true awk, not this container's mawk/gawk: the same fixtures through it, when installed
+  it.skipIf(!ONE_TRUE_AWK)('BSD awk (original-awk) renders the same power', () => {
+    const t = mkdtempSync(join(tmpdir(), 'oawk-'));
+    mkdirSync(join(t, 'bin'));
+    symlinkSync(ONE_TRUE_AWK!, join(t, 'bin/awk'));
+    writeFileSync(
+      join(t, 'macstats.sh'),
+      readFileSync(AGENT, 'utf8').replace(
+        /^export LC_ALL=C PATH=/m,
+        `export LC_ALL=C PATH=${join(t, 'bin')}:`,
+      ),
+    );
+    const therm =
+      '2026-11-17 10:00:00 -0800 CPU Power notify\n\tCPU_Scheduler_Limit \t= 100\n\tCPU_Available_CPUs \t= 8\n\tCPU_Speed_Limit \t= 80\nThermal Warning Level = 2\n';
+    for (const d of [
+      FX,
+      variant((f) => {
+        f['pmset-batt.txt'] =
+          "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1234567)\t80%; AC attached; not charging present: true\n";
+        f['pmset-therm.txt'] = therm;
+        f['pmset.txt'] = ' powermode 1\n';
+      }),
+    ]) {
+      const r = (agent: string) =>
+        JSON.parse(execFileSync('bash', [agent, '--render', d], { encoding: 'utf8' })).power;
+      expect(r(join(t, 'macstats.sh'))).toEqual(r(AGENT));
+    }
+  });
+
+  it('CRLF line ends read the same; a UPS is source ups', () => {
+    const crlf = render(
+      variant((f) => {
+        for (const n of PM) f[n] = f[n]!.replace(/\n/g, '\r\n');
+        f['pmset.txt'] = f['pmset.txt']!.replace(/lowpowermode +0/, 'lowpowermode 1');
+      }),
+    ).power;
+    expect(crlf).toMatchObject({
+      source: 'ac',
+      batteryPct: 12,
+      remainingMin: 542,
+      lowPowerMode: true,
+    });
+    expect(
+      power((f) => (f['pmset-batt.txt'] = f['pmset-batt.txt']!.replace('AC Power', 'UPS Power')))
+        .source,
+    ).toBe('ups');
+  });
+
+  it('the battery id never reaches the JSON', () => {
+    expect(JSON.stringify(render(FX))).not.toContain('1234567');
+  });
+});
+
 describe('macstats.sh out-dir pin (runs before any macOS tool)', () => {
   const tick = (out: string, state: string) =>
     spawnSync('bash', [AGENT, out, state], { encoding: 'utf8' });
@@ -134,7 +334,7 @@ describe('macstats.sh out-dir pin (runs before any macOS tool)', () => {
 
 describe('one real tick, macOS tools stubbed', () => {
   // a copy of the agent whose fixed PATH starts with stub vm_stat / sysctl / ps that print the fixtures
-  function stubbed() {
+  function stubbed(pmset = false) {
     const t = mkdtempSync(join(tmpdir(), 'tick-'));
     const bin = join(t, 'bin');
     mkdirSync(bin);
@@ -155,6 +355,12 @@ describe('one real tick, macOS tools stubbed', () => {
       `#!/bin/bash\ncase "$2" in\n${oids.map((o, i) => `  ${o}) echo '${sys[i]}' ;;`).join('\n')}\n  *) exit 1 ;;\nesac\n`,
       { mode: 0o755 },
     );
+    if (pmset)
+      writeFileSync(
+        join(bin, 'pmset'),
+        `#!/bin/bash\ncase "$2" in\n  batt) cat '${join(FX, 'pmset-batt.txt')}' ;;\n  therm) cat '${join(FX, 'pmset-therm.txt')}' ;;\n  '') cat '${join(FX, 'pmset.txt')}' ;;\n  *) exit 1 ;;\nesac\n`,
+        { mode: 0o755 },
+      );
     const agent = readFileSync(AGENT, 'utf8').replace(
       /^export LC_ALL=C PATH=/m,
       `export LC_ALL=C PATH=${bin}:`,
@@ -175,12 +381,24 @@ describe('one real tick, macOS tools stubbed', () => {
     expect(readdirSync(join(t, 'out'))).toEqual(['mac-stats.json']);
     const j = JSON.parse(readFileSync(join(t, 'out/mac-stats.json'), 'utf8'));
     expect(j).toMatchObject({ v: 1, mem: { usedMiB: 15360 }, cpus: 12 });
+    // no pmset on this PATH (the tests run on Linux): power is all null, the tick still exits 0 and quiet
+    expect(j.power).toMatchObject({ source: null, lowPowerMode: null, thermal: null });
     expect(readFileSync(join(t, 'state/last'), 'utf8').trim()).toBe('ok');
     // a second tick logs nothing (one log line per change) and still writes
     const r2 = spawnSync('bash', [join(t, 'macstats.sh'), join(t, 'out'), join(t, 'state')], {
       encoding: 'utf8',
     });
     expect([r2.status, r2.stdout, r2.stderr]).toEqual([0, '', '']);
+  });
+
+  it('with pmset there, a tick writes power', () => {
+    const t = stubbed(true);
+    const r = spawnSync('bash', [join(t, 'macstats.sh'), join(t, 'out'), join(t, 'state')], {
+      encoding: 'utf8',
+    });
+    expect([r.status, r.stderr]).toEqual([0, '']);
+    const j = JSON.parse(readFileSync(join(t, 'out/mac-stats.json'), 'utf8'));
+    expect(j.power).toMatchObject({ source: 'ac', batteryPct: 12, lowPowerMode: false });
   });
 
   it('a link to a directory planted after the check is replaced by the rename, never moved into', () => {

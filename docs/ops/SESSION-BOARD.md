@@ -21,6 +21,7 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 | Who is the hub, is it up          | `board.sh hub` — the name from `scripts/board/hub.json` and whether a live session by that name is on the board (`docs/ops/HUB.md`)                                                                                                                                            |
 | What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                                                                                                            |
 | How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)                                                                                 |
+| Is the machine throttled          | `node scripts/src/board/cli.ts machine /workspace/localNotes/board [--json]` — the Mac's battery / Low Power Mode / thermal line and the slowdown ratio (_History_ → _Slowdown_); also two lines of `board.sh status`, `.machine` in `board.sh json`, and HEALTH on the tower  |
 | Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                                                                                                        |
 | The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                                                                                                          |
 | The web tower                     | http://localhost:6183 · `board.sh tower start\|restart\|stop\|status\|version`; sync-main after a merge (`docs/ops/TOWER.md` → _Run it_)                                                                                                                                       |
@@ -120,6 +121,16 @@ up to the headline (a block can have several holders, and older events no mix).
 `lockBusy` (enforcing, the board lock stayed busy for the whole wait before any decision, so the job ran
 unslotted — fail-open; a job already held gives up instead, and with `enforce: false` a busy lock never waits) is reported,
 not counted as a block. Load tests are excluded.
+
+**Slowdown** (F120, `tower/slowdown.ts`). Per class `typecheck`, `lint`, `test` and `ui`, the median `wallSec` of the
+clean job events (exit 0, not a load test or guard) that ended in the last 30 min, over the median of those in the
+24 h before that window, widened to 7 days when that has fewer than 5. It needs 2 recent and 5 baseline runs, else
+it shows the count instead. `test-file`, `build`, `dev` and `other` are too mixed to compare. `×1.5` is amber and
+`×2` red on the tower. It answers "is it slow now", whatever the cause: the Mac on battery or in Low Power Mode, heat,
+or a crowded container (the `mac:` line beside it tells the first two apart). `test` mixes whole suites with
+filtered runs, and `ui` dev checks with short captures, so only `typecheck` and `lint` set the tower's colour and
+"slow ×…" headline; all four show in the line. Measured 2026-11-17 in a low-power window:
+typecheck ×1.8, lint ×2, test ×1.2.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 

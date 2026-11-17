@@ -28,6 +28,22 @@ export type MacStats = {
   cpus: number | null;
   vm: { pid: number; comm: string; rssMiB: number } | null;
   agentVersion: string | null;
+  power?: Power; // absent: an agent older than F120 (unknown, never red)
+};
+export type Thermal = {
+  warningLevel: number | string | null; // null: "No … has been recorded"; a string: recorded, not a number
+  performanceWarningLevel: number | string | null;
+  cpuSpeedLimit: number | null; // % of full speed
+  cpuSchedulerLimit: number | null;
+  cpuAvailableCpus: number | null;
+};
+export type Power = {
+  source: 'ac' | 'battery' | 'ups' | null;
+  batteryPct: number | null;
+  state: string | null; // charging | discharging | charged | finishing | not-charging
+  remainingMin: number | null; // to full on AC, to empty on battery
+  lowPowerMode: boolean | null;
+  thermal: Thermal | null; // null: pmset -g therm printed nothing
 };
 export type MacRead = {
   state: Fresh;
@@ -85,6 +101,99 @@ export function parseMacStats(text: string): MacStats {
           }
         : null,
     agentVersion: typeof r.agentVersion === 'string' ? clean(r.agentVersion).slice(0, 64) : null,
+    ...(r.power !== undefined && { power: parsePower(r.power) }),
+  };
+}
+
+// Lenient: a wrong-typed field is null, never a throw (memory is the agent's job; power is extra).
+function parsePower(p: unknown): Power {
+  const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+  const t =
+    o.thermal && typeof o.thermal === 'object' ? (o.thermal as Record<string, unknown>) : null;
+  const lvl = (x: unknown) => (typeof x === 'string' ? clean(x).slice(0, 24) : num(x));
+  const pct = num(o.batteryPct);
+  return {
+    source: o.source === 'ac' || o.source === 'battery' || o.source === 'ups' ? o.source : null,
+    batteryPct: pct !== null && pct >= 0 && pct <= 100 ? pct : null,
+    state: typeof o.state === 'string' ? clean(o.state).slice(0, 16) : null,
+    remainingMin: num(o.remainingMin),
+    lowPowerMode: typeof o.lowPowerMode === 'boolean' ? o.lowPowerMode : null,
+    thermal: t && {
+      warningLevel: lvl(t.warningLevel),
+      performanceWarningLevel: lvl(t.performanceWarningLevel),
+      cpuSpeedLimit: num(t.cpuSpeedLimit),
+      cpuSchedulerLimit: num(t.cpuSchedulerLimit),
+      cpuAvailableCpus: num(t.cpuAvailableCpus),
+    },
+  };
+}
+
+// The Mac's throttle state for HEALTH, `board.sh status` and `pnpm lanes status` (docs/ops/HUB.md → lanes on battery).
+// Red (alerts) on Low Power Mode, battery under 20%, a CPU limit under 100%, or a numeric warning level other than 0.
+export const BATTERY_LOW_PCT = 20;
+export const LANES_THROTTLED = 3; // the advice: at most this many lanes on battery under 30% or with Low Power Mode
+export const BATTERY_ADVISE_PCT = 30;
+export type PowerSummary = {
+  known: boolean; // false: no fresh read, or an agent older than F120
+  line: string; // '' when unknown
+  alerts: string[];
+  advice: string | null;
+};
+
+const hm = (min: number) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
+
+export function powerSummary(read: MacRead): PowerSummary {
+  // a stale read (1–5 min old) still counts: power changes slowly; silent or bad doesn't
+  const p = read.state === 'ok' || read.state === 'stale' ? read.stats?.power : undefined;
+  if (!p) return { known: false, line: '', alerts: [], advice: null };
+  const alerts: string[] = [];
+  const bits: string[] = [];
+  const onBatt = p.source === 'battery';
+  const from = onBatt ? 'battery' : p.source === 'ups' ? 'UPS' : 'AC';
+  if (p.batteryPct !== null) {
+    // "100%; charged; 0:00 remaining" is the desk's everyday line: no "(0:00 to full)"
+    const left =
+      p.remainingMin === null || (!onBatt && (p.remainingMin === 0 || p.state === 'charged'))
+        ? ''
+        : ` (${hm(p.remainingMin)} ${onBatt ? 'left' : 'to full'})`;
+    bits.push(`${from} ${p.batteryPct}%${p.state ? ` ${p.state}` : ''}${left}`);
+  } else if (p.source) bits.push(from);
+  if (onBatt && p.batteryPct !== null && p.batteryPct < BATTERY_LOW_PCT)
+    alerts.push(`battery ${p.batteryPct}%`);
+  if (p.lowPowerMode) {
+    bits.push('Low Power Mode on');
+    alerts.push('Low Power Mode');
+  } else if (p.lowPowerMode === null && p.source) bits.push('Low Power Mode unknown'); // a pmset line we can't read: say so
+  const t = p.thermal;
+  const limits: string[] = [];
+  if (t) {
+    if (t.cpuSpeedLimit !== null && t.cpuSpeedLimit < 100)
+      limits.push(`CPU speed ${t.cpuSpeedLimit}%`);
+    if (t.cpuSchedulerLimit !== null && t.cpuSchedulerLimit < 100)
+      limits.push(`scheduler ${t.cpuSchedulerLimit}%`);
+    // a level that isn't a number is a layout we haven't seen: shown, never red on a guess
+    const odd: string[] = [];
+    for (const [name, v] of [
+      ['thermal warning', t.warningLevel],
+      ['performance warning', t.performanceWarningLevel],
+    ] as const)
+      if (typeof v === 'number' && v !== 0) limits.push(`${name} ${v}`);
+      else if (typeof v === 'string') odd.push(`${name} unreadable`);
+    if (odd.length) bits.push(odd.join(', '));
+  }
+  alerts.push(...limits);
+  bits.push(
+    limits.length ? `limit: ${limits.join(', ')}` : t ? 'no thermal limit' : 'thermal unknown',
+  );
+  const advise =
+    !!p.lowPowerMode || (onBatt && p.batteryPct !== null && p.batteryPct < BATTERY_ADVISE_PCT);
+  return {
+    known: true,
+    line: bits.join(' · '),
+    alerts,
+    advice: advise
+      ? `≤ ${LANES_THROTTLED} lanes (on battery under ${BATTERY_ADVISE_PCT}% or Low Power Mode)`
+      : null,
   };
 }
 

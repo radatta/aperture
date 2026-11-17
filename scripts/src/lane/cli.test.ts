@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { deps, world } from './fakes.ts';
+import { deps, macStats, world } from './fakes.ts';
 import { usageKeys } from '../bot/help.ts';
 import { FLAGS, USAGE, main } from './cli.ts';
 
@@ -57,7 +58,20 @@ describe('lane cli', () => {
     const w = world();
     const t = deps(w, [['git worktree list', `worktree ${w.main}\nHEAD 1\ndetached\n`]]);
     expect(await main(['status'], () => t.d)).toBe(0);
-    expect(t.out()).toBe('0 of 5 lanes active');
+    expect(t.out()).toBe(
+      '0 of 5 lanes active\nmac: no stats (agent not installed: tower NEEDS YOU)',
+    );
+  });
+
+  // F120: the hub caps lanes by the Mac's power (docs/ops/HUB.md)
+  it('status adds the mac line, with the ≤ 3 lanes advice on Low Power Mode', async () => {
+    const w = world();
+    const t = deps(w, [['git worktree list', `worktree ${w.main}\nHEAD 1\ndetached\n`]]);
+    writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now(), { lowPowerMode: true }));
+    expect(await main(['status'], () => t.d)).toBe(0);
+    expect(t.out().split('\n')[1]).toBe(
+      'mac: AC 82% charging · Low Power Mode on · no thermal limit — RED: Low Power Mode — suggest ≤ 3 lanes (on battery under 30% or Low Power Mode)',
+    );
   });
 
   it('start.ts and end.ts reach processes and the disk only through the seam', () => {

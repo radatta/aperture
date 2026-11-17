@@ -1,19 +1,54 @@
 // `pnpm board sync-main` (docs/ops/TOWER.md → Run it): the main checkout to origin/main, detached, then the web tower
 // restarted only when the code it serves differs from the new HEAD in a file the tower runs. The base is the commit the
 // tower serves (board.sh tower version), not the old HEAD: a checkout moved by `pnpm lanes start` is caught too. Never
-// starts a stopped tower. Idempotent: a second run says so and does nothing.
+// starts a stopped tower. Idempotent: a second run says so and does nothing. The dirty check through the switch runs
+// under the main-checkout lock (main-lock.ts), so it never interleaves with a `lanes start`; the tower restart doesn't.
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { towerChanged } from './tower/behind.ts';
+import { timedOut } from '../bot/sh.ts';
 
-export type Run = (cmd: string, args: string[], cwd: string) => string; // throws on a non-zero exit
+// throws on a non-zero exit, and past timeoutMs (SIGTERM: git removes its lock files on TERM)
+export type Run = (cmd: string, args: string[], cwd: string, timeoutMs?: number) => string;
+export type Locked = <T>(fn: () => T) => T; // main-lock.ts withMainLock; tests pass their own
+
+export const FETCH_TIMEOUT_MS = 60_000;
 
 const short = (s: string) => s.slice(0, 7);
 
-export function syncMain(run: Run, here: string): string {
-  const git = (args: string[]) => run('git', args, mainRoot).trim();
+// The real Run, untrimmed (sync-main reads porcelain's XY columns).
+export const execRun: Run = (cmd, args, cwd, timeoutMs) => {
+  try {
+    return execFileSync(cmd, args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: timeoutMs,
+      killSignal: 'SIGTERM',
+    });
+  } catch (e) {
+    throw timedOut(e, cmd, args, timeoutMs) ?? e;
+  }
+};
+
+export function syncMain(run: Run, here: string, locked: Locked = (fn) => fn()): string {
+  const git = (args: string[], timeoutMs?: number) => run('git', args, mainRoot, timeoutMs).trim();
   const mainRoot = dirname(
     run('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], here).trim(),
   );
+  const { old, target } = locked(() => move(run, git, mainRoot));
+  const moved =
+    old === target
+      ? `main checkout: already at ${short(target)}`
+      : `main checkout: moved ${short(old)} → ${short(target)}`;
+  return restartTower(run, git, mainRoot, target, moved);
+}
+
+function move(
+  run: Run,
+  git: (args: string[], timeoutMs?: number) => string,
+  mainRoot: string,
+): { old: string; target: string } {
   const dirty = run('git', ['status', '--porcelain', '--untracked-files=no'], mainRoot) // untrimmed: XY columns
     .split('\n')
     .filter(Boolean);
@@ -30,7 +65,7 @@ export function syncMain(run: Run, here: string): string {
   if (branch)
     throw new Error(`the main checkout is on branch ${branch}, not detached — nothing moved`);
   try {
-    git(['fetch', 'origin']);
+    git(['fetch', 'origin'], FETCH_TIMEOUT_MS);
   } catch (e) {
     throw new Error(`git fetch failed — nothing moved: ${(e as Error).message}`, { cause: e });
   }
@@ -43,11 +78,16 @@ export function syncMain(run: Run, here: string): string {
       // git aborts a switch whole (an untracked file it would overwrite): HEAD is where it was
       throw new Error(`git switch failed — nothing moved: ${(e as Error).message}`, { cause: e });
     }
-  const moved =
-    old === target
-      ? `main checkout: already at ${short(target)}`
-      : `main checkout: moved ${short(old)} → ${short(target)}`;
+  return { old, target };
+}
 
+function restartTower(
+  run: Run,
+  git: (args: string[]) => string,
+  mainRoot: string,
+  target: string,
+  moved: string,
+): string {
   const board = (args: string[]) =>
     run('bash', [join(mainRoot, 'scripts/board/board.sh'), 'tower', ...args], mainRoot).trim();
   try {

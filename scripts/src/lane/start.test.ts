@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Answer, Call, World } from './fakes.ts';
-import { boardSession, deps, fail, laneFile, porcelain, proc, world } from './fakes.ts';
+import { boardSession, deps, fail, laneFile, macStats, porcelain, proc, world } from './fakes.ts';
 import { KICKOFF_PROMPT, claudeLine, start } from './start.ts';
 import type { StartArgs } from './start.ts';
 
@@ -459,5 +459,122 @@ describe('lane start: rollback', () => {
     expect(
       t.calls.filter((c) => c.cmd === 'git' && c.args[0] === 'branch').map((c) => c.args),
     ).toEqual([['branch', '-d', B]]);
+  });
+});
+
+// F155: one start or sync-main at a time in the main checkout
+describe('lane start: the main-checkout lock', () => {
+  it('the dirty check through worktree add run inside the lock; sync-main after it is released', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.lock.events.length).toBe(2);
+    const [inAt, outAt] = t.lock.events.map((e) => Number(e.split(' ').at(-1)));
+    const inside = t.calls.slice(inAt, outAt).map((c) => c.line);
+    expect(inside[0]).toBe('git status --porcelain');
+    expect(inside.some((l) => l.startsWith('git fetch origin'))).toBe(true);
+    expect(inside.at(-1)).toMatch(/^git worktree add/);
+    expect(t.calls.slice(outAt).some((c) => c.line === 'pnpm install')).toBe(true);
+    expect(t.sync.calls).toBe(1);
+    expect(t.lock.depth).toBe(0); // sync-main ran outside: it takes the lock itself
+  });
+
+  it('a busy lock refuses with 75, nothing changed', async () => {
+    const w = world();
+    const t = deps(w, script(w));
+    t.lock.busy = true;
+    expect(await start(t.d, args())).toBe(75);
+    expect(mutated(t.calls)).toEqual([]);
+    expect(t.calls.some((c) => c.line.startsWith('git'))).toBe(false);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+    expect(t.out()).toMatch(/main checkout busy.*nothing changed; retry/);
+    expect(t.sync.calls).toBe(0);
+  });
+
+  it('the fetch and ls-remote carry timeouts', async () => {
+    const w = world();
+    claudeSession(w);
+    const timeouts: Record<string, number | undefined> = {};
+    const t = deps(w, script(w));
+    const run = t.d.run;
+    t.d.run = (cmd, a, o) => {
+      if (cmd === 'git' && (a[0] === 'fetch' || a[0] === 'ls-remote'))
+        timeouts[a[0]] = o?.timeoutMs;
+      return run(cmd, a, o);
+    };
+    expect(await start(t.d, args())).toBe(0);
+    expect(timeouts).toEqual({ fetch: 60_000, 'ls-remote': 30_000 });
+  });
+
+  it('a timed-out fetch is the failed-fetch refusal', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['git fetch origin', fail('git fetch timed out after 60 s')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.out()).toMatch(/git fetch failed \(nothing changed\): git fetch timed out after 60 s/);
+    expect(mutated(t.calls)).toEqual([]);
+    expect(t.lock.depth).toBe(0);
+  });
+
+  it('a failed or timed-out ls-remote refuses with 1, nothing changed', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['git ls-remote', fail('git ls-remote timed out after 30 s')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.out()).toMatch(
+      /git ls-remote failed \(nothing changed\): git ls-remote timed out after 30 s/,
+    );
+    expect(mutated(t.calls)).toEqual([]);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+  });
+
+  it('a rollback after the lock was released takes it again for its git steps', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['pnpm install', fail('ERR_PNPM')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.lock.events.length).toBe(4);
+    const [inAt, outAt] = t.lock.events.slice(2).map((e) => Number(e.split(' ').at(-1)));
+    expect(t.calls.slice(inAt, outAt).map((c) => c.line.split(' ').slice(0, 3).join(' '))).toEqual([
+      'git worktree remove',
+      'git branch -d',
+    ]);
+  });
+});
+
+// F120: advice, never a refusal (docs/ops/HUB.md → lanes on battery)
+describe('lane start: the Mac on battery', () => {
+  it('notes the ≤ 3 lanes advice with 3 lanes active on battery under 30%, and still starts', async () => {
+    const w = world();
+    claudeSession(w);
+    for (const [i, b] of ['one', 'two', 'three'].entries()) {
+      proc(w, 9000 + i, '777');
+      boardSession(w, 9000 + i, b);
+    }
+    const t = deps(w, script(w, [], ['one', 'two', 'three']));
+    writeFileSync(
+      join(w.board, 'mac-stats.json'),
+      macStats(t.clock.now(), { source: 'battery', batteryPct: 25, state: 'discharging' }),
+    );
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(
+      /note: the Mac is on battery or Low Power Mode, 3 lanes active already: suggest ≤ 3 lanes/,
+    );
+  });
+
+  it('no note on AC with 3 lanes, or on Low Power Mode with fewer', async () => {
+    for (const [lanes, power] of [
+      [['one', 'two', 'three'], { batteryPct: 10 }],
+      [['one'], { lowPowerMode: true }],
+    ] as const) {
+      const w = world();
+      claudeSession(w);
+      for (const [i, b] of lanes.entries()) {
+        proc(w, 9000 + i, '777');
+        boardSession(w, 9000 + i, b);
+      }
+      const t = deps(w, script(w, [], [...lanes]));
+      writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now(), power));
+      expect(await start(t.d, args())).toBe(0);
+      expect(t.out()).not.toMatch(/note: the Mac/);
+    }
   });
 });

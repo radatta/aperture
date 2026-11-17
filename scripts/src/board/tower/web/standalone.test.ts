@@ -34,6 +34,23 @@ describe('the tower as a Home Screen app', () => {
     expect(js).toContain("document.documentElement.classList.add('installed')");
   });
 
+  // F161: the next step on the parked header clipping is to read what the phone reports, not another CSS guess
+  it('carries the status-bar readout, off by default: ?debug=1 or five taps on the serving line', () => {
+    const js = readFileSync(join(import.meta.dirname, 'app.js'), 'utf8');
+    expect(js).toContain("new URLSearchParams(location.search).get('debug') === '1'");
+    expect(js).toContain("'empty serving'");
+    expect(js).toMatch(/taps\.length >= 5/);
+    for (const k of [
+      'display-mode:',
+      'navigator.standalone:',
+      'safe-area-inset top',
+      'header padding-top',
+    ])
+      expect(js).toContain(k);
+    expect(html).toMatch(/#dbg \{[^}]*position: fixed;/);
+    expect(html).not.toContain('id="dbg"'); // made only when asked for
+  });
+
   it("carries the Aperture app's two status-bar metas, word for word", () => {
     for (const m of META) {
       expect(app).toContain(m);

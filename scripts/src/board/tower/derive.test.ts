@@ -10,7 +10,7 @@ import {
   type Inputs,
 } from './derive.ts';
 import type { GhRun } from './gh.ts';
-import type { MacRead, Costs } from './health.ts';
+import type { MacRead, MacStats, Costs } from './health.ts';
 import type { LaneFile } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import type { Pr } from './prs.ts';
@@ -944,6 +944,66 @@ describe('round 3', () => {
     expect(v.health.macReady).toBe(false);
     i.macInstallReady = true;
     expect(derive(i).needs.find((n) => n.kind === 'source')!.cmd).toBe('cd /x && install');
+  });
+  // F120
+  it('an older agent (no power key) is a NEEDS YOU reinstall with the install line; a missing one is not doubled', () => {
+    const old = {
+      state: 'ok' as const,
+      at: NOW - 5000,
+      error: null,
+      stats: { power: undefined } as unknown as MacStats,
+    };
+    const v = derive(inputs({ mac: old }));
+    expect(v.needs.filter((n) => n.kind === 'source')).toEqual([
+      expect.objectContaining({
+        what: 'Reinstall the Mac stats agent (battery, Low Power Mode, thermal)',
+        cmd: 'cd /x && install',
+      }),
+    ]);
+    expect(v.health.power.known).toBe(false);
+    const fresh = {
+      ...old,
+      stats: {
+        power: {
+          source: 'ac',
+          batteryPct: 80,
+          state: 'charged',
+          remainingMin: 0,
+          lowPowerMode: true,
+          thermal: null,
+        },
+      } as unknown as MacStats,
+    };
+    const f = derive(inputs({ mac: fresh }));
+    expect(f.needs.filter((n) => n.kind === 'source')).toEqual([]);
+    expect(f.health.power).toMatchObject({ known: true, alerts: ['Low Power Mode'] });
+    const missing = { state: 'missing' as const, at: null, error: null, stats: null };
+    expect(
+      derive(inputs({ mac: missing }))
+        .needs.filter((n) => n.kind === 'source')
+        .map((n) => n.what),
+    ).toEqual(['Install the Mac stats agent']);
+  });
+  it('health carries the slowdown ratio from the job history', () => {
+    const i = inputs();
+    const job = (agoMin: number, wallSec: number) => ({
+      t: NOW - agoMin * MIN,
+      start: 0,
+      cls: 'lint',
+      label: 'lint',
+      name: null,
+      branch: null,
+      exit: 0,
+      signal: null,
+      wallSec,
+      verdict: null,
+      excluded: false,
+    });
+    i.tower.jobs = [...[60, 120, 180, 240, 300].map((m) => job(m, 4)), job(5, 8), job(10, 8)];
+    expect(derive(i).health.slowdown).toMatchObject({
+      worst: { cls: 'lint', ratio: 2 },
+      tone: 'bad',
+    });
   });
   it('an unreadable lock is a failed source, not ok', () => {
     const i = inputs({ lock: lock(null, { bad: 'holder unreadable' }) });

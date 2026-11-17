@@ -20,4 +20,10 @@ describe('run', () => {
   it('keeps stderr alone when stdout is empty', () => {
     expect(fail("process.stderr.write('boom'); process.exit(1)")).toThrow(/failed: boom$/);
   });
+
+  it('kills a child past timeoutMs and says so', () => {
+    const t0 = Date.now();
+    expect(() => run('sleep', ['5'], { timeoutMs: 200 })).toThrow('sleep 5 timed out after 0.2 s');
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
 });

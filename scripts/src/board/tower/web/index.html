@@ -12,6 +12,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>tower</title>
@@ -225,6 +226,15 @@
       .tile.c-bad .sub {
         color: var(--c);
       }
+      /* the MAC tile's battery / Low Power Mode / thermal line (F120): red only for its own alert */
+      .tile .sub.power,
+      .tile.calm-mem .sub:not(.power) {
+        color: var(--ink2);
+      }
+      .tile .sub.power.alert {
+        color: var(--c);
+        font-weight: 700;
+      }
       .tile .more {
         display: none;
         margin-top: 6px;
@@ -410,6 +420,10 @@
       }
       .t-dim {
         color: var(--ink2);
+      }
+      .serving {
+        cursor: pointer; /* tappable on iOS (five taps: the status-bar readout) */
+        touch-action: manipulation;
       }
       .empty {
         color: var(--ink2);
@@ -748,6 +762,27 @@
         .tile.cheer {
           animation: none;
         }
+      }
+
+      /* F161's status-bar readout (app.js debugReadout): above everything, inside the bottom safe area */
+      #dbg {
+        position: fixed;
+        z-index: 50;
+        left: max(8px, env(safe-area-inset-left));
+        right: max(8px, env(safe-area-inset-right));
+        bottom: max(8px, env(safe-area-inset-bottom));
+        margin: 0;
+        padding: 8px 10px;
+        font:
+          12px/1.4 ui-monospace,
+          Menlo,
+          monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--ink);
+        background: var(--panel);
+        border: 2px solid var(--dev);
+        border-radius: 8px;
       }
 
       /* The phone (a Home Screen web app, 390–440 px): nothing is cut off. Text that CSS would clip wraps; a row

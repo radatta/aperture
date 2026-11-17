@@ -132,6 +132,12 @@ no script writes it: the Mac never runs anything from the shared folder.
 - **Lanes.** The hub starts each lane from `/workspace` with its kickoff file:
   `pnpm lanes start <branch> --kickoff /workspace/localNotes/kickoffs/<branch>.md`. It keeps active lanes under the
   cap (`limits.json` `lanes.maxActive`); a refused start names who is active.
+- **Lanes on battery** (F120). With the Mac on battery under 30% or in Low Power Mode, keep **at most 3 lanes**
+  running: a throttled Mac stretches every gate (2026-11-17's low-power window: typecheck ×1.8, lint ×2), so a fourth
+  lane costs everyone time. Read it from the `mac:` line of `pnpm lanes status` or `board.sh status` (it says
+  "suggest ≤ 3 lanes" when the rule applies), or the tower's MAC tile; the `slowdown` line beside it says how much
+  slower jobs run now (SESSION-BOARD.md → _History_ → _Slowdown_). `lanes start` notes it and still starts: the hub
+  decides, parking or holding a lane (`pnpm board lane parked`) until the Mac is back on AC.
 - **Asks.** Relay each `[ask-maintainer]` to the user with the hub's own recommendation, and the answer back as a
   `[relay]`, verbatim, plus what it means for the lane.
 - **Roadmap.** The hub alone writes `/workspace/localNotes/roadmap.md`; feature sessions message it and never edit

@@ -71,9 +71,15 @@ function stress(v) {
   v.next.more = 4;
   v.slipping.push({ kind: 'fired', what: `F99: ${LONG('fired')}`, owner: 'lane', since: now - 7200000, after: 'tower-web merge' });
   if (v.sparks) v.sparks.mac = Array(58).fill(null).concat([30000, 31000]); // two points: no line to draw
+  // F120: every power alert at once, and a slow container
+  v.health.power = { known: true, line: 'battery 12% discharging (0:50 left) · Low Power Mode on · limit: CPU speed 80%, thermal warning 2', alerts: ['battery 12%', 'Low Power Mode', 'CPU speed 80%', 'thermal warning 2'], advice: '≤ 3 lanes (on battery under 30% or Low Power Mode)' };
+  v.health.slowdown = { ...v.health.slowdown, worst: { cls: 'typecheck', ratio: 2.4 }, tone: 'bad', line: 'typecheck ×2.4 (3/41) · lint ×2.0 (2/37) · test ×1.2 (2/12) · ui – (0 recent)' };
   return v;
 }
 function empty(v) {
+  // a server older than the page (a rollback): no power or slowdown in HEALTH must not break the render
+  delete v.health.power;
+  delete v.health.slowdown;
   v.needs = [];
   v.active = [];
   v.next = { order: [], queue: [], merge: [], maintainer: null, more: 0, parked: [], table: [], nowIndex: 0, soon: [], notes: [], planAt: null, ask: null };
@@ -162,6 +168,34 @@ async function standalone(b, name) {
       await page.waitForTimeout(300);
     }
     await page.unrouteAll({ behavior: 'ignoreErrors' }); // a poll still in flight mustn't throw on close
+    await ctx.close();
+  }
+  // F161's readout: ?debug=1 shows it with the header's real padding; five taps on "serving" toggle it, a tap closes
+  {
+    const tag = `${name}-debug-p440-light`;
+    const ctx = await b.newContext({ ...SIZES.p440, colorScheme: 'light' });
+    const page = await ctx.newPage();
+    await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
+    await page.goto(BASE + '/?debug=1');
+    await page.waitForSelector('#meta .ver', { state: 'attached' });
+    const r = await page.evaluate(() => ({
+      text: document.querySelector('#dbg')?.textContent ?? '',
+      top: parseFloat(getComputedStyle(document.querySelector('header')).paddingTop),
+    }));
+    if (!r.text.includes(`header padding-top ${r.top}px`)) fails.push(`${tag}: readout ${JSON.stringify(r)}`);
+    if (!r.text.includes('navigator.standalone: true') || /undefined|null|NaN/.test(r.text))
+      fails.push(`${tag}: readout ${JSON.stringify(r.text)}`);
+    await page.screenshot({ path: `${OUT}/${tag}.png` });
+    console.log(`${OUT}/${tag}.png`);
+    await page.click('#dbg');
+    if (await page.$('#dbg')) fails.push(`${tag}: a tap didn't close the readout`);
+    await page.goto(BASE + '/'); // no ?debug: off until five taps
+    await page.waitForSelector('.serving', { state: 'attached' });
+    if (await page.$('#dbg')) fails.push(`${tag}: readout open without ?debug`);
+    // SOURCES sits folded on the phone (opened by a tap); the handler is what's under test, so dispatch the taps
+    await page.evaluate(() => { for (let i = 0; i < 5; i++) document.querySelector('.serving').click(); });
+    if (!(await page.$('#dbg'))) fails.push(`${tag}: five taps on "serving" didn't open the readout`);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
     await ctx.close();
   }
 }
@@ -264,11 +298,6 @@ async function expandPass(b, name) {
   await fresh.waitForTimeout(300);
   const f = await fresh.evaluate(() => ({ url: location.href, open: document.body.dataset.open ?? null }));
   if (f.open !== null || !f.url.startsWith(BASE) || f.url.includes('#')) fails.push(`${tag}: Esc on a direct #next: ${JSON.stringify(f)}`);
-  // the favicon trial pages
-  for (const v of ['a', 'b']) {
-    const html = await (await fetch(`${BASE}/?favicon=${v}`)).text();
-    if (!html.includes(`href="/favicon-${v}-32.png"`)) fails.push(`${tag}: /?favicon=${v} doesn't link its icons`);
-  }
   console.log(`${tag}: done`);
   await ctx.close();
 }

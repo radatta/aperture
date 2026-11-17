@@ -102,7 +102,7 @@ sampler_running() {
 }
 
 board_json() {
-  local sample leases overlap bar
+  local sample leases overlap bar mach
   if [ -r "$CG/memory.stat" ]; then
     sample=$(bash "$SB_SCRIPTS/sampler.sh" --print)
   else  # not in the container (the Mac): the sampler's latest tick, read-only
@@ -115,13 +115,17 @@ board_json() {
   leases='[]'
   [ "${#live[@]}" -eq 0 ] || leases=$(jq -s '.' "${live[@]}" 2>/dev/null) || leases='[]'
   bar=$(node "$SB_REPO/scripts/src/board/cli.ts" barriers "$BOARD_DIR/history" 7 2>/dev/null)  # none on a Mac without node
+  # the Mac's power and the slowdown ratio (F120, docs/ops/HUB.md → lanes on battery); null without node
+  mach=$(node "$SB_REPO/scripts/src/board/cli.ts" machine "$BOARD_DIR" --json 2>/dev/null)
   jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" --arg bar "$bar" --arg cap "$(sb_limit '.concurrency.test')" \
+    --arg mach "$mach" \
     --slurpfile dev <( [ -f "$BOARD_DIR/devlock.json" ] && cat "$BOARD_DIR/devlock.json" ) \
     --slurpfile ov <( [ -f "$BOARD_DIR/overlap.json" ] && cat "$BOARD_DIR/overlap.json" ) \
     --slurpfile reg <( cat "$BOARD_DIR"/sessions/*.json 2>/dev/null ) \
     --arg sampler "$(sampler_running && echo running || echo stopped)" \
     --arg thr "$(sb_thresholds 2>/dev/null)" '
     {sample: $s, sampler: $sampler, barriers: (if $bar == "" then null else $bar end),
+     machine: ($mach | fromjson? // null),
      testCap: (if $cap == "" then null else ($cap | tonumber) end), thresholds: ($thr | split(" ") | map(select(. != "") | split("=") | {(.[0]): .[1]}) | add),
      devLock: ($dev[0] // null), heavy: $heavy, overlap: ($ov[0] // null),
      registered: ($reg | map({key: (.pid | tostring), value: .}) | from_entries)}'
@@ -147,6 +151,7 @@ cmd_status() {
     $dl,
     "heavy: \(.heavy | length) slot(s)\(if .testCap then " · test \([.heavy[] | select(.class == "test")] | length)/\(.testCap)" else "" end)\(if (.heavy | length) > 0 then " — " + (.heavy | map("\(.name // .pid): \(.label // .class)") | join(", ")) else "" end)",
     (.barriers // empty),
+    (.machine.lines // [] | .[]),
     (if .overlap and ((.overlap.pairs // []) | length) > 0
      then "overlaps:", (.overlap.pairs[] | "  \(.a) ↔ \(.b): \(.files | join(", "))") else empty end),
     "sampler: \(.sampler)\(if .sampler != "running" then " — board.sh sampler start" else "" end)",

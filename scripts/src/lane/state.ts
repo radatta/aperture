@@ -4,6 +4,7 @@ import type { Clock } from '../bot/dispatch.ts';
 import type { Run } from '../bot/sh.ts';
 import { BRANCH_RE } from '../board/tower/lanes.ts';
 import type { LaneFile } from '../board/tower/lanes.ts';
+import { readMacStats, type MacRead } from '../board/tower/health.ts';
 
 export const EXIT = { ok: 0, failed: 1, usage: 2, refused: 3, later: 75 } as const;
 export const DEFAULT_CAP = 5;
@@ -49,7 +50,10 @@ export interface Deps {
   log: (s: string) => void;
   env: Env;
   syncMain: () => string; // board/sync-main.ts: the main checkout to origin/main, the tower restarted if stale; throws
+  lock: <T>(fn: () => T) => T; // board/main-lock.ts: git writes in the main checkout, one session at a time; throws busy
 }
+
+export const LS_REMOTE_TIMEOUT_MS = 30_000; // the fetch's is board/sync-main.ts FETCH_TIMEOUT_MS
 
 // Both lifecycle commands end here: a failure warns and never changes the command's outcome.
 export function syncMainSoft(d: Deps): void {
@@ -154,6 +158,15 @@ export function laneCap(d: Deps): number {
   } catch {
     return DEFAULT_CAP;
   }
+}
+
+// The Mac's power, read through the lane seam (F120): `lanes status` prints its line, `lanes start` the ≤ 3 advice.
+export function macRead(d: Deps): MacRead {
+  return readMacStats(`${d.env.boardDir}/mac-stats.json`, d.clock.now(), (p) => {
+    const t = d.fs.read(p);
+    if (t === null) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return t;
+  });
 }
 
 export const describeActive = (a: Active[]) =>

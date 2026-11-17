@@ -1,6 +1,7 @@
 // `pnpm lanes end <branch>`: once the PR is merged and main's deploy for it is green (or `--force-abandon "<reason>"`),
 // archive the worktree's localNotes and check the copy, remove the worktree, clear the board lane, print the
 // maintainer's Mac line, close the lane's window by id only, and sync main (board sync-main). A rerun resumes (docs/ops/LANES.md → End).
+import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
 import { deployFor } from '../board/tower/derive.ts';
 import { parseRuns } from '../board/tower/gh.ts';
 import { verdict } from '../bot/prune.ts';
@@ -125,11 +126,17 @@ function deployGate(
 
 // The local branch holds nothing the PR lacks: its head is the PR's, or an ancestor of it (the PR's head moved on
 // GitHub, e.g. "Update branch"). The PR head is fetched into FETCH_HEAD only.
-function headCovered(d: Deps, head: string, pr: Pr): boolean | 'fetch-failed' {
+function headCovered(d: Deps, head: string, pr: Pr): boolean | { failed: string } {
   if (head === pr.headRefOid) return true;
   const at = d.env.mainRoot;
-  if (tryRun(d, 'git', ['fetch', 'origin', `pull/${pr.number}/head`], at) === null)
-    return 'fetch-failed';
+  try {
+    d.run('git', ['fetch', 'origin', `pull/${pr.number}/head`], {
+      cwd: at,
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
+  } catch (err) {
+    return { failed: (err as Error).message.split('\n')[0]! }; // a timeout says so
+  }
   return tryRun(d, 'git', ['merge-base', '--is-ancestor', head, pr.headRefOid], at) !== null;
 }
 
@@ -203,8 +210,12 @@ export function end(d: Deps, a: EndArgs): number {
         `PR ${pr.number} is ${pr.state === 'CLOSED' ? 'closed unmerged' : pr.state} (or --force-abandon "<reason>")`,
       );
     const covered = head ? headCovered(d, head, pr) : true;
-    if (covered === 'fetch-failed')
-      return refuse(d, `could not fetch PR ${pr.number}'s head to compare`, EXIT.failed);
+    if (typeof covered === 'object')
+      return refuse(
+        d,
+        `could not fetch PR ${pr.number}'s head to compare: ${covered.failed}`,
+        EXIT.failed,
+      );
     if (head && !covered)
       return refuse(
         d,

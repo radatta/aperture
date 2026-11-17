@@ -38,8 +38,7 @@ SOURCES says what to run. The server compares on each page poll (HEAD read from 
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
 inside). It serves read-only routes only: `/`, `/app.js`, `/manifest.webmanifest`, `/api/state` (`?history=1` adds the chart series) and the
 icon (`/icon.svg`, `/apple-touch-icon.png` with its `-precomposed` twin, which iOS probes, and the tab icon
-`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`, plus the same four of the trial variants
-`favicon-a…` and `favicon-b…`; `/?favicon=a|b` serves the page linking those), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
+`/favicon.svg`, `/favicon-32.png`, `/favicon-64.png`, `/favicon.ico`), and nothing else, and only to a `Host` of `localhost` or a loopback address (no DNS rebinding); a bad URL is a 400.
 
 ## Panels
 
@@ -73,8 +72,13 @@ From the top:
 1. **The health strip**, always above the fold at 1512×860. Click a tile for its details.
    - **TODAY**: DONE TODAY's merges (the same day boundary) and how many deployed. It glows when one lands.
    - **CONTAINER**: memory against soft and hard (a last-hour sparkline), CPU, live `test` slots against
-     `limits.json`.
-   - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge".
+     `limits.json`. The slowdown ratio (SESSION-BOARD.md → _History_ → _Slowdown_) is in its details, and on its line
+     as "slow ×1.8 lint" once typecheck or lint reaches ×1.5 (amber; ×2 red).
+   - **MAC** (below): until `tools/macstats/install.sh` is on `origin/main` it says "installs at merge". A second
+     line is the power: "AC 82% charging (0:40 to full) · no thermal limit". It is red, and so is the tile, on Low
+     Power Mode, on battery under 20%, on a CPU speed or scheduler limit under 100%, or on a recorded thermal or
+     performance warning level that is a number other than 0 (one it can't read shows as "unreadable", not red). The details add the ≤ 3 lanes advice (HUB.md → _The hub's duties_). An
+     agent older than the power fields shows no line, never red, and NEEDS YOU carries its reinstall.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
    - lane `needs` items, with the link or a copy button for the one-line Mac command (the phone says "on the Mac"
@@ -183,22 +187,23 @@ planAt`, amber past 6 h. Then the landing order, the merge queue, every NEEDS YO
   (2026-11-16), as on other manifest-less sites while the Aperture app cleared it: so the page links
   `/manifest.webmanifest` (`web/manifest.webmanifest`: `display` standalone, scope `/`, Nord, the radar icons), and
   `app.js` also marks the page `installed` when `navigator.standalone` is true or the query matches, which applies the
-  same floor upright. Which of the two fixed it is unverified. **After this merges, remove the tower's Home Screen icon
+  same floor upright. Which of the two fixed it is unverified. The header still sat under the bar on the phone
+  (F161, parked 2026-11-16); before any more CSS, read what the phone reports: open the readout with five taps
+  within 3 s on SOURCES' "serving …" line, or `?debug=1`, and a tap on it closes it. It lists the `display-mode`
+  queries that match, `navigator.standalone`, the `installed` class, the measured `env(safe-area-inset-top/bottom)`,
+  the header's padding and box, the viewport and screen, and the UA. It is read-only, the page's only, and the
+  capture checks it per engine. **After this merges, remove the tower's Home Screen icon
   and add it again.**
-- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
-  tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
-  before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
-  `favicon-64.png` (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico`
-  holding both (`convert favicon-32.png favicon-64.png favicon.ico`), which Safari falls back to. The touch icon's
-  link comes after the tab icons', so the tab never settles on the opaque 180 px radar.
-- **Trial variants** (until the maintainer picks one in real Safari; headless can't show this): macOS Safari draws a
-  light plate behind a tab icon it judges low-contrast on its dark tab bar, which the default's dark tile gets
-  (WebKit bug 309949). `/?favicon=a` links variant a, the same dial with no tile, in mid-tones that read on light
-  and dark bars; `/?favicon=b` variant b, the dial dark on a light Nord-teal tile. Each is `favicon-<v>.svg` with its
-  `-32.png`, `-64.png` and `.ico` (the same commands), the page also linking its `.ico`. The page is built per
-  variant at start (the CSP allows no inline script, and Safari reads icon links as the page parses); any other
-  value is the default page, byte for byte. Safari caches a tab icon per page URL: a Private window shows a variant
-  fresh.
+- The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (no tile: the
+  dial, a sweep and a blip in mid-tones that read on light and dark tab bars); the Home Screen's detailed one would
+  read as a dark square there. No tile because macOS Safari draws a light plate behind a tab icon it judges
+  low-contrast on its dark bar (WebKit bug 309949), which a dark tile got; the maintainer picked this one of two
+  trial variants in real Safari (2026-11-16). Its PNGs are linked before the SVG because Safari's tab skips an SVG
+  icon (it showed a letter monogram): `favicon-32.png` and `favicon-64.png`
+  (`rsvg-convert -w 32 -h 32 favicon.svg -o favicon-32.png`, and `-w 64 -h 64`), and `favicon.ico` holding both
+  (`convert favicon-32.png favicon-64.png favicon.ico`), linked too, which Safari falls back to. The touch icon's
+  link comes after the tab icons', so the tab never settles on the opaque 180 px radar. Safari caches a tab icon per
+  page URL: a Private window shows a new one fresh.
 
 **Proof**: `scripts/board/tower-web-capture.sh <out-dir> [--url <base>]` (under `heavy.sh`) screenshots the
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
@@ -208,7 +213,7 @@ numbers, `undefined` on the page, or a Mac-only button on the phone; an expanded
 five chips, with HEALTH or another panel showing, and (NEXT) without a struck row, a slip marker and the now-line. One
 pass per engine then drives the expand at 390 px: a title tap, a poll (scroll kept), a reload (panel and scroll
 kept), Esc, keys `3` `2` `2` `1`, Back, a modified key, `#zzz`, Esc on a page opened at `#next`, and a slot card
-opened on the glance still open after; and fetches both `?favicon=` pages.
+opened on the glance still open after.
 Three more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
 has no option, Chromium ignores it over CDP), so the installed frame is served the page with the floor's
 `display-mode` terms dropped, and the flagged frame the page as served with `navigator.standalone` true (the
@@ -339,20 +344,36 @@ open|tracked|done|dropped, `source`, `since`).
 
 A launchd agent on the Mac, `dev.rahuldatta.aperture.macstats` (`tools/macstats/`). It is not a mailroom job: the
 mailroom's runner is serial and runs in the container→Mac direction. Every 15 s it runs `vm_stat`, `sysctl` and `ps`
-and writes `<main checkout>/localNotes/board/mac-stats.json`:
+and `pmset -g batt`, `pmset -g` and `pmset -g therm` (none needs sudo), and writes
+`<main checkout>/localNotes/board/mac-stats.json`:
 
 ```json
 { "v": 1, "t": "…Z", "host": "…", "agentVersion": "<sha256 of macstats.sh>", "memTotalMiB": 36864,
   "mem": { "freeMiB": …, "activeMiB": …, "inactiveMiB": …, "wiredMiB": …, "compressedMiB": …, "usedMiB": …,
            "freePct": …, "pressure": "normal|warn|critical" },
   "swap": { "totalMiB": …, "usedMiB": … }, "load": [1, 5, 15], "cpus": 12,
-  "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": … } }
+  "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": … },
+  "power": { "source": "ac|battery|ups|null", "batteryPct": 12, "state": "charging", "remainingMin": 542,
+             "lowPowerMode": false,
+             "thermal": { "warningLevel": null, "performanceWarningLevel": null, "cpuSpeedLimit": null,
+                          "cpuSchedulerLimit": null, "cpuAvailableCpus": null } } }
 ```
 
 - `usedMiB` is active + wired + compressor.
 - `freeMiB` is free + speculative.
 - `vm` is the largest resident process named like a hypervisor (`Virtualization`, `limactl`, `qemu`, `vfkit`,
   `krunkit`), or `null`.
+- `power` (F120): from `pmset -g batt`'s `Now drawing from 'AC Power'` / `'Battery Power'` and its
+  `-InternalBattery-0 (id=…)<tab>12%; charging; 9:02 remaining present: true` line. `state` is `charging`,
+  `discharging`, `charged`, `finishing` (finishing charge) or `not-charging` (`AC attached; not charging`).
+  `remainingMin` is to full on AC and to empty on battery, and null for `(no estimate)`. The battery id is never
+  written. `lowPowerMode` is `pmset -g`'s `lowpowermode 0|1`, else `powermode 0|1|2` (a Mac with High Power Mode; 1 is low); neither readable shows "Low Power Mode unknown" on the line, never a silent off. `thermal` is `pmset -g therm`: a `Note: No … has been
+recorded` line is null, `CPU_Speed_Limit = 80` a number, and a recorded level that isn't a number `"recorded"`.
+  Anything pmset doesn't print is null, so a desktop Mac or a pmset failure is nulls, never a failed tick. `v` stays
+  1 (the key is additive): a key-less file is an older agent.
+- Only the battery line, Low Power Mode and the "No … recorded" notes are seen in real output. The recorded-level
+  layout and an Apple-silicon `CPU_Speed_Limit` are from Intel-era reports (2026-11-17 search), so a level that
+  isn't a number shows as "unreadable" on the line, never red on a guess, and never fails a tick.
 
 **Trust boundary.** The agent takes no input from the container:
 

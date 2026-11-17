@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Run } from '../bot/sh.ts';
+import { MainBusy } from '../board/main-lock.ts';
 import { fakeClock } from '../bot/fakes.ts';
 import { realFs } from './archive.ts';
 import { lanesAt } from './cli.ts';
@@ -16,6 +17,7 @@ export type Call = {
   args: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
 };
 export type Answer = string | ((c: Call) => string);
 export const fail =
@@ -26,8 +28,19 @@ export const fail =
 
 export function fakeRun(answers: [string, Answer][]): { run: Run; calls: Call[] } {
   const calls: Call[] = [];
-  const run = ((cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
-    const c = { line: [cmd, ...args].join(' '), cmd, args, cwd: opts?.cwd, env: opts?.env };
+  const run = ((
+    cmd: string,
+    args: string[],
+    opts?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
+  ) => {
+    const c = {
+      line: [cmd, ...args].join(' '),
+      cmd,
+      args,
+      cwd: opts?.cwd,
+      env: opts?.env,
+      timeoutMs: opts?.timeoutMs,
+    };
     calls.push(c);
     const hit = answers.find(([p]) => c.line.startsWith(p));
     if (!hit) throw new Error(`unscripted: ${c.line}`);
@@ -62,6 +75,8 @@ export function deps(w: World, answers: [string, Answer][], over: Partial<Deps['
   const { run, calls } = fakeRun(answers);
   const logs: string[] = [];
   const clock = fakeClock();
+  // the main-checkout lock: records each outermost enter/exit; `busy` makes the next take throw MainBusy
+  const lock = { busy: false, depth: 0, events: [] as string[] };
   const sync = {
     calls: 0,
     fail: null as string | null,
@@ -94,8 +109,20 @@ export function deps(w: World, answers: [string, Answer][], over: Partial<Deps['
       if (sync.fail !== null) throw new Error(sync.fail);
       return 'main checkout: already at aaaaaaa\ntower: restart not needed (serving aaaaaaa)';
     },
+    lock: <T>(fn: () => T): T => {
+      if (lock.depth) return fn();
+      if (lock.busy) throw new MainBusy('main checkout busy: held for 120 s');
+      lock.events.push(`lock after ${calls.length}`);
+      lock.depth++;
+      try {
+        return fn();
+      } finally {
+        lock.depth--;
+        lock.events.push(`unlock after ${calls.length}`);
+      }
+    },
   };
-  return { d, calls, logs, clock, sync, out: () => logs.join('\n') };
+  return { d, calls, logs, clock, sync, lock, out: () => logs.join('\n') };
 }
 
 // A /proc/<pid>/stat whose start tick is field 22 (the 20th after the `)`).
@@ -134,3 +161,36 @@ export const porcelain = (main: string, branches: string[]) =>
       ]),
     )
     .join('\n');
+
+// A fresh mac-stats.json with a calm AC power block, `power` fields overridden (F120).
+export const macStats = (now: number, power: object = {}) =>
+  JSON.stringify({
+    v: 1,
+    t: new Date(now).toISOString(),
+    host: 'mac',
+    memTotalMiB: 36864,
+    mem: {
+      freeMiB: 1,
+      activeMiB: 1,
+      inactiveMiB: 1,
+      wiredMiB: 1,
+      compressedMiB: 1,
+      usedMiB: 1,
+      pressure: 'normal',
+    },
+    power: {
+      source: 'ac',
+      batteryPct: 82,
+      state: 'charging',
+      remainingMin: null,
+      lowPowerMode: false,
+      thermal: {
+        warningLevel: null,
+        performanceWarningLevel: null,
+        cpuSpeedLimit: null,
+        cpuSchedulerLimit: null,
+        cpuAvailableCpus: null,
+      },
+      ...power,
+    },
+  });

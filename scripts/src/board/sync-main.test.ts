@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { syncMain, type Run } from './sync-main.ts';
+import { MainBusy } from './main-lock.ts';
+import { FETCH_TIMEOUT_MS, execRun, syncMain, type Run } from './sync-main.ts';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -20,9 +21,9 @@ type World = {
 };
 
 function fake(w: World) {
-  const calls: { cmd: string; args: string[]; cwd: string }[] = [];
-  const run: Run = (cmd, args, cwd) => {
-    calls.push({ cmd, args, cwd });
+  const calls: { cmd: string; args: string[]; cwd: string; timeoutMs?: number }[] = [];
+  const run: Run = (cmd, args, cwd, timeoutMs) => {
+    calls.push({ cmd, args, cwd, timeoutMs });
     if (cmd === 'bash') {
       const sub = args[2];
       if (sub === 'status') {
@@ -191,5 +192,55 @@ describe('sync-main', () => {
     expect(() => syncMain(f.run, MAIN)).toThrow(
       /^main checkout: moved aaaaaaa → bbbbbbb\ntower: restart failed \(served commit unknown\): did not start/,
     );
+  });
+
+  // F155: a lanes start can't interleave with the move
+  it('the dirty check through the switch run inside the lock, the tower restart outside', () => {
+    const f = fake({
+      head: A,
+      origin: B,
+      tower: 'running',
+      served: A,
+      changed: { [`${A}..${B}`]: ['x'] },
+    });
+    const marks: string[] = [];
+    const locked = <T>(fn: () => T): T => {
+      marks.push(`in@${f.calls.length}`);
+      try {
+        return fn();
+      } finally {
+        marks.push(`out@${f.calls.length}`);
+      }
+    };
+    syncMain(f.run, MAIN, locked);
+    const line = (c: { cmd: string; args: string[] }) =>
+      `${c.cmd === 'git' ? 'git ' : ''}${c.args[c.cmd === 'git' ? 0 : 2]}`;
+    const at = (m: string) => Number(marks.find((x) => x.startsWith(m))!.split('@')[1]);
+    const inside = f.calls.slice(at('in'), at('out')).map(line);
+    expect(inside[0]).toBe('git status');
+    expect(inside).toContain('git fetch');
+    expect(inside.at(-1)).toBe('git switch');
+    expect(f.calls.slice(at('out')).map(line)).toContain('restart');
+  });
+
+  it('the fetch carries a 60 s timeout', () => {
+    const f = fake({ head: A, origin: A, tower: 'stopped' });
+    syncMain(f.run, MAIN);
+    expect(f.calls.find((c) => c.args[0] === 'fetch')!.timeoutMs).toBe(FETCH_TIMEOUT_MS);
+    expect(FETCH_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it('the real runner kills a child past its timeout and says so', () => {
+    expect(() => execRun('sleep', ['5'], '/', 200)).toThrow('sleep 5 timed out after 0.2 s');
+  });
+
+  it('a busy lock throws before any git write', () => {
+    const f = fake({ head: A, origin: B, tower: 'running' });
+    expect(() =>
+      syncMain(f.run, MAIN, () => {
+        throw new MainBusy('main checkout busy');
+      }),
+    ).toThrow(/main checkout busy/);
+    expect(f.calls.map((c) => c.args[0])).toEqual(['rev-parse']);
   });
 });
