@@ -572,6 +572,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setReminderSettings: async () => {
         throw new Error('unused');
       },
+      reopenSitting: async () => {
+        throw new Error('unused');
+      },
       patchSittingReview: async () => {
         throw new Error('unused');
       },

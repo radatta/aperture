@@ -823,7 +823,10 @@ export class BackendClient implements ApiClient {
       : null;
     const roll = linked?.active ? linked : null; // an archived roll reads as unlinked, as Settings shows it
     if (!roll) throw new Error(LC_ROLL_UNLINKED_ERROR);
-    const sittings = await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now);
+    const sittings = await this.closeIdleAll(
+      await this.repo.listSittings({ consistent: true }),
+      now,
+    );
     const plan = planSittingStart(
       n,
       sittings,
@@ -1340,8 +1343,15 @@ export class BackendClient implements ApiClient {
   }
   // Reopen, in Start's order: the gate first (reclaimStart — no Start counted), then the head (a CAS on the
   // idle-closed head; lost, the gate is freed again), then its rep started as a resume starts it.
-  private async reopen(s: Sitting, now: number, via: 'button' | 'start' | 'event'): Promise<Sitting> {
-    const sittings = await this.closeIdleAll(await this.repo.listSittings({ consistent: true }), now);
+  private async reopen(
+    s: Sitting,
+    now: number,
+    via: 'button' | 'start' | 'event',
+  ): Promise<Sitting> {
+    const sittings = await this.closeIdleAll(
+      await this.repo.listSittings({ consistent: true }),
+      now,
+    );
     const rep = (await this.repo.getTask(s.repTaskId, { consistent: true })) ?? undefined;
     const err = sittingReopenError(s, rep, sittings, now);
     if (err) throw new Error(err);
@@ -1355,7 +1365,12 @@ export class BackendClient implements ApiClient {
       {
         consistent: true,
         create: () =>
-          reclaimStart({ ...this.baseAt(now), id: 'lcstart', ...emptyGate(gateDay) }, s.id, [], now)!,
+          reclaimStart(
+            { ...this.baseAt(now), id: 'lcstart', ...emptyGate(gateDay) },
+            s.id,
+            [],
+            now,
+          )!,
       },
     );
     const head = await this.repo.casUpdate(

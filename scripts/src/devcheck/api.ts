@@ -301,6 +301,9 @@ export interface DevSitting {
   prepTarget: string;
   startedAt: number;
   endedAt: number | null;
+  closedBy?: 'idle' | null; // idle close — absent on heads from before it
+  reopenedAt?: number | null;
+  idleMs?: number;
   review?: DevSittingReview | null; // PR C — absent on heads from before reviews
   summary: {
     runs: number;
@@ -1219,6 +1222,11 @@ export function createApiClient({
     async finishTask(id: string, to: 'done' | 'cancelled'): Promise<DevTask> {
       assertLedgerTask(id);
       return call<DevTask>('transitionTask', [id, to]);
+    },
+    // The Reopen button's write, on an idle-closed sitting this run started.
+    async reopenSitting(id: string): Promise<DevSitting> {
+      assertLedger(id, 'sitting');
+      return call<DevSitting>('reopenSitting', [id]);
     },
     // The coach's partial review write (cause, help, test) on a sitting this run started.
     async patchSittingReview(

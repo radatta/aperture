@@ -473,7 +473,9 @@ describe('Right now — a LeetCode sitting', () => {
     shift = 0; // nothing since the Start: Home's read closes it at Start + 5
     renderApp({ api, path: '/' });
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
-    const link = await screen.findByRole('link', { name: 'LeetCode sitting closed automatically →' });
+    const link = await screen.findByRole('link', {
+      name: 'LeetCode sitting closed automatically →',
+    });
     expect(link.getAttribute('href')).toBe(`/recruiting/sittings/${sitting.id}`);
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect((await screen.findByLabelText<HTMLInputElement>('Actual (min)')).value).toBe('5');

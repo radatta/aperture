@@ -845,7 +845,12 @@ describe('idle close', () => {
   it('a reopen leaves the gap out of its minutes, across several reopens', () => {
     const closed = idleClosedSitting(head(), 20 * M, 70 * M);
     const back = reopenedSitting(closed, 3 * H);
-    expect(back).toMatchObject({ status: 'active', endedAt: null, closedBy: null, reopenedAt: 3 * H });
+    expect(back).toMatchObject({
+      status: 'active',
+      endedAt: null,
+      closedBy: null,
+      reopenedAt: 3 * H,
+    });
     expect(back.idleMs).toBe(3 * H - 20 * M);
     expect(sittingElapsedMs(back, 3 * H + 10 * M)).toBe(30 * M); // 20 before + 10 after
     const twice = reopenedSitting(idleClosedSitting(back, 3 * H + 15 * M, 4 * H), 5 * H);
@@ -877,7 +882,11 @@ describe('idle close', () => {
   });
   it('an event stamped after the end comes back; one before it is a straggler', () => {
     // The extension's clock 3 h behind the server's; ended at 5 min server time.
-    const closed = idleClosedSitting(head({ startedAt: 3 * H, clientStartedAt: 0 }), 3 * H + 5 * M, 4 * H);
+    const closed = idleClosedSitting(
+      head({ startedAt: 3 * H, clientStartedAt: 0 }),
+      3 * H + 5 * M,
+      4 * H,
+    );
     const cut = 5 * M + 60_000; // the end on the extension's clock, plus the skew
     expect(sittingReturns(closed, [{ at: cut }])).toBe(false);
     expect(sittingReturns(closed, [{ at: cut }, { at: cut + 1 }])).toBe(true);
@@ -893,17 +902,33 @@ describe('idle close', () => {
     const closed = idleClosedSitting(head(), 5 * M, 50 * M);
     const tasks = [{ id: 't1', status: 'in_progress', rollId: 'r', deletedAt: null } as Task];
     const plan = (slug: string, sameDay: boolean, id = 'new') =>
-      planSittingStart({ clientSittingId: id, problemSlug: slug }, [closed], tasks, 'r', H, () => sameDay);
+      planSittingStart(
+        { clientSittingId: id, problemSlug: slug },
+        [closed],
+        tasks,
+        'r',
+        H,
+        () => sameDay,
+      );
     expect(plan('a', true)).toMatchObject({ kind: 'reopen', sitting: { id: 's1' }, ends: [] });
     expect(plan('a', true, 'c1')).toMatchObject({ kind: 'reopen' }); // a repeat Start of it
     expect(plan('a', false)).toMatchObject({ kind: 'attach', rep: { id: 't1' } });
-    expect(plan('a', false, 'c1')).toMatchObject({ kind: 'resume', sitting: { status: 'abandoned' } });
+    expect(plan('a', false, 'c1')).toMatchObject({
+      kind: 'resume',
+      sitting: { status: 'abandoned' },
+    });
     expect(plan('b', true)).toMatchObject({ kind: 'attach', rep: { id: 't1' } });
     // Its rep finished: nothing to come back to.
     const done = [{ ...tasks[0]!, status: 'done' } as Task];
     expect(
-      planSittingStart({ clientSittingId: 'n', problemSlug: 'a' }, [closed], done, 'r', H, () => true)
-        .kind,
+      planSittingStart(
+        { clientSittingId: 'n', problemSlug: 'a' },
+        [closed],
+        done,
+        'r',
+        H,
+        () => true,
+      ).kind,
     ).toBe('spawn');
   });
   it('a reopen claims the gate without counting a Start; a Start can’t take it from a fresh reclaim', () => {

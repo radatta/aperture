@@ -109,7 +109,11 @@ function Loaded({ detail }: { detail: Detail }) {
       {(liveReads > 0 || sitting.status !== 'done' || sitting.prepTarget !== 'General') && (
         <Text as="p" size="sm" tone="muted">
           {[
-            open ? 'In progress' : sitting.status === 'abandoned' && !isIdleClosed(sitting) ? 'Dropped' : null,
+            open
+              ? 'In progress'
+              : sitting.status === 'abandoned' && !isIdleClosed(sitting)
+                ? 'Dropped'
+                : null,
             sitting.status === 'active' && !open ? 'Past its 24 h window' : null,
             liveReads > 0
               ? `Claude watched live · ${liveReads} ${liveReads === 1 ? 'pull' : 'pulls'}`
@@ -122,7 +126,11 @@ function Loaded({ detail }: { detail: Detail }) {
       )}
 
       {isIdleClosed(sitting) && (
-        <IdleClosed id={sitting.id} repTaskId={sitting.repTaskId} offer={canOfferReopen(sitting, now)} />
+        <IdleClosed
+          id={sitting.id}
+          repTaskId={sitting.repTaskId}
+          offer={canOfferReopen(sitting, now)}
+        />
       )}
 
       {(open || (isIdleClosed(sitting) && sitting.status === 'abandoned')) && (

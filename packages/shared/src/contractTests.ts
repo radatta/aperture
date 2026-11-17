@@ -3929,7 +3929,11 @@ export function runApiContract(
         expect((await api.getSitting(sitting.id)).sitting).toEqual(closed);
         // The gate is free: a Start on another problem goes through, on the roll's open rep.
         const next = await api.lcSittingStart(
-          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+          sittingStart({
+            problemSlug: 'add-two-numbers',
+            problemTitle: 'Add Two',
+            startedAt: clock,
+          }),
         );
         expect(next).toMatchObject({ resumed: false, sitting: { repTaskId: sitting.repTaskId } });
       });
@@ -3939,13 +3943,21 @@ export function runApiContract(
         advance(SITTING_IDLE_MS + 1);
         expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ closedBy: 'idle' });
         const next = await api.lcSittingStart(
-          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+          sittingStart({
+            problemSlug: 'add-two-numbers',
+            problemTitle: 'Add Two',
+            startedAt: clock,
+          }),
         );
         advance(SITTING_IDLE_MS + 1);
         expect(await api.pullLiveSitting()).toMatchObject({
           sitting: null,
           liveReads: 0, // not counted: the pull came after the close
-          lastSitting: { id: next.sitting.id, closedBy: 'idle', endedAt: next.sitting.startedAt + SITTING_IDLE_TAIL_MS },
+          lastSitting: {
+            id: next.sitting.id,
+            closedBy: 'idle',
+            endedAt: next.sitting.startedAt + SITTING_IDLE_TAIL_MS,
+          },
         });
       });
 
@@ -3983,13 +3995,21 @@ export function runApiContract(
         expect(await api.reopenSitting(sitting.id)).toMatchObject({ reopenedAt: back.reopenedAt });
         await expect(
           api.lcSittingStart(
-            sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+            sittingStart({
+              problemSlug: 'add-two-numbers',
+              problemTitle: 'Add Two',
+              startedAt: clock,
+            }),
           ),
         ).rejects.toThrow(SITTING_ACTIVE_ERROR);
         // Idle again; another problem takes the rep, and while it's open the first can't come back.
         advance(SITTING_IDLE_MS + 1);
         const other = await api.lcSittingStart(
-          sittingStart({ problemSlug: 'add-two-numbers', problemTitle: 'Add Two', startedAt: clock }),
+          sittingStart({
+            problemSlug: 'add-two-numbers',
+            problemTitle: 'Add Two',
+            startedAt: clock,
+          }),
         );
         await expect(api.reopenSitting(sitting.id)).rejects.toThrow(SITTING_ACTIVE_ERROR);
         advance(SITTING_IDLE_MS + 1);
@@ -4014,7 +4034,11 @@ export function runApiContract(
         expect((await api.getSitting(sitting.id)).sitting.endedAt).toBe(closed.endedAt);
         expect(await call([lcSnap('c', clock)])).toMatchObject({ accepted: 1, status: 'active' });
         const { sitting: back, live } = await api.getSitting(sitting.id);
-        expect(back).toMatchObject({ status: 'active', closedBy: null, idleMs: clock - closed.endedAt! });
+        expect(back).toMatchObject({
+          status: 'active',
+          closedBy: null,
+          idleMs: clock - closed.endedAt!,
+        });
         expect(live?.code).toBe('c');
       });
 

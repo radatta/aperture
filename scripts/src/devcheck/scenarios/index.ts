@@ -28,6 +28,7 @@ import { lcCoach } from './lc-coach';
 import { lcCoachAi } from './lc-coach-ai';
 import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
+import { sittingAutoClose } from './sitting-auto-close';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
 import { partsV2bReads } from './parts-v2b-reads';
@@ -85,7 +86,8 @@ export const SCENARIOS: Scenario[] = [
   identifierCleanup,
   siriCapture, // late, and tears its tokens and tasks down itself: no later scenario sees its captures
   lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
-  failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
+  failedReads, // its intercepts and a 30 s wait shouldn't sit in front of the others
+  sittingAutoClose, // last of all: its ~50-min idle wait (slow: --feature / --tier all only) behind everything
 ];
 
 export type RunTier = Tier | 'delta' | 'all';

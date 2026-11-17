@@ -323,7 +323,11 @@ describe('End sitting', () => {
 // Closed by idle: the stub on a clock the test moves (the page's own clock stays real — the minutes are stopped).
 async function withIdleClosed() {
   const clock = { t: Date.now() - 2 * 3600_000 };
-  const api = createStubClient({ seed: false, storageKey: `sit-${Math.random()}`, now: () => clock.t });
+  const api = createStubClient({
+    seed: false,
+    storageKey: `sit-${Math.random()}`,
+    now: () => clock.t,
+  });
   const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
   await api.updateSettings({ leetcodeRollId: roll.id });
   const { sitting } = await api.lcSittingStart({
@@ -338,7 +342,9 @@ async function withIdleClosed() {
   clock.t += 20 * 60_000;
   await api.lcSittingEvents({
     sittingId: sitting.id,
-    events: [{ id: '01HZZZZZZZZZZZZZZZZZZZZZZW', type: 'snapshot', at: clock.t, payload: { code: 'x' } }],
+    events: [
+      { id: '01HZZZZZZZZZZZZZZZZZZZZZZW', type: 'snapshot', at: clock.t, payload: { code: 'x' } },
+    ],
   });
   clock.t += 90 * 60_000; // idle since: the page's read closes it at 20 + 5
   return { api, sitting, clock };
@@ -357,7 +363,10 @@ describe('closed automatically', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await user.click(screen.getByRole('button', { name: 'Reopen' }));
     await waitFor(async () =>
-      expect((await api.getSitting(sitting.id)).sitting).toMatchObject({ status: 'active', closedBy: null }),
+      expect((await api.getSitting(sitting.id)).sitting).toMatchObject({
+        status: 'active',
+        closedBy: null,
+      }),
     );
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull());
     expect(await screen.findByRole('button', { name: 'End sitting' })).toBeTruthy();

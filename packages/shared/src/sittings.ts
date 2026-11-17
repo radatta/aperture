@@ -633,8 +633,7 @@ export function sittingElapsedMs(
 export const sittingMinutes = (
   s: Pick<Sitting, 'startedAt' | 'endedAt' | 'idleMs'>,
   now: number,
-): number =>
-  Math.max(1, msToMin(sittingElapsedMs(s, now)));
+): number => Math.max(1, msToMin(sittingElapsedMs(s, now)));
 export interface SittingMetrics {
   firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
   submitsBeforeAccepted: number | null;
