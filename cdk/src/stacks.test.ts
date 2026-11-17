@@ -617,7 +617,7 @@ describe('ApertureAppStack finance sync', () => {
     expect(JSON.stringify(stmts)).not.toMatch(/google/);
   });
 
-  it('the BFF gets Plaid env, the sync function name, token writes, and invoke on exactly that ARN', () => {
+  it('the BFF gets Plaid env, the sync function name, token writes, and invoke on exactly the sync and the worker', () => {
     const bff = Object.values(
       app.findResources('AWS::Lambda::Function', {
         Properties: { FunctionName: 'aperture-bff-dev' },
@@ -636,7 +636,7 @@ describe('ApertureAppStack finance sync', () => {
     for (const action of ['ssm:PutParameter', 'ssm:DeleteParameter'])
       expect(resourcesFor(action)).toContain('aperture/dev/plaid/items/*');
     // Exactly two ARNs, never `arn:*`: the sync and the coach worker (minimizePolicies may merge their statements).
-    const invoke = stmts.filter((st) => st.Action === 'lambda:InvokeFunction');
+    const invoke = stmts.filter((st) => JSON.stringify(st.Action).includes('lambda:'));
     expect(
       invoke
         .flatMap((st) => st.Resource)
@@ -871,7 +871,7 @@ describe('ApertureAppStack coach worker', () => {
     expect(Object.keys(env).sort()).toEqual(['STAGE', 'TABLE_NAME']); // the key is read from SSM, never env
   });
 
-  it('reserves 1 on each dev slot; prod reserves none', () => {
+  it('reserves 1 on dev (devb: the per-slot sum test); prod reserves none', () => {
     expect(worker.props.ReservedConcurrentExecutions).toBe(1);
     expect(
       fnOf(prod, 'aperture-coach-worker-prod').props.ReservedConcurrentExecutions,
@@ -934,19 +934,33 @@ describe('ApertureAppStack coach worker', () => {
     ).toEqual([{ 'Fn::GetAtt': [groupId, 'Arn'] }]);
   });
 
-  it('the BFF and the MCP function name it and may invoke exactly its ARN', () => {
-    for (const t of [dev, prod]) {
-      const stage = t === dev ? 'dev' : 'prod';
+  // On both stages: the MCP function may invoke the worker alone, the BFF the worker and the sync — exact ARNs, and
+  // no other lambda: action on either.
+  it('the BFF and the MCP function name it and may invoke exactly its ARN (the BFF the sync too)', () => {
+    const arn = (id: string) => JSON.stringify({ 'Fn::GetAtt': [id, 'Arn'] });
+    for (const [t, stage] of [
+      [dev, 'dev'],
+      [prod, 'prod'],
+    ] as const) {
       const workerId = fnOf(t, `aperture-coach-worker-${stage}`).id;
-      for (const name of [`aperture-bff-${stage}`, `aperture-mcp-${stage}`]) {
+      const syncId = fnOf(t, `aperture-finance-sync-${stage}`).id;
+      for (const [name, want] of [
+        [`aperture-bff-${stage}`, [workerId, syncId]],
+        [`aperture-mcp-${stage}`, [workerId]],
+      ] as const) {
         const fn = fnOf(t, name).props;
         const env = (fn.Environment as { Variables: Record<string, unknown> }).Variables;
         expect(env.COACH_WORKER_FN).toEqual({ Ref: workerId });
-        const resources = statementsOf(t, fn.Role)
-          .filter((st) => actionsOf([st]).includes('lambda:InvokeFunction'))
-          .flatMap((st) => st.Resource);
-        expect(resources).toContainEqual({ 'Fn::GetAtt': [workerId, 'Arn'] });
-        expect(JSON.stringify(resources)).not.toMatch(/\*/);
+        const lambdaStmts = statementsOf(t, fn.Role).filter((st) =>
+          JSON.stringify(st.Action).includes('lambda:'),
+        );
+        expect(actionsOf(lambdaStmts).every((a) => a === 'lambda:InvokeFunction')).toBe(true);
+        expect(
+          lambdaStmts
+            .flatMap((st) => st.Resource)
+            .map((r) => JSON.stringify(r))
+            .sort(),
+        ).toEqual(want.map(arn).sort());
       }
     }
   });

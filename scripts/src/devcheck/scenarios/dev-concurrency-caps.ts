@@ -111,7 +111,7 @@ export const devConcurrencyCaps: Scenario = {
       id: 'live-values',
       entry: 'api',
       kind: 'nominal',
-      what: 'Dev’s and devb’s functions each report 18 / 10 / 1 / 1 after the deploy',
+      what: 'Dev’s and devb’s functions each report 18 / 9 / 1 / 1 / 1 (BFF, MCP, finance sync, poller, coach worker) after the deploy',
       needsYou:
         'the container has no AWS credentials: the get-function-concurrency line in the PR body',
     },
@@ -119,7 +119,7 @@ export const devConcurrencyCaps: Scenario = {
       id: 'kill-drill',
       entry: 'api',
       kind: 'edge',
-      what: 'A live kill sets every function on both slots to 0 and locks all four URLs; the unkill puts back 18 / 10 / 1 / 1 on each slot',
+      what: 'A live kill sets every function on both slots to 0 and locks all four URLs; the unkill puts back 18 / 9 / 1 / 1 / 1 on each slot',
       needsYou:
         'the drill kills dev for every lane and needs the management account (CI-BOT.md → Drill)',
     },

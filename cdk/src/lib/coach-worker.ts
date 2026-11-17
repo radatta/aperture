@@ -23,9 +23,8 @@ export interface CoachWorkerProps {
 
 // The LeetCode coach's worker (lambdas/src/coachWorker.ts): the AI pick runs here, invoked async by the BFF and the
 // MCP function, at most once a day a user. Its own function so the model call stays out of the request path and
-// away from finance-sync's Plaid grants. No Function URL, no schedule. Cost at single-user: ≤ 1 × 90 s × 0.5 GB a
-// day, inside the free tier (INFRA §11). No alarm of its own: the org's free ten are full, so the account-wide
-// Lambda Errors alarm covers it, a timeout included (app-stack.ts → Monitoring).
+// away from finance-sync's Plaid grants. No Function URL, no schedule, no alarm of its own (app-stack.ts →
+// Monitoring). Cost: INFRA §11.
 export class CoachWorker extends Construct {
   readonly fn: NodejsFunction;
 
