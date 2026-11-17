@@ -44,7 +44,8 @@ The user names the mode; collaborative is the default.
   - **Dev test is Claude's after the push:** run `pnpm devcheck --tier full --feature <the feature's scenario>` (it
     waits for the deploy itself; a branch with no scenario of its own runs without `--feature`), Read the screenshots.
     A green full run with zero leftovers, every _Feature coverage_ row `pass`, `off dev`, `needs you` or `deferred`
-    (under _This feature_ and _Other scenarios_ alike), plus that review is the all-clear (phase 9). On
+    (under _This feature_ and _Other scenarios_ alike), `pnpm gate:ci` green on the head sha, plus that review is the
+    all-clear (phase 9). On
     `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate (a rebase that resolved conflicts also gets
     the recheck: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_), `pnpm bot push --after-rebase` (a
     `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
@@ -96,8 +97,11 @@ hub message (the checkpoints stay).
 4. **Build** — only on the user's "execute". When asking for it, give a rough estimate of how many files the change
    will touch — a gauge of size, not a commitment — and the lenses the review will run. While building, after each
    section run the touched files' tests (`vitest run <file>`) and a typecheck.
-5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, each under `scripts/board/heavy.sh --`,
-   real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
+5. **Gate** — `pnpm gate:fast` (`docs/ops/GATE.md`): full typecheck and lint, then the tests the branch's diff can
+   reach, each step under `heavy.sh` by itself; it runs a package's whole suite, or all of them, when its rules say so,
+   and prints why. Its exit code is real (`pipefail` if piped). The full suite runs on GitHub on every push (phase 8);
+   `pnpm gate:fast --full` locally only to reproduce a red Branch run a single file can't, or when GitHub is
+   unreachable. Nothing goes to a subagent on a red gate.
 6. **Review** — read `docs/ops/REVIEW.md` first: the lens map, the merge, the finding shape and the escalation
    rules live there.
    - **Round 1, parallel.** On the committed, gate-green diff, launch together the read-only lens reviewers its
@@ -116,7 +120,7 @@ hub message (the checkpoints stay).
 
 7. **Ready for dev** — once the review has stopped with no serious finding open (or the round cap's ask is answered),
    every picked lens ran, and nothing is held open (`docs/ops/REVIEW.md` → _Merge_ 1 and 5): committed on the feature branch (one commit after the build, one
-   per round's fixes), gate green, PR body current.
+   per round's fixes), `gate:fast` green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
    rebase (CLAUDE.md → _Claude behavior_), then re-run the gate (and the recheck, after a rebase that resolved
    conflicts: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_). Then a green
@@ -164,7 +168,7 @@ hub message (the checkpoints stay).
    only where (this branch when it's the same surface, else its own small PR), never whether; triage by reading the
    code path or reproducing, never "automation artifact" or "by design" unverified. Fixes go back through the gate
    (plus the fix-diff recheck: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
-   every row of the feature's matrix proven on dev, covered off dev, or listed under _Needs you_, and every other
+   `pnpm gate:ci` green on the head sha (the full suite), every row of the feature's matrix proven on dev, covered off dev, or listed under _Needs you_, and every other
    scenario's row likewise (_Other scenarios (regression)_) — a row the report shows `fail` or `skipped` is untested
    (a `deferred` slow row counts like off dev, with `ios-standalone`'s caveat: `docs/ops/DEV-CHECK.md` → _Slow
    tier_), whatever the status line says. Autonomous: the all-clear is the green full run with every row so.

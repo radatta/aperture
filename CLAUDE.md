@@ -165,7 +165,7 @@ Every feature runs eleven phases in one of **two modes** the user names: **colla
 2. **Plan** — the `Plan` agent (always, and mandatory above 5 files), with the dev-test matrix (a UI change also moves its iOS probe points: `pnpm sim-bench:plans`) and a step plan whose ETA ranges come from measured history, never a guess; the step plan goes into the lane status file, updated at every phase change. → hub `[kickoff]`.
 3. **Questions** — answered (autonomous: logged).
 4. **Build** — only on the execute; each section's tests and a typecheck.
-5. **Gate** — `pnpm typecheck`, `pnpm lint`, `pnpm test`, each under `heavy.sh`, real exit codes.
+5. **Gate** — `pnpm gate:fast`: full typecheck and lint, the tests the diff reaches (`docs/ops/GATE.md`), real exit codes; the full suite runs on GitHub per push.
 6. **Review** — read `docs/ops/REVIEW.md`: one parallel round of lens reviewers picked by what the diff touches (`code-reviewer` always), merged into one ranked list, fixed in one pass, one gate; then rechecks of each fix diff while a round still finds something serious — 4 rounds at most, then `[ask-maintainer]` in either mode. Which lenses run, and when a recheck is due: REVIEW.md.
 7. **Ready for dev** — committed, gate green, PR body current.
 8. **Dev test** — on latest main; green `pnpm devcheck:local`; **the public-content scan before the first push**; `pnpm bot push`, `deploy-dev` under its lock (→ hub `[lock]`); `pnpm devcheck` and its screenshots.
