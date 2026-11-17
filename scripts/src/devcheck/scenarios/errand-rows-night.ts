@@ -45,7 +45,7 @@ export const errandRowsNight: Scenario = {
       offDev: {
         file: 'app/src/pages/Home/Night.test.tsx',
         test: 'a day of only errands shows no Done today section',
-        why: 'same path as errand-absent (proven on dev): the heading renders from the same filtered list; the test user’s day holds other scenarios’ finished tasks until the run’s cleanup',
+        why: 'dev can’t produce it: the test user’s day holds other scenarios’ finished tasks until the run’s cleanup; only the filter feeding the heading is new, and errand-absent proves it on dev',
       },
     },
   ],

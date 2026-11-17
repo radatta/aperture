@@ -273,6 +273,7 @@ describe('night: today in review', () => {
     await checkOff(api, milk.id);
     expect((await checkOff(api, soap.id)).estimateLockedMin).toBe(15);
     await checkOff(api, candles.id);
+    expect((await api.transitionTask(party.id, 'done')).status).toBe('done'); // a placed rollup
     const user = userEvent.setup();
     renderApp({ api });
     await user.click(screen.getByRole('button', { name: 'Night' }));
