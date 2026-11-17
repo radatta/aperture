@@ -234,7 +234,15 @@ async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
       // MCP function gets nothing Plaid"), and its finance tools read only what's in the table.
       handleRpc(
         d.doc,
-        { userId, method, args, google: d.google, stateSecret: process.env.ORIGIN_SECRET },
+        // idlePeek: MCP reads stay free — an idle sitting reads closed, and the app's next read writes the close.
+        {
+          userId,
+          method,
+          args,
+          google: d.google,
+          stateSecret: process.env.ORIGIN_SECRET,
+          idlePeek: true,
+        },
         {
           presigner: d.presigner,
           objects: d.objects,

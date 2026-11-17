@@ -178,10 +178,10 @@ export const lcSittings: Scenario = {
       id: 'live-stale',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A sitting left open past its window reads inactive, with nothing written',
+      what: 'A sitting left open past its window reads inactive (closed by idle), with nothing written',
       offDev: {
-        file: 'lambdas/src/backend.sittings.test.ts',
-        test: 'nothing open — none ever, the gate on an ended one, or past the window — writes nothing',
+        file: 'lambdas/src/mcp/leetcodeTools.test.ts',
+        test: 'a sitting left untouched reads closed by idle, its minutes stopped 5 past the last activity — nothing written',
         why: 'dev can’t wait a day; the same pull path is proven on dev by live-active and live-after-done',
       },
     },

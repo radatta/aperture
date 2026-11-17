@@ -572,6 +572,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setReminderSettings: async () => {
         throw new Error('unused');
       },
+      reopenSitting: async () => {
+        throw new Error('unused');
+      },
       patchSittingReview: async () => {
         throw new Error('unused');
       },
@@ -2041,6 +2044,27 @@ describe('runPipeline', () => {
           run: async () => undefined,
         },
       ],
+    });
+
+    it('a slow step whose MCP token could lapse inside its wait signs MCP in again first; a cheap one doesn’t', async () => {
+      const w = world();
+      const minted: number[] = [];
+      // 16 min left on the first token (under a slow step's 50), hours on the next.
+      w.browser.signInMcp = async () => {
+        minted.push(minted.length);
+        return {
+          accessToken: `mcp${minted.length}`,
+          expiresAt: minted.length === 1 ? 1000 : 1e10,
+          email: 'x',
+          sub: 's',
+          clientId: 'c',
+        };
+      };
+      const r = await runPipeline(
+        deps(w, [slowSc(async () => undefined)], memLedger(), { slow: ['slw'] }),
+      );
+      expect(r.status).toBe('PASS');
+      expect(minted).toHaveLength(2); // setup, then before the slow step — not again before the cheap one
     });
 
     it('a slow step outside the slow set is deferred, the scenario goes on, and the run stays green', async () => {

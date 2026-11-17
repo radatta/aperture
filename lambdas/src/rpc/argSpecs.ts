@@ -435,6 +435,7 @@ export const RPC_ARGS = {
   listSittings: [opt(range)],
   getSitting: [id],
   pullLiveSitting: [],
+  reopenSitting: [id],
   listSittingReplay: [id],
   setSittingPrepTarget: [id, named('prepTarget', str(KEY_MAX))],
   setSittingReview: [id, owned('review', SITTING_REVIEW_KEYS)],

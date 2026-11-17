@@ -2,6 +2,7 @@ import { useId, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import {
   isSittingOpen,
+  mayBeIdle,
   msToMin,
   problemCompanies,
   ROLL_PLAN_FALLBACK_MIN,
@@ -14,21 +15,45 @@ import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useRolls } from '../../data/hooks/useRolls';
-import { useSitting } from '../../data/hooks/useSittings';
+import {
+  useIdleRecheck,
+  useReopenSitting,
+  useSitting,
+  useSittings,
+} from '../../data/hooks/useSittings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { fmtDuration } from '../../lib/format';
 import { useNow } from '../../lib/useNow';
 import { DoneForm } from '../../modules/tasks/DoneForm';
 import { REVIEW_ID, ReviewForm } from './ReviewForm';
-import { sittingOutcome } from './recruitingHelpers';
+import {
+  canOfferReopen,
+  IDLE_CLOSED_NOTICE,
+  isIdleClosed,
+  sittingOutcome,
+} from './recruitingHelpers';
 import { SittingTimeline } from './SittingTimeline';
 
 // One sitting (docs/areas/recruiting → The page): the problem, how it went in numbers, every Run and Submit
 // with its failing case, the final code, the review — and, while it's open, End sitting: the rep's Done form
-// prefilled with the sitting's minutes (Done on the rep is what ends a sitting).
+// prefilled with the sitting's minutes (Done on the rep is what ends a sitting). Closed by idle, it says so, with
+// Reopen and the rep's Done (its minutes stopped at the close) while the rep is still in progress.
 export function SittingDetail() {
   const { id = '' } = useParams();
-  const { data, isPending, isError, error, refetch } = useSitting(id);
+  const q = useSitting(id);
+  const { data, isPending, isError, error, refetch } = q;
+  const now = useNow();
+  // A page left open: its cached head may have closed by idle since — read again before End sitting prefills.
+  const stale = useIdleRecheck(
+    data?.sitting,
+    {
+      fetchedAt: q.dataUpdatedAt,
+      failedAt: q.errorUpdatedAt,
+      fetching: q.isFetching,
+      refetch,
+    },
+    now,
+  );
   const missing = isError && /Not found/.test(String(error?.message));
   if (!data)
     return (
@@ -46,16 +71,52 @@ export function SittingDetail() {
         It may have been deleted with its rep.
       </EmptyState>
     );
-  return <Loaded detail={data} />;
+  // The re-read failed: End sitting falls back to the cached minutes, and says so.
+  const recheckFailed =
+    mayBeIdle(data.sitting, now) &&
+    q.errorUpdatedAt > q.dataUpdatedAt &&
+    isSittingOpen(data.sitting, now);
+  return <Loaded detail={data} now={now} stale={stale} recheckFailed={recheckFailed} />;
 }
 
-function Loaded({ detail }: { detail: Detail }) {
+function Loaded({
+  detail,
+  now,
+  stale,
+  recheckFailed,
+}: {
+  detail: Detail;
+  now: number;
+  stale: boolean;
+  recheckFailed: boolean;
+}) {
   const { sitting, live, events, problem, liveReads } = detail;
-  const now = useNow();
+  // A later sitting took its rep (a Start on another problem attached it): this one's rep is that one's now.
+  // Unknown until the list is read: neither is offered meanwhile (or on a failed read).
+  const list = useSittings();
+  const all = list.data;
+  const superseded =
+    !all || all.some((x) => x.repTaskId === sitting.repTaskId && x.startedAt > sitting.startedAt);
+  const idleOpen = isIdleClosed(sitting) && sitting.status === 'abandoned' && !superseded;
   const outcome = sittingOutcome(sitting, now);
   const m = sittingMetrics(sitting);
   const companies = problemCompanies(problem);
   const open = isSittingOpen(sitting, now);
+  // Closed by idle, the boxed notice below says so: no "Dropped" here, and no empty line.
+  const statusLine = [
+    open
+      ? 'In progress'
+      : sitting.status === 'abandoned' && !isIdleClosed(sitting)
+        ? 'Dropped'
+        : null,
+    sitting.status === 'active' && !open ? 'Past its 24 h window' : null,
+    liveReads > 0
+      ? `Claude watched live · ${liveReads} ${liveReads === 1 ? 'pull' : 'pulls'}`
+      : null,
+    sitting.prepTarget !== 'General' ? `For ${sitting.prepTarget}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <article className="flex flex-col gap-5">
       <div className="flex flex-col gap-1">
@@ -100,28 +161,48 @@ function Loaded({ detail }: { detail: Detail }) {
           {sitting.summary.runs} · {sitting.summary.submits}
         </Metric>
       </dl>
-      {(liveReads > 0 || sitting.status !== 'done' || sitting.prepTarget !== 'General') && (
+      {statusLine && (
         <Text as="p" size="sm" tone="muted">
-          {[
-            open ? 'In progress' : sitting.status === 'abandoned' ? 'Dropped' : null,
-            sitting.status === 'active' && !open ? 'Past its 24 h window' : null,
-            liveReads > 0
-              ? `Claude watched live · ${liveReads} ${liveReads === 1 ? 'pull' : 'pulls'}`
-              : null,
-            sitting.prepTarget !== 'General' ? `For ${sitting.prepTarget}` : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
+          {statusLine}
         </Text>
       )}
 
-      {open && (
+      {isIdleClosed(sitting) && (
+        <IdleClosed
+          id={sitting.id}
+          repTaskId={sitting.repTaskId}
+          offer={canOfferReopen(sitting, now) && !superseded}
+          // Reopen takes its button away: focus goes on to End sitting, the same button renamed.
+          onReopened={() => requestAnimationFrame(() => document.getElementById(END_ID)?.focus())}
+        />
+      )}
+
+      {isIdleClosed(sitting) && sitting.status === 'abandoned' && list.isError && (
+        <p role="alert" className="text-sm text-danger">
+          Couldn’t read your sittings to offer Reopen.{' '}
+          <button type="button" className="underline" onClick={() => void list.refetch()}>
+            Retry
+          </button>
+        </p>
+      )}
+
+      {recheckFailed && (
+        <p role="alert" className="text-sm text-danger">
+          Couldn’t re-check whether this sitting closed for inactivity — End sitting’s minutes may
+          run past your last activity.
+        </p>
+      )}
+
+      {(open || idleOpen) && (
         <EndSitting
           // Mark done takes End sitting away: focus goes on to the review, the next thing to do.
           onEnded={() => requestAnimationFrame(() => document.getElementById(REVIEW_ID)?.focus())}
           repTaskId={sitting.repTaskId}
           rollId={sitting.rollId}
           minutes={sittingMinutes(sitting, now)}
+          label={open ? 'End sitting' : 'Mark rep done'}
+          heading={open ? 'End the sitting — mark its rep done' : 'Mark its rep done'}
+          waiting={stale}
         />
       )}
 
@@ -146,6 +227,45 @@ function Loaded({ detail }: { detail: Detail }) {
   );
 }
 
+// Closed by idle: said outright, never silent, with Reopen while the server would take it (inside its window, its
+// rep still in progress). A refusal (another sitting open, its rep moved on) shows inline, the button kept.
+function IdleClosed({
+  id,
+  repTaskId,
+  offer,
+  onReopened,
+}: {
+  id: string;
+  repTaskId: string;
+  offer: boolean;
+  onReopened: () => void;
+}) {
+  const reopen = useReopenSitting();
+  const { data: tasks } = useAllTasks();
+  const rep = tasks?.find((t) => t.id === repTaskId);
+  const show = offer && rep?.status === 'in_progress';
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-panel px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Text size="sm">{IDLE_CLOSED_NOTICE}</Text>
+        {show && (
+          <Button
+            aria-disabled={reopen.isPending || undefined}
+            onClick={() => !reopen.isPending && reopen.mutate(id, { onSuccess: onReopened })}
+          >
+            Reopen
+          </Button>
+        )}
+      </div>
+      {reopen.isError && (
+        <p role="alert" className="text-sm text-danger">
+          {reopen.error instanceof Error ? reopen.error.message : 'Couldn’t reopen it.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Metric({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col">
@@ -164,17 +284,24 @@ function Metric({ label, children }: { label: string; children: React.ReactNode 
 // Done on the rep ends the sitting (the server's hook); the form starts on the sitting's own minutes, and the
 // Roll's estimate when the rep lost one — RepTie's call.
 const focusOnMount = (el: HTMLElement | null) => el?.focus();
+const END_ID = 'end-sitting';
 
 function EndSitting({
   repTaskId,
   rollId,
   minutes,
   onEnded,
+  label,
+  heading,
+  waiting,
 }: {
   repTaskId: string;
   rollId: string;
   minutes: number;
   onEnded: () => void;
+  label: string;
+  heading: string;
+  waiting: boolean; // its minutes are being read again (useIdleRecheck)
 }) {
   const [ending, setEnding] = useState(false);
   const back = useRef(false); // Cancel hands focus back to End sitting
@@ -187,16 +314,17 @@ function EndSitting({
   if (!ending)
     return (
       <Button
+        id={END_ID}
         className="self-start"
         ref={(el) => {
           if (el && back.current) el.focus();
           back.current = false;
         }}
         // The form waits for the Rolls: its estimate is copied once, and must be the Roll's, not the fallback.
-        aria-disabled={rolls.isPending || undefined}
-        onClick={() => !rolls.isPending && setEnding(true)}
+        aria-disabled={rolls.isPending || waiting || undefined}
+        onClick={() => !rolls.isPending && !waiting && setEnding(true)}
       >
-        End sitting
+        {label}
       </Button>
     );
   // Focus lands on the form, not its Actual field — no keyboard springs up on a phone.
@@ -209,7 +337,7 @@ function EndSitting({
       className="outline-none"
     >
       <Text size="sm" weight="medium" id={`${id}-end`}>
-        End the sitting — mark its rep done
+        {heading}
       </Text>
       <DoneForm
         task={rep}

@@ -13,7 +13,7 @@ import {
   sittingMinutes,
   todayKey,
 } from '@aperture/shared';
-import type { DueUrgency, Task } from '@aperture/shared';
+import type { DueUrgency, Sitting, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -168,9 +168,9 @@ export function RightNowCard() {
   const hero = rn.hero;
   const heroElapsed = hero ? liveElapsedMin(hero, timers) : 0;
   // A LeetCode rep with its sitting open shows, and Done starts on, the sitting's minutes, Start to now — what
-  // the sitting's own End offers — not the focus timer's.
+  // the sitting's own End offers — not the focus timer's; closed by idle, its minutes stopped at the close.
   const now = useNow();
-  const heroSitting = useOpenSittingFor(hero, now);
+  const { sitting: heroSitting, waiting: heroWaiting } = useOpenSittingFor(hero, now);
   const heroMin = heroSitting ? sittingMinutes(heroSitting, now) : heroElapsed;
   const heroTimer = hero
     ? timers.find((t) => t.session.kind === 'work' && t.session.taskId === hero.id)
@@ -245,9 +245,10 @@ export function RightNowCard() {
               <Button
                 size="sm"
                 // A LeetCode rep's open sitting not read yet: wait, or Done would start on the wrong minutes.
-                aria-disabled={heroSitting === undefined || undefined}
+                // One that may have closed by idle since it was read: wait for the re-read (useIdleRecheck).
+                aria-disabled={heroSitting === undefined || heroWaiting || undefined}
                 onClick={async () => {
-                  if (heroSitting === undefined) return;
+                  if (heroSitting === undefined || heroWaiting) return;
                   const elapsed = heroMin; // captured before the timer stops
                   // A stop that didn't land keeps the timer; its row in the bar below says so, and the
                   // Actual form waits until the time is really saved.
@@ -265,7 +266,7 @@ export function RightNowCard() {
                 Done
               </Button>
             </div>
-            {heroSitting && <SittingLink id={heroSitting.id} />}
+            {heroSitting && <SittingLink sitting={heroSitting} />}
             {doneOpen?.taskId === hero.id &&
               (doneOpen.rep ? (
                 <RepDoneForm
@@ -402,7 +403,8 @@ function FocusRow({
             </Text>
           ) : t.status === 'in_progress' ? (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(rep.min)} in
+              {fmtDuration(rep.min)}
+              {rep.stopped ? '' : ' in'}
             </Text>
           ) : (
             <>
@@ -427,19 +429,22 @@ function FocusRow({
       {asking && open && (
         <EstimateChips task={t} startRef={startRef} onClose={() => setAsking(false)} />
       )}
-      {rep.sitting && <SittingLink id={rep.sitting.id} />}
+      {rep.sitting && <SittingLink sitting={rep.sitting} />}
     </div>
   );
 }
 
-// To the open sitting's page, where End sitting is — on a LeetCode rep whose sitting is still open.
-function SittingLink({ id }: { id: string }) {
+// To the sitting's page, where End sitting is — on a LeetCode rep whose sitting is still open, or closed by
+// idle (Reopen and the rep's Done are there).
+function SittingLink({ sitting }: { sitting: Sitting }) {
   return (
     <Link
-      to={`/recruiting/sittings/${id}`}
+      to={`/recruiting/sittings/${sitting.id}`}
       className="-my-1 self-start py-1 text-sm text-teal underline underline-offset-2"
     >
-      End the LeetCode sitting →
+      {sitting.status === 'active'
+        ? 'End the LeetCode sitting →'
+        : 'LeetCode sitting closed automatically →'}
     </Link>
   );
 }
@@ -467,8 +472,12 @@ function RepDoneForm(props: {
 // are read, the task's own.
 function useRepSitting(t: Task) {
   const now = useNow();
-  const sitting = useOpenSittingFor(t, now) ?? null;
-  return { sitting, min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin };
+  const sitting = useOpenSittingFor(t, now).sitting ?? null;
+  return {
+    sitting,
+    min: sitting ? sittingMinutes(sitting, now) : t.actualAccruedMin,
+    stopped: sitting?.status === 'abandoned', // closed by idle: its minutes no longer run ("25m", not "25m in")
+  };
 }
 
 // A lighter "also today" row — the plan's tail + any off-plan in-progress task. "Focus this" is the
@@ -514,7 +523,8 @@ function AlsoRow({
         <div className="flex shrink-0 items-center gap-2">
           {t.status === 'in_progress' && (
             <Text size="xs" tone="muted" tabular>
-              {fmtDuration(rep.min)} in
+              {fmtDuration(rep.min)}
+              {rep.stopped ? '' : ' in'}
             </Text>
           )}
           {canFocus && (
@@ -525,7 +535,7 @@ function AlsoRow({
         </div>
       </div>
       {/* Its own line, as in a Big-3 row: inside RowText it wrapped and took the row's "·" at phone width. */}
-      {rep.sitting && <SittingLink id={rep.sitting.id} />}
+      {rep.sitting && <SittingLink sitting={rep.sitting} />}
     </div>
   );
 }

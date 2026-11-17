@@ -183,6 +183,7 @@ describe('createApiClient', () => {
       'removeHarnessStray',
       'removePlan',
       'removeSitting',
+      'reopenSitting',
       'restoreCoachSlot',
       'restoreReminderToggles',
       'revokePlaceToken',

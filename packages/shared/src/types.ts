@@ -457,8 +457,13 @@ export interface Sitting extends BaseEntity {
   day: string; // YYYY-MM-DD — startedAt bucketed by the client's tz offset + dayStartHour
   startedAt: number; // server clock at Start — the sitting clock
   clientStartedAt: number; // the Start click by the extension's clock — the clock its events' times are on
-  endedAt: number | null; // set when its rep finishes (Done, Drop), or by a later Start ending it as stale
+  endedAt: number | null; // set when its rep finishes (Done, Drop), by a later Start ending it as stale, or by an idle close
   status: SittingStatus;
+  // Set when a read found it idle (sittings.ts SITTING_IDLE_MS) and closed it at its last activity + a tail; cleared
+  // by a reopen, kept when its rep is Done after. Absent on heads from before — read as `closedBy ?? null`.
+  closedBy?: 'idle' | null;
+  reopenedAt?: number | null; // the newest reopen of an idle-closed sitting (activity on the server clock)
+  idleMs?: number; // the gaps its reopens bridged, left out of its minutes (sittingElapsedMs)
   clientSittingId: string; // the extension's idempotency key for Start
   problemSlug: string;
   problemTitle: string;

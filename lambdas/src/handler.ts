@@ -28,6 +28,8 @@ export interface RpcCall {
   method: string;
   args: unknown[];
   testMode?: boolean; // smoke path → write-free
+  // MCP: a sitting found idle reads closed, nothing written (sittings.ts → Idle close); the app's own reads write it.
+  idlePeek?: boolean;
   now?: () => number; // injectable clock (tests)
   google?: GoogleGateway; // live calendar seam (index.ts); ignored in testMode
   stateSecret?: string; // OAuth state HMAC key (ORIGIN_SECRET)
@@ -62,6 +64,7 @@ export async function handleRpc(
   const backend = new BackendClient(new Repo(doc, writes, call.userId), {
     userId: call.userId,
     now: call.now,
+    idlePeek: call.testMode || call.idlePeek,
     google,
     stateSecret: call.stateSecret,
     // No presigner in testMode: the unconfigured one refuses, so a smoke run never mints a signed URL.

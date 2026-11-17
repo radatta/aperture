@@ -28,6 +28,7 @@ LeetCode traffic ─► lcSittingEvents ─► events stored raw; runs/submits/n
                                        snapshots/replay into the live row
 Done on the rep ─────────────────────► sitting done          Drop ─► abandoned          delete ─► gone with it
 (stale: past 24 h, or its rep finished elsewhere ─► ended by the next Start)
+(idle: 45 min with no activity ─► closed by the next read at last activity + 5 min ─► Reopen / coming back)
 (ended: for 10 min still takes the events stamped before its end, inside its 24 h window)
 ```
 
@@ -47,7 +48,8 @@ Done on the rep ─────────────────────�
 - **A sitting ends through its rep** (`transitionTask` / `deleteTask` hooks, for tasks with a `rollId`; any
   other finish is caught at the next Start). Ending it refolds its summary first, so a fold lost just before
   Done heals. An Accepted submit never ends it — you may keep going. A repeat Start of an ended sitting returns
-  it ended (`resumed: true`): the extension mints a new id for a new sitting.
+  it ended (`resumed: true`): the extension mints a new id for a new sitting — except one closed by idle the
+  same app day, which it reopens (_Idle close_).
 - **The Start gate** (`lcstart`, one row a user): every Start first counts an attempt there (a CAS, ≤ 400 a
   day, refused ones included — before any read); a new sitting then **claims** it — refused while the gate
   holds another open sitting, or one claimed in the last two minutes that this Start can't see yet (a
@@ -61,6 +63,55 @@ Done on the rep ─────────────────────�
   (`endedAt`, server clock) is compared on that clock too, shifted by `startedAt − clientStartedAt`.
   LeetCode's `solve_elapsed_ms` counts from the first time a problem was ever opened, so it's context only.
   `day` buckets `startedAt` by the client's tz offset and `dayStartHour`.
+
+### Idle close
+
+A sitting nothing has touched for **45 minutes** (`SITTING_IDLE_MS`, the coach's 30-minute cap + 15) is closed
+by the next read, never by a scheduled job ($0, no new resource).
+
+- **Activity** is everything the server already hears, on its own clock: the Start, a reopen, every events call
+  that keeps an event (the budget row's `updatedAt`) and every `live_sitting` pull (the reads row's `updatedAt`),
+  so a hint conversation with Claude keeps it open. Event `at` times are the extension's clock and never count —
+  a skewed Mac would close a sitting under use. The extension sends a snapshot only when the code changes, so
+  45 minutes of thinking without typing closes it; the next keystroke reopens it.
+- **The end is the last activity + 5 minutes** (`SITTING_IDLE_TAIL_MS`), never the moment it's noticed, so its
+  minutes, the cap and the rep's Done prefill aren't inflated. The head records `closedBy: 'idle'`; status
+  `abandoned`, its rep left in progress (as a stale sitting's is), the Start gate released.
+- **Every read closes first** (`closeIdle` in the backend and the stub, on the shared `idleEnd`): `listSittings`
+  (the Recruiting list, Home, `list_sittings`, `get_day`, the coach tools), `getSitting` (`get_sitting`),
+  `pullLiveSitting` (before the pull counts), the coach's reads (`leetcode_today`, `coach_stats`), Start, events,
+  and a rep's Done or Drop. Below the line (`mayBeIdle`, the head's own times) it costs nothing; past it, three
+  consistent gets (the two stamps, then the rep once it's idle). The close is a CAS only an open head not reopened
+  since passes, so reads at once write one close; fresher activity wins through its own path (an event or Start runs
+  this first, then reopens). Its gate release frees only a claim no later than the end (`releaseStart`'s
+  `claimedBy`) — a reopen's claim comes 40+ min after it — so a reopen racing the release keeps the gate. Accepted
+  race: a snapshot landing between the activity read and the CAS doesn't stop the close; the next event reopens it.
+- **MCP reads stay free.** Through `/mcp` (`RpcCall.idlePeek`) and on a smoke run, a read answers the closed view —
+  the same end — and writes nothing; the app's next read, a Start or an event writes it. So CLAUDE.md's MCP rules
+  hold: reads write nothing, `live_sitting` writes only its count (and none on an idle sitting). An MCP write that
+  ends a rep (`complete_task`) still writes the close first, as any Done does.
+- **A rep finished elsewhere** (a Done or Drop whose best-effort hook missed) ends its idle sitting as the rep did —
+  `done` at its `completedAt`, or abandoned at its `cancelledAt`, never later than the idle end — not as idle, as the
+  next Start used to.
+- **Reopen** (`reopenSitting`, the button on its page) — refused unless closed by idle, inside its 24 h window,
+  its rep still in progress, no other sitting open (`SITTING_ACTIVE_ERROR`) and no later sitting on its rep
+  (`sittingReopenError`). In Start's order: the gate (`reclaimStart`, no Start counted), then the head, then its
+  rep started as a resume does. The gap since the end goes to `idleMs`, which its minutes leave out
+  (`sittingElapsedMs`), so coming back hours later never counts the hours. A Start that read the sitting ended
+  can't take the gate from a reopen still writing (`claimStart`'s fresh-reclaim guard).
+- **Coming back** the same app day reopens it on its own: a Start on its problem (or a repeat of its Start), or an
+  events call with an event stamped after its end. Another day, or refused, a Start plans as usual (the roll's open
+  rep is attached to a new sitting). A pull never reopens; there's no MCP reopen tool (an MCP write needs the
+  user's go, and returning through the extension already reopens).
+- **Stragglers**: an idle-closed sitting takes the events stamped before its end for its whole 24 h window (its end
+  is already old when noticed, so the 10-minute grace would refuse the outbox's retries).
+- **Done on its rep afterwards** turns it `done`, its end and `closedBy` kept; Drop leaves it abandoned. Unnoticed
+  until the Done, it ends `done` at the idle end (as its rep, above).
+- **The app never prefills from a stale head**: a page or Home left open holds the sitting as cached. Once a cached
+  open head is past the line and older than 30 s (`useIdleRecheck`), it's read again and Done waits for it (the
+  cached head still shows; a failed re-read stops the wait), so a morning's tab never prefills the hours since. A sitting a later Start took the rep from offers neither Reopen nor
+  the rep's Done on its page; Home links a rep to its newest sitting closed by idle however old (the rep is still in
+  progress, and its minutes are that sitting's).
 
 ### What's stored, what's derived
 
@@ -200,7 +251,8 @@ sitting's clock. **The grace:** for 10 minutes after its end (`SITTING_END_GRACE
 Start — never past the 24 h window, so a sitting ended for staleness gets none) a sitting still takes the events
 stamped before the end on the extension's clock, plus 60 s for the Start's latency (`SITTING_END_SKEW_MS`) —
 the outbox's retries land after Done. The rest of the call is skipped, not refused, and the budget reserves
-only the kept events. Past the grace every call is refused. A known risk, accepted as unlikely: a late call
+only the kept events. Past the grace every call is refused — except on a sitting closed by idle, which takes them
+for its whole window, or reopens (_Idle close_). A known risk, accepted as unlikely: a late call
 racing a delete (`tombstoneSitting` queries the children, then tombstones them) can leave a late raw or judged row
 under a deleted sitting — possible only in the 10 minutes after a Drop followed by a delete. Each event is idempotent on its id. The server recomputes everything
 it decides on (`userId`, `day`, `startedAt`, verdicts, counters); payloads are opaque.
@@ -225,7 +277,7 @@ ever does must sanitise it.
 
 `/recruiting` → **Sittings**: the open sitting pinned with its running clock, the rest by day with the
 outcome (`first submit accepted` / `accepted on submit N` / `not accepted` / `no submit yet`, or `no submit` once ended), runs, and
-`dropped`; a dot marks a reviewed one. Patterns ([coach.md](coach.md) → _The Patterns tab_) and Stories are the other tabs.
+`dropped` (or `closed automatically`, _Idle close_); a dot marks a reviewed one. Patterns ([coach.md](coach.md) → _The Patterns tab_) and Stories are the other tabs.
 
 Each row opens **`/recruiting/sittings/:id`**: the problem (linked to LeetCode) with its tags and companies; the
 outcome, time to first submit, duration, runs and submits, and "Claude watched live · N pulls"; the timeline
@@ -237,6 +289,11 @@ open links to that page ("End the LeetCode sitting →"), shows the sitting's mi
 no timer ran), and its Done prefills from the sitting too, the Roll's estimate included; the list is read only while a LeetCode-roll rep is in progress, so an ordinary day costs no
 read. Both Done forms wait for the Rolls before opening — the form copies its estimate once, so it must be the
 Roll's, not the 30-minute fallback (used only when the Rolls can't be read).
+
+A sitting closed by idle says **"Closed automatically: 45 min with no activity"** on its page, with **Reopen**
+while the server would take it (a refusal shows inline, the button kept) and, while its rep is in progress,
+**Mark rep done**: the rep's Done form on the minutes up to the close. Home links its rep there ("LeetCode
+sitting closed automatically →") with those minutes and that prefill.
 
 ## The shape
 
@@ -626,7 +683,10 @@ Since a submission is a real write to real data, dev is where you do this — no
 
 ### Watching an ingest
 
-Sittings log `{"event":"lc_sitting_start","sittingId":…,"attach":bool}` per Start and
+Sittings log `{"event":"lc_sitting_start","sittingId":…,"attach":bool}` per Start,
+`{"event":"lc_sitting_idle_close","sittingId":…,"idleMs":n}` per idle close (`idleMs`: from the end to its noticing),
+`{"event":"lc_sitting_reopen","sittingId":…,"via":"button"|"start"|"event","idleMs":n}` per reopen (and
+`lc_sitting_reopen_refused` when an event's return was refused), and
 `{"event":"lc_ingest","sittingId":…,"accepted":n,"duplicates":n,"skipped":n,"late":bool,"bytes":n}` per events
 call (`late`: the sitting had ended; `skipped` is what the grace dropped) — never code or payloads. The legacy
 ingest's `{"event":"leetcode_ingest",…}` line went with it at PR D, so one appearing in a log predates that deploy.

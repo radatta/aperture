@@ -23,7 +23,21 @@ import {
   normalizeSittingEvents,
   normalizeSittingStart,
   claimStart,
+  reclaimStart,
   countStartAttempt,
+  idleCloseAt,
+  idleEnd,
+  idleClosedSitting,
+  finishIdleClosed,
+  mayBeIdle,
+  reopenedSitting,
+  sittingLastActivity,
+  sittingReopenError,
+  sittingReturns,
+  SITTING_IDLE_MS,
+  SITTING_IDLE_TAIL_MS,
+  SITTING_REOPEN_ERROR,
+  SITTING_REOPEN_REP_ERROR,
   emptyGate,
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
@@ -465,7 +479,14 @@ describe('planSittingStart', () => {
       ...over,
     }) as Sitting;
   const plan = (sittings: Sitting[], tasks: Task[], slug = 'b', now = H) =>
-    planSittingStart({ clientSittingId: 'new', problemSlug: slug }, sittings, tasks, 'r', now);
+    planSittingStart(
+      { clientSittingId: 'new', problemSlug: slug },
+      sittings,
+      tasks,
+      'r',
+      now,
+      () => true,
+    );
 
   it('refuses another problem while one is open on a live rep', () => {
     expect(() => plan([open({})], [rep('t1', 'in_progress')])).toThrow(SITTING_ACTIVE_ERROR);
@@ -509,10 +530,12 @@ describe('the Start gate', () => {
     const g = claimStart(emptyGate('d'), 'd', 'A', [], new Set(), T)!;
     expect(claimStart(g, 'd', 'B', [], new Set(), T + 3 * 60_000)?.openSittingId).toBe('B');
     expect(
-      claimStart(g, 'd', 'B', [{ id: 'A', status: 'done' }], new Set(), T)?.openSittingId,
+      claimStart(g, 'd', 'B', [{ id: 'A', status: 'done', endedAt: T + 1 }], new Set(), T)
+        ?.openSittingId,
     ).toBe('B');
     expect(
-      claimStart(g, 'd', 'B', [{ id: 'A', status: 'active' }], new Set(['A']), T)?.openSittingId,
+      claimStart(g, 'd', 'B', [{ id: 'A', status: 'active', endedAt: null }], new Set(['A']), T)
+        ?.openSittingId,
     ).toBe('B');
     expect(releaseStart(g, 'A')).toMatchObject({ openSittingId: null });
     expect(releaseStart(g, 'B')).toBeNull();
@@ -769,5 +792,189 @@ describe('reading a sitting back', () => {
       { raw: { companyTagStatsV2: '[]' } },
     ])
       expect(problemCompanies(junk)).toEqual([]);
+  });
+});
+
+describe('idle close', () => {
+  const M = 60_000;
+  const H = 60 * M;
+  const head = (over: Partial<Sitting> = {}): Sitting =>
+    ({
+      id: 's1',
+      clientSittingId: 'c1',
+      status: 'active',
+      problemSlug: 'a',
+      repTaskId: 't1',
+      startedAt: 0,
+      clientStartedAt: 0,
+      endedAt: null,
+      updatedAt: 0,
+      day: 'd',
+      ...over,
+    }) as Sitting;
+  const none = { budgetAt: null, readsAt: null };
+  it('waits 45 minutes from the last activity and ends 5 minutes after it', () => {
+    expect(SITTING_IDLE_MS).toBe(45 * M);
+    expect(SITTING_IDLE_TAIL_MS).toBe(5 * M);
+    expect(idleCloseAt(head(), none, 45 * M)).toBeNull(); // exactly at the line: still open
+    expect(idleCloseAt(head(), none, 45 * M + 1)).toBe(5 * M);
+    // The newest of Start, reopen, an events call and a pull counts.
+    const a = { budgetAt: 10 * M, readsAt: 20 * M };
+    expect(sittingLastActivity(head({ reopenedAt: 15 * M }), a)).toBe(20 * M);
+    expect(idleCloseAt(head(), a, 65 * M)).toBeNull();
+    expect(idleCloseAt(head(), a, 65 * M + 1)).toBe(25 * M);
+    expect(idleCloseAt(head({ reopenedAt: 30 * M }), a, 70 * M)).toBeNull();
+  });
+  it('an idle sitting whose rep finished meanwhile ends as its rep did, no later than the idle end', () => {
+    const a = { budgetAt: 10 * M, readsAt: null };
+    expect(idleEnd(head(), undefined, a, 60 * M)).toEqual({
+      to: 'abandoned',
+      at: 15 * M,
+      idle: true,
+    });
+    const done = { status: 'done', completedAt: 12 * M, cancelledAt: null } as Task;
+    expect(idleEnd(head(), done, a, 60 * M)).toEqual({ to: 'done', at: 12 * M, idle: false });
+    expect(idleEnd(head(), { ...done, completedAt: 50 * M }, a, 60 * M)).toMatchObject({
+      at: 15 * M,
+    });
+    const dropped = { status: 'cancelled', completedAt: null, cancelledAt: 11 * M } as Task;
+    expect(idleEnd(head(), dropped, a, 60 * M)).toEqual({
+      to: 'abandoned',
+      at: 11 * M,
+      idle: false,
+    });
+    expect(idleEnd(head(), done, a, 50 * M)).toBeNull(); // not idle: Start or the hook decides, as before
+  });
+  it('the precheck is free and never closes an ended sitting', () => {
+    expect(mayBeIdle(head(), 45 * M)).toBe(false);
+    expect(mayBeIdle(head({ reopenedAt: 10 * M }), 50 * M)).toBe(false);
+    expect(mayBeIdle(head(), 50 * M)).toBe(true);
+    expect(mayBeIdle(head({ status: 'done', endedAt: 1 }), 50 * M)).toBe(false);
+    expect(idleCloseAt(head({ status: 'abandoned', endedAt: 1 }), none, 9 * H)).toBeNull();
+  });
+  it('an idle close abandons it at its end, and Done after reads done with the end kept', () => {
+    const closed = idleClosedSitting(head(), 5 * M, 50 * M);
+    expect(closed).toMatchObject({ status: 'abandoned', endedAt: 5 * M, closedBy: 'idle' });
+    expect(closed.updatedAt).toBe(50 * M);
+    expect(finishIdleClosed(closed, 60 * M)).toMatchObject({
+      status: 'done',
+      endedAt: 5 * M,
+      closedBy: 'idle',
+    });
+    expect(finishIdleClosed(head({ status: 'abandoned', endedAt: 1 }), 60 * M)).toBeNull();
+  });
+  it('a reopen leaves the gap out of its minutes, across several reopens', () => {
+    const closed = idleClosedSitting(head(), 20 * M, 70 * M);
+    const back = reopenedSitting(closed, 3 * H);
+    expect(back).toMatchObject({
+      status: 'active',
+      endedAt: null,
+      closedBy: null,
+      reopenedAt: 3 * H,
+    });
+    expect(back.idleMs).toBe(3 * H - 20 * M);
+    expect(sittingElapsedMs(back, 3 * H + 10 * M)).toBe(30 * M); // 20 before + 10 after
+    const twice = reopenedSitting(idleClosedSitting(back, 3 * H + 15 * M, 4 * H), 5 * H);
+    expect(sittingElapsedMs({ ...twice, endedAt: 5 * H + 5 * M }, 9 * H)).toBe(40 * M);
+  });
+  it('refuses a reopen unless closed by idle, in its window, its rep live and nothing else open', () => {
+    const closed = idleClosedSitting(head(), 5 * M, 50 * M);
+    const live = { status: 'in_progress' } as Task;
+    const other = head({ id: 's2', clientSittingId: 'c2', repTaskId: 't2', startedAt: H });
+    expect(sittingReopenError(closed, live, [closed], H)).toBeNull();
+    expect(sittingReopenError(head(), live, [], H)).toBeNull(); // already open: a no-op
+    expect(sittingReopenError(head({ status: 'abandoned', endedAt: 1 }), live, [], H)).toBe(
+      SITTING_REOPEN_ERROR,
+    );
+    expect(sittingReopenError(closed, live, [], SITTING_INGEST_WINDOW_MS + 1)).toBe(
+      SITTING_ENDED_ERROR,
+    );
+    expect(sittingReopenError(closed, { status: 'done' } as Task, [], H)).toBe(
+      SITTING_REOPEN_REP_ERROR,
+    );
+    expect(sittingReopenError(closed, undefined, [], H)).toBe(SITTING_REOPEN_REP_ERROR);
+    expect(sittingReopenError(closed, live, [closed, other], 2 * H)).toBe(SITTING_ACTIVE_ERROR);
+    // A later sitting that took its rep, itself ended.
+    const later = { ...other, repTaskId: 't1', status: 'abandoned' as const, endedAt: 2 * H };
+    expect(sittingReopenError(closed, live, [closed, later], 3 * H)).toBe(SITTING_REOPEN_REP_ERROR);
+    expect(sittingReopenError(finishIdleClosed(closed, H)!, live, [], H)).toBe(
+      SITTING_REOPEN_ERROR,
+    );
+  });
+  it('an event stamped after the end comes back; one before it is a straggler', () => {
+    // The extension's clock 3 h behind the server's; ended at 5 min server time.
+    const closed = idleClosedSitting(
+      head({ startedAt: 3 * H, clientStartedAt: 0 }),
+      3 * H + 5 * M,
+      4 * H,
+    );
+    const cut = 5 * M + 60_000; // the end on the extension's clock, plus the skew
+    expect(sittingReturns(closed, [{ at: cut }])).toBe(false);
+    expect(sittingReturns(closed, [{ at: cut }, { at: cut + 1 }])).toBe(true);
+    expect(sittingReturns(head(), [{ at: 9 * H }])).toBe(false); // open: nothing to come back to
+    expect(sittingReturns({ ...closed, closedBy: null }, [{ at: 9 * H }])).toBe(false);
+  });
+  it('an idle-closed sitting takes stragglers for its whole window, not just the grace', () => {
+    const closed = idleClosedSitting(head(), 5 * M, 50 * M);
+    expect(sittingIngestPhase(closed, 5 * H)).toBe('grace');
+    expect(sittingIngestPhase(closed, SITTING_INGEST_WINDOW_MS + 1)).toBe('closed');
+  });
+  it('a Start on its problem the same app day reopens it; another day, it attaches the rep', () => {
+    const closed = idleClosedSitting(head(), 5 * M, 50 * M);
+    const tasks = [{ id: 't1', status: 'in_progress', rollId: 'r', deletedAt: null } as Task];
+    const plan = (slug: string, sameDay: boolean, id = 'new') =>
+      planSittingStart(
+        { clientSittingId: id, problemSlug: slug },
+        [closed],
+        tasks,
+        'r',
+        H,
+        () => sameDay,
+      );
+    expect(plan('a', true)).toMatchObject({ kind: 'reopen', sitting: { id: 's1' }, ends: [] });
+    expect(plan('a', true, 'c1')).toMatchObject({ kind: 'reopen' }); // a repeat Start of it
+    expect(plan('a', false)).toMatchObject({ kind: 'attach', rep: { id: 't1' } });
+    expect(plan('a', false, 'c1')).toMatchObject({
+      kind: 'resume',
+      sitting: { status: 'abandoned' },
+    });
+    expect(plan('b', true)).toMatchObject({ kind: 'attach', rep: { id: 't1' } });
+    // Its rep finished: nothing to come back to.
+    const done = [{ ...tasks[0]!, status: 'done' } as Task];
+    expect(
+      planSittingStart(
+        { clientSittingId: 'n', problemSlug: 'a' },
+        [closed],
+        done,
+        'r',
+        H,
+        () => true,
+      ).kind,
+    ).toBe('spawn');
+  });
+  it('a reopen claims the gate without counting a Start; a Start can’t take it from a fresh reclaim', () => {
+    const T = 2 * H;
+    const closed = { id: 'A', status: 'abandoned' as const, startedAt: 0, endedAt: 5 * M };
+    const g0 = { ...emptyGate('d'), starts: 3 };
+    const g = reclaimStart(g0, 'A', [closed], T)!;
+    expect(g).toMatchObject({ openSittingId: 'A', openClaimedAt: T, starts: 3 });
+    // Still held by A (its idle close not yet released): stamped afresh, so that release can't free the reopen.
+    expect(reclaimStart(g, 'A', [closed], T + 5)).toMatchObject({
+      openSittingId: 'A',
+      openClaimedAt: T + 5,
+    });
+    expect(releaseStart({ ...g, openClaimedAt: T + 5 }, 'A', T)).toBeNull();
+    expect(releaseStart(g, 'A', T)).toMatchObject({ openSittingId: null });
+    // A Start that read A as ended: refused while the reclaim may still be writing A's head.
+    expect(() => claimStart(g, 'd', 'B', [closed], new Set(), T + 1000)).toThrow(
+      SITTING_ACTIVE_ERROR,
+    );
+    expect(claimStart(g, 'd', 'B', [closed], new Set(), T + 3 * M)?.openSittingId).toBe('B');
+    // Refused while another is open, or claimed moments ago by a Start not yet seen.
+    const open = { id: 'B', status: 'active' as const, startedAt: T - M, endedAt: null };
+    const held = { ...g0, openSittingId: 'B', openClaimedAt: T - M };
+    expect(() => reclaimStart(held, 'A', [closed, open], T)).toThrow(SITTING_ACTIVE_ERROR);
+    expect(() => reclaimStart(held, 'A', [closed], T)).toThrow(SITTING_ACTIVE_ERROR);
+    expect(reclaimStart(held, 'A', [closed], T + 2 * M)?.openSittingId).toBe('A');
   });
 });

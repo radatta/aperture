@@ -182,6 +182,9 @@ describe('outcomes', () => {
       ),
     ).toBe(true);
     expect(countsAsPractice(sit({ slug: 'two-sum', on: day(-1), test: true }), NOW)).toBe(false);
+    // An idle gap a reopen bridged isn't practice: 25 minutes on the clock, 23 of them away.
+    const away = sit({ slug: 'two-sum', on: day(-1), minutes: 25 });
+    expect(countsAsPractice({ ...away, idleMs: 23 * 60_000 }, NOW)).toBe(false);
     expect(
       attemptsOf(
         [sit({ slug: 'two-sum', on: day(-1), test: true, submits: ['accepted'] })],

@@ -30,6 +30,9 @@ import {
 } from './scenario';
 import { nearExpiry, type Session } from './token';
 
+// A slow step's own wait is at most ~45 min (sitting-auto-close's idle wait): it starts with at least this long.
+const SLOW_STEP_MCP_MIN_MS = 50 * 60_000;
+
 export interface BrowserSession {
   page: PwPage;
   signIn(shot: (name: string) => Promise<void>): Promise<Session>;
@@ -253,10 +256,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     tokenBaseline = new Set((await api.reads.listScopedTokens()).map((t) => t.id));
     // After the sweep (whose writes use the checked app session), before any step: the MCP token is the
     // test user's — WRONG_USER otherwise — before a step can write through it.
-    const mcpSession = await browser.signInMcp((p) =>
-      makeShot(p, createUi(p), d.shotsDir, () => 'mcp', r.shots),
-    );
+    const opened = browser;
+    const signInMcp = () =>
+      opened.signInMcp((p) => makeShot(p, createUi(p), d.shotsDir, () => 'mcp', r.shots));
+    let mcpSession = await signInMcp();
     const mcp = d.makeMcp(() => mcpToken(mcpSession, d.now));
+    // The MCP session keeps no refresh token: a slow step (a wall-clock wait) whose token could lapse inside it
+    // signs in again first, so a long wait never ends in "the MCP token has expired".
+    const renewMcp = async () => {
+      if (mcpSession.expiresAt * 1000 - d.now() < SLOW_STEP_MCP_MIN_MS)
+        mcpSession = await signInMcp();
+    };
 
     r.startSha = parseMarker(await d.fetchShell());
     let inPage: string | undefined;
@@ -322,6 +332,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         const s0 = d.now();
         try {
           await renewSession(); // a cached token can lapse mid-run, and a run with sim steps is minutes long
+          if (step.cost === 'slow') await renewMcp();
           await step.run(ctx);
           await Promise.all(pendingRecords); // a create's id is in the ledger before the next step reads it
           res.status = 'pass';

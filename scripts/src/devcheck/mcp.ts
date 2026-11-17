@@ -53,6 +53,7 @@ export interface DevLiveSitting {
   lastSitting?: {
     id: string;
     status: string;
+    closedBy?: 'idle' | null;
     liveReads: number;
     problem: { slug: string };
   } | null;
@@ -170,7 +171,15 @@ export interface DevDayView {
 
 // What get_sitting and list_sittings answer (PR C) — the fields the scenario reads.
 export interface DevSittingRead {
-  sitting: { id: string; status: string; submitCount: number; liveReads: number } | null;
+  sitting: {
+    id: string;
+    status: string;
+    closedBy?: 'idle' | null;
+    minutes?: number;
+    endedAt?: string | null;
+    submitCount: number;
+    liveReads: number;
+  } | null;
   problem?: { statement: string | null; companies: string[] };
   timeline?: (
     | { kind: 'codeChanged'; count: number }
@@ -191,6 +200,7 @@ export interface DevSittingRead {
 export interface DevSittingRow {
   id: string;
   status: string;
+  closedBy?: 'idle' | null;
   reviewed: boolean;
   tags: string[];
 }

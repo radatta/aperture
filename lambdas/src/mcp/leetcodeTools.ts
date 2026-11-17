@@ -147,6 +147,7 @@ function inactive(pull: LiveSittingPull, now: number) {
           id: s.id,
           problem: problemOf(s),
           status: s.status,
+          closedBy: s.closedBy ?? null,
           startedAt: iso(s.startedAt),
           expired,
           endedAt: iso(s.endedAt),
@@ -175,6 +176,7 @@ function sittingRow(s: Sitting, now: number) {
     day: s.day,
     problem: { title: s.problemTitle, slug: s.problemSlug, difficulty: s.difficulty },
     status: s.status,
+    closedBy: s.closedBy ?? null,
     expired: expiredAt(s, now),
     minutes: minutesOf(s, now),
     submitCount: s.summary.submits,
@@ -203,6 +205,7 @@ function sittingRead(d: SittingDetail, now: number) {
       problem: problemOf(s),
       lang: s.lang,
       status: s.status,
+      closedBy: s.closedBy ?? null,
       expired: expiredAt(s, now),
       day: s.day,
       startedAt: iso(s.startedAt),
@@ -263,9 +266,10 @@ export const LEETCODE_TOOLS: Tool[] = [
       'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste their code back at them — point at a line, a name or a case.',
       '`slot` says where the open sitting sits in today’s plan (leetcode_today): its kind (re-solve, carry-over, new, stretch, or off-plan), reason, the 30-minute cap and whether it is past it, and the coaching `rules` for that kind — follow them.',
       '`trace` is what the extension’s trace card recorded before the first submit (traced, partial, skipped, none; null until then) — don’t ask for a trace already written.',
+      'A sitting with no activity for 45 minutes (no extension event, no live pull) is closed automatically by the next read, at its last activity + 5 minutes (`closedBy: "idle"`, its rep left in progress) — here it reads closed, and the app writes the close; coming back to the problem the same day reopens it, and so does the Reopen button in the app. Each pull counts as activity, so talking it through keeps it open.',
       '`active: false` carries `lastSitting`, the most recent one.',
       '`expired: true` marks a last sitting left open past its 24 h window (no longer capturing; the next Start ends it).',
-      'Not read-only: each pull of an open sitting writes one count on it ("Claude watched live") — nothing else.',
+      'Not read-only: each pull of an open sitting writes one count on it ("Claude watched live") — nothing else; one that finds it idle reads it closed and writes nothing.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -310,6 +314,7 @@ export const LEETCODE_TOOLS: Tool[] = [
       'One LeetCode sitting, read back whole — for talking it through afterwards ("how did that sitting go?"). With no `id`, the most recent sitting.',
       'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, their final code in full, editing facts, and their review (their own words — never rewrite them back to them as yours).',
       'Talk from this data, not from memory, and never paste their code back at them — point at a line, a name or a case.',
+      '`closedBy: "idle"` means Aperture closed it after 45 minutes with no activity, at the last activity + 5 minutes (its rep left in progress).',
       'Read-only.',
     ].join(' '),
     inputSchema: {
@@ -341,6 +346,7 @@ export const LEETCODE_TOOLS: Tool[] = [
     description: [
       'LeetCode sittings, newest first — for planning prep ("what have I done this week?", "which problems took a hint?"). Each row: day, problem, status, minutes, submit count, the outcome (first submit accepted, submits before accepted, time to first submit), prep target, and whether they reviewed it with their own pattern tags.',
       'Optional from/to day keys (pass BOTH or NEITHER) and `limit` (1–100, default 30). `get_sitting` with a row’s id reads one in full.',
+      '`closedBy: "idle"` marks one Aperture closed after 45 minutes with no activity.',
       'Read-only.',
     ].join(' '),
     inputSchema: {
