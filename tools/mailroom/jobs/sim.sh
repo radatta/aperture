@@ -558,7 +558,7 @@ sim_launch_again() {
     SIM_AGAIN_DEAD="; no web process though the tree showed the app, so not terminated"
   fi
   ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
-  sim_find_icon || return 1
+  sim_icon_refind || return 1
   sim_icon_tap
 }
 
@@ -646,14 +646,18 @@ sim_icon_land() {
     sim_icon_reset || return 1
   done
 }
+# The icon found again within a launch: the note's "home pressed N times" counts presses pressed again for a drop over
+# the whole launch, so this find's extras add to it, never the caller's own deliberate press.
+sim_icon_refind() {
+  local p="${SIM_PRESSES:-1}" rc=0
+  sim_find_icon || rc=$?
+  SIM_PRESSES=$((p + SIM_PRESSES - 1))
+  return "$rc"
+}
 # Home pressed, the icon found again, tapped: one more of launch's four.
 sim_icon_reset() {
-  local p="${SIM_PRESSES:-1}"
   ax batch --step "button home" --step "sleep $SIM_SETTLE" >/dev/null 2>&1 || true
-  # the note's "home pressed N times" counts presses pressed again for a drop, the launch's whole: the find's extras
-  # add to it, never the reset's own deliberate press (that one is "Home pressed before each retap")
-  sim_find_icon || { SIM_PRESSES=$((p + SIM_PRESSES - 1)); return 1; }
-  SIM_PRESSES=$((p + SIM_PRESSES - 1))
+  sim_icon_refind || return 1
   sim_icon_tap || return 1
   SIM_TAPS=$((SIM_TAPS + 1)) SIM_RESETS=$((SIM_RESETS + 1))
 }

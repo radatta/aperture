@@ -70,7 +70,8 @@ def addobj: reduce .[] as $o ({}; reduce ($o | to_entries[]) as $e (.; .[$e.key]
 # A job that failed because iOS dropped an input. SWITCHER_FAILED counts only for its "the app switcher did not kill
 # the app … iOS dropped the input" case, not "no Aperture card … was the app running?" (sim.sh, op_kill): told apart by
 # the start of the note, which survives the 240-character cut in sim.sh. (No apostrophes in this program: it is single-quoted.)
-def dropfail: (.detail // "") as $d | ($d | IN("ICON_TAP_DROPPED", "ICON_SCROLL_DROPPED", "HOME_PRESS_DROPPED", "TAP_DROPPED", "NAV_UNCONFIRMED", "TYPED", "ERASED"))
+def dropfail: (.detail // "") as $d | ($d | IN("ICON_TAP_DROPPED", "ICON_SCROLL_DROPPED", "HOME_PRESS_DROPPED", "TAP_DROPPED", "TYPED", "ERASED"))
+  or ($d == "NAV_UNCONFIRMED" and ([.steps[]? | select(.status == "fail") | .note // "" | contains(" tab twice")] | any))
   or ($d == "SWITCHER_FAILED" and .status == "fail"
     and ([.steps[]? | select(.status == "fail") | .note // "" | startswith("the app switcher didn\u0027t kill")] | any));
 
@@ -182,7 +183,7 @@ def ratio($a; $b): if $a == null or $b == null or $b == 0 then "—" else "×" +
   "| Signal | Count |",
   "|---|---|",
   (.signals | to_entries[] | select(.value > 0) | "| \(.key) | \(.value) |"),
-  (.fails | "| dropped-input fails (ICON_TAP_DROPPED, HOME_PRESS_DROPPED, TAP_DROPPED, TYPED, ERASED, SWITCHER_FAILED) | \(.dropFails) |",
+  (.fails | "| dropped-input fails (ICON_TAP_DROPPED, ICON_SCROLL_DROPPED, HOME_PRESS_DROPPED, TAP_DROPPED, NAV_UNCONFIRMED after two tab taps, TYPED, ERASED, SWITCHER_FAILED) | \(.dropFails) |",
      "| AX_TIMEOUT | \(.axTimeout) |", "| TIMEOUT (job budget or PROBES) | \(.timeout) |", "| STALE_BUILD | \(.staleBuild) |"),
   (if .fails.seedMissing > 0 then "| **Done form task missing?** (no row Done to tap — `pnpm sim-bench:seed`) | \(.fails.seedMissing) |" else empty end),
   "",
