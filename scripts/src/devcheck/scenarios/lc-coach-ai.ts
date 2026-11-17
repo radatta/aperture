@@ -311,6 +311,28 @@ export const lcCoachAi: Scenario = {
         why: 'dev’s worker can’t be stopped mid-pick without a test-only switch',
       },
     },
+    {
+      id: 'switch-off-mid-pick',
+      entry: 'api',
+      kind: 'edge',
+      what: 'The switch turned off after the claim: the worker makes no call and the day falls back',
+      offDev: {
+        file: 'lambdas/src/coach/pick.test.ts',
+        test: 'the switch turned off after the claim: no call, a fallback',
+        why: 'dev can’t place a settings write between the claim and the worker’s start',
+      },
+    },
+    {
+      id: 'claim-after-change',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A slot change that reached the day first means no claim: the rules stay',
+      offDev: {
+        file: 'packages/shared/src/coachAi.test.ts',
+        test: 'won’t claim a day a slot change reached first',
+        why: 'dev can’t time a slot change between the plan read and the claim',
+      },
+    },
   ],
   steps: [
     {

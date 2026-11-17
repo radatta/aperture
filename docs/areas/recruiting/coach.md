@@ -122,7 +122,8 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
   `startedAt`), reads the day's input strongly consistent, builds the context, makes the call, runs the answer through
   the guardrails, settles the row, then applies a focus change. An event for a claim that isn't its own, already
   started or settled, or for a day with no row, returns `not-ours` with no call; a throw after the start settles
-  `unavailable`/`error` at once. One log line a run (`coach_worker`: the run, day and claim, never the user id), plus
+  `unavailable`/`error` at once. The switch off by then settles `unavailable`/`off` with no call (the
+  day stays a fallback if it's turned back on). One log line a run (`coach_worker`: the run, day and claim, never the user id), plus
   `coach_pick` from the gateway and `coach_pick_rejected` with a guardrail's code. Callers reach it through a
   `CoachPickInvoker` (`coach/invoker.ts`): live (an Event invoke), inline (tests, the local check), or disabled
   (testMode, or no `COACH_WORKER_FN` on the stage — then no pick is ever `due`).

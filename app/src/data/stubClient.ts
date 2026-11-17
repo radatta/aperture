@@ -1233,8 +1233,9 @@ class StubClient implements ApiClient {
     });
     const meta = { model: 'stub', usage: null, ms: 0 };
     const mode = stubCoachPickMode();
-    const res: CoachPickResult =
-      mode === 'fallback'
+    const res: CoachPickResult = !ci.aiPick // switched off after the claim, as the worker
+      ? { ok: false, reason: 'unavailable', detail: 'off', oldestDue: ctx.oldestDue, ...meta }
+      : mode === 'fallback'
         ? { ok: false, reason: 'api', detail: 'stub', oldestDue: ctx.oldestDue, ...meta }
         : pickResultOf(
             mode === 'invalid'

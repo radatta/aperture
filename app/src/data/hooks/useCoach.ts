@@ -30,12 +30,13 @@ export function useCoachToday(opts: { enabled?: boolean } = {}) {
     onSuccess: (today) => qc.setQueryData(qk.coachToday(), today),
   });
   const day = query.data?.ai?.status === 'due' ? query.data.day : null;
-  // Shared by every reader (Home's line and the card): the newest start's outcome for this day, wherever it was fired.
+  // Shared by every reader (Home's line and the card): the newest start's outcome for the plan's day, wherever it was
+  // fired. Filtered here, not in the cache filter, which is only re-run on a mutation event.
   const starts = useMutationState({
-    filters: { mutationKey: PICK_START, predicate: (m) => m.state.variables === query.data?.day },
-    select: (m) => m.state.status,
+    filters: { mutationKey: PICK_START },
+    select: (m) => ({ day: m.state.variables, status: m.state.status }),
   });
-  const startFailed = starts[starts.length - 1] === 'error';
+  const startFailed = starts.filter((x) => x.day === query.data?.day).at(-1)?.status === 'error';
   useEffect(() => {
     if (!day) return;
     const seen = started.get(qc) ?? started.set(qc, new Set()).get(qc)!;
