@@ -290,6 +290,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       getCoachStats: async () => ({ attempts: 0, ranking: [], patterns: [] }),
       listCoachAttempts: async () => [],
       getCoachFocusRow: async () => null,
+      getCoachDay: async () => null,
       draftSittingReview: async () => {
         throw new Error('unused');
       },
@@ -592,6 +593,15 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setCoachFocus: async () => {
         throw new Error('unused');
       },
+      recordCoachPickFocus: () => {
+        throw new Error('unused');
+      },
+      startCoachPick: async () => {
+        throw new Error('unused');
+      },
+      logCoachAttempts: async () => {
+        throw new Error('unused');
+      },
       restoreReminderToggles: async () => {
         const on = { remindTimed: true, remindDueDay: true, remindPlanned: true };
         reminderWrites.push(on);
@@ -737,6 +747,40 @@ describe('runPipeline', () => {
     })(w);
     await runPipeline(deps(w, [s], memLedger()));
     expect(seen).toBe(25);
+  });
+
+  it('the coach’s AI pick is off before any step, whatever the row held (absent reads as on)', async () => {
+    for (const held of [undefined, true, false]) {
+      const w = world();
+      if (held !== undefined) await w.api.writes.updateSettings({ coachAiPick: held });
+      const patches: unknown[] = [];
+      const update = w.api.writes.updateSettings;
+      w.api.writes.updateSettings = async (patch) => {
+        patches.push(patch);
+        return update(patch);
+      };
+      let seen: boolean | undefined;
+      const s = scenario(async () => {
+        seen = (await w.api.reads.getSettings()).coachAiPick;
+      })(w);
+      await runPipeline(deps(w, [s], memLedger()));
+      expect(seen).toBe(false);
+      // Written only when it wasn't off already, and in the one baseline write.
+      expect(patches).toEqual(held === false ? [] : [{ coachAiPick: false }]);
+    }
+  });
+
+  it('one baseline write puts back both the work block and the AI pick', async () => {
+    const w = world();
+    await w.api.writes.updateSettings({ pomodoroWorkMin: 1, coachAiPick: true });
+    const patches: unknown[] = [];
+    const update = w.api.writes.updateSettings;
+    w.api.writes.updateSettings = async (patch) => {
+      patches.push(patch);
+      return update(patch);
+    };
+    await runPipeline(deps(w, [scenario(async () => undefined)(w)], memLedger()));
+    expect(patches).toEqual([{ pomodoroWorkMin: 25, coachAiPick: false }]);
   });
 
   it('records every 429 by method (or path), and nothing else', async () => {

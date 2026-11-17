@@ -110,6 +110,11 @@ import {
   patchReview,
   normalizeReviewPatch,
   planDay,
+  aiPickPending,
+  AI_PICK_BUSY_ERROR,
+  claimAiRow,
+  coachAiPickOn,
+  settleAiRow,
   listRecords,
   coachStats,
   normalizeStatsRange,
@@ -288,6 +293,8 @@ import { signState } from './google/state';
 import type { Presigner } from './s3/presigner';
 import type { ObjectStore } from './s3/objects';
 import { noopAnthropic } from './anthropic/gateway';
+import { noopPickInvoker } from './coach/invoker';
+import type { CoachPickInvoker } from './coach/invoker';
 import type { AnthropicGateway } from './anthropic/gateway';
 import { SITTING_DRAFT_TIMEOUT_MS, sittingDraftData } from './anthropic/sittingReviewPrompt';
 
@@ -300,6 +307,7 @@ export interface BackendOptions {
   objects?: ObjectStore; // gated S3 delete seam (attachment bytes); unconfigured → throws on use
   plaid?: PlaidGateway; // gated Plaid seam; defaults to the inert noop
   financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
+  coachPickInvoker?: CoachPickInvoker; // starts the coach's AI pick; defaults to disabled (no pick is ever due)
   anthropic?: AnthropicGateway; // gated Claude API seam (quick add's parse); defaults to the inert noop
   placeTokens?: PlaceTokenStore; // the Shortcut token's lookup rows (outside the user partition)
   scopedTokens?: ScopedTokenStore; // scoped device tokens (capture.md): rows + their lookups
@@ -428,6 +436,7 @@ export class BackendClient implements ApiClient {
   private readonly finance: FinanceService;
   private readonly sessions: SessionService;
   private readonly anthropic: AnthropicGateway;
+  private readonly coachPick: CoachPickInvoker;
   private readonly placeTokens: PlaceTokenStore;
   private readonly scopedTokens: ScopedTokenStore;
   private readonly push: PushService;
@@ -444,6 +453,7 @@ export class BackendClient implements ApiClient {
     this.presigner = opts.presigner ?? unconfiguredPresigner;
     this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
+    this.coachPick = opts.coachPickInvoker ?? noopPickInvoker();
     this.placeTokens = opts.placeTokens ?? unconfiguredPlaceTokens;
     this.scopedTokens = opts.scopedTokens ?? unconfiguredScopedTokens;
     this.finance = new FinanceService({
@@ -563,6 +573,7 @@ export class BackendClient implements ApiClient {
       fluxDisclaimerAckAt: null,
       fluxSets: {},
       leetcodeRollId: null,
+      coachAiPick: true,
       ...REMINDER_SETTINGS_DEFAULTS,
     };
     const row = await this.repo.getSettingsRow(opts);
@@ -1252,9 +1263,11 @@ export class BackendClient implements ApiClient {
   // --- The LeetCode coach (coach.ts; docs/areas/recruiting/coach.md) ---
   // Everything the plan reads, for the user's day as the server reads it (or `day`). Consistent for a write's
   // read-modify-write, so a change made a moment ago is in the plan it changes.
+  // The AI pick reads only the server's today: a `day` argument never starts one.
   private async coachInput(day?: string, consistent = false): Promise<CoachInput> {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
-    const { dayStartHour } = await this.ensureSettings();
+    const settings = await this.ensureSettings();
+    const { dayStartHour } = settings;
     const now = this.now();
     const opts = { consistent };
     const [sittings, attempts, days, focus] = await Promise.all([
@@ -1264,11 +1277,75 @@ export class BackendClient implements ApiClient {
       this.repo.getCoachFocus(opts),
     ]);
     const today = day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
-    return { today, now, dayStartHour, sittings, attempts, days, focus };
+    return {
+      today,
+      now,
+      dayStartHour,
+      sittings,
+      attempts,
+      days,
+      focus,
+      aiPick: coachAiPickOn(settings),
+      aiCanStart: day === undefined && this.coachPick.enabled,
+    };
   }
   // Consistent: a read right after a coach write (a focus, a floor, a logged attempt) must see it.
   async getCoachToday(day?: string): Promise<CoachToday> {
     return planDay(await this.coachInput(day, true));
+  }
+  // Claims the day's one pick (a conditional write: two readers at once, one winner) and hands it to the worker. The
+  // winner whose invoke fails settles the day as a fallback at once, so nothing waits on a pick that never started.
+  async startCoachPick(): Promise<CoachToday> {
+    const ci = await this.coachInput(undefined, true);
+    const plan = planDay(ci);
+    if (plan.ai?.status !== 'due') return plan;
+    const claimId = this.ulid();
+    const empty: CoachDay = {
+      ...this.baseAt(ci.now),
+      id: ci.today,
+      day: ci.today,
+      floor: false,
+      changes: [],
+    };
+    const shape = this.repo.coachDayShape(ci.today);
+    const row = await this.repo.casUpdate(
+      shape,
+      ci.today,
+      (cur) => claimAiRow(cur, claimId, ci.now),
+      ci.now,
+      { create: () => claimAiRow(empty, claimId, ci.now)!, consistent: true },
+    );
+    if (row.ai?.claimId === claimId) {
+      try {
+        await this.coachPick.invoke({ userId: this.userId, day: ci.today, claimId });
+      } catch (err) {
+        console.log(
+          JSON.stringify({ event: 'coach_pick_invoke_failed', name: (err as Error).name }),
+        );
+        await this.repo.casUpdate(
+          shape,
+          ci.today,
+          (cur) =>
+            settleAiRow(
+              cur,
+              claimId,
+              {
+                ok: false,
+                reason: 'unavailable',
+                detail: 'invoke',
+                oldestDue: null,
+                model: null,
+                usage: null,
+                ms: null,
+              },
+              this.now(),
+            ),
+          this.now(),
+          { consistent: true },
+        );
+      }
+    }
+    return this.getCoachToday();
   }
   // Consistent: the coach tools read it right after a write (a peek, a logged attempt) to say what's due next.
   async listProblemRecords(): Promise<ProblemRecord[]> {
@@ -1317,6 +1394,7 @@ export class BackendClient implements ApiClient {
   }
   async setCoachSlot(input: CoachSlotInput): Promise<CoachToday> {
     return this.changeCoachDay((cur, ci) => {
+      if (aiPickPending(cur.ai, ci.now)) throw new Error(AI_PICK_BUSY_ERROR);
       const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
       const seen = new Set(all.filter((a) => a.day < ci.today).map((a) => a.slug));
       const known = (slug: string) => !!catalogProblem(slug) || all.some((a) => a.slug === slug);
@@ -2723,8 +2801,8 @@ export class BackendClient implements ApiClient {
       const err = fluxSetsError(patch.fluxSets);
       if (err) throw new Error(err);
     }
-    // A reminder toggle off the wire must be a real boolean — a string "false" would read as on.
-    for (const k of REMINDER_KEYS) {
+    // A toggle off the wire must be a real boolean — a string "false" would read as on.
+    for (const k of [...REMINDER_KEYS, 'coachAiPick']) {
       const v = (patch as Record<string, unknown>)[k];
       if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
     }

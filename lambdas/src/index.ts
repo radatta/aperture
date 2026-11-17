@@ -46,6 +46,9 @@ import { createS3ObjectStore } from './s3/objects';
 import { createLivePlaid } from './plaid/livePlaid';
 import { noopInvoker } from './finance/invoker';
 import { liveInvoker } from './finance/liveInvoker';
+import { noopPickInvoker } from './coach/invoker';
+import type { CoachPickInvoker } from './coach/invoker';
+import { livePickInvoker } from './coach/liveInvoker';
 import { createLiveAnthropic } from './anthropic/liveAnthropic';
 import { createPublicKeyReader } from './push/publicKey';
 import type { PublicKeyReader } from './push/publicKey';
@@ -85,6 +88,10 @@ const plaid = createLivePlaid({
 const financeInvoker = process.env.FINANCE_SYNC_FN
   ? liveInvoker(process.env.FINANCE_SYNC_FN)
   : noopInvoker();
+// The coach worker (cdk coach-worker): its AI pick, async. No worker on this stage → disabled: no pick is ever due.
+const coachPickInvoker = process.env.COACH_WORKER_FN
+  ? livePickInvoker(process.env.COACH_WORKER_FN)
+  : noopPickInvoker();
 
 // Quick add's parse (Claude API: raw fetch + the SSM key) — built once, inert until parseTask runs;
 // testMode swaps in noopAnthropic. No key on the stage → every parse says so and the line saves raw.
@@ -104,6 +111,7 @@ export interface BffDeps {
   objects: ObjectStore;
   plaid: PlaidGateway;
   financeInvoker: FinanceSyncInvoker;
+  coachPickInvoker: CoachPickInvoker;
   anthropic: AnthropicGateway;
   pushPublicKey: PublicKeyReader;
 }
@@ -115,6 +123,7 @@ const live: BffDeps = {
   objects,
   plaid,
   financeInvoker,
+  coachPickInvoker,
   anthropic,
   pushPublicKey,
 };
@@ -297,6 +306,7 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
         objects: d.objects,
         plaid: d.plaid,
         financeInvoker: d.financeInvoker,
+        coachPickInvoker: d.coachPickInvoker,
         anthropic: d.anthropic,
         pushPublicKey: d.pushPublicKey,
       },

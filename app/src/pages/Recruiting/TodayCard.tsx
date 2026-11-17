@@ -25,13 +25,30 @@ const ENGINE = ''; // the focus picker's "the coach's pick" option (clears the o
 // claude.ai drives the coaching; this is the glance, plus the few changes worth a tap: another problem, skip,
 // restore, a floor day, the focus override. Every write is reversible, and a refused one says why inline.
 export function TodayCard() {
-  const { data: today, isPending, isError, refetch } = useCoachToday();
+  const { data: today, isPending, isError, refetch, startFailed, retryStart } = useCoachToday();
   const id = useId();
+  const status = aiStatus(today, startFailed);
   return (
     <Card aria-labelledby={`${id}-h`} role="region" className="flex flex-col gap-3">
       <Text as="h2" id={`${id}-h`} size="lg" weight="semibold">
         Today’s practice
       </Text>
+      {/* The AI pick's one live region, mounted before the plan loads so its first line is announced too. */}
+      <div
+        className={cx(
+          'flex flex-wrap items-center gap-2',
+          (!status.text || status.quiet) && 'sr-only',
+        )}
+      >
+        <p role="status" className="text-sm text-ink-muted">
+          {status.text}
+        </p>
+        {status.retry && (
+          <Button variant="quiet" size="sm" onClick={retryStart}>
+            Retry
+          </Button>
+        )}
+      </div>
       {isError && !today ? (
         <LoadError onRetry={() => void refetch()}>Couldn’t load today’s plan.</LoadError>
       ) : isPending || !today ? (
@@ -39,13 +56,31 @@ export function TodayCard() {
           Loading today’s plan…
         </Text>
       ) : (
-        <TodayBody today={today} />
+        <TodayBody today={today} startFailed={startFailed} />
       )}
     </Card>
   );
 }
 
-function TodayBody({ today }: { today: CoachToday }) {
+// The AI pick's state on the card: whether it's still picking (slots withheld), and the line said about it — a
+// fallback's notice, a failed start (with a Retry), or, once picked, a screen-reader-only "picked" (`quiet`).
+function aiStatus(today: CoachToday | undefined, startFailed: boolean) {
+  const ai = today?.ai;
+  const picking = ai?.status === 'pending' || (ai?.status === 'due' && !startFailed);
+  const retry = ai?.status === 'due' && startFailed;
+  const text = picking
+    ? 'Opus is picking today’s problems… usually under a minute.'
+    : retry
+      ? 'Couldn’t start today’s AI pick — using the rules for now.'
+      : ai?.status === 'fallback'
+        ? ai.notice
+        : ai?.status === 'ok'
+          ? 'Opus picked today’s problems.'
+          : null;
+  return { picking, retry, text, quiet: ai?.status === 'ok' };
+}
+
+function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boolean }) {
   const slot = useSetCoachSlot();
   const floor = useSetCoachFloor();
   const [error, setError] = useState<string | null>(null);
@@ -70,13 +105,25 @@ function TodayBody({ today }: { today: CoachToday }) {
   }
   const change = (s: CoachSlot, action: 'swap' | 'skip' | 'restore') =>
     run(() => slot.mutateAsync({ slug: s.slug, action }));
-  const queue = [...dueBeyondSlots(today), ...today.next48h];
+  // While Opus picks, the rule slots aren't shown — nor what's due beyond them: the plan never shifts under a glance.
+  const ai = today.ai;
+  const { picking } = aiStatus(today, startFailed);
+  const queue = picking ? today.next48h : [...dueBeyondSlots(today), ...today.next48h];
 
   return (
     <div className="flex flex-col gap-4">
       <FocusLine today={today} />
 
-      {today.slots.length === 0 ? (
+      {ai?.status === 'ok' && ai.focusChange && (
+        <Text size="xs" tone="muted">
+          Opus moved the focus from {PATTERN_NAMES[ai.focusChange.from]} to{' '}
+          {PATTERN_NAMES[ai.focusChange.to]}
+          {ai.focusChange.why ? ` — ${ai.focusChange.why}` : ''}
+        </Text>
+      )}
+      {ai?.status === 'ok' && ai.note && <Text size="sm">{ai.note}</Text>}
+
+      {picking ? null : today.slots.length === 0 ? (
         <Text size="sm" tone="muted">
           Nothing to plan today — every problem in reach is done or queued for later.
         </Text>
@@ -226,7 +273,7 @@ function FocusLine({ today }: { today: CoachToday }) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Text size="sm" weight="medium">
           {PATTERN_NAMES[f.pattern]} · day {f.day} of {f.of}
-          {f.source === 'override' ? ' · your pick' : ''}
+          {f.source === 'override' ? ' · your pick' : f.source === 'ai' ? ' · Opus’s pick' : ''}
         </Text>
         <Button
           variant="quiet"
@@ -339,7 +386,7 @@ function SlotRow({
         )}
       </div>
       <Text size="xs" tone="muted">
-        {s.reason}
+        {s.aiWhy ?? s.reason}
       </Text>
       <div className="-ml-2 flex flex-wrap items-center gap-1">
         {s.status === 'in-progress' && s.sittingId && (

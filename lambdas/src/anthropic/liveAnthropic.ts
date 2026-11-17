@@ -1,6 +1,19 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { ModelOutcome } from '@aperture/shared';
-import type { AnthropicGateway, FluxNoteRequest, SittingDraftRequest } from './gateway';
+import type {
+  AnthropicGateway,
+  CoachPickRequest,
+  FluxNoteRequest,
+  SittingDraftRequest,
+} from './gateway';
+import {
+  COACH_PICK_EFFORT,
+  COACH_PICK_MAX_TOKENS,
+  COACH_PICK_MODEL,
+  coachPickOutputSchema,
+  coachPickSystemPrompt,
+  coachPickUserContent,
+} from './coachPickPrompt';
 import { PARSE_MODEL, parseOutputSchema, parseSystemPrompt } from './parsePrompt';
 import {
   fluxNoteOutputSchema,
@@ -71,6 +84,10 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     schema: Record<string, unknown>;
     maxTokens: number;
     timeoutMs: number;
+    // Haiku's calls turn thinking off and run at low effort; Opus 5.5 can't turn it off (a 400), so its call omits
+    // `thinking` and names its effort.
+    thinking?: 'disabled' | 'omit';
+    effort?: 'low' | 'medium' | 'high';
   }
 
   async function call(req: Call): Promise<Called> {
@@ -98,9 +115,9 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         body: JSON.stringify({
           model: req.model,
           max_tokens: req.maxTokens,
-          thinking: { type: 'disabled' },
+          ...(req.thinking === 'omit' ? {} : { thinking: { type: 'disabled' } }),
           output_config: {
-            effort: 'low',
+            effort: req.effort ?? 'low',
             format: { type: 'json_schema', schema: req.schema },
           },
           system: req.system,
@@ -229,6 +246,47 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         }),
       );
       return out;
+    },
+    // The user's practice history goes to the API (the same posture and data class as the review draft); the log line
+    // carries counts and tokens only, never the data or the answer.
+    async coachPick(req: CoachPickRequest) {
+      const started = Date.now();
+      const { meta, ...out } = await call({
+        model: COACH_PICK_MODEL,
+        system: coachPickSystemPrompt(),
+        user: coachPickUserContent(req.ctx),
+        schema: coachPickOutputSchema(req.ctx),
+        maxTokens: COACH_PICK_MAX_TOKENS,
+        timeoutMs: req.timeoutMs,
+        thinking: 'omit',
+        effort: COACH_PICK_EFFORT,
+      });
+      const ms = Date.now() - started;
+      const usage =
+        meta?.usage?.input_tokens !== undefined || meta?.usage?.output_tokens !== undefined
+          ? { input: meta.usage.input_tokens ?? 0, output: meta.usage.output_tokens ?? 0 }
+          : null;
+      const refused = !out.ok && meta?.stop === 'refusal';
+      log(
+        JSON.stringify({
+          event: 'coach_pick',
+          ok: out.ok,
+          reason: out.ok ? undefined : refused ? 'refusal' : out.reason,
+          status: meta?.status,
+          stop_reason: meta?.stop,
+          ms,
+          candidates: req.ctx.candidates.length,
+          attempts: req.ctx.recent.length,
+          input_tokens: meta?.usage?.input_tokens,
+          output_tokens: meta?.usage?.output_tokens,
+          model: COACH_PICK_MODEL,
+        }),
+      );
+      const common = { model: COACH_PICK_MODEL, usage, ms };
+      if (out.ok) return { ...out, ...common };
+      return refused
+        ? { ok: false as const, reason: 'refusal' as const, detail: 'refusal', ...common }
+        : { ...out, ...common };
     },
   };
 }

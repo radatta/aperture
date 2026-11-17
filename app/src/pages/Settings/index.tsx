@@ -867,6 +867,22 @@ function LeetcodeSection() {
             !rollsQ.isPending &&
             ' Add a Roll on the Rolls page first.'}
         </Text>
+        {/* The coach's AI pick (docs/areas/recruiting/coach.md → The AI pick). Old rows read undefined = on. */}
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={settings.coachAiPick !== false}
+            onChange={(e) => update.mutate({ coachAiPick: e.target.checked })}
+          />
+          <span className="flex flex-col">
+            <Text size="sm">AI pick: Opus chooses today’s problems</Text>
+            <Text size="xs" tone="muted">
+              Once a day, the first time the plan is opened, Opus picks up to four from the coach’s
+              candidates and says why each one today. Off: the coach’s rules pick, with no call.
+            </Text>
+          </span>
+        </label>
         {update.isError && (
           <p role="alert" className="text-xs text-danger">
             Couldn&apos;t save that — try again.

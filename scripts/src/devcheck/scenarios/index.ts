@@ -25,6 +25,7 @@ import { identifierCleanup } from './identifier-cleanup';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcCoach } from './lc-coach';
+import { lcCoachAi } from './lc-coach-ai';
 import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
 import { partsV2 } from './parts-v2';
@@ -72,6 +73,9 @@ export const SCENARIOS: Scenario[] = [
   finance,
   timedReminders, // its cheap rows first; its poller chain (two tick waits) last, so it can defer whole
   cognitoRefresh,
+  // Before lcSittings and lcCoach: their sittings, attempts and slot changes today put the day under way on the
+  // rules, which is never due a pick. Its pick (the setting on for its own steps only) leaves them the rules' plan.
+  lcCoachAi,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   lcCoach, // after lcSittings: it links its own roll, Starts on today's slot, and unlinks for the next
   devConcurrencyCaps,

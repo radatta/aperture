@@ -394,6 +394,7 @@ export const RPC_ARGS = {
         remindTimed: opt(bool),
         remindDueDay: opt(bool),
         remindPlanned: opt(bool),
+        coachAiPick: opt(bool),
       },
       { notObject: 'settings patch must be an object' },
     ),
@@ -443,6 +444,7 @@ export const RPC_ARGS = {
 
   // The LeetCode coach — the normalizers in coach.ts check every field with their own messages.
   getCoachToday: [opt(day)],
+  startCoachPick: [],
   listProblemRecords: [],
   getCoachStats: [opt(owned('range', ['from', 'to'], { object: true }))],
   setCoachSlot: [owned('slot', SLOT_KEYS, { object: true })],

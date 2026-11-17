@@ -3896,6 +3896,55 @@ export function runApiContract(
     });
 
     // The LeetCode coach (coach.ts): a plan derived on read from the sittings, and the few decisions it stores.
+    // The coach's AI pick (coachAi.ts): both sides answer with the same stand-in through the real guardrails, so a
+    // picked day reads like the rules' — what this pins is the claim, the once-a-day hold and the switch.
+    describe('lc coach ai', () => {
+      const history = () =>
+        api.logCoachAttempts([
+          { slug: 'two-sum', day: '2023-11-10', outcome: 'failed' },
+          { slug: 'valid-anagram', day: '2023-11-12', outcome: 'failed' },
+        ]);
+
+      it('a new account has no pick and no notice', async () => {
+        expect((await api.getCoachToday()).ai).toBeNull();
+        expect((await api.startCoachPick()).ai).toBeNull();
+      });
+
+      it('with history: due, then one pick, held all day; a past day never starts one', async () => {
+        await history();
+        const before = await api.getCoachToday();
+        expect(before.ai).toMatchObject({ status: 'due', source: 'rules', notice: null });
+        const t = await api.startCoachPick();
+        expect(t.ai).toMatchObject({ status: 'ok', source: 'ai', notice: null });
+        expect(t.slots.map((x) => [x.slug, x.kind])).toEqual(
+          before.slots.map((x) => [x.slug, x.kind]),
+        );
+        for (const x of t.slots) expect(x.aiWhy).toBe(x.reason);
+        expect(t.floor).toEqual(before.floor);
+        const again = await api.startCoachPick();
+        expect(again.ai?.pickedAt).toBe(t.ai?.pickedAt);
+        expect((await api.getCoachToday()).ai?.status).toBe('ok');
+        expect((await api.getCoachToday('2023-11-13')).ai).toBeNull();
+      });
+
+      it('slot changes key on the pick; the switch off shows the rules, and takes only a boolean', async () => {
+        await history();
+        const t = await api.startCoachPick();
+        const skipped = await api.setCoachSlot({ slug: t.slots[0]!.slug, action: 'skip' });
+        expect(skipped.slots[0]).toMatchObject({ slug: t.slots[0]!.slug, status: 'skipped' });
+        expect(await api.getSettings()).toMatchObject({ coachAiPick: true });
+        expect(await api.updateSettings({ coachAiPick: false })).toMatchObject({
+          coachAiPick: false,
+        });
+        const off = await api.getCoachToday();
+        expect(off.ai).toBeNull();
+        expect(off.slots.every((x) => x.aiWhy === null)).toBe(true);
+        await expect(api.updateSettings({ coachAiPick: 'no' as never })).rejects.toThrow(
+          /true or false/,
+        );
+      });
+    });
+
     describe('lc coach', () => {
       const TODAY = '2023-11-14'; // the suite's clock, in the user's zone
       // A finished sitting on `slug`: Start, one Submit (accepted or not), Done on its rep.

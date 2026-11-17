@@ -19,6 +19,8 @@ import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
 import { noopAnthropic } from './anthropic/gateway';
+import { noopPickInvoker } from './coach/invoker';
+import type { CoachPickInvoker } from './coach/invoker';
 import type { AnthropicGateway } from './anthropic/gateway';
 
 export interface RpcCall {
@@ -38,6 +40,7 @@ export interface RpcDeps {
   objects?: ObjectStore; // deletes attachment bytes in S3; ignored in testMode
   plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
   financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
+  coachPickInvoker?: CoachPickInvoker; // starts the coach worker's AI pick; ignored in testMode (no pick is due)
   anthropic?: AnthropicGateway; // live Claude API seam (index.ts, mcp/index.ts); ignored in testMode
   pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM read, index.ts); ignored in testMode
 }
@@ -68,6 +71,9 @@ export async function handleRpc(
     objects: call.testMode ? noopObjectStore() : deps.objects,
     plaid: call.testMode ? noopPlaid() : (deps.plaid ?? noopPlaid()),
     financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
+    coachPickInvoker: call.testMode
+      ? noopPickInvoker()
+      : (deps.coachPickInvoker ?? noopPickInvoker()),
     anthropic: call.testMode ? noopAnthropic() : (deps.anthropic ?? noopAnthropic()),
     placeTokens: new PlaceTokenStore(doc, writes), // the same writes: a smoke run mints nothing
     scopedTokens: new ScopedTokenStore(doc, writes), // likewise

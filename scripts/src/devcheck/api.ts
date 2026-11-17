@@ -262,6 +262,9 @@ export interface DevSettings extends Required<DevReminderSettings> {
   pomodoroWorkMin: number;
   fluxSets: Record<string, number>;
   leetcodeRollId?: string | null; // the lc-sittings scenario links its own roll, and unlinks it after
+  // The coach's AI pick (absent = on). Every run turns it off after the sweep (pipeline.ts) so no other scenario's
+  // read starts the day's one pick; lc-coach-ai turns it on for its own steps and off again in their `finally`.
+  coachAiPick?: boolean;
 }
 
 // The slices of a Roll and a LeetCode sitting the lc-sittings scenario writes and reads
@@ -350,6 +353,50 @@ export interface DevCoachSlot {
   sittingId: string | null;
   outcome: string | null;
   swappedFrom: string | null;
+  aiWhy?: string | null; // the AI pick's "why today"; null on a rule slot
+}
+// The plan's view of the day's AI pick (packages/shared/src/coach.ts CoachAiView).
+export interface DevCoachAiView {
+  status: 'due' | 'pending' | 'ok' | 'fallback';
+  source: 'ai' | 'rules';
+  notice: string | null;
+  reason: string | null;
+  note: string | null;
+  focusChange: { from: string; to: string; why: string } | null;
+  model: string | null;
+  pickedAt: number | null;
+}
+// packages/shared/src/coach.ts AI_PICK_NOTICE (scripts doesn't depend on shared; api.test.ts pins the copy).
+export const DEV_AI_PICK_NOTICE = 'AI pick unavailable today, using the rules';
+// The stored day row's pick (packages/shared/src/types.ts CoachDayAi), as exportData answers it.
+export interface DevCoachDayAi {
+  status: 'pending' | 'ok' | 'fallback';
+  claimId: string;
+  claimedAt: number;
+  startedAt: number | null;
+  settledAt: number | null;
+  model: string | null;
+  picks: { slug: string; kind: string; why: string }[];
+  note: string | null;
+  focus: { from: string; to: string; why: string } | null;
+  reason: string | null;
+  detail: string | null;
+  usage: { input: number; output: number } | null;
+}
+export interface DevCoachDay {
+  id: string;
+  day: string;
+  floor: boolean;
+  changes?: { action: string; from: string; to: string | null }[]; // today's slot changes (a restore removes one)
+  ai?: DevCoachDayAi;
+}
+// One attempt for logCoachAttempts (packages/shared/src/coach.ts CoachAttemptInput).
+export interface DevCoachAttemptInput {
+  slug: string;
+  day?: string;
+  outcome: 'clean' | 'solved' | 'failed';
+  minutes?: number | null;
+  note?: string | null;
 }
 export interface DevCoachToday {
   day: string;
@@ -362,6 +409,7 @@ export interface DevCoachToday {
   next48h: { slug: string; dueDay: string }[];
   momentum: { activeDays: number; lastActiveDay: string | null };
   unreviewed: { sittingId: string; slug: string }[];
+  ai?: DevCoachAiView | null; // null: the AI pick is off, or nothing to pick from
 }
 // What getCoachStats answers — the fields the Patterns tab's steps read.
 export interface DevCoachStats {
@@ -708,8 +756,16 @@ export function createApiClient({
       (await call<{ coachAttempts: DevCoachAttempt[] }>('exportData', [])).coachAttempts,
     // The stored focus override row, held or not (the plan's `focus.source` says only whether it still holds).
     getCoachFocusRow: async () =>
-      (await call<{ coachFocus: { pattern: string; sinceDay: string } | null }>('exportData', []))
-        .coachFocus,
+      (
+        await call<{
+          coachFocus: { pattern: string; sinceDay: string; source?: 'override' | 'ai' } | null;
+        }>('exportData', [])
+      ).coachFocus,
+    // One day's stored coach row (the floor, the slot changes, the AI pick) — the export's; null when none.
+    getCoachDay: async (day: string) =>
+      (await call<{ coachDays: DevCoachDay[] }>('exportData', [])).coachDays.find(
+        (d) => d.day === day,
+      ) ?? null,
     getSitting: (id: string) => call<DevSittingDetail>('getSitting', [id]),
     // The Haiku draft (PR C): a model call that writes nothing — a read here, one real call per use.
     draftSittingReview: (id: string) => call<DevReviewDraft>('draftSittingReview', [id]),
@@ -1123,6 +1179,41 @@ export function createApiClient({
       ]);
       if (pattern === null && ledger.has(id)) ledger.append({ run, op: 'deleted', id });
       return f;
+    },
+    // Today's AI pick (lc-coach-ai). It claims the day row's `ai` once, ever, and the worker settles it: the day row
+    // has no delete and the pick can't be undone, so that is not ledgered — nothing cleanup could remove (the
+    // setting it needs is put back by its step's `finally`, and by every run after the sweep). What it can leave
+    // that cleanup can undo is the focus: an `ok` pick may move it (source 'ai'), so `coach-focus:<run>` is recorded
+    // before the call, as setCoachFocus does — removing it clears the override; with no focus moved it reads gone.
+    // A pick the app starts itself (the Today card's first read) is recorded the same way, by the step, before the
+    // page opens: recordCoachPickFocus.
+    recordCoachPickFocus(): void {
+      const id = coachFocusId(run);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: COACH_FOCUS_VIA, title: 'ai pick focus' });
+    },
+    // `off`: the setting is off, so nothing can move the focus — no ledger line (cleanup would otherwise clear a
+    // focus row this run never wrote).
+    async startCoachPick(opts: { off?: boolean } = {}): Promise<DevCoachToday> {
+      if (!opts.off) writes.recordCoachPickFocus();
+      return call<DevCoachToday>('startCoachPick', []);
+    },
+    // Attempts logged through the API, as the app's and log_attempt's path: an intent, then each id from the
+    // answer (`coach:attempt`, deleted by deleteCoachAttempt at cleanup); a 4xx is a refusal before any write.
+    async logCoachAttempts(inputs: DevCoachAttemptInput[]): Promise<DevCoachAttempt[]> {
+      const title = `log ${inputs.map((a) => a.slug).join(',')}`;
+      ledger.append({ run, op: 'intent', via: COACH_ATTEMPT_VIA, title });
+      let out: DevCoachAttempt[];
+      try {
+        out = await call<DevCoachAttempt[]>('logCoachAttempts', [inputs]);
+      } catch (err) {
+        if (/→ HTTP 4\d\d/.test(String(err)))
+          ledger.append({ run, op: 'refused', via: COACH_ATTEMPT_VIA, title });
+        throw err;
+      }
+      for (const a of out)
+        ledger.append({ run, op: 'created', id: a.id, via: COACH_ATTEMPT_VIA, title });
+      return out;
     },
     // A rep's finish, which ends its sitting (Done needs the actual first: setTaskActual).
     async finishTask(id: string, to: 'done' | 'cancelled'): Promise<DevTask> {

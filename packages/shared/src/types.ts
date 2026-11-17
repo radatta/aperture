@@ -292,6 +292,9 @@ export interface Settings extends BaseEntity {
   remindTimed: boolean; // default true — a deadline with a clock time, at that time
   remindDueDay: boolean; // default true — a day-only deadline, at 09:00
   remindPlanned: boolean; // default true — a task planned for the day, at 09:00
+  // LeetCode coach: Opus picks the day's problems from the rules' candidates (coachAi.ts). Rows from before read
+  // back undefined and count as on (coachAiPickOn). Off → the rule plan, no call.
+  coachAiPick: boolean; // default true
 }
 
 // One device's Web Push subscription (reminders.ts). Never exported or returned: endpoint + p256dh + auth
@@ -527,12 +530,40 @@ export interface CoachDay extends BaseEntity {
   day: string;
   floor: boolean;
   changes: CoachSlotChange[];
+  ai?: CoachDayAi; // the day's AI pick (coachAi.ts); absent on rows from before it, and on a day with none
+}
+// Why a day's AI pick fell back to the rules. `invalid` is a guardrail's refusal (`detail` names it).
+export type CoachAiReason =
+  'unavailable' | 'timeout' | 'network' | 'api' | 'bad-json' | 'refusal' | 'invalid';
+export interface CoachAiPick {
+  slug: string;
+  kind: SlotKind; // the candidate's kind, so the slot's coaching rules are the engine's
+  why: string; // the model's one line, cut to AI_WHY_MAX
+}
+// One claim, one call, one result a day (docs/areas/recruiting/coach.md → The AI pick). `claimId` fences the
+// worker's writes to the claim that invoked it; a `pending` older than AI_PICK_STALE_MS reads as a timeout.
+export interface CoachDayAi {
+  status: 'pending' | 'ok' | 'fallback';
+  claimId: string;
+  claimedAt: number;
+  startedAt: number | null; // the worker began; set once, so a redelivered event never calls twice
+  settledAt: number | null;
+  model: string | null;
+  picks: CoachAiPick[]; // in the model's order; [] unless ok
+  note: string | null;
+  focus: { from: PatternId; to: PatternId; why: string } | null;
+  oldestDue: string | null; // the oldest due re-solve when picked — tomorrow's guardrail reads it
+  reason: CoachAiReason | null;
+  detail: string | null; // a guardrail code or an HTTP status, never model text
+  usage: { input: number; output: number } | null;
+  ms: number | null;
 }
 // The focus override (one row): the pattern held from `sinceDay`, the anchor the focus replay starts from.
+// `ai`: the day's AI pick moved it (a top-3 ranked pattern only).
 export interface CoachFocus extends BaseEntity {
   pattern: PatternId;
   sinceDay: string;
-  source: 'override';
+  source: 'override' | 'ai';
 }
 
 // What the extension's replay stream says about how the sitting went, folded at ingest so it outlives the

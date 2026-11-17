@@ -167,6 +167,27 @@ describe('the coach’s view helpers', () => {
       ),
     ).toBe('LeetCode · floor day · Two Sum');
   });
+  it('the Home line says the AI pick is running, never a plan about to change', () => {
+    const picking = (status: 'due' | 'pending') =>
+      coachGlance(
+        day({ slots: [{ status: 'open', slug: 'a' } as CoachSlot], ai: { status } as never }),
+      );
+    expect(picking('due')).toBe('LeetCode · picking today’s problems…');
+    expect(picking('pending')).toBe('LeetCode · picking today’s problems…');
+    const due = day({
+      slots: [{ status: 'open', slug: 'a' } as CoachSlot],
+      ai: { status: 'due' } as never,
+    });
+    expect(coachGlance(due, true)).toBe('LeetCode · 1 today');
+    expect(
+      coachGlance(
+        day({
+          slots: [{ status: 'open', slug: 'a' } as CoachSlot],
+          ai: { status: 'fallback' } as never,
+        }),
+      ),
+    ).toBe('LeetCode · 1 today');
+  });
 
   it('due beyond the slots: a live slot counts there; a skipped one, or one swapped away, is still due', () => {
     const due = [{ slug: 'a' }, { slug: 'b' }, { slug: 'c' }] as CoachToday['due'];

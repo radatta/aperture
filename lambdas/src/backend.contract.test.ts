@@ -15,6 +15,11 @@ import { runFinanceSync } from './finance/sync';
 import { InMemoryPlaid } from './plaid/gateway';
 import { fakePresigner } from './s3/presigner';
 import { fakeObjectStore } from './s3/objects';
+import { standInCoachPick } from '@aperture/shared';
+import { noopAnthropic } from './anthropic/gateway';
+import type { AnthropicGateway } from './anthropic/gateway';
+import { inlinePickInvoker } from './coach/invoker';
+import { runCoachPick } from './coach/pick';
 
 // The Lambda backend, run against the SAME contract suite as the stub — this is the parity proof the
 // whole page-first architecture rests on. Two passes:
@@ -45,6 +50,28 @@ function financeDeps(doc: DocClient, now: () => number) {
   return { plaid, financeInvoker };
 }
 
+// The coach's AI pick: the worker runs inline (the RPC returns after it, like the stub), answered by the stub's own
+// stand-in through the real guardrails, so the two compare 1:1.
+function coachDeps(doc: DocClient, now: () => number) {
+  const anthropic: AnthropicGateway = {
+    ...noopAnthropic(),
+    coachPick: async (req) => ({
+      ok: true,
+      fields: standInCoachPick(req.ctx),
+      model: 'stub',
+      usage: null,
+      ms: 0,
+    }),
+  };
+  const coachPickInvoker = inlinePickInvoker((e) =>
+    runCoachPick(
+      { repo: new Repo(doc, liveWrites(doc), e.userId), anthropic, now, log: () => {} },
+      e,
+    ),
+  );
+  return { anthropic, coachPickInvoker };
+}
+
 runApiContract('lambda (direct)', (now) => {
   const doc = new InMemoryDoc();
   return new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
@@ -57,6 +84,7 @@ runApiContract('lambda (direct)', (now) => {
     pushRegistry: new PushRegistry(doc, liveWrites(doc)),
     pushPublicKey,
     ...financeDeps(doc, now),
+    ...coachDeps(doc, now),
   });
 });
 
@@ -67,6 +95,7 @@ runApiContract('lambda (via handleRpc dispatch)', (now) => {
     objects: fakeObjectStore(),
     pushPublicKey,
     ...financeDeps(doc, now),
+    ...coachDeps(doc, now),
   };
   const client: Record<string, unknown> = {};
   for (const method of API_METHODS) {
