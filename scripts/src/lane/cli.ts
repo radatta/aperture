@@ -1,5 +1,6 @@
 // `pnpm lanes <command>`: one lane = one branch = one worktree = one Claude session named after the branch, born at
 // kickoff and gone at cleanup. Plain node, builtins only. docs/ops/LANES.md.
+import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -80,7 +81,13 @@ function realDeps(): Deps {
       slug: REPO_SLUG,
       procDir: '/proc',
     },
-    syncMain: () => syncMain((c, a, cwd) => run(c, a, { cwd }), mainRoot),
+    // Untrimmed, as `pnpm board sync-main` runs it: sync-main reads porcelain's XY columns.
+    syncMain: () =>
+      syncMain(
+        (c, a, cwd) =>
+          execFileSync(c, a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+        mainRoot,
+      ),
   };
 }
 

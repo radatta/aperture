@@ -131,11 +131,10 @@ From the top:
 - Home Screen metas: `viewport-fit=cover` with safe-area padding (the header: the top inset plus 8 px on the phone, 12 px on the desktop, so it clears the status bar), `theme-color` per scheme,
   the app's `apple-mobile-web-app-capable` = `yes` and `apple-mobile-web-app-status-bar-style` = `black-translucent`,
   `apple-mobile-web-app-title`, and the radar icon (`web/icon.svg`, Nord; `apple-touch-icon.png` is it at 180 px:
-  `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them when the icon is
-  added, so a re-add picks them up. Installed (`display-mode` standalone or fullscreen, which iOS may report instead),
-  the header's top inset is floored at 62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug
-  301994). **After the PR that added the two status-bar metas merges, remove the tower's Home Screen icon and add it
-  again.**
+  `rsvg-convert -w 180 -h 180 icon.svg -o apple-touch-icon.png` after an edit). iOS reads them only when the icon is
+  added: **after a change to them merges, remove the Home Screen icon and add it again.** Installed and upright on the
+  phone (`display-mode` standalone, or fullscreen, which iOS may report instead), the header's top inset is floored at
+  62 px, a Dynamic Island phone's, because iOS 26 can report 0 there (WebKit bug 301994).
 - The tab icon is its own radar, `web/favicon.svg`, drawn on a 32 grid with strokes that survive 16 px (a dark rounded
   tile, one bright ring, a sweep, a blip); the Home Screen's detailed one would read as a dark square there. Its PNGs are linked
   before the SVG because Safari's tab skips an SVG icon (it showed a letter monogram): `favicon-32.png` and
@@ -146,7 +145,9 @@ From the top:
 fixtures (or a running server) in Chromium, and the phone sizes in WebKit too, at 440×956 and 390×844 (dpr 3, touch)
 and 1512×860, light and dark, plain / stress (every string long, every source off) / empty, and fails on hidden text,
 a sideways scroll, a wrapped header, a spark over its numbers, `undefined` on the page, or a Mac-only button on the
-phone.
+phone. Two more frames per engine at 440 check the status-bar floor: nothing here emulates `display-mode` (Playwright
+has no option, Chromium ignores it over CDP), so the installed frame is served the page with the floor's
+`display-mode` terms dropped and must clear 62 px; the page as served keeps its own 8 px.
 
 **SOURCES** (collapsed, plus a header chip that also tints the live dot) lists every source with its age and state:
 `ok`, `stale`, `failed` (with the error) or `missing`.

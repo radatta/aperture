@@ -94,13 +94,6 @@
         padding: calc(env(safe-area-inset-top, 0px) + 12px) max(18px, env(safe-area-inset-right))
           10px max(18px, env(safe-area-inset-left));
       }
-      /* A Home Screen app: never under the status bar, even when iOS reports a 0 inset (WebKit bug 301994). 62px is
-         a Dynamic Island phone's inset (54px bar). iOS may report fullscreen for standalone (WebKit bug 264218). */
-      @media (display-mode: standalone), (display-mode: fullscreen) {
-        header {
-          padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 12px);
-        }
-      }
       header h1 {
         font-size: 21px;
         margin: 0;
@@ -583,7 +576,11 @@
           padding: calc(env(safe-area-inset-top, 0px) + 8px) max(12px, env(safe-area-inset-right))
             8px max(12px, env(safe-area-inset-left));
         }
-        @media (display-mode: standalone), (display-mode: fullscreen) {
+        /* Installed, upright: never under the status bar, even when iOS reports a 0 inset (WebKit bug 301994).
+           62px is a Dynamic Island phone's inset (54px bar); iOS may report fullscreen (WebKit bug 264218). Above
+           700px or sideways no installed screen has such a bar, so the floor stays here. */
+        @media (display-mode: standalone) and (orientation: portrait),
+          (display-mode: fullscreen) and (orientation: portrait) {
           header {
             padding-top: calc(max(env(safe-area-inset-top, 0px), 62px) + 8px);
           }

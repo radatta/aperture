@@ -119,6 +119,33 @@ async function check(page, tag, phone) {
 }
 
 // A tap opens a row with details, which then shows them in full; a slot card stays open across a poll.
+// The Home Screen app at 440, in a real engine's cascade: no browser here emulates display-mode (Playwright has no
+// option; Chromium ignores it over CDP), so the installed frame is served the page with the floor's display-mode
+// terms dropped (portrait stays), and headless reports a 0 inset, as iOS 26 can. Installed, the header clears the
+// 62 px floor; the page as served (a tab) keeps its own 8 px.
+async function standalone(b, name) {
+  for (const mode of ['installed', 'tab']) {
+    const tag = `${name}-${mode}-p440-light`;
+    const ctx = await b.newContext({ ...SIZES.p440, colorScheme: 'light' });
+    const page = await ctx.newPage();
+    let forced = 0;
+    if (mode === 'installed')
+      await page.route(BASE + '/', async (route) => {
+        const res = await route.fetch();
+        const html = (await res.text()).replace(/\(display-mode: (standalone|fullscreen)\) and /g, () => (forced++, ''));
+        await route.fulfill({ response: res, body: html });
+      });
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#meta .ver', { state: 'attached' });
+    if (mode === 'installed' && forced !== 2) fails.push(`${tag}: found ${forced} of the 2 floor terms to force`);
+    const top = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('header')).paddingTop));
+    if (mode === 'installed' ? top < 62 + 8 : top !== 8) fails.push(`${tag}: header padding-top ${top}px`);
+    await page.screenshot({ path: `${OUT}/${tag}.png` });
+    console.log(`${OUT}/${tag}.png`);
+    await ctx.close();
+  }
+}
+
 async function taps(page, tag) {
   const n = await page.locator('#needs .item.has-more').count();
   if (n) {
@@ -174,6 +201,7 @@ async function taps(page, tag) {
           await ctx.close();
         }
     }
+    await standalone(b, name);
     await b.close();
   }
   if (fails.length) {
