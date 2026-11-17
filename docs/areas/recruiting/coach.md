@@ -299,7 +299,7 @@ mode — each its own PR. (History-only solves cover logging old solves by hand,
 | `packages/shared/src/sittings.ts`                                                     | `CAUSE_TAGS`, `mergeReview`, `patchReview`, `hasReviewWords`, the trace fold               |
 | `packages/shared/src/traceComment.ts`                                                 | the trace-comment rule ([index.md](index.md) → _Coach events_)                             |
 | `packages/shared/src/coachLegacyFixtures.ts`                                          | synthetic legacy rows for tests                                                            |
-| `packages/shared/src/contractTests.ts`                                                | `lc coach`, `lc coach ai` — run 3× (stub, backend direct, via handleRpc)                   |
+| `packages/shared/src/contractTests.ts`                                                | `lc coach`, `lc coach ai`, `lc coach fixes` — run 3× (stub, backend direct, via handleRpc) |
 | `lambdas/src/backend.ts`, `app/src/data/stubClient.ts`                                | the coach RPCs                                                                             |
 | `lambdas/src/ddb/keys.ts`, `repo.ts`                                                  | the `lcc#` rows, and the legacy `lc#` reader                                               |
 | `lambdas/src/mcp/coachTools.ts`                                                       | the coach's MCP tools and `live_sitting`'s slot                                            |
@@ -347,16 +347,16 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
 
 ## The history, stats and story reads, and two more writes
 
-Added beside _Over MCP_'s table, in `coachTools.ts`; all six writes stay on **Ask**:
+Added beside _Over MCP_'s table, in `coachTools.ts`; all eight writes stay on **Ask**:
 
-| Tool                                              | Kind  | Over                                                                                                                       |
-| ------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
-| `list_problems {pattern?, due?, peeked?, limit?}` | read  | `listProblemRecords`; `due: true` is the re-solve queue (due today or earlier), oldest first; limit ≤ 100, default 30      |
-| `get_problem {slug}`                              | read  | one record, its `tries` (each day's outcome, help, cause, sitting and logged-attempt ids) and its sittings; untried → null |
-| `coach_stats {from?, to?}`                        | read  | `getCoachStats`, rates with a `pct` only from 5 tries, `weakest`, and a note on how to read it                             |
-| `list_stories`                                    | read  | `listStories`: the STAR story bank, for behavioral mocks                                                                   |
-| `set_focus_pattern {pattern \| null}`             | write | `setCoachFocus`, then the focus as the plan reads it; `other` refused                                                      |
-| `delete_attempt {id}`                             | write | `deleteCoachAttempt`, after finding the id among the live logged attempts; none → `deleted: false`, nothing written        |
+| Tool                                                      | Kind  | Over                                                                                                                                                                                                   |
+| --------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_problems {pattern?, due?, peeked?, track?, limit?}` | read  | `listProblemRecords`; `due: true` is the re-solve queue (due today or earlier), oldest first; `track` `clean` or `retry` (`peeked` still read as `retry`); limit ≤ 100, default 30                     |
+| `get_problem {slug}`                                      | read  | one record, its `tries` (each day's outcome, help, accepted, cause, `sources`, sitting and logged-attempt ids, and each sitting's `claudeNotes`), its sittings and its `legacy` groups; untried → null |
+| `coach_stats {from?, to?}`                                | read  | `getCoachStats`, rates with a `pct` only from 5 tries, `weakest`, and a note on how to read it                                                                                                         |
+| `list_stories`                                            | read  | `listStories`: the STAR story bank, for behavioral mocks                                                                                                                                               |
+| `set_focus_pattern {pattern \| null}`                     | write | `setCoachFocus`, then the focus as the plan reads it; `other` refused                                                                                                                                  |
+| `delete_attempt {id}`                                     | write | `deleteCoachAttempt`, after finding the id among the live logged attempts; none → `deleted: false`, nothing written                                                                                    |
 
 **Stats** (`coachStats`, RPC `getCoachStats(range?)`): over the counted attempts, so test sittings never count. A
 first try is a problem's first attempt ever, with no history-only solve dated before it, so a range never turns a re-solve into one; every later day on it is
@@ -369,7 +369,7 @@ additively.
 
 The review draft's one Haiku call also proposes the cause (`ReviewDraft.cause`, a tag or null): the prompt gives
 each tag's meaning and four signals beside the cases — accepted at all, the sitting ended (quit-early needs it), a
-Run before the first Submit, the extension's trace state ([index.md](index.md) → _Review and the Claude draft_).
+Run before the first Submit, the comment trace (`summary.commentTrace`; [index.md](index.md) → _Review and the Claude draft_).
 The cause stays out of the mistake lines, and a signal is never a line of its own. No extra call; about 20 more output
 tokens, so the ≈ $0.0003 a draft stands. A stray value is null and keeps the lines. The stub stands in with a
 fixed rule: a failed first Submit with no Run before it proposes `no-trace`, else nothing.
@@ -390,15 +390,15 @@ then `other` — problems outside the roadmap — last and only once something l
 Per pattern, over counted attempts only (test sittings never count), from `coachStats` plus `patternDetail`; the
 same fields ride `coach_stats` (rates with `pct`):
 
-| Field             | Counts                                                                                                                                        |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `firstTry`        | the problem's first attempt ever (none after a history-only solve), clean                                                                     |
-| `resolve`         | any later-day attempt, clean (derived from history, so no slot stamp)                                                                         |
-| `submitsPerTry`   | captured submits ÷ attempts with one (a re-solve is its own try), to 1 decimal; logged attempts carry none                                    |
-| `runBeforeSubmit` | attempts with a captured submit whose first submit had a Run before it                                                                        |
-| `traced`          | attempts whose trace stood at all three inputs at the first submit; `partial`, `skipped`, `none` miss; no coach data or the card off: neither |
-| `causes`          | cause tags                                                                                                                                    |
-| `weeks`           | first tries per ISO week                                                                                                                      |
+| Field             | Counts                                                                                                                              |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `firstTry`        | the problem's first attempt ever (none after a history-only solve), clean                                                           |
+| `resolve`         | any later-day attempt, clean (derived from history, so no slot stamp)                                                               |
+| `submitsPerTry`   | captured submits ÷ attempts with one (a re-solve is its own try), to 1 decimal; logged attempts carry none                          |
+| `runBeforeSubmit` | attempts with a captured submit whose first submit had a Run before it                                                              |
+| `traced`          | attempts traced by a trace comment before the first Run or Submit; none by then misses; sittings from before the rule count neither |
+| `causes`          | cause tags                                                                                                                          |
+| `weeks`           | first tries per ISO week                                                                                                            |
 
 Rates read "3 of 8"; a percentage joins from 5 tries, so a week of data stays honest. The weekly bars draw a week
 under 5 tries hollow. Charts are inline SVG, no dependency. Hooks: `app/src/data/hooks/useCoachStats.ts`, under

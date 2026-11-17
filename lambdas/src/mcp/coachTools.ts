@@ -696,9 +696,12 @@ export const COACH_TOOLS: Tool[] = [
         attempts: stored.map((a) => ({
           id: a.id,
           slug: a.slug,
+          title: a.title,
+          difficulty: a.difficulty ?? null,
           day: a.day,
           outcome: a.outcome,
           help: a.help,
+          accepted: a.accepted ?? a.outcome !== 'failed',
           cause: a.cause,
           historical: a.historical === true,
           nextDue: nextDue(records, a.slug),

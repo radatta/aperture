@@ -967,6 +967,7 @@ describe('stats', () => {
         outcome: 'failed',
         help: 'solution',
         cause: null,
+        accepted: false,
         minutes: null,
         note: null,
         historical: false,

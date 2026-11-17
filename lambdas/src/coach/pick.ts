@@ -45,6 +45,7 @@ export async function readCoachInput(repo: Repo, day: string, now: number): Prom
     focus,
     aiPick: settings?.coachAiPick !== false, // switched off after the claim: no call
     aiCanStart: false,
+    premium: settings?.leetcodePremium !== false, // as getCoachToday reads it: on by default
     legacy,
     voids,
     planMode: settings?.coachPlanMode ?? 'auto', // the pick keeps the mode's mix (validateCoachPick → 'mix')

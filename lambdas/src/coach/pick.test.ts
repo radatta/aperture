@@ -11,7 +11,7 @@ import type { CoachPickCall, CoachPickRequest } from '../anthropic/gateway';
 import { handleCoachPick } from '../coachWorker';
 import { inlinePickInvoker } from './invoker';
 import type { CoachPickEvent, CoachPickInvoker } from './invoker';
-import { runCoachPick } from './pick';
+import { readCoachInput, runCoachPick } from './pick';
 
 // The coach's AI pick on the server (docs/areas/recruiting/coach.md → The AI pick): the claim, the worker's one call,
 // the guardrails and every way it falls back — always to the rules, always with the notice. Synthetic history only.
@@ -180,6 +180,15 @@ describe('the worker’s edges', () => {
       source: 'override',
     });
     expect((await b.getCoachToday()).ai?.focusChange).toBeNull();
+  });
+
+  it('reads Premium as the plan does: on by default, off once the setting is', async () => {
+    const { doc, b } = await setup();
+    const premium = async () =>
+      (await readCoachInput(new Repo(doc, liveWrites(doc), U), '2026-11-16', NOW)).premium;
+    expect(await premium()).toBe(true);
+    await b.updateSettings({ leetcodePremium: false });
+    expect(await premium()).toBe(false);
   });
 
   it('the switch turned off after the claim: no call, a fallback', async () => {

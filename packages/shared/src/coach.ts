@@ -503,6 +503,7 @@ export interface ProblemTry {
   outcome: AttemptOutcome;
   help: HelpLevel;
   cause: CauseTag | null;
+  accepted: boolean; // accepted that day, a peek too (outcome stays failed with the solution read)
   minutes: number | null;
   note: string | null;
   historical: boolean;
@@ -569,6 +570,7 @@ export function problemRecords(
         outcome: a.outcome,
         help: a.help,
         cause: a.cause,
+        accepted: a.accepted,
         minutes: a.minutes,
         note: a.note,
         historical: a.historical,

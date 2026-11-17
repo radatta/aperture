@@ -12,6 +12,7 @@ interface T {
   on: string;
   outcome: AttemptOutcome;
   help?: HelpLevel;
+  accepted?: boolean;
   minutes?: number | null;
   historical?: boolean;
 }
@@ -20,6 +21,7 @@ const tryOf = (t: T): ProblemTry => ({
   outcome: t.outcome,
   help: t.help ?? 'none',
   cause: null,
+  accepted: t.accepted ?? t.outcome !== 'failed',
   minutes: t.minutes ?? null,
   note: null,
   historical: t.historical ?? false,
@@ -102,6 +104,13 @@ describe('problemStatus', () => {
       problemStatus(rec('two-sum', [{ on: day(-300), outcome: 'failed', historical: true }]), TODAY)
         .state,
     ).toBe('not-yet');
+    // Accepted only with the solution read: a peek, never a solve.
+    const peek = { on: day(-300), outcome: 'failed', help: 'solution', historical: true } as const;
+    expect(problemStatus(rec('two-sum', [{ ...peek, accepted: true }]), TODAY)).toMatchObject({
+      state: 'peeked',
+      done: false,
+    });
+    expect(problemStatus(rec('two-sum', [peek]), TODAY).state).toBe('not-yet');
   });
   it('the newest live try sets the state; a clean or solved try keeps it done', () => {
     const r = rec('two-sum', [
