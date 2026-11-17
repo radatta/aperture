@@ -1214,12 +1214,13 @@ window.addEventListener('pagehide', saveY);
 history.scrollRestoration = 'manual'; // the page restores its own scroll (below), once the first render is in
 applyOpen();
 tick().then(() => {
+  let y = 0;
   try {
-    const y = Number(sessionStorage.getItem(`tower:y:${open ?? ''}`));
-    if (y > 0) window.scrollTo(0, y);
+    y = Number(sessionStorage.getItem(`tower:y:${open ?? ''}`)) || 0;
   } catch {
-    // no storage: stay at the top
+    // no storage (a private window): the top
   }
+  window.scrollTo(0, y); // also over the browser's own jump to the #next anchor, which the strip would cover
 });
 setInterval(tick, POLL_MS);
 // the live timers: every second, against the server's clock

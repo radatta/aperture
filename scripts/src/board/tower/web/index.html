@@ -613,7 +613,8 @@
       body[data-open] main {
         grid-template-columns: minmax(0, 1fr);
       }
-      body[data-open] main > section.x-open .body {
+      #slipping.x-open .body,
+      #sources.x-open .body {
         display: block;
       }
       section.x-open {
@@ -637,6 +638,9 @@
         font-weight: 600;
         color: var(--hold);
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 16em;
       }
       .slip {
         color: var(--hold);
@@ -886,6 +890,11 @@
         }
         table.plan td.you {
           width: 26%;
+        }
+        .row .you {
+          white-space: normal;
+          overflow-wrap: anywhere;
+          max-width: none;
         }
       }
     </style>
