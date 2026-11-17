@@ -77,4 +77,4 @@ left running is this run's leak (the class that broke phone-nits and timer-credi
 `LOCAL_SERVER_FAILED`: the server or Vite didn't start — `server.log` / `vite.log` in the run dir (a
 `Cannot find module '../lightningcss…'` is the shared-`node_modules` trap: `CI=true pnpm install`). Anything else
 reads as on dev: the report, its rows and screenshots. A step that fails only locally is still a bug to read
-before dismissing — dev-test bugs are bugs (CLAUDE.md, phase 9).
+before dismissing — dev-test bugs are bugs (FEATURE-WORKFLOW.md → phase 9).

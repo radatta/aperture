@@ -5,24 +5,25 @@ Every feature runs the same eleven phases, in a lane (`docs/ops/LANES.md`) that 
 must-dos; this is the how-to. **Read it at kickoff, and again before each of phases 8–11** — nothing loads it on its
 own, so `pnpm lanes start`'s first prompt opens it before the kickoff.
 
-## Talking to the maintainer: through the hub only
+## Talking to the user: through the hub only
 
-A lane never sends a phone ping and never asks the maintainer in its own pane, in either mode (the maintainer,
-2026-11-16). Whatever it needs from the maintainer — a decision, a Mac command, a resource it can't reach — goes to the hub as
+A lane never sends a phone ping and never asks the user in its own pane, in either mode (the user,
+2026-11-16). Whatever it needs from the user — a decision, a Mac command, a resource it can't reach — goes to the hub as
 `[ask-maintainer]` with the options and the lane's pick, or the exact one-line Mac command; the hub relays it with
 its recommendation and sends back the answer as `[relay]` (`docs/ops/HUB.md` → _Messages_). So in a lane, "ask the
-user", "tell the user" and "hand the user" anywhere in the docs mean that message. Anything the maintainer types in
+user", "tell the user" and "hand the user" anywhere in the docs mean that message. Anything the user types in
 a lane's pane goes to the hub as `[info]` at once, verbatim in the message (it is not GitHub-bound text). Which hub
-messages count as the maintainer's approval: `docs/ops/HUB.md` → _Approval_.
+messages count as the user's approval: `docs/ops/HUB.md` → _Approval_; for a go only the pane can give, the
+`[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
 
 ## Two modes
 
-The maintainer names the mode; collaborative is the default.
+The user names the mode; collaborative is the default.
 
 - **Collaborative.** Claude stops at decision points: Plan's model, Plan's questions, the execute and n, review
   findings that need a product call or add scope, and the dev all-clear. Each is one `[ask-maintainer]` (findings as
   a list), and the lane waits for the hub's `[relay]`.
-- **Autonomous (only when the maintainer says so).** Claude makes every decision itself — it never stops or hands
+- **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands
   one back. Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
   (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a
   noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what
@@ -35,16 +36,16 @@ The maintainer names the mode; collaborative is the default.
     / at dev test / at PR / at Cleanup (a `.github/workflows/` branch's push, which the bot can't do, and a
     `.github/` branch's admission to the `dev` environment, only when Claude asks for them — phase 8; its removal at
     Cleanup — phase 11). The pause before Build is the only planned one.
-  - **Blocked anyway** (a maintainer-only command, an undecidable call): `[ask-maintainer] <branch> — <need>` to the
+  - **Blocked anyway** (a user-only command, an undecidable call): `[ask-maintainer] <branch> — <need>` to the
     hub, with the command or the options and a pick, and the lane file's `--needs … --cmd|--link`. A block the
-    maintainer isn't needed for (another lane, a stuck environment) is `[blocked]` instead — one message per block,
+    user isn't needed for (another lane, a stuck environment) is `[blocked]` instead — one message per block,
     never both. Carry on with whatever doesn't depend on it.
   - **Dev test is Claude's after the push:** run `pnpm devcheck --tier full --feature <the feature's scenario>` (it
     waits for the deploy itself; a branch with no scenario of its own runs without `--feature`), Read the screenshots.
     A green full run with zero leftovers, every _Feature coverage_ row `pass`, `off dev`, `needs you` or `deferred`
     (under _This feature_ and _Other scenarios_ alike), plus that review is the all-clear (phase 9). On
     `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a
-    `.github/workflows/` branch: the maintainer's push), `pnpm bot deploy-dev` again, rerun.
+    `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
   - **Finished:** `[pr-open]` (or `[pr-ready]` when the mailroom was unreachable) to the hub, with the devcheck
     report's _This feature_ lists — _You don't need to test_ / _Needs you_, "no feature rows" for a branch with no
     scenario of its own — and the report below.
@@ -52,7 +53,7 @@ The maintainer names the mode; collaborative is the default.
 **No hub.** Before the kickoff, `ListAgents` must list the hub (`board.sh hub` is the quick check). Missing, in
 either mode: `pnpm board lane <phase> --needs "no hub"` (the tower shows it), one line in the pane saying so — a
 statement, not a question — then carry on with what is already approved and keep sending at each checkpoint (the
-messages land when it is back). A call that needs the maintainer is parked as a logged decision until the hub returns.
+messages land when it is back). A call that needs the user is parked as a logged decision until the hub returns.
 
 ## Lane status and checkpoints
 
@@ -91,7 +92,7 @@ fields for the step plan and ETA ranges, they ride in `--step` text (`review r1 
    questions, mode, the step plan.
 3. **Questions** — collaborative: `[ask-maintainer]` with each question's options and a pick. Autonomous: answer and
    log them.
-4. **Build** — only on the maintainer's "execute" plus a number of review rounds (n). When asking for n, give a rough
+4. **Build** — only on the user's "execute" plus a number of review rounds (n). When asking for n, give a rough
    estimate of how many files the change will touch — a gauge of size, not a commitment. While building, after each
    section run the touched files' tests (`vitest run <file>`) and a typecheck. Autonomous: n per the sizing rule
    above, logged.
@@ -130,29 +131,29 @@ fields for the step plan and ETA ranges, they ride in `--step` text (`review r1 
      frees or lapses (exit 0 → `deploy-dev` again; 75, still held after 45 min → tell the hub who holds it and until
      when). Etiquette and the named dev order: `docs/ops/HUB.md` → _Lock etiquette_.
    - **`.github/` branches.** A branch that changes `.github/` is dispatched on its own ref, and the `dev`
-     environment admits it only by name: the first time, the admit command goes to the maintainer **before**
+     environment admits it only by name: the first time, the admit command goes to the user **before**
      `pnpm bot deploy-dev` — else GitHub refuses the deploy job and the run is wasted (`docs/ops/CI-BOT.md` →
-     _Commands_ → workflow changes). One that changes `.github/workflows/` is also pushed by the maintainer (the bot has
-     no `workflows` permission) — send the maintainer, from the worktree path, `git push -u origin <branch>` with the admit
+     _Commands_ → workflow changes). One that changes `.github/workflows/` is also pushed by the user (the bot has
+     no `workflows` permission) — send the user, from the worktree path, `git push -u origin <branch>` with the admit
      command `&&`-chained after it the first time (after a rebase, `git push --force-with-lease -u origin <branch>`),
      again after every fix commit, since the branch head must be the dispatched commit. **A `.github/workflows/`
      branch never skips this phase:** PR checks never run the deploy workflows, so a green `dev` deploy run is the
      only proof they even start. For a changed reusable workflow, check who else calls it
      (`scripts/src/workflow-permissions.test.ts` checks caller permissions).
    - **A dispatch that fails in `Deploy stacks` with `explicit deny in a service control policy`** means the branch
-     changes a shape dev's freeze holds still: the maintainer opens the freeze for it (`docs/ops/CI-BOT.md` → _Kill
+     changes a shape dev's freeze holds still: the user opens the freeze for it (`docs/ops/CI-BOT.md` → _Kill
      switch_ → _Opening the freeze_), asked through `[ask-maintainer]`.
-   - Also send the maintainer `code <Mac worktree path>`, to read the code directly, and a short checklist of
+   - Also send the user `code <Mac worktree path>`, to read the code directly, and a short checklist of
      what matters most to test on dev for this feature: a handful of items, not the review checklist.
    - **Then run the dev check yourself** — `pnpm devcheck --tier full --feature <its scenario>`, plus a
      `scenarios/<feature>.ts` whose rows encode the plan's matrix (`docs/ops/DEV-CHECK.md` → _Rows_); the report keeps
      the feature's rows apart from every other scenario's — and Read its screenshots; `ios` rows need the Mac awake —
      an unreachable Mac leaves them _Needs you_ with the reason, never a failure (`docs/ops/IOS-CHECK.md`); what they
      turn up goes through phase 9's rule.
-   - Autonomous: a `.github/workflows/` branch's push and a `.github/` branch's admission are the maintainer's
+   - Autonomous: a `.github/workflows/` branch's push and a `.github/` branch's admission are the user's
      (operator steps, else `[ask-maintainer]`); everything else is Claude's.
 9. **Dev feedback** — collaborative: `[ask-maintainer]` for how dev testing went. **Every defect a dev test turns up
-   — the headless agent's oddity, the maintainer's repro, a devcheck row — is a bug to fix:** "pre-existing" decides
+   — the headless agent's oddity, the user's repro, a devcheck row — is a bug to fix:** "pre-existing" decides
    only where (this branch when it's the same surface, else its own small PR), never whether; triage by reading the
    code path or reproducing, never "automation artifact" or "by design" unverified. Fixes go back through the gate
    (plus a review round if non-trivial), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
@@ -164,12 +165,12 @@ fields for the step plan and ETA ranges, they ride in `--step` text (`review r1 
     `pnpm bot lock release` (**→ hub:** `[lock]` released), `pnpm bot push`, then `pnpm mailroom open-pr`
     (`docs/ops/MAILROOM.md` → _Using it_; **→ hub:** `[pr-open]` with the URL, or `[pr-ready]` when the mailroom was
     unreachable). A push to an open PR after a rebase is `pnpm bot push --after-rebase` (a `.github/workflows/`
-    branch: the maintainer's `git push --force-with-lease -u origin <branch>`); after any push to an open PR,
+    branch: the user's `git push --force-with-lease -u origin <branch>`); after any push to an open PR,
     `pnpm mailroom edit-pr` brings its body up to date.
 11. **Cleanup** — once `gh pr view <branch>` shows it merged and main's deploy run is green, without asking the
-    maintainer (the maintainer, 2026-11-08), the session or the hub runs `pnpm lanes end <branch>` from `/workspace`
+    user (the user, 2026-11-08), the session or the hub runs `pnpm lanes end <branch>` from `/workspace`
     (`docs/ops/LANES.md` → _End_: it checks both gates, archives `localNotes/` to
-    `/workspace/localNotes/archive/<branch>/`, removes the worktree; `--force-abandon "<reason>"` on the maintainer's
+    `/workspace/localNotes/archive/<branch>/`, removes the worktree; `--force-abandon "<reason>"` on the user's
     word for an abandoned branch; by hand only when it can't run, its _End_ steps 1–3); the local branch goes at the
     end of the wave, when the hub runs `pnpm bot prune-branches` (squash merges make `-d` refuse; `-D` stays
     hard-blocked) — whenever `lanes end` prints a line, send it to the hub as printed, never through a Bash command:
@@ -182,8 +183,8 @@ fields for the step plan and ETA ranges, they ride in `--step` text (`review r1 
 **Every feature ends with `localNotes/report-<branch>.md`**, either mode, written even when the run never reached a
 PR (a run that stops before phase 10 releases its dev lock first): status first (PR ready / blocked / failed, and
 why), what the feature is, what happened (build, rounds, dev check, decisions), a short happy-path test the
-maintainer can run unaided, the devcheck report's _This feature_ lists, _You don't need to test_ and _Needs you_
-(what still needs the maintainer, and why; "no feature rows" for a branch with no scenario of its own), key
+user can run unaided, the devcheck report's _This feature_ lists, _You don't need to test_ and _Needs you_
+(what still needs the user, and why; "no feature rows" for a branch with no scenario of its own), key
 screenshots (relative links into `localNotes/`), and **each step's estimate against its actual**, which
 also go into `decisions.md` and the lane file, so the next plan's ranges calibrate. Its text gets pasted into PRs, so it follows
 `docs/ops/PUBLIC-CONTENT.md` like the PR body — scan both before `open-pr`. The last message in the pane links it

@@ -49,7 +49,8 @@ own .local/mac-root.
 Every throwaway repo is configured as the maintainer's GitHub login with its noreply address (the commit-identity
 block), and the hook never inherits this process's GIT_AUTHOR_*/GIT_COMMITTER_*. A repo-suite case may set "identity"
 ({"name", "email"} overriding that config), "head_author" ({"name", "email"}: a first commit by that author, for
---amend) and "env" (extra environment for the hook, e.g. GIT_COMMITTER_EMAIL).
+--amend), "env" (extra environment for the hook, e.g. GIT_COMMITTER_EMAIL) and "ids_patch" (merged into the copied
+identifiers.json; null deletes a key, e.g. maintainer.github, to prove the hook fails open).
 """
 
 import fcntl
@@ -164,6 +165,19 @@ def make_repo(root: str, branch: str, identity: dict | None = None) -> str:
     return repo
 
 
+def patch(base: dict, change: dict) -> dict:
+    """`change` merged into `base`, recursively; a None value deletes the key."""
+    out = dict(base)
+    for k, v in change.items():
+        if v is None:
+            out.pop(k, None)
+        elif isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = patch(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def hook_env(extra: dict | None) -> dict:
     """This process's environment minus any identity override, plus the case's own "env"."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
@@ -259,6 +273,9 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
         subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "base"], check=True, env=hook_env(author))
     if case.get("ids"):
         shutil.copy2(REPO_ROOT / "identifiers.json", pathlib.Path(repo) / "identifiers.json")
+        if "ids_patch" in case:
+            patched = pathlib.Path(repo) / "identifiers.json"
+            patched.write_text(json.dumps(patch(json.loads(patched.read_text(encoding="utf-8")), case["ids_patch"])), encoding="utf-8")
         src = pathlib.Path(repo) / "scripts" / "src"
         src.mkdir(parents=True)
         for name in ("identifiers.ts", "identifiers-scan.ts", "mac-root.ts", "commit-identity.ts"):

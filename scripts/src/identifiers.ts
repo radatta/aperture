@@ -36,6 +36,12 @@ export function loadIdentifiers(path = IDENTIFIERS_PATH): Identifiers {
     throw new Error(
       `${path}: maintainer.name, repo, a 12-digit aws.devAccountId and aws.prodAccountSha256 are required`,
     );
+  // The commit-identity check builds the expected author from it: a missing one must fail here, not deny every commit.
+  const login: unknown = ids.maintainer.github;
+  if (typeof login !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(login))
+    throw new Error(
+      `${path}: maintainer.github must be a GitHub login (letters, digits, hyphens; 1–39)`,
+    );
   return ids;
 }
 

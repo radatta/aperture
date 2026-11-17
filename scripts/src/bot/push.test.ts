@@ -10,7 +10,7 @@ const onBranch = (branch: string, extra: [string, string | (() => string)][] = [
     ['git rev-parse --verify -q refs/remotes/origin/', 'a'.repeat(40)],
     ['git rev-parse --short HEAD', 'abc1234'],
     ...extra,
-    ['git log --format', ''],
+    ['git log --no-show-signature --format', ''],
     ['git rev-list --merges', ''],
     ['git rev-list', ''],
     ['git push', ''],
@@ -91,7 +91,10 @@ describe('bot push', () => {
     const LOGIN = IDS.maintainer.github;
     const NOREPLY = `${LOGIN}@users.noreply.github.com`;
     const log = (an: string, ae: string, cn: string, ce: string) =>
-      ['git log --format', ['3'.repeat(40), an, ae, cn, ce].join('\0')] as [string, string];
+      ['git log --no-show-signature --format', ['3'.repeat(40), an, ae, cn, ce].join('\0')] as [
+        string,
+        string,
+      ];
 
     it.each([
       ['author', log('Someone', 'someone@example.com', LOGIN, NOREPLY)],
@@ -117,7 +120,7 @@ describe('bot push', () => {
       const { run, calls } = onBranch('feat');
       push(run, 't', { afterRebase: false }, quiet);
       const l = calls.find((c) => c.args[0] === 'log');
-      expect(l?.args.slice(2)).toEqual(['origin/main..HEAD', `^${'a'.repeat(40)}`]);
+      expect(l?.args.slice(3)).toEqual(['origin/main..HEAD', `^${'a'.repeat(40)}`]);
     });
 
     it('pushes the expected identity in either noreply form', () => {

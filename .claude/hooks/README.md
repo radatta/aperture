@@ -81,7 +81,9 @@ Its commit-identity block (`docs/ops/IDENTIFIERS.md` → _The checks_ → _Commi
 overrides `git var` can't see; it fails open the same way. Every throwaway repo the runner makes is configured as the
 login from `identifiers.json` with its noreply address, and the hook never inherits the runner's
 `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, so the `ids` cases pass on identity; the `identity:` fixtures set `"identity"` (a
-wrong config), `"env"` (the hook's environment) or `"head_author"` (a wrongly authored HEAD, for `--amend`).
+wrong config), `"env"` (the hook's environment), `"head_author"` (a wrongly authored HEAD, for `--amend`) or
+`"ids_patch"` (an edited `identifiers.json` — no `maintainer.github` proves the fail-open). The hook's `git … commit`
+gate reads an option value as a shell word, quotes included, so `git -c "user.name=A B" commit` reaches the block.
 
 ## Board hooks
 

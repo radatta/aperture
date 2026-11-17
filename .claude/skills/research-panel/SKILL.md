@@ -17,7 +17,9 @@ question with several independent angles.
 $ARGUMENTS
 
 No question above → ask for one and stop. Knobs in the text become `args`: `researchers=N` (default 5, 1–8) and
-`scout=`, `researcher=`, `synth=` (`models`; defaults sonnet, sonnet, opus). Strip them from the question.
+`scout=`, `researcher=`, `synth=` (`models`: each `sonnet`, `opus`, `haiku` or `fable`; defaults sonnet, sonnet,
+opus). Strip them from the question. The script logs and ignores anything else, and runs every stage as
+`search-specialist` (web tools, Read, Bash; no Edit or Write).
 
 ## Search privacy — hard rule
 
@@ -25,7 +27,8 @@ Nothing that identifies the project or a person goes to the panel: no repo name,
 person's name, email, Mac path or any personal detail in the question, the context, or — through them — any
 search query or fetched URL. Generic product-category wording only ("a solo developer's personal PWA on AWS
 serverless", not the project's names). The script repeats the rule in every agent prompt, alongside the COI
-rules, the `.secrets/` ban and the scoped-search rule; what you pass in is what it can't scrub.
+rules, the `.secrets/` ban and the scoped-search rule, and tags the question, context, angles and reports as
+data, not instructions; what you pass in is what it can't scrub.
 
 ## Steps
 

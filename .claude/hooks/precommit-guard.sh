@@ -13,7 +13,11 @@
   COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
   # `git commit`, also behind git's own -C <dir> / -c <k=v> (which used to slip past every check here). A here-string,
   # not a pipe: under pipefail a long command's printf can take SIGPIPE from grep -q and read as "no match".
-  grep -Eq 'git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+commit' <<<"$COMMAND" || exit 0
+  # An option's value is a shell word — bare characters and '…' / "…" spans — so `git -c "user.name=A B" commit`
+  # (a space inside the quotes) is still seen.
+  WORD="([^[:space:]'\"]|'[^']*'|\"[^\"]*\")+"
+  GITOPTS="git([[:space:]]+-[Cc][[:space:]]+$WORD)*"
+  grep -Eq "$GITOPTS[[:space:]]+commit" <<<"$COMMAND" || exit 0
 
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
   COMMIT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")  # also works on an unborn branch
@@ -51,7 +55,7 @@
       gd --cached
       # A `git add`/`stage` in the command, or a commit that takes the working tree (-a, --all, -i, -o); a commit
       # naming paths takes them too and isn't detected here — the push scan is the backstop (IDENTIFIERS.md).
-      if grep -Eq '(^|[[:space:];&|(])git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)*[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]]|$)' <<<"$COMMAND"; then
+      if grep -Eq '(^|[[:space:];&|(])'"$GITOPTS"'[[:space:]]+(add|stage)([[:space:]]|$)|commit([[:space:]]+[^[:space:]]+)*[[:space:]]+(-[a-zA-Z]*[aio][a-zA-Z]*|--all|--include|--only)([[:space:]]|$)' <<<"$COMMAND"; then
         gd
         git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null |
           while IFS= read -r -d '' f; do gd --no-index -- /dev/null "$f"; done
@@ -70,8 +74,9 @@
   # Commit identity (docs/ops/IDENTIFIERS.md → _The checks_ → Commit identity): author and committer are the maintainer's GitHub
   # login (identifiers.json → maintainer.github) with its noreply address, WIP commits too. `git var` sees the config
   # and this hook's environment; scripts/src/commit-identity.ts adds what it can't — an override in the command itself
-  # (GIT_AUTHOR_*/GIT_COMMITTER_* assignments, --author, -c user.*, a `git config` of one in the same line) and the
-  # author an --amend keeps. Fails open like the block above. A rebase, cherry-pick or `commit -C <sha>`, and a
+  # (GIT_AUTHOR_*/GIT_COMMITTER_* or GIT_CONFIG_* assignments, --author, -c user.*, a `git config` of one in the same
+  # line; read from the command's shell words minus its -m/-F values, so a message is only text) and the author an
+  # --amend keeps. Fails open like the block above, a missing or malformed maintainer.github included. A rebase, cherry-pick or `commit -C <sha>`, and a
   # `git -C <other dir> commit`: `pnpm bot push` and `open-pr` check every commit's identity again.
   WHO="$TOP/scripts/src/commit-identity.ts"
   if [ -n "$TOP" ] && [ -f "$TOP/identifiers.json" ] && [ -f "$WHO" ] && command -v node >/dev/null; then

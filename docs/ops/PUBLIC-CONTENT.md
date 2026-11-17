@@ -1,6 +1,6 @@
 # Public content — what GitHub-bound text may say
 
-The repo is public. Everything that reaches GitHub passes this one gate: code, docs, tests, fixtures, comments, commit messages, PR titles and bodies, and report text pasted into a PR — and what never waits for a PR (_Also public_, below). Hard identifiers (name, mailbox, paths, account ids) and their regex guard live in [IDENTIFIERS.md](IDENTIFIERS.md); this doc is the judgment half. The `code-reviewer` agent screens every diff against it, and the author scans the PR title, body and report before `open-pr`.
+The repo is public. Everything that reaches GitHub passes this one gate: code, docs, tests, fixtures, comments, commit messages, PR titles and bodies, and report text pasted into a PR — and what never waits for a PR (_Also public_, below). Hard identifiers (name, mailbox, paths, account ids) and their regex guard live in [IDENTIFIERS.md](IDENTIFIERS.md); this doc is the judgment half. The `code-reviewer` agent screens every diff against it, and the author scans the branch before its first push, then the PR title, body and report before `open-pr` (_What enforces it_).
 
 ## Never
 

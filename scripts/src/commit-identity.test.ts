@@ -12,6 +12,8 @@ import {
   keepsHeadAuthor,
   overrideProblems,
   rangeIdentityHits,
+  shellWords,
+  withoutMessages,
 } from './commit-identity.ts';
 import { IDS } from './identifiers.ts';
 
@@ -70,6 +72,7 @@ describe('rangeIdentityHits', () => {
     expect(hits.join()).not.toMatch(/someone|GitHub/);
     expect(calls[0]?.args).toEqual([
       'log',
+      '--no-show-signature',
       '--format=%H%x00%an%x00%ae%x00%cn%x00%ce',
       'origin/main..HEAD',
       `^${'f'.repeat(40)}`,
@@ -101,6 +104,18 @@ describe('overrideProblems', () => {
     [`git -c user.name=Someone commit -m "x"`, '`-c`'],
     [`git -c author.email=someone@example.com commit -m "x"`, '`-c`'],
     [`git --config-env=user.email=MAIL commit -m "x"`, '--config-env'],
+    [`git -c "user.name=Some One" commit -m "x"`, '`-c`'],
+    [`git -c 'user.email=someone@example.com' commit -m "x"`, '`-c`'],
+    [`git -c user.name="Some One" commit -m "x"`, '`-c`'],
+    [`git --config-env 'user.email=MAIL' commit -m "x"`, '--config-env'],
+    [`${GIT} --au="Someone <someone@example.com>" -m "x"`, '--author'],
+    [`${GIT} --auth Someone -m "x"`, '--author'],
+    [
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x ${GIT} -m "x"`,
+      'GIT_CONFIG_',
+    ],
+    [`GIT_CONFIG_PARAMETERS="'user.email'='x'" ${GIT} -m "x"`, 'GIT_CONFIG_'],
+    [`GIT_CONFIG_GLOBAL=/tmp/other ${GIT} -m "x"`, 'GIT_CONFIG_'],
     [`git config user.email someone@example.com && ${GIT} -m "x"`, '`git config`'],
     [`git config set user.name Someone; ${GIT} -m "x"`, '`git config`'],
     [
@@ -120,8 +135,44 @@ describe('overrideProblems', () => {
     `${GIT} --amend --no-edit --reset-author`,
     `git rebase origin/main --exec '${GIT} --amend --no-edit --reset-author'`,
     `git -C ../other commit -m "x"`,
+    // A message (or message file) is text, however it is written.
+    `${GIT} -m "blocked the --author override"`,
+    `${GIT} -m 'GIT_AUTHOR_EMAIL= is refused'`,
+    `${GIT} -qam"GIT_CONFIG_KEY_0= too"`,
+    `${GIT} --message="git -c user.email=x" --no-verify`,
+    `${GIT} --mess "--author is refused"`,
+    `${GIT} -m x -m "git config user.name y"`,
+    `git tag -a v1 -m "see GIT_COMMITTER_NAME=" && ${GIT} -m "x"`,
+    `${GIT} -F --author`,
+    // Not an abbreviation of --author: --no-author clears it.
+    `${GIT} --no-author -m "x"`,
   ])('allows %s', (cmd) => {
     expect(overrideProblems(cmd)).toEqual([]);
+  });
+});
+
+describe('shellWords and withoutMessages', () => {
+  it.each([
+    [`git -c "a b" commit -m 'c d'`, ['git', '-c', 'a b', 'commit', '-m', 'c d']],
+    ['a "b\\"c" d\\ e', ['a', 'b"c', 'd e']],
+    [`a&&b ;c|d\ne`, ['a', '&&', 'b', ';', 'c', '|', 'd', ';', 'e']],
+    [`a "" b`, ['a', '', 'b']],
+    [`x="a;b" y`, ['x=a;b', 'y']],
+  ])('%s', (cmd, want) => {
+    expect(shellWords(cmd)).toEqual(want);
+  });
+
+  it('cannot split an unterminated quote, so the raw line is matched (fail closed)', () => {
+    expect(shellWords(`${GIT} -m "x`)).toBeNull();
+    expect(overrideProblems(`${GIT} --author=x -m "x`)).toEqual(['`--author` on the commit']);
+  });
+
+  it('drops each message and message file, and nothing else', () => {
+    const strip = (cmd: string) => withoutMessages(shellWords(cmd)!);
+    expect(
+      strip(`${GIT} -m a -mb -am c --message d --message=e --m f -F g --fil h --file=i -v`),
+    ).toEqual(['git', 'commit', '-v']);
+    expect(strip(`${GIT} -m && echo`)).toEqual(['git', 'commit', '&&', 'echo']);
   });
 });
 
@@ -153,6 +204,20 @@ describe('commandHits (the hook)', () => {
     ]);
     expect(commandHits(idents, `${GIT} --amend --no-edit --reset-author`)).toEqual([]);
     expect(commandHits(idents, `${GIT} -m "x"`)).toEqual([]);
+  });
+
+  it.each([
+    [`${GIT} --amen --no-edit`, true], // git takes a unique prefix: --am and up
+    [`${GIT} --am`, true],
+    [`${GIT} --amend --res`, false],
+    [`${GIT} --amend --reset-author --no-res`, true], // the last of the pair wins
+    [`${GIT} --amend --no-reset-author --reset-author`, false],
+    [`${GIT} -m "fixed the --amend path"`, false], // a message is text
+    [`${GIT} --amend -m "no --reset-author here"`, true],
+    [`git rebase origin/main --exec '${GIT} --amend --no-edit'`, true],
+    [`${GIT} --all -m x`, false],
+  ])('keepsHeadAuthor: %s → %s', (cmd, want) => {
+    expect(keepsHeadAuthor(cmd)).toBe(want);
   });
 
   it('adds the overrides git var cannot see', () => {

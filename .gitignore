@@ -26,3 +26,6 @@ nohup.out
 .metals
 # Python bytecode (the hook fixture runner)
 __pycache__/
+
+# The hub pin is the maintainer's, typed on the Mac into /workspace/.coi (read-only here); never tracked
+.coi/hub-pin

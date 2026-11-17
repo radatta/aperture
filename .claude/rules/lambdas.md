@@ -10,7 +10,7 @@ paths:
   Single audit point; guarantees no writes fire during any test/smoke run. Home: `docs/product/CONVENTIONS.md` →
   _BFF writes_.
 - External calls go only through the gated gateways; JWT and origin-secret handling stay in-handler
-  (`docs/arch/INFRA.md` §4). The review round's backend checklist: `docs/ops/FEATURE-WORKFLOW.md` → phase 6.
+  (gateways: `docs/arch/TECH.md` → _Beyond the BFF_ and the `lambdas/src/` tree; the edge: `docs/arch/INFRA.md` §4). The review round's backend checklist: `docs/ops/FEATURE-WORKFLOW.md` → phase 6.
 - Tests run in Vitest's **node** env, so they match the Lambda's prod runtime; the node-env handler tests are the
   runtime proof (no second review agent).
 - Page-first: a backend half follows a frontend that already passed its rounds — check the lambda against the

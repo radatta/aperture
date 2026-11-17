@@ -320,7 +320,9 @@ describe('openPr', () => {
       if (to.includes('/inbox/')) fs.files.delete(to); // the Mac takes it, then goes quiet
     };
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
-    expect(logs.join('\n')).toMatch(/may still open the PR[\s\S]*gh pr list --head mac-mailroom/);
+    expect(logs.join('\n')).toMatch(
+      /may still open the PR[\s\S]*gh pr list --head mac-mailroom --json url,isCrossRepository \(a row with isCrossRepository true is a fork's/,
+    );
   });
 
   it('counts time spent before submit against the wait budget', async () => {
@@ -388,7 +390,7 @@ describe('openPr', () => {
     expect(out).toContain('COMMIT_IDENTITY');
     expect(out).toContain('cccccccccccc author name\ncccccccccccc author email');
     expect(out).not.toMatch(/someone|gh pr create|bbbbbbbbbbbb/i);
-    expect(calls.find((c) => c.args[0] === 'log')?.args.slice(2)).toEqual(['origin/main..HEAD']);
+    expect(calls.find((c) => c.args[0] === 'log')?.args.slice(3)).toEqual(['origin/main..HEAD']);
   });
 
   it('a large clean body passes the identifier check', async () => {
