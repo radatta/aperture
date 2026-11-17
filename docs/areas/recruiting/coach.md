@@ -10,12 +10,12 @@ decisions are stored; everything else is recomputed on every read.
 
 ## What's stored, what's derived
 
-| Stored (`lcc#`)                            | What                                                                           |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| `lcc#day#<day>` (`CoachDay`)               | that day's floor choice and slot changes (a swap or skip per slot, the newest) |
-| `lcc#att#<ulid>` (`CoachAttempt`)          | an attempt made outside the extension, or a peek seeded from the thread        |
-| `lcc#focus` (`CoachFocus`)                 | the focus override and the day it started                                      |
-| the review's `cause`, `test` (on the head) | the one cause tag of a sitting, and the test-sitting flag                      |
+| Stored (`lcc#`)                            | What                                                                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `lcc#day#<day>` (`CoachDay`)               | that day's floor choice, slot changes (a swap or skip per slot, the newest), and its AI pick (`ai`, _The AI pick_) |
+| `lcc#att#<ulid>` (`CoachAttempt`)          | an attempt made outside the extension, or a peek seeded from the thread                                            |
+| `lcc#focus` (`CoachFocus`)                 | the focus override and the day it started (`source`: the user's, or `ai`)                                          |
+| the review's `cause`, `test` (on the head) | the one cause tag of a sitting, and the test-sitting flag                                                          |
 
 `lcc#mock#` and `lcc#imp#` are reserved for later rows. Derived on read: attempts, problem records, the re-solve
 schedule, the focus pattern, the day's plan. At a few dozen sittings a month a read is two small Queries plus the
@@ -97,6 +97,49 @@ falling back to the same level only when the pattern has nothing easier left. Re
 ("yesterday", "November 14"), and a re-solve's opens with today's rule. A slot is a rep only once the extension's Start runs (one open rep per roll,
 [rolls](../home/rolls.md) D6).
 
+## The AI pick
+
+Opus 5.5 picks the day's problems from the rules' own candidates, once a day, and says why each one today
+(`packages/shared/src/coachAi.ts`; the call in `lambdas/src/anthropic/coachPickPrompt.ts`; the worker in
+`lambdas/src/coach/pick.ts`). On by default; Settings → LeetCode → **AI pick** off (`Settings.coachAiPick`) is the
+rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stays reserved).
+
+- **When:** the first read of the user's day that finds it `due` — the app's card or Home line, or `leetcode_today` —
+  starts it. `due` needs the setting on, the server's today (a `day` argument never starts one), a worker on the
+  stage, history before today and at least two candidates; a new user gets the rules with no notice.
+- **The read stays pure.** `getCoachToday` only reports `ai.status: 'due'`; the reader calls `startCoachPick()`,
+  which claims the day row with a conditional write (two readers at once: one claim) and Event-invokes the
+  `coach-worker` Lambda (`COACH_WORKER_FN`; 90 s, no retries; its role reads the table and the Anthropic key only).
+  The BFF and MCP Lambdas time out at 15 s, too short for an Opus call that always thinks.
+- **Once, ever:** a day with any `ai` is never claimed again; a fallback stays a fallback. The worker starts only its
+  own claim, once (`startedAt` fences a redelivered event), gives up without a call when its event waited over 20 s,
+  and its writes land only on that claim. A claim older than 120 s reads as `fallback`/`timeout` with no write, so a
+  dropped event never leaves a reader waiting; a result after that is stored as the timeout readers saw.
+- **Candidates** (`coachPickContext`): the rules' own pick first (with its kinds), then the carry-over, ≤ 15 due
+  re-solves oldest first, ≤ 5 unseen in the focus, ≤ 3 stretch, and, while no focus pick is held, ≤ 3 unseen in each
+  other top-3 pattern behind a focus change (`ifFocus`). Context: the rules' order, the last 14 days of attempts
+  (outcome, help, cause, last error, minutes against the 30-minute cap, notes cut to 160), per-pattern rates,
+  momentum, the focus, the top 3. No ids. His practice data goes to the API, as for the review draft.
+- **The call:** `claude-opus-5-5`, thinking on (it can't be off), effort `medium`, structured output (slugs and
+  patterns enumerated), 60 s, 8,000 max tokens, no fallback model, no retry; one log line `coach_pick` with tokens,
+  never text. Typical ≈ 4–7k in, 1–3k out: about $0.04–0.10 a day, worst ≈ $0.18.
+- **Guardrails, in code, never trusted to the model** (`validateCoachPick`): 1–4 unique picks, every one a
+  candidate; the oldest due re-solve can't be skipped two AI days running (`mustInclude`, from the last `ok` day's
+  `oldestDue`); a focus change only to another top-3 pattern and never while a pick (his or the AI's) is held; an
+  `ifFocus` pick only with that change. Any break rejects the whole answer (`invalid`, the code in `detail`); only
+  text is repaired (trimmed, a why ≤ 140, the note ≤ 240, an empty why → the rule's reason). The floor is always
+  the rules'.
+- **Any failure** — no key, a timeout, an API error, a refusal, bad JSON, a guardrail, a failed invoke — is the rule
+  plan with the notice "AI pick unavailable today, using the rules" on the card and in the thread. Never silent.
+- **The view:** an `ok` pick replaces the rule slots in its order (`CoachSlot.aiWhy`; `reason` keeps the rules'
+  facts); swaps, skips, status and alternatives work as on any day, keyed by the pick; it isn't re-checked on later
+  reads, so it holds all day. A focus change writes `CoachFocus` with `source: 'ai'` after the day row, and shows
+  only while that focus holds. While `due` or `pending` the card and the thread show no slots ("Opus is picking
+  today's problems…"; the card polls every 2.5 s, `leetcode_today` waits ≤ 9 s), and a slot change is refused.
+- **Local and stub:** both run the worker's steps with `standInCoachPick` — the rules' own pick and reasons, no
+  note — through the real guardrails; the stub's `aperture:stub:coachPick` key (`fallback`, `invalid`, `slow`)
+  shows the other states.
+
 ## The catalog
 
 `packages/shared/src/neetcode150.ts`: the public NeetCode 150 list (slug, LeetCode title, roadmap pattern,
@@ -110,7 +153,7 @@ LeetCode tags (`patternOfTags`), else `other`. The user's own problem history ne
 
 | Tool                                         | Kind   | Over                                                                                                                                            |
 | -------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note                                                                        |
+| `leetcode_today {day?}`                      | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 9 s; `ai` and each slot's `why`    |
 | `live_sitting`                               | (read) | gains `slot` (kind or `off-plan`, reason, cap, `overCap`, the rules) and `trace` (`summary.coach.trace`, [index.md](index.md) → _Coach events_) |
 | `mark_peeked {slug \| sittingId, day?}`      | write  | that day's sitting's review → help `solution`; none → a peek attempt                                                                            |
 | `set_cause_tag {sittingId?, cause, peeked?}` | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                          |
@@ -123,7 +166,7 @@ review's one cause) lives in the claude.ai project's instructions, kept outside 
 
 ## RPCs
 
-`getCoachToday(day?)`, `listProblemRecords()`, `setCoachSlot({slug, action, toSlug?})`, `setCoachFloor(on)`,
+`getCoachToday(day?)`, `startCoachPick()`, `listProblemRecords()`, `setCoachSlot({slug, action, toSlug?})`, `setCoachFloor(on)`,
 `setCoachFocus(pattern | null)`, `logCoachAttempts(inputs)`, `deleteCoachAttempt(id)`, `patchSittingReview(id,
 {cause?, help?, test?})` — JWT only, none an ingest method. Day-scoped writes act on the user's day as the server
 reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
@@ -132,20 +175,23 @@ reads it. `ExportBundle` carries `coachDays`, `coachAttempts`, `coachFocus`.
 
 Mocks, the
 history import, and countdown mode — each its own PR. `CoachToday.mode`, `target` and `arm` are already in the
-shape, and the gaps and cap are parameters, so countdown mode and an A/B arm add rather than change.
+shape, and the gaps and cap are parameters, so countdown mode and an A/B arm (the AI pick against the rules) add
+rather than change.
 
 ## Files
 
 | File                                                                                  | What                                                                                       |
 | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `packages/shared/src/coach.ts`                                                        | the engine: attempts, records, `resolveState`, `focusOn`, `planDay`, the write normalizers |
+| `packages/shared/src/coachAi.ts`                                                      | the AI pick: candidates, context, guardrails, the stand-in, the day row's claim steps      |
+| `lambdas/src/anthropic/coachPickPrompt.ts`, `lambdas/src/coach/`, `coachWorker.ts`    | the AI pick's prompt, the worker and its invokers                                          |
 | `packages/shared/src/neetcode150.ts`                                                  | the catalog and the pattern ids                                                            |
 | `packages/shared/src/sittings.ts`                                                     | `CAUSE_TAGS`, `mergeReview`, `patchReview`                                                 |
-| `packages/shared/src/contractTests.ts`                                                | `lc coach` — run 3× (stub, backend direct, via handleRpc)                                  |
+| `packages/shared/src/contractTests.ts`                                                | `lc coach`, `lc coach ai` — run 3× (stub, backend direct, via handleRpc)                   |
 | `lambdas/src/backend.ts`, `app/src/data/stubClient.ts`                                | the coach RPCs                                                                             |
 | `lambdas/src/ddb/keys.ts`, `repo.ts`                                                  | the `lcc#` rows                                                                            |
 | `lambdas/src/mcp/coachTools.ts`                                                       | the coach's MCP tools and `live_sitting`'s slot                                            |
-| `scripts/src/devcheck/scenarios/lc-coach.ts`                                          | the dev check's rows                                                                       |
+| `scripts/src/devcheck/scenarios/lc-coach.ts`, `lc-coach-ai.ts`                        | the dev check's rows                                                                       |
 | `app/src/pages/Recruiting/TodayCard.tsx`, `ReviewForm.tsx`, `Home/LeetcodeGlance.tsx` | the app: the Today card, the cause chips and Peeked, the morning line                      |
 
 ## In the app

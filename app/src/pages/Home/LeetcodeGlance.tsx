@@ -10,7 +10,7 @@ import { coachGlance } from '../Recruiting/recruitingHelpers';
 export function LeetcodeGlance() {
   const { data: settings } = useSettings();
   const linked = !!settings?.leetcodeRollId;
-  const { data: today, isError } = useCoachToday({ enabled: linked });
+  const { data: today, isError, pickStart } = useCoachToday({ enabled: linked });
   if (!linked) return null;
   // A failed read is one quiet-but-visible line, never silence.
   if (isError && !today)
@@ -28,7 +28,7 @@ export function LeetcodeGlance() {
   return (
     <Link to="/recruiting" className="flex items-center justify-between gap-2 px-1 text-sm">
       <Text size="sm" tone="muted" tabular className="min-w-0">
-        {coachGlance(today)}
+        {coachGlance(today, pickStart.isError)}
       </Text>
       <Text size="sm" tone="muted" aria-hidden className="shrink-0 whitespace-nowrap">
         Today →

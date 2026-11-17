@@ -174,6 +174,11 @@ describe('the coach’s view helpers', () => {
       );
     expect(picking('due')).toBe('LeetCode · picking today’s problems…');
     expect(picking('pending')).toBe('LeetCode · picking today’s problems…');
+    const due = day({
+      slots: [{ status: 'open', slug: 'a' } as CoachSlot],
+      ai: { status: 'due' } as never,
+    });
+    expect(coachGlance(due, true)).toBe('LeetCode · 1 today');
     expect(
       coachGlance(
         day({
