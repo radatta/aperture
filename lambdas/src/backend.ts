@@ -324,6 +324,7 @@ import type { PlaidGateway } from './plaid/gateway';
 import { EventGoneError, noopGoogle, PullIncompleteError } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
+import { stateKey } from './auth/strict';
 import type { Presigner } from './s3/presigner';
 import type { ObjectStore } from './s3/objects';
 import { noopAnthropic } from './anthropic/gateway';
@@ -485,7 +486,7 @@ export class BackendClient implements ApiClient {
   private readonly now: () => number;
   private readonly ulid: () => string;
   private readonly google: GoogleGateway;
-  private readonly stateSecret: string;
+  private readonly stateSecret: string | undefined;
   private readonly presigner: Presigner;
   private readonly objects: ObjectStore;
   private readonly finance: FinanceService;
@@ -513,7 +514,7 @@ export class BackendClient implements ApiClient {
     };
     this.ulid = createUlid(this.now);
     this.google = opts.google ?? noopGoogle();
-    this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
+    this.stateSecret = opts.stateSecret; // resolved on use: only Google connect needs it (stateKey)
     this.presigner = opts.presigner ?? unconfiguredPresigner;
     this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
@@ -3235,7 +3236,7 @@ export class BackendClient implements ApiClient {
   // testMode/smoke run makes zero real calls. Settings + task-pointer writes go through the repo Writes.
 
   async googleConnectUrl(): Promise<{ url: string }> {
-    const state = signState(this.userId, this.stateSecret, this.now());
+    const state = signState(this.userId, stateKey(this.stateSecret), this.now());
     return { url: await this.google.buildConsentUrl(state) };
   }
 

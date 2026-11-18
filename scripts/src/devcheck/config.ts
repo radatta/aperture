@@ -43,6 +43,8 @@ export const slotOrigin = (): string => SLOT_TARGETS[slot].origin;
 export const TEST_USER_EMAIL = IDS.email.devTestUser;
 // packages/shared/src/rpc.ts AUTH_HEADER — the BFF reads the JWT here (CloudFront owns Authorization).
 export const AUTH_HEADER = 'x-aperture-authorization';
+// packages/shared/src/rpc.ts AGENT_TOKEN_HEADER — the MCP server's static agent token (a raw value, no Bearer).
+export const AGENT_TOKEN_HEADER = 'x-aperture-agent-token';
 
 // The origin this run talks to: the slot's, unless the local check (local/run-local.ts) bound its own loopback
 // server and switched to it. Only a dev slot or a loopback http origin is accepted, so no config can aim a run at prod.

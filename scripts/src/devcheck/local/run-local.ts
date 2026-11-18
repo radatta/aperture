@@ -142,7 +142,8 @@ async function main(): Promise<number> {
         LOCAL_POOL_ID,
         LOCAL_CLAUDE_CLIENT_ID: LOCAL_CLAUDE_CLIENT,
         LOCAL_JWKS: JSON.stringify(auth.jwks),
-        // Set, so the agent-token and device-token paths reject as on dev rather than fall back to 'local'.
+        // Required: the server runs strict (STAGE=dev, lambdas/src/auth/strict.ts), so an unset token would refuse
+        // its path. Random, so the token paths reject as on dev; the run never presents them.
         AGENT_TOKEN: randomBytes(32).toString('hex'),
         DEVICE_TOKEN: randomBytes(32).toString('hex'),
       },

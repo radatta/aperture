@@ -30,7 +30,9 @@ header (no `Bearer` prefix). Same class + delivery as the recruiting **device to
 var from a gitignored file / `APERTURE_AGENT_TOKEN` in CI — `AGENT_TOKEN_PROD` is a secret of the `prod`
 GitHub environment, and an empty value in CI fails the synth instead of rotating it — NOT Secrets Manager), validated with
 `timingSafeEqual` in `resolveAgentUserId`, attributed to the same Cognito `sub` (`DEVICE_USER_ID`). It is
-kept **distinct** from the device token so the two revoke independently.
+kept **distinct** from the device token so the two revoke independently. On a stage an unset `AGENT_TOKEN` or
+`DEVICE_USER_ID` is a 401, never the `local` user (devb binds no user, so it refuses the agent token):
+[INFRA §10](../../arch/INFRA.md#10-secrets) → _Fail closed on a stage_.
 
 The token is **unscoped by method** (`*`) — it's a full app session — so the edge disambiguates by
 **credential, not method**: the agent header present → validate it, never fall through; else a Cognito
@@ -335,7 +337,7 @@ Claude Code has a bug history of not sending custom headers on the initial hands
 - **Unit tests** (`lambdas/src/mcp/*.test.ts`): the protocol, every tool over an in-memory table + the
   Google fake + a recording uploader, the auth fork, and the contract rename (3× via the shared suite).
 - **Only a deployed stage** proves: CloudFront forwarding the custom header, Claude Code actually sending
-  it, and `DEVICE_USER_ID` = your `sub` (a wrong value writes tasks under `u#local`).
+  it, and `DEVICE_USER_ID` = your `sub` (a wrong value writes under the wrong partition; an unset one is a 401).
 - **Every dev check** (`docs/ops/DEV-CHECK.md` → _MCP as the test user_) proves the bearer path end to end on
   dev: the claude client's code + PKCE sign-in, `Authorization` reaching `/mcp` through CloudFront, the
   client-bound verifier, and the tools a feature's scenario drives (`create_task`, `delete_task`,
@@ -376,7 +378,8 @@ exchange; the façade only publishes correct metadata from our origin.
   rejected here. Safe from the deploy cycle that keeps the BFF verifier un-bound, because the claude
   client has no CloudFront dependency (its callbacks are constants, its resource identifier is
   domain-literal). An unconfigured stage (no `MCP_CLIENT_ID`) **rejects** a bearer rather than falling
-  back to the `local` dev user — a public OAuth endpoint must not treat "unconfigured" as "anyone".
+  back to the `local` dev user — a public OAuth endpoint must not treat "unconfigured" as "anyone", on any stage
+  or none.
 - **D14 — cross-client replay denied.** The BFF verifier is deliberately not client-bound, so a
   claude.ai-minted token would otherwise be a valid full `/api/*` token. The BFF now **denies** tokens
   carrying the claude client id (`assertClientAllowed`), keeping "claude.ai can only do what `/mcp`

@@ -31,7 +31,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 **Backend / infra (resolved — the blueprint is [INFRA.md](INFRA.md))**
 
 - **Hosting:** S3 (static) + CloudFront (CDN + HTTPS — required for the PWA service worker).
-- **Auth:** Cognito (multi-device identity → JWT validated by the API).
+- **Auth:** Cognito (multi-device identity → JWT validated by the API). The `'local'` dev user exists off a stage only; on one, an unset credential refuses ([INFRA §10](INFRA.md#10-secrets) → _Fail closed on a stage_).
 - **Compute:** Lambda(s), TS/esbuild.
 - **Data:** DynamoDB, on-demand. Logical entities per §2; the physical model (keys / access patterns) is §2.4 — DDB is access-pattern-first, not relational.
 - **Cost:** effectively free at single-user scale — breakdown in INFRA §11.

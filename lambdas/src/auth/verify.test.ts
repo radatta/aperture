@@ -17,9 +17,20 @@ const okVerifier: Verifier = {
 };
 
 describe('resolveUserId', () => {
-  it('falls back to the dev user when no verifier is wired (local)', async () => {
-    expect(await resolveUserId(undefined, null)).toBe('local');
-    expect(await resolveUserId('Bearer anything', null)).toBe('local');
+  it('falls back to the dev user when no verifier is wired, off a stage (local)', async () => {
+    expect(await resolveUserId(undefined, null, false)).toBe('local');
+    expect(await resolveUserId('Bearer anything', null, false)).toBe('local');
+  });
+
+  it('refuses on a stage when no verifier is wired — never the dev user', async () => {
+    await expect(resolveUserId('Bearer anything', null, true)).rejects.toThrow(
+      /Unauthorized: auth not configured/,
+    );
+  });
+
+  it('a stage with a verifier: the right token is the user, a wrong one refused', async () => {
+    expect(await resolveUserId('Bearer good', okVerifier, true)).toBe('cognito-sub-123');
+    await expect(resolveUserId('Bearer forged', okVerifier, true)).rejects.toThrow(/Unauthorized/);
   });
 
   it('returns the token sub when a valid bearer token is presented', async () => {
@@ -40,14 +51,25 @@ describe('resolveUserId', () => {
 });
 
 describe('resolveDeviceUserId', () => {
-  it('falls back to local when no device token is configured (dev)', () => {
-    expect(resolveDeviceUserId(undefined, undefined, undefined)).toBe('local');
-    expect(resolveDeviceUserId('Bearer whatever', undefined, 'sub-1')).toBe('local');
+  it('falls back to local when no device token is configured, off a stage (dev)', () => {
+    expect(resolveDeviceUserId(undefined, undefined, undefined, false)).toBe('local');
+    expect(resolveDeviceUserId('Bearer whatever', undefined, 'sub-1', false)).toBe('local');
   });
 
   it('returns the configured device user when the token matches', () => {
-    expect(resolveDeviceUserId('Bearer tok', 'tok', 'sub-1')).toBe('sub-1');
-    expect(resolveDeviceUserId('Bearer tok', 'tok', undefined)).toBe('local'); // no owner → local
+    expect(resolveDeviceUserId('Bearer tok', 'tok', 'sub-1', false)).toBe('sub-1');
+    expect(resolveDeviceUserId('Bearer tok', 'tok', 'sub-1', true)).toBe('sub-1');
+    expect(resolveDeviceUserId('Bearer tok', 'tok', undefined, false)).toBe('local'); // no owner → local
+  });
+
+  it('refuses on a stage when the token or its owner is unset — never local', () => {
+    expect(() => resolveDeviceUserId('Bearer whatever', undefined, 'sub-1', true)).toThrow(
+      /Unauthorized: device token not configured/,
+    );
+    expect(() => resolveDeviceUserId('Bearer tok', 'tok', undefined, true)).toThrow(
+      /Unauthorized: no user is bound/,
+    );
+    expect(() => resolveDeviceUserId('Bearer nope', 'tok', 'sub-1', true)).toThrow(/Unauthorized/);
   });
 
   it('rejects a missing or wrong device token as Unauthorized', () => {
@@ -58,15 +80,26 @@ describe('resolveDeviceUserId', () => {
 });
 
 describe('resolveAgentUserId', () => {
-  it('falls back to local when no agent token is configured (dev)', () => {
-    expect(resolveAgentUserId(undefined, undefined, undefined)).toBe('local');
-    expect(resolveAgentUserId('whatever', undefined, 'sub-1')).toBe('local');
+  it('falls back to local when no agent token is configured, off a stage (dev)', () => {
+    expect(resolveAgentUserId(undefined, undefined, undefined, false)).toBe('local');
+    expect(resolveAgentUserId('whatever', undefined, 'sub-1', false)).toBe('local');
   });
 
   it('returns the configured agent user when the RAW header token matches (no Bearer prefix)', () => {
     expect(resolveAgentUserId('tok', 'tok', 'sub-1')).toBe('sub-1');
+    expect(resolveAgentUserId('tok', 'tok', 'sub-1', true)).toBe('sub-1');
     expect(resolveAgentUserId('  tok  ', 'tok', 'sub-1')).toBe('sub-1'); // trims surrounding whitespace
-    expect(resolveAgentUserId('tok', 'tok', undefined)).toBe('local'); // no owner → local
+    expect(resolveAgentUserId('tok', 'tok', undefined, false)).toBe('local'); // no owner → local
+  });
+
+  it('refuses on a stage when the token or its owner is unset — never local', () => {
+    expect(() => resolveAgentUserId('whatever', undefined, 'sub-1', true)).toThrow(
+      /Unauthorized: agent token not configured/,
+    );
+    expect(() => resolveAgentUserId('tok', 'tok', undefined, true)).toThrow(
+      /Unauthorized: no user is bound/,
+    );
+    expect(() => resolveAgentUserId('nope', 'tok', 'sub-1', true)).toThrow(/Unauthorized/);
   });
 
   it('rejects a missing or wrong agent token as Unauthorized', () => {

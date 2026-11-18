@@ -1,8 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from './api';
-import { DEV_ORIGIN } from './config';
+import { AGENT_TOKEN_HEADER, DEV_ORIGIN } from './config';
 import type { Ledger, LedgerEntry } from './ledger';
-import { MCP_CREATE_VIA, createMcpClient } from './mcp';
+import { MCP_CREATE_VIA, WRONG_AGENT_TOKEN, createMcpClient } from './mcp';
 
 function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & {
   entries: Omit<LedgerEntry, 't'>[];
@@ -42,7 +43,24 @@ const recorded = [{ run: 'r0', op: 'created' as const, id: 'T1', via: 'api:creat
 const client = (fetch: FetchLike, ledger = memLedger(recorded)) =>
   createMcpClient({ fetch, token: () => 'tok', ledger, run: 'r1', sleep: async () => undefined });
 
+it('the agent-token header mirrors packages/shared (rpc.ts)', () => {
+  const rpc = readFileSync(new URL('../../../packages/shared/src/rpc.ts', import.meta.url), 'utf8');
+  expect(rpc).toContain(`AGENT_TOKEN_HEADER = '${AGENT_TOKEN_HEADER}'`);
+});
+
 describe('createMcpClient', () => {
+  it('the agent-token probe sends only the bogus constant — no bearer — and returns the status', async () => {
+    const fetch = vi.fn(async () => new Response('{}', { status: 401 }));
+    expect(await client(fetch as unknown as FetchLike).reads.agentTokenProbe()).toBe(401);
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${DEV_ORIGIN}/mcp`);
+    expect(init.headers).toEqual({
+      'content-type': 'application/json',
+      [AGENT_TOKEN_HEADER]: WRONG_AGENT_TOKEN,
+    });
+    expect(JSON.parse(init.body as string)).toMatchObject({ method: 'initialize' });
+  });
+
   it('posts one JSON-RPC tools/call to the dev /mcp with the bearer in authorization', async () => {
     const fetch = server({ list_backlog: json([{ id: 'T1', title: 'a' }]) });
     expect(await client(fetch).reads.listBacklog()).toEqual([{ id: 'T1', title: 'a' }]);
@@ -63,6 +81,7 @@ describe('createMcpClient', () => {
   it('exposes exactly the declared reads and writes', () => {
     const c = client(server({}));
     expect(Object.keys(c.reads).sort()).toEqual([
+      'agentTokenProbe',
       'catalogStatus',
       'coachStats',
       'getAttachmentDownloadUrl',

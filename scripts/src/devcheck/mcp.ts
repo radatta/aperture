@@ -25,7 +25,7 @@ import {
   type FetchLike,
   type LedgerKind,
 } from './api';
-import { assertDevOrigin, targetOrigin } from './config';
+import { AGENT_TOKEN_HEADER, assertDevOrigin, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import { pendingIds, type Ledger } from './ledger';
 
@@ -280,6 +280,7 @@ export class McpRpcError extends Error {
   }
 }
 export const PARAM_ERROR = -32602;
+export const WRONG_AGENT_TOKEN = 'devcheck-not-an-agent-token';
 
 export function createMcpClient({
   fetch,
@@ -371,6 +372,18 @@ export function createMcpClient({
     items.flatMap((x) => (x && 'sittingId' in x ? [x.sittingId] : []));
 
   const reads = {
+    // A wrong agent token, no bearer: dev must answer 401 (mcp-auth-closed). The value is a fixed bogus
+    // constant — never the real token — and `initialize` reads nothing, so even a regression changes nothing.
+    agentTokenProbe: async (): Promise<number> => {
+      assertDevOrigin(mcpUrl());
+      const res = await fetch(mcpUrl(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', [AGENT_TOKEN_HEADER]: WRONG_AGENT_TOKEN },
+        body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method: 'initialize', params: {} }),
+      });
+      await res.text();
+      return res.status;
+    },
     toolsList: async () =>
       (await rpc<{ tools: { name: string }[] }>('tools/list', {})).tools.map((t) => t.name),
     // The tools as claude.ai sees them, schemas and descriptions included.
