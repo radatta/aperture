@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { catalogLoaded, unloadCatalog } from '@aperture/shared';
+import { legacyRow } from '@aperture/shared/contract';
 import { BackendClient } from './backend';
 import { FakeAnthropic } from './anthropic/gateway';
 import { FIXTURE_CLASSES, FIXTURE_SOURCE } from './catalog/fixture';
@@ -9,6 +10,7 @@ import type { CatalogImportEvent } from './catalog/invoker';
 import { FakeCatalogSource } from './catalog/source';
 import { CatalogStore } from './catalog/store';
 import { InMemoryDoc } from './ddb/DocClient';
+import { entityItem } from './ddb/mapping';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { handleRpc } from './handler';
@@ -122,6 +124,35 @@ describe('the full catalog through the BFF', () => {
     expect(await u2.listProblemRecords()).toEqual([]); // the catalog is shared; records stay each user's own
     const today = await u2.getCoachToday();
     expect(today.slots.every((s) => !s.slug.startsWith('synthetic-'))).toBe(true); // the plan stays NeetCode's
+  });
+
+  it('a legacy-only off-list problem reads the catalog’s facts, in its record and its legacy group', async () => {
+    const { doc, client } = setup();
+    const u1 = client('u1');
+    const r = legacyRow(
+      'synthetic-heap-merge',
+      '2026-10-20',
+      'accepted',
+      Date.UTC(2026, 9, 20, 17),
+      1,
+    );
+    await doc.put(
+      entityItem('u1', `lc#${r.day}#${r.id}`, { ...r, userId: 'u1', problemTitle: 'Old Title' }),
+    );
+    await u1.startCatalogImport({ classes: FIXTURE_CLASSES });
+    unloadCatalog(); // a fresh container: each read must load the catalog itself
+    expect((await u1.listLegacyGroups('synthetic-heap-merge'))[0]).toMatchObject({
+      title: 'Synthetic Heap Merge',
+      difficulty: 'Hard',
+    });
+    expect((await u1.listProblemRecords())[0]).toMatchObject({
+      slug: 'synthetic-heap-merge',
+      title: 'Synthetic Heap Merge',
+      pattern: 'heap',
+      difficulty: 'Hard',
+      inCatalog: false,
+      lists: ['leetcode'],
+    });
   });
 
   it('a smoke (testMode) import stages and claims nothing', async () => {

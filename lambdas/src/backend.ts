@@ -1762,6 +1762,7 @@ export class BackendClient implements ApiClient {
   // The legacy history's groups (read-only), with why each doesn't count.
   async listLegacyGroups(slug?: string): Promise<LegacyGroup[]> {
     if (slug !== undefined && typeof slug !== 'string') throw new Error('slug must be text');
+    await this.ensureCatalog(); // a group's title and difficulty read the full catalog when it is imported
     const [rows, voids] = await Promise.all([
       this.repo.listLegacyLeetcode({ consistent: true }),
       this.repo.listCoachVoids({ consistent: true }),

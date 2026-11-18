@@ -309,8 +309,8 @@ as on) lets the coach pick them like any other — `pickable`, `easierIn`, the r
 the room check all honour it (`CoachInput.premium`); off, they're never picked. The focus replay reads the setting
 as it stands now, so flipping it can move the focus (a pattern whose only unseen problems are Premium drops in or
 out of the ranking), and today's new or stretch pick with it. A problem outside the list joins
-the working catalog from the user's own sittings, its pattern from its LeetCode tags (`patternOfTags`), else
-`other`. The user's own problem history never goes in the tracked file.
+the working catalog from the user's own sittings, its pattern from the full catalog once one is imported
+(_The full LeetCode catalog_), else its LeetCode tags (`patternOfTags`), else `other`. The user's own problem history never goes in the tracked file.
 
 ## Over MCP
 
@@ -408,7 +408,7 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
 
 ## The history, stats and story reads, and two more writes
 
-Added beside _Over MCP_'s table, in `coachTools.ts`; all eight writes stay on **Ask**:
+Added beside _Over MCP_'s table, in `coachTools.ts`; all nine writes stay on **Ask**:
 
 | Tool                                                      | Kind  | Over                                                                                                                                                                                                   |
 | --------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
