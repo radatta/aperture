@@ -11,7 +11,7 @@ import {
   ticks,
   type Point,
 } from './meter.ts';
-import { quantile, shrinkLog, slope, spearman } from './stats.ts';
+import { maxOf, minOf, quantile, shrinkLog, slope, spearman } from './stats.ts';
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 5, 10, min)).toISOString();
 const log = (rows: Parameters<typeof meterRow>[0][]) =>
@@ -218,6 +218,11 @@ describe('fit', () => {
 });
 
 describe('stats', () => {
+  it('takes min and max of large arrays', () => {
+    const xs = Array.from({ length: 200_000 }, (_, i) => i);
+    expect([minOf(xs), maxOf(xs), minOf([]), maxOf([])]).toEqual([0, 199_999, Infinity, -Infinity]);
+  });
+
   it('interpolates quantiles', () => {
     expect(quantile([1, 2, 3, 4], 0.5)).toBe(2.5);
     expect(quantile([], 0.5)).toBeNaN();

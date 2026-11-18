@@ -2,6 +2,7 @@
 // from each session's own markers: an explicit `pnpm board lane <phase>` wins; otherwise tool-use heuristics move
 // the phase forward (FEATURE-WORKFLOW.md's order). Subagents take their parent's phase at their first call.
 // docs/ops/USAGE-METER.md → Phases.
+import { minOf } from './stats.ts';
 import type { Marker } from './transcript.ts';
 
 export const PHASES = [
@@ -126,10 +127,8 @@ export function agreement(
   if (!markers.some((m) => m.kind === 'lane-phase')) return null;
   const explicit = timeline(markers.filter((m) => m.kind === 'lane-phase'));
   const heuristic = timeline(markers.filter((m) => m.kind !== 'lane-phase'));
-  const from = Math.min(
-    ...markers
-      .filter((m) => m.kind === 'lane-phase' && m.phase && EXPLICIT[m.phase])
-      .map((m) => m.ts),
+  const from = minOf(
+    markers.filter((m) => m.kind === 'lane-phase' && m.phase && EXPLICIT[m.phase]).map((m) => m.ts),
   );
   let agree = 0;
   let total = 0;

@@ -185,6 +185,18 @@ describe('fit model', () => {
     expect(scheduledResets(gap, wide)).toEqual(
       [R - 7 * 86_400_000, R, R + 7 * 86_400_000].map((t) => new Date(t).toISOString()),
     );
+    // a manual reset after the previous scheduled one, no rows between: that reset and the manual one are both kept
+    const after = parseMeter(
+      [
+        meterRow({ ts: '2026-01-13T10:00:00Z', resetsAt }), // p = 01-15 09:00
+        meterRow({ ts: '2026-01-19T10:00:00Z', resetsAt: resetsAt + 10 * 86400 }), // M + 7 d, M = 01-18
+      ].join('\n'),
+    ).rows;
+    expect(scheduledResets(after, wide)).toEqual([
+      '2026-01-08T09:00:00.000Z',
+      '2026-01-15T09:00:00.000Z',
+      '2026-01-18T09:00:00.000Z',
+    ]);
   });
 
   it('counts hours to 100 from the last tick, crediting at most one point of progress since', () => {
@@ -193,6 +205,18 @@ describe('fit model', () => {
     expect(hoursTo100(96, 0, 6, h / 12)).toBeCloseTo(4 / 6 - 1 / 12);
     expect(hoursTo100(96, 0, 6, h)).toBeCloseTo(3 / 6); // an hour without a tick: one point at most
     expect(hoursTo100(100, 0, 6, 0)).toBe(0);
+  });
+
+  it('takes a log of 150k fresh readings without a stack overflow', () => {
+    const rows = Array.from({ length: 150_000 }, (_, i) => ({
+      ts: i * 1000,
+      sid: 's',
+      name: null,
+      cost: i,
+      pct: 1 + Math.floor(i / 10_000),
+      resetsAt: 1_800_000_000,
+    }));
+    expect(() => fitModel({ rows, manual: null, calls: [], now: 150_000_000 })).not.toThrow();
   });
 
   it('recovers k from live ticks and the calls between them', () => {

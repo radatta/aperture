@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PR } from './gh.ts';
 import { agreement, clusters, phaseAt, timeline } from './phases.ts';
-import { attribute, overhead, POST_MS, prTable, prType } from './prs.ts';
+import { attribute, overhead, POST_MS, prTable, prType, type PRRow } from './prs.ts';
 import { concurrency, reviewRounds, roundVerdicts } from './questions.ts';
 import { loadShards, type Shard } from './store.ts';
 import type { Call, Marker } from './transcript.ts';
@@ -246,9 +246,14 @@ describe('attribution and the PR table', () => {
     expect(o.perPR).toBeCloseTo(10);
     expect(o.adhocQU).toBeCloseTo(20);
     expect(o.otherQU).toBeCloseTo(20);
-    // a lane whose PR merged in the lookback (before --since) isn't "no merged PR"
-    const late = prTable(a, prs, min(500));
-    expect(overhead(a, late, prs).unmerged.map((u) => u.lane)).not.toContain('lane-a');
+    // a lane whose PR merged only in the lookback (not in the table): merged up to its post window, after that a
+    // reused name is new work. `win` stands in for another lane's PR that sets the overhead window.
+    const win = [{ branch: 'lane-x', qu: 1, start: min(0), mergedAt: min(10_000) } as PRRow];
+    const unmergedQU = (p: PR[]) =>
+      overhead(a, win, p).unmerged.find((u) => u.lane === 'lane-a')?.qu ?? 0;
+    expect(unmergedQU([prs[0]!])).toBeCloseTo(20); // only c4, past the post window
+    const early = [{ ...prs[0]!, mergedAt: min(-POST_MS / 60_000 - 100) }];
+    expect(unmergedQU(early)).toBeCloseTo(140); // all seven lane-a calls
   });
 
   it('gives a branch with two PRs each its own window', () => {

@@ -2,6 +2,11 @@
 
 export const median = (xs: number[]) => quantile(xs, 0.5);
 
+// Min/max by reduce: `Math.max(...xs)` throws past ~120k elements (one call frame per argument), and the meter log
+// and a long-lived session's calls grow past that.
+export const minOf = (xs: number[]) => xs.reduce((m, x) => (x < m ? x : m), Infinity);
+export const maxOf = (xs: number[]) => xs.reduce((m, x) => (x > m ? x : m), -Infinity);
+
 export function quantile(xs: number[], q: number): number {
   if (!xs.length) return NaN;
   const s = [...xs].sort((a, b) => a - b);

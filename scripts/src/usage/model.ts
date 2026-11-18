@@ -31,7 +31,7 @@ import {
   type PRType,
 } from './prs.ts';
 import { concurrency, reviewRounds, type Concurrency, type JobEvent } from './questions.ts';
-import { median, shrinkLog, spearman } from './stats.ts';
+import { maxOf, median, minOf, shrinkLog, spearman } from './stats.ts';
 import type { Loaded } from './store.ts';
 
 // QU between two instants from time-sorted calls, by prefix sums.
@@ -60,25 +60,34 @@ const WEEK_MS = 7 * 86_400_000;
 
 // Weekly resets the log's resets_at implies, back over the manual readings' span: an interval across one would
 // difference across a reset. Added to the manual resets unless one is listed within an hour.
-// Each resets_at steps back week by week to the previous one (the oldest to the first manual reading), so a week the
-// log skipped is still split; a manual reset that moved resets_at off the schedule stops its step-back at the
-// previous value. resets_at values within an hour are one (seconds of jitter), and so are inferred resets.
+// The weekly resets the log's resets_at values imply over the manual readings' span. The oldest steps back a week at
+// a time; each later value marks its own window's start and the weeks from the previous value up to it, which covers
+// a week the log skipped and a manual reset before or after the previous scheduled one. Values within an hour are one
+// (seconds of jitter), and so are inferred resets.
 export function scheduledResets(rows: MeterRow[], manual: Manual | null): string[] {
   const near = (a: number, b: number) => Math.abs(a - b) < 3_600_000;
   const known = (manual?.resets ?? []).map((r) => Date.parse(r));
-  const firstReading = Math.min(...(manual?.readings ?? []).map((r) => Date.parse(r.at)));
+  const firstReading = minOf((manual?.readings ?? []).map((r) => Date.parse(r.at)));
   const ats: number[] = [];
   for (const at of rows
     .flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : []))
     .sort((a, b) => a - b))
     if (!ats.some((x) => near(x, at))) ats.push(at);
+  const cands: number[] = [];
+  // the oldest: every week back to the first manual reading
+  if (ats[0] !== undefined)
+    for (let t = ats[0] - WEEK_MS; t > firstReading; t -= WEEK_MS) cands.push(t);
+  // each later one: its own window's start, plus the weeks from the previous value up to that start (a week the
+  // log skipped, or the reset a manual reset cut short)
+  for (let i = 1; i < ats.length; i++) {
+    const [p, a] = [ats[i - 1]!, ats[i]!];
+    cands.push(a - WEEK_MS);
+    for (let t = p; t < a - WEEK_MS - 3_600_000; t += WEEK_MS) cands.push(t);
+  }
   const out: number[] = [];
-  ats.forEach((at, i) => {
-    const stop = i ? ats[i - 1]! - WEEK_MS + 3_600_000 : firstReading;
-    for (let t = at - WEEK_MS; t > stop && t > firstReading; t -= WEEK_MS)
-      if (![...known, ...out].some((k) => near(k, t))) out.push(t);
-  });
-  return out.sort((a, b) => a - b).map((t) => new Date(t).toISOString());
+  for (const t of cands.sort((x, y) => x - y))
+    if (t > firstReading && ![...known, ...out].some((k) => near(k, t))) out.push(t);
+  return out.map((t) => new Date(t).toISOString());
 }
 
 // From the newest reading: the meter has moved on since it ticked, by up to one point (it would have ticked again).
@@ -128,7 +137,8 @@ export function fitModel(o: {
     .flatMap((w) => intervals(w))
     .filter(covered)
     .map(toObs);
-  const { windows, stragglers } = ticks(freshReadings(o.rows));
+  const fresh = freshReadings(o.rows);
+  const { windows, stragglers } = ticks(fresh);
   const live = windows
     .flatMap((w) => intervals(w))
     .filter(covered)
@@ -149,9 +159,8 @@ export function fitModel(o: {
   const callQU = span ? q.between(span[0], span[1]) : 0;
 
   const lastWindow = windows.at(-1) ?? [];
-  const fresh = freshReadings(o.rows);
   // stale once the latest resets_at any fresh reading carried has passed (a new week's reading carries a later one)
-  const latestReset = Math.max(...fresh.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])));
+  const latestReset = maxOf(fresh.flatMap((r) => (r.resetsAt ? [r.resetsAt * 1000] : [])));
   const resetAt = Number.isFinite(latestReset) && o.now > latestReset ? latestReset : null;
   const b = resetAt === null ? burn(lastWindow, o.now) : null;
   const k = all.fit?.k ?? null;

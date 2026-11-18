@@ -204,15 +204,20 @@ export function overhead(a: Attribution, rows: PRRow[], prs: PR[] = []): Overhea
   let hubQU = 0;
   let adhocQU = 0;
   let otherQU = 0;
-  // every branch with a merged PR, the lookback's included: none of them is "no merged PR"
-  const merged = new Set([...rows.map((r) => r.branch), ...prs.map((p) => p.branch)]);
+  // a branch in the table is merged; one whose PR merged only in the lookback counts as merged up to that PR's post
+  // window, after which a reused name is new, unmerged work
+  const merged = new Set(rows.map((r) => r.branch));
+  const lookback = new Map<string, number>();
+  for (const p of prs)
+    if (!merged.has(p.branch))
+      lookback.set(p.branch, Math.max(lookback.get(p.branch) ?? -Infinity, p.mergedAt));
   const unmerged = new Map<string, number>();
   for (const c of a.calls) {
     if (!inWin(c.ts)) continue;
     if (c.role === 'hub') hubQU += c.qu;
     else if (c.role === 'adhoc') adhocQU += c.qu;
     else if (c.role === 'other') otherQU += c.qu;
-    else if (c.lane && !merged.has(c.lane))
+    else if (c.lane && !merged.has(c.lane) && c.ts > (lookback.get(c.lane) ?? -Infinity) + POST_MS)
       unmerged.set(c.lane, (unmerged.get(c.lane) ?? 0) + c.qu);
   }
   return {

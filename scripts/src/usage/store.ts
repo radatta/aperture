@@ -12,6 +12,7 @@ import {
 import { dirname, join } from 'node:path';
 import type { Kind } from './lanes.ts';
 import { priceCall, type PriceFlag } from './prices.ts';
+import { minOf } from './stats.ts';
 import type { Call, Marker } from './transcript.ts';
 
 export interface SessionRec {
@@ -119,7 +120,7 @@ export function loadShards(shards: Shard[]): Loaded {
   for (const sh of shards) {
     markers.set(sh.s.rel, sh.markers);
     // a fork copies the original's rows with their timestamps; the original is the file that started first
-    const first = Math.min(...sh.calls.map((c) => c.ts));
+    const first = minOf(sh.calls.map((c) => c.ts));
     for (const c of sh.calls) {
       const prev = best.get(c.id);
       if (!prev) {

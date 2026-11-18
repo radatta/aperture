@@ -112,9 +112,10 @@ tick, ΔP is exact.
 
 History comes from `localNotes/usage/manual-readings.json`: `{ readings: [{ at, pct, approx? }], resets: [at] }`,
 `at` as ISO with offset. A manual reading counts as ±½ point (variance 1/12, or 1/3 if `approx`); a reset is an exact
-zero. The weekly resets that `resets_at` implies are added to the history's resets, so no interval spans one: each
-`resets_at` steps back 7 days at a time to the previous one (the oldest back to the first manual reading), so a week
-the log skipped is still split, and one a manual reset moved off the schedule stops at the previous value. The report lists those it inferred. Once the latest `resets_at` any fresh reading carried has passed,
+zero. The weekly resets that `resets_at` implies are added to the history's resets, so no interval spans one. The oldest
+`resets_at` in the log steps back 7 days at a time to the first manual reading. Each later value marks its own
+window's start, plus the weeks from the previous value up to that start: that covers a week the log skipped and a
+manual reset before or after the previous scheduled one. Values within an hour count as one. The report lists those it inferred. Once the latest `resets_at` any fresh reading carried has passed,
 `fit` and `line` say the meter reset instead of showing last week's numbers.
 
 ## Fit
