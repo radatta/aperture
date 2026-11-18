@@ -305,7 +305,8 @@ export async function runPushTick(
       own.retries,
     );
     // The gap's reminders: each deduped, then queued as misses right away — before any send, so a fault
-    // later in this tick can't leave them deduped but never caught up (only a kill between one's two writes).
+    // later in this tick can't leave them deduped but never caught up. Only the one being queued can be: a
+    // kill or a throw between its dedup write and its misses (one per device).
     if (gapFrom !== null && gapFrom < now - REMINDER_WINDOW_MS)
       for (const c of (await find(gapFrom, now - REMINDER_WINDOW_MS - 1, true)).filter(missable))
         if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now }))

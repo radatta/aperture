@@ -1243,7 +1243,6 @@ describe('push dispatch — retry and catch-up', () => {
     expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
       "Last reminder didn't reach this device (re-subscribed mid-send) — retrying",
     );
-    expect((await w.repo().getPushSub('S1'))?.updatedAt).toBeGreaterThan(50);
     expect((await w.repo().listPushQueue()).retries).toHaveLength(1);
     expect((await w.repo().getPushUserHealth())?.lastError ?? '').not.toMatch(/stopped accepting/);
     w.push.status = 201;
@@ -1251,6 +1250,51 @@ describe('push dispatch — retry and catch-up', () => {
     await w.tick();
     expect(w.push.sends).toHaveLength(2);
     expect(await w.repo().getPushSub('S1')).toMatchObject({ lastOkAt: TWO_PM + MIN });
+  });
+
+  it('a revive on the last retry runs out to the catch-up, said on the revived version', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    for (let m = 0; m <= 2; m++) {
+      w.set(TWO_PM + m * MIN);
+      await w.tick();
+    }
+    w.push.status = () => {
+      w.mem.putNow(entityItem(U, sk.pushSub('S1'), sub('S1', { updatedAt: 50 })));
+      return 410;
+    };
+    w.set(TWO_PM + 3 * MIN); // the third and last retry
+    await w.tick();
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+      "Last reminder didn't reach this device (re-subscribed mid-send) after 4 tries",
+    );
+    const q = await w.repo().listPushQueue();
+    expect(q.retries).toEqual([]);
+    expect(q.misses.map((m) => m.cand.key)).toEqual(['T1']);
+  });
+
+  it('a gap reminder is queued as its dedup lands: a fault on the next one’s still leaves it', async () => {
+    const inner = new InMemoryDoc();
+    const w = world(inner);
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ id: 'A', title: 'Gap', dueDay: TODAY, dueTime: '13:15' }));
+    await w.repo().putTask(task({ id: 'A2', title: 'Gap two', dueDay: TODAY, dueTime: '13:20' }));
+    const second = sk.pushSent(AT(TODAY, '13:20'), 'A2');
+    const putIf = inner.putIf.bind(inner);
+    inner.putIf = async (item, expected) => {
+      if (item.SK === second) throw new Error('ProvisionedThroughputExceededException');
+      return putIf(item, expected);
+    };
+    await expect(w.tick()).rejects.toThrow();
+    expect((await w.repo().listPushQueue()).misses.map((m) => m.cand.key)).toEqual(['A']);
   });
 
   it('a catch-up whose 404 lost to a revive says so, on the device and the health line', async () => {

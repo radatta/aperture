@@ -287,9 +287,11 @@ export class Deliverer {
 
   // One POST, its log line, and the device's stamp: delivered, dropped (gone), or its error. `lead`
   // replaces the error's opening (a catch-up's). A 404/410 whose delete lost to a re-subscribe made
-  // mid-send is judged here, once: the device is back and this notification never reached its new
-  // subscription, so it is a transient failure ('retry', "re-subscribed mid-send") — each caller's own
-  // transient path takes it (a retry queued or continued, a catch-up's failure said).
+  // mid-send is judged here, once, as a transient failure ('retry', "re-subscribed mid-send"); each
+  // caller's own transient path takes it (a retry queued or continued — its last runs out to the
+  // catch-up — or a catch-up's failure said). An id is its endpoint's hash, so the re-subscribe re-sent
+  // the same endpoint: the retry most likely 404s again and deletes it a tick later. At most 1 + RETRY_MAX
+  // + 1 POSTs a notification, each needing another racing write.
   private async post(
     sub: PushSub,
     payload: string,
@@ -339,10 +341,14 @@ export class Deliverer {
       // row as read only, so a removal (tombstone) or a revive that landed meanwhile stands. The app
       // re-subscribes on its next launch (D7).
       const deleted = await this.d.repo.deletePushSubIf(sub.id, sub.updatedAt);
-      this.d.log(JSON.stringify({ ...line, ...(deleted ? { removed: true } : { changed: true }) }));
-      // A revive keeps its device (and its queued rows) and is retried; a removal doesn't.
+      // A revive keeps its device (and its queued rows) and is judged transient below; a removal doesn't.
       const now = deleted ? null : await this.d.repo.getPushSub(sub.id);
-      if (!now || now.deletedAt !== null) {
+      const revived = now !== null && now.deletedAt === null;
+      const tag = deleted
+        ? { removed: true }
+        : { changed: true, ...(revived && pending === 'retrying' ? { retry: true } : {}) };
+      this.d.log(JSON.stringify({ ...line, ...tag }));
+      if (!revived) {
         if (deleted) this.removed++;
         this.subs.delete(sub.id);
         this.fail(
@@ -354,13 +360,12 @@ export class Deliverer {
       to = now;
       result = { outcome: 'retry', why: 're-subscribed mid-send' };
     } else this.d.log(JSON.stringify(line));
-    const r = result;
-    if (r.outcome === 'retry' && pending === 'last') return r; // runOut says it
-    const message = `${lead} (${r.why})${r.outcome === 'retry' && pending === 'retrying' ? ' — retrying' : ''}`;
+    if (result.outcome === 'retry' && pending === 'last') return result; // runOut says it
+    const message = `${lead} (${result.why})${result.outcome === 'retry' && pending === 'retrying' ? ' — retrying' : ''}`;
     const at = Math.max(this.d.now, to.updatedAt + 1);
     await this.stamp({ ...to, updatedAt: at, lastError: message, lastErrorAt: this.d.now }, to);
     this.fail(`${to.label}: ${message}`);
-    return r;
+    return result;
   }
 
   // Retries ran out (or the poller stalled past RETRY_EXPIRE_MS): the device says so, and its reminders
