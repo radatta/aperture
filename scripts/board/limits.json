@@ -34,7 +34,7 @@
       "pids": 300,
       "anonMiB": 4000,
       "p95Sec": 240,
-      "source": "Since gate-parallel the narrow pnpm gate:fast's one slot (tsc + eslint + up to 6 workers at once; its events log gate-narrow, so staleness can't see them: re-measure from those). Was 2026-11-17, ONE sample: gate:fast's app run on a one-page diff (44 files at VITEST_MAX_WORKERS=4): pids +294, anon +3718 MiB, 57.5 s; anon rounded up, p95 set to cover a run that includes the ~210 s mailroom fixture suite - docs/ops/GATE.md; re-measure from a day of history"
+      "source": "Since gate-parallel the narrow pnpm gate:fast's one slot (tsc + eslint + one 4-worker package at once, NARROW_BUDGET; its events log gate-narrow, so staleness can't see them: re-measure from those). Was 2026-11-17, ONE sample: gate:fast's app run on a one-page diff (44 files at VITEST_MAX_WORKERS=4): pids +294, anon +3718 MiB, 57.5 s; anon rounded up, p95 set to cover a run that includes the ~210 s mailroom fixture suite - docs/ops/GATE.md; re-measure from a day of history"
     },
     "ui": {
       "pids": 280,
