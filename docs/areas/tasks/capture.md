@@ -36,7 +36,7 @@ through to the JWT path.
   `voice: true` (the Shortcut; `"true"` as text is taken too) applies the voice time rules (§4); absent
   (Raycast) keeps the typed rules, exactly as the capture bar. Both roll a past clock with no day forward.
 - **Order:** 405 non-POST → 413 body too large → 401 token → 422 other path, bad JSON, empty or over-long
-  text (only after auth, never counted) → 429 daily cap → 200.
+  text (only after auth, never counted) → 429 daily cap → 409 busy → 200.
 - **200:** `{id, say, detail, raw, duplicate, due}` — `say` the sentence to speak, `detail` the typed
   receipt (Raycast's toast), `raw` saved as typed, `due` `{day, time}` or null.
 - **Anything else:** `{error, say}`. **Never 404:** CloudFront turns an origin 403/404 into the app's
@@ -45,29 +45,43 @@ through to the JWT path.
 | Status | When                                         | `say`                                                                                  |
 | ------ | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | 200    | parsed                                       | "Added: call mum, today 5 PM." (a place: "Added to Grocer: milk.")                     |
-| 200    | saved as typed                               | "Added as typed, with no date or time: call mum at five."                              |
+| 200    | saved without the model, its words' time     | "Added without AI, as typed: call mum at 5, today 5 PM." (spoken lines)                |
+| 200    | saved as typed, no time it can place         | "Added as typed, with no date or time: call mum at five."                              |
 | 200    | the same line within a minute                | "Already added: call mum, today 5 PM." (same `id`, nothing new)                        |
 | 200    | …and the first is still in flight            | "Got that a moment ago. If it isn't in the app in a minute, say it again." (`id` null) |
 | 401    | missing, malformed, unknown or revoked token | "Aperture: this capture token isn't valid. Make a new one in Settings."                |
 | 405    | not POST                                     | "Aperture capture needs a POST."                                                       |
 | 413    | body over 16 KiB                             | "That was too long for Aperture. Nothing was added."                                   |
 | 422    | other path / bad body / empty / over-long    | the path's, "Aperture didn't get any text." or the too-long one                        |
+| 409    | every retry of the token row lost a race     | "Aperture was busy and nothing was added. Say it again."                               |
 | 429    | 200 captures today                           | "Daily capture limit reached. Nothing was added."                                      |
 | 500    | anything else                                | "Aperture hit an error. Check the app before retrying."                                |
 
 **Flow** (`BackendClient.captureForToken`): count the capture first (one conditional write — at the cap it
 refuses before anything is spent) → parse (`runQuickParse`: a `|` line takes the grammar and never meets
-the model; otherwise one model call, claimed against the parse cap first, with a deadline of
-`min(parseBudgetMs, 5 s)`) → `createTask` (a timed task syncs to Google Calendar as usual) → remember the
-task for the duplicate guard. A failed or timed-out parse saves the line as the title, no due date, and says
-so. A failed create forgets the line, so the retry is a new capture, not "already got that".
+the model; a line over 600 characters (`CAPTURE_PARSE_TEXT_MAX`) skips it too; otherwise one Sonnet call, claimed
+against the user's parse cap first, with a deadline of `min(parseBudgetMs, 5 s)` and at most 512 output tokens)
+→ `createTask` (a timed task syncs to Google Calendar as usual) → remember the task for the duplicate guard.
+Without the model (failed, timed out, capped, too long) a spoken line saves as typed **with the time its own
+words say**, placed by the voice rules (§4) — "tomorrow" is the next day; any other day word, or no time, saves
+with none — and says "without AI"; a typed line saves with no due. A failed create forgets the line, so the
+retry is a new capture, not "already got that".
+
+**A lost race on the token row** (several captures at once through one token — F224, 2026-11-17): each counter
+write is conditional on the row's `updatedAt`; a lost one backs off (full jitter, 25 ms doubling to 200 ms) and
+tries again, eight tries in all (under a second). Every try lost: **409** with the spoken "say it again" — the
+write that lost added nothing, so a retry is safe. It was a generic 500 before.
 
 **Why synchronous** (spike §3b): for a reminder, hearing the time it understood is what catches a misheard
 one, and a background parse would need a self-invoke or a queue plus an IAM change. Parse takes 3–6 s on dev
-(quick-add's 2026-10-13 measure), so some lines will hit the 5 s deadline and save raw — the dev check's
-model rows fail on `raw: true`, which is the signal to raise `CAPTURE_PARSE_DEADLINE_MS`.
+(quick-add's 2026-10-13 measure, Haiku), so some lines will hit the 5 s deadline and save raw — the dev check's
+model rows fail on `raw: true`, which is the signal to raise `CAPTURE_PARSE_DEADLINE_MS`. **Siri's wait** isn't
+documented anywhere (searched 2026-11-17: no limit for Get Contents of URL or Siri-run shortcuts; one report of
+~10 s for Siri-run intents, and reports of Speak Text cut short on long text), so the budget is the server answering
+in under 8 s with a one-sentence `say`; the `api-latency` dev row logs p50 / p95 / max and fails past 8 s.
 
-**Logging:** one line per request, `{event: 'capture', ok, reason, ms, raw?, duplicate?}`, with fixed reason
+**Logging:** one line per request, `{event: 'capture', ok, reason, ms, raw?, duplicate?, voice?, parseMs?,
+fallback?}` (`fallback` the parse's failure reason), with fixed reason
 codes. Never the text, header, token, hash or an error message. The parse's own line logs only `chars` and
 token counts.
 
@@ -100,21 +114,26 @@ shortcut uploads what's embedded in it, and Shortcuts sync is end-to-end encrypt
 Protection, so a leak is likely — the token has to be cheap to lose. The same token moves Raycast off the
 agent token (closing mcp's deferred "create-only token").
 
-### Caps (worst case ≈ $1)
+### Caps
 
-Per token, per UTC day — guards, not UX:
+Per UTC day — guards, not UX:
 
-- **200 captures** (`CAPTURE_DAILY_CAP`), then 429 with a spoken `say`. Duplicates count too.
-- **50 model parses** (`CAPTURE_PARSE_DAILY_CAP`), then the line saves as typed (and says so). Only a real
-  model call counts: a grammar line never does.
+- **200 captures per token** (`CAPTURE_DAILY_CAP`), then 429 with a spoken `say`. Duplicates count too.
+- **40 model parses per user, across all their capture tokens** (`CAPTURE_PARSE_DAILY_CAP`; the maintainer,
+  2026-11-17), then the line saves without the model (and says so). Only a real model call counts: a grammar
+  line or a too-long one never does. Each token's row counts its own; a claim adds the user's other live rows,
+  so claims racing through two tokens can overshoot by the race's width, and a revoked token's count leaves
+  with it (revoking is the owner's move). The app's own parse (Cognito) isn't counted.
 - **Duplicate guard:** the same line (case and spacing aside, voice and typed apart) within 60 s of the
   first is answered with the first's task, and never moves the window. The Shortcut never retries by itself,
   so only a manual retry after an unclear failure can double up. A first still unsaved after 20 s
   (`CAPTURE_IN_FLIGHT_MS` — past the Lambda's 15 s timeout) died, so the same line then is a new capture;
   inside those 20 s the answer hedges ("…if it isn't in the app in a minute, say it again").
-- **Leaked token:** 50 × ~$0.0003 × 30 days ≈ $0.45 a month of model spend plus junk tasks — five leaked ≈
-  $2.25. Revoke in Settings stops it at once. Not capped: the request floor (a missing or malformed header
-  costs nothing, an unknown token one GetItem); reserved concurrency would cap the whole shared BFF.
+- **Leaked tokens:** 40 × ~$0.003–0.006 (Sonnet, 512 output tokens at most, 600 characters in) ≈ $0.12–0.24 a
+  day, ~$3.60–7.20 a month, however many tokens leak, plus junk tasks. It sits inside the maintainer's Claude
+  API credit, which his ~$1 rogue-cost rule doesn't cover (2026-11-17). Revoke in Settings stops it at once. Not
+  capped: the request floor (a missing or malformed header costs nothing, an unknown token one GetItem);
+  reserved concurrency would cap the whole shared BFF.
 
 ## 4. Time rules
 
@@ -128,10 +147,16 @@ maintainer, 2026-11-16):
 3. "morning" is 9 AM, "tonight" 8 PM; "in N minutes/hours" is computed from the server clock, never by the
    model.
 
-**The time comes from code, the day from the model** (`packages/shared/src/spokenTime.ts`). When the grammar
-finds a time in the line, the model gets the voice rules on top of the typed prompt — strip spoken times and a
-leading "remind me to" from the title, `dueTime` always null, a day only when one was said — and its
-`dueTime` is ignored. Precedence: relative → a stated clock → a bare hour → a day-part.
+**The model reads the clock, the code places it** (since 2026-11-17, Sonnet; before, the grammar read it and the
+model's time was ignored). Every spoken line gets the voice rules on top of the typed prompt — strip spoken times
+and a leading "remind me to" from the title; `dueTime` the clock as said ("at 5" → 05:00, the hour as said;
+"5 pm" → 17:00; "tonight" alone → 20:00, "morning" → 09:00; a delay → null); a day only when one was said. The
+code then places it (`validateParsedTask`, `spokenTime.ts`): a delay ("in 20 minutes") is always the server
+clock's; a model clock that agrees with the grammar's reading takes the grammar's placement (a bare hour wraps,
+"at 1 tonight" is the small hours); one that disagrees wins — a bare hour when the line names no half of the day
+(no am/pm, 24-hour clock, noon, morning…evening, tonight), else as stated — and rolls forward like any time. With
+no model clock the grammar's reading fills, as before. The grammar on its own (precedence: relative → a stated
+clock → a bare hour → a day-part) is the fallback when the model doesn't run (§2 _Flow_).
 
 Two checks keep the grammar honest:
 
@@ -145,9 +170,8 @@ Two checks keep the grammar honest:
   add): the 2026-11-16 dev check saw "call the bank at 6 pm" come back with today and no time. Only when the
   model took those words out of its title, or they're an at/by clock ("watch 9pm show" kept them: no time); a
   different time from the model stands.
-- **A clock the grammar can't read is the model's** ("at quarter past five"): with no grammar match the model
-  gets the typed prompt, and a clock it returns is taken and rolled forward like any stated time — but only
-  when the line has a digit or an hour word in it, so an invented time is still dropped.
+- **A model clock needs words for it:** only when the line has a digit or an hour word in it, so an invented
+  time is still dropped. "at quarter past five" with no half of the day is a bare hour: at 6 AM, 5:15 PM today.
 
 | Said                                         | Now         | Lands                                            |
 | -------------------------------------------- | ----------- | ------------------------------------------------ |
@@ -234,6 +258,12 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
 - **2026-11-17 (titles, autonomous):** a spoken title keeps every word the parse didn't use, as a typed one does;
   the spoken time, "tonight", "morning" and a leading "remind me to" are the parse's — [quick-add's titles
   log](quick-add.md).
+
+- **2026-11-17 (Sonnet, autonomous build; the maintainer's calls in [quick-add's log](quick-add.md)):** the
+  model reads every spoken clock and the code places it (§4); without the model a spoken line keeps its words'
+  time and says "without AI"; a lost token-row race retries with jitter, then 409 "say it again" (F224); the
+  parse cap is per user, 40 a day (the maintainer); lines over 600 characters skip the model. The Shortcut is
+  unchanged.
 
 ## 8. Build record
 

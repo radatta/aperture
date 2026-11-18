@@ -58,7 +58,7 @@ Stay ambitious and productive **and** get more mindful/balanced — with a hard 
 ### What each mode creates
 
 - **Log** → timestamped entry in today's timeline. No other fields, bar an optional one-shot **private** flag ([log](../areas/log/index.md)).
-- **Task** → **title only, unscoped**, into a backlog — or, when asked, onto today (→ today, [lenses](../areas/tasks/lenses.md)), onto a store's errand list (`@place`, [places](../areas/tasks/places.md)), or onto its due time's day ([parts](../areas/tasks/parts.md) v2b); the receipt says which. Scoped later in the morning pass (estimate + buffer nudge → feeds the estimation-bias calibration). _Optionally_, a `|` after the title takes one line of the bulk-add token grammar (`memo | ~30 #Admin due:2026-10-03`) — see [bulk-add.md](../areas/tasks/bulk-add.md). Without one, Claude Haiku reads any structure you typed naturally (`aperture, fix x due fri 30m`) — see [quick-add.md](../areas/tasks/quick-add.md).
+- **Task** → **title only, unscoped**, into a backlog — or, when asked, onto today (→ today, [lenses](../areas/tasks/lenses.md)), onto a store's errand list (`@place`, [places](../areas/tasks/places.md)), or onto its due time's day ([parts](../areas/tasks/parts.md) v2b); the receipt says which. Scoped later in the morning pass (estimate + buffer nudge → feeds the estimation-bias calibration). _Optionally_, a `|` after the title takes one line of the bulk-add token grammar (`memo | ~30 #Admin due:2026-10-03`) — see [bulk-add.md](../areas/tasks/bulk-add.md). Without one, Claude Sonnet reads any structure you typed naturally (`aperture, fix x due fri 30m`) — see [quick-add.md](../areas/tasks/quick-add.md).
 - **Idea** → inbox, triaged whenever.
 
 ### Hard rule
@@ -67,7 +67,7 @@ Capture **never** asks for structure. No estimate, no due date, no category _pro
 
 _Amended 2026-09-28:_ Task mode accepts optional inline tokens after `|`. Nothing prompts for them and a bare capture costs exactly what it did, so the rule's point — capture never _asks_ — stands. A malformed token refuses the submit with an inline error and keeps the text; capture never fails silently.
 
-_Amended 2026-10-12:_ Task mode parses natural language with Claude Haiku ([quick-add.md](../areas/tasks/quick-add.md)). Still nothing is asked: you type what you'd say, a bare `buy milk` comes back as itself, and Enter stays one gesture (the parse runs behind the cleared field; a failed parse saves the line as typed, and says so). Review (✨) is the opt-in look-before-saving.
+_Amended 2026-10-12:_ Task mode parses natural language with Claude Haiku ([quick-add.md](../areas/tasks/quick-add.md)). Still nothing is asked: you type what you'd say, a bare `buy milk` comes back as itself, and Enter stays one gesture (the parse runs behind the cleared field; a failed parse saves the line as typed, and says so). Review (✨) is the opt-in look-before-saving. _Amended 2026-11-17 (the maintainer):_ review is the default — the first Enter shows the parse, the second saves it (Claude Sonnet now); ✨ off or ⌘Enter saves as typed.
 
 ---
 
@@ -186,7 +186,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 1. **Weekly balance view** (work vs non-work split, gentle nudge) — v1.1, the _first_ thing after v1. In v1, balance lives entirely through **habits** (the non-work-habit vehicle); the analytical weekly view comes once a week of category data exists.
 2. **Resurfacing** — surfacing a past entry at night. Needs weeks of data.
-3. **AI reflection** — boundary-triggered LLM that reads across entries and asks one good question. AI is greenlit, just not day one. Since built elsewhere: Claude Haiku parses quick add ([quick-add](../areas/tasks/quick-add.md)) and writes Flux's weekly note ([flux](../areas/flux/index.md)); the reflection use is still parked.
+3. **AI reflection** — boundary-triggered LLM that reads across entries and asks one good question. AI is greenlit, just not day one. Since built elsewhere: Claude Sonnet parses quick add ([quick-add](../areas/tasks/quick-add.md)) and writes Flux's weekly note ([flux](../areas/flux/index.md)); the reflection use is still parked.
 4. **Richer calibration** — personalized buffer from measured bias, trend analytics. v1 keeps per-task delta + a simple aggregate ratio. Since built, in part: the done gate and hindsight estimates ([integrity](../areas/calibration/integrity.md)) and two-level calibration for parent + parts ([parts](../areas/tasks/parts.md)); the buffer is still a flat +25%.
 5. **Quarterly / annual cadence** — v1 has the daily loop only.
 6. **Calendar integration** — v1's "hours available" was a manual daily capacity number, not calendar-derived. Since built: **[calendar/](../areas/calendar/index.md)**.
@@ -203,7 +203,7 @@ Pointers only; each `areas/` doc owns its design and decision log. The whole map
 
 - **Home** — [right now + coming up](../areas/home/right-now.md) (the daytime home) · [Rolls](../areas/home/rolls.md) · the Day shape card ([calendar](../areas/calendar/index.md)).
 - **Tasks** — [due dates + times](../areas/tasks/due-dates.md) · [parent + parts](../areas/tasks/parts.md) and [split](../areas/tasks/split.md) · [recurring cadences](../areas/tasks/recurring.md) · [lenses](../areas/tasks/lenses.md) (Today · Week · Backlog · Done) · the [task editor](../areas/tasks/task-editor.md) · [notes](../areas/tasks/notes.md) · [attachments](../areas/tasks/attachments.md) · [reflection](../areas/tasks/reflection.md) · [life areas](../areas/tasks/areas.md) · [calibration integrity](../areas/calibration/integrity.md).
-- **Capture** — [quick add](../areas/tasks/quick-add.md) (Claude Haiku parse) · [bulk add](../areas/tasks/bulk-add.md) · [private log entries](../areas/log/index.md).
+- **Capture** — [quick add](../areas/tasks/quick-add.md) (Claude Sonnet parse) · [bulk add](../areas/tasks/bulk-add.md) · [private log entries](../areas/log/index.md).
 - **Out in the world** — [places](../areas/tasks/places.md) (errand lists + an iPhone Shortcut) · [reminders](../areas/tasks/reminders.md) (Web Push) · [Google Calendar](../areas/calendar/index.md), two-way.
 - **Modules** — [Finances](../areas/finances/index.md) · [Flux](../areas/flux/index.md) · [Recruiting](../areas/recruiting/index.md) (LeetCode sittings + the Safari extension, the [story bank](../areas/recruiting/story-bank.md)).
 - **Reach** — the [MCP connector](../areas/mcp/index.md): Claude Code and claude.ai read and write Aperture, with voice capture and a Raycast hotkey.

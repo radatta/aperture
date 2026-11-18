@@ -2,7 +2,7 @@
 
 Hotkey → type one line → Enter → a backlog task in Aperture. `aperture-add.sh` is a Raycast Script
 Command: one POST to `/api/capture` ([docs/areas/tasks/capture.md](../../docs/areas/tasks/capture.md)), where
-the server parses the line (**Claude Haiku 5.5** — the same parse as the app's quick add,
+the server parses the line (**Claude Sonnet 5.5** — the same parse as the app's quick add,
 [docs/areas/tasks/quick-add.md](../../docs/areas/tasks/quick-add.md)) into a short title, notes, category, due
 date/time and estimate, creates the task and answers a receipt — no browser, no Claude chat.
 
@@ -11,7 +11,7 @@ aperture, fix: tighten the capture bar spacing on phones. the dock overlaps …,
 → Added: fix: tighten the capture bar spacing on phones · Aperture · due Sat 10/10 · +notes
 ```
 
-Haiku only parses (it has no tools); the server does the one write. Needs only `curl`, `jq` and
+The model only parses (it has no tools); the server does the one write. Needs only `curl`, `jq` and
 `security`, all built into macOS 15+. No Anthropic key on the Mac (since 2026-10-12) — the server holds it.
 
 ## Install (once)
@@ -39,7 +39,7 @@ If macOS asks whether `security` may read a Keychain item, choose **Always Allow
 ## Use
 
 Type it the way you'd say it: a leading category word (`aperture,`), `due tmw` / `due fri 4pm`, `30m`.
-Haiku only sets what you stated — it never invents an estimate — and moves extra detail into notes.
+The model only sets what you stated — it never invents an estimate — and moves extra detail into notes.
 "Today" follows the app's day start (Settings, 4am by default), so `due tmw` typed at 1am means the day
 after the one you're still in. A grammar line (space, pipe, space — `memo | ~30 #Admin`) skips the
 model and takes the strict [bulk-add grammar](../../docs/areas/tasks/bulk-add.md). A time with no day
@@ -53,7 +53,7 @@ wrong guess is visible at once:
 | toast                                                 | means                                                                                                                                                                                   |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Added: <title> · <category> · due Sat 10/10 · 30m …` | parsed and saved; `no category` = none matched                                                                                                                                          |
-| `… · dropped due time` / `unknown category` / …       | Haiku returned a field the server would reject; saved without it                                                                                                                        |
+| `… · dropped due time` / `unknown category` / …       | The model returned a field the server would reject; saved without it                                                                                                                        |
 | `… · calendar sync failed`                            | saved, but the Google event wasn't — retry from the task in the app                                                                                                                     |
 | `Added RAW (couldn't parse: <why>): <line>`           | **red** — saved, but unparsed: the parse failed (`timeout`, `api: refusal`, `unavailable: no API key on this stage`, `unavailable: daily parse limit reached` …); the line is the title |
 | `Already added: <title> …`                            | the same line within a minute — the first capture, answered again; nothing new was saved                                                                                                |

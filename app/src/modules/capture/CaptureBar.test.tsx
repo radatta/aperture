@@ -263,6 +263,27 @@ describe('CaptureBar', () => {
     });
   });
 
+  // Review first is a Task-mode step only: Log and Idea save on one press, and nothing reads them.
+  it('Idea mode saves on one Enter, and on one Send', async () => {
+    const api = createStubClient({ seed: false, storageKey: `cap-idea-${Math.random()}` });
+    const parse = vi.spyOn(api, 'parseTask');
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+    await user.click(screen.getByRole('button', { name: 'Idea' }));
+    const box = () => screen.getByLabelText('Capture idea') as HTMLTextAreaElement;
+    await user.type(box(), 'a podcast about bridges');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listIdeas()).map((i) => i.text)).toEqual(['a podcast about bridges']),
+    );
+    expect(box().value).toBe('');
+    await user.type(box(), 'a map of every bakery');
+    await user.click(screen.getByRole('button', { name: 'Save idea' }));
+    await waitFor(async () => expect(await api.listIdeas()).toHaveLength(2));
+    expect(parse).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Read with AI' })).toBeNull();
+  });
+
   describe('Task tokens', () => {
     it('parses optional tokens after " | " into the created task', async () => {
       const { api, user, box } = await taskBar();
@@ -1139,7 +1160,7 @@ describe('CaptureBar', () => {
       );
     });
 
-    it('✨ on a failed preview parses again; the preview reads due dates relatively', async () => {
+    it('Send on a failed preview parses again; the preview reads due dates relatively', async () => {
       const { user, box } = await taskBar();
       localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
       await user.type(box(), 'admin, file taxes due tmw');
@@ -1162,6 +1183,7 @@ describe('CaptureBar', () => {
       expect(screen.queryByText('call bank')).toBeNull();
       await user.clear(box());
       await user.type(box(), 'memo | ~30');
+      expect(screen.queryByRole('button', { name: 'Read with AI' })).toBeNull();
       expect(screen.queryByRole('button', { name: /Review|Retry/ })).toBeNull();
       await user.keyboard('{Meta>}{Enter}{/Meta}');
       await waitFor(async () =>
@@ -1169,7 +1191,7 @@ describe('CaptureBar', () => {
       );
     });
 
-    it('✨ keeps focus in the field (the phone keyboard stays up)', async () => {
+    it('Send keeps focus in the field (the phone keyboard stays up)', async () => {
       const { user, box } = await taskBar();
       await user.type(box(), 'admin, call bank');
       const blurs = vi.fn();
@@ -1296,11 +1318,18 @@ describe('CaptureBar — Review category suggestion', () => {
     expect(await screen.findByText(`${LINE} · no category`)).toBeTruthy();
   });
 
-  it('Auto (Enter, no Review) never takes a suggestion', async () => {
+  it('⌘Enter past an untapped chip, or ✨ off, never takes a suggestion', async () => {
     const { api, user, box } = await seededBar();
     await user.type(box(), LINE);
-    await user.keyboard('{Enter}');
+    await review(user);
+    await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    await user.keyboard('{Meta>}{Enter}{/Meta}');
     await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
+    expect(chip()).toBeNull();
+    await user.type(box(), `${LINE} too`);
+    await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, `${LINE} too`))?.categoryId).toBeNull());
     expect(chip()).toBeNull();
   });
 
@@ -1377,15 +1406,23 @@ describe('CaptureBar — Review category suggestion', () => {
     expect(document.activeElement).toBe(box());
   });
 
-  it('a capture nobody reviews never reads the task list', async () => {
-    const { user, box, list } = await taskBar();
+  // The chip is the only reader: a capture that shows no preview never fetches the history it scores.
+  it('a grammar, ✨-off or ⌘Enter capture never reads the task list', async () => {
+    const { api, user, box, list } = await taskBar();
+    const create = vi.spyOn(api, 'createTask'); // waits on this: saved() would read the list itself
     await user.type(box(), 'memo | ~30');
     await user.keyboard('{Enter}');
     await screen.findByText(/Task added/);
     await user.type(box(), 'file taxes');
+    await user.click(screen.getByRole('button', { name: 'Read with AI' }));
     await user.keyboard('{Enter}');
-    await screen.findByText('file taxes · no category');
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    await user.type(box(), 'water plants');
+    await user.keyboard('{Meta>}{Enter}{/Meta}');
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+    await act(async () => {});
     expect(list).not.toHaveBeenCalled();
+    expect(create.mock.calls.map(([i]) => i.title)).toEqual(['memo', 'file taxes', 'water plants']);
   });
 
   it('a failed create puts the text back with the tap; the retry saves under it, without parsing again', async () => {
@@ -1414,6 +1451,9 @@ describe('CaptureBar — Review category suggestion', () => {
     await user.click(screen.getByRole('button', { name: 'Task' }));
     expect(screen.queryByText('#Garden')).toBeNull();
     await user.click(box());
+    await user.keyboard('{Enter}'); // read again: the chip is offered afresh, untaken
+    await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    expect(screen.queryByText('#Garden')).toBeNull();
     await user.keyboard('{Enter}');
     await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
   });
@@ -1464,10 +1504,13 @@ describe('CaptureBar — Review category suggestion', () => {
     await waitFor(() => expect(parse).toHaveBeenCalledTimes(1));
     await act(async () => {});
     expect(screen.queryByText('yesterday parse')).toBeNull(); // hidden: its day has gone
-    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(24); // the seeded history only
+    await reviewThenSave(user);
     await waitFor(async () => expect(await saved(api, LINE)).toBeTruthy());
     expect(parse).toHaveBeenCalledTimes(2);
     expect(await saved(api, 'yesterday parse')).toBeUndefined();
+    expect((await saved(api, LINE))?.categoryId).toBeNull(); // the stale parse's Garden didn't carry
   });
 });
 
@@ -1789,6 +1832,9 @@ describe('CaptureBar — places', () => {
   it('quick add takes a known @word and says which list it went on', async () => {
     const { api, user, box } = await placeBar();
     await user.type(box(), 'milk @corner');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('@Corner Shop')).toBeTruthy(); // previewed before it saves
+    expect(await api.listTasks()).toHaveLength(0);
     await user.keyboard('{Enter}');
     await waitFor(async () =>
       expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
