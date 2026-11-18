@@ -16,7 +16,7 @@ if [ "${1:-}" != --steps ]; then
   mkdir -p "$(dirname "$log")" || exit 1
   exec </dev/null >>"$log" 2>&1
   for v in "${!HEAVY_@}"; do unset "$v"; done  # a caller's class, slot or noslot must not reach this run
-  case "${WARM_MAX_SEC:-}" in '' | *[!0-9]* | 0) max=300 ;; *) max=$WARM_MAX_SEC ;; esac
+  case "${WARM_MAX_SEC:-}" in '' | *[!0-9]* | 0*) max=300 ;; *) max=$WARM_MAX_SEC ;; esac  # 00 would stop it at once
   echo "warm: $(date -u +%Y-%m-%dT%H:%M:%SZ) typecheck + lint in $PWD (cap $max s)"
   # CLAUDE_PID=0: no Claude owns this job, so heavy.sh names it by the cwd's branch, not the hub's session.
   CLAUDE_PID=0 HEAVY_CLASS=warm HEAVY_LABEL="warm:$(git branch --show-current 2>/dev/null)" \
@@ -50,6 +50,7 @@ trap 'echo "warm: ${step:-the run} stopped (a yield or the cap)"; exit 143' TERM
 yield() {
   echo "warm: yielding to $1"
   if [ -n "$me" ]; then kill -TERM "$me"; wait; fi
+  [ -n "${p:-}" ] && kill -TERM "$p" 2>/dev/null && wait "$p"  # no heavy.sh above us (a hand-run --steps)
   exit 143
 }
 

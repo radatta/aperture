@@ -10,6 +10,7 @@ import {
   existsSync,
   readdirSync,
   rmSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -1541,6 +1542,10 @@ describe('warm.sh (the cache warm at lanes start)', () => {
       }),
     ]);
     expect(readdirSync(heavyDir())).toHaveLength(1); // its own slot released; the other lane's stays
+  });
+
+  it('is executable, as its header says it can be run (a rewrite once dropped the bit: exit 126)', () => {
+    expect(statSync(join(boardDir, 'warm.sh')).mode & 0o111).toBe(0o111);
   });
 
   it('a failed typecheck still runs lint, and the warm exits with the first failure', () => {
