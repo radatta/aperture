@@ -37,15 +37,16 @@ export const IOS_PROBE_PATHS = [
   'scripts/src/devcheck/probe-only.ts',
   'scripts/src/devcheck/scenarios/ios-probe.ts',
 ];
-// category-suggest's one slow step is the Review chip on the Simulator.
-export const CATEGORY_SUGGEST_PATHS = [
+// The Review chip on the Simulator (category-suggest-ios), and category-suggest, whose history it seeds.
+export const CATEGORY_SUGGEST_IOS_PATHS = [
   'app/src/modules/capture/CaptureBar.tsx',
   'app/src/modules/capture/PreviewCategory.tsx',
   'scripts/src/devcheck/scenarios/category-suggest.ts',
+  'scripts/src/devcheck/scenarios/category-suggest-ios.ts',
 ];
 // Every scenario with an ios step; scenarios/index.test.ts pins it to their slowPaths.
 export const IOS_SLOW_PATHS = [
   ...IOS_STANDALONE_PATHS,
   ...IOS_PROBE_PATHS,
-  ...CATEGORY_SUGGEST_PATHS,
+  ...CATEGORY_SUGGEST_IOS_PATHS,
 ];

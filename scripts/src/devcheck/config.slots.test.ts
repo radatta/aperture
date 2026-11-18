@@ -47,6 +47,13 @@ describe('dev slots', () => {
     expect(runLockFile()).toBe('run.lock');
   });
 
+  it('the browser lane’s user has its own env file, state and ledger beside the original’s', () => {
+    expect(envPath('/m', 'dev', 'web')).toBe('/m/.secrets/devcheck.dev.web.env');
+    expect(statePath('/m', 'dev', 'web')).toBe('/m/.secrets/devcheck.dev.web.state.json');
+    expect(ledgerFile('dev', 'web')).toBe('ledger.dev.web.jsonl');
+    expect(envPath('/m', 'dev', 'main')).toBe(envPath('/m'));
+  });
+
   it("on devb, every guard moves to devb's addresses and refuses slot A's", () => {
     useSlot('devb');
     expect(slotOrigin()).toBe(DEVB_ORIGIN);

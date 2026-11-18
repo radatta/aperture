@@ -6,6 +6,7 @@ import {
   CLAUDE_CALLBACK,
   DEV_ORIGIN,
   TEST_USER_EMAIL,
+  TEST_USERS,
   ENV_KEYS,
   assertDevCognitoUrl,
   assertDevOrigin,
@@ -76,6 +77,13 @@ describe('parseEnv', () => {
     expect(() => parseEnv(GOOD.replace(TEST_USER_EMAIL, 'someone@example.com'))).toThrow(
       /WRONG_USER/,
     );
+  });
+  it('holds each user’s file to that user: neither test user’s file reads as the other’s', () => {
+    const web = GOOD.replace(TEST_USER_EMAIL, TEST_USERS.web);
+    expect(parseEnv(web, 'web').DEVCHECK_EMAIL).toBe(TEST_USERS.web);
+    expect(() => parseEnv(web)).toThrow(/WRONG_USER/);
+    expect(() => parseEnv(GOOD, 'web')).toThrow(/WRONG_USER.*browser lane/);
+    expect(TEST_USERS.web).not.toBe(TEST_USERS.main);
   });
 });
 

@@ -5,17 +5,15 @@
 // never `devcheck <nonce>` — the parts scenarios sweep that prefix. The /tasks search text persists
 // across lenses, so every open searches for its own task and the last step clears it.
 // The Review preview's chip (docs/areas/tasks/quick-add.md) has no grammar path: Review always asks the
-// model. Four rows go end to end through the real parse (the `real-*` steps and the Simulator's, a fraction of a cent a run):
+// model. Three rows go end to end through the real parse (the `real-*` steps, a fraction of a cent a run; the Simulator's
+// is category-suggest-ios.ts, the iPhone lane's, which seeds its own history from GARDEN and KITCHEN):
 // they assert what holds whatever the model says (a preview, no error, the slot agrees with what lands) and
 // nothing of its wording. Rows that need an exact reply (the scorer's cases need a parse with no category,
 // which the model won't reliably give) get a canned one from ctx.intercept; each row's text says why.
-import type { IosOp } from '../../mailroom/sim.ts';
 import type { PwLocator } from '../pw-types';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
-import { DOCK, MODE_ROW } from '../ios';
-import { CATEGORY_SUGGEST_PATHS } from './ios-paths';
 
-const GARDEN = [
+export const GARDEN = [
   'water the tomato beds',
   'prune the rose hedge',
   'spread mulch on the border',
@@ -35,7 +33,7 @@ const GARDEN = [
   'check the flux gasket',
   'swap the flux gasket',
 ];
-const KITCHEN = [
+export const KITCHEN = [
   'descale the kettle',
   'sharpen the chef knife',
   'clean the oven racks',
@@ -66,10 +64,6 @@ const R_ROLLOVER = 'hill the flux gasket';
 const R_TODAY = 'thin the flux gasket';
 const R_MODE = 'seed the flux gasket';
 const R_REAL_CHIP = 'torque the flux gasket';
-// The Simulator's own line: a verb no other step saves. A full run's real-review can file its line under
-// another category (the model matches the run nonce to another scenario's category), and the same words
-// then outvote Garden; measured, this one still clears the margin after every earlier save (2.8 nats).
-const R_SIM_CHIP = 'shim the flux gasket';
 const R_REAL_NAMED = 'kitchen, polish the flux gasket';
 const R_REAL_AUTO = 'grease the flux gasket';
 const R_AI_OFF = 'loam the flux gasket';
@@ -95,7 +89,7 @@ type ParseReply =
 const NO_CATEGORY =
   'Canned parse: needs a reply with no category, which the model won’t reliably give.';
 
-const name = (ctx: Ctx, what: string) => `devcheck-cat ${ctx.nonce} ${what}`;
+export const name = (ctx: Ctx, what: string) => `devcheck-cat ${ctx.nonce} ${what}`;
 const chipName = (label: string) => `Use suggested category ${label}`;
 // By role, never getByLabel: that also matches the chip's aria-label, as a substring. The <label> wraps
 // the <select>, so its accessible name carries the options too; hence the prefix.
@@ -237,72 +231,10 @@ async function barWithHistory(ctx: Ctx) {
   await ctx.page.getByRole('button', { name: chipName('Garden') }).waitFor({ timeout: 15_000 });
 }
 
-// The sim types through its own keyboard, so the line is the fixed words of R_REAL_CHIP, no nonce. Nothing is
-// saved. The field and the chip are found by scanning: the preview lifts the bar by its own height.
-// Opens with its own launch: run last, it can't count on ios-standalone leaving the sim up.
-// A filled field reads as its value, and only over its text, with no textarea role (as ios-standalone
-// finds 'zzqx'). Scanned down from the top, so the field wins over the preview's copy of the title below
-// it, wherever the dock sits.
-const REVIEW_KEYBOARD: IosOp[] = [
-  { op: 'launch' },
-  { op: 'signIn' },
-  // A warm app holds the task list it loaded earlier in the run, before this scenario seeded its history.
-  { op: 'kill', method: 'terminate' },
-  { op: 'launch' },
-  { op: 'nav', tab: 'Home' },
-  { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
-  // 4 s, not 2: since the mode-row scan starts at MODE_ROW (315) it can read the Task toggle mid-settle (y 374/402 on
-  // 2026-11-12, against 464 settled), and a tap there misses the moving dock and blurs the field (jobs …011648Z…-8c62,
-  // …010744Z…-6102). ios-standalone's CAPTURE waits 4 for the same settle.
-  { op: 'wait', s: 4 },
-  { op: 'tap', label: 'Task', scan: DOCK(110, MODE_ROW), role: 'AXCheckBox' },
-  { op: 'keys', text: R_SIM_CHIP },
-  // Send, since review-first (2026-11-17): the first press parses; ✨ beside it is the read-with-AI toggle now.
-  { op: 'tap', label: 'Review before saving', scan: DOCK(395) },
-  { op: 'wait', s: 6 },
-  { op: 'shot', name: 'review-chip' },
-  {
-    op: 'find',
-    label: R_SIM_CHIP,
-    scan: { x: 60, from: 300, to: 600 },
-    as: 'bar0',
-  },
-  { op: 'expect', as: 'bar0', aboveKeyboard: true },
-  {
-    op: 'find',
-    label: 'Use suggested category',
-    scan: { x: 195, from: 300, to: 600 },
-    role: 'AXButton',
-    as: 'chip',
-  },
-  { op: 'expect', as: 'chip', aboveKeyboard: true },
-  {
-    op: 'tap',
-    label: 'Use suggested category',
-    scan: { x: 195, from: 300, to: 600 },
-    role: 'AXButton',
-  },
-  { op: 'wait', s: 1 },
-  { op: 'shot', name: 'review-chip-tapped' },
-  {
-    op: 'find',
-    label: R_SIM_CHIP,
-    scan: { x: 60, from: 300, to: 600 },
-    as: 'bar',
-  },
-  { op: 'expect', as: 'bar', aboveKeyboard: true },
-  { op: 'absent', label: 'Use suggested category', scan: { x: 195, from: 300, to: 600 } },
-  { op: 'shot', name: 'review-chip-taken' },
-  { op: 'erase', n: R_SIM_CHIP.length },
-  { op: 'tap', label: 'Log', scan: DOCK(49, MODE_ROW), role: 'AXCheckBox' },
-  { op: 'blur' },
-];
-
 export const categorySuggest: Scenario = {
   id: 'category-suggest',
   title: 'Editor and Review preview: tap-only category suggestion',
   tiers: ['full'],
-  slowPaths: CATEGORY_SUGGEST_PATHS,
   rows: [
     {
       id: 'accept',
@@ -503,12 +435,6 @@ export const categorySuggest: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: `Tap, then switch to Log and back: the taken category is gone. ${NO_CATEGORY}`,
-    },
-    {
-      id: 'review-keyboard',
-      entry: 'ios',
-      kind: 'nominal',
-      what: 'iPhone PWA, real parse: Review a line, tap the chip: the keyboard stays up, the field stays above it, the chip goes',
     },
     {
       id: 'week',
@@ -1105,17 +1031,6 @@ export const categorySuggest: Scenario = {
         } finally {
           ctx.page.off('request', count);
         }
-      },
-    },
-    // Last: a Simulator miss fails only its own row, never the browser steps after it.
-    {
-      id: 'review-keyboard',
-      entry: 'ios',
-      cost: 'slow',
-      proves: ['review-keyboard'],
-      title: 'On the Simulator: Review, tap the chip; the keyboard stays up over a real parse',
-      async run(ctx) {
-        await ctx.ios.run('review-chip', REVIEW_KEYBOARD);
       },
     },
     noConsoleErrors,

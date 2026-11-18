@@ -10,7 +10,7 @@ import {
   ledgerKind,
   type ApiClient,
 } from './api';
-import { targetOrigin } from './config';
+import { TEST_USER_EMAIL, targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import {
@@ -93,6 +93,11 @@ export interface PipelineDeps {
   skip?: (scenario: string, step: { id: string; entry: string }) => string | null;
   checkSessions?: boolean; // the local check: the end of the run asserts no timer was left running
   sleep?: (ms: number) => Promise<void>; // a cleanup retry's backoff (tests pass a no-op)
+  testUser?: string; // the email this run signs in as (ctx.testUser; default the original test user)
+  // A same-origin path the page parks on once the build check passed, so no app runs in it while the steps do: the
+  // iPhone lane's page (lanes.ts), whose steps are the Simulator's and the API's. `/api/` paths skip the service
+  // worker's app fallback, and the origin's storage — the session the token reads come from — stays readable.
+  park?: string;
 }
 
 // A dropped connection, not an answer: undici's `terminated` (the socket closed mid-response) or a socket-level
@@ -380,11 +385,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         'BUILD_MISMATCH_IN_PAGE',
         `page shows build ${inPage ?? 'none'} after ${IN_PAGE_RELOADS} reloads`,
       );
+    if (d.park) await page.goto(`${targetOrigin()}${d.park}`, { waitUntil: 'domcontentloaded' });
 
     const ctx: Ctx = {
       page,
       api,
       mcp,
+      testUser: d.testUser ?? TEST_USER_EMAIL,
       ui,
       nonce: d.runId.replace(/[^a-z0-9]/gi, '').slice(-10),
       dates: datesFor(new Date(d.now())),

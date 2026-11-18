@@ -431,7 +431,11 @@ describe('cachedState', () => {
 describe('the callers open their browser through launchCached', () => {
   // Both entry points must renew before launch; a bare launch(pw, statePath) would load the cache unrenewed.
   it.each([
-    ['devcheck/run.ts', /launchCached\(\s*pw,\s*statePath\(main\)/],
+    // each lane's own user's state (lanes.ts): `state` is statePath(main, slot, o.user)
+    [
+      'devcheck/run.ts',
+      /const state = statePath\(main, slot, o\.user\);[^]*launchCached\(\s*pw,\s*state,/,
+    ],
     [
       'mailroom/sim-bench-seed.ts',
       /launchCached\(\s*loadPlaywright\(\),\s*statePath\(main, 'dev'\)/,

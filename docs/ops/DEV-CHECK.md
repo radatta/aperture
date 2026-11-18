@@ -89,6 +89,43 @@ attempts refusal whenever the ledger has a Start today — that gate also counts
 the ledger never sees. Once the budget has run out in a run, a later Start refused because a sitting the cut-short
 scenario opened is still open (`Another sitting is still open`) reads needs-you too.
 
+## Two users
+
+On slot A a full run is two lanes at once (`lanes.ts`), one test user each, so it takes about as long as its longer lane
+instead of both — the Simulator's ~7 min used to run after the browser's ~9 (`localNotes`' sim profile, 2026-11-08;
+board history, 2026-11-17):
+
+| Lane    | Scenarios                                                               | Signs in as                                                                                                             | Its files                                                         |
+| ------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| iPhone  | `user: 'iphone'`: `ios-standalone`, `ios-probe`, `category-suggest-ios` | `identifiers.json` → `email.devTestUser`, the Simulator's own user (its email and Keychain item are pinned in `sim.sh`) | `devcheck.dev.env`, `devcheck.dev.state.json`, `ledger.dev.jsonl` |
+| browser | every other one                                                         | `email.devTestUserWeb`                                                                                                  | `devcheck.dev.web.env`, `…web.state.json`, `ledger.dev.web.jsonl` |
+
+**Why two users.** Separate partitions, so neither lane's tasks, plans or categories show in the other's lists and
+counts — `areas`' Home picker caps at 30 and the iPhone lane plans 16 tasks for today, to name one. What the two still
+share is the stage: the BFF's reserved concurrency (18) and MCP's (9), the DynamoDB ceiling, the LeetCode catalog
+(only `lc-catalog` reads it) and the build marker, which each lane checks itself. A 429 from the two users' load
+together reads like any other (_Throttles (429)_), and the report says the lanes ran side by side beside it.
+
+**How a lane runs.** Each lane is a whole pipeline run — its own deploy wait (shared: the iPhone lane sends no sim
+job before the build is confirmed), sign-in, sweep of its own ledger, settings baseline, in-page build check, steps,
+cleanup and leak check — so nothing about cleanup changes with two writers: each ledger has one. The iPhone lane's
+browser page parks on `/api/health` after its build check (an `/api/` path never boots the app from the service
+worker), so no second app polls dev while the Simulator works. The lanes merge into one report in scenario order:
+the header's `Lanes:` line gives each lane's time and the wall, the iPhone lane's harness lines start `iPhone user:`,
+its created records say `(iPhone user)`, and its screenshots sit in `shots/iphone/`. A lane that fails or crashes
+fails or crashes the run, by lane; the other still finishes and cleans up.
+
+**When it's one user.** devb (no Simulator), slot A before the browser user's env file exists (setup step 1b), or
+`DEVCHECK_LANES=one-user`: every scenario in one lane as `email.devTestUser`, as before lanes — so merging needed no
+setup first. `DEVCHECK_LANES=serial` runs both lanes, the iPhone lane first: the timing baseline, and the fallback
+if side by side misbehaves. When no iPhone step will run (a branch touching no iOS path), its scenarios stay in the
+browser lane, every step deferred, and no second user signs in — unless the iPhone ledger holds an earlier run's
+leftovers, which that lane then sweeps.
+
+**Scenarios that name the user** read `ctx.testUser` (the lane's), never the constant: `identifier-cleanup` checks
+the session is that user. `category-suggest-ios` seeds its own Garden history in the iPhone user's partition — in a
+one-user run `category-suggest` seeded it already, and it skips its seed.
+
 ## One-time setup
 
 1. **Test user** (dev pool only — never prod). On the Mac, the plan's operator step creates it with
@@ -109,14 +146,23 @@ cloudformation describe-stacks --profile aperture-dev --region us-west-1 --stack
 && ! grep -q '^DEVCHECK_CLAUDE_CLIENT_ID=' .secrets/devcheck.dev.env && printf 'DEVCHECK_CLAUDE_CLIENT_ID=%s\n'
 "$id" >> .secrets/devcheck.dev.env && chmod 600 .secrets/devcheck.dev.env` (one line; a recreated dev stack
    means removing the old line and rerunning it).
+   1b. **The browser lane's user** (slot A only; _Two users_). The same kind of user, `identifiers.json` →
+   `email.devTestUserWeb`, made by the same operator line against dev's pool, writing
+   `.secrets/devcheck.dev.web.env` with all seven keys (the claude client's included). Until it exists, slot A runs
+   one user. One more user in the pool costs nothing: Cognito's free tier on the Lite and Essentials plans is
+   10,000 monthly active users with no end date ([pricing](https://aws.amazon.com/cognito/pricing/); the pool sets
+   no feature plan, so never Plus), the admin calls that create it carry no charge, and the claude client signs in
+   with a code and PKCE, not the paid machine-to-machine grant. It needs no Keychain item: the Simulator stays the
+   original user. Step 3's fixture bank is per user, so the browser user links its own.
 2. **Playwright, outside the repo** — it is no package's dependency (it would add a browser download to every
    CI install, and no test needs it). `~/pw` is a scratch directory outside the monorepo, so npm there doesn't
    break the pnpm-only rule: `mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx
 playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROOT` overrides;
    `DEVCHECK_CHROMIUM` points at a system Chromium). Check `npm view playwright version` before refreshing.
 
-3. **Fixture bank** (the `finance` scenario). Once, as the test user, from Safari on the Mac: read
-   `DEVCHECK_EMAIL` / `DEVCHECK_PASSWORD` from `.secrets/devcheck.dev.env`, sign in to dev in a private window,
+3. **Fixture bank** (the `finance` scenario). Once per user that runs it — on slot A the browser lane's
+   (`devcheck.dev.web.env`), on devb its one user — from Safari on the Mac: read
+   `DEVCHECK_EMAIL` / `DEVCHECK_PASSWORD` from that user's env file, sign in to dev in a private window,
    Finances → **Connect a bank** → _First Platypus Bank_ (non-OAuth; an OAuth institution may drop custom
    fields) → username `user_custom`, password = the JSON in `scripts/src/devcheck/fixtures/plaid-fixture.json`
    (a Plaid Sandbox `user_custom` config: a card and a checking account with fixed `DEVCHECK …` rows,
@@ -236,16 +282,23 @@ line is dropped. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
 own `/api` and `/mcp` clients back off a Lambda 429 and retry, so no console sees it and a call that succeeds may
 still have been throttled; `ctx.api.throttles()` and `ctx.mcp.throttles()` count those, for a step that must prove
-none happened (`dev-concurrency-caps`).
+none happened (`dev-concurrency-caps`). With two lanes side by side (_Two users_) the Simulator's cold Home loads
+land on the same reservation as the browser lane's steps; the report says so beside any 429, and
+`DEVCHECK_LANES=serial` is how to tell the two apart.
 
 The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
 
 ## Ledgers
 
-| File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                   |
-| ---------------------------------------------------- | --------------------------------- | -------------------------------------------------------- |
-| `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) |
-| `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`              |
+| File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                                                                 |
+| ---------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) — on slot A with two users, the iPhone lane's |
+| `ledger.dev.web.jsonl`                               | the harness                       | the browser lane's user's partition (_Two users_)                                                      |
+| `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`                                                            |
+
+One ledger per user, never shared: cleanup reads a ledger's ids back with its user's token, so another user's id
+would read as gone. A one-user run on slot A leaves `ledger.dev.web.jsonl` alone and logs any ids pending in it; the
+next two-user run's browser lane sweeps them.
 
 Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?, of?}`, `op`
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` or `refused` after it is
@@ -298,7 +351,8 @@ finds it on disk, and a file that exports no Scenario, two, or one whose `id` is
 It sets `order` to place itself in the run: the scenarios that predate discovery sit at 10, 20, … 440 in their old
 order (`LEGACY_ORDER`, whose comments say why each sits where it does), a tie breaks by `id`, and
 `pnpm --dir scripts exec tsx src/devcheck/list.ts` prints the result (`--json`: the fingerprint a refactor diffs
-before and after). Detail that's about this scenario alone — what it leaves behind, a kind it ledgers, why it
+before and after). A scenario that sends Simulator jobs sets `user: 'iphone'` and sends nothing else to the
+browser: on slot A it runs in the iPhone lane as the Simulator's user, with its own data (_Two users_). Detail that's about this scenario alone — what it leaves behind, a kind it ledgers, why it
 sits where it does — goes in its header comment, not here. A new API or MCP method goes in its area's file
 (`api/<area>.ts`, `mcp/<area>.ts`, next to the composers `api.ts` and `mcp.ts`), so lanes don't all edit one
 client. Its `rows` are the plan's dev-test matrix (_Rows_, below); a Chrome runbook maps onto its steps one for

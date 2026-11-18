@@ -26,6 +26,7 @@ import {
   type DevStory,
   type DevTask,
 } from './api';
+import { TEST_USERS, TEST_USER_EMAIL, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { IOS_NOTE, type Ios } from './ios';
@@ -837,6 +838,36 @@ describe('runPipeline', () => {
     expect(p.openMs).toBeGreaterThan(0);
     expect(p.cleanupMs).toBeGreaterThan(0);
     expect(Object.values(p).reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(r.durationMs);
+  });
+
+  it('park: after the build check, the page waits on the parking path before any step runs', async () => {
+    const w = world();
+    let atStep: string[] = [];
+    const s = scenario(async () => void (atStep = [...w.gotos]))(w);
+    const r = await runPipeline(deps(w, [s], memLedger(), { park: '/api/health' }));
+    expect(r.status).toBe('PASS');
+    expect(atStep).toEqual([`${targetOrigin()}/api/health`]);
+  });
+
+  it('no park, no navigation of its own; a failed build check never parks', async () => {
+    const w = world();
+    await runPipeline(deps(w, [scenario(async () => undefined)(w)]));
+    expect(w.gotos).toEqual([]);
+    const stale = world({ inPage: ['b'.repeat(40)] });
+    const r = await runPipeline(
+      deps(stale, [scenario(async () => undefined)(stale)], memLedger(), { park: '/api/health' }),
+    );
+    expect(r.codes).toContain('BUILD_MISMATCH_IN_PAGE');
+    expect(stale.gotos).toEqual([]);
+  });
+
+  it('ctx.testUser is the lane’s user: the original by default', async () => {
+    const w = world();
+    const seen: string[] = [];
+    const s = scenario(async (_x, ctx) => void seen.push(ctx.testUser))(w);
+    await runPipeline(deps(w, [s]));
+    await runPipeline(deps(w, [s], memLedger(), { testUser: TEST_USERS.web }));
+    expect(seen).toEqual([TEST_USER_EMAIL, TEST_USERS.web]);
   });
 
   it('a leftover short work block from a killed run is put back before any step', async () => {

@@ -14,7 +14,8 @@ import { macRootFile, readMacRoot } from './mac-root.ts';
 export interface Identifiers {
   maintainer: { name: string; github: string };
   repo: string;
-  email: { contact: string; alerts: string; devTestUser: string };
+  // devTestUser: the dev check's original user (the Simulator's, devb's); devTestUserWeb: slot A's browser lane (DEV-CHECK.md → Two users)
+  email: { contact: string; alerts: string; devTestUser: string; devTestUserWeb: string };
   domains: { apex: string; prod: string; dev: string; devb: string };
   aws: { devAccountId: string; region: string; prodAccountSha256: string };
   bundlePrefix: string;

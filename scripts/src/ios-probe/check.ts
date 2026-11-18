@@ -39,7 +39,7 @@ export type SkipReason = keyof typeof SKIP;
 // Ops that need data only dev has, by scenario and label. An entry that matches no op fails the run (a stale skip).
 export const DEV_DATA: { scenario: string; label: string; why: string }[] = [
   {
-    scenario: 'category-suggest',
+    scenario: 'category-suggest-ios',
     label: 'Use suggested category',
     why: 'the chip needs a Garden task history (the scenario seeds it on dev)',
   },

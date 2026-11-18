@@ -22,7 +22,7 @@ describe('recordIosPlans', () => {
     for (const s of SCENARIOS)
       if ((await recordIosPlans(s, { nonce: 'plans' })).length) withJobs.push(s.id);
     expect(withJobs.sort()).toEqual(iosScenarioIds());
-    expect(withJobs).toEqual(expect.arrayContaining(['ios-standalone', 'category-suggest']));
+    expect(withJobs).toEqual(expect.arrayContaining(['ios-standalone', 'category-suggest-ios']));
   });
 
   it('records plans the runner would accept, named after their steps', async () => {

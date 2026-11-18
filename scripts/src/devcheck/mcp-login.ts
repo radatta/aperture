@@ -93,7 +93,7 @@ export const swapCode = (
 // The same identity guard as the app's session (WRONG_USER), plus: an access token minted for the claude
 // client, the only one /mcp accepts.
 export function assertMcpTestUser(s: McpSession, env: DevcheckEnv): void {
-  assertTestUser(s, env.DEVCHECK_SUB);
+  assertTestUser(s, env.DEVCHECK_SUB, env.DEVCHECK_EMAIL);
   const access = decodeJwtPayload(s.accessToken);
   if (s.clientId !== env.DEVCHECK_CLAUDE_CLIENT_ID || access.token_use !== 'access')
     throw fail('the token was not minted as the claude client’s access token');

@@ -181,11 +181,25 @@ describe('the slow tier', () => {
   it("the bot's iOS routing list is exactly every iOS scenario's slowPaths", () => {
     const ios = SCENARIOS.filter((s) => s.steps.some((x) => x.entry === 'ios'));
     expect(ios.map((s) => s.id).sort()).toEqual([
-      'category-suggest',
+      'category-suggest-ios',
       'ios-probe',
       'ios-standalone',
     ]);
     expect([...IOS_SLOW_PATHS].sort()).toEqual(ios.flatMap((s) => s.slowPaths ?? []).sort());
+  });
+
+  it('every scenario with an ios step runs in the iPhone lane, and only those; none drives the parked page', () => {
+    const ios = SCENARIOS.filter((s) => s.steps.some((x) => x.entry === 'ios'));
+    expect(
+      SCENARIOS.filter((s) => s.user === 'iphone')
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(ios.map((s) => s.id).sort());
+    // The iPhone lane's page waits on /api/health (lanes.ts): a step there has no app to drive.
+    for (const s of ios) {
+      const src = readFileSync(new URL(`./${s.id}.ts`, import.meta.url), 'utf8');
+      expect(src, s.id).not.toMatch(/ctx\.(page|ui)\b/);
+    }
   });
 
   it('ios-standalone is slow everywhere and covers what iOS can see plus its own harness', () => {

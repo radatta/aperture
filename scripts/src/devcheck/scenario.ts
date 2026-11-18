@@ -57,6 +57,10 @@ export interface Scenario {
   // Where it runs among the others: lower first, ties by id. The scenarios that predate discovery sit at 10, 20, …
   // 440 in their old order (scenarios/index.ts → LEGACY_ORDER, `list.ts` prints it); a new one must set this.
   order?: number;
+  // 'iphone': the scenario drives the Simulator, so on slot A it runs in the iPhone lane as the Simulator's own user,
+  // alongside the browser lane's scenarios rather than before them (lanes.ts, DEV-CHECK.md → Two users). Unset: the
+  // browser lane. A one-user run (devb, no browser-user env file, DEVCHECK_LANES=legacy) runs everything as one.
+  user?: 'iphone';
 }
 
 export interface Dates {
@@ -68,6 +72,7 @@ export interface Ctx {
   page: PwPage;
   api: ApiClient;
   mcp: McpClient; // dev's /mcp as the test user, through the claude client (mcp-login.ts)
+  testUser: string; // the email this lane signs in as (config.ts TEST_USERS)
   nonce: string; // unique per run — makes a title findable on screen; never a cleanup key
   dates: Dates;
   ui: Ui;

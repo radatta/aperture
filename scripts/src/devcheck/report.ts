@@ -41,6 +41,7 @@ export interface CreatedRecord {
   via: string;
   title?: string;
   final: 'deleted' | 'gone' | 'left';
+  lane?: 'iphone'; // the iPhone lane's user made it (lanes.ts); unset: the browser lane's, or a one-user run's
 }
 
 // A harness failure with what it said — the deploy wait, a sign-in, the build check, cleanup. A step's failure
@@ -96,6 +97,9 @@ export interface RunResult {
   // The iOS Simulator's jobs this run, and — when any iOS row came back "needs you" from the sim — why and how
   // many (the status line and the PR's first line say so: IOS-CHECK.md → Results).
   ios?: { jobs: IosJobSummary[]; unavailable: { reason: string; rows: number } | null };
+  // How the run's lanes ran (lanes.ts, DEV-CHECK.md → Two users) and each one's own time; durationMs is the wall.
+  // Absent: a one-user run made before lanes, or the local check.
+  lanes?: { mode: 'one-user' | 'serial' | 'parallel'; browserMs?: number; iphoneMs?: number };
 }
 
 const STATUS_DETAIL_MAX = 200;
@@ -280,6 +284,18 @@ function renderIos(ios: RunResult['ios']): string[] {
   ];
 }
 
+// e.g. `Lanes: parallel — browser 531.0s ∥ iPhone user 447.2s · wall 540.3s`; serial lists the iPhone lane first, as it ran.
+export function lanesLine(l: NonNullable<RunResult['lanes']>, wallMs: number): string {
+  const parts = [
+    ...(l.browserMs !== undefined ? [`browser ${sec(l.browserMs)}`] : []),
+    ...(l.iphoneMs !== undefined ? [`iPhone user ${sec(l.iphoneMs)}`] : []),
+  ];
+  if (parts.length < 2)
+    return `Lanes: ${l.mode}${parts.length ? ` — ${parts[0]} only` : ''} · wall ${sec(wallMs)}`;
+  const sep = l.mode === 'parallel' ? ' ∥ ' : ' then ';
+  return `Lanes: ${l.mode} — ${(l.mode === 'serial' ? [...parts].reverse() : parts).join(sep)} · wall ${sec(wallMs)}`;
+}
+
 export function renderReport(r: RunResult): string {
   const left = r.created.filter((c) => c.final === 'left');
   const lines = [
@@ -289,6 +305,7 @@ export function renderReport(r: RunResult): string {
     `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
+  if (r.lanes) lines.push(lanesLine(r.lanes, r.durationMs));
   if (r.sittingStarts !== undefined) lines.push(budgetLine(r.sittingStarts, r.dayStart));
   if (r.failures.length)
     lines.push('', ...r.failures.map((f) => `**Failed:** ${f.code} — ${f.message}`));
@@ -312,7 +329,9 @@ export function renderReport(r: RunResult): string {
   lines.push('', '## Data', '');
   if (!r.created.length) lines.push('Created nothing.');
   for (const c of r.created)
-    lines.push(`- \`${c.id}\` via ${c.via}${c.title ? ` — ${c.title}` : ''} → **${c.final}**`);
+    lines.push(
+      `- \`${c.id}\` via ${c.via}${c.title ? ` — ${c.title}` : ''}${c.lane ? ' (iPhone user)' : ''} → **${c.final}**`,
+    );
   if (r.swept.length) lines.push(`- Swept from earlier runs: ${r.swept.join(', ')}`);
   if (r.unrecorded.length)
     lines.push(
@@ -361,6 +380,13 @@ export function renderReport(r: RunResult): string {
     '',
     '## Throttled (429)',
     '',
+    // Both users' load lands on one stage's reserved concurrency (DEV-CHECK.md → Two users): say so beside a 429.
+    ...(r.throttled.length && r.lanes?.mode === 'parallel' && r.lanes.iphoneMs !== undefined
+      ? [
+          '_The lanes ran side by side: a 429 here may be the two users’ load together — rerun with DEVCHECK_LANES=serial to tell._',
+          '',
+        ]
+      : []),
     ...(r.throttled.length ? r.throttled.map((t) => `- \`${cell(t)}\``) : ['None.']),
   );
   // A scenario's own injected responses (ctx.intercept) — kept apart from real throttles, so neither reads as the other.
