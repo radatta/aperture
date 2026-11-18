@@ -19,11 +19,20 @@ import { hidingSecret, laDay, noConsoleErrors, type Ctx, type Scenario } from '.
 // The slice of @aperture/shared the scenario reads. scripts doesn't depend on shared, so its source is loaded at
 // run time (tsx transpiles it) — the same rules and texts the Lambda runs, never a copy that could drift.
 // siri-capture.test.ts checks every name below is really there.
-export const SAY_KEYS = ['unauthorized', 'method', 'path', 'empty', 'tooLong', 'cap'] as const;
+export const SAY_KEYS = [
+  'unauthorized',
+  'method',
+  'path',
+  'empty',
+  'tooLong',
+  'cap',
+  'busy',
+] as const;
 export interface Shared {
   CAPTURE_SAY: Record<(typeof SAY_KEYS)[number], string>;
   CAPTURE_DAILY_CAP: number;
   CAPTURE_PARSE_DAILY_CAP: number;
+  CAPTURE_PARSE_TEXT_MAX: number;
   CAPTURE_DUPLICATE_MS: number;
   CAPTURE_TEXT_MAX: number;
   CAPTURE_BODY_MAX: number;
@@ -49,6 +58,7 @@ export interface Shared {
 export const SHARED_NUMBERS = [
   'CAPTURE_DAILY_CAP',
   'CAPTURE_PARSE_DAILY_CAP',
+  'CAPTURE_PARSE_TEXT_MAX',
   'CAPTURE_DUPLICATE_MS',
   'CAPTURE_TEXT_MAX',
   'CAPTURE_BODY_MAX',
@@ -543,7 +553,25 @@ export const siriCapture: Scenario = {
       id: 'parse-cap',
       entry: 'api',
       kind: 'edge',
-      what: 'Past 50 model parses in a UTC day a spoken line saves as typed, and says why',
+      what: 'Past 40 model parses in a UTC day, across all the user’s capture tokens, a spoken line saves without AI — keeping its own words’ time — and says so',
+    },
+    {
+      id: 'long-line',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A spoken line past 600 characters never reaches the model: saved as typed with its words’ time, said “without AI”',
+    },
+    {
+      id: 'busy',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Eight captures at once through one token (four model lines): each answers 200 with its task, or 409 with the spoken “say it again” — never a 5xx (F224)',
+    },
+    {
+      id: 'latency',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Spoken lines through the Sonnet parse, one at a time: each answers under 8 s and parsed (Siri’s wait); p50, p95 and max logged',
     },
     {
       id: 'grammar-table',
@@ -574,7 +602,7 @@ export const siriCapture: Scenario = {
       what: 'A failed or timed-out parse saves the line as typed and says so',
       offDev: {
         file: 'lambdas/src/backend.capture.test.ts',
-        test: 'a failed or timed-out parse saves the line as typed and says so',
+        test: "a failed or timed-out parse saves the line as typed, with its own words' time, and says so",
         why: 'dev’s model can’t be made to fail or time out on demand',
       },
     },
@@ -1255,6 +1283,75 @@ export const siriCapture: Scenario = {
       },
     },
     {
+      id: 'api-busy',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['busy'],
+      title: 'Eight captures at once through one token: 200 or a spoken 409, never a 5xx',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        await withToken(ctx, `devcheck ${ctx.nonce} busy`, async (token) => {
+          const at = aheadClock(laClock(Date.now()).hour);
+          const texts = Array.from({ length: 8 }, (_, i) =>
+            i % 2
+              ? `${line(ctx, `busy ${i}`)} | ~5`
+              : `${line(ctx, `busy ${i} call the vet`)} at ${at}`,
+          );
+          const answers = await Promise.all(
+            texts.map((text, i) =>
+              ctx.api.writes.captureRaw(token, { text, voice: true }, { tag: `busy #${i}` }),
+            ),
+          );
+          let busy = 0;
+          for (const [i, got] of answers.entries()) {
+            if (got.status === 409) {
+              refused(got, 409, `busy #${i}`, S.CAPTURE_SAY.busy);
+              busy++;
+              continue;
+            }
+            const r = ok(got, `busy #${i}`);
+            if (!r.id) throw new Error(`busy #${i}: answered with no task`);
+            if (!taskIds.includes(r.id)) taskIds.push(r.id);
+            await getTask(ctx, r.id);
+          }
+          ctx.log(`8 at once: ${8 - busy} added, ${busy} answered busy`);
+        });
+      },
+    },
+    {
+      id: 'api-latency',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['latency'],
+      title: 'Six spoken lines through the real parse, one at a time: each under 8 s and parsed',
+      async run(ctx) {
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const at = aheadClock(laClock(Date.now()).hour);
+        const ms: number[] = [];
+        for (let i = 1; i <= 6; i++) {
+          const t0 = Date.now();
+          const r = await capture(
+            ctx,
+            tokenB,
+            `${line(ctx, `quick ${i} call the vet`)} at ${at}`,
+            `latency ${i}`,
+          );
+          ms.push(Date.now() - t0);
+          if (r.raw)
+            throw new Error(`latency ${i}: saved as typed after ${ms.at(-1)} ms — ${r.detail}`);
+        }
+        const sorted = [...ms].sort((a, b) => a - b);
+        const pct = (p: number) =>
+          sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]!;
+        ctx.log(
+          `capture latency (ms, from the container): n ${ms.length}, p50 ${pct(0.5)}, p95 ${pct(0.95)}, max ${sorted.at(-1)} — ${ms.join(', ')}`,
+        );
+        if (sorted.at(-1)! > 8_000)
+          throw new Error(`a capture took ${sorted.at(-1)} ms (Siri's budget is 8 s)`);
+      },
+    },
+    {
       id: 'api-cap',
       entry: 'api',
       proves: ['cap'],
@@ -1316,43 +1413,68 @@ export const siriCapture: Scenario = {
       proves: ['parse-cap'],
       cost: 'slow',
       title:
-        'A fresh token: 50 distinct spoken lines (real parses), then the 51st saves as typed, “daily parse limit reached”',
+        'A fresh token: distinct spoken lines (real parses) until the user’s 40 a day are spent, then one saves without AI, keeping its time',
       async run(ctx) {
         const S = await loadShared();
         await clearOfMidnight(ctx, untilUtcMidnight, 'UTC midnight', 7 * MIN); // the parse cap's day is UTC too
         await withToken(ctx, nameD(ctx), async (token) => {
           const day = new Date().toISOString().slice(0, 10);
           const at = aheadClock(laClock(Date.now()).hour);
-          // One at a time: each is a real model call. A raw save on the way (a missed deadline) still spent its
-          // claim, so it counts like a parse — only the 51st must be refused one.
+          // One at a time: each is a real model call. The cap is the user's, across every live capture token, so
+          // the run's earlier rows spent some of it already: the refusal comes within the cap's count, never
+          // later. A raw save on the way (a missed deadline) still spent its claim, so it counts like a parse.
           let raws = 0;
-          for (let i = 1; i <= S.CAPTURE_PARSE_DAILY_CAP; i++) {
-            const r = await capture(
-              ctx,
-              token,
-              `${line(ctx, `parse ${i} call the vet`)} at ${at}`,
-              `parse ${i}`,
+          for (let i = 1; i <= S.CAPTURE_PARSE_DAILY_CAP + 1; i++) {
+            const text = `${line(ctx, `parse ${i} call the vet`)} at ${at}`;
+            const t0 = Date.now();
+            const r = await capture(ctx, token, text, `parse ${i}`);
+            if (!r.raw) continue;
+            if (!r.detail.includes('daily parse limit reached')) {
+              raws++;
+              continue;
+            }
+            // Past the cap: no model, but the words' own time, placed by the voice rules, and said so.
+            const want = spokenWant(S, text, t0, Date.now());
+            if (!r.due || !want.some((w) => w.day === r.due!.day && w.time === r.due!.time))
+              throw new Error(
+                `parse ${i}: due ${JSON.stringify(r.due)}, expected ${JSON.stringify(want[0])}`,
+              );
+            if (!r.say.startsWith('Added without AI, as typed: '))
+              throw new Error(`parse ${i}: say is “${r.say}”`);
+            ctx.log(
+              `parse cap: refused at capture ${i} of this token (${raws} saved as typed on the way)`,
             );
-            if (r.raw) raws++;
+            return;
           }
-          if (raws)
-            ctx.log(`parse cap: ${raws} of ${S.CAPTURE_PARSE_DAILY_CAP} saved as typed on the way`);
-          const n = S.CAPTURE_PARSE_DAILY_CAP + 1;
-          const r = await capture(
-            ctx,
-            token,
-            `${line(ctx, `parse ${n} call the vet`)} at ${at}`,
-            `parse ${n}`,
+          throw new Error(
+            `no capture past the cap was refused${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
           );
-          if (
-            !r.raw ||
-            !r.detail.includes('daily parse limit reached') ||
-            !r.say.startsWith('Added as typed')
-          )
-            throw new Error(
-              `parse ${n}: ${JSON.stringify(r)}${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
-            );
         });
+      },
+    },
+    {
+      id: 'api-long-line',
+      entry: 'api',
+      proves: ['long-line'],
+      title: 'A spoken line past 600 characters: saved as typed, its time kept, “without AI”',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const head = line(ctx, 'long call the vet');
+        const pad = ' and then the rest of a very long thought'.repeat(
+          Math.ceil(S.CAPTURE_PARSE_TEXT_MAX / 40),
+        );
+        const text = `${head}${pad} at ${aheadClock(laClock(Date.now()).hour)}`;
+        const t0 = Date.now();
+        const r = await capture(ctx, tokenB, text, 'the long line');
+        const want = spokenWant(S, text, t0, Date.now());
+        if (!r.raw || !r.detail.includes('too long for the model'))
+          throw new Error(`not saved as typed: ${r.detail}`);
+        if (!r.due || !want.some((w) => w.day === r.due!.day && w.time === r.due!.time))
+          throw new Error(`due ${JSON.stringify(r.due)}, expected ${JSON.stringify(want[0])}`);
+        if (!r.say.startsWith('Added without AI, as typed: ')) throw new Error(`say is “${r.say}”`);
+        if ((await getTask(ctx, r.id!)).title !== text)
+          throw new Error('the title isn’t the line as typed');
       },
     },
     {

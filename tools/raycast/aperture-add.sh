@@ -72,6 +72,7 @@ case "$status" in
   200) ;;
   401) fail "token rejected (HTTP 401) — revoked, or not a capture token? Make one in Settings › Capture" ;;
   429) fail "${say:-daily capture limit reached} (HTTP 429)" ;;
+  409) fail "${say:-Aperture was busy and nothing was added} (HTTP 409) — run it again" ;;
   5*) fail "HTTP $status — ${say:-no details}; $MAYBE_ADDED" ;;
   *) fail "HTTP $status — ${say:-$(head -c 200 "$out")}" ;;
 esac

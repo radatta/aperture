@@ -138,6 +138,9 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   if (!r.ok) return `the parse failed (${r.reason})`;
   const { title, dueTime } = r.input;
   if (s.category && r.input.categoryId !== categoryId) return `no category, “${title}”`;
+  // The run's category is bait no other line is about: a line filed there was forced into it (F229).
+  if (!s.category && categoryId && r.input.categoryId === categoryId)
+    return `filed under the run's category, “${title}”`;
   // A line naming no category may still be filed by topic (the prompt's "clearly matches" is the model's call,
   // category suggestion's concern): what this scenario holds is that its leading word stays in the title.
   if (!dueTime && s.untimed === undefined && CLOCK.test(s.line)) return `no time, “${title}”`;
@@ -145,10 +148,10 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   return want.includes(title) ? null : `“${title}”, want “${want.join('” or “')}”`;
 }
 
-// Four at a time by default (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the
-// model is nondeterministic, the server's guard isn't — and the first-try tally logged. Captures go one at a time
-// (`batch` 1): each is up to three conditional writes on its token's one row, and four at once lost that race on
-// dev (2026-11-17, a 500) — a race no Shortcut or hotkey makes.
+// Four at a time (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the model is
+// nondeterministic, the server's guard isn't — and the first-try tally logged. Captures too, since a lost race on the
+// token's row retries with jitter (F224, 2026-11-17; four at once had answered a 500): a 409 "busy" left after that is a
+// miss, re-asked once like any other.
 async function sample(
   ctx: Ctx,
   what: string,
@@ -217,6 +220,12 @@ export const captureTitles: Scenario = {
       what: 'A leading word naming no category stays in the title',
     },
     {
+      id: 'no-force',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A line about no category is never filed under one just because it is there: the run’s own category, which no line is about, stays empty (F229)',
+    },
+    {
       id: 'mcp-parse',
       entry: 'mcp',
       kind: 'nominal',
@@ -271,7 +280,7 @@ export const captureTitles: Scenario = {
       id: 'api-sample',
       entry: 'api',
       cost: 'slow',
-      proves: ['verbatim', 'due-out', 'due-kept', 'lead-category', 'lead-other'],
+      proves: ['verbatim', 'due-out', 'due-kept', 'lead-category', 'lead-other', 'no-force'],
       title: 'The sample through parseTask: every class’s titles exact, tallies logged',
       async run(ctx) {
         const m = marker(ctx.nonce);
@@ -284,8 +293,8 @@ export const captureTitles: Scenario = {
         const parse = (line: string) => ctx.api.reads.parseTask(line);
         try {
           const fails = [
-            ...(await sample(ctx, 'verbatim', verbatim(m), parsed(parse))),
-            ...(await sample(ctx, 'due phrase', dueOut, parsed(parse))),
+            ...(await sample(ctx, 'verbatim', verbatim(m), parsed(parse, cat.id))),
+            ...(await sample(ctx, 'due phrase', dueOut, parsed(parse, cat.id))),
             ...(await sample(ctx, 'leading word', leads(label, live), parsed(parse, cat.id))),
           ];
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
@@ -372,7 +381,6 @@ export const captureTitles: Scenario = {
               const title = (await ctx.api.reads.getTask(r.id))?.title;
               return title === s.title ? null : `“${title}”, want “${s.title}”`;
             },
-            1,
           );
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
         } finally {
