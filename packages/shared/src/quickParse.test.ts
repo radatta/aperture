@@ -492,6 +492,25 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       dueDay: '2026-11-16',
       dueTime: '05:00',
     });
+    // "5:30" is a 12-hour clock: no half said, so a bare hour — 02:00 + 5:30 is the morning's, the model's 05:30
+    // agreeing. At 06:00 the next 5:30 is the evening's (R1-01).
+    expect(at('call mum at 5:30', { dueTime: '05:30' })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '05:30',
+    });
+    expect(voice('call mum at 5:30', { dueTime: '05:30' }).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:30',
+    });
+    // A half-of-day word away from the clock says nothing about it: the bare hour stands (the
+    // model's 16:00 agrees with the grammar's 4, so 02:00 + 4 is the morning's).
+    expect(
+      at('at 4 book the night bus', { title: 'book the night bus', dueTime: '16:00' }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '04:00' });
+    // Before the clock counts too: "this evening at 5".
+    expect(at('call mum this evening at 5', { dueTime: '17:00' })).toMatchObject({
+      dueTime: '17:00',
+    });
     // "tonight" alone: the rule's 8 PM, not a model's other reading.
     expect(at('call mum tonight', { dueTime: '21:00' })).toMatchObject({ dueTime: '20:00' });
     // "at 1 tonight" and "friday at 1 tonight" keep the small-hours rule (the grammar places an agreeing clock).
@@ -882,7 +901,13 @@ describe('spokenFallbackDue (a spoken line saved without the model)', () => {
       dueTime: '17:00',
     });
   });
-  it('"tomorrow" is the next calendar day; any other day word means no time', () => {
+  it('"tomorrow" is the app\'s next day, as the model reads it; any other day word means no time', () => {
+    // 00:30 before the day rolls: the app's today is still yesterday, so its tomorrow is the calendar's today.
+    const late = { now: Date.UTC(2026, 10, 17, 8, 30), today: '2026-11-16' };
+    expect(spokenFallbackDue('call mum tomorrow at 9', late)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '09:00',
+    });
     expect(spokenFallbackDue('call mum tomorrow at 9', c)).toEqual({
       dueDay: '2026-11-17',
       dueTime: '09:00',

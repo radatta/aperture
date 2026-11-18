@@ -1,5 +1,5 @@
 // Voice capture — "Hey Siri, Aperture" / the Action Button → a task. An iPhone Shortcut (or Raycast) POSTs the
-// spoken line to /api/capture with a scoped token; the server parses it (Haiku, with a deadline), creates the
+// spoken line to /api/capture with a scoped token; the server parses it (the model, with a deadline), creates the
 // task and answers a sentence to speak. Pure rules shared by the stub, the Lambda and the dev check: the
 // scoped-token shapes, the caps, the wire shapes and the spoken texts. Design record:
 // docs/areas/tasks/capture.md.

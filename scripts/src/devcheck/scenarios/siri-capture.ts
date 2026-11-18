@@ -106,6 +106,7 @@ const fillName = (ctx: Ctx, i: number) => `devcheck ${ctx.nonce} fill ${i}`;
 // Steps share what earlier ones made; a failed step skips the rest, so these are set when read.
 let tokenA: string; // plaintexts — never logged
 let tokenB: string;
+const parsedB: string[] = [];
 let infoA: DevScopedToken;
 let infoB: DevScopedToken;
 let taskIds: string[] = []; // every task the route made this run, torn down by the last step
@@ -209,6 +210,10 @@ async function capture(
   const got = await ctx.api.writes.captureRaw(token, body, opts.tag ? { tag: opts.tag } : {});
   const r = ok(got, what);
   if (r.id && !r.duplicate && !taskIds.includes(r.id)) taskIds.push(r.id);
+  // A parsed, non-grammar line through tokenB spent one of the user's model calls (its UTC day kept): the
+  // parse-cap row needs the refusal to come that much sooner, or the cap is per token, not per user.
+  if (token === tokenB && !r.raw && !r.duplicate && !text.includes('|'))
+    parsedB.push(new Date().toISOString().slice(0, 10));
   return r;
 }
 const tokenById = async (ctx: Ctx, id: string) =>
@@ -566,6 +571,17 @@ export const siriCapture: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'Eight captures at once through one token (four model lines): each answers 200 with its task, or 409 with the spoken “say it again” — never a 5xx (F224)',
+    },
+    {
+      id: 'busy-exhausted',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Every retry of the token row lost its race: 409 with the spoken “say it again”, and nothing written (F224)',
+      offDev: {
+        file: 'lambdas/src/index.test.ts',
+        test: '409s with a spoken "say it again" when every retry of the token row lost a race (F224)',
+        why: 'eight lost races in a row can’t be forced on dev — the concurrent burst proves the retry lands; scopedToken.test.ts proves the give-up writes nothing',
+      },
     },
     {
       id: 'latency',
@@ -1316,6 +1332,9 @@ export const siriCapture: Scenario = {
             await getTask(ctx, r.id);
           }
           ctx.log(`8 at once: ${8 - busy} added, ${busy} answered busy`);
+          // Eight tries with backoff each: more than one of eight giving up means the retry isn't working.
+          if (busy > 1)
+            throw new Error(`${busy} of 8 answered busy — the lost-race retry isn't landing`);
         });
       },
     },
@@ -1424,7 +1443,9 @@ export const siriCapture: Scenario = {
           // the run's earlier rows spent some of it already: the refusal comes within the cap's count, never
           // later. A raw save on the way (a missed deadline) still spent its claim, so it counts like a parse.
           let raws = 0;
-          for (let i = 1; i <= S.CAPTURE_PARSE_DAILY_CAP + 1; i++) {
+          const spentB = parsedB.filter((d) => d === day).length;
+          const latest = S.CAPTURE_PARSE_DAILY_CAP - spentB + 1;
+          for (let i = 1; i <= latest; i++) {
             const text = `${line(ctx, `parse ${i} call the vet`)} at ${at}`;
             const t0 = Date.now();
             const r = await capture(ctx, token, text, `parse ${i}`);
@@ -1442,12 +1463,12 @@ export const siriCapture: Scenario = {
             if (!r.say.startsWith('Added without AI, as typed: '))
               throw new Error(`parse ${i}: say is “${r.say}”`);
             ctx.log(
-              `parse cap: refused at capture ${i} of this token (${raws} saved as typed on the way)`,
+              `parse cap: refused at capture ${i} of this token, ${spentB} spent through another this run (${raws} saved as typed on the way)`,
             );
             return;
           }
           throw new Error(
-            `no capture past the cap was refused${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
+            `no refusal by capture ${latest} of this token, though another spent ${spentB} of the user's ${S.CAPTURE_PARSE_DAILY_CAP} today — a per-token cap?${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
           );
         });
       },

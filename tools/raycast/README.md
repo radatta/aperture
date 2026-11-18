@@ -86,6 +86,7 @@ APERTURE_URL=https://dev.aperture.rahuldatta.dev APERTURE_KEYCHAIN_SERVICE=apert
 | `no token in Keychain item …`      | step 1 not done (or a different service name)                                        |
 | `token rejected (HTTP 401)`        | revoked in Settings, or not a capture token — make one and re-run step 1 with `-U`   |
 | `… (HTTP 429)`                     | the token's daily capture limit (200) — nothing was added; it resets at midnight UTC |
+| `… (HTTP 409)`                     | several captures raced on the token and this one gave up — nothing was added; re-run |
 | `can't reach …`                    | offline, DNS or TLS — the request never left, nothing was added                      |
 | `… it may have been added …`       | timeout (20s), dropped reply or a 5xx — check the app before retrying                |
 | `HTTP <n> — …` / any other message | the server's `say`, verbatim (or a local check: empty title, missing `jq`)           |
@@ -98,7 +99,7 @@ not the Mac.
 ## Security
 
 The capture token can only add tasks through `/api/capture` — it opens no RPC method, MCP tool or other
-route, and is capped (200 captures and 50 model parses a day). A leaked one costs junk tasks and cents of
+route, and is capped (200 captures a day, and 40 model parses a day across all your capture tokens). A leaked one costs junk tasks and cents of
 model spend until you revoke it in Settings › Capture, which stops it at once without touching the
 phone's token ([capture.md → Token](../../docs/areas/tasks/capture.md#3-token)). It lives only in Keychain,
 reaches curl through a file descriptor (never the process list), and goes only to `APERTURE_URL`. The typed line goes to the

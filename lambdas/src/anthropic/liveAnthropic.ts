@@ -190,7 +190,8 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         system: parseSystemPrompt(req.today, req.categories, { voice: req.voice }),
         user: req.text,
         schema: parseOutputSchema(req.categories.map((c) => c.id)),
-        maxTokens: req.maxTokens ?? 2048,
+        // The longest app line (2,500 characters) copied whole into notes is ~700 tokens of JSON.
+        maxTokens: req.maxTokens ?? 1024,
         timeoutMs: req.timeoutMs,
         thinking: PARSE_THINKING,
         effort: PARSE_EFFORT,

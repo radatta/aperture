@@ -30,7 +30,7 @@ const verbatim = (m: string): Sample[] => [
   { line: 'book the vet note at 11 am', title: 'book the vet note' },
   { line: 'ping the plumber asap at 4 pm', title: 'ping the plumber asap' },
   { line: 'renew passport online at 9 am', title: 'renew passport online' },
-  // F232 (dev, 2026-11-18): the model put the marker and "typed" in notes; they go back.
+  // F232 (dev, 2026-11-17): the model put the marker and "typed" in notes; they go back.
   {
     line: `devcheck ${m} call the dentist typed tomorrow at 5 pm`,
     title: `devcheck ${m} call the dentist typed`,
@@ -72,7 +72,7 @@ const dueOut: Sample[] = [
 // Through the capture route — spoken (the Shortcut's body: the lead-in, the said time and the day go) and typed
 // (Raycast's) — every other word stays. Real tasks, so each carries the run's marker.
 const captured = (m: string): Sample[] => [
-  // F232 (dev, 2026-11-18): a marker prefix and a trailing word beside "tomorrow at <clock>", typed — the model put
+  // F232 (dev, 2026-11-17): a marker prefix and a trailing word beside "tomorrow at <clock>", typed — the model put
   // both in notes and titled it "call the dentist".
   {
     line: `devcheck ${m} call the dentist typed tomorrow at 5 pm`,
@@ -139,6 +139,11 @@ const leads = (label: string, live: Set<string>): Sample[] => [
     { line: 'devcheck call the bank at 7 pm', title: 'devcheck call the bank' },
   ].filter((s) => !live.has(s.line.split(/[\s,:]/)[0]!)),
 ];
+
+// One word, this run's own: no live category or earlier run's can match it, and it doesn't carry the marker
+// every sample line does (a line naming the marker would read as naming the category).
+const baitLabel = (nonce: string) =>
+  `quince${nonce.replace(/\d/g, (d) => 'qrstuvwxyz'[Number(d)]!)}`;
 
 const parsed =
   (parse: (line: string) => Promise<DevParseResult>, categoryId: string | null = null) =>
@@ -238,6 +243,12 @@ export const captureTitles: Scenario = {
       what: 'A line about no category is never filed under one just because it is there: the run’s own category, which no line is about, stays empty (F229)',
     },
     {
+      id: 'no-force-ui',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The capture bar’s Review, with one category no line is about: the preview files the line under none (F229)',
+    },
+    {
       id: 'mcp-parse',
       entry: 'mcp',
       kind: 'nominal',
@@ -299,8 +310,7 @@ export const captureTitles: Scenario = {
         const live = new Set(
           (await ctx.api.reads.listCategories()).map((c) => c.label.toLowerCase()),
         );
-        // One word, this run's own: no live category or earlier run's can match it.
-        const label = `quince${m}`;
+        const label = baitLabel(ctx.nonce);
         const cat = await ctx.api.writes.upsertCategory({ label, isWork: false });
         const parse = (line: string) => ctx.api.reads.parseTask(line);
         try {
@@ -341,28 +351,38 @@ export const captureTitles: Scenario = {
       id: 'ui-review',
       entry: 'ui',
       cost: 'slow',
-      proves: ['review'],
-      title: 'Capture bar › Review: “…typed at 1 am” previews with “typed” kept; nothing saved',
+      proves: ['review', 'no-force-ui'],
+      title:
+        'Capture bar › Review: “…typed at 1 am” previews with “typed” kept, not filed under the one bait category; nothing saved',
       async run(ctx) {
         const s = verbatim(marker(ctx.nonce))[0]!;
-        await ctx.ui.goto('/tasks');
-        await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
-        const field = ctx.page.locator('textarea[aria-label="Capture task"]');
-        const created = ctx.createdIds().length;
-        await field.fill(s.line);
-        const parsed = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
-          timeout: 15_000,
+        // A category no line is about, live while the app parses (F229: a line is never forced into it).
+        const cat = await ctx.api.writes.upsertCategory({
+          label: `${baitLabel(ctx.nonce)}ui`,
+          isWork: false,
         });
-        await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
-        const res = await parsed;
-        if (res.status() !== 200) throw new Error(`parseTask answered ${res.status()}`);
-        const why = miss(s, (await res.json()) as DevParseResult, null);
-        if (why) throw new Error(`the preview: ${why}`);
-        await ctx.ui.expectText(s.title, 10_000);
-        await ctx.shot('review');
-        await field.fill(''); // unsaved
-        await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
-        if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
+        try {
+          await ctx.ui.goto('/tasks');
+          await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
+          const field = ctx.page.locator('textarea[aria-label="Capture task"]');
+          const created = ctx.createdIds().length;
+          await field.fill(s.line);
+          const parsed = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
+            timeout: 15_000,
+          });
+          await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
+          const res = await parsed;
+          if (res.status() !== 200) throw new Error(`parseTask answered ${res.status()}`);
+          const why = miss(s, (await res.json()) as DevParseResult, cat.id);
+          if (why) throw new Error(`the preview: ${why}`);
+          await ctx.ui.expectText(s.title, 10_000);
+          await ctx.shot('review');
+          await field.fill(''); // unsaved
+          await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
+          if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
+        } finally {
+          await ctx.api.writes.deleteCategory(cat.id, null);
+        }
       },
     },
     {

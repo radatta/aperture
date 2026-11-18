@@ -74,6 +74,7 @@ const R_REAL_NAMED = 'kitchen, polish the flux gasket';
 const R_REAL_AUTO = 'grease the flux gasket';
 const R_AI_OFF = 'loam the flux gasket';
 const R_AS_TYPED = 'weed the flux gasket';
+const R_RELOAD = 'mulch the flux gasket';
 const R_LONG =
   'hoe the flux gasket and then walk the long way back past the shed to fetch the other tool';
 
@@ -448,6 +449,12 @@ export const categorySuggest: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'A failed parse keeps the text and says why: Send tries again, and "Save as typed" saves the line raw. Canned parse: a failure the model won’t produce on demand.',
+    },
+    {
+      id: 'review-reload',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A reload with a preview showing saves nothing: the bar comes back empty and the task is on no list. Canned parse.',
     },
     {
       id: 'review-grammar',
@@ -886,6 +893,36 @@ export const categorySuggest: Scenario = {
       },
     },
     {
+      id: 'review-reload',
+      entry: 'ui',
+      proves: ['review-reload'],
+      title: 'A preview showing, then a reload: nothing saved, the bar empty',
+      async run(ctx) {
+        const title = name(ctx, R_RELOAD);
+        await openTaskBar(ctx);
+        const parse = await ctx.intercept('parseTask', {
+          status: 200,
+          times: 1,
+          body: await parsed(ctx, title),
+        });
+        const created = ctx.createdIds().length;
+        await captureField(ctx).fill(title);
+        await captureField(ctx).press('Enter');
+        await ctx.page
+          .getByRole('button', { name: 'Save reviewed task' })
+          .waitFor({ timeout: 10_000 });
+        await parse.release();
+        await ctx.page.reload({ waitUntil: 'load' });
+        await openTaskBar(ctx);
+        if ((await captureField(ctx).inputValue()) !== '')
+          throw new Error('the bar came back with text after the reload');
+        await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
+        if (ctx.createdIds().length !== created) throw new Error('the reload saved a task');
+        if ((await ctx.api.reads.listTasks()).some((t) => t.title === title))
+          throw new Error('the previewed line is on the server');
+      },
+    },
+    {
       id: 'review-grammar',
       entry: 'ui',
       proves: ['review-grammar'],
@@ -1044,7 +1081,7 @@ export const categorySuggest: Scenario = {
           await captureField(ctx).fill(name(ctx, R_REAL_AUTO));
           const send = ctx.page.getByRole('button', { name: 'Review before saving' });
           // Outlined until the parse lands (the filled one carries bg-teal).
-          if (/\bbg-teal\b/.test((await send.getAttribute('class')) ?? ''))
+          if (/(?:^|\s)bg-teal(?:\s|$)/.test((await send.getAttribute('class')) ?? ''))
             throw new Error('Send is filled before any parse');
           const t0 = Date.now();
           const answer = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
@@ -1054,7 +1091,7 @@ export const categorySuggest: Scenario = {
           const save = ctx.page.getByRole('button', { name: 'Save reviewed task' });
           await save.waitFor({ timeout: 15_000 });
           ctx.log(`real parse into the preview: ${Date.now() - t0} ms`);
-          if (!/\bbg-teal\b/.test((await save.getAttribute('class')) ?? ''))
+          if (!/(?:^|\s)bg-teal(?:\s|$)/.test((await save.getAttribute('class')) ?? ''))
             throw new Error('Send did not fill when the parse landed');
           const shown = ((await (await answer).json()) as { input?: { title?: string } }).input
             ?.title;

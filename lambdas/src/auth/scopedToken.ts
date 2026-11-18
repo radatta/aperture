@@ -20,6 +20,9 @@ import { bearerOf } from './placeToken';
 // A lost race re-reads and tries again after a full-jitter backoff (25 ms doubling, at most 200 ms a wait —
 // under a second in all): several captures at once through one token all land (F224). Past the last, busy.
 const CAS_ATTEMPTS = 8;
+// After the task is saved, the row's bookkeeping gets a short try: its miss is logged, never the user's, and
+// the Lambda's tail stays well inside its 15 s.
+const CAS_TAIL_ATTEMPTS = 3;
 const CAS_BACKOFF_MS = 25;
 const CAS_BACKOFF_MAX_MS = 200;
 const backoff = (attempt: number) =>
@@ -94,10 +97,11 @@ async function casRow<T>(
   store: ScopedTokenStore,
   auth: ScopedAuth,
   step: (row: ScopedTokenRow) => { next: ScopedTokenRow | null; out: T },
+  attempts = CAS_ATTEMPTS,
 ): Promise<T> {
   let row = auth.row;
   let lost: unknown;
-  for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const { next, out } = step(row);
     if (!next) return out;
     try {
@@ -107,7 +111,7 @@ async function casRow<T>(
     } catch (err) {
       if (!(err instanceof ConditionFailedError)) throw err;
       lost = err;
-      if (attempt < CAS_ATTEMPTS - 1) await backoff(attempt);
+      if (attempt < attempts - 1) await backoff(attempt);
       const fresh = await store.row(auth.userId, row.id);
       if (!fresh || fresh.hash !== auth.hash)
         throw new Error('Unauthorized: revoked token', { cause: err });
@@ -186,14 +190,19 @@ export function recordCaptureTask(
   taskId: string,
   now: number,
 ): Promise<void> {
-  return casRow(store, auth, (row) => {
-    if (row.lastTextHash !== textHash || row.lastTaskId !== null)
-      return { next: null, out: undefined };
-    return {
-      next: { ...row, lastTaskId: taskId, updatedAt: Math.max(now, row.updatedAt + 1) },
-      out: undefined,
-    };
-  });
+  return casRow(
+    store,
+    auth,
+    (row) => {
+      if (row.lastTextHash !== textHash || row.lastTaskId !== null)
+        return { next: null, out: undefined };
+      return {
+        next: { ...row, lastTaskId: taskId, updatedAt: Math.max(now, row.updatedAt + 1) },
+        out: undefined,
+      };
+    },
+    CAS_TAIL_ATTEMPTS,
+  );
 }
 
 // A capture that failed after it was counted: drop its line from the duplicate guard (only while the row

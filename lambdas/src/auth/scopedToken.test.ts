@@ -5,7 +5,12 @@ import { ScopedTokenStore } from '../ddb/scopedTokens';
 import { liveWrites } from '../ddb/writes';
 import { BackendClient } from '../backend';
 import { Repo } from '../ddb/repo';
-import { CaptureBusyError, reserveCapture, resolveScopedToken } from './scopedToken';
+import {
+  CaptureBusyError,
+  recordCaptureTask,
+  reserveCapture,
+  resolveScopedToken,
+} from './scopedToken';
 
 // F224: several captures at once through one token race on its row. A lost race backs off (full jitter) and
 // tries again; only when every try lost is the answer "busy" — never a generic error.
@@ -65,5 +70,20 @@ describe('the token row under a race (casRow)', () => {
     lose(100);
     await reserveCapture(store, auth, 'h1', Date.now()).catch(() => {});
     expect(waits).toEqual([25, 50, 100, 200, 200, 200, 200]);
+  });
+
+  it('the bookkeeping after a save gives up after three tries, without the long tail', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { store, auth, lose, id } = await setup();
+    await reserveCapture(store, auth, 'h1', Date.now());
+    lose(3);
+    const err = await recordCaptureTask(store, auth, 'h1', 't1', Date.now()).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CaptureBusyError);
+    expect((await store.row('u1', id))!.lastTaskId).toBeNull();
+    lose(2);
+    await recordCaptureTask(store, auth, 'h1', 't1', Date.now());
+    expect((await store.row('u1', id))!.lastTaskId).toBe('t1');
   });
 });

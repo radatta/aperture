@@ -408,7 +408,7 @@ export function CaptureBar({
       // The nudge already had its say on this draft: the retry is one Enter, and a × stays dismissed.
       setNudge({ dismissed: nudgeAtSubmit.dismissed, held: true });
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
-      setAiNext(aiAtSubmit); // an as-typed save retries as typed
+      setAiNext(aiAtSubmit); // ✨ as it was at the save: an as-typed save retries as typed (a parked one doesn't keep it)
       // The reviewed parse comes back with it, tapped chip and all: the retry saves what was reviewed, unparsed.
       if (reviewedPreview?.result?.ok) quick.reinstate(reviewedPreview);
     };
@@ -850,7 +850,7 @@ export function CaptureBar({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={submit}
-                className="min-h-8 shrink-0 rounded-md px-1 text-xs text-teal hover:underline"
+                className="min-h-11 shrink-0 rounded-md border border-teal px-3 text-xs text-teal hover:bg-teal-soft"
               >
                 Save as typed
               </button>
@@ -979,7 +979,9 @@ function Hint({
   return (
     <Text size="xs" tone="muted" className="hidden pr-1 sm:block">
       {suggesting
-        ? 'Tab accepts · Enter saves · Shift+Tab switches'
+        ? task && reviewing
+          ? 'Tab accepts · Enter reads it, again saves'
+          : 'Tab accepts · Enter saves · Shift+Tab switches'
         : task
           ? reviewing
             ? 'Enter reads it, again saves · ⌘Enter saves now'

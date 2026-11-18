@@ -129,8 +129,9 @@ Per UTC day — guards, not UX:
   so only a manual retry after an unclear failure can double up. A first still unsaved after 20 s
   (`CAPTURE_IN_FLIGHT_MS` — past the Lambda's 15 s timeout) died, so the same line then is a new capture;
   inside those 20 s the answer hedges ("…if it isn't in the app in a minute, say it again").
-- **Leaked tokens:** 40 × ~$0.003–0.006 (Sonnet, 512 output tokens at most, 600 characters in) ≈ $0.12–0.24 a
-  day, ~$3.60–7.20 a month, however many tokens leak, plus junk tasks. It sits inside the maintainer's Claude
+- **Leaked tokens:** 40 × ~~$0.003–0.006 (Sonnet, 512 output tokens at most, 600 characters in; ~$0.008 at most a
+  parse) ≈ $0.12–0.24 a day, ~$3.60–7.20 a month, however many tokens leak, plus junk tasks. The hard ceiling,
+  with all five tokens racing their claims at once, is 5 × 40 = 200 parses a day (~~$1.60). It sits inside the maintainer's Claude
   API credit, which his ~$1 rogue-cost rule doesn't cover (2026-11-17). Revoke in Settings stops it at once. Not
   capped: the request floor (a missing or malformed header costs nothing, an unknown token one GetItem);
   reserved concurrency would cap the whole shared BFF.
@@ -196,8 +197,12 @@ Two checks keep the grammar honest:
   grammar can't read ("at five twenty pm") means no grammar time at all, so the model's clock takes over.
 - A day counts as named only when it's after the calendar's today ("today at 9 am" rolls; a past day the
   model read, "monday" as last Monday, rolls too). "friday at 1 tonight" is the small hours after Friday.
-- "afternoon" and "evening" stay day-only (not decided). A raw save gets no time: with no model there's no
-  day, and a wrong day is worse than none.
+- "afternoon" and "evening" stay day-only (not decided). A spoken line saved without the model keeps its words'
+  own time (`spokenFallbackDue`): "today", "tonight" and "tomorrow" (the app's next day, as the model reads it)
+  place it; any other day word means no time at all, since a wrong day is worse than none. Without the model's
+  kept-words guard, the fallback can time a line whose number wasn't a time ("look at one of the leases" reads
+  as 1 o'clock) — accepted: it is rare and the save is said out loud. A typed line saved without the model gets
+  no time.
 - `say` reads a timed task against the calendar date ("today 5 AM" said at 1 AM) and a day-only one against
   the app's day.
 - A relative delay is never an estimate: the estimate guard reads the line with "in N …" taken out.

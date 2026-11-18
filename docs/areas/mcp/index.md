@@ -51,7 +51,7 @@ every task/log/story/settings row, calendar event inserts on the connected Googl
 - **delete a calendar event Aperture didn't create** — the pointer rule (only events whose `eventId`
   Aperture stored).
 - **spend the Claude API key beyond the parse** — `parse_task` sends one line to the model (Sonnet) per call and
-  returns fields; it writes nothing. There is no rate cap on it (single user, ~$0.0003 a call, every call
+  returns fields; it writes nothing. There is no rate cap on it (single user, under a cent a call, every call
   logged as `event: parse_task`) — a leaked token could run up model spend until it's rotated.
 - **reach Plaid or change anything financial** — the MCP role has no Plaid SSM path or Lambda-invoke IAM,
   and the edge pins the Plaid gateway + sync invoker to no-ops (cdk `stacks.test` "the MCP function gets
@@ -488,7 +488,7 @@ Decisions (2026-10-12) — the parse moved to the server ([quick-add](../tasks/q
 
 Decisions (2026-10-09):
 
-- **Haiku only parses; the script writes.** Rejected: giving Haiku the tools (the API's MCP connector, or
+- **The model only parses; the script writes.** Rejected: giving the model the tools (the API's MCP connector, or
   `claude -p`) — the connector's bearer fails this edge's Cognito path, it adds model turns, it puts prod
   write tools in front of a one-liner, and a timeout no longer says whether the task was saved.
 - **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out; the cache

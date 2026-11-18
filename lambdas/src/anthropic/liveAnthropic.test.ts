@@ -80,7 +80,7 @@ describe('createLiveAnthropic', () => {
     const body = JSON.parse(init.body as string);
     expect(body).toMatchObject({
       model: 'claude-sonnet-5-5',
-      max_tokens: 2048,
+      max_tokens: 1024,
       // Sonnet 5.5 400s on `disabled`: thinking off is `between_tools`, and nothing else may sit beside it.
       thinking: { type: 'between_tools' },
       output_config: { effort: 'low', format: { type: 'json_schema' } },

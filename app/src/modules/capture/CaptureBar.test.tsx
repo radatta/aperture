@@ -974,6 +974,60 @@ describe('CaptureBar', () => {
       expect(screen.queryByText(READS)).toBeNull();
     });
 
+    it('⌘Enter while a parse is in flight saves the line as typed; the late parse never shows', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['admin, call bank']),
+      );
+      expect(box().value).toBe('');
+      resolve(parsed('LATE'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('LATE')).toBeNull();
+      expect(await api.listTasks()).toHaveLength(1);
+    });
+
+    it('✨ off while a parse is in flight drops it: the late parse never shows, and Send saves as typed', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+      expect(screen.queryByText('Reading it…')).toBeNull();
+      resolve(parsed('LATE'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('LATE')).toBeNull();
+      expect(box().value).toBe('admin, call bank');
+      await user.click(screen.getByRole('button', { name: 'Save task' }));
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['admin, call bank']),
+      );
+    });
+
+    // The client's ceiling (withTimeout, useQuickParse.test) answers a timeout outcome; the bar treats it like
+    // any failed parse: said, the text kept, nothing saved.
+    it('a parse past the client timeout is a failed preview, never a save', async () => {
+      const { api, user, box } = await taskBar();
+      vi.spyOn(api, 'parseTask').mockResolvedValueOnce({
+        ok: false,
+        reason: 'timeout',
+        detail: 'no reply in 10s',
+      });
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn’t parse \(timeout: no reply in 10s\)/)).toBeTruthy();
+      expect(box().value).toBe('admin, call bank');
+      expect(screen.getByRole('button', { name: 'Retry parse' })).toBeTruthy();
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
     it('a parse that lands after the text changed never shows, and never saves', async () => {
       const { api, user, box } = await taskBar();
       let resolve!: (r: ParseTaskResult) => void;

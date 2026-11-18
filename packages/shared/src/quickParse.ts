@@ -48,7 +48,7 @@ export type ParseFailReason =
 export type ParseTaskResult =
   | {
       ok: true;
-      source: 'haiku' | 'grammar';
+      source: 'haiku' | 'grammar'; // 'haiku' means the model, whichever it is (kept on the wire for old clients)
       input: CreateTaskInput;
       categoryLabel: string | null;
       placeName: string | null; // the list a known `@slug` put it on (places.ts)
@@ -100,10 +100,25 @@ const rangesOf = (line: string, re: RegExp): Range[] =>
 const SPOKEN_CLOCK_HINT =
   /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
 
-// A spoken clock with its half of the day said: "5 pm", "5 o'clock pm", "17:30", "noon", "in the evening",
-// "tonight". Without one, the model's clock is a bare hour and the server picks morning or evening.
-const HALF_SAID =
-  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
+// A spoken clock with its half of the day said, in its own words or right beside them: "5 pm", "17:30", "noon",
+// "at 5 in the evening", "tonight at 9". Without one, the model's clock is a bare hour and the server picks
+// morning or evening. Only beside the clock: "at 9 book the night bus" says no half. "5:30" is 12-hour, so
+// only a 24-hour form ("17:30", "08:15") counts.
+const HALF_IN =
+  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
+const HALF_AFTER =
+  /^\s*(?:o['’]?\s?clock\s*)?(?:a\.?m\b|p\.?m\b|(?:in the|this) (?:morning|afternoon|evening)\b|at night\b|tonight\b)/i;
+const HALF_BEFORE =
+  /\b(?:tonight|this (?:morning|afternoon|evening)|morning|afternoon|evening|night)\s*(?:at|by|around)?\s*$/i;
+const halfSaid = (line: string, said: string): boolean => {
+  const i = said ? line.toLowerCase().indexOf(said.toLowerCase()) : -1;
+  if (i < 0) return HALF_IN.test(line); // the grammar found no clock: the line is all there is
+  return (
+    HALF_IN.test(said) ||
+    HALF_AFTER.test(line.slice(i + said.length)) ||
+    HALF_BEFORE.test(line.slice(0, i))
+  );
+};
 
 // Where the model's spoken clock lands: the grammar's own reading when the two agree (it keeps the rules a bare
 // hour, "tonight" and "morning" carry), else the model's — a bare hour when the line says no half of the day.
@@ -116,13 +131,13 @@ function placeModelClock(hhmm: string, spoken: SpokenTime | null, line: string):
         ? spoken.hour % 12 === h % 12 &&
           spoken.minute === m &&
           // a bare hour where the line says its half ("at 5 in the evening") is the grammar missing it
-          (spoken.part !== null || !HALF_SAID.test(line))
+          (spoken.part !== null || !halfSaid(line, spoken.said))
         : spoken?.kind === 'part'
           ? DAY_PART_TIME[spoken.part] === hhmm
           : false;
   if (spoken && agrees) return spoken;
   const said = spoken?.said ?? '';
-  return HALF_SAID.test(line)
+  return halfSaid(line, said)
     ? { said, kind: 'clock', hhmm }
     : { said, kind: 'bare', hour: h % 12 || 12, minute: m, part: null };
 }
@@ -574,7 +589,7 @@ export async function runQuickParse(
 
 // A spoken line saved without the model (it failed, timed out, or was past a cap): the time its own words say,
 // placed by the voice rules, so a reminder still rings (the maintainer, 2026-11-17: the grammar is the fallback).
-// "today" / "tonight" name no other day and "tomorrow" is the calendar's next; any other day word ("friday",
+// "today" / "tonight" name no other day and "tomorrow" is the app's next, as the model reads it; any other day word ("friday",
 // "in 2 days", "the 20th") the grammar can't place, so no time at all — a wrong day is worse than none.
 export function spokenFallbackDue(
   line: string,
@@ -587,8 +602,7 @@ export function spokenFallbackDue(
     .replace(new RegExp(TODAY_WORD.source, 'gi'), ' ')
     .replace(new RegExp(TOMORROW_WORD.source, 'gi'), ' ');
   if (spoken.kind !== 'relative' && DAY_WORD.test(rest)) return null;
-  const calToday = zonedDayTime(ctx.now, USER_TIME_ZONE).day;
-  const r = resolveSpoken(spoken, tomorrow ? addDays(calToday, 1) : null, {
+  const r = resolveSpoken(spoken, tomorrow ? addDays(ctx.today, 1) : null, {
     now: ctx.now,
     today: ctx.today,
     dayInWords: tomorrow,
