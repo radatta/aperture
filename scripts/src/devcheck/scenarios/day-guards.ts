@@ -1,12 +1,17 @@
 // The day-plan server guards on the deployed BFF: one plan row per (task, day) (an id-less insert
 // returns the existing row), getDay refuses a day after the user's app day (400) and a malformed one,
 // the stale sweep's bounded range read (the live proof of the BETWEEN expression), and a habit uncheck
-// that tombstones. Tasks and the habit come from the API (ledger-recorded); the habit is ARCHIVED at
-// cleanup, not deleted — the API has no habit delete — so one archived habit per run stays on the test
-// user (DEV-CHECK.md → habit kind). "Today" is the app's day: before 4am LA the app is still on yesterday.
+// that tombstones. Tasks and the habit come from the API (ledger-recorded). "Today" is the app's day: before
+// 4am LA the app is still on yesterday.
 // The run's eight tasks tip the Backlog's "No category" group past COLLAPSE_AT (8), which starts it
 // collapsed: the UI step expands it, and a teardown step deletes the tasks once the day rows are proven,
 // so later scenarios (attachment-delete, places) find the Backlog as they left it.
+//
+// A habit is a ledger kind (DEV-CHECK.md → What it guarantees): recorded from the create's id
+// (`via: api:upsertHabit`). The API has no habit delete, so cleanup ARCHIVES it (upsertHabit({ …, active: false }))
+// and "exists" means listed and active — the run ends at 0 leftovers, and one archived `devcheck <nonce> habit`
+// per run stays on the dev test user, by design, until a tombstoning deleteHabit lands (this scenario's
+// follow-up). Its checks are tombstones the archive leaves behind.
 import type { DevHabit, DevPlan, DevTask } from '../api';
 import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
